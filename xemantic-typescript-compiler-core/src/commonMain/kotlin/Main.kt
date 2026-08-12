@@ -444,6 +444,31 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--flowCensus", "--flowcensus" -> {
                 FlowCensus.reset(); modes.set(FlowCensus::on, true)
             }
+            // (WARM.19) round 895 — the whole-source `indexOf` family: the ~50
+            // pin walkers that ask every file whether it contains some
+            // corpus-unique literal. A timestamp pair IS affordable here (a
+            // scan is tens of microseconds against a ~90 ns pair), so this
+            // census reports nanos as well as counts.
+            "--srcScanCensus", "--srcscancensus" -> {
+                SrcScan.reset(); modes.set(SrcScan::on, true)
+            }
+            // The pre-895 path in the SAME binary: no filter, no filter build.
+            // The A/B arm and the switch `SrcScanEquivalenceTest` ablates.
+            "--srcScanFilterOff", "--srcscanfilteroff" -> {
+                modes.set(SrcScan::off, true)
+            }
+            // Runs the real scan even where the filter refused, and counts the
+            // disagreements. A divergence is a soundness failure.
+            "--verifySrcScan", "--verifysrcscan" -> {
+                SrcScan.reset(); modes.set(SrcScan::verify, true); modes.set(SrcScan::on, true)
+            }
+            // The POSITIVE CONTROL for --verifySrcScan: corrupts the filter build
+            // so it refuses needles that ARE present. Without it a zero
+            // divergence count cannot tell a sound gate from a dead instrument
+            // (round 790).
+            "--srcScanBogus", "--srcscanbogus" -> {
+                modes.set(SrcScan::bogus, true)
+            }
             // (PERF.HW.g) round 881 — the `mergeSingleSymbol` shape, which is the
             // single blocker to sharing one bind across `--workers` checkers.
             // Counters only; `docs/parallel-bind-sharing.md` § 4 stage 1.
@@ -674,6 +699,9 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     }
     if (FlowCensus.on) {
         print(FlowCensus.report())
+    }
+    if (SrcScan.on) {
+        print(SrcScan.report())
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
@@ -923,6 +951,16 @@ internal fun usageText(): String =
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
+          --srcScanCensus    (WARM.19) the whole-source substring-scan family: calls, characters
+                             scanned, characters the n-gram filter refused, and the nanos of
+                             both mechanisms
+          --srcScanFilterOff (WARM.19) restore the pre-895 path — every whole-source scan runs
+                             with no n-gram filter and no filter build. The in-binary OFF arm
+                             for the equivalence pin and the A/B
+          --verifySrcScan    (WARM.19) run the real scan even where the filter refused and count
+                             the disagreements; a divergence is a soundness failure
+          --srcScanBogus     (WARM.19) positive control: corrupt the filter build so it refuses
+                             needles that ARE present, which --verifySrcScan must then see
           --mergeClone       (PERF.HW.k) copy a binder-owned symbol before the merge writes to it
                              (tsc/tsgo design). EXPERIMENTAL: sound only once the getMergedSymbol
                              forwarding table lands — see docs/parallel-bind-sharing.md

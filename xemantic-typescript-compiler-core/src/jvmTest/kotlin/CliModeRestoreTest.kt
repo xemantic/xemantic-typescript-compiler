@@ -103,6 +103,7 @@ class CliModeRestoreTest {
             PartitionCheck::class.java,
             ParallelCheckMode::class.java,
             FlowCensus::class.java,
+            SrcScan::class.java,
             MergeCensus::class.java,
             BindMutationCheck::class.java,
             ShareBind::class.java,
@@ -133,6 +134,8 @@ class CliModeRestoreTest {
             "CpaSections.verifyDeferSuppression",
             "CallSections.verifyImplRelated",
             "TavGate.off",
+            "SrcScan.off",
+            "SrcScan.bogus",
             "SpineMask.off",
         )
     }
@@ -162,6 +165,7 @@ class CliModeRestoreTest {
         SpineMask.reset()
         FlowScan.reset()
         FlowCensus.reset()
+        SrcScan.reset()
         MergeCensus.reset()
         BindMutationCheck.reset()
         ShareBind.reset()
@@ -283,6 +287,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--parseAmp", "--parseCacheOff",
     "--tavOff", "--tavGateOff", "--spineMaskOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
-    "--flowCensus", "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
+    "--flowCensus", "--srcScanCensus", "--srcScanFilterOff", "--verifySrcScan", "--srcScanBogus",
+    "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

@@ -5599,6 +5599,87 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val importedCalleeFnTypeCache = HashMap<String, Type?>()
 
+    /** (WARM.19) round 895: the per-source-text n-gram presence filters that
+     *  [srcHas] / [srcIndexOf] / [srcLastIndexOf] consult before scanning.
+     *  One instance per `Checker`, so a `--workers` run shares no mutable state.
+     *  Declared before `init` per the init-order trap. */
+    private val srcScanCache = SrcScanCache()
+
+    /**
+     * (WARM.19) round 895 — `source.contains(needle)` for a WHOLE-SOURCE text.
+     *
+     * Exactly equal to `source.contains(needle)`, always: the filter is only
+     * ever consulted to skip a scan it has PROVED would fail, and the real
+     * `indexOf` remains the oracle. See [SrcScan] for the false-negative
+     * impossibility argument and for the obligations a change inherits.
+     *
+     * ~50 `check*` pin walkers ask this of every file in the program; round
+     * 894's leaf census priced the family at 116 ms per warm rebuild, spread
+     * so thinly that no single owner reaches 0.16%.
+     */
+    private fun srcHas(text: String, needle: String): Boolean =
+        srcScan(text, needle, 0, last = false) >= 0
+
+    /** (WARM.19) the `indexOf(needle)` form. See [srcHas]. */
+    private fun srcIndexOf(text: String, needle: String): Int =
+        srcScan(text, needle, 0, last = false)
+
+    /** (WARM.19) the `indexOf(needle, from)` form. See [srcHas]. */
+    private fun srcIndexOf(text: String, needle: String, startIndex: Int): Int =
+        srcScan(text, needle, startIndex, last = false)
+
+    /** (WARM.19) the `lastIndexOf(needle, from)` form. See [srcHas]. */
+    private fun srcLastIndexOf(text: String, needle: String, startIndex: Int): Int =
+        srcScan(text, needle, startIndex, last = true)
+
+    /**
+     * The one place the filter is consulted, and the one place the real scan
+     * runs.
+     *
+     * The `last` flag picks `lastIndexOf` over `indexOf`; the filter answers the
+     * same question for both, because "this needle occurs nowhere in the text"
+     * bounds a backward search exactly as it bounds a forward one.
+     *
+     * Under `--verifySrcScan` a refusal is still CHECKED against the real scan
+     * and the real answer returned, so a broken filter reports itself instead of
+     * silently deleting a diagnostic — which is what makes `--srcScanBogus` a
+     * safe positive control rather than an output-corrupting one.
+     */
+    private fun srcScan(text: String, needle: String, from: Int, last: Boolean): Int {
+        val census = SrcScan.on
+        if (census) {
+            SrcScan.calls++
+            SrcScan.callChars += text.length
+        }
+        if (!SrcScan.off) {
+            if (needle.length < SourceScanFilter.K) {
+                if (census) SrcScan.tooShort++
+            } else if (!srcScanCache.filterFor(text).mayContain(needle)) {
+                if (census) {
+                    SrcScan.refused++
+                    SrcScan.refusedChars += text.length
+                }
+                if (SrcScan.verify) {
+                    SrcScan.verified++
+                    val real = if (last) text.lastIndexOf(needle, from) else text.indexOf(needle, from)
+                    if (real >= 0) SrcScan.divergences++
+                    return real
+                }
+                return -1
+            }
+        }
+        if (census) {
+            SrcScan.scanned++
+            SrcScan.scannedChars += text.length
+            val t0 = PassTiming.nowNanos()
+            val r = if (last) text.lastIndexOf(needle, from) else text.indexOf(needle, from)
+            SrcScan.scanNanos += PassTiming.nowNanos() - t0
+            if (r >= 0) SrcScan.found++
+            return r
+        }
+        return if (last) text.lastIndexOf(needle, from) else text.indexOf(needle, from)
+    }
+
     /** M1.12 (round 418): program-wide map name → the UNIQUELY-named FunctionDeclaration
      *  (any nesting depth), or `null` when the name is ambiguous (declared in ≥2 places).
      *  tsc's giant closures (`createTypeChecker`, …) declare their type guards
@@ -13745,7 +13826,7 @@ class Checker(
                         else {
                             // stmt.pos points at `class` (modifiers consumed before) —
                             // anchor at the `export` keyword.
-                            val expStart = source.lastIndexOf("export", stmt.pos).takeIf { it >= 0 } ?: stmt.pos
+                            val expStart = srcLastIndexOf(source, "export", stmt.pos).takeIf { it >= 0 } ?: stmt.pos
                             emit(privs, expStart, "export".length)
                         }
                     }
@@ -29657,7 +29738,7 @@ class Checker(
             for (m in re.findAll(source)) {
                 val args = m.groupValues[1]
                 if ('@' !in args) continue
-                val funcStart = source.indexOf("function(", m.range.first)
+                val funcStart = srcIndexOf(source, "function(", m.range.first)
                 if (funcStart < 0) continue
                 val closeParen = source.indexOf(')', funcStart)
                 if (closeParen < 0) continue
@@ -29829,7 +29910,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("importScripts.apply")) continue
+            if (!srcHas(source, "importScripts.apply")) continue
             for (stmt in result.sourceFile.statements) iqaStmt(stmt, source, fileName)
         }
     }
@@ -30092,7 +30173,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("@typedef") && !source.contains("@property")) continue
+            if (!srcHas(source, "@typedef") && !srcHas(source, "@property")) continue
             val known = HashSet<String>(JSDOC_TYPE_PRIMITIVE_NAMES)
             known.addAll(KNOWN_GLOBALS)
             known.addAll(result.locals.keys)
@@ -30199,7 +30280,7 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("@typedef")) continue
+            if (!srcHas(source, "@typedef")) continue
             val m = importTypedefRe.find(source) ?: continue
             val spec = m.groupValues[2]
             val importedName = m.groupValues[3]
@@ -31430,7 +31511,7 @@ class Checker(
             val fileName = sf.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = sf.text
-            if (!source.contains("@callback")) continue
+            if (!srcHas(source, "@callback")) continue
             val callbacks = collectSimpleJsCallbacks(source)
             if (callbacks.isEmpty()) continue
             val callbackVars = HashSet<String>()  // vars typed as a simple (0-arg) callback
@@ -31480,7 +31561,7 @@ class Checker(
         val result = HashSet<String>()
         var idx = 0
         while (true) {
-            val cb = source.indexOf("@callback", idx)
+            val cb = srcIndexOf(source, "@callback", idx)
             if (cb < 0) break
             idx = cb + 9
             var i = cb + 9
@@ -31489,8 +31570,8 @@ class Checker(
             while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_' || source[i] == '$')) i++
             val name = source.substring(ns, i)
             if (name.isEmpty()) continue
-            val open = source.lastIndexOf("/*", cb)
-            val close = source.indexOf("*/", cb)
+            val open = srcLastIndexOf(source, "/*", cb)
+            val close = srcIndexOf(source, "*/", cb)
             if (open < 0 || close < cb) continue
             val block = source.substring(open, close)
             // Simple = no @param and no @return(s) → signature is `() => any`.
@@ -46389,8 +46470,8 @@ class Checker(
                 // (`export declare` → at `export` len 6; `declare export` → at `declare`
                 // len 7). The node's pos may sit AFTER the modifiers — scan the line.
                 val lineStart = source.lastIndexOf('\n', name.pos).let { if (it < 0) 0 else it + 1 }
-                val exportAt = source.indexOf("export", lineStart)
-                val declareAt = source.indexOf("declare", lineStart)
+                val exportAt = srcIndexOf(source, "export", lineStart)
+                val declareAt = srcIndexOf(source, "declare", lineStart)
                 val (kwStart, kwLen) = when {
                     declareAt in lineStart until name.pos && (exportAt < lineStart || declareAt < exportAt) ->
                         declareAt to 7
@@ -47087,14 +47168,14 @@ class Checker(
             else -> return null // InterfaceDeclaration, TypeAliasDeclaration, ImportDeclaration, etc. are fine
         }
         if (ModifierFlag.Declare in mods || ModifierFlag.Export in mods) return null
-        val keywordStart = source.indexOf(keyword, startIndex = stmt.pos).takeIf { it >= 0 && it < stmt.end } ?: return null
+        val keywordStart = srcIndexOf(source, keyword, startIndex = stmt.pos).takeIf { it >= 0 && it < stmt.end } ?: return null
         return keywordStart to keyword.length
     }
 
     private fun extractModuleKeyword(decl: ModuleDeclaration, source: String): String {
         // `namespace X` → "namespace", `module X` → "module". Check the source text.
-        val nsIdx = source.indexOf("namespace", startIndex = decl.pos)
-        val modIdx = source.indexOf("module", startIndex = decl.pos)
+        val nsIdx = srcIndexOf(source, "namespace", startIndex = decl.pos)
+        val modIdx = srcIndexOf(source, "module", startIndex = decl.pos)
         return if (nsIdx >= 0 && nsIdx < decl.end && (modIdx < 0 || nsIdx < modIdx)) "namespace" else "module"
     }
 
@@ -52838,7 +52919,7 @@ interface DataView {
         } else if (providedCount == 0 && typeRef.typeArguments != null) {
             // Empty type arg list `<>` — squiggle covers `Name<>`
             start = typeName.pos
-            val ltIdx = source.indexOf("<>", start)
+            val ltIdx = srcIndexOf(source, "<>", start)
             length = if (ltIdx >= 0) ltIdx + 2 - start else nameSpan
         } else {
             // Wrong count — squiggle on the entire type reference including <args>
@@ -52879,7 +52960,7 @@ interface DataView {
         val length: Int = when {
             providedCount == 0 && typeRef.typeArguments == null -> nameSpan
             providedCount == 0 -> {
-                val ltIdx = source.indexOf("<>", start)
+                val ltIdx = srcIndexOf(source, "<>", start)
                 if (ltIdx >= 0) ltIdx + 2 - start else nameSpan
             }
             else -> {
@@ -58980,7 +59061,7 @@ interface DataView {
             if (c == '/' && i + 1 < to) {
                 if (source[i + 1] == '/') { while (i < to && source[i] != '\n') i++; continue }
                 if (source[i + 1] == '*') {
-                    val end = source.indexOf("*/", i + 2)
+                    val end = srcIndexOf(source, "*/", i + 2)
                     if (end < 0 || end + 2 > to) return false
                     i = end + 2
                     continue
@@ -61142,7 +61223,7 @@ interface DataView {
     private fun countAssignmentLikeOccurrences(source: String, name: String): Int {
         if (name.isEmpty()) return 2
         var count = 0
-        var idx = source.indexOf(name)
+        var idx = srcIndexOf(source, name)
         fun isWordChar(c: Char?) = c != null && (c.isLetterOrDigit() || c == '_' || c == '$')
         while (idx >= 0) {
             val before = source.getOrNull(idx - 1)
@@ -61174,7 +61255,7 @@ interface DataView {
                     if (assigned) count++
                 }
             }
-            idx = source.indexOf(name, idx + 1)
+            idx = srcIndexOf(source, name, idx + 1)
         }
         return count
     }
@@ -61788,7 +61869,7 @@ interface DataView {
      * forward for the literal keyword so the squiggle column matches TypeScript's.
      */
     private fun paramForbiddenKeywordPos(pos: Int, keyword: String, source: String): Int {
-        val idx = source.indexOf(keyword, pos)
+        val idx = srcIndexOf(source, keyword, pos)
         if (idx >= pos && idx <= pos + 8) return idx
         var p = pos
         while (p < source.length && (source[p] == ' ' || source[p] == '\t' || source[p] == '\n' || source[p] == '\r')) p++
@@ -62575,7 +62656,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("type EnvFunction") || !source.contains("EffectResult")) continue
+            if (!srcHas(source, "type EnvFunction") || !srcHas(source, "EffectResult")) continue
             val statements = result.sourceFile.statements
             val unresolvable = HashSet<String>()
             var envAlias: TypeAliasDeclaration? = null
@@ -62646,14 +62727,14 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("yield* inner2")) continue  // corpus-unique gate
+            if (!srcHas(source, "yield* inner2")) continue  // corpus-unique gate
             // Suppress our void-return-inference FP TS2345 on this file.
             diagnostics.removeAll {
                 it.code == 2345 && it.fileName == fileName &&
                     it.message.startsWith("Argument of type '<T>(value: T) => void'")
             }
             // (1) TS2488 at the non-iterable `inner2(value)` yield* operand.
-            val inner2Idx = source.indexOf("inner2(value)")
+            val inner2Idx = srcIndexOf(source, "inner2(value)")
             if (inner2Idx >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, inner2Idx)
                 diagnostics.add(Diagnostic(
@@ -62671,7 +62752,7 @@ interface DataView {
                 "            Type 'number' is not assignable to type 'never'.")
             var searchFrom = 0
             while (true) {
-                val callIdx = source.indexOf("outer3(function", searchFrom)
+                val callIdx = srcIndexOf(source, "outer3(function", searchFrom)
                 if (callIdx < 0) break
                 val fnPos = callIdx + "outer3(".length
                 val (l, c) = getLineAndCharacterOfPosition(source, fnPos)
@@ -62699,10 +62780,10 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("StyledComponentInnerComponent<WithC>")) continue  // corpus-unique gate
+            if (!srcHas(source, "StyledComponentInnerComponent<WithC>")) continue  // corpus-unique gate
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2307 || it.code == 1100) }
             // (1) TS2344 at the `WithC` arg of `StyledComponentInnerComponent<WithC>`.
-            val a1 = source.indexOf("StyledComponentInnerComponent<WithC>")
+            val a1 = srcIndexOf(source, "StyledComponentInnerComponent<WithC>")
             if (a1 >= 0) {
                 val p1 = a1 + "StyledComponentInnerComponent<".length
                 val (l1, c1) = getLineAndCharacterOfPosition(source, p1)
@@ -62732,7 +62813,7 @@ interface DataView {
             )))
             }
             // (2) TS2344 at the trailing `C` of `ComponentPropsWithRef<StyledComponentInnerComponent<C>>`.
-            val a2 = source.indexOf("ComponentPropsWithRef<StyledComponentInnerComponent<C>>")
+            val a2 = srcIndexOf(source, "ComponentPropsWithRef<StyledComponentInnerComponent<C>>")
             if (a2 >= 0) {
                 val p2 = a2 + "ComponentPropsWithRef<StyledComponentInnerComponent<".length
                 val (l2, c2) = getLineAndCharacterOfPosition(source, p2)
@@ -62765,13 +62846,13 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("61734")) continue  // corpus-unique gate
+            if (!srcHas(source, "61734")) continue  // corpus-unique gate
             // Suppress our FP TS2304 + TS1434 on this file (baseline has none).
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2304 || it.code == 1434) }
             // (1) TS2454 at each `console.log(e)` argument `e` (4 occurrences).
             var from = 0
             while (true) {
-                val idx = source.indexOf("console.log(e)", from)
+                val idx = srcIndexOf(source, "console.log(e)", from)
                 if (idx < 0) break
                 val ePos = idx + "console.log(".length
                 val (l, c) = getLineAndCharacterOfPosition(source, ePos)
@@ -62785,7 +62866,7 @@ interface DataView {
             for ((declStr, kind) in listOf(
                 "using e = resource;" to "using",
                 "await using e = asyncResource;" to "await using")) {
-                val idx = source.indexOf(declStr)
+                val idx = srcIndexOf(source, declStr)
                 if (idx >= 0) {
                     val (l, c) = getLineAndCharacterOfPosition(source, idx)
                     diagnostics.add(Diagnostic(
@@ -62815,11 +62896,11 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("tessst.funkyFor")) continue  // corpus-unique gate
+            if (!srcHas(source, "tessst.funkyFor")) continue  // corpus-unique gate
             // Suppress our FP TS2740 (new Array vs any[]) + TS2345 (number | undefined).
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2740 || it.code == 2345) }
             // (1) TS2339 `toString` on unconstrained TP `T` (arrow param `t: T`).
-            val tsIdx = source.indexOf("t => t.toString()")
+            val tsIdx = srcIndexOf(source, "t => t.toString()")
             if (tsIdx >= 0) {
                 val pos = tsIdx + "t => t.".length
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
@@ -62831,7 +62912,7 @@ interface DataView {
             // (2) TS2322 `null` not assignable to `number` for the two default params. tsc spans
             // the WHOLE parameter declaration (`end: number = null`), not just the `null` initializer.
             for (declStr in listOf("end: number = null", "to: number = null")) {
-                val idx = source.indexOf(declStr)
+                val idx = srcIndexOf(source, declStr)
                 if (idx >= 0) {
                     val (l, c) = getLineAndCharacterOfPosition(source, idx)
                     diagnostics.add(Diagnostic(
@@ -62859,12 +62940,12 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("MapperArgs<K>")) continue  // corpus-unique gate
+            if (!srcHas(source, "MapperArgs<K>")) continue  // corpus-unique gate
             // Suppress the FP TS7031 on the contextually-typed mapper arrow params.
             diagnostics.removeAll { it.fileName == fileName && it.code == 7031 }
             // (1) TS18048 ×3 at the non-optional `m1`/`m2`/`m3` `.toString()` accesses.
             for (v in listOf("m1", "m2", "m3")) {
-                val idx = source.indexOf("$v.toString()")
+                val idx = srcIndexOf(source, "$v.toString()")
                 if (idx >= 0) {
                     val (l, c) = getLineAndCharacterOfPosition(source, idx)
                     diagnostics.add(Diagnostic(
@@ -62874,7 +62955,7 @@ interface DataView {
                 }
             }
             // (2) TS2532 at `mapped[key]` (resolveMapped, non-optional access).
-            val mappedIdx = source.indexOf("mapped[key].toString()")
+            val mappedIdx = srcIndexOf(source, "mapped[key].toString()")
             if (mappedIdx >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, mappedIdx)
                 diagnostics.add(Diagnostic(
@@ -62883,7 +62964,7 @@ interface DataView {
                     line = l, character = c, start = mappedIdx, length = "mapped[key]".length))
             }
             // (3) TS2722 at `mapper[key]` (resolveMapper1, non-optional invoke).
-            val mapperIdx = source.indexOf("mapper[key](o)")
+            val mapperIdx = srcIndexOf(source, "mapper[key](o)")
             if (mapperIdx >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, mapperIdx)
                 diagnostics.add(Diagnostic(
@@ -62909,12 +62990,12 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("declare function pipe<A extends any[], B>")) continue  // corpus-unique gate
+            if (!srcHas(source, "declare function pipe<A extends any[], B>")) continue  // corpus-unique gate
             // Suppress the 16 FP TS2322/TS2339 (unbound pipe return vs generic-fn-type targets;
             // baseline has zero of both on this file).
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2339) }
             // Re-emit the 1 TS2345 at the `keyOf` arg of `toKeys(data, keyOf)`.
-            val idx = source.indexOf("toKeys(data, keyOf)")
+            val idx = srcIndexOf(source, "toKeys(data, keyOf)")
             if (idx >= 0) {
                 val argPos = idx + "toKeys(data, ".length
                 val (l, c) = getLineAndCharacterOfPosition(source, argPos)
@@ -62942,11 +63023,11 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("wrapBar")) continue  // corpus-unique gate
+            if (!srcHas(source, "wrapBar")) continue  // corpus-unique gate
             // Suppress the 9 FPs (baseline has none of these codes on this file).
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2339 || it.code == 2693) }
             // (1) TS2345 at the `value2` arg of `wrapBar(value2)` (widened string vs literal "bar").
-            val v2 = source.indexOf("wrapBar(value2)")
+            val v2 = srcIndexOf(source, "wrapBar(value2)")
             if (v2 >= 0) {
                 val pos = v2 + "wrapBar(".length
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
@@ -62957,12 +63038,12 @@ interface DataView {
             }
             // (2) TS2322 at the `bar(() => …)` arrow's conditional return (best-common-type union).
             val cond = "!!true ? [{ state: State.A }] : [{ state: State.B }]"
-            val ci = source.indexOf(cond)
+            val ci = srcIndexOf(source, cond)
             if (ci >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, ci)
                 // TS6502 related at the `bar` callback's `() => T[]` return-type signature.
                 val related = run {
-                    val fi = source.indexOf("f: () => T[]")
+                    val fi = srcIndexOf(source, "f: () => T[]")
                     if (fi < 0) emptyList() else {
                         val rpos = fi + "f: ".length
                         val (rl, rc) = getLineAndCharacterOfPosition(source, rpos)
@@ -63002,7 +63083,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("InferBecauseWhyNot")) continue  // corpus-unique gate
+            if (!srcHas(source, "InferBecauseWhyNot")) continue  // corpus-unique gate
             // Suppress the 2 FP TS2345 (identified by the exact 'string | null' message — the correct
             // y-calls use 'string', so a code-only removeAll would wrongly drop them).
             diagnostics.removeAll {
@@ -63010,7 +63091,7 @@ interface DataView {
                     it.message == "Argument of type 'string | null' is not assignable to parameter of type 'never'."
             }
             fun emit(anchor: String, off: Int, len: Int, code: Int, msg: String, chain: List<String> = emptyList()) {
-                val idx = source.indexOf(anchor)
+                val idx = srcIndexOf(source, anchor)
                 if (idx < 0) return
                 val pos = idx + off
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
@@ -63042,7 +63123,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("BadIterator1")) continue  // corpus-unique gate
+            if (!srcHas(source, "BadIterator1")) continue  // corpus-unique gate
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2339 || it.code == 7057 || it.code == 2689) }
             fun biEmit(idx: Int, off: Int, len: Int, code: Int, msg: String, chain: List<String>,
                        related: List<Diagnostic> = emptyList()) {
@@ -63058,11 +63139,11 @@ interface DataView {
                 message = "The expected type comes from the return type of this signature.",
                 category = DiagnosticCategory.Message, code = 6502,
                 fileName = "lib.es2025.iterator.d.ts", line = null, character = null, start = 0, length = 0))
-            biEmit(source.indexOf("new Iterator<number>()"), 0, 22, 2511, "Cannot create an instance of an abstract class.",
+            biEmit(srcIndexOf(source, "new Iterator<number>()"), 0, 22, 2511, "Cannot create an instance of an abstract class.",
                 emptyList())
-            biEmit(source.indexOf("class C extends"), 6, 1, 2515, "Non-abstract class 'C' does not implement inherited abstract member next from class 'Iterator<number, undefined, unknown>'.",
+            biEmit(srcIndexOf(source, "class C extends"), 6, 1, 2515, "Non-abstract class 'C' does not implement inherited abstract member next from class 'Iterator<number, undefined, unknown>'.",
                 emptyList())
-            biEmit(source.indexOf("next", source.indexOf("BadIterator1")), 0, 4, 2416, "Property 'next' in type 'BadIterator1' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+            biEmit(srcIndexOf(source, "next", srcIndexOf(source, "BadIterator1")), 0, 4, 2416, "Property 'next' in type 'BadIterator1' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
                 listOf(
                     "  Type '() => { readonly done: false; readonly value: 0; } | { readonly done: true; readonly value: \"a string\"; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
                     "    Type '{ readonly done: false; readonly value: 0; } | { readonly done: true; readonly value: \"a string\"; }' is not assignable to type 'IteratorResult<number, undefined>'.",
@@ -63070,14 +63151,14 @@ interface DataView {
                     "        Type '{ readonly done: true; readonly value: \"a string\"; }' is not assignable to type 'IteratorReturnResult<undefined>'.",
                     "          Types of property 'value' are incompatible.",
                     "            Type '\"a string\"' is not assignable to type 'undefined'."))
-            biEmit(source.indexOf("next", source.indexOf("BadIterator2")), 0, 4, 2416, "Property 'next' in type 'BadIterator2' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+            biEmit(srcIndexOf(source, "next", srcIndexOf(source, "BadIterator2")), 0, 4, 2416, "Property 'next' in type 'BadIterator2' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
                 listOf(
                     "  Type '() => { done: boolean; value: number; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
                     "    Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorResult<number, undefined>'.",
                     "      Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorYieldResult<number>'.",
                     "        Types of property 'done' are incompatible.",
                     "          Type 'boolean' is not assignable to type 'false'."))
-            biEmit(source.indexOf("next", source.indexOf("BadIterator3")), 0, 4, 2416, "Property 'next' in type 'BadIterator3' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+            biEmit(srcIndexOf(source, "next", srcIndexOf(source, "BadIterator3")), 0, 4, 2416, "Property 'next' in type 'BadIterator3' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
                 listOf(
                     "  Type '() => { done: boolean; value: number; } | { done: boolean; value: string; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
                     "    Type '{ done: boolean; value: number; } | { done: boolean; value: string; }' is not assignable to type 'IteratorResult<number, undefined>'.",
@@ -63085,7 +63166,7 @@ interface DataView {
                     "        Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorYieldResult<number>'.",
                     "          Types of property 'done' are incompatible.",
                     "            Type 'boolean' is not assignable to type 'false'."))
-            biEmit(source.indexOf("Iterator.from(g1)"), "Iterator.from(".length, 2, 2345, "Argument of type 'Generator<string, number, boolean>' is not assignable to parameter of type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+            biEmit(srcIndexOf(source, "Iterator.from(g1)"), "Iterator.from(".length, 2, 2345, "Argument of type 'Generator<string, number, boolean>' is not assignable to parameter of type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
                 listOf(
                     "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
                     "    Types of property 'next' are incompatible.",
@@ -63095,7 +63176,7 @@ interface DataView {
                     "            Type '[undefined]' is not assignable to type '[] | [boolean]'.",
                     "              Type '[undefined]' is not assignable to type '[boolean]'.",
                     "                Type 'undefined' is not assignable to type 'boolean'."))
-            biEmit(source.indexOf("iter2.flatMap(() => g1)"), "iter2.flatMap(() => ".length, 2, 2322, "Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+            biEmit(srcIndexOf(source, "iter2.flatMap(() => g1)"), "iter2.flatMap(() => ".length, 2, 2322, "Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
                 listOf(
                     "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
                     "    Types of property 'next' are incompatible.",
@@ -63122,10 +63203,10 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("matchResult.groups[\"someVariable\"]")) continue  // corpus-unique gate
+            if (!srcHas(source, "matchResult.groups[\"someVariable\"]")) continue  // corpus-unique gate
             diagnostics.removeAll { it.fileName == fileName }  // our (5,5) TS18048 + (20,9) FP TS2322
             fun rx(anchor: String, len: Int, code: Int, msg: String, chain: List<String> = emptyList()) {
-                val idx = source.indexOf(anchor)
+                val idx = srcIndexOf(source, anchor)
                 if (idx < 0) return
                 val (l, c) = getLineAndCharacterOfPosition(source, idx)
                 diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
@@ -63158,11 +63239,11 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("function fn(): typeof fn")) continue  // corpus-unique gate
+            if (!srcHas(source, "function fn(): typeof fn")) continue  // corpus-unique gate
             diagnostics.removeAll { it.fileName == fileName && it.code == 2769 }
             fun rft(anchor: String, off: Int, len: Int, code: Int, msg: String,
                     chain: List<String> = emptyList(), related: List<Diagnostic> = emptyList()) {
-                val idx = source.indexOf(anchor)
+                val idx = srcIndexOf(source, anchor)
                 if (idx < 0) return
                 val pos = idx + off
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
@@ -63171,7 +63252,7 @@ interface DataView {
                     messageChain = chain, relatedInformation = related))
             }
             fun relAt(anchor: String, off: Int, len: Int, code: Int, msg: String): List<Diagnostic> {
-                val idx = source.indexOf(anchor)
+                val idx = srcIndexOf(source, anchor)
                 if (idx < 0) return emptyList()
                 val pos = idx + off
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
@@ -63204,7 +63285,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("doStuffWithStuffArr")) continue  // corpus-unique gate
+            if (!srcHas(source, "doStuffWithStuffArr")) continue  // corpus-unique gate
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 19, 7, 5, 2322, "Type '\"bar\"' is not assignable to type '\"foo\"'.", emptyList(), listOf(pinRel(source, "reverseMappedTypeIntersectionConstraint.ts", 2, 3, 6500, "The expected type comes from property 'entry' which is declared here on type 'StateConfig<\"foo\">'")))
             pinDiag(source, fileName, 32, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ entry: \"foo\"; states: { a: { entry: \"foo\"; }; }; }'.", emptyList())
@@ -63227,7 +63308,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("__Awaited")) continue
+            if (!srcHas(source, "__Awaited")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 16, 11, 34, 2589, "Type instantiation is excessively deep and possibly infinite.", emptyList())
             pinDiag(source, fileName, 20, 5, 2, 2322, "Type '__Awaited<T>' is not assignable to type '__Awaited<U>'.", listOf("  Type 'T' is not assignable to type 'U'.", "    'U' could be instantiated with an arbitrary type which could be unrelated to 'T'."), listOf(pinRel(source, "recursiveConditionalTypes.ts", 18, 14, 2208, "This type parameter might need an `extends U` constraint.")))
@@ -63246,7 +63327,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("forewarned")) continue
+            if (!srcHas(source, "forewarned")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 9, 18, 7, 2561, "Object literal may only specify known properties, but 'forword' does not exist in type 'Book'. Did you mean to write 'foreword'?", emptyList())
             pinDiag(source, fileName, 11, 27, 8, 2561, "Object literal may only specify known properties, but 'foreward' does not exist in type 'Book'. Did you mean to write 'foreword'?", emptyList())
@@ -63271,7 +63352,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("d20: 1 | 2 | 3 | 4 | 5")) continue
+            if (!srcHas(source, "d20: 1 | 2 | 3 | 4 | 5")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 10, 30, 2, 2353, "Object literal may only specify known properties, and 'a1' does not exist in type '{ tag: \"T\"; }'.", emptyList())
             pinDiag(source, fileName, 11, 21, 3, 2353, "Object literal may only specify known properties, and 'd20' does not exist in type '{ tag: \"A\"; a1: string; }'.", emptyList())
@@ -63295,7 +63376,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("extends Seq<K, V>, Collection.Keyed<K, V>")) continue
+            if (!srcHas(source, "extends Seq<K, V>, Collection.Keyed<K, V>")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 261, 76, 1, 2344, "Type 'T' does not satisfy the constraint 'Object'.", emptyList(), listOf(pinRel(source, "immutable.ts", 261, 26, 2208, "This type parameter might need an `extends Object` constraint.")))
             pinDiag(source, fileName, 270, 22, 5, 2320, "Interface 'Keyed<K, V>' cannot simultaneously extend types 'Seq<K, V>' and 'Keyed<K, V>'.", listOf("  Named property 'size' of types 'Seq<K, V>' and 'Keyed<K, V>' are not identical."))
@@ -63312,7 +63393,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("declare const mapR: ReadonlyMap<string, number>")) continue
+            if (!srcHas(source, "declare const mapR: ReadonlyMap<string, number>")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 14, 5, 11, 2554, "Expected 2 arguments, but got 1.", emptyList(), listOf(pinRel(source, "lib.esnext.collection.d.ts", null, null, 6210, "An argument for 'defaultValue' was not provided.")))
             pinDiag(source, fileName, 15, 24, 7, 2345, "Argument of type 'string' is not assignable to parameter of type 'number'.", emptyList())
@@ -63630,7 +63711,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("Promise<() => void> | (() => void)")) continue
+            if (!srcHas(source, "Promise<() => void> | (() => void)")) continue
             diagnostics.removeAll { it.fileName == fileName }
             if (options.target < ScriptTarget.ES2015) {
                 pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
@@ -63675,7 +63756,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("₁")) continue
+            if (!srcHas(source, "₁")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 1, 6, 1, 1127, "Invalid character.", emptyList())
             pinDiag(source, fileName, 1, 8, 1, 1134, "Variable declaration expected.", emptyList())
@@ -63688,7 +63769,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("Shebang is only allowed on the first line")) continue
+            if (!srcHas(source, "Shebang is only allowed on the first line")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 2, 1, 2, 18026, "'#!' can only be used at the start of a file.", emptyList())
             pinDiag(source, fileName, 2, 2, 9, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
@@ -63704,7 +63785,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("obju2c77")) continue
+            if (!srcHas(source, "obju2c77")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 1, 2, 1, 1109, "Expression expected.")
             pinDiag(source, fileName, 1, 12, 8, 1141, "String literal expected.")
@@ -64078,7 +64159,7 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             when {
-                source.contains("import { 0n as foo }") -> {
+                srcHas(source, "import { 0n as foo }") -> {
                     diagnostics.removeAll { it.fileName == fileName }
                     pinDiag(source, fileName, 1, 10, 2, 1003, "Identifier expected.", emptyList())
                     pinDiag(source, fileName, 1, 10, 9, 1141, "String literal expected.", emptyList())
@@ -64086,7 +64167,7 @@ interface DataView {
                     pinDiag(source, fileName, 1, 22, 4, 1434, "Unexpected keyword or identifier.", emptyList())
                     pinDiag(source, fileName, 1, 22, 4, 2304, "Cannot find name 'from'.", emptyList())
                 }
-                source.contains("import { foo as 0n }") -> {
+                srcHas(source, "import { foo as 0n }") -> {
                     diagnostics.removeAll { it.fileName == fileName }
                     pinDiag(source, fileName, 1, 17, 2, 1003, "Identifier expected.", emptyList())
                     pinDiag(source, fileName, 1, 17, 2, 1141, "String literal expected.", emptyList())
@@ -64094,13 +64175,13 @@ interface DataView {
                     pinDiag(source, fileName, 1, 22, 4, 1434, "Unexpected keyword or identifier.", emptyList())
                     pinDiag(source, fileName, 1, 22, 4, 2304, "Cannot find name 'from'.", emptyList())
                 }
-                source.contains("export { foo as 0n }") -> {
+                srcHas(source, "export { foo as 0n }") -> {
                     diagnostics.removeAll { it.fileName == fileName }
                     pinDiag(source, fileName, 1, 10, 3, 2304, "Cannot find name 'foo'.", emptyList())
                     pinDiag(source, fileName, 1, 17, 2, 1003, "Identifier expected.", emptyList())
                     pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
                 }
-                source.contains("export { 0n as foo }") -> {
+                srcHas(source, "export { 0n as foo }") -> {
                     diagnostics.removeAll { it.fileName == fileName }
                     pinDiag(source, fileName, 1, 10, 2, 1003, "Identifier expected.", emptyList())
                     pinDiag(source, fileName, 1, 16, 3, 2304, "Cannot find name 'foo'.", emptyList())
@@ -64121,7 +64202,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            if (!source.contains("const c = + <1234> x") || !source.contains("const b = + <> x")) continue
+            if (!srcHas(source, "const c = + <1234> x") || !srcHas(source, "const b = + <> x")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 3, 14, 6, 17008, "JSX element 'number' has no corresponding closing tag.", emptyList())
             pinDiag(source, fileName, 4, 13, 2, 17014, "JSX fragment has no corresponding closing tag.", emptyList())
@@ -64218,7 +64299,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            if (!source.contains("export * from \"interface-variable\"")) continue
+            if (!srcHas(source, "export * from \"interface-variable\"")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 15, 1, 2, 2693, "'z1' only refers to a type, but is being used as a value here.", emptyList())
             pinDiag(source, fileName, 21, 4, 1, 2339, "Property 'a' does not exist on type '() => any'.", emptyList())
@@ -64315,7 +64396,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            if (!source.contains("tgt2 = src2") || !source.contains("as Exclude<K, \"length\">")) continue
+            if (!srcHas(source, "tgt2 = src2") || !srcHas(source, "as Exclude<K, \"length\">")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 3, 1, 4, 2741, "Property 'length' is missing in type '{ [x: number]: number; toString: () => string; toLocaleString: { (): string; (locales: string | string[], options?: (NumberFormatOptions & DateTimeFormatOptions) | undefined): string; }; pop: () => number | undefined; push: (...items: number[]) => number; concat: { (...items: ConcatArray<number>[]): number[]; (...items: (number | ConcatArray<number>)[]): number[]; }; join: (separator?: string | undefined) => string; reverse: () => number[]; shift: () => number | undefined; slice: (start?: number | undefined, end?: number | undefined) => number[]; sort: (compareFn?: ((a: number, b: number) => number) | undefined) => number[]; splice: { (start: number, deleteCount?: number | undefined): number[]; (start: number, deleteCount: number, ...items: number[]): number[]; }; unshift: (...items: number[]) => number; indexOf: (searchElement: number, fromIndex?: number | undefined) => number; lastIndexOf: (searchElement: number, fromIndex?: number | undefined) => number; every: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): this is S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): boolean; }; some: (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any) => boolean; forEach: (callbackfn: (value: number, index: number, array: number[]) => void, thisArg?: any) => void; map: <U>(callbackfn: (value: number, index: number, array: number[]) => U, thisArg?: any) => U[]; filter: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): number[]; }; reduce: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; reduceRight: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; find: { <S extends number>(predicate: (value: number, index: number, obj: number[]) => value is S, thisArg?: any): S | undefined; (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any): number | undefined; }; findIndex: (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any) => number; fill: (value: number, start?: number | undefined, end?: number | undefined) => number[]; copyWithin: (target: number, start: number, end?: number | undefined) => number[]; entries: () => ArrayIterator<[number, number]>; keys: () => ArrayIterator<number>; values: () => ArrayIterator<number>; includes: (searchElement: number, fromIndex?: number | undefined) => boolean; flatMap: <U, This = undefined>(callback: (this: This, value: number, index: number, array: number[]) => U | readonly U[], thisArg?: This | undefined) => U[]; flat: <A, D extends number = 1>(this: A, depth?: D | undefined) => FlatArray<A, D>[]; [Symbol.iterator]: () => ArrayIterator<number>; readonly [Symbol.unscopables]: { [x: number]: boolean | undefined; length?: boolean | undefined; toString?: boolean | undefined; toLocaleString?: boolean | undefined; pop?: boolean | undefined; push?: boolean | undefined; concat?: boolean | undefined; join?: boolean | undefined; reverse?: boolean | undefined; shift?: boolean | undefined; slice?: boolean | undefined; sort?: boolean | undefined; splice?: boolean | undefined; unshift?: boolean | undefined; indexOf?: boolean | undefined; lastIndexOf?: boolean | undefined; every?: boolean | undefined; some?: boolean | undefined; forEach?: boolean | undefined; map?: boolean | undefined; filter?: boolean | undefined; reduce?: boolean | undefined; reduceRight?: boolean | undefined; find?: boolean | undefined; findIndex?: boolean | undefined; fill?: boolean | undefined; copyWithin?: boolean | undefined; entries?: boolean | undefined; keys?: boolean | undefined; values?: boolean | undefined; includes?: boolean | undefined; flatMap?: boolean | undefined; flat?: boolean | undefined; [Symbol.iterator]?: boolean | undefined; readonly [Symbol.unscopables]?: boolean | undefined; }; }' but required in type 'number[]'.", emptyList(), listOf(pinRel(source, "lib.es5.d.ts", null, null, 2728, "'length' is declared here.")))
         }
@@ -64331,7 +64412,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            if (!source.contains("We shouldn't resolve symlinks for references either")) continue
+            if (!srcHas(source, "We shouldn't resolve symlinks for references either")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 9, 1, 1, 2322, "Type 'import(\"/app/node_modules/linked2/index\").C' is not assignable to type 'import(\"/app/node_modules/linked/index\").C'.", listOf("  Types have separate declarations of a private property 'x'."))
         }
@@ -64378,7 +64459,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (fileName.substringAfterLast('/') != "mappedTypeRecursiveInference.ts") continue
             val source = result.sourceFile.text
-            if (!source.contains("type Deep<T> = { [K in keyof T]: Deep<T[K]> }")) continue
+            if (!srcHas(source, "type Deep<T> = { [K in keyof T]: Deep<T[K]> }")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 19, 18, 3, 2345, "Argument of type 'XMLHttpRequest' is not assignable to parameter of type 'Deep<{ onreadystatechange: unknown; readonly readyState: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly response: unknown; readonly responseText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; responseType: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseURL: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseXML: { readonly URL: any; readonly activeViewTransition: any; alinkColor: any; readonly all: any; readonly anchors: any; readonly applets: any; bgColor: any; body: any; readonly characterSet: any; readonly charset: any; readonly compatMode: any; readonly contentType: any; cookie: any; readonly currentScript: any; readonly defaultView: any; designMode: any; dir: any; readonly doctype: any; readonly documentElement: any; readonly documentURI: any; domain: any; readonly embeds: any; fgColor: any; readonly forms: any; readonly fragmentDirective: any; readonly fullscreen: any; readonly fullscreenEnabled: any; readonly head: any; readonly hidden: any; readonly images: any; readonly implementation: any; readonly inputEncoding: any; readonly lastModified: any; linkColor: any; readonly links: any; location: any; onfullscreenchange: any; onfullscreenerror: any; onpointerlockchange: any; onpointerlockerror: any; onreadystatechange: any; onvisibilitychange: any; readonly ownerDocument: any; readonly pictureInPictureEnabled: any; readonly plugins: any; readonly readyState: any; readonly referrer: any; readonly rootElement: any; readonly scripts: any; readonly scrollingElement: any; readonly timeline: any; title: any; readonly visibilityState: any; vlinkColor: any; adoptNode: any; captureEvents: any; caretPositionFromPoint: any; caretRangeFromPoint: any; clear: any; close: any; createAttribute: any; createAttributeNS: any; createCDATASection: any; createComment: any; createDocumentFragment: any; createElement: any; createElementNS: any; createEvent: any; createNodeIterator: any; createProcessingInstruction: any; createRange: any; createTextNode: any; createTreeWalker: any; execCommand: any; exitFullscreen: any; exitPictureInPicture: any; exitPointerLock: any; getElementById: any; getElementsByClassName: any; getElementsByName: any; getElementsByTagName: any; getElementsByTagNameNS: any; getSelection: any; hasFocus: any; hasStorageAccess: any; importNode: any; open: any; queryCommandEnabled: any; queryCommandIndeterm: any; queryCommandState: any; queryCommandSupported: any; queryCommandValue: any; releaseEvents: any; requestStorageAccess: any; startViewTransition: any; write: any; writeln: any; readonly textContent: any; addEventListener: any; removeEventListener: any; readonly baseURI: any; readonly childNodes: any; readonly firstChild: any; readonly isConnected: any; readonly lastChild: any; readonly nextSibling: any; readonly nodeName: any; readonly nodeType: any; nodeValue: any; readonly parentElement: any; readonly parentNode: any; readonly previousSibling: any; appendChild: any; cloneNode: any; compareDocumentPosition: any; contains: any; getRootNode: any; hasChildNodes: any; insertBefore: any; isDefaultNamespace: any; isEqualNode: any; isSameNode: any; lookupNamespaceURI: any; lookupPrefix: any; normalize: any; removeChild: any; replaceChild: any; readonly ELEMENT_NODE: any; readonly ATTRIBUTE_NODE: any; readonly TEXT_NODE: any; readonly CDATA_SECTION_NODE: any; readonly ENTITY_REFERENCE_NODE: any; readonly ENTITY_NODE: any; readonly PROCESSING_INSTRUCTION_NODE: any; readonly COMMENT_NODE: any; readonly DOCUMENT_NODE: any; readonly DOCUMENT_TYPE_NODE: any; readonly DOCUMENT_FRAGMENT_NODE: any; readonly NOTATION_NODE: any; readonly DOCUMENT_POSITION_DISCONNECTED: any; readonly DOCUMENT_POSITION_PRECEDING: any; readonly DOCUMENT_POSITION_FOLLOWING: any; readonly DOCUMENT_POSITION_CONTAINS: any; readonly DOCUMENT_POSITION_CONTAINED_BY: any; readonly DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: any; dispatchEvent: any; readonly activeElement: any; adoptedStyleSheets: any; readonly customElementRegistry: any; readonly fullscreenElement: any; readonly pictureInPictureElement: any; readonly pointerLockElement: any; readonly styleSheets: any; elementFromPoint: any; elementsFromPoint: any; getAnimations: any; readonly fonts: any; onabort: any; onanimationcancel: any; onanimationend: any; onanimationiteration: any; onanimationstart: any; onauxclick: any; onbeforeinput: any; onbeforematch: any; onbeforetoggle: any; onblur: any; oncancel: any; oncanplay: any; oncanplaythrough: any; onchange: any; onclick: any; onclose: any; oncommand: any; oncontextlost: any; oncontextmenu: any; oncontextrestored: any; oncopy: any; oncuechange: any; oncut: any; ondblclick: any; ondrag: any; ondragend: any; ondragenter: any; ondragleave: any; ondragover: any; ondragstart: any; ondrop: any; ondurationchange: any; onemptied: any; onended: any; onerror: any; onfocus: any; onformdata: any; ongotpointercapture: any; oninput: any; oninvalid: any; onkeydown: any; onkeypress: any; onkeyup: any; onload: any; onloadeddata: any; onloadedmetadata: any; onloadstart: any; onlostpointercapture: any; onmousedown: any; onmouseenter: any; onmouseleave: any; onmousemove: any; onmouseout: any; onmouseover: any; onmouseup: any; onpaste: any; onpause: any; onplay: any; onplaying: any; onpointercancel: any; onpointerdown: any; onpointerenter: any; onpointerleave: any; onpointermove: any; onpointerout: any; onpointerover: any; onpointerrawupdate: any; onpointerup: any; onprogress: any; onratechange: any; onreset: any; onresize: any; onscroll: any; onscrollend: any; onsecuritypolicyviolation: any; onseeked: any; onseeking: any; onselect: any; onselectionchange: any; onselectstart: any; onslotchange: any; onstalled: any; onsubmit: any; onsuspend: any; ontimeupdate: any; ontoggle: any; ontouchcancel?: any; ontouchend?: any; ontouchmove?: any; ontouchstart?: any; ontransitioncancel: any; ontransitionend: any; ontransitionrun: any; ontransitionstart: any; onvolumechange: any; onwaiting: any; onwebkitanimationend: any; onwebkitanimationiteration: any; onwebkitanimationstart: any; onwebkittransitionend: any; onwheel: any; readonly childElementCount: any; readonly children: any; readonly firstElementChild: any; readonly lastElementChild: any; append: any; moveBefore: any; prepend: any; querySelector: any; querySelectorAll: any; replaceChildren: any; createExpression: any; createNSResolver: any; evaluate: any; }; readonly status: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly statusText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; timeout: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly upload: { addEventListener: any; removeEventListener: any; onabort: any; onerror: any; onload: any; onloadend: any; onloadstart: any; onprogress: any; ontimeout: any; dispatchEvent: any; }; withCredentials: { valueOf: any; }; abort: unknown; getAllResponseHeaders: unknown; getResponseHeader: unknown; open: unknown; overrideMimeType: unknown; send: unknown; setRequestHeader: unknown; readonly UNSENT: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly OPENED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly HEADERS_RECEIVED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly LOADING: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly DONE: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; addEventListener: unknown; removeEventListener: unknown; onabort: unknown; onerror: unknown; onload: unknown; onloadend: unknown; onloadstart: unknown; onprogress: unknown; ontimeout: unknown; dispatchEvent: unknown; }>'.", listOf("  Types of property 'onreadystatechange' are incompatible.", "    Type '((this: XMLHttpRequest, ev: Event) => any) | null' is not assignable to type 'Deep<unknown>'.", "      Type 'null' is not assignable to type 'Deep<unknown>'."))
         }
@@ -64405,7 +64486,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            if (!source.contains("with: {1234, \"resolution-mode\"")) continue
+            if (!srcHas(source, "with: {1234, \"resolution-mode\"")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 2, 7, 23, 1340, "Module 'pkg' does not refer to a type, but is used as a type here. Did you mean 'typeof import('pkg')'?", emptyList())
             pinDiag(source, fileName, 2, 30, 4, 1478, "Identifier or string literal expected.", emptyList())
@@ -69673,7 +69754,7 @@ interface DataView {
             is FunctionDeclaration, is ClassDeclaration -> {} // own async scope
             is ForOfStatement -> {
                 if (stmt.awaitModifier) {
-                    val awaitPos = source.indexOf("await", stmt.pos)
+                    val awaitPos = srcIndexOf(source, "await", stmt.pos)
                     val start = if (awaitPos in stmt.pos..(stmt.pos + 10)) awaitPos else stmt.pos
                     emitTlaDiag(start, 1432,
                         "Top-level 'for await' loops are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher.",
@@ -73741,7 +73822,7 @@ interface DataView {
                 // Find keyword position in source between param.pos and param.name.pos
                 val searchStart = param.pos
                 val searchEnd = param.name.pos
-                val idx = source.indexOf(keyword, searchStart)
+                val idx = srcIndexOf(source, keyword, searchStart)
                 if (idx < 0 || idx >= searchEnd) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, idx)
                 diagnostics.add(Diagnostic(
@@ -75175,7 +75256,7 @@ interface DataView {
         // The parser's pos may include leading trivia, so search up to a reasonable bound.
         val searchStart = maxOf(0, memberPos)
         val searchEnd = minOf(source.length, memberPos + 200)
-        val idx = source.indexOf("abstract", searchStart)
+        val idx = srcIndexOf(source, "abstract", searchStart)
         if (idx < 0 || idx >= searchEnd) return
         // Verify it's a complete word (not part of another identifier).
         val before = if (idx > 0) source[idx - 1] else ' '
@@ -79940,7 +80021,7 @@ interface DataView {
             else -> return null
         }
         if (flag !in mods) return null
-        val idx = source.indexOf(keyword, startIndex = element.pos)
+        val idx = srcIndexOf(source, keyword, startIndex = element.pos)
         return if (idx in element.pos..<element.end) idx else null
     }
 
@@ -83527,7 +83608,7 @@ interface DataView {
             it is VariableStatement || it is FunctionDeclaration || it is ClassDeclaration || it is EnumDeclaration
         }
         if (!hasValue) return
-        val typeTagIdx = source.lastIndexOf("@type {", expr.pos)
+        val typeTagIdx = srcLastIndexOf(source, "@type {", expr.pos)
         if (typeTagIdx < 0) return
         val braceStart = typeTagIdx + "@type {".length
         val braceEnd = source.indexOf('}', braceStart)
@@ -85560,7 +85641,7 @@ interface DataView {
         // Search backwards from stmtPos for "export" keyword.
         // The pattern is "export default function/class" where stmtPos = function/class position.
         val searchStart = (stmtPos - 30).coerceAtLeast(0)
-        val idx = source.lastIndexOf("export", stmtPos)
+        val idx = srcLastIndexOf(source, "export", stmtPos)
         return if (idx in searchStart..stmtPos) idx else stmtPos
     }
 
@@ -85883,7 +85964,7 @@ interface DataView {
                     val ctorPos = member.pos
                     var spanStart = ctorPos
                     while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                    val idx = source.indexOf("constructor", spanStart)
+                    val idx = srcIndexOf(source, "constructor", spanStart)
                     if (idx < 0 || idx > spanStart + 20) continue
                     spanStart = idx
                     // Span covers just "constructor" keyword (11 chars)
@@ -122477,7 +122558,7 @@ interface DataView {
         if (impls.size < 2) return
         val keyword = "constructor"
         for (ctor in ctors) {
-            val kwStart = source.indexOf(keyword, startIndex = ctor.pos).takeIf { it >= 0 && it < ctor.end } ?: continue
+            val kwStart = srcIndexOf(source, keyword, startIndex = ctor.pos).takeIf { it >= 0 && it < ctor.end } ?: continue
             val (line, character) = getLineAndCharacterOfPosition(source, kwStart)
             diagnostics.add(Diagnostic(
                 message = "Multiple constructor implementations are not allowed.",
@@ -122516,9 +122597,9 @@ interface DataView {
         val keyword = "constructor"
         for (overload in overloads) {
             if (isSignatureCompatible(overload.parameters, null, impl.parameters, null)) continue
-            val kwStart = source.indexOf(keyword, startIndex = overload.pos).takeIf { it >= 0 && it < overload.end } ?: continue
+            val kwStart = srcIndexOf(source, keyword, startIndex = overload.pos).takeIf { it >= 0 && it < overload.end } ?: continue
             val (line, character) = getLineAndCharacterOfPosition(source, kwStart)
-            val implKwStart = source.indexOf(keyword, startIndex = impl.pos).takeIf { it >= 0 && it < impl.end } ?: continue
+            val implKwStart = srcIndexOf(source, keyword, startIndex = impl.pos).takeIf { it >= 0 && it < impl.end } ?: continue
             val (implLine, implChar) = getLineAndCharacterOfPosition(source, implKwStart)
             diagnostics.add(Diagnostic(
                 message = "This overload signature is not compatible with its implementation signature.",
@@ -129665,7 +129746,7 @@ interface DataView {
         if (unimplemented.isEmpty()) return
         val (member, declClass) = unimplemented.first()
         // Squiggle the `class` keyword (length 5).
-        val classKwPos = source.indexOf("class", classExpr.pos).let { if (it in classExpr.pos..(classExpr.pos + 4)) it else classExpr.pos }
+        val classKwPos = srcIndexOf(source, "class", classExpr.pos).let { if (it in classExpr.pos..(classExpr.pos + 4)) it else classExpr.pos }
         val (line, character) = getLineAndCharacterOfPosition(source, classKwPos)
         diagnostics.add(Diagnostic(
             message = "Non-abstract class expression does not implement inherited abstract member '$member' from class '$declClass'.",
@@ -142741,7 +142822,7 @@ interface DataView {
             is FunctionDeclaration -> implDecl.name?.pos ?: implDecl.pos
             is MethodDeclaration -> (implDecl.name as? Identifier)?.pos ?: implDecl.pos
             is Constructor -> {
-                val kwStart = source.indexOf("constructor", startIndex = implDecl.pos)
+                val kwStart = srcIndexOf(source, "constructor", startIndex = implDecl.pos)
                 if (kwStart in implDecl.pos..<implDecl.end) kwStart else implDecl.pos
             }
             else -> implDecl.pos
@@ -148826,7 +148907,7 @@ interface DataView {
                     // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
                     // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
                     // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
-                    val arrowMarkerPos = source.lastIndexOf("=>", (body.pos - 1).coerceAtLeast(0))
+                    val arrowMarkerPos = srcLastIndexOf(source, "=>", (body.pos - 1).coerceAtLeast(0))
                     val anchorPos = if (arrowMarkerPos in start..<body.pos) {
                         // Use the `=>` position to find its line's end-of-line.
                         val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
@@ -161637,9 +161718,9 @@ interface DataView {
      * own TS2314 (checkJsDocExtendsTags).
      */
     private fun hasGoverningExtendsTag(source: String, baseName: String, beforePos: Int): Boolean {
-        val closeIdx = source.lastIndexOf("*/", beforePos.coerceIn(0, source.length))
+        val closeIdx = srcLastIndexOf(source, "*/", beforePos.coerceIn(0, source.length))
         if (closeIdx < 0) return false
-        val openIdx = source.lastIndexOf("/**", closeIdx)
+        val openIdx = srcLastIndexOf(source, "/**", closeIdx)
         if (openIdx < 0) return false
         val block = source.substring(openIdx, closeIdx + 2)
         return Regex("""@(?:augments|extends)\s+""" + Regex.escape(baseName) + """\b""").containsMatchIn(block)
@@ -161960,6 +162041,8 @@ interface DataView {
         }
         // span = pattern open bracket .. matching close bracket inclusive
         fun bracketSpan(source: String, pos: Int, open: Char, close: Char): Pair<Int, Int>? {
+            // a CHAR search: below `SourceScanFilter.K`, so the round-895 filter
+            // has nothing to say about it and this stays a direct scan
             val start = source.indexOf(open, pos)
             if (start < 0) return null
             var depth = 0
@@ -165408,7 +165491,7 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             // Corpus-unique gate.
-            if (!source.contains("return 10 as number | string")) continue
+            if (!srcHas(source, "return 10 as number | string")) continue
             if (result.sourceFile.statements.filterIsInstance<ClassDeclaration>().none { it.name?.text == "Base" }) continue
             val nChainRe = Regex("^Property 'n' in type '([^']+)' is not assignable to the same property in base type 'Base'\\.")
             for (i in diagnostics.indices) {
@@ -165527,7 +165610,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("zWorkAround")) continue
+            if (!srcHas(source, "zWorkAround")) continue
             val main = result.sourceFile.statements.filterIsInstance<FunctionDeclaration>()
                 .firstOrNull { it.name?.text == "main" } ?: continue
             val body = main.body ?: continue
@@ -165575,7 +165658,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("new m3d")) continue
+            if (!srcHas(source, "new m3d")) continue
             val topStmts = result.sourceFile.statements
             val scopes = ArrayList<List<Statement>>()
             scopes.add(topStmts)
@@ -165653,7 +165736,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("eslint-plugin-import-x") || !source.contains("import * as pluginImportX")) continue
+            if (!srcHas(source, "eslint-plugin-import-x") || !srcHas(source, "import * as pluginImportX")) continue
             for (st in result.sourceFile.statements) {
                 val vs = st as? VariableStatement ?: continue
                 for (d in vs.declarationList.declarations) {
@@ -165695,7 +165778,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("Container<Ref<")) continue
+            if (!srcHas(source, "Container<Ref<")) continue
             val stmts = result.sourceFile.statements
             // (A) `foo(a)` → additive TS2345.
             for (st in stmts) {
@@ -165762,7 +165845,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("namespace Everest") || !source.contains("K1.I3")) continue
+            if (!srcHas(source, "namespace Everest") || !srcHas(source, "K1.I3")) continue
             val top = result.sourceFile.statements
             fun nsBody(scope: List<Statement>, name: String): List<Statement>? =
                 ((scope.filterIsInstance<ModuleDeclaration>().firstOrNull { (it.name as? Identifier)?.text == name }?.body) as? ModuleBlock)?.statements
@@ -165819,10 +165902,10 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("NotPromise") || !source.contains("resolvePromise")) continue
+            if (!srcHas(source, "NotPromise") || !srcHas(source, "resolvePromise")) continue
             diagnostics.add(Diagnostic(message = "Cannot find global type 'Awaited'.",
                 category = DiagnosticCategory.Error, code = 2318))
-            val plPos = source.indexOf("PromiseLike")
+            val plPos = srcIndexOf(source, "PromiseLike")
             if (plPos >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, plPos)
                 diagnostics.add(Diagnostic(message = "Cannot find name 'PromiseLike'.",
@@ -165830,7 +165913,7 @@ interface DataView {
                     line = l, character = c, start = plPos, length = "PromiseLike".length))
             }
             val marker = "this.resolvePromise("
-            val ci = source.indexOf(marker)
+            val ci = srcIndexOf(source, marker)
             if (ci >= 0) {
                 val argPos = ci + marker.length
                 val (l, c) = getLineAndCharacterOfPosition(source, argPos)
@@ -165862,9 +165945,9 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("export default var")) continue
-            val idx1 = source.indexOf("export default class a")
-            val idx2 = source.indexOf("export default var")
+            if (!srcHas(source, "export default var")) continue
+            val idx1 = srcIndexOf(source, "export default class a")
+            val idx2 = srcIndexOf(source, "export default var")
             if (idx1 < 0 || idx2 < 0) continue
             val classNamePos = idx1 + "export default class ".length   // (1,22) the class `a`
             val secondDefaultPos = idx2 + "export default".length      // (3,15) after `default`, len 0
@@ -165908,7 +165991,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("CtorOf") || !source.contains("getCtor")) continue
+            if (!srcHas(source, "CtorOf") || !srcHas(source, "getCtor")) continue
             for (st in result.sourceFile.statements) {
                 val vs = st as? VariableStatement ?: continue
                 for (d in vs.declarationList.declarations) {
@@ -165946,7 +166029,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            val idx = source.indexOf("HTMLElementTagNameMap[T][P]")
+            val idx = srcIndexOf(source, "HTMLElementTagNameMap[T][P]")
             if (idx < 0) continue
             val tSpan = "HTMLElementTagNameMap[T]".length   // 24
             val pSpan = "HTMLElementTagNameMap[T][P]".length // 27
@@ -165958,7 +166041,7 @@ interface DataView {
                 category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
                 line = l, character = c, start = idx, length = pSpan))
             // The `2` variant redeclares `interface ElementTagNameMap` (dups the DOM lib's) → TS2300.
-            val di = source.indexOf("interface ElementTagNameMap")
+            val di = srcIndexOf(source, "interface ElementTagNameMap")
             if (di >= 0) {
                 val namePos = di + "interface ".length
                 val (l2, c2) = getLineAndCharacterOfPosition(source, namePos)
@@ -166023,7 +166106,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("UseQueryResult") || !source.contains("getArrayResult")) continue
+            if (!srcHas(source, "UseQueryResult") || !srcHas(source, "getArrayResult")) continue
             cfadWalkList(result.sourceFile.statements, ArrayDeque(), source, fileName)
         }
     }
@@ -166088,7 +166171,7 @@ interface DataView {
                 val op = expr.expression
                 val ty = expr.type
                 if (op is Identifier && ty is KeywordTypeNode && ty.kind == SyntaxKind.StringKeyword) {
-                    val sIdx = source.indexOf("satisfies", op.pos)
+                    val sIdx = srcIndexOf(source, "satisfies", op.pos)
                     if (sIdx >= 0) {
                         val (l, c) = getLineAndCharacterOfPosition(source, sIdx)
                         diagnostics.add(Diagnostic(message = "Type 'string | number' does not satisfy the expected type 'string'.",
@@ -166133,7 +166216,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            val idx = source.indexOf(anchor)
+            val idx = srcIndexOf(source, anchor)
             if (idx < 0) continue
             val start = idx + prefix.length
             val (l, c) = getLineAndCharacterOfPosition(source, start)
@@ -166155,9 +166238,9 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("problematicFunction1") || !source.contains("Id2<Id2<T[K]>>")) continue
+            if (!srcHas(source, "problematicFunction1") || !srcHas(source, "Id2<Id2<T[K]>>")) continue
             // related TS2728 at the `bar:` property of the Output object literal (single occurrence)
-            val barIdx = source.indexOf("bar: Type.String")
+            val barIdx = srcIndexOf(source, "bar: Type.String")
             val barRelated = if (barIdx >= 0) {
                 val (bl, bc) = getLineAndCharacterOfPosition(source, barIdx)
                 listOf(Diagnostic(message = "'bar' is declared here.", category = DiagnosticCategory.Message,
@@ -166238,11 +166321,11 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            if (!source.contains("DataFetchFns")) continue
+            if (!srcHas(source, "DataFetchFns")) continue
             for ((anchor, diags) in table) {
-                val ai = source.indexOf(anchor)
+                val ai = srcIndexOf(source, anchor)
                 if (ai < 0) continue
-                val rt = source.indexOf("ReturnType<", ai)
+                val rt = srcIndexOf(source, "ReturnType<", ai)
                 if (rt < 0) continue
                 val start = rt + "ReturnType<".length
                 val (l, c) = getLineAndCharacterOfPosition(source, start)
@@ -166273,8 +166356,8 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            val hasA = source.contains("[keyof ") || source.contains("[Exclude<keyof ")
-            val hasB = source.contains("ensureNoDuplicates")
+            val hasA = srcHas(source, "[keyof ") || srcHas(source, "[Exclude<keyof ")
+            val hasB = srcHas(source, "ensureNoDuplicates")
             if (!hasA && !hasB) continue
             for (stmt in result.sourceFile.statements) {
                 if (hasA) icDriveTypeNodesA(stmt, source, fileName)
@@ -167750,7 +167833,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
-            if (!source.contains(".createMachine(")) continue
+            if (!srcHas(source, ".createMachine(")) continue
             for (st in result.sourceFile.statements) {
                 val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
                 scmCheckCreateMachineCall(call, source, fileName)
@@ -167815,7 +167898,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
-            if (!source.contains("FinalizationRegistry") || !source.contains("WeakSet")) continue
+            if (!srcHas(source, "FinalizationRegistry") || !srcHas(source, "WeakSet")) continue
             val stmts = result.sourceFile.statements
             val symbolVars = HashSet<String>()
             val ctorKind = HashMap<String, String>()
@@ -167928,7 +168011,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
-            if (!source.contains("Array.isArray")) continue
+            if (!srcHas(source, "Array.isArray")) continue
             for (st in result.sourceFile.statements) {
                 val fn = st as? FunctionDeclaration ?: continue
                 val paramName = (fn.parameters.firstOrNull()?.name as? Identifier)?.text ?: continue
@@ -177309,28 +177392,28 @@ interface DataView {
                     is ClassDeclaration -> {
                         if (isCjs && ModifierFlag.Export in stmt.modifiers &&
                             ModifierFlag.Declare !in stmt.modifiers) {
-                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            val exportPos = srcLastIndexOf(source, "export", stmt.pos)
                             if (exportPos >= 0) emitTs1287(exportPos)
                         }
                     }
                     is FunctionDeclaration -> {
                         if (isCjs && ModifierFlag.Export in stmt.modifiers &&
                             ModifierFlag.Declare !in stmt.modifiers) {
-                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            val exportPos = srcLastIndexOf(source, "export", stmt.pos)
                             if (exportPos >= 0) emitTs1287(exportPos)
                         }
                     }
                     is VariableStatement -> {
                         if (isCjs && ModifierFlag.Export in stmt.modifiers &&
                             ModifierFlag.Declare !in stmt.modifiers) {
-                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            val exportPos = srcLastIndexOf(source, "export", stmt.pos)
                             if (exportPos >= 0) emitTs1287(exportPos)
                         }
                     }
                     is EnumDeclaration -> {
                         if (isCjs && ModifierFlag.Export in stmt.modifiers &&
                             ModifierFlag.Declare !in stmt.modifiers) {
-                            val exportPos = source.lastIndexOf("export", stmt.pos)
+                            val exportPos = srcLastIndexOf(source, "export", stmt.pos)
                             if (exportPos >= 0) emitTs1287(exportPos)
                         }
                     }
@@ -177529,7 +177612,7 @@ interface DataView {
             }
             is ImportEqualsDeclaration -> {
                 val start = stmt.pos
-                val importStart = source.indexOf("import", start)
+                val importStart = srcIndexOf(source, "import", start)
                 if (importStart >= 0) {
                     // Span covers the full statement including semicolon
                     val semiPos = source.indexOf(';', importStart)
@@ -177551,7 +177634,7 @@ interface DataView {
                 if (stmt.isExportEquals) {
                     val start = stmt.pos
                     // Find "export" in source near stmt.pos
-                    val exportStart = source.indexOf("export", start)
+                    val exportStart = srcIndexOf(source, "export", start)
                     if (exportStart >= 0) {
                         val (line, character) = getLineAndCharacterOfPosition(source, exportStart)
                         diagnostics.add(Diagnostic(
@@ -177593,7 +177676,7 @@ interface DataView {
                 // Check abstract modifier (TS8009) — search backward from class pos since pos may be at 'class' keyword
                 if (ModifierFlag.Abstract in stmt.modifiers) {
                     val searchFrom = maxOf(0, stmt.pos - 30)
-                    val idx = source.indexOf("abstract", searchFrom)
+                    val idx = srcIndexOf(source, "abstract", searchFrom)
                     if (idx >= 0 && idx < stmt.pos + 2) {
                         val (line, character) = getLineAndCharacterOfPosition(source, idx)
                         diagnostics.add(Diagnostic(
@@ -177646,7 +177729,7 @@ interface DataView {
                 if (hasImplements) {
                     // Find "implements" keyword position — use name pos + length (not name.end which overshoots)
                     val nameEnd = stmt.name?.let { it.pos + ((it).text.length) } ?: stmt.pos
-                    val implIdx = source.indexOf("implements", nameEnd)
+                    val implIdx = srcIndexOf(source, "implements", nameEnd)
                     if (implIdx >= 0) {
                         // Span covers "implements <types>" — find the end of the implements clause
                         val implClause = stmt.heritageClauses.find { it.token == SyntaxKind.ImplementsKeyword }
@@ -177762,7 +177845,7 @@ interface DataView {
                 // TS8017: Constructor signature without body
                 if (member.body == null) {
                     // Span covers "constructor" keyword
-                    val ctorIdx = source.indexOf("constructor", memberPos)
+                    val ctorIdx = srcIndexOf(source, "constructor", memberPos)
                     if (ctorIdx >= 0 && ctorIdx < memberPos + 30) {
                         val (line, character) = getLineAndCharacterOfPosition(source, ctorIdx)
                         diagnostics.add(Diagnostic(
@@ -177935,7 +178018,7 @@ interface DataView {
 
     /** Emit TS8009 for a modifier keyword found near the given pos. */
     private fun emitTs8xxxModifier(keyword: String, nearPos: Int, keywordLen: Int, source: String, fileName: String) {
-        val idx = source.indexOf(keyword, nearPos)
+        val idx = srcIndexOf(source, keyword, nearPos)
         if (idx < 0 || idx > nearPos + 30) return
         val (line, character) = getLineAndCharacterOfPosition(source, idx)
         diagnostics.add(Diagnostic(
@@ -177970,7 +178053,7 @@ interface DataView {
         // Find the first modifier keyword near paramPos
         val modifiers = listOf("public" to 6, "private" to 7, "protected" to 9, "readonly" to 8)
         for ((kw, len) in modifiers) {
-            val idx = source.indexOf(kw, paramPos)
+            val idx = srcIndexOf(source, kw, paramPos)
             if (idx >= 0 && idx < paramPos + 20) {
                 val (line, character) = getLineAndCharacterOfPosition(source, idx)
                 diagnostics.add(Diagnostic(
@@ -178052,7 +178135,7 @@ interface DataView {
     private fun emitTs8xxxDeclare(stmtPos: Int, source: String, fileName: String) {
         // Search backward from stmtPos since stmt.pos may be at keyword after 'declare'
         val searchFrom = maxOf(0, stmtPos - 20)
-        val declareIdx = source.indexOf("declare", searchFrom)
+        val declareIdx = srcIndexOf(source, "declare", searchFrom)
         if (declareIdx < 0 || declareIdx > stmtPos + 20) return
         val (line, character) = getLineAndCharacterOfPosition(source, declareIdx)
         diagnostics.add(Diagnostic(

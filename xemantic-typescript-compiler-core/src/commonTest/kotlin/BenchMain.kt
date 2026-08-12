@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
+import com.xemantic.typescript.compiler.SrcScan
 import com.xemantic.typescript.compiler.ParallelCheckMode
 import com.xemantic.typescript.compiler.ShareBind
 import com.xemantic.typescript.compiler.PassTiming
@@ -160,6 +161,14 @@ internal val TIERS = listOf(
     // its boundary cost is microseconds against a ~900 ms region — round 738
     // stated that and it is regime-independent.
     "frontend",
+    // (WARM.19) round 895 — the whole-source substring-scan family, ON and OFF.
+    // These two tiers exist because the round's whole claim is a WARM one and its
+    // census had only ever been taken COLD: `String.indexOf` warms ~3.8x here and
+    // the hand-written filter build warms on its own schedule, so the cold ratio
+    // is an inference and these are the measurement. They arm counters plus ONE
+    // timestamp pair per scan and per build — affordable, uniquely here, because
+    // a whole-source scan is tens of microseconds against a ~90 ns pair.
+    "srcscan", "srcscanoff",
     // (WARM.9) round 861 — `init:buildFileLocalTypeMaps`, the ONLY tail pass over
     // 1% warm (268.4 ms = 3.56%, `warm-tail-attribution.md` § 3). Round 829
     // censused it COLD with `--fltmCensus` and closed it at 0.8-1.0%; warm it is
@@ -422,6 +431,8 @@ internal fun tierBegin(tier: String) {
         "call" -> { CallSections.reset(); CallSections.mode = CallSections.ON }
         "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
         "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
+        "srcscan" -> { SrcScan.reset(); SrcScan.on = true }
+        "srcscanoff" -> { SrcScan.reset(); SrcScan.on = true; SrcScan.off = true }
         "frontend" -> { FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON }
         // (WARM.21) — arms nothing but the pass's OFF switch. Deliberately NOT
         // `FrontEnd.mode = ON`: the census's own extra chain walks would land
@@ -514,6 +525,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     "call", "callcoarse" ->
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
+    "srcscan", "srcscanoff" -> SrcScan.report()
     "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
         "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->
@@ -599,6 +611,12 @@ internal fun tierStop() {
     ArgSections.mode = ArgSections.OFF
     CallSections.mode = CallSections.OFF
     LibTypeCensus.enabled = false
+    // (WARM.19) — an `off` left set silently restores the pre-895 unfiltered
+    // path for every LATER rebuild in this process, which reads as a regression
+    // in whatever tier follows; an `on` left set leaves a timestamp pair on
+    // every scan of every later rebuild.
+    SrcScan.on = false
+    SrcScan.off = false
     FrontEnd.mode = FrontEnd.OFF
     // (WARM.16) — same hazard as `SpineAmp.reps` below: a `copyAmp` left set
     // costs every LATER rebuild in this process `r` extra whole-map copies per
@@ -636,6 +654,7 @@ internal fun tierStop() {
     ArgSections.reset()
     CallSections.reset()
     LibTypeCensus.reset()
+    SrcScan.reset()
 }
 
 fun main(args: Array<String>) {
