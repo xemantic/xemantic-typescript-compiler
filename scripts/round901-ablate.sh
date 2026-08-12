@@ -113,9 +113,13 @@ for arm in "${ARMS[@]}"; do
   # its ABSENCE means a green run — i.e. a BLIND arm, not a compile error. The
   # first pass of this driver mislabelled exactly that and would have hidden two
   # blind arms behind a word that reads like an infrastructure problem.
-  echo "-- $arm: $(grep -a 'tests completed' "$LOG/$arm.log" ||
-      grep -qa 'BUILD SUCCESSFUL' "$LOG/$arm.log" && echo 'ALL PINS GREEN — BLIND ARM' ||
-      echo 'BUILD FAILED — see the log')"
+  if grep -qa 'tests completed' "$LOG/$arm.log"; then
+    echo "-- $arm: $(grep -a 'tests completed' "$LOG/$arm.log")"
+  elif grep -qa 'BUILD SUCCESSFUL' "$LOG/$arm.log"; then
+    echo "-- $arm: ALL PINS GREEN — BLIND ARM"
+  else
+    echo "-- $arm: BUILD FAILED — see $LOG/$arm.log"
+  fi
   grep -a 'FAILED$' "$LOG/$arm.log" | sed 's/^/     /' | head -12
 done
 

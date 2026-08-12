@@ -211,20 +211,27 @@ class LexLevelProbeCensusTest {
      * BOTH arms must run — one shared sink cannot tell a dropped arm from a
      * running one, and a slope read off a single surviving arm is a measurement
      * of the wrong thing with nothing to say so.
-     *
-     * The inequality is the more valuable half: the filter is a SUPERSET of the
-     * map by construction, so it can never sink less. That is the proof-of-absence
-     * property itself — a mask that refused a name the map holds would make the
-     * lever suppress a resolution, and this is the only assertion in the repo that
-     * would see it.
      */
     @Test
-    fun `both amplified arms run and the filter is a superset of the map`() = withCensus(amp = 3) {
+    fun `both amplified arms run`() = withCensus(amp = 3) {
         diagnose(source)
         assert(MapCensus.lexAmpMapSink > 0L)
         assert(MapCensus.lexAmpFilterSink > 0L)
-        assert(MapCensus.lexAmpFilterSink >= MapCensus.lexAmpMapSink)
         assert(MapCensus.sink == MapCensus.lexAmpMapSink + MapCensus.lexAmpFilterSink)
+    }
+
+    /**
+     * The soundness assertion, kept in its OWN method so that it discriminates on
+     * its own: the filter is a SUPERSET of the map by construction, so it can
+     * never sink less. A mask built even one bit off its own probe breaks this
+     * and nothing else — and a filter that refuses a name the map HOLDS is a
+     * suppressed resolution, which no diagnostic assertion could catch because
+     * the lever changes no answer when it is right.
+     */
+    @Test
+    fun `the filter never refuses a name the map holds`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpFilterSink >= MapCensus.lexAmpMapSink)
     }
 
     // ---- the round-900 lesson ----------------------------------------------
