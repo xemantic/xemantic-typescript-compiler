@@ -356,8 +356,11 @@ internal fun copyAmpKinds(tier: String): Int = when {
     tier.startsWith("copyampes") -> 1 shl FrontEnd.CP_EPOCH_SET
     // (WARM.25) round 894's candidate (6) — `spineArgListOverlay` alone (`al`),
     // and every `SpineArgCtx` map copy including the fn-boundary edges (`ag`).
-    tier.startsWith("copyampal") -> 1 shl FrontEnd.CP_ARG_OVERLAY
-    tier.startsWith("copyampag") -> (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_EDGE)
+    tier.startsWith("copyampal") ->
+        (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_SHADOW)
+    tier.startsWith("copyampag") ->
+        (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_SHADOW) or
+            (1 shl FrontEnd.CP_ARG_EDGE)
     else -> -1
 }
 

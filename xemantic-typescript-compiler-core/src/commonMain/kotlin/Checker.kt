@@ -60628,9 +60628,9 @@ interface DataView {
                 }
             }
             shadowed?.let {
-                FrontEnd.addCopy(FrontEnd.CP_ARG_OVERLAY, effective.size)
-                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_OVERLAY, effective)
-                FrontEnd.noteMuts(FrontEnd.CP_ARG_OVERLAY, it.size)
+                FrontEnd.addCopy(FrontEnd.CP_ARG_SHADOW, effective.size)
+                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_SHADOW, effective)
+                FrontEnd.noteMuts(FrontEnd.CP_ARG_SHADOW, it.size)
                 effective = effective - it
             }
         }

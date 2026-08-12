@@ -72,10 +72,14 @@ class CopyCensusTest {
     fun `each per-family amplifier arm names exactly its own family`() {
         assert(copyAmpKinds("copyampem16") == 1 shl FrontEnd.CP_EPOCH_MAP)
         assert(copyAmpKinds("copyampes16") == 1 shl FrontEnd.CP_EPOCH_SET)
-        assert(copyAmpKinds("copyampal16") == 1 shl FrontEnd.CP_ARG_OVERLAY)
+        assert(
+            copyAmpKinds("copyampal16") ==
+                (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_SHADOW)
+        )
         assert(
             copyAmpKinds("copyampag16") ==
-                (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_EDGE)
+                (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_SHADOW) or
+                    (1 shl FrontEnd.CP_ARG_EDGE)
         )
     }
 
@@ -202,23 +206,53 @@ class CopyCensusTest {
 
     // ---- the hooks, through a real compile ----------------------------------
 
+    /**
+     * The compile fixture. It is deliberately RICHER than the obvious one: a
+     * plain nested-function fixture makes five `EpochMap` copies holding four
+     * entries between them, because rounds 891/892 moved the fn-body local
+     * families onto `MapScopeStack` and what survives in a single-file compile
+     * copies near-EMPTY maps. The invariant "a copy is counted at most once"
+     * is then unfalsifiable — no copy is ever written twice, so a census that
+     * counted every write would read the same as one that counted the first.
+     * A class with methods, `this`, an arrow callback and a function-expression
+     * callback reaches 21 copies and 34 writes, which is the multiplicity the
+     * pin below needs.
+     */
     private val src = """
-        function outer(a: string, b: number) {
-            let x = a;
-            let y = b;
-            function inner(c: string) {
-                let z = c;
-                return z;
+        class Holder {
+            v: number = 1;
+            run(a: number, b: string): number {
+                let x = a; let y = b;
+                const cb = (p: number) => { let q = p; let r = q; return r + x; };
+                return cb(x) + this.v;
             }
-            if (x.length > 0) {
-                let w = x;
-                return inner(w);
-            }
-            return inner(x);
+            other(k: number) { let m = k; let n = m; return this.run(n, "s"); }
         }
-        outer("k", 1);
-        inner2();
-        function inner2() { return 0; }
+        function take(f: (n: number) => number, s: string) { return f(1); }
+        const h = new Holder();
+        take((z) => { let a1 = z; let b1 = a1; return b1; }, "q");
+        take(function (z) { let c1 = z; let d1 = c1; return d1; }, "w");
+        h.other(2);
+        function outer(a: string) {
+            function inner(c: string) { return c; }
+            return inner(a);
+        }
+        outer("k");
+    """.trimIndent()
+
+    /**
+     * The SHADOW fixture — `let shadowMe` at fnDepth > 0 hiding a file-level
+     * `function shadowMe`, which is the only shape that reaches
+     * `spineArgListOverlay`'s second copy site.
+     */
+    private val shadowSrc = """
+        function shadowMe(z: number) { return z; }
+        function host() {
+            let shadowMe = 1;
+            function nested(w: number) { return w; }
+            return nested(shadowMe);
+        }
+        host();
     """.trimIndent()
 
     /**
@@ -243,6 +277,10 @@ class CopyCensusTest {
             assert(touched > 0L)
             assert(touched <= calls)
             assert(touchedEntries <= entries)
+            // …and the fixture must actually EXERCISE the invariant: with
+            // `writes <= copies` the "at most once" clause is vacuous, so the
+            // multiplicity is asserted rather than assumed.
+            assert(FrontEnd.copyMuts[FrontEnd.CP_EPOCH_MAP] > calls)
         }
 
     /**
@@ -273,5 +311,22 @@ class CopyCensusTest {
         diagnose(src)
         assert(FrontEnd.copyCalls[FrontEnd.CP_ARG_OVERLAY] > 0L)
         assert(FrontEnd.copyEntries[FrontEnd.CP_ARG_OVERLAY] > 0L)
+    }
+
+    /**
+     * …and its SECOND copy site separately. This pin is why the shadow-minus
+     * has its own family index at all: while the two sites shared one counter,
+     * deleting the shadow site's hook reddened NOTHING, because the overlay
+     * site kept the counter non-zero. A census family that cannot be zero is a
+     * census family that cannot be wrong.
+     */
+    @Test
+    fun `a compile reaches the arg list shadow-minus copy site`() = withSavedMode {
+        FrontEnd.mode = FrontEnd.ON
+        FrontEnd.reset()
+        diagnose(shadowSrc)
+        assert(FrontEnd.copyCalls[FrontEnd.CP_ARG_SHADOW] > 0L)
+        assert(FrontEnd.copyEntries[FrontEnd.CP_ARG_SHADOW] > 0L)
+        assert(FrontEnd.copyMuts[FrontEnd.CP_ARG_SHADOW] > 0L)
     }
 }

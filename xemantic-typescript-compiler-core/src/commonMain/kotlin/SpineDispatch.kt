@@ -4845,11 +4845,21 @@ object FrontEnd {
     const val CP_CTA_VAR = 4
     /** `CtaFrame`'s localTypes / localDeclNodes / shadowedNames fn-body copies. */
     const val CP_CTA_LOCAL = 5
-    /** (WARM.25) `spineArgListOverlay`'s `funcParams` overlay + shadow-minus. */
+    /** (WARM.25) `spineArgListOverlay`'s nested-FunctionDeclaration overlay. */
     const val CP_ARG_OVERLAY = 6
+    /**
+     * (WARM.25) `spineArgListOverlay`'s fnDepth>0 shadow-minus.
+     *
+     * Split from [CP_ARG_OVERLAY] because the two sites are in one function and
+     * a single counter cannot see one of them fail: the ablation's A8 arm — the
+     * shadow site's hook deleted — reddened NOTHING while the family counter was
+     * shared, since the OTHER site kept it non-zero. Round 813's law, met inside
+     * this round's own instrument.
+     */
+    const val CP_ARG_SHADOW = 7
     /** (WARM.25) the other `SpineArgCtx` map copies — fn-boundary edges, ModuleBlock. */
-    const val CP_ARG_EDGE = 7
-    const val CP_N = 8
+    const val CP_ARG_EDGE = 8
+    const val CP_N = 9
 
     val copyNames: Array<String> = arrayOf(
         "EpochMap(localTypes)",
@@ -4858,7 +4868,8 @@ object FrontEnd {
         "spinePd anns (HashMap)",
         "CtaFrame.varTypes (toMutableMap)",
         "CtaFrame localTypes+declNodes+shadowed",
-        "spineArgListOverlay funcParams",
+        "spineArgListOverlay nested-fn overlay",
+        "spineArgListOverlay shadow-minus",
         "SpineArgCtx edge/ns copies",
     )
 
