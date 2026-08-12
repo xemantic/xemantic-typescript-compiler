@@ -80,12 +80,27 @@ open(p,'w').write(s.replace(old, new))
 EOF
        ;;
     B5) python3 - <<'EOF'
+# De-duplicate per SCOPE, i.e. record the scope-weighted population round 901 § 5
+# priced the successor from.
+#
+# The first form of this arm guarded on `lexScopes.contains(l)`, which is ALWAYS
+# TRUE here: `lexLevelHasName` calls `MapCensus.lexScope(l)` two lines before it
+# calls `lexAmp`. The edit produced a real `git diff` and changed nothing — a DEAD
+# arm, not a blind pin, and the driver could not tell them apart. First sight is
+# instead `censusNames == null`, which is genuinely once per scope.
 p='xemantic-typescript-compiler-core/src/commonMain/kotlin/MapCensus.kt'
 s=open(p).read()
-old="        lexProbeSizeSum += names.size.toLong()\n        lexProbeSizeHistogram[if (names.size >= 9) 9 else names.size]++"
-new="        if (lexScopes.contains(l)) {\n            lexProbeSizeSum += names.size.toLong()\n            lexProbeSizeHistogram[if (names.size >= 9) 9 else names.size]++\n        }"
-assert s.count(old) == 1, s.count(old)
-open(p,'w').write(s.replace(old, new))
+old1="        val names = l.censusNames ?: l.symbols.keys.toTypedArray().also { l.censusNames = it }"
+new1=("        val firstSight = l.censusNames == null\n"
+      "        val names = l.censusNames ?: l.symbols.keys.toTypedArray().also { l.censusNames = it }")
+old2=("        lexProbeSizeSum += names.size.toLong()\n"
+      "        lexProbeSizeHistogram[if (names.size >= 9) 9 else names.size]++")
+new2=("        if (firstSight) {\n"
+      "            lexProbeSizeSum += names.size.toLong()\n"
+      "            lexProbeSizeHistogram[if (names.size >= 9) 9 else names.size]++\n"
+      "        }")
+assert s.count(old1) == 1 and s.count(old2) == 1
+open(p,'w').write(s.replace(old1, new1).replace(old2, new2))
 EOF
        ;;
     B6) python3 - <<'EOF'

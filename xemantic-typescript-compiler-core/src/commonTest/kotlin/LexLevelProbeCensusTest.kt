@@ -51,8 +51,20 @@ class LexLevelProbeCensusTest {
      * A fixture that reaches every arm of the partition: a namespace (an UNTRUSTED
      * level), nested functions (levels whose own `symbols` carry type parameters
      * and block-hoisted names), and blocks (levels that bind nothing at all).
+     *
+     * The file-level bare block is load-bearing and was added by round 902's
+     * ablation. Its `var` is B83.5-hoisted into the SOURCE FILE root's own
+     * `symbols`, and the root is the ONLY level that carries an `existing` table
+     * past the untrusted-owner rule (round 901 § 1). Without it the root's
+     * `symbols` is empty, so the root is never a REAL probe, so no amplified scope
+     * has an `existing` table at all — and an arm that pollutes the scanned array
+     * with `existing` keys becomes a no-op that reads as a blind pin.
      */
     private val source = """
+        {
+            var hoistedAtFileLevel = 0;
+            hoistedAtFileLevel = hoistedAtFileLevel + 1;
+        }
         const top = 2;
         namespace N {
             export const inside = 1;
