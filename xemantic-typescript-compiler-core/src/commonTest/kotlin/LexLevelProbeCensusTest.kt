@@ -1,0 +1,233 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler
+
+import com.xemantic.kotlin.test.assert
+import kotlin.test.Test
+
+/**
+ * (WARM.28) round 901 — the census that priced round 899's candidate (2),
+ * `lexLevelHasName`, and then REFUSED it. `docs/perf/lex-level-probe-price.md`.
+ *
+ * What these pins protect is a MEASUREMENT, not an answer. The census changes no
+ * diagnostic, so no output assertion anywhere can see it break — which is round
+ * 897's A1 and round 900's A3 for the third time, and the answer is the same:
+ * the pins are counter identities that hold BY CONSTRUCTION and are breached the
+ * moment a hook moves.
+ *
+ * The identity that carries the round is the EMPTY/REAL split. `HashMap.getNode`
+ * reads `table` before it hashes the key, so a level whose `symbols` map was
+ * never written answers a probe with a null check — and a census that counted
+ * probes alone would price those at the arc's 20-50 ns reference and manufacture
+ * a prize out of 271,684 free operations. If [MapCensus.lexSymEmpty] ever stops
+ * being able to be non-zero, the census is silently back to counting probes.
+ */
+class LexLevelProbeCensusTest {
+
+    /**
+     * A fixture that reaches every arm of the partition: a namespace (an UNTRUSTED
+     * level), nested functions (levels whose own `symbols` carry type parameters
+     * and block-hoisted names), and blocks (levels that bind nothing at all).
+     */
+    private val source = """
+        const top = 2;
+        namespace N {
+            export const inside = 1;
+            export function useOuter(): number {
+                return inside + top;
+            }
+        }
+        function outer<T>(p: T): number {
+            let seen = 0;
+            {
+                let inner = p;
+                seen = seen + 1;
+            }
+            function nested(q: T): T {
+                return q;
+            }
+            nested(p);
+            return seen;
+        }
+        outer(N.inside);
+    """.trimIndent()
+
+    private fun <T> withCensus(amp: Int = 0, block: () -> T): T {
+        val savedOn = MapCensus.on
+        val savedAmp = MapCensus.lexLevelAmp
+        try {
+            MapCensus.reset()
+            MapCensus.on = true
+            MapCensus.lexLevelAmp = amp
+            return block()
+        } finally {
+            MapCensus.on = savedOn
+            MapCensus.lexLevelAmp = savedAmp
+            MapCensus.reset()
+        }
+    }
+
+    // ---- the partition ------------------------------------------------------
+
+    /**
+     * Every call leaves through exactly one of the four recorded doors. A hook
+     * moved above a gate, or an early `return` added without one, breaks this
+     * before it can quietly shift a population between rows.
+     */
+    @Test
+    fun `every lexLevelHasName call is charged to exactly one door`() = withCensus {
+        diagnose(source)
+        val calls = MapCensus.lexCalls
+        assert(calls > 0)
+        val doors = MapCensus.lexUntrusted + MapCensus.lexFnSkipped +
+            MapCensus.lexSymEmpty + MapCensus.lexSymProbe
+        assert(doors == calls)
+    }
+
+    /**
+     * …and every call that got past the two gates and missed `symbols` is charged
+     * to exactly one of the three continuations. This is the identity that makes
+     * the refusable population a MEASUREMENT rather than a subtraction.
+     */
+    @Test
+    fun `every symbols miss is charged to exactly one continuation`() = withCensus {
+        diagnose(source)
+        val probed = MapCensus.lexSymEmpty + MapCensus.lexSymProbe
+        assert(probed > 0)
+        val misses = probed - MapCensus.lexSymHit
+        val continuations = MapCensus.lexExProbe + MapCensus.lexNoExisting + MapCensus.lexRootExcluded
+        assert(continuations == misses)
+    }
+
+    /**
+     * The round's deciding distinction, pinned as a POSITIVE control on BOTH
+     * sides (round 849: a zero from a blind instrument reads like a real
+     * negative). A census that classified every probe as real would fail the
+     * first assertion; one that classified every probe as empty would fail the
+     * second, and either would have priced 813,571 operations at the wrong rate.
+     */
+    @Test
+    fun `the empty and the real probe populations are both non-empty`() = withCensus {
+        diagnose(source)
+        assert(MapCensus.lexSymEmpty > 0)
+        assert(MapCensus.lexSymProbe > 0)
+    }
+
+    /** The untrusted-owner rule is reached — the fixture's namespace level. */
+    @Test
+    fun `the untrusted-owner rule is exercised by the fixture`() = withCensus {
+        diagnose(source)
+        assert(MapCensus.lexUntrusted > 0)
+    }
+
+    /**
+     * The refusable population can never exceed the probes that exist to be
+     * refused. True by construction, and breached the moment the `real` flag
+     * stops tracking the map it describes.
+     */
+    @Test
+    fun `the refusable population is a subset of the real probes`() = withCensus {
+        diagnose(source)
+        val refusable = MapCensus.lexNoExistingReal + MapCensus.lexAbsent + MapCensus.lexAbsentReal
+        val real = MapCensus.lexSymProbe + MapCensus.lexExProbe
+        assert(refusable <= real)
+        assert(MapCensus.lexNoExistingReal <= MapCensus.lexNoExisting)
+        assert(MapCensus.lexAbsentReal <= MapCensus.lexAbsent)
+    }
+
+    // ---- the scope populations ---------------------------------------------
+
+    /**
+     * A scope is QUERIED at most once into the census and BOUND exactly once, so
+     * the queried population is a subset of the bound one — the identity that
+     * prices an eagerly built, race-free filter against a lazily built one. It is
+     * exactly round 900's A3 shape: dropping the de-duplication changes no answer
+     * anywhere, so only a counter can see it.
+     */
+    @Test
+    fun `queried scopes are a de-duplicated subset of the bound scopes`() = withCensus {
+        diagnose(source)
+        assert(MapCensus.lexScopesBound > 0)
+        assert(MapCensus.lexScopesQueried > 0)
+        assert(MapCensus.lexScopesQueried <= MapCensus.lexScopesBound)
+        val queriedOwnKeys = MapCensus.lexScopeKeys - MapCensus.lexScopeExistingKeys
+        assert(queriedOwnKeys <= MapCensus.lexScopeBoundKeys)
+    }
+
+    // ---- the amplifier ------------------------------------------------------
+
+    /**
+     * Round 759's arithmetic falsifier: the sink must be an EXACT multiple of the
+     * repetition count, at every `r`, or the JIT elided one of the two loops and
+     * the slope it produced is a measurement of nothing. Both arms accumulate
+     * into the same sink, so the multiple covers both.
+     */
+    @Test
+    fun `the amplified arms sink an exact multiple of r`() = withCensus(amp = 7) {
+        diagnose(source)
+        assert(MapCensus.lexAmpCalls > 0)
+        assert(MapCensus.sink > 0L)
+        assert(MapCensus.sink % 7L == 0L)
+    }
+
+    /** The amplifier runs once per REAL probe and never for an empty level. */
+    @Test
+    fun `the amplifier is armed on exactly the real probes`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpCalls == MapCensus.lexSymProbe)
+    }
+
+    // ---- the round-900 lesson ----------------------------------------------
+
+    /**
+     * Every hook must sit INSIDE its `MapCensus.on` guard, arguments included.
+     * Round 900 found a probe whose guard was inside the function while its
+     * argument materialised a lazy view at the call site, so the instrument ran
+     * on every production compile for ninety-nine rounds. Nothing but a pin that
+     * compiles with the census OFF can see that.
+     */
+    @Test
+    fun `no counter moves while the census is off`() {
+        val savedOn = MapCensus.on
+        val savedAmp = MapCensus.lexLevelAmp
+        try {
+            MapCensus.reset()
+            MapCensus.on = false
+            MapCensus.lexLevelAmp = 0
+            diagnose(source)
+            assert(MapCensus.lexCalls == 0L)
+            assert(MapCensus.lexSymProbe == 0L)
+            assert(MapCensus.lexScopesQueried == 0L)
+            assert(MapCensus.lexScopesBound == 0L)
+            assert(MapCensus.lexAmpCalls == 0L)
+            assert(MapCensus.sink == 0L)
+        } finally {
+            MapCensus.on = savedOn
+            MapCensus.lexLevelAmp = savedAmp
+            MapCensus.reset()
+        }
+    }
+}

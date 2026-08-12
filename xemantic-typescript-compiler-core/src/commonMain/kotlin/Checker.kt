@@ -33903,6 +33903,10 @@ class Checker(
             var head = true
             while (l != null && l !== stop) {
                 if (head || !isFnLikeScopeOwner(l.owner)) {
+                    if (MapCensus.on) {
+                        MapCensus.lexScope(l)
+                        if (l.symbols.isEmpty()) MapCensus.lexTpEmpty++ else MapCensus.lexTpProbe++
+                    }
                     val sym = l.symbols[name]
                     if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) return true
                 }
@@ -33944,6 +33948,10 @@ class Checker(
             var head = true
             while (l != null && l !== stop) {
                 if (head || !isFnLikeScopeOwner(l.owner)) {
+                    if (MapCensus.on) {
+                        MapCensus.lexScope(l)
+                        if (l.symbols.isEmpty()) MapCensus.lexTpEmpty++ else MapCensus.lexTpProbe++
+                    }
                     val sym = l.symbols[name]
                     if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) {
                         val c = (sym.declarations.firstOrNull() as? TypeParameter)?.constraint
@@ -34005,20 +34013,58 @@ class Checker(
      * (block-hoisted `var`s the main binder never binds, B83.5) stay unfiltered.
      */
     private fun lexLevelHasName(l: LexicalScope, name: String, head: Boolean): Boolean {
+        if (MapCensus.on) MapCensus.lexCalls++
         val owner = l.owner
-        if (owner is ModuleDeclaration || owner is EnumDeclaration) return false
-        if (!head && isFnLikeScopeOwner(owner)) return false
-        if (l.symbols.containsKey(name)) return true
-        val ex = l.existing ?: return false
-        if (owner is SourceFile && name in unresolvedLexRootExcluded) return false
-        return ex.containsKey(name)
+        if (owner is ModuleDeclaration || owner is EnumDeclaration) {
+            if (MapCensus.on) MapCensus.lexUntrusted++
+            return false
+        }
+        if (!head && isFnLikeScopeOwner(owner)) {
+            if (MapCensus.on) MapCensus.lexFnSkipped++
+            return false
+        }
+        // `real` is the census's whole point: a probe of a level whose `symbols` map
+        // was never written has a null table, so `HashMap.getNode` returns before it
+        // hashes the key. Only a NON-empty map costs what a filter could refuse.
+        var real = false
+        if (MapCensus.on) {
+            MapCensus.lexScope(l)
+            real = l.symbols.isNotEmpty()
+            if (real) MapCensus.lexSymProbe++ else MapCensus.lexSymEmpty++
+            if (real && MapCensus.lexLevelAmp > 0) MapCensus.lexAmp(l, name)
+        }
+        if (l.symbols.containsKey(name)) {
+            if (MapCensus.on) MapCensus.lexSymHit++
+            return true
+        }
+        val ex = l.existing ?: run {
+            if (MapCensus.on) { MapCensus.lexNoExisting++; if (real) MapCensus.lexNoExistingReal++ }
+            return false
+        }
+        if (owner is SourceFile && name in unresolvedLexRootExcluded) {
+            if (MapCensus.on) MapCensus.lexRootExcluded++
+            return false
+        }
+        if (MapCensus.on) MapCensus.lexExProbe++
+        val r = ex.containsKey(name)
+        if (MapCensus.on) {
+            if (r) MapCensus.lexExHit++
+            else { MapCensus.lexAbsent++; if (real) MapCensus.lexAbsentReal++ }
+        }
+        return r
     }
 
     /** [lexLevelHasName]'s type-position sibling: the bound symbol must carry a type meaning. */
     private fun lexLevelHasType(l: LexicalScope, name: String, head: Boolean): Boolean {
+        if (MapCensus.on) MapCensus.lexTypeCalls++
         val owner = l.owner
         if (owner is ModuleDeclaration || owner is EnumDeclaration) return false
         if (!head && isFnLikeScopeOwner(owner)) return false
+        if (MapCensus.on) {
+            MapCensus.lexScope(l)
+            if (l.symbols.isEmpty()) MapCensus.lexTypeSymEmpty++ else MapCensus.lexTypeSymProbe++
+            if (l.existing != null) MapCensus.lexTypeExProbe++
+        }
         val sym = l.symbols[name]
             ?: (if (owner is SourceFile && name in unresolvedLexRootExcluded) null else l.existing?.get(name))
             ?: return false

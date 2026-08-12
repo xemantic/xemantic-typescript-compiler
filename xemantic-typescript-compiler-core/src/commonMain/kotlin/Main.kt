@@ -486,6 +486,17 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
                     modes.set(MapCensus::on, true)
                 }
             }
+            // (WARM.28) round 759's amplification for candidate (2): N probes of a
+            // real `LexicalScope.symbols` map AND N evaluations of the 64-bit
+            // proof-of-absence filter that would replace them, under one pair each.
+            "--lexLevelAmp", "--lexlevelamp" -> {
+                i++
+                if (i < args.size) {
+                    MapCensus.reset()
+                    modes.set(MapCensus::lexLevelAmp, args[i].toIntOrNull() ?: 0)
+                    modes.set(MapCensus::on, true)
+                }
+            }
             // (WARM.23) candidate (3): replay each file's real nodeToFlow key
             // sequence into a fresh `mutableMapOf` and a fresh LongKeyMap, N reps,
             // ABBA within the file.
@@ -997,6 +1008,9 @@ internal fun usageText(): String =
                              and the perFileScope file-PATH probe count
           --perFileScopeAmp N (WARM.23) price one perFileScope[path] probe: N probes under one
                              timestamp pair; NEGATIVE N is the in-situ empty bracket
+          --lexLevelAmp N    (WARM.28) price one LexicalScope.symbols probe AND the 64-bit
+                             proof-of-absence filter that would replace it: N of each under one
+                             timestamp pair, ABBA — the boundary cancels between the arms
           --flowMapReplay N  (WARM.23) replay each file's real nodeToFlow key sequence into a
                              fresh mutableMapOf and a fresh LongKeyMap, N reps, ABBA per file —
                              what a container swap RECOVERS, not what the old one costs

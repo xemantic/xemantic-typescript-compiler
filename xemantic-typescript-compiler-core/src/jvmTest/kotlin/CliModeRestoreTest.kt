@@ -290,7 +290,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--tavOff", "--tavGateOff", "--spineMaskOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
     "--flowCensus", "--srcScanCensus", "--srcScanFilterOff", "--verifySrcScan", "--srcScanBogus",
-    "--mapCensus", "--perFileScopeAmp", "--flowMapReplay",
+    "--mapCensus", "--perFileScopeAmp", "--flowMapReplay", "--lexLevelAmp",
     "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

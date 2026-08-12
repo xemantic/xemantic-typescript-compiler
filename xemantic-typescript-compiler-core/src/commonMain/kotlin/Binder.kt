@@ -84,6 +84,11 @@ class Binder(private val options: CompilerOptions) {
         val feL = FrontEnd.t()
         val lexicalScopes = bindLexicalScopes(sourceFile, fileLocals)
         FrontEnd.close(FrontEnd.BIND_LEX, feL)
+        // (WARM.28) the denominator for an EAGERLY built per-scope filter: a lazy
+        // one is written during checking, which `--shareBind` (round 883) hands to
+        // N worker threads at once, so the sound construction is here — and then
+        // it is paid for EVERY scope, not only the ones a query reaches.
+        if (MapCensus.on) MapCensus.lexBound(lexicalScopes)
         val feF = FrontEnd.t()
         val flowGraph = FlowGraphBuilder().build(sourceFile)
         FrontEnd.close(FrontEnd.BIND_FLOW, feF)
