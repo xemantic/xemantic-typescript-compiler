@@ -11158,8 +11158,48 @@ class Checker(
      * `internal` for direct construction tests (Inv3PerFileLookupTest); unconsumed
      * by checker paths until INV.3(c).
      */
+    /**
+     * (WARM.23) THE funnel for every `perFileScope` read — round 894 candidate
+     * (2a). Two things ride on it and neither is expressible at the raw `[]`:
+     * the census counts how many full file-PATH hashes a rebuild pays (the map
+     * is keyed by a 60-100 character path and probed per NAME lookup), and
+     * `--perFileScopeAmp N` prices ONE probe by round 759's amplification,
+     * because a single probe is well under a timestamp pair.
+     *
+     * Off (both modes at their defaults) this is `perFileScope[fileName]` and
+     * two not-taken branches.
+     */
+    private fun perFileScopeOf(fileName: String): SymbolTable? {
+        if (MapCensus.on) MapCensus.perFileProbes++
+        val r = MapCensus.perFileScopeReads
+        if (r == 0) return perFileScope[fileName]
+        if (r < 0) {
+            // In-situ EMPTY bracket at the same site and frequency, so `cold` can
+            // be separated from the pair. The real read still happens, outside
+            // the pair, so the compile is unchanged.
+            val e0 = PassTiming.nowNanos()
+            MapCensus.perFileAmpNanos += PassTiming.nowNanos() - e0
+            MapCensus.perFileAmpCalls++
+            return perFileScope[fileName]
+        }
+        val t0 = PassTiming.nowNanos()
+        var result: SymbolTable? = null
+        var seen = 0L
+        var i = 0
+        while (i < r) {
+            val v = perFileScope[fileName]
+            if (v != null) seen++
+            result = v
+            i++
+        }
+        MapCensus.perFileAmpNanos += PassTiming.nowNanos() - t0
+        MapCensus.perFileAmpCalls++
+        MapCensus.sink += seen
+        return result
+    }
+
     internal fun lookupPerFile(fileName: String, name: String): Symbol? {
-        val scope = perFileScope[fileName] ?: return null
+        val scope = perFileScopeOf(fileName) ?: return null
         val sym = scope[name] ?: return null
         if (sym.flags.hasAny(SymbolFlags.Alias) && sym.declarations.any { it is ImportSpecifier }) {
             resolveImportedSymbolGeneral(sym)?.let { return it }
@@ -11190,7 +11230,7 @@ class Checker(
      * the per-pass conflated tables keep measuring only UN-migrated traffic.
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
-        if (name in moduleOnlyGlobalNames && perFileScope.containsKey(fileName)) {
+        if (name in moduleOnlyGlobalNames && perFileScopeOf(fileName) != null) {
             // INV.3(d): the retired merge no longer puts module-only names into
             // [globals] at all — the per-file resolution IS the symbol (the
             // declaring file's own clean instance; an import alias resolves
@@ -12169,7 +12209,7 @@ class Checker(
                 // not visible without an explicit import. Defensive fallback
                 // to [globals] when [perFileScope] hasn't been built yet
                 // (matches 17.32b/c pattern).
-                val fileScope = perFileScope[result.sourceFile.fileName]
+                val fileScope = perFileScopeOf(result.sourceFile.fileName)
                 val symbol = result.locals[expr.text]
                     ?: fileScope?.get(expr.text)
                     ?: (if (fileScope == null) globals[expr.text] else null)
@@ -21993,7 +22033,7 @@ class Checker(
         // ad-hoc module-file filter. The per-file scope already encodes the same
         // "lib + script-file locals + own-file locals" semantics, with other-file
         // module-file locals excluded.
-        val fileScope = perFileScope[currentFileName] ?: return false
+        val fileScope = perFileScopeOf(currentFileName) ?: return false
         return fileScope.containsKey(name)
     }
 
@@ -34098,7 +34138,7 @@ class Checker(
         // [globals] map. Other module files' locals are not visible without
         // an explicit import. Defensive fallback to legacy globals iteration
         // when [perFileScope] is unbuilt (matches 17.32b/c/d pattern).
-        val perFile = perFileScope[fileName]
+        val perFile = perFileScopeOf(fileName)
         if (perFile != null) {
             for ((name, _) in perFile) {
                 if (name !in ambientExternalModuleNames) fileScope.names.add(name)
@@ -37416,7 +37456,7 @@ class Checker(
         // which has no `declare var` companion) must be filtered. The embedded lib lacked
         // IArguments, so this bug only surfaced under `useRealLibs`; tsc's
         // getSuggestedSymbolForNonexistentSymbol applies the Value-meaning filter here.
-        val fileScopeForTypeOnly = perFileScope[fileName]
+        val fileScopeForTypeOnly = perFileScopeOf(fileName)
         if (fileScopeForTypeOnly != null) {
             for ((symName, sym) in fileScopeForTypeOnly) {
                 if (!sym.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) {
@@ -37475,7 +37515,7 @@ class Checker(
                 if (s.parent != null) {
                     candidates.addAll(s.names)
                 } else {
-                    val fileScope = perFileScope[fileName]
+                    val fileScope = perFileScopeOf(fileName)
                     if (fileScope != null) {
                         candidates.addAll(fileScope.keys)
                     } else {
@@ -103988,13 +104028,16 @@ interface DataView {
             // Re-entry on the SAME node is a type-level cycle: degrade to errorType
             // instead of unbounded recursion. Not cached; the outer resolution
             // stores the real type.
-            if (!nodeTypeResolutionInProgress.add(node)) return errorType
+            val nodeInProgressAdded = nodeTypeResolutionInProgress.add(node)
+            if (MapCensus.on) MapCensus.nodeEnter(nodeInProgressAdded)
+            if (!nodeInProgressAdded) return errorType
             try {
                 val type = getTypeFromTypeNodeWorker(node)
                 nodeTypes[node] = type
                 return type
             } finally {
                 nodeTypeResolutionInProgress.remove(node)
+                if (MapCensus.on) MapCensus.nodeLeave()
             }
         }
         // INV.5(c) option (iii): context-KEYED caching for context-BEARING
@@ -106066,7 +106109,9 @@ interface DataView {
         // StackOverflowError. getTypeOfFunction additionally stores a
         // fnType SHELL before resolving signatures (B198), so function
         // self-references hit the cache fast-path above and never reach this check.
-        if (!symbolTypeResolutionInProgress.add(symbol.id)) return anyType
+        val symInProgressAdded = symbolTypeResolutionInProgress.add(symbol.id)
+        if (MapCensus.on) MapCensus.symEnter(symInProgressAdded)
+        if (!symInProgressAdded) return anyType
         // (ORDER.1) round 778: the WRITE is gated on the caller-supplied
         // instantiation context being empty — the exact mirror of
         // `getTypeFromTypeNodeCore`'s `cacheable` gate, which has always refused
@@ -106090,6 +106135,7 @@ interface DataView {
             return type
         } finally {
             symbolTypeResolutionInProgress.remove(symbol.id)
+            if (MapCensus.on) MapCensus.symLeave()
         }
     }
 
@@ -106761,12 +106807,15 @@ interface DataView {
         // completes and plants the full table; the re-entrant inner request returns
         // with the type still member-less, which is correct for the circular-base
         // error inputs that produce these cycles.
-        if (!memberResolutionInProgress.add(type.id)) return
+        val memberInProgressAdded = memberResolutionInProgress.add(type.id)
+        if (MapCensus.on) MapCensus.memberEnter(memberInProgressAdded)
+        if (!memberInProgressAdded) return
         try {
             if (LibTypeCensus.enabled) resolveStructuredTypeMembersCensused(type)
             else resolveStructuredTypeMembersDispatch(type)
         } finally {
             memberResolutionInProgress.remove(type.id)
+            if (MapCensus.on) MapCensus.memberLeave()
         }
     }
 

@@ -469,6 +469,34 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--srcScanBogus", "--srcscanbogus" -> {
                 modes.set(SrcScan::bogus, true)
             }
+            // (WARM.23) round 896 — the map-key candidate census: the three
+            // in-progress sentinel sets' populations AND max live sizes (round
+            // 890's law), and the perFileScope probe count.
+            "--mapCensus", "--mapcensus" -> {
+                MapCensus.reset(); modes.set(MapCensus::on, true)
+            }
+            // (WARM.23) round 759's amplification for ONE `perFileScope[path]`
+            // probe: N probes under one timestamp pair; NEGATIVE N is the in-situ
+            // empty bracket. Two positive N cancel the boundary.
+            "--perFileScopeAmp", "--perfilescopeamp" -> {
+                i++
+                if (i < args.size) {
+                    MapCensus.reset()
+                    modes.set(MapCensus::perFileScopeReads, args[i].toIntOrNull() ?: 0)
+                    modes.set(MapCensus::on, true)
+                }
+            }
+            // (WARM.23) candidate (3): replay each file's real nodeToFlow key
+            // sequence into a fresh `mutableMapOf` and a fresh LongKeyMap, N reps,
+            // ABBA within the file.
+            "--flowMapReplay", "--flowmapreplay" -> {
+                i++
+                if (i < args.size) {
+                    MapCensus.reset()
+                    modes.set(MapCensus::flowReplayReps, args[i].toIntOrNull() ?: 0)
+                    modes.set(MapCensus::on, true)
+                }
+            }
             // (PERF.HW.g) round 881 — the `mergeSingleSymbol` shape, which is the
             // single blocker to sharing one bind across `--workers` checkers.
             // Counters only; `docs/parallel-bind-sharing.md` § 4 stage 1.
@@ -702,6 +730,9 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     }
     if (SrcScan.on) {
         print(SrcScan.report())
+    }
+    if (MapCensus.on) {
+        print(MapCensus.report())
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
@@ -961,6 +992,14 @@ internal fun usageText(): String =
                              the disagreements; a divergence is a soundness failure
           --srcScanBogus     (WARM.19) positive control: corrupt the filter build so it refuses
                              needles that ARE present, which --verifySrcScan must then see
+          --mapCensus        (WARM.23) the map-key candidates round 894 ranked: the three
+                             in-progress sentinel sets (adds, re-entries and MAX LIVE SIZE)
+                             and the perFileScope file-PATH probe count
+          --perFileScopeAmp N (WARM.23) price one perFileScope[path] probe: N probes under one
+                             timestamp pair; NEGATIVE N is the in-situ empty bracket
+          --flowMapReplay N  (WARM.23) replay each file's real nodeToFlow key sequence into a
+                             fresh mutableMapOf and a fresh LongKeyMap, N reps, ABBA per file —
+                             what a container swap RECOVERS, not what the old one costs
           --mergeClone       (PERF.HW.k) copy a binder-owned symbol before the merge writes to it
                              (tsc/tsgo design). EXPERIMENTAL: sound only once the getMergedSymbol
                              forwarding table lands — see docs/parallel-bind-sharing.md

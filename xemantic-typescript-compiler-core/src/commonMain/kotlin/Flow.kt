@@ -666,6 +666,16 @@ class FlowGraphBuilder {
             recordedNodes,
         )
         FrontEnd.close(FrontEnd.FLOW_INDEX, tIndex)
+        // (WARM.23) round 894 candidate (3): price the CONTAINER, not the owner.
+        // The replay runs AFTER the graph is finished, over this file's real key
+        // sequence, so it measures what a swap would recover rather than what the
+        // present container costs. Off (`flowReplayReps == 0`) this is one static
+        // read and a not-taken branch.
+        if (MapCensus.flowReplayReps > 0) {
+            val keys = LongArray(recordedNodes.size)
+            for (k in recordedNodes.indices) keys[k] = nodeKey(recordedNodes[k])
+            MapCensus.replayFlowKeys(keys)
+        }
         return graph
     }
 

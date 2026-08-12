@@ -104,6 +104,7 @@ class CliModeRestoreTest {
             ParallelCheckMode::class.java,
             FlowCensus::class.java,
             SrcScan::class.java,
+            MapCensus::class.java,
             MergeCensus::class.java,
             BindMutationCheck::class.java,
             ShareBind::class.java,
@@ -166,6 +167,7 @@ class CliModeRestoreTest {
         FlowScan.reset()
         FlowCensus.reset()
         SrcScan.reset()
+        MapCensus.reset()
         MergeCensus.reset()
         BindMutationCheck.reset()
         ShareBind.reset()
@@ -288,6 +290,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--tavOff", "--tavGateOff", "--spineMaskOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
     "--flowCensus", "--srcScanCensus", "--srcScanFilterOff", "--verifySrcScan", "--srcScanBogus",
+    "--mapCensus", "--perFileScopeAmp", "--flowMapReplay",
     "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )
