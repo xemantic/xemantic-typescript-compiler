@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
+import com.xemantic.typescript.compiler.IterCensus
 import com.xemantic.typescript.compiler.MapCensus
 import com.xemantic.typescript.compiler.CrawlParseCache
 import com.xemantic.typescript.compiler.NameCensus
@@ -276,6 +277,11 @@ internal val TIERS = listOf(
     // so its rebuild is otherwise a `plain` one and the numbers are
     // deterministic (which is their own falsifier).
     "boxedkey",
+    // (WARM.32) round 905 — the ITERATOR-ALLOCATION family's population: list
+    // iterations and ELEMENTS at `forEachChild`'s 70 child positions and the
+    // INV.4 edge classifiers' 145 identity tests. Counters and histograms only,
+    // deterministic, no timestamp pair. Its amplified sibling is `iteramp<N>`.
+    "itercensus",
 )
 
 /**
@@ -309,6 +315,20 @@ internal fun bkAmpReps(tier: String): Int? {
 internal fun tnkAmpReps(tier: String): Int? {
     if (!tier.startsWith("tnkamp")) return null
     val digits = tier.removePrefix("tnkamp")
+    if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
+    val n = digits.toIntOrNull() ?: return null
+    return if (n <= 0) null else n
+}
+
+/**
+ * (WARM.32) round 905 — the iterator-vs-indexed amplifier at `N` repetitions per
+ * arm per call, IN SITU at both of the family's real call sites. Same slope
+ * discipline: one process runs two `r` so `p(r) = cost + boundary/r` can be
+ * fitted PER ARM, which is what round 904 showed a single-`r` `A - B` cannot do.
+ */
+internal fun iterAmpReps(tier: String): Int? {
+    if (!tier.startsWith("iteramp")) return null
+    val digits = tier.removePrefix("iteramp")
     if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
     val n = digits.toIntOrNull() ?: return null
     return if (n <= 0) null else n
@@ -497,6 +517,13 @@ internal fun tierBegin(tier: String) {
         MapCensus.on = true
         return
     }
+    val iterAmp = iterAmpReps(tier)
+    if (iterAmp != null) {
+        IterCensus.reset()
+        IterCensus.amp = iterAmp
+        IterCensus.on = true
+        return
+    }
     val tnkAmp = tnkAmpReps(tier)
     if (tnkAmp != null) {
         MapCensus.reset()
@@ -571,6 +598,9 @@ internal fun tierBegin(tier: String) {
         "typenodekey" -> { MapCensus.reset(); MapCensus.typeNodeKeyCensus = true; MapCensus.on = true }
         // (WARM.31) — counters only; deliberately does NOT arm `rows`.
         "boxedkey" -> { MapCensus.reset(); MapCensus.boxedKeyCensus = true; MapCensus.on = true }
+        // (WARM.32) — counters and histograms only, no timestamp pair; deliberately
+        // does NOT arm `rows`, because the quantity is deterministic.
+        "itercensus" -> { IterCensus.reset(); IterCensus.census = true; IterCensus.on = true }
         // (WARM.22) — the edge amplifier at N extra evaluations per fold. It is
         // a SLOPE instrument, so a process must be able to run
         // `reachamp8,reachamp24,reachamp8,reachamp24` and get both r values at
@@ -624,6 +654,10 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     // (WARM.31) — taken while the amplifier still holds its arm, so `amplified r=`
     // prints from the live field (round 850).
     MapCensus.report()
+} else if (iterAmpReps(tier) != null) {
+    // (WARM.32) — taken while the amplifier still holds its arm, so `r=` prints
+    // from the live field (round 850).
+    IterCensus.report()
 } else if (tnkAmpReps(tier) != null) {
     // (WARM.30) — taken while the amplifier still holds its arm, so `amplified
     // r=` prints from the live field and an arm labels itself from its own state
@@ -669,6 +703,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     "libtypes" -> LibTypeCensus.report()
     "srcscan", "srcscanoff" -> SrcScan.report()
     "typenodekey", "boxedkey" -> MapCensus.report()
+    "itercensus" -> IterCensus.report()
     "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
         "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->
@@ -811,6 +846,14 @@ internal fun tierStop() {
     MapCensus.typeNodeKeyAmp = 0
     MapCensus.on = false
     MapCensus.reset()
+    // (WARM.32) — same hazard as above: `census` left set costs every LATER
+    // rebuild a size read and a histogram bump at every list child position and
+    // every edge membership test, and `amp` left set costs it `2 * r` extra
+    // whole-list iterations at each of them.
+    IterCensus.census = false
+    IterCensus.amp = 0
+    IterCensus.on = false
+    IterCensus.reset()
     SpineAmp.reps = 0
     SpineAmp.reset()
     SpineDispatch.reset()
@@ -850,7 +893,7 @@ fun main(args: Array<String>) {
             val bad = list.filter {
                 it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null &&
                     nameCensusReps(it) == null && tnkAmpReps(it) == null &&
-                    bkAmpReps(it) == null
+                    bkAmpReps(it) == null && iterAmpReps(it) == null
             }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(

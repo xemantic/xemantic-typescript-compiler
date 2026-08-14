@@ -524,6 +524,27 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
                     modes.set(MapCensus::on, true)
                 }
             }
+            // (WARM.32) the ITERATOR-ALLOCATION family: how many list iterations
+            // `forEachChild` and the INV.4 edge classifiers really perform, and over
+            // how many ELEMENTS — a per-call cost times a call count is the wrong
+            // quantity when a third of the lists are empty.
+            "--iterCensus", "--itercensus" -> {
+                IterCensus.reset()
+                modes.set(IterCensus::census, true)
+                modes.set(IterCensus::on, true)
+            }
+            // (WARM.32) the iterator-vs-indexed PREMIUM, two arms under one timestamp
+            // pair each, IN SITU at both populations' real call sites and in ABBA
+            // rotation. A slope: run two `r` and fit p(r) = cost + boundary/r PER ARM
+            // (round 904 — a single-r A - B over-reads by up to 23%).
+            "--iterAmp", "--iteramp" -> {
+                i++
+                if (i < args.size) {
+                    IterCensus.reset()
+                    modes.set(IterCensus::amp, args[i].toIntOrNull() ?: 0)
+                    modes.set(IterCensus::on, true)
+                }
+            }
             "--typeNodeKeyCensus", "--typenodekeycensus" -> {
                 MapCensus.reset()
                 modes.set(MapCensus::typeNodeKeyCensus, true)
@@ -788,6 +809,9 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     }
     if (MapCensus.on) {
         print(MapCensus.report())
+    }
+    if (IterCensus.on) {
+        print(IterCensus.report())
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
@@ -1065,6 +1089,13 @@ internal fun usageText(): String =
           --boxedKeyAmp N    (WARM.31) the boxed-key PREMIUM in two arms under one timestamp
                              pair each, on Relation.cache: the real HashMap<Long,·> probe and
                              a LongKeyMap populated in lockstep — A - B is what a swap returns
+          --iterCensus       (WARM.32) the iterator-allocation family: how many list iterations
+                             forEachChild's 70 child positions and the INV.4 edge classifiers'
+                             145 identity tests perform, over how many elements, with the
+                             empty/singleton split and the concrete List classes
+          --iterAmp N        (WARM.32) the iterator-vs-indexed PREMIUM in two arms under one
+                             timestamp pair each, in situ at both populations' real call sites —
+                             run two N and fit p(r) = cost + boundary/r per arm
           --typeNodeKeyAmp N (WARM.30) price it in three arms under one timestamp pair each:
                              the real deep-key probe, a (file, nodeId) LongKeyMap populated in
                              lockstep, and isPerFileDependentRefNode — the row's second owner

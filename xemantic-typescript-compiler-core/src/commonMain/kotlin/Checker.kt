@@ -18046,10 +18046,10 @@ class Checker(
                     else -> expr // expression body passes the leak through
                 }
                 is CallExpression ->
-                    if (child === parent.expression || parent.arguments.any { it === child }) expr
+                    if (child === parent.expression || parent.arguments.anyIdentical(child)) expr
                     else DA_NONE
                 is NewExpression ->
-                    if (child === parent.expression || parent.arguments?.any { it === child } == true) expr
+                    if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) expr
                     else DA_NONE
                 is BinaryExpression -> if (child === parent.left || child === parent.right) expr else DA_NONE
                 is ParenthesizedExpression -> if (child === parent.expression) expr else DA_NONE
@@ -18064,7 +18064,7 @@ class Checker(
                 is ElementAccessExpression ->
                     if (child === parent.expression || child === parent.argumentExpression) expr
                     else DA_NONE
-                is ArrayLiteralExpression -> if (parent.elements.any { it === child }) expr else DA_NONE
+                is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) expr else DA_NONE
                 is ObjectLiteralExpression -> when (child) {
                     // ShorthandPropertyAssignment (incl. its default initializer)
                     // was NOT descended by the legacy object-literal arm.
@@ -18086,7 +18086,7 @@ class Checker(
                     child === parent.template && child is TemplateExpression -> expr
                     else -> DA_NONE
                 }
-                is CommaListExpression -> if (parent.elements.any { it === child }) expr else DA_NONE
+                is CommaListExpression -> if (parent.elements.anyIdentical(child)) expr else DA_NONE
                 else -> DA_NONE
             }
         }
@@ -18405,10 +18405,10 @@ class Checker(
             is ArrayLiteralExpression -> if (child is Expression) OS_EXPR else OS_NONE
             is ParenthesizedExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) OS_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) OS_EXPR
                 else OS_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) OS_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) OS_EXPR
                 else OS_NONE
             is BinaryExpression -> if (child === parent.left || child === parent.right) OS_EXPR else OS_NONE
             is ConditionalExpression ->
@@ -32182,14 +32182,14 @@ class Checker(
             is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else EX_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) pStatus else EX_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) pStatus else EX_NONE
+                pNode.arguments.anyIdentical(child)) pStatus else EX_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus else EX_NONE
+                pNode.arguments?.anyIdentical(child) == true) pStatus else EX_NONE
             is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
                 child === pNode.whenFalse) pStatus else EX_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else EX_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else EX_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else EX_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else EX_NONE
             is ObjectLiteralExpression -> if (child is PropertyAssignment ||
                 child is SpreadAssignment) pStatus else EX_NONE
             is PropertyAssignment -> if (child === pNode.initializer) pStatus else EX_NONE
@@ -50165,9 +50165,9 @@ class Checker(
             is BinaryExpression -> if (child === pNode.left || child === pNode.right) SM_SEXPR else SM_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) SM_SEXPR else SM_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) SM_SEXPR else SM_NONE
+                pNode.arguments.anyIdentical(child)) SM_SEXPR else SM_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) SM_SEXPR else SM_NONE
+                pNode.arguments?.anyIdentical(child) == true) SM_SEXPR else SM_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) SM_SEXPR else SM_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) SM_SEXPR else SM_NONE
             else -> SM_NONE
@@ -53623,16 +53623,16 @@ interface DataView {
             }
             is FunctionExpression -> if (child === parent.body) AT_STMT else AT_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) AT_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) AT_EXPR
                 else AT_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) AT_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) AT_EXPR
                 else AT_NONE
             is PropertyAccessExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
             is ElementAccessExpression ->
                 if (child === parent.expression || child === parent.argumentExpression) AT_EXPR
                 else AT_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) AT_EXPR else AT_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) AT_EXPR else AT_NONE
             is ObjectLiteralExpression -> when (child) {
                 is PropertyAssignment, is SpreadAssignment,
                 is MethodDeclaration, is GetAccessor, is SetAccessor -> AT_MEMBER
@@ -53652,7 +53652,7 @@ interface DataView {
             is VoidExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
             is DeleteExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
             is TypeOfExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
-            is CommaListExpression -> if (parent.elements.any { it === child }) AT_EXPR else AT_NONE
+            is CommaListExpression -> if (parent.elements.anyIdentical(child)) AT_EXPR else AT_NONE
             is ClassExpression ->
                 if (child is MethodDeclaration || child is Constructor ||
                     child is GetAccessor || child is SetAccessor ||
@@ -54011,8 +54011,8 @@ interface DataView {
             child === parent.whenFalse
         is BinaryExpression -> true
         is ParenthesizedExpression -> child === parent.expression
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
-        is NewExpression -> child === parent.expression || parent.arguments?.any { it === child } == true
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
+        is NewExpression -> child === parent.expression || parent.arguments?.anyIdentical(child) == true
         // Param defaults were never walked — the body only (both body forms).
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
@@ -54459,8 +54459,8 @@ interface DataView {
         is ParenthesizedExpression -> child === parent.expression
         is ConditionalExpression -> child === parent.condition || child === parent.whenTrue ||
             child === parent.whenFalse
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
-        is NewExpression -> child === parent.expression || parent.arguments?.any { it === child } == true
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
+        is NewExpression -> child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression -> child === parent.expression || child === parent.argumentExpression
         is PrefixUnaryExpression -> child === parent.operand
@@ -55123,8 +55123,8 @@ interface DataView {
             if (spineIanyObjLitIsDestructureDefault(parent)) child is PropertyAssignment
             else child is PropertyAssignment || child is MethodDeclaration
         is PropertyAssignment -> child === parent.initializer
-        is CallExpression -> parent.arguments.any { it === child }
-        is NewExpression -> parent.arguments?.any { it === child } == true
+        is CallExpression -> parent.arguments.anyIdentical(child)
+        is NewExpression -> parent.arguments?.anyIdentical(child) == true
         is BinaryExpression -> child === parent.left || child === parent.right
         is ParenthesizedExpression -> child === parent.expression
         is ConditionalExpression -> child === parent.whenTrue || child === parent.whenFalse
@@ -55352,10 +55352,10 @@ interface DataView {
      */
     private fun spineIanySubtreeRow(p: Node, pk: Int, node: Node): Int = when (pk) {
         NodeKind.CALL_EXPRESSION ->
-            if ((p as CallExpression).arguments.any { it === node })
+            if ((p as CallExpression).arguments.anyIdentical(node))
                 IanySections.S_CALL_ARG else IanySections.S_CALL_OTHER
         NodeKind.NEW_EXPRESSION ->
-            if ((p as NewExpression).arguments?.any { it === node } == true)
+            if ((p as NewExpression).arguments?.anyIdentical(node) == true)
                 IanySections.S_CALL_ARG else IanySections.S_CALL_OTHER
         NodeKind.VARIABLE_DECLARATION -> IanySections.S_VARDECL
         NodeKind.RETURN_STATEMENT -> IanySections.S_RETURN
@@ -55610,10 +55610,10 @@ interface DataView {
             is PropertyAssignment -> if (node === p.initializer && spineIanyReached(node)) {
                 spineIanyPropAssignEdge(p, node)
             }
-            is CallExpression -> if (p.arguments.any { it === node } && spineIanyReached(node)) {
+            is CallExpression -> if (p.arguments.anyIdentical(node) && spineIanyReached(node)) {
                 spineIanyCallArgEdge(p, node)
             }
-            is NewExpression -> if (p.arguments?.any { it === node } == true && spineIanyReached(node)) {
+            is NewExpression -> if (p.arguments?.anyIdentical(node) == true && spineIanyReached(node)) {
                 val callCtx = spineIanyCtx
                 spineIanyDefineCtx(node, if (callCtx != null && callCtx.kind == 1 && callCtx.typed)
                     SpineIanyCtx(kind = 0, typed = true) else null)
@@ -57104,16 +57104,16 @@ interface DataView {
             }
             is FunctionExpression -> if (child === parent.body) CM_STMT else CM_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) CM_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) CM_EXPR
                 else CM_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) CM_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) CM_EXPR
                 else CM_NONE
             is PropertyAccessExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
             is ElementAccessExpression ->
                 if (child === parent.expression || child === parent.argumentExpression) CM_EXPR
                 else CM_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) CM_EXPR else CM_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) CM_EXPR else CM_NONE
             is ObjectLiteralExpression -> when (child) {
                 is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment -> CM_MEMBER
                 else -> CM_NONE
@@ -57136,7 +57136,7 @@ interface DataView {
             is VoidExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
             is DeleteExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
             is TypeOfExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
-            is CommaListExpression -> if (parent.elements.any { it === child }) CM_EXPR else CM_NONE
+            is CommaListExpression -> if (parent.elements.anyIdentical(child)) CM_EXPR else CM_NONE
             is ClassExpression ->
                 if (child is MethodDeclaration || child is Constructor ||
                     child is GetAccessor || child is SetAccessor ||
@@ -57516,7 +57516,7 @@ interface DataView {
                     if (child === parent.expression || child === parent.argumentExpression) expr
                     else NU_NONE
                 is CallExpression ->
-                    if (child === parent.expression || parent.arguments.any { it === child }) expr
+                    if (child === parent.expression || parent.arguments.anyIdentical(child)) expr
                     else NU_NONE
                 is ParenthesizedExpression -> if (child === parent.expression) expr else NU_NONE
                 is ConditionalExpression ->
@@ -57525,7 +57525,7 @@ interface DataView {
                 is PrefixUnaryExpression -> if (child === parent.operand) expr else NU_NONE
                 is PostfixUnaryExpression -> if (child === parent.operand) expr else NU_NONE
                 is TemplateExpression -> if (child is TemplateSpan) member else NU_NONE
-                is ArrayLiteralExpression -> if (parent.elements.any { it === child }) expr else NU_NONE
+                is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) expr else NU_NONE
                 is ObjectLiteralExpression -> when (child) {
                     is PropertyAssignment, is SpreadAssignment -> member
                     else -> NU_NONE
@@ -60535,10 +60535,10 @@ interface DataView {
         is SetAccessor -> if (child === parent.body) pDepth else -1
         is PropertyDeclaration -> if (child === parent.initializer) spineArgExprChild(pDepth) else -1
         is CallExpression ->
-            if (child === parent.expression || parent.arguments.any { it === child })
+            if (child === parent.expression || parent.arguments.anyIdentical(child))
                 spineArgExprChild(pDepth) else -1
         is NewExpression ->
-            if (parent.arguments?.any { it === child } == true) spineArgExprChild(pDepth) else -1
+            if (parent.arguments?.anyIdentical(child) == true) spineArgExprChild(pDepth) else -1
         is BinaryExpression -> when {
             child === parent.left -> spineArgExprChild(pDepth)
             child === parent.right -> if (child is BinaryExpression) pDepth else spineArgExprChild(pDepth)
@@ -60554,7 +60554,7 @@ interface DataView {
             else -> spineArgExprChild(pDepth)
         }
         is FunctionExpression -> if (child === parent.body) pDepth else -1
-        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) spineArgExprChild(pDepth) else -1
+        is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) spineArgExprChild(pDepth) else -1
         is ObjectLiteralExpression -> when (child) {
             is PropertyAssignment, is SpreadAssignment, is MethodDeclaration -> pDepth
             else -> -1
@@ -60578,7 +60578,7 @@ interface DataView {
         is AsExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
         is SatisfiesExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
         is NonNullExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
-        is CommaListExpression -> if (parent.elements.any { it === child }) spineArgExprChild(pDepth) else -1
+        is CommaListExpression -> if (parent.elements.anyIdentical(child)) spineArgExprChild(pDepth) else -1
         is ClassExpression ->
             if (child is MethodDeclaration || child is Constructor ||
                 child is GetAccessor || child is SetAccessor ||
@@ -65263,12 +65263,12 @@ interface DataView {
         is CallExpression -> when {
             // The callee edge DROPS the arrow context (legacy omitted the param).
             child === parent.expression -> itCtx(itTyped(ctx), itInsideFn(ctx), itShadow(ctx), arrow = false)
-            parent.arguments.any { it === child } -> ctx
+            parent.arguments.anyIdentical(child) -> ctx
             else -> -1L
         }
         is NewExpression -> when {
             child === parent.expression -> ctx
-            parent.arguments?.any { it === child } == true -> ctx
+            parent.arguments?.anyIdentical(child) == true -> ctx
             else -> -1L
         }
         is BinaryExpression -> if (child === parent.left || child === parent.right) ctx else -1L
@@ -65282,7 +65282,7 @@ interface DataView {
             if (child === parent.expression || child === parent.argumentExpression) ctx else -1L
         is ConditionalExpression ->
             if (child === parent.condition || child === parent.whenTrue || child === parent.whenFalse) ctx else -1L
-        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) ctx else -1L
+        is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) ctx else -1L
         is ObjectLiteralExpression -> when (child) {
             // Get/set accessors were the legacy `else -> {}` (unreached).
             is PropertyAssignment, is MethodDeclaration, is SpreadAssignment,
@@ -65309,7 +65309,7 @@ interface DataView {
         is TypeAssertionExpression -> if (child === parent.expression) ctx else -1L
         is SatisfiesExpression -> if (child === parent.expression) ctx else -1L
         is NonNullExpression -> if (child === parent.expression) ctx else -1L
-        is CommaListExpression -> if (parent.elements.any { it === child }) ctx else -1L
+        is CommaListExpression -> if (parent.elements.anyIdentical(child)) ctx else -1L
         else -> -1L
     }
 
@@ -65579,19 +65579,19 @@ interface DataView {
         is ModuleDeclaration -> child === parent.body && child is ModuleBlock
         is ModuleBlock -> child is Statement
         // ---- expressions (the deleted fnParamScanExpr arms) ----
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is BinaryExpression -> child === parent.left || child === parent.right
         is ParenthesizedExpression -> child === parent.expression
         is PrefixUnaryExpression -> child === parent.operand
         is PostfixUnaryExpression -> child === parent.operand
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is SpreadElement -> child === parent.expression
         is AsExpression -> child === parent.expression
         is NonNullExpression -> child === parent.expression
@@ -65882,15 +65882,15 @@ interface DataView {
         is ModuleDeclaration -> child === parent.body && child is ModuleBlock
         is ModuleBlock -> child is Statement
         // ---- expressions (the deleted checkAbstractInExpr arms) ----
-        is NewExpression -> parent.arguments?.any { it === child } == true // callee NOT descended
+        is NewExpression -> parent.arguments?.anyIdentical(child) == true // callee NOT descended
         is BinaryExpression -> child === parent.left || child === parent.right
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is ParenthesizedExpression -> child === parent.expression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is ObjectLiteralExpression -> child is PropertyAssignment || child is SpreadAssignment
         is PropertyAssignment -> child === parent.initializer
         is SpreadAssignment -> child === parent.expression
@@ -65913,7 +65913,7 @@ interface DataView {
         is DeleteExpression -> child === parent.expression
         is NonNullExpression -> child === parent.expression
         is TypeOfExpression -> child === parent.expression
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is ClassExpression -> when (child) {
             is MethodDeclaration, is Constructor, is GetAccessor,
             is SetAccessor, is PropertyDeclaration -> true
@@ -66217,13 +66217,13 @@ interface DataView {
         is ParenthesizedExpression -> child === parent.expression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression -> // the callee IS descended here (unlike the ai classifier)
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is SpreadElement -> child === parent.expression
         is AsExpression -> child === parent.expression
         is TypeAssertionExpression -> child === parent.expression
@@ -66420,9 +66420,9 @@ interface DataView {
         is TypeAssertionExpression -> child === parent.expression
         is ParenthesizedExpression -> child === parent.expression
         is BinaryExpression -> child === parent.left || child === parent.right
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression -> // the callee IS descended here (unlike the ai classifier)
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
@@ -66430,7 +66430,7 @@ interface DataView {
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
         is PrefixUnaryExpression -> child === parent.operand
         is PostfixUnaryExpression -> child === parent.operand
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         // objlit METHOD/accessor bodies are reached here (unlike the sy
         // classifier); shorthand properties and computed NAMES are not.
         is ObjectLiteralExpression -> when (child) {
@@ -66454,7 +66454,7 @@ interface DataView {
         is TemplateSpan -> child === parent.expression
         is TaggedTemplateExpression ->
             child === parent.tag || (child === parent.template && child is TemplateExpression)
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
         is ClassExpression -> when (child) {
@@ -66881,8 +66881,8 @@ interface DataView {
         is PropertyDeclaration -> child === parent.initializer
         // ---- expressions (the walkNewImplicitAnyInExpr arms) ----
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is BinaryExpression -> child === parent.left || child === parent.right
         is ParenthesizedExpression -> child === parent.expression
         is PropertyAccessExpression -> child === parent.expression
@@ -66890,7 +66890,7 @@ interface DataView {
             child === parent.expression || child === parent.argumentExpression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         // objlit: property VALUES, spreads AND method/accessor bodies (unlike
         // the round-649 del classifier, which walked values/spreads only).
         is ObjectLiteralExpression ->
@@ -66908,7 +66908,7 @@ interface DataView {
         is PostfixUnaryExpression -> child === parent.operand
         is TemplateExpression -> child is TemplateSpan
         is TemplateSpan -> child === parent.expression
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
         is AsExpression -> child === parent.expression
@@ -67076,13 +67076,13 @@ interface DataView {
         is DeleteExpression -> child === parent.expression
         // the legacy left-spine iteration dissolves into plain edges
         is BinaryExpression -> child === parent.left || child === parent.right
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is ParenthesizedExpression -> child === parent.expression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         // objlit: PropertyAssignment values + spreads only — METHOD/accessor
         // bodies, shorthand properties, and computed NAMES were never walked
         // (frozen; unlike the spineCo classifier).
@@ -67091,13 +67091,13 @@ interface DataView {
         is SpreadAssignment -> child === parent.expression
         is TemplateExpression -> child is TemplateSpan
         is TemplateSpan -> child === parent.expression
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is AsExpression -> child === parent.expression
         is TypeAssertionExpression -> child === parent.expression
         is SatisfiesExpression -> child === parent.expression
         is NonNullExpression -> child === parent.expression
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
@@ -67272,10 +67272,10 @@ interface DataView {
             is BinaryExpression -> if (child === pNode.left || child === pNode.right)
                 CP_EXPR else CP_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) CP_EXPR else CP_NONE
+                pNode.arguments.anyIdentical(child)) CP_EXPR else CP_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) CP_EXPR else CP_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) CP_EXPR else CP_NONE
+                pNode.arguments?.anyIdentical(child) == true) CP_EXPR else CP_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) CP_EXPR else CP_NONE
             is SpreadElement -> if (child === pNode.expression) CP_EXPR else CP_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) CP_EXPR else CP_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) CP_EXPR else CP_NONE
@@ -67288,7 +67288,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) CP_EXPR else CP_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) CP_EXPR else CP_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) CP_EXPR else CP_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) CP_EXPR else CP_NONE
             is PropertyAccessExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) CP_EXPR else CP_NONE
@@ -67516,10 +67516,10 @@ interface DataView {
             is BinaryExpression -> if (child === pNode.left || child === pNode.right)
                 AB_EXPR else AB_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) AB_EXPR else AB_NONE
+                pNode.arguments.anyIdentical(child)) AB_EXPR else AB_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) AB_EXPR else AB_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) AB_EXPR else AB_NONE
+                pNode.arguments?.anyIdentical(child) == true) AB_EXPR else AB_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) AB_EXPR else AB_NONE
             is SpreadElement -> if (child === pNode.expression) AB_EXPR else AB_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) AB_EXPR else AB_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) AB_EXPR else AB_NONE
@@ -67532,7 +67532,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) AB_EXPR else AB_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) AB_EXPR else AB_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) AB_EXPR else AB_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) AB_EXPR else AB_NONE
             is PropertyAccessExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) AB_EXPR else AB_NONE
@@ -67711,9 +67711,9 @@ interface DataView {
                 pStatus else IY_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) pStatus else IY_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) pStatus else IY_NONE
+                pNode.arguments.anyIdentical(child)) pStatus else IY_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus else IY_NONE
+                pNode.arguments?.anyIdentical(child) == true) pStatus else IY_NONE
             is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
                 child === pNode.whenFalse) pStatus else IY_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else IY_NONE
@@ -67721,7 +67721,7 @@ interface DataView {
             is PropertyAccessExpression -> if (child === pNode.expression) pStatus else IY_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) pStatus else IY_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else IY_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else IY_NONE
             is ObjectLiteralExpression -> if (child is PropertyAssignment ||
                 child is SpreadAssignment) pStatus else IY_NONE
             is PropertyAssignment -> if (child === pNode.initializer ||
@@ -67741,7 +67741,7 @@ interface DataView {
             is VoidExpression -> if (child === pNode.expression) pStatus else IY_NONE
             is TypeAssertionExpression -> if (child === pNode.expression) pStatus else IY_NONE
             is SatisfiesExpression -> if (child === pNode.expression) pStatus else IY_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else IY_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) pStatus else IY_NONE
             // Nested function-likes reset the generator context (the FP-safe
             // subset: only FunctionDeclaration generators are ever flagged).
             is ArrowFunction -> if (child === pNode.body) IY_NON else IY_NONE
@@ -67967,9 +67967,9 @@ interface DataView {
             is BinaryExpression -> if (child === pNode.left || child === pNode.right)
                 AA_EXPR else AA_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) AA_EXPR else AA_NONE
+                pNode.arguments.anyIdentical(child)) AA_EXPR else AA_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) AA_EXPR else AA_NONE
+                pNode.arguments?.anyIdentical(child) == true) AA_EXPR else AA_NONE
             is AsExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
             is TypeAssertionExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
             is SatisfiesExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
@@ -67979,7 +67979,7 @@ interface DataView {
             is PropertyAccessExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) AA_EXPR else AA_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) AA_EXPR else AA_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) AA_EXPR else AA_NONE
             is ObjectLiteralExpression -> if (child is PropertyAssignment ||
                 child is SpreadAssignment) AA_EXPR else AA_NONE
             is PropertyAssignment -> if (child === pNode.initializer) AA_EXPR else AA_NONE
@@ -67996,7 +67996,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) AA_EXPR else AA_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) AA_EXPR else AA_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) AA_EXPR else AA_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) AA_EXPR else AA_NONE
             // arrow/fn-expr bodies are the RESTRICTED statement walk; a
             // concise (expression) arrow body continues as AA_EXPR.
             is ArrowFunction -> if (child === pNode.body) {
@@ -68244,9 +68244,9 @@ interface DataView {
         is TypeAssertionExpression -> child === parent.expression
         is ParenthesizedExpression -> child === parent.expression
         is BinaryExpression -> child === parent.left || child === parent.right
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
@@ -68254,7 +68254,7 @@ interface DataView {
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
         is PrefixUnaryExpression -> child === parent.operand
         is PostfixUnaryExpression -> child === parent.operand
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         // objlit METHOD/accessor bodies are reached; shorthand properties
         // and computed NAMES are not.
         is ObjectLiteralExpression -> when (child) {
@@ -68277,7 +68277,7 @@ interface DataView {
         is TemplateSpan -> child === parent.expression
         is TaggedTemplateExpression ->
             child === parent.tag || (child === parent.template && child is TemplateExpression)
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
         is ClassExpression -> when (child) {
@@ -68561,9 +68561,9 @@ interface DataView {
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is BinaryExpression -> child === parent.left || child === parent.right
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
@@ -68579,8 +68579,8 @@ interface DataView {
         is VoidExpression -> child === parent.expression
         is DeleteExpression -> child === parent.expression
         is YieldExpression -> child === parent.expression
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
-        is CommaListExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         is TemplateExpression -> child is TemplateSpan
         is TemplateSpan -> child === parent.expression
         is TaggedTemplateExpression -> child === parent.tag || child === parent.template
@@ -68944,7 +68944,7 @@ interface DataView {
         PMR_EXPR -> when (parent) {
             is PropertyAccessExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
             is CallExpression -> if (child === parent.expression ||
-                parent.arguments.any { it === child }) PMR_EXPR else PMR_NONE
+                parent.arguments.anyIdentical(child)) PMR_EXPR else PMR_NONE
             is BinaryExpression -> when {
                 child === parent.left ->
                     if (parent.operator == SyntaxKind.Equals && parent.left is PropertyAccessExpression) PMR_NONE
@@ -69117,10 +69117,10 @@ interface DataView {
         is ConditionalExpression -> if (child === parent.whenTrue || child === parent.whenFalse) 1 else 0
         is BinaryExpression -> if (child === parent.left || child === parent.right) 1 else 0
         is CallExpression -> if (child === parent.expression ||
-            parent.arguments.any { it === child }) 1 else 0
+            parent.arguments.anyIdentical(child)) 1 else 0
         is NewExpression -> if (child === parent.expression ||
-            parent.arguments?.any { it === child } == true) 1 else 0
-        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) 1 else 0
+            parent.arguments?.anyIdentical(child) == true) 1 else 0
+        is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) 1 else 0
         is SpreadElement -> if (child === parent.expression) 1 else 0
         is PrefixUnaryExpression -> if (child === parent.operand) 1 else 0
         is PostfixUnaryExpression -> if (child === parent.operand) 1 else 0
@@ -69133,7 +69133,7 @@ interface DataView {
         is TemplateSpan -> if (child === parent.expression) 1 else 0
         is TaggedTemplateExpression -> if (child === parent.tag ||
             (child === parent.template && child is TemplateExpression)) 1 else 0
-        is CommaListExpression -> if (parent.elements.any { it === child }) 1 else 0
+        is CommaListExpression -> if (parent.elements.anyIdentical(child)) 1 else 0
         is PropertyAccessExpression -> if (child === parent.expression) 1 else 0
         is ElementAccessExpression -> if (child === parent.expression ||
             child === parent.argumentExpression) 1 else 0
@@ -71669,10 +71669,10 @@ interface DataView {
             is PrefixUnaryExpression -> if (child === parent.operand) CA_EXPR else CA_NONE
             is PostfixUnaryExpression -> if (child === parent.operand) CA_EXPR else CA_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) CA_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) CA_EXPR
                 else CA_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) CA_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) CA_EXPR
                 else CA_NONE
             is ParenthesizedExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
             is AsExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
@@ -71683,7 +71683,7 @@ interface DataView {
             is ElementAccessExpression ->
                 if (child === parent.expression || child === parent.argumentExpression) CA_EXPR
                 else CA_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) CA_EXPR else CA_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) CA_EXPR else CA_NONE
             is ObjectLiteralExpression -> when (child) {
                 is PropertyAssignment, is SpreadAssignment -> CA_MEMBER
                 else -> CA_NONE
@@ -74545,16 +74545,16 @@ interface DataView {
             is ArrowFunction -> if (child === pNode.body) pStatus else SU_NONE
             is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else SU_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) pStatus else SU_NONE
+                pNode.arguments.anyIdentical(child)) pStatus else SU_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus else SU_NONE
+                pNode.arguments?.anyIdentical(child) == true) pStatus else SU_NONE
             is PropertyAccessExpression -> if (child === pNode.expression) pStatus else SU_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) pStatus else SU_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) pStatus else SU_NONE
             is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
                 child === pNode.whenFalse) pStatus else SU_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else SU_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else SU_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else SU_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else SU_NONE
             is AsExpression -> if (child === pNode.expression) pStatus else SU_NONE
@@ -74571,7 +74571,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) pStatus else SU_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) pStatus else SU_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else SU_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) pStatus else SU_NONE
             else -> SU_NONE
         }
         SU_CMEMBER_EXT, SU_CMEMBER_NOEXT -> {
@@ -76518,16 +76518,16 @@ interface DataView {
                 if (child === parent.condition || child === parent.whenTrue ||
                     child === parent.whenFalse) UBD_EXPR else UBD_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) UBD_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) UBD_EXPR
                 else UBD_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) UBD_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) UBD_EXPR
                 else UBD_NONE
             is PropertyAccessExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
             is ElementAccessExpression ->
                 if (child === parent.expression || child === parent.argumentExpression) UBD_EXPR
                 else UBD_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) UBD_EXPR else UBD_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) UBD_EXPR else UBD_NONE
             is ObjectLiteralExpression -> when (child) {
                 is PropertyAssignment, is SpreadAssignment,
                 is MethodDeclaration, is GetAccessor, is SetAccessor -> UBD_MEMBER
@@ -76547,7 +76547,7 @@ interface DataView {
                 child === parent.template && child is TemplateExpression -> UBD_EXPR
                 else -> UBD_NONE
             }
-            is CommaListExpression -> if (parent.elements.any { it === child }) UBD_EXPR else UBD_NONE
+            is CommaListExpression -> if (parent.elements.anyIdentical(child)) UBD_EXPR else UBD_NONE
             else -> UBD_NONE
         }
         else -> UBD_NONE
@@ -79989,13 +79989,13 @@ interface DataView {
         is NonNullExpression -> child === parent.expression
         is BinaryExpression -> child === parent.left || child === parent.right
         is ConditionalExpression -> child === parent.whenTrue || child === parent.whenFalse // NOT the condition
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is SpreadElement -> child === parent.expression
         is PrefixUnaryExpression -> child === parent.operand
         is PostfixUnaryExpression -> child === parent.operand
@@ -80008,7 +80008,7 @@ interface DataView {
         is TemplateSpan -> child === parent.expression
         is TaggedTemplateExpression ->
             child === parent.tag || (child === parent.template && child is TemplateExpression)
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         else -> false
     }
 
@@ -83314,10 +83314,10 @@ interface DataView {
             // so the unconditional edge is reach-equivalent.
             is PropertyAccessExpression -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
             is CallExpression ->
-                if (child === pNode.expression || pNode.arguments.any { it === child }) TPO_EXPR
+                if (child === pNode.expression || pNode.arguments.anyIdentical(child)) TPO_EXPR
                 else TPO_NONE
             is NewExpression ->
-                if (child === pNode.expression || pNode.arguments?.any { it === child } == true) TPO_EXPR
+                if (child === pNode.expression || pNode.arguments?.anyIdentical(child) == true) TPO_EXPR
                 else TPO_NONE
             // The legacy left-spine flatten emits leftmost-first then the
             // rights in source order — identical to plain left/right edges.
@@ -84149,15 +84149,15 @@ interface DataView {
             child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
         is ParenthesizedExpression -> child === parent.expression
         is BinaryExpression -> child === parent.left || child === parent.right
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
         is ConditionalExpression -> child === parent.condition ||
             child === parent.whenTrue || child === parent.whenFalse
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is ObjectLiteralExpression -> child is PropertyAssignment ||
             child is SpreadAssignment || child is MethodDeclaration // NOT accessors/shorthand
         is PropertyAssignment -> child === parent.initializer // NOT the computed name
@@ -84178,16 +84178,16 @@ interface DataView {
         is TemplateSpan -> child === parent.expression
         is TaggedTemplateExpression -> child === parent.tag ||
             (child === parent.template && child is TemplateExpression)
-        is CommaListExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.anyIdentical(child)
         // ---- types (the deleted walkTParamDefaultsInType arms) ----
         is FunctionType -> child === parent.type || child is Parameter
         is ConstructorType -> child === parent.type || child is Parameter
-        is UnionType -> parent.types.any { it === child }
-        is IntersectionType -> parent.types.any { it === child }
+        is UnionType -> parent.types.anyIdentical(child)
+        is IntersectionType -> parent.types.anyIdentical(child)
         is ArrayType -> child === parent.elementType
-        is TupleType -> parent.elements.any { it === child }
+        is TupleType -> parent.elements.anyIdentical(child)
         is ParenthesizedType -> child === parent.type
-        is TypeReference -> parent.typeArguments?.any { it === child } == true
+        is TypeReference -> parent.typeArguments?.anyIdentical(child) == true
         is TypeLiteral -> child is MethodDeclaration || child is Constructor ||
             child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
         else -> false
@@ -85308,16 +85308,16 @@ interface DataView {
             is SpreadAssignment -> if (child === pNode.expression) pStatus else UY_NONE
             is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else UY_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) pStatus else UY_NONE
+                pNode.arguments.anyIdentical(child)) pStatus else UY_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus else UY_NONE
+                pNode.arguments?.anyIdentical(child) == true) pStatus else UY_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) pStatus else UY_NONE
             is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
                 child === pNode.whenFalse) pStatus else UY_NONE
             is PropertyAccessExpression -> if (child === pNode.expression) pStatus else UY_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) pStatus else UY_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else UY_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else UY_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else UY_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else UY_NONE
             is SpreadElement -> if (child === pNode.expression) pStatus else UY_NONE
@@ -85333,7 +85333,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) pStatus else UY_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) pStatus else UY_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else UY_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) pStatus else UY_NONE
             else -> UY_NONE
         }
         UY_MEMBER -> when (pNode) {
@@ -85490,16 +85490,16 @@ interface DataView {
             // ObjectLiteralExpression: deliberately NO arm — skipped entirely.
             is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else SR_NONE
             is CallExpression -> if (child === pNode.expression ||
-                pNode.arguments.any { it === child }) pStatus else SR_NONE
+                pNode.arguments.anyIdentical(child)) pStatus else SR_NONE
             is NewExpression -> if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus else SR_NONE
+                pNode.arguments?.anyIdentical(child) == true) pStatus else SR_NONE
             is PropertyAccessExpression -> if (child === pNode.expression) pStatus else SR_NONE
             is ElementAccessExpression -> if (child === pNode.expression ||
                 child === pNode.argumentExpression) pStatus else SR_NONE
             is ParenthesizedExpression -> if (child === pNode.expression) pStatus else SR_NONE
             is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
                 child === pNode.whenFalse) pStatus else SR_NONE
-            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else SR_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else SR_NONE
             is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else SR_NONE
             is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else SR_NONE
             is AsExpression -> if (child === pNode.expression) pStatus else SR_NONE
@@ -85516,7 +85516,7 @@ interface DataView {
             is TemplateSpan -> if (child === pNode.expression) pStatus else SR_NONE
             is TaggedTemplateExpression -> if (child === pNode.tag ||
                 (child === pNode.template && child is TemplateExpression)) pStatus else SR_NONE
-            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else SR_NONE
+            is CommaListExpression -> if (pNode.elements.anyIdentical(child)) pStatus else SR_NONE
             else -> SR_NONE
         }
         SR_MEMBER -> when (pNode) {
@@ -87978,10 +87978,10 @@ interface DataView {
         is CatchClause -> if (child === pNode.block) pStatus else AF_NONE
         is NewExpression ->
             if (child === pNode.expression ||
-                pNode.arguments?.any { it === child } == true) pStatus
+                pNode.arguments?.anyIdentical(child) == true) pStatus
             else AF_NONE
         is CallExpression ->
-            if (child === pNode.expression || pNode.arguments.any { it === child }) pStatus
+            if (child === pNode.expression || pNode.arguments.anyIdentical(child)) pStatus
             else AF_NONE
         is BinaryExpression ->
             if (child === pNode.left || child === pNode.right) pStatus else AF_NONE
@@ -87998,7 +87998,7 @@ interface DataView {
         is ElementAccessExpression ->
             if (child === pNode.expression || child === pNode.argumentExpression) pStatus
             else AF_NONE
-        is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else AF_NONE
+        is ArrayLiteralExpression -> if (pNode.elements.anyIdentical(child)) pStatus else AF_NONE
         is PropertyAssignment -> if (child === pNode.initializer) pStatus else AF_NONE
         is SpreadAssignment -> if (child === pNode.expression) pStatus else AF_NONE
         is SpreadElement -> if (child === pNode.expression) pStatus else AF_NONE
@@ -88017,7 +88017,7 @@ interface DataView {
             if (child === pNode.tag || child === pNode.template) pStatus else AF_NONE
         is TemplateExpression -> if (child is TemplateSpan) pStatus else AF_NONE
         is TemplateSpan -> if (child === pNode.expression) pStatus else AF_NONE
-        is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else AF_NONE
+        is CommaListExpression -> if (pNode.elements.anyIdentical(child)) pStatus else AF_NONE
         else -> AF_NONE
     }
 
@@ -89778,17 +89778,17 @@ interface DataView {
                 else -> IR_NONE
             }
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) IR_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) IR_EXPR
                 else IR_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) IR_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) IR_EXPR
                 else IR_NONE
             is ParenthesizedExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
             is BinaryExpression -> if (child === parent.left || child === parent.right) IR_EXPR else IR_NONE
             is ConditionalExpression ->
                 if (child === parent.condition || child === parent.whenTrue ||
                     child === parent.whenFalse) IR_EXPR else IR_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) IR_EXPR else IR_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) IR_EXPR else IR_NONE
             is SpreadElement -> if (child === parent.expression) IR_EXPR else IR_NONE
             is AsExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
             is TypeAssertionExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
@@ -89811,7 +89811,7 @@ interface DataView {
             is VoidExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
             is DeleteExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
             is TypeOfExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
-            is CommaListExpression -> if (parent.elements.any { it === child }) IR_EXPR else IR_NONE
+            is CommaListExpression -> if (parent.elements.anyIdentical(child)) IR_EXPR else IR_NONE
             else -> IR_NONE
         }
         else -> IR_NONE
@@ -150812,7 +150812,7 @@ interface DataView {
                     is InterfaceDeclaration -> decl.members
                     else -> continue
                 }
-                if (members.any { it === node }) return decl
+                if (members.anyIdentical(node)) return decl
             }
         }
         return null
@@ -160208,15 +160208,15 @@ interface DataView {
         is PostfixUnaryExpression -> child === parent.operand
         is BinaryExpression -> child === parent.left || child === parent.right
         is ParenthesizedExpression -> child === parent.expression
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is SpreadElement -> child === parent.expression
         is AsExpression -> child === parent.expression
         is NonNullExpression -> child === parent.expression
@@ -163284,10 +163284,10 @@ interface DataView {
                 if (child === parent.condition || child === parent.whenTrue ||
                     child === parent.whenFalse) NP_EXPR else NP_NONE
             is CallExpression ->
-                if (child === parent.expression || parent.arguments.any { it === child }) NP_EXPR
+                if (child === parent.expression || parent.arguments.anyIdentical(child)) NP_EXPR
                 else NP_NONE
             is NewExpression ->
-                if (child === parent.expression || parent.arguments?.any { it === child } == true) NP_EXPR
+                if (child === parent.expression || parent.arguments?.anyIdentical(child) == true) NP_EXPR
                 else NP_NONE
             is PropertyAccessExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
             is ElementAccessExpression ->
@@ -163300,7 +163300,7 @@ interface DataView {
             is AwaitExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
             is VoidExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
             is SpreadElement -> if (child === parent.expression) NP_EXPR else NP_NONE
-            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) NP_EXPR else NP_NONE
+            is ArrayLiteralExpression -> if (parent.elements.anyIdentical(child)) NP_EXPR else NP_NONE
             is ObjectLiteralExpression -> when (child) {
                 is PropertyAssignment, is ShorthandPropertyAssignment,
                 is SpreadAssignment, is MethodDeclaration -> NP_MEMBER
@@ -169603,15 +169603,15 @@ interface DataView {
         // ---- expressions (the deleted gIdxCheckExpr arms) ----
         is BinaryExpression -> child === parent.left || child === parent.right
         is ParenthesizedExpression -> child === parent.expression
-        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is CallExpression -> child === parent.expression || parent.arguments.anyIdentical(child)
         is NewExpression ->
-            child === parent.expression || parent.arguments?.any { it === child } == true
+            child === parent.expression || parent.arguments?.anyIdentical(child) == true
         is PropertyAccessExpression -> child === parent.expression
         is ElementAccessExpression ->
             child === parent.expression || child === parent.argumentExpression
         is ConditionalExpression ->
             child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
-        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ArrayLiteralExpression -> parent.elements.anyIdentical(child)
         is SpreadElement -> child === parent.expression
         is PrefixUnaryExpression -> child === parent.operand
         is PostfixUnaryExpression -> child === parent.operand
@@ -171320,7 +171320,7 @@ interface DataView {
         }
         is FunctionExpression -> if (child === parent.body) pDepth + 1 else -1
         is CallExpression ->
-            if (child === parent.expression || parent.arguments.any { it === child })
+            if (child === parent.expression || parent.arguments.anyIdentical(child))
                 spineIaExpr(pDepth + 1) else -1
         is TaggedTemplateExpression -> when {
             child === parent.tag -> spineIaExpr(pDepth + 1)
@@ -171336,7 +171336,7 @@ interface DataView {
         is PostfixUnaryExpression -> if (child === parent.operand) spineIaExpr(pDepth + 1) else -1
         is SpreadElement -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
         is ArrayLiteralExpression ->
-            if (parent.elements.any { it === child }) spineIaExpr(pDepth + 1) else -1
+            if (parent.elements.anyIdentical(child)) spineIaExpr(pDepth + 1) else -1
         is ObjectLiteralExpression -> when (child) {
             is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment,
             is MethodDeclaration, is GetAccessor, is SetAccessor -> pDepth + 1
@@ -171347,7 +171347,7 @@ interface DataView {
         is NonNullExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
         is TypeAssertionExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
         is NewExpression ->
-            if (child === parent.expression || parent.arguments?.any { it === child } == true)
+            if (child === parent.expression || parent.arguments?.anyIdentical(child) == true)
                 spineIaExpr(pDepth + 1) else -1
         is ElementAccessExpression ->
             if (child === parent.expression || child === parent.argumentExpression)
@@ -171359,7 +171359,7 @@ interface DataView {
         is DeleteExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
         is TypeOfExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
         is CommaListExpression ->
-            if (parent.elements.any { it === child }) spineIaExpr(pDepth + 1) else -1
+            if (parent.elements.anyIdentical(child)) spineIaExpr(pDepth + 1) else -1
         is ClassExpression ->
             if (child is MethodDeclaration || child is Constructor ||
                 child is GetAccessor || child is SetAccessor ||

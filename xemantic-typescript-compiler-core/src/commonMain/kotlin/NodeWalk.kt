@@ -68,21 +68,21 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.CALL_EXPRESSION -> {
             node as CallExpression
             action(node.expression)
-            node.typeArguments?.forEach(action)
-            node.arguments.forEach(action)
+            walkList(node.typeArguments, action)
+            walkList(node.arguments, action)
         }
         NodeKind.STRING_LITERAL_NODE -> {}
         NodeKind.NUMERIC_LITERAL_NODE -> {}
         NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; action(node.left); action(node.right) }
         NodeKind.EXPRESSION_STATEMENT -> { node as ExpressionStatement; action(node.expression) }
-        NodeKind.BLOCK -> { node as Block; node.statements.forEach(action) }
+        NodeKind.BLOCK -> { node as Block; walkList(node.statements, action) }
         NodeKind.VARIABLE_DECLARATION -> {
             node as VariableDeclaration
             action(node.name)
             node.type?.let(action)
             node.initializer?.let(action)
         }
-        NodeKind.VARIABLE_DECLARATION_LIST -> { node as VariableDeclarationList; node.declarations.forEach(action) }
+        NodeKind.VARIABLE_DECLARATION_LIST -> { node as VariableDeclarationList; walkList(node.declarations, action) }
         NodeKind.VARIABLE_STATEMENT -> { node as VariableStatement; action(node.declarationList) }
 
         // ── statements ──
@@ -121,7 +121,7 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.SWITCH_STATEMENT -> {
             node as SwitchStatement
             action(node.expression)
-            node.caseBlock.forEach(action)
+            walkList(node.caseBlock, action)
         }
         NodeKind.LABELED_STATEMENT -> { node as LabeledStatement; action(node.label); action(node.statement) }
         NodeKind.THROW_STATEMENT -> { node as ThrowStatement; node.expression?.let(action) }
@@ -139,36 +139,36 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.FUNCTION_DECLARATION -> {
             node as FunctionDeclaration
             node.name?.let(action)
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             node.body?.let(action)
         }
         NodeKind.CLASS_DECLARATION -> {
             node as ClassDeclaration
             node.name?.let(action)
-            node.typeParameters?.forEach(action)
-            node.heritageClauses?.forEach(action)
-            node.members.forEach(action)
-            node.decorators?.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.heritageClauses, action)
+            walkList(node.members, action)
+            walkList(node.decorators, action)
         }
         NodeKind.INTERFACE_DECLARATION -> {
             node as InterfaceDeclaration
             action(node.name)
-            node.typeParameters?.forEach(action)
-            node.heritageClauses?.forEach(action)
-            node.members.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.heritageClauses, action)
+            walkList(node.members, action)
         }
         NodeKind.TYPE_ALIAS_DECLARATION -> {
             node as TypeAliasDeclaration
             action(node.name)
-            node.typeParameters?.forEach(action)
+            walkList(node.typeParameters, action)
             action(node.type)
         }
         NodeKind.ENUM_DECLARATION -> {
             node as EnumDeclaration
             action(node.name)
-            node.members.forEach(action)
+            walkList(node.members, action)
         }
         NodeKind.MODULE_DECLARATION -> {
             node as ModuleDeclaration
@@ -199,22 +199,22 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.TEMPLATE_EXPRESSION -> {
             node as TemplateExpression
             action(node.head)
-            node.templateSpans.forEach(action)
+            walkList(node.templateSpans, action)
         }
-        NodeKind.ARRAY_LITERAL_EXPRESSION -> { node as ArrayLiteralExpression; node.elements.forEach(action) }
-        NodeKind.OBJECT_LITERAL_EXPRESSION -> { node as ObjectLiteralExpression; node.properties.forEach(action) }
+        NodeKind.ARRAY_LITERAL_EXPRESSION -> { node as ArrayLiteralExpression; walkList(node.elements, action) }
+        NodeKind.OBJECT_LITERAL_EXPRESSION -> { node as ObjectLiteralExpression; walkList(node.properties, action) }
         NodeKind.ELEMENT_ACCESS_EXPRESSION -> { node as ElementAccessExpression; action(node.expression); action(node.argumentExpression) }
         NodeKind.NEW_EXPRESSION -> {
             node as NewExpression
             action(node.expression)
-            node.typeArguments?.forEach(action)
-            node.arguments?.forEach(action)
-            node.leadingTypeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
+            walkList(node.arguments, action)
+            walkList(node.leadingTypeArguments, action)
         }
         NodeKind.TAGGED_TEMPLATE_EXPRESSION -> {
             node as TaggedTemplateExpression
             action(node.tag)
-            node.typeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
             action(node.template)
         }
         NodeKind.TYPE_ASSERTION_EXPRESSION -> { node as TypeAssertionExpression; action(node.type); action(node.expression) }
@@ -226,15 +226,15 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.FUNCTION_EXPRESSION -> {
             node as FunctionExpression
             node.name?.let(action)
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             action(node.body)
         }
         NodeKind.ARROW_FUNCTION -> {
             node as ArrowFunction
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             action(node.body)
         }
@@ -255,20 +255,20 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.CLASS_EXPRESSION -> {
             node as ClassExpression
             node.name?.let(action)
-            node.typeParameters?.forEach(action)
-            node.heritageClauses?.forEach(action)
-            node.members.forEach(action)
-            node.decorators?.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.heritageClauses, action)
+            walkList(node.members, action)
+            walkList(node.decorators, action)
         }
         NodeKind.AS_EXPRESSION -> { node as AsExpression; action(node.expression); action(node.type) }
         NodeKind.NON_NULL_EXPRESSION -> { node as NonNullExpression; action(node.expression) }
         NodeKind.SATISFIES_EXPRESSION -> { node as SatisfiesExpression; action(node.expression); action(node.type) }
         NodeKind.META_PROPERTY -> { node as MetaProperty; action(node.name) }
         NodeKind.OMITTED_EXPRESSION -> {}
-        NodeKind.COMMA_LIST_EXPRESSION -> { node as CommaListExpression; node.elements.forEach(action) }
+        NodeKind.COMMA_LIST_EXPRESSION -> { node as CommaListExpression; walkList(node.elements, action) }
 
         // ── supporting kinds that happen to carry a low id ──
-        NodeKind.SOURCE_FILE -> { node as SourceFile; node.statements.forEach(action) }
+        NodeKind.SOURCE_FILE -> { node as SourceFile; walkList(node.statements, action) }
         NodeKind.TEMPLATE_SPAN -> { node as TemplateSpan; action(node.expression); action(node.literal) }
         else ->
             // Disjoint continuation ranges — NOT a fall-through chain, so no kind
@@ -290,7 +290,7 @@ private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> 
         NodeKind.TYPE_REFERENCE -> {
             node as TypeReference
             action(node.typeName)
-            node.typeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
         }
 
         // ── class elements ──
@@ -299,42 +299,42 @@ private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> 
             action(node.name)
             node.type?.let(action)
             node.initializer?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
         NodeKind.METHOD_DECLARATION -> {
             node as MethodDeclaration
             action(node.name)
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             node.body?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
         NodeKind.CONSTRUCTOR -> {
             node as Constructor
-            node.parameters.forEach(action)
+            walkList(node.parameters, action)
             node.body?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
         NodeKind.GET_ACCESSOR -> {
             node as GetAccessor
             action(node.name)
-            node.parameters.forEach(action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             node.body?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
         NodeKind.SET_ACCESSOR -> {
             node as SetAccessor
             action(node.name)
-            node.parameters.forEach(action)
+            walkList(node.parameters, action)
             node.type?.let(action)
             node.body?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
         NodeKind.INDEX_SIGNATURE -> {
             node as IndexSignature
-            node.parameters.forEach(action)
+            walkList(node.parameters, action)
             node.type?.let(action)
         }
         NodeKind.SEMICOLON_CLASS_ELEMENT -> {}
@@ -343,26 +343,26 @@ private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> 
         // ── type nodes ──
         NodeKind.FUNCTION_TYPE -> {
             node as FunctionType
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             action(node.type)
         }
         NodeKind.CONSTRUCTOR_TYPE -> {
             node as ConstructorType
-            node.typeParameters?.forEach(action)
-            node.parameters.forEach(action)
+            walkList(node.typeParameters, action)
+            walkList(node.parameters, action)
             action(node.type)
         }
         NodeKind.TYPE_QUERY -> {
             node as TypeQuery
             action(node.exprName)
-            node.typeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
         }
-        NodeKind.TYPE_LITERAL -> { node as TypeLiteral; node.members.forEach(action) }
+        NodeKind.TYPE_LITERAL -> { node as TypeLiteral; walkList(node.members, action) }
         NodeKind.ARRAY_TYPE -> { node as ArrayType; action(node.elementType) }
-        NodeKind.TUPLE_TYPE -> { node as TupleType; node.elements.forEach(action) }
-        NodeKind.UNION_TYPE -> { node as UnionType; node.types.forEach(action) }
-        NodeKind.INTERSECTION_TYPE -> { node as IntersectionType; node.types.forEach(action) }
+        NodeKind.TUPLE_TYPE -> { node as TupleType; walkList(node.elements, action) }
+        NodeKind.UNION_TYPE -> { node as UnionType; walkList(node.types, action) }
+        NodeKind.INTERSECTION_TYPE -> { node as IntersectionType; walkList(node.types, action) }
         NodeKind.CONDITIONAL_TYPE -> {
             node as ConditionalType
             action(node.checkType)
@@ -381,7 +381,7 @@ private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> 
         NodeKind.TEMPLATE_LITERAL_TYPE -> {
             node as TemplateLiteralType
             action(node.head)
-            node.templateSpans.forEach(action)
+            walkList(node.templateSpans, action)
         }
         NodeKind.TEMPLATE_LITERAL_TYPE_SPAN -> { node as TemplateLiteralTypeSpan; action(node.type); action(node.literal) }
         NodeKind.PARENTHESIZED_TYPE -> { node as ParenthesizedType; action(node.type) }
@@ -398,7 +398,7 @@ private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> 
             node as ImportType
             action(node.argument)
             node.qualifier?.let(action)
-            node.typeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
         }
         NodeKind.THIS_TYPE -> {}
         NodeKind.INFER_TYPE -> { node as InferType; action(node.typeParameter) }
@@ -419,16 +419,16 @@ private fun forEachChildOfSupportingNode(node: Node, kind: Int, action: (Node) -
             action(node.name)
             node.type?.let(action)
             node.initializer?.let(action)
-            node.decorators?.forEach(action)
+            walkList(node.decorators, action)
         }
 
         // ── supporting nodes ──
         NodeKind.DECORATOR -> { node as Decorator; action(node.expression) }
-        NodeKind.HERITAGE_CLAUSE -> { node as HeritageClause; node.types.forEach(action) }
+        NodeKind.HERITAGE_CLAUSE -> { node as HeritageClause; walkList(node.types, action) }
         NodeKind.EXPRESSION_WITH_TYPE_ARGUMENTS -> {
             node as ExpressionWithTypeArguments
             action(node.expression)
-            node.typeArguments?.forEach(action)
+            walkList(node.typeArguments, action)
         }
         NodeKind.ENUM_MEMBER -> {
             node as EnumMember
@@ -450,8 +450,8 @@ private fun forEachChildOfSupportingNode(node: Node, kind: Int, action: (Node) -
         }
         NodeKind.SPREAD_ASSIGNMENT -> { node as SpreadAssignment; action(node.expression) }
         NodeKind.COMPUTED_PROPERTY_NAME -> { node as ComputedPropertyName; action(node.expression) }
-        NodeKind.OBJECT_BINDING_PATTERN -> { node as ObjectBindingPattern; node.elements.forEach(action) }
-        NodeKind.ARRAY_BINDING_PATTERN -> { node as ArrayBindingPattern; node.elements.forEach(action) }
+        NodeKind.OBJECT_BINDING_PATTERN -> { node as ObjectBindingPattern; walkList(node.elements, action) }
+        NodeKind.ARRAY_BINDING_PATTERN -> { node as ArrayBindingPattern; walkList(node.elements, action) }
         NodeKind.BINDING_ELEMENT -> {
             node as BindingElement
             node.propertyName?.let(action)
@@ -461,24 +461,24 @@ private fun forEachChildOfSupportingNode(node: Node, kind: Int, action: (Node) -
         NodeKind.CASE_CLAUSE -> {
             node as CaseClause
             action(node.expression)
-            node.statements.forEach(action)
+            walkList(node.statements, action)
         }
-        NodeKind.DEFAULT_CLAUSE -> { node as DefaultClause; node.statements.forEach(action) }
+        NodeKind.DEFAULT_CLAUSE -> { node as DefaultClause; walkList(node.statements, action) }
         NodeKind.CATCH_CLAUSE -> {
             node as CatchClause
             node.variableDeclaration?.let(action)
             action(node.block)
         }
-        NodeKind.MODULE_BLOCK -> { node as ModuleBlock; node.statements.forEach(action) }
+        NodeKind.MODULE_BLOCK -> { node as ModuleBlock; walkList(node.statements, action) }
         NodeKind.NAMESPACE_IMPORT -> { node as NamespaceImport; action(node.name) }
-        NodeKind.NAMED_IMPORTS -> { node as NamedImports; node.elements.forEach(action) }
+        NodeKind.NAMED_IMPORTS -> { node as NamedImports; walkList(node.elements, action) }
         NodeKind.IMPORT_SPECIFIER -> {
             node as ImportSpecifier
             node.propertyName?.let(action)
             action(node.name)
         }
         NodeKind.NAMESPACE_EXPORT -> { node as NamespaceExport; action(node.name) }
-        NodeKind.NAMED_EXPORTS -> { node as NamedExports; node.elements.forEach(action) }
+        NodeKind.NAMED_EXPORTS -> { node as NamedExports; walkList(node.elements, action) }
         NodeKind.EXPORT_SPECIFIER -> {
             node as ExportSpecifier
             node.propertyName?.let(action)
@@ -497,25 +497,67 @@ private fun forEachChildOfSupportingNode(node: Node, kind: Int, action: (Node) -
         NodeKind.JSX_OPENING_ELEMENT -> {
             node as JsxOpeningElement
             action(node.tagName)
-            node.attributes.forEach(action)
+            walkList(node.attributes, action)
         }
         NodeKind.JSX_CLOSING_ELEMENT -> { node as JsxClosingElement; action(node.tagName) }
         NodeKind.JSX_ELEMENT -> {
             node as JsxElement
             action(node.openingElement)
-            node.children.forEach(action)
+            walkList(node.children, action)
             action(node.closingElement)
         }
         NodeKind.JSX_SELF_CLOSING_ELEMENT -> {
             node as JsxSelfClosingElement
             action(node.tagName)
-            node.attributes.forEach(action)
+            walkList(node.attributes, action)
         }
         NodeKind.JSX_TEXT -> {}
         NodeKind.JSX_EXPRESSION_CONTAINER -> { node as JsxExpressionContainer; node.expression?.let(action) }
-        NodeKind.JSX_FRAGMENT -> { node as JsxFragment; node.children.forEach(action) }
+        NodeKind.JSX_FRAGMENT -> { node as JsxFragment; walkList(node.children, action) }
         else -> unstampedKindError(node)
     }
+}
+
+/**
+ * (WARM.32) The ONE place [forEachChild]'s 70 list child positions iterate, and
+ * the ONE place the family's shape can be changed or measured.
+ *
+ * Nullable by design: a `xs?.forEach(action)` position and a `xs.forEach(action)`
+ * one become the SAME call here, and a null list returns before the hook — which
+ * is what today's `?.` does and what keeps the census's `calls` a count of real
+ * iterations.
+ *
+ * NOT `inline`: 70 inlined copies of the loop are what put [forEachChild] over
+ * HotSpot's 8,000-byte `HugeMethodLimit` in the first place (round 803), so a
+ * static call here SHRINKS all three partitions. The gate is one static
+ * `Boolean` read; round 900's law is obeyed by passing the LIST and deriving
+ * `size` inside [IterCensus.noteList].
+ *
+ * The body is deliberately `for (e in xs)` — the exact lowering of
+ * `xs.forEach(action)`, so this refactor is shape-preserving and the
+ * [IterCensus] amplifier's arm A is the code that actually runs here.
+ */
+private fun walkList(xs: List<Node>?, action: (Node) -> Unit) {
+    if (xs == null) return
+    if (IterCensus.on) IterCensus.noteList(xs)
+    for (e in xs) action(e)
+}
+
+/**
+ * (WARM.32) The identity membership test the INV.4 edge classifiers ask ~145
+ * times over — `xs.any { it === x }`, which cannot be `xs.contains(x)` because
+ * AST nodes are data classes and `equals` would deep-recurse the subtree
+ * (round 471).
+ *
+ * Extracted so the family has one home; the body is the exact lowering of the
+ * `any {}` it replaces, so the extraction is shape-preserving. Being a static
+ * call rather than 145 inlined loops also takes bytecode OUT of the edge
+ * classifiers, which live in `Checker.kt`'s largest functions.
+ */
+internal fun List<Node>.anyIdentical(x: Node): Boolean {
+    if (IterCensus.on) IterCensus.noteAny(this, x)
+    for (e in this) if (e === x) return true
+    return false
 }
 
 /**
