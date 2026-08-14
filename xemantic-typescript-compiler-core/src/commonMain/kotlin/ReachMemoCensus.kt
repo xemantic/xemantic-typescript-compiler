@@ -135,8 +135,19 @@ object ReachMemoCensus {
         Triple(32, 512, 16384),   // this box, measured by `lscpu`
         Triple(32, 256, 4096),    // a standing-in-for-contention shrink
         Triple(32, 128, 1024),    // a hostile one — the delta's shape at the end
+        // The one direction that could flip the verdict, so it is measured
+        // rather than argued: the model cannot see the checker's own traffic
+        // between two consultations, and what that traffic does is evict L1.
+        // Layout A runs 45 concurrent sequential streams and needs 45 lines
+        // resident; layout B runs ONE and needs two. A small L1 is where B
+        // should win if it ever does.
+        Triple(4, 64, 512),       // "flushed" — L1 too small for 45 streams
+        Triple(8, 128, 2048),
     )
-    private val geometryNames = arrayOf("box(32K/512K/16M)", "shrunk(32K/256K/4M)", "hostile(32K/128K/1M)")
+    private val geometryNames = arrayOf(
+        "box(32K/512K/16M)", "shrunk(32K/256K/4M)", "hostile(32K/128K/1M)",
+        "flushed(4K/64K/512K)", "mid(8K/128K/2M)",
+    )
 
     // `val`, and cleared in place rather than reallocated: a `var` holding an
     // `Array` is a MUTABLE field to `CliModeRestoreTest`'s reflection sweep, and
@@ -147,6 +158,18 @@ object ReachMemoCensus {
     private val simB = Array(geometries.size) {
         Hierarchy(geometries[it].first, geometries[it].second, geometries[it].third)
     }
+
+    /**
+     * Layout C — the candidate in its BEST possible form: a node's row PADDED
+     * to 64 bytes, so it is always exactly one cache line and never straddles
+     * two. It costs 42% more memory than B (64 bytes a node against 45) and it
+     * is measured because a refusal taken against the strongest form of a
+     * candidate is a refusal with certainty (round 903).
+     */
+    private val simC = Array(geometries.size) {
+        Hierarchy(geometries[it].first, geometries[it].second, geometries[it].third)
+    }
+    private var baseC = 0L
 
     /** Model the JVM zeroing a fresh `ByteArray`: a write to every line. It is
      *  IDENTICAL in both layouts (43n bytes either way — the transposition does
@@ -219,6 +242,8 @@ object ReachMemoCensus {
         elemBytes[IADEPTH] = 2
         for (h in simA) h.clear()
         for (h in simB) h.clear()
+        for (h in simC) h.clear()
+        baseC = 0
     }
 
     /**
@@ -244,19 +269,23 @@ object ReachMemoCensus {
         }
         baseB = bump + 16
         bump += 16 + align(n.toLong() * N)
+        baseC = bump + 16
+        bump += 16 + align(n.toLong() * 64)
         if (modelZeroing) {
-            for (c in 0 until N) zero(baseA[c], n.toLong() * elemBytes[c], true)
-            zero(baseB, n.toLong() * N, false)
+            for (c in 0 until N) zero(baseA[c], n.toLong() * elemBytes[c], 0)
+            zero(baseB, n.toLong() * N, 1)
+            zero(baseC, n.toLong() * 64, 2)
         }
     }
 
     private fun align(bytes: Long): Long = (bytes + 7L) and 7L.inv()
 
-    private fun zero(base: Long, bytes: Long, armA: Boolean) {
+    private fun zero(base: Long, bytes: Long, arm: Int) {
+        val sim = when (arm) { 0 -> simA; 1 -> simB; else -> simC }
         var a = base
         val end = base + bytes
         while (a < end) {
-            if (armA) for (h in simA) h.touch(a) else for (h in simB) h.touch(a)
+            for (h in sim) h.touch(a)
             a += 64
         }
     }
@@ -321,6 +350,8 @@ object ReachMemoCensus {
         for (h in simA) h.touch(a)
         val b = baseB + id.toLong() * N + c
         for (h in simB) h.touch(b)
+        val cAddr = baseC + id.toLong() * 64 + c
+        for (h in simC) h.touch(cAddr)
     }
 
     fun report(): String = buildString {
@@ -343,14 +374,20 @@ object ReachMemoCensus {
             val nm = if (i < ReachCensus.N) ReachCensus.names[i] else if (i == ARGDEPTH) "ArgDepth" else "IaDepth"
             appendLine("    ${nm.padEnd(12)} probe=${probes[i]} ascent=${ascents[i]} write=${writes[i]}")
         }
-        appendLine("  LAYOUT SIMULATION — A = 45 arrays (today), B = one row of $N per node")
+        appendLine(
+            "  LAYOUT SIMULATION — A = 45 arrays (today), B = one row of $N per node, " +
+                "C = one row PADDED to 64 B per node"
+        )
         for (g in geometries.indices) {
-            val a = simA[g]; val b = simB[g]
+            val a = simA[g]; val b = simB[g]; val c = simC[g]
             appendLine("    ${geometryNames[g]}")
             appendLine("      A  l1=${a.l1Hits} l2=${a.l2Hits} l3=${a.l3Hits} dram=${a.dram}")
             appendLine("      B  l1=${b.l1Hits} l2=${b.l2Hits} l3=${b.l3Hits} dram=${b.dram}")
+            appendLine("      C  l1=${c.l1Hits} l2=${c.l2Hits} l3=${c.l3Hits} dram=${c.dram}")
             appendLine("      B-A l1=${b.l1Hits - a.l1Hits} l2=${b.l2Hits - a.l2Hits} " +
                 "l3=${b.l3Hits - a.l3Hits} dram=${b.dram - a.dram}")
+            appendLine("      C-A l1=${c.l1Hits - a.l1Hits} l2=${c.l2Hits - a.l2Hits} " +
+                "l3=${c.l3Hits - a.l3Hits} dram=${c.dram - a.dram}")
         }
     }
 }
