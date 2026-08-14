@@ -158,6 +158,11 @@ class ReachMemoCensusTest {
             for (g in ReachMemoCensus.gapHistogram) gaps += g
             assert(ascents > 0)
             assert(gaps > 0)
+            // round 849: the exclusion must not be vacuous, or the identity
+            // below holds for a fixture that never reaches the two classifiers
+            // it is about — and the ablation arm that targets them is DEAD
+            // rather than the pin blind (round 902).
+            assert(interleaved > 0)
             assert(gaps == ascents - interleaved)
             // a parent is never its own child, so the zero-gap bucket is empty
             assert(ReachMemoCensus.gapHistogram[0] == 0L)
