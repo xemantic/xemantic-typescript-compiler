@@ -1090,3 +1090,95 @@ round built exactly that, first, and read it before writing a line of the fix.
   and the narrowing entries add ~4-6 ms at the measured 30-51 ns/entry, so ~0.8-1.1%, inside what
   this box settles (rounds 840(c)/858/886). The claim is the controlled row plus the cross-checked
   census.
+
+---
+
+### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+**WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
+during a trim, and nothing noticed for ~15 rounds because rounds 886-902 were self-directing: each
+session note named its own successor. **Round 902 ended with a CLOSURE and named none, so round 903
+opened with no pool at all** and had to rebuild one by surveying `docs/perf/`. That is the failure
+this section exists to prevent. **A round that refuses a candidate must leave at least one named
+successor here, with its price and its next instrument** — a refusal is a successful round only if
+the arc can continue from it.
+
+DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
+sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->
+5,424 (pre-895) -> 5,243 (HEAD) = **-10.5% over rounds 887-898**. **There has been no wall A/B for
+twelve rounds**, and round 899 could resolve 1.88% in SIGN alone — so every item below is a fifth to
+a half of what this box can judge and must be defended on counters plus a decomposition, never on a
+median. `cost_gate.py` reads +0.00% by construction for all of them.
+
+REFUSAL FLOOR: ~**0.31%** (~17 ms) for a LOW-risk change — round 897 refused there, 898 refused
+MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused at 0.085%.
+
+- [ ] **(WARM.31) Residual boxed primitive map/set keys — `Integer.equals` 29.4 ms (0.54%) MEASURED.**
+  IN PROGRESS (round 904). A LOCATION, not yet a candidate: nothing has established which maps hold
+  it. `IntKeyMap`/`LongKeyMap` are the house idiom and `symbolTypes` + `nodeToFlow` are already
+  migrated. Named sites to VERIFY, not trust: `symbolTypeResolutionInProgress` (`Checker.kt:177`),
+  `relationComparisonStack`/`relationSourceTargets` (`:207`/`:252`, and `countOccurrences` iterates
+  with per-element unboxing), `ctaM3NarrowThen` (`:2572`), `spineTavLevelMemo` (`:5112`),
+  `Binder.scopes` (`Binder.kt:581`). **First step is BUILD-FREE**: census each site's population,
+  maxLive and KEY RANGE — `Integer.valueOf` caches -128..127, so a small-int site boxes nothing new
+  and refuses itself. `maxLive` inverts rankings (round 890). Price any swap **NET** (round 899:
+  `nodeToFlow`'s -42.6 gross returned +19.1 as the replacement's own frames).
+
+- [ ] **(WARM.32) The iterator-allocation family — NEW, from the ../xemantic-rust-compiler transfer
+  audit (round 903), never swept here.** Kotlin's `Iterable.any`/`all`/`forEach` are `inline` but
+  their bodies are `for (e in this)` on an `Iterable` receiver, so each asks for a **heap iterator**
+  and pays `hasNext`/`next` virtual dispatch per element. Two populations: **`NodeWalk.forEachChild`
+  has 70 `list.forEach(action)` calls and runs ONCE PER NODE** (~857 k nodes x three sweeps —
+  `spineWalkFile`, `Binder.pushChildren`, `FlowGraph`'s side-table fill), and it is **#5 in the warm
+  leaf table at 1.40%**; and **140 `.any { it === child }` across ~40 INV.4 edge classifiers**,
+  running per (parent, child) edge over round 875's 3.32 M edge evaluations. The sibling project
+  measured **-3.1%** converting exactly this shape (its PH3) and recorded WHY the sampler did not
+  over-promise there: **an object handed to an iterator escapes by construction**, so escape analysis
+  was never going to fold it. **THE CAVEAT THAT DECIDES THE INSTRUMENT: the value here is NOT the
+  bytes.** Round 801 removed 367,189 `String` allocations for exactly **0 ms** and round 893 measured
+  warm GC at ~1.7% of wall — so this must be priced in TIME (a two-arm amplifier, iterator vs indexed
+  loop, over the real node population), never in MB. Bounded above by round 875's 44 ms for the whole
+  edge-predicate population. LOW risk: mechanical, and `ForEachChildOracleTest` already pins the
+  enumeration reflectively.
+
+- [ ] **(WARM.33) reach-machinery (b) — transpose the 43 per-file memos. <= ~0.8% (<= 43 ms),
+  ESTIMATED.** 43 separate `ByteArray`s per file, each probed at a scattered `nodeId` at 2.23
+  classifiers/node; one array of 43 statuses PER NODE puts a node's whole row in 1-2 cache lines.
+  Also deletes 36.9 MB/rebuild of allocated+zeroed `ByteArray`. Queued by round 875 § 9 **with its
+  number attached so it is not re-estimated upward**. Next instrument: a transposed-layout amplifier
+  arm on the memo probe ALONE, before touching 43 classifiers — the third-arm discipline that saved
+  round 902 from shipping a regression it had estimated at +0.41%.
+
+- [ ] **(WARM.34) `lexLevelHasName` — the COUNT question. Ceiling 21.4-27.3 ms (0.39-0.50%);
+  realistic value UNPRICED.** Round 902 closed this family as a CONTAINER question (filter +0.26%,
+  parallel array **-0.19%, a regression**) and explicitly left this one open, unopened: the 737,591
+  real probes arise from an O(depth) ascent that **revisits the same big outer levels on every walk**
+  (35.5% of probes land on levels averaging 815 symbols). The lever is memoizing the ASCENT, not the
+  probe. **Cheap first step, no build**: census how many of the 737,591 are RE-probes of a level
+  already probed for the same name within one resolution. Two instruments already agree the rate is
+  36.6 ns, so that census alone decides it. Risk: INV.4(c)(ii)'s three load-bearing rules sit
+  directly above it.
+
+- [ ] **(SPINE.1) The six spine handlers' frame bookkeeping — STALE DENOMINATOR, re-take before
+  costing.** `ccetSpineLeave` / `spineCtaM3StatementAnchor` / `cpaSpineLeave` / `ctaSpineEnter` /
+  `spineIanyEnterNode` / `spineArithEnterNode` are ~61-63% of the spine. Round 847's per-handler ms
+  are against an **8,095 ms** rebuild and must not be quoted; today's JFR top row is `cpaSpineLeave`
+  at **1.81%** and nothing else clears 1.3%. **Apply round 733's deflation BEFORE costing anything**:
+  88.4% of the `…SpineLeave` time is the migrated passes' own checking work, not scaffolding.
+  `reach-machinery.md` § 9 names this as the remaining place with more than 1% in it.
+
+**CLOSED THIS ROUND, DO NOT RE-RAISE** (round 903, `docs/perf/type-node-key-price.md`): the
+`nodeTypes` deep AST-value key, **refused at 0.085%** — its premium over a `(file, nodeId)`
+`LongKeyMap` is 12.98 ns over 354,131 ops = 4.60 ms, and `A - B` is an UPPER bound. Round 896's
+`nodeTypeResolutionInProgress` sentinel falls with it at 1.54 ms. The JFR row's other owner is
+`isPerFileDependentRefNode` at 3.70 ms; family 9.04 ms against a 57.1 ms row.
+
+**ALSO RECORDED, UNPRICED, from the round-903 hot-path audit** (candidates with a named mechanism but
+no measurement — each needs the build-free population step first): `mappedNodeTypeKey`
+(`Checker.kt:104288`) builds a `StringBuilder` + two `sortedBy` copies + a `String` + a key object per
+bypassed resolution (~88 k/rebuild) purely to be a map key; `collectTypeofGuardNames` &c allocate a
+`LinkedHashSet` unconditionally where the caller only asks `isNotEmpty()`, then `Set.plus` copies both
+operands again (`Checker.kt:54541`-`54572`); `spineOsWithAmbient` (`:18209`) and
+`spineTcDispatchWithAmbient` (`:66469`) are closure-taking and NOT `inline` on a measured-hot path;
+`narrowTypeFromFlow`'s `memo: NarrowFlowMemo = NarrowFlowMemo()` default allocates through the
+`$default` bridge at every call site that omits it.
