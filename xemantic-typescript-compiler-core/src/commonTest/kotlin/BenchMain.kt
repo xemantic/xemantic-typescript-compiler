@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
+import com.xemantic.typescript.compiler.MapCensus
 import com.xemantic.typescript.compiler.CrawlParseCache
 import com.xemantic.typescript.compiler.NameCensus
 import com.xemantic.typescript.compiler.SrcScan
@@ -264,7 +265,35 @@ internal val TIERS = listOf(
     "reachamp16",
     "reachamp24",
     "reachamp32",
+    // (WARM.30) round 903 — the census for `nodeTypes`' deep AST-VALUE key.
+    // COUNTERS plus one `forEachChild` subtree walk per probe, and no timestamp
+    // pair anywhere: the quantity it answers (mean key subtree size, and the
+    // hit/miss/bypassed split) is a count of structure and is identical on every
+    // rebuild, which is its own falsifier. Its amplified sibling is `tnkamp<N>`.
+    "typenodekey",
 )
+
+/**
+ * (WARM.30) round 903 — the FOURTH parameterised tier family: `tnkamp<N>` runs
+ * the three-arm deep-key amplifier at `N` probes per arm per call for one
+ * rebuild.
+ *
+ * A parameter is unavoidable for the same reason `amp<N>` needs one: the answer
+ * is a SLOPE, so one process must be able to run `tnkamp8,tnkamp32,tnkamp32,tnkamp8`
+ * and get both `r` at one warmth. A single `r` measures a boundary it cannot
+ * separate — and here the boundary also cancels BETWEEN the three arms at equal
+ * `r`, which is the only thing that makes a first-probe rate readable.
+ *
+ * `tnkamp0` is rejected: the zero arm is not the base of this slope (the arms
+ * take no bracket at all at `r == 0`), so a zero here is a typo and nothing else.
+ */
+internal fun tnkAmpReps(tier: String): Int? {
+    if (!tier.startsWith("tnkamp")) return null
+    val digits = tier.removePrefix("tnkamp")
+    if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
+    val n = digits.toIntOrNull() ?: return null
+    return if (n <= 0) null else n
+}
 
 /**
  * (WARM.24) round 897 — the THIRD parameterised tier family: `namecensus<N>`
@@ -439,6 +468,16 @@ internal fun tierBegin(tier: String) {
         CrawlParseCache.enabled = false
         return
     }
+    // (WARM.30) — the amplifier arms NO other probe, for the reason (WARM.14)
+    // gives: its answer is a slope taken from its own brackets, and an armed pass
+    // probe would only add boundaries that do not cancel between two `r`.
+    val tnkAmp = tnkAmpReps(tier)
+    if (tnkAmp != null) {
+        MapCensus.reset()
+        MapCensus.typeNodeKeyAmp = tnkAmp
+        MapCensus.on = true
+        return
+    }
     val copyAmp = copyAmpReps(tier)
     if (copyAmp != null) {
         FrontEnd.reset()
@@ -500,6 +539,10 @@ internal fun tierBegin(tier: String) {
         // otherwise a `plain` one and the counters cannot be contaminated by a
         // second probe's own walks (round 874's `tavcensus`/`frontend` split).
         "reach" -> { ReachCensus.reset(); ReachCensus.on = true }
+        // (WARM.30) — counters and subtree walks only, no timestamp pair, so its
+        // rebuild is otherwise a `plain` one. Deliberately does NOT arm `rows`:
+        // the quantity is deterministic, so it needs no row to be read against.
+        "typenodekey" -> { MapCensus.reset(); MapCensus.typeNodeKeyCensus = true; MapCensus.on = true }
         // (WARM.22) — the edge amplifier at N extra evaluations per fold. It is
         // a SLOPE instrument, so a process must be able to run
         // `reachamp8,reachamp24,reachamp8,reachamp24` and get both r values at
@@ -549,6 +592,11 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     NameCensus.replayReps = nameCensusReps(tier)!!
     NameCensus.replay()
     NameCensus.report()
+} else if (tnkAmpReps(tier) != null) {
+    // (WARM.30) — taken while the amplifier still holds its arm, so `amplified
+    // r=` prints from the live field and an arm labels itself from its own state
+    // (round 850).
+    MapCensus.report()
 } else if (copyAmpReps(tier) != null) {
     // (WARM.16) — taken while the census still holds its counters, and it
     // prints `amp=` from the live field, so an arm labels itself from its own
@@ -588,6 +636,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
     "srcscan", "srcscanoff" -> SrcScan.report()
+    "typenodekey" -> MapCensus.report()
     "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
         "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->
@@ -718,6 +767,16 @@ internal fun tierStop() {
     NameCensus.replayReps = 0
     NameCensus.reset()
     CrawlParseCache.enabled = true
+    // (WARM.30) — three restores, each silent if missed. `typeNodeKeyCensus` left
+    // set costs every LATER rebuild in this process a `forEachChild` subtree walk
+    // per `getTypeFromTypeNodeCore` call AND a whole-cache sweep at the end of the
+    // check; `typeNodeKeyAmp` left set costs it `3 * r` extra probes per cacheable
+    // resolution, which is a large, silent and entirely plausible-looking
+    // slowdown of whatever tier follows.
+    MapCensus.typeNodeKeyCensus = false
+    MapCensus.typeNodeKeyAmp = 0
+    MapCensus.on = false
+    MapCensus.reset()
     SpineAmp.reps = 0
     SpineAmp.reset()
     SpineDispatch.reset()
@@ -756,7 +815,7 @@ fun main(args: Array<String>) {
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
             val bad = list.filter {
                 it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null &&
-                    nameCensusReps(it) == null
+                    nameCensusReps(it) == null && tnkAmpReps(it) == null
             }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(

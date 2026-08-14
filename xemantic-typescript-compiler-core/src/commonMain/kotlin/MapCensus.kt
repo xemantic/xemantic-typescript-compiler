@@ -531,6 +531,178 @@ object MapCensus {
         }
     }
 
+    // ---- (WARM.30) nodeTypes' deep AST-VALUE key ---------------------------
+
+    /**
+     * (WARM.30) round 903 — the census for `state.nodeTypes`, the
+     * `HashMap<TypeNode, Type>` whose key is an AST **value**.
+     *
+     * Every concrete `TypeNode` is a `data class … : NodeBase()`, so the generated
+     * `hashCode()`/`equals()` recurse the whole subtree — round 471's hazard,
+     * living in the checker's own hottest resolution cache. `docs/perf` ranks it at
+     * **57.1 ms**, the largest single map owner in a warm rebuild, and round 898's
+     * admission test (divide the owner row by its own population) does NOT refute
+     * it: 354,131 deep hashes per rebuild is 161 ns each, which is possible only if
+     * the mean key subtree is large. **Nothing had measured that**, which is why
+     * the first instrument is this census and not a re-key.
+     *
+     * Two properties of the numbers here are deliberate and a reader must carry
+     * both:
+     *
+     *  * the subtree size is **PROBE-WEIGHTED** as well as object-weighted (round
+     *    902's law: a scope population is not a probe population — transposed one
+     *    family over, a NODE population is not a PROBE population, and a deep hash
+     *    is paid once per probe, not once per node). [tnkSubtreeSum] divided by
+     *    [tnkCalls] is what prices the row; [tnkObjectSubtreeSum] over
+     *    [tnkObjects] is the shape of the cache and is reported beside it
+     *    precisely so the two can be seen to disagree;
+     *  * an UNINDEXED key (`nodeId == -1`, i.e. a `copy()`d or Transformer-
+     *    synthesized node — INV.2(a)) is bucketed SEPARATELY rather than assumed
+     *    absent, because a `(fileHash, nodeId)` successor key cannot address one
+     *    at all and its population is the first thing such a re-key must survive.
+     *
+     * The size is a NODE count taken with [forEachChild], i.e. the number of
+     * recursive `hashCode()` frames the key costs — not the number of scalar
+     * fields each frame folds. It is a proxy and is stated as one.
+     */
+    var typeNodeKeyCensus: Boolean = false
+
+    /**
+     * Probes performed under ONE timestamp pair per arm at a real `nodeTypes`
+     * probe site; `0` = OFF. `--typeNodeKeyAmp N`.
+     *
+     * Three arms, because the JFR row has **two owners** and a leaf-frame profile
+     * cannot tell them apart (round 864's law, arriving before the measurement
+     * instead of after it):
+     *
+     *  * **A** — the real `nodeTypes[node]` probe: deep hash, bucket, deep equals;
+     *  * **B** — the same probe against a parallel [LongKeyMap] keyed on
+     *    `(owning file hash, nodeId)`, populated in lockstep, so `A - B` is the
+     *    deep-key PREMIUM rather than the whole probe;
+     *  * **C** — `isPerFileDependentRefNode`, a recursive subtree walk that runs
+     *    on EVERY call, cacheable or not, over the SAME subtree the hash walks,
+     *    and is charged to the same owner by every leaf profile in this repo.
+     *
+     * `A - B` is an UPPER bound on what a re-key recovers: arm B's key is computed
+     * OUTSIDE every timestamp pair, so it prices the ideal successor whose key is
+     * free. A refusal taken against it is therefore a refusal with certainty; an
+     * acceptance would still owe the key's own price.
+     *
+     * The arms rotate cyclically per call so none owns a bracket position, and
+     * two values of `r` cancel the ~90 ns boundary algebraically within each arm.
+     * The boundary also cancels BETWEEN arms at equal `r`, which is what makes a
+     * FIRST-probe (i.e. production) rate readable at all (round 901).
+     *
+     * **The hoisting falsifier is the SLOPE, not the sink.** A pure function of an
+     * immutable object may be hoisted out of the amplification loop by C2, and an
+     * exact-multiple sink would still pass — which is why arm A amplifies the MAP
+     * GET (a mutable escaping container C2 cannot prove pure) rather than
+     * `node.hashCode()`, and why arm C is a RECURSIVE call (never inlined, hence
+     * never hoisted). If any arm's `p(r)` is flat between two `r`, that arm was
+     * elided and its number is not a measurement.
+     */
+    var typeNodeKeyAmp: Int = 0
+
+    const val TNK_HIT = 0
+    const val TNK_MISS = 1
+    const val TNK_BYPASSED = 2
+
+    /** Censused `getTypeFromTypeNodeCore` invocations. */
+    var tnkCalls: Long = 0
+
+    /** …answered by the cache — one deep hash and one deep `equals`. */
+    var tnkHits: Long = 0
+
+    /** …that missed a CACHEABLE probe — one hash here, three more below it. */
+    var tnkMisses: Long = 0
+
+    /** …refused by the cacheable gate, which still paid `isPerFileDependentRefNode`. */
+    var tnkBypassed: Long = 0
+
+    /** Probes whose key carries no `nodeId` — a `(file, nodeId)` re-key cannot address them. */
+    var tnkUnindexed: Long = 0
+
+    /** Subtree nodes summed over PROBES: the numerator of the deep hash's real length. */
+    var tnkSubtreeSum: Long = 0
+
+    /** The largest key subtree any probe presented. */
+    var tnkMaxSubtree: Int = 0
+
+    /** Probe-weighted subtree sizes, buckets 0..10 then 11+. */
+    val tnkProbeSizeHistogram = LongArray(12)
+
+    /** Distinct cache KEYS swept at the end of the check — the object-weighted arm. */
+    var tnkObjects: Long = 0
+    var tnkObjectSubtreeSum: Long = 0
+    var tnkObjectUnindexed: Long = 0
+    val tnkObjectSizeHistogram = LongArray(12)
+
+    /** Entries the parallel `(file, nodeId)` map holds, against [tnkObjects]. */
+    var tnkParallelEntries: Long = 0
+
+    /** Stores performed into the parallel map — one per cacheable miss. */
+    var tnkStores: Long = 0
+
+    fun tnkProbe(node: Node, bucket: Int) {
+        // Round 900's law: the guard cannot protect an ARGUMENT, so the caller
+        // passes the NODE and every derivation happens below this line.
+        if (!typeNodeKeyCensus) return
+        tnkCalls++
+        when (bucket) {
+            TNK_HIT -> tnkHits++
+            TNK_MISS -> tnkMisses++
+            else -> tnkBypassed++
+        }
+        if ((node as NodeBase).nodeId < 0) tnkUnindexed++
+        val n = subtreeSize(node)
+        tnkSubtreeSum += n.toLong()
+        if (n > tnkMaxSubtree) tnkMaxSubtree = n
+        tnkProbeSizeHistogram[if (n >= 11) 11 else n]++
+    }
+
+    /**
+     * The OBJECT-weighted arm, swept from the live cache's key set at the end of
+     * the check. Iterating a `HashMap`'s keys hashes nothing, so this costs one
+     * subtree walk per distinct key and no probe at all — which is the only way
+     * the two weightings can be taken from the SAME rebuild (round 861: a
+     * sub-population and the row it is read against may not come from two draws).
+     */
+    fun tnkSweepKeys(keys: Collection<Node>, parallelEntries: Int) {
+        if (!typeNodeKeyCensus) return
+        tnkParallelEntries += parallelEntries.toLong()
+        for (k in keys) {
+            tnkObjects++
+            if ((k as NodeBase).nodeId < 0) tnkObjectUnindexed++
+            val n = subtreeSize(k)
+            tnkObjectSubtreeSum += n.toLong()
+            tnkObjectSizeHistogram[if (n >= 11) 11 else n]++
+        }
+    }
+
+    /** Nodes in [n]'s subtree, including [n] — the recursive `hashCode()` frame count. */
+    private fun subtreeSize(n: Node): Int {
+        var count = 1
+        forEachChild(n) { count += subtreeSize(it) }
+        return count
+    }
+
+    var tnkAmpCalls: Long = 0
+    var tnkAmpMapNanos: Long = 0
+    var tnkAmpLongNanos: Long = 0
+    var tnkAmpRefNanos: Long = 0
+
+    /**
+     * Per-arm sinks, split for round 901's reason: one shared sink cannot tell a
+     * DROPPED arm from a running one. Each must be an exact multiple of `r`
+     * (round 759's arithmetic falsifier), and [tnkAmpLongSink] must EQUAL
+     * [tnkAmpMapSink] — the parallel map is populated in lockstep with
+     * `nodeTypes`, so a probe that finds one must find the other, and any
+     * inequality means the successor key is not a bijection on this population.
+     */
+    var tnkAmpMapSink: Long = 0
+    var tnkAmpLongSink: Long = 0
+    var tnkAmpRefSink: Long = 0
+
     // ---- (3) nodeToFlow replay -------------------------------------------
 
     var replayFiles: Long = 0
@@ -566,6 +738,14 @@ object MapCensus {
         lexScopesBound = 0; lexScopeBoundKeys = 0
         for (i in lexBoundHistogram.indices) lexBoundHistogram[i] = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
+        tnkCalls = 0; tnkHits = 0; tnkMisses = 0; tnkBypassed = 0
+        tnkUnindexed = 0; tnkSubtreeSum = 0; tnkMaxSubtree = 0
+        tnkObjects = 0; tnkObjectSubtreeSum = 0; tnkObjectUnindexed = 0
+        tnkParallelEntries = 0; tnkStores = 0
+        for (i in tnkProbeSizeHistogram.indices) tnkProbeSizeHistogram[i] = 0
+        for (i in tnkObjectSizeHistogram.indices) tnkObjectSizeHistogram[i] = 0
+        tnkAmpCalls = 0; tnkAmpMapNanos = 0; tnkAmpLongNanos = 0; tnkAmpRefNanos = 0
+        tnkAmpMapSink = 0; tnkAmpLongSink = 0; tnkAmpRefSink = 0
         replayFiles = 0; replayKeys = 0; replayReps = 0
         legacyPutNanos = 0; legacyGetNanos = 0; longPutNanos = 0; longGetNanos = 0
     }
@@ -711,6 +891,46 @@ object MapCensus {
                     "${lexProbeSizeSum.toDouble() / maxOf(lexAmpCalls, 1)} own symbols, " +
                     "scan steps/probe ${lexScanSteps.toDouble() / maxOf(lexAmpCalls, 1)}   " +
                     "buckets 0..8 then 9+: ${lexProbeSizeHistogram.joinToString(" ")}"
+            )
+        }
+        if (tnkCalls > 0 || tnkAmpCalls > 0) {
+            appendLine(
+                "  (WARM.30) nodeTypes deep AST-value key: calls=$tnkCalls " +
+                    "hits=$tnkHits misses=$tnkMisses bypassed=$tnkBypassed " +
+                    "UNINDEXED keys (nodeId<0)=$tnkUnindexed"
+            )
+            appendLine(
+                "       deep hashes/rebuild = hits + 4*misses + bypassed's isPerFileDependentRefNode " +
+                    "=> get $tnkHits+$tnkMisses, sentinel add/remove ${2 * tnkMisses}, put $tnkMisses " +
+                    "= ${tnkHits + 4 * tnkMisses} hashes"
+            )
+            appendLine(
+                "       PROBE-weighted key subtree: mean " +
+                    "${tnkSubtreeSum.toDouble() / maxOf(tnkCalls, 1)} nodes, max $tnkMaxSubtree, " +
+                    "buckets 0..10 then 11+: ${tnkProbeSizeHistogram.joinToString(" ")}"
+            )
+            appendLine(
+                "       OBJECT-weighted (distinct cache keys): objects=$tnkObjects mean " +
+                    "${tnkObjectSubtreeSum.toDouble() / maxOf(tnkObjects, 1)} nodes, " +
+                    "unindexed=$tnkObjectUnindexed  parallel (file,nodeId) entries=$tnkParallelEntries " +
+                    "stores=$tnkStores   buckets: ${tnkObjectSizeHistogram.joinToString(" ")}"
+            )
+        }
+        if (tnkAmpCalls > 0) {
+            appendLine(
+                "       amplified r=$typeNodeKeyAmp over $tnkAmpCalls calls:  " +
+                    "A map(deep key) p(r)=${tnkAmpMapNanos / tnkAmpCalls} ns   " +
+                    "B LongKeyMap(file,nodeId) p(r)=${tnkAmpLongNanos / tnkAmpCalls} ns   " +
+                    "C isPerFileDependentRefNode p(r)=${tnkAmpRefNanos / tnkAmpCalls} ns   " +
+                    "A-B=${(tnkAmpMapNanos - tnkAmpLongNanos) / tnkAmpCalls} ns   " +
+                    "sink A=$tnkAmpMapSink B=$tnkAmpLongSink C=$tnkAmpRefSink " +
+                    "(A and B must be EQUAL and every sink an exact multiple of r)"
+            )
+            appendLine(
+                "       sink mod r: A=${tnkAmpMapSink % maxOf(typeNodeKeyAmp, 1)} " +
+                    "B=${tnkAmpLongSink % maxOf(typeNodeKeyAmp, 1)} " +
+                    "C=${tnkAmpRefSink % maxOf(typeNodeKeyAmp, 1)}   " +
+                    "— a FLAT p(r) between two r means C2 elided that arm, which no sink can see"
             )
         }
         if (perFileAmpCalls > 0) {

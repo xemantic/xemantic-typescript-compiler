@@ -498,6 +498,27 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
                     modes.set(MapCensus::on, true)
                 }
             }
+            // (WARM.30) round 903 — the deep AST-VALUE key on `nodeTypes`: the
+            // hit/miss/bypassed split, the PROBE-weighted key subtree size (round
+            // 902's law) and the unindexed-key population a `(file, nodeId)`
+            // successor cannot address.
+            "--typeNodeKeyCensus", "--typenodekeycensus" -> {
+                MapCensus.reset()
+                modes.set(MapCensus::typeNodeKeyCensus, true)
+                modes.set(MapCensus::on, true)
+            }
+            // (WARM.30) round 759's amplification, THREE arms: the real deep-key
+            // probe, the same probe against a `(file, nodeId)` LongKeyMap populated
+            // in lockstep, and `isPerFileDependentRefNode` — the row's second owner,
+            // which every leaf profile charges to the map.
+            "--typeNodeKeyAmp", "--typenodekeyamp" -> {
+                i++
+                if (i < args.size) {
+                    MapCensus.reset()
+                    modes.set(MapCensus::typeNodeKeyAmp, args[i].toIntOrNull() ?: 0)
+                    modes.set(MapCensus::on, true)
+                }
+            }
             // (WARM.23) candidate (3): replay each file's real nodeToFlow key
             // sequence into a fresh `mutableMapOf` and a fresh LongKeyMap, N reps,
             // ABBA within the file.
@@ -1013,6 +1034,12 @@ internal fun usageText(): String =
                              proof-of-absence filter, AND a parallel-array linear scan: N of each
                              under one timestamp pair, cyclically rotated — the boundary cancels
                              between the arms
+          --typeNodeKeyCensus (WARM.30) the nodeTypes deep AST-value key: hit/miss/bypassed,
+                             the PROBE-weighted key subtree size, and the unindexed keys a
+                             (file, nodeId) successor cannot address
+          --typeNodeKeyAmp N (WARM.30) price it in three arms under one timestamp pair each:
+                             the real deep-key probe, a (file, nodeId) LongKeyMap populated in
+                             lockstep, and isPerFileDependentRefNode — the row's second owner
           --flowMapReplay N  (WARM.23) replay each file's real nodeToFlow key sequence into a
                              fresh mutableMapOf and a fresh LongKeyMap, N reps, ABBA per file —
                              what a container swap RECOVERS, not what the old one costs

@@ -6027,6 +6027,24 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
+    /**
+     * (WARM.30) round 903 — the CONTROL container for [typeNodeKeyAmp]'s arm B: a
+     * cheap-key successor to `state.nodeTypes`, keyed on `(owning file hash,
+     * nodeId + 2)` and populated in LOCKSTEP with it, so a probe that finds one
+     * finds the other and `A - B` is the deep-key premium rather than the whole
+     * probe.
+     *
+     * `+ 2` and not `+ 1`: [LongKeyMap] reserves key `0` as its empty-slot
+     * sentinel (round 896), and an UNINDEXED node carries `nodeId == -1`, so a
+     * `+ 1` shift would put a `copy()`d node at offset 0 of a zero-hash file
+     * straight onto the sentinel and throw. That population is not hypothetical —
+     * [MapCensus.tnkUnindexed] counts it.
+     *
+     * Written only while [MapCensus.typeNodeKeyAmp] is armed; empty on every
+     * production compile. Declared before `init` per the init-order trap.
+     */
+    private val tnkParallelTypes = LongKeyMap<Type>(1024)
+
     /** (WARM.7) round 860: per-FILE memo for [scanUmdExportAsNamespace] — see
      *  [umdExportAsNamespaceOccurrences]. Declared before `init` per the init-order trap. */
     private val umdOccurrencesByFile = HashMap<String, List<UmdExportAsNamespaceOccurrence>>()
@@ -6251,6 +6269,15 @@ class Checker(
         initCheckPasses7()
         initCheckPasses8()
         } // end if (!declarationOnly)
+        // (WARM.30) round 903 — the OBJECT-weighted arm of the deep-key census,
+        // swept from the live cache once the check is over. Iterating a HashMap's
+        // keys hashes nothing, so this is one subtree walk per distinct key and no
+        // probe at all — and it comes from the SAME rebuild as the probe-weighted
+        // numbers, which round 861's law requires (a sub-population and the row it
+        // is read against may not be a cross-draw quotient).
+        if (MapCensus.typeNodeKeyCensus) {
+            MapCensus.tnkSweepKeys(state.nodeTypes.keys, tnkParallelTypes.entryCount)
+        }
         PassTiming.noteInitEnd()
         } catch (e: StackOverflowError) {
             // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
@@ -104179,9 +104206,18 @@ interface DataView {
             if (cacheable) PassTiming.typeNodeCacheable++ else PassTiming.typeNodeBypassed++
         }
         if (cacheable) {
-            nodeTypes[node]?.let {
+            val cached = nodeTypes[node]
+            // (WARM.30) round 903 — the census and the three-arm amplifier for the
+            // deep AST-VALUE key. Round 900's law: a guard INSIDE the callee cannot
+            // protect its own ARGUMENT, so both call sites pass the NODE and a
+            // compile-time constant, and every derivation happens past the guard.
+            if (MapCensus.typeNodeKeyCensus) {
+                MapCensus.tnkProbe(node, if (cached != null) MapCensus.TNK_HIT else MapCensus.TNK_MISS)
+            }
+            if (MapCensus.typeNodeKeyAmp > 0) tnkAmp(node)
+            if (cached != null) {
                 if (PassTiming.detailed) PassTiming.typeNodeCacheHits++
-                return it
+                return cached
             }
             // B202.2: in-progress sentinel (cacheable context only — context-sensitive
             // resolutions legitimately re-run the same node and are NOT tracked).
@@ -104194,12 +104230,19 @@ interface DataView {
             try {
                 val type = getTypeFromTypeNodeWorker(node)
                 nodeTypes[node] = type
+                // (WARM.30) — the parallel container's LOCKSTEP store. Guarded at the
+                // CALL SITE (round 900) and armed only by `--typeNodeKeyAmp`.
+                if (MapCensus.typeNodeKeyAmp > 0) tnkStore(node, type)
                 return type
             } finally {
                 nodeTypeResolutionInProgress.remove(node)
                 if (MapCensus.on) MapCensus.nodeLeave()
             }
         }
+        // (WARM.30) — the THIRD bucket. This branch already paid
+        // `isPerFileDependentRefNode` over the same subtree the hash would walk,
+        // and every leaf profile in this repo charges that to the map's owner.
+        if (MapCensus.typeNodeKeyCensus) MapCensus.tnkProbe(node, MapCensus.TNK_BYPASSED)
         // INV.5(c) option (iii): context-KEYED caching for context-BEARING
         // resolutions — the conservative gate pins the checking-file dimension
         // (currentFileLocals must be the node's OWN file's locals) so the
@@ -104225,6 +104268,114 @@ interface DataView {
     }
 
     private var bypassTimingActive = false
+
+    // ---- (WARM.30) round 903: the three-arm deep-key amplifier ---------------
+
+    /**
+     * The successor key arm B probes with: `(owning file hash, nodeId + 2)`.
+     *
+     * Computed OUTSIDE every timestamp pair, exactly as `MapCensus.lexMaskOf` and
+     * `LexicalScope.censusNames` are — which is what makes arm B an IDEAL
+     * successor whose key is free, and therefore makes `A - B` an UPPER bound on
+     * what a re-key could recover. A production re-key would additionally owe
+     * whatever the owning file costs to name; this instrument deliberately does
+     * not pay it, because a refusal taken against an upper bound is a refusal with
+     * certainty (round 758: price the prize first).
+     *
+     * The owner walk mirrors [lookupPerFileForNode]'s hop-bounded chain climb.
+     * `nodeId` restarts at 0 in every `SourceFile` (round 787), so the file MUST
+     * be in the key or the map silently collapses one node per file onto each id
+     * and arm B measures a container an order of magnitude too small.
+     */
+    private fun tnkKeyOf(node: TypeNode): Long {
+        var cur: Node? = node
+        var hops = 0
+        var owner: SourceFile? = null
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) { owner = cur; break }
+            cur = (cur as NodeBase).parent
+        }
+        val fileHash = owner?.fileName?.hashCode() ?: 0
+        return (fileHash.toLong() shl 32) or ((node as NodeBase).nodeId.toLong() + 2L and 0xFFFFFFFFL)
+    }
+
+    /** Arm B's lockstep store — one per cacheable miss, i.e. one per `nodeTypes` put. */
+    private fun tnkStore(node: TypeNode, type: Type) {
+        if (MapCensus.typeNodeKeyAmp <= 0) return
+        MapCensus.tnkStores++
+        tnkParallelTypes.put(tnkKeyOf(node), type)
+    }
+
+    /**
+     * Three arms under one timestamp pair each, cyclically rotated so no arm owns
+     * a bracket position (round 891: two rotations of one family on one binary
+     * disagreed 4x because the leading draw's ~15% landed wholly on whichever arm
+     * ran first).
+     *
+     * Every derivation the arms need — the successor key — happens above the first
+     * pair, so what the pairs enclose is the probe and nothing else.
+     */
+    private fun tnkAmp(node: TypeNode) {
+        val r = MapCensus.typeNodeKeyAmp
+        if (r <= 0) return
+        val key = tnkKeyOf(node)
+        MapCensus.tnkAmpCalls++
+        when (MapCensus.tnkAmpCalls % 3L) {
+            0L -> { tnkAmpMap(node, r); tnkAmpLong(key, r); tnkAmpRef(node, r) }
+            1L -> { tnkAmpLong(key, r); tnkAmpRef(node, r); tnkAmpMap(node, r) }
+            else -> { tnkAmpRef(node, r); tnkAmpMap(node, r); tnkAmpLong(key, r) }
+        }
+    }
+
+    /**
+     * ARM A — the production probe: `hashCode()` recursing the key's whole subtree,
+     * one bucket walk, and `equals()` recursing it again on a hit.
+     *
+     * It amplifies the MAP GET and never `node.hashCode()` directly: a data class's
+     * `hashCode` is a pure function of an immutable object, so C2 may hoist it out
+     * of the loop — and the exact-multiple sink falsifier would STILL pass, since
+     * `sink = r * h` either way. A `HashMap.get` on a mutable escaping container
+     * cannot be proved pure and is not hoisted.
+     */
+    private fun tnkAmpMap(node: TypeNode, r: Int) {
+        val t0 = PassTiming.nowNanos()
+        var seen = 0L
+        var i = 0
+        while (i < r) { if (nodeTypes[node] != null) seen++; i++ }
+        MapCensus.tnkAmpMapNanos += PassTiming.nowNanos() - t0
+        MapCensus.tnkAmpMapSink += seen
+        MapCensus.sink += seen
+    }
+
+    /** ARM B — the same question against a cheap `(file, nodeId)` key. */
+    private fun tnkAmpLong(key: Long, r: Int) {
+        val t0 = PassTiming.nowNanos()
+        var seen = 0L
+        var i = 0
+        while (i < r) { if (tnkParallelTypes.get(key) != null) seen++; i++ }
+        MapCensus.tnkAmpLongNanos += PassTiming.nowNanos() - t0
+        MapCensus.tnkAmpLongSink += seen
+        MapCensus.sink += seen
+    }
+
+    /**
+     * ARM C — the row's SECOND owner. [isPerFileDependentRefNode] walks the same
+     * subtree the hash walks, on EVERY call whether cacheable or not, and a
+     * leaf-frame profile charges it to the map. Measuring it separately is a
+     * correction to that attribution whatever the verdict on arm A minus arm B.
+     *
+     * Recursive, therefore never inlined, therefore never hoisted — which is the
+     * only reason this arm can be an ordinary call in a loop at all.
+     */
+    private fun tnkAmpRef(node: TypeNode, r: Int) {
+        val t0 = PassTiming.nowNanos()
+        var seen = 0L
+        var i = 0
+        while (i < r) { if (isPerFileDependentRefNode(node)) seen++; i++ }
+        MapCensus.tnkAmpRefNanos += PassTiming.nowNanos() - t0
+        MapCensus.tnkAmpRefSink += seen
+        MapCensus.sink += seen
+    }
 
     private fun getTypeFromTypeNodeBypassed(node: TypeNode): Type {
         val cKey = mappedNodeTypeKey(node)
