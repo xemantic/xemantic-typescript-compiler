@@ -1,5 +1,115 @@
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
 
+**Round 895 (2026-08-12) — (WARM.19): THE WHOLE-SOURCE `indexOf` FAMILY IS GATED — **488,469,784
+CHARACTERS SCANNED PER REBUILD -> 22,894,093**, AND THE MECHANISM'S OWN WARM NANOS GO **86.2 ms ->
+21.9 ms (-64.3 ms = -1.24%)** OVER AN IDENTICAL POPULATION WITH THE SAME 14 HITS. AND A COLD CENSUS
+WOULD HAVE BEEN WRONG IN BOTH DIRECTIONS.**
+
+Round 894 § 10 found, while separating key-side leaves out of the HashMap census, 116 ms/rebuild of
+whole-source `String.indexOf` in ~50 `Checker.check*` pin walkers — no owner above 0.16%, invisible
+to `cost_gate.py`, never counted. `docs/perf/whole-source-scan-census.md`.
+
+- **(A) THE POPULATION FIRST, BEFORE A LINE OF FIX (CLAUDE.md's first law).** The instrument is a
+  helper (`srcHas`/`srcIndexOf`/`srcLastIndexOf`) that every whole-source scan routes through, plus
+  counters and — affordable uniquely here, because a whole-source scan is tens of microseconds
+  against a ~90 ns pair — a TIMESTAMP PAIR per scan and per build. **3,827 calls over 488,469,784
+  characters = 49 whole-program passes, to find 14 needles (0.37%).** They are corpus-unique pins
+  (`"import { 0n as foo }"`, `"Shebang is only allowed on the first line"`), so on tsc's own sources
+  essentially none can ever match.
+
+- **(B) THE SITE COUNT IS NOT THE POPULATION, AND THE MAJORITY OF THE SITES ARE LEFT ALONE.** Of 218
+  scan sites, **69 are CHAR searches bounded to a node position** (`source.indexOf(';', exprEnd)`) —
+  the largest single form, and almost none of the cost. They are not rewritten: one character is
+  below the filter's window width, so gating them would be pure overhead. Rewriting all 218 would
+  have looked more thorough and measured worse.
+
+- **(C) THE MECHANISM, AND WHY A FALSE NEGATIVE IS IMPOSSIBLE RATHER THAN UNLIKELY.**
+  `SourceScanFilter` records a hash of every 4-character window of a file's text in a bitset. A
+  needle can occur only if EVERY one of its own windows occurs, so one clear bit is a PROOF of
+  absence. If `needle` occurs at `p`, then window `j` of the needle **is** window `p+j` of the text,
+  which the build visited and whose bit it set. Hash collisions and the 7-bit character fold can
+  only make windows look PRESENT, i.e. produce false POSITIVES — and a false positive costs one
+  scan, because **the real `indexOf` remains the oracle**: the filter is consulted only to SKIP a
+  call, never to answer one. Measured selectivity: **3,723 of 3,827 refused (97.3%), 95.3% of the
+  characters, 90 false positives in 3,813 = 2.4%.**
+
+- **(D) THE CACHE IS LENGTH-KEYED AND IDENTITY-PROBED, ON PURPOSE.** A `HashMap<String, Filter>`
+  would hash ~10 M characters of file text once per file for nothing (round 894's own candidate (1)
+  is about exactly that cost). `SrcScanCache` is a 1,024-slot open-addressed table keyed on
+  `text.length` and matched with `===`; **a miss is never wrong, only slower** — it rebuilds. One
+  instance per `Checker`, so a `--workers` run shares no mutable state.
+
+- **(E) WARM, BOTH ARMS ALTERNATING IN ONE PROCESS — AND COLD WOULD HAVE BEEN WRONG IN BOTH
+  DIRECTIONS.**
+
+  | mechanism | cold | warm | warm-up |
+  |---|---:|---:|---:|
+  | `String.indexOf` over 488 M chars | 436.3 ms | **86.2 ms** | **5.07x** |
+  | the filter build over 10 M chars | 65.9 ms | **18.9 ms** | **3.49x** |
+  | **net removed** | 345.8 ms (1.49% cold) | **64.3 ms (1.24% warm)** | |
+
+  The build is a hand-written scanner and warms 3.5x, almost exactly CLAUDE.md's round-859 figure;
+  the JDK intrinsic warms **5.07x**, MORE than a whole rebuild's ~3.4x. **So a cold census
+  OVERSTATES what gating a scan is worth — the exact opposite of round 859, where a cold table
+  UNDERSTATED an ungated `java.util.regex` because that does not warm at all.** Text scanning is a
+  different regime cold and warm in BOTH directions; take the warm one.
+
+- **(F) ROUND 894's 116 ms WAS RIGHT AND ~26% OF IT WAS NEVER ADDRESSABLE.** The string-needle part
+  measures 86.2 ms warm; the remainder is predominantly the 69 char searches, which are also
+  `java.lang.String.indexOf` frames in a JFR dump and are gateable by nothing. Reading a leaf-frame
+  FAMILY as one prize is round 758's population-vs-frequency law one instrument over.
+
+- **(G) NO WALL A/B IS CLAIMED.** 1.24% is inside what this box settles; the four instrumented
+  rebuilds read `overheadMs` -70 / -116 / -317 / +261, i.e. noise. What is claimed is the
+  mechanism's own nanos, PAIRED, on ONE binary, with the population and the 14 hits identical in
+  both arms — a same-answers control taken in the same run as the price. This is the seventh round
+  running to decline a wall number, which is the house style since round 893 vindicated the practice
+  collectively at -8.18%.
+
+- **(H) THE REWRITE WAS DECIDED BY A PARSER AND VERIFIED BY INVERSION, NOT BY EYE (round 819).**
+  `scripts/round895_srcscan_apply.py` rewrote 149 sites; `scripts/round895_srcscan_verify.py`
+  INVERTS the rewrite and demands the original file back byte for byte — **134 lines differ, 0
+  inversion failures, and the multiset of all 13,725 string literals is identical** (round 684: a
+  scripted sweep may re-flow arguments but never their string literals). Two mistakes the compiler
+  caught that no review would have: 8 sites pass the index as a NAMED argument (`startIndex = n`),
+  and one passes a `Char`. Type safety is the whole safety net here — the helpers take `String`.
+
+- **(I) WHAT DID NOT WORK, AND WHAT THE PINS CAUGHT.** The first rewrite pass renamed the helpers'
+  own bodies into calls to themselves (infinite recursion) because their parameter was also called
+  `source` — fixed by naming it `text`, which is a naming rule, not a code rule. **And the partition
+  pin failed on HEAD and was RIGHT: `tooShort` calls also increment `scanned`, because a needle
+  below the window width falls through and IS scanned** — the three counters are not disjoint, the
+  partition is `refused + scanned == calls` and `tooShort` is a SUBSET. A census that reports a
+  bucket it never had is exactly what a partition assertion exists to catch, and it caught it on its
+  first run.
+
+- **(J) THE ABLATION, AND ITS POSITIVE CONTROL.** `--srcScanBogus` corrupts the build so it records
+  only every second window, which makes the filter refuse needles that ARE present.
+  `SrcScanTest` asserts the gated diagnostic (TS18026 via `checkShebangError`, a walker whose whole
+  body is behind one whole-source gate) **DISAPPEARS under the bogus filter and is present on the
+  same binary with it intact** — so the pin discriminates, and the gate is load-bearing. Under
+  `--verifySrcScan` the verifier reads `verified > 0, divergences == 0` sound and
+  `divergences > 0` bogus: a verifier that read 0 in both cases would be worthless (round 790).
+
+- **(K) THE COMMITTED GRID HARNESS HAS BEEN A ONE-PROFILE GRID ALL ALONG.** `bench-compile-tsc.sh`
+  names the compiler profile `tsc-project-<commit8>` and the other seven `tsc-<name>-<commit8>`;
+  every grid script in `scripts/` globs `build/bench/tsc-project-*`, which matches **the compiler
+  profile and nothing else** — round 888's output directory holds exactly one profile's captures.
+  `scripts/round895-grid.sh` enumerates profile dirs by the presence of a `tsconfig.json` and
+  REFUSES to run with fewer than 8.
+
+- **(L) GATES.** Suite **14,339 / 0 failures / 3 skipped**; the delta is exactly the 12 new
+  `SrcScanTest` pins, verified from the diff (no existing test file gains a `@Test`), which makes
+  the pre-round total on this box 14,327 — three above the 14,324 round 892 recorded, a discrepancy
+  inherited and not chased. **8-PROFILE `--listAll` GRID, both arms of one binary, ALL EIGHT
+  `added=0 removed=0`** (deprecatedCompat/jsTyping/compiler/server/services/tsc/typingsInstallerCore
+  46 diagnostics, harness 94); the differ refuses a truncated capture (round 811) and an empty one
+  (round 804), and the harness asserts `SourceScanFilter.class` is in the class dir before running
+  (round 853). `cost_gate.py` **+0.00% on all 20 counters** — the EXPECTED control here (round 876),
+  since these walkers touch no checker counter and emit nothing on the profiles, which is precisely
+  why the grid and the corpus are the real gates. `huge_methods.py --fail-over 0` 0 over the limit.
+
+
 **Round 893 (2026-08-12) — THE CUMULATIVE WARM A/B OF ROUNDS 887-892: **-8.18% MEDIAN PAIRED, B FASTER
 IN 12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS** — THE ARC'S FIRST DEMONSTRATED WARM SPEED-UP,
 AND IT EXCEEDS THE SUM OF THE SIX ROUNDS' OWN PRICES. THE GC EXPLANATION IS REFUTED; THE LEAF PROFILE

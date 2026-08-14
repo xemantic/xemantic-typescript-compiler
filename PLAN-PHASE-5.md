@@ -20,6 +20,71 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 906 (2026-08-14) — (WARM.33): THE LARGEST ESTIMATED ITEM IN THE QUEUE IS **REFUSED, AND IT IS A
+REGRESSION AT EVERY GEOMETRY** — AND ROUND 875 HAD THE **SIGN** WRONG, NOT THE MAGNITUDE: IT READ THE
+*ASCENT'S* SCATTER ONTO THE *PROBE'S* SEQUENTIAL SWEEP. **THE CEILING FOR *ANY* MEMO-LAYOUT CHANGE IS
+2.65-15.99 ms, BELOW THE FLOOR EVERYWHERE. THE WHOLE DIRECTION IS CLOSED.**
+
+Priced with **no clock in the round at all**. `docs/perf/reach-memo-transposition-price.md`.
+
+- **(A) ROUND 875'S OWN QUEUED INSTRUMENT CANNOT WORK, AND SAYING SO IS THE ROUND'S FIRST PRODUCT.**
+  It queued "a transposed-layout **amplifier** arm on the memo probe". An amplifier repeats one probe
+  `r` times under a timestamp pair — so from the second repetition the line is **L1-hot**, and it
+  prices an L1 hit, which is exactly the cost the change exists to remove. (The sibling Rust compiler
+  hit this precisely in its PG11: a memo removed 35.6% of repeat reads and moved the mechanism
+  16.18% -> 15.44%, *because the repeat read was already in L1*.) **A LOCALITY CHANGE CANNOT BE
+  AMPLIFIED.** So the instrument is a CENSUS of the exact access stream plus a set-associative LRU
+  **model** — three layouts x five geometries — and its answer is a **miss-count delta**, i.e. a
+  deterministic counter, not a measurement.
+
+- **(B) THE CENSUS, WITH ITS FALSIFIERS EXACT.** `scripts/round906_instrument.py` hooks all **139**
+  `memo[...]` access lines (43 entry probes, 2 interleaved, 43 ascent probes, 51 writes).
+  **8,888,467 memo accesses per rebuild** — probe 1,960,176 / ascent 3,166,496 / write 3,761,795 —
+  over a **38.4 MiB** footprint. The 43 classifiers' probes sum to **1,909,715 = `ReachCensus.calls`
+  to the digit**, and the gap histogram's 2,816,334 steps plus the two interleaved classifiers'
+  350,162 reproduce 3,166,496 exactly. Two processes identical to the last digit.
+
+- **(C) ROUND 902'S LAW AGAIN, AND AGAIN IT MATTERED: THE MEAN 2.23 IS NOT THE QUANTITY.** **13.9% of
+  nodes are consulted by nobody**; the 738,192 that are consulted average **2.655**, and the
+  transposable population — second-and-later consultations — is **1,221,984 (62.3%)**.
+
+- **(D) THE FINDING THAT REVERSES THE CANDIDATE: THE ASCENT IS NOT SCATTERED.** **42.2% of ascent
+  steps go to `nodeId − 1`** and **89.8% stay within 64 ids** — i.e. *inside one cache line of
+  today's layout*. And the spine walks in PREORDER, so each classifier's 1-byte array is swept
+  **sequentially**: a line serves **~14.2** consultations plus the ascent steps within 64 ids, where a
+  45-byte transposed row serves **~3.8**. **Layout A already answers 97.0% of accesses out of L1.**
+  Round 875 § 5.2 read the ascent's scatter onto the probe's sequential sweep, and got the SIGN wrong.
+
+- **(E) THE PRICE — THE CANDIDATE IS NEGATIVE EVERYWHERE, AND THE CEILING REFUSES THE WHOLE
+  DIRECTION.** Access-stream ms, zeroing separated (it is bandwidth-bound, ~4 ms, identical in every
+  layout):
+
+  | geometry | A (today) | B (transposed) | C (padded row) | ceiling on ANY layout |
+  |---|---:|---:|---:|---:|
+  | box (32K/512K/16M) | 16.87 | **+3.90** | +23.88 | **2.65 ms = 0.05%** |
+  | shrunk / mid / hostile | 23.2-27.0 | +13.0 / +15.7 / +21.0 | +22.4 / +33.7 / +38.0 | 9.0 / 10.4 / 12.8 ms |
+  | flushed (4K/64K/512K) | 30.22 | +24.20 | +46.21 | **15.99 ms = 0.30%** |
+
+  **Shrinking the cache — the only direction in which the model's optimism could have hidden a prize
+  — makes the candidate WORSE.** Layout C is the candidate's own best form and is the worst arm.
+
+- **(F) A CORRECTION TO THIS QUEUE'S OWN ENTRY, WHICH I WROTE.** The item promised the change "deletes
+  36.9 MB/rebuild of allocated+zeroed `ByteArray`". It deletes **55 KB of array headers**: 43 arrays
+  of *n* bytes and one array of 43*n* bytes **are the same bytes**. The figure was inherited from
+  round 875 and restated without checking. *A queue entry is a claim, and it inherits its ancestors'
+  errors silently.*
+
+- **(G) ONE ADJACENT DIRECTION PRICED AND CLOSED ON THE WAY PAST.** Lazily allocating the 17
+  classifiers consulted <1,000x per rebuild saves bandwidth worth **~2-3 ms** — below the floor before
+  it starts — and is recorded precisely so nobody re-opens it as the ~57 ms a naive read of the model's
+  `dram` column suggests.
+
+- **(H) GATES.** Suite **14,424 -> 14,430 / 0 failures / 3 skipped** = exactly the 6 new pins.
+  `cost_gate.py` **+0.00% on all 20 counters** — a control, not a verdict. `huge_methods.py
+  --fail-over 0`: **0 over the limit**. Three single-mistake ablation arms, each with **reached-ness
+  evidence** (round 902), distinct red sets, tree restored and pins re-run green. **No wall A/B and
+  none possible** — the round contains no clock.
+
 **Round 905 (2026-08-14) — (WARM.32): THE ITERATOR-ALLOCATION FAMILY — THE ONE CANDIDATE IMPORTED FROM
 THE SIBLING RUST COMPILER, WHERE THE SAME MECHANISM MEASURED **−3.1%** — IS **REFUSED HERE AT 0.074%
 (3.90 ms), BY 4.4x**. THE MECHANISM TRANSFERS AND THE **SHAPE** DOES NOT: 215 SITES ARE **495,305
@@ -879,115 +944,6 @@ The scoreboard is § 11 of that doc.
   262,404 keys) and the mechanism's own paired nanos over an identical population in one process.
   Round 893 vindicated the practice collectively at -8.18%.
 
-**Round 895 (2026-08-12) — (WARM.19): THE WHOLE-SOURCE `indexOf` FAMILY IS GATED — **488,469,784
-CHARACTERS SCANNED PER REBUILD -> 22,894,093**, AND THE MECHANISM'S OWN WARM NANOS GO **86.2 ms ->
-21.9 ms (-64.3 ms = -1.24%)** OVER AN IDENTICAL POPULATION WITH THE SAME 14 HITS. AND A COLD CENSUS
-WOULD HAVE BEEN WRONG IN BOTH DIRECTIONS.**
-
-Round 894 § 10 found, while separating key-side leaves out of the HashMap census, 116 ms/rebuild of
-whole-source `String.indexOf` in ~50 `Checker.check*` pin walkers — no owner above 0.16%, invisible
-to `cost_gate.py`, never counted. `docs/perf/whole-source-scan-census.md`.
-
-- **(A) THE POPULATION FIRST, BEFORE A LINE OF FIX (CLAUDE.md's first law).** The instrument is a
-  helper (`srcHas`/`srcIndexOf`/`srcLastIndexOf`) that every whole-source scan routes through, plus
-  counters and — affordable uniquely here, because a whole-source scan is tens of microseconds
-  against a ~90 ns pair — a TIMESTAMP PAIR per scan and per build. **3,827 calls over 488,469,784
-  characters = 49 whole-program passes, to find 14 needles (0.37%).** They are corpus-unique pins
-  (`"import { 0n as foo }"`, `"Shebang is only allowed on the first line"`), so on tsc's own sources
-  essentially none can ever match.
-
-- **(B) THE SITE COUNT IS NOT THE POPULATION, AND THE MAJORITY OF THE SITES ARE LEFT ALONE.** Of 218
-  scan sites, **69 are CHAR searches bounded to a node position** (`source.indexOf(';', exprEnd)`) —
-  the largest single form, and almost none of the cost. They are not rewritten: one character is
-  below the filter's window width, so gating them would be pure overhead. Rewriting all 218 would
-  have looked more thorough and measured worse.
-
-- **(C) THE MECHANISM, AND WHY A FALSE NEGATIVE IS IMPOSSIBLE RATHER THAN UNLIKELY.**
-  `SourceScanFilter` records a hash of every 4-character window of a file's text in a bitset. A
-  needle can occur only if EVERY one of its own windows occurs, so one clear bit is a PROOF of
-  absence. If `needle` occurs at `p`, then window `j` of the needle **is** window `p+j` of the text,
-  which the build visited and whose bit it set. Hash collisions and the 7-bit character fold can
-  only make windows look PRESENT, i.e. produce false POSITIVES — and a false positive costs one
-  scan, because **the real `indexOf` remains the oracle**: the filter is consulted only to SKIP a
-  call, never to answer one. Measured selectivity: **3,723 of 3,827 refused (97.3%), 95.3% of the
-  characters, 90 false positives in 3,813 = 2.4%.**
-
-- **(D) THE CACHE IS LENGTH-KEYED AND IDENTITY-PROBED, ON PURPOSE.** A `HashMap<String, Filter>`
-  would hash ~10 M characters of file text once per file for nothing (round 894's own candidate (1)
-  is about exactly that cost). `SrcScanCache` is a 1,024-slot open-addressed table keyed on
-  `text.length` and matched with `===`; **a miss is never wrong, only slower** — it rebuilds. One
-  instance per `Checker`, so a `--workers` run shares no mutable state.
-
-- **(E) WARM, BOTH ARMS ALTERNATING IN ONE PROCESS — AND COLD WOULD HAVE BEEN WRONG IN BOTH
-  DIRECTIONS.**
-
-  | mechanism | cold | warm | warm-up |
-  |---|---:|---:|---:|
-  | `String.indexOf` over 488 M chars | 436.3 ms | **86.2 ms** | **5.07x** |
-  | the filter build over 10 M chars | 65.9 ms | **18.9 ms** | **3.49x** |
-  | **net removed** | 345.8 ms (1.49% cold) | **64.3 ms (1.24% warm)** | |
-
-  The build is a hand-written scanner and warms 3.5x, almost exactly CLAUDE.md's round-859 figure;
-  the JDK intrinsic warms **5.07x**, MORE than a whole rebuild's ~3.4x. **So a cold census
-  OVERSTATES what gating a scan is worth — the exact opposite of round 859, where a cold table
-  UNDERSTATED an ungated `java.util.regex` because that does not warm at all.** Text scanning is a
-  different regime cold and warm in BOTH directions; take the warm one.
-
-- **(F) ROUND 894's 116 ms WAS RIGHT AND ~26% OF IT WAS NEVER ADDRESSABLE.** The string-needle part
-  measures 86.2 ms warm; the remainder is predominantly the 69 char searches, which are also
-  `java.lang.String.indexOf` frames in a JFR dump and are gateable by nothing. Reading a leaf-frame
-  FAMILY as one prize is round 758's population-vs-frequency law one instrument over.
-
-- **(G) NO WALL A/B IS CLAIMED.** 1.24% is inside what this box settles; the four instrumented
-  rebuilds read `overheadMs` -70 / -116 / -317 / +261, i.e. noise. What is claimed is the
-  mechanism's own nanos, PAIRED, on ONE binary, with the population and the 14 hits identical in
-  both arms — a same-answers control taken in the same run as the price. This is the seventh round
-  running to decline a wall number, which is the house style since round 893 vindicated the practice
-  collectively at -8.18%.
-
-- **(H) THE REWRITE WAS DECIDED BY A PARSER AND VERIFIED BY INVERSION, NOT BY EYE (round 819).**
-  `scripts/round895_srcscan_apply.py` rewrote 149 sites; `scripts/round895_srcscan_verify.py`
-  INVERTS the rewrite and demands the original file back byte for byte — **134 lines differ, 0
-  inversion failures, and the multiset of all 13,725 string literals is identical** (round 684: a
-  scripted sweep may re-flow arguments but never their string literals). Two mistakes the compiler
-  caught that no review would have: 8 sites pass the index as a NAMED argument (`startIndex = n`),
-  and one passes a `Char`. Type safety is the whole safety net here — the helpers take `String`.
-
-- **(I) WHAT DID NOT WORK, AND WHAT THE PINS CAUGHT.** The first rewrite pass renamed the helpers'
-  own bodies into calls to themselves (infinite recursion) because their parameter was also called
-  `source` — fixed by naming it `text`, which is a naming rule, not a code rule. **And the partition
-  pin failed on HEAD and was RIGHT: `tooShort` calls also increment `scanned`, because a needle
-  below the window width falls through and IS scanned** — the three counters are not disjoint, the
-  partition is `refused + scanned == calls` and `tooShort` is a SUBSET. A census that reports a
-  bucket it never had is exactly what a partition assertion exists to catch, and it caught it on its
-  first run.
-
-- **(J) THE ABLATION, AND ITS POSITIVE CONTROL.** `--srcScanBogus` corrupts the build so it records
-  only every second window, which makes the filter refuse needles that ARE present.
-  `SrcScanTest` asserts the gated diagnostic (TS18026 via `checkShebangError`, a walker whose whole
-  body is behind one whole-source gate) **DISAPPEARS under the bogus filter and is present on the
-  same binary with it intact** — so the pin discriminates, and the gate is load-bearing. Under
-  `--verifySrcScan` the verifier reads `verified > 0, divergences == 0` sound and
-  `divergences > 0` bogus: a verifier that read 0 in both cases would be worthless (round 790).
-
-- **(K) THE COMMITTED GRID HARNESS HAS BEEN A ONE-PROFILE GRID ALL ALONG.** `bench-compile-tsc.sh`
-  names the compiler profile `tsc-project-<commit8>` and the other seven `tsc-<name>-<commit8>`;
-  every grid script in `scripts/` globs `build/bench/tsc-project-*`, which matches **the compiler
-  profile and nothing else** — round 888's output directory holds exactly one profile's captures.
-  `scripts/round895-grid.sh` enumerates profile dirs by the presence of a `tsconfig.json` and
-  REFUSES to run with fewer than 8.
-
-- **(L) GATES.** Suite **14,339 / 0 failures / 3 skipped**; the delta is exactly the 12 new
-  `SrcScanTest` pins, verified from the diff (no existing test file gains a `@Test`), which makes
-  the pre-round total on this box 14,327 — three above the 14,324 round 892 recorded, a discrepancy
-  inherited and not chased. **8-PROFILE `--listAll` GRID, both arms of one binary, ALL EIGHT
-  `added=0 removed=0`** (deprecatedCompat/jsTyping/compiler/server/services/tsc/typingsInstallerCore
-  46 diagnostics, harness 94); the differ refuses a truncated capture (round 811) and an empty one
-  (round 804), and the harness asserts `SourceScanFilter.class` is in the class dir before running
-  (round 853). `cost_gate.py` **+0.00% on all 20 counters** — the EXPECTED control here (round 876),
-  since these walkers touch no checker counter and emit nothing on the profiles, which is precisely
-  why the grid and the corpus are the real gates. `huge_methods.py --fail-over 0` 0 over the limit.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1030,13 +986,20 @@ MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused 
   `anyIdentical` in `NodeWalk.kt` (one home, so it cannot be re-opened blind), which shrank
   `forEachChild`'s three (JIT.1) partitions **9,256 -> 5,929 bytecodes (-36%)**.
 
-- [ ] **(WARM.33) reach-machinery (b) — transpose the 43 per-file memos. <= ~0.8% (<= 43 ms),
-  ESTIMATED.** 43 separate `ByteArray`s per file, each probed at a scattered `nodeId` at 2.23
-  classifiers/node; one array of 43 statuses PER NODE puts a node's whole row in 1-2 cache lines.
-  Also deletes 36.9 MB/rebuild of allocated+zeroed `ByteArray`. Queued by round 875 § 9 **with its
-  number attached so it is not re-estimated upward**. Next instrument: a transposed-layout amplifier
-  arm on the memo probe ALONE, before touching 43 classifiers — the third-arm discipline that saved
-  round 902 from shipping a regression it had estimated at +0.41%.
+- [x] **(WARM.33) reach-machinery (b), transpose the 43 per-file memos — REFUSED, round 906, AND THE
+  CANDIDATE IS A REGRESSION AT EVERY GEOMETRY.** `docs/perf/reach-memo-transposition-price.md`.
+  **The whole memo-LAYOUT direction is closed**: the ceiling for ANY layout is **2.65-15.99 ms**,
+  below the floor at every cache geometry, and shrinking the cache makes the candidate worse rather
+  than better. **Round 875 had the SIGN wrong** — it read the ascent's scatter onto the probe's
+  sequential sweep; measured, **42.2% of ascent steps go to `nodeId - 1`, 89.8% stay within 64 ids**,
+  the spine walks in PREORDER so each 1-byte array is swept sequentially, and **layout A already
+  answers 97.0% of accesses out of L1** (a line serves ~14.2 consultations against a transposed row's
+  ~3.8). **Round 875's queued instrument could never have decided it**: an amplifier repeats one probe,
+  so from the second repetition the line is L1-hot — *a locality change cannot be amplified*, and the
+  round that priced it contains no clock at all, only a census plus a set-associative LRU model.
+  Also corrected: this entry's own "deletes 36.9 MB/rebuild" deletes **55 KB of array headers** —
+  43 arrays of n bytes and one of 43n are the same bytes. Adjacent direction closed with it: lazily
+  allocating the 17 classifiers consulted <1,000x/rebuild is worth ~2-3 ms.
 
 - [ ] **(WARM.34) `lexLevelHasName` — the COUNT question. Ceiling 21.4-27.3 ms (0.39-0.50%);
   realistic value UNPRICED.** Round 902 closed this family as a CONTAINER question (filter +0.26%,
