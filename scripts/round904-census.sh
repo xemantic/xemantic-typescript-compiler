@@ -56,13 +56,19 @@ run() {
   echo "=== $tag  tiers=$tiers  warmup=$WARMUP iters=$ITERS ===" | tee -a "$OUT/started"
   java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.bench.BenchMainKt \
     "$PROJ" "$WARMUP" "$ITERS" "$tiers" > "$OUT/$tag.txt" 2>&1
-  grep -aE '"summary"|WARM.31|FAMILY TOTAL|CONTROLS' "$OUT/$tag.txt" | tee -a "$OUT/started"
+  grep -aE '"summary"|WARM.31|FAMILY TOTAL|CONTROLS|ns per probe|LOCKSTEP|A - B|amplified r=' "$OUT/$tag.txt" | tee -a "$OUT/started"
 }
 
 # Two independent processes. The census is deterministic, so a disagreement
 # between them is an instrument fault, not a measurement.
 run census1 boxedkey
 run census2 boxedkey
+
+# The PREMIUM, two `r`, ABBA inside each process and the rotation MIRRORED
+# across the two (round 891: one rotation is not enough at two draws per arm —
+# the leading draw's ~15% lands wholly on whichever arm ran first).
+run ampA bkamp8,bkamp24,bkamp24,bkamp8
+run ampB bkamp24,bkamp8,bkamp8,bkamp24
 
 date >> "$OUT/started"
 touch "$OUT/done"
