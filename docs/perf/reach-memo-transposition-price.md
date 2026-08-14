@@ -238,6 +238,39 @@ large share of it is ~2-3 ms. It is below the floor before it is started, and it
 is recorded here so it is not re-opened as though it were the 57 ms a naive
 reading of the `dram` column suggests.
 
+## 5a. Gates
+
+* Suite **14,430 / 0 failures / 3 skipped** over all four modules
+  (`xml.etree` over `*/build/test-results/jvmTest/*.xml`) = the 14,424 baseline
+  plus this round's 6 pins, exactly.
+* `cost_gate.py` **+0.00% on all 20 counters**, 46 errors / 78 files. Expected,
+  and read as a CONTROL rather than a verdict (round 876): the round changes no
+  checker decision, so a moved counter would mean a hook that is not inert.
+* `huge_methods.py --fail-over 0` — **0 over the limit**. Worth running despite
+  the change being counters: 43 classifiers each grew two to four lines, and
+  the largest method in the compiler is 7,702 of 8,000 (round 814).
+* **No 8-profile grid.** Every injected line is guarded by `ReachMemoCensus.on`,
+  which is false in production; the negative-control pin asserts the diagnostic
+  CODES are identical armed and disarmed, and the corpus's 14,296 core
+  baselines are the wider instrument.
+
+## 5b. Ablation — three arms, one mistake at a time
+
+Round 807: a combined ablation cannot attribute. Round 902: `git diff
+--shortstat` proves the edit LANDED, never that it DOES anything — so each arm
+below names what shows its mistake was REACHED, and the pins assert those
+populations are non-empty (round 849). Committed tree, `git checkout --` between
+arms, `scripts/round906-ablate.sh`.
+
+| arm | the mistake | reached because | pins reddened |
+| --- | --- | --- | --- |
+| A1 | the consultation is not recorded against its node | *the access families are non-empty* stays GREEN in the same run, i.e. `probes > 0` on the very path the deleted line sat on | 1 — *the per-node histogram partitions the nodes* |
+| A2 | the two interleaved classifiers stop separating their consultation from their ancestor probes | the gap pin asserts `interleaved > 0`, so `pa`'s non-zero-`hops` path is exercised | 2 — *probe exactly once per consultation*, *the gap histogram accounts for every ascent step* |
+| A3 | layout C is not modelled at all | its rows are printed either way, so a row COUNT cannot see it and only the per-level sum can | 1 — *the layout model classifies every access into exactly one level* |
+
+Every arm's red set is distinct, and the tree was restored clean and the six
+pins re-run GREEN on it.
+
 ## 6. What landed
 
 Instrument only — no change to the machinery.
@@ -250,8 +283,15 @@ Instrument only — no change to the machinery.
   classifier from the nearest enclosing `val memo = spine<X>Memo` binding, so an
   access in a marker or backfill helper is attributed correctly; `--check` /
   `--revert`.
-* `scripts/round906_price.py`, `scripts/round906-census.sh`.
+* `scripts/round906_price.py`, `scripts/round906-census.sh`,
+  `scripts/round906-ablate.sh`.
 * `ReachMemoCensusTest`, six pins.
+
+The instrument's own cost, for a next user: the `reachmemo` tier's rebuild is
+**+5,908 ms** against a 5,197 ms probe-free one — three layouts at five
+geometries is 15 modelled hierarchies over 8.9 M accesses. It is a census, so
+that cost buys nothing and pays nothing; the rebuild it is read against is the
+UNINSTRUMENTED median `BenchMain` prints in its summary line.
 
 ## 7. For the next agent
 
