@@ -292,7 +292,15 @@ class Checker(
     // -----------------------------------------------------------------------
     @get:JvmName("diagnostics_") private val diagnostics get() = state.diagnostics
     private val referencedAliases get() = state.referencedAliases
-    private val enumValues get() = state.enumValues
+    /** (WARM.31) round 904 — EVERY `enumValues[...]` expression evaluates this
+     *  accessor exactly once, so one hook here counts all ~25 boxed-`Int` map
+     *  operations on the enum-value table. The key is not visible at this point,
+     *  hence [MapCensus.bkOpOnly]; the keys are symbol ids, i.e. the same range
+     *  as every other id-keyed site here. */
+    private val enumValues get(): MutableMap<Int, MutableMap<String, ConstantValue>> {
+        if (MapCensus.boxedKeyCensus) MapCensus.bkOpOnly(MapCensus.BK_ENUM)
+        return state.enumValues
+    }
     private val nodeTypes get() = state.nodeTypes
     private val symbolTypes get() = state.symbolTypes
     private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
@@ -593,8 +601,14 @@ class Checker(
      *  NOT need [packIdPair]'s finalizer: the two halves are uncorrelated (a per-file
      *  salt against an AST position), so 1,186 real keys fill 919 of 2,048 buckets with
      *  a max bucket of 4 and nothing treeified. */
-    private fun internKey(tp: TypeParameter): Long =
-        (tp.internSalt.toLong() shl 32) or (tp.pos.toLong() and 0xFFFFFFFFL)
+    private fun internKey(tp: TypeParameter): Long {
+        val k = (tp.internSalt.toLong() shl 32) or (tp.pos.toLong() and 0xFFFFFFFFL)
+        // (WARM.31) round 904 — `internKey` exists ONLY to key
+        // `typeParamInternCache`, so one hook here censuses all 16 `getOrPut`
+        // sites at once (each is one boxed-`Long` probe, plus a put on a miss).
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_TP_INTERN, k)
+        return k
+    }
 
     /** B60.12: AST TypeParameter nodes by name, used by `checkTypeParamTypedOps` walker
      *  to emit TS2208 related info pointing at the correct source position. */
@@ -24310,6 +24324,10 @@ class Checker(
 
     /** Re-null only the ids [spineScopeFill] wrote — O(#scopes), not O(nodeCount). */
     private fun spineScopeClear() {
+        // (WARM.31) round 904 — `spineScopeWrittenIds` is an `ArrayList<Int>`, so
+        // this iteration UNBOXES one `Integer` per written scope (and the `add`s
+        // boxed them). The array of scopes itself is already primitive-indexed.
+        if (MapCensus.boxedKeyCensus) MapCensus.bkScan(MapCensus.BK_BINDER_SCOPES, spineScopeWrittenIds.size)
         for (id in spineScopeWrittenIds) spineScopeByNode[id] = null
         spineScopeWrittenIds.clear()
         spineCurrentScope = null
@@ -26115,10 +26133,12 @@ class Checker(
 
     private fun tavLevelFor(owner: Node): TavLevel? {
         val id = (owner as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineTavLevelMemo[id]?.let { return it }
         FrontEnd.addTavHops(0, 0, 1)
         val parent = tavLevelAt(owner)
         val level = tavBuildLevel(owner, parent)
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0 && level != null) spineTavLevelMemo[id] = level
         return level
     }
@@ -34024,6 +34044,7 @@ class Checker(
         if (node == null || unresolvedLexScopes.isEmpty()) return null
         val id = (node as NodeBase).nodeId
         if (id < 0) return null
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_UNRES_LEX, id.toLong())
         return unresolvedLexScopes[id]
     }
 
@@ -54098,6 +54119,7 @@ interface DataView {
 
     private fun spineUncalledLevelFor(owner: Node): UncalledLevel {
         val id = (owner as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineUncalledLevelMemo[id]?.let { return it }
         val shadowed = HashSet<String>()
         val typed = HashMap<String, Type>()
@@ -54113,6 +54135,7 @@ interface DataView {
             else -> {}
         }
         val level = UncalledLevel(shadowed, typed)
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineUncalledLevelMemo[id] = level
         return level
     }
@@ -54138,8 +54161,10 @@ interface DataView {
 
     private fun spineUncalledThisTypeFor(cls: ClassDeclaration): Type? {
         val id = (cls as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0 && spineUncalledThisMemo.containsKey(id)) return spineUncalledThisMemo[id]
         val t = resolveUncalledThisType(cls)
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineUncalledThisMemo[id] = t
         return t
     }
@@ -60618,6 +60643,7 @@ interface DataView {
      */
     private fun spineArgListCtx(owner: Node): SpineArgCtx {
         val id = (owner as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineArgListCtxMemo[id]?.let { return it }
         val ctx = when (owner) {
             is SourceFile -> spineArgListOverlay(spineArgFileBaseCtx(), owner.statements)
@@ -60646,6 +60672,7 @@ interface DataView {
             is DefaultClause -> spineArgListOverlay(spineArgCtxAt(owner), owner.statements)
             else -> spineArgFileBaseCtx()
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineArgListCtxMemo[id] = ctx
         return ctx
     }
@@ -65435,6 +65462,7 @@ interface DataView {
      *  keeps the parent maps via [fnParamAddTps]). */
     private fun spineFpCtxFor(p: Node, child: Node): FnParamCtx {
         val id = (child as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineFpCtxMemo[id]?.let { return it }
         val parentCtx = spineFpCtxAt(p)
         val cls = ((p as NodeBase).parent) as? ClassDeclaration
@@ -65449,6 +65477,7 @@ interface DataView {
             is FunctionExpression -> fnParamChildCtx(parentCtx, p.parameters, p.typeParameters)
             else -> parentCtx
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineFpCtxMemo[id] = ctx
         return ctx
     }
@@ -65677,6 +65706,7 @@ interface DataView {
      *  shadowed by non-abstract classes (remove wins for a duplicate name). */
     private fun spineAiClassesFor(owner: Node): Set<String> {
         val id = (owner as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineAiClassesMemo[id]?.let { return it }
         val stmts: List<Statement> = when (owner) {
             is SourceFile -> owner.statements
@@ -65705,6 +65735,7 @@ interface DataView {
             }
             s
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineAiClassesMemo[id] = out
         return out
     }
@@ -66038,6 +66069,7 @@ interface DataView {
      *  so ONLY fn bodies and ModuleBlocks are collection boundaries). */
     private fun spineSyCtxFor(p: Node, child: Node): SyCtx {
         val id = (child as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineSyCtxMemo[id]?.let { return it }
         val outer = spineSyCtxAt(p)
         val aliases = spineSyAliases
@@ -66077,6 +66109,7 @@ interface DataView {
             if (child is Block) collectSymbolLocals(child.statements, bodyTp, aliases, names)
             ctx = SyCtx(names, bodyTp)
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineSyCtxMemo[id] = ctx
         return ctx
     }
@@ -76325,6 +76358,7 @@ interface DataView {
      */
     private fun spineUbdListDecls(owner: Node): Map<String, BlockScopedDecl> {
         val id = (owner as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineUbdDeclsMemo[id]?.let { return it }
         val stmts: List<Statement> = when (owner) {
             is SourceFile -> owner.statements
@@ -76347,6 +76381,7 @@ interface DataView {
             }
         }
         for (name in hoistedNames) blockScopedDecls.remove(name)
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineUbdDeclsMemo[id] = blockScopedDecls
         return blockScopedDecls
     }
@@ -102904,13 +102939,17 @@ interface DataView {
         // recursion hit the cache instead of re-allocating Symbols/Signatures/Type.Object
         // (matters for Promise/IPromise overload-permutation comparisons).
         val cacheKey = packRelationKey(ref.id, propSym.id)
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RESOLVED_PROP, cacheKey)
         state.resolvedPropertyTypes[cacheKey]?.let { return it }
         if (relationDepth > 0) {
             if (state.genericPropInstantiationBudget <= 0) return null
             state.genericPropInstantiationBudget--
         }
         val computed = resolveGenericPropertyTypeWorker(ref, propSym)
-        if (computed != null) state.resolvedPropertyTypes[cacheKey] = computed
+        if (computed != null) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RESOLVED_PROP, cacheKey)
+            state.resolvedPropertyTypes[cacheKey] = computed
+        }
         return computed
     }
 
@@ -106422,6 +106461,10 @@ interface DataView {
         // StackOverflowError. getTypeOfFunction additionally stores a
         // fnType SHELL before resolving signatures (B198), so function
         // self-references hit the cache fast-path above and never reach this check.
+        if (MapCensus.boxedKeyCensus) {
+            MapCensus.bk(MapCensus.BK_SYM_INPROG, symbol.id.toLong())
+            MapCensus.bkPush(MapCensus.BK_SYM_INPROG)
+        }
         val symInProgressAdded = symbolTypeResolutionInProgress.add(symbol.id)
         if (MapCensus.on) MapCensus.symEnter(symInProgressAdded)
         if (!symInProgressAdded) return anyType
@@ -106447,6 +106490,10 @@ interface DataView {
             if (cacheable || !SYMBOL_TYPE_ORDER_GATE) symbolTypes[symbol.id] = type
             return type
         } finally {
+            if (MapCensus.boxedKeyCensus) {
+                MapCensus.bk(MapCensus.BK_SYM_INPROG, symbol.id.toLong())
+                MapCensus.bkPop(MapCensus.BK_SYM_INPROG)
+            }
             symbolTypeResolutionInProgress.remove(symbol.id)
             if (MapCensus.on) MapCensus.symLeave()
         }
@@ -107120,6 +107167,7 @@ interface DataView {
         // completes and plants the full table; the re-entrant inner request returns
         // with the type still member-less, which is correct for the circular-base
         // error inputs that produce these cycles.
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_SYM_INPROG, type.id.toLong())
         val memberInProgressAdded = memberResolutionInProgress.add(type.id)
         if (MapCensus.on) MapCensus.memberEnter(memberInProgressAdded)
         if (!memberInProgressAdded) return
@@ -107127,6 +107175,7 @@ interface DataView {
             if (LibTypeCensus.enabled) resolveStructuredTypeMembersCensused(type)
             else resolveStructuredTypeMembersDispatch(type)
         } finally {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_SYM_INPROG, type.id.toLong())
             memberResolutionInProgress.remove(type.id)
             if (MapCensus.on) MapCensus.memberLeave()
         }
@@ -112571,7 +112620,9 @@ interface DataView {
      */
     private fun resolveImportedNamespaceSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
         val topLevel = visited.isEmpty()
+        if (MapCensus.boxedKeyCensus && topLevel) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
         if (topLevel && importedNamespaceSymCache.containsKey(aliasSymbol.id)) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
             return importedNamespaceSymCache[aliasSymbol.id]
         }
         val result = computeImportedNamespaceSymbol(aliasSymbol, visited)
@@ -112620,13 +112671,18 @@ interface DataView {
      */
     private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         val topLevel = visited.isEmpty()
+        if (MapCensus.boxedKeyCensus && topLevel) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
         val cached = topLevel && importedSymbolGeneralCache.containsKey(aliasSymbol.id)
         if (MapCensus.on) MapCensus.risgEnter(topLevel, cached)
         if (cached) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
             return importedSymbolGeneralCache[aliasSymbol.id]
         }
         val result = computeImportedSymbolGeneral(aliasSymbol, visited)
-        if (topLevel) importedSymbolGeneralCache[aliasSymbol.id] = result
+        if (topLevel) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
+            importedSymbolGeneralCache[aliasSymbol.id] = result
+        }
         return result
     }
 
@@ -112685,7 +112741,9 @@ interface DataView {
         // Memoize at the entry (fresh walk): the enclosing-import search + star chain
         // repeats identically across flow walks otherwise (services-perf firewall).
         val topLevel = visited.isEmpty()
+        if (MapCensus.boxedKeyCensus && topLevel) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
         if (topLevel && importedGuardDeclCache.containsKey(aliasSymbol.id)) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
             return importedGuardDeclCache[aliasSymbol.id]
         }
         val result = computeImportedFunctionLikeDecl(aliasSymbol, visited)
@@ -114176,7 +114234,13 @@ interface DataView {
      * with [sym]; else keep [sym]. Deterministic across paths because both end at symbols
      * carrying the declaring file's EnumDeclaration instances.
      */
-    private fun canonicalEnumSymbol(sym: Symbol): Symbol = canonicalEnumSymCache.getOrPut(sym.id) {
+    private fun canonicalEnumSymbol(sym: Symbol): Symbol {
+        // (WARM.31) round 904 — one boxed-`Int` probe per call.
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_ENUM, sym.id.toLong())
+        return canonicalEnumSymbolCached(sym)
+    }
+
+    private fun canonicalEnumSymbolCached(sym: Symbol): Symbol = canonicalEnumSymCache.getOrPut(sym.id) {
         val global = globals[sym.name] ?: return@getOrPut sym
         if (global === sym || !global.flags.hasAny(SymbolFlags.Enum)) return@getOrPut sym
         if (enumValues[global.id] == null) return@getOrPut sym
@@ -114225,7 +114289,9 @@ interface DataView {
      *  FP-safe (narrowing removes union constituents). */
     private fun resolveImportedEnumSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
         val topLevel = visited.isEmpty()
+        if (MapCensus.boxedKeyCensus && topLevel) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
         if (topLevel && importedEnumSymCache.containsKey(aliasSymbol.id)) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_IMPORT_CACHES, aliasSymbol.id.toLong())
             return importedEnumSymCache[aliasSymbol.id]
         }
         val result = computeImportedEnumSymbol(aliasSymbol, visited)
@@ -149741,12 +149807,72 @@ interface DataView {
     private class Relation {
         private val cache = HashMap<Long, Ternary>()
 
+        /**
+         * (WARM.31) round 904 — arm B of the boxed-key amplifier, populated in
+         * LOCKSTEP with [cache] and read only under `--boxedKeyAmp`. It is the
+         * primitive-keyed successor this whole candidate is about, and putting it
+         * HERE rather than in a synthetic loop is what keeps the measurement
+         * honest: the same key stream, the same table occupancy, the same cache
+         * residency (round 897 — a leaf profile cannot see a working-set effect,
+         * so a bench-rig key sequence would price a different machine state).
+         *
+         * `LongKeyMap` reserves key 0 as its empty-slot sentinel, so a key of
+         * exactly 0 is skipped and COUNTED rather than assumed impossible.
+         */
+        private val shadow = LongKeyMap<Ternary>(1024)
+
         fun get(sourceId: Int, targetId: Int): Ternary? {
-            return cache[packKey(sourceId, targetId)]
+            val k = packKey(sourceId, targetId)
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REL_CACHE, k)
+            if (MapCensus.boxedKeyAmp > 0) amp(k)
+            return cache[k]
+        }
+
+        /**
+         * Two arms under one timestamp pair each, order alternating per call so a
+         * drift inside the rebuild lands on both. Neither arm's key is computed
+         * inside its bracket, so what is measured is the PROBE and nothing else.
+         *
+         * Two falsifiers ride along. (1) Each sink is 0 or `r` per call, hence an
+         * exact multiple of `r` — and the two sinks must be EQUAL, which is the
+         * lockstep control: they diverge the moment the shadow stops mirroring.
+         * (2) A `HashMap` probe on an unchanging key is loop-invariant-looking, so
+         * C2 may hoist it; the falsifier for that is the SLOPE between two `r`,
+         * never the sink (round 903).
+         */
+        private fun amp(k: Long) {
+            val r = MapCensus.boxedKeyAmp
+            val boxedFirst = (MapCensus.bkAmpCalls and 1L) == 0L
+            if (boxedFirst) { ampBoxed(k, r); ampPrimitive(k, r) }
+            else { ampPrimitive(k, r); ampBoxed(k, r) }
+            MapCensus.bkAmpCalls++
+        }
+
+        private fun ampBoxed(k: Long, r: Int) {
+            val t0 = PassTiming.nowNanos()
+            var s = 0L
+            var i = 0
+            while (i < r) { if (cache[k] != null) s++; i++ }
+            MapCensus.bkAmpBoxedNanos += PassTiming.nowNanos() - t0
+            MapCensus.bkAmpBoxedSink += s
+        }
+
+        private fun ampPrimitive(k: Long, r: Int) {
+            val t0 = PassTiming.nowNanos()
+            var s = 0L
+            var i = 0
+            while (i < r) { if (shadow.get(k) != null) s++; i++ }
+            MapCensus.bkAmpPrimNanos += PassTiming.nowNanos() - t0
+            MapCensus.bkAmpPrimSink += s
         }
 
         fun set(sourceId: Int, targetId: Int, result: Ternary) {
-            cache[packKey(sourceId, targetId)] = result
+            val k = packKey(sourceId, targetId)
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REL_CACHE, k)
+            cache[k] = result
+            if (MapCensus.boxedKeyAmp > 0) {
+                if (k != 0L) shadow.put(k, result) else MapCensus.bkAmpSentinelKeys++
+            }
         }
 
         /** (HASH.1)(b) round 890: see [packIdPair] — this map's 43,080 real keys
@@ -150001,6 +150127,10 @@ interface DataView {
         // Cycle detection: if we're already comparing this (source, target) pair,
         // assume compatibility to break the cycle (TypeScript's approach for recursive types).
         val pairKey = packRelationKey(source.id, target.id)
+        // (WARM.31) round 904 — three boxed-`Long` set operations per reaching
+        // call (contains here, add below, remove in the `finally`), plus the two
+        // `countOccurrences` scans over the boxed-`Int` target stacks.
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REL_STACK, pairKey)
         if (pairKey in state.relationComparisonStack) {
             relationUsedCycleBreak = true
             return true
@@ -150020,9 +150150,23 @@ interface DataView {
             relationUsedCycleBreak = true
             return true
         }
+        if (MapCensus.boxedKeyCensus) {
+            MapCensus.bk(MapCensus.BK_REL_STACK, pairKey)
+            MapCensus.bkPush(MapCensus.BK_REL_STACK)
+        }
         state.relationComparisonStack.add(pairKey)
         if (srcRef != null) state.relationSourceTargets.add(srcRef.target.id)
         if (tgtRef != null) state.relationTargetTargets.add(tgtRef.target.id)
+        if (MapCensus.boxedKeyCensus) {
+            if (srcRef != null) {
+                MapCensus.bk(MapCensus.BK_REL_TARGETS, srcRef.target.id.toLong())
+                MapCensus.bkPush(MapCensus.BK_REL_TARGETS)
+            }
+            if (tgtRef != null) {
+                MapCensus.bk(MapCensus.BK_REL_TARGETS, tgtRef.target.id.toLong())
+                MapCensus.bkPush(MapCensus.BK_REL_TARGETS)
+            }
+        }
         if (relationDepth == 0) state.genericPropInstantiationBudget = 2_000
         relationDepth++
         val savedCycleBreak = relationUsedCycleBreak
@@ -150039,6 +150183,12 @@ interface DataView {
         } finally {
             relationUsedCycleBreak = savedCycleBreak || relationUsedCycleBreak
             relationDepth--
+            if (MapCensus.boxedKeyCensus) {
+                MapCensus.bk(MapCensus.BK_REL_STACK, pairKey)
+                MapCensus.bkPop(MapCensus.BK_REL_STACK)
+                if (tgtRef != null) MapCensus.bkPop(MapCensus.BK_REL_TARGETS)
+                if (srcRef != null) MapCensus.bkPop(MapCensus.BK_REL_TARGETS)
+            }
             if (tgtRef != null) state.relationTargetTargets.removeAt(state.relationTargetTargets.lastIndex)
             if (srcRef != null) state.relationSourceTargets.removeAt(state.relationSourceTargets.lastIndex)
             state.relationComparisonStack.remove(pairKey)
@@ -150062,6 +150212,10 @@ interface DataView {
     private fun packRelationKey(a: Int, b: Int): Long = packIdPair(a, b)
 
     private fun countOccurrences(stack: List<Int>, id: Int): Int {
+        // (WARM.31) round 904 — each element visit UNBOXES an `Integer`; that, not
+        // the add/remove, is where an `ArrayList<Int>` costs more than an `IntArray`,
+        // so the scan STEPS are what the census counts here.
+        if (MapCensus.boxedKeyCensus) MapCensus.bkScan(MapCensus.BK_REL_TARGETS, stack.size)
         var n = 0
         for (e in stack) if (e == id) n++
         return n
@@ -154628,7 +154782,12 @@ interface DataView {
         }
         // Cycle detection: don't re-enter elaboration for the same type pair
         val pairKey = packRelationKey(source.id, target.id)
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_ELAB, pairKey)
         if (pairKey in state.elaborationStack) return null
+        if (MapCensus.boxedKeyCensus) {
+            MapCensus.bk(MapCensus.BK_ELAB, pairKey)
+            MapCensus.bkPush(MapCensus.BK_ELAB)
+        }
         state.elaborationStack.add(pairKey)
         try {
             // B75.3: Plain `Array<U>` source vs `ReadonlyArray<T>` target — elaborate
@@ -155045,6 +155204,10 @@ interface DataView {
                 "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
             ) + undefinedExtra + unionConstituentExtra + funcExtra
         } finally {
+            if (MapCensus.boxedKeyCensus) {
+                MapCensus.bk(MapCensus.BK_ELAB, pairKey)
+                MapCensus.bkPop(MapCensus.BK_ELAB)
+            }
             state.elaborationStack.remove(pairKey)
         }
     }
@@ -155124,7 +155287,12 @@ interface DataView {
     ): List<String>? {
         // Cycle detection: pack (source.id, target.id) like the Object→Object path
         val pairKey = packRelationKey(source.id, target.id)
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_ELAB, pairKey)
         if (pairKey in state.elaborationStack) return null
+        if (MapCensus.boxedKeyCensus) {
+            MapCensus.bk(MapCensus.BK_ELAB, pairKey)
+            MapCensus.bkPush(MapCensus.BK_ELAB)
+        }
         state.elaborationStack.add(pairKey)
         try {
             // Merge object-like constituent members. Reference / Interface / anonymous
@@ -155179,6 +155347,10 @@ interface DataView {
             }
             return null
         } finally {
+            if (MapCensus.boxedKeyCensus) {
+                MapCensus.bk(MapCensus.BK_ELAB, pairKey)
+                MapCensus.bkPop(MapCensus.BK_ELAB)
+            }
             state.elaborationStack.remove(pairKey)
         }
     }
@@ -159878,6 +160050,7 @@ interface DataView {
      *  consulted). */
     private fun spineIdcCtxFor(p: Node, child: Node): IdcCtx {
         val id = (child as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineIdcCtxMemo[id]?.let { return it }
         val ctx: IdcCtx = when (p) {
             is FunctionDeclaration -> {
@@ -159897,6 +160070,7 @@ interface DataView {
             }
             else -> spineIdcEmptyCtx // PropertyDeclaration initializer: (∅, ∅)
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineIdcCtxMemo[id] = ctx
         return ctx
     }
@@ -169268,6 +169442,7 @@ interface DataView {
      *  consulted). */
     private fun spineGxCtxFor(p: Node, child: Node): GxCtx {
         val id = (child as NodeBase).nodeId
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineGxCtxMemo[id]?.let { return it }
         val ctx: GxCtx = when (p) {
             is FunctionDeclaration -> {
@@ -169297,6 +169472,7 @@ interface DataView {
             }
             else -> spineGxEmptyCtx // PropertyDeclaration initializer: (∅, ∅)
         }
+        if (MapCensus.boxedKeyCensus && id >= 0) MapCensus.bk(MapCensus.BK_SPINE_MEMO, id.toLong())
         if (id >= 0) spineGxCtxMemo[id] = ctx
         return ctx
     }

@@ -271,6 +271,11 @@ internal val TIERS = listOf(
     // hit/miss/bypassed split) is a count of structure and is identical on every
     // rebuild, which is its own falsifier. Its amplified sibling is `tnkamp<N>`.
     "typenodekey",
+    // (WARM.31) round 904 — per-SITE population counts for the residual
+    // boxed-primitive map/set keys. Counters only, no timestamp pair anywhere,
+    // so its rebuild is otherwise a `plain` one and the numbers are
+    // deterministic (which is their own falsifier).
+    "boxedkey",
 )
 
 /**
@@ -286,6 +291,20 @@ internal val TIERS = listOf(
  *
  * `tnkamp0` is rejected: the zero arm is not the base of this slope (the arms
  * take no bracket at all at `r == 0`), so a zero here is a typo and nothing else.
+ */
+internal fun bkAmpReps(tier: String): Int? {
+    if (!tier.startsWith("bkamp")) return null
+    val digits = tier.removePrefix("bkamp")
+    if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
+    val n = digits.toIntOrNull() ?: return null
+    return if (n <= 0) null else n
+}
+
+/**
+ * (WARM.31) round 904 — the boxed-vs-primitive KEY amplifier at `N` probes per
+ * arm per call. Same slope discipline as `tnkamp<N>`: one process runs two `r`
+ * so the timestamp boundary cancels algebraically, and a FLAT p(r) between them
+ * is the hoisting falsifier (round 903), not the sink.
  */
 internal fun tnkAmpReps(tier: String): Int? {
     if (!tier.startsWith("tnkamp")) return null
@@ -471,6 +490,13 @@ internal fun tierBegin(tier: String) {
     // (WARM.30) — the amplifier arms NO other probe, for the reason (WARM.14)
     // gives: its answer is a slope taken from its own brackets, and an armed pass
     // probe would only add boundaries that do not cancel between two `r`.
+    val bkAmp = bkAmpReps(tier)
+    if (bkAmp != null) {
+        MapCensus.reset()
+        MapCensus.boxedKeyAmp = bkAmp
+        MapCensus.on = true
+        return
+    }
     val tnkAmp = tnkAmpReps(tier)
     if (tnkAmp != null) {
         MapCensus.reset()
@@ -543,6 +569,8 @@ internal fun tierBegin(tier: String) {
         // rebuild is otherwise a `plain` one. Deliberately does NOT arm `rows`:
         // the quantity is deterministic, so it needs no row to be read against.
         "typenodekey" -> { MapCensus.reset(); MapCensus.typeNodeKeyCensus = true; MapCensus.on = true }
+        // (WARM.31) — counters only; deliberately does NOT arm `rows`.
+        "boxedkey" -> { MapCensus.reset(); MapCensus.boxedKeyCensus = true; MapCensus.on = true }
         // (WARM.22) — the edge amplifier at N extra evaluations per fold. It is
         // a SLOPE instrument, so a process must be able to run
         // `reachamp8,reachamp24,reachamp8,reachamp24` and get both r values at
@@ -592,6 +620,10 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     NameCensus.replayReps = nameCensusReps(tier)!!
     NameCensus.replay()
     NameCensus.report()
+} else if (bkAmpReps(tier) != null) {
+    // (WARM.31) — taken while the amplifier still holds its arm, so `amplified r=`
+    // prints from the live field (round 850).
+    MapCensus.report()
 } else if (tnkAmpReps(tier) != null) {
     // (WARM.30) — taken while the amplifier still holds its arm, so `amplified
     // r=` prints from the live field and an arm labels itself from its own state
@@ -636,7 +668,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
     "srcscan", "srcscanoff" -> SrcScan.report()
-    "typenodekey" -> MapCensus.report()
+    "typenodekey", "boxedkey" -> MapCensus.report()
     "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
         "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->
@@ -774,6 +806,8 @@ internal fun tierStop() {
     // resolution, which is a large, silent and entirely plausible-looking
     // slowdown of whatever tier follows.
     MapCensus.typeNodeKeyCensus = false
+    MapCensus.boxedKeyCensus = false
+    MapCensus.boxedKeyAmp = 0
     MapCensus.typeNodeKeyAmp = 0
     MapCensus.on = false
     MapCensus.reset()
@@ -815,7 +849,8 @@ fun main(args: Array<String>) {
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
             val bad = list.filter {
                 it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null &&
-                    nameCensusReps(it) == null && tnkAmpReps(it) == null
+                    nameCensusReps(it) == null && tnkAmpReps(it) == null &&
+                    bkAmpReps(it) == null
             }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(

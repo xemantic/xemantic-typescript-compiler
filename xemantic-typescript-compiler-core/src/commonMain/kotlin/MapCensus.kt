@@ -730,7 +730,154 @@ object MapCensus {
     /** Reps actually run, so a per-rebuild figure is nanos / reps. */
     var replayReps: Long = 0
 
+    // ---- (WARM.31) round 904 — the residual BOXED-PRIMITIVE map/set keys ----
+
+    /**
+     * Round 899 § 33.8 candidate **(6)**, quoted there as "a LOCATION, not yet a
+     * candidate": `Integer.equals` is **29.4 ms** of key-side leaf work, i.e.
+     * cost that exists *only* because a primitive key is boxed, and
+     * `IntKeyMap`/`LongKeyMap` are the house idiom. Nothing had established
+     * WHICH maps hold it.
+     *
+     * This is the counter that decides it, and it is deliberately keyed by SITE
+     * rather than by container: what a swap returns is
+     * `population x per-operation premium`, the premium is one number shared by
+     * every site in the family, so the only unknown per site is its population.
+     *
+     * Round 898's admission test, transposed: a boxed-`Int` `HashMap` probe is
+     * ~15-30 ns and an `IntKeyMap` probe ~2 ns (round 903 measured a `LongKeyMap`
+     * probe at 2.11 ns), so the most generous credible premium is ~10 ns net —
+     * and this arc's refusal floor is ~17 ms. **A site therefore needs ~1.7 M
+     * operations per rebuild to be worth a LOW-risk swap on its own**, against a
+     * whole-spine node population of 856,962 (`cost-counters.txt`). That
+     * threshold is what the table below is read against.
+     *
+     * Two hooks are POSITIVE CONTROLS with an independently known answer, so a
+     * wiring mistake is visible rather than silent (round 902): [BK_RISG] must
+     * agree with [risgCalls] (round 900 measured 259,739) and [BK_SYM_INPROG]
+     * with [symAdds] (round 896 measured 24,232).
+     *
+     * Round 900's law is obeyed at every call site: [bk] takes the key as a
+     * primitive `Long` and nothing is derived before the guard.
+     */
+    var boxedKeyCensus: Boolean = false
+
+    const val BK_REL_STACK = 0
+    const val BK_REL_CACHE = 1
+    const val BK_REL_TARGETS = 2
+    const val BK_ELAB = 3
+    const val BK_TP_INTERN = 4
+    const val BK_RESOLVED_PROP = 5
+    const val BK_RISG = 6
+    const val BK_IMPORT_CACHES = 7
+    const val BK_UNRES_LEX = 8
+    const val BK_SPINE_MEMO = 9
+    const val BK_ENUM = 10
+    const val BK_SYM_INPROG = 11
+    const val BK_REASSIGN_SCAN = 12
+    const val BK_BINDER_SCOPES = 13
+    const val BK_SITES = 14
+
+    val BK_NAMES = listOf(
+        "relationComparisonStack   (HashSet<Long>, transient)",
+        "Relation.cache            (HashMap<Long,Ternary>)",
+        "relation{Source,Target}Targets (ArrayList<Int> + countOccurrences scan)",
+        "elaboration/functionElaborationStack (HashSet<Long>)",
+        "typeParamInternCache      (MutableMap<Long,TypeParam>)",
+        "resolvedPropertyTypes     (HashMap<Long,Type>)",
+        "importedSymbolGeneralCache (HashMap<Int,Symbol?>) [CONTROL]",
+        "imported{Namespace,Guard,Enum} caches (HashMap<Int,·>)",
+        "unresolvedLexScopes[nodeId] (Map<Int,LexicalScope>)",
+        "the spine nodeId memo family (10 HashMap<Int,·>)",
+        "enumValues / canonicalEnumSymCache (Map<Int,·>)",
+        "symbolType/memberResolutionInProgress (HashSet<Int>) [CONTROL]",
+        "FlowGraphBuilder.reassignScanCache (HashMap<Int,·>)",
+        "Binder.scopes / lexicalScopes (HashMap<Int,LexicalScope>)",
+    )
+
+    /** Map/set OPERATIONS per rebuild (a get, a containsKey, a put, an add, a remove). */
+    val bkOps = LongArray(BK_SITES)
+
+    /**
+     * Operations whose key is inside `Integer.valueOf`/`Long.valueOf`'s -128..127
+     * cache, i.e. the ones that box NOTHING NEW and whose identity fast path in
+     * `HashMap.getNode` (`e.key == key`) short-circuits before `equals`. A site
+     * whose keys are all small is refused for free.
+     */
+    val bkSmallKeys = LongArray(BK_SITES)
+
+    /** Max LIVE entries — round 890's law: a transient set cannot treeify. */
+    val bkLive = IntArray(BK_SITES)
+    val bkMaxLive = IntArray(BK_SITES)
+
+    /** Smallest / largest key seen, so a site's key RANGE is reported, not assumed. */
+    val bkMinKey = LongArray(BK_SITES) { Long.MAX_VALUE }
+    val bkMaxKey = LongArray(BK_SITES) { Long.MIN_VALUE }
+
+    /** One map/set operation at [site] with primitive key [key]. */
+    fun bk(site: Int, key: Long) {
+        bkOps[site]++
+        if (key >= -128L && key <= 127L) bkSmallKeys[site]++
+        if (key < bkMinKey[site]) bkMinKey[site] = key
+        if (key > bkMaxKey[site]) bkMaxKey[site] = key
+    }
+
+    /** An operation that GROWS a transient container by one live entry. */
+    fun bkPush(site: Int) {
+        val n = bkLive[site] + 1
+        bkLive[site] = n
+        if (n > bkMaxLive[site]) bkMaxLive[site] = n
+    }
+
+    fun bkPop(site: Int) { bkLive[site]-- }
+
+    /**
+     * [steps] element visits of a boxed-primitive LIST scan, each of which unboxes
+     * one `Integer`. Counted into the same site's [bkOps], because the quantity a
+     * swap to an `IntArray` removes is exactly the per-element unboxing — and
+     * counted separately in [bkScanCalls] so a mean scan length is readable.
+     */
+    fun bkScan(site: Int, steps: Int) {
+        bkScanCalls[site]++
+        bkOps[site] += steps.toLong()
+    }
+
+    val bkScanCalls = LongArray(BK_SITES)
+
+    /** One map/set operation whose key is not visible at the hook (see `enumValues`). */
+    fun bkOpOnly(site: Int) { bkOps[site]++ }
+
+    /**
+     * (WARM.31) Probes per arm per call for the boxed-vs-primitive key amplifier;
+     * `0` = OFF. `--boxedKeyAmp N`, sited on `Relation.cache` — the largest
+     * non-refused member of the family (456,660 ops/rebuild) and the one whose
+     * key is a packed `Long`, i.e. the shape rounds 889/890 already re-mixed.
+     *
+     * The answer is a SLOPE, so a process must run two `r`; the boundary cancels
+     * algebraically between them AND between the two arms at equal `r`
+     * (round 759).
+     */
+    var boxedKeyAmp: Int = 0
+
+    var bkAmpCalls: Long = 0
+    var bkAmpBoxedNanos: Long = 0
+    var bkAmpPrimNanos: Long = 0
+    var bkAmpBoxedSink: Long = 0
+    var bkAmpPrimSink: Long = 0
+
+    /** Keys of exactly 0, which `LongKeyMap` reserves — counted, never assumed. */
+    var bkAmpSentinelKeys: Long = 0
+
     fun reset() {
+        // NOTE: like the other flags in this object, `boxedKeyCensus` itself is
+        // NOT cleared here — `reset()` clears COUNTERS, and every caller (the CLI
+        // arm, `tierBegin`) resets before arming.
+        for (i in 0 until BK_SITES) {
+            bkOps[i] = 0; bkSmallKeys[i] = 0; bkLive[i] = 0; bkMaxLive[i] = 0; bkScanCalls[i] = 0
+            bkMinKey[i] = Long.MAX_VALUE; bkMaxKey[i] = Long.MIN_VALUE
+        }
+        bkAmpCalls = 0; bkAmpBoxedNanos = 0; bkAmpPrimNanos = 0
+        bkAmpBoxedSink = 0; bkAmpPrimSink = 0; bkAmpSentinelKeys = 0
         symAdds = 0; symReentries = 0; symMaxLive = 0; symLive = 0
         nodeAdds = 0; nodeReentries = 0; nodeMaxLive = 0; nodeLive = 0
         memberAdds = 0; memberReentries = 0; memberMaxLive = 0; memberLive = 0
@@ -988,6 +1135,57 @@ object MapCensus {
             appendLine(
                 "      RECOVERABLE (legacy - long) = " +
                     "${(legacyPutNanos + legacyGetNanos - longPutNanos - longGetNanos) / n / 1_000_000.0} ms per rebuild"
+            )
+        }
+        if (boxedKeyCensus) {
+            appendLine("  (WARM.31)(6) the residual BOXED-PRIMITIVE map/set keys, by SITE:")
+            var total = 0L
+            var totalSmall = 0L
+            for (i in 0 until BK_SITES) {
+                total += bkOps[i]
+                totalSmall += bkSmallKeys[i]
+                val range =
+                    if (bkOps[i] == 0L) "(never reached)"
+                    else "keys ${bkMinKey[i]}..${bkMaxKey[i]}"
+                appendLine(
+                    "    ${i.toString().padStart(2)} ${BK_NAMES[i].padEnd(62)} " +
+                        "ops=${bkOps[i]} small(-128..127)=${bkSmallKeys[i]} " +
+                        "maxLive=${bkMaxLive[i]} $range"
+                )
+            }
+            appendLine("    FAMILY TOTAL ops=$total  of which small-key=$totalSmall")
+            appendLine(
+                "    at a 10 ns/op premium the WHOLE family is " +
+                    "${total * 10 / 1_000_000.0} ms; the arc floor is ~17 ms per change"
+            )
+            appendLine(
+                "    CONTROLS: site $BK_RISG ops must be 2x risgCalls-ish (risgCalls=$risgCalls); " +
+                    "site $BK_SYM_INPROG ops vs symAdds=$symAdds"
+            )
+        }
+        if (boxedKeyAmp > 0) {
+            appendLine("  (WARM.31) boxed-vs-primitive KEY amplifier, amplified r=$boxedKeyAmp")
+            val c = maxOf(bkAmpCalls, 1)
+            val n = c * boxedKeyAmp
+            appendLine(
+                "    calls=$bkAmpCalls  probes/arm=$n  sentinel keys skipped=$bkAmpSentinelKeys"
+            )
+            appendLine(
+                "    A HashMap<Long,·> boxed : ${bkAmpBoxedNanos} ns total, " +
+                    "${bkAmpBoxedNanos.toDouble() / n} ns per probe  sink=$bkAmpBoxedSink " +
+                    "(sink mod r = ${bkAmpBoxedSink % boxedKeyAmp})"
+            )
+            appendLine(
+                "    B LongKeyMap primitive : ${bkAmpPrimNanos} ns total, " +
+                    "${bkAmpPrimNanos.toDouble() / n} ns per probe  sink=$bkAmpPrimSink " +
+                    "(sink mod r = ${bkAmpPrimSink % boxedKeyAmp})"
+            )
+            appendLine(
+                "    LOCKSTEP CONTROL: sinks equal = ${bkAmpBoxedSink == bkAmpPrimSink}"
+            )
+            appendLine(
+                "    A - B = ${(bkAmpBoxedNanos - bkAmpPrimNanos).toDouble() / n} ns per probe " +
+                    "(the boundary cancels between the arms at equal r)"
             )
         }
     }

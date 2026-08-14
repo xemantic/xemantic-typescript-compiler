@@ -583,6 +583,7 @@ class Binder(private val options: CompilerOptions) {
         // per-nodeId keying is impossible — conventional binding stands alone.
         if (sourceFile.nodeCount == 0) return scopes
         val root = LexicalScope(sourceFile, parent = null, existing = fileLocals)
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_BINDER_SCOPES, sourceFile.nodeId.toLong())
         scopes[sourceFile.nodeId] = root
 
         val nodeStack = ArrayList<Node>(64)
@@ -794,7 +795,10 @@ class Binder(private val options: CompilerOptions) {
                     // symbol's exports for `E.A`-style consumers) for a nested one.
                     val mainExports = enumSymbol?.takeIf { it.id >= 1 }?.exports
                     val enumScope = LexicalScope(node, scope, existing = mainExports)
-                    if (node.nodeId >= 0) scopes[node.nodeId] = enumScope
+                    if (node.nodeId >= 0) {
+                        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_BINDER_SCOPES, node.nodeId.toLong())
+                        scopes[node.nodeId] = enumScope
+                    }
                     bindLexicalEnumMembers(node, enumSymbol, enumScope)
                     pushChildren(node, enumScope)
                 }
@@ -813,7 +817,10 @@ class Binder(private val options: CompilerOptions) {
     ): LexicalScope {
         val scope = LexicalScope(owner, parent)
         val id = (owner as NodeBase).nodeId
-        if (id >= 0) scopes[id] = scope
+        if (id >= 0) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_BINDER_SCOPES, id.toLong())
+            scopes[id] = scope
+        }
         return scope
     }
 
@@ -846,7 +853,10 @@ class Binder(private val options: CompilerOptions) {
         for (i in 0 until segCount) {
             scope = LexicalScope(node, scope, existing = segSymbols[i]?.exports)
         }
-        if (node.nodeId >= 0) scopes[node.nodeId] = scope
+        if (node.nodeId >= 0) {
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_BINDER_SCOPES, node.nodeId.toLong())
+            scopes[node.nodeId] = scope
+        }
         return scope
     }
 

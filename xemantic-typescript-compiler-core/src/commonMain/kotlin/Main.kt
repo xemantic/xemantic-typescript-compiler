@@ -502,6 +502,28 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             // hit/miss/bypassed split, the PROBE-weighted key subtree size (round
             // 902's law) and the unindexed-key population a `(file, nodeId)`
             // successor cannot address.
+            // (WARM.31) round 904 — round 899 § 33.8 candidate (6): which maps hold
+            // the `Integer.equals` key-side leaf work. A per-SITE population count,
+            // because what a swap returns is population x a premium shared by every
+            // site in the family, so the population is the only per-site unknown.
+            "--boxedKeyCensus", "--boxedkeycensus" -> {
+                MapCensus.reset()
+                modes.set(MapCensus::boxedKeyCensus, true)
+                modes.set(MapCensus::on, true)
+            }
+            // (WARM.31) round 759's amplification, TWO arms (round 898: fewer arms,
+            // bigger r) on `Relation.cache` — the largest non-refused member of the
+            // family: the real boxed `HashMap<Long,·>` probe, and a `LongKeyMap`
+            // populated in lockstep. `A - B` is the boxed-key premium the whole
+            // family would be priced at.
+            "--boxedKeyAmp", "--boxedkeyamp" -> {
+                i++
+                if (i < args.size) {
+                    MapCensus.reset()
+                    modes.set(MapCensus::boxedKeyAmp, args[i].toIntOrNull() ?: 0)
+                    modes.set(MapCensus::on, true)
+                }
+            }
             "--typeNodeKeyCensus", "--typenodekeycensus" -> {
                 MapCensus.reset()
                 modes.set(MapCensus::typeNodeKeyCensus, true)
@@ -1037,6 +1059,12 @@ internal fun usageText(): String =
           --typeNodeKeyCensus (WARM.30) the nodeTypes deep AST-value key: hit/miss/bypassed,
                              the PROBE-weighted key subtree size, and the unindexed keys a
                              (file, nodeId) successor cannot address
+          --boxedKeyCensus   (WARM.31) the residual boxed-primitive map/set keys: per-SITE
+                             operation counts, max live size and key range, against the
+                             ~1.7 M ops one site needs to be worth a swap on its own
+          --boxedKeyAmp N    (WARM.31) the boxed-key PREMIUM in two arms under one timestamp
+                             pair each, on Relation.cache: the real HashMap<Long,·> probe and
+                             a LongKeyMap populated in lockstep — A - B is what a swap returns
           --typeNodeKeyAmp N (WARM.30) price it in three arms under one timestamp pair each:
                              the real deep-key probe, a (file, nodeId) LongKeyMap populated in
                              lockstep, and isPerFileDependentRefNode — the row's second owner

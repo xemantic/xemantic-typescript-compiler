@@ -1472,9 +1472,11 @@ class FlowGraphBuilder {
         // replacing the per-closure O(range) char scan that was ~14% of the tsc-source
         // self-compile (thousands of closures inside `createTypeChecker`-scale functions).
         val feS = FrontEnd.t()
+        if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REASSIGN_SCAN, hi.toLong())
         var scan = reassignScanCache[hi]
         if (scan == null || scan.start > start) {
             scan = scanReassignedEntries(source, start, hi)
+            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REASSIGN_SCAN, hi.toLong())
             reassignScanCache[hi] = scan
             FrontEnd.addReassignScan((hi - start).toLong())
             FlowScan.scansBuilt++
