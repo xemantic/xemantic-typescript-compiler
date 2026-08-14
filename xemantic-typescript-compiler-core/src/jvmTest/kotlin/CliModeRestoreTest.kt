@@ -106,6 +106,7 @@ class CliModeRestoreTest {
             SrcScan::class.java,
             MapCensus::class.java,
             IterCensus::class.java,
+            ReachMemoCensus::class.java,
             MergeCensus::class.java,
             BindMutationCheck::class.java,
             ShareBind::class.java,
@@ -169,6 +170,7 @@ class CliModeRestoreTest {
         FlowCensus.reset()
         SrcScan.reset()
         MapCensus.reset()
+        ReachMemoCensus.reset()
         MergeCensus.reset()
         BindMutationCheck.reset()
         ShareBind.reset()
@@ -294,6 +296,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--mapCensus", "--perFileScopeAmp", "--flowMapReplay", "--lexLevelAmp",
     "--typeNodeKeyCensus", "--typeNodeKeyAmp", "--boxedKeyCensus", "--boxedKeyAmp",
     "--iterCensus", "--iterAmp",
+    "--reachMemoCensus",
     "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

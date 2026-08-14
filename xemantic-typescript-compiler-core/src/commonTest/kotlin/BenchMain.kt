@@ -42,6 +42,7 @@ import com.xemantic.typescript.compiler.TavGate
 import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
+import com.xemantic.typescript.compiler.ReachMemoCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.IterCensus
 import com.xemantic.typescript.compiler.MapCensus
@@ -282,6 +283,12 @@ internal val TIERS = listOf(
     // INV.4 edge classifiers' 145 identity tests. Counters and histograms only,
     // deterministic, no timestamp pair. Its amplified sibling is `iteramp<N>`.
     "itercensus",
+    // (WARM.33) every ACCESS to the 45 per-file reach/depth memos, plus a
+    // set-associative model of both layouts. Arms `reach` TOO, deliberately:
+    // the reconstruction's falsifier is that its WRITE count reproduces round
+    // 875's per-classifier `folds`, and a cross-draw comparison of two
+    // deterministic counters taken in different rebuilds proves nothing.
+    "reachmemo",
 )
 
 /**
@@ -601,6 +608,10 @@ internal fun tierBegin(tier: String) {
         // (WARM.32) — counters and histograms only, no timestamp pair; deliberately
         // does NOT arm `rows`, because the quantity is deterministic.
         "itercensus" -> { IterCensus.reset(); IterCensus.census = true; IterCensus.on = true }
+        "reachmemo" -> {
+            ReachCensus.reset(); ReachCensus.on = true
+            ReachMemoCensus.reset(); ReachMemoCensus.on = true
+        }
         // (WARM.22) — the edge amplifier at N extra evaluations per fold. It is
         // a SLOPE instrument, so a process must be able to run
         // `reachamp8,reachamp24,reachamp8,reachamp24` and get both r values at
@@ -704,6 +715,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     "srcscan", "srcscanoff" -> SrcScan.report()
     "typenodekey", "boxedkey" -> MapCensus.report()
     "itercensus" -> IterCensus.report()
+    "reachmemo" -> ReachCensus.report() + ReachMemoCensus.report()
     "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
         "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->

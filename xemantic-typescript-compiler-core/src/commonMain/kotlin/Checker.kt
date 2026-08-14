@@ -17897,6 +17897,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.DA, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -17912,6 +17913,7 @@ class Checker(
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = DA_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.DA, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -17924,6 +17926,7 @@ class Checker(
             result = if (pNode == null || pStatus == DA_NONE) DA_NONE
                 else spineDaEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.DA, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -18301,6 +18304,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.OS, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -18316,6 +18320,7 @@ class Checker(
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = OS_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.OS, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -18328,6 +18333,7 @@ class Checker(
             result = if (pNode == null || pStatus == OS_NONE) OS_NONE
                 else spineOsEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.OS, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -18637,6 +18643,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.PD, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -18652,6 +18659,7 @@ class Checker(
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = PD_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.PD, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -18664,6 +18672,7 @@ class Checker(
             result = if (pNode == null || pStatus == PD_NONE) PD_NONE
                 else spinePdEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.PD, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -23416,6 +23425,9 @@ class Checker(
      * re-pushed, halving stack traffic.
      */
     private fun spineWalkFile(sf: SourceFile) {
+        // (WARM.33) the per-file boundary: the 45 memos are freshly allocated
+        // and zeroed here, which is where both modelled layouts get their bases.
+        if (ReachMemoCensus.on) ReachMemoCensus.beginFile(sf)
         // INV.4(g) round 716: the profiled walk is a SEPARATE function, so the
         // production loop below is byte-identical to the pre-instrumentation one.
         // This loop is the hottest in the compiler (857k nodes) and the subject of
@@ -25736,6 +25748,7 @@ class Checker(
         var uresExprHops = 0
         while (verdict == 0) {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.pa(ReachCensus.URESEXPR, id, uresExprHops)
             if (id >= 0 && id < memo.size && memo[id].toInt() != 0) {
                 verdict = memo[id].toInt()
                 break
@@ -25757,6 +25770,7 @@ class Checker(
         var n: Node = node
         while (true) {
             val id = (n as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.URESEXPR, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = v
             if (n === cur) break
             n = (n as NodeBase).parent ?: break
@@ -25782,6 +25796,7 @@ class Checker(
         if (type == null) return
         val id = (type as NodeBase).nodeId
         val memo = spineUResTypeMemo
+        if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.URESTYPE, id)
         if (id >= 0 && id < memo.size) memo[id] = 1
         else spineUResTypeRootsFallback.add(type)
     }
@@ -25860,6 +25875,7 @@ class Checker(
         while (verdict == 0) {
             val id = (cur as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.pa(ReachCensus.URESTYPE, id, uresTypeHops)
                 val m = memo[id].toInt()
                 if (m != 0) { verdict = m; break }
             } else if (spineUResTypeRootsFallback.isNotEmpty() &&
@@ -25877,6 +25893,7 @@ class Checker(
         var n: Node = node
         while (true) {
             val id = (n as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.URESTYPE, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = v
             if (n === cur) break
             n = (n as NodeBase).parent ?: break
@@ -26389,6 +26406,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.TAV, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -26412,6 +26430,7 @@ class Checker(
                 break
             }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.TAV, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) {
                 status = spineTavApply(pm, edge)
@@ -26422,6 +26441,7 @@ class Checker(
         }
         run {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.TAV, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = status.toByte()
         }
         for (i in chain.indices.reversed()) {
@@ -26429,6 +26449,7 @@ class Checker(
             if (ReachCensus.on) ReachCensus.folds[ReachCensus.TAV]++
             status = spineTavApply(status, spineTavEdge((n as NodeBase).parent!!, n))
             val id = n.nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.TAV, id)
             if (id >= 0 && id < memo.size) memo[id] = status.toByte()
         }
         if (ReachCensus.on) ReachCensus.misses[ReachCensus.TAV]++
@@ -32096,6 +32117,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.EX, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -32111,6 +32133,7 @@ class Checker(
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = EX_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.EX, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -32126,6 +32149,7 @@ class Checker(
                 else -> spineExFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.EX, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -41430,6 +41454,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.DUPID, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m == 1
             }
@@ -41450,6 +41475,7 @@ class Checker(
                 break
             }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.DUPID, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) {
                 reached = pm == 1
@@ -41460,6 +41486,7 @@ class Checker(
         }
         run {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.DUPID, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
                 memo[id] = if (reached) 1 else 2
             }
@@ -41467,6 +41494,7 @@ class Checker(
         val fill: Byte = if (reached) 1 else 2
         for (i in chain.indices.reversed()) {
             val id = (chain[i] as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.DUPID, id)
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
         if (ReachCensus.on) ReachCensus.misses[ReachCensus.DUPID]++
@@ -50065,6 +50093,7 @@ class Checker(
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.SM, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -50080,6 +50109,7 @@ class Checker(
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = SM_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.SM, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -50095,6 +50125,7 @@ class Checker(
                 else -> spineSmFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.SM, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -53510,6 +53541,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AT, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -53525,6 +53557,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = AT_STMT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AT, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -53537,6 +53570,7 @@ interface DataView {
             result = if (pNode == null || pStatus == AT_NONE) AT_NONE
                 else spineAtEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AT, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -54056,6 +54090,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.UNCALLED, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m == 1
             }
@@ -54076,6 +54111,7 @@ interface DataView {
                 break
             }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.UNCALLED, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) {
                 reached = pm == 1
@@ -54086,6 +54122,7 @@ interface DataView {
         }
         run {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.UNCALLED, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
                 memo[id] = if (reached) 1 else 2
             }
@@ -54093,6 +54130,7 @@ interface DataView {
         val fill: Byte = if (reached) 1 else 2
         for (i in chain.indices.reversed()) {
             val id = (chain[i] as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.UNCALLED, id)
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
         if (ReachCensus.on) ReachCensus.misses[ReachCensus.UNCALLED]++
@@ -54500,6 +54538,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.ARITH, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m == 1
             }
@@ -54520,6 +54559,7 @@ interface DataView {
                 break
             }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.ARITH, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) {
                 reached = pm == 1
@@ -54530,6 +54570,7 @@ interface DataView {
         }
         run {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.ARITH, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
                 memo[id] = if (reached) 1 else 2
             }
@@ -54537,6 +54578,7 @@ interface DataView {
         val fill: Byte = if (reached) 1 else 2
         for (i in chain.indices.reversed()) {
             val id = (chain[i] as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.ARITH, id)
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
         if (ReachCensus.on) ReachCensus.misses[ReachCensus.ARITH]++
@@ -55140,6 +55182,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.IANY, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m == 1
             }
@@ -55160,6 +55203,7 @@ interface DataView {
                 break
             }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.IANY, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) {
                 reached = pm == 1
@@ -55170,6 +55214,7 @@ interface DataView {
         }
         run {
             val id = (cur as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.IANY, id)
             if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
                 memo[id] = if (reached) 1 else 2
             }
@@ -55177,6 +55222,7 @@ interface DataView {
         val fill: Byte = if (reached) 1 else 2
         for (i in chain.indices.reversed()) {
             val id = (chain[i] as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.IANY, id)
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
         if (ReachCensus.on) ReachCensus.misses[ReachCensus.IANY]++
@@ -56968,6 +57014,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.CM, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -56983,6 +57030,7 @@ interface DataView {
             if (parent == null) { anchor = null; break }
             if (parent is SourceFile) { anchor = parent; anchorStatus = CM_STMT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.CM, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -56995,6 +57043,7 @@ interface DataView {
             result = if (pNode == null || pStatus == CM_NONE) CM_NONE
                 else spineCmEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.CM, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -57366,6 +57415,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.NU, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -57381,6 +57431,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = NU_STMT * 512; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.NU, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -57393,6 +57444,7 @@ interface DataView {
             result = if (pNode == null || pStatus == NU_NONE) NU_NONE
                 else spineNuEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.NU, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toShort()
             pNode = c
             pStatus = result
@@ -60416,6 +60468,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachMemoCensus.ARGDEPTH, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m - 2
             }
@@ -60431,6 +60484,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → unreached
             if (parent is SourceFile) { anchor = parent; anchorDepth = 0; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachMemoCensus.ARGDEPTH, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorDepth = pm - 2; break }
             cur = parent
@@ -60442,6 +60496,7 @@ interface DataView {
             val c = chain[i]
             result = if (pNode == null || pDepth < 0) -1 else spineArgEdge(pNode, pDepth, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachMemoCensus.ARGDEPTH, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = (result + 2).toShort()
             pNode = c
             pDepth = result
@@ -65493,6 +65548,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.FP, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -65508,6 +65564,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = FP_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.FP, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -65527,6 +65584,7 @@ interface DataView {
                 else -> FP_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.FP, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -65797,6 +65855,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AI, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -65812,6 +65871,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = AI_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AI, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -65828,6 +65888,7 @@ interface DataView {
                 else -> AI_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AI, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -66125,6 +66186,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.SY, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -66140,6 +66202,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = SY_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.SY, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -66156,6 +66219,7 @@ interface DataView {
                 else -> SY_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.SY, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -66325,6 +66389,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.CO, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -66340,6 +66405,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = CO_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.CO, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -66356,6 +66422,7 @@ interface DataView {
                 else -> CO_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.CO, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -66680,6 +66747,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.TC, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -66695,6 +66763,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = TC_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.TC, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -66707,6 +66776,7 @@ interface DataView {
             result = if (pNode == null || pStatus == TC_NONE) TC_NONE
                 else spineTcEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.TC, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -66787,6 +66857,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.NA, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -66802,6 +66873,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = NA_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.NA, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -66818,6 +66890,7 @@ interface DataView {
                 else -> NA_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.NA, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -66978,6 +67051,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.DEL, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -66993,6 +67067,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = DEL_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.DEL, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -67009,6 +67084,7 @@ interface DataView {
                 else -> DEL_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.DEL, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -67165,6 +67241,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.CP, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -67180,6 +67257,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = CP_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.CP, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -67195,6 +67273,7 @@ interface DataView {
                 else -> spineCpFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.CP, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -67403,6 +67482,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AB, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -67418,6 +67498,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = AB_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AB, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -67433,6 +67514,7 @@ interface DataView {
                 else -> spineAbFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AB, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -67609,6 +67691,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.IY, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -67624,6 +67707,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = IY_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.IY, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -67639,6 +67723,7 @@ interface DataView {
                 else -> spineIyFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.IY, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -67851,6 +67936,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AA, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -67866,6 +67952,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = AA_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AA, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -67881,6 +67968,7 @@ interface DataView {
                 else -> spineAaFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AA, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -68145,6 +68233,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.B94, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -68160,6 +68249,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = B94_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.B94, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -68176,6 +68266,7 @@ interface DataView {
                 else -> B94_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.B94, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -68474,6 +68565,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.CE, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -68489,6 +68581,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = CE_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.CE, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -68508,6 +68601,7 @@ interface DataView {
                 else -> CE_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.CE, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -68839,6 +68933,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.PMR, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -68854,6 +68949,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = PMR_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.PMR, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -68869,6 +68965,7 @@ interface DataView {
                 else -> spinePmrEdge(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.PMR, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -71541,6 +71638,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.CA, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -71556,6 +71654,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = CA_LIST; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.CA, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -71568,6 +71667,7 @@ interface DataView {
             result = if (pNode == null || pStatus == CA_NONE) CA_NONE
                 else spineCaEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.CA, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -74438,6 +74538,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.SU, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -74453,6 +74554,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = SU_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.SU, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -74468,6 +74570,7 @@ interface DataView {
                 else -> spineSuFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.SU, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -76399,6 +76502,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.UBD, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -76414,6 +76518,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = UBD_LIST; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.UBD, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -76426,6 +76531,7 @@ interface DataView {
             result = if (pNode == null || pStatus == UBD_NONE) UBD_NONE
                 else spineUbdEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.UBD, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -77987,6 +78093,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.EV, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -78002,6 +78109,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = EV_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.EV, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -78017,6 +78125,7 @@ interface DataView {
                 else -> spineEvFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.EV, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -79889,6 +79998,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AC, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -79904,6 +80014,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = AC_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AC, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -79920,6 +80031,7 @@ interface DataView {
                 else -> AC_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AC, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -83197,6 +83309,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.TPO, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -83212,6 +83325,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = TPO_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.TPO, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -83229,6 +83343,7 @@ interface DataView {
                 else -> TPO_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.TPO, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -84043,6 +84158,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.TD, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -84058,6 +84174,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = TD_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.TD, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -84074,6 +84191,7 @@ interface DataView {
                 else -> TD_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.TD, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -85175,6 +85293,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.UY, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -85190,6 +85309,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = UY_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.UY, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -85205,6 +85325,7 @@ interface DataView {
                 else -> spineUyFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.UY, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -85398,6 +85519,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.SR, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -85413,6 +85535,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = SR_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.SR, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -85428,6 +85551,7 @@ interface DataView {
                 else -> spineSrFold(pNode, pStatus, c)
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.SR, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -87784,6 +87908,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.AF, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -87799,6 +87924,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = AF_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.AF, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -87816,6 +87942,7 @@ interface DataView {
                 else -> AF_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.AF, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -89671,6 +89798,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.IR, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -89686,6 +89814,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → NONE
             if (parent is SourceFile) { anchor = parent; anchorStatus = IR_STMT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.IR, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -89698,6 +89827,7 @@ interface DataView {
             result = if (pNode == null || pStatus == IR_NONE) IR_NONE
                 else spineIrEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.IR, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -160118,6 +160248,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.IDC, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -160133,6 +160264,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = IDC_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.IDC, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -160149,6 +160281,7 @@ interface DataView {
                 else -> IDC_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.IDC, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -163152,6 +163285,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.NP, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -163167,6 +163301,7 @@ interface DataView {
             if (parent == null) { anchor = null; break }
             if (parent is SourceFile) { anchor = parent; anchorStatus = NP_STMT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.NP, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -163179,6 +163314,7 @@ interface DataView {
             result = if (pNode == null || pStatus == NP_NONE) NP_NONE
                 else spineNpEdge(pNode, pStatus, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.NP, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -169516,6 +169652,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachCensus.GX, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m
             }
@@ -169531,6 +169668,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed
             if (parent is SourceFile) { anchor = parent; anchorStatus = GX_ROOT; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachCensus.GX, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorStatus = pm; break }
             cur = parent
@@ -169547,6 +169685,7 @@ interface DataView {
                 else -> GX_NONE
             }
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachCensus.GX, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
             pNode = c
             pStatus = result
@@ -171181,6 +171320,7 @@ interface DataView {
         run {
             val id = (node as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
+                if (ReachMemoCensus.on) ReachMemoCensus.p(ReachMemoCensus.IADEPTH, id)
                 val m = memo[id].toInt()
                 if (m != 0) return m - 2
             }
@@ -171196,6 +171336,7 @@ interface DataView {
             if (parent == null) { anchor = null; break } // detached/unindexed → unreached
             if (parent is SourceFile) { anchor = parent; anchorDepth = 0; break }
             val pid = (parent as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.s(ReachMemoCensus.IADEPTH, pid, (cur as NodeBase).nodeId)
             val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
             if (pm != 0) { anchor = parent; anchorDepth = pm - 2; break }
             cur = parent
@@ -171207,6 +171348,7 @@ interface DataView {
             val c = chain[i]
             result = if (pNode == null || pDepth < 0) -1 else spineIaEdge(pNode, pDepth, c)
             val cid = (c as NodeBase).nodeId
+            if (ReachMemoCensus.on) ReachMemoCensus.w(ReachMemoCensus.IADEPTH, cid)
             if (cid >= 0 && cid < memo.size) memo[cid] = (result + 2).toShort()
             pNode = c
             pDepth = result

@@ -603,6 +603,14 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--reachCensus", "--reachcensus" -> {
                 ReachCensus.reset(); modes.set(ReachCensus::on, true)
             }
+            // (WARM.33) round 906 — every ACCESS to the 45 per-file reach/depth
+            // memos, fed to a set-associative model of BOTH layouts. There is no
+            // clock in it: a locality change cannot be amplified (a repeated
+            // probe is an L1 hit by the second repetition), so the instrument is
+            // a MISS-COUNT DELTA, which is a counter and therefore deterministic.
+            "--reachMemoCensus", "--reachmemocensus" -> {
+                ReachMemoCensus.reset(); modes.set(ReachMemoCensus::on, true)
+            }
             // (WARM.22) — the EDGE amplifier. Arms the census too, because its
             // arithmetic falsifier prints in that table and a slope with no
             // falsifier beside it is not a measurement (round 759).
@@ -1124,6 +1132,10 @@ internal fun usageText(): String =
                              --reachCensus. Two values of N cancel the boundary and give the
                              cost of ONE edge evaluation, and the arm-count pair gives its
                              slope in arms
+          --reachMemoCensus  (WARM.33) every ACCESS to the 45 per-file INV.4 reach/depth memos
+                             (probe, ascent, write), the per-node consultation histogram, and a
+                             set-associative LRU model of BOTH layouts — 45 arrays versus one
+                             row per node — reported as a miss-count delta per cache level
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --verifyMappedCache  recompute every served INV.5(c) mapped-cache hit and split
                              shape-different serves from id-only ones (implies --passTiming)
