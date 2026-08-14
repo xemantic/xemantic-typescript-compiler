@@ -1,4 +1,210 @@
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
+
+**Round 891 (2026-08-11) — (WARM.18): THE `CtaFrame.varTypes` PER-SCOPE COPY BECOMES AN UNDO LOG —
+**1,145,523 ENTRIES COPIED PER REBUILD -> 16,182 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND THE
+OTHER THREE FAMILIES ARE **REFUSED WITH A PRICED CONDITION TABLE**, INCLUDING THE ONE THAT IS THE
+BIGGER PRIZE.**
+
+Round 869 replaced two of the six per-scope whole-map copy families and said in as many words why it
+stopped: the rest are where a wrong scope does not crash — it silently resolves a name to an OUTER
+binding (the `applyBodyLocalShadowing` FP class). This round worked the item in the order CLAUDE.md
+requires — **conditions first, price second, code third** — and took exactly one of the four.
+`docs/perf/cta-frame-copy-families.md`.
+
+- **(A) THE CONDITION TABLE, WHICH IS WHAT DECIDED IT.** Round 869's law: replaceable EXACTLY when the
+  stack is strictly LIFO, no key is removed, and no reader mutates or retains the map.
+
+  | family | one LIFO stack? | removal? | retains / iterates? | writes/entries | price | verdict |
+  |---|---|---|---|---:|---:|---|
+  | `CtaFrame.varTypes` | **YES** — `ctaFrames`, one frame per owner node, `reset` per file | **none** in 217 refs (3 write paths + one `putAll`) | ~15 legacy call sites, all synchronous in one dispatch; **no** `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted` reader | 0.22% (recorded) | **33.9 ms = 0.59%** | **CONVERTED** |
+  | `CtaFrame` localTypes+declNodes+shadowed | copies at ONE site, but the maps are installed into AMBIENT fields >=12 other sites re-install with different objects | — | — | **UN-INSTRUMENTED** | **43-55 ms = 0.8-1.0%** | **REFUSED** |
+  | `EpochMap(localTypes)` | **NO** — THREE spine stacks (ccet/cpa/cta-narrowing) plus >=12 ad-hoc `currentLocalTypes = EpochMap(currentLocalTypes)` sites whose restore is a **POINTER SWAP** | — | — | 9.4% | ~14-24 ms = 0.25-0.42% (derived) | **REFUSED** |
+  | `EpochSet(paramBindings)` | same | — | — | 20% | ~1-2 ms (derived) | **REFUSED** |
+
+- **(B) THE PRICE, AND THE MEASUREMENT LESSON THAT COST THE ROUND AN EXTRA BATCH.** Three new
+  per-family amplifier arms (`copyampcv<r>` / `copyampcl<r>` / `copyampcta<r>`, the shape round 869's
+  `copyampos` established) price ONE family on the binary that still has it. **Two batches of the same
+  family on the same binary, with OPPOSITE rotations, read 53.6 and 14.1 ms/rep — a 4x
+  disagreement.** The cause is round 869's own first-draw law taken one step further: rotation INSIDE
+  a process is not enough at two draws per arm, because the leading draw's ~15% lands wholly on
+  whichever arm ran first (`r=16` in batch 1, `r=0` in batch 2) and a 6-point fit cannot absorb it.
+  Pooling the 12 draws gives **33.9 ms**; discarding each batch's leading draw gives **32.6** with the
+  two sub-intervals agreeing to 2.5%. **Quoted: ~33 ms = 0.59% [0.47-0.64%].** Batch 1 alone would
+  have been written up as 0.94%. Arithmetic falsifier held on every rebuild
+  (`ampSink == r x entries`, e.g. `18,328,368 = 16 x 1,145,523`).
+
+- **(C) THE ONE MECHANISM `AnnScopeStack` DOES NOT HAVE, AND IT IS NOT COSMETIC.** This family's map
+  is handed OUT by reference to helpers that WRITE into it (`checkVarDeclAssignability`,
+  `ctaTypeParamsIntoLocals`, the `extraVarTypes` `putAll`), so the scope cannot be a private map with
+  a `put` method — it is a `MutableMap` **FACADE** (`VarScopeStack.view`) whose `put`/`putAll`/
+  `remove` route through the log. `clear()` THROWS: it cannot be recorded in O(1), and a silent one
+  would drop the enclosing scopes' entries with no way to restore them at the pop. **And the facade
+  is the only place this family's writes can be counted, which is how a five-round-old census number
+  turned out to be wrong: the old hook was attached to 2 of the 3 write paths, so it read 2,564 where
+  the truth is 16,182** — 6.3x optimistic, with nothing anywhere saying so.
+
+- **(D) SHARING IS "OPEN NO SCOPE".** A BARE (non-`Block`) then-statement narrowing frame deliberately
+  shares its parent's map, because the legacy dispatch it reproduces passed the map straight through.
+  That is the frame's `varScoped` flag, which is also what `ctaSpineLeave` pops on — so push and pop
+  are mirrored by construction rather than by a separate rule. Every other frame kind (8 fn-body
+  shapes, statement blocks, `ModuleBlock`, switch clauses) opens a scope; the file-root frame does
+  not, and is dropped by `reset`.
+
+- **(E) THE CONTROLLED ROW (round 793 — the change moves no boundary and no population).**
+
+  | | before | after |
+  |---|---:|---:|
+  | `CtaFrame.varTypes` pushes | 30,433 | 30,433 |
+  | entries copied by it | **1,145,523** | **0** |
+  | undo records | 0 | **16,182** |
+  | entries copied, all six families | 2,746,298 | 1,600,775 |
+
+  **70.8x less work over an identical population.** And the amplifier is the change's own falsifier:
+  `copyampcv16/8/0` re-run on the new binary reads **`ampSink 0`** — it finds nothing left to
+  amplify, so the copies are GONE rather than merely uncounted.
+
+- **(F) WHY THE BIGGER PRIZE WAS REFUSED — this is not a ranking by size.** The cta LOCAL family is
+  0.8-1.0% against `varTypes`' 0.59%. Three facts stopped it: (i) its produced-versus-consumed ratio
+  **does not exist yet** — the census reads `writes 0` and that is round 849's un-instrumented zero,
+  not a measurement, and round 801's law is that the ratio comes FIRST; (ii) its sibling
+  `ambiguousNames` is a **RESET, not a shadow** (a fn frame gives it a fresh EMPTY set), which an
+  undo log expresses in O(size) — the very cost being removed — so the family is not one mechanism;
+  (iii) the narrowing frame copies `localTypes` into the `EpochMap` family, which is refused for not
+  being a stack at all, so converting the cta half leaves two disciplines over one ambient field.
+  Queued as **(WARM.18b)** with its instrument named: a counting facade over `CtaFrame.localTypes`,
+  run for one census, BEFORE any code.
+
+- **(G) PINS AND ABLATION.** `VarScopeStackTest`, 13 pins, all over strings and ints. The shadowing
+  shape is pinned directly (inner scope sees outer entries; an inner write is gone after the pop; a
+  shadowed key comes back with the OUTER value, not absent; repeated writes to one key still restore
+  the INHERITED value — the pin the reverse replay exists for), plus the `putAll` seed path, the
+  removal path, the SHARED-frame case, the file-root/`reset` boundary, and `toMutableMap()` still
+  being a detached snapshot (the legacy nested walk's one genuine copy).
+  **Eight single-mistake ablations** (`scripts/round891-ablate.sh`, one arm per invocation, each
+  reverted before the next, on a committed tree — round 789/851), red set predicted per arm:
+
+  | arm | the mistake | pins red |
+  |---|---|---:|
+  | A1 | `pop` replays its slice FORWARD | **2** |
+  | A2 | `pop` restores nothing, only truncates | 9 |
+  | A3 | a write records ABSENT instead of the pre-write value | 7 |
+  | A4 | `putAll` bypasses the log | **1** |
+  | A5 | `push` records mark 0 | 6 |
+  | A6 | a file-root write (no scope open) IS recorded | **1** |
+  | A7 | `remove` is not recorded | **1** |
+  | A8 | `reset` keeps the entries — a cross-FILE leak | 2 |
+
+  **All eight red sets are DISTINCT** (A3 and A5 differ by exactly one pin), and A4/A6/A7 each have a
+  uniquely-their-own failure. **A1 — the mistake the whole scheme turns on — is seen by exactly two
+  pins**, `repeated writes to one key in one scope still restore the inherited value` (forward replay
+  leaves the LAST pre-write value, i.e. the inner one) and `a write made with no scope open persists`.
+  **REPORTED HONESTLY (round 868): 3 of the 13 pins are reddened by NO arm** — `an inner scope sees
+  the outer scope's entries`, `toMutableMap on the view is a detached snapshot` and `popping with no
+  scope open is a no-op`. Every arm here breaks the POP or the RECORD, and those three assert the READ
+  path and the guarded no-op; they are recorded as INVARIANT GUARDS with no discrimination claim
+  attached, not counted as coverage.
+
+- **(H) GATES.** Suite **14,295 -> 14,308 / 0 failures / 3 skipped** = exactly the 13 new pins.
+  Compiler-profile `--listAll` digest **`59d930db849399aea5e03e25fedb8e4e`** over 46 errors — the
+  cross-round recipe CLAUDE.md records, i.e. equivalence against a capture taken before this arc.
+  `cost_gate.py` **+0.00% on all 20 counters** (the EXPECTED control, round 876 — this change moves no
+  decision). `huge_methods.py --fail-over 0` **0 over the limit, 692 classes**. **NO WALL-TIME A/B IS
+  CLAIMED** — 0.59% is inside what this box settles (rounds 840(c)/858/886); the claim is the
+  controlled row plus the amplifier price, both deterministic.
+
+**Round 890 (2026-08-11) — (HASH.1)(b): THE PACKED-KEY SWEEP, RUN ON THE **REAL** KEY POPULATIONS
+RATHER THAN A MODEL. THIRTEEN PACKED-LONG KEY SITES CENSUSED; **TWO ARE DEGENERATE AND FIXED, FOUR
+ARE MEASURED ALREADY-FINE, TWO ARE REFUSED** — AND THE MECHANISM IS SHARPER THAN ROUND 889 COULD
+STATE IT: `Relation.cache`'s 43,080 REAL KEYS COLLAPSE ONTO **18,201 HASHES, 1,140 OF THEM IN ONE
+BUCKET**, BECAUSE TYPE IDS ARE MINTED SEQUENTIALLY AND A RELATION ASKS ABOUT **NEIGHBOURS**.**
+
+Round 889 fixed `nodeKey` and queued the family. This round did not model anything it could measure:
+a THROWAWAY census (an `add(name, key)` at every packed-Long write site, dumped under `--passTiming`,
+reverted before a line of the fix was written) captured the ACTUAL key population of every such
+container on the compiler profile, and `scripts/round890_bucket_model.py` ran `java.util.HashMap`'s
+bucket arithmetic over each — as packed, and after the golden-ratio finalizer.
+`docs/perf/hash-key-spread.md` § 5.
+
+- **(A) THE TABLE.** Primed columns are the same population multiplied by `0x9E3779B97F4A7C15`.
+
+  | packer | halves | correlated? | container | keys | cap | used | max | tree% | used' | max' | tree%' | verdict |
+  |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | `Relation.packKey` | (srcTypeId, tgtTypeId) | **YES** | `Relation.cache` | 43,080 | 65,536 | 17,486 | **1,140** | **27.3%** | 31,532 | 6 | 0% | **FIXED** |
+  | `packRelationKey` | (typeId, symId) | **YES** | `resolvedPropertyTypes` | 10,482 | 16,384 | 5,698 | 10 | 2.1% | 7,742 | 6 | 0% | **FIXED** |
+  | `packRelationKey` | (typeId, typeId) | YES | `relationComparisonStack` | 51,447 seen, **27 LIVE** | 64 | — | — | — | — | — | — | free ride |
+  | `packRelationKey` | ″ | ″ | `elaborationStack` | 1 seen, 1 live | 16 | — | — | — | — | — | — | free ride |
+  | `packRelationKey` | ″ | ″ | `functionElaborationStack` | **0** on this profile | — | — | — | — | — | — | — | free ride |
+  | inline pair | (targetId, targetId) | YES | `ts2403IdentityStack` | 6,214 seen, **2 LIVE** | 16 | — | — | — | — | — | — | uniformity |
+  | inline pair | (enumSymId, enumSymId) | YES | `enumTypesRelationCache` | **0** on this profile | — | — | — | — | — | — | — | uniformity |
+  | `internKey` | (internSalt, pos) | **no** | `typeParamInternCache` | 1,186 | 2,048 | 919 | 4 | 0% | 902 | 4 | 0% | **already fine** |
+  | `walkMemoKey` | (nodeId, fileHash) + `* 31` folds | mixed by the folds | `walkMemo` | 31,875 | 65,536 | 25,257 | 6 | 0% | 25,325 | 6 | 0% | **already fine** |
+  | 3 × M0.3(iii) intern keys | (id, id) | YES | `referenceCacheLong` &c | — | — | — | — | — | — | — | — | **already fine** — `LongKeyMap.bucket` applies the SAME finalizer inside the map |
+  | `SpineDispatch.nodeKey` | (fileHash, nodeId) | no | `distinctPa`/`distinctP` | — | — | — | — | — | — | — | — | **refused** — `[CENSUS]`-only, never written in production |
+  | `PassTiming` pairs ×5 | — | — | probe maps | — | — | — | — | — | — | — | — | **REFUSED — `redundantPairNanos` is UNPACKED** (`k and 0xFFFF_FFFFL`) |
+  | `nodeKey` | (pos, end) | YES | `nodeToFlow` &c | — | — | — | — | — | — | — | — | fixed in (a) |
+
+- **(B) THE MECHANISM, NAMED EXACTLY.** For `nodeKey` the collapse was "the hash's range is the set
+  of node lengths". For an id pair the census names it outright: `hash == 1 -> 1,140 keys`,
+  `hash == 2 -> 420`, `hash == 6 -> 471`, `hash == 7 -> 440`. **Type ids are minted SEQUENTIALLY and
+  the pairs a relation actually asks about are overwhelmingly NEIGHBOURS** — an instantiation against
+  its target, a union against a member it was built from — so `a xor b` for `(2k, 2k+1)` is `1` for
+  every k and 1,140 unrelated type pairs share one bucket; **21% of all queried pairs have
+  `|src - tgt| <= 64`**, i.e. a hash under 128. **The diagonal is the degenerate limit**: `a xor a`
+  is 0, so an un-mixed identity relation would put every `(T, T)` query in bucket 0.
+
+- **(C) A DISTINCTION THE MODEL-ONLY APPROACH WOULD HAVE GOT WRONG IN BOTH DIRECTIONS.** Ranked by
+  total distinct keys, `relationComparisonStack` (51,447) looks like the family's worst offender and
+  `resolvedPropertyTypes` (10,482) like a rounding error. **The census's `maxLive` column inverts
+  that**: the stack is add/remove and never holds more than **27 entries at once**, so its table
+  never grows past 64 and it cannot treeify however bad its hash is — while `resolvedPropertyTypes`
+  is a grow-only cache and does. **A key population is not a map population**; a sweep that ranks by
+  the first mis-prices every transient container it touches.
+
+- **(D) FOUR SITES ARE ALREADY FINE AND SAYING SO IS PART OF CLOSING THE FAMILY.** `internKey` packs
+  a per-file SALT against an AST position — genuinely uncorrelated halves, max bucket 4.
+  `walkMemoKey`'s `* 31` folds of the walk kind and input digest already spread it, max bucket 6. The
+  three M0.3(iii) intern caches are `LongKeyMap`s, which apply this very finalizer INSIDE `bucket()`
+  — the fix has been sitting in the repo, correct, for the one map family that did not need help.
+  Both live sites now carry a one-line KDoc stating the measurement, so the next agent does not
+  re-derive it.
+
+- **(E) TWO SITES ARE REFUSED, ONE OF THEM ON A SOUNDNESS OBLIGATION.** `SpineDispatch.nodeKey` feeds
+  `[CENSUS]`-only sets that a production run never writes. And **`PassTiming.redundantPairNanos` is
+  the repo's one key that is UNPACKED** (`(k and 0xFFFF_FFFFL).toInt()`, PassTiming.kt:1005) — a
+  finalizer there would silently mis-attribute the probe's own table. That is round 889 § (F)'s first
+  obligation actually biting something, which is why it is checked per site rather than assumed.
+
+- **(F) THE SECOND OBLIGATION, RE-CHECKED.** All seven ROUTED containers are membership-or-lookup
+  only (`in`, `[]`, `getOrPut`, `add`/`remove`) and none has a `.keys`/`.values`/`.entries`/`forEach`
+  reader. **Four of them are plain `HashMap`/`HashSet`, not `mutableMapOf`** — so unlike round 889's
+  three LinkedHashMaps, had any been iterated this WOULD have been a rounds-754/776/778 program-order
+  change that no output diff can see. The check was the deciding one here, not a formality.
+
+- **(G) THE PINS, AND THE ONE THAT FAILED FIRST TIME FOR A GOOD REASON.** `IdPairKeyHashSpreadTest`,
+  four pins, every one comparing against the un-mixed packing written LONGHAND inside the pin (round
+  889's lesson). The neighbouring-ids pin failed on its first run because I wrote the adjacent pair as
+  `(2k+1, 2k+2)`, which does NOT XOR to 1 — `(2k, 2k+1)` does; the pin was asserting the pathology it
+  claimed to reproduce and the pathology was not there, which is exactly the failure mode a
+  longhand-comparison pin is supposed to expose, and it exposed it on the author.
+
+- **(G2) THE ABLATION, ONE MISTAKE, RED SET PREDICTED IN ADVANCE.** `packIdPair` loses its
+  `* NODE_KEY_MIX` and nothing else changes: **3 of the 4 new pins RED** (`neighbouring ids …`,
+  `the compiler profile's relation key shape …`, `the diagonal does not collapse …`) and **the 5
+  `nodeKey` pins GREEN**, which is the control that the mistake landed where it was aimed. The
+  fourth pin (`the packing stays injective …`) is green and was written saying it could not
+  discriminate — both packings are bijections — so it is an INVARIANT GUARD with no claim attached
+  (round 807), defending a future cheaper mix that loses injectivity. Restored tree: 9/9 green.
+
+- **(H) NO WALL-TIME NUMBER IS CLAIMED.** Round 889's JFR prices the `Relation.cache` group at 0.97%
+  of compile-thread samples with 56% inside `HashMap$TreeNode` frames, i.e. a recoverable ~0.5% ≈
+  ~30 ms of a ~5.9 s warm rebuild — well inside what this box settles (rounds 840(c)/858/886). The
+  claim is the bucket arithmetic on the REAL populations, which is deterministic and reproducible
+  offline. `cost_gate.py` +0.00% is the EXPECTED control (round 876), not a win.
+
+- **(I) WHAT THE PINS DO NOT GUARD, STATED PLAINLY.** They pin `packIdPair` itself. **A future site
+  that hand-rolls `(a shl 32) or b` again is invisible to every pin in this repo** — the only defence
+  is that `packIdPair` is now the sole id-pair packer in `Checker.kt` and its KDoc says so.
+
 PRICED AND REFUSED, NOT UNSTARTED — AND THE CENSUS FOUND THE HASH FAMILY'S REAL DEFECT ON THE WAY
 PAST: `nodeKey` HASHES TO `pos xor end`, i.e. TO **THE SET OF NODE LENGTHS**, SO `nodeToFlow` WAS
 NOT A HASH TABLE BUT A HANDFUL OF RED-BLACK TREES.**
