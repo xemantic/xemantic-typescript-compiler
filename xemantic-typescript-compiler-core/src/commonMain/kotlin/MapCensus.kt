@@ -643,6 +643,21 @@ object MapCensus {
     /** Stores performed into the parallel map — one per cacheable miss. */
     var tnkStores: Long = 0
 
+    /**
+     * (WARM.30) the REACHED control for amplifier arm C, and round 902's law made
+     * cheap: an arm can be DEAD rather than the pin blind, and nothing else here
+     * can tell the difference.
+     *
+     * `isPerFileDependentRefNode`'s FIRST line is
+     * `if (multiFileModuleTypeNames.isEmpty() || depth > 4) return false`. On a
+     * program with no type name declared in two module files that is a field
+     * read and a return, so arm C would be pricing an `isEmpty()` check while
+     * reading like a subtree walk — a number that is right for the profile and
+     * wrong for the mechanism. This counter is what separates the two, and it is
+     * recorded from the checker's own live set rather than re-derived.
+     */
+    var tnkMultiFileNames: Long = 0
+
     fun tnkProbe(node: Node, bucket: Int) {
         // Round 900's law: the guard cannot protect an ARGUMENT, so the caller
         // passes the NODE and every derivation happens below this line.
@@ -667,9 +682,10 @@ object MapCensus {
      * the two weightings can be taken from the SAME rebuild (round 861: a
      * sub-population and the row it is read against may not come from two draws).
      */
-    fun tnkSweepKeys(keys: Collection<Node>, parallelEntries: Int) {
+    fun tnkSweepKeys(keys: Collection<Node>, parallelEntries: Int, multiFileNames: Int) {
         if (!typeNodeKeyCensus) return
         tnkParallelEntries += parallelEntries.toLong()
+        tnkMultiFileNames += multiFileNames.toLong()
         for (k in keys) {
             tnkObjects++
             if ((k as NodeBase).nodeId < 0) tnkObjectUnindexed++
@@ -741,7 +757,7 @@ object MapCensus {
         tnkCalls = 0; tnkHits = 0; tnkMisses = 0; tnkBypassed = 0
         tnkUnindexed = 0; tnkSubtreeSum = 0; tnkMaxSubtree = 0
         tnkObjects = 0; tnkObjectSubtreeSum = 0; tnkObjectUnindexed = 0
-        tnkParallelEntries = 0; tnkStores = 0
+        tnkParallelEntries = 0; tnkStores = 0; tnkMultiFileNames = 0
         for (i in tnkProbeSizeHistogram.indices) tnkProbeSizeHistogram[i] = 0
         for (i in tnkObjectSizeHistogram.indices) tnkObjectSizeHistogram[i] = 0
         tnkAmpCalls = 0; tnkAmpMapNanos = 0; tnkAmpLongNanos = 0; tnkAmpRefNanos = 0
@@ -915,6 +931,11 @@ object MapCensus {
                     "unindexed=$tnkObjectUnindexed  parallel (file,nodeId) entries=$tnkParallelEntries " +
                     "stores=$tnkStores   buckets: ${tnkObjectSizeHistogram.joinToString(" ")}"
             )
+            appendLine(
+                "       REACHED control for amplifier arm C: multiFileModuleTypeNames=$tnkMultiFileNames " +
+                    "(ZERO means isPerFileDependentRefNode returns at its first line and arm C prices " +
+                    "an isEmpty() check, not a subtree walk — round 902)"
+            )
         }
         if (tnkAmpCalls > 0) {
             appendLine(
@@ -924,7 +945,10 @@ object MapCensus {
                     "C isPerFileDependentRefNode p(r)=${tnkAmpRefNanos / tnkAmpCalls} ns   " +
                     "A-B=${(tnkAmpMapNanos - tnkAmpLongNanos) / tnkAmpCalls} ns   " +
                     "sink A=$tnkAmpMapSink B=$tnkAmpLongSink C=$tnkAmpRefSink " +
-                    "(A and B must be EQUAL and every sink an exact multiple of r)"
+                    "(every sink an exact multiple of r; (A - B) / r = " +
+                    "${(tnkAmpMapSink - tnkAmpLongSink) / maxOf(typeNodeKeyAmp, 1)} probes the DEEP key " +
+                    "served from a structurally-equal but DISTINCT node — the whole semantic content " +
+                    "a (file, nodeId) re-key would lose)"
             )
             appendLine(
                 "       sink mod r: A=${tnkAmpMapSink % maxOf(typeNodeKeyAmp, 1)} " +

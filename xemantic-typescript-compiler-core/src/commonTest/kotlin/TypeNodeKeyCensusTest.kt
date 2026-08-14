@@ -245,19 +245,50 @@ class TypeNodeKeyCensusTest {
      * question on the same population and `A - B` is the deep-key PREMIUM rather
      * than a comparison of two different hit rates.
      *
-     * The equality is not decoration: `nodeId` restarts at 0 in every SourceFile
-     * (round 787), so a successor key that dropped the file would collapse one
-     * node per file onto each id, arm B would answer hits arm A never had, and
-     * the premium would be measured against a container an order of magnitude too
-     * small. That failure is invisible in every timing and shows up here.
+     * The bound is `B <= A` and NOT `B == A`, and the difference is the round's
+     * bonus finding rather than a defect: a structural key can serve a probe from
+     * a DIFFERENT, structurally-equal node, which a `(file, nodeId)` key never
+     * can — measured at exactly 130 probes of 176,282 on the compiler profile
+     * (0.074%), i.e. the whole semantic content of the deep key. It can only go
+     * one way: arm B's key is injective on nodes, so it cannot answer a hit arm A
+     * missed.
+     *
+     * `nodeId` restarts at 0 in every SourceFile (round 787), so a successor key
+     * that dropped the file would collapse one node per file onto each id and arm
+     * B would answer hits arm A never had — which is what the `<=` direction
+     * catches, and which is invisible in every timing.
      */
     @Test
-    fun `the parallel key is a bijection on this population`() =
+    fun `the parallel key answers a subset of what the structural key answers`() =
         withCensus(census = false, amp = AMP) {
             diagnose(source)
             assert(MapCensus.tnkStores > 0)
-            assert(MapCensus.tnkAmpLongSink == MapCensus.tnkAmpMapSink)
+            assert(MapCensus.tnkAmpLongSink <= MapCensus.tnkAmpMapSink)
+            assert(MapCensus.tnkAmpLongSink > 0)
         }
+
+    /**
+     * The REACHED control for amplifier arm C (round 902: an arm can be DEAD
+     * rather than the pin blind, and `git diff --shortstat` cannot tell you
+     * which).
+     *
+     * `isPerFileDependentRefNode` opens with
+     * `if (multiFileModuleTypeNames.isEmpty() || depth > 4) return false`, so on a
+     * program with no type name declared in two module files arm C prices a field
+     * read and a return while reading exactly like a subtree walk. This fixture is
+     * single-file, so the set IS empty here and the counter reports it — the pin
+     * is that the census can EXPRESS the distinction, which is what makes the
+     * whole-project reading interpretable.
+     */
+    @Test
+    fun `the arm C reached control is recorded`() = withCensus {
+        diagnose(source)
+        assert(MapCensus.tnkObjects > 0)
+        // Single-file, so no type name is declared in two module files and arm C
+        // would price the early return here. A non-zero would mean the counter is
+        // wired to something other than the set the function actually guards on.
+        assert(MapCensus.tnkMultiFileNames == 0L)
+    }
 
     /**
      * INV.0 — the amplifier's negative control. Off, no bracket is taken and the

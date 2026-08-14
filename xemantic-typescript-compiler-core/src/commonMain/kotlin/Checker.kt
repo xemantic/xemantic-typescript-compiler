@@ -6276,7 +6276,9 @@ class Checker(
         // numbers, which round 861's law requires (a sub-population and the row it
         // is read against may not be a cross-draw quotient).
         if (MapCensus.typeNodeKeyCensus) {
-            MapCensus.tnkSweepKeys(state.nodeTypes.keys, tnkParallelTypes.entryCount)
+            MapCensus.tnkSweepKeys(
+                state.nodeTypes.keys, tnkParallelTypes.entryCount, multiFileModuleTypeNames.size,
+            )
         }
         PassTiming.noteInitEnd()
         } catch (e: StackOverflowError) {
