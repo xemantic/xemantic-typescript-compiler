@@ -1,5 +1,260 @@
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
 
+**Round 893 (2026-08-12) — THE CUMULATIVE WARM A/B OF ROUNDS 887-892: **-8.18% MEDIAN PAIRED, B FASTER
+IN 12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS** — THE ARC'S FIRST DEMONSTRATED WARM SPEED-UP,
+AND IT EXCEEDS THE SUM OF THE SIX ROUNDS' OWN PRICES. THE GC EXPLANATION IS REFUTED; THE LEAF PROFILE
+SHOWS RED-BLACK BUCKET PROBING AT **EXACTLY ZERO**, DOWN FROM 5.91% OF WARM WALL.**
+
+Six consecutive rounds landed counted removed work and every one of them declined to claim a wall
+number — correctly, each being ~0.5-1% against a box that settles at ~1% (rounds 840(c)/858/886 each
+recorded a disagreeing second batch at that size). The arc's actual wall effect was therefore
+UNMEASURED. This round measured it. **No production code changed.** `docs/perf/warm-leaf-profile.md`
+§ 32.
+
+- **(A) THE PROTOCOL, WHICH IS THE ROUND.** Two BUILDS — `6a4e3612` (parent of 887) and `abf184ee`
+  (HEAD) — snapshotted to two class dirs, **one JVM per SAMPLE** (round 867: two arms that share a
+  compiled method are not independent arms), `WARMUP=6` / `ITERS=8` (the 2026-08-10 calibration: two
+  identical arms sit 3.3% apart at warm-up 2 and 0.8% at 6), sample = that process's median.
+  **Two batches of six pairs with OPPOSITE leading arms**, so each arm leads exactly 6 of the 12
+  pairs — round 891's 4x disagreement came from a rotation that left the leading draw's ~15% on one
+  arm. Box quiesced (`--stop` + bracket-pattern kotlin-daemon kill BEFORE measuring, round 851;
+  14.4 GB free), and **the box was left alone for the whole 50 minutes** (round 774: watching a
+  benchmark is part of the benchmark).
+
+- **(B) THE RESULT.**
+
+  | | A = `6a4e3612` | B = `abf184ee` |
+  |---|---:|---:|
+  | n (process medians) | 12 | 12 |
+  | median | 5,859 ms | **5,424 ms** |
+  | mean | 5,882 ms | 5,418 ms |
+  | sd | 130 ms (**2.21%**) | 186 ms (**3.44%**) |
+
+  **B wins 12/12. Median paired delta -8.18% (-479 ms); mean -7.87%; per-pair range
+  [-12.03%, -2.81%], never crossing zero. Batch 1 6/6, median -7.32%; batch 2 6/6, median -9.51%.**
+  Median-of-medians -7.42%.
+
+- **(C) THE SD IS ABOVE THE QUIET-BOX THRESHOLD AND THIS SAYS SO EXPLICITLY.** `ab-warm.sh`'s rule is
+  that a warm run whose per-arm sd exceeds ~1% was not measured on a quiet box and its verdict should
+  be discarded. Both arms exceed it (2.21% / 3.44%). CLAUDE.md permits an explicit override when the
+  effect is many times the sd; **here it is ~2.4x the larger sd, which is NOT the "tens of times"
+  case, so the override is not what carries this.** What carries it is the SIGN: 12/12 is 1-in-4,096
+  under the null, the per-pair range lies wholly below zero, and the two batches are independently
+  6/6 with the rotation reversed — round 840(c)'s replication requirement, met. **-8.18% is not a
+  point estimate to quote as a precise figure**; the defensible claim is "a real speed-up of roughly
+  5-10%".
+
+- **(D) THE CONTROLS THAT MAKE THIS A COMPILER MEASUREMENT.** Both arms emit **46 errors** over 78
+  files on every one of the 192 measured rebuilds (BenchMain aborts the run on any files/errors
+  drift), the compiler-profile `--listAll` digest is `59d930db849399aea5e03e25fedb8e4e` for BOTH —
+  the cross-round recipe, `grep 'error TS' | sort` — with a **zero-line diff** and no
+  `... and N more error(s)` truncation in either capture (round 811). The binaries are structurally
+  distinct: **694 vs 688 classes**, with `MapScopeStack`/`SetScopeStack` (892) and `SpineMask` (888)
+  present only in B, asserted as positive controls by the driver before it ran a sample (round 853 —
+  a gate reading a class dir needs proof the code under test is in it). **Same answers, different
+  code.**
+
+- **(E) THE EXCESS: -8.18% AGAINST ~3-5% OF SUMMED PER-ROUND PRICES.** Three candidate explanations
+  were on the table; the round tested one, the leaf profile answered a second, and the third is open.
+
+- **(F) GC IS REFUTED, AND ON BUDGET RATHER THAN SIGN.** One process per arm with `-Xlog:gc`, same
+  6+8 shape: **A 68 pauses / 1,375 ms total / 65.4 ms max; B 86 pauses / 1,287 ms / 43.4 ms.**
+  B does MORE GC cycles for slightly less pause, and the whole budget is **~92-98 ms per rebuild =
+  ~1.7%** in both arms — an order of magnitude below the effect, so **eliminating GC entirely could
+  not produce 8%**, whichever way the arms fell. The 6.3 ms/rebuild that separates them is 0.1 of the
+  8 percentage points. Stated as a MEASURED NEGATIVE. (n=1 per arm with logging on, so the -4.4%
+  those two processes show is not a verdict; the budget is what n=1 establishes, and it is enough.)
+
+- **(G) THE LEAF PROFILE, RE-TAKEN A FIFTH TIME ON ROUND 888's EXACT RECIPE, FINDS THE MECHANISM.**
+  Two processes, `stackdepth=1024`, `delay=60s,duration=90s`, `jfr print --stack-depth 512`, filtered
+  to `xtsc-deep-stack`, stdlib charged to the nearest non-stdlib OWNER; 7,942 + 8,113 samples, max
+  depth 212/174. Denominators are each round's own `medianMs` (888: **5,905 ms**; 893: **5,461 ms**),
+  because a JFR share is a share of WALL TIME and the rebuild just got 7.5% shorter (round 870).
+
+  | leaf-class family | ms888 | ms893 | Δ |
+  |---|---:|---:|---:|
+  | own code | 3,650.0 | 3,487.7 | -162.3 |
+  | **HashMap / HashSet** | **1,560.7** | **1,300.5** | **-260.2** |
+  | String / StringBuilder | 259.8 | 222.5 | -37.3 |
+  | ArrayList / ArrayDeque | 262.6 | 273.8 | +11.2 |
+
+  and split out of that family: **`HashMap$TreeNode` as a leaf was 5.91% = 348.8 ms/rebuild at round
+  888 and is 0.00% — ZERO samples in 16,055 — at round 893.** Rounds 889/890 did not make map lookups
+  a bit cheaper; **they removed an entire mechanism.** Reading the two rows together: of the 348.8 ms
+  of red-black probing, ~89 ms returned as ordinary linear bucket probing and **~260 ms is gone**.
+  **Round 890 priced its own change at ~0.5%** — under-read ~9x, because an amplifier counts map
+  OPERATIONS while the cost of a treeified bucket is superlinear in its depth (890 measured max
+  bucket 1,140 -> 6 for `Relation.packKey`).
+
+- **(H) OWNER FAMILIES (round 874's unit), ms/rebuild.** `cta*` handlers **216.0 -> 84.3 (-131.7)** =
+  rounds 891/892 landing exactly where they were built (they priced themselves at ~83 ms, so ~1.6x
+  under-read); `flow-graph build` **207.2 -> 134.0 (-73.2)** and `module/import resolution`
+  **192.3 -> 133.9 (-58.4)** = round 889's `nodeKey` finalizer (`nodeToFlow` is a `FlowGraphBuilder`
+  table); `spine walk core` -15.9; `name resolution` -11.9; residue -131.5. **At the OWNER level the
+  biggest movers are `ctaSpineEnter` -54.6, `FlowGraphBuilder.recordFlow` -51.3, `cpaSpineLeave`
+  -10.8, `spineEnterNode` -9.0** — no row is more than ~1% of the rebuild, which is round 874's law
+  holding for the fifth take running: **the ROW is the wrong unit and the FAMILY is the right one.**
+
+- **(I) TWO CAVEATS ON THE TABLE THAT MUST TRAVEL WITH IT.** The profile spans **889-892** (round
+  888's dump already contains 887+888) while the A/B spans **887-892**; and it is a CROSS-ROUND
+  ABSOLUTE comparison, which CLAUDE.md prices at up to 12.8% of drift on identical code. So the table
+  RANKS mechanisms and only the paired A/B MEASURES the arc. Also unchanged: **a JFR leaf share is
+  not a wall-clock price** (round 623 eliminated a 5.3% leaf for -0.3%) — what lifts this one above
+  "candidate" is that an independent paired A/B on the same code in the same session measured -8.18%.
+
+- **(J) WHAT IS STILL UNEXPLAINED.** GC refuted; superlinear red-black probing directly supported and
+  probably most of it; **non-additivity under a shifting denominator (round 870) remains open and is
+  not separately testable from here.** The two under-readings the profile exposes (hash ~9x, `cta*`
+  ~1.6x) roughly close the gap arithmetically, but that is a coincidence unless each is priced
+  independently. **The honest state: the excess is largely ATTRIBUTED, not yet EXPLAINED.**
+
+- **(K) GATES.** No production code changed — no suite run, no `cost_gate.py`, no `huge_methods.py`
+  were required or run. The only source edits are two ROUNDS-dict lines in
+  `scripts/round888_compare.py` / `scripts/round888_families.py` (adding the 893 dumps) plus docs.
+  The repo's `build/classes` was restored from the HEAD snapshot after arm A's build, verified at 694
+  classes.
+
+**Round 892 (2026-08-11) — (WARM.18b): THE FAMILY ROUND 891 REFUSED IS **CONVERTED** — `CtaFrame`'s
+localTypes+declNodes+shadowed AND THE NARROWING FRAME'S `EpochMap`, **1,214,236 ENTRIES COPIED PER
+REBUILD -> 28,695 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND ALL THREE REFUSAL REASONS
+DISSOLVED UNDER THE INSTRUMENT ROUND 891 QUEUED BUT DID NOT BUILD.**
+
+Round 891 refused this family for three named reasons and queued **(WARM.18b)** with its instrument
+named: *"a counting facade over `CtaFrame.localTypes`, run for one census, BEFORE any code."* This
+round built exactly that, first, and read it before writing a line of the fix.
+`docs/perf/cta-frame-copy-families.md` §§ 6-10.
+
+- **(A) THE INSTRUMENT, AND WHY IT HAD TO BE A FACADE.** A THROWAWAY counting facade over every write
+  path of all three components (round 890's shape: census, read, **revert**). It is the only way in —
+  the maps are reached by REFERENCE through the ambient fields (`currentLocalTypes` &c), so a hook
+  anywhere else is round 891's own 2-of-3-paths hook again, which read 6.3x optimistic with nothing
+  saying so.
+
+  | write path | count |
+  |---|---:|
+  | `localTypes.put` @ fn-frame | 24,572 |
+  | `localTypes.remove` @ fn-frame | 81 |
+  | `localTypes.put` @ narrowing frame | 1,942 |
+  | `declNodes.put` / `.remove` @ fn-frame | 1,582 / 352 |
+  | `shadowed.add` @ fn-frame | 166 |
+  | **writes needing an undo record** | **28,695** |
+  | writes at the file root (no scope open — free) | 567 |
+  | `putAll`/`addAll` anywhere but the seed, and `clear()` | **0 / 0** |
+
+  **28,695 against 1,089,527 entries copied = 2.6%**, the same order as `varTypes`' 1.4%. Adding the
+  narrowing frames' 124,709 entries the population at stake is **1,214,236**.
+
+- **(B) THE THREE REFUSALS, ANSWERED — AND TWO OF THEM WERE ARTEFACTS OF NOT HAVING MEASURED.**
+  (i) the ratio is 2.6%, not an un-instrumented zero. (ii) **`ambiguousNames` RESETS rather than
+  shadows — true, and irrelevant: it is not in the family.** A fn frame gives it a FRESH EMPTY set,
+  which is O(1); it was never COPIED, so there is nothing to replace and no mechanism to find. The
+  refusal treated a sibling FIELD as a sibling COST. (iii) the narrowing frame's
+  `EpochMap(top.localTypes)` — **the one real reason, and its answer is to convert it too, onto the
+  same stack.** Not optional: a function declared inside a then-branch takes its base from
+  `ctaFrames.last()`, so a copy there and a live map at the fn frame is exactly the
+  two-disciplines-over-one-ambient-field hazard round 891 named — a nested body would inherit the
+  PRE-narrow map. It is also worth another 124,709 entries.
+
+- **(C) THE CONDITION TABLE, RE-AUDITED OVER ALL 423 REFERENCES** (374 `currentLocalTypes`, 12
+  `currentLocalDeclTypeNodes`, 37 `currentShadowedNames`). Strictly LIFO on `ctaFrames` with a
+  per-file `reset`; **no `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted`/
+  `.toMutableMap` reader and no `for (x in map)` anywhere** (the one whole-collection read is
+  `name in currentShadowedNames`, i.e. `contains`); **0 `clear()` calls, measured**; 433 removals,
+  all recordable. **The retention question is the one round 891 could not settle and it resolves
+  cleanly:** the 56 `= currentLocalTypes` sites are 37 local `val saved…` POINTER SWAPS (the object
+  identity is stable, so the restore puts the same object back) plus exactly two FIELD retentions —
+  `spineCaRestingLocalTypes` and `spineArithBase` — both taken at SPINE ENTRY, i.e. the PRE-SPINE
+  resting map, which is never a cta frame's. And the ≥12 ad-hoc `EpochMap(currentLocalTypes)`
+  installs that round 891 read as disqualifying are harmless *because* each is a genuine DETACHED
+  snapshot that is written into and then discarded by a pointer-swap restore — a copy that never
+  merges back cannot observe the difference between a copy chain and a live map.
+
+- **(D) WHAT LANDED.** `MapScopeStack<V>` + `SetScopeStack` (`ScopeStack.kt`). **Round 891's
+  `VarScopeStack` is RETIRED ONTO the generic class rather than copied beside it** — the
+  reverse-replay mechanism now exists once, not twice. The set twin needs two things the map does
+  not: one BIT per touched element (`had` = present-before) instead of a value, so the restore is a
+  different statement; and `addAll` recording per ELEMENT. **Two flags on `CtaFrame`, because the two
+  scope-opening shapes are not the same shape:** `localScoped` (fn-body AND narrowing frames -> pop
+  the localTypes stack) and `ctaFnScoped` (fn-body only -> also pop declNodes and shadowedNames,
+  which the narrowing frame SHARES with its parent). The three `putAll(base.*)` seeds are simply
+  GONE: `base` is `ctaFrames.last()` at all eight call sites and every frame now holds the live view,
+  so the scope just opened already holds what the copy would have been seeded with.
+
+- **(E) ONE DELIBERATE, STATED DIVERGENCE.** The `onMutate` hook reproduces the expression-memo epoch
+  bump the replaced `EpochMap` performed, and it is a SUPERSET — the fn-body maps were plain
+  `HashMap`s and did not bump, so ~25,000 writes now bump that did not. That is the SAFE direction
+  for a probe-only fence (round 660): an extra bump can only make the shadow memo MISS, where a
+  missing one could make it serve a stale entry.
+
+- **(F) THE CONTROLLED ROW (round 793 — the change moves no boundary and no population).**
+
+  | | before | after |
+  |---|---:|---:|
+  | `CtaFrame` local pushes | 9,525 | **11,016** (+1,491 = the narrowing frames, MOVED here) |
+  | entries copied by it | **1,089,527** | **0** |
+  | undo records | 0 | **28,695** |
+  | `EpochMap` pushes / entries / writes | 28,828 / 471,726 / 44,320 | 27,337 / 347,017 / 42,378 |
+  | entries copied, ALL SIX families | 1,600,775 | **386,539** |
+
+  **42.3x less work over an identical population.** The three `EpochMap` deltas are exact
+  (−1,491 / −124,709 / −1,942 = the narrowing frames, their entries and their writes), which is the
+  falsifier that they MOVED rather than vanished. **And the headline is an INDEPENDENT cross-check:
+  the undo log records 28,695 — the throwaway census's write count to the unit — measured by a
+  different instrument, on a different binary.**
+
+- **(G) PINS AND ABLATION.** `ScopeStackTest` (round 891's 13, re-pointed at the generic class, plus
+  12 new: the set twin's shadow/restore/`addAll`/root/reset/no-op/`clear`, the map at a NON-`String`
+  value type, the `onMutate` contract and the map's `clear`) and a new `CtaLocalScopePinTest` whose 4
+  pins go THROUGH A COMPILE and assert BOTH directions of one shadowing — the inner binding wins
+  inside the body (a TS2322 that must be PRESENT, which is what stops the others passing vacuously)
+  and the outer binding is back after it (a TS2322 that must be ABSENT, reachable only if the pop
+  restored). **THE ABLATION — 12 arms, one mistake each, on a committed tree, two source
+  files (mechanism in `ScopeStack.kt`, wiring in `Checker.kt`):**
+
+  | arm | the mistake | red |
+  |---|---|---:|
+  | A1 | map `pop` replays FORWARD | 2 |
+  | A2 | map `pop` restores nothing | 13 |
+  | A3 | a write records ABSENT | 9 |
+  | A4 | set `pop` restores nothing | 4 |
+  | A5 | the set records "was PRESENT" unconditionally | 2 |
+  | A6 | `push` records mark 0 | 8 |
+  | A7 | a file-root write IS recorded | 2 |
+  | A8 | `reset` keeps the entries | 2 |
+  | A9 | the NARROWING frame shares instead of scoping | **1** (was **0**) |
+  | A10 | the fn pop drops the declNodes/shadowed pops | **0** |
+  | A11 | `reset` skips the localTypes stack | **0** |
+  | A12 | the fn-body frame opens NO localTypes scope | 3 |
+
+  **Every non-zero red set is DISTINCT** (A3/A6 and A7/A8 each differ by exactly one pin); **five arms
+  have a uniquely-their-own failing pin** (A2, A4, A7, A8, A9) and the other five are discriminated
+  by their SET only, which is stated rather than dressed up. **THE ABLATION'S REAL PRODUCT IS THAT IT
+  FOUND A MISSING PIN, WHICH IS THE STRONGEST EVIDENCE IT WAS WORTH RUNNING: A9 — the arm for the
+  invariant that DECIDED THE ROUND — reddened NOTHING**, because no fixture contained an `if`; round
+  813's law is that such a green is as often BLIND as it is redundant, and here it was blind. **The
+  first replacement pin then FAILED ON HEAD** — this compiler emits nothing at all for
+  `const s: string = <string | undefined>`, so a nullish pin would have been vacuous in BOTH
+  directions. The shape that works (`typeof x === "string"` over `string | number`) was verified
+  against an un-narrowed control in the scratch-project CLI loop BEFORE either assertion was written,
+  and that control shipped as a pin. **A10 and A11 still redden nothing and the reason is structural,
+  not a redundant guard**: A10's consumers are AST-shape/shadow-detection rules no fixture drives
+  across a fn boundary, and A11 is a CROSS-FILE leak, which `diagnose()` — single-file — cannot
+  express at all. **12 of the 32 pins are reddened by no arm** and are recorded as INVARIANT GUARDS
+  with no coverage claim (the READ-path pins, the guarded no-ops, both `clear()` refusals, the
+  `toMutableMap` detachment, the `onMutate` contract, and the four SET-side root/reset/no-op/clear
+  pins, for which no arm was cut because A7/A8 both aimed at the map stack).
+
+- **(H) GATES.** Suite **14,308 -> 14,324 / 0 failures / 3 skipped** = exactly the 16 new pins.
+  Compiler-profile `--listAll` digest **`59d930db849399aea5e03e25fedb8e4e`** over 46 errors — the
+  cross-round recipe CLAUDE.md records, i.e. equivalence against a capture predating this arc.
+  `cost_gate.py` **+0.00% on all 20 counters** (the EXPECTED control, round 876 — this moves no
+  decision). `huge_methods.py --fail-over 0` **0 over the limit, 694 classes**. **NO WALL-TIME A/B IS
+  CLAIMED** — round 891's amplifier priced this family at 43-55 ms from a single unreplicated batch
+  and the narrowing entries add ~4-6 ms at the measured 30-51 ns/entry, so ~0.8-1.1%, inside what
+  this box settles (rounds 840(c)/858/886). The claim is the controlled row plus the cross-checked
+  census.
+
+
 **Round 891 (2026-08-11) — (WARM.18): THE `CtaFrame.varTypes` PER-SCOPE COPY BECOMES AN UNDO LOG —
 **1,145,523 ENTRIES COPIED PER REBUILD -> 16,182 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND THE
 OTHER THREE FAMILIES ARE **REFUSED WITH A PRICED CONDITION TABLE**, INCLUDING THE ONE THAT IS THE
@@ -38893,4 +39148,3 @@ round 864's. Nothing in the flow graph was changed; the census instrument landed
   the arms agree by being one build twice. Round-851 order throughout; the harness was committed
   before the ablation (round 789) and the tree is clean after it. Commits `6832bf20`, `01eb02d4`,
   `80ab6723`, `e3241623`.
-
