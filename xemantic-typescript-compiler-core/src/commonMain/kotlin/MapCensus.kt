@@ -664,7 +664,19 @@ object MapCensus {
     private var ascProbeMark = 0L
 
     /** Every real probe any of the three families performs, for the partition check. */
-    private fun lexRealProbes(): Long = lexSymProbe + lexExProbe + lexTypeSymProbe + lexTpProbe
+    fun lexRealProbes(): Long = lexSymProbe + lexExProbe + lexTypeSymProbe + lexTpProbe
+
+    /** NameScopes that ever opened an ascent — the memo's key space, one axis of it. */
+    fun lexAscentScopes(): Int = lexAscentIds
+
+    /**
+     * Closes the last open ascent. [report] calls it; a pin must call it too,
+     * because close-on-next-entry leaves exactly one ascent unclosed and its
+     * probes uncounted, which would break the partition by construction.
+     */
+    fun lexAscentFinish() {
+        closeAscent()
+    }
 
     fun nextAscentScopeId(): Int = ++lexAscentIds
 
