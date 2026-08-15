@@ -531,6 +531,186 @@ object MapCensus {
         }
     }
 
+    // ---- (WARM.34) the ASCENT census ---------------------------------------
+
+    /**
+     * (WARM.34) round 907 — the COUNT question rounds 901/902 left open.
+     *
+     * Both CONTAINER levers are measured and refused: a 64-bit proof-of-absence
+     * filter at +0.26% (below floor) and the parallel-array successor at
+     * **−0.19%, a regression**. Round 902 § 4 named the one that was left:
+     *
+     * > the 737,591 real probes arise from an O(depth) ascent that **revisits the
+     * > same big outer levels on every walk** — 35.5% of probes land on levels
+     * > averaging 815 symbols. The lever is memoizing the ASCENT, not the probe.
+     *
+     * The rate is not in question: two independent instruments put a first probe
+     * of a level at **36.6 ns** (round 901's JFR row) and **33-37 ns** (round
+     * 901's amplifier), and round 902 reproduced the second at 28.9 ns in a batch
+     * that ran 9% fast. So the whole decision is a POPULATION, and a population is
+     * a counter — which is deterministic, costs one build, and can resolve an
+     * effect far below the ±1.0% warm band (round 906's law).
+     *
+     * Two populations, because there are two memos one could build and they have
+     * very different prices:
+     *
+     *  * **the ASCENT memo** — one `(NameScope, name)`-keyed answer per family,
+     *    which replaces a whole O(depth) walk with ONE probe. Its prize is the
+     *    real probes performed by ascents whose `(scope, name, family)` key has
+     *    been asked before ([lexAscentProbesRepeat]); its cost is one memo probe
+     *    per repeat plus a miss and an insert per first sighting.
+     *  * **the per-LEVEL memo** — a `(LexicalScope, name)`-keyed answer, i.e. the
+     *    theoretical ceiling of caching the individual probe. It is priced here
+     *    only to be refused on its face: a memo probe keyed on a PAIR cannot be
+     *    cheaper than the single-`String` probe it replaces, so its prize is
+     *    negative however large [lexPairRepeat] is. The number is recorded because
+     *    "how redundant is the probe stream" is the question a next agent will ask
+     *    first, and the answer should not have to be re-derived.
+     *
+     * **Round 900's law is why the hooks take the OBJECT.** `lexAscentTop` is
+     * called from inside an `if (MapCensus.on)` guard and derives everything after
+     * it; nothing here is computed in an argument position.
+     *
+     * The bracketing is CLOSE-ON-NEXT-ENTRY, which is exact rather than merely
+     * convenient: the five ascent functions are the ONLY callers of the four real
+     * probe sites, they never nest (none of them re-enters the checker), and
+     * [report] closes the last one — so the per-ascent probe counts PARTITION the
+     * real-probe total exactly, and `LexAscentCensusTest` asserts that equality.
+     * That is round 796's law: print the sums as partition checks against the rows
+     * they re-attribute, and anything less than EXACT means the hooks miss a path.
+     */
+    const val AS_HAS = 0
+    const val AS_SHADOW = 1
+    const val AS_TYPE = 2
+    const val AS_TP = 3
+    const val AS_TPC = 4
+    const val AS_FAMILIES = 5
+
+    val lexAscentCalls = LongArray(AS_FAMILIES)
+
+    /** …of which the `(scope, name, family)` key had been asked before. */
+    val lexAscentRepeat = LongArray(AS_FAMILIES)
+
+    /** Real probes performed by FIRST-sighting ascents — the memo's misses. */
+    var lexAscentProbesFirst: Long = 0
+
+    /**
+     * Real probes performed by REPEAT ascents — the ascent memo's whole gross
+     * prize, at round 901's measured 33-37 ns each.
+     */
+    var lexAscentProbesRepeat: Long = 0
+
+    /** Real probes per ascent, 0..10 then 11+; the shape behind the mean. */
+    val lexAscentProbeHistogram = LongArray(12)
+
+    /** Real probes charged to each family's ascents — where the population lives. */
+    val lexAscentProbesByFamily = LongArray(AS_FAMILIES)
+
+    /** NameScope chain steps walked, i.e. the recursion's own depth. */
+    var lexAscentScopeSteps: Long = 0
+
+    /** Ascents that performed NO real probe at all — a memo cannot help them. */
+    var lexAscentNoProbe: Long = 0
+
+    /**
+     * Ascents that probed at least one real level and found the name in NONE of
+     * them — and the probes those ascents performed.
+     *
+     * This is the UPPER BOUND on the last shape the count question leaves: a
+     * per-FILE proof-of-absence filter over the union of every lexical level's
+     * names, tested ONCE per ascent instead of once per level (round 901's filter
+     * was per level and refused 481,170 probes for ~14 ms, below floor). A name
+     * absent from the whole file is absent from every level the ascent consults,
+     * so `{filter-refusable} ⊆ {no consulted level held the name}` — which makes
+     * this a bound the filter can only fall short of, never exceed. A refusal
+     * taken against an upper bound is a refusal with certainty (round 903).
+     *
+     * "Held the name" is the level's own presence test, NOT the function's
+     * verdict: `lexLevelHasType` can find a symbol and still answer false on its
+     * flags, and `typeParamConstraintOf` can find a type parameter with no
+     * constraint. A name filter over-approximates both, so presence is the
+     * predicate that bounds it.
+     */
+    var lexAscentNoHit: Long = 0
+    var lexAscentNoHitProbes: Long = 0
+
+    private var ascHit = false
+
+    /** One consulted level held [lexAscentTop]'s name — see [lexAscentNoHit]. */
+    fun lexAscentLevelHit() {
+        ascHit = true
+    }
+
+    /** Distinct `(LexicalScope, name)` pairs seen at a REAL `lexLevelHasName` probe. */
+    var lexPairDistinct: Long = 0
+
+    /** …and the real probes that repeated one. */
+    var lexPairRepeat: Long = 0
+
+    private val lexPairSeen = HashMap<LexicalScope, MutableSet<String>>()
+
+    /**
+     * Keyed by the scope's census id folded with the family, so the census never
+     * RETAINS a `NameScope` — those are created and discarded per walk point, and
+     * a set holding a million of them would change the run's memory behaviour.
+     */
+    private val lexAscentSeen = HashMap<Long, MutableSet<String>>()
+
+    private var lexAscentIds: Int = 0
+
+    private var ascOpen = false
+    private var ascFamily = 0
+    private var ascRepeat = false
+    private var ascProbeMark = 0L
+
+    /** Every real probe any of the three families performs, for the partition check. */
+    private fun lexRealProbes(): Long = lexSymProbe + lexExProbe + lexTypeSymProbe + lexTpProbe
+
+    fun nextAscentScopeId(): Int = ++lexAscentIds
+
+    /**
+     * Opens an ascent, closing the previous one. [scopeId] is the querying
+     * `NameScope`'s census id (assigned lazily by [nextAscentScopeId]).
+     */
+    fun lexAscentTop(family: Int, scopeId: Int, name: String) {
+        closeAscent()
+        lexAscentCalls[family]++
+        val key = scopeId.toLong() * AS_FAMILIES + family
+        ascRepeat = !lexAscentSeen.getOrPut(key) { HashSet() }.add(name)
+        if (ascRepeat) lexAscentRepeat[family]++
+        ascFamily = family
+        ascProbeMark = lexRealProbes()
+        ascHit = false
+        ascOpen = true
+    }
+
+    /** One NameScope chain step — the recursion the ascent memo would collapse. */
+    fun lexAscentStep() {
+        lexAscentScopeSteps++
+    }
+
+    private fun closeAscent() {
+        if (!ascOpen) return
+        ascOpen = false
+        val p = lexRealProbes() - ascProbeMark
+        if (ascRepeat) lexAscentProbesRepeat += p else lexAscentProbesFirst += p
+        lexAscentProbesByFamily[ascFamily] += p
+        if (p == 0L) lexAscentNoProbe++
+        if (p > 0L && !ascHit) { lexAscentNoHit++; lexAscentNoHitProbes += p }
+        lexAscentProbeHistogram[if (p >= 11L) 11 else p.toInt()]++
+    }
+
+    /**
+     * Records one `(level, name)` pair at a REAL `lexLevelHasName` probe. Identity
+     * keyed on the scope, which is sound because [LexicalScope] is a plain class
+     * and not a `data class` (round 471 / round 865), and program-wide safe
+     * because a scope object belongs to exactly one file — unlike a `nodeId`,
+     * which restarts at 0 in every file (round 787).
+     */
+    fun lexPair(l: LexicalScope, name: String) {
+        if (lexPairSeen.getOrPut(l) { HashSet() }.add(name)) lexPairDistinct++ else lexPairRepeat++
+    }
+
     // ---- (WARM.30) nodeTypes' deep AST-VALUE key ---------------------------
 
     /**
@@ -900,6 +1080,16 @@ object MapCensus {
         for (i in lexProbeSizeHistogram.indices) lexProbeSizeHistogram[i] = 0
         lexScopesBound = 0; lexScopeBoundKeys = 0
         for (i in lexBoundHistogram.indices) lexBoundHistogram[i] = 0
+        for (i in 0 until AS_FAMILIES) {
+            lexAscentCalls[i] = 0; lexAscentRepeat[i] = 0; lexAscentProbesByFamily[i] = 0
+        }
+        for (i in lexAscentProbeHistogram.indices) lexAscentProbeHistogram[i] = 0
+        lexAscentProbesFirst = 0; lexAscentProbesRepeat = 0
+        lexAscentScopeSteps = 0; lexAscentNoProbe = 0
+        lexAscentSeen.clear(); lexAscentIds = 0
+        lexAscentNoHit = 0; lexAscentNoHitProbes = 0
+        ascOpen = false; ascFamily = 0; ascRepeat = false; ascProbeMark = 0; ascHit = false
+        lexPairSeen.clear(); lexPairDistinct = 0; lexPairRepeat = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
         tnkCalls = 0; tnkHits = 0; tnkMisses = 0; tnkBypassed = 0
         tnkUnindexed = 0; tnkSubtreeSum = 0; tnkMaxSubtree = 0
@@ -1033,6 +1223,40 @@ object MapCensus {
         appendLine(
             "       bound scopes by own-symbol count 0..8 then 9+: " +
                 lexBoundHistogram.joinToString(" ")
+        )
+        closeAscent()
+        val ascCalls = lexAscentCalls.sum()
+        val ascRepeats = lexAscentRepeat.sum()
+        appendLine(
+            "  (WARM.34) ASCENTS: calls=$ascCalls (has=${lexAscentCalls[AS_HAS]} " +
+                "shadow=${lexAscentCalls[AS_SHADOW]} type=${lexAscentCalls[AS_TYPE]} " +
+                "tp=${lexAscentCalls[AS_TP]} tpConstraint=${lexAscentCalls[AS_TPC]})  " +
+                "NameScope steps=$lexAscentScopeSteps  no-probe ascents=$lexAscentNoProbe"
+        )
+        appendLine(
+            "       REPEAT (scope,name,family) asked before = $ascRepeats " +
+                "(has=${lexAscentRepeat[AS_HAS]} shadow=${lexAscentRepeat[AS_SHADOW]} " +
+                "type=${lexAscentRepeat[AS_TYPE]} tp=${lexAscentRepeat[AS_TP]} " +
+                "tpConstraint=${lexAscentRepeat[AS_TPC]})"
+        )
+        appendLine(
+            "       real probes: FIRST=$lexAscentProbesFirst REPEAT=$lexAscentProbesRepeat " +
+                "sum=${lexAscentProbesFirst + lexAscentProbesRepeat} " +
+                "(must equal all real probes ${lexRealProbes()}) " +
+                "by family=${lexAscentProbesByFamily.joinToString(",")}"
+        )
+        appendLine(
+            "       real probes per ascent 0..10 then 11+: " +
+                lexAscentProbeHistogram.joinToString(" ")
+        )
+        appendLine(
+            "       ascents whose consulted levels held the name NOWHERE: " +
+                "$lexAscentNoHit carrying $lexAscentNoHitProbes real probes " +
+                "— the UPPER BOUND on a per-file proof-of-absence filter"
+        )
+        appendLine(
+            "       (level,name) pairs at a REAL lexLevelHasName probe: " +
+                "distinct=$lexPairDistinct repeat=$lexPairRepeat"
         )
         if (lexAmpCalls > 0) {
             appendLine(

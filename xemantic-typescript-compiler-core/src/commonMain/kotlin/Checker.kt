@@ -33932,7 +33932,37 @@ class Checker(
          */
         val lex: LexicalScope? = parent?.lex,
     ) {
+        /**
+         * (WARM.34) CENSUS-ONLY, and 0 on every production compile: a lazily
+         * assigned identity for this walk point. The ascent census keys its
+         * "has this `(scope, name, family)` been asked before" set on the id
+         * rather than on the object, so it never RETAINS a `NameScope` — those
+         * are created and discarded per walk point, and a set holding a million
+         * of them would change the run's own memory behaviour.
+         */
+        var censusId: Int = 0
+
+        private fun censusKey(): Int {
+            if (censusId == 0) censusId = MapCensus.nextAscentScopeId()
+            return censusId
+        }
+
+        /**
+         * The five ascent functions below are each split into a public entry and a
+         * `…From` recursion, so the census can tell a TOP-LEVEL resolution from the
+         * chain step that continues one. Without the split the two are the same
+         * call and the per-ascent probe counts cannot be bracketed at all; with it
+         * the bracketing is exact, because these are the only callers of the four
+         * real probe sites and none of them re-enters the checker. Off, an entry is
+         * a static read, a not-taken branch and a call C2 inlines.
+         */
         fun has(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentTop(MapCensus.AS_HAS, censusKey(), name)
+            return hasFrom(name)
+        }
+
+        private fun hasFrom(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentStep()
             if (name in names) return true
             if (hasArguments && name == "arguments") return true
             var l = lex
@@ -33943,7 +33973,7 @@ class Checker(
                 head = false
                 l = l.parent
             }
-            return parent?.has(name) == true
+            return parent?.hasFrom(name) == true
         }
 
         /**
@@ -33956,6 +33986,12 @@ class Checker(
          * file-statement-list child was a non-root scope carrying file-level decls).
          */
         fun hasLocalShadow(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentTop(MapCensus.AS_SHADOW, censusKey(), name)
+            return hasLocalShadowFrom(name)
+        }
+
+        private fun hasLocalShadowFrom(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentStep()
             if (parent != null && name in names) return true
             var l = lex
             val stop = parent?.lex
@@ -33965,11 +34001,17 @@ class Checker(
                 head = false
                 l = l.parent
             }
-            return parent?.hasLocalShadow(name) == true
+            return parent?.hasLocalShadowFrom(name) == true
         }
 
         /** Returns true if [name] is a type parameter in this scope or any ancestor scope. */
         fun isTypeParam(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentTop(MapCensus.AS_TP, censusKey(), name)
+            return isTypeParamFrom(name)
+        }
+
+        private fun isTypeParamFrom(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentStep()
             if (name in typeParamNames) return true
             var l = lex
             val stop = parent?.lex
@@ -33981,16 +34023,23 @@ class Checker(
                         if (l.symbols.isEmpty()) MapCensus.lexTpEmpty++ else MapCensus.lexTpProbe++
                     }
                     val sym = l.symbols[name]
+                    if (sym != null && MapCensus.on) MapCensus.lexAscentLevelHit()
                     if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) return true
                 }
                 head = false
                 l = l.parent
             }
-            return parent?.isTypeParam(name) == true
+            return parent?.isTypeParamFrom(name) == true
         }
 
         /** Returns true if [name] was added via [addType] or [addTypeParam] anywhere in the scope chain. */
         fun hasType(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentTop(MapCensus.AS_TYPE, censusKey(), name)
+            return hasTypeFrom(name)
+        }
+
+        private fun hasTypeFrom(name: String): Boolean {
+            if (MapCensus.on) MapCensus.lexAscentStep()
             if (name in typeNames || name in typeParamNames) return true
             var l = lex
             val stop = parent?.lex
@@ -34000,7 +34049,7 @@ class Checker(
                 head = false
                 l = l.parent
             }
-            return parent?.hasType(name) == true
+            return parent?.hasTypeFrom(name) == true
         }
 
         /** Add a type parameter name to both [names] and [typeParamNames]. */
@@ -34015,6 +34064,12 @@ class Checker(
          *  search (`typeParamConstraints[name] ?: parent?…` fell through to an outer
          *  same-named constrained TP). */
         fun typeParamConstraintOf(name: String): TypeNode? {
+            if (MapCensus.on) MapCensus.lexAscentTop(MapCensus.AS_TPC, censusKey(), name)
+            return typeParamConstraintOfFrom(name)
+        }
+
+        private fun typeParamConstraintOfFrom(name: String): TypeNode? {
+            if (MapCensus.on) MapCensus.lexAscentStep()
             typeParamConstraints[name]?.let { return it }
             var l = lex
             val stop = parent?.lex
@@ -34026,6 +34081,7 @@ class Checker(
                         if (l.symbols.isEmpty()) MapCensus.lexTpEmpty++ else MapCensus.lexTpProbe++
                     }
                     val sym = l.symbols[name]
+                    if (sym != null && MapCensus.on) MapCensus.lexAscentLevelHit()
                     if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) {
                         val c = (sym.declarations.firstOrNull() as? TypeParameter)?.constraint
                         if (c != null) return c
@@ -34034,7 +34090,7 @@ class Checker(
                 head = false
                 l = l.parent
             }
-            return parent?.typeParamConstraintOf(name)
+            return parent?.typeParamConstraintOfFrom(name)
         }
 
         /** Add a type-eligible name (class/interface/type-alias/enum) — populates both [names] and [typeNames]. */
@@ -34105,10 +34161,13 @@ class Checker(
             MapCensus.lexScope(l)
             real = l.symbols.isNotEmpty()
             if (real) MapCensus.lexSymProbe++ else MapCensus.lexSymEmpty++
+            // (WARM.34) how redundant the probe STREAM is, independently of how
+            // redundant the ascent is: the ceiling of caching the individual probe.
+            if (real) MapCensus.lexPair(l, name)
             if (real && MapCensus.lexLevelAmp > 0) MapCensus.lexAmp(l, name)
         }
         if (l.symbols.containsKey(name)) {
-            if (MapCensus.on) MapCensus.lexSymHit++
+            if (MapCensus.on) { MapCensus.lexSymHit++; MapCensus.lexAscentLevelHit() }
             return true
         }
         val ex = l.existing ?: run {
@@ -34122,7 +34181,7 @@ class Checker(
         if (MapCensus.on) MapCensus.lexExProbe++
         val r = ex.containsKey(name)
         if (MapCensus.on) {
-            if (r) MapCensus.lexExHit++
+            if (r) { MapCensus.lexExHit++; MapCensus.lexAscentLevelHit() }
             else { MapCensus.lexAbsent++; if (real) MapCensus.lexAbsentReal++ }
         }
         return r
@@ -34142,6 +34201,9 @@ class Checker(
         val sym = l.symbols[name]
             ?: (if (owner is SourceFile && name in unresolvedLexRootExcluded) null else l.existing?.get(name))
             ?: return false
+        // (WARM.34) PRESENCE, not the verdict: a name filter over-approximates the
+        // flags test, so what bounds it is whether the level held the name at all.
+        if (MapCensus.on) MapCensus.lexAscentLevelHit()
         return sym.flags.hasAny(UNRESOLVED_TYPE_ELIGIBLE_FLAGS)
     }
 
