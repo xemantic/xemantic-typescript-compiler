@@ -166,6 +166,26 @@ internal val TIERS = listOf(
     // its boundary cost is microseconds against a ~900 ms region — round 738
     // stated that and it is regime-independent.
     "frontend",
+    // (SPINE.1) round 908 — round 733's `SpineSections`, which had NEVER been
+    // run warm: it is the only probe that partitions `cpaSpineLeave` and
+    // `ccetSpineLeave` THEMSELVES (anchor / owner / restores / vardecl / frame
+    // pop, plus the two frame-ambient installs and the three ancestor climbs as
+    // nested sub-measures), where `cpa` and `call` partition their PAYLOADS one
+    // frame down. That is exactly the (SPINE.1) thesis — "per-node bookkeeping
+    // that exists to reproduce the deleted walkers' ambient state" — and every
+    // number ever taken for it (rounds 733, 799) is a COLD one-shot `MainKt`
+    // run, where a probe boundary is 2.5-5x more expensive than warm (round
+    // 850) and the handlers' own passes were 29-40% larger.
+    //
+    // It has no `*coarse` twin and cannot get one cheaply: its sections are a
+    // running-timestamp SPLIT of two handlers rather than a nest of levels, so
+    // there is no anchor set to keep. Its boundary is therefore priced against
+    // the PROBE-FREE median instead — `overheadMs` divided by the boundary count
+    // the report itself prints — which is the same differential in its crudest
+    // form (the zero-boundary arm is the measured loop) and is what round 733
+    // used cold. Give it TWO draws per process: the probe's own code is cold on
+    // the first instrumented rebuild (round 846).
+    "spinesections",
     // (WARM.19) round 895 — the whole-source substring-scan family, ON and OFF.
     // These two tiers exist because the round's whole claim is a WARM one and its
     // census had only ever been taken COLD: `String.indexOf` warms ~3.8x here and
@@ -581,6 +601,8 @@ internal fun tierBegin(tier: String) {
         "argcoarse" -> { ArgSections.reset(); ArgSections.mode = ArgSections.COARSE }
         "call" -> { CallSections.reset(); CallSections.mode = CallSections.ON }
         "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
+        // (SPINE.1) round 908 — round 733's probe, warm for the first time.
+        "spinesections" -> { SpineSections.reset(); SpineSections.mode = SpineSections.ON }
         "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
         "srcscan" -> { SrcScan.reset(); SrcScan.on = true }
         "srcscanoff" -> { SrcScan.reset(); SrcScan.on = true; SrcScan.off = true }
@@ -711,6 +733,8 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
         ArgSections.report() + "\n== (CALL.2) csv ==\n" + ArgSections.csv() + "== (CALL.2) csv end =="
     "call", "callcoarse" ->
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
+    "spinesections" ->
+        SpineSections.report() + "\n== (SPINE.1) csv ==\n" + SpineSections.csv() + "== (SPINE.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
     "srcscan", "srcscanoff" -> SrcScan.report()
     "typenodekey", "boxedkey" -> MapCensus.report()
@@ -800,6 +824,7 @@ internal fun tierStop() {
     CpaSections.mode = CpaSections.OFF
     ArgSections.mode = ArgSections.OFF
     CallSections.mode = CallSections.OFF
+    SpineSections.mode = SpineSections.OFF
     LibTypeCensus.enabled = false
     // (WARM.19) — an `off` left set silently restores the pre-895 unfiltered
     // path for every LATER rebuild in this process, which reads as a regression
