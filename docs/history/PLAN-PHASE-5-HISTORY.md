@@ -1,5 +1,103 @@
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
 
+**Round 897 (2026-08-12) — (WARM.24): ROUND 894'S **TOP-RANKED** CANDIDATE, SCANNER IDENTIFIER
+INTERNING, IS **REFUSED** — MEASURED PRIZE **17.2 ms (0.31%)** AGAINST A **67.7 ms** CEILING, MEASURED
+COST **11.1 ms PER PARSE**, AND A BLOCKER THE CENSUS'S "RISK: LOW, A HANDFUL OF LINES" DID NOT SEE:
+THE SCANNER RUNS ON THE CRAWL'S **N CONCURRENT WORKERS**.**
+
+Everything below was priced BEFORE a line of fix (CLAUDE.md's first law), with one instrument —
+`NameCensus.kt`, a `namecensus<N>` `BenchMain` tier, `scripts/round897-census.sh`, four JVMs in two
+batches. `docs/perf/name-intern-price.md`.
+
+- **(A) THE REGIME FACT, WHICH DECIDES HOW EVERY COST HERE IS READ.** `CrawlParseCache` serves the
+  program's parse from the previous request, so **in the warm regime this arc measures the Scanner
+  does not run at all**. An intern probe is paid once per file VERSION; the map probes it makes
+  cheaper are paid every rebuild. That also **corrects the census**: its 24.8 ms/rebuild of
+  `String.hashCode` is read there as "one hash per fresh identifier instance", but with a cached
+  parse those instances persist and `String.hashCode` caches per instance — an identifier is hashed
+  ONCE PER PROCESS. Whatever those 24.8 ms hash, interning at the Scanner cannot touch it, so the
+  candidate's ceiling was **42.9, not 67.7 ms**, before any other deflation.
+
+- **(B) THE POPULATIONS.** ~527 k identifier-shaped tokens per program parse collapse onto **~22.4 k
+  distinct names — a 94.4% intern hit rate**, mean length 10.4 chars. On the resolution path,
+  **1,063,149 `moduleOnlyGlobalNames` probes of which 623,146 HIT (58.6%)**, plus 440,003 onward
+  `globals[name]` reads. The hit RATE is the quantity that matters and nobody would have guessed it:
+  `HashMap` calls `String.equals` only for an entry whose 32-bit hash matches, so a MISS never walks
+  characters and **only a hit can pay what interning removes**.
+
+- **(C) THE PRIZE, BY REPLAY (round 896(B)'s shape) — 17.2 ms/rebuild (0.31%)**, four processes
+  14.2 / 15.3 / 20.3 / 19.1. The captured probe sequence is replayed against the real member
+  population twice, once with the production instances and once with every string collapsed onto a
+  canonical one, ABBA per rep, falsified by ARITHMETIC (every arm's hit count an exact multiple of
+  the reps, and the two arms agreeing on all of them — interning's equivalence claim in miniature).
+
+- **(D) AND THE DECOMPOSITION IS THE ROUND'S BEST FINDING: INTERNING IS ONLY HALF `String.equals`.**
+  The MAP arm is the control that makes the set arm readable — `globals` holds 185 entries and the
+  replay hits it 10,383 times per rep, so an equals-driven delta there is at most 0.15 ms, yet the
+  measured delta is **4.9-6.7 ms**. **97% of it is not `equals` at all: it is the KEY-OBJECT WORKING
+  SET collapsing from ~400 k `String` instances to ~22.4 k.** Splitting the set arm the same way
+  gives **`equals` 9.1 ms + locality 8.1 ms**, and **14.6 ns per equal-but-distinct comparison** —
+  § 5a's mechanism measured directly for the first time. **The locality half is invisible to a
+  leaf-frame profile**, because it is not time in `String.equals`, it is time in whatever frame
+  dereferences the object; any census that ranks a candidate off leaf frames under-reads it.
+
+- **(E) THE COST, AND A DESIGN THE CENSUS DID NOT CONSIDER.** `scanIdentifier` ALREADY probes a
+  `String`-keyed map for every identifier-shaped token (`KEYWORDS[word]`), so one table holding the
+  ~160 reserved words *and* every interned name answers both questions in one lookup. Measured:
+  **52.4 ns/token as a separate table (27.6 ms/parse), 21.2 ns/token folded (11.1 ms/parse)**. The
+  fold halves it and cannot go much lower — 434 k intern hits per parse at 14.6 ns is 6.3 ms on its
+  own. **11.1 ms is not "clearly below" a 17.2 ms saving**, and cold — the CLI, the shipped GraalVM
+  image CI benches per push, an edited file in a daemon — the census's own preferred design is a
+  net LOSS.
+
+- **(F) THE BLOCKER, WHICH IS THE STRONGER GROUND, AND THIS ROUND'S OWN INSTRUMENT PROVED IT.** The
+  prize needs a PROGRAM-WIDE table (it comes from probe and stored key being one object;
+  `moduleOnlyGlobalNames`' 4,088 members are minted in whichever file declared them and probed from
+  all 78, so a per-FILE table captures ~none of it) — and `parseForCrawl` runs inside
+  `withContext(Dispatchers.Default)`. A program-wide `HashMap.getOrPut` from `scanIdentifier` is
+  **round 825's hazard verbatim**. The proof is the census's own numbers: its SCANNER counters
+  disagree by up to 4.7% across four processes on one binary while its CHECKER counters are
+  identical to the last digit in all four. The thread-safe designs are an `expect`/`actual`
+  concurrent map on the hottest loop in the front end, or canonicalising after the parse — which
+  means writing `Identifier.text` and breaking INV.2(a), the property `CrawlParseCache` and
+  `RealLibSnapshots` both rest on.
+
+- **(G) TWO MORE CORRECTIONS TO ROUND 894'S LIST, FROM THE SAME RUN.** **(2b) is refused**: at a
+  58.6% hit rate a "definitely absent" bitset pre-filter is worthless for a hit, its reachable
+  population is the 440,003 misses, and its prize is **~2-9 ms (0.04-0.16%)** against a ≤42.9 ms
+  ceiling. **(7) is CLOSED, not deferred**: round 896 refused it because its prerequisite was
+  unbuilt; that prerequisite now costs 11.1-27.6 ms per parse and is blocked, while (7)'s own
+  deletable part is 6.5 ms — it can never pay for what it needs. **Three of round 894's ceilings are
+  now measured at 4-10x their answer**, which is round 896's finding for the third time.
+
+- **(H) THE ABLATION TOOK THREE PASSES AND THE TWO IT FAILED ARE THE LESSON.** Six single mistakes,
+  one at a time, dry-run for a real diff, on a committed tree. Final: **5 of 6 discriminate, one pin
+  each**; **A2 (the `canon` insertion order) is a REDUNDANT guard** — canonicalisation is applied to
+  both sides, so whichever occurrence wins the slot the two sides agree — recorded rather than
+  claimed (round 809). Pass 1 read 4 of 6 green. **A1 (the interned arm probing the RAW container)
+  was a pin that did not exist**: swapping the container does not change the ANSWER, so every
+  hit-count pin stays green, correctly — only the container's IDENTITY can see it. **A1's first
+  repair was then blind because of the arms' own ABBA rotation** — a fault in the even branch is
+  overwritten by the odd one and the end state reads healthy, so the observable had to become
+  STICKY. *A rotation that protects a measurement can hide a fault in it.* **A5/A6 were blind
+  because the FIXTURE masked them**: both publish pins seeded the snapshots in between, and `seed`
+  installs them directly, so a last-wins or premature capture was overwritten before it could be
+  observed.
+
+- **(I) GATES.** Suite **14,358 / 0 failures / 3 skipped** (+8 from 14,350, exactly the eight
+  `NameCensusTest` pins). `cost_gate.py` **+0.00% on all 20 counters** — the expected CONTROL for a
+  round that lands no behaviour change (round 876), and here it also says the inert hooks are inert.
+  `huge_methods.py --fail-over 0`: **0 over the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT
+  `added=0 removed=0`** (46 diagnostics each, harness 94), cross-round against round 896's committed
+  captures with the identical recipe — run because the round adds a hook to a line every identifier
+  of every file crosses, and a gate whose expected answer is "nothing moved" is a control.
+  `scripts/round897-grid.sh`.
+
+- **(J) NO WALL A/B, AND THIS TIME BECAUSE THERE IS NOTHING TO A/B.** The round lands an instrument
+  and a refusal. What is claimed is deterministic populations (1,063,149 probes, 623,146 hits,
+  ~22.4 k distinct names) and paired nanos over identical populations inside one process.
+
+
 **Round 896 (2026-08-12) — (WARM.23): TWO OF ROUND 894'S FIVE MAP-KEY CANDIDATES TAKEN, THREE REFUSED
 WITH A COST — AND THE REFUSALS ARE THE FINDING: **TWO OF THE FIVE CEILINGS ARE AN ORDER OF MAGNITUDE
 ABOVE THE ANSWER**, WHICH THE POPULATION COUNT SETTLES IN ONE DIVISION.**

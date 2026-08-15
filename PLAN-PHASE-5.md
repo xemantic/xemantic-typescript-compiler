@@ -20,6 +20,85 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 908 (2026-08-15) — (SPINE.1): THE LAST CHECKER-SIDE ITEM IS **REFUSED AND CLOSED**. 40% OF THE
+WARM REBUILD LIVES IN SIX HANDLERS AND **91-100% OF IT IS THE TYPE SYSTEM DOING ITS JOB**. THE ONE ROW
+THAT LOOKED LIKE A LEVER — 79.8 ms OF FRAME-AMBIENT INSTALL — HAS A **~8 ms** DELETABLE POPULATION AND
+FAILS ITS OWN DIVISION BY **~20x**, BECAUSE **A TIMESTAMP IS AN OPTIMIZER BARRIER.**
+
+Instrument only, two `Checker.kt` lines behind a call-site mode test.
+
+- **(A) THE DENOMINATOR, RE-TAKEN — AND ROUND 847's TABLE WAS 60% STALE IN ms.** Eight probe-free warm
+  process medians: 4,794 / 4,981 / 5,206 / 5,058 / 5,003 / 4,877 / 5,203 / 5,276 → **mean 5,050 ms**,
+  range 9.6%. So 1% = 50.5 ms and the ~17 ms floor is **0.34%** here. All 22 instrumented rebuilds
+  answered 78 files / 46 errors.
+
+- **(B) THE FRESH WARM PER-HANDLER TABLE, AND ROUND 830's LAW DEMONSTRATED LIVE.** (Round 847's column
+  is **STALE** — against 8,095 ms — and is quoted only as a share.)
+
+  | handler | net ms today | % warm | *r847 ms (stale)* | *r847 %* |
+  |---|---:|---:|---:|---:|
+  | `spineCtaM3StatementAnchor` | **620** | **12.28%** | *853* | *10.54%* |
+  | `cpaSpineLeave` | **584** | **11.56%** | *617* | *7.62%* |
+  | `ccetSpineLeave` | **433** | **8.57%** | *876* | *10.82%* |
+  | `spineIanyEnterNode` | **147** | **2.91%** | *171* | *2.11%* |
+  | `ctaSpineEnter` | **129** | **2.55%** | *359* | *4.43%* |
+  | `spineArithEnterNode` | **113** | **2.24%** | *153* | *1.89%* |
+  | **the six** | **2,025** | **40.1%** | *3,029* | *37.4%* |
+
+  Same six, still 62.6% of the probed spine (847: 63.0%) — but **the order swapped again**:
+  `ccetSpineLeave` went #1 -> #3 (**−51% in ms**) while `cpaSpineLeave` **fell 5% in ms and ROSE
+  7.62% -> 11.56% in share**. That is round 830 exactly: *a rising share is evidence the denominator
+  shrank.* Partition check against the independent `spine` tier: 3,234 vs 3,104 = **104.2%**.
+
+- **(C) ROUND 733's DEFLATION WAS *MEASURED*, NOT APPLIED — AND `SpineSections` RAN WARM FOR THE FIRST
+  TIME** (rounds 733/799 read it cold; it was given a `BenchMain` tier this round).
+
+  | probe | object | net ms | checking | bookkeeping |
+  |---|---|---:|---:|---:|
+  | `cta` A | `spineCtaM3StatementAnchor` | 640 | **94%** | 37 ms |
+  | `cpa` P | `checkPropertyAccessInExpr` | 462 | **~100%** | <=0 |
+  | `call` | `checkSingleCallExpressionTypes` | 381 | **93%** | 28.5 ms |
+  | `spinesections` | both `…SpineLeave` handlers | 912 | **91.4%** | 80 ms |
+
+  Round 733's split re-derived warm: passes' own work **91.4%**, ambient install+restore **8.7%**,
+  outside-the-ambient **~0**, the three ancestor climbs **2.1% (19.6 ms)** — *the same 2.1% it read
+  cold*. **Every frame pop and every restore is at or below one probe boundary**, and five of the
+  eleven sections read NEGATIVE once their own boundary is subtracted.
+
+- **(D) NOTHING CLEARS THE FLOOR.** Largest is the three ancestor climbs at **19.6 ms (0.39%)** —
+  round 733's hypothesis #1, refused again (73/213/32 ns per call at depth 6/9, and a classifier is
+  consulted once per node, so a memo can never answer its own query — round 875's law). Then the `cta`
+  frame+ambient install at **16.0 ms**, load-bearing; and the `cta` eligibility gate at **14.4 ms**,
+  where **round 888's mask already took 87% of its population** (915,543 -> 120,026 consultations).
+
+- **(E) THE ROW THAT LOOKED LIKE A LEVER, AND THE NEW LAW THAT KILLED IT.** The two frame-ambient
+  installs measure **79.8 ms = 1.58%** — the round-869 per-scope-copy shape, and the only thing in the
+  region above 1%. A census (deterministic, identical in all four draws) says the "O(frames) rebuild"
+  walks **2.91 frames** (max 8), **produces nothing on 91.4% of installs**, and the save copies **ZERO
+  entries on 100%** of 147,572 installs: deletable population ≈ **8 ms**, half the floor. And the row
+  fails round 896's divide-by-population test by **~20x** — 676 ns for ~16 `putfield`s and an empty
+  copy — because **A TIMESTAMP IS AN OPTIMIZER BARRIER: bracketing a run of field save/restores forces
+  stores that production coalesces away.** Every section probe over a field-shuffling region in this
+  repo is inflated for the same reason.
+
+- **(F) TWO CORRECTIONS A NEXT AGENT NEEDS, BOTH ALSO IN CLAUDE.md.** The **`dispatch` tier bypasses
+  `spineEnterMask`**, so the per-handler table above prices the **pre-888 regime** (~73 ms on its
+  total) and is structurally blind to the lever that region already banked. And today's `CtaSections`
+  is not comparable to round 850's, for the same reason.
+
+- **(G) WHAT THIS CLOSES.** (SPINE.1) was the last checker-side queue item and
+  `reach-machinery.md` § 9's "remaining named place with more than 1% in it". It is now measured out.
+  **That makes SIX consecutive priced refusals (rounds 903-908) and an EMPTY checker-side pool.** The
+  named, already-measured levers that remain are **(ART.1)** the PGO'd native image (−21.2% check-only
+  / −19.1% emit, 5/5 paired, byte-identical output) and **(ART.2)** CRaC (3.4x, blocked on one known
+  cwd defect with a known fix) — both an order of magnitude larger than anything left in the checker.
+
+- **(H) GATES.** Suite **14,437 -> 14,439 / 0 failures / 0 errors / 3 skipped** = exactly the 2 new
+  pins, verified by XML parse across all four modules. `cost_gate.py` **+0.00% on every counter**.
+  `huge_methods.py --fail-over 0`: clean. The two `Checker.kt` lines sit behind a **call-site** mode
+  test — round 900's law in its sharper form, since `sec >= 0` is true in production and a callee
+  guard could not have protected the three `size` reads.
+
 **Round 907 (2026-08-15) — (WARM.34): THE COUNT QUESTION IS **REFUSED BY ITS OWN CENSUS**, AND THE
 `lexLevelHasName` FAMILY IS **CLOSED ENTIRELY**. THE QUEUE'S PREMISE WAS WRONG IN THE SAME WAY ROUND
 902's OWN LAW PREDICTS: **"THE O(depth) ASCENT" DESCRIBES THE *CHAIN* (3.69 STEPS), NOT THE *PROBES*
@@ -792,103 +871,6 @@ Priced BEFORE a line of fix, one instrument, no production behaviour change. `do
   347,017 entries / 42,378 writes / 56,096 lookups) and a slope with an arithmetic falsifier that
   held on all 60 instrumented rebuilds.
 
-**Round 897 (2026-08-12) — (WARM.24): ROUND 894'S **TOP-RANKED** CANDIDATE, SCANNER IDENTIFIER
-INTERNING, IS **REFUSED** — MEASURED PRIZE **17.2 ms (0.31%)** AGAINST A **67.7 ms** CEILING, MEASURED
-COST **11.1 ms PER PARSE**, AND A BLOCKER THE CENSUS'S "RISK: LOW, A HANDFUL OF LINES" DID NOT SEE:
-THE SCANNER RUNS ON THE CRAWL'S **N CONCURRENT WORKERS**.**
-
-Everything below was priced BEFORE a line of fix (CLAUDE.md's first law), with one instrument —
-`NameCensus.kt`, a `namecensus<N>` `BenchMain` tier, `scripts/round897-census.sh`, four JVMs in two
-batches. `docs/perf/name-intern-price.md`.
-
-- **(A) THE REGIME FACT, WHICH DECIDES HOW EVERY COST HERE IS READ.** `CrawlParseCache` serves the
-  program's parse from the previous request, so **in the warm regime this arc measures the Scanner
-  does not run at all**. An intern probe is paid once per file VERSION; the map probes it makes
-  cheaper are paid every rebuild. That also **corrects the census**: its 24.8 ms/rebuild of
-  `String.hashCode` is read there as "one hash per fresh identifier instance", but with a cached
-  parse those instances persist and `String.hashCode` caches per instance — an identifier is hashed
-  ONCE PER PROCESS. Whatever those 24.8 ms hash, interning at the Scanner cannot touch it, so the
-  candidate's ceiling was **42.9, not 67.7 ms**, before any other deflation.
-
-- **(B) THE POPULATIONS.** ~527 k identifier-shaped tokens per program parse collapse onto **~22.4 k
-  distinct names — a 94.4% intern hit rate**, mean length 10.4 chars. On the resolution path,
-  **1,063,149 `moduleOnlyGlobalNames` probes of which 623,146 HIT (58.6%)**, plus 440,003 onward
-  `globals[name]` reads. The hit RATE is the quantity that matters and nobody would have guessed it:
-  `HashMap` calls `String.equals` only for an entry whose 32-bit hash matches, so a MISS never walks
-  characters and **only a hit can pay what interning removes**.
-
-- **(C) THE PRIZE, BY REPLAY (round 896(B)'s shape) — 17.2 ms/rebuild (0.31%)**, four processes
-  14.2 / 15.3 / 20.3 / 19.1. The captured probe sequence is replayed against the real member
-  population twice, once with the production instances and once with every string collapsed onto a
-  canonical one, ABBA per rep, falsified by ARITHMETIC (every arm's hit count an exact multiple of
-  the reps, and the two arms agreeing on all of them — interning's equivalence claim in miniature).
-
-- **(D) AND THE DECOMPOSITION IS THE ROUND'S BEST FINDING: INTERNING IS ONLY HALF `String.equals`.**
-  The MAP arm is the control that makes the set arm readable — `globals` holds 185 entries and the
-  replay hits it 10,383 times per rep, so an equals-driven delta there is at most 0.15 ms, yet the
-  measured delta is **4.9-6.7 ms**. **97% of it is not `equals` at all: it is the KEY-OBJECT WORKING
-  SET collapsing from ~400 k `String` instances to ~22.4 k.** Splitting the set arm the same way
-  gives **`equals` 9.1 ms + locality 8.1 ms**, and **14.6 ns per equal-but-distinct comparison** —
-  § 5a's mechanism measured directly for the first time. **The locality half is invisible to a
-  leaf-frame profile**, because it is not time in `String.equals`, it is time in whatever frame
-  dereferences the object; any census that ranks a candidate off leaf frames under-reads it.
-
-- **(E) THE COST, AND A DESIGN THE CENSUS DID NOT CONSIDER.** `scanIdentifier` ALREADY probes a
-  `String`-keyed map for every identifier-shaped token (`KEYWORDS[word]`), so one table holding the
-  ~160 reserved words *and* every interned name answers both questions in one lookup. Measured:
-  **52.4 ns/token as a separate table (27.6 ms/parse), 21.2 ns/token folded (11.1 ms/parse)**. The
-  fold halves it and cannot go much lower — 434 k intern hits per parse at 14.6 ns is 6.3 ms on its
-  own. **11.1 ms is not "clearly below" a 17.2 ms saving**, and cold — the CLI, the shipped GraalVM
-  image CI benches per push, an edited file in a daemon — the census's own preferred design is a
-  net LOSS.
-
-- **(F) THE BLOCKER, WHICH IS THE STRONGER GROUND, AND THIS ROUND'S OWN INSTRUMENT PROVED IT.** The
-  prize needs a PROGRAM-WIDE table (it comes from probe and stored key being one object;
-  `moduleOnlyGlobalNames`' 4,088 members are minted in whichever file declared them and probed from
-  all 78, so a per-FILE table captures ~none of it) — and `parseForCrawl` runs inside
-  `withContext(Dispatchers.Default)`. A program-wide `HashMap.getOrPut` from `scanIdentifier` is
-  **round 825's hazard verbatim**. The proof is the census's own numbers: its SCANNER counters
-  disagree by up to 4.7% across four processes on one binary while its CHECKER counters are
-  identical to the last digit in all four. The thread-safe designs are an `expect`/`actual`
-  concurrent map on the hottest loop in the front end, or canonicalising after the parse — which
-  means writing `Identifier.text` and breaking INV.2(a), the property `CrawlParseCache` and
-  `RealLibSnapshots` both rest on.
-
-- **(G) TWO MORE CORRECTIONS TO ROUND 894'S LIST, FROM THE SAME RUN.** **(2b) is refused**: at a
-  58.6% hit rate a "definitely absent" bitset pre-filter is worthless for a hit, its reachable
-  population is the 440,003 misses, and its prize is **~2-9 ms (0.04-0.16%)** against a ≤42.9 ms
-  ceiling. **(7) is CLOSED, not deferred**: round 896 refused it because its prerequisite was
-  unbuilt; that prerequisite now costs 11.1-27.6 ms per parse and is blocked, while (7)'s own
-  deletable part is 6.5 ms — it can never pay for what it needs. **Three of round 894's ceilings are
-  now measured at 4-10x their answer**, which is round 896's finding for the third time.
-
-- **(H) THE ABLATION TOOK THREE PASSES AND THE TWO IT FAILED ARE THE LESSON.** Six single mistakes,
-  one at a time, dry-run for a real diff, on a committed tree. Final: **5 of 6 discriminate, one pin
-  each**; **A2 (the `canon` insertion order) is a REDUNDANT guard** — canonicalisation is applied to
-  both sides, so whichever occurrence wins the slot the two sides agree — recorded rather than
-  claimed (round 809). Pass 1 read 4 of 6 green. **A1 (the interned arm probing the RAW container)
-  was a pin that did not exist**: swapping the container does not change the ANSWER, so every
-  hit-count pin stays green, correctly — only the container's IDENTITY can see it. **A1's first
-  repair was then blind because of the arms' own ABBA rotation** — a fault in the even branch is
-  overwritten by the odd one and the end state reads healthy, so the observable had to become
-  STICKY. *A rotation that protects a measurement can hide a fault in it.* **A5/A6 were blind
-  because the FIXTURE masked them**: both publish pins seeded the snapshots in between, and `seed`
-  installs them directly, so a last-wins or premature capture was overwritten before it could be
-  observed.
-
-- **(I) GATES.** Suite **14,358 / 0 failures / 3 skipped** (+8 from 14,350, exactly the eight
-  `NameCensusTest` pins). `cost_gate.py` **+0.00% on all 20 counters** — the expected CONTROL for a
-  round that lands no behaviour change (round 876), and here it also says the inert hooks are inert.
-  `huge_methods.py --fail-over 0`: **0 over the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT
-  `added=0 removed=0`** (46 diagnostics each, harness 94), cross-round against round 896's committed
-  captures with the identical recipe — run because the round adds a hook to a line every identifier
-  of every file crosses, and a gate whose expected answer is "nothing moved" is a control.
-  `scripts/round897-grid.sh`.
-
-- **(J) NO WALL A/B, AND THIS TIME BECAUSE THERE IS NOTHING TO A/B.** The round lands an instrument
-  and a refusal. What is claimed is deterministic populations (1,063,149 probes, 623,146 hits,
-  ~22.4 k distinct names) and paired nanos over identical populations inside one process.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -960,19 +942,28 @@ MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused 
   <= 7.30 ms. **Closure is now GENERAL, not per-lever: any one-operation oracle costing one probe
   recovers at most 0.21%.** Container closed by 901 (+0.26%) and 902 (−0.19%).
 
-- [ ] **(SPINE.1) The six spine handlers' frame bookkeeping — STALE DENOMINATOR, re-take before
-  costing.** `ccetSpineLeave` / `spineCtaM3StatementAnchor` / `cpaSpineLeave` / `ctaSpineEnter` /
-  `spineIanyEnterNode` / `spineArithEnterNode` are ~61-63% of the spine. Round 847's per-handler ms
-  are against an **8,095 ms** rebuild and must not be quoted; today's JFR top row is `cpaSpineLeave`
-  at **1.81%** and nothing else clears 1.3%. **Apply round 733's deflation BEFORE costing anything**:
-  88.4% of the `…SpineLeave` time is the migrated passes' own checking work, not scaffolding.
-  `reach-machinery.md` § 9 names this as the remaining place with more than 1% in it.
+- [x] **(SPINE.1) The six spine handlers' frame bookkeeping — REFUSED AND CLOSED, round 908.**
+  Denominator re-taken: **5,050 ms** (8 probe-free warm process medians), so 1% = 50.5 ms. The six
+  are still 62.6% of the probed spine and **40.1% of the rebuild**, but round 733's deflation,
+  MEASURED rather than applied (and with `SpineSections` run WARM for the first time), says the
+  passes' own checking work is **91.4%** and every frame pop and restore is at or below one probe
+  boundary — five of eleven sections read NEGATIVE once their boundary is subtracted. **Nothing
+  clears the floor**: the three ancestor climbs are 19.6 ms (0.39%, refused again), the cta
+  frame+ambient install 16.0 ms and load-bearing, the cta eligibility gate 14.4 ms with round 888's
+  mask having already taken **87% of its population**. **The one row above 1% — 79.8 ms of
+  frame-ambient install — has a ~8 ms deletable population** (the rebuild walks 2.91 frames, produces
+  nothing on 91.4% of installs, and the save copies ZERO entries on 100% of 147,572) **and fails its
+  own division by ~20x, because a timestamp is an OPTIMIZER BARRIER.** Round 847's per-handler ms are
+  superseded — they were against 8,095 ms — and the order swapped again (`ccetSpineLeave` #1 -> #3,
+  −51% in ms, while `cpaSpineLeave` fell 5% in ms and ROSE 7.62% -> 11.56% in share: round 830 live).
+  **Caveat for any successor: the `dispatch` tier bypasses `spineEnterMask`, so that table prices the
+  pre-888 regime and is blind to the lever the region already banked.**
 
-**THE SEARCH STATE, AFTER FIVE CONSECUTIVE REFUSALS (rounds 903-907) — READ THIS BEFORE PICKING THE
-NEXT CANDIDATE.** 903 refused at 0.085%, 904 at 0.334% (14 sites TOGETHER), 905 at 0.074%, 906
+**THE SEARCH STATE, AFTER SIX CONSECUTIVE REFUSALS (rounds 903-908) — READ THIS BEFORE PICKING THE
+NEXT CANDIDATE. THE CHECKER-SIDE POOL IS NOW EMPTY.** 903 refused at 0.085%, 904 at 0.334% (14 sites TOGETHER), 905 at 0.074%, 906
 measured a REGRESSION and closed a whole direction, 907 refused by census and closed a family. **Every
 candidate ranked off the JFR profile in this arc has come in 2-21x over when measured — nine of ten
-in the recorded scoreboard, five of five this session.** Meanwhile 61% of the warm rebuild is
+in the recorded scoreboard, six of six this session.** Meanwhile 61% of the warm rebuild is
 unclassified residue, **no single JFR row is above 1.81%**, and the box cannot resolve below ~1.5%.
 **That is what an exhausted search looks like.** It is not a failure — the compiler is -10.5% over
 rounds 887-898 and warm xtsc is 2.05x tsc check-only — but a sixth single-row candidate should be
