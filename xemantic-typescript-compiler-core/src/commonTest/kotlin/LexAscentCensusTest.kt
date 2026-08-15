@@ -122,17 +122,32 @@ class LexAscentCensusTest {
      * continues one — which is the whole reason the five functions are split into
      * a public entry and a `…From` recursion. The fixture recurses (nested
      * functions inside blocks inside a generic function), so the chain steps
-     * strictly exceed the ascents; wire the recursion back to the public entry and
-     * the two become equal and the round's 1.544 becomes 0.42.
+     * strictly exceed the ascents; wire a recursion back to its public entry and
+     * that family reads exactly equal, and the round's 1.544 probes per ascent
+     * becomes the probes per chain STEP, which is a different quantity that no
+     * oracle is differenced against.
+     *
+     * Asserted PER FAMILY, and that is not decoration: the summed form was this
+     * round's blind pin. Wiring one family's recursion back to its entry leaves
+     * the other four recursing, so the sum stays strictly greater while the census
+     * it feeds is wrong.
      */
     @Test
     fun `an ascent is opened once per top-level query, never per chain step`() = withCensus {
         diagnose(source)
         MapCensus.lexAscentFinish()
-        val calls = MapCensus.lexAscentCalls.sum()
-        val steps = MapCensus.lexAscentScopeSteps
-        assert(calls > 0)
-        assert(steps > calls)
+        assert(MapCensus.lexAscentCalls.sum() > 0)
+        assert(MapCensus.lexAscentStepsByFamily.sum() == MapCensus.lexAscentScopeSteps)
+        var families = 0
+        for (f in 0 until MapCensus.AS_FAMILIES) {
+            val calls = MapCensus.lexAscentCalls[f]
+            if (calls == 0L) continue
+            families++
+            assert(MapCensus.lexAscentStepsByFamily[f] > calls)
+        }
+        // …and the fixture really exercises more than one of them, or the loop
+        // above is a pin over an empty set (round 849).
+        assert(families >= 3)
     }
 
     /**

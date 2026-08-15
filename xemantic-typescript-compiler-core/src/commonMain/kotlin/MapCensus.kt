@@ -609,6 +609,17 @@ object MapCensus {
     /** NameScope chain steps walked, i.e. the recursion's own depth. */
     var lexAscentScopeSteps: Long = 0
 
+    /**
+     * …split per family, which is what makes the bracketing pinnable at all.
+     * Wiring ONE family's recursion back to its public entry leaves the OTHER
+     * four recursing, so a pin on the summed `steps > calls` stays green against
+     * a census whose ascent count is inflated to the chain-step count — measured,
+     * round 907's arm C1, blind on the first pass. Per family the identity is
+     * strict for every family that ever walks past its first level, and a
+     * self-opening recursion makes its family read exactly equal.
+     */
+    val lexAscentStepsByFamily = LongArray(AS_FAMILIES)
+
     /** Ascents that performed NO real probe at all — a memo cannot help them. */
     var lexAscentNoProbe: Long = 0
 
@@ -699,6 +710,7 @@ object MapCensus {
     /** One NameScope chain step — the recursion the ascent memo would collapse. */
     fun lexAscentStep() {
         lexAscentScopeSteps++
+        lexAscentStepsByFamily[ascFamily]++
     }
 
     private fun closeAscent() {
@@ -1094,6 +1106,7 @@ object MapCensus {
         for (i in lexBoundHistogram.indices) lexBoundHistogram[i] = 0
         for (i in 0 until AS_FAMILIES) {
             lexAscentCalls[i] = 0; lexAscentRepeat[i] = 0; lexAscentProbesByFamily[i] = 0
+            lexAscentStepsByFamily[i] = 0
         }
         for (i in lexAscentProbeHistogram.indices) lexAscentProbeHistogram[i] = 0
         lexAscentProbesFirst = 0; lexAscentProbesRepeat = 0
@@ -1243,7 +1256,9 @@ object MapCensus {
             "  (WARM.34) ASCENTS: calls=$ascCalls (has=${lexAscentCalls[AS_HAS]} " +
                 "shadow=${lexAscentCalls[AS_SHADOW]} type=${lexAscentCalls[AS_TYPE]} " +
                 "tp=${lexAscentCalls[AS_TP]} tpConstraint=${lexAscentCalls[AS_TPC]})  " +
-                "NameScope steps=$lexAscentScopeSteps  no-probe ascents=$lexAscentNoProbe"
+                "NameScope steps=$lexAscentScopeSteps " +
+                "(${lexAscentStepsByFamily.joinToString(",")})  " +
+                "no-probe ascents=$lexAscentNoProbe"
         )
         appendLine(
             "       REPEAT (scope,name,family) asked before = $ascRepeats " +
