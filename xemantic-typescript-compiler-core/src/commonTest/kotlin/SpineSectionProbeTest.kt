@@ -196,4 +196,64 @@ class SpineSectionProbeTest {
         assert(SpineSections.calls[SpineSections.CCET_INSTALL].sum() == ccetHits * 2)
         SpineSections.reset()
     }
+
+    /**
+     * (SPINE.1) round 908. The install census is the only thing that can say
+     * whether the O(frames) rebuild inside each frame-ambient install PRODUCES
+     * anything — a timing row cannot, and the round measured that row at
+     * 54 ms (cpa) + 26 ms (ccet) of a warm rebuild.
+     *
+     * Round 849's law is why the positive control is here and not left implied:
+     * a `rebuilt == 0` from a census hooked at the wrong place is
+     * indistinguishable from a real zero, so the fixture carries a `namespace`
+     * and the pin demands the rebuild produce entries inside it.
+     */
+    @Test
+    fun `the install census counts one record per frame-ambient install`() {
+        val saved = SpineSections.mode
+        SpineSections.reset()
+        SpineSections.mode = SpineSections.ON
+        try {
+            diagnose(source)
+        } finally {
+            SpineSections.mode = saved
+        }
+        // The install-only measure closes TWO spans per install (install and
+        // restore); the census records ONE. That equality is what says the
+        // census sits at the install itself and not on some other path.
+        assert(SpineSections.installs[0] == SpineSections.calls[SpineSections.CPA_INSTALL].sum() / 2)
+        assert(SpineSections.installs[1] == SpineSections.calls[SpineSections.CCET_INSTALL].sum() / 2)
+        assert(SpineSections.installs[0] > 0L)
+        assert(SpineSections.installs[1] > 0L)
+        // An installing frame is itself on the stack, so the rebuild scans at
+        // least one frame per install and its recorded max is at least one.
+        assert(SpineSections.installFrameDepth[0] >= SpineSections.installs[0])
+        assert(SpineSections.installFrameDepth[1] >= SpineSections.installs[1])
+        assert(SpineSections.installFrameDepthMax[0] >= 1L)
+        assert(SpineSections.installFrameDepthMax[1] >= 1L)
+        // POSITIVE CONTROL: the fixture declares `namespace Geo` and calls into
+        // it, so some install must happen under a namespace frame and the
+        // rebuild must produce at least one entry. Without this a census that
+        // never ran would read exactly like "the rebuild produces nothing".
+        assert(SpineSections.installRebuilt[0] + SpineSections.installRebuilt[1] > 0L)
+        SpineSections.reset()
+    }
+
+    @Test
+    fun `the install census records nothing while the probe is off`() {
+        val saved = SpineSections.mode
+        SpineSections.reset()
+        SpineSections.mode = SpineSections.OFF
+        try {
+            diagnose(source)
+        } finally {
+            SpineSections.mode = saved
+        }
+        val recorded = SpineSections.installs.sum() +
+            SpineSections.installFrameDepth.sum() +
+            SpineSections.installRebuilt.sum() +
+            SpineSections.installSaved.sum() +
+            SpineSections.installFrameDepthMax.sum()
+        assert(recorded == 0L)
+    }
 }

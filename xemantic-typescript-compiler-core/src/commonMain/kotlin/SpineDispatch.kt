@@ -613,6 +613,41 @@ object SpineSections {
     var overheadNanos: Long = 0
     var overheadCalls: Long = 0
 
+    // ---- (SPINE.1) round 908: the frame-ambient install's own POPULATION ----
+    //
+    // The install saves the enclosing namespace/class stacks into a fresh
+    // `ArrayList`, CLEARS them, and REBUILDS them by scanning the whole frame
+    // stack — an O(frames) walk per install whose result the round measured at
+    // 54 ms (cpa) + 26 ms (ccet) warm. What a TIME cannot say is whether that
+    // walk produces anything: these four counters do, and they are read at the
+    // one call site the probe already brackets (`sec >= 0`, i.e. only from
+    // `cpaSpineLeave`/`ccetSpineLeave`).
+    //
+    // That `sec >= 0` test is TRUE in production too — only the timing INSIDE
+    // `close` is mode-gated — so the mode test sits at the CALL SITE, never
+    // here: round 900's law is that a callee's `if (off) return` cannot protect
+    // its own arguments, and production must not make even the three `size`
+    // reads. Moving the test into this function would silently reinstate that.
+    var installs: LongArray = LongArray(2)          // [0] = cpa, [1] = ccet
+    var installFrameDepth: LongArray = LongArray(2) // frames scanned by the rebuild
+    var installFrameDepthMax: LongArray = LongArray(2)
+    var installRebuilt: LongArray = LongArray(2)    // entries the rebuild produced
+    var installSaved: LongArray = LongArray(2)      // entries the save copied
+
+    /**
+     * Record one frame-ambient install: [frames] frame-stack entries scanned,
+     * [rebuilt] entries the scan produced, [saved] entries copied out first.
+     * [which] is 0 for cpa and 1 for ccet.
+     */
+    fun install(which: Int, frames: Int, rebuilt: Int, saved: Int) {
+        if (mode == OFF) return
+        installs[which]++
+        installFrameDepth[which] += frames
+        if (frames > installFrameDepthMax[which]) installFrameDepthMax[which] = frames.toLong()
+        installRebuilt[which] += rebuilt
+        installSaved[which] += saved
+    }
+
     fun reset() {
         nanos = Array(N) { LongArray(SpineDispatch.KINDS) }
         calls = Array(N) { LongArray(SpineDispatch.KINDS) }
@@ -620,6 +655,11 @@ object SpineSections {
         climbDepth = LongArray(N)
         overheadNanos = 0
         overheadCalls = 0
+        installs = LongArray(2)
+        installFrameDepth = LongArray(2)
+        installFrameDepthMax = LongArray(2)
+        installRebuilt = LongArray(2)
+        installSaved = LongArray(2)
     }
 
     // The four entry points below are DELIBERATELY inline despite carrying no
@@ -707,6 +747,17 @@ object SpineSections {
                         if (c > 0) ns / c else 0
                     } ns each, hits=${hits[s]}" +
                     if (depth > 0) ", meanAncestorDepth=${depth / c}" else ""
+            )
+        }
+        appendLine("-- (SPINE.1) round 908: what the frame-ambient install's REBUILD produces --")
+        for (w in 0..1) {
+            val n = installs[w]
+            if (n == 0L) continue
+            appendLine(
+                "  ${if (w == 0) "cpa" else "ccet"}: installs=$n  frames scanned=${
+                    installFrameDepth[w]
+                } (mean ${installFrameDepth[w].toDouble() / n}, max ${installFrameDepthMax[w]})" +
+                    "  entries REBUILT=${installRebuilt[w]}  entries SAVED=${installSaved[w]}"
             )
         }
         appendLine("-- top kinds per section (ms net) --")

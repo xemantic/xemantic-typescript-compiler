@@ -1025,7 +1025,18 @@ class Checker(
             f.nsSymbol?.let { inferenceNamespaceStack.addLast(it) }
             f.classSym?.let { callWalkerClassStack.addLast(it) }
         }
-        if (sec >= 0) SpineSections.close(SpineSections.CCET_INSTALL, kind, t0)
+        if (sec >= 0) {
+            SpineSections.close(SpineSections.CCET_INSTALL, kind, t0)
+            // (SPINE.1) round 908 — as above (the mode test is at the CALL
+            // site, round 900); ccet's rebuild fills TWO stacks, so
+            // `rebuilt`/`saved` are their sums.
+            if (SpineSections.mode != SpineSections.OFF) SpineSections.install(
+                1,
+                ccetFrames.size,
+                inferenceNamespaceStack.size + callWalkerClassStack.size,
+                sNs.size + sCls.size,
+            )
+        }
         try { block() } finally {
             val t1 = if (sec >= 0) SpineSections.t() else 0L
             currentLocalTypes = sLT; currentParamBindingNames = sPB
@@ -1865,7 +1876,19 @@ class Checker(
         inStaticClassMethod = frame.inStatic
         propertyAccessEnclosingNamespaces.clear()
         for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
-        if (sec >= 0) SpineSections.close(SpineSections.CPA_INSTALL, kind, t0)
+        if (sec >= 0) {
+            SpineSections.close(SpineSections.CPA_INSTALL, kind, t0)
+            // (SPINE.1) round 908 — the rebuild's own population, read from the
+            // three collections it has just finished with. `sec >= 0` holds at
+            // `cpaSpineLeave`'s call site in PRODUCTION too (only the timing
+            // inside `close` is mode-gated), so the mode test has to be here:
+            // round 900's law is that a callee's `if (off) return` cannot
+            // protect its own arguments, and these three are `size` reads that
+            // production must not make.
+            if (SpineSections.mode != SpineSections.OFF) SpineSections.install(
+                0, cpaFrames.size, propertyAccessEnclosingNamespaces.size, sNs.size,
+            )
+        }
         try { block() } finally {
             val t1 = if (sec >= 0) SpineSections.t() else 0L
             currentLocalTypes = sLT; currentParamBindingNames = sPB

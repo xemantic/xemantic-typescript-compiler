@@ -48,6 +48,7 @@ import com.xemantic.typescript.compiler.IterCensus
 import com.xemantic.typescript.compiler.MapCensus
 import com.xemantic.typescript.compiler.CrawlParseCache
 import com.xemantic.typescript.compiler.NameCensus
+import com.xemantic.typescript.compiler.SpineSections
 import com.xemantic.typescript.compiler.SrcScan
 import com.xemantic.typescript.compiler.ParallelCheckMode
 import com.xemantic.typescript.compiler.ShareBind
