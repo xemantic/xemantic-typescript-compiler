@@ -20,6 +20,62 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 907 (2026-08-15) — (WARM.34): THE COUNT QUESTION IS **REFUSED BY ITS OWN CENSUS**, AND THE
+`lexLevelHasName` FAMILY IS **CLOSED ENTIRELY**. THE QUEUE'S PREMISE WAS WRONG IN THE SAME WAY ROUND
+902's OWN LAW PREDICTS: **"THE O(depth) ASCENT" DESCRIBES THE *CHAIN* (3.69 STEPS), NOT THE *PROBES*
+(1.54) — A CHAIN-STEP POPULATION IS NOT A PROBE POPULATION.**
+
+Nothing was built. `docs/perf/lex-ascent-count-price.md`.
+
+- **(A) THE CENSUS, WITH AN EXACT PARTITION CHECK.** Three processes identical to the last digit,
+  reproduced across all three of the round's builds (nine runs); per-ascent probe counts sum to
+  **870,231 = every real probe the three families make**. Per warm rebuild: **563,466 ascents**,
+  **2,079,962 NameScope chain steps (3.69 each)**, **870,231 real map probes (1.544 per ascent)** —
+  so **the whole probe stream at round 901's measured 36.6 ns is 31.85 ms = 0.602%**. That is the
+  ceiling on *everything* in this family, and it is twice what round 902 projected.
+
+- **(B) THE PREMISE WAS WRONG, AND ITS REFUTATION IS ROUND 902's LAW ONE STEP FURTHER ALONG ROUND
+  902's OWN FAMILY.** The queue said the probes "arise from an O(depth) ascent that revisits the same
+  big outer levels on every walk". That describes the **chain**; **58% of level visits are refused by
+  the untrusted / non-head-fn rules or are hash-free EMPTY maps** (round 901's short-circuit finding),
+  so 3.69 steps become 1.54 probes. *A chain-step population is not a probe population.*
+
+- **(C) THE REDUNDANCY IS REAL AND DOES NOT HELP, WHICH IS THE ROUND'S SHARPEST RESULT.** **80.7% of
+  the stream re-probes a `(level, name)` pair already asked** — 142,632 distinct pairs at 5.17 probes
+  each. Three levers, all under the floor: **(i) the ascent memo the queue named** — 36.4% of ascents
+  repeat a `(scope, name, family)` key, a fine hit rate, but **a repeat ascent performs 1.32 real
+  probes and a memo probe replaces them with 1**, so the net is 66,095 probes = **2.42 ms** before
+  charging 358,586 misses and inserts; with the memo **entirely free** it is 9.92 ms = 0.187%, and at
+  the measured probe cost it is **−10.7 ms, a regression**. **(ii) a per-level memo** — the 21.8 ms
+  the 80.7% implies — is refused **by construction**: *a cache keyed by the same name at the same
+  granularity as the map it fronts IS that map.* **(iii) a per-file proof-of-absence filter**, the
+  only operation cheaper than a probe, bounded by a measured superset at **<= 7.30 ms = 0.138%**.
+  Union of (i) and (iii), both free and assumed disjoint: 0.338%; with their own costs, 0.257%.
+  **To clear 0.31% a lever must delete more than half the stream at zero cost; the best deletes 25%.**
+
+- **(D) THE FAMILY IS CLOSED, ALL THREE LEVERS, ACROSS THREE ROUNDS.** Container: round 901's filter
+  **+0.26%** and round 902's parallel array **−0.19%**. Count: this round. And the closure is now
+  GENERAL rather than per-lever — the whole stream is 0.60%, and any one-operation oracle that costs
+  one probe recovers at most 0.21%. Recorded in passing: **`typeParamConstraintOf` is called 0 times
+  per rebuild**, and two of the five families average **under one** real probe per ascent.
+
+- **(E) THE ABLATION'S BLIND ARM IS THE ROUND'S SECOND FINDING.** Six arms, one mistake at a time,
+  every red set unique — but **C1 was blind on the first pass**: a pin asserting `steps > calls`
+  **summed over five families** stayed green against a census whose ascent count — *the denominator of
+  the entire result* — had been inflated to the chain-step count, because one family (`has`) is 47% of
+  the sum and carried it. Repaired by splitting the counter per family, which also produced the
+  per-family table. **A PIN OVER A SUM IS A PIN OVER ITS LARGEST MEMBER.** Two further pins read zero
+  before the fixture was repaired (round 849, in both directions).
+
+- **(F) GATES — AND THE GRID IS A REAL GATE HERE.** The production shape DID change: the five ascent
+  functions are split into an entry and a `…From` recursion, so a top-level query can be told from a
+  chain step. Suite **14,430 -> 14,437 / 0 failures / 0 errors / 3 skipped** = exactly the 7 new pins,
+  verified by XML parse across all four modules. `cost_gate.py` **+0.00% on all 20 counters** — a
+  control. `huge_methods.py --fail-over 0`: **0 over the limit**, 732 classes. **8-PROFILE `--listAll`
+  GRID: all eight `added=0 removed=0`**, zero exceptions, against round 905's committed captures.
+  No wall A/B and nothing to A/B — nothing was built. The census folded into the existing
+  `--mapCensus`, so no new flag and no three-place lockstep.
+
 **Round 906 (2026-08-14) — (WARM.33): THE LARGEST ESTIMATED ITEM IN THE QUEUE IS **REFUSED, AND IT IS A
 REGRESSION AT EVERY GEOMETRY** — AND ROUND 875 HAD THE **SIGN** WRONG, NOT THE MAGNITUDE: IT READ THE
 *ASCENT'S* SCATTER ONTO THE *PROBE'S* SEQUENTIAL SWEEP. **THE CEILING FOR *ANY* MEMO-LAYOUT CHANGE IS
@@ -833,117 +889,6 @@ batches. `docs/perf/name-intern-price.md`.
   and a refusal. What is claimed is deterministic populations (1,063,149 probes, 623,146 hits,
   ~22.4 k distinct names) and paired nanos over identical populations inside one process.
 
-**Round 896 (2026-08-12) — (WARM.23): TWO OF ROUND 894'S FIVE MAP-KEY CANDIDATES TAKEN, THREE REFUSED
-WITH A COST — AND THE REFUSALS ARE THE FINDING: **TWO OF THE FIVE CEILINGS ARE AN ORDER OF MAGNITUDE
-ABOVE THE ANSWER**, WHICH THE POPULATION COUNT SETTLES IN ONE DIVISION.**
-
-**QUEUE-TAG NOTE, FIRST, BECAUSE THE LEDGER IS ALREADY DIRTY: rounds 894 and 895 were BOTH committed
-as `(WARM.19)`, which is round 871's tag.** So `(WARM.19)` now names three unrelated pieces of work
-(the `--serve` request ladder, the hash-owner census, the whole-source scan filter). This round is
-`(WARM.23)`; `(WARM.20)`/`(WARM.21)`/`(WARM.22)` are taken (`--reachCensus` carries WARM.22), and a
-next round should read the tag off the usage text rather than off the previous session note.
-
-Round 894 ranked five candidates in `docs/perf/warm-hash-owner-census.md` § 9, each with an UPPER
-BOUND ("if this owner's map work went to zero"). All five were priced BEFORE a line of fix, per
-CLAUDE.md's first law, with one instrument each — `MapCensus.kt`, `scripts/round896-census.sh`.
-The scoreboard is § 11 of that doc.
-
-- **(A) THE PRICING INSTRUMENTS, AND WHY EACH HAD TO BE ITS OWN SHAPE.** A lookup can be amplified
-  (round 759) and an INSERT cannot — re-putting one key into one container measures an OVERWRITE,
-  not the distinct-key insert production performs. So `--flowMapReplay N` replays each file's REAL
-  key sequence into a **fresh** `mutableMapOf` and a **fresh** `LongKeyMap` per rep, ABBA within the
-  file; `--perFileScopeAmp N` is the ordinary amplifier; and the two sentinel SETS need no timing at
-  all, because a population of 24,232 with a max live size of 3 refuses itself.
-
-- **(B) TAKEN — (3) `nodeToFlow` -> `LongKeyMap`: 32.3 ms -> 14.4 ms, i.e. 17.9 ms/rebuild (0.33%),
-  replicated at 17.6 ms in a second run.** 262,404 keys/rebuild across 83 files — round 864's own
-  entry count, reached independently by a different instrument. The ceiling was 46.6 ms; a
-  replacement probe is not free, which is the whole 2.6x. **The put/get SPLIT does not replicate
-  (28.3/4.0 vs 22.1/10.8) while the TOTAL does (32.3 vs 32.9)** — quote the total.
-
-- **(C) THE SWAP'S ONE NEW FAILURE MODE IS THE KEY, NOT THE CONTAINER, AND IT IS A CRASH.**
-  `LongKeyMap` reserves `0L` as its empty-slot sentinel and `require`s against it at `put` — and
-  `nodeKey(0, 0)` **IS** `0L`, which an error-recovery zero-width node at offset 0 really produces.
-  `flowKey` shifts both coordinates by one: still a bijection (the pack is injective, `NODE_KEY_MIX`
-  is odd), so round 889's spread is untouched and only WHICH pair lands on the sentinel moves — to
-  `(-1, -1)`, where `recordFlow` never writes and a synthetic node's READ correctly answers null.
-
-- **(D) AND THE ITERATION-ORDER AUDIT IS NOW STRUCTURAL RATHER THAN A CLAIM.** Round 894 audited
-  `nodeToFlow` as get/put/size only. `LongKeyMap` has no iterator, no `keys`, no `entries` — so the
-  rounds-754/776/778 hazard (an iteration-order change invisible in every output diff) is a COMPILE
-  ERROR here, not a review item. This is the argument for preferring it to a plain `HashMap`
-  wherever an audit says "never iterated". `Binder.nodeToSymbol` IS iterated and must not follow.
-
-- **(E) TAKEN — (2a) `perFileScope`: 650,394 map probes/rebuild -> 6,426 (-99.01%).** Two halves.
-  The double probe (`globalsForFile`'s `containsKey` + `lookupPerFile`'s `get`, the file PATH hashed
-  twice per name) is now one, which alone halves READS to 325,236; a one-entry reference-compared
-  memo then answers **318,810 of those 325,236 (98.0%)** without touching the map. The memo is
-  round 895(D)'s shape — **a miss is never wrong, only slower** — and identity is a property of the
-  TRAVERSAL (`perFileScope`'s keys ARE `sourceFile.fileName`, which every hot caller arrives
-  holding), never a bet on string equality: keying the MAP by identity is the unsound version, and a
-  pin drives the miss path with a `StringBuilder`-built path to say so.
-
-- **(F) ITS PRICE IS A RANGE AND THE WIDTH IS THE INSTRUMENT'S, NOT THE CHANGE'S.** Pre-change
-  amplification over all 650,394 probes: p(4) = 83 ns, p(16) = 163 ns, so a repeat probe is 6.7 ns;
-  the in-situ empty bracket reads 53 ns, which rounds 734/735 say BOUNDS the pair rather than
-  measuring it. One production probe is therefore **10-51 ns** and removing 643,968 of them is
-  **6.4-33 ms**. Round 894's JFR attribution — 34.7 ms over those same probes = 53 ns each — sits at
-  the top of the range. **The `String.hashCode` cache is why the bottom of the range is so low**: a
-  60-100 character path is hashed ONCE ever, and the probe then takes `String.equals`' identity fast
-  path, so "hashing a long path per lookup" was never what this cost.
-
-- **(G) REFUSED — (4) `symbolTypeResolutionInProgress`, and the refusal corrects the census.**
-  **24,232 adds/rebuild, MAX LIVE 3.** The census's 28.2 ms ceiling would be **1,164 ns per add** —
-  ~20x a boxed `HashSet` probe on a table that never leaves its initial 16 slots. It cannot be that
-  set; § 2 of the census flags that very row as inlining-migration-suspect and the population
-  settles it. The whole set is worth **~2-5 ms** and a replacement recovers a fraction. Same for
-  `memberResolutionInProgress` (13,019 adds, max live 6).
-
-- **(H) REFUSED — (5) `nodeTypeResolutionInProgress`, for a cost AND a soundness reason.**
-  **59,283 adds** — which is exactly `typeNode.cacheable - typeNode.cacheHits` (176,282 - 116,999)
-  in `cost-counters.txt`, an independent confirmation the hook is on the right population — at 2
-  deep data-class hashes each. The `nodeTypes` path pays 354,131 deep hashes in total (one per
-  cacheable call, plus add/put/remove per miss), so the sentinel is **33.5%** of it, ~3-5 ms against
-  the census's TypeNode-shaped key rows. Buying that needs IDENTITY keying, which **weakens the only
-  cycle guard on the cacheable path**: two structurally-equal nodes in different files are one key
-  today and would become two, so a cycle that terminates at `errorType` would recurse instead — in a
-  compiler whose doctrine forbids catching `StackOverflowError`. Not worth 3-5 ms.
-
-- **(I) REFUSED — (7) `AliasedCondKey`, because its prerequisite is unbuilt.** Packing
-  `(FlowNode, String, String)` into a primitive needs interned NAME ids, i.e. round 894's candidate
-  (1). Without it the pack must probe a `String`-keyed intern table per key construction — the very
-  `String` hash-and-equals being removed (round 788: skipping cached work MOVES it). The part a pack
-  would actually delete is the measured `AliasedCondKey.equals` row, **6.5 ms** of the owner's 22.4;
-  the rest is the map probe any keyed container still pays.
-
-- **(J) THE ABLATIONS — AND ONE PIN THAT DOES NOT DISCRIMINATE, RECORDED RATHER THAN CLAIMED.** Six
-  single mistakes, one at a time (round 807), each dry-run for a real diff first (rounds 855/856),
-  on a COMMITTED tree (rounds 789/851). `scripts/round896-ablate.sh`: **A1** shift removed -> 3 pins
-  red; **A2** injectivity broken -> the 2 injectivity pins red; **A3** only one coordinate shifted ->
-  exactly 1 pin red (the synthetic-position one, which is why it exists).
-  `scripts/round896-ablate-2a.sh`: **B1** memo ignores its key -> 4 red; **B2** memo becomes the
-  ORACLE -> 7 red. **B3 — `globalsForFile` falling through to merged `globals` — leaves everything
-  GREEN, and it is a REDUNDANT GUARD rather than a blind pin: INV.3(d) already retired module-only
-  names out of `globals`, so the fall-through reaches a null anyway.** The pin was RENAMED to what
-  it does test (round 809). **A2 also names what the equivalence pins CANNOT see**: the INV.2(b)
-  side table is filled FROM the map, so a key collision makes both paths agree on the same wrong
-  answer — only an injectivity pin sees it.
-
-- **(K) GATES.** Suite **14,350 / 0 failures / 3 skipped** (+11 from 14,339: 7 `FlowMapKeyTest` +
-  4 `PerFileScopeMemoTest`, verified from the diff — no existing file gains a `@Test`).
-  `cost_gate.py` **+0.00% on all 20 counters** both times, and for (2a) that is a real control, not
-  a formality: `globals.lookups` / `globals.conflated` / `globals.misses` measure that very
-  resolution path. `huge_methods.py --fail-over 0` 0 over the limit. **8-PROFILE `--listAll` GRID,
-  ALL EIGHT `added=0 removed=0`** — and note the shape, since neither change has an in-binary arm:
-  the before-side is round 895's committed captures produced by the parent commit with the
-  IDENTICAL recipe (round 841: a capture is a property of OUTPUT x RECIPE). 46 diagnostics per
-  profile, harness 94. `scripts/round896-grid.sh`.
-
-- **(L) NO WALL A/B IS CLAIMED, FOR THE EIGHTH ROUND RUNNING.** ~0.33% + ~0.1-0.6% is inside what
-  this box settles (~1%). What is claimed is deterministic counters (650,394 -> 6,426 probes;
-  262,404 keys) and the mechanism's own paired nanos over an identical population in one process.
-  Round 893 vindicated the practice collectively at -8.18%.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1001,15 +946,19 @@ MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused 
   43 arrays of n bytes and one of 43n are the same bytes. Adjacent direction closed with it: lazily
   allocating the 17 classifiers consulted <1,000x/rebuild is worth ~2-3 ms.
 
-- [ ] **(WARM.34) `lexLevelHasName` — the COUNT question. Ceiling 21.4-27.3 ms (0.39-0.50%);
-  realistic value UNPRICED.** Round 902 closed this family as a CONTAINER question (filter +0.26%,
-  parallel array **-0.19%, a regression**) and explicitly left this one open, unopened: the 737,591
-  real probes arise from an O(depth) ascent that **revisits the same big outer levels on every walk**
-  (35.5% of probes land on levels averaging 815 symbols). The lever is memoizing the ASCENT, not the
-  probe. **Cheap first step, no build**: census how many of the 737,591 are RE-probes of a level
-  already probed for the same name within one resolution. Two instruments already agree the rate is
-  36.6 ns, so that census alone decides it. Risk: INV.4(c)(ii)'s three load-bearing rules sit
-  directly above it.
+- [x] **(WARM.34) `lexLevelHasName`, the COUNT question — REFUSED by its own census, round 907, AND
+  THE WHOLE FAMILY IS NOW CLOSED.** `docs/perf/lex-ascent-count-price.md`. **The queue's premise was
+  wrong**: "an O(depth) ascent revisiting the big outer levels" describes the CHAIN (3.69 steps),
+  not the PROBES (**1.544** per ascent), because 58% of level visits are refused by the untrusted /
+  non-head-fn rules or are hash-free EMPTY maps — *a chain-step population is not a probe
+  population*, round 902's law one step along its own family. **563,466 ascents / 870,231 real probes
+  = 31.85 ms = 0.602% is the ceiling on EVERYTHING here.** The 80.7% redundancy is real and does not
+  help: a repeat ascent performs **1.32** probes and a memo probe replaces them with **1**, so the
+  queued ascent memo is **2.42 ms net, 9.92 ms even if free, and −10.7 ms at the measured probe
+  cost — a regression**. A per-level memo is refused BY CONSTRUCTION (*a cache keyed by the same name
+  at the same granularity as the map it fronts IS that map*), and a per-file absence filter is
+  <= 7.30 ms. **Closure is now GENERAL, not per-lever: any one-operation oracle costing one probe
+  recovers at most 0.21%.** Container closed by 901 (+0.26%) and 902 (−0.19%).
 
 - [ ] **(SPINE.1) The six spine handlers' frame bookkeeping — STALE DENOMINATOR, re-take before
   costing.** `ccetSpineLeave` / `spineCtaM3StatementAnchor` / `cpaSpineLeave` / `ctaSpineEnter` /
@@ -1018,6 +967,44 @@ MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused 
   at **1.81%** and nothing else clears 1.3%. **Apply round 733's deflation BEFORE costing anything**:
   88.4% of the `…SpineLeave` time is the migrated passes' own checking work, not scaffolding.
   `reach-machinery.md` § 9 names this as the remaining place with more than 1% in it.
+
+**THE SEARCH STATE, AFTER FIVE CONSECUTIVE REFUSALS (rounds 903-907) — READ THIS BEFORE PICKING THE
+NEXT CANDIDATE.** 903 refused at 0.085%, 904 at 0.334% (14 sites TOGETHER), 905 at 0.074%, 906
+measured a REGRESSION and closed a whole direction, 907 refused by census and closed a family. **Every
+candidate ranked off the JFR profile in this arc has come in 2-21x over when measured — nine of ten
+in the recorded scoreboard, five of five this session.** Meanwhile 61% of the warm rebuild is
+unclassified residue, **no single JFR row is above 1.81%**, and the box cannot resolve below ~1.5%.
+**That is what an exhausted search looks like.** It is not a failure — the compiler is -10.5% over
+rounds 887-898 and warm xtsc is 2.05x tsc check-only — but a sixth single-row candidate should be
+justified against this record rather than picked off a profile.
+
+**THE MEASURED LEVERS THAT ARE *NOT* EXHAUSTED ARE AT THE ARTIFACT LEVEL, AND THEY ARE AN ORDER OF
+MAGNITUDE LARGER THAN ANYTHING LEFT HERE.** Both are already measured, not speculative:
+
+- [ ] **(ART.1) Ship the PGO'd native image. -21.2% check-only / -19.1% emit**, 5/5 paired in both
+  modes, 46 diagnostics and all 78 emitted `.js` byte-identical (`docs/perf/aot-native-image.md`
+  § 10). **CI currently ships the Community Edition arm, which has no PGO at all** — so the shipped
+  binary runs ~14-20% slow against what is already demonstrated on this box. Needs Oracle GraalVM
+  (`-graal` in SDKMAN; CE's `native-image --help` does not mention the word) and an `.iprof` trained
+  on BOTH modes — a check-only-only profile leaves the Transformer/Emitter on static heuristics.
+  This is the biggest single lever ever measured in this arc.
+
+- [ ] **(ART.2) CRaC — ~30 ms restore at FULL WARM SPEED** (6.8-7.3 s against 24-25 s cold, 3.4x,
+  output byte-identical bar the `time:` line; `docs/perf/crac-checkpoint.md`). **Blocked on one known
+  defect, not on the mechanism**: the restored process keeps the CHECKPOINT's working directory —
+  round 873's bug one layer down — so a CRaC CLI must re-install the real cwd through
+  `SystemVfs.workingDirectory` in an `afterRestore` hook, exactly as `CompileServer` already does per
+  request. Unmeasured risk: the 340 MB image was page-cache-hot in every restore taken so far.
+
+**AND THE UNPRICED CHECKER CANDIDATES FROM ROUND 903's HOT-PATH AUDIT**, each with a named mechanism
+and no measurement — every one needs the build-free population step FIRST, and the record above says
+to expect them to come in small: `mappedNodeTypeKey` (`Checker.kt:104288`) builds a `StringBuilder` +
+two `sortedBy` copies + a `String` + a key object per bypassed resolution (~88 k/rebuild) purely to be
+a map key; `collectTypeofGuardNames` &c allocate a `LinkedHashSet` unconditionally where the caller
+only asks `isNotEmpty()`, then `Set.plus` copies both operands again (`Checker.kt:54541`-`54572`);
+`spineOsWithAmbient` (`:18209`) and `spineTcDispatchWithAmbient` (`:66469`) are closure-taking and NOT
+`inline` on a measured-hot path; `narrowTypeFromFlow`'s `memo: NarrowFlowMemo = NarrowFlowMemo()`
+default allocates through the `$default` bridge at every call site that omits it.
 
 **CLOSED THIS ROUND, DO NOT RE-RAISE** (round 903, `docs/perf/type-node-key-price.md`): the
 `nodeTypes` deep AST-value key, **refused at 0.085%** — its premium over a `(file, nodeId)`
