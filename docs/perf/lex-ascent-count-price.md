@@ -27,7 +27,7 @@ which only a refusing filter is, and that one is bounded at **7.96 ms**.
 | ceiling on ANY one-operation oracle costing one probe | 11.23 ms = 0.212% |
 | arc refusal floor | ~17 ms = ~0.31% |
 
-Binary: `e8c422e3` + this round's census. Profile `build/bench/tsc-project-*`
+Binary: `22d77ebe` (round 907's instrument on `e8c422e3`). Profile `build/bench/tsc-project-*`
 (78 files, **46 errors** on every run). Denominator **5,290 ms** as rounds 905 and
 906 stated it (1% = 52.9 ms). Rate NOT re-measured: round 901's JFR row implies
 **36.6 ns** per first probe of a level and its amplifier measured **33–37 ns**,
@@ -40,7 +40,7 @@ agreeing to 0.5%; round 902 reproduced the second at 28.9 ns in a batch that ran
 
 ```
 (WARM.34) ASCENTS: calls=563466 (has=264767 shadow=224276 type=36493 tp=37930 tpConstraint=0)
-          NameScope steps=2079962  no-probe ascents=100184
+          NameScope steps=2079962 (958160,806331,151467,164004,0)  no-probe ascents=100184
      REPEAT (scope,name,family) asked before = 204880 (has=114930 shadow=76288 type=6616 tp=7046)
      real probes: FIRST=599256 REPEAT=270975 sum=870231 (must equal all real probes 870231)
                   by family=384008,429563,28182,28478,0
@@ -56,8 +56,8 @@ lexTypeSymProbe + lexTpProbe`). That is round 796's law and it is what says the
 bracketing sees every path: the five ascent functions are the only callers of the
 four real probe sites, they never nest, and the close-on-next-entry bracket is
 therefore a partition rather than a sample. Every pre-existing counter in the same
-report is unchanged across the round's two builds, which is the cross-build
-control.
+report is unchanged across the round's THREE builds — nine runs in all — which
+is the cross-build control.
 
 ### 1.1 A chain-step population is not a probe population
 
@@ -220,49 +220,96 @@ invalidation protocol and a per-file bitset.
   And **17.8% of ascents make no real probe at all**, answered entirely from the
   threaded `names` sets.
 
-## 7. Pins and ablation
+## 7. Per family, because the mean hides two of them entirely
 
-Six pins (`LexAscentCensusTest`), and the ablation is one mistake at a time on a
+| family | ascents | chain steps each | **real probes each** |
+|---|---:|---:|---:|
+| `has` | 264,767 | 3.62 | **1.450** |
+| `hasLocalShadow` | 224,276 | 3.60 | **1.915** |
+| `hasType` | 36,493 | 4.15 | **0.772** |
+| `isTypeParam` | 37,930 | 4.32 | **0.751** |
+| `typeParamConstraintOf` | **0** | — | — |
+
+Two families average **under one real probe per ascent** — they walk four
+`NameScope` levels and touch a non-empty map less than once — and the fifth is
+never called at all on this profile. Round 902's law again: the mean 1.544 is not
+the quantity, the distribution is, and every family in it is under 2.
+
+## 8. Pins and ablation
+
+Seven pins (`LexAscentCensusTest`), and the ablation is one mistake at a time on a
 committed tree (round 807), each arm naming what shows the mistake was REACHED
 (round 902: `git diff --shortstat` proves the edit landed, never that it does
 anything).
 
-| arm | the mistake | reached because | pins reddened |
-|---|---|---|---|
-| C1 | the recursion calls the public entry, so every chain step opens an ascent | the chain-steps pin asserts `steps > calls`, i.e. the fixture really recurses | 2 — *an ascent is opened once per top-level query*, *the probe histogram partitions the ascents* |
-| C2 | the ascent is never closed on the next entry (probes charged to the first ascent only) | the partition pin asserts the probe total is non-zero | 1 — *the per-ascent probe counts partition the real probes* |
-| C3 | the repeat set keyed on the name only, dropping the scope | the repeat pin asserts a first sighting exists at all | 1 — *the same name at two different scopes is two first sightings* |
-| C4 | the `(level,name)` pair census keyed on the name only | the pair pin asserts distinct > 0 | 1 — *a pair is distinct per LEVEL* |
-| C5 | the presence hit recorded from the flags VERDICT instead of the level's map | the no-hit pin asserts the no-hit population is non-empty | 1 — *a level that holds the name is a hit even when the verdict is false* |
-| C6 | `lexAscentStep` hoisted out of its `MapCensus.on` guard | — (an INV.0 violation, visible only as a count with the census off) | 1 — *the census is inert when off* |
+| arm | the mistake | pins reddened |
+|---|---|---|
+| C1 | the recursion calls the public entry, so every chain step opens an ascent | 1 — *an ascent is opened once per top-level query, never per chain step* |
+| C2 | the ascent is never closed on the next entry | 2 — *the per-ascent probe counts partition the real probes*, *the probe histogram partitions the ascents* |
+| C3 | the repeat set keyed on the name only, dropping the scope | 1 — *the same name at two different scopes is two first sightings* |
+| C4 | the `(level,name)` pair census keyed on the name only | 1 — *a level-name pair is distinct per LEVEL* |
+| C5 | the presence hit recorded from the flags VERDICT instead of the level's map | 1 — *a level that holds the name is a hit even when the verdict is false* |
+| C6 | `lexAscentStep` hoisted out of its `MapCensus.on` guard | 1 — *the ascent census is inert when off* |
 
-## 8. Gates
+**All six discriminate and every red set is unique.** Each arm's edit was
+dry-run for a real diff and reverted clean, the tree was restored to 0 modified
+files, and each arm's build was checked to have been REACHED (round 808: a
+Kotlin-daemon death reports zero pins run, which is indistinguishable from "the
+mistake changed nothing").
+
+### C1 was BLIND on the first pass, and the reason is this arc's own law
+
+`lexAscentScopeSteps > lexAscentCalls.sum()` stayed green against a census whose
+ascent count was inflated to the chain-step count. **A summed identity cannot see
+a per-family defect**: wiring ONE family's recursion back to its public entry
+leaves the other four recursing, and `has` alone is 47% of the ascents, so the sum
+stayed strictly greater while the denominator of the round's whole finding was
+wrong. The repair splits the step counter per family, where the identity is
+strict for every family that walks past its first level and a self-opening
+recursion reads EXACTLY equal — and it pays for itself twice, because the
+per-family table above is the § 7 data.
+
+That is round 902's B5/B6 in a third costume (one assertion could not separate two
+defects) and round 901's A2 in a second (a pin satisfied *vacuously* by a
+population that dominates the sum). The counter-form worth carrying: **a pin over
+a SUM is a pin over the largest member.**
+
+## 9. Gates
 
 | gate | result |
 |---|---|
-| `jvmTest`, 4 modules, real XML parser | see the session note |
-| `cost_gate.py` | **+0.00%** expected — a CONTROL, not a verdict (round 876) |
-| `huge_methods.py --fail-over 0` | 0 over the limit |
-| 8-profile `--listAll` grid | run, because the round DOES edit production shape |
+| `jvmTest`, 4 modules, real XML parser | **14,437 / 0 failures / 3 skipped** — the 14,430 baseline plus this round's 7 pins, exactly |
+| `cost_gate.py` | **+0.00% on all 20 counters**, 46 errors / 78 files |
+| `huge_methods.py --fail-over 0` | **0 over the limit**, 732 classes |
+| 8-profile `--listAll` grid | **all eight `added=0 removed=0`** (46 each, harness 94, 0 exceptions), cross-round against round 905's committed captures, identical recipe |
 
 Unlike rounds 901/902/906 this round is not purely guarded hooks: the five ascent
 functions are split into a public entry and a `…From` recursion so a top-level
 resolution can be told from a chain step. That is behaviour-preserving by
-inspection (the recursion targets move from `has` to `hasFrom` and so on, one for
-one) and it sits on the path that decides TS2304 — so the grid is a gate here,
-not a control.
+inspection (each recursion target moves from `has` to `hasFrom` and so on, one for
+one) and it sits on the path that decides TS2304 — so **the grid is a gate here,
+not a control**, and `cost_gate.py`'s zero is the control (round 876: the round
+changes no checker decision, so a moved counter would mean a hook that is not
+inert).
 
-## 9. For the next agent
+Reproduced across the round's THREE builds: every census number in § 1 is
+identical in all nine runs (three processes x three builds), which is the
+instrument's own falsifier.
+
+## 10. For the next agent
 
 * **Reusable constants**: the unresolved-names ascent is **563,466 ascents,
   2,079,962 chain steps and 870,231 real map probes per warm rebuild** — 1.544
   probes per ascent, 36.4% of ascents repeat a `(scope, name, family)` already
   asked, 19.6% find the name in no level they consult, and 17.8% probe nothing at
-  all. At 36.6 ns the whole stream is **31.85 ms = 0.60%**.
+  all. At 36.6 ns the whole stream is **31.85 ms = 0.60%**. `typeParamConstraintOf`
+  is called **0 times**.
 * **The general law this round adds**: *a cache keyed by the same key at the same
-  granularity as the map it fronts is that map.* Before pricing a memo, divide
-  the work it would replace by the operations it would perform — a memo in front
-  of 1.3 map probes cannot win, whatever its hit rate.
+  granularity as the map it fronts is that map.* Before pricing a memo, divide the
+  work it would replace by the operations it would perform — a memo in front of
+  1.3 map probes cannot win, whatever its hit rate.
 * **And the corollary**: an ascent's DEPTH is not its COST. Count the operations
   that survive the walk's own guards (here 58% of the level visits are refused or
   hash-free) before reading "O(depth)" as a lever.
+* **The pin law**: a pin over a SUM is a pin over its largest member — split the
+  identity by whatever axis the mistake could be confined to.
