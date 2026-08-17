@@ -30,6 +30,8 @@ import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NodeKind
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.ParserFlags
+import com.xemantic.typescript.compiler.PropertyAccessExpression
+import com.xemantic.typescript.compiler.QualifiedName
 import com.xemantic.typescript.compiler.Scanner
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SyntaxKind
@@ -125,6 +127,24 @@ internal class SourceIndex private constructor(
      * it back needs the PREVIOUS end.
      */
     private val tokenEnds: IntArray,
+    /**
+     * (API.4a) Every token's START offset, parallel to [tokenEnds].
+     *
+     * `realEndOf` needs only the ends; a COMPLETION ANCHOR needs the whole token —
+     * which token the caret is inside, where the word it is inside begins, and what
+     * the token before that word is. Recorded in the same scan, so it costs nothing
+     * a position query was not already paying.
+     *
+     * A token's start is `Scanner.getTokenPos()`, which is assigned AFTER
+     * `scanLeadingTrivia()` — so trivia is in the GAPS between consecutive tokens
+     * and never inside one, which is what makes [completionAnchorAt]'s comment
+     * detection a scan of one gap rather than a second lexer.
+     */
+    private val tokenStarts: IntArray,
+    /** (API.4a) Every token's kind, parallel to [tokenEnds]. */
+    private val tokenKinds: Array<SyntaxKind>,
+    /** (API.4a) The text this index describes — the anchor reports a PREFIX. */
+    private val text: String,
 ) {
 
     companion object {
@@ -148,11 +168,26 @@ internal class SourceIndex private constructor(
                 needsJsxFlag = flags.needsJsxFlag,
                 noImplicitAny = flags.noImplicitAny,
             ).parse()
-            return SourceIndex(sourceFile, text.length, scanTokenEnds(text))
+            val tokens = scanTokens(text)
+            return SourceIndex(
+                sourceFile = sourceFile,
+                textLength = text.length,
+                tokenEnds = tokens.ends,
+                tokenStarts = tokens.starts,
+                tokenKinds = tokens.kinds,
+                text = text,
+            )
         }
 
+        /** (API.4a) [scanTokens]' three parallel arrays. */
+        private class Tokens(
+            val starts: IntArray,
+            val ends: IntArray,
+            val kinds: Array<SyntaxKind>,
+        )
+
         /**
-         * Every token end in [text], ascending.
+         * Every token in [text], in scan order — so [Tokens.ends] is ascending.
          *
          * The loop terminates on end-of-file, and ALSO on a token that did not
          * advance the scanner. That second exit is a fail-safe rather than a
@@ -164,18 +199,22 @@ internal class SourceIndex private constructor(
          * node in the file to a coarser answer, which is the same graceful direction
          * as the class KDoc's merge case.
          */
-        private fun scanTokenEnds(text: String): IntArray {
+        private fun scanTokens(text: String): Tokens {
             val scanner = Scanner(text)
+            val starts = ArrayList<Int>()
             val ends = ArrayList<Int>()
+            val kinds = ArrayList<SyntaxKind>()
             var previousEnd = -1
             while (true) {
                 val token = scanner.scan()
                 val end = scanner.getPos()
+                starts.add(scanner.getTokenPos())
                 ends.add(end)
+                kinds.add(token)
                 if (token == SyntaxKind.EndOfFile || end <= previousEnd) break
                 previousEnd = end
             }
-            return ends.toIntArray()
+            return Tokens(starts.toIntArray(), ends.toIntArray(), kinds.toTypedArray())
         }
     }
 
@@ -250,6 +289,240 @@ internal class SourceIndex private constructor(
         // pair, which is a total order over distinct nodes.
         found.sortWith(compareBy({ it.pos }, { it.end }))
         return found
+    }
+
+    // --- (API.4a) the completion anchor ------------------------------------------
+
+    /**
+     * What a caret at [offset] may complete, and what it is attached to.
+     *
+     * ## The decision, in order
+     *
+     * 1. An [offset] outside `0 .. textLength` answers [CompletionKind.NONE].
+     *    Unlike [pathAt] the file's own END is legitimate here: a caret after the
+     *    last character is where a user types, and there is no node there to want.
+     * 2. A caret STRICTLY INSIDE a string, template, regular-expression or numeric
+     *    literal token answers NONE. Strictly: at such a token's first offset the
+     *    caret is before its opening quote and at its last it is after the closing
+     *    one, and neither is inside the literal.
+     * 3. A caret inside a COMMENT answers NONE. Comments are not tokens here — the
+     *    scanner consumes them as leading trivia before recording a token's start —
+     *    so they live entirely in the GAPS between consecutive tokens, and the gap
+     *    the caret falls in is re-read for `//` and comment-open markers. That is
+     *    exact rather than heuristic precisely because a string literal IS a token
+     *    and can never appear in a gap.
+     * 4. Otherwise the WORD under the caret is found: the token W with
+     *    `start < offset <= end` whose first character can begin an identifier.
+     *    Strictly greater than `start`, so a caret immediately BEFORE a word is not
+     *    inside it and completes as an insertion; less-or-equal `end`, so a caret
+     *    immediately after `o.fo|` is inside `fo`. Keywords qualify — `new` and
+     *    `class` are legal property names, and a half-typed identifier is often a
+     *    keyword prefix.
+     * 5. The token immediately before the word (or before the caret, when there is
+     *    no word) decides the kind: a `.` or `?.` makes it
+     *    [CompletionKind.MEMBER], anything else [CompletionKind.FREE_NAME]. Only
+     *    NON-EMPTY tokens are considered, which is what stops the zero-width
+     *    end-of-file token from displacing a real one at the end of a buffer.
+     *
+     * Whitespace and newlines need no rule of their own and get none: they are gaps,
+     * so `o.` then a newline then the caret still finds `.` as the token before it.
+     *
+     * ## The receiver, and the recovery rule for an incomplete `o.`
+     *
+     * THE RECEIVER IS TAKEN FROM THE PARSE, NOT FROM THE TOKEN STREAM. That is
+     * affordable because this parser ALWAYS builds a `PropertyAccessExpression` for
+     * a `.`: when no identifier follows it reports TS1003 and synthesizes a
+     * zero-width `Identifier("")` (`Parser.kt`, the `Dot ->` arm of the
+     * member-access loop). So `o.` at end of file, `o.` before a `}` and `o.`
+     * before a newline all produce a real node whose `expression` is the receiver,
+     * and no bracket-balanced backwards scan over raw text is needed.
+     *
+     * The node is found by descending to the character IMMEDIATELY BEFORE the dot —
+     * which is inside the receiver's own last token — and walking back OUT along
+     * that path to the first `PropertyAccessExpression` or `QualifiedName` whose own
+     * dot is this one. Descending to the dot itself would not work: the dot is the
+     * last token of `o.`, so the access node's real end is snapped back below it and
+     * the descent would stop at the source file.
+     *
+     * "Whose own dot is this one" is exact and needs no guessing: a member access's
+     * dot lies between its receiver's real end and its name's `pos`, so the test is
+     * `realEnd(expression) <= dotStart < name.pos`. In `a.b.c` that rejects `a.b`
+     * (whose name starts before the second dot) and accepts `a.b.c`, giving `a.b` as
+     * the receiver — and since two dots in one path are at different offsets, at
+     * most one node in the path can match.
+     *
+     * A dot the parse did NOT turn into a member access — a dot inside a numeric
+     * literal never becomes a `.` token at all, and a type-position dot our parser
+     * recovers differently would be one — yields a MEMBER anchor with a null
+     * [CompletionAnchor.receiver], i.e. an empty list. Refusing is deliberate: the
+     * alternative is to guess a receiver from bracket-balanced text, and a
+     * confidently wrong receiver produces a confidently wrong list.
+     */
+    fun completionAnchorAt(offset: Int): CompletionAnchor {
+        if (offset < 0 || offset > textLength) return CompletionAnchor.none(offset)
+        val containing = tokenContaining(offset)
+        if (containing >= 0 && isUncompletableLiteral(tokenKinds[containing])) {
+            return CompletionAnchor.none(offset)
+        }
+        if (containing < 0 && offsetIsInComment(offset)) return CompletionAnchor.none(offset)
+        val word = wordTokenAt(offset)
+        val anchorStart = if (word >= 0) tokenStarts[word] else offset
+        val prefix = if (word >= 0) text.substring(tokenStarts[word], offset) else ""
+        val replacementEnd = if (word >= 0) tokenEnds[word] else offset
+        val before = tokenEndingAtOrBefore(anchorStart)
+        val beforeKind = if (before >= 0) tokenKinds[before] else null
+        if (beforeKind != SyntaxKind.Dot && beforeKind != SyntaxKind.QuestionDot) {
+            return CompletionAnchor(
+                CompletionKind.FREE_NAME,
+                prefix,
+                anchorStart,
+                replacementEnd,
+                null,
+            )
+        }
+        return CompletionAnchor(
+            CompletionKind.MEMBER,
+            prefix,
+            anchorStart,
+            replacementEnd,
+            receiverOfDotAt(tokenStarts[before]),
+        )
+    }
+
+    /**
+     * The receiver of the member access whose dot starts at [dotStart], or null when
+     * the parse built no member access there — see [completionAnchorAt] for the rule
+     * and for why refusing beats guessing.
+     */
+    private fun receiverOfDotAt(dotStart: Int): Node? {
+        if (dotStart <= 0) return null
+        val path = pathAt(dotStart - 1)
+        for (index in path.indices.reversed()) {
+            val node = path[index]
+            val receiver: Node
+            val namePos: Int
+            when (node) {
+                is PropertyAccessExpression -> {
+                    receiver = node.expression
+                    namePos = node.name.pos
+                }
+                is QualifiedName -> {
+                    receiver = node.left
+                    namePos = node.right.pos
+                }
+                else -> continue
+            }
+            if (realEndOf(receiver) <= dotStart && dotStart < namePos) return receiver
+        }
+        return null
+    }
+
+    /** The token whose span strictly contains [offset], or -1. */
+    private fun tokenContaining(offset: Int): Int {
+        var lo = 0
+        var hi = tokenStarts.size - 1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            when {
+                offset < tokenStarts[mid] -> hi = mid - 1
+                offset >= tokenEnds[mid] -> lo = mid + 1
+                else -> return mid
+            }
+        }
+        return -1
+    }
+
+    /**
+     * The identifier-like token the caret is INSIDE or at the end of, or -1.
+     *
+     * "Identifier-like" is decided from the token's first CHARACTER rather than from
+     * its kind, so every keyword qualifies without a keyword list to keep in sync —
+     * which is what a member completion needs, since `new`, `class` and `default`
+     * are all legal property names.
+     */
+    private fun wordTokenAt(offset: Int): Int {
+        var lo = 0
+        var hi = tokenStarts.size - 1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            when {
+                offset <= tokenStarts[mid] -> hi = mid - 1
+                offset > tokenEnds[mid] -> lo = mid + 1
+                else -> {
+                    val start = tokenStarts[mid]
+                    if (start >= textLength) return -1
+                    val first = text[start]
+                    return if (first.isLetter() || first == '_' || first == '$') mid else -1
+                }
+            }
+        }
+        return -1
+    }
+
+    /** The last NON-EMPTY token ending at or before [offset], or -1. */
+    private fun tokenEndingAtOrBefore(offset: Int): Int {
+        var lo = 0
+        var hi = tokenEnds.size - 1
+        var best = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (tokenEnds[mid] <= offset) {
+                best = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        // The end-of-file token is zero-width and shares its end with the file's
+        // last real token, so it must not be allowed to answer here.
+        while (best >= 0 && tokenStarts[best] >= tokenEnds[best]) best--
+        return best
+    }
+
+    /** True for the literal kinds a caret inside offers no completion in. */
+    private fun isUncompletableLiteral(kind: SyntaxKind): Boolean = when (kind) {
+        SyntaxKind.StringLiteral,
+        SyntaxKind.NumericLiteral,
+        SyntaxKind.BigIntLiteral,
+        SyntaxKind.RegularExpressionLiteral,
+        SyntaxKind.NoSubstitutionTemplateLiteral,
+        SyntaxKind.TemplateHead,
+        SyntaxKind.TemplateMiddle,
+        SyntaxKind.TemplateTail,
+        -> true
+        else -> false
+    }
+
+    /**
+     * True when [offset] is inside a comment.
+     *
+     * Only the trivia GAP around [offset] is examined, which is sound because the
+     * scanner records a token's start after skipping leading trivia — so a comment
+     * is never inside a token, and a `//` inside a string literal is never inside a
+     * gap.
+     */
+    private fun offsetIsInComment(offset: Int): Boolean {
+        val previous = tokenEndingAtOrBefore(offset)
+        var at = if (previous < 0) 0 else tokenEnds[previous]
+        // A comment containing the caret must START at or before it, so scanning the
+        // gap only as far as the caret decides containment.
+        while (at <= offset && at < textLength) {
+            if (text[at] == '/' && at + 1 < textLength && text[at + 1] == '/') {
+                var end = at + 2
+                while (end < textLength && text[end] != '\n' && text[end] != '\r') end++
+                if (offset in at until end) return true
+                at = end
+            } else if (text[at] == '/' && at + 1 < textLength && text[at + 1] == '*') {
+                var end = at + 2
+                while (end + 1 < textLength && !(text[end] == '*' && text[end + 1] == '/')) end++
+                val close = minOf(end + 2, textLength)
+                if (offset in at until close) return true
+                at = close
+            } else {
+                at++
+            }
+        }
+        return false
     }
 
     /**

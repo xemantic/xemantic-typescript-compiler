@@ -20,6 +20,113 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 917 (2026-08-17) — (API.4a): THE COMPLETION ANCHOR + MEMBER COMPLETIONS. THE ROUND'S PRODUCT
+IS THAT THE ANCHOR — THE PART EVERY PREVIOUS (API.\*) ROUND CALLED "GENUINELY NEW" — TURNED OUT TO NEED
+**NO PARSER WORK AT ALL**, BECAUSE THIS PARSER ALREADY RECOVERS A DANGLING `.` INTO A REAL
+`PropertyAccessExpression`; AND THAT THE ONE THING THAT DID BITE WAS A **SPAN COLLISION**, WHERE
+`o` AND `o.<nothing>` CARRY THE IDENTICAL `(pos, end)` PAIR AND FIRST-WINS ANSWERS `any`.**
+
+- **THE ANCHOR NEEDED NO PARSER CHANGE, AND THAT WAS READ OUT OF THE SOURCE BEFORE ANY CODE WAS
+  WRITTEN.** `Parser.kt`'s `Dot ->` arm is unconditional: when the token after `.` is neither an
+  identifier nor a keyword it reports TS1003 and synthesizes `Identifier(text = "", pos = getPos(),
+  end = getPos())`, then builds the access anyway. So `o.` at end of file, `o.` before a `}` and `o.`
+  before a newline all leave a receiver node in the tree, and the anchor never has to scan raw text
+  backwards balancing brackets — which was the design the queue entry anticipated and which would have
+  been the round's whole risk. The rule that finds it is exact rather than heuristic: **descend to the
+  character BEFORE the dot** (the dot is often the file's LAST token, so its own access node's real end
+  is snapped back below it and descending to the dot answers `SourceFile`), then walk back OUT to the
+  first `PropertyAccessExpression`/`QualifiedName` satisfying `realEnd(expression) <= dotStart <
+  name.pos`. Two dots in one path are at different offsets, so **at most one node can satisfy it** and
+  the walk direction does not matter.
+
+- **THE ONE REAL DEFECT, AND IT IS A PROPERTY OF THE CAPTURE DESIGN RATHER THAN OF COMPLETIONS: A RAW
+  SPAN DOES NOT ALWAYS IDENTIFY A NODE.** With the buffer ending IMMEDIATELY after the dot (no newline,
+  no next token), the synthesized name is zero-width at EOF, so the property access's `end` — read
+  after a one-token lookahead that sees only end-of-file — equals its RECEIVER's, and `holder` and
+  `holder.<nothing>` are both `(45, 52)`. Preorder reaches the access first, `typeToString` of an
+  empty-named property access is `any`, and first-wins then refuses the receiver's own record.
+  Measured: `holder.` read EMPTY while `holder. ` (one trailing space), `holder.;` and `holder.\n` all
+  read `[alpha, beta]` — a defect visible in exactly one of five shapes. **The fix states the missing
+  invariant rather than special-casing EOF: among nodes sharing a span, the DEEPEST is what was asked
+  about, so a later visit overwrites an earlier one IFF it is a DESCENDANT of it** (`parent`-chain
+  walk, run only on a collision). Two visits of the SAME node still keep the first, i.e. round 911's
+  tightest-ambient rule is untouched.
+
+- **THE MEMBER HALF WAS (API.3d) ONE QUESTION WIDER, AS ROUND 916 PREDICTED — AND THE PREDICTION HELD
+  DOWN TO THE LEG ORDER.** `this` first (its type is `currentClassForThis`, null in a static member),
+  then the EXPORT TABLE (a namespace's members are on no type and an enum's own type is member-LESS),
+  then `getTypeOfExpression` + `resolveStructuredTypeMembers`. What is NOT reused is the UNION RULE, and
+  the divergence is deliberate and stated in both KDocs: **go-to-definition COLLECTS across a union
+  and completions INTERSECT**, because "where is `p` declared" is asked about a name already in the
+  text while "what may I write here" must not offer something that will not compile. Nullish
+  constituents are SKIPPED rather than allowed to empty the intersection — otherwise every optional
+  chain and every `strictNullChecks` union answers nothing.
+
+- **OFF IS STILL FREE, AND IT IS STRUCTURAL RATHER THAN CAREFUL.** `memberSpans` is a SECOND span list
+  whose keys are UNIONED into `keysByFile`, so the per-node hot-path guard is byte-identical and the
+  member test happens only after a span has already matched. That is what keeps `fileSemantics` — which
+  hands in every identifier in a file — from enumerating a type at each of them. `cost_gate.py` reads
+  **+0.00% on all 20 counters**.
+
+- **WHAT IS ANSWERED**: members of an object/interface/class receiver including inherited ones (an
+  override ONCE), an intersection (both sides), a union (only members on EVERY constituent, with the
+  member's type rendered as the distinct constituent types joined by `|`), a nullish union (the
+  non-nullish arm), a merged interface, an imported interface, a namespace, an enum, `this`, a lib
+  primitive, and an incomplete `o.` in three buffer shapes. **WHAT IS REFUSED, each with a reason**:
+  free names (`FREE_NAMES_NOT_IMPLEMENTED` — an explicit refusal, not a silent empty list, which is
+  round 913's own pattern); strings/templates/regexes/numeric literals/comments and out-of-file
+  positions (`NO_COMPLETION_CONTEXT`, and they do NOT build); an `any` receiver and an unresolvable one
+  (empty, and NOT a refusal — the receiver was reached and genuinely has no members); accessibility
+  FILTERING — private and protected members are OFFERED with `accessibility` saying which they are,
+  because hiding one correctly depends on where the caret sits relative to the declaring class and a
+  half-done filter silently loses real candidates; a class's static side reached through an instance.
+
+- **A PIN WAS WRITTEN AS A DISCRIMINATOR, MEASURED NOT TO BE ONE, AND RENAMED — round 807's rule
+  applied to my own work.** `a receiver used NOWHERE else in the file still offers its members` was
+  written to catch the round-833 lazy-member-table rule, on the theory that every other receiver in
+  the fixture is resolved by its own `readX` line. It stays GREEN under arm A1: **a `declare const x:
+  T` declaration alone already resolves `T`'s table.** The rule IS load-bearing and the ONE receiver
+  whose table nothing else resolves is `this`, whose type comes from `resolveUncalledThisType` rather
+  than from a declaration the checker visited — so A1 is discriminated by the `this` pin, and the KDoc
+  now says so instead of claiming a discrimination it does not have.
+
+- **A TEST-FIXTURE TRAP WORTH ONE LINE: `|` IS A CARET MARKER AND A UNION SEPARATOR.** The first run of
+  `CompletionAnchorTest` failed one case because `marked.indexOf('|')` found the `|` of
+  `{ a: number } | undefined` rather than the caret, placing the caret 46 characters early — and the
+  test then measured a real anchor at the wrong offset and looked entirely correct while doing it. The
+  marker is U+2038 CARET now, with an assertion that exactly one appears.
+
+- **PINS: +49** (`-project` 142 -> 191; core UNCHANGED at 14,337 — nothing was added there that a core
+  test can reach without the `-project` anchor). 23 anchor pins, parse-only and written FIRST, plus 26
+  end-to-end. **THE DISCRIMINATOR** is (API.3d)'s inverted: a receiver whose members are spelled
+  exactly like two unrelated top-level bindings, asserted as an EXACT list — the wrong answer here is
+  not empty and not a crash, it is a SUPERSET that still contains the right names.
+
+- **SIX-ARM ABLATION, ONE MISTAKE AT A TIME (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). Every arm a DISTINCT
+  set; all six compiled.** **A1** no `resolveStructuredTypeMembers` -> **1 red** (`this`, see above).
+  **A2** the anchor ignores the prefix -> **5 red**, three of them parse-only anchor pins.
+  **A3** a union COLLECTS instead of intersecting -> **1 red, uniquely its own**. **A4** plain
+  first-wins, no descendant rule -> **1 red**, exactly the end-of-buffer pin — i.e. the defect above is
+  pinned by the one test that found it. **A5** no export-table leg -> **2 red** (namespace + enum).
+  **A6** nullish constituents not skipped -> **1 red, uniquely its own**.
+
+- **GATES: suite 14,613 -> 14,662 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules. `cost_gate.py` **+0.00% on all 20 counters**. `huge_methods.py --fail-over 0` clean on core
+  (**742 classes, 15,851 methods, 0 over**) and, per round 909's blind-spot rule, on `-project`
+  explicitly (**21 classes, 213 methods, 0 over**; the largest new method is `scanTokens` at 157).
+  `spine_closure_audit.py` 46 handlers all supersets, run although no `spine*EnterNode` changed.
+  Warning-clean. No wall A/B: production executes not one new instruction — every addition sits behind
+  a hook that returns on a null per-file key set.
+
+- **WHAT (API.4b) NOW NEEDS**, written into its queue entry rather than left implied: the anchor
+  already gives it a correct `FREE_NAME` kind, prefix and replacement span, so what is missing is the
+  ENUMERATION — and the structural fact that decides its shape is that `spineCurrentScope` is nulled
+  per file, so it must be captured DURING the walk (a third span list beside `memberSpans`) and the
+  anchor must start handing in a node for a free position, which today it does not. The size problem is
+  measured, not guessed (round 902: **290.94** symbols per real probe, 815 on the outer levels), so
+  whether a free-name item carries a `typeText` at all is a decision to take BEFORE building it.
+
 **Round 916 (2026-08-17) — (API.3d): MEMBER GO-TO-DEFINITION LANDS, AND THE ROUND'S PRODUCT IS THAT
 ROUND 913's REFUSAL WAS RIGHT FOR A REASON THAT SURVIVES THE FIX — THE MEMBER MECHANISM IS *A SECOND
 MECHANISM*, NOT A WIDENING OF THE FIRST, AND THE ABLATION ARM THAT PROVES IT IS THE ONE THAT RESOLVES A
@@ -752,129 +859,6 @@ Instrument only, two `Checker.kt` lines behind a call-site mode test.
   test — round 900's law in its sharper form, since `sec >= 0` is true in production and a callee
   guard could not have protected the three `size` reads.
 
-**Round 907 (2026-08-15) — (WARM.34): THE COUNT QUESTION IS **REFUSED BY ITS OWN CENSUS**, AND THE
-`lexLevelHasName` FAMILY IS **CLOSED ENTIRELY**. THE QUEUE'S PREMISE WAS WRONG IN THE SAME WAY ROUND
-902's OWN LAW PREDICTS: **"THE O(depth) ASCENT" DESCRIBES THE *CHAIN* (3.69 STEPS), NOT THE *PROBES*
-(1.54) — A CHAIN-STEP POPULATION IS NOT A PROBE POPULATION.**
-
-Nothing was built. `docs/perf/lex-ascent-count-price.md`.
-
-- **(A) THE CENSUS, WITH AN EXACT PARTITION CHECK.** Three processes identical to the last digit,
-  reproduced across all three of the round's builds (nine runs); per-ascent probe counts sum to
-  **870,231 = every real probe the three families make**. Per warm rebuild: **563,466 ascents**,
-  **2,079,962 NameScope chain steps (3.69 each)**, **870,231 real map probes (1.544 per ascent)** —
-  so **the whole probe stream at round 901's measured 36.6 ns is 31.85 ms = 0.602%**. That is the
-  ceiling on *everything* in this family, and it is twice what round 902 projected.
-
-- **(B) THE PREMISE WAS WRONG, AND ITS REFUTATION IS ROUND 902's LAW ONE STEP FURTHER ALONG ROUND
-  902's OWN FAMILY.** The queue said the probes "arise from an O(depth) ascent that revisits the same
-  big outer levels on every walk". That describes the **chain**; **58% of level visits are refused by
-  the untrusted / non-head-fn rules or are hash-free EMPTY maps** (round 901's short-circuit finding),
-  so 3.69 steps become 1.54 probes. *A chain-step population is not a probe population.*
-
-- **(C) THE REDUNDANCY IS REAL AND DOES NOT HELP, WHICH IS THE ROUND'S SHARPEST RESULT.** **80.7% of
-  the stream re-probes a `(level, name)` pair already asked** — 142,632 distinct pairs at 5.17 probes
-  each. Three levers, all under the floor: **(i) the ascent memo the queue named** — 36.4% of ascents
-  repeat a `(scope, name, family)` key, a fine hit rate, but **a repeat ascent performs 1.32 real
-  probes and a memo probe replaces them with 1**, so the net is 66,095 probes = **2.42 ms** before
-  charging 358,586 misses and inserts; with the memo **entirely free** it is 9.92 ms = 0.187%, and at
-  the measured probe cost it is **−10.7 ms, a regression**. **(ii) a per-level memo** — the 21.8 ms
-  the 80.7% implies — is refused **by construction**: *a cache keyed by the same name at the same
-  granularity as the map it fronts IS that map.* **(iii) a per-file proof-of-absence filter**, the
-  only operation cheaper than a probe, bounded by a measured superset at **<= 7.30 ms = 0.138%**.
-  Union of (i) and (iii), both free and assumed disjoint: 0.338%; with their own costs, 0.257%.
-  **To clear 0.31% a lever must delete more than half the stream at zero cost; the best deletes 25%.**
-
-- **(D) THE FAMILY IS CLOSED, ALL THREE LEVERS, ACROSS THREE ROUNDS.** Container: round 901's filter
-  **+0.26%** and round 902's parallel array **−0.19%**. Count: this round. And the closure is now
-  GENERAL rather than per-lever — the whole stream is 0.60%, and any one-operation oracle that costs
-  one probe recovers at most 0.21%. Recorded in passing: **`typeParamConstraintOf` is called 0 times
-  per rebuild**, and two of the five families average **under one** real probe per ascent.
-
-- **(E) THE ABLATION'S BLIND ARM IS THE ROUND'S SECOND FINDING.** Six arms, one mistake at a time,
-  every red set unique — but **C1 was blind on the first pass**: a pin asserting `steps > calls`
-  **summed over five families** stayed green against a census whose ascent count — *the denominator of
-  the entire result* — had been inflated to the chain-step count, because one family (`has`) is 47% of
-  the sum and carried it. Repaired by splitting the counter per family, which also produced the
-  per-family table. **A PIN OVER A SUM IS A PIN OVER ITS LARGEST MEMBER.** Two further pins read zero
-  before the fixture was repaired (round 849, in both directions).
-
-- **(F) GATES — AND THE GRID IS A REAL GATE HERE.** The production shape DID change: the five ascent
-  functions are split into an entry and a `…From` recursion, so a top-level query can be told from a
-  chain step. Suite **14,430 -> 14,437 / 0 failures / 0 errors / 3 skipped** = exactly the 7 new pins,
-  verified by XML parse across all four modules. `cost_gate.py` **+0.00% on all 20 counters** — a
-  control. `huge_methods.py --fail-over 0`: **0 over the limit**, 732 classes. **8-PROFILE `--listAll`
-  GRID: all eight `added=0 removed=0`**, zero exceptions, against round 905's committed captures.
-  No wall A/B and nothing to A/B — nothing was built. The census folded into the existing
-  `--mapCensus`, so no new flag and no three-place lockstep.
-
-**Round 906 (2026-08-14) — (WARM.33): THE LARGEST ESTIMATED ITEM IN THE QUEUE IS **REFUSED, AND IT IS A
-REGRESSION AT EVERY GEOMETRY** — AND ROUND 875 HAD THE **SIGN** WRONG, NOT THE MAGNITUDE: IT READ THE
-*ASCENT'S* SCATTER ONTO THE *PROBE'S* SEQUENTIAL SWEEP. **THE CEILING FOR *ANY* MEMO-LAYOUT CHANGE IS
-2.65-15.99 ms, BELOW THE FLOOR EVERYWHERE. THE WHOLE DIRECTION IS CLOSED.**
-
-Priced with **no clock in the round at all**. `docs/perf/reach-memo-transposition-price.md`.
-
-- **(A) ROUND 875'S OWN QUEUED INSTRUMENT CANNOT WORK, AND SAYING SO IS THE ROUND'S FIRST PRODUCT.**
-  It queued "a transposed-layout **amplifier** arm on the memo probe". An amplifier repeats one probe
-  `r` times under a timestamp pair — so from the second repetition the line is **L1-hot**, and it
-  prices an L1 hit, which is exactly the cost the change exists to remove. (The sibling Rust compiler
-  hit this precisely in its PG11: a memo removed 35.6% of repeat reads and moved the mechanism
-  16.18% -> 15.44%, *because the repeat read was already in L1*.) **A LOCALITY CHANGE CANNOT BE
-  AMPLIFIED.** So the instrument is a CENSUS of the exact access stream plus a set-associative LRU
-  **model** — three layouts x five geometries — and its answer is a **miss-count delta**, i.e. a
-  deterministic counter, not a measurement.
-
-- **(B) THE CENSUS, WITH ITS FALSIFIERS EXACT.** `scripts/round906_instrument.py` hooks all **139**
-  `memo[...]` access lines (43 entry probes, 2 interleaved, 43 ascent probes, 51 writes).
-  **8,888,467 memo accesses per rebuild** — probe 1,960,176 / ascent 3,166,496 / write 3,761,795 —
-  over a **38.4 MiB** footprint. The 43 classifiers' probes sum to **1,909,715 = `ReachCensus.calls`
-  to the digit**, and the gap histogram's 2,816,334 steps plus the two interleaved classifiers'
-  350,162 reproduce 3,166,496 exactly. Two processes identical to the last digit.
-
-- **(C) ROUND 902'S LAW AGAIN, AND AGAIN IT MATTERED: THE MEAN 2.23 IS NOT THE QUANTITY.** **13.9% of
-  nodes are consulted by nobody**; the 738,192 that are consulted average **2.655**, and the
-  transposable population — second-and-later consultations — is **1,221,984 (62.3%)**.
-
-- **(D) THE FINDING THAT REVERSES THE CANDIDATE: THE ASCENT IS NOT SCATTERED.** **42.2% of ascent
-  steps go to `nodeId − 1`** and **89.8% stay within 64 ids** — i.e. *inside one cache line of
-  today's layout*. And the spine walks in PREORDER, so each classifier's 1-byte array is swept
-  **sequentially**: a line serves **~14.2** consultations plus the ascent steps within 64 ids, where a
-  45-byte transposed row serves **~3.8**. **Layout A already answers 97.0% of accesses out of L1.**
-  Round 875 § 5.2 read the ascent's scatter onto the probe's sequential sweep, and got the SIGN wrong.
-
-- **(E) THE PRICE — THE CANDIDATE IS NEGATIVE EVERYWHERE, AND THE CEILING REFUSES THE WHOLE
-  DIRECTION.** Access-stream ms, zeroing separated (it is bandwidth-bound, ~4 ms, identical in every
-  layout):
-
-  | geometry | A (today) | B (transposed) | C (padded row) | ceiling on ANY layout |
-  |---|---:|---:|---:|---:|
-  | box (32K/512K/16M) | 16.87 | **+3.90** | +23.88 | **2.65 ms = 0.05%** |
-  | shrunk / mid / hostile | 23.2-27.0 | +13.0 / +15.7 / +21.0 | +22.4 / +33.7 / +38.0 | 9.0 / 10.4 / 12.8 ms |
-  | flushed (4K/64K/512K) | 30.22 | +24.20 | +46.21 | **15.99 ms = 0.30%** |
-
-  **Shrinking the cache — the only direction in which the model's optimism could have hidden a prize
-  — makes the candidate WORSE.** Layout C is the candidate's own best form and is the worst arm.
-
-- **(F) A CORRECTION TO THIS QUEUE'S OWN ENTRY, WHICH I WROTE.** The item promised the change "deletes
-  36.9 MB/rebuild of allocated+zeroed `ByteArray`". It deletes **55 KB of array headers**: 43 arrays
-  of *n* bytes and one array of 43*n* bytes **are the same bytes**. The figure was inherited from
-  round 875 and restated without checking. *A queue entry is a claim, and it inherits its ancestors'
-  errors silently.*
-
-- **(G) ONE ADJACENT DIRECTION PRICED AND CLOSED ON THE WAY PAST.** Lazily allocating the 17
-  classifiers consulted <1,000x per rebuild saves bandwidth worth **~2-3 ms** — below the floor before
-  it starts — and is recorded precisely so nobody re-opens it as the ~57 ms a naive read of the model's
-  `dram` column suggests.
-
-- **(H) GATES.** Suite **14,424 -> 14,430 / 0 failures / 3 skipped** = exactly the 6 new pins.
-  `cost_gate.py` **+0.00% on all 20 counters** — a control, not a verdict. `huge_methods.py
-  --fail-over 0`: **0 over the limit**. Three single-mistake ablation arms, each with **reached-ness
-  evidence** (round 902), distinct red sets, tree restored and pins re-run green. **No wall A/B and
-  none possible** — the round contains no clock.
-
----
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1079,12 +1063,68 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   generic cases right for free. **13 pins, five-arm ablation each reddening a DISTINCT set, all gates
   green.**
 
-- [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution).
-  Under (API.3)'s capture design its shape is already implied and it is the case that stresses the
-  design hardest: a completion request has NO node at the position (the user is mid-identifier, often
-  right after a `.`), so the capture anchor must be the nearest enclosing node plus the scope in force
-  there — which the spine already maintains as `spineCurrentScope` (INV.4(c)(i)) and which
-  `lexLevelHasName`'s ascent already walks. Do not start before (API.3) lands the capture mechanism.
+- [x] **(API.4a) The completion ANCHOR + MEMBER completions — LANDED, round 917.** (API.4) was
+  decomposed rather than taken whole; this is the standalone half that needed the genuinely new
+  mechanism. **THE ANCHOR** (`SourceIndex.completionAnchorAt` / `CompletionAnchor`, `-project`, where
+  round 910's caret already lives) answers a TOKEN-level question, because a completion request has no
+  node at the caret by construction: it reports a `CompletionKind` (MEMBER / FREE_NAME / NONE), the
+  typed PREFIX, and a replacement span covering the whole word rather than only the prefix. **The
+  recovery rule for an incomplete `o.` is that there is nothing to recover**: this parser's `Dot ->`
+  arm always builds a `PropertyAccessExpression`, synthesizing a zero-width `Identifier("")` and
+  reporting TS1003, so the receiver is a real node at end of file, before a `}` and across a newline
+  alike — the anchor descends to the character BEFORE the dot and walks back out to the access whose
+  own dot that is (`realEnd(expression) <= dotStart < name.pos`, which at most one node in a path can
+  satisfy). A `.` the parse did not turn into an access answers empty rather than guessing a receiver
+  from bracket-balanced text. **THE MEMBERS** ride (API.3d)'s resolution one question wider —
+  `TypeCaptureRequest.memberSpans` (a SECOND span list, so `fileSemantics` never enumerates) ->
+  `CapturedMembers` / `CapturedMember(name, kind, typeText, optional, readonly, accessibility)`.
+  **`Project.completionsAt(fileName, offset): CompletionList`.** Free names are an explicit
+  `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`, never a silent empty list.
+
+- [ ] **(API.4b) FREE-NAME completions + keywords.** The second half of (API.4). **Lands by deleting
+  one refusal**: `Project.completionsAt` maps `CompletionKind.FREE_NAME` to
+  `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`; replacing that with a candidate list needs NO change
+  to `CompletionList`, `CompletionItem` or the method signature, which is the constraint (API.4a) was
+  designed under.
+
+  **WHAT IS ALREADY YOURS, do not re-derive it.** The anchor: `completionAnchorAt` already returns
+  `FREE_NAME` with the correct prefix and replacement span at every free position, and already answers
+  `NONE` inside strings, templates, comments and numeric literals — `CompletionAnchorTest` pins all of
+  it, including the caret at the very end of the file. The public value types, the refusal enum, the
+  `memberSpans` channel and the "off is free" wiring. The build-free short-circuit (a refused kind does
+  not compile) — you will be REMOVING that for FREE_NAME, which makes free-name completion a compile
+  where member completion already is one.
+
+  **WHAT MUST BE BUILT, and the one structural fact that decides its shape.** The scope chain is
+  **CLEARED PER FILE**: `spineCurrentScope` is nulled by the spine's per-file teardown, which is what
+  `DefinitionCaptureMeasurementTest` measures — so the enumeration must happen DURING the walk, at the
+  requested position, exactly as `typeCaptureRecordDefinition` does. There is no post-hoc option. The
+  natural shape is a third span list (`scopeSpans`) beside `memberSpans`, keyed the same way, recording
+  a `CapturedScope` at the node the anchor names — and the anchor must therefore hand in a NODE for a
+  free position too, which today it does not (it returns `receiver = null`). Deciding WHICH node a free
+  caret names is the first sub-problem: the caret is between nodes, so the honest candidate is the
+  nearest enclosing statement or block, and its scope is the scope in force for the position.
+
+  **THE SIZE PROBLEM IS REAL AND IS MEASURED.** CLAUDE.md round 902: `LexicalScope.symbols` holds 1.51
+  symbols averaged over SCOPES but **290.94 averaged over a real PROBE**, because the ascent walks
+  outwards and 35.5% of probes land on levels holding a mean of **815**. A completion list is that
+  whole ascent, flattened — so it is hundreds of items on a real program, every one of which costs a
+  `getTypeOfSymbol` + `typeToString` if the item is to carry a type the way a member item does.
+  **Decide whether a free-name item carries `typeText` at all before building it**; making it optional
+  (null for a free name, present for a member) is a strictly additive change to `CompletionItem` and
+  is the cheap escape.
+
+  **SHADOWING AND DEDUP.** Innermost wins: a name bound at two levels must appear ONCE, as the inner
+  binding, which is the opposite of the member walk's merge (a member declared twice is one item
+  merged from both). `lexLevelHasName`'s ascent is the traversal to copy, with its two live rules —
+  `LexicalScope.symbols` only, never `existing` (round 748), and the untrusted Module/Enum levels are
+  SKIPPED (INV.4(c)(ii)). Keywords are a separate, purely syntactic list keyed on the anchor's
+  position and want their own `CompletionItem.kind`.
+
+  **THE PIN THAT DISCRIMINATES** is (API.4a)'s discriminator inverted: a caret inside a function body
+  whose local shadows a same-named binding in ANOTHER FILE must offer the local ONCE and must not
+  offer the other file's; and the member pins must stay green, i.e. a free-name enumeration must not
+  leak into a member position — the failure round 913 refused and round 916's arm A2 catches.
 
 DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
 sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->

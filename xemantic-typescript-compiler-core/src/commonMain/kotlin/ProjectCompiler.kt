@@ -83,6 +83,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         val capturedTypes: List<CapturedType> = emptyList(),
         /** (API.3b) Where the symbols at those same spans are declared, or empty. */
         val capturedDefinitions: List<CapturedDefinition> = emptyList(),
+        /** (API.4a) What the types at the request's `memberSpans` call their own,
+         *  or empty — the member half of a completion list. */
+        val capturedMembers: List<CapturedMembers> = emptyList(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -277,6 +280,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             written = written,
             capturedTypes = result.capturedTypes,
             capturedDefinitions = result.capturedDefinitions,
+            capturedMembers = result.capturedMembers,
         )
     }
 

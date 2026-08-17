@@ -4,12 +4,13 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 916, 2026-08-17).** Landed: diagnostics, in-memory edits,
+**Status (round 917, 2026-08-17).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
-namespace, enum, lib), and **batched semantics** — many positions, or a whole
-file, in one build. Not yet: completions `(API.4)`. See the `(API.*)` items in
-`PLAN-PHASE-5.md`.
+namespace, enum, lib), **batched semantics** — many positions, or a whole file,
+in one build — and **member completions** `(API.4a)`. Not yet: free-name
+completions `(API.4b)`, which `completionsAt` refuses explicitly rather than
+answering empty. See the `(API.*)` items in `PLAN-PHASE-5.md`.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -437,6 +438,90 @@ answer an empty list without compiling.
 `diagnostics()` build and never becomes it, and it reads your overlay. Batching
 changes how many compiles you pay for, nothing about what one compile is.
 
+## 10a. Completions
+
+```kotlin
+val list: CompletionList = project.completionsAt(path, offset)
+// CompletionList(kind: CompletionKind, prefix: String,
+//                replacementStart: Int, replacementEnd: Int,
+//                items: List<CompletionItem>, refusal: CompletionRefusal?)
+// CompletionItem(name: String, kind: String, typeText: String,
+//                optional: Boolean, readonly: Boolean, accessibility: String)
+```
+
+**Member completions are answered; free names are refused, out loud.** A caret
+after a `.` or a `?.` gets the members of the expression to its left. A caret at
+a free position gets `kind = FREE_NAME` and
+`refusal = FREE_NAMES_NOT_IMPLEMENTED` — an empty list *with a stated reason*, so
+your host can tell "nothing is in scope here" from "this compiler cannot do that
+yet" and fall back to a word-based completer only in the second case. Everything
+else about a free-name caret — the prefix, the replacement span — is correct
+today and usable; `(API.4b)` fills in the candidates without changing a
+signature.
+
+**This is the one query whose position is not a node.** Every other semantic
+member starts from a node at the caret; a completion request has none by
+construction, because the user is mid-identifier or sitting right after a dot
+with nothing typed. So the caret is resolved against the *token stream*, and the
+receiver is then recovered from the parse. What follows from that:
+
+- `o.` at end of file, before a `}`, or with the caret parked on the next line
+  all work. Our parser always builds a property access for a `.` — it
+  synthesizes an empty name and reports TS1003 — so there is a real receiver node
+  even when nothing has been typed after the dot.
+- A caret inside a **string, template, regular expression, numeric literal or
+  comment** answers `kind = NONE` / `refusal = NO_COMPLETION_CONTEXT`, **and does
+  not compile**. A `.` inside a string or a comment is not a member anchor.
+- A caret at the very **end of the file** is a real position here, unlike
+  `nodeInfoAt` (§ 7), whose spans are half-open and exclude it.
+
+**Filtering is yours, and deliberately so.** `items` is *not* cut by `prefix`.
+Ranking — prefix versus substring versus fuzzy, case sensitivity, how a
+`_`-prefixed member sorts — is host policy, and a list that has already been cut
+cannot be re-ranked. So you get the full candidate set and the prefix beside it.
+
+**Two spans, and they are different quantities.** `prefix` is what the user has
+typed and is what you filter by. `replacementStart until replacementEnd` is what
+accepting an item must *replace*, and it covers the whole word the caret is in —
+so accepting in the middle of `o.fo|o` leaves no `o` behind. With no word under
+the caret the two offsets are equal and an accepted item is inserted.
+
+**What the member list contains.**
+
+| receiver | what you get |
+|---|---|
+| object / interface / class | its own members and its bases', an override once |
+| `A & B` | the members of both |
+| <code>A &#124; B</code> | only the members present on **every** constituent |
+| <code>T &#124; undefined</code> | `T`'s members — nullish constituents are skipped |
+| namespace, module alias, enum | its export table |
+| `this` | the enclosing class's members (nothing inside a `static` member) |
+| primitive, type parameter | the apparent type's — the lib wrapper, the constraint |
+| `any` | nothing, which is also tsc's answer |
+| unresolvable | nothing — never the nearest same-named thing |
+
+The union rule is deliberately **not** the rule go-to-definition uses on the same
+receiver (§ 9, which collects every declaration). "Where is `p` declared" is
+asked about a name already in your text and every declaration of it is a real
+place to go; "what may I write here" must not offer something that will not
+compile.
+
+Items are **deduplicated by name and sorted by name** — the order is imposed by
+the API, because a member table's own iteration order is an implementation
+property.
+
+**Accessibility is reported, not enforced.** `private` and `protected` members
+**are offered**, with `accessibility` saying which they are. Whether to hide one
+depends on where the caret sits relative to the declaring class, which is a
+mechanism this round did not build; reporting the fact lets you apply your own
+rule, where hiding on a half-implemented test would silently lose real
+candidates. `kind` is how you tell a method from a property — there is no
+separate flag.
+
+**Cost: one compile, one caret.** The same caveats as hover (§ 8): it builds, and
+that build is not the `diagnostics()` build. Batching many carets is
+`semanticsAt`'s question, not this one.
+
 ## 11. Rules that apply to everything
 
 **Paths.** Every path crossing the API is normalized and made absolute through
@@ -534,14 +619,13 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **`(API.4)` completions** — the largest, and the one that stresses the design:
-  a completion request has no node at the position at all, since the user is
-  mid-identifier. Its member half is now mostly in place — "what does this
-  receiver's type call things" is the same member resolution `definitionsAt`
-  uses, one question wider (enumerate rather than look up one name) — so what it
-  still needs is the *anchor*: a request whose position falls between nodes, and
-  the free-name half, which is an enumeration of the scope chain rather than a
-  lookup in it.
+- **`(API.4b)` free-name completions** — everything a caret's lexical scope binds,
+  plus the keywords legal at that position. The anchor already reports the caret
+  correctly (`kind`, `prefix`, replacement span); what is missing is the
+  enumeration, which is a different traversal of the scope chain from the
+  single-name lookup `definitionsAt` performs, and a larger one — the outer
+  levels of a real program hold hundreds of symbols. It lands by dropping
+  `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`, with no signature change here.
 - **contextual object-literal keys** — `{ p: v }`'s own `p` still answers
   nothing, because the useful target is the contextual type's property (§ 9).
 

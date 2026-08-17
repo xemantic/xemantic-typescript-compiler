@@ -89,10 +89,18 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * going to perform anyway. Reach for those; the single-caret pair remains for the
  * host that genuinely has one caret and one question.
  *
+ * ## Completions
+ *
+ * [completionsAt] answers what may be WRITTEN at a caret. It is the one query whose
+ * position cannot be a node — the user is mid-identifier or sitting just after a
+ * `.` — so it resolves the caret against the token stream and reports what it found
+ * ([CompletionKind]) beside the candidates. Member completions are answered; free
+ * names are an explicit, documented refusal, not a silent empty list.
+ *
  * ## What this class is NOT
  *
- * It is not a language service: there are no completions, no find-references, and
- * no incremental reuse of a previous build's internal state.
+ * It is not a full language service: there is no find-references, no free-name
+ * completion yet, and no incremental reuse of a previous build's internal state.
  * A query on a dirty project is a FULL rebuild, and that is a property of the
  * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
@@ -501,6 +509,114 @@ public class Project private constructor(
             ?.locations
             ?.map { DefinitionLocation(it.fileName, it.start, it.length, it.kind) }
             ?: emptyList()
+    }
+
+    /**
+     * (API.4a) What may be written at [offset] in [fileName] — the completion
+     * answer.
+     *
+     * ## What is answered, and what is refused
+     *
+     * MEMBER completions — the caret follows a `.` or a `?.` — are answered: the
+     * receiver's type is computed during the build and every member it has comes
+     * back. FREE-NAME completions are REFUSED with
+     * [CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED] rather than answered with a
+     * silent empty list, because a host cannot otherwise tell "nothing is in scope"
+     * from "this compiler does not do that yet". Everything else about a free-name
+     * caret — its [CompletionList.kind], its [CompletionList.prefix] and its
+     * replacement span — IS answered and is correct today; (API.4b) fills in the
+     * candidates by removing that refusal, which needs no change to any signature
+     * here.
+     *
+     * ## The anchor is a token question, not a node question
+     *
+     * Every other semantic member of this class starts from a node that exists at
+     * the caret. A completion request has none — the user is mid-identifier, or
+     * sitting right after a `.` with nothing typed — so the position is resolved
+     * against the TOKEN STREAM instead, and the receiver is then recovered from the
+     * parse. `CompletionAnchor` and `SourceIndex.completionAnchorAt` carry the full
+     * rule, including what happens to an incomplete `o.`: this parser always builds
+     * a property access for a `.`, synthesizing an empty name and reporting TS1003,
+     * so the receiver is a real node even at end of file. A `.` the parse did not
+     * turn into a member access answers an empty list rather than guessing a
+     * receiver from raw text.
+     *
+     * ## What this offers that tsc would not, deliberately
+     *
+     * PRIVATE and PROTECTED members are OFFERED, with
+     * [CompletionItem.accessibility] saying which they are. Filtering them correctly
+     * depends on where the caret is relative to the declaring class — inside the
+     * class, inside a subclass, or outside — and that is a second mechanism this
+     * round did not build; reporting the fact lets a host apply its own rule, where
+     * hiding them on a half-implemented test would silently lose real candidates.
+     *
+     * ## Cost
+     *
+     * ONE build, with the same caveats [quickInfoAt] documents: it does not read or
+     * fill the [diagnostics] cache. A caret that admits no completion — inside a
+     * string, a comment or a numeric literal, or outside the file — DOES NOT BUILD.
+     * Only one caret is described per build; a host describing several is asking
+     * [semanticsAt]'s question, not this one.
+     */
+    public fun completionsAt(fileName: String, offset: Int): CompletionList {
+        val index = sourceIndexOf(fileName)
+            ?: return CompletionList(
+                CompletionKind.NONE,
+                "",
+                offset,
+                offset,
+                emptyList(),
+                CompletionRefusal.NO_COMPLETION_CONTEXT,
+            )
+        val anchor = index.completionAnchorAt(offset)
+        val refusal = when (anchor.kind) {
+            CompletionKind.NONE -> CompletionRefusal.NO_COMPLETION_CONTEXT
+            CompletionKind.FREE_NAME -> CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED
+            CompletionKind.MEMBER -> null
+        }
+        val receiver = anchor.receiver
+        // A refused kind and a `.` with no receiver both answer without building: a
+        // query that cannot use a compile must not pay for one.
+        if (refusal != null || receiver == null) {
+            return CompletionList(
+                anchor.kind,
+                anchor.prefix,
+                anchor.replacementStart,
+                anchor.replacementEnd,
+                emptyList(),
+                refusal,
+            )
+        }
+        val key = keyOf(fileName)
+        // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
+        val span = TypeCaptureSpan(key, receiver.pos, receiver.end)
+        val captured = ProjectCompiler(overlay)
+            .build(
+                projectPath,
+                noEmit = true,
+                typeCapture = TypeCaptureRequest(spans = emptyList(), memberSpans = listOf(span)),
+            )
+            .capturedMembers
+            .firstOrNull {
+                it.fileName == key && it.start == receiver.pos && it.end == receiver.end
+            }
+        return CompletionList(
+            CompletionKind.MEMBER,
+            anchor.prefix,
+            anchor.replacementStart,
+            anchor.replacementEnd,
+            captured?.members.orEmpty().map {
+                CompletionItem(
+                    name = it.name,
+                    kind = it.kind,
+                    typeText = it.typeText,
+                    optional = it.optional,
+                    readonly = it.readonly,
+                    accessibility = it.accessibility,
+                )
+            },
+            null,
+        )
     }
 
     /**

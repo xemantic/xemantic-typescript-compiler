@@ -1,3 +1,126 @@
+**Round 907 (2026-08-15) — (WARM.34): THE COUNT QUESTION IS **REFUSED BY ITS OWN CENSUS**, AND THE
+`lexLevelHasName` FAMILY IS **CLOSED ENTIRELY**. THE QUEUE'S PREMISE WAS WRONG IN THE SAME WAY ROUND
+902's OWN LAW PREDICTS: **"THE O(depth) ASCENT" DESCRIBES THE *CHAIN* (3.69 STEPS), NOT THE *PROBES*
+(1.54) — A CHAIN-STEP POPULATION IS NOT A PROBE POPULATION.**
+
+Nothing was built. `docs/perf/lex-ascent-count-price.md`.
+
+- **(A) THE CENSUS, WITH AN EXACT PARTITION CHECK.** Three processes identical to the last digit,
+  reproduced across all three of the round's builds (nine runs); per-ascent probe counts sum to
+  **870,231 = every real probe the three families make**. Per warm rebuild: **563,466 ascents**,
+  **2,079,962 NameScope chain steps (3.69 each)**, **870,231 real map probes (1.544 per ascent)** —
+  so **the whole probe stream at round 901's measured 36.6 ns is 31.85 ms = 0.602%**. That is the
+  ceiling on *everything* in this family, and it is twice what round 902 projected.
+
+- **(B) THE PREMISE WAS WRONG, AND ITS REFUTATION IS ROUND 902's LAW ONE STEP FURTHER ALONG ROUND
+  902's OWN FAMILY.** The queue said the probes "arise from an O(depth) ascent that revisits the same
+  big outer levels on every walk". That describes the **chain**; **58% of level visits are refused by
+  the untrusted / non-head-fn rules or are hash-free EMPTY maps** (round 901's short-circuit finding),
+  so 3.69 steps become 1.54 probes. *A chain-step population is not a probe population.*
+
+- **(C) THE REDUNDANCY IS REAL AND DOES NOT HELP, WHICH IS THE ROUND'S SHARPEST RESULT.** **80.7% of
+  the stream re-probes a `(level, name)` pair already asked** — 142,632 distinct pairs at 5.17 probes
+  each. Three levers, all under the floor: **(i) the ascent memo the queue named** — 36.4% of ascents
+  repeat a `(scope, name, family)` key, a fine hit rate, but **a repeat ascent performs 1.32 real
+  probes and a memo probe replaces them with 1**, so the net is 66,095 probes = **2.42 ms** before
+  charging 358,586 misses and inserts; with the memo **entirely free** it is 9.92 ms = 0.187%, and at
+  the measured probe cost it is **−10.7 ms, a regression**. **(ii) a per-level memo** — the 21.8 ms
+  the 80.7% implies — is refused **by construction**: *a cache keyed by the same name at the same
+  granularity as the map it fronts IS that map.* **(iii) a per-file proof-of-absence filter**, the
+  only operation cheaper than a probe, bounded by a measured superset at **<= 7.30 ms = 0.138%**.
+  Union of (i) and (iii), both free and assumed disjoint: 0.338%; with their own costs, 0.257%.
+  **To clear 0.31% a lever must delete more than half the stream at zero cost; the best deletes 25%.**
+
+- **(D) THE FAMILY IS CLOSED, ALL THREE LEVERS, ACROSS THREE ROUNDS.** Container: round 901's filter
+  **+0.26%** and round 902's parallel array **−0.19%**. Count: this round. And the closure is now
+  GENERAL rather than per-lever — the whole stream is 0.60%, and any one-operation oracle that costs
+  one probe recovers at most 0.21%. Recorded in passing: **`typeParamConstraintOf` is called 0 times
+  per rebuild**, and two of the five families average **under one** real probe per ascent.
+
+- **(E) THE ABLATION'S BLIND ARM IS THE ROUND'S SECOND FINDING.** Six arms, one mistake at a time,
+  every red set unique — but **C1 was blind on the first pass**: a pin asserting `steps > calls`
+  **summed over five families** stayed green against a census whose ascent count — *the denominator of
+  the entire result* — had been inflated to the chain-step count, because one family (`has`) is 47% of
+  the sum and carried it. Repaired by splitting the counter per family, which also produced the
+  per-family table. **A PIN OVER A SUM IS A PIN OVER ITS LARGEST MEMBER.** Two further pins read zero
+  before the fixture was repaired (round 849, in both directions).
+
+- **(F) GATES — AND THE GRID IS A REAL GATE HERE.** The production shape DID change: the five ascent
+  functions are split into an entry and a `…From` recursion, so a top-level query can be told from a
+  chain step. Suite **14,430 -> 14,437 / 0 failures / 0 errors / 3 skipped** = exactly the 7 new pins,
+  verified by XML parse across all four modules. `cost_gate.py` **+0.00% on all 20 counters** — a
+  control. `huge_methods.py --fail-over 0`: **0 over the limit**, 732 classes. **8-PROFILE `--listAll`
+  GRID: all eight `added=0 removed=0`**, zero exceptions, against round 905's committed captures.
+  No wall A/B and nothing to A/B — nothing was built. The census folded into the existing
+  `--mapCensus`, so no new flag and no three-place lockstep.
+
+**Round 906 (2026-08-14) — (WARM.33): THE LARGEST ESTIMATED ITEM IN THE QUEUE IS **REFUSED, AND IT IS A
+REGRESSION AT EVERY GEOMETRY** — AND ROUND 875 HAD THE **SIGN** WRONG, NOT THE MAGNITUDE: IT READ THE
+*ASCENT'S* SCATTER ONTO THE *PROBE'S* SEQUENTIAL SWEEP. **THE CEILING FOR *ANY* MEMO-LAYOUT CHANGE IS
+2.65-15.99 ms, BELOW THE FLOOR EVERYWHERE. THE WHOLE DIRECTION IS CLOSED.**
+
+Priced with **no clock in the round at all**. `docs/perf/reach-memo-transposition-price.md`.
+
+- **(A) ROUND 875'S OWN QUEUED INSTRUMENT CANNOT WORK, AND SAYING SO IS THE ROUND'S FIRST PRODUCT.**
+  It queued "a transposed-layout **amplifier** arm on the memo probe". An amplifier repeats one probe
+  `r` times under a timestamp pair — so from the second repetition the line is **L1-hot**, and it
+  prices an L1 hit, which is exactly the cost the change exists to remove. (The sibling Rust compiler
+  hit this precisely in its PG11: a memo removed 35.6% of repeat reads and moved the mechanism
+  16.18% -> 15.44%, *because the repeat read was already in L1*.) **A LOCALITY CHANGE CANNOT BE
+  AMPLIFIED.** So the instrument is a CENSUS of the exact access stream plus a set-associative LRU
+  **model** — three layouts x five geometries — and its answer is a **miss-count delta**, i.e. a
+  deterministic counter, not a measurement.
+
+- **(B) THE CENSUS, WITH ITS FALSIFIERS EXACT.** `scripts/round906_instrument.py` hooks all **139**
+  `memo[...]` access lines (43 entry probes, 2 interleaved, 43 ascent probes, 51 writes).
+  **8,888,467 memo accesses per rebuild** — probe 1,960,176 / ascent 3,166,496 / write 3,761,795 —
+  over a **38.4 MiB** footprint. The 43 classifiers' probes sum to **1,909,715 = `ReachCensus.calls`
+  to the digit**, and the gap histogram's 2,816,334 steps plus the two interleaved classifiers'
+  350,162 reproduce 3,166,496 exactly. Two processes identical to the last digit.
+
+- **(C) ROUND 902'S LAW AGAIN, AND AGAIN IT MATTERED: THE MEAN 2.23 IS NOT THE QUANTITY.** **13.9% of
+  nodes are consulted by nobody**; the 738,192 that are consulted average **2.655**, and the
+  transposable population — second-and-later consultations — is **1,221,984 (62.3%)**.
+
+- **(D) THE FINDING THAT REVERSES THE CANDIDATE: THE ASCENT IS NOT SCATTERED.** **42.2% of ascent
+  steps go to `nodeId − 1`** and **89.8% stay within 64 ids** — i.e. *inside one cache line of
+  today's layout*. And the spine walks in PREORDER, so each classifier's 1-byte array is swept
+  **sequentially**: a line serves **~14.2** consultations plus the ascent steps within 64 ids, where a
+  45-byte transposed row serves **~3.8**. **Layout A already answers 97.0% of accesses out of L1.**
+  Round 875 § 5.2 read the ascent's scatter onto the probe's sequential sweep, and got the SIGN wrong.
+
+- **(E) THE PRICE — THE CANDIDATE IS NEGATIVE EVERYWHERE, AND THE CEILING REFUSES THE WHOLE
+  DIRECTION.** Access-stream ms, zeroing separated (it is bandwidth-bound, ~4 ms, identical in every
+  layout):
+
+  | geometry | A (today) | B (transposed) | C (padded row) | ceiling on ANY layout |
+  |---|---:|---:|---:|---:|
+  | box (32K/512K/16M) | 16.87 | **+3.90** | +23.88 | **2.65 ms = 0.05%** |
+  | shrunk / mid / hostile | 23.2-27.0 | +13.0 / +15.7 / +21.0 | +22.4 / +33.7 / +38.0 | 9.0 / 10.4 / 12.8 ms |
+  | flushed (4K/64K/512K) | 30.22 | +24.20 | +46.21 | **15.99 ms = 0.30%** |
+
+  **Shrinking the cache — the only direction in which the model's optimism could have hidden a prize
+  — makes the candidate WORSE.** Layout C is the candidate's own best form and is the worst arm.
+
+- **(F) A CORRECTION TO THIS QUEUE'S OWN ENTRY, WHICH I WROTE.** The item promised the change "deletes
+  36.9 MB/rebuild of allocated+zeroed `ByteArray`". It deletes **55 KB of array headers**: 43 arrays
+  of *n* bytes and one array of 43*n* bytes **are the same bytes**. The figure was inherited from
+  round 875 and restated without checking. *A queue entry is a claim, and it inherits its ancestors'
+  errors silently.*
+
+- **(G) ONE ADJACENT DIRECTION PRICED AND CLOSED ON THE WAY PAST.** Lazily allocating the 17
+  classifiers consulted <1,000x per rebuild saves bandwidth worth **~2-3 ms** — below the floor before
+  it starts — and is recorded precisely so nobody re-opens it as the ~57 ms a naive read of the model's
+  `dram` column suggests.
+
+- **(H) GATES.** Suite **14,424 -> 14,430 / 0 failures / 3 skipped** = exactly the 6 new pins.
+  `cost_gate.py` **+0.00% on all 20 counters** — a control, not a verdict. `huge_methods.py
+  --fail-over 0`: **0 over the limit**. Three single-mistake ablation arms, each with **reached-ness
+  evidence** (round 902), distinct red sets, tree restored and pins re-run green. **No wall A/B and
+  none possible** — the round contains no clock.
+
+---
+
 **Round 905 (2026-08-14) — (WARM.32): THE ITERATOR-ALLOCATION FAMILY — THE ONE CANDIDATE IMPORTED FROM
 THE SIBLING RUST COMPILER, WHERE THE SAME MECHANISM MEASURED **−3.1%** — IS **REFUSED HERE AT 0.074%
 (3.90 ms), BY 4.4x**. THE MECHANISM TRANSFERS AND THE **SHAPE** DOES NOT: 215 SITES ARE **495,305

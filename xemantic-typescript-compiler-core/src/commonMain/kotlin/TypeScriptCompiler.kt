@@ -57,6 +57,12 @@ data class CompilationResult(
      * resolves — a member name, a literal, a keyword.
      */
     val capturedDefinitions: List<CapturedDefinition> = emptyList(),
+    /**
+     * (API.4a) What the types at the request's `memberSpans` call their own, or
+     * empty. One entry per span the checker reached; an entry whose `members` is
+     * empty is a real answer ("that receiver has no members").
+     */
+    val capturedMembers: List<CapturedMembers> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -1172,6 +1178,7 @@ class TypeScriptCompiler {
             diagnostics = diagnostics,
             capturedTypes = checker.capturedTypes,
             capturedDefinitions = checker.capturedDefinitions,
+            capturedMembers = checker.capturedMembers,
         )
     }
 
@@ -1655,6 +1662,7 @@ class TypeScriptCompiler {
             allSourceFiles = allFiles,
             capturedTypes = checker.capturedTypes,
             capturedDefinitions = checker.capturedDefinitions,
+            capturedMembers = checker.capturedMembers,
         )
     }
 

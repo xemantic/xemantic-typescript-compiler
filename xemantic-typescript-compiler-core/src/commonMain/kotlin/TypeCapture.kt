@@ -156,6 +156,70 @@ data class CapturedDefinition(
 )
 
 /**
+ * (API.4a) ONE member of the type at a requested [TypeCaptureRequest.memberSpans]
+ * span — a completion candidate.
+ *
+ * VALUE-TYPED for [CapturedType]'s reason, and carrying enough for an editor to
+ * RENDER the item without a second query: the name to insert, what sort of thing it
+ * is, its type as text, and the three facts a list widget shows as decoration.
+ *
+ * @property name the member's name, exactly as it must be written after the dot.
+ * @property kind the `SyntaxKind` name of the member's own declaration —
+ *   `PropertyDeclaration` for a property (interface members are `ClassElement`s in
+ *   this parser, so a property signature is one too), `MethodDeclaration` for a
+ *   method, `GetAccessor` / `SetAccessor` for an accessor, `Parameter` for a
+ *   constructor parameter property, `EnumMember` for an enum's member. `"Unknown"`
+ *   for a symbol carrying no declaration at all (a synthesized tuple member).
+ *   THIS is how a host tells a method from a property; there is no separate flag.
+ * @property typeText the member's type, rendered as the compiler renders it in a
+ *   message. For a UNION receiver it is the DISTINCT types the member has across
+ *   the constituents, in constituent order, joined by `" | "` — the member of
+ *   `{ p: string } | { p: number }` reads `string | number`.
+ * @property optional true when the member is declared `p?`, or is optional in ANY
+ *   constituent of a union receiver: a member that may be absent on one arm of the
+ *   union may be absent through the union.
+ * @property readonly true when ANY contributing declaration carries `readonly`.
+ * @property accessibility `"public"`, `"protected"` or `"private"`, read from the
+ *   declaration's modifiers. It is REPORTED AND NOT ACTED ON: whether an
+ *   inaccessible member should be offered depends on where the caret is relative to
+ *   the declaring class, which is a second mechanism (see
+ *   [TypeCaptureRequest.memberSpans]). A host that wants tsc's filtering applies it
+ *   here; one that wants to grey the item out has what it needs either way.
+ */
+data class CapturedMember(
+    val name: String,
+    val kind: String,
+    val typeText: String,
+    val optional: Boolean,
+    val readonly: Boolean,
+    val accessibility: String,
+)
+
+/**
+ * (API.4a) Everything the type at a requested [TypeCaptureRequest.memberSpans] span
+ * calls its own — the member half of a completion list.
+ *
+ * Keyed on the query span exactly as [CapturedType] and [CapturedDefinition] are, by
+ * the RAW `(pos, end)` pair.
+ *
+ * An entry EXISTS whenever the checker reached the span; [members] being empty is
+ * therefore a real answer ("this receiver has no members") and is distinguishable
+ * from no entry at all ("the checker never walked that span"). Both are legitimate
+ * and both come out of `Project.completionsAt` as an empty list.
+ *
+ * @property members deduplicated by name and sorted by name ascending. Sorted here
+ *   rather than left in table order because a member table's iteration order is an
+ *   implementation property (`resolveStructuredTypeMembers` fills it base-first) and
+ *   a completion list a user reads must not reorder under a checker change.
+ */
+data class CapturedMembers(
+    val fileName: String,
+    val start: Int,
+    val end: Int,
+    val members: List<CapturedMember>,
+)
+
+/**
  * (API.3) A set of positions a compile is asked to record the type AT, handed to
  * the compiler BEFORE the build.
  *
@@ -213,14 +277,67 @@ data class TypeCaptureRequest(
      * recorded once, by the DEEPEST node carrying it).
      */
     val spans: List<TypeCaptureSpan>,
+    /**
+     * (API.4a) The spans to additionally ENUMERATE THE MEMBERS OF — a completion
+     * request names its RECEIVER here, and gets [CapturedMembers] back.
+     *
+     * ## Why a second list rather than a flag on every span
+     *
+     * Enumerating a type's members resolves every member's type, which is real work
+     * and is work `Project.fileSemantics` must never do: that caller hands in every
+     * identifier in a file, and enumerating members at each of them would multiply
+     * a linear sweep by the size of every type it touches. A completion asks about
+     * ONE receiver. Keeping the two populations apart makes that structural instead
+     * of a convention.
+     *
+     * A span may appear in both lists; it then gets a type, a definition and a
+     * member list, all from the one visit. [keysByFile] is the UNION, so the
+     * checker's per-node hot-path guard is unchanged — the member test happens only
+     * after a span has already matched.
+     *
+     * ## What member enumeration answers, and what it deliberately does not
+     *
+     * The receiver's own members, its bases' (through `resolveStructuredTypeMembers`,
+     * which copies a base's own symbol into the derived table, so an INHERITED
+     * member appears once and an OVERRIDDEN one appears once, as the override), the
+     * members of every constituent of an INTERSECTION, and — for a UNION — only the
+     * members present on EVERY constituent, because only those may legally be
+     * accessed through the union. That last rule is deliberately NOT the rule
+     * [CapturedDefinition] uses for the same receiver: "where is `p` declared" is
+     * asked about a name the user has already written and every declaration of it is
+     * a real place to go, while "what may I write here" must not offer something
+     * that will not compile.
+     *
+     * `undefined` / `null` / `void` constituents of a union are SKIPPED rather than
+     * emptying the intersection — they contribute no members, and treating them as
+     * a veto would make every `strictNullChecks` union and every optional chain
+     * answer nothing.
+     *
+     * NOT answered: accessibility filtering (reported per member instead, see
+     * [CapturedMember.accessibility]), the static side of a class reached through an
+     * instance (only the instance member table is read), and index signatures and
+     * call/construct signatures, which have no name to complete.
+     */
+    val memberSpans: List<TypeCaptureSpan> = emptyList(),
 ) {
 
     /**
      * The spans indexed by file, as packed `(start, end)` keys — the form the
      * checker's per-node test needs.
+     *
+     * (API.4a) The UNION of [spans] and [memberSpans]: this set is what the hot-path
+     * guard tests, and a member span has to pass it to be visited at all.
      */
     internal val keysByFile: Map<String, Set<Long>> =
-        spans.groupBy { it.fileName }
+        (spans + memberSpans).groupBy { it.fileName }
+            .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
+
+    /**
+     * (API.4a) The [memberSpans] alone, in the same form — consulted only after a
+     * span has already matched [keysByFile], i.e. never on the hot path.
+     */
+    internal val memberKeysByFile: Map<String, Set<Long>> =
+        memberSpans.groupBy { it.fileName }
             .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
 
     internal companion object {

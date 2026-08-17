@@ -4994,6 +4994,17 @@ class Checker(
         typeCapture?.keysByFile ?: emptyMap()
 
     /**
+     * (API.4a) The subset of [typeCaptureKeysByFile] whose members are also to be
+     * ENUMERATED — the completion receivers.
+     *
+     * A second map rather than a flag per span, for [TypeCaptureRequest.memberSpans]'
+     * reason: `Project.fileSemantics` hands in every identifier in a file and must
+     * not enumerate a type at each of them.
+     */
+    private val typeCaptureMemberKeysByFile: Map<String, Set<Long>> =
+        typeCapture?.memberKeysByFile ?: emptyMap()
+
+    /**
      * The requested spans of the file the spine is walking, or null.
      *
      * Null for EVERY file when nothing was requested, which is what makes the
@@ -5001,6 +5012,16 @@ class Checker(
      * branch. Set beside `spineFileName` in [checkSpine]'s per-file loop.
      */
     private var typeCaptureKeysCurrentFile: Set<Long>? = null
+
+    /**
+     * (API.4a) The member-enumeration spans of the file the spine is walking, or
+     * null.
+     *
+     * Read only from inside [typeCaptureRecordAt], i.e. only once a span has already
+     * matched [typeCaptureKeysCurrentFile] — so it adds nothing to the per-node hot
+     * path. Set beside its sibling in [checkSpine]'s per-file loop.
+     */
+    private var typeCaptureMemberKeysCurrentFile: Set<Long>? = null
 
     /**
      * The captured type answers, keyed by the span asked about, FIRST WINS.
@@ -5037,6 +5058,41 @@ class Checker(
      */
     internal val capturedDefinitions: List<CapturedDefinition>
         get() = typeCaptureDefinitions.values.toList()
+
+    /**
+     * (API.4a) The captured MEMBER LISTS, keyed and ordered exactly as
+     * [typeCaptureResults] is, and first-wins for the same reason.
+     */
+    private val typeCaptureMemberResults = LinkedHashMap<TypeCaptureSpan, CapturedMembers>()
+
+    /**
+     * (API.4a) Which NODE produced each entry of [typeCaptureMemberResults].
+     *
+     * Kept because a raw span does NOT always identify one node, and the case where
+     * it does not is exactly the case a completion is asked in. A dangling `.` at
+     * end of file makes the parser synthesize a ZERO-WIDTH name there, so the
+     * property access's `end` — read after the one-token lookahead, which sees only
+     * end-of-file — equals its RECEIVER's, and `o` and `o.<nothing>` become the same
+     * `(pos, end)` pair. Preorder then reaches the property access first and
+     * first-wins would answer with the members of `any`.
+     *
+     * The rule that resolves it: among nodes sharing a span, the DEEPEST one is what
+     * was asked about, so a later visit overwrites an earlier one when it is a
+     * DESCENDANT of it. That leaves the ordinary case untouched — two visits of the
+     * SAME node still keep the first, i.e. the tightest ambient, which is what
+     * [typeCaptureRecord] documents.
+     */
+    private val typeCaptureMemberNodes = HashMap<TypeCaptureSpan, Node>()
+
+    /**
+     * (API.4a) What the types at the requested member spans call their own.
+     *
+     * `internal` for the reason [capturedTypes] is: the compile driver reads it into
+     * [CompilationResult.capturedMembers]. Empty unless a [TypeCaptureRequest]
+     * carrying [TypeCaptureRequest.memberSpans] was passed.
+     */
+    internal val capturedMembers: List<CapturedMembers>
+        get() = typeCaptureMemberResults.values.toList()
 
     /**
      * (API.3) Records the type at [node] when its RAW span is one the caller asked
@@ -5125,7 +5181,256 @@ class Checker(
     private fun typeCaptureRecordAt(node: Expression, fileName: String) {
         typeCaptureRecord(node, fileName)
         if (node is Identifier) typeCaptureRecordDefinition(node, fileName)
+        // (API.4a) The member enumeration, for the spans that asked for one. The
+        // membership test is HERE rather than at the per-node hook because the node
+        // has already matched the union key set by the time this runs: a completion
+        // costs the spine nothing that a hover does not already cost.
+        val memberKeys = typeCaptureMemberKeysCurrentFile
+        if (memberKeys != null &&
+            TypeCaptureRequest.packSpanKey(node.pos, node.end) in memberKeys
+        ) {
+            typeCaptureRecordMembers(node, fileName)
+        }
     }
+
+    /**
+     * (API.4a) Records what [node]'s type calls its own, FIRST WINS — except that a
+     * DESCENDANT overwrites its ancestor, for [typeCaptureMemberNodes]' reason.
+     *
+     * First-wins for [typeCaptureRecord]'s reason: the innermost ambient reaches the
+     * node first, and a later visit of the SAME node under a looser one must not
+     * overwrite it.
+     *
+     * An entry is written even when nothing was found, so a caller can tell "the
+     * receiver was reached and has no members" from "the span was never walked" —
+     * the two are different facts and only one of them is a bug.
+     */
+    private fun typeCaptureRecordMembers(node: Expression, fileName: String) {
+        val span = TypeCaptureSpan(fileName, node.pos, node.end)
+        val previous = typeCaptureMemberNodes[span]
+        if (previous != null && !typeCaptureIsDescendantOf(node, previous)) return
+        typeCaptureMemberNodes[span] = node
+        val savedCheckFileName = currentCheckFileName
+        currentCheckFileName = fileName
+        try {
+            val collected = typeCaptureCompletionMembers(node)
+            val members = ArrayList<CapturedMember>(collected.size)
+            for ((name, symbols) in collected) {
+                // An empty name is a member table's own placeholder and `__`-prefixed
+                // names are the compiler's internal entries; neither is writable
+                // after a dot, so neither is a completion.
+                if (name.isEmpty() || name.startsWith("__")) continue
+                members.add(typeCaptureMemberItem(name, symbols))
+            }
+            members.sortBy { it.name }
+            typeCaptureMemberResults[span] =
+                CapturedMembers(fileName, node.pos, node.end, members)
+        } finally {
+            currentCheckFileName = savedCheckFileName
+        }
+    }
+
+    /**
+     * (API.4a) True when [node] is strictly below [ancestor] in the parse — INV.2(a)
+     * stamps `parent` at the end of every parse, so this is a pointer walk.
+     *
+     * Bounded by the tree's depth and by nothing else, which is safe here for the
+     * one reason it would not be in a general walker: it runs only on a SPAN
+     * COLLISION, i.e. between two nodes already known to start and end together, so
+     * the walk terminates within a handful of steps or not at all — and a
+     * synthesized node with no parent chain simply answers false.
+     */
+    private fun typeCaptureIsDescendantOf(node: Node, ancestor: Node): Boolean {
+        var current: Node? = (node as NodeBase).parent
+        while (current != null) {
+            if (current === ancestor) return true
+            current = (current as NodeBase).parent
+        }
+        return false
+    }
+
+    /**
+     * (API.4a) Every member the RECEIVER [node] offers, name to contributing
+     * symbols.
+     *
+     * The legs are (API.3d)'s, in (API.3d)'s order and for (API.3d)'s reasons —
+     * this is the same resolution one question wider: ENUMERATE rather than look up
+     * one name.
+     *
+     * 1. `this` is [Identifier]`("this")` in this parser, so it types as `any` and
+     *    finds nothing; its real type is `currentClassForThis`, which the capture
+     *    hook restores from the cta frame and which that frame deliberately leaves
+     *    NULL inside a STATIC member — a static `this` therefore offers nothing
+     *    rather than offering instance members.
+     * 2. A namespace, a module alias and an ENUM answer from their own EXPORT table
+     *    and never from a type (an enum's own type is a member-LESS `Type.Object`
+     *    and a namespace identifier types as `any`). A non-empty export table is
+     *    the whole answer, exactly as it is for a definition: the same receiver
+     *    cannot mean two things at once, and merging a type's members in on top
+     *    would mix a class's statics into its instance side.
+     * 3. Everything else goes through the type.
+     */
+    private fun typeCaptureCompletionMembers(node: Expression): Map<String, List<Symbol>> {
+        if (node is Identifier && node.text == "this") {
+            val cls = currentClassForThis ?: return emptyMap()
+            val thisType = resolveUncalledThisType(cls) ?: return emptyMap()
+            return typeCaptureMembersOfType(thisType, 0)
+        }
+        typeCaptureExportedMembers(node)?.let { return it }
+        return typeCaptureMembersOfType(getTypeOfExpression(node), 0)
+    }
+
+    /**
+     * (API.4a) Every EXPORT of whatever [receiver] names, or null when it names
+     * nothing with an export table.
+     *
+     * The enumerating twin of [typeCaptureExportedMember], sharing its scope lookup
+     * and its import hop, and — like it — following only a BARE identifier receiver:
+     * a longer chain would need its middle segment resolved the same way.
+     */
+    private fun typeCaptureExportedMembers(receiver: Node): Map<String, List<Symbol>>? {
+        val root = receiver as? Identifier ?: return null
+        val resolved =
+            spineScopeLookup(root.text) ?: lookupPerFileForNode(root, root.text) ?: return null
+        val exports = typeCaptureFollowImportAlias(resolved).exports ?: return null
+        if (exports.isEmpty()) return null
+        val out = LinkedHashMap<String, List<Symbol>>(exports.size)
+        for ((name, symbol) in exports) out[name] = listOf(symbol)
+        return out
+    }
+
+    /**
+     * (API.4a) Every member [type] has, name to the symbols that contribute it.
+     *
+     * A LIST per name because a UNION receiver's member is declared once per
+     * constituent and the answer's type text is all of them; for every other shape
+     * the list is a singleton.
+     *
+     * ## The union rule, which is NOT [typeCaptureCollectMembers]'
+     *
+     * Only a member present on EVERY constituent survives, because only such a
+     * member may legally be written after the dot. The definition walk beside this
+     * one deliberately COLLECTS instead — "where is `p` declared" is asked about a
+     * name that is already in the text, and every declaration of it is a real place
+     * to go, while "what may I write here" must not offer something that will not
+     * compile.
+     *
+     * `undefined` / `null` / `void` constituents are SKIPPED rather than emptying
+     * the intersection: they contribute no members, so treating them as a veto would
+     * make every `strictNullChecks` union and every optional chain answer nothing,
+     * and the access itself is separately diagnosed.
+     *
+     * An INTERSECTION contributes the union of its constituents' members, which is
+     * what `A & B` has.
+     *
+     * A primitive receiver (`"s".`) and a bare type parameter (`t.` where
+     * `T extends I`) reach their members through [getApparentType] — the wrapper
+     * interface and the constraint respectively. `any` has no apparent type other
+     * than itself, so an `any` receiver answers EMPTY, which is the same answer tsc
+     * gives and is not a gap.
+     *
+     * Only the instance member table is read. `staticMembers` is deliberately not
+     * merged: it is dual-populated into `members` where it belongs, and reading it
+     * here would offer a class's statics through an instance.
+     */
+    private fun typeCaptureMembersOfType(type: Type, depth: Int): Map<String, List<Symbol>> {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return emptyMap()
+        return when (type) {
+            is Type.Union -> {
+                var surviving: LinkedHashMap<String, MutableList<Symbol>>? = null
+                for (constituent in type.types) {
+                    if (constituent === undefinedType ||
+                        constituent === nullType ||
+                        constituent === voidType
+                    ) {
+                        continue
+                    }
+                    val members = typeCaptureMembersOfType(constituent, depth + 1)
+                    val accumulated = surviving
+                    if (accumulated == null) {
+                        val fresh = LinkedHashMap<String, MutableList<Symbol>>(members.size)
+                        for ((name, symbols) in members) fresh[name] = ArrayList(symbols)
+                        surviving = fresh
+                    } else {
+                        val entries = accumulated.entries.iterator()
+                        while (entries.hasNext()) {
+                            val entry = entries.next()
+                            val alsoHere = members[entry.key]
+                            if (alsoHere == null) entries.remove() else entry.value.addAll(alsoHere)
+                        }
+                    }
+                }
+                surviving ?: emptyMap()
+            }
+            is Type.Intersection -> {
+                val out = LinkedHashMap<String, MutableList<Symbol>>()
+                for (constituent in type.types) {
+                    for ((name, symbols) in typeCaptureMembersOfType(constituent, depth + 1)) {
+                        out.getOrPut(name) { ArrayList(1) }.addAll(symbols)
+                    }
+                }
+                out
+            }
+            is Type.Object -> {
+                // A member table is LAZY (round 833) — a reader that does not resolve
+                // first answers differently depending on whether an earlier line in
+                // the file happened to resolve this type. Resolving is also what makes
+                // an INHERITED member appear at all, and appear ONCE: the base's own
+                // symbol is copied into the derived table, and an override replaces
+                // it under the same key.
+                resolveStructuredTypeMembers(type)
+                val members = type.members ?: return emptyMap()
+                val out = LinkedHashMap<String, List<Symbol>>(members.size)
+                for ((name, symbol) in members) out[name] = listOf(symbol)
+                out
+            }
+            else -> {
+                val apparent = getApparentType(type)
+                if (apparent !== type) typeCaptureMembersOfType(apparent, depth + 1) else emptyMap()
+            }
+        }
+    }
+
+    /** (API.4a) [name] and the symbols declaring it, as one completion candidate. */
+    private fun typeCaptureMemberItem(name: String, symbols: List<Symbol>): CapturedMember {
+        // A LinkedHashSet: a union whose constituents give the member the SAME type
+        // must render that type once, and the order is constituent order.
+        val types = LinkedHashSet<String>()
+        for (symbol in symbols) types.add(typeToString(getTypeOfSymbol(symbol)))
+        val first = symbols[0]
+        val declaration = first.valueDeclaration ?: first.declarations.firstOrNull()
+        val modifiers = typeCaptureMemberModifiers(first)
+        return CapturedMember(
+            name = name,
+            kind = declaration?.kind?.name ?: "Unknown",
+            typeText = types.joinToString(" | "),
+            optional = symbols.any { isOptionalProperty(it) },
+            readonly = symbols.any { ModifierFlag.Readonly in typeCaptureMemberModifiers(it) },
+            accessibility = when {
+                // A `#name` field is private by its spelling and carries no modifier.
+                name.startsWith("#") || ModifierFlag.Private in modifiers -> "private"
+                ModifierFlag.Protected in modifiers -> "protected"
+                else -> "public"
+            },
+        )
+    }
+
+    /**
+     * (API.4a) The modifiers on [symbol]'s declaration, or none.
+     *
+     * The four class-element kinds plus [Parameter], which is where a constructor
+     * parameter property's `private readonly` lives. A kind not listed carries no
+     * accessibility modifier in the grammar.
+     */
+    private fun typeCaptureMemberModifiers(symbol: Symbol): Set<ModifierFlag> =
+        when (val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()) {
+            is PropertyDeclaration -> declaration.modifiers
+            is MethodDeclaration -> declaration.modifiers
+            is GetAccessor -> declaration.modifiers
+            is SetAccessor -> declaration.modifiers
+            is Parameter -> declaration.modifiers
+            else -> emptySet()
+        }
 
     /**
      * (API.3b) Records where the symbol [id] names is declared, FIRST WINS.
@@ -23887,6 +24192,11 @@ class Checker(
                 typeCaptureKeysCurrentFile =
                     if (typeCaptureKeysByFile.isEmpty()) null
                     else typeCaptureKeysByFile[sf.fileName]
+                // (API.4a) read only once a span has already matched, so it is off
+                // the per-node path entirely.
+                typeCaptureMemberKeysCurrentFile =
+                    if (typeCaptureMemberKeysByFile.isEmpty()) null
+                    else typeCaptureMemberKeysByFile[sf.fileName]
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
