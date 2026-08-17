@@ -1,3 +1,88 @@
+**Round 905 (2026-08-14) — (WARM.32): THE ITERATOR-ALLOCATION FAMILY — THE ONE CANDIDATE IMPORTED FROM
+THE SIBLING RUST COMPILER, WHERE THE SAME MECHANISM MEASURED **−3.1%** — IS **REFUSED HERE AT 0.074%
+(3.90 ms), BY 4.4x**. THE MECHANISM TRANSFERS AND THE **SHAPE** DOES NOT: 215 SITES ARE **495,305
+CALLS OVER 2-ELEMENT LISTS**, AND **A COUNT OF SITES IS NOT A COUNT OF CALLS.**
+
+Priced BEFORE the fix; the extraction landed, the fix did not. `docs/perf/iterator-allocation-price.md`.
+
+- **(A) THE CANDIDATE, AND WHERE IT CAME FROM.** Kotlin's `Iterable.any`/`forEach` are `inline` but
+  their bodies are `for (e in this)` on an `Iterable` receiver, so each call asks for a **heap
+  iterator** and pays `hasNext`/`next` virtual dispatch per element. `../xemantic-rust-compiler` landed
+  exactly this conversion (its PH3) for **−3.1% wall**, and recorded WHY a sampled share did not
+  over-promise there: *an object handed to an iterator escapes by construction*, so escape analysis was
+  never going to fold it. **The transfer audit flagged two populations here** — `forEachChild`'s 70
+  `list.forEach(action)` calls (once per node, three sweeps, #5 in the warm leaf table at 1.40%) and
+  145 `.any { it === child }` in the INV.4 edge classifiers.
+
+- **(B) THE CENSUS REFUSED IT ON ITS OWN, BEFORE THE AMPLIFIER.** Two processes, identical to the last
+  digit: **495,305 calls over 925,502 elements**. `forEachChild` list positions 275,477 calls / 547,102
+  elements (mean **1.986**; 7.0% EMPTY, **52.4% SINGLETON**); `anyIdentical` 219,828 calls / 378,400
+  visited (mean **1.721**, because it **hits 94.4%** of the time and a hit stops the scan). **17 ms
+  over 495,305 calls is 34.3 ns per call — and round 904 measured a WHOLE boxed `HashMap<Long, ·>`
+  probe at 8.53 ns.** No per-call mechanism this cheap can clear the floor at this population.
+
+- **(C) THE MEASUREMENT, BOTH HALVES, FITTED PER ARM.** `r` = 8/24, ABBA, mirrored across two
+  processes, 16 draws, leading draw dropped (rounds 869/891). Denominator **5,290 ms** (four process
+  medians 5,237.9 / 5,304.6 / 5,287.3 / 5,325.4).
+
+  | | arm | p(8) | p(24) | cost | boundary |
+  |---|---|---:|---:|---:|---:|
+  | `forEachChild` | A iterator | 25.574 | 19.914 | **17.084** | 67.9 ns |
+  | | B indexed | 12.806 | 7.693 | **5.136** | 61.4 ns |
+  | `anyIdentical` | A iterator | 13.254 | 8.251 | **5.750** | 60.0 ns |
+  | | B indexed | 8.412 | 4.801 | **2.996** | 43.3 ns |
+
+  **Premiums 11.95 ns and 2.75 ns → 3.29 + 0.60 = 3.90 ms = 0.074%.** Pooled 4.49 ms, most-generous
+  4.58 ms; all refuse. **And the premium is an UPPER bound** — both arms fold into a trivial sink, the
+  cheapest possible body, where iterator overhead is maximally exposed, while production's body is a
+  megamorphic `action(e)`. Falsifiers: sinks **equal between arms** in all 16 draws, every sink an exact
+  multiple of `r`, no arm flat.
+
+- **(D) ROUND 904's BOUNDARY LAW IS SHARPENED BY ITS OWN SUCCESSOR — 23% BECOMES 76%, AND THE
+  MECHANISM IS NAMED.** On `anyIdentical` the single-`r` form reads **4.85 ns against a true 2.75**.
+  **A boundary is a property of the ARM, not of the harness**: it absorbs everything charged per CALL,
+  and an iterator-constructing arm builds its iterator *there*, so the gap between two arms' boundaries
+  is itself part of what is being measured. **Round 904's "both boundaries must land near ~90 ns" free
+  check is WITHDRAWN** — these four read 67.9 / 61.4 / 60.0 / 43.3 and were all correct. The surviving
+  check is arithmetic: `premium + (b_A − b_B)/r` reproduces the measured single-`r` `A − B` at BOTH `r`,
+  closing to 0.01 ns on both halves.
+
+- **(E) A COUNT OF SITES IS NOT A COUNT OF CALLS — 4-6x UNDER THE QUEUE's OWN PROJECTION.** 215 sites
+  produced 495,305 calls, because most children are **direct `action(x)` positions** rather than list
+  positions (IDENTIFIER alone is 44.5% of nodes and has no child list at all), and **only 219,828 of
+  round 875's 3.32 M edge evaluations ever reach an `.any`**. Two ceilings corrected with it: the
+  iterator is **4.4%** of `forEachChild`'s 1.40% leaf row, and `.any` is **1.4%** of round 875's 44 ms
+  bound on the edge half.
+
+- **(F) THE SIBLING IS NOT CONTRADICTED, WHICH IS THE POINT WORTH KEEPING.** 11.95 ns is real — 1.4x
+  round 904's *whole* boxed-key premium — and the mechanism is identical. What differs is the shape of
+  the population it runs over: a Rust parser's iterator chains run per token over `withIndex()`
+  compositions allocating ~24 objects a call; ours are 495 k calls over 2-element lists. **A mechanism
+  transfers between codebases; a price does not.**
+
+- **(G) WHAT LANDED, SINCE THE FIX DID NOT.** The 215 sites now route through **`walkList` /
+  `anyIdentical`** in `NodeWalk.kt`, bodies the verbatim lowering of what they replace — so the family
+  has ONE HOME and the fix, had it cleared, would have been one line each. Kept for two reasons: a
+  future agent cannot re-open it blind, and it shrank **`forEachChild`'s three (JIT.1) partitions from
+  9,256 to 5,929 bytecodes (−36%)** on the compiler's traversal primitive, which is real headroom under
+  the 8,000-byte cliff. **The strongest gate was not a run: the substitution was proved PURELY TEXTUAL
+  by inverting it against the parent commit** — `Checker.kt` round-trips exactly at all 145 sites,
+  `NodeWalk.kt` at 69/70, the 70th differing only in which of two equivalent spellings the inverter
+  chose (`arguments` is nullable on `NewExpression`, non-null on `CallExpression`, and the forward
+  substitution collapses both onto the null-checking helper). **Stated rather than hidden: the
+  extraction itself is not priced by a warm A/B** — its expected effect is ~0 against a ±1.0% band, so
+  it is gated on behaviour, not wall.
+
+- **(H) GATES.** Suite **14,416 -> 14,424 / 0 failures / 0 errors / 3 skipped** = exactly the 8 new
+  pins. `cost_gate.py` **+0.00% on all 18 counters**. `huge_methods.py --fail-over 0`: **0 over the
+  limit**. **8-PROFILE `--listAll` GRID, all eight captured, no exception and no truncation** —
+  `scripts/round905-grid.sh` enumerates profiles by the presence of a `tsconfig.json` and REFUSES below
+  8, which is round 895's law (every committed "8-profile grid" before it was a one-profile grid). This
+  gate is a real one here, not a control: the round rewrites the enumeration primitive every walk in the
+  compiler goes through.
+
+---
+
 **Round 904 (2026-08-14) — (WARM.31): THE WHOLE BOXED-PRIMITIVE-KEY FAMILY IS **REFUSED** — 14 SITES,
 **2,698,745 OPERATIONS PER REBUILD, A 6.58 ns PREMIUM, 17.7 ms = 0.334% FOR ALL OF THEM TOGETHER** AND
 **0.064% FOR THE LARGEST SINGLE ONE**. AND THE 29.4 ms THAT RANKED IT WAS ONE DRAW OF A **4x-UNSTABLE**

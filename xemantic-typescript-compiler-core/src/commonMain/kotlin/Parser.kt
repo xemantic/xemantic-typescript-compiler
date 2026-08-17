@@ -10112,30 +10112,8 @@ private val INDEX_SIG_ALLOWED_PARAM_KEYWORDS = setOf(
     SyntaxKind.SymbolKeyword,
 )
 
-/**
- * Compute an array of line start positions (0-based byte offsets where each line begins).
- * The first entry is always 0 (start of the first line).
- */
-private fun computeLineStarts(text: String): IntArray {
-    // M0.3(viii): growable IntArray, no per-line Integer boxing (the old
-    // mutableListOf(0) boxed every line start).
-    var starts = IntArray(maxOf(16, text.length / 32))
-    var count = 1 // starts[0] = 0 (start of the first line)
-    var i = 0
-    val n = text.length
-    while (i < n) {
-        val ch = text[i]
-        if (ch == '\r') {
-            if (i + 1 < n && text[i + 1] == '\n') {
-                i++ // skip \r in \r\n
-            }
-        } else if (ch != '\n') {
-            i++
-            continue
-        }
-        if (count == starts.size) starts = starts.copyOf(starts.size * 2)
-        starts[count++] = i + 1
-        i++
-    }
-    return if (count == starts.size) starts else starts.copyOf(count)
-}
+// `computeLineStarts` used to live here, as the Parser's private line index. It is
+// now `internal` in LineStarts.kt, beside the one statement of the line-terminator
+// convention it implements, because the Checker and the tsconfig reader each had
+// their OWN offset-to-line loop and one of them disagreed with this one about a
+// lone `\r` (round 915).

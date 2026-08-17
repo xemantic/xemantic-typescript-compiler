@@ -18099,15 +18099,15 @@ class Checker(
     /**
      * Compute 1-based line and character for a position in source text.
      */
-    /** Line-start offsets for `source` = [0] followed by (i+1) for each `\n` at index i.
+    /** Line-start offsets for `source`, by the compiler's ONE line-terminator rule
+     *  ([lineBreakWidthAt]) — the same index the Parser builds for its own syntax
+     *  diagnostics, so the two can never number a file's lines differently.
+     *  Until round 915 this counted `\n` only and therefore reported every position
+     *  in a lone-`\r` file as line 1 while the Parser numbered it; `\n` and `\r\n`
+     *  are identical under both readings, which is why no baseline could see it.
      *  Memoized per source String (init-order: [lineStartsCache] is declared before init). */
     private fun lineStartsFor(source: String): IntArray =
-        lineStartsCache.getOrPut(source) {
-            val starts = ArrayList<Int>()
-            starts.add(0)
-            for (i in source.indices) if (source[i] == '\n') starts.add(i + 1)
-            starts.toIntArray()
-        }
+        lineStartsCache.getOrPut(source) { computeLineStarts(source) }
 
     private fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
         // Byte-for-byte equivalent to the former linear scan: line = 1 + (# of `\n` in
@@ -18126,16 +18126,14 @@ class Checker(
         return (idx + 1) to (position - starts[idx] + 1)
     }
 
-    /** Inverse of getLineAndCharacterOfPosition: 1-based (line, col) → char offset in `source`. */
+    /** Inverse of getLineAndCharacterOfPosition: 1-based (line, col) → char offset in `source`.
+     *  Reads the SAME memoized index as the forward direction — an inverse built on a
+     *  different terminator rule would not round-trip, which is what it silently did for
+     *  a lone `\r` before round 915. A `line` past the end of the file answers with the
+     *  last line's start, as the former scan-until-found loop did. */
     private fun posOfLineCol(source: String, line: Int, col: Int): Int {
-        var curLine = 1
-        var lineStart = 0
-        var i = 0
-        while (i < source.length && curLine < line) {
-            if (source[i] == '\n') { curLine++; lineStart = i + 1 }
-            i++
-        }
-        return lineStart + (col - 1)
+        val starts = lineStartsFor(source)
+        return starts[(line - 1).coerceIn(0, starts.size - 1)] + (col - 1)
     }
 
     /**

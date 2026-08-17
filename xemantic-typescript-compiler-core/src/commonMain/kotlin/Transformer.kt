@@ -8469,11 +8469,10 @@ class Transformer(
             // Source coordinates of the element's `<` (1-based; pos may include trivia).
             var p = nodePos.coerceAtLeast(0)
             while (p < sourceText.length && sourceText[p] != '<') p++
-            var lineNo = 1; var lineStart = 0
-            for (i in 0 until p.coerceAtMost(sourceText.length)) {
-                if (sourceText[i] == '\n') { lineNo++; lineStart = i + 1 }
-            }
-            val colNo = p - lineStart + 1
+            // The compiler's ONE offset-to-line conversion — tsc emits these
+            // coordinates from its own `getLineAndCharacterOfPosition`, so a copy that
+            // counted `\n` only put a lone-`\r` file's whole tree on line 1 (round 915).
+            val (lineNo, colNo) = lineAndCharacterAt(sourceText, p)
             listOf(
                 tagExpr, propsExpr,
                 VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),

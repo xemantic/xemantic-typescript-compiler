@@ -44,3 +44,28 @@ internal fun diagnose(
         (if (directives.isEmpty()) "" else directives + "\n") + source.trimIndent(),
         fileName,
     ).diagnostics
+
+/**
+ * Compiles [source] EXACTLY as given, bypassing the `// @directive` header format.
+ *
+ * The single reason to prefer this over [diagnose] is a test about LINE
+ * TERMINATORS, and BOTH of that helper's layers destroy them: `trimIndent` splits
+ * on `\r\n` / `\n` / `\r` alike and rejoins with `\n`, and `parseMultiFileSource`
+ * — the header/`@Filename` splitter behind `TypeScriptCompiler.compile(String)` —
+ * opens with `.replace("\r\n", "\n").replace("\r", "\n")`. So the string entry
+ * point cannot carry a `\r` into the Parser at all, which is why a lone-`\r` defect
+ * is unreachable from the whole generated corpus and not merely unrepresented in
+ * it. The project/`Vfs` path performs no such normalisation, and this helper
+ * reproduces it by handing the pipeline a [ParsedSource] directly.
+ *
+ * Anything not about line terminators belongs on [diagnose].
+ */
+internal fun diagnoseVerbatim(
+    source: String,
+    fileName: String = "t.ts",
+    options: CompilerOptions = CompilerOptions(),
+): List<Diagnostic> = TypeScriptCompiler().compileParsed(
+    ParsedSource(options, listOf(SourceFileEntry(fileName, source))),
+    options,
+    fileName,
+).diagnostics

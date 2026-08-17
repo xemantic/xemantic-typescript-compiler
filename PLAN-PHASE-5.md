@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 915 (2026-08-17) — (BUG.1): THE LONE-`\r` SELF-INCONSISTENCY IS CLOSED, AND THE SWEEP THE ITEM
+ASKED FOR FOUND **FIVE** OFFSET→LINE CONVERTERS WHERE THE QUEUE NAMED TWO — FOUR OF THEM WRONG, EACH A
+PRIVATE COPY OF A LOOP NOBODY KNEW WAS DUPLICATED. THE ROUND'S REAL PRODUCT IS THE **SECOND** REASON
+THE FAMILY WAS INVISIBLE: THE STRING ENTRY POINT BEHIND THE ENTIRE GENERATED CORPUS **NORMALISES
+`\r` AWAY BEFORE THE PARSER RUNS**, SO NO CORPUS FIXTURE COULD EVER HAVE CAUGHT THIS — NOT "none
+happens to have a lone `\r`", BUT "none CAN".**
+
+- **THE PREMISE HELD.** `Parser.computeLineStarts` broke a line at `\n`, `\r\n` and a lone `\r`
+  (tsc's rule); `Checker.lineStartsFor` was `for (i in source.indices) if (source[i] == '\n')`. So a
+  SYNTAX diagnostic numbered a classic-Mac file's lines and a SEMANTIC one reported line 1.
+
+- **THE SWEEP — the part a future agent cannot re-derive cheaply.** Grepping for *definitions* rather
+  than call sites (`fun *LineChar*`/`fun *LineStarts*`/`line++`/`ln++`/`curLine++`) found **five**
+  independent implementations of one conversion, all in `commonMain`, all private, none referring to
+  each other: (1) `Parser.computeLineStarts` — CORRECT, the reference; (2) `Checker.lineStartsFor`
+  (`\n` only) — the queued bug; (3) `Checker.posOfLineCol` — the INVERSE, `\n` only, so the two
+  directions did not even round-trip; (4) `TypeScriptCompiler.positionToLineCharacter` (`\n` only) —
+  ~14 diagnostic call sites; (5) `TypeScriptCompiler`'s inline TS2688 loop and `Transformer`'s JSX
+  dev-runtime `lineNumber`/`columnNumber` loop, both `\n` only, the latter feeding EMITTED JavaScript
+  rather than a diagnostic; (6) `CompilerOptions.computeLineAndColumn` for tsconfig positions, a
+  THIRD convention — `\n` breaks the line and `\r` is treated as ZERO-WIDTH. Six copies, three
+  conventions. **The `-project` module's `LineMap` was already right** and is deliberately left a
+  reimplementation (it also carries `lineContentEnds`, which the compiler has no use for), so it is
+  the one place the rule is stated twice — pinned by a differential, not by restatement.
+
+- **WHAT LANDED.** A new `LineStarts.kt` holding the convention as ONE function,
+  `lineBreakWidthAt(text, i)` — `0`, `1` or `2` — plus the two traversal shapes built on it:
+  `computeLineStarts` (moved out of `Parser.kt`, now `internal`, byte-identical logic) and
+  `lineAndCharacterAt` (a BOUNDED scan for the sites with nothing to memoize on). All five wrong
+  copies now delegate. `posOfLineCol` reads the same memoized index the forward direction does, which
+  is what makes the round-trip structural rather than coincidental. **Deliberately NOT one function**:
+  a scan that stops at the offset and an index that spans the file are different algorithms, so they
+  share the RULE and are pinned to agree at every offset of six terminator-mixed texts.
+
+- **THE FINDING, and it is bigger than the bug.** `TypeScriptCompiler.compile(String)` →
+  `parseMultiFileSource` opens with `.replace("\r\n", "\n").replace("\r", "\n")`. Every generated
+  corpus test and every `diagnose()`-based pin goes through it, so **a `\r` cannot reach the Parser
+  from that entry point at all**. The corpus's one genuinely lone-`\r` fixture
+  (`templateStringMultiline3`) is normalised before it is parsed. Only the project/`Vfs` path
+  preserves terminators — which is exactly the path the new `(API.*)` embedding API sits on, i.e. the
+  bug was becoming reachable just as it was found. The first version of the core pin was therefore
+  **VACUOUS AND PASSED**: it built `\r` text, the harness turned it into `\n` text, and "the two
+  halves agree" was a statement about a file with no `\r` in it. `diagnoseVerbatim` now hands the
+  pipeline a `ParsedSource` directly.
+
+- **A SECOND VACUITY, found the same way.** A fixture beginning with `\r` is not a leading-line-break
+  test either: `parseMultiFileSource` drops blank lines before the first content line, so the pin read
+  line 1 for a correct compiler. Replaced with consecutive-and-trailing breaks after a real first line.
+
+- **PINS — 10 new (`LineTerminatorConsistencyTest`, core) + 1 (`ProjectPositionTest`) − 1 (the
+  `LineMapTest` case that pinned the divergence as permanent).** The sharp four are
+  self-consistency: a lone-`\r` file where TS2322 must land on line 3 and TS1128 on line 5 with every
+  diagnostic's `line` matching an independent restatement of the rule; the three-shape control
+  (`\n` / `\r\n` / `\r` must produce the SAME `(code, line)` table — this is what catches the obvious
+  double-count, which would read 5 and 9 for CRLF); consecutive + trailing breaks; and the CHARACTER
+  on the line after a lone `\r`. The other six pin the shared helper's edges (empty text, a text that
+  IS one `\r`, trailing breaks under all three shapes, the `\n` inside a `\r\n`, and scan-vs-index
+  agreement over all offsets of six texts) and are labelled in-file as NON-discriminating.
+
+- **ABLATION (restoring the pre-fix `\n`-only body by hand, never `git checkout`): exactly 5 pins
+  red** — the 4 discriminating core ones and the 1 new `-project` one — the 6 arithmetic guards and
+  all 12 other `ProjectPositionTest` cases green. Restored by hand and re-run green.
+
+- **GATES: suite 14,593 -> 14,603 / 0 failures / 0 errors / 3 skipped = EXACTLY the +10** (core
+  14,326 -> 14,336; `-project` unchanged at 133, being +1/−1), XML-summed over all six modules. **No
+  corpus baseline moved**, which is the load-bearing negative: `\n` and `\r\n` had to be untouched.
+  `cost_gate.py` **+0.00% on all 20 counters** — a real gate here, since the Checker's line index
+  changed shape, and proven live by its own 46-error / 78-file compile. `huge_methods.py --fail-over
+  0` clean on core (**739 classes, up from 738 — the gate SAW `LineStartsKt`**) and on `-project`
+  (12); `Checker.<init>` unmoved at 5,813 (no new field). Warning-clean. No wall A/B: `lineStartsFor`
+  is memoized per source and `computeLineStarts` is lazy, so the loop is not on any hot path — the
+  counters are the defensible instrument.
+
 **Round 914 (2026-08-17) — (API.3c): THE BATCH LANDS AND THE API IS NOW USABLE BY AN EDITOR — N SPANS COST
 ONE BUILD, MEASURED AT **34x** FOR HOVER AND **62x** WHEN EACH CARET IS ALSO ASKED FOR ITS DEFINITION.
 THE ROUND'S TECHNICAL PRODUCT IS THAT THE QUEUE ENTRY'S "IT NEEDS NO NEW MECHANISM" WAS TRUE OF THE
@@ -693,89 +766,6 @@ Priced with **no clock in the round at all**. `docs/perf/reach-memo-transpositio
   evidence** (round 902), distinct red sets, tree restored and pins re-run green. **No wall A/B and
   none possible** — the round contains no clock.
 
-**Round 905 (2026-08-14) — (WARM.32): THE ITERATOR-ALLOCATION FAMILY — THE ONE CANDIDATE IMPORTED FROM
-THE SIBLING RUST COMPILER, WHERE THE SAME MECHANISM MEASURED **−3.1%** — IS **REFUSED HERE AT 0.074%
-(3.90 ms), BY 4.4x**. THE MECHANISM TRANSFERS AND THE **SHAPE** DOES NOT: 215 SITES ARE **495,305
-CALLS OVER 2-ELEMENT LISTS**, AND **A COUNT OF SITES IS NOT A COUNT OF CALLS.**
-
-Priced BEFORE the fix; the extraction landed, the fix did not. `docs/perf/iterator-allocation-price.md`.
-
-- **(A) THE CANDIDATE, AND WHERE IT CAME FROM.** Kotlin's `Iterable.any`/`forEach` are `inline` but
-  their bodies are `for (e in this)` on an `Iterable` receiver, so each call asks for a **heap
-  iterator** and pays `hasNext`/`next` virtual dispatch per element. `../xemantic-rust-compiler` landed
-  exactly this conversion (its PH3) for **−3.1% wall**, and recorded WHY a sampled share did not
-  over-promise there: *an object handed to an iterator escapes by construction*, so escape analysis was
-  never going to fold it. **The transfer audit flagged two populations here** — `forEachChild`'s 70
-  `list.forEach(action)` calls (once per node, three sweeps, #5 in the warm leaf table at 1.40%) and
-  145 `.any { it === child }` in the INV.4 edge classifiers.
-
-- **(B) THE CENSUS REFUSED IT ON ITS OWN, BEFORE THE AMPLIFIER.** Two processes, identical to the last
-  digit: **495,305 calls over 925,502 elements**. `forEachChild` list positions 275,477 calls / 547,102
-  elements (mean **1.986**; 7.0% EMPTY, **52.4% SINGLETON**); `anyIdentical` 219,828 calls / 378,400
-  visited (mean **1.721**, because it **hits 94.4%** of the time and a hit stops the scan). **17 ms
-  over 495,305 calls is 34.3 ns per call — and round 904 measured a WHOLE boxed `HashMap<Long, ·>`
-  probe at 8.53 ns.** No per-call mechanism this cheap can clear the floor at this population.
-
-- **(C) THE MEASUREMENT, BOTH HALVES, FITTED PER ARM.** `r` = 8/24, ABBA, mirrored across two
-  processes, 16 draws, leading draw dropped (rounds 869/891). Denominator **5,290 ms** (four process
-  medians 5,237.9 / 5,304.6 / 5,287.3 / 5,325.4).
-
-  | | arm | p(8) | p(24) | cost | boundary |
-  |---|---|---:|---:|---:|---:|
-  | `forEachChild` | A iterator | 25.574 | 19.914 | **17.084** | 67.9 ns |
-  | | B indexed | 12.806 | 7.693 | **5.136** | 61.4 ns |
-  | `anyIdentical` | A iterator | 13.254 | 8.251 | **5.750** | 60.0 ns |
-  | | B indexed | 8.412 | 4.801 | **2.996** | 43.3 ns |
-
-  **Premiums 11.95 ns and 2.75 ns → 3.29 + 0.60 = 3.90 ms = 0.074%.** Pooled 4.49 ms, most-generous
-  4.58 ms; all refuse. **And the premium is an UPPER bound** — both arms fold into a trivial sink, the
-  cheapest possible body, where iterator overhead is maximally exposed, while production's body is a
-  megamorphic `action(e)`. Falsifiers: sinks **equal between arms** in all 16 draws, every sink an exact
-  multiple of `r`, no arm flat.
-
-- **(D) ROUND 904's BOUNDARY LAW IS SHARPENED BY ITS OWN SUCCESSOR — 23% BECOMES 76%, AND THE
-  MECHANISM IS NAMED.** On `anyIdentical` the single-`r` form reads **4.85 ns against a true 2.75**.
-  **A boundary is a property of the ARM, not of the harness**: it absorbs everything charged per CALL,
-  and an iterator-constructing arm builds its iterator *there*, so the gap between two arms' boundaries
-  is itself part of what is being measured. **Round 904's "both boundaries must land near ~90 ns" free
-  check is WITHDRAWN** — these four read 67.9 / 61.4 / 60.0 / 43.3 and were all correct. The surviving
-  check is arithmetic: `premium + (b_A − b_B)/r` reproduces the measured single-`r` `A − B` at BOTH `r`,
-  closing to 0.01 ns on both halves.
-
-- **(E) A COUNT OF SITES IS NOT A COUNT OF CALLS — 4-6x UNDER THE QUEUE's OWN PROJECTION.** 215 sites
-  produced 495,305 calls, because most children are **direct `action(x)` positions** rather than list
-  positions (IDENTIFIER alone is 44.5% of nodes and has no child list at all), and **only 219,828 of
-  round 875's 3.32 M edge evaluations ever reach an `.any`**. Two ceilings corrected with it: the
-  iterator is **4.4%** of `forEachChild`'s 1.40% leaf row, and `.any` is **1.4%** of round 875's 44 ms
-  bound on the edge half.
-
-- **(F) THE SIBLING IS NOT CONTRADICTED, WHICH IS THE POINT WORTH KEEPING.** 11.95 ns is real — 1.4x
-  round 904's *whole* boxed-key premium — and the mechanism is identical. What differs is the shape of
-  the population it runs over: a Rust parser's iterator chains run per token over `withIndex()`
-  compositions allocating ~24 objects a call; ours are 495 k calls over 2-element lists. **A mechanism
-  transfers between codebases; a price does not.**
-
-- **(G) WHAT LANDED, SINCE THE FIX DID NOT.** The 215 sites now route through **`walkList` /
-  `anyIdentical`** in `NodeWalk.kt`, bodies the verbatim lowering of what they replace — so the family
-  has ONE HOME and the fix, had it cleared, would have been one line each. Kept for two reasons: a
-  future agent cannot re-open it blind, and it shrank **`forEachChild`'s three (JIT.1) partitions from
-  9,256 to 5,929 bytecodes (−36%)** on the compiler's traversal primitive, which is real headroom under
-  the 8,000-byte cliff. **The strongest gate was not a run: the substitution was proved PURELY TEXTUAL
-  by inverting it against the parent commit** — `Checker.kt` round-trips exactly at all 145 sites,
-  `NodeWalk.kt` at 69/70, the 70th differing only in which of two equivalent spellings the inverter
-  chose (`arguments` is nullable on `NewExpression`, non-null on `CallExpression`, and the forward
-  substitution collapses both onto the null-checking helper). **Stated rather than hidden: the
-  extraction itself is not priced by a warm A/B** — its expected effect is ~0 against a ±1.0% band, so
-  it is gated on behaviour, not wall.
-
-- **(H) GATES.** Suite **14,416 -> 14,424 / 0 failures / 0 errors / 3 skipped** = exactly the 8 new
-  pins. `cost_gate.py` **+0.00% on all 18 counters**. `huge_methods.py --fail-over 0`: **0 over the
-  limit**. **8-PROFILE `--listAll` GRID, all eight captured, no exception and no truncation** —
-  `scripts/round905-grid.sh` enumerates profiles by the presence of a `tsconfig.json` and REFUSES below
-  8, which is round 895's law (every committed "8-profile grid" before it was a one-profile grid). This
-  gate is a real one here, not a control: the round rewrites the enumeration primitive every walk in the
-  compiler goes through.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -944,15 +934,19 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 
   </details>
 
-- [ ] **(BUG.1) The compiler disagrees with itself about a lone `\r`** — `Parser.computeLineStarts`
-  (`Parser.kt:10119`) breaks the line there, `Checker.lineStartsFor` (`Checker.kt:17641`) counts `\n`
-  only, so on classic-Mac text a SYNTAX diagnostic numbers the lines and a SEMANTIC one reports line 1.
-  Found round 910 while building the embedding API's line map. **Low impact and NOT urgent** (lone-`\r`
-  files are practically extinct; `\r\n` and `\n` are identical under both, which is why no corpus
-  baseline catches it) — but it is a genuine self-inconsistency and tsc breaks the line in both places.
-  The fix is one loop in `lineStartsFor`; the gate is a hand-written pin, since the corpus cannot see it.
-  Cost note before anyone "optimises" it: `lineStartsFor` is memoized per source and its loop is the
-  cheap part.
+- [x] **(BUG.1) The compiler disagrees with itself about a lone `\r` — DONE, round 915.** The
+  convention is now stated ONCE, as `lineBreakWidthAt` in a new `LineStarts.kt`, and every
+  offset→line conversion in the compiler goes through it. The sweep the item asked for found **five**
+  such converters where the entry named two, four of them wrong: `Checker.lineStartsFor`, its inverse
+  `Checker.posOfLineCol`, `TypeScriptCompiler.positionToLineCharacter` (plus its inline TS2688 twin),
+  the `Transformer`'s JSX dev-runtime coordinates (EMITTED output, not a diagnostic), and
+  `CompilerOptions.computeLineAndColumn` — which implemented a THIRD convention, `\r` as zero-width.
+  `-project`'s `LineMap` was already correct and stays a reimplementation, pinned by a differential.
+  **The finding that outlives the fix**: `parseMultiFileSource` — the `// @directive` splitter behind
+  the whole generated corpus — begins by replacing every `\r\n` and `\r` with `\n`, so the corpus was
+  not merely unlucky, it was structurally incapable of carrying a `\r` to the Parser; only the
+  project/`Vfs` path can, which is the path the `(API.*)` arc sits on. `LineTerminatorConsistencyTest`
+  (core) + `ProjectPositionTest`'s lone-`\r` differential are the gate; 5 pins redden under ablation.
 
 - [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution).
   Under (API.3)'s capture design its shape is already implied and it is the case that stresses the

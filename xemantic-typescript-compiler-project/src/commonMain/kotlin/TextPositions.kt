@@ -59,20 +59,20 @@ public data class TextPosition(
  * only. This class is therefore a REIMPLEMENTATION rather than a wrapper, which
  * makes the one thing that matters about it whether it agrees with the original.
  *
- * ## Line terminators, including where the compiler disagrees with itself
+ * ## Line terminators
  *
- * `\n`, `\r\n` and a lone `\r` all end a line here — the LSP rule, and the rule
- * of tsc's own `computeLineStarts`.
+ * `\n`, `\r\n` and a lone `\r` all end a line here — the LSP rule, the rule of
+ * tsc's own `computeLineStarts`, and the rule the whole compiler now implements
+ * through the single `lineBreakWidthAt` in its `LineStarts.kt`.
  *
- * `Parser.computeLineStarts` agrees. The CHECKER does not: `Checker.lineStartsFor`
- * counts `\n` ONLY, so on a file whose lines end in a lone `\r` (classic Mac
- * text, and the only shape where the two differ — `\r\n` ends in a `\n` and is
- * therefore identical under both) a SEMANTIC diagnostic reports every position as
- * line 1 while a SYNTAX diagnostic from the same compile numbers the lines. This
- * class follows the Parser/LSP rule, so it reproduces the syntax diagnostics'
- * numbering and NOT the checker's on such a file. `LineMapTest` pins that
- * divergence explicitly instead of leaving it as folklore, because a lone-`\r`
- * fixture is exactly what nobody writes by accident.
+ * That agreement is younger than this class. Until (BUG.1) landed in round 915 the
+ * compiler disagreed with ITSELF on lone-`\r` text — the only shape where the
+ * readings differ, since `\r\n` ends in a `\n` and is therefore identical under
+ * both: the Parser broke the line and the Checker counted `\n` only, so a SEMANTIC
+ * diagnostic reported every position as line 1 while a SYNTAX one from the same
+ * compile numbered them. `ProjectPositionTest` pins the agreement on such a file
+ * against real diagnostics, which is the only form of the claim this class can
+ * make honestly.
  *
  * Unicode `U+2028` / `U+2029` are NOT terminators here. tsc treats them as such;
  * neither our Parser nor our Checker does, and this class matches OUR compiler

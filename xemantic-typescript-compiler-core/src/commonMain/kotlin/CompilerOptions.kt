@@ -1237,17 +1237,11 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
     return result
 }
 
-/** Compute 1-based line and 1-based column for a 0-based offset in text. */
-private fun computeLineAndColumn(text: String, offset: Int): Pair<Int, Int> {
-    var line = 1
-    var col = 1
-    for (i in 0 until offset.coerceAtMost(text.length)) {
-        if (text[i] == '\n') {
-            line++
-            col = 1
-        } else if (text[i] != '\r') {
-            col++
-        }
-    }
-    return line to col
-}
+/** Compute 1-based line and 1-based column for a 0-based offset in text.
+ *  The compiler's ONE offset-to-line conversion ([lineAndCharacterAt]); this used to
+ *  be a fifth private copy of it, which broke a line at `\n` only and treated a `\r`
+ *  as zero-width (round 915). Identical for every token position in `\n` and `\r\n`
+ *  text — a `\r` only ever precedes the `\n` that closes the same line, so it is
+ *  never inside the span whose column is being counted. */
+private fun computeLineAndColumn(text: String, offset: Int): Pair<Int, Int> =
+    lineAndCharacterAt(text, offset)

@@ -135,29 +135,15 @@ class LineMapTest {
 
     @Test
     fun `a lone CR ends a line`() {
-        // The LSP rule and the rule of our own Parser. `Checker.lineStartsFor`
-        // disagrees — see the next test, which pins the divergence rather than
-        // pretending it away.
+        // The LSP rule, the rule of our own Parser, and — since (BUG.1) landed in
+        // round 915 — of the Checker too. Before that the compiler disagreed with
+        // itself here and this file pinned the divergence; the agreement is now
+        // pinned against real diagnostics in `ProjectPositionTest`.
         val cr = "a\rbb\rc"
         val crMap = LineMap.of(cr)
         assert(crMap.lineCount == 3)
         assert(crMap.positionAt(cr.indexOf("bb")) == TextPosition(2, 1))
         assert(crMap.positionAt(cr.indexOf('c')) == TextPosition(3, 1))
-    }
-
-    @Test
-    fun `a lone CR does not reproduce the checker's own line numbering`() {
-        // DOCUMENTED DIVERGENCE, not a defect of this class: on lone-CR text the
-        // compiler disagrees with itself — `Parser.computeLineStarts` breaks the
-        // line, `Checker.lineStartsFor` counts `\n` only and reports everything as
-        // line 1. This class follows the Parser/LSP rule, so a SEMANTIC diagnostic
-        // on such a file carries a line number this map does not produce. Pinned so
-        // that a future agent reading a mismatched coordinate finds the reason here
-        // instead of rediscovering it against a lone-CR file nobody writes on
-        // purpose.
-        val cr = "a\rb"
-        val checkerWouldSay = 1
-        assert(LineMap.of(cr).positionAt(cr.indexOf('b')).line != checkerWouldSay)
     }
 
     @Test

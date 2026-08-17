@@ -2550,18 +2550,14 @@ private fun checkMissingTypesReferenceExports(files: List<SourceFileEntry>): Lis
                 val pkgJson = pkgJsonByName[refName]
                 if (pkgJson != null && packageExportsHidesTypes(pkgJson)) {
                     val nameStart = offset + m.groups[2]!!.range.first
-                    var ln = 1
-                    var lineStart = 0
-                    for (i in 0 until nameStart.coerceAtMost(source.length)) {
-                        if (source[i] == '\n') { ln++; lineStart = i + 1 }
-                    }
+                    val (ln, nameChar) = lineAndCharacterAt(source, nameStart)
                     diags.add(Diagnostic(
                         message = "Cannot find type definition file for '$refName'.",
                         category = DiagnosticCategory.Error,
                         code = 2688,
                         fileName = fn,
                         line = ln,
-                        character = nameStart - lineStart + 1,
+                        character = nameChar,
                         start = nameStart,
                         length = refName.length,
                     ))
@@ -6119,18 +6115,10 @@ private fun scanMalformedBareJson(content: String, fileName: String): List<Diagn
     return diags
 }
 
-private fun positionToLineCharacter(source: String, position: Int): Pair<Int, Int> {
-    var line = 1
-    var lineStart = 0
-    val cap = position.coerceAtMost(source.length)
-    for (i in 0 until cap) {
-        if (source[i] == '\n') {
-            line++
-            lineStart = i + 1
-        }
-    }
-    return line to (position - lineStart + 1)
-}
+/** The compiler's ONE offset-to-line conversion ([lineAndCharacterAt]); this used to
+ *  be a fourth private copy of it that counted `\n` only (round 915). */
+private fun positionToLineCharacter(source: String, position: Int): Pair<Int, Int> =
+    lineAndCharacterAt(source, position)
 
 /**
  * INV.6(6b): the sequential partition-equivalence harness (opt-in via

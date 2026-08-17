@@ -92,6 +92,42 @@ class ProjectPositionTest {
         assert(project.offsetAt("/proj/src/a.ts", sample.line!!, sample.character!!) == sample.start)
     }
 
+    /**
+     * The same differential on the one line shape where the compiler used to
+     * disagree with ITSELF.
+     *
+     * [LineMap] breaks a line at a lone `\r`; until (BUG.1) landed in round 915 the
+     * Checker did not, so a semantic diagnostic on classic-Mac text carried line 1
+     * and this map answered the real line. `\n` and `\r\n` are identical under both
+     * readings, which is why the test above cannot see it and this one can.
+     *
+     * The source is assembled from explicit `\r`s rather than written as a raw
+     * string, because `trimIndent` rejoins lines with `\n` and would erase the whole
+     * point of the fixture.
+     */
+    @Test
+    fun `a lone CR file's diagnostics agree with this map too`() {
+        val loneCrSource = listOf(
+            "// a leading comment, so nothing interesting lives on line 1",
+            "export function twice(n: number): number {",
+            "    return n * 2;",
+            "}",
+            "",
+            "export const bad: number = \"text\";",
+        ).joinToString("\r") + "\r"
+        val project = open(projectWith(loneCrSource))
+        val diagnostics = project.diagnostics("/proj/src/a.ts")
+            .filter { it.start != null && it.line != null && it.character != null }
+        // Vacuity guard, and the assertion that fails on the pre-915 compiler: the
+        // failing assignment is on line 6, and a checker that counted `\n` only put
+        // every one of these on line 1.
+        assert(diagnostics.any { it.line!! > 1 && it.character!! > 1 })
+        for (diagnostic in diagnostics) {
+            val computed = project.positionAt("/proj/src/a.ts", diagnostic.start!!)
+            assert(computed == TextPosition(diagnostic.line!!, diagnostic.character!!))
+        }
+    }
+
     // --- the overlay ------------------------------------------------------------
 
     /**
