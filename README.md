@@ -43,14 +43,15 @@ java -jar xemantic-typescript-compiler.jar <input.ts> [output.js]
 ### Embedding it — the `Project` API
 
 A build tool, IDE plugin or test harness can open a project, query its
-diagnostics, apply unsaved editor buffers in memory, and ask for the type at a
-position:
+diagnostics, apply unsaved editor buffers in memory, and ask what the compiler
+knows at a position:
 
 ```kotlin
 val project = Project.open("/path/to/my-app")
 project.diagnostics()
 project.updateFile("/path/to/my-app/src/a.ts", editorBuffer)  // never touches disk
 project.quickInfoAt("/path/to/my-app/src/a.ts", offset)       // hover
+project.definitionsAt("/path/to/my-app/src/a.ts", offset)     // go to definition
 project.close()
 ```
 

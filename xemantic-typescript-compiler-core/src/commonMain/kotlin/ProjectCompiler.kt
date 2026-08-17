@@ -81,6 +81,8 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** (API.3) The types the checker recorded at the spans a [TypeCaptureRequest]
          *  named, or empty — which is every build that did not ask for any. */
         val capturedTypes: List<CapturedType> = emptyList(),
+        /** (API.3b) Where the symbols at those same spans are declared, or empty. */
+        val capturedDefinitions: List<CapturedDefinition> = emptyList(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -96,9 +98,10 @@ class ProjectCompiler(private val vfs: Vfs) {
      *   somewhere throwaway without touching the project. (AOT.4)(c), round 840(c): the
      *   AOT trainer emits — an emit-trained cache is worth ~1.26 s on an emitting compile —
      *   and a training run must never write into the user's project. Inert under `noEmit`.
-     * @param typeCapture (API.3) when non-null, the checker records the type at each
-     *   named span while it walks past it, and the answers come back in
-     *   [Result.capturedTypes]. Null — the default — leaves the whole pipeline
+     * @param typeCapture (API.3) when non-null, the checker records the type and the
+     *   definition at each named span while it walks past it, and the answers come
+     *   back in [Result.capturedTypes] and [Result.capturedDefinitions].
+     *   Null — the default — leaves the whole pipeline
      *   untouched; see [TypeCaptureRequest] for why a capture is directed inwards
      *   rather than answered from a retained checker afterwards.
      */
@@ -273,6 +276,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             sharedNameFiles = sharedNameFiles,
             written = written,
             capturedTypes = result.capturedTypes,
+            capturedDefinitions = result.capturedDefinitions,
         )
     }
 

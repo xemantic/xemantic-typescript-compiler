@@ -71,8 +71,82 @@ data class CapturedType(
 )
 
 /**
+ * (API.3b) ONE declaration of the symbol a requested [TypeCaptureSpan] resolved to
+ * — a place go-to-definition can navigate to.
+ *
+ * ## Why this one carries a LENGTH where [CapturedType] carries a raw `end`
+ *
+ * A captured TYPE describes the span the caller named, so it can hand the raw
+ * `(start, end)` identity straight back and let the caller — which owns a token
+ * index — say how long the node really is. A DECLARATION is in a different file,
+ * usually one the caller never asked about and may not even be able to read (a
+ * `lib.*.d.ts` has no path on disk), so the same trick would push a span-semantics
+ * problem onto a party with nothing to solve it with. The checker holds every
+ * program file's TEXT, so the exact end is computed HERE and only a finished span
+ * crosses the boundary.
+ *
+ * [start] is therefore exact ([Node.pos] is already the first character of the
+ * node's first token) and [start] `until` [start] `+` [length] is the real extent
+ * — NOT `end - pos`, which would overshoot by a token (round 910).
+ *
+ * @property fileName the file the declaration is in, as the program names it.
+ * @property start the 0-based offset of the declaration's first character.
+ * @property length its real extent, half-open with [start].
+ * @property kind the `SyntaxKind` name of the node the span covers — the
+ *   declaration's NAME where it has one, so an editor highlights `foo` rather
+ *   than a whole class body, and the declaration itself otherwise.
+ */
+data class CapturedDeclaration(
+    val fileName: String,
+    val start: Int,
+    val length: Int,
+    val kind: String,
+)
+
+/**
+ * (API.3b) The symbol a requested [TypeCaptureSpan] resolved to, and where it is
+ * declared.
+ *
+ * Keyed on the query span the same way [CapturedType] is, by the RAW `(pos, end)`
+ * pair — see [TypeCaptureSpan] for why identity and extent are deliberately
+ * different questions.
+ *
+ * ## What resolves, and what deliberately does not
+ *
+ * Only a FREE NAME resolves: an [Identifier] that names something the lexical
+ * scope chain in force at that position binds. A MEMBER name — the `p` of `o.p`,
+ * a property signature's name, an enum member behind its enum — is answered by
+ * NOTHING rather than by a scope lookup, because a scope lookup of a member name
+ * finds whatever unrelated binding happens to share the spelling, and a confidently
+ * wrong navigation target is worse than none. Member definitions need the
+ * receiver's type resolved and its property symbol found, which is a separate
+ * mechanism and not this one.
+ *
+ * @property name the resolved symbol's name — the spelling that was looked up,
+ *   which after an import hop may differ from the identifier at the query span.
+ * @property locations every declaration contributing to that symbol, in the
+ *   binder's own order. MORE THAN ONE is normal, not an error: declaration
+ *   merging is the language feature that makes `interface I` twice, or a function
+ *   and a namespace of the same name, one symbol. EMPTY never happens — a symbol
+ *   with no declarations is not recorded at all.
+ */
+data class CapturedDefinition(
+    val fileName: String,
+    val start: Int,
+    val end: Int,
+    val name: String,
+    val locations: List<CapturedDeclaration>,
+)
+
+/**
  * (API.3) A set of positions a compile is asked to record the type AT, handed to
  * the compiler BEFORE the build.
+ *
+ * ONE request, TWO recorded facts: at every span the checker records the
+ * [CapturedType] and the [CapturedDefinition]. They are recorded together because
+ * they are recorded by the same per-node hook and both are functions of the same
+ * walk-scoped state, and because separating them would double the number of
+ * compiles a host needs to describe one caret.
  *
  * ## Why the direction is inwards
  *

@@ -20,6 +20,93 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 913 (2026-08-17) — (API.3b): GO-TO-DEFINITION LANDS, AND THE ROUND'S PRODUCT IS THAT **THE QUEUE
+ENTRY'S OWN PREMISE WAS WRONG**: (API.3a)'s ambient lesson does NOT transfer, because a definition's
+walk-scoped input is not the checking ambient at all — it is `spineCurrentScope`, which the spine
+maintains PER NODE where the ambient is install-and-restore PER ANCHOR. WHAT DOES TRANSFER IS THE ONLY
+THING THAT MATTERS: BOTH INPUTS ARE GONE ONCE THE WALK IS OVER, SO CAPTURE IS STILL MANDATORY.**
+
+- **THE CORRECTION, stated first because a next agent will otherwise inherit the wrong model.** The
+  entry said "a symbol resolved without `withCtaFrameLocals` is the same wrong answer one indirection
+  along". `withCtaFrameLocals` restores `currentLocalTypes`, a map of `String -> Type` — it holds no
+  symbols and no declarations, so it cannot answer a definition question in either direction. The
+  resolution that CAN is the INV.2(c) lexical chain (`spineScopeLookup`: scope-space bindings, then the
+  aliased container tables — a body's params and locals, the file's locals, the enclosing namespaces'
+  exports), and `spineScopeEnterIfOwner` runs **before** `spineEnterNode`, i.e. the chain is already
+  correct at an arbitrary node. **The capture is still required, for the OTHER half of the argument:**
+  `spineScopeClear` nulls the chain when the spine leaves a file, so the post-hoc query has nothing to
+  ascend and falls through to `lookupPerFileForNode`. So the shape of the two rounds is the same and
+  the mechanism is not, and that distinction is now in the code's KDoc, in CLAUDE.md and in
+  `DefinitionCaptureMeasurementTest`'s header.
+
+- **THE MEASUREMENT (captured-during-walk vs asked-post-hoc, ONE `Checker` instance, core
+  `DefinitionCaptureMeasurementTest`).** A body local shadowing a same-named file-level `const`:
+  captured answers **the body declaration**, post-hoc **the file-level one** — a DIFFERENT
+  DECLARATION, i.e. an editor would navigate the user to the wrong line and look like it worked. A
+  parameter: captured answers **the parameter**, post-hoc answers **nothing at all** (nothing durable
+  binds a parameter by name — the same finding (API.3a) made, where the type degraded to `any`). The
+  control, a file-level `const`, is answered **identically by both**, which is exactly what makes the
+  body-local row dangerous rather than obviously broken.
+
+- **ONE HOOK, TWO RECORDED FACTS.** No second spine handler and no second request type: the same
+  `typeCaptureVisit` now records the type AND the definition at every requested span, because both are
+  functions of the same walk and separating them would double the compiles a host needs to describe
+  one caret. `spineEnterMask` is untouched — the hook is a `spineEnterNode` PROLOGUE line, not a masked
+  handler — and `spine_closure_audit.py` was run anyway (46 handlers, all supersets).
+
+- **THE SPAN QUESTION, DECIDED THE OTHER WAY FROM (API.3a) AND ON PURPOSE.** A captured TYPE hands the
+  RAW `(pos, end)` identity back and lets `-project`'s `SourceIndex` say how long the node really is. A
+  DECLARATION cannot: it is usually in a file the caller never asked about and may not be able to read
+  at all — **a `lib.*.d.ts` has no path on disk** — so pushing round 910's span problem outwards would
+  hand it to the one party with nothing to solve it with. The checker holds every program file's
+  `SourceFile.text`, so the exact end is computed THERE, by scanning FORWARD from the name's own `pos`
+  (`Scanner.resetToPosition` + `scan`, greatest token end strictly below `Node.end`) — one or two
+  tokens, no index, no cache, and the same graceful degradation `SourceIndex` documents (a context-free
+  re-scan can only SPLIT a contextual token, which adds boundaries; a merge answers a SHORT span, never
+  one reaching into the next declaration). The span is the **NAME** where a declaration has a
+  single-token one, as tsc's own go-to-definition navigates.
+
+- **WHAT ANSWERS NOTHING, DELIBERATELY, AND IS PINNED AS SUCH.** A MEMBER name — the `p` of `o.p`, a
+  property signature's name, an enum member behind its enum — is refused rather than resolved, because
+  a scope lookup of a member name finds whatever unrelated binding shares the spelling and **a
+  confidently wrong navigation target is worse than none**. `typeCaptureIsFreeName` is a REJECT-list
+  over parent kinds rather than an accept-list, because the referencing positions are open-ended while
+  the member positions are closed, and a missed reject is a wrong answer where a missed accept is only
+  a missing one. The pin is sharp: at the same span the TYPE **is** captured, which proves the refusal
+  is a refusal and not a miss.
+
+- **AN IMPORTED NAME ANSWERS ABOUT THE ORIGINAL**, through the checker's existing
+  `resolveImportedSymbolGeneral` (attempted only when every declaration is an import binding — the same
+  test that function applies one level down), degrading to the import statement when the module does
+  not resolve. And a MERGED symbol answers with EVERY declaration: `interface Merged` twice returns two
+  locations, so "take the first declaration" is the wrong host-side reflex and the API says so.
+
+- **FOUR-ARM ABLATION, ONE MISTAKE AT A TIME (round 807's law), each arm dry-run for a real diff
+  (round 902) and restored from a byte-verified copy rather than `git checkout` (round 851).** **A1**
+  drop the lexical-chain leg -> 5 red, exactly the body-local/parameter family in both modules. **A2**
+  take the length from the raw `Node.end` -> 5 red, every span assertion. **A3** drop the free-name
+  gate -> **1 red, uniquely its own** (the member-name refusal). **A4** drop the import-alias hop ->
+  **1 red, uniquely its own** (the cross-file pin). Every arm reddened a DISTINCT set; no pin was
+  credited with discrimination it does not have.
+
+- **GATES: suite 14,548 -> 14,567 / 0 failures / 0 errors / 3 skipped = EXACTLY the 19 new pins** (11
+  `-project`, 8 core; core 14,314 -> 14,322, module 100 -> 111), XML-parsed across all six modules and
+  re-run a second time on the byte-restored post-ablation tree. **`cost_gate.py` +0.00% on all 20
+  counters** — a real gate, not a tautology, since `Checker.kt` grew ~240 lines on the hot walk, and
+  proven live by the compile it drives (46 errors / 78 files). `huge_methods.py --fail-over 0` clean on
+  core (738 classes, `Checker.<init>` 5,802 -> **5,813** — the one new field) **and, per round 909's
+  blind-spot rule, on the module explicitly** (11 classes, up from 10: the gate SAW the new code).
+  `spine_closure_audit.py` 46 handlers all supersets. Build warning-clean. No wall A/B: production
+  gains nothing but the definition branch INSIDE an already-null-guarded hook, i.e. zero instructions
+  when no capture is requested, which is far under the +-1.0% band.
+
+- **DEFERRED, unchanged: (API.3c)** — batch a whole file's spans into ONE build. `TypeCaptureRequest`
+  already takes a SET and now yields two answer lists per span, so "semantic info for file X" is one
+  compile away from being one compile; `quickInfoAt` and `definitionsAt` currently build once EACH,
+  which is the thing (API.3c) exists to fix. **And one honest gap worth its own item eventually:**
+  member go-to-definition needs the receiver's type resolved and its property symbol found, which the
+  capture hook is the right place for but the scope chain is not the right mechanism for.
+
 **Round 912 (2026-08-17) — (WARM.35): THE FOUR UNPRICED CANDIDATES FROM ROUND 903's HOT-PATH AUDIT ARE
 **ALL REFUSED**, THE LARGEST AT **0.18%** AND ALL FOUR TOGETHER AT **0.303% (15.9 ms)** — UNDER THE
 ~17 ms FLOOR FOR *ONE* LOW-RISK CHANGE. THE ROUND'S REAL PRODUCT IS THAT **THE QUEUE'S OWN POPULATION
@@ -837,11 +924,25 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   predicted branch per node, with the NODE as the argument (round 900). Public surface stays value-typed:
   `QuickInfo` + `Project.quickInfoAt`.
 
-- [ ] **(API.3b) Go-to-definition** — the other half, deferred from round 911. The capture mechanism now
+- [x] **(API.3b) Go-to-definition — LANDED, round 913.** The entry read: *"the capture mechanism now
   exists and this is the same shape one field over: record the resolved `Symbol`'s `declarations`
   (each a pos/end-bearing node) at the captured position instead of its type, and answer
   `DefinitionLocation(fileName, start, length)`. **Read (API.3a)'s ambient lesson first** — a symbol
-  resolved without `withCtaFrameLocals` is the same wrong answer one indirection along.
+  resolved without `withCtaFrameLocals` is the same wrong answer one indirection along."* **The
+  premise is WRONG in its most useful sentence, and the correction is the round's product: the
+  ambient lesson does NOT transfer, because a definition's walk-scoped input is not the ambient at
+  all.** `withCtaFrameLocals` restores `currentLocalTypes`, which holds TYPES and no symbols, so it
+  cannot answer "what does this name refer to" for anything. What does is `spineCurrentScope` — the
+  INV.2(c) lexical chain — and the spine **maintains that per NODE**, pushing it BEFORE a node's own
+  enter handlers, so it is already correct at an arbitrary node and needs no reconstruction. What
+  (API.3a) and (API.3b) genuinely share is only that both inputs are gone once the walk is over
+  (`spineScopeClear` nulls the chain per file), which is what still makes capture mandatory:
+  post-hoc, a body local resolves to a same-named FILE-LEVEL const and a parameter to nothing at all.
+  Landed: `CapturedDefinition`/`CapturedDeclaration` in the core (recorded by the SAME hook as the
+  type — one request, two facts), `DefinitionLocation` + `Project.definitionsAt` in `-project`,
+  import-alias hop through `resolveImportedSymbolGeneral`, and an exact NAME span computed in the
+  core by a forward token scan of the declaring file's own text. **19 pins, four-arm ablation, all
+  gates green.**
 
 - [ ] **(API.3c) Batch a whole file's spans into ONE build.** The core `TypeCaptureRequest` already
   takes a SET of spans and `Project.quickInfoAt` deliberately does not cache its build (a capture build

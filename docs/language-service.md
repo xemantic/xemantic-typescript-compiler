@@ -56,6 +56,7 @@ project.updateFile("/path/to/my-app/src/a.ts", editorBuffer)
 
 project.diagnostics("/path/to/my-app/src/a.ts")          // just this file
 project.quickInfoAt("/path/to/my-app/src/a.ts", 142)     // hover
+project.definitionsAt("/path/to/my-app/src/a.ts", 142)   // go to definition
 
 project.close()
 ```
@@ -82,6 +83,7 @@ you call them.
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
 | `quickInfoAt` | **full build, every call** | not cached today — see below |
+| `definitionsAt` | **full build, every call** | same mechanism, same caveat |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -98,7 +100,8 @@ Two consequences for a host:
 
 - **Debounce, do not poll.** Re-asking `diagnostics()` per keystroke costs a
   compile per keystroke. Ask on idle.
-- **`quickInfoAt` builds every call and does not reuse the build.** That is
+- **`quickInfoAt` and `definitionsAt` build every call and do not reuse the
+  build** — and asking both about one caret is two compiles today. That is
   deliberate rather than an oversight: a capture build types nodes the checker
   had no reason to type, so its diagnostics are not interchangeable with a plain
   build's and reusing it would quietly change what `diagnostics()` reports. The
@@ -269,7 +272,64 @@ exists while the checker is at that position, so any new semantic feature must
 capture during the walk too. `(API.3)` in `PLAN-PHASE-5.md` has the full
 reasoning.
 
-## 9. Rules that apply to everything
+## 9. Semantic queries: go to definition
+
+```kotlin
+val places: List<DefinitionLocation> = project.definitionsAt(path, offset)
+// DefinitionLocation(fileName: String, start: Int, length: Int, kind: String)
+```
+
+`start until start + length` is the declaration's **name** — `foo`, not the whole
+class body it heads — which is what an editor wants to highlight and where tsc's
+own go-to-definition navigates. A declaration with no single-token name (a
+binding pattern, a computed member name) falls back to the whole declaration:
+coarser, never wrong.
+
+**An empty list is a normal answer**, and there are four ways to get one:
+
+- there is no node at the offset, or the file is unknown;
+- the offset is on a keyword, a literal or trivia — nothing the scope binds;
+- the name resolves to a symbol with no declaration to point at;
+- **the offset is on a MEMBER name** (`o.p`, a property signature's name, an enum
+  member behind its enum). This one is deliberate. Resolving a member needs the
+  receiver's type and its property symbol, which is a different mechanism from
+  the scope lookup behind this call; answering it with a scope lookup would find
+  whatever unrelated binding happens to share the spelling, and an editor that
+  jumps somewhere confidently wrong is worse than one that does not jump. Member
+  definitions are an honest gap, not a bug.
+
+**More than one location is normal too.** Declaration merging is a language
+feature — an `interface` declared twice, a function and a namespace of the same
+name — so every contributing declaration comes back, in the compiler's own
+deterministic order. Do not assume `single()`; if you need one, take the first.
+
+**An imported name answers about the original.** `import { foo } from "./m"` and
+then a use of `foo` navigates to `foo` in `./m`, not to the import statement. If
+the module cannot be resolved you get the import binding itself, which is
+truthful and less useful.
+
+**The declaring file may be one you cannot open.** A definition in a library
+answers with that library's name (`lib.es2020.d.ts`), which has no path on disk.
+Handle that rather than assuming every `fileName` is openable — the span is still
+exact, because the length is computed inside the compiler from the declaring
+file's own text.
+
+Like hover, this is captured **while the checker walks** rather than asked
+afterwards, and for a reason one indirection away from hover's. The state that
+answers "what does this name refer to here" is the lexical scope chain, and it is
+torn down per file when the walk leaves it. Measured, on one checker instance:
+
+| position | captured (correct) | asked afterwards |
+|---|---|---|
+| file-level `const` | its own declaration | the same |
+| body local shadowing a file-level `const` | **the body declaration** | **the file-level one** |
+| parameter at its use | **the parameter** | **nothing at all** |
+
+The body-local row is the dangerous one: not a coarser answer, a *different
+declaration* — an editor would send the user to the wrong line and look like it
+worked.
+
+## 10. Rules that apply to everything
 
 **Paths.** Every path crossing the API is normalized and made absolute through
 the backing `Vfs` before it is used as a key. Pass absolute paths and you never
@@ -299,7 +359,7 @@ see `TestVfs.kt`.
 > assertion then passes vacuously — as an empty diagnostic list. Give such a
 > test a negative control.
 
-## 10. A minimal hover host
+## 11. A minimal hover host
 
 ```kotlin
 class HoverHost(projectPath: String) {
@@ -329,12 +389,14 @@ class HoverHost(projectPath: String) {
 }
 ```
 
-## 11. What is coming, and what would change
+## 12. What is coming, and what would change
 
-- **`(API.3b)` go-to-definition** — the same capture mechanism, one field over:
-  record the resolved symbol's declarations instead of its type.
-- **`(API.3c)` batched capture** — one build answering many positions. Purely
-  additive; `quickInfoAt` keeps working.
+- **`(API.3c)` batched capture** — one build answering many positions, so a
+  host stops paying a compile per caret. Purely additive; `quickInfoAt` and
+  `definitionsAt` keep working.
+- **member go-to-definition** — `definitionsAt` refuses a member name today
+  (§ 9); answering it needs the receiver's type resolved and its property
+  symbol found, in the same capture hook.
 - **`(API.4)` completions** — the largest, and the one that stresses the design:
   a completion request has no node at the position at all, since the user is
   mid-identifier.

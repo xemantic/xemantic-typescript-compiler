@@ -51,6 +51,12 @@ data class CompilationResult(
      * named, or empty — which is every compile that did not ask for any.
      */
     val capturedTypes: List<CapturedType> = emptyList(),
+    /**
+     * (API.3b) Where the symbols at those same spans are declared, or empty. Shorter
+     * than [capturedTypes] whenever a span named something no free-name lookup
+     * resolves — a member name, a literal, a keyword.
+     */
+    val capturedDefinitions: List<CapturedDefinition> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -164,8 +170,9 @@ class TypeScriptCompiler {
         recheckOnly: Set<String>? = null,
         /** (API.3): when non-null, the checker records the type at each named span
          *  while it walks past it, and the answers come back in
-         *  [CompilationResult.capturedTypes]. Null — the default — leaves the whole
-         *  pipeline untouched; see [TypeCaptureRequest]. */
+         *  [CompilationResult.capturedTypes] / [CompilationResult.capturedDefinitions].
+         *  Null — the default — leaves the whole pipeline untouched; see
+         *  [TypeCaptureRequest]. */
         typeCapture: TypeCaptureRequest? = null,
     ): CompilationResult =
         runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName, recheckOnly, typeCapture) }
@@ -1164,6 +1171,7 @@ class TypeScriptCompiler {
             options = options,
             diagnostics = diagnostics,
             capturedTypes = checker.capturedTypes,
+            capturedDefinitions = checker.capturedDefinitions,
         )
     }
 
@@ -1646,6 +1654,7 @@ class TypeScriptCompiler {
             diagnostics = diagnostics,
             allSourceFiles = allFiles,
             capturedTypes = checker.capturedTypes,
+            capturedDefinitions = checker.capturedDefinitions,
         )
     }
 

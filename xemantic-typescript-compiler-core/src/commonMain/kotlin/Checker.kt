@@ -5003,14 +5003,20 @@ class Checker(
     private var typeCaptureKeysCurrentFile: Set<Long>? = null
 
     /**
-     * The captured answers, keyed by the span asked about so the DEEPEST node
-     * carrying a span wins.
+     * The captured type answers, keyed by the span asked about, FIRST WINS.
      *
-     * Deepest, not first: the spine walks preorder, so several nodes sharing one
-     * raw span (a wrapper and its sole child) are visited outermost-first and the
-     * last write is the innermost — the node a caller pointing at that span meant.
+     * See [typeCaptureRecord] for why first: the walk reaches a node under the
+     * tightest ambient it will ever have there, and a later visit of a node sharing
+     * the same raw span would answer from a looser one.
      */
     private val typeCaptureResults = LinkedHashMap<TypeCaptureSpan, CapturedType>()
+
+    /**
+     * (API.3b) The captured DEFINITION answers, keyed and ordered exactly as
+     * [typeCaptureResults] is, and first-wins for the same reason: the scope chain
+     * in force at a node is the tightest one that node ever sees.
+     */
+    private val typeCaptureDefinitions = LinkedHashMap<TypeCaptureSpan, CapturedDefinition>()
 
     /**
      * (API.3) What the checker computed at the requested spans.
@@ -5020,6 +5026,17 @@ class Checker(
      * unless a [TypeCaptureRequest] was passed.
      */
     internal val capturedTypes: List<CapturedType> get() = typeCaptureResults.values.toList()
+
+    /**
+     * (API.3b) Where the symbols at the requested spans are declared.
+     *
+     * `internal` for the same reason [capturedTypes] is: the compile driver reads it
+     * into [CompilationResult.capturedDefinitions]. Empty unless a
+     * [TypeCaptureRequest] was passed, and shorter than the request whenever a span
+     * named something no free-name lookup resolves.
+     */
+    internal val capturedDefinitions: List<CapturedDefinition>
+        get() = typeCaptureDefinitions.values.toList()
 
     /**
      * (API.3) Records the type at [node] when its RAW span is one the caller asked
@@ -5049,7 +5066,7 @@ class Checker(
         if (node !is Expression) return
         val frame = ctaFrames.lastOrNull()
         if (frame == null) {
-            typeCaptureRecord(node, spineFileName)
+            typeCaptureRecordAt(node, spineFileName)
             return
         }
         // The ambient a statement anchor installs, reproduced VERBATIM from
@@ -5081,7 +5098,7 @@ class Checker(
             namespacesPushed++
         }
         try {
-            withCtaFrameLocals(frame) { typeCaptureRecord(node, spineFileName) }
+            withCtaFrameLocals(frame) { typeCaptureRecordAt(node, spineFileName) }
         } finally {
             repeat(namespacesPushed) { inferenceNamespaceStack.removeLast() }
             currentClassForThis = savedThis
@@ -5092,6 +5109,234 @@ class Checker(
             currentTypeParamScope = savedTpScope
             currentFlowGraph = savedFlowGraph
         }
+    }
+
+    /**
+     * (API.3) Records everything a capture records at [node] — its type, and, when
+     * it is a free name, where that name is declared.
+     *
+     * Both under the installed ambient of [typeCaptureVisit], though only the TYPE
+     * needs it. The definition's own walk-scoped input is [spineCurrentScope], which
+     * the walk maintains per node and pushes BEFORE a node's enter handlers, so it
+     * is already correct here and needs no reconstruction. That asymmetry is the
+     * whole shape of (API.3b) versus (API.3a) and is worth stating: the cta frames
+     * are install-and-restore, the lexical scope chain is not.
+     */
+    private fun typeCaptureRecordAt(node: Expression, fileName: String) {
+        typeCaptureRecord(node, fileName)
+        if (node is Identifier) typeCaptureRecordDefinition(node, fileName)
+    }
+
+    /**
+     * (API.3b) Records where the symbol [id] names is declared, FIRST WINS.
+     *
+     * Resolution is the spine's own lexical chain first ([spineScopeLookup]: the
+     * INV.2(c) scope-space bindings, then the aliased container tables — a function
+     * body's params and locals, then the file's, then the enclosing namespaces'),
+     * and only then the node-keyed global lookup [getTypeOfIdentifier] falls through
+     * to. That order is what makes a body local answer about ITSELF rather than
+     * about a same-named global, and it is available ONLY during the walk:
+     * `spineCurrentScope` is nulled per file when the spine leaves it, which is what
+     * `DefinitionCaptureMeasurementTest` measures against a post-hoc query.
+     *
+     * Nothing is recorded when the name is not a FREE one ([typeCaptureIsFreeName])
+     * or resolves to nothing. That is deliberate silence rather than a best guess:
+     * a scope lookup of `p` in `o.p` finds any unrelated `p`, and an editor that
+     * jumps somewhere confidently wrong is worse than one that does not jump.
+     */
+    private fun typeCaptureRecordDefinition(id: Identifier, fileName: String) {
+        val span = TypeCaptureSpan(fileName, id.pos, id.end)
+        if (span in typeCaptureDefinitions) return
+        typeCaptureDefinitions[span] = typeCaptureDefinitionAt(id, fileName) ?: return
+    }
+
+    /**
+     * (API.3b) The definition answer for [id], computed from whatever scope state is
+     * in force RIGHT NOW.
+     *
+     * Separated from [typeCaptureRecordDefinition] so the post-hoc query the design
+     * refutes can run the very same resolution with the walk's state gone — see
+     * [postHocDefinitionAtSpanForTesting]. It reads state and writes none.
+     */
+    private fun typeCaptureDefinitionAt(id: Identifier, fileName: String): CapturedDefinition? {
+        if (!typeCaptureIsFreeName(id)) return null
+        val resolved = spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
+        val symbol = typeCaptureFollowImportAlias(resolved)
+        val locations = ArrayList<CapturedDeclaration>(symbol.declarations.size)
+        for (declaration in symbol.declarations) {
+            typeCaptureDeclarationLocation(declaration)?.let { locations.add(it) }
+        }
+        if (locations.isEmpty()) return null
+        return CapturedDefinition(fileName, id.pos, id.end, symbol.name, locations)
+    }
+
+    /**
+     * (API.3b) True when [id] is a name resolved through the SCOPE CHAIN, rather
+     * than a member name resolved through some receiver.
+     *
+     * A reject-list rather than an accept-list, because the referencing positions
+     * are open-ended (every expression, type and heritage position) while the
+     * member positions are a closed set of parent kinds — and the failure direction
+     * of a missed reject is a wrong answer, where a missed accept is only a missing
+     * one. Interface members ride the class-member arms: `InterfaceDeclaration`
+     * holds `ClassElement`s.
+     *
+     * A LABEL is rejected for the same reason as a member name: it is not a symbol
+     * at all, so a scope lookup of it finds whatever variable shares the spelling.
+     */
+    private fun typeCaptureIsFreeName(id: Identifier): Boolean =
+        when (val parent = (id as NodeBase).parent) {
+            null -> false
+            is PropertyAccessExpression -> parent.name !== id
+            is QualifiedName -> parent.right !== id
+            is PropertyAssignment -> parent.name !== id
+            is EnumMember -> parent.name !== id
+            is PropertyDeclaration -> parent.name !== id
+            is MethodDeclaration -> parent.name !== id
+            is GetAccessor -> parent.name !== id
+            is SetAccessor -> parent.name !== id
+            is LabeledStatement -> parent.label !== id
+            is BreakStatement -> parent.label !== id
+            is ContinueStatement -> parent.label !== id
+            // `{ p: local }` in a binding pattern: `p` is the SOURCE object's member,
+            // `local` is the binding this file introduces.
+            is BindingElement -> parent.propertyName !== id
+            // `import { p as local }`: `p` names an export of the OTHER module, which
+            // no scope here binds. `export { local as p }` is the mirror — there the
+            // reference is `propertyName` and `name` is the exported spelling.
+            is ImportSpecifier -> parent.propertyName !== id
+            is ExportSpecifier -> parent.propertyName == null || parent.propertyName !== id
+            else -> true
+        }
+
+    /**
+     * (API.3b) The symbol an import alias stands for, or [symbol] itself.
+     *
+     * Go-to-definition on an imported name means the DECLARATION, not the import
+     * statement that brought it in — that is what a user is asking for, and the
+     * import line is one keystroke away anyway. The hop is attempted only for a
+     * symbol whose declarations are ALL import bindings, which is the same test
+     * [computeImportedSymbolGeneral] applies one level down, and it degrades to the
+     * alias itself when the module does not resolve: an import statement is a
+     * truthful location, just a less useful one.
+     */
+    private fun typeCaptureFollowImportAlias(symbol: Symbol): Symbol {
+        val declarations = symbol.declarations
+        if (declarations.isEmpty()) return symbol
+        for (declaration in declarations) if (!isImportBindingDecl(declaration)) return symbol
+        return resolveImportedSymbolGeneral(symbol) ?: symbol
+    }
+
+    /**
+     * (API.3b) [declaration] as a navigable span, or null when it cannot be placed.
+     *
+     * The span is the declaration's NAME where it has a single-token one — tsc's
+     * go-to-definition navigates to the name, and an editor highlighting `foo`
+     * rather than a whole class body is the point — and the declaration node itself
+     * otherwise (a binding pattern, a computed member name, a `declare module "x"`).
+     *
+     * Null when the node carries no position (a Transformer-synthesized node, which
+     * no binder symbol should hold but which costs one comparison to refuse) or when
+     * its parent chain reaches no [SourceFile] — INV.2(a) stamps `parent` at the end
+     * of every parse, so that only happens for a hand-constructed tree.
+     */
+    private fun typeCaptureDeclarationLocation(declaration: Node): CapturedDeclaration? {
+        if (declaration.pos < 0) return null
+        val sourceFile = typeCaptureEnclosingFile(declaration) ?: return null
+        val target = typeCaptureDeclarationName(declaration) ?: declaration
+        val end = typeCaptureRealEnd(sourceFile.text, target.pos, target.end)
+        return CapturedDeclaration(
+            fileName = sourceFile.fileName,
+            start = target.pos,
+            length = end - target.pos,
+            kind = target.kind.name,
+        )
+    }
+
+    /**
+     * (API.3b) The single-token name node of [declaration], or null.
+     *
+     * Only a single-token name is returned, so a binding pattern (`const { a } = o`
+     * as the VariableDeclaration behind a whole-pattern symbol) and a computed
+     * member name fall back to the declaration. The kinds listed are the ones the
+     * binder and the INV.2(c) lexical pass actually attach to a [Symbol]; a kind
+     * not listed is not wrong, only coarser.
+     */
+    private fun typeCaptureDeclarationName(declaration: Node): Node? {
+        val name: Node? = when (declaration) {
+            is VariableDeclaration -> declaration.name
+            is Parameter -> declaration.name
+            is BindingElement -> declaration.name
+            is FunctionDeclaration -> declaration.name
+            is FunctionExpression -> declaration.name
+            is ClassDeclaration -> declaration.name
+            is ClassExpression -> declaration.name
+            is InterfaceDeclaration -> declaration.name
+            is TypeAliasDeclaration -> declaration.name
+            is EnumDeclaration -> declaration.name
+            is EnumMember -> declaration.name
+            is ModuleDeclaration -> declaration.name
+            is TypeParameter -> declaration.name
+            is PropertyDeclaration -> declaration.name
+            is MethodDeclaration -> declaration.name
+            is GetAccessor -> declaration.name
+            is SetAccessor -> declaration.name
+            is ImportSpecifier -> declaration.name
+            is ExportSpecifier -> declaration.name
+            is NamespaceImport -> declaration.name
+            is ImportEqualsDeclaration -> declaration.name
+            // A default import's binder declaration is the whole statement.
+            is ImportDeclaration -> declaration.importClause?.name
+            else -> null
+        }
+        return when (name) {
+            is Identifier, is StringLiteralNode, is NumericLiteralNode -> name
+            else -> null
+        }
+    }
+
+    /** (API.3b) The [SourceFile] [node] was parsed from, by INV.2(a)'s parent chain. */
+    private fun typeCaptureEnclosingFile(node: Node): SourceFile? {
+        var current: Node? = node
+        while (current != null) {
+            if (current is SourceFile) return current
+            current = (current as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * (API.3b) The offset one past the last character of the span `[pos, rawEnd)` —
+     * the number [Node.end] is commonly mistaken for.
+     *
+     * `Node.end` is the end of the token FOLLOWING the node (round 910:
+     * `Parser.getEnd()` is the scanner position read after the one-token lookahead),
+     * so the real end is the greatest TOKEN end strictly below it. The `-project`
+     * module answers the same question with a whole-file token index because it
+     * asks it about arbitrary carets; here the start is already exact and the span
+     * is one declaration, so scanning FORWARD from [pos] answers it in a token or
+     * two and needs no index and no cache.
+     *
+     * Degrades the way `SourceIndex` degrades: a context-free re-scan can only SPLIT
+     * a contextual token (a regex literal scans as `/`, `ab`, `/`), which adds ends
+     * and leaves every real boundary in place; a MERGE would answer too low, i.e.
+     * a short span, never a span reaching into the next declaration. The
+     * no-advance exit is a fail-safe against a wedged loop inside a long-lived host
+     * (CLAUDE.md, round 873), not a reachable case.
+     */
+    private fun typeCaptureRealEnd(text: String, pos: Int, rawEnd: Int): Int {
+        if (pos < 0 || pos >= text.length) return maxOf(pos, 0)
+        val scanner = Scanner(text)
+        scanner.resetToPosition(pos)
+        var best = pos
+        while (true) {
+            val token = scanner.scan()
+            val at = scanner.getPos()
+            if (at >= rawEnd || at <= best) break
+            best = at
+            if (token == SyntaxKind.EndOfFile) break
+        }
+        return best
     }
 
     /**
@@ -5155,6 +5400,38 @@ class Checker(
             forEachChild(node) { child -> stack.add(child) }
         }
         return found?.let { typeToString(getTypeOfExpression(it)) }
+    }
+
+    /**
+     * (API.3b) TEST-ONLY — the post-hoc twin of [postHocTypeAtSpanForTesting], for
+     * the DEFINITION question.
+     *
+     * Runs [typeCaptureDefinitionAt] — the very resolution the capture runs — after
+     * `init`, when `spineCurrentScope` has been nulled by the spine's per-file
+     * teardown. So the lexical chain that answers a body local is simply gone and
+     * the resolution falls through to the node-keyed global lookup, which is how a
+     * "keep the checker and ask it later" go-to-definition would behave.
+     * `DefinitionCaptureMeasurementTest` measures the difference rather than
+     * asserting it, and it must stay `internal` for the same reason its twin does.
+     *
+     * Returns null when no [Identifier] in [fileName] carries that raw span.
+     */
+    internal fun postHocDefinitionAtSpanForTesting(
+        fileName: String,
+        start: Int,
+        end: Int,
+    ): CapturedDefinition? {
+        val sourceFile = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile ?: return null
+        val stack = ArrayList<Node>()
+        stack.add(sourceFile)
+        var found: Identifier? = null
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is Identifier && node.pos == start && node.end == end) found = node
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        return found?.let { typeCaptureDefinitionAt(it, fileName) }
     }
 
     // ── INV.4 check spine (round 514) ──────────────────────────────────────
@@ -24595,7 +24872,11 @@ class Checker(
      * the parent (the [LexicalScope] KDoc's resolution order). Null when
      * nothing binds the name lexically — future consumers layer their own
      * file-root extras (KNOWN_GLOBALS seeding etc.) on top, per the (c)(ii)
-     * plan. Consumed today by the audit trace only.
+     * plan. Consumed by the audit trace and, since (API.3b), by the position-
+     * directed definition capture — which is why it may not become audit-only
+     * again: it is the ONLY thing that answers "what does this name refer to
+     * HERE" for a body local, and it answers it only while the walk is inside
+     * that body ([spineScopeClear] nulls the chain per file).
      */
     private fun spineScopeLookup(name: String): Symbol? {
         var s = spineCurrentScope

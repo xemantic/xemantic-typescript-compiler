@@ -73,12 +73,13 @@ import com.xemantic.typescript.compiler.computeParserFlags
  *
  * ## Semantics
  *
- * [quickInfoAt] answers what the TYPE CHECKER computed at an offset. Unlike the
- * two families above it BUILDS, and it builds with the position handed IN: the
- * compiler's answer to "what is the type here" is a function of state that exists
- * only while the checker walks, so it is recorded in place rather than asked for
- * afterwards. See that method, and `TypeCaptureRequest` in the core for the
- * measurement that decided it.
+ * [quickInfoAt] answers what the TYPE CHECKER computed at an offset, and
+ * [definitionsAt] where the name at an offset is declared. Unlike the two families
+ * above they BUILD, and they build with the position handed IN: the compiler's
+ * answers to "what is the type here" and "what does this name refer to" are
+ * functions of state that exists only while the checker walks, so they are recorded
+ * in place rather than asked for afterwards. See those methods, and
+ * `TypeCaptureRequest` in the core for the measurement that decided it.
  *
  * ## What this class is NOT
  *
@@ -433,6 +434,56 @@ public class Project private constructor(
             start = node.pos,
             end = index.realEndOf(node),
         )
+    }
+
+    /**
+     * Where the name at [offset] in [fileName] is DECLARED — the go-to-definition
+     * answer — or an empty list when there is nothing to navigate to.
+     *
+     * The caret is resolved to a node exactly as [quickInfoAt] resolves it, and the
+     * compiler is then asked to resolve the SYMBOL at that node while it walks. It
+     * BUILDS, with the same caveats [quickInfoAt] documents: a separate build that
+     * neither reads nor fills the [diagnostics] cache.
+     *
+     * ## More than one location is normal
+     *
+     * Declaration merging is a language feature: an `interface` declared twice, a
+     * function and a namespace of the same name, a class and an interface. Every
+     * contributing declaration is returned, in the compiler's own (deterministic)
+     * order, and a host that wants one picks the first rather than assuming there
+     * is only one.
+     *
+     * ## An imported name answers about the ORIGINAL
+     *
+     * `import { foo } from "./m"` and then a use of `foo` navigates to `foo` in
+     * `./m`, not to the import statement — the import line is one keystroke away
+     * anyway. When the module cannot be resolved the import binding itself is
+     * returned, which is truthful and less useful.
+     *
+     * ## What answers EMPTY, deliberately
+     *
+     * A MEMBER name — the `p` of `o.p`, a property signature's name, an enum member
+     * behind its enum — is not answered. Resolving a member needs the receiver's
+     * type and its property symbol, which is a different mechanism from the scope
+     * lookup this uses; answering it with a scope lookup would find whatever
+     * unrelated binding shares the spelling, and an editor that jumps somewhere
+     * confidently wrong is worse than one that does not jump. Labels, keywords,
+     * literals and any offset outside every node answer empty for the same reason:
+     * they name nothing the scope chain binds.
+     */
+    public fun definitionsAt(fileName: String, offset: Int): List<DefinitionLocation> {
+        val index = sourceIndexOf(fileName) ?: return emptyList()
+        val node = index.pathAt(offset).lastOrNull() ?: return emptyList()
+        val key = keyOf(fileName)
+        // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
+        val span = TypeCaptureSpan(key, node.pos, node.end)
+        return ProjectCompiler(overlay)
+            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(listOf(span)))
+            .capturedDefinitions
+            .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
+            ?.locations
+            ?.map { DefinitionLocation(it.fileName, it.start, it.length, it.kind) }
+            ?: emptyList()
     }
 
     /**
