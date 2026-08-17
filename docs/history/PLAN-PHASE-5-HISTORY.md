@@ -1,3 +1,202 @@
+**Round 899 (2026-08-12) — (WARM.26): THE CUMULATIVE WARM A/B OF ROUNDS 895-898 — **B FASTER IN
+12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS, SIGN-TEST p = 0.0005 — BUT THE EFFECT IS
+SMALLER THAN ONE ARM'S sd, SO THE *DIRECTION* IS ESTABLISHED AND THE *MAGNITUDE* IS NOT.** AND THE
+SIXTH LEAF PROFILE RECONCILES WITH IT TO WITHIN ITS OWN RESOLUTION.**
+
+**No production code changed.** Round 893 is the template; this block is ~4x smaller than that one
+and the round was designed for that up front. `docs/perf/warm-leaf-profile.md` § 33.
+
+- **(A) THE PRIOR, STATED BEFORE THE RUN.** Rounds 895-898 bank ~82-115 ms by counters (895's scan
+  gating -64.3 ms, 896's `nodeToFlow` -17.9, 896's `perFileScope` 6.4-33; 897/898 are refusals plus
+  flag-gated-OFF instruments, verified from the diff) = **1.5-2.1% of a ~5.4 s rebuild**, against
+  per-arm sds round 893 measured at 2.21%/3.44%. So "not resolvable, the counters remain the claim"
+  was a pre-declared acceptable outcome, and this note would have said so.
+
+- **(B) THE RESULT.** Arms `63819970` (pre-895) and HEAD `7a859f00`, one JVM per SAMPLE (round 867),
+  `WARMUP=6`/`ITERS=8` (the 2026-08-10 calibration), two batches of six pairs with OPPOSITE leading
+  arms, box quiesced and left alone for the whole 40 minutes (round 774).
+
+  | | A = `63819970` | B = HEAD |
+  |---|---:|---:|
+  | n (process medians) | 12 | 12 |
+  | median | 5,418.4 ms | **5,242.6 ms** |
+  | sd | 137.9 ms (**2.55%**) | 132.1 ms (**2.51%**) |
+
+  **12/12 to B.** Pooled median paired **-1.88%**, mean -2.48%, per-pair range **[-6.51%, -0.70%]**,
+  never crossing zero, exact two-sided sign test **p = 0.0005**. Batch 1 **6/6** (median -1.61%),
+  batch 2 **6/6** (median -1.88%) — round 840(c)'s replication met on reversed rotations.
+
+- **(C) AND THE MAGNITUDE IS WHERE THIS SAYS NO.** The three central estimators disagree by 1.7x
+  (median of paired deltas -1.88%, mean -2.48%, median-of-medians -3.25%) and the paired range spans
+  a factor of nine. Both arm sds are again over `ab-warm.sh`'s ~1% threshold, and **unlike round 893
+  the effect is SMALLER than one arm sd**, so CLAUDE.md's "many times the sd" override cannot be
+  invoked at all. What carries the direction is pairing plus replication; nothing carries a figure.
+  **The defensible claim is "roughly 1.5-3%, direction certain, point estimate not resolvable on this
+  box".**
+
+- **(D) A CROSS-ROUND ANCHOR THAT CAME OUT UNUSUALLY WELL — AND IS LUCK, NOT A NEW LAW.** Arm A here
+  differs from round 893's arm B by docs and two script lines; 893 measured that code at **5,424 ms**
+  and this round at **5,418 ms — 0.11% apart across sessions**, where CLAUDE.md prices the anchor at
+  up to 12.8% of drift. It does let the two rounds be laid side by side: **5,859 (pre-887) ->
+  5,424/5,418 (pre-895) -> 5,243 (HEAD) = -10.5% over rounds 887-898.**
+
+- **(E) SAME ANSWERS, DIFFERENT CODE.** All 192 measured rebuilds report 78 files / 46 errors;
+  both arms' `--listAll` capture is 46 diagnostics, digest `59d930db849399aea5e03e25fedb8e4e` (the
+  round-841 cross-round recipe, the same digest round 893 recorded), zero-line diff, no
+  `... and N more error(s)` truncation (round 811). 694 vs 711 classes with `SourceScanFilter` (895)
+  and `MapCensus` (896) in B only, asserted by the driver BEFORE it ran a sample (round 853).
+
+- **(F) THE SIXTH LEAF PROFILE, AND THE FIRST TIME THIS ARC HAS RECONCILED THREE INSTRUMENTS.**
+  Recipe identical to 888/893; 8,127+7,742 samples, max depth 182/170 vs the 512 cap, `checkSpine`
+  inclusive 74.09%/74.00%, denominator **5,429 ms** (round 870). The three landed changes can be
+  added up PER OWNER: `nodeToFlow` -42.6 gross but **+19.1 back as `LongKeyMap` frames = -23.5 net**;
+  `perFileScope` (`lookupPerFile` -29.7, `globalsForFile` -7.8, memo +1.2) **= -36.3**; the scan
+  gating (String family -74.7, `SourceScanFilter` +22.5) **= ~-52**. **Total ~-112 ms = 2.1%**,
+  against the A/B's -1.88% and the counters' 1.5-2.1%. Round 893 closed with "the excess is largely
+  attributed, not yet explained"; here the three instruments agree to within their own resolution.
+  **A container swap must be priced NET — 45% of `nodeToFlow`'s gross came straight back.**
+
+- **(G) BY FAMILY: the map family 1,300.7 -> 1,136.5 ms and String/StringBuilder 222.5 -> 147.8** —
+  exactly the two families the rounds targeted; everything else rose and the residue is flat, which
+  under a shrinking denominator is what an unchanged cost looks like (round 870) plus drift, so only
+  the falls are read. `HashMap$TreeNode` is **0 samples in 15,869** for the second round running. By
+  ROW the top owner is `cpaSpineLeave` at **1.81%** and nothing else clears 1.3% — round 874's law
+  holding for the SIXTH take. **No C2 key split** behind any large row delta; and `ctaSpineEnter`
+  reads 0.87% vs 0.61% WITHIN this round, so a cross-round delta of that size is uninterpretable.
+
+- **(H) THE RANKED LIST — SIX, AND EVERY ONE CARRIES ROUND 898's ARITHMETIC FILTER** (ms ÷ population
+  -> is the implied per-op cost physically possible?). § 33.8. **(1) `resolveImportedSymbolGeneral`**
+  24.3 ms — a PROVEN `containsKey`-then-`get` double probe (round 896's `globalsForFile` shape) on an
+  **Int**-keyed, boxed cache; real only at ~0.7-1.5 M probes/rebuild, **population unknown, first
+  instrument is a counter**; ~8-15 ms, LOW risk, same-answers. **(2) `lexLevelHasName`** 30.1 ms — NOT
+  a double probe (two different maps per level, O(depth) ascent); ~1.0 M probes at ~30 ns is
+  plausible against `globals.lookups` 748,522, so **not refuted**; the lever is a proof-of-absence
+  filter (round 895's shape) over a scope name set frozen after bind; ~8-12 ms, MEDIUM, grid.
+  **(3) `getTypeFromTypeNodeCore`** 57.1 ms, the largest map owner — 354 k ops -> **161 ns/op**, which
+  is plausible ONLY because the key is a data class with a recursive `hashCode` (round 471); the
+  deletable part is the deep hash, ~10-20 ms, **HIGH** risk (cache SHARING, `typeNode.cacheHits`,
+  program order, round 787). **(4) REFUSED HERE ON ARITHMETIC: the two UNCENSUSED whole-map copies**
+  `spineArithFnFrame` + `spineCaCopyTop` = 42.0 ms JFR, which at round 898's measured 2.6-3.4x
+  over-read is ~12-16 ms — below the 0.31% at which round 897 refused a LOW-risk change. **(5)
+  `SuffixNameSet.materialize`** 21.6 ms insert-100%, where the arithmetic makes the answer BINARY:
+  ~0.5-1.0 M adds is implausible for a set built once per file and plausible for one rebuilt per
+  query — one counter decides it. **(6)** `Integer.equals` at **29.4 ms** of key-side leaf work is a
+  LOCATION for the residual boxed-Int maps, with no owner named yet.
+
+- **(I) WHAT IS *NOT* ON THE LIST, AND THE RULE IT ESTABLISHES.** `lookupPerFileForNode` is the
+  second largest map owner (40.7 ms) and its arithmetic is textbook — round 897 counted 1,063,149
+  probes, so 31.1 ms of `HashSet.contains` is **29 ns/probe**. It is absent because the LEVER is
+  absent (a bitset refuses only the 440,003 misses = 2-9 ms; interning is 17.2 ms against 11.1 ms per
+  parse and round 825's concurrency blocker). **A real cost with no known lever is CLOSED, not open.**
+
+- **(J) tsgo — AND HALF OF IT WAS ALREADY CLOSED BY ROUND 889, WHICH THIS ROUND ALMOST RE-RAISED.**
+  `LinkStore[K, V] { entries map[K]*V; arena }` has two axes and they must not be conflated. The
+  GROUPING axis (~25 stores of co-accessed fields) **round 889 censused and refused** — our top such
+  cluster is 0.49% and the bottom is one sample. The KEY axis is open and unmeasured (889's key-shape
+  census left 40.8% "unclassified"): tsgo keys by `*ast.Node`, an 8-byte ADDRESS, where we key
+  `nodeTypes` by the AST VALUE. That is candidate (3) and nothing more. **Unpriced; recorded only to
+  fix which half is closed.**
+
+- **(K) GATES — STATED IN FULL BECAUSE MOST WERE NOT RUN.** No production source changed (`git diff`
+  touches only `scripts/` and `docs/`), so **no suite run, no `cost_gate.py`, no `huge_methods.py`,
+  no 8-profile grid** were required or run — the same posture as round 893 (K). What WAS run, and is
+  the round's own gate: the two arms' `--listAll` same-answers control above, the driver's
+  class-dir positive controls, BenchMain's per-rebuild files/errors abort on all 192 rebuilds, and
+  the profile's depth/thread/`checkSpine`-inclusive validity checks. The repo's `build/classes` was
+  restored from the HEAD snapshot after arm A's build and verified at 711 classes. Source edits are
+  the three new scripts plus one ROUNDS line in each of `round888_families.py`,
+  `round888_compare.py`, `round894_hash_owners.py`.
+
+**Round 898 (2026-08-12) — (WARM.25): ROUND 894'S LAST TWO OPEN CANDIDATES, **BOTH REFUSED**, AND
+WITH THEM THE WHOLE RANKED LIST: **EIGHT OF ITS NINE CEILINGS ARE NOW MEASURED AND EVERY ONE IS OVER
+BY 2.1-21x.** THE ROUND-891-vs-ROUND-894 CONTRADICTION RESOLVES **IN ROUND 891'S FAVOUR** —
+`EpochMap` copies are **11-15 ms**, not 38.1.**
+
+Priced BEFORE a line of fix, one instrument, no production behaviour change. `docs/perf/copy-family-price.md`.
+
+- **(A) CANDIDATE (8), THE CONTRADICTION, SETTLED — AND HALF OF IT WAS NEVER A CONTRADICTION.** Round
+  891 DERIVED 14-24 ms for `EpochMap(localTypes)`; round 894's JFR census MEASURED
+  `Checker$EpochMap.<init>` at 38.1. But round 892 removed **124,709 entries** from that family (the
+  narrowing frames, moved onto `MapScopeStack`), so 891's derivation **re-stated at the population
+  894 was looking at** — 347,017 entries at 30-51 ns — reads **10.4-17.7 ms**. The amplifier measures
+  **11.2-14.8 ms**, inside it. *A derivation is a claim about a population as much as about a rate;
+  re-state it before calling it wrong.*
+
+- **(B) AND THE CENSUS FIGURE IS REFUTABLE WITH NO BUILD AT ALL.** 38.1 ms over that family's own
+  population is **1,394 ns to copy a 12.6-entry map = 110 ns PER ENTRY**, where a `HashMap` insert
+  with an already-cached `String` hash is tens of ns. Round 896 stated this rule after applying it to
+  candidate (4) and it was not applied here. The mechanism is CLAUDE.md's round-623 entry — a JFR
+  leaf share is not a wall-clock price, and `HashMap.putMapEntries` is exactly the tight allocating
+  loop that attracts samples; the EXTENDED measure amplifies it by construction.
+
+- **(C) THE OBVIOUS RESCUE IS REFUTED BY ITS OWN ARM.** "A copy costs `K + c*n` and the per-entry
+  derivation dropped `K`" is a good hypothesis — `EpochMap`'s mean copy is 12.6 entries against the
+  37.6/114.3 the rate came from. It is false: **`EpochSet(paramBindings)` makes 35,015 copies of mean
+  1.1** — the most call-dominated container of the six — and its slope is **unresolvable (0.5-2.8
+  ms)**. If a fixed per-call cost were worth anything, that family would show it.
+
+- **(D) CANDIDATE (6) REFUSED, AND THE COST THAT DECIDED IT IS A POPULATION THE CENSUS COULD NOT
+  SEE.** `spineArgListOverlay` is **393 copies/rebuild** (365 nested-fn overlays of mean 633 entries
+  + 28 shadow-minus of mean 753) carrying 8,152 writes; measured **12.7 ms = 0.23%** against a 41.2
+  ceiling. The chained-scope-map replacement trades an O(1) probe for an O(depth) walk — so this
+  round counted the probes: **56,096 `SpineArgCtx` lookups/rebuild, 29,703 (53%) MISSES**, and a miss
+  must walk the chain to the END. That is 1-6 ms back, leaving **~7-11 ms (0.13-0.20%)** — below the
+  **0.31%** at which round 897 refused a change it rated LOW risk, where this is MEDIUM (TS2554/2555,
+  shadowing rules bug-compatible with a deleted legacy walker), and **no counter in
+  `cost-counters.txt` moves**, so its only defence would be a wall A/B at a fifth of what this box
+  settles. The sharpest single line in the census: **the shadow-minus copies 21,086 entries to remove
+  29 names — 727 entries per name.**
+
+- **(E) A NEW COUNTER, BECAUSE `writes/entries` ANSWERS ONLY THE UNDO-LOG QUESTION.** It is a
+  whole-FAMILY write count and cannot tell one copy written a hundred times from a hundred copies
+  written once — different shapes, different levers. Charging a copy ONCE, on its first write:
+  **6,598 of 27,337 `EpochMap` copies (24.1%) are never written and they hold 188,774 entries =
+  54.4% of the volume**, and the never-written ones are the BIG ones (mean 28.6 vs 7.6). So a
+  copy-on-write `EpochMap` — which needs **no LIFO discipline at all**, the one structural argument
+  this family has never had — is worth ~6-8 ms (0.11-0.15%). Recorded, refused: establishing it needs
+  exactly the >=12-site pointer-swap audit round 891 declined, for 0.13%.
+
+- **(F) THE INSTRUMENT'S OWN LESSON — A BALANCED PALINDROME IS NOT ENOUGH.** Batch 1 ran three arms
+  (r=0/16/32) x 4 draws in two MIRRORED rotations, both palindromes, so a LINEAR drift cancels in
+  each by construction — and they disagreed **2x on `em`, 4x on `al`, and by SIGN on `es`**. The raw
+  draws say why: one rotation reads 5,869/5,848/5,483/5,544/5,571/5,100, monotone downward, i.e. the
+  warm-up is still running at rebuild 14 and what a palindrome cannot cancel is its NON-linear
+  remainder. **The fix is fewer arms and a bigger `r`, not more rotations**: batch 2 (TWO arms,
+  r=64, 8 draws, palindromic, two processes) gave 13.99/15.52 for `em` and 11.46/13.93 for `al`, with
+  **every one of the 16 `r=64` draws above every one of the 16 `r=0` draws**.
+
+- **(G) WHAT THIS DOES TO ROUND 894 § 9 — IT IS A LOCATION LIST, NOT A PRICE LIST.** (1) 3.9x, (2a)
+  1.1-5.4x, (2b) 4.8-21x, (3) 2.6x, (4) 5.6-14x, (5) 2.8-6.7x, (6) 3.2x, (8) 2.6-3.4x. The ratios
+  cluster at ~3x wherever the owner really IS one map operation and run higher where the owner row
+  was mostly something else — a systematic attribution bias plus a per-candidate misidentification,
+  not eight independent over-estimates. Two build-free steps now stand between a row there and a
+  decision: divide the row by its own population, and name the ONE map operation it is supposed to
+  be.
+
+- **(H) THE ABLATION — 8 ARMS, TWO BLIND, TWO DIFFERENT REPAIRS.** All eight discriminate after
+  repair; 4 have a uniquely-their-own pin (A5-A8), A1/A2 and A3/A4 are discriminated as PAIRS and not
+  from each other (stated, not dressed up). **A8 (the shadow-minus hook deleted) was blind because
+  the two copy sites in one function SHARED one census family** — the survivor kept the counter
+  non-zero, so no pin could see the other fail; the repair is the split, which is also what produced
+  (D)'s 727-entries-per-name row. *A census family that cannot be zero is a census family that cannot
+  be wrong.* **A3 (the first-write record never cleared) was blind because the FIXTURE could not
+  express the invariant** — rounds 891/892 moved the fn-body locals onto `MapScopeStack`, so a
+  single-file compile copies near-EMPTY maps (5 copies, 4 entries, none written twice) and "counted
+  at most once" is vacuous; a class with methods, `this` and two callback shapes reaches 21 copies /
+  34 writes and the pin now ASSERTS that multiplicity.
+
+- **(I) GATES.** Suite **14,372 / 0 failures / 3 skipped** (+14, exactly the `CopyCensusTest` pins).
+  `cost_gate.py` **+0.00% on all 20 counters** — the expected CONTROL, and here also the statement
+  that hooks on `EpochMap.put` and on the arity read of every call expression are inert.
+  `huge_methods.py --fail-over 0`: **0 over the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT
+  `added=0 removed=0`** (46 each, harness 94), cross-round against round 897's committed captures,
+  identical recipe. `scripts/round898-grid.sh`.
+
+- **(J) NO WALL A/B, FOR THE NINTH ROUND RUNNING — and this time there is nothing to A/B.** The round
+  lands an instrument and two refusals; what is claimed is deterministic populations (27,337 copies /
+  347,017 entries / 42,378 writes / 56,096 lookups) and a slope with an arithmetic falsifier that
+  held on all 60 instrumented rebuilds.
+
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
 
 **Round 897 (2026-08-12) — (WARM.24): ROUND 894'S **TOP-RANKED** CANDIDATE, SCANNER IDENTIFIER
