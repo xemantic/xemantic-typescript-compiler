@@ -2647,8 +2647,22 @@ private fun computeNeedsJsxFlag(fileName: String, options: CompilerOptions, forc
  * parse, so a crawl-time parse is provably the parse the core would produce
  * (the reuse gate compares these flags for equality). All inputs are per-file
  * (fileName/content) or plain option fields — no whole-program dependency.
+ *
+ * PUBLIC, and deliberately so — do NOT "tidy" it back to `internal` (round 910).
+ * INV.1(e) is a claim about EVERY parse of a project file, and the embedding API
+ * (`xemantic-typescript-compiler-project`) parses one to answer position queries.
+ * A module that cannot call this has exactly two options, and both are worse than
+ * the widened visibility: parse with hand-rolled flags, which is undetectable
+ * drift — no test in the consuming module can compare against a function it
+ * cannot see, so a later edit here would silently make that module describe a
+ * DIFFERENT TREE than the compile does — or not parse at all. The flags are not
+ * cosmetic: `topLevelAwait` is true for any ESNext/ES2022/NodeNext/Preserve/System
+ * project and for any file whose top-level `import`/`export` region contains
+ * `await`, and `needsJsxFlag` is true for every `.tsx`, so getting them wrong
+ * changes which node is at an offset. The two helpers below it stay private —
+ * this is the whole entry point.
  */
-internal fun computeParserFlags(fileName: String, content: String, options: CompilerOptions): ParserFlags {
+fun computeParserFlags(fileName: String, content: String, options: CompilerOptions): ParserFlags {
     // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
     // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
     val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")

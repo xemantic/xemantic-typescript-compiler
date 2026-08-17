@@ -25,11 +25,15 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Diagnostic
+import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SystemVfs
+import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.Vfs
+import com.xemantic.typescript.compiler.computeParserFlags
 
 /**
  * An open TypeScript project a host application can query for diagnostics and
@@ -46,6 +50,24 @@ import com.xemantic.typescript.compiler.Vfs
  * project.diagnostics("/path/to/project/src/a.ts")   // as the user is typing it
  * project.close()
  * ```
+ *
+ * ## Positions
+ *
+ * [positionAt] / [offsetAt] translate between the compiler's 0-based character
+ * offsets and the 1-based (line, character) coordinates an editor and
+ * [Diagnostic] both speak. They read TEXT and never a program, so unlike every
+ * other member here they do NOT build — a host may convert a coordinate on a
+ * dirty project without paying for a compile. See [LineMap] for the terminator
+ * rules and for where our own compiler disagrees with itself about them.
+ *
+ * ## Syntax
+ *
+ * [nodeInfoAt] answers what the syntax tree says is at an offset. Like the position
+ * conversions and unlike everything else here it does NOT build: it PARSES the one
+ * file asked about, with the parser flags the project's `tsconfig.json` implies,
+ * and caches that parse the same way the line indexes are cached. A caller gets a
+ * value ([NodeInfo]), never a node — see that class for why, and [SourceIndex] for
+ * why "the node at an offset" needs more than the node's own `pos`/`end`.
  *
  * ## What this class is NOT
  *
@@ -188,6 +210,184 @@ public class Project private constructor(
         }
     }
 
+    // --- positions -------------------------------------------------------------
+
+    /**
+     * Line indexes, one per file, built on demand and dropped when that file is
+     * edited.
+     *
+     * Cached because an editor asks many positions per keystroke and each
+     * conversion would otherwise re-scan the whole file; keyed by the same
+     * absolute path [updateFile] keys, so a query and an edit cannot miss each
+     * other by spelling.
+     */
+    private val lineMaps = HashMap<String, LineMap>()
+
+    /**
+     * The 1-based (line, character) coordinate of the 0-based [offset] in
+     * [fileName], or null when the file has no text to index.
+     *
+     * The text comes from the OVERLAY, so this answers about the caller's unsaved
+     * buffer — the same bytes [diagnostics] type-checks. Reading through the
+     * backing store instead would be silently wrong in the one situation the class
+     * exists for: a position query and a diagnostic query would describe different
+     * text, and every offset an editor mapped would be off by whatever the user
+     * had typed.
+     *
+     * Null means "no such file, in the overlay or below it". A file that is
+     * readable but not part of the program still answers, because "where is offset
+     * N in this text" is a question about text and does not need a program — and
+     * requiring membership would make the answer depend on a build.
+     *
+     * @throws IllegalArgumentException if [offset] is outside `0 .. <file length>`.
+     */
+    public fun positionAt(fileName: String, offset: Int): TextPosition? =
+        lineMapOf(fileName)?.positionAt(offset)
+
+    /**
+     * The 0-based offset of the 1-based ([line], [character]) coordinate in
+     * [fileName], or null when the file has no text to index.
+     *
+     * Reads the overlay, exactly as [positionAt] does. [character] is clamped into
+     * the line and [line] is not — see [LineMap.offsetAt].
+     *
+     * @throws IllegalArgumentException if [line] is outside the file's line range.
+     */
+    public fun offsetAt(fileName: String, line: Int, character: Int): Int? =
+        lineMapOf(fileName)?.offsetAt(line, character)
+
+    /**
+     * The line index of [fileName], built from the overlay's text and cached.
+     *
+     * INTERNAL on purpose. Handing the [LineMap] itself to a caller would hand out
+     * an object that goes stale at the next [updateFile] with nothing to say so —
+     * a host would cache it beside its own buffer and quietly convert against the
+     * previous keystroke. The two conversions above consult the cache per call, so
+     * an edit is always seen.
+     */
+    internal fun lineMapOf(fileName: String): LineMap? {
+        checkOpen()
+        val key = keyOf(fileName)
+        lineMaps[key]?.let { return it }
+        val text = overlay.readText(key) ?: return null
+        return LineMap.of(text).also { lineMaps[key] = it }
+    }
+
+    // --- syntax ----------------------------------------------------------------
+
+    /**
+     * Parses, one per file, built on demand and dropped when that file is edited.
+     *
+     * Kept beside [lineMaps] and invalidated by the same paths, so a host cannot
+     * observe a coordinate and a node that describe different text.
+     */
+    private val sourceIndexes = HashMap<String, SourceIndex>()
+
+    /**
+     * The resolved `tsconfig.json` options, loaded once and dropped when any JSON
+     * file is edited.
+     *
+     * They are needed only because a parse is option-dependent (INV.1(e)), and
+     * loading them is a file read plus a JSON parse — cheap, but not free per
+     * keystroke.
+     */
+    private var parseOptions: CompilerOptions? = null
+
+    /**
+     * What the syntax tree says is at [offset] in [fileName], or null when there is
+     * nothing there.
+     *
+     * The narrowest node whose real span contains [offset], described as a value.
+     * Null means one of four things, all of them legitimate answers rather than
+     * errors: the file has no text in the overlay or below it, [offset] is negative,
+     * [offset] is at or past the end of the file (the caret after the last character
+     * is inside no node — the spans are half-open), or the parse placed no node
+     * there at all.
+     *
+     * Reads the OVERLAY, so it describes the caller's unsaved buffer, exactly as
+     * [positionAt] does — and PARSES rather than builds, so a host may ask on a
+     * dirty project without paying for a compile. It follows that the answer is
+     * SYNTACTIC: it knows what the text is, never what it means. No type, no symbol,
+     * no resolution.
+     *
+     * Trivia belongs to no node: an offset inside a comment, or in the whitespace
+     * between two statements, resolves to the innermost node that ENCLOSES that
+     * trivia — the source file for a comment between top-level statements, the block
+     * for one inside a function body — because a node's span stops at its own last
+     * token and leading comments are carried beside the following node rather than
+     * inside it ([SourceIndex], and `NodeSpanSemanticsTest`'s finding 1).
+     */
+    public fun nodeInfoAt(fileName: String, offset: Int): NodeInfo? {
+        val index = sourceIndexOf(fileName) ?: return null
+        val path = index.pathAt(offset)
+        val node = path.lastOrNull() ?: return null
+        return NodeInfo(
+            kind = node.kind.name,
+            start = node.pos,
+            end = index.realEndOf(node),
+            // Outwards from the node: parent first, source file last. Taken from the
+            // descent path rather than from `NodeBase.parent`, which is stamped by
+            // the indexer and absent on anything synthesized.
+            ancestorKinds = path.subList(0, path.size - 1).asReversed().map { it.kind.name },
+        )
+    }
+
+    /**
+     * The narrowest node containing [offset] in [fileName], or null.
+     *
+     * INTERNAL, and the deliberate counterpart of the public [nodeInfoAt]: whether
+     * this API publishes `Node` at all is an open question that the next queue item
+     * decides, and answering it here by accident would be the one direction that
+     * cannot be walked back ([NodeInfo] carries the argument). Everything inside
+     * this module that needs the node itself — and the tests that have to reach past
+     * the descriptor to check the lookup — goes through this.
+     */
+    internal fun nodeAt(fileName: String, offset: Int): Node? =
+        sourceIndexOf(fileName)?.pathAt(offset)?.lastOrNull()
+
+    /**
+     * The parse of [fileName], built from the overlay's text and cached.
+     *
+     * The flags come from the compiler's own [computeParserFlags] over the project's
+     * resolved options, which is what makes this parse the parse a compile would
+     * perform (INV.1(e)). Hand-rolling them would be silent drift: no assertion
+     * about a node's position can see that a differently-flagged parser produced a
+     * different tree, and `topLevelAwait` alone decides whether `await x` at the top
+     * level of a file is an await expression or an identifier.
+     */
+    private fun sourceIndexOf(fileName: String): SourceIndex? {
+        checkOpen()
+        val key = keyOf(fileName)
+        sourceIndexes[key]?.let { return it }
+        val text = overlay.readText(key) ?: return null
+        val options = parseOptions
+            ?: TsConfigLoader(overlay).load(configPath).options.also { parseOptions = it }
+        val flags = computeParserFlags(key, text, options)
+        return SourceIndex.of(text, key, flags).also { sourceIndexes[key] = it }
+    }
+
+    /**
+     * Drops whatever [key]'s new content invalidates.
+     *
+     * Per-path for the text-derived indexes: an edit to one buffer cannot change
+     * another file's text, and an editor edits one file per keystroke while holding
+     * indexes for every file it has open.
+     *
+     * A JSON edit additionally drops EVERY parse and the options themselves, because
+     * a parse is option-dependent and a config resolves an `extends` chain through
+     * files this class never learns the names of — watching only [configPath] would
+     * serve stale flags for an edit one level up, silently. The bluntness costs
+     * nothing: a `.json` file is not what a host edits per keystroke.
+     */
+    private fun invalidate(key: String) {
+        lineMaps.remove(key)
+        sourceIndexes.remove(key)
+        if (key.endsWith(".json")) {
+            parseOptions = null
+            sourceIndexes.clear()
+        }
+    }
+
     /**
      * Overlays [text] as the content of [path], as an unsaved editor buffer.
      *
@@ -204,8 +404,10 @@ public class Project private constructor(
      */
     public fun updateFile(path: String, text: String) {
         checkOpen()
-        overlay.put(keyOf(path), text)
+        val key = keyOf(path)
+        overlay.put(key, text)
         cached = null
+        invalidate(key)
     }
 
     /**
@@ -217,8 +419,10 @@ public class Project private constructor(
      */
     public fun deleteFile(path: String) {
         checkOpen()
-        overlay.remove(keyOf(path))
+        val key = keyOf(path)
+        overlay.remove(key)
         cached = null
+        invalidate(key)
     }
 
     /**
@@ -240,6 +444,9 @@ public class Project private constructor(
         closed = true
         overlay.clear()
         cached = null
+        lineMaps.clear()
+        sourceIndexes.clear()
+        parseOptions = null
     }
 
     /**

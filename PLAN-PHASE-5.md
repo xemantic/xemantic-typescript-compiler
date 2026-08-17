@@ -20,6 +20,87 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 910 (2026-08-17) — (API.2) LANDED IN TWO HALVES, AND THE ROUND'S REAL PRODUCT IS TWO **MEASURED
+FACTS ABOUT OUR AST SPANS** THAT MAKE THE OBVIOUS IMPLEMENTATION WRONG: **`Node.end` IS THE END OF THE
+TOKEN *FOLLOWING* THE NODE, SO SIBLING SPANS OVERLAP AND `[pos, end)` IS NOT A CONTAINMENT TEST.** ALSO
+DECIDED THIS ROUND, BY READING RATHER THAN PREFERENCE: (API.3) IS **POSITION-DIRECTED CAPTURE**, NOT A
+POST-HOC QUERY.
+
+- **WHAT LANDED.** (a) A public `LineMap` / `TextPosition` (both 1-based, `Diagnostic`'s convention) with
+  `Project.positionAt` / `offsetAt`; these read through the overlay and **deliberately do NOT build**, so
+  a host can convert coordinates on a dirty project for free (pinned: `lists == 0`, `reads == 1`).
+  (b) `Project.nodeInfoAt` returning a **value-typed** `NodeInfo(kind, start, end, ancestorKinds)`, over
+  an `internal nodeAt` / `SourceIndex`. **No AST, `Symbol` or `Type` is published** — (API.3)'s surface
+  decision stays open. **53 new pins** (LineMap 15, ProjectPosition 11, NodeSpanSemantics 6, ProjectNodeAt
+  21); module 30 -> 83.
+
+- **FINDING 1, VERIFIED IN SOURCE AND EMPIRICALLY: `Node.end` OVERSHOOTS BY A TOKEN.**
+  `Parser.getEnd() = scanner.getPos()` (`Parser.kt:746`), read after the parser's one-token lookahead, so
+  in `const abc = 1;` the identifier `abc` reads **`[6,11)`** where its text is `[6,9)`, and statement 1
+  reads `[0,18)` where its text ends at 14. **Sibling spans therefore OVERLAP**: a caret on the `=` tests
+  as inside `abc`, a caret on `let` as inside the previous statement. `SourceFile` is exact only because
+  EOF is zero-width. **FINDING 2, the mirror trap: `Node.pos` is tsc's `getStart()`, NOT tsc's `pos`** —
+  `Scanner.scan` sets `tokenPos` AFTER `scanLeadingTrivia()` (`Scanner.kt:331-333`), so trivia is already
+  skipped and leading comments hang off `leadingComments` BELOW the span; a routine ported from tsc that
+  adds a `getStart()` skip double-skips past the node's own first token. Both in CLAUDE.md, both pinned by
+  `NodeSpanSemanticsTest` rather than left as prose.
+
+- **AND THE FIX THE QUEUE ENTRY IMPLIED IS *REFUTED*, WHICH IS THE ROUND'S SHARPEST RESULT.** Bounding a
+  node's end by the NEXT SIBLING'S `pos` looks sufficient and fixes the caret-on-`let` case — but in
+  `const abc = 1;` the initializer starts at **12** while `abc` ends at 11, so `min(11,12) = 11` and the
+  `=` at offset 10 is STILL inside `abc`. **The `=` is covered by no child at all, so no arithmetic over
+  child positions can ever see it.** The sound rule is `realEnd = the greatest TOKEN end strictly below
+  node.end` — one extra `Scanner` pass per parse, binary-searched, cached beside the tree. The context-free
+  re-scan can only SPLIT a contextual token (a regex scans as `/`,`ab`,`/`), which adds ends and preserves
+  every real boundary; a merge would make a span come out short and report the PARENT — coarser, never
+  wrong-sibling, because the bound is never too high.
+
+- **BOUNDARY CONVENTION, stated because an ambiguous primitive cannot be layered on:** half-open, so
+  `offset == start` is inside and `offset == end` is outside — matching `Diagnostic.start`/`length`,
+  `Node.pos`/`end`, `LineMap` and tsc's `getTokenAtPosition`. Consequence pinned: `abc|` is NOT on `abc`;
+  tsserver's touch preference (`includePrecedingTokenAtEndPosition`) belongs a layer ABOVE, so a host asks
+  at `offset` then `offset - 1`. Building it in would make two adjacent nodes both contain the boundary.
+
+- **TWO PINS WERE MEASURED VACUOUS AND SAID SO RATHER THAN SHIPPED (now in CLAUDE.md).** A `.tsx`/`.jsx`
+  fixture CANNOT pin that `computeParserFlags` was consulted — `Parser.isJsxFile` keys off the file
+  EXTENSION, and `needsJsxFlag` drives a diagnostic, not the grammar. Nor can a top-level `await`: our
+  parser produces an `AwaitExpression` with `topLevelAwait = false` too (two tests failed on the first run
+  proving it). **The one option-derived GRAMMAR difference is `forceJsx` on a plain `.js` file** — that is
+  the pin that landed, with a negative control.
+
+- **THE ONE CORE CHANGE, AND WHY IT IS ONE WORD: `computeParserFlags` `internal` -> public**
+  (`TypeScriptCompiler.kt`). The implementer hit it, REFUSED to hand-roll the flags, and stopped — correctly:
+  its own KDoc calls it *"the single source of truth … so a crawl-time parse is provably the parse the core
+  would produce"*, which is precisely the guarantee an out-of-core parse needs, and a duplicate would be
+  **drift no test in the consuming module could ever see** (no `-Xfriend-paths` between modules, so nothing
+  could compare against it). The flags are not cosmetic: `topLevelAwait` is true for any
+  ESNext/ES2022/NodeNext/Preserve/System project and `needsJsxFlag` for every `.tsx`. The KDoc now says not
+  to tidy it back.
+
+- **(API.3) DECIDED BY READING `getTypeOfIdentifier`, NOT BY PREFERENCE** (committed separately,
+  `a966ad76`): it consults `currentLocalTypes` — its own comment says *"populated during TS2322 checking
+  walk"* — then `currentParamBindingNames`, `currentCheckFileName`/`fileLocalTypeMaps`, `currentFileLocals`,
+  the inference-namespace chain, and only THEN the node-keyed lookup. At rest `currentLocalTypes` is an
+  empty `HashMap` (`:636`) and both `current*` fields are null, so a post-hoc query **skips the first five
+  reads**; for a function-body local that does not merely lose narrowing, it can resolve to an unrelated
+  same-named global (the `useCaseSensitiveFileNames` failure documented in that very function). So the
+  design is **capture during the walk**, and the queue entry carries the spine-closure constraint (round
+  888's mask) a next agent would otherwise lose a round to.
+
+- **FOUND IN PASSING, QUEUED AS (BUG.1): the compiler disagrees with itself about a lone `\r`** —
+  `Parser.computeLineStarts` breaks the line there, `Checker.lineStartsFor` counts `\n` only, so a SYNTAX
+  diagnostic and a SEMANTIC one number the lines differently on classic-Mac text. `\n` and `\r\n` are
+  identical under both, which is why no corpus baseline can see it.
+
+- **GATES: suite 14,469 -> 14,522 / 0 failures / 0 errors / 3 skipped = EXACTLY the 53 new pins**, XML-parsed
+  across all six modules, with core unchanged at 14,305 (the visibility change is behaviour-free).
+  `cost_gate.py` **+0.00% on all 20 counters** — here a real control rather than a tautology, since core
+  bytecode DID change (`internal` -> public removes JVM name mangling), and the gate proved live by running
+  a real compile (46 errors / 78 files). `huge_methods.py --fail-over 0` clean on core (732 classes) AND on
+  the module (9, up from 3 — the gate saw the new code). Build warning-clean. Ablation: `realEndOf`
+  returning raw `node.end` reddens **exactly the 7 predicted pins**, restored by hand from a scratchpad copy
+  (never `git checkout`, which would have destroyed the round's uncommitted work).
+
 **Round 909 (2026-08-17) — (API.1): A NEW ARC, ON OWNER DIRECTIVE — THE **PROJECT / LANGUAGESERVICE
 EMBEDDING API**, WHICH IS WHAT THE CHECKER-SIDE PERF POOL BEING EMPTY (round 908) MAKES ROOM FOR.
 SLICE 1 LANDED: A NEW MODULE, A PUBLIC `Project` THAT ANSWERS DIAGNOSTICS AND ACCEPTS **IN-MEMORY
@@ -673,79 +754,6 @@ Priced BEFORE a line of fix, one instrument, no production behaviour change.
   round, run anyway because the hooks sit on the path that decides TS2304. No wall A/B for the tenth
   round running, and nothing to A/B.
 
-**Round 900 (2026-08-12) — (WARM.27): ROUND 899's CANDIDATE (5) IS THE **FIRST JFR ROW IN THIS
-ARC WHOSE ARITHMETIC CONFIRMS IT** — 767,521 inserts at **28.1 ns** each — AND THE COUNTER THAT
-CONFIRMED IT ALSO FOUND WHY THEY EXIST: **A PROBE ARGUMENT HAD BEEN MATERIALISING ROUND 801's LAZY
-VIEWS ON EVERY PRODUCTION COMPILE FOR NINETY-NINE ROUNDS.** CANDIDATE (1) **REFUSED** at 84.3 ns per
-`Integer`-keyed probe.**
-
-Both populations measured before a line of fix (CLAUDE.md's first law + round 898's admission test).
-`docs/perf/suffix-name-index.md`.
-
-- **(A) CANDIDATE (5), AND THE BINARY WAS POSED OVER THE WRONG QUANTITY.** Round 899 said ~0.5-1.0 M
-  `HashSet.add`s "is implausibly large for a set built once per file and entirely plausible for one
-  rebuilt per QUERY", so one counter decides it. The counter says **767,521 names inserted across
-  1,143 sets**, i.e. **21.6 ms / 767,521 = 28.1 ns per add** — exactly a `HashSet.add` with a cached
-  `String` hash. **The row survives its own plausibility test, the only one of round 899's six and
-  round 894's nine that has.** But the sets ARE built once each (`built` memoises); they are simply
-  HUGE, mean **671**. *A count of builds does not bound the work a build does — for a 100%-insert
-  row the deciding quantity is INSERTS, and the binary named neither outcome.*
-
-- **(B) THE LEVER IS THE THIRD COUNTER: THE SUFFIXES OF ONE SCAN ARE NESTED.** 1,143 suffixes are cut
-  from **1,220 cached scans holding 15,331 names in total** — a 50x gap, because each suffix
-  re-inserts the same tail of a shared array. Membership is then a comparison against the scan's LAST
-  occurrence (`e in suffix(lo) <=> max{k : names[k]==e} >= lo`), so ONE lazily-built index per scan
-  answers all of them. LAST and not first is load-bearing: a name reassigned both before and after a
-  closure is the shape the structure exists for, and first-wins inverts it.
-
-- **(C) AND THE FIRST BUILD STILL READ `materialized 1143`, WHICH IS THE ROUND'S REAL FINDING.**
-  `FrontEnd.addClosureCensus(reassigned.size.toLong())` — the guard `if (mode != ON) return` is
-  INSIDE the function and **Kotlin evaluates arguments strictly**, so it never got the chance to run,
-  and asking a lazy view its size materialises it. The (FRONT.2) probe was building all 1,143 hash
-  sets on **every production compile with the probe OFF**. Round 801 created `SuffixNameSet` to stop
-  exactly that and read its own census (`created 1143, materialized 1143`) as "every set is
-  eventually asked", concluding the work MOVED. **The asker was the instrument.** Post-fix the same
-  census reads **`created 1143, materialized 0, inserted 0`** — nothing in production ever asks one
-  its size — with **192 of 1,220** scans ever questioned, so 84% now build nothing. *A probe that
-  must be free when off is not free when off if its ARGUMENT does the work.*
-
-- **(D) THE PRICE, WITH ITS DEFLATIONS STATED.** 767,521 `HashSet.add` -> **0**, replaced by 11,619
-  `HashMap.put`: **755,902 inserts removed = ~21.2 ms = ~0.39%** of a 5,429 ms rebuild at the rate
-  the row and the population agree on. That rate is DERIVED from the JFR row, so a residual
-  attribution bias deflates it proportionally; and no wall A/B is attempted at 0.39%, which is a
-  fifth of what round 899's 12/12 sign test could resolve. **The claim is the deterministic
-  population** (identical across runs) **and the arithmetic on it.**
-
-- **(E) CANDIDATE (1) REFUSED, ON ITS OWN ARITHMETIC.** `resolveImportedSymbolGeneral` is a genuine
-  double probe, and the census says **259,739 calls, all top-level, 251,380 hits (96.8%), 511,119 map
-  probes** — not the **0.7-1.5 M** the 21.9 ms `containsKey` row needs. That is **84.3 ns per
-  `Integer`-keyed probe** against this arc's 15-30 ns reference: **over-read ~3x, round 898's law for
-  the ninth time.** The removable half is **3.8-7.5 ms = 0.07-0.14%**, below round 897's 0.31%
-  refusal and at/below round 898's 0.13-0.20%. And it is not the five lines it looks: the value is
-  `Symbol?` and `containsKey` is precisely what separates "absent" from "cached null", so one probe
-  needs a SENTINEL — a correctness-carrying construct for 0.07-0.14%. Recorded without a price: the
-  default argument `visited = mutableSetOf()` allocates on all 259,739 calls and 251,380 never touch
-  it, but *an allocation count is not a cost* (round 801).
-
-- **(F) CANDIDATE (2) NOT STARTED** — `lexLevelHasName` was ranked below both and the budget went to
-  them. It remains the top open item, unrefuted, MEDIUM risk, grid required.
-
-- **(G) THE ABLATION — 5 ARMS, ALL DISCRIMINATE, ONE WAS BLIND AND IT IS ROUND 897's A1 VERBATIM.**
-  A1 (first-occurrence index) 3 pins, A2 (`> lo`) 8 pins incl. 5 pre-existing semantic ones, A3
-  (index not shared) 1 **after repair**, A4 (the eager `.size` restored) 1, A5 (`contains`
-  re-materialises) 4. Four have a uniquely-their-own pin; **A1 is caught but NOT separated from A2**
-  — its failures are a strict subset — stated rather than dressed up (round 807). **A3 read a clean
-  sweep on the first pass because sharing changes no ANSWER, only how many times the work is done**,
-  so every membership pin stayed green, correctly; the repair is a COUNTER pin
-  (`indexesBuilt <= scansBuilt`, `indexEntries <= scanNames`, both true by construction).
-
-- **(H) GATES.** Suite **14,379 / 0 / 3** (+7 = exactly the new pins; baseline 14,372).
-  `cost_gate.py` **+0.00% on all 20 counters** — the expected control, and here the statement that a
-  change deleting hash-set inserts touches no resolution. `huge_methods.py --fail-over 0`: **0 over
-  the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`** (46 each, harness 94),
-  cross-round against round 898's captures, identical recipe — a real gate this time, not a control.
-  `--verifyFlowScan`: 1,220 scans compared, **0 diverged**.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -773,13 +781,29 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   checker — so warmth comes from the CONTENT-keyed `CrawlParseCache` alone. Do not build "incremental"
   on it; the seam does not exist yet.
 
-- [ ] **(API.2) Position→node lookup, the unblocker EVERY editor feature needs.** There is no
+- [x] **(API.2) Position→node lookup — LANDED, round 910**, in two halves: a public `LineMap` /
+  `TextPosition` + `Project.positionAt` / `offsetAt` (which read through the overlay and deliberately do
+  NOT build, so a host can convert coordinates on a dirty project for free), and
+  `Project.nodeInfoAt` (public, value-typed) over an `internal nodeAt` / `SourceIndex`. 53 pins.
+  **The queue entry's "cheap and self-contained" was half wrong**: see the two span findings in the
+  round-910 note and in CLAUDE.md — `Node.end` is the end of the FOLLOWING token, so `[pos,end)` is not
+  a containment test, and the fix is a token snap-back rather than the sibling arithmetic this entry
+  originally implied. **Unblocked by ONE word in core**: `computeParserFlags` is now public, because
+  INV.1(e) ("the parse a crawl produces is provably the parse the core would produce") is exactly the
+  guarantee an out-of-core parse needs, and duplicating it would be drift no test in the consuming
+  module could see. Original entry, for the record:
+
+  <details><summary>original (API.2) text</summary>
+
+  **Position→node lookup, the unblocker EVERY editor feature needs.** There is no
   `getTouchingToken` equivalent anywhere in core: `computeLineStarts` is `private` to `Parser.kt:10119`
   and `positionToLineCharacter` is a private top-level fun (`TypeScriptCompiler.kt:6073`), both
   offset→line only, i.e. the direction diagnostics need and not the one an editor does. Needs: a
   public line/offset map, and a node-at-offset walk (`forEachChild`-driven, narrowest-enclosing, with
   the token-boundary rule tsc's `getTouchingPropertyName` uses). **Cheap and self-contained — it needs
   no checker state**, which is why it comes before quick-info.
+
+  </details>
 
 - [ ] **(API.3) Quick info + go-to-definition — THE DESIGN IS NOW DECIDED BY EVIDENCE: *POSITION-DIRECTED
   CAPTURE*, NOT A POST-HOC QUERY, BECAUSE THE CHECKER'S ANSWER TO "WHAT IS THE TYPE HERE" IS A FUNCTION
@@ -834,6 +858,16 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   prerequisite): **the right end state and the wrong next step**, the largest job in the repo. Do not
   let hover gate on it — and do not let it be "unblocked" by an API that has already published the
   internals it must change.
+
+- [ ] **(BUG.1) The compiler disagrees with itself about a lone `\r`** — `Parser.computeLineStarts`
+  (`Parser.kt:10119`) breaks the line there, `Checker.lineStartsFor` (`Checker.kt:17641`) counts `\n`
+  only, so on classic-Mac text a SYNTAX diagnostic numbers the lines and a SEMANTIC one reports line 1.
+  Found round 910 while building the embedding API's line map. **Low impact and NOT urgent** (lone-`\r`
+  files are practically extinct; `\r\n` and `\n` are identical under both, which is why no corpus
+  baseline catches it) — but it is a genuine self-inconsistency and tsc breaks the line in both places.
+  The fix is one loop in `lineStartsFor`; the gate is a hand-written pin, since the corpus cannot see it.
+  Cost note before anyone "optimises" it: `lineStartsFor` is memoized per source and its loop is the
+  cheap part.
 
 - [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution).
   Under (API.3)'s capture design its shape is already implied and it is the case that stresses the

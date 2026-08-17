@@ -1,3 +1,76 @@
+**Round 900 (2026-08-12) — (WARM.27): ROUND 899's CANDIDATE (5) IS THE **FIRST JFR ROW IN THIS
+ARC WHOSE ARITHMETIC CONFIRMS IT** — 767,521 inserts at **28.1 ns** each — AND THE COUNTER THAT
+CONFIRMED IT ALSO FOUND WHY THEY EXIST: **A PROBE ARGUMENT HAD BEEN MATERIALISING ROUND 801's LAZY
+VIEWS ON EVERY PRODUCTION COMPILE FOR NINETY-NINE ROUNDS.** CANDIDATE (1) **REFUSED** at 84.3 ns per
+`Integer`-keyed probe.**
+
+Both populations measured before a line of fix (CLAUDE.md's first law + round 898's admission test).
+`docs/perf/suffix-name-index.md`.
+
+- **(A) CANDIDATE (5), AND THE BINARY WAS POSED OVER THE WRONG QUANTITY.** Round 899 said ~0.5-1.0 M
+  `HashSet.add`s "is implausibly large for a set built once per file and entirely plausible for one
+  rebuilt per QUERY", so one counter decides it. The counter says **767,521 names inserted across
+  1,143 sets**, i.e. **21.6 ms / 767,521 = 28.1 ns per add** — exactly a `HashSet.add` with a cached
+  `String` hash. **The row survives its own plausibility test, the only one of round 899's six and
+  round 894's nine that has.** But the sets ARE built once each (`built` memoises); they are simply
+  HUGE, mean **671**. *A count of builds does not bound the work a build does — for a 100%-insert
+  row the deciding quantity is INSERTS, and the binary named neither outcome.*
+
+- **(B) THE LEVER IS THE THIRD COUNTER: THE SUFFIXES OF ONE SCAN ARE NESTED.** 1,143 suffixes are cut
+  from **1,220 cached scans holding 15,331 names in total** — a 50x gap, because each suffix
+  re-inserts the same tail of a shared array. Membership is then a comparison against the scan's LAST
+  occurrence (`e in suffix(lo) <=> max{k : names[k]==e} >= lo`), so ONE lazily-built index per scan
+  answers all of them. LAST and not first is load-bearing: a name reassigned both before and after a
+  closure is the shape the structure exists for, and first-wins inverts it.
+
+- **(C) AND THE FIRST BUILD STILL READ `materialized 1143`, WHICH IS THE ROUND'S REAL FINDING.**
+  `FrontEnd.addClosureCensus(reassigned.size.toLong())` — the guard `if (mode != ON) return` is
+  INSIDE the function and **Kotlin evaluates arguments strictly**, so it never got the chance to run,
+  and asking a lazy view its size materialises it. The (FRONT.2) probe was building all 1,143 hash
+  sets on **every production compile with the probe OFF**. Round 801 created `SuffixNameSet` to stop
+  exactly that and read its own census (`created 1143, materialized 1143`) as "every set is
+  eventually asked", concluding the work MOVED. **The asker was the instrument.** Post-fix the same
+  census reads **`created 1143, materialized 0, inserted 0`** — nothing in production ever asks one
+  its size — with **192 of 1,220** scans ever questioned, so 84% now build nothing. *A probe that
+  must be free when off is not free when off if its ARGUMENT does the work.*
+
+- **(D) THE PRICE, WITH ITS DEFLATIONS STATED.** 767,521 `HashSet.add` -> **0**, replaced by 11,619
+  `HashMap.put`: **755,902 inserts removed = ~21.2 ms = ~0.39%** of a 5,429 ms rebuild at the rate
+  the row and the population agree on. That rate is DERIVED from the JFR row, so a residual
+  attribution bias deflates it proportionally; and no wall A/B is attempted at 0.39%, which is a
+  fifth of what round 899's 12/12 sign test could resolve. **The claim is the deterministic
+  population** (identical across runs) **and the arithmetic on it.**
+
+- **(E) CANDIDATE (1) REFUSED, ON ITS OWN ARITHMETIC.** `resolveImportedSymbolGeneral` is a genuine
+  double probe, and the census says **259,739 calls, all top-level, 251,380 hits (96.8%), 511,119 map
+  probes** — not the **0.7-1.5 M** the 21.9 ms `containsKey` row needs. That is **84.3 ns per
+  `Integer`-keyed probe** against this arc's 15-30 ns reference: **over-read ~3x, round 898's law for
+  the ninth time.** The removable half is **3.8-7.5 ms = 0.07-0.14%**, below round 897's 0.31%
+  refusal and at/below round 898's 0.13-0.20%. And it is not the five lines it looks: the value is
+  `Symbol?` and `containsKey` is precisely what separates "absent" from "cached null", so one probe
+  needs a SENTINEL — a correctness-carrying construct for 0.07-0.14%. Recorded without a price: the
+  default argument `visited = mutableSetOf()` allocates on all 259,739 calls and 251,380 never touch
+  it, but *an allocation count is not a cost* (round 801).
+
+- **(F) CANDIDATE (2) NOT STARTED** — `lexLevelHasName` was ranked below both and the budget went to
+  them. It remains the top open item, unrefuted, MEDIUM risk, grid required.
+
+- **(G) THE ABLATION — 5 ARMS, ALL DISCRIMINATE, ONE WAS BLIND AND IT IS ROUND 897's A1 VERBATIM.**
+  A1 (first-occurrence index) 3 pins, A2 (`> lo`) 8 pins incl. 5 pre-existing semantic ones, A3
+  (index not shared) 1 **after repair**, A4 (the eager `.size` restored) 1, A5 (`contains`
+  re-materialises) 4. Four have a uniquely-their-own pin; **A1 is caught but NOT separated from A2**
+  — its failures are a strict subset — stated rather than dressed up (round 807). **A3 read a clean
+  sweep on the first pass because sharing changes no ANSWER, only how many times the work is done**,
+  so every membership pin stayed green, correctly; the repair is a COUNTER pin
+  (`indexesBuilt <= scansBuilt`, `indexEntries <= scanNames`, both true by construction).
+
+- **(H) GATES.** Suite **14,379 / 0 / 3** (+7 = exactly the new pins; baseline 14,372).
+  `cost_gate.py` **+0.00% on all 20 counters** — the expected control, and here the statement that a
+  change deleting hash-set inserts touches no resolution. `huge_methods.py --fail-over 0`: **0 over
+  the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`** (46 each, harness 94),
+  cross-round against round 898's captures, identical recipe — a real gate this time, not a control.
+  `--verifyFlowScan`: 1,220 scans compared, **0 diverged**.
+
 **Round 899 (2026-08-12) — (WARM.26): THE CUMULATIVE WARM A/B OF ROUNDS 895-898 — **B FASTER IN
 12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS, SIGN-TEST p = 0.0005 — BUT THE EFFECT IS
 SMALLER THAN ONE ARM'S sd, SO THE *DIRECTION* IS ESTABLISHED AND THE *MAGNITUDE* IS NOT.** AND THE
