@@ -111,24 +111,41 @@ data class CapturedDeclaration(
  * pair — see [TypeCaptureSpan] for why identity and extent are deliberately
  * different questions.
  *
- * ## What resolves, and what deliberately does not
+ * ## What resolves, through which of the two mechanisms
  *
- * Only a FREE NAME resolves: an [Identifier] that names something the lexical
- * scope chain in force at that position binds. A MEMBER name — the `p` of `o.p`,
- * a property signature's name, an enum member behind its enum — is answered by
- * NOTHING rather than by a scope lookup, because a scope lookup of a member name
- * finds whatever unrelated binding happens to share the spelling, and a confidently
- * wrong navigation target is worse than none. Member definitions need the
- * receiver's type resolved and its property symbol found, which is a separate
- * mechanism and not this one.
+ * A FREE NAME — an [Identifier] naming something the lexical scope chain in force
+ * at that position binds — resolves through that chain, which is why the answer has
+ * to be taken DURING the walk.
+ *
+ * (API.3d) A MEMBER name resolves through its RECEIVER instead: the receiver's type
+ * is computed and the property symbol of that type is the answer. It is a second
+ * mechanism because it has to be — a member name is bound by no scope, so a scope
+ * lookup of the `p` in `o.p` finds whatever unrelated `p` shares the spelling, and
+ * a confidently wrong navigation target is worse than none. The receiver-bearing
+ * positions are `o.p` (a property, a method, an accessor, a static, `this.p`,
+ * `super.p`) and the qualified `N.x` / `N.T` of a namespace, a module alias or an
+ * enum, the last three answered from the export table rather than from a type.
+ *
+ * ## What answers NOTHING, and why each is a refusal rather than a gap
+ *
+ * An element access (`o["p"]`) — its argument is a string literal, not an
+ * identifier, and only identifiers are offered a definition. A PropertyAssignment
+ * name (`{ p: v }`) — the answer would be the CONTEXTUAL type's property, which is
+ * not a function of any receiver and is not in hand at an arbitrary node. A member
+ * DECLARATION's own name (`interface I { p: string }`) — it already IS the
+ * declaration. A chained namespace segment (`A.B.x`) — the middle segment would
+ * have to be resolved the same way, for a case one caret to the left already
+ * answers. A LABEL — not a symbol at all.
  *
  * @property name the resolved symbol's name — the spelling that was looked up,
  *   which after an import hop may differ from the identifier at the query span.
  * @property locations every declaration contributing to that symbol, in the
  *   binder's own order. MORE THAN ONE is normal, not an error: declaration
  *   merging is the language feature that makes `interface I` twice, or a function
- *   and a namespace of the same name, one symbol. EMPTY never happens — a symbol
- *   with no declarations is not recorded at all.
+ *   and a namespace of the same name, one symbol — and a union or intersection
+ *   receiver contributes one per constituent that declares the member, in
+ *   constituent order. EMPTY never happens — a symbol with no declarations is not
+ *   recorded at all.
  */
 data class CapturedDefinition(
     val fileName: String,

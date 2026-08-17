@@ -5139,10 +5139,11 @@ class Checker(
      * `spineCurrentScope` is nulled per file when the spine leaves it, which is what
      * `DefinitionCaptureMeasurementTest` measures against a post-hoc query.
      *
-     * Nothing is recorded when the name is not a FREE one ([typeCaptureIsFreeName])
-     * or resolves to nothing. That is deliberate silence rather than a best guess:
-     * a scope lookup of `p` in `o.p` finds any unrelated `p`, and an editor that
-     * jumps somewhere confidently wrong is worse than one that does not jump.
+     * A name that is NOT free ([typeCaptureIsFreeName]) is not looked up in any
+     * scope — a scope lookup of the `p` in `o.p` finds any unrelated `p`, and an
+     * editor that jumps somewhere confidently wrong is worse than one that does not
+     * jump. (API.3d) it goes to [typeCaptureMemberSymbols] instead, which resolves
+     * it through its RECEIVER; the positions that have no receiver stay silent.
      */
     private fun typeCaptureRecordDefinition(id: Identifier, fileName: String) {
         val span = TypeCaptureSpan(fileName, id.pos, id.end)
@@ -5159,15 +5160,167 @@ class Checker(
      * [postHocDefinitionAtSpanForTesting]. It reads state and writes none.
      */
     private fun typeCaptureDefinitionAt(id: Identifier, fileName: String): CapturedDefinition? {
-        if (!typeCaptureIsFreeName(id)) return null
-        val resolved = spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
-        val symbol = typeCaptureFollowImportAlias(resolved)
-        val locations = ArrayList<CapturedDeclaration>(symbol.declarations.size)
-        for (declaration in symbol.declarations) {
-            typeCaptureDeclarationLocation(declaration)?.let { locations.add(it) }
+        val symbols =
+            if (typeCaptureIsFreeName(id)) {
+                val resolved =
+                    spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
+                listOf(typeCaptureFollowImportAlias(resolved))
+            } else {
+                typeCaptureMemberSymbols(id)
+            }
+        if (symbols.isEmpty()) return null
+        // A LinkedHashSet because more than one symbol may carry the same
+        // declaration — `A | B` where both members are the same interface reached
+        // through two references, or a base member inherited down two paths — while
+        // the order the constituents were visited in is the answer's order.
+        val locations = LinkedHashSet<CapturedDeclaration>()
+        for (symbol in symbols) {
+            for (declaration in symbol.declarations) {
+                typeCaptureDeclarationLocation(declaration)?.let { locations.add(it) }
+            }
         }
         if (locations.isEmpty()) return null
-        return CapturedDefinition(fileName, id.pos, id.end, symbol.name, locations)
+        return CapturedDefinition(fileName, id.pos, id.end, symbols[0].name, locations.toList())
+    }
+
+    /**
+     * (API.3d) The property symbol(s) a MEMBER name resolves to, or empty.
+     *
+     * This is the mechanism (API.3b) deliberately did not build, and the reason it
+     * had to be a second one is that a member name is not resolved by any scope: it
+     * is resolved by a RECEIVER. So the question asked here is the compiler's own —
+     * "what is the receiver's type, and what does that type call [id]'s spelling" —
+     * and the answer is a symbol whose declarations are the navigation target.
+     *
+     * ## Two receivers, two mechanisms, in this order
+     *
+     * A namespace, a module alias and an ENUM answer from their own EXPORT table and
+     * never from a type: an enum's own type is a member-LESS `Type.Object`
+     * (CLAUDE.md) and a namespace identifier types as `any`, so the type path below
+     * would find nothing for either. That leg is a symbol-table walk with no type
+     * resolution in it, so it is also the only leg a TYPE position (`N.T`) can use —
+     * which is why it runs first and why a [QualifiedName] is accepted at all.
+     *
+     * Everything else goes through the type: [getTypeOfExpression] on the receiver,
+     * then [typeCaptureCollectMembers]. That is deliberately the compiler's own
+     * member resolution rather than a re-derivation — `resolveStructuredTypeMembers`
+     * is what makes an INHERITED member answer with the BASE's symbol (it copies the
+     * base's own [Symbol] object into the derived table) and what makes a generic
+     * instantiation answer with the declaration rather than the substituted type (it
+     * copies `declarations` onto the instantiated symbol). A hand-rolled walk of
+     * `type.members` would get both wrong, and a member table is LAZY (round 833), so
+     * anything reading one without resolving it first answers differently depending
+     * on whether an earlier line in the file happened to resolve that type.
+     *
+     * ## What is REFUSED here, and why that is better than a guess
+     *
+     * An element access (`o["p"]`) never arrives: its argument is a string literal,
+     * not an [Identifier], and only identifiers are offered a definition. A
+     * PropertyAssignment name (`{ p: v }`) and a member DECLARATION name (the `p` of
+     * `interface I { p: string }`) are refused by [typeCaptureIsFreeName] and stay
+     * refused: the first would need the object literal's CONTEXTUAL type, which is
+     * not a function of the receiver and is not in hand at an arbitrary node, and the
+     * second already IS the declaration. A shorthand `{ p }` is not a member position
+     * at all — it is a reference to the local `p`, which the free-name path answers.
+     */
+    private fun typeCaptureMemberSymbols(id: Identifier): List<Symbol> {
+        val receiver: Node = when (val parent = (id as NodeBase).parent) {
+            is PropertyAccessExpression -> if (parent.name === id) parent.expression else return emptyList()
+            is QualifiedName -> if (parent.right === id) parent.left else return emptyList()
+            else -> return emptyList()
+        }
+        val name = id.text
+        val symbols = ArrayList<Symbol>(2)
+        // `this` is `Identifier("this")` in this parser — there is no ThisExpression
+        // node — so it reaches [getTypeOfExpression] as a name nothing binds and
+        // types as `any`, which finds no members. Its real type is the enclosing
+        // class's, and the ambient this hook installs is where that lives:
+        // `currentClassForThis` is set from the cta frame and is deliberately NULL
+        // inside a STATIC member (the frame's own rule), so a static `this` answers
+        // nothing rather than answering with instance members.
+        if (receiver is Identifier && receiver.text == "this") {
+            val cls = currentClassForThis ?: return emptyList()
+            val thisType = resolveUncalledThisType(cls) ?: return emptyList()
+            typeCaptureCollectMembers(thisType, name, symbols, 0)
+            return symbols
+        }
+        typeCaptureExportedMember(receiver, name)?.let { return listOf(it) }
+        val receiverExpression = receiver as? Expression ?: return emptyList()
+        typeCaptureCollectMembers(getTypeOfExpression(receiverExpression), name, symbols, 0)
+        return symbols
+    }
+
+    /**
+     * (API.3d) [name] as an EXPORT of whatever [receiver] names, or null.
+     *
+     * One table covers three shapes because the binder puts all three in it: a
+     * namespace's and a module's exports, and an ENUM's members (`Binder`'s
+     * `bindEnumDeclaration` declares each member into `symbol.exports`). The import
+     * hop is the same one the free-name path takes, so `import * as N from "./m"`
+     * followed by `N.x` answers about the declaration in `./m` rather than about the
+     * import.
+     *
+     * Only a bare [Identifier] receiver is followed. A longer chain (`A.B.x`) would
+     * need the middle segment resolved the same way, which is real work for a case
+     * an editor can already reach one caret to the left; it answers nothing rather
+     * than guessing.
+     */
+    private fun typeCaptureExportedMember(receiver: Node, name: String): Symbol? {
+        val root = receiver as? Identifier ?: return null
+        val resolved =
+            spineScopeLookup(root.text) ?: lookupPerFileForNode(root, root.text) ?: return null
+        return typeCaptureFollowImportAlias(resolved).exports?.get(name)
+    }
+
+    /**
+     * (API.3d) Collects every symbol [type] calls [name], across unions,
+     * intersections and apparent types, into [out].
+     *
+     * A UNION or an INTERSECTION legitimately answers with MORE THAN ONE
+     * declaration and both are returned, in constituent order — which is why this
+     * collects rather than returning the first hit the way `getPropertyOfType` does.
+     * A union's rule there ("the property exists only if every constituent has it")
+     * is an assignability question and is the wrong one here: a user who asks where
+     * `p` is declared on `A | B` wants both places, and a `p` present on only one
+     * constituent is still a real declaration to navigate to.
+     *
+     * A primitive receiver (`"s".length`) and a bare type parameter (`t.p` where
+     * `T extends I`) reach their members through [getApparentType] — the wrapper
+     * interface and the constraint respectively — so the answer for a lib member is
+     * the lib's own declaration, in the lib file the program was built with.
+     *
+     * [depth] bounds the constituent recursion; nothing here can cycle (the member
+     * tables' own cycle guard is in `resolveStructuredTypeMembersCore`) but a
+     * pathological nest is not worth walking.
+     */
+    private fun typeCaptureCollectMembers(
+        type: Type,
+        name: String,
+        out: MutableList<Symbol>,
+        depth: Int,
+    ) {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return
+        when (type) {
+            is Type.Union -> for (c in type.types) typeCaptureCollectMembers(c, name, out, depth + 1)
+            is Type.Intersection ->
+                for (c in type.types) typeCaptureCollectMembers(c, name, out, depth + 1)
+            is Type.Object -> {
+                resolveStructuredTypeMembers(type)
+                val member = type.members?.get(name)
+                if (member != null) {
+                    out.add(member)
+                    return
+                }
+                // The static side is dual-populated into `members` today, so this is
+                // reached only where that mirroring did not happen; it can name no
+                // file the instance side would not have named.
+                (type as? Type.Interface)?.staticMembers?.get(name)?.let { out.add(it) }
+            }
+            else -> {
+                val apparent = getApparentType(type)
+                if (apparent !== type) typeCaptureCollectMembers(apparent, name, out, depth + 1)
+            }
+        }
     }
 
     /**
@@ -5183,6 +5336,14 @@ class Checker(
      *
      * A LABEL is rejected for the same reason as a member name: it is not a symbol
      * at all, so a scope lookup of it finds whatever variable shares the spelling.
+     *
+     * (API.3d) FALSE STILL MEANS "not the scope chain", NOT "no answer": the two
+     * receiver-bearing rejects ([PropertyAccessExpression] and [QualifiedName]) are
+     * now answered by [typeCaptureMemberSymbols]. Everything else this rejects is
+     * answered by nothing, which is why widening it is still the dangerous
+     * direction — a position wrongly admitted here gets a scope lookup, and a scope
+     * lookup of a member name is exactly the wrong answer this predicate exists to
+     * prevent.
      */
     private fun typeCaptureIsFreeName(id: Identifier): Boolean =
         when (val parent = (id as NodeBase).parent) {
@@ -5275,6 +5436,11 @@ class Checker(
             is TypeAliasDeclaration -> declaration.name
             is EnumDeclaration -> declaration.name
             is EnumMember -> declaration.name
+            // (API.3d) An object literal's own member: reached only now that a
+            // member name resolves, and without it `o.p` navigates to the whole
+            // `p: 1` rather than to `p`.
+            is PropertyAssignment -> declaration.name
+            is ShorthandPropertyAssignment -> declaration.name
             is ModuleDeclaration -> declaration.name
             is TypeParameter -> declaration.name
             is PropertyDeclaration -> declaration.name
@@ -51936,6 +52102,13 @@ class Checker(
          *  [NARROW_GLOBAL_DEPTH_BUDGET] (live depth includes per-walk depth); kept as an
          *  explicit per-walk horizon. */
         private const val NARROW_MAX_DEPTH = 2000
+
+        /** (API.3d) Constituent-recursion horizon for [Checker.typeCaptureCollectMembers].
+         *  Bounds a union of unions of intersections; nothing there can cycle (the member
+         *  tables carry their own guard) and a real receiver nests one or two deep, so
+         *  this is a fail-safe, not a policy. A primitive `const`, so it costs the
+         *  class's static initializer nothing (round 820). */
+        private const val TYPE_CAPTURE_MEMBER_MAX_DEPTH = 8
 
         /** (ENGINE.2b) round 788: node budget for [cpaArgsMayConsumeContext]'s bounded
          *  pre-gate scan. Exhausting it answers TRUE (compute as before), so the budget

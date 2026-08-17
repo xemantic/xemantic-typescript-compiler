@@ -20,6 +20,113 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 916 (2026-08-17) — (API.3d): MEMBER GO-TO-DEFINITION LANDS, AND THE ROUND'S PRODUCT IS THAT
+ROUND 913's REFUSAL WAS RIGHT FOR A REASON THAT SURVIVES THE FIX — THE MEMBER MECHANISM IS *A SECOND
+MECHANISM*, NOT A WIDENING OF THE FIRST, AND THE ABLATION ARM THAT PROVES IT IS THE ONE THAT RESOLVES A
+MEMBER BY A SCOPE LOOKUP: IT REDDENS **TEN** PINS, INCLUDING BOTH NEGATIVE CONTROLS THAT THE
+"MECHANISM ENTIRELY OFF" ARM LEAVES GREEN.**
+
+- **THE PREMISE HELD, WHICH IS WORTH SAYING BECAUSE THE LAST THREE (API.\*) ROUNDS ALL FOUND THEIRS
+  WRONG.** Round 913's sentence — *"member definitions need the receiver's type resolved and its
+  property symbol found, which is a separate mechanism and not this one"* — is exactly what was built,
+  in the same hook, with no new public type and no new field on `Checker`. A member answer is a
+  non-empty `definitions` list where one used to be empty; `DefinitionLocation` was already the right
+  value.
+
+- **WHAT MADE IT SMALL: THE AMBIENT THE HOOK ALREADY INSTALLS IS EXACTLY ENOUGH.** The task's first
+  constraint was to establish what ambient a receiver's type genuinely needs rather than write a
+  second install block. It needs none: the type at the member-access node was already being captured,
+  so round 911's `ctaM3StmtAnchorCore` prologue + `withCtaFrameLocals(frame)` is in force and
+  `getTypeOfExpression(receiver)` answers under it. The ONE place that needed anything extra was
+  `this`, and even there the answer was already installed — **`this` is `Identifier("this")` in this
+  parser (there is no `ThisExpression` node), so it reaches `getTypeOfExpression` as a name nothing
+  binds and types as `any`**; its real type comes from `currentClassForThis`, which the hook restores
+  from the cta frame and which the frame deliberately leaves NULL inside a STATIC member, so a static
+  `this` answers nothing rather than answering with instance members. Measured before that leg
+  existed, `this.inst` read EMPTY.
+
+- **WHAT MADE IT CORRECT: GOING THROUGH THE COMPILER'S OWN MEMBER RESOLUTION.** `resolveStructuredTypeMembers`
+  is what makes an INHERITED member answer with the BASE's own `Symbol` (`resolveInterfaceMembersCore`
+  copies the base's symbol object into the derived table) and a GENERIC instantiation answer with the
+  declaration rather than the substituted type (`resolveReferenceMembers` does
+  `newProp.declarations.addAll(prop.declarations)`). A hand-rolled walk of `type.members` would have
+  got both wrong, and CLAUDE.md's round-833 rule bites here too: a member table is LAZY, so a reader
+  that does not resolve first answers differently depending on whether an earlier line in the file
+  happened to resolve that type.
+
+- **ONE PLACE THE EXISTING CODE HAD TO CHANGE, AND IT WAS ONLY REACHABLE NOW.**
+  `typeCaptureDeclarationName` had no `PropertyAssignment` arm, so an object literal's own member
+  answered with the whole `size: 1` rather than with `size` — invisible until a member name resolved
+  at all. Three pins assert the span, and dropping the arm again (arm A5) reddens exactly those three.
+
+- **UNION AND INTERSECTION RECEIVERS COLLECT RATHER THAN PICK.** `getPropertyOfType`'s union rule ("the
+  property exists only if EVERY constituent has it, then return the first") is an assignability
+  question and is the wrong one here — a user asking where `p` is declared on `A | B` wants both
+  places, and a `p` on one constituent only is still a real declaration. So the member walk is its own
+  small collector with a depth cap, and the answer is deduplicated by `(file, start, length)` in
+  constituent order.
+
+- **WHAT IS DELIBERATELY STILL REFUSED, each for a stated reason** (KDoc, `docs/language-service.md`
+  § 9): `o["p"]` (the argument is a literal — only identifiers are offered a definition), `{ p: v }`'s
+  own key (the useful target is the CONTEXTUAL type's property, a third mechanism), a member's own
+  declaration name (it already IS the declaration), `A.B.x`'s tail (the middle segment would have to be
+  resolved the same way, for a case one caret to the left already answers), and anything unresolvable
+  (silence, never the nearest same-named thing). The LIB question was decided by CONSISTENCY rather
+  than by taste: `definitionsAt` already documents that a free name resolving into a lib answers with a
+  file the host may not be able to open, so a member is not given a different rule.
+
+- **A PIN'S MEANING WAS CHANGED, AND THAT IS LOGGED RATHER THAN QUIET.** Three pins asserted the old
+  refusal (core `DefinitionCaptureMeasurementTest`'s member case, `ProjectDefinitionTest`'s
+  "answers EMPTY", `ProjectSemanticsTest`'s "a type and deliberately no definition"). All three now
+  assert the MEMBER's declaration at the same span, and each says in-file that its meaning changed
+  because the gap closed — an unlogged pin change is indistinguishable from hiding a regression. A
+  NEW negative control replaces what they used to guard: an unresolvable member whose spelling IS a
+  file-level `const` must still answer nothing.
+
+- **PINS: +13** (core +1 net: the rewritten discriminator plus a new unresolvable-member control;
+  `-project` +9 net: 10 new, 1 rewritten in place). **THE DISCRIMINATOR, written first**: a member
+  whose spelling collides with an unrelated top-level binding in the same file — the wrong answer is
+  not empty or a crash, it is a *plausible location in the right file*, so only the OFFSET separates
+  them and both are asserted.
+
+- **FIVE-ARM ABLATION, ONE MISTAKE AT A TIME (round 807), each dry-run for a real diff (round 902),
+  restored from a byte-verified copy and never `git checkout` (round 851). Every arm a DISTINCT set;
+  185 tests ran in every arm and no arm failed to compile.** **A1** member path never taken -> **9
+  red**, every positive member pin, both "answers empty" controls GREEN. **A2** a member resolved by a
+  SCOPE LOOKUP — precisely the wrong answer round 913 refused — -> **10 red**, and it is the only arm
+  that reddens the two NEGATIVE controls (`an unresolvable member answers NOTHING`, `an object-literal
+  KEY being declared answers empty`), i.e. the pins written to catch a *guess* are the pins that catch
+  it. **A3** no union/intersection recursion -> **1 red, uniquely its own**. **A4** no export-table leg
+  -> **1 red, uniquely its own** (the namespace pin — a namespace's and an enum's members are on no
+  TYPE, so a type-only implementation is silent there). **A5** no `PropertyAssignment` name arm -> **3
+  red**, exactly the span assertions. Worth recording: the LIB pin cannot discriminate A2, because a
+  scope lookup of `length` also lands in a lib file — it is discriminated by A1, and saying so is the
+  round-807 rule against crediting a pin with discrimination it does not have.
+
+- **GATES: suite 14,603 -> 14,613 / 0 failures / 0 errors / 3 skipped = EXACTLY the +10 net** (core
+  14,336 -> 14,337, `-project` 133 -> 142), XML-summed over all six modules and re-run on the
+  byte-restored post-ablation tree. **`cost_gate.py` +0.00% on all 20 counters** — a real gate, since
+  the member walk is new code reachable from the capture hook on the hot walk, and proven live by its
+  own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**739 classes, 15,801
+  methods, 0 over**; `Checker.<init>` unmoved at **5,813** — no new field) and, per round 909's
+  blind-spot rule, on `-project` explicitly (12 classes). `spine_closure_audit.py` 46 handlers all
+  supersets, run although no `spine*EnterNode` changed. Warning-clean. No wall A/B: production executes
+  not one new instruction — the member walk sits inside a hook that returns on a null per-file key set.
+
+- **WHAT THIS LEAVES (API.4), asked for explicitly.** It leaves it with **less to build, but not with
+  its hard half done**. What transfers is real and is the part that would have been most likely to be
+  got wrong: "what does this receiver's type call things" now has a tested answer, including the lazy
+  member table, the inherited-symbol rule, unions and the namespace/enum export leg — completions'
+  member half is that same resolution one question wider (ENUMERATE `type.members` rather than look up
+  one name). What does NOT transfer is the anchoring: every mechanism in this round starts from *a
+  node that exists at the caret*, and a completion request by definition has none — the user is
+  mid-identifier or sitting just after a `.`, so the capture request cannot be a span at all and needs
+  a "nearest enclosing node + the scope in force there" shape that nothing here provides. The free-name
+  half is also genuinely new: `spineScopeLookup` answers ONE name and completions need the chain
+  ENUMERATED, which is a different traversal of `LexicalScope` (and CLAUDE.md's round-902 warning
+  applies — the outer levels are large, mean 815 symbols on a real probe). So: the member seam is
+  bought, the anchor and the enumeration are not.
+
 **Round 915 (2026-08-17) — (BUG.1): THE LONE-`\r` SELF-INCONSISTENCY IS CLOSED, AND THE SWEEP THE ITEM
 ASKED FOR FOUND **FIVE** OFFSET→LINE CONVERTERS WHERE THE QUEUE NAMED TWO — FOUR OF THEM WRONG, EACH A
 PRIVATE COPY OF A LOOP NOBODY KNEW WAS DUPLICATED. THE ROUND'S REAL PRODUCT IS THE **SECOND** REASON
@@ -947,6 +1054,30 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   not merely unlucky, it was structurally incapable of carrying a `\r` to the Parser; only the
   project/`Vfs` path can, which is the path the `(API.*)` arc sits on. `LineTerminatorConsistencyTest`
   (core) + `ProjectPositionTest`'s lone-`\r` differential are the gate; 5 pins redden under ablation.
+
+- [x] **(API.3d) Member go-to-definition — LANDED, round 916.** The gap round 913 recorded
+  deliberately: *"a scope lookup of a member name finds whatever unrelated binding happens to share
+  the spelling, and a confidently wrong navigation target is worse than none. Member definitions need
+  the receiver's type resolved and its property symbol found, which is a separate mechanism and not
+  this one."* It is now that separate mechanism, in the SAME capture hook and with no new public type:
+  `typeCaptureMemberSymbols` resolves a member name through its RECEIVER and hands the resulting
+  symbols' declarations to the existing `CapturedDeclaration` path, so a member answer is simply a
+  non-empty `definitions` list where one used to be empty. **ANSWERS**: `o.p` / `o.m()` / `this.p` /
+  `super.p` / `C.staticP`; a member of an IMPORTED interface (in the declaring file); an INHERITED
+  member (the BASE's declaration); a MERGED member (one location per contributing declaration); a
+  member of a UNION or INTERSECTION receiver (one per constituent, in constituent order); `N.x` and
+  the qualified TYPE `N.T` for a namespace, module alias or enum; a LIB member (in `lib.*.d.ts`, the
+  policy `definitionsAt` already documented for a free name). **REFUSED, each with a reason in the
+  KDoc**: an element access (`o["p"]` — the argument is a literal, and only identifiers are offered a
+  definition); an object-literal key being declared (`{ p: v }` — the useful target is the CONTEXTUAL
+  type's property, a third mechanism); a member's own declaration name (it already IS the
+  declaration); a chained namespace segment (`A.B.x`); an unresolvable member (silence, never the
+  nearest same-named anything). **THE ROUND'S TWO FINDINGS**: the ambient the hook already installs is
+  exactly enough — `this` needed `currentClassForThis`, which round 911's install already restores and
+  which is deliberately NULL in a static member — and going through the compiler's own
+  `resolveStructuredTypeMembers` rather than a hand-rolled table read is what makes the inherited and
+  generic cases right for free. **13 pins, five-arm ablation each reddening a DISTINCT set, all gates
+  green.**
 
 - [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution).
   Under (API.3)'s capture design its shape is already implied and it is the case that stresses the

@@ -468,16 +468,25 @@ public class Project private constructor(
      * anyway. When the module cannot be resolved the import binding itself is
      * returned, which is truthful and less useful.
      *
+     * ## A MEMBER name answers about the MEMBER
+     *
+     * (API.3d) The `p` of `o.p` is resolved through the RECEIVER — `o`'s type is
+     * computed and `p`'s property symbol on it is the answer — never through the
+     * scope chain, which would find whatever unrelated `p` shares the spelling. So
+     * an INHERITED member answers with the BASE's declaration, a member of a union
+     * receiver answers with one location per constituent that declares it, and a
+     * member of an imported interface answers in the file that declares it. A
+     * qualified `N.x` or `N.T` where `N` is a namespace, a module alias or an enum
+     * answers from that symbol's exports.
+     *
      * ## What answers EMPTY, deliberately
      *
-     * A MEMBER name — the `p` of `o.p`, a property signature's name, an enum member
-     * behind its enum — is not answered. Resolving a member needs the receiver's
-     * type and its property symbol, which is a different mechanism from the scope
-     * lookup this uses; answering it with a scope lookup would find whatever
-     * unrelated binding shares the spelling, and an editor that jumps somewhere
-     * confidently wrong is worse than one that does not jump. Labels, keywords,
-     * literals and any offset outside every node answer empty for the same reason:
-     * they name nothing the scope chain binds.
+     * An element access (`o["p"]`) — the argument is a literal, and only identifiers
+     * are offered a definition. An object-literal property name (`{ p: v }`) — the
+     * answer would be a contextual type's property, which is a third mechanism. A
+     * member's own DECLARATION name — it already is the declaration. A chained
+     * namespace segment (`A.B.x`). Labels, keywords, literals and any offset outside
+     * every node: they name nothing, through either mechanism.
      */
     public fun definitionsAt(fileName: String, offset: Int): List<DefinitionLocation> {
         val index = sourceIndexOf(fileName) ?: return emptyList()

@@ -4,11 +4,12 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 914, 2026-08-17).** Landed: diagnostics, in-memory edits,
+**Status (round 916, 2026-08-17).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
-go-to-definition, and **batched semantics** — many positions, or a whole file, in
-one build. Not yet: member go-to-definition, completions `(API.4)`. See the
-`(API.*)` items in `PLAN-PHASE-5.md`.
+go-to-definition **including members** (`o.p`, inherited, imported, union,
+namespace, enum, lib), and **batched semantics** — many positions, or a whole
+file, in one build. Not yet: completions `(API.4)`. See the `(API.*)` items in
+`PLAN-PHASE-5.md`.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -300,18 +301,48 @@ own go-to-definition navigates. A declaration with no single-token name (a
 binding pattern, a computed member name) falls back to the whole declaration:
 coarser, never wrong.
 
-**An empty list is a normal answer**, and there are four ways to get one:
+### Two mechanisms, because a member is not bound by any scope
+
+A **free name** is resolved through the lexical scope chain in force at that
+position. A **member name** — the `p` of `o.p` — is resolved through its
+**receiver**: `o`'s type is computed and `p`'s property symbol on that type is the
+answer.
+
+That split is not an implementation detail, it is the whole correctness argument.
+A scope lookup of `p` finds whatever unrelated `p` happens to share the spelling,
+so a member answered that way is a *plausible location in the right file* that has
+nothing to do with what the user clicked. Member resolution went through the
+compiler's own member tables for the same reason: that is what makes an
+**inherited** member answer with the *base's* declaration and a **generic
+instantiation** answer with the declaration rather than the substituted type.
+
+What answers, concretely:
+
+| you point at | you get |
+|---|---|
+| `o.p`, `o.m()`, `this.p`, `super.p`, `C.staticP` | the property/method/accessor declaration |
+| a member of an **imported** interface | the declaration, in the declaring file |
+| an **inherited** member | the **base's** declaration, not the derived type |
+| a member declared by **merged** interfaces (overloads) | **one location per contributing declaration** |
+| a member of a **union** receiver | **one per constituent** that declares it, in constituent order |
+| `N.x` / `N.T` where `N` is a namespace, module alias or enum | the export's declaration |
+| `"s".length`, `arr.push` | the **lib**'s declaration (see the lib note below) |
+
+**An empty list is a normal answer**, and these are the ways to get one:
 
 - there is no node at the offset, or the file is unknown;
-- the offset is on a keyword, a literal or trivia — nothing the scope binds;
+- the offset is on a keyword, a literal or trivia — nothing either mechanism binds;
 - the name resolves to a symbol with no declaration to point at;
-- **the offset is on a MEMBER name** (`o.p`, a property signature's name, an enum
-  member behind its enum). This one is deliberate. Resolving a member needs the
-  receiver's type and its property symbol, which is a different mechanism from
-  the scope lookup behind this call; answering it with a scope lookup would find
-  whatever unrelated binding happens to share the spelling, and an editor that
-  jumps somewhere confidently wrong is worse than one that does not jump. Member
-  definitions are an honest gap, not a bug.
+- **nothing declares the member** (`(o as any).absent`) — silence, never the
+  nearest same-named anything;
+- **an element access** (`o["p"]`) — the argument is a literal, not an identifier,
+  and only identifiers are offered a definition;
+- **an object-literal key being declared** (`{ p: v }`) — the useful answer is the
+  *contextual* type's property, which is a third mechanism and is not built;
+- **a member's own declaration name** (`interface I { p: string }`) — it already
+  *is* the declaration;
+- **a chained namespace segment** (`A.B.x`) — the middle segment would have to be
+  resolved the same way, for a case one caret to the left already answers.
 
 **More than one location is normal too.** Declaration merging is a language
 feature — an `interface` declared twice, a function and a namespace of the same
@@ -385,9 +416,9 @@ val entry = many.firstOrNull { offset >= it.start && offset < it.end }
 The ordering is imposed by the API rather than inherited from the compiler, whose
 answer order is the order its walk happened to reach the nodes.
 
-**`quickInfo` may be null and `definitions` may be empty** — independently. A
-member name has a type and, deliberately, no definition (§ 9). An entry with
-neither is still returned: "there is a node here and the compiler had nothing to
+**`quickInfo` may be null and `definitions` may be empty** — independently. An
+object-literal key being declared has a type and, deliberately, no definition
+(§ 9). An entry with neither is still returned: "there is a node here and the compiler had nothing to
 say about it" is a different answer from "there is nothing here", and only your
 UI knows which to draw.
 
@@ -503,12 +534,16 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **member go-to-definition** — `definitionsAt` refuses a member name today
-  (§ 9); answering it needs the receiver's type resolved and its property
-  symbol found, in the same capture hook.
 - **`(API.4)` completions** — the largest, and the one that stresses the design:
   a completion request has no node at the position at all, since the user is
-  mid-identifier.
+  mid-identifier. Its member half is now mostly in place — "what does this
+  receiver's type call things" is the same member resolution `definitionsAt`
+  uses, one question wider (enumerate rather than look up one name) — so what it
+  still needs is the *anchor*: a request whose position falls between nodes, and
+  the free-name half, which is an enumeration of the scope chain rather than a
+  lookup in it.
+- **contextual object-literal keys** — `{ p: v }`'s own `p` still answers
+  nothing, because the useful target is the contextual type's property (§ 9).
 
 None of these change what is documented above. The one thing that would is the
 architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) that makes the checker

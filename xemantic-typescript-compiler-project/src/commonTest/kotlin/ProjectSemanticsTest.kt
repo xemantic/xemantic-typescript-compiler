@@ -269,22 +269,27 @@ class ProjectSemanticsTest {
 
     // --- the candidate set of a sweep -------------------------------------------
 
+    /**
+     * (API.3d) THE MEANING OF THIS PIN CHANGED. It used to assert that a swept
+     * member name carried a type and, deliberately, NO definition — the shape that
+     * proved round 913's refusal was a refusal. Member go-to-definition now exists,
+     * so the same span asserts the same include rule with the other half inverted:
+     * a member name is still swept, and its definition is now the MEMBER's
+     * declaration. The refusal it used to pin is gone because the gap it described
+     * is closed, not because the assertion became inconvenient.
+     */
     @Test
-    fun `a sweep reports a MEMBER name with a type and deliberately no definition`() {
-        // The include/exclude rule, pinned in both directions at once: member names
-        // ARE swept (they are identifiers and they are typed) and their definition is
-        // refused rather than guessed at (`CapturedDefinition`). An entry with a type
-        // and no locations is the shape that proves both.
+    fun `a sweep reports a MEMBER name with a type and its own declaration`() {
         val project = projectWith()
         val at = offsetOf("holder.member") + "holder.".length
         val entry = project.fileSemantics(mainFile).single { it.start == at }
         assert(entry.kind == "Identifier")
-        // A TYPE was captured (what it is, is the checker's business at a member
-        // name — measured `any`, since the capture types the identifier node itself
-        // rather than resolving it through the receiver) and the DEFINITION was
-        // refused. Both halves of the rule, at one span.
         assert(entry.quickInfo != null)
-        assert(entry.definitions.isEmpty())
+        // Resolved through the receiver, so it is the object literal's own `member`
+        // — a batch that dropped the member mechanism reads an empty list here.
+        assert(entry.definitions.size == 1)
+        assert(entry.definitions[0].start == offsetOf("member: 1"))
+        assert(entry.definitions[0].length == "member".length)
     }
 
     @Test

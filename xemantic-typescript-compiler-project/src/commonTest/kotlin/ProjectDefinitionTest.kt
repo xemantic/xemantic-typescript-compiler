@@ -66,7 +66,7 @@ class ProjectDefinitionTest {
      * a different offset.
      */
     private val main = """
-        import { imported, collide } from "./b";
+        import { imported, collide, Shape, ns } from "./b";
         export function f(param: number): number {
             const collide: number = 1;
             const useLocal = collide;
@@ -77,13 +77,31 @@ class ProjectDefinitionTest {
         export interface Merged { a: string; }
         export interface Merged { b: string; }
         export const merged: Merged = { a: "a", b: "b" };
+        export const member: string = "an unrelated top-level binding";
         export const holder = { member: 1 };
         export const readMember = holder.member;
+        declare const shape: Shape;
+        export const readImportedMember = shape.width;
+        interface BaseIface { inherited: string; }
+        interface DerivedIface extends BaseIface { own: number; }
+        declare const derived: DerivedIface;
+        export const readInherited = derived.inherited;
+        export interface Overloaded { over(): void; }
+        export interface Overloaded { over(x: number): void; }
+        declare const overloaded: Overloaded;
+        export const readOverload = overloaded.over;
+        declare const united: { shared: string } | { shared: number };
+        export const readUnion = united.shared;
+        export const readLibMember = "abc".length;
+        export const readNsMember = ns.inside;
+        export const readUnresolved = (holder as any).absent;
     """.trimIndent() + "\n"
 
     private val other = """
         export const imported: string = "i";
         export const collide: string = "c";
+        export interface Shape { width: number; }
+        export namespace ns { export const inside = 7; }
     """.trimIndent() + "\n"
 
     private fun projectWith(
@@ -173,18 +191,146 @@ class ProjectDefinitionTest {
         assert(definitions.all { it.length == "Merged".length })
     }
 
+    // --- (API.3d) member names, resolved through the RECEIVER ---------------------
+
+    /**
+     * THE DISCRIMINATOR. `member` is a property of `holder` and, one line above, an
+     * unrelated exported `const` of the same spelling. A scope lookup — which is
+     * what round 913 refused to do here, and what a member path that quietly reused
+     * the free-name resolution would do — answers the `const`. Only a resolution
+     * through the receiver's TYPE answers the object literal's own property.
+     *
+     * The wrong answer is a plausible location in the right file, so only the
+     * OFFSET separates them and both are asserted.
+     */
+    @Test
+    fun `a caret on a member name answers the MEMBER, not the same-named top-level binding`() {
+        val project = projectWith()
+        val at = offsetOf("holder.member") + "holder.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        assert(definitions.size == 1)
+        assert(definitions[0].fileName == mainFile)
+        assert(definitions[0].start == offsetOf("member: 1"))
+        assert(definitions[0].start != offsetOf("member: string"))
+        assert(definitions[0].length == "member".length)
+        assert(definitions[0].kind == "Identifier")
+        // ... while the RECEIVER of the same expression still answers through the
+        // scope chain, which proves both mechanisms are live in one build.
+        assert(project.definitionsAt(mainFile, offsetOf("holder.member")).size == 1)
+    }
+
+    @Test
+    fun `a caret on a member of an IMPORTED interface answers in the declaring file`() {
+        val project = projectWith()
+        // The module-resolution trap: without a resolved import this would measure
+        // nothing at all, so pin that it resolves before reading the answer.
+        assert(project.diagnostics(mainFile).none { it.code == 2307 })
+        val at = offsetOf("shape.width") + "shape.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        assert(definitions.size == 1)
+        assert(definitions[0].fileName == otherFile)
+        assert(definitions[0].start == offsetOf("width", 0, other))
+        assert(definitions[0].length == "width".length)
+    }
+
+    @Test
+    fun `a caret on an INHERITED member answers the BASE's declaration`() {
+        val project = projectWith()
+        val at = offsetOf("derived.inherited") + "derived.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        assert(definitions.size == 1)
+        // `BaseIface` declares it, `DerivedIface` only extends — an implementation
+        // that read the derived type's own member list would answer nothing, and one
+        // that answered the derived declaration would be pointing at `own`.
+        assert(definitions[0].start == offsetOf("inherited: string"))
+        assert(definitions[0].length == "inherited".length)
+    }
+
+    @Test
+    fun `a caret on a MERGED member answers every contributing declaration`() {
+        val project = projectWith()
+        val at = offsetOf("overloaded.over") + "overloaded.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        // Two interface declarations of the same name each contribute an overload of
+        // `over`, so both are the answer and "the first" would be the wrong one.
+        assert(definitions.size == 2)
+        assert(definitions.map { it.start } == listOf(offsetOf("over()"), offsetOf("over(x")))
+        assert(definitions.all { it.length == "over".length })
+    }
+
+    @Test
+    fun `a caret on a member of a UNION receiver answers one location per constituent`() {
+        val project = projectWith()
+        val at = offsetOf("united.shared") + "united.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        assert(definitions.size == 2)
+        assert(
+            definitions.map { it.start } ==
+                listOf(offsetOf("shared: string"), offsetOf("shared: number")),
+        )
+    }
+
+    @Test
+    fun `a caret on a member of an imported NAMESPACE answers in the declaring file`() {
+        val project = projectWith()
+        val at = offsetOf("ns.inside") + "ns.".length
+        val definitions = project.definitionsAt(mainFile, at)
+        // A namespace's members are not on any TYPE — an enum's are not either — so
+        // this leg is the export table, and a type-only implementation reads empty.
+        assert(definitions.size == 1)
+        assert(definitions[0].fileName == otherFile)
+        assert(definitions[0].start == offsetOf("inside = 7", 0, other))
+        assert(definitions[0].length == "inside".length)
+    }
+
+    /**
+     * A LIB member answers, and the answer names a file the host may not be able to
+     * open — which is the policy `definitionsAt` already documents for a free name
+     * that resolves into a lib, so a member is not given a different rule. The span
+     * is still exact, because it is computed inside the compiler from the declaring
+     * file's own text.
+     */
+    @Test
+    fun `a caret on a LIB member answers in the lib file, with an exact span`() {
+        val project = projectWith()
+        val at = offsetOf("\"abc\".length") + "\"abc\".".length
+        val definitions = project.definitionsAt(mainFile, at)
+        assert(definitions.isNotEmpty())
+        assert(definitions.all { it.fileName.startsWith("lib.") })
+        assert(definitions.all { it.fileName.endsWith(".d.ts") })
+        // Not `mainFile`: a receiver whose type came from the lib must not be
+        // answered out of the file the caret is in.
+        assert(definitions.none { it.fileName == mainFile })
+        assert(definitions[0].length == "length".length)
+        assert(definitions[0].kind == "Identifier")
+    }
+
     // --- what answers empty, and why --------------------------------------------
 
     @Test
-    fun `a caret on a member name answers EMPTY rather than a same-named binding`() {
+    fun `a caret on an UNRESOLVABLE member answers empty rather than guessing`() {
         val project = projectWith()
-        val at = offsetOf("holder.member") + "holder.".length
-        // `member` is resolvable as a property of `holder` and by no scope lookup.
-        // A scope lookup would have to invent an answer; this one declines.
+        val at = offsetOf("as any).absent") + "as any).".length
+        // Nothing declares `absent`, so there is nothing to navigate to and the
+        // answer is silence — never the nearest same-named anything.
         assert(project.definitionsAt(mainFile, at).isEmpty())
-        // ... while the RECEIVER of the same expression does answer, which proves
-        // the caret and the build reached this statement at all.
-        assert(project.definitionsAt(mainFile, offsetOf("holder.member")).size == 1)
+    }
+
+    @Test
+    fun `a caret on an object-literal KEY being declared answers empty`() {
+        val project = projectWith()
+        // `{ member: 1 }`'s own `member` is a declaration, not a reference, and the
+        // answer a host would want is the CONTEXTUAL type's property — a third
+        // mechanism this round did not build. Refused rather than guessed.
+        assert(project.definitionsAt(mainFile, offsetOf("member: 1")).isEmpty())
+    }
+
+    @Test
+    fun `a caret on an interface member's own declaration name answers empty`() {
+        val project = projectWith()
+        // It already IS the declaration; answering with itself is not useful and is
+        // not what this round set out to do.
+        assert(project.definitionsAt(mainFile, offsetOf("inherited: string")).isEmpty())
     }
 
     @Test

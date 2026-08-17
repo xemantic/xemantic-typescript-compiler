@@ -187,11 +187,25 @@ class DefinitionCaptureMeasurementTest {
         assert(source.substring(location.start, location.start + location.length) == "topLevel")
     }
 
+    /**
+     * (API.3d) THE DISCRIMINATOR of the member mechanism, and the reason it had to
+     * be a second mechanism at all.
+     *
+     * `size` is a member of `o` AND a file-level `const`, so the two candidate
+     * answers are different declarations in the same file and the assertion is which
+     * one comes back. A scope lookup — what (API.3b) refused to do here, and what a
+     * member path that quietly reused the free-name resolution would do — finds the
+     * `const` and navigates the user to a line that has nothing to do with what they
+     * clicked. Only a resolution that went through the RECEIVER'S TYPE can answer the
+     * object literal's own `size`.
+     *
+     * Note what makes this sharp rather than merely green: the WRONG answer is not
+     * an empty list or a crash, it is a plausible location in the right file. Only
+     * the offset separates them.
+     */
     @Test
-    fun `negative control - a member name is answered by NOTHING rather than by a scope lookup`() {
+    fun `a member name answers the MEMBER, not the same-named file-level binding`() {
         val options = CompilerOptions()
-        // `size` is a member of `o` AND a file-level const. A scope lookup of the
-        // member name would find the const and navigate the user to it.
         val text = """
             const size: string = "s";
             const o = { size: 1 };
@@ -207,6 +221,48 @@ class DefinitionCaptureMeasurementTest {
             forEachChild(node) { child -> stack.add(child) }
         }
         assert(memberName != null)
+        val span = TypeCaptureSpan(fileName, memberName.pos, memberName.end)
+        val checker = Checker(
+            options, listOf(Binder(options).bind(sourceFile)), isMultiFileSource = true,
+            typeCapture = TypeCaptureRequest(listOf(span)),
+        )
+        assert(checker.capturedDefinitions.size == 1)
+        val locations = checker.capturedDefinitions[0].locations
+        assert(locations.size == 1)
+        // Derived by search, never hardcoded: the `size` of `{ size: 1 }` is the
+        // second occurrence, the `const size` the first.
+        val constDeclarationAt = text.indexOf("size")
+        val memberDeclarationAt = text.indexOf("size", constDeclarationAt + 1)
+        assert(locations[0].start == memberDeclarationAt)
+        assert(locations[0].start != constDeclarationAt)
+        assert(locations[0].length == "size".length)
+        assert(locations[0].kind == "Identifier")
+        // ... and the type at the same span is still captured, which proves the span
+        // was reached rather than that the two facts happen to agree.
+        assert(checker.capturedTypes.size == 1)
+    }
+
+    @Test
+    fun `negative control - an unresolvable member answers NOTHING rather than guessing`() {
+        val options = CompilerOptions()
+        // `nope` is on no type and is also a file-level const, so the wrong answer
+        // is available to a scope lookup and must not be taken.
+        val text = """
+            const nope: string = "s";
+            const o = { size: 1 };
+            const read = (o as any).nope;
+        """.trimIndent()
+        val sourceFile = Parser(text, fileName).parse()
+        val stack = ArrayList<Node>()
+        stack.add(sourceFile)
+        var memberName: Identifier? = null
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is PropertyAccessExpression) memberName = node.name
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        assert(memberName != null)
+        assert(memberName.text == "nope")
         val span = TypeCaptureSpan(fileName, memberName.pos, memberName.end)
         val checker = Checker(
             options, listOf(Binder(options).bind(sourceFile)), isMultiFileSource = true,
