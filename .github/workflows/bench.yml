@@ -50,10 +50,13 @@ jobs:
       # ORACLE, not Community, since 2026-08-10 — and this RE-BASELINES the AOT
       # column of the archived series. Every row before that date measured a CE
       # image (which had CI's AOT arm at ~1.02x tsc); every row after measures
-      # Oracle GraalVM + PGO, which on the dev box is -13.9% check-only / -19.5%
-      # emit against the Oracle base and ~1.8-1.9x tsc. The AOT column is
-      # therefore NOT comparable across that boundary. The xtsc JVM, tsc and
-      # tsgo columns are untouched and remain continuous.
+      # the Oracle BASE image, which is ahead of CE. The AOT column is therefore
+      # NOT comparable across that boundary. The xtsc JVM, tsc and tsgo columns
+      # are untouched and remain continuous.
+      #
+      # BASE, not PGO — the PGO cycle was moved out of the push path the same
+      # week; the build step below is the authority on that and states what the
+      # column does and does not measure. Keep the two in agreement.
       - name: Set up GraalVM (Oracle, for the AOT arm only)
         uses: graalvm/setup-graalvm@v1
         with:
