@@ -78,6 +78,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         val sharedNameFiles: Set<String> = emptySet(),
         /** Output files written to disk as (path, byteLength). Empty when noEmit. */
         val written: List<Pair<String, Int>>,
+        /** (API.3) The types the checker recorded at the spans a [TypeCaptureRequest]
+         *  named, or empty — which is every build that did not ask for any. */
+        val capturedTypes: List<CapturedType> = emptyList(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -93,12 +96,18 @@ class ProjectCompiler(private val vfs: Vfs) {
      *   somewhere throwaway without touching the project. (AOT.4)(c), round 840(c): the
      *   AOT trainer emits — an emit-trained cache is worth ~1.26 s on an emitting compile —
      *   and a training run must never write into the user's project. Inert under `noEmit`.
+     * @param typeCapture (API.3) when non-null, the checker records the type at each
+     *   named span while it walks past it, and the answers come back in
+     *   [Result.capturedTypes]. Null — the default — leaves the whole pipeline
+     *   untouched; see [TypeCaptureRequest] for why a capture is directed inwards
+     *   rather than answered from a retained checker afterwards.
      */
     fun build(
         projectPath: String,
         noEmit: Boolean = false,
         recheckOnly: Set<String>? = null,
         outDir: String? = null,
+        typeCapture: TypeCaptureRequest? = null,
     ): Result {
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
@@ -199,6 +208,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
         val result = TypeScriptCompiler().compileParsed(
             parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
+            typeCapture = typeCapture,
         )
         // INV.7(d2): top-level declaration names per file (from the crawl parses)
         // for the shared-name full-rebuild bail.
@@ -262,6 +272,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             moduleFiles = moduleFiles,
             sharedNameFiles = sharedNameFiles,
             written = written,
+            capturedTypes = result.capturedTypes,
         )
     }
 

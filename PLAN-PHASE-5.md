@@ -20,6 +20,71 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 911 (2026-08-17) — (API.3a): QUICK INFO LANDS, AND THE DESIGN ROUND 910 DECIDED BY *READING* IS
+NOW CONFIRMED BY *MEASUREMENT* — **FIVE OF SIX POSITIONS ANSWER DIFFERENTLY POST-HOC**, AND THE
+PREDICTION IN THE QUEUE ENTRY WAS WRONG IN THE **WORSE** DIRECTION. THE ROUND'S TECHNICAL PRODUCT IS THAT
+**A PER-NODE HOOK ON THE SPINE SEES NONE OF THE CHECKING AMBIENT.**
+
+- **THE MEASUREMENT, captured-during-walk vs asked-post-hoc on ONE `Checker` instance** (core
+  `TypeCaptureMeasurementTest`, 9 pins): top-level annotated `const` **`string` / `string`**; body local
+  shadowing `declare const collide: string` **`number` / `string`**; `typeof`-narrowed parameter
+  **`string` / `any`**; parameter at its use **`number` / `any`**; arrow-body parameter **`string` /
+  `any`**; class-method parameter **`number` / `any`**. The top-level row is the honest control —
+  post-hoc is NOT wrong about everything, which is exactly why the failure is dangerous. **Round 910
+  predicted the narrowed case would read `string | number` (narrowing merely lost); it reads `any`,
+  because nothing durable binds a parameter at all** — and `any` is the ONE answer that is silent at
+  every use site, so a post-hoc hover would have looked plausible and meant nothing. A wrong prediction
+  in the direction of "worse than I thought" is the useful kind: it converts the design from a judgement
+  into a measurement.
+
+- **THE FINDING THAT MOVED THE HOOK, and the round's most reusable fact: THE SPINE'S ANCHORS
+  INSTALL-AND-RESTORE THE CHECKING AMBIENT PER DISPATCH, SO AT AN ARBITRARY NODE THE CHECKER HOLDS NONE
+  OF IT** — `currentLocalTypes` there is the FILE-level map. Measured: the first working version answered
+  `bodyLocal=string` (the global), `narrowed=any`, `parameter=any`. **The position's scope is
+  `ctaFrames.last()`; the ambient FIELDS are not.** The fix reproduces `ctaM3StmtAnchorCore`'s prologue
+  verbatim (`classForThis / inFn / inAsync / inGen / fnTpDecls / fnTpScope / currentFlowGraph /
+  currentCheckFileName` + the namespace-chain push) and then `withCtaFrameLocals(frame)`. The ablation
+  drops exactly that one call and reddens **exactly the 8 predicted pins**, with the top-level control
+  and all 96 other module pins green — and it is REACHED, not dead, since its answers revert to the
+  pre-fix `string/any/any`.
+
+- **A SECOND HOOK WAS BUILT AND DELETED RATHER THAN SHIPPED**: one in `checkTypeAssignabilityInStatements`'
+  statement loop **never fired once** over declaration / arrow / method bodies — that walk is not on the
+  spine path for these shapes. Removing it beat shipping a per-statement production read that bought
+  nothing. Recorded in CLAUDE.md, because "the legacy assignability walk is where body-scoped ambient
+  lives" is the natural guess and it is false; the cta frames are.
+
+- **THREADING AND IDENTITY.** An explicit parameter on the `recheckOnly` model —
+  `Project.quickInfoAt` -> `ProjectCompiler.build` -> `compileParsed` -> `compileParsedCore` ->
+  `cpcCompileMultiFile` -> `cpcBindAndCheck` -> `Checker`, answering back through
+  `CompilationResult.capturedTypes` -> `ProjectCompiler.Result.capturedTypes`. **Nothing on
+  `CompilerOptions`** (compared for parse-flag equality, and ~160 bytecodes per `copy()` call site, round
+  815) and **no process-global mode** (those owe the round-848 ledger; a capture request is DATA).
+  The single-file arm is threaded too, so the API is not silently inert there. **Node identity is the RAW
+  `(pos, end)` pair**: `-project` resolves the caret with `SourceIndex`, which owns round 910's token
+  snap-back, so no span semantics enter the checker at all.
+
+- **OFF IS FREE, AND IT IS GATED AS SUCH.** Production adds one null-valued instance-field read plus a
+  perfectly-predicted branch per node — the shape `SpineDispatch.mode` has had since round 732 — placed
+  ABOVE the dispatch probe's early return, with **the node itself as the argument** (round 900: a guard
+  cannot protect a derived one), plus one branch per FILE in `checkSpine`'s loop. The per-file field is
+  null unless a span was requested in that file. No counter, diagnostic or emit path is touched.
+
+- **GATES: suite 14,522 -> 14,548 / 0 failures / 0 errors / 3 skipped = EXACTLY the 26 new pins** (17
+  `-project`, 9 core), core 14,305 -> 14,314. **`cost_gate.py` +0.00% on all 20 counters** — the real
+  gate for this round, not a control, since `Checker.kt` grew 198 lines on the hot walk.
+  `huge_methods.py --fail-over 0` clean on core (736 classes, `Checker.<init>` at 5,802) and on the
+  module (10). `spine_closure_audit.py` 46 handlers, all closures supersets — run even though the hook is
+  a prologue line rather than a masked handler, so it CANNOT be skipped by `spineEnterMask`. Warning-clean.
+  No wall A/B: the change is one predicted branch over 856,962 nodes, which is far under the +-1.0% band,
+  so counters are the defensible instrument (CLAUDE.md's standing rule).
+
+- **DEFERRED, and queued as (API.3b)/(API.3c):** go-to-definition, and exposing the BATCH form —
+  `TypeCaptureRequest` already takes a set of spans, so "semantic info for file X" is one compile away
+  from being one compile, which is what makes hover practical for an editor. `quickInfoAt` currently
+  builds per call and deliberately does not cache that build (a capture build types nodes the checker had
+  no reason to type, so its diagnostics are not reusable — pinned).
+
 **Round 910 (2026-08-17) — (API.2) LANDED IN TWO HALVES, AND THE ROUND'S REAL PRODUCT IS TWO **MEASURED
 FACTS ABOUT OUR AST SPANS** THAT MAKE THE OBVIOUS IMPLEMENTATION WRONG: **`Node.end` IS THE END OF THE
 TOKEN *FOLLOWING* THE NODE, SO SIBLING SPANS OVERLAP AND `[pos, end)` IS NOT A CONTAINMENT TEST.** ALSO
@@ -805,7 +870,42 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 
   </details>
 
-- [ ] **(API.3) Quick info + go-to-definition — THE DESIGN IS NOW DECIDED BY EVIDENCE: *POSITION-DIRECTED
+- [x] **(API.3a) QUICK INFO — LANDED, round 911, AND THE DESIGN BELOW IS NOW CONFIRMED BY MEASUREMENT
+  RATHER THAN BY READING.** Captured-during-walk vs asked-post-hoc on ONE `Checker` instance: top-level
+  annotated `const` **`string` / `string`** (the honest control — post-hoc is not wrong about
+  everything), body local shadowing a global **`number` / `string`**, `typeof`-narrowed parameter
+  **`string` / `any`**, parameter at its use **`number` / `any`**, arrow-body parameter **`string` /
+  `any`**, class-method parameter **`number` / `any`**. **Five of six differ, and the prediction in this
+  entry was wrong in the WORSE direction**: the narrowed case does not degrade to `string | number`
+  (narrowing merely lost), it degrades to **`any`** — nothing durable binds a parameter at all — which is
+  the one answer that is SILENT at every use site, so a post-hoc hover would have looked plausible and
+  meant nothing. **THE HOOK'S REAL LESSON, now in CLAUDE.md: a per-node hook on the spine sees NONE of
+  the checking ambient**, because the anchors install-and-restore it per dispatch — the position's scope
+  is `ctaFrames.last()`, and the capture must reproduce `ctaM3StmtAnchorCore`'s prologue plus
+  `withCtaFrameLocals(frame)`. Without that it answered `bodyLocal=string`, `narrowed=any`,
+  `parameter=any`. Threaded as an explicit parameter on the `recheckOnly` model (nothing on
+  `CompilerOptions`, no process-global mode); node identity is the RAW `(pos, end)` pair, so round 910's
+  span semantics stay entirely in `-project`'s `SourceIndex`. **OFF IS FREE and gated as such**:
+  `cost_gate.py` +0.00% on all 20 counters, the production cost being one null-valued field read and a
+  predicted branch per node, with the NODE as the argument (round 900). Public surface stays value-typed:
+  `QuickInfo` + `Project.quickInfoAt`.
+
+- [ ] **(API.3b) Go-to-definition** — the other half, deferred from round 911. The capture mechanism now
+  exists and this is the same shape one field over: record the resolved `Symbol`'s `declarations`
+  (each a pos/end-bearing node) at the captured position instead of its type, and answer
+  `DefinitionLocation(fileName, start, length)`. **Read (API.3a)'s ambient lesson first** — a symbol
+  resolved without `withCtaFrameLocals` is the same wrong answer one indirection along.
+
+- [ ] **(API.3c) Batch a whole file's spans into ONE build.** The core `TypeCaptureRequest` already
+  takes a SET of spans and `Project.quickInfoAt` deliberately does not cache its build (a capture build
+  types nodes the checker had no reason to type, so its diagnostics are not reusable — pinned). So
+  "semantic info for file X" is already one compile away from being one compile; exposing it turns
+  hover-per-keystroke from N builds into 1. **This is the item that makes the API practical for an
+  editor** and it needs no new mechanism.
+
+  <details><summary>the design decision, recorded round 910 and confirmed round 911</summary>
+
+  **(API.3) Quick info + go-to-definition — THE DESIGN IS NOW DECIDED BY EVIDENCE: *POSITION-DIRECTED
   CAPTURE*, NOT A POST-HOC QUERY, BECAUSE THE CHECKER'S ANSWER TO "WHAT IS THE TYPE HERE" IS A FUNCTION
   OF WALK-SCOPED AMBIENT STATE AND A POST-HOC CALL WOULD BE SILENTLY WRONG FOR EXACTLY THE INTERESTING
   CASES (round 909, by reading `getTypeOfIdentifier`).** `Checker` does all its work in `init`, so the
@@ -858,6 +958,8 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   prerequisite): **the right end state and the wrong next step**, the largest job in the repo. Do not
   let hover gate on it — and do not let it be "unblocked" by an API that has already published the
   internals it must change.
+
+  </details>
 
 - [ ] **(BUG.1) The compiler disagrees with itself about a lone `\r`** — `Parser.computeLineStarts`
   (`Parser.kt:10119`) breaks the line there, `Checker.lineStartsFor` (`Checker.kt:17641`) counts `\n`

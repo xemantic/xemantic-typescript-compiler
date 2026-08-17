@@ -32,6 +32,8 @@ import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
+import com.xemantic.typescript.compiler.TypeCaptureRequest
+import com.xemantic.typescript.compiler.TypeCaptureSpan
 import com.xemantic.typescript.compiler.Vfs
 import com.xemantic.typescript.compiler.computeParserFlags
 
@@ -69,10 +71,19 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * value ([NodeInfo]), never a node — see that class for why, and [SourceIndex] for
  * why "the node at an offset" needs more than the node's own `pos`/`end`.
  *
+ * ## Semantics
+ *
+ * [quickInfoAt] answers what the TYPE CHECKER computed at an offset. Unlike the
+ * two families above it BUILDS, and it builds with the position handed IN: the
+ * compiler's answer to "what is the type here" is a function of state that exists
+ * only while the checker walks, so it is recorded in place rather than asked for
+ * afterwards. See that method, and `TypeCaptureRequest` in the core for the
+ * measurement that decided it.
+ *
  * ## What this class is NOT
  *
- * It is not a language service: there are no completions, no hovers, no
- * find-references, and no incremental reuse of a previous build's internal state.
+ * It is not a language service: there are no completions, no find-references, and
+ * no incremental reuse of a previous build's internal state.
  * A query on a dirty project is a FULL rebuild, and that is a property of the
  * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
@@ -364,6 +375,64 @@ public class Project private constructor(
             ?: TsConfigLoader(overlay).load(configPath).options.also { parseOptions = it }
         val flags = computeParserFlags(key, text, options)
         return SourceIndex.of(text, key, flags).also { sourceIndexes[key] = it }
+    }
+
+    // --- semantics ---------------------------------------------------------------
+
+    /**
+     * What the TYPE CHECKER computed for the expression at [offset] in [fileName],
+     * or null when there is nothing typed there.
+     *
+     * The narrowest node at [offset] is resolved exactly as [nodeInfoAt] resolves it
+     * — same parse, same overlay, same half-open span rules — and then the compiler
+     * is asked to record the type AT THAT NODE while it checks the program.
+     *
+     * ## This BUILDS, and it builds a SECOND time
+     *
+     * Unlike [nodeInfoAt] and [positionAt], this is a semantic question and only a
+     * compile can answer it. It also does not reuse — and does not populate — the
+     * build [diagnostics] caches: a build carrying a capture request types
+     * expressions the checker had no reason to type, so it is not guaranteed to
+     * produce the same diagnostics as a plain build, and quietly substituting one
+     * for the other would make "what are my errors" depend on where the user last
+     * hovered. Every unedited file still hits the compiler's content-keyed parse
+     * cache, so the second build re-parses nothing.
+     *
+     * ## Why the position goes IN rather than the answer coming out
+     *
+     * The compiler's answer to "what is the type here" is a function of state that
+     * exists only WHILE the checker walks — `currentLocalTypes` is built as it goes
+     * and torn down again per statement anchor. Measured, asking a finished checker
+     * instead answers a function-body local with a same-named GLOBAL's type and a
+     * parameter with `any` (`TypeCaptureMeasurementTest` in the compiler core is the
+     * measurement). So the position is handed to the build and the answer is
+     * recorded in place; see `TypeCaptureRequest`.
+     *
+     * Null means: no such file, [offset] is outside every node, the node there is
+     * not an expression (a caret on the `=` of `const a = 1` is inside no child of
+     * the declaration — the `=` belongs to no node at all), or the checker never
+     * typed it.
+     */
+    public fun quickInfoAt(fileName: String, offset: Int): QuickInfo? {
+        val index = sourceIndexOf(fileName) ?: return null
+        val node = index.pathAt(offset).lastOrNull() ?: return null
+        val key = keyOf(fileName)
+        // The RAW `Node.end` is the capture's IDENTITY — the compiler matches its own
+        // nodes on the same pair, and INV.1(e) makes its parse of this text with these
+        // flags the same parse. The REAL end, snapped back to the token stream, is
+        // what the caller is told.
+        val span = TypeCaptureSpan(key, node.pos, node.end)
+        val captured = ProjectCompiler(overlay)
+            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(listOf(span)))
+            .capturedTypes
+            .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
+            ?: return null
+        return QuickInfo(
+            kind = captured.kind,
+            displayString = captured.typeText,
+            start = node.pos,
+            end = index.realEndOf(node),
+        )
     }
 
     /**

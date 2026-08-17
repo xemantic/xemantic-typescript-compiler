@@ -46,6 +46,11 @@ data class CompilationResult(
     val diagnostics: List<Diagnostic> = emptyList(),
     /** All source files including tsconfig.json — used for error baselines which annotate all files. */
     val allSourceFiles: List<Pair<String, String>> = emptyList(),
+    /**
+     * (API.3) The types the checker recorded at the spans a [TypeCaptureRequest]
+     * named, or empty — which is every compile that did not ask for any.
+     */
+    val capturedTypes: List<CapturedType> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -157,7 +162,13 @@ class TypeScriptCompiler {
          *  (the INV.6 seam) — the watch loop's incremental recheck; the caller
          *  merges kept prior diagnostics for out-of-set files. */
         recheckOnly: Set<String>? = null,
-    ): CompilationResult = runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName, recheckOnly) }
+        /** (API.3): when non-null, the checker records the type at each named span
+         *  while it walks past it, and the answers come back in
+         *  [CompilationResult.capturedTypes]. Null — the default — leaves the whole
+         *  pipeline untouched; see [TypeCaptureRequest]. */
+        typeCapture: TypeCaptureRequest? = null,
+    ): CompilationResult =
+        runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName, recheckOnly, typeCapture) }
 
     /**
      * The pipeline body of [compileParsed] — always entered through [runWithDeepStack],
@@ -169,6 +180,7 @@ class TypeScriptCompiler {
         baseOptions: CompilerOptions,
         fileName: String,
         recheckOnly: Set<String>? = null,
+        typeCapture: TypeCaptureRequest? = null,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
@@ -224,6 +236,7 @@ class TypeScriptCompiler {
                 options = options,
                 fileName = fileName,
                 diagnostics = diagnostics,
+                typeCapture = typeCapture,
             )
         } else {
             return cpcCompileMultiFile(
@@ -232,6 +245,7 @@ class TypeScriptCompiler {
                 fileName = fileName,
                 diagnostics = diagnostics,
                 recheckOnly = recheckOnly,
+                typeCapture = typeCapture,
             )
         }
     }
@@ -1019,6 +1033,7 @@ class TypeScriptCompiler {
         options: CompilerOptions,
         fileName: String,
         diagnostics: MutableList<Diagnostic>,
+        typeCapture: TypeCaptureRequest? = null,
     ): CompilationResult {
         // Single-file compilation
         val file = parsed.files[0]
@@ -1058,7 +1073,7 @@ class TypeScriptCompiler {
 
         val binder = Binder(options)
         val binderResult = binder.bind(sourceFile)
-        val checker = Checker(options, listOf(binderResult))
+        val checker = Checker(options, listOf(binderResult), typeCapture = typeCapture)
         diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
         // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
         // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
@@ -1148,6 +1163,7 @@ class TypeScriptCompiler {
             jsOutputs = singleFileJsOutputs,
             options = options,
             diagnostics = diagnostics,
+            capturedTypes = checker.capturedTypes,
         )
     }
 
@@ -1164,6 +1180,7 @@ class TypeScriptCompiler {
         fileName: String,
         diagnostics: MutableList<Diagnostic>,
         recheckOnly: Set<String>?,
+        typeCapture: TypeCaptureRequest? = null,
     ): CompilationResult {
         // All source files including tsconfig.json (for error baselines)
         val allFiles = parsed.files.map { it.fileName to it.content }
@@ -1349,6 +1366,7 @@ class TypeScriptCompiler {
             recheckOnly = recheckOnly,
             parsedSourceFiles = parsedSourceFiles,
             diagnostics = diagnostics,
+            typeCapture = typeCapture,
         )
         val fePostT0 = FrontEnd.t()
         // (WARM.8) round 861 — the four blocks of [FrontEnd.POST] abut from here
@@ -1627,6 +1645,7 @@ class TypeScriptCompiler {
             options = options,
             diagnostics = diagnostics,
             allSourceFiles = allFiles,
+            capturedTypes = checker.capturedTypes,
         )
     }
 
@@ -2058,6 +2077,7 @@ class TypeScriptCompiler {
         recheckOnly: Set<String>?,
         parsedSourceFiles: Map<String, SourceFile>,
         diagnostics: MutableList<Diagnostic>,
+        typeCapture: TypeCaptureRequest? = null,
     ): Checker {
         // Phase 2: Bind all files and create shared checker
         //
@@ -2161,7 +2181,13 @@ class TypeScriptCompiler {
             checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
                 assignedFileNames = recheckOnly,
                 allInputFileNames = allInputFileNames,
-                jsonModuleContents = jsonModules)
+                jsonModuleContents = jsonModules,
+                // (API.3): the SEQUENTIAL checker is the only one handed a capture
+                // request — under `--workers` each worker walks its own partition
+                // and would race on one shared result map for no benefit, so a
+                // capture build runs sequentially (`ParallelCheckMode.workers` is 1
+                // for every embedding-API caller).
+                typeCapture = typeCapture)
             if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
             if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(

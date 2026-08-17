@@ -72,6 +72,18 @@ class Checker(
      * single-file checks.
      */
     private val jsonModuleContents: Map<String, String> = emptyMap(),
+    /**
+     * (API.3) When non-null, the check spine RECORDS the type of the expression at
+     * each requested [TypeCaptureSpan] as it walks past it — see [TypeCaptureRequest]
+     * for why the direction is inwards rather than a post-hoc query, and
+     * [capturedTypes] for the answers.
+     *
+     * Threaded as a PARAMETER rather than carried on [CompilerOptions]: that data
+     * class is compared for parse-flag equality and copied at ~160 bytecodes per
+     * `copy()` call site (round 815), and a capture request is DATA, not an option.
+     * Nor is it a process-global mode — those go through the round-848 `ModeLedger`.
+     */
+    private val typeCapture: TypeCaptureRequest? = null,
 ) {
     /**
      * INV.6(6d): the PARTITION VIEW of [binderResults] — per-file PASS loops
@@ -4970,6 +4982,180 @@ class Checker(
     // B281: per-file cache of (top-level ambient module names, file declares ANY
     // string-named module anywhere). MUST be declared before init {} (init-order).
     private val fileAmbientModuleInfoCache = HashMap<String, Triple<Set<String>, Boolean, Set<String>>>()
+
+    // ── (API.3) position-directed type capture ─────────────────────────────
+    // MUST be declared before init {} (the spine runs from init).
+
+    /**
+     * The requested spans indexed by file, or an empty map when no capture was
+     * requested — which is every production compile.
+     */
+    private val typeCaptureKeysByFile: Map<String, Set<Long>> =
+        typeCapture?.keysByFile ?: emptyMap()
+
+    /**
+     * The requested spans of the file the spine is walking, or null.
+     *
+     * Null for EVERY file when nothing was requested, which is what makes the
+     * per-node hook in [spineEnterNode] one field read and a perfectly-predicted
+     * branch. Set beside `spineFileName` in [checkSpine]'s per-file loop.
+     */
+    private var typeCaptureKeysCurrentFile: Set<Long>? = null
+
+    /**
+     * The captured answers, keyed by the span asked about so the DEEPEST node
+     * carrying a span wins.
+     *
+     * Deepest, not first: the spine walks preorder, so several nodes sharing one
+     * raw span (a wrapper and its sole child) are visited outermost-first and the
+     * last write is the innermost — the node a caller pointing at that span meant.
+     */
+    private val typeCaptureResults = LinkedHashMap<TypeCaptureSpan, CapturedType>()
+
+    /**
+     * (API.3) What the checker computed at the requested spans.
+     *
+     * `internal` deliberately: the compile driver reads it into
+     * [CompilationResult.capturedTypes], which is the value a caller sees. Empty
+     * unless a [TypeCaptureRequest] was passed.
+     */
+    internal val capturedTypes: List<CapturedType> get() = typeCaptureResults.values.toList()
+
+    /**
+     * (API.3) Records the type at [node] when its RAW span is one the caller asked
+     * about.
+     *
+     * Called from [spineEnterNode] under a null check on
+     * [typeCaptureKeysCurrentFile], and the argument is the node itself: round 900's
+     * law is that a probe's guard cannot protect its own ARGUMENT, because Kotlin
+     * evaluates arguments strictly, so nothing may be derived at the call site.
+     *
+     * Matching is EQUALITY on the raw `(pos, end)` pair rather than containment,
+     * because `Node.end` overshoots by a token (round 910) and there is no token
+     * index here to snap it back with; the caller — which does have one — resolves
+     * its caret to a node first and asks about that node's span. A span nothing in
+     * the program carries simply yields no answer.
+     *
+     * Only an [Expression] is typed. `currentCheckFileName` is installed for the
+     * call because the spine's own handlers install-and-restore it per anchor
+     * dispatch, so at an arbitrary node it is at rest — and it is the key
+     * `getTypeOfIdentifier` reaches `fileLocalTypeMaps` through. Everything else the
+     * answer depends on (`currentLocalTypes`, `currentFileLocals`, the frames) is
+     * live BECAUSE this runs inside the walk, which is the whole point.
+     */
+    private fun typeCaptureVisit(node: Node) {
+        val keys = typeCaptureKeysCurrentFile ?: return
+        if (TypeCaptureRequest.packSpanKey(node.pos, node.end) !in keys) return
+        if (node !is Expression) return
+        val frame = ctaFrames.lastOrNull()
+        if (frame == null) {
+            typeCaptureRecord(node, spineFileName)
+            return
+        }
+        // The ambient a statement anchor installs, reproduced VERBATIM from
+        // [ctaM3StmtAnchorCore]'s prologue — because at an arbitrary node the spine
+        // holds NONE of it. The anchors install-and-restore per dispatch (round 806),
+        // so a plain per-node capture reads the FILE-level tables and answers a body
+        // local with the same-named global's type; measured before this install
+        // existed, all three of the interesting positions in
+        // `TypeCaptureMeasurementTest` came out wrong. The frame is the position's
+        // scope: `ctaFrames.last()` is what the anchor itself reads.
+        val savedThis = currentClassForThis
+        val savedInFn = inNonArrowFunctionBody
+        val savedAsync = inAsyncFunctionBody
+        val savedGen = inGeneratorFunctionBody
+        val savedTpDecls = currentTypeParamDecls
+        val savedTpScope = currentTypeParamScope
+        val savedFlowGraph = currentFlowGraph
+        currentClassForThis = frame.classForThis
+        inNonArrowFunctionBody = frame.inFn
+        inAsyncFunctionBody = frame.inAsync
+        inGeneratorFunctionBody = frame.inGen
+        currentTypeParamDecls = frame.fnTpDecls ?: emptyMap()
+        currentTypeParamScope = frame.fnTpScope ?: savedTpScope
+        currentFlowGraph = ctaM3FlowGraph
+        var namespacesPushed = 0
+        for (f in ctaFrames) {
+            val symbol = f.nsSymbol ?: continue
+            inferenceNamespaceStack.addLast(symbol)
+            namespacesPushed++
+        }
+        try {
+            withCtaFrameLocals(frame) { typeCaptureRecord(node, spineFileName) }
+        } finally {
+            repeat(namespacesPushed) { inferenceNamespaceStack.removeLast() }
+            currentClassForThis = savedThis
+            inNonArrowFunctionBody = savedInFn
+            inAsyncFunctionBody = savedAsync
+            inGeneratorFunctionBody = savedGen
+            currentTypeParamDecls = savedTpDecls
+            currentTypeParamScope = savedTpScope
+            currentFlowGraph = savedFlowGraph
+        }
+    }
+
+    /**
+     * (API.3) Records [node]'s type under [fileName], FIRST WINS.
+     *
+     * First wins because the two hooks are ordered innermost-ambient-first: a
+     * function body is checked from its declaration's spine anchor, i.e. BEFORE the
+     * spine walks into the body's own nodes, and a narrowed then-branch is checked
+     * inside the narrow's install-and-restore. So the answer taken under the
+     * tightest ambient is always the one recorded first, and the outer hooks —
+     * which would answer the same node from the file-level ambient — must not
+     * overwrite it. That ordering is what [TypeCaptureMeasurementTest] measures.
+     *
+     * `currentCheckFileName` is installed for the call because the spine's own
+     * handlers install-and-restore it per anchor dispatch, so at an arbitrary node
+     * it is at rest — and it is the key `getTypeOfIdentifier` reaches
+     * `fileLocalTypeMaps` through.
+     */
+    private fun typeCaptureRecord(node: Expression, fileName: String) {
+        val span = TypeCaptureSpan(fileName, node.pos, node.end)
+        if (span in typeCaptureResults) return
+        val savedCheckFileName = currentCheckFileName
+        currentCheckFileName = fileName
+        try {
+            val text = typeToString(getTypeOfExpression(node))
+            typeCaptureResults[span] = CapturedType(
+                fileName = fileName,
+                start = node.pos,
+                end = node.end,
+                kind = node.kind.name,
+                typeText = text,
+            )
+        } finally {
+            currentCheckFileName = savedCheckFileName
+        }
+    }
+
+    /**
+     * (API.3) TEST-ONLY — the POST-HOC query the capture design exists to refute.
+     *
+     * Answers "the type at this span" AFTER `init` has finished, i.e. with the
+     * walk-scoped ambient at rest, which is exactly what a "hand the checker back
+     * and ask it later" API would do. It is `internal` and it must stay that way:
+     * it is silently wrong for the cases a hover user actually points at, and
+     * `TypeCaptureMeasurementTest` exists to keep measuring by how much.
+     *
+     * Returns null when no [Expression] in [fileName] carries that raw span.
+     */
+    internal fun postHocTypeAtSpanForTesting(fileName: String, start: Int, end: Int): String? {
+        val sourceFile = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile ?: return null
+        // Iterative, as every full-tree walk here must be (deep chains overflow a
+        // recursive descent — CLAUDE.md's deep-recursion rule).
+        val stack = ArrayList<Node>()
+        stack.add(sourceFile)
+        var found: Expression? = null
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            // Deepest wins, so keep descending rather than stopping at the first hit.
+            if (node is Expression && node.pos == start && node.end == end) found = node
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        return found?.let { typeToString(getTypeOfExpression(it)) }
+    }
 
     // ── INV.4 check spine (round 514) ──────────────────────────────────────
     // Per-file context for the single-pass check spine — the ONE preorder walk
@@ -23255,6 +23441,11 @@ class Checker(
                 // so skipping a foreign file skips exactly that file's emissions.
                 if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
                 spineFileName = sf.fileName
+                // (API.3): null for every file unless a caller asked for a span in
+                // it, which is what keeps [spineEnterNode]'s hook to one field read.
+                typeCaptureKeysCurrentFile =
+                    if (typeCaptureKeysByFile.isEmpty()) null
+                    else typeCaptureKeysByFile[sf.fileName]
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
@@ -23598,6 +23789,13 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
+        // (API.3) the position-directed type capture. Placed ABOVE the dispatch
+        // probe's early return so a capture is unaffected by the probe mode, and
+        // costing — when nothing was requested, i.e. always in production — one
+        // null-valued field read and a perfectly-predicted branch. The argument is
+        // the node itself: round 900's law is that this guard could not protect a
+        // derived one.
+        if (typeCaptureKeysCurrentFile != null) typeCaptureVisit(node)
         // (DISPATCH.1)(a): the opt-in derivation harness. OFF in production, so
         // this is one static field read + a perfectly-predicted branch; the
         // straight-line prologue below is byte-identical to the pre-probe one.
