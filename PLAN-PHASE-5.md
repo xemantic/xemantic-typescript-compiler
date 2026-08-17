@@ -781,22 +781,66 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   the token-boundary rule tsc's `getTouchingPropertyName` uses). **Cheap and self-contained — it needs
   no checker state**, which is why it comes before quick-info.
 
-- [ ] **(API.3) Quick info + go-to-definition — BLOCKED ON AN OWNER DESIGN DECISION, not on code.**
-  Everything an editor needs is `private` in `Checker.kt` and nothing hands back live state:
-  `getTypeOfExpression` (`:108501`), `getTypeOfSymbol` (`:106667`) and `typeToString` (`:120389`) are
-  all `private fun`, and `BinderResult.nodeToSymbol` is public but no `BinderResult` ever escapes a
-  compile. Three ways, rising cost: **(a) query-shaped** — narrow `Checker` entry points
-  (`quickInfoAt`, `definitionAt`) answering one question per compile, no new public types, cheap, but
-  the API can never grow past what is hardcoded; **(b) snapshot-shaped** — `ProjectCompiler` optionally
-  returns a `ProgramSnapshot` holding ASTs + binder output + the live `Checker`, honest layering but it
-  publishes the AST/`Symbol`/`Type` model as versioned API; **(c) the full inversion** — a lazy,
-  re-entrant checker so a snapshot answers queries without re-running the eager passes
-  (`docs/ARCHITECTURE-RETHINK.md:850` names this as the LSP prerequisite). **Recommendation: (a) for
-  this slice**, which delivers hover + go-to-definition against today's architecture and keeps (b)/(c)
-  open. ASK THE OWNER BEFORE STARTING.
+- [ ] **(API.3) Quick info + go-to-definition — THE DESIGN IS NOW DECIDED BY EVIDENCE: *POSITION-DIRECTED
+  CAPTURE*, NOT A POST-HOC QUERY, BECAUSE THE CHECKER'S ANSWER TO "WHAT IS THE TYPE HERE" IS A FUNCTION
+  OF WALK-SCOPED AMBIENT STATE AND A POST-HOC CALL WOULD BE SILENTLY WRONG FOR EXACTLY THE INTERESTING
+  CASES (round 909, by reading `getTypeOfIdentifier`).** `Checker` does all its work in `init`, so the
+  instance still HOLDS its tables afterwards and "hand the Checker back and call `getTypeOfExpression`"
+  looks free. It is not: `getTypeOfIdentifier` (`Checker.kt:108777`) consults, IN ORDER,
+  `currentLocalTypes` (its own comment: *"populated during TS2322 checking walk"*),
+  `currentParamBindingNames`, `currentCheckFileName` -> `fileLocalTypeMaps`, `currentFileLocals`, the
+  inference-namespace chain, and only THEN the node-keyed `lookupPerFileForNode`. At rest
+  `currentLocalTypes` is an empty `HashMap` (`:636`) and the two `current*` file fields are null, so a
+  post-hoc query **skips the first five reads** and falls through to globals. **For a
+  FUNCTION-BODY LOCAL that does not merely lose narrowing — it can resolve to an unrelated same-named
+  global**, which is the `useCaseSensitiveFileNames` failure documented in that very function
+  (a destructured param resolving to another file's function, FP TS2345 x9). Two of the ambient reads
+  are FILE-scoped and cheaply re-installable from outside; `currentLocalTypes` is
+  STATEMENT-POSITION-scoped, built first-wins as the walk proceeds and deliberately leaking across
+  blocks in statement order — **it cannot be reconstructed for an arbitrary position without
+  re-walking to that position, which is the whole argument for capture.** So: hand the compiler the
+  position(s) BEFORE the build and capture type+symbol at those nodes while the real ambient is
+  installed. Correct by construction, and it **batches** — one build can capture every identifier in a
+  file, so "semantic info for file X" is one compile rather than N. Cost, stated: a query is a compile
+  (~5.2 s warm on tsc's own sources, far less on a normal project, repeats warm through
+  `CrawlParseCache`); too slow per keystroke, fine for hover-on-demand.
+  **IMPLEMENTATION CONSTRAINT A NEW AGENT WILL OTHERWISE LOSE A ROUND TO: a capture handler is a spine
+  handler, so it must extend `SpineDispatch.enterClosure` or round 888's `spineEnterMask` means it is
+  NEVER CALLED**, and `python3 scripts/spine_closure_audit.py` must be run after touching any
+  `spine*EnterNode`. **PUBLIC SURFACE STAYS VALUE-TYPED** (`QuickInfo(kind, displayString, span,
+  docs)`, `DefinitionLocation(fileName, start, length)`) — no AST, no `Symbol`, no `Type`.
+  **THE FIRST STEP IS STILL A MEASUREMENT, NOT CODE:** pin the above by asking a post-init `Checker`
+  for the type at three positions — a top-level `const`, a function-body local, and a guard-narrowed
+  reference — and record which answer wrong. That experiment becomes the regression pin for the capture
+  path.
 
-- [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution)
-  and the one most exposed to (API.3)'s choice — do not start before it is settled.
+  **THE STARTING FACTS** (unchanged, and they are what make capture cheap): everything an editor needs
+  is `private` in `Checker.kt` and nothing hands back live state — `getTypeOfExpression` (`:108501`),
+  `getTypeOfSymbol` (`:106667`) and `typeToString` (`:120389`) are all `private fun`, and
+  `BinderResult.nodeToSymbol` is public but no `BinderResult` ever escapes a compile. Capture needs only
+  an `internal` seam plus a handler; it publishes none of them.
+
+  **THE THREE ALTERNATIVES, AND WHY THEY ARE NOT THE NEXT STEP.** (a) **post-hoc query-shaped** —
+  narrow `Checker` entry points answering one question after `init`: **superseded by the finding above**,
+  because it is silently wrong for body locals and narrowed references (the ONE hover case a user
+  notices is `let`/`const` inside a function). Directed capture is (a)'s cheapness without its defect.
+  (b) **snapshot-shaped** — return a `ProgramSnapshot` holding ASTs + binder output + the live
+  `Checker`: **REJECTED for now, and the reason is this repo's own history** — it freezes as versioned
+  API exactly the structures the perf arc keeps rewriting (rounds 889-908 changed packed-key hashing,
+  container types and memo layouts, and moved maps onto `LongKeyMap`/`IntKeyMap`, which deliberately
+  have NO iterator). Publishing them constrains the work that just delivered -10.5%. It also does not
+  even solve the ambient problem: a snapshot hands back the same post-hoc trap. (c) **the full
+  inversion** — a lazy, re-entrant checker (`docs/ARCHITECTURE-RETHINK.md:850` names it as the LSP
+  prerequisite): **the right end state and the wrong next step**, the largest job in the repo. Do not
+  let hover gate on it — and do not let it be "unblocked" by an API that has already published the
+  internals it must change.
+
+- [ ] **(API.4) Completions.** Largest of the editor features (scope enumeration + member resolution).
+  Under (API.3)'s capture design its shape is already implied and it is the case that stresses the
+  design hardest: a completion request has NO node at the position (the user is mid-identifier, often
+  right after a `.`), so the capture anchor must be the nearest enclosing node plus the scope in force
+  there — which the spine already maintains as `spineCurrentScope` (INV.4(c)(i)) and which
+  `lexLevelHasName`'s ascent already walks. Do not start before (API.3) lands the capture mechanism.
 
 DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
 sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->
