@@ -20,6 +20,100 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 912 (2026-08-17) — (WARM.35): THE FOUR UNPRICED CANDIDATES FROM ROUND 903's HOT-PATH AUDIT ARE
+**ALL REFUSED**, THE LARGEST AT **0.18%** AND ALL FOUR TOGETHER AT **0.303% (15.9 ms)** — UNDER THE
+~17 ms FLOOR FOR *ONE* LOW-RISK CHANGE. THE ROUND'S REAL PRODUCT IS THAT **THE QUEUE'S OWN POPULATION
+FOR THE LARGEST OF THEM WAS A TRANSCRIBED SOURCE COMMENT**, AND THAT **TWO OF THE FOUR FIXES ARE DEAD
+BEFORE ARITHMETIC — ONE IS NOT EXPRESSIBLE IN KOTLIN AND ONE IS A SOUNDNESS BUG.**
+
+Nothing was built and no amplifier was run: every refusal is population x a generous per-operation
+ceiling, checked against round 896's divide-and-refuse, exactly as round 904 refused the boxed-key
+family. `docs/perf/round912-candidate-census.md` is the record.
+
+- **THE MEASUREMENT.** Throwaway counters at each site (reverted), printed after the last measured
+  rebuild on the compiler profile (78 files, 46 errors), warm `BenchMain <proj> 6 2` and `6 3`,
+  instrumented medians **5,065.7** and **5,170.8 ms**. Denominator per this file: **5,242.6 ms**, so
+  1% = 52.4 ms and the floor is 0.324%.
+
+  | candidate | population/rebuild | ceiling | % | verdict |
+  |---|---:|---:|---:|---|
+  | `mappedNodeTypeKey` key build | **25,987** keys of **110,780** calls | 9.36 ms | 0.179% | REFUSED (1.8x) |
+  | `narrowTypeFromFlow` default-arg `NarrowFlowMemo` | **31,768** | 4.77 ms | 0.091% | REFUSED (3.6x) |
+  | `collectTypeofGuardNames` &c `LinkedHashSet` | **22,798** | 1.48 ms | 0.028% | REFUSED (11.5x) |
+  | `spineOsWithAmbient` / `spineTcDispatchWithAmbient` | **2,841** | 0.28 ms | 0.005% | KILLED BY READING (60x) |
+  | **ALL FOUR TOGETHER** | | **15.9 ms** | **0.303%** | under the floor |
+
+  To reach 17 ms they would need **654 / 535 / 746 / 5,983 ns per operation**, against a measured
+  **15.09 ns** for a whole `HashMap` get that recursively hashes AND `equals` a 2.76-node AST subtree
+  (round 903) and **8.53 ns** for a boxed `HashMap<Long,·>` probe (round 904).
+
+- **THE CONTROLS, because a census that is only self-consistent has none.** Two independent processes
+  agree **to the last digit on all 22 counters**, and `mappedNodeTypeKey calls = 110,780`
+  **reproduces `docs/perf/cost-counters.txt`'s `typeNode.bypassed` exactly** — an external, previously
+  recorded number the census never had access to.
+
+- **THE FINDING WORTH MORE THAN ANY OF THE PRICES: A QUEUE POPULATION CAN BE A TRANSCRIBED SOURCE
+  COMMENT.** The "~88 k/rebuild" attached to `mappedNodeTypeKey` traces to an in-source comment ("this
+  is not the hot loop — 88k calls"), and it is wrong in **both directions at once**: the function is
+  **CALLED 110,780 times** (the comment aged 26%) and **BUILDS A KEY 25,987 times** (**3.4x fewer**
+  than the queue attributed to it, because **76.5%** of calls exit at the foreign-file gate before any
+  key work). A number in a KDoc is not a measurement, and the quantity a fix would act on is not
+  automatically the quantity the comment counts. Now in CLAUDE.md.
+
+- **WHAT DID NOT WORK, AND WHY THAT IS THE ROUND'S SECOND PRODUCT.** (i) **Candidate 3's `inline` is
+  NOT EXPRESSIBLE**: both `spineOsWithAmbient` and `spineTcDispatchWithAmbient` hand `block` to a
+  **recursive, non-inline** callee (`spineOsApplyTps` / `spineTcApplyLevels`), so `inline` forces
+  `noinline`, which re-materialises the lambda exactly as today — *a candidate can be dead on grounds
+  of the LANGUAGE before any population is counted, and it is reading the CALLEE, not the wrapper,
+  that shows it.* Its population is **2,841 calls**, one third of one percent of a single pass over
+  the spine's 856,962 nodes, so the "measured-hot path" premise was false as well and **nothing had
+  ever measured it** — `grep -rn` over `docs/` finds not one mention of any of the four names.
+  (ii) **Candidate 4's obvious shared-memo fix is a SOUNDNESS bug**: `narrowTypeFromFlowCore` handles
+  RE-ENTRANT outermost walks at `narrowLiveDepth == 0` by design, so a single shared instance would be
+  cleared and overwritten by a re-entrant walk while the outer walk still depends on it — and a wrong
+  serve there is a **wrong narrowed type**, undoing round 736's depth/height soundness argument from
+  underneath. **34.2%** of memos already grow past 32 slots, so a shared memo's `clear()` is not
+  obviously cheaper than the allocation it replaces (round 899: price a container swap NET). *The
+  cheapest-looking of the four is the riskiest.*
+
+- **AND THE ONE THING THE AUDIT NEVER NOTICED — still under the floor, so it is recorded rather than
+  queued.** `mappedNodeTypeKey` performs **110,780 parent-chain climbs plus 110,780 `String`-keyed
+  `fileResults` probes (~5.5 ms)** purely so that 76.5% of calls can answer "foreign file". That is
+  comparable to the *named* mechanism and structurally required by the gate; the WHOLE function, at
+  these generous rates, is ~15 ms — under the floor by itself. Also recorded: two of that function's
+  three reject branches (`unindexed`, `no-owner`) fire **0** times on this profile, and the legacy
+  `checkArithmeticInStatement` `IfStatement` arm runs **0** times (a bound on its frequency here,
+  **not** deletion evidence — round 753).
+
+- **THE HONEST UNCERTAINTY, stated because a ceiling is only as good as its rates.** Two of the
+  per-operation rates are NOT sourced from a repo-measured constant and are set 3-10x above the
+  nearest anchor on purpose: the `StringBuilder` + ~4.7 appends + `toString` for a 12.79-char key
+  (**150 ns**), and `entries.sortedBy { }` over a **1.277**-entry map (**200 ns** — the census's own
+  surprise is that a type-param scope is in force for 71.7% of built keys, so the sort really runs; it
+  is just a 1-element `Collections.sort`). **An amplifier was judged not worth a build**: candidate 1
+  would have to measure **654 ns per key**, ~43x a measured full recursive-hash `HashMap` probe, so
+  the refusal survives an order of magnitude of rate error and an amplifier could only make the answer
+  smaller. Three of the four are pure-allocation candidates, a genre round 801 (367,189 `String`
+  allocations = **0 ms**) and round 893 (warm GC ~1.7% of wall) already price near zero — this is the
+  fourth confirmation.
+
+- **NEW REUSABLE CONSTANT, the allocation twin of round 904's ~1.7 M map-ops bar:** a pure-allocation
+  candidate needs **> 113,000 allocations/rebuild at a generous 150 ns, or > 340,000 at a realistic
+  50 ns**, to clear the ~17 ms floor. In CLAUDE.md, and it refuses most per-node allocation candidates
+  by arithmetic.
+
+- **GATES AND SUCCESSOR.** **No code changed** — the counters were reverted, so there is no suite run,
+  no `cost_gate.py`, no `huge_methods.py` and no grid to report; the corpus count is unmoved. Per the
+  WORK ORDER NOTE, the named successor is the **(API.\*)** arc — **(API.3b) go-to-definition** next,
+  with **(API.3c)** (batch a whole file's spans into ONE build) as the item that makes the API
+  practical for an editor. **The checker-side pool is now empty in the literal sense**: round 908
+  closed the spine side and this round prices the audit residue, leaving nothing checker-side
+  unpriced. The two remaining perf levers are artifact-level and **both are gated** — (ART.1) on the
+  owner's release decision (the engineering exists; `native.yml` already builds Oracle + PGO), and
+  (ART.2) on a **CRaC JDK that is no longer installed on this box** (Zulu 26 / OpenJDK 25, plus 17 and
+  21 under `~/jdks`), so neither its `afterRestore` cwd fix nor a re-measurement can be compiled or
+  verified locally.
+
 **Round 911 (2026-08-17) — (API.3a): QUICK INFO LANDS, AND THE DESIGN ROUND 910 DECIDED BY *READING* IS
 NOW CONFIRMED BY *MEASUREMENT* — **FIVE OF SIX POSITIONS ANSWER DIFFERENTLY POST-HOC**, AND THE
 PREDICTION IN THE QUEUE ENTRY WAS WRONG IN THE **WORSE** DIRECTION. THE ROUND'S TECHNICAL PRODUCT IS THAT
@@ -672,153 +766,6 @@ Priced BEFORE a line of fix, one instrument, no production behaviour change.
   warning-clean. **No wall A/B, for the twelfth round running, and nothing to A/B** — the round lands
   an instrument and a refusal.
 
-**Round 902 (2026-08-12) — (WARM.29): ROUND 901's SUCCESSOR — THE PARALLEL-ARRAY CONTAINER IT
-PRICED AT 0.41-0.47% — IS **REFUSED, AND IT IS A REGRESSION**: MEASURED, IT COSTS **+13.75 ns PER
-PROBE = −10.1 ms = −0.19%**. THE ESTIMATE WAS NOT OPTIMISTIC, IT WAS COMPUTED OVER THE WRONG
-POPULATION: **A LEVEL IS SCANNED ONCE PER *PROBE*, NOT ONCE PER *EXISTENCE*, AND THE TWO MEANS
-DIFFER BY 193x** (1.51 own symbols against **290.94**).**
-
-No production behaviour changed; the round lands an instrument and a refusal. `docs/perf/lex-level-scan-price.md`.
-
-- **(A) THE ROUND DID WHAT ROUND 901 SAID TO DO, AND THAT IS WHAT KILLED THE CANDIDATE.** Round 901
-  refused a filter at 0.26% and named a successor — "replace the per-scope `HashMap` with a
-  parallel-array linear scan (map fallback above ~8), 794,251 probes at ~3-6 ns instead of 33-37,
-  ~22-25 ms = 0.41-0.47%" — then explicitly did **not** build it, because that rate was ESTIMATED
-  and *the next instrument is a third `--lexLevelAmp` arm, not a fix*. Two arms were added (an
-  unconditional scan and the HYBRID actually proposed). **Had the round trusted the estimate it would
-  have shipped a 0.19% regression behind a container change touching a binder-OUTPUT type.**
-
-- **(B) A SCOPE POPULATION IS NOT A PROBE POPULATION — ROUND 890's LAW, ONE FAMILY OVER.** Round 901
-  priced the scan off `lexBoundHistogram`, which counts each `LexicalScope` **once**: `15270 8381
-  3748 …`, 46.7% empty, mean **1.51**. Counting the same scopes once **per real probe** gives `0
-  166388 101041 62112 44319 35255 28750 22145 15900 261681`, mean **290.94**, **212.12 scan steps per
-  probe**. The unresolved-names ascent walks outwards, so it reaches the big outer levels on every
-  walk: **35.5% of probes land on levels averaging 815 symbols**, and those alone are 213.2 M of the
-  214.6 M symbols a scan would traverse per rebuild. *The cost of a scan is weighted by the probes;
-  the cost of an allocation is weighted by the scopes. Round 901 measured the second and priced the
-  first.*
-
-- **(C) THE MEASUREMENT, WITH ITS FALSIFIER AND ITS CROSS-ROUND CONTROL.** Four arms under one
-  timestamp pair each, cyclically rotated; `r = 4` and `r = 16`, two runs each, ABBA at the run level.
-  Warm slopes **MAP 6.00 / FILTER 0.96 / SCAN 709.2 / HYBRID 7.42 ns per rep**; at `r = 1`, where the
-  boundary cancels between arms, **the unconditional scan is +1,046 ns against the map and the hybrid
-  is +13.75 ns**. Sink an exact 4x between the two `r` (nothing elided), scan and hybrid sinks EQUAL
-  to the map's at both (the arms answer the same question), hybrid branch split 475,910/261,681
-  matching the histogram to the unit. Round 901's two arms reproduce — MAP warm slope 6.00 vs 6.4,
-  FILTER 0.96 vs 1.17, map-minus-filter first probe 28.9 ns vs 33-37 and the JFR row's 36.6.
-
-- **(D) AND NO THRESHOLD RESCUES IT, WHICH IS THE STRONGER HALF.** The hybrid's scanned levels
-  average **2.86** entries and it still loses, for two reasons that are not tuning parameters: the
-  35.5% that fall back pay the array load, the null test and the length test **and then the whole map
-  probe**; and 2.86 elements is 2.86 `String` dereferences to scattered objects against one cached
-  hash and one `Node`. **Even if the replacement were FREE, the whole <=8 population is 13.8-17.6 ms =
-  0.25-0.32%** — straddling round 897's 0.31% refusal floor. The arithmetic is closed before an
-  implementation is chosen. `lexLevelHasName` is now CLOSED as a *container* question: both its levers
-  are measured and both refused, the filter at +0.26% and the container at **−0.19%**.
-
-- **(E) THE ABLATION — 6 ARMS, ALL DISCRIMINATE, AND TWO WERE **DEAD**, NOT BLIND.** B1 (scan arm
-  dropped) 2 pins, B2 (hybrid dropped) 2, B3 (scan stops one short) 1 — *a strict subset of B1,
-  recorded not dressed up*, B4 (array built from `symbols` **plus** `existing`) 3 **unique**, B5
-  (histogram de-duplicated per scope — round 901's population injected deliberately) 2 **unique**, B6
-  (size recorded as 1) 2 **unique**. **B4 and B5 read ALL PINS GREEN on the first pass and neither was
-  a blind pin: both edits changed nothing.** B5 guarded on `lexScopes.contains(l)`, always true
-  because `lexLevelHasName` calls `lexScope(l)` two lines above `lexAmp`; B4 polluted the array with
-  `existing` keys, but the SourceFile root is the only level carrying an `existing` table past the
-  untrusted-owner rule and the fixture's root bound nothing, so no amplified scope had one.
-  ***Round 855 needs the sharper form: `git diff --shortstat` proves the EDIT landed, never that it
-  DOES anything — and in a driver's output a dead arm and a blind pin are the same line.***
-
-- **(F) THREE PIN SPLITS IN ONE ROUND, ALL THE SAME LESSON.** The re-weighting pin first compared
-  against `lexScopeBoundKeys` and failed in the full suite at 80 against 586 — the bound count is
-  lib-dominated on any small fixture (round 898's A3 / round 901's A2 for the third time in four
-  rounds). The size census then began as ONE method, so B5 and B6 failed the same lone assertion; and
-  its consistency assertion, first written against the CALL count, fired under both defects and
-  separated neither. **An assertion that fires for two causes separates neither.**
-
-- **(G) GATES.** Suite **14,396 / 0 / 3** (+6 = exactly the new pins; baseline 14,390).
-  `cost_gate.py` **+0.00% on all 20 counters** — the expected control for a change that adds census
-  hooks and one always-null field. `huge_methods.py --fail-over 0`: **0 over the limit**, 714 classes.
-  **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`** (46 each, harness 94), cross-round
-  against round 901's captures, identical recipe — a control, run anyway because the hooks sit on the
-  path that decides TS2304. **No wall A/B for the eleventh round running**, and nothing to A/B.
-
-**Round 901 (2026-08-12) — (WARM.28): ROUND 899's LAST UNREFUTED CANDIDATE, `lexLevelHasName`, IS
-**REAL — TWO INDEPENDENT INSTRUMENTS AGREE ON ITS RATE TO 0.5%** — AND IS **REFUSED AT ~14 ms
-(0.26%)**. THE CENSUS THAT PRICED IT FOUND THE ROW'S ACTUAL CAUSE: **32,693 `HashMap`s HOLDING 47,490
-KEYS BETWEEN THEM, 46.7% OF THEM EMPTY** — WORTH ~0.45%, WHICH THE FILTER WOULD HAVE FORECLOSED.**
-
-Priced BEFORE a line of fix, one instrument, no production behaviour change.
-`docs/perf/lex-level-probe-price.md`.
-
-- **(A) THE POPULATION IS EXACTLY WHAT ROUND 899 DERIVED, AND THE DERIVATION STILL COULD NOT HAVE
-  DECIDED IT.** **1,024,959 calls** against the predicted ~1.0 M. But **271,684 of the 1,009,275
-  probe-path calls cost NOTHING**: `HashMap.getNode` reads `table` BEFORE it hashes the key, and a
-  `mutableMapOf()` that was never written keeps `table == null`, so an empty level answers with a
-  null check and a return. *Round 898's law one level down — an operation that short-circuits before
-  it does anything is not one of the operations you divide by.* A census counting probes alone would
-  have manufactured 7-13 ms of prize out of free work.
-
-- **(B) THE ROW SURVIVES ITS ARITHMETIC, AND THEN SURVIVES A SECOND INSTRUMENT.** 29.8 ms over
-  **813,571 REAL probes = 36.6 ns**, inside the 20-50 ns band — the second row in this arc (after
-  round 900's candidate (5)) to pass, against 8 of round 894's 9 and 1 of round 899's 6 that did not.
-  But that band was measured on `perFileScope`, whose keys are file PATHS in a populated table, and
-  the mean queried level holds **1.5** entries, so the prior does not transfer (round 789).
-  `--lexLevelAmp` measures it: **MAP warm slope 6.4 ns, FILTER warm slope 1.17 ns**, and the two-arm
-  delta extrapolates to **33-37 ns for the FIRST probe** — which is the one production performs.
-  **Two independent instruments, agreeing to 0.5%.** Sink is an exact 4x between r=4 and r=16, so
-  neither loop was elided. *The amplifier amplifies BOTH arms in one call because at equal `r` the
-  ~90 ns boundary cancels BETWEEN them, which is the only way a first-probe rate is readable at all.*
-
-- **(C) REFUSED AT ~12.6-15.8 ms (0.23-0.29%), FOR THREE REASONS IN ASCENDING WEIGHT.** 474,954
-  refusable probes, ~2.3% false positives, minus a filter test on all 737,591 real-probe calls and a
-  0.5 ms eager build. **(a)** below this arc's floor — round 897 refused a LOW-risk change at 0.31%
-  gross, 898 refused MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and built at 0.39%. **(b)**
-  `cost_gate.py` reads **+0.00% by construction** (it removes probes, not resolutions), so its only
-  defence would be a wall A/B at **a seventh of what this box settles** — round 899 resolved 1.88% in
-  SIGN alone. **(c) THE REAL ONE: a filter in front of a container is a commitment to the
-  container.** Refusing 58% of those probes banks the smaller half and removes the justification for
-  replacing the container, which is worth nearly twice as much.
-
-- **(D) WHAT THE ROUND DID *NOT* HAVE TO WORRY ABOUT, RECORDED BECAUSE IT WAS THE FLAGGED RISK.** The
-  filter would sit BELOW INV.4(c)(ii)'s three load-bearing rules and guard ONE map probe whose answer
-  it proves — not the function's verdict — so the untrusted-level, non-head-fn and root-exclusion
-  rules are untouched by construction; and `LexicalScope.symbols` has **exactly one writer in the
-  repo** (`Binder.kt` `declareLexical`), so a mask built at the end of `bindLexicalScopes` cannot go
-  stale. **The soundness argument was fine. The number was not.**
-
-- **(E) THE SUCCESSOR, PRICED FROM THIS ROUND'S OWN CENSUS.** Bound scopes by own-symbol count:
-  `15270 8381 3748 1907 1171 768 456 394 174 424` — **46.7% hold ZERO** (an allocated `LinkedHashMap`
-  that never receives a key), 93.2% hold <=4, **98.7% hold <=8**, tail 424 scopes. Replacing the
-  per-scope `HashMap` with a parallel-array linear scan (map fallback above ~8) serves **794,251 real
-  probes** across the three families at ~3-6 ns instead of 33-37: **~22-25 ms = 0.41-0.47%**, which
-  clears every floor this arc has used. One writer, five readers (one audit-only). **NOT built: the
-  array scan's own rate is ESTIMATED, and the next instrument is a third `--lexLevelAmp` arm, not a
-  fix** (CLAUDE.md's first law). The 32,693 deleted allocations are recorded UNPRICED — an allocation
-  count is not a cost (round 801).
-
-- **(F) THE ABLATION — 6 ARMS, ALL DISCRIMINATE, FOUR UNIQUELY, AND TWO WERE BLIND FIRST TIME.** A1
-  (EMPTY/REAL collapsed) 1 pin, A2 (dedup dropped) 1 **unique**, A3 (`real` frozen false) 3
-  **unique**, A4 (map arm dropped) 1, A5 (hook outside its guard) 1 **unique**, A6 (mask one bit off)
-  2 **unique**. A1 and A4 are caught but NOT separated — strict subsets — stated, not dressed up
-  (round 807). **A2 was blind because the FIXTURE could not express the invariant** (round 898's A3):
-  `queried <= bound` is vacuous on a small file where the lib binding dominates the bound count, and
-  the discriminating form is the STRICT inequality against the probes. **A4 was blind because ONE
-  SHARED SINK CANNOT TELL A DROPPED ARM FROM A RUNNING ONE**; splitting it per arm catches it and
-  also buys the assertion that matters most — the filter is a SUPERSET of the map, so it can never
-  sink less, which IS the proof-of-absence property and is what A6 exists to test.
-
-- **(G) AND THE DRIVER CALLED A BLIND ARM A COMPILE ERROR.** Gradle prints `N tests completed, M
-  failed` **only when something failed**, so its ABSENCE is a green run — the first pass reported
-  that as `compile error`, a phrase that reads like infrastructure and would have buried both blind
-  arms. *A driver's verdict vocabulary needs a word for "the mistake landed and nothing noticed".*
-
-- **(H) GATES.** Suite **14,390 / 0 / 3** (+11 = exactly the new pins; baseline 14,379).
-  `cost_gate.py` **+0.00% on all 20 counters** — the expected control. `huge_methods.py --fail-over
-  0`: **0 over the limit**, 714 classes. **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`**
-  (46 each, harness 94), cross-round against round 900's captures, identical recipe — a CONTROL this
-  round, run anyway because the hooks sit on the path that decides TS2304. No wall A/B for the tenth
-  round running, and nothing to A/B.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1054,8 +1001,55 @@ MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and BUILT at 0.39%, 903 refused 
   **Caveat for any successor: the `dispatch` tier bypasses `spineEnterMask`, so that table prices the
   pre-888 regime and is blind to the lever the region already banked.**
 
-**THE SEARCH STATE, AFTER SIX CONSECUTIVE REFUSALS (rounds 903-908) — READ THIS BEFORE PICKING THE
-NEXT CANDIDATE. THE CHECKER-SIDE POOL IS NOW EMPTY.** 903 refused at 0.085%, 904 at 0.334% (14 sites TOGETHER), 905 at 0.074%, 906
+- [x] **(WARM.35) The four round-903 hot-path candidates — ALL REFUSED, round 912, AND THE QUEUE'S OWN
+  POPULATION FOR THE LARGEST OF THEM WAS A TRANSCRIBED SOURCE COMMENT.**
+  `docs/perf/round912-candidate-census.md`. Priced by census plus round 896's divide-and-refuse —
+  **no fix built, no amplifier needed**; both census processes agree to the last digit on all 22
+  counters and `mappedNodeTypeKey calls = 110,780` reproduces `cost-counters.txt`'s
+  `typeNode.bypassed` exactly, which is a second independent control. Against the stated 5,242.6 ms
+  denominator (1% = 52.4 ms, the ~17 ms floor = 0.324%):
+  **`mappedNodeTypeKey` key build — 25,987 keys of 110,780 calls = 9.36 ms = 0.179%, refused by
+  1.8x**; **`narrowTypeFromFlow`'s default-arg `NarrowFlowMemo` — 31,768 = 4.77 ms = 0.091%, by
+  3.6x**; **`collectTypeofGuardNames` &c `LinkedHashSet` — 22,798 = 1.48 ms = 0.028%, by 11.5x**;
+  **`spineOsWithAmbient` / `spineTcDispatchWithAmbient` — 2,841 = 0.28 ms = 0.005%, KILLED BY READING,
+  by 60x**. **ALL FOUR TOGETHER are 15.9 ms = 0.303%, still under the floor for ONE low-risk change.**
+  To reach 17 ms they would need **654 / 535 / 746 / 5,983 ns per operation**, against a measured
+  **15.09 ns** for a whole `HashMap` get that recursively hashes AND `equals` a 2.76-node AST subtree
+  (round 903). **DO NOT RE-RAISE ANY OF THE FOUR.** Three mechanism findings outlive the prices:
+  **(a)** the "~88 k/rebuild" this queue attached to `mappedNodeTypeKey` **was never a measurement** —
+  it is a transcribed KDoc that is itself 26% stale (real call count **110,780**) applied to the wrong
+  quantity (only **25,987**, 3.4x fewer, build a key; 76.5% exit at the foreign-file gate first), so
+  the entry was wrong in both directions at once; **(b)** candidate 3's `inline` **is not expressible
+  in Kotlin** — both wrappers hand `block` to a RECURSIVE non-inline callee, so `inline` forces
+  `noinline`, which re-materialises the lambda, i.e. a candidate can be dead on grounds of the
+  LANGUAGE before any population is counted, and reading the CALLEE rather than the wrapper is what
+  shows it; **(c)** candidate 4's obvious shared-memo fix is a **SOUNDNESS bug, not merely a small
+  prize** — `narrowTypeFromFlowCore` handles re-entrant walks at `narrowLiveDepth == 0` by design, so
+  a shared instance would be cleared under a live outer walk and a wrong serve there is a WRONG
+  NARROWED TYPE; and **34.2%** of memos outgrow 32 slots, so `clear()` is not obviously cheaper than
+  the allocation (round 899: price a container swap NET). **NEW REUSABLE CONSTANT, the allocation twin
+  of round 904's ~1.7 M map-ops bar: a pure-allocation candidate needs > 113,000 allocations/rebuild
+  at a generous 150 ns, or > 340,000 at a realistic 50 ns, to clear the ~17 ms floor** — which refuses
+  most per-node allocation candidates by arithmetic, the whole spine visiting 856,962 nodes.
+  **AND THE ONE THING THE AUDIT NEVER NOTICED, still under the floor:** `mappedNodeTypeKey` spends
+  **110,780 parent-chain climbs plus 110,780 `String`-keyed map probes (~5.5 ms)** so that 76.5% of
+  calls can answer "foreign file" — comparable to the named mechanism, and structurally required by
+  the gate; the WHOLE function at these generous rates is ~15 ms, still under the floor.
+
+**SUCCESSOR, PER THE WORK ORDER NOTE ABOVE — a refusing round must name one.** With round 908 closing
+the spine side and round 912 pricing the audit residue, **the checker-side pool is empty in the
+literal sense: nothing checker-side is left unpriced.** **The successor is the (API.\*) arc, whose
+next unchecked item is (API.3b) go-to-definition, with (API.3c) — batching a whole file's spans into
+ONE build — as the item that makes the API practical for an editor.** The remaining PERF levers are
+ARTIFACT-level and **both are gated, which a next agent must not rediscover**: (ART.1) is gated on the
+owner's RELEASE decision and not on engineering (`native.yml` already builds Oracle + PGO and verifies
+byte-identity), and (ART.2) is gated on a **CRaC JDK that is NO LONGER INSTALLED on this box**
+(`/usr/lib/jvm` holds Zulu 26 and OpenJDK 25; `~/jdks` holds 17 and 21 — none of them a CRaC build), so
+neither its `afterRestore` cwd fix nor a re-measurement can be compiled or verified locally.
+
+**THE SEARCH STATE, AFTER SIX CONSECUTIVE REFUSALS (rounds 903-908), AMENDED ROUND 912 — READ THIS
+BEFORE PICKING THE NEXT CANDIDATE. THE CHECKER-SIDE POOL IS NOW EMPTY, AND SINCE ROUND 912 IT IS EMPTY
+OF UNPRICED CANDIDATES TOO.** 903 refused at 0.085%, 904 at 0.334% (14 sites TOGETHER), 905 at 0.074%, 906
 measured a REGRESSION and closed a whole direction, 907 refused by census and closed a family. **Every
 candidate ranked off the JFR profile in this arc has come in 2-21x over when measured — nine of ten
 in the recorded scoreboard, six of six this session.** Meanwhile 61% of the warm rebuild is
@@ -1088,29 +1082,19 @@ MAGNITUDE LARGER THAN ANYTHING LEFT HERE.** Both are already measured, not specu
   round 873's bug one layer down — so a CRaC CLI must re-install the real cwd through
   `SystemVfs.workingDirectory` in an `afterRestore` hook, exactly as `CompileServer` already does per
   request. Unmeasured risk: the 340 MB image was page-cache-hot in every restore taken so far.
+  **CORRECTED round 912 — AND THIS IS ALSO A LOCAL-TOOLING BLOCK, NOT ONLY A CODE ONE: the CRaC JDK
+  IS NO LONGER INSTALLED ON THIS BOX.** `/usr/lib/jvm` holds Zulu 26 and OpenJDK 25 and `~/jdks` holds
+  17 and 21 — none of them a CRaC build — so neither the `afterRestore` fix nor a re-measurement can
+  be compiled or verified locally; it needs a Zulu CRaC install (or CI) first. Do not rediscover this
+  by writing the hook and finding nothing to run it on.
 
-**AND THE UNPRICED CHECKER CANDIDATES FROM ROUND 903's HOT-PATH AUDIT**, each with a named mechanism
-and no measurement — every one needs the build-free population step FIRST, and the record above says
-to expect them to come in small: `mappedNodeTypeKey` (`Checker.kt:104288`) builds a `StringBuilder` +
-two `sortedBy` copies + a `String` + a key object per bypassed resolution (~88 k/rebuild) purely to be
-a map key; `collectTypeofGuardNames` &c allocate a `LinkedHashSet` unconditionally where the caller
-only asks `isNotEmpty()`, then `Set.plus` copies both operands again (`Checker.kt:54541`-`54572`);
-`spineOsWithAmbient` (`:18209`) and `spineTcDispatchWithAmbient` (`:66469`) are closure-taking and NOT
-`inline` on a measured-hot path; `narrowTypeFromFlow`'s `memo: NarrowFlowMemo = NarrowFlowMemo()`
-default allocates through the `$default` bridge at every call site that omits it.
+**THE ROUND-903 HOT-PATH AUDIT'S FOUR UNPRICED CANDIDATES ARE NOW PRICED AND ALL FOUR ARE REFUSED —
+see (WARM.35) above, and do not re-raise them from this block's former wording** (both copies of it
+are collapsed into that entry; the record it stood on, "~88 k/rebuild", was a transcribed source
+comment rather than a measurement).
 
-**CLOSED THIS ROUND, DO NOT RE-RAISE** (round 903, `docs/perf/type-node-key-price.md`): the
+**CLOSED IN ROUND 903, DO NOT RE-RAISE** (round 903, `docs/perf/type-node-key-price.md`): the
 `nodeTypes` deep AST-value key, **refused at 0.085%** — its premium over a `(file, nodeId)`
 `LongKeyMap` is 12.98 ns over 354,131 ops = 4.60 ms, and `A - B` is an UPPER bound. Round 896's
 `nodeTypeResolutionInProgress` sentinel falls with it at 1.54 ms. The JFR row's other owner is
 `isPerFileDependentRefNode` at 3.70 ms; family 9.04 ms against a 57.1 ms row.
-
-**ALSO RECORDED, UNPRICED, from the round-903 hot-path audit** (candidates with a named mechanism but
-no measurement — each needs the build-free population step first): `mappedNodeTypeKey`
-(`Checker.kt:104288`) builds a `StringBuilder` + two `sortedBy` copies + a `String` + a key object per
-bypassed resolution (~88 k/rebuild) purely to be a map key; `collectTypeofGuardNames` &c allocate a
-`LinkedHashSet` unconditionally where the caller only asks `isNotEmpty()`, then `Set.plus` copies both
-operands again (`Checker.kt:54541`-`54572`); `spineOsWithAmbient` (`:18209`) and
-`spineTcDispatchWithAmbient` (`:66469`) are closure-taking and NOT `inline` on a measured-hot path;
-`narrowTypeFromFlow`'s `memo: NarrowFlowMemo = NarrowFlowMemo()` default allocates through the
-`$default` bridge at every call site that omits it.

@@ -1,3 +1,150 @@
+**Round 902 (2026-08-12) — (WARM.29): ROUND 901's SUCCESSOR — THE PARALLEL-ARRAY CONTAINER IT
+PRICED AT 0.41-0.47% — IS **REFUSED, AND IT IS A REGRESSION**: MEASURED, IT COSTS **+13.75 ns PER
+PROBE = −10.1 ms = −0.19%**. THE ESTIMATE WAS NOT OPTIMISTIC, IT WAS COMPUTED OVER THE WRONG
+POPULATION: **A LEVEL IS SCANNED ONCE PER *PROBE*, NOT ONCE PER *EXISTENCE*, AND THE TWO MEANS
+DIFFER BY 193x** (1.51 own symbols against **290.94**).**
+
+No production behaviour changed; the round lands an instrument and a refusal. `docs/perf/lex-level-scan-price.md`.
+
+- **(A) THE ROUND DID WHAT ROUND 901 SAID TO DO, AND THAT IS WHAT KILLED THE CANDIDATE.** Round 901
+  refused a filter at 0.26% and named a successor — "replace the per-scope `HashMap` with a
+  parallel-array linear scan (map fallback above ~8), 794,251 probes at ~3-6 ns instead of 33-37,
+  ~22-25 ms = 0.41-0.47%" — then explicitly did **not** build it, because that rate was ESTIMATED
+  and *the next instrument is a third `--lexLevelAmp` arm, not a fix*. Two arms were added (an
+  unconditional scan and the HYBRID actually proposed). **Had the round trusted the estimate it would
+  have shipped a 0.19% regression behind a container change touching a binder-OUTPUT type.**
+
+- **(B) A SCOPE POPULATION IS NOT A PROBE POPULATION — ROUND 890's LAW, ONE FAMILY OVER.** Round 901
+  priced the scan off `lexBoundHistogram`, which counts each `LexicalScope` **once**: `15270 8381
+  3748 …`, 46.7% empty, mean **1.51**. Counting the same scopes once **per real probe** gives `0
+  166388 101041 62112 44319 35255 28750 22145 15900 261681`, mean **290.94**, **212.12 scan steps per
+  probe**. The unresolved-names ascent walks outwards, so it reaches the big outer levels on every
+  walk: **35.5% of probes land on levels averaging 815 symbols**, and those alone are 213.2 M of the
+  214.6 M symbols a scan would traverse per rebuild. *The cost of a scan is weighted by the probes;
+  the cost of an allocation is weighted by the scopes. Round 901 measured the second and priced the
+  first.*
+
+- **(C) THE MEASUREMENT, WITH ITS FALSIFIER AND ITS CROSS-ROUND CONTROL.** Four arms under one
+  timestamp pair each, cyclically rotated; `r = 4` and `r = 16`, two runs each, ABBA at the run level.
+  Warm slopes **MAP 6.00 / FILTER 0.96 / SCAN 709.2 / HYBRID 7.42 ns per rep**; at `r = 1`, where the
+  boundary cancels between arms, **the unconditional scan is +1,046 ns against the map and the hybrid
+  is +13.75 ns**. Sink an exact 4x between the two `r` (nothing elided), scan and hybrid sinks EQUAL
+  to the map's at both (the arms answer the same question), hybrid branch split 475,910/261,681
+  matching the histogram to the unit. Round 901's two arms reproduce — MAP warm slope 6.00 vs 6.4,
+  FILTER 0.96 vs 1.17, map-minus-filter first probe 28.9 ns vs 33-37 and the JFR row's 36.6.
+
+- **(D) AND NO THRESHOLD RESCUES IT, WHICH IS THE STRONGER HALF.** The hybrid's scanned levels
+  average **2.86** entries and it still loses, for two reasons that are not tuning parameters: the
+  35.5% that fall back pay the array load, the null test and the length test **and then the whole map
+  probe**; and 2.86 elements is 2.86 `String` dereferences to scattered objects against one cached
+  hash and one `Node`. **Even if the replacement were FREE, the whole <=8 population is 13.8-17.6 ms =
+  0.25-0.32%** — straddling round 897's 0.31% refusal floor. The arithmetic is closed before an
+  implementation is chosen. `lexLevelHasName` is now CLOSED as a *container* question: both its levers
+  are measured and both refused, the filter at +0.26% and the container at **−0.19%**.
+
+- **(E) THE ABLATION — 6 ARMS, ALL DISCRIMINATE, AND TWO WERE **DEAD**, NOT BLIND.** B1 (scan arm
+  dropped) 2 pins, B2 (hybrid dropped) 2, B3 (scan stops one short) 1 — *a strict subset of B1,
+  recorded not dressed up*, B4 (array built from `symbols` **plus** `existing`) 3 **unique**, B5
+  (histogram de-duplicated per scope — round 901's population injected deliberately) 2 **unique**, B6
+  (size recorded as 1) 2 **unique**. **B4 and B5 read ALL PINS GREEN on the first pass and neither was
+  a blind pin: both edits changed nothing.** B5 guarded on `lexScopes.contains(l)`, always true
+  because `lexLevelHasName` calls `lexScope(l)` two lines above `lexAmp`; B4 polluted the array with
+  `existing` keys, but the SourceFile root is the only level carrying an `existing` table past the
+  untrusted-owner rule and the fixture's root bound nothing, so no amplified scope had one.
+  ***Round 855 needs the sharper form: `git diff --shortstat` proves the EDIT landed, never that it
+  DOES anything — and in a driver's output a dead arm and a blind pin are the same line.***
+
+- **(F) THREE PIN SPLITS IN ONE ROUND, ALL THE SAME LESSON.** The re-weighting pin first compared
+  against `lexScopeBoundKeys` and failed in the full suite at 80 against 586 — the bound count is
+  lib-dominated on any small fixture (round 898's A3 / round 901's A2 for the third time in four
+  rounds). The size census then began as ONE method, so B5 and B6 failed the same lone assertion; and
+  its consistency assertion, first written against the CALL count, fired under both defects and
+  separated neither. **An assertion that fires for two causes separates neither.**
+
+- **(G) GATES.** Suite **14,396 / 0 / 3** (+6 = exactly the new pins; baseline 14,390).
+  `cost_gate.py` **+0.00% on all 20 counters** — the expected control for a change that adds census
+  hooks and one always-null field. `huge_methods.py --fail-over 0`: **0 over the limit**, 714 classes.
+  **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`** (46 each, harness 94), cross-round
+  against round 901's captures, identical recipe — a control, run anyway because the hooks sit on the
+  path that decides TS2304. **No wall A/B for the eleventh round running**, and nothing to A/B.
+
+**Round 901 (2026-08-12) — (WARM.28): ROUND 899's LAST UNREFUTED CANDIDATE, `lexLevelHasName`, IS
+**REAL — TWO INDEPENDENT INSTRUMENTS AGREE ON ITS RATE TO 0.5%** — AND IS **REFUSED AT ~14 ms
+(0.26%)**. THE CENSUS THAT PRICED IT FOUND THE ROW'S ACTUAL CAUSE: **32,693 `HashMap`s HOLDING 47,490
+KEYS BETWEEN THEM, 46.7% OF THEM EMPTY** — WORTH ~0.45%, WHICH THE FILTER WOULD HAVE FORECLOSED.**
+
+Priced BEFORE a line of fix, one instrument, no production behaviour change.
+`docs/perf/lex-level-probe-price.md`.
+
+- **(A) THE POPULATION IS EXACTLY WHAT ROUND 899 DERIVED, AND THE DERIVATION STILL COULD NOT HAVE
+  DECIDED IT.** **1,024,959 calls** against the predicted ~1.0 M. But **271,684 of the 1,009,275
+  probe-path calls cost NOTHING**: `HashMap.getNode` reads `table` BEFORE it hashes the key, and a
+  `mutableMapOf()` that was never written keeps `table == null`, so an empty level answers with a
+  null check and a return. *Round 898's law one level down — an operation that short-circuits before
+  it does anything is not one of the operations you divide by.* A census counting probes alone would
+  have manufactured 7-13 ms of prize out of free work.
+
+- **(B) THE ROW SURVIVES ITS ARITHMETIC, AND THEN SURVIVES A SECOND INSTRUMENT.** 29.8 ms over
+  **813,571 REAL probes = 36.6 ns**, inside the 20-50 ns band — the second row in this arc (after
+  round 900's candidate (5)) to pass, against 8 of round 894's 9 and 1 of round 899's 6 that did not.
+  But that band was measured on `perFileScope`, whose keys are file PATHS in a populated table, and
+  the mean queried level holds **1.5** entries, so the prior does not transfer (round 789).
+  `--lexLevelAmp` measures it: **MAP warm slope 6.4 ns, FILTER warm slope 1.17 ns**, and the two-arm
+  delta extrapolates to **33-37 ns for the FIRST probe** — which is the one production performs.
+  **Two independent instruments, agreeing to 0.5%.** Sink is an exact 4x between r=4 and r=16, so
+  neither loop was elided. *The amplifier amplifies BOTH arms in one call because at equal `r` the
+  ~90 ns boundary cancels BETWEEN them, which is the only way a first-probe rate is readable at all.*
+
+- **(C) REFUSED AT ~12.6-15.8 ms (0.23-0.29%), FOR THREE REASONS IN ASCENDING WEIGHT.** 474,954
+  refusable probes, ~2.3% false positives, minus a filter test on all 737,591 real-probe calls and a
+  0.5 ms eager build. **(a)** below this arc's floor — round 897 refused a LOW-risk change at 0.31%
+  gross, 898 refused MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and built at 0.39%. **(b)**
+  `cost_gate.py` reads **+0.00% by construction** (it removes probes, not resolutions), so its only
+  defence would be a wall A/B at **a seventh of what this box settles** — round 899 resolved 1.88% in
+  SIGN alone. **(c) THE REAL ONE: a filter in front of a container is a commitment to the
+  container.** Refusing 58% of those probes banks the smaller half and removes the justification for
+  replacing the container, which is worth nearly twice as much.
+
+- **(D) WHAT THE ROUND DID *NOT* HAVE TO WORRY ABOUT, RECORDED BECAUSE IT WAS THE FLAGGED RISK.** The
+  filter would sit BELOW INV.4(c)(ii)'s three load-bearing rules and guard ONE map probe whose answer
+  it proves — not the function's verdict — so the untrusted-level, non-head-fn and root-exclusion
+  rules are untouched by construction; and `LexicalScope.symbols` has **exactly one writer in the
+  repo** (`Binder.kt` `declareLexical`), so a mask built at the end of `bindLexicalScopes` cannot go
+  stale. **The soundness argument was fine. The number was not.**
+
+- **(E) THE SUCCESSOR, PRICED FROM THIS ROUND'S OWN CENSUS.** Bound scopes by own-symbol count:
+  `15270 8381 3748 1907 1171 768 456 394 174 424` — **46.7% hold ZERO** (an allocated `LinkedHashMap`
+  that never receives a key), 93.2% hold <=4, **98.7% hold <=8**, tail 424 scopes. Replacing the
+  per-scope `HashMap` with a parallel-array linear scan (map fallback above ~8) serves **794,251 real
+  probes** across the three families at ~3-6 ns instead of 33-37: **~22-25 ms = 0.41-0.47%**, which
+  clears every floor this arc has used. One writer, five readers (one audit-only). **NOT built: the
+  array scan's own rate is ESTIMATED, and the next instrument is a third `--lexLevelAmp` arm, not a
+  fix** (CLAUDE.md's first law). The 32,693 deleted allocations are recorded UNPRICED — an allocation
+  count is not a cost (round 801).
+
+- **(F) THE ABLATION — 6 ARMS, ALL DISCRIMINATE, FOUR UNIQUELY, AND TWO WERE BLIND FIRST TIME.** A1
+  (EMPTY/REAL collapsed) 1 pin, A2 (dedup dropped) 1 **unique**, A3 (`real` frozen false) 3
+  **unique**, A4 (map arm dropped) 1, A5 (hook outside its guard) 1 **unique**, A6 (mask one bit off)
+  2 **unique**. A1 and A4 are caught but NOT separated — strict subsets — stated, not dressed up
+  (round 807). **A2 was blind because the FIXTURE could not express the invariant** (round 898's A3):
+  `queried <= bound` is vacuous on a small file where the lib binding dominates the bound count, and
+  the discriminating form is the STRICT inequality against the probes. **A4 was blind because ONE
+  SHARED SINK CANNOT TELL A DROPPED ARM FROM A RUNNING ONE**; splitting it per arm catches it and
+  also buys the assertion that matters most — the filter is a SUPERSET of the map, so it can never
+  sink less, which IS the proof-of-absence property and is what A6 exists to test.
+
+- **(G) AND THE DRIVER CALLED A BLIND ARM A COMPILE ERROR.** Gradle prints `N tests completed, M
+  failed` **only when something failed**, so its ABSENCE is a green run — the first pass reported
+  that as `compile error`, a phrase that reads like infrastructure and would have buried both blind
+  arms. *A driver's verdict vocabulary needs a word for "the mistake landed and nothing noticed".*
+
+- **(H) GATES.** Suite **14,390 / 0 / 3** (+11 = exactly the new pins; baseline 14,379).
+  `cost_gate.py` **+0.00% on all 20 counters** — the expected control. `huge_methods.py --fail-over
+  0`: **0 over the limit**, 714 classes. **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`**
+  (46 each, harness 94), cross-round against round 900's captures, identical recipe — a CONTROL this
+  round, run anyway because the hooks sit on the path that decides TS2304. No wall A/B for the tenth
+  round running, and nothing to A/B.
+
 **Round 900 (2026-08-12) — (WARM.27): ROUND 899's CANDIDATE (5) IS THE **FIRST JFR ROW IN THIS
 ARC WHOSE ARITHMETIC CONFIRMS IT** — 767,521 inserts at **28.1 ns** each — AND THE COUNTER THAT
 CONFIRMED IT ALSO FOUND WHY THEY EXIST: **A PROBE ARGUMENT HAD BEEN MATERIALISING ROUND 801's LAZY
