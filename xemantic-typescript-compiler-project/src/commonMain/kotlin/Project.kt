@@ -81,6 +81,14 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * in place rather than asked for afterwards. See those methods, and
  * `TypeCaptureRequest` in the core for the measurement that decided it.
  *
+ * Because a query IS a build, the two single-caret members are the WRONG default
+ * for an interactive host: describing one caret both ways is two compiles and
+ * describing a screenful is dozens. [semanticsAt] takes many offsets and
+ * [fileSemantics] takes a whole file, and each is ONE compile — the positions go in
+ * as a set and the checker records at all of them during the single walk it was
+ * going to perform anyway. Reach for those; the single-caret pair remains for the
+ * host that genuinely has one caret and one question.
+ *
  * ## What this class is NOT
  *
  * It is not a language service: there are no completions, no find-references, and
@@ -485,6 +493,154 @@ public class Project private constructor(
             ?.map { DefinitionLocation(it.fileName, it.start, it.length, it.kind) }
             ?: emptyList()
     }
+
+    /**
+     * (API.3c) Everything the compiler knows about the nodes at [offsets] in
+     * [fileName] — every hover answer and every go-to-definition answer — in ONE
+     * build.
+     *
+     * THIS IS THE MEMBER AN EDITOR SHOULD USE. [quickInfoAt] and [definitionsAt]
+     * each build, so describing one caret both ways costs two compiles and
+     * describing twenty carets costs forty; this costs one, whatever the count,
+     * because the compiler takes a SET of spans and records at all of them during
+     * the single walk it was going to perform anyway. `ProjectSemanticsTest` pins
+     * that as a COUNT of builds rather than as a duration.
+     *
+     * ## What comes back, and in what order
+     *
+     * One [SemanticInfo] per DISTINCT span, sorted by `(start, end)` ascending.
+     * Distinct span, not distinct offset: several carets inside one identifier name
+     * the same node and collapse to one entry, and an offset that lands in no node
+     * at all contributes none. So the result is neither indexed by nor the same
+     * length as [offsets], and a caller maps back by containment — `start <= offset
+     * < end` — which is the same half-open rule [nodeInfoAt] answers under.
+     *
+     * The order is imposed here rather than inherited: the compiler returns its
+     * answers in the order its walk happened to reach the nodes, which is an
+     * implementation property and would silently reorder under any change to the
+     * check spine.
+     *
+     * An EMPTY [offsets] — or one where nothing resolves — answers an empty list
+     * and DOES NOT BUILD. A caller that asks about nothing must not pay for a
+     * compile.
+     *
+     * ## The caveats are [quickInfoAt]'s, unchanged
+     *
+     * It builds, that build is not the [diagnostics] build and does not become it,
+     * and it reads the overlay. Batching changes the count of compiles, nothing
+     * about what one compile is.
+     */
+    public fun semanticsAt(fileName: String, offsets: List<Int>): List<SemanticInfo> {
+        val index = sourceIndexOf(fileName) ?: return emptyList()
+        val nodes = ArrayList<Node>(offsets.size)
+        for (offset in offsets) index.pathAt(offset).lastOrNull()?.let { nodes.add(it) }
+        return semanticsOf(fileName, index, nodes)
+    }
+
+    /**
+     * (API.3c) Everything the compiler knows about every IDENTIFIER in [fileName],
+     * in ONE build.
+     *
+     * The whole-file form of [semanticsAt], expressed in terms of it — same value,
+     * same ordering, same single build — for the two host features that want a file
+     * rather than a caret: semantic highlighting, which has to draw every name at
+     * once, and hover prefetch, which wants the answers before the user asks.
+     *
+     * ## The candidate set is exactly the identifiers
+     *
+     * Every `Identifier` node, member names included; no keywords, no punctuation,
+     * no literals, no larger expressions. [SourceIndex.identifiers] carries the
+     * argument for that boundary. A file with none of them — an empty buffer, a file
+     * of comments — answers an empty list without building.
+     *
+     * ## Cost, stated plainly
+     *
+     * ONE compile, plus the checker typing each of those identifiers. That is
+     * linear in the file and it is not free: this is the member to call when a file
+     * is opened or saved, not the one to call per keystroke. The compile itself
+     * dominates, and it is the compile this API cannot avoid ([Project]'s own KDoc
+     * says why there is no incremental reuse to lean on).
+     */
+    public fun fileSemantics(fileName: String): List<SemanticInfo> {
+        val index = sourceIndexOf(fileName) ?: return emptyList()
+        return semanticsOf(fileName, index, index.identifiers())
+    }
+
+    /**
+     * The one build both semantic sweeps perform, and the assembly of its answers.
+     *
+     * [nodes] is deduplicated HERE, by raw span and first-sighting, so neither
+     * caller has to: two carets inside one identifier are one question, and the raw
+     * `(pos, end)` pair is the identity the capture speaks (`TypeCaptureSpan` —
+     * `Node.end` is the end of the FOLLOWING token, so it is an identity and never
+     * an extent).
+     *
+     * Note what is NOT done here: the single-caret [quickInfoAt] and [definitionsAt]
+     * are deliberately not re-expressed on top of this. The ~10 lines they duplicate
+     * buy an INDEPENDENT oracle — `ProjectSemanticsTest` asserts the batch agrees
+     * with them span for span, and that assertion would be a tautology if both sides
+     * ran this function. Drift between the two paths is exactly what it fails on.
+     */
+    private fun semanticsOf(
+        fileName: String,
+        index: SourceIndex,
+        nodes: Collection<Node>,
+    ): List<SemanticInfo> {
+        val distinct = LinkedHashMap<Long, Node>(nodes.size)
+        for (node in nodes) distinct.getOrPut(spanKeyOf(node)) { node }
+        if (distinct.isEmpty()) return emptyList()
+        val key = keyOf(fileName)
+        val result = ProjectCompiler(overlay).build(
+            projectPath,
+            noEmit = true,
+            typeCapture = TypeCaptureRequest(
+                distinct.values.map { TypeCaptureSpan(key, it.pos, it.end) },
+            ),
+        )
+        val types = HashMap<Long, String>(result.capturedTypes.size)
+        for (captured in result.capturedTypes) {
+            if (captured.fileName == key) types[packSpan(captured.start, captured.end)] = captured.typeText
+        }
+        val definitions = HashMap<Long, List<DefinitionLocation>>(result.capturedDefinitions.size)
+        for (captured in result.capturedDefinitions) {
+            if (captured.fileName != key) continue
+            definitions[packSpan(captured.start, captured.end)] = captured.locations.map {
+                DefinitionLocation(it.fileName, it.start, it.length, it.kind)
+            }
+        }
+        return distinct.values.map { node ->
+            val spanKey = spanKeyOf(node)
+            val end = index.realEndOf(node)
+            SemanticInfo(
+                start = node.pos,
+                end = end,
+                kind = node.kind.name,
+                quickInfo = types[spanKey]?.let { typeText ->
+                    QuickInfo(node.kind.name, typeText, node.pos, end)
+                },
+                definitions = definitions[spanKey] ?: emptyList(),
+            )
+        }.sortedWith(compareBy({ it.start }, { it.end }))
+    }
+
+    /** [node]'s RAW `(pos, end)` identity as one key — see [semanticsOf]. */
+    private fun spanKeyOf(node: Node): Long = packSpan(node.pos, node.end)
+
+    /**
+     * `(start, end)` as one `Long`, for matching a captured answer back to the node
+     * it was asked about.
+     *
+     * FINALIZED by an odd multiply, for round 889's reason and not as a ritual: a
+     * plain `(start shl 32) or end` hashes to `start xor end` under
+     * `Long.hashCode`, and a node's `end` is its `start` plus a token or two, so a
+     * whole file's spans would pile onto a few dozen buckets of the maps below. The
+     * compiler's own copy of this key is finalized with the same constant
+     * (`packIdPair`), which is `internal` to that module and therefore restated
+     * rather than shared. Sound for the same two reasons: nothing unpacks the key
+     * and nothing iterates the maps.
+     */
+    private fun packSpan(start: Int, end: Int): Long =
+        ((start.toLong() shl 32) or (end.toLong() and 0xFFFFFFFFL)) * -0x61c8864680b583ebL
 
     /**
      * Drops whatever [key]'s new content invalidates.

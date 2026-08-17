@@ -4,10 +4,11 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 911, 2026-08-17).** Landed: diagnostics, in-memory edits,
-line/offset conversion, syntactic node lookup, and quick info (hover).
-Not yet: go-to-definition `(API.3b)`, batched capture `(API.3c)`, completions
-`(API.4)`. See the `(API.*)` items in `PLAN-PHASE-5.md`.
+**Status (round 914, 2026-08-17).** Landed: diagnostics, in-memory edits,
+line/offset conversion, syntactic node lookup, quick info (hover),
+go-to-definition, and **batched semantics** — many positions, or a whole file, in
+one build. Not yet: member go-to-definition, completions `(API.4)`. See the
+`(API.*)` items in `PLAN-PHASE-5.md`.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -55,8 +56,14 @@ project.diagnostics().forEach { d ->
 project.updateFile("/path/to/my-app/src/a.ts", editorBuffer)
 
 project.diagnostics("/path/to/my-app/src/a.ts")          // just this file
+
+// one caret, one question — one compile each
 project.quickInfoAt("/path/to/my-app/src/a.ts", 142)     // hover
 project.definitionsAt("/path/to/my-app/src/a.ts", 142)   // go to definition
+
+// many carets, both questions — ONE compile (§ 10; this is the one to reach for)
+project.semanticsAt("/path/to/my-app/src/a.ts", listOf(142, 190, 240))
+project.fileSemantics("/path/to/my-app/src/a.ts")
 
 project.close()
 ```
@@ -84,6 +91,8 @@ you call them.
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
 | `quickInfoAt` | **full build, every call** | not cached today — see below |
 | `definitionsAt` | **full build, every call** | same mechanism, same caveat |
+| `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
+| `fileSemantics(f)` | **ONE full build** | every identifier in the file |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -101,13 +110,19 @@ Two consequences for a host:
 - **Debounce, do not poll.** Re-asking `diagnostics()` per keystroke costs a
   compile per keystroke. Ask on idle.
 - **`quickInfoAt` and `definitionsAt` build every call and do not reuse the
-  build** — and asking both about one caret is two compiles today. That is
-  deliberate rather than an oversight: a capture build types nodes the checker
-  had no reason to type, so its diagnostics are not interchangeable with a plain
-  build's and reusing it would quietly change what `diagnostics()` reports. The
-  fix is batching — the underlying request already accepts a *set* of spans, so
-  "semantic info for this whole file" is one compile rather than N. Exposing it
-  is `(API.3c)`, and it is the item that makes hover practical for an editor.
+  build** — so asking both about one caret is two compiles. That is deliberate
+  rather than an oversight: a capture build types nodes the checker had no reason
+  to type, so its diagnostics are not interchangeable with a plain build's and
+  reusing it would quietly change what `diagnostics()` reports.
+- **So batch.** `semanticsAt` takes many offsets and `fileSemantics` takes a
+  whole file, and each is **one** compile — the positions go in as a set and the
+  checker records at all of them during the single walk it was going to perform
+  anyway. Measured on a 34-identifier fixture: **one sweep 100 ms, the same 34
+  carets one at a time 3,373 ms (34x), and 6,209 ms (62x) when each is asked both
+  ways.** The ratio is the point, not the milliseconds — it is the number of
+  compiles, so it holds at any project size. Reach for the batch by default and
+  keep the single-caret pair for when you genuinely have one caret and one
+  question.
 
 ## 4. Diagnostics
 
@@ -329,7 +344,69 @@ The body-local row is the dangerous one: not a coarser answer, a *different
 declaration* — an editor would send the user to the wrong line and look like it
 worked.
 
-## 10. Rules that apply to everything
+## 10. Semantic queries in bulk — the one an editor should use
+
+```kotlin
+val many: List<SemanticInfo> = project.semanticsAt(path, listOf(142, 190, 240))
+val whole: List<SemanticInfo> = project.fileSemantics(path)
+// SemanticInfo(start: Int, end: Int, kind: String,
+//              quickInfo: QuickInfo?, definitions: List<DefinitionLocation>)
+```
+
+Both are **one compile**, whatever the number of positions. The reason is that a
+capture was always a *set*: the compiler is handed the spans before the build and
+records the type and the definition at each of them during the single walk it was
+going to perform anyway. `quickInfoAt` and `definitionsAt` are the degenerate
+one-span case, and paying a compile per caret is the thing this replaces.
+
+Measured on a 34-identifier fixture, warm:
+
+| what | compiles | wall |
+|---|---|---|
+| `fileSemantics` — all 34 spans | 1 | **100 ms** |
+| `quickInfoAt` x 34 | 34 | 3,373 ms |
+| `quickInfoAt` + `definitionsAt` x 34 | 68 | 6,209 ms |
+
+The ratios (**34x** and **62x**) are what transfers to your project; the
+milliseconds are a property of a tiny fixture. It is a count of compiles, so the
+saving does not shrink as the project grows.
+
+**What comes back.** One `SemanticInfo` per **distinct span**, sorted by
+`(start, end)` ascending — not one per offset. Several carets inside one
+identifier are one question and collapse to one entry, and an offset that lands
+in no node contributes none, so the result is neither indexed by nor the same
+length as your input. Map back by containment, under the same half-open rule as
+everywhere else:
+
+```kotlin
+val entry = many.firstOrNull { offset >= it.start && offset < it.end }
+```
+
+The ordering is imposed by the API rather than inherited from the compiler, whose
+answer order is the order its walk happened to reach the nodes.
+
+**`quickInfo` may be null and `definitions` may be empty** — independently. A
+member name has a type and, deliberately, no definition (§ 9). An entry with
+neither is still returned: "there is a node here and the compiler had nothing to
+say about it" is a different answer from "there is nothing here", and only your
+UI knows which to draw.
+
+**What `fileSemantics` enumerates: every `Identifier`, and nothing else.** No
+keywords, no punctuation, no literals, no larger expressions. Member names are
+included — they are identifiers and they are typed. The rule is deliberately one
+sentence long, because the alternative is a taste-driven list that drifts; if you
+want the type of a larger expression, ask `semanticsAt` for the caret you
+actually have.
+
+**An empty request does not build.** `semanticsAt(f, emptyList())`, a list of
+offsets that all land outside every node, and a file with no identifiers each
+answer an empty list without compiling.
+
+**The caveats are hover's, unchanged.** It builds, that build is not the
+`diagnostics()` build and never becomes it, and it reads your overlay. Batching
+changes how many compiles you pay for, nothing about what one compile is.
+
+## 11. Rules that apply to everything
 
 **Paths.** Every path crossing the API is normalized and made absolute through
 the backing `Vfs` before it is used as a key. Pass absolute paths and you never
@@ -359,28 +436,58 @@ see `TestVfs.kt`.
 > assertion then passes vacuously — as an empty diagnostic list. Give such a
 > test a negative control.
 
-## 11. A minimal hover host
+## 12. A minimal hover host
+
+The shape that matters: **one compile per idle, not one per caret.** The host
+sweeps a file when it settles and answers every hover, and every go-to-definition,
+out of that one build's answers.
 
 ```kotlin
 class HoverHost(projectPath: String) {
     private val project = Project.open(projectPath)
 
+    /** The last sweep of each file, dropped the moment that file changes. */
+    private val swept = HashMap<String, List<SemanticInfo>>()
+
     fun didChange(path: String, text: String) {
         project.updateFile(path, text)          // free; the next query rebuilds
+        swept.remove(path)                      // the answers describe old text
+    }
+
+    /** Call on idle / on save — ONE compile, and it answers the whole file. */
+    fun didSettle(path: String) {
+        swept[path] = project.fileSemantics(path)
     }
 
     /** LSP is 0-based, this API is 1-based — convert once, here. */
-    fun hover(path: String, line0: Int, char0: Int): String? {
+    private fun offsetOf(path: String, line0: Int, char0: Int): Int? =
         // A client one keystroke ahead of us can send a line we do not have.
-        val offset = try {
-            project.offsetAt(path, line0 + 1, char0 + 1) ?: return null
+        try {
+            project.offsetAt(path, line0 + 1, char0 + 1)
         } catch (_: IllegalArgumentException) {
-            return null
+            null
         }
-        val info = project.quickInfoAt(path, offset)
-            ?: project.quickInfoAt(path, offset - 1)   // the touch case: `abc|`
-            ?: return null
-        return info.displayString
+
+    private fun at(path: String, offset: Int): SemanticInfo? {
+        val entries = swept[path] ?: return null
+        // The touch case: `abc|` is outside `abc`, so try one to the left too.
+        return entries.firstOrNull { offset >= it.start && offset < it.end }
+            ?: entries.firstOrNull { offset - 1 >= it.start && offset - 1 < it.end }
+    }
+
+    fun hover(path: String, line0: Int, char0: Int): String? {
+        val offset = offsetOf(path, line0, char0) ?: return null
+        // Free on a hit. On a miss — the user hovered before the file settled —
+        // fall back to the single-caret call, which costs a compile.
+        return at(path, offset)?.quickInfo?.displayString
+            ?: project.quickInfoAt(path, offset)?.displayString
+            ?: project.quickInfoAt(path, offset - 1)?.displayString
+    }
+
+    fun definition(path: String, line0: Int, char0: Int): List<DefinitionLocation> {
+        val offset = offsetOf(path, line0, char0) ?: return emptyList()
+        at(path, offset)?.let { return it.definitions }
+        return project.definitionsAt(path, offset)
     }
 
     fun diagnostics(path: String) = project.diagnostics(path)   // call on idle, not per keystroke
@@ -389,11 +496,13 @@ class HoverHost(projectPath: String) {
 }
 ```
 
-## 12. What is coming, and what would change
+Note what the cache is allowed to be: a plain map keyed by path and dropped on
+edit. There is nothing to invalidate more cleverly, because a `SemanticInfo` is a
+value — it holds no AST, no `Symbol` and no `Type`, so a stale entry describes
+stale text and nothing worse.
 
-- **`(API.3c)` batched capture** — one build answering many positions, so a
-  host stops paying a compile per caret. Purely additive; `quickInfoAt` and
-  `definitionsAt` keep working.
+## 13. What is coming, and what would change
+
 - **member go-to-definition** — `definitionsAt` refuses a member name today
   (§ 9); answering it needs the receiver's type resolved and its property
   symbol found, in the same capture hook.

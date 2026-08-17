@@ -1,3 +1,152 @@
+**Round 904 (2026-08-14) — (WARM.31): THE WHOLE BOXED-PRIMITIVE-KEY FAMILY IS **REFUSED** — 14 SITES,
+**2,698,745 OPERATIONS PER REBUILD, A 6.58 ns PREMIUM, 17.7 ms = 0.334% FOR ALL OF THEM TOGETHER** AND
+**0.064% FOR THE LARGEST SINGLE ONE**. AND THE 29.4 ms THAT RANKED IT WAS ONE DRAW OF A **4x-UNSTABLE**
+NUMBER: THE SAME LEAF FAMILY READS **72.9 ms AND 19.0 ms IN ROUND 899's OWN TWO DUMPS, SAME BINARY.**
+
+Priced BEFORE a line of fix; no production behaviour change. `docs/perf/boxed-primitive-key-price.md`.
+
+- **(A) THE THRESHOLD WAS COMPUTED BEFORE THE CENSUS RAN, AND IT IS WHAT CLOSED THE FAMILY.** At a
+  generous 10 ns premium against the ~17 ms floor, a single site needs **~1.7 M operations per
+  rebuild**. **The whole check spine visits 856,962 nodes** — so *every per-node memo in the compiler
+  is refused by arithmetic before any build*, and the question reduced to whether any site is driven
+  by something other than node count. None is: the largest of the fourteen is **519,478 ops = 30% of
+  the single-site threshold**.
+
+- **(B) THE CENSUS, WITH BOTH CONTROLS HITTING EXACTLY.** `--boxedKeyCensus`, deterministic, two
+  processes agreeing to the last digit. Top sites per rebuild: `importedSymbolGeneralCache` 519,478,
+  `Relation.cache` 456,660, `relationComparisonStack` 444,446 (**max live 27**), the enum caches
+  427,024, the ten spine `nodeId` memos 319,558; total **2,698,745** over 14 sites. **Site 6 is
+  exactly 2x round 900's `risgCalls` (259,739) and site 11 is >= 2x round 896's `symAdds` (24,232)** —
+  two independently-recorded populations reached by a different instrument, which is what says the
+  hooks are on the right operations.
+
+- **(C) THE `-128..127` DEFLATION DOES NOT APPLY, WHICH HAD TO BE CHECKED RATHER THAN ASSUMED.**
+  `Integer.valueOf` caches small ints, so a small-key site boxes nothing new — but ids here run to
+  millions and `nodeId`s to 275,470, and **only 0.41% of all keys fall in the cache**. The filter that
+  could have refused half the family for free refuses none of it.
+
+- **(D) TWO SITES ARE NOT REFUSED BY PRICE BUT BY *SHAPE*, WHICH IS THE PART A FUTURE "JUST MIGRATE
+  THEM ALL" PROPOSAL NEEDS.** `Binder.lexicalScopes` is **ITERATED** (`for ((_, scope) in
+  result.lexicalScopes)`), and `IntKeyMap`/`LongKeyMap` have no iterator *by design* — which is
+  exactly what makes the rounds-754/776/778 order hazard a compile error rather than a review item,
+  and is the same exemption CLAUDE.md already grants `Binder.nodeToSymbol`. And `relationComparisonStack`
+  / `relation{Source,Target}Targets` / the two in-progress sentinels are **transient add/remove stacks
+  with max live 27 / 18 / 5** — their successor is a linear array, not a map at all.
+
+- **(E) THE PREMIUM, AND THE INSTRUMENT CORRECTION IT FORCED.** Two arms, two `r`, mirrored rotation,
+  8 draws per arm: a boxed `HashMap<Long, ·>` probe is **8.53 ns**, a `LongKeyMap` probe **1.96 ns**,
+  premium **6.58 ns [4.88-8.27]**. **A SINGLE-`r` `A − B` OVER-READS THIS BY UP TO 23%** — the standing
+  advice that the timestamp boundary "cancels between the arms at equal `r`" is **false when the arms'
+  boundaries differ**, and here they do (**88.0 vs 76.1 ns**), so `A − B` reads 8.07 at `r = 8` and
+  7.07 at `r = 24` against a true 6.58. Fit `p(r) = cost + boundary/r` per ARM and difference the
+  COSTS; the two implied boundaries are then a free check on the fit, and they reproduce both measured
+  values to 0.01 ns. **Round 903's arms were already SLOPES at two `r`, so its 12.98 ns premium and its
+  refusal are unaffected** — but the two rounds together are why this is now a law rather than a note.
+
+- **(F) THE FINDING THAT REACHES BACK INTO THE RANKING ITSELF: LEAF INSTABILITY IS PER-*MECHANISM*,
+  NOT PER-ROW.** Round 868 established that LEAF attribution is unstable across processes and it is
+  always quoted about one frame (`HashMap.getNode` 9.66% vs 3.70%). Run over **round 899's own two
+  dumps — same binary, same round** — the boxed-primitive leaf FAMILY reads **72.9 ms and 19.0 ms**,
+  a **4x** disagreement, because C2 inlined `Integer.equals` into its callers in the second process.
+  **So the 29.4 ms that put this on the candidate list was one draw of a number with a 4x spread**, and
+  an aggregation that SUMS inlinable stdlib leaves inherits the instability at family scale. Minimum
+  two processes for any family share; `scripts/boxed_key_leaves.py` carries the warning in its own
+  docstring, and its stated purpose is to LOCATE an owner, never to price one.
+
+- **(G) A THIRD REUSABLE CONSTANT, AND A BAND THAT MUST NOT BE INHERITED.** `docs/perf/warm-leaf-profile.md`
+  § 33.8's "an `Integer`-keyed probe is ~15-30 ns" is **over by 1.8-3.5x**. This *strengthens* round
+  900's refusal of candidate (1) — its 84.3 ns/probe was over by **10x**, not the 3-6x recorded — and
+  it means a `LongKeyMap`/`IntKeyMap` probe is ~2 ns, now confirmed twice (rounds 903 and 904). A next
+  agent can refuse a NEW boxed-key site for free: **population x 6.58 ns**.
+
+- **(H) GATES.** Suite **14,409 -> 14,416 / 0 failures / 0 errors / 3 skipped** = exactly the 7 new
+  pins. `cost_gate.py` **+0.00% on all 20 counters** — the expected control. `huge_methods.py
+  --fail-over 0`: 0 over the limit. Build warning-clean. **The pins DISCRIMINATE**: ablating the
+  `bkPush` on the relation stack reddens exactly one pin, the one that names it, on a binary that
+  otherwise builds and passes — round 902's law applied prospectively, an arm shown REACHED rather
+  than merely applied. **No wall A/B, for the thirteenth round running, and nothing to A/B.**
+
+**Round 903 (2026-08-14) — (WARM.30): THE CANDIDATE THIS FILE AND CLAUDE.md BOTH CERTIFIED AS "THE ONE
+JFR ROW WORTH BELIEVING" IS **REFUSED AT 0.085%, AND ITS ROW IS OVER BY 6.3x** — BECAUSE THE
+PLAUSIBILITY ARGUMENT THAT ADMITTED IT APPEALED TO A MAGNITUDE NOBODY HAD MEASURED. THE RECURSION IS
+REAL AND IT IS **TWO NODES DEEP**.**
+
+Priced BEFORE a line of fix, one instrument, no production behaviour change.
+`docs/perf/type-node-key-price.md`.
+
+- **(A) THE CANDIDATE, AND THE STATUS IT HELD.** `state.nodeTypes` (`Checker.kt:166`) is a
+  `HashMap<TypeNode, Type>` keyed by the AST **value**; every concrete `TypeNode` is a `data class`
+  (139 of them in `Ast.kt`, **zero** `override fun equals`), so each probe is a recursive structural
+  hash — round 471's hazard. JFR: **57.1 ms**, the largest single map owner. Rounds 894-899 refuted
+  eight of nine JFR-ranked candidates by dividing the row by its own population; this one **passed**
+  that division at 161 ns/op, and CLAUDE.md recorded it as *"what makes that row worth believing"*.
+  **That sentence is the round's subject.** A recursive `hashCode` licenses any rate you like — the
+  check appealed to the depth of the recursion, and the depth had never been measured.
+
+- **(B) THE CENSUS DECIDED IT BEFORE THE AMPLIFIER RAN.** `--typeNodeKeyCensus`:
+  `calls 287,062 / hits 116,999 / misses 59,283 / bypassed 110,780`, **unindexed keys 0**.
+  **Probe-weighted mean key subtree: 2.7567 nodes (max 337); 73.6% of probes present a key of at most
+  TWO nodes.** At the measured 5.47 ns/node, 161 ns/op needs a **29.4**-node mean — exactly the 25-40
+  the design predicted the row would require, and **10.7x** what exists. *The row was refuted by its
+  own arithmetic the moment its population was known.*
+
+- **(C) THE AMPLIFIER, THREE ARMS, AND THE PRIZE MEASURED DIRECTLY RATHER THAN BY PROXY.** `r = 8`
+  and `r = 24`, 16 draws per `r`, two mirrored batches (round 891 — one rotation is a batch, not a
+  result). Every sink an exact multiple of `r`; no arm flat.
+
+  | arm | what it probes | ns/op |
+  |---|---|---:|
+  | A | `nodeTypes[node]` — deep hash + bucket + deep equals | **15.09** |
+  | B | the same probe against a `(file, nodeId)` `LongKeyMap` | **2.11** |
+  | C | `isPerFileDependentRefNode` — the second owner | **12.88** |
+
+  `A − B` is the deep key's premium, i.e. **the prize of the proposed fix**, not a proxy for it.
+  The map GET is amplified rather than `node.hashCode()` because a data-class hash is a pure function
+  of an immutable object and C2 may hoist it — **and the exact-multiple sink falsifier would still
+  pass**, which is the one failure mode that falsifier cannot see.
+
+- **(D) THE DECISION: REFUSED BY 3.7x.** `(A − B) x 354,131 = 4.60 ms = 0.085%` of the 5,429 ms
+  denominator, against this arc's ~0.31% (~17 ms) floor; **2.5x under it even at the most generous
+  single-draw bound** (6.77 ms = 0.125%). `A − B` is an *upper* bound — arm B's key is computed
+  outside every timestamp pair — so the refusal is certain rather than marginal. **Round 896's
+  sentinel-set candidate falls with it**: 118,566 of those ops at this premium is 1.54 ms, against
+  the 3-5 ms it was refused at on a soundness ground that no longer has to be argued.
+
+- **(E) THE CORRECTION TO THE JFR ATTRIBUTION, WHICH STANDS WHATEVER THE VERDICT — AND WHICH THE
+  ROUND FOUND BEFORE MEASURING ANYTHING.** The row has **TWO owners**, and a leaf-frame profile
+  cannot separate them: `cacheable` (`Checker.kt:104175`) calls `isPerFileDependentRefNode`
+  (`Checker.kt:99546`), *itself a recursive subtree walk over the same subtree the hash walks*, on
+  **every** call — cacheable or not. 12.88 ns x 287,062 = **3.70 ms (0.068%)**. Family total
+  **5.34 + 3.70 = 9.04 ms against a 57.1 ms row = over by 6.3x**, the ninth consecutive JFR
+  over-read and at the top of the recorded 2.1-21x band. *An instrument that had bracketed only the
+  map probe would have charged the walk to the hash and reported roughly double the prize.*
+
+- **(F) ROUND 902's LAW DOES **NOT** BITE HERE, AND THAT IS INFORMATION RATHER THAN AN EXCEPTION.**
+  Probe-weighted and object-weighted key sizes differ by **6.6%** (2.7567 vs 2.5856), not by round
+  902's 193x. The law says which weighting to *check*; it does not say which one always wins. A round
+  that assumed the probe weighting must dominate would have been right about the method and wrong
+  about this population.
+
+- **(G) WHAT THE DEEP KEY ACTUALLY BUYS, MEASURED — AND WHY IT IS NOT A LICENCE TO RE-KEY.** The
+  structural key's entire semantic effect is **130 shared probes of 176,282 (0.074%)**, read off the
+  two arms' sink difference and exactly `130 x r` at both `r` in both batches. The unit fixture had
+  *passed* an `A == B` sink equality that the real population refutes; it is now a `<=` bound with
+  the difference reported as a number. **`PerFileTypeNameCacheCollisionTest` pins the case where that
+  sharing is WRONG**, so 0.074% is the size of the benefit, not of the risk.
+
+- **(H) ARM C NEARLY SHIPPED AS A ROUND-902 DEAD ARM.** `isPerFileDependentRefNode` opens with
+  `if (multiFileModuleTypeNames.isEmpty() …) return false` — on a program without such names it
+  prices a field read while reading, in every driver output, exactly like a subtree walk. A REACHED
+  control was added *before* the number was quoted and reports **5**, so the arm is live. Round 902's
+  lesson applied one round later, prospectively rather than in the post-mortem.
+
+- **(I) GATES.** Suite **14,409 / 0 failures / 0 errors / 3 skipped** (+13 = exactly the new pins;
+  baseline 14,396). `cost_gate.py` **+0.00% on all 18 counters** — the expected control for an
+  instrument-only round (round 876). `huge_methods.py --fail-over 0`: **0 over the limit**
+  (`getTypeFromTypeNodeCore` grew and stays under; `Checker.<init>` 5,753/8,000). Build
+  warning-clean. **No wall A/B, for the twelfth round running, and nothing to A/B** — the round lands
+  an instrument and a refusal.
+
 **Round 902 (2026-08-12) — (WARM.29): ROUND 901's SUCCESSOR — THE PARALLEL-ARRAY CONTAINER IT
 PRICED AT 0.41-0.47% — IS **REFUSED, AND IT IS A REGRESSION**: MEASURED, IT COSTS **+13.75 ns PER
 PROBE = −10.1 ms = −0.19%**. THE ESTIMATE WAS NOT OPTIMISTIC, IT WAS COMPUTED OVER THE WRONG

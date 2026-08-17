@@ -213,6 +213,46 @@ internal class SourceIndex private constructor(
     }
 
     /**
+     * (API.3c) Every [SyntaxKind.Identifier] node in the file, in ascending
+     * position order — the candidate set a whole-file semantic sweep asks about.
+     *
+     * ## Why identifiers, and nothing else
+     *
+     * The rule has to be cheap to state, because the alternative is a taste-driven
+     * list that drifts. An identifier is exactly the thing that HAS a semantic
+     * answer worth asking for: it names something, so it has a type and — when it
+     * is a free name — a declaration. Punctuation and keywords name nothing;
+     * literals have a type but a trivially syntactic one; larger expressions have
+     * types a hover could show, but a caller wanting the type of `f(x)` can ask
+     * [pathAt] for the caret it actually has, and enumerating every expression node
+     * would multiply the capture set for answers nobody sweeps for.
+     *
+     * MEMBER names are included (the `p` of `o.p`, a property signature's name):
+     * they are typed, which is the sweep's primary product. Their go-to-definition
+     * answer is deliberately empty — see `CapturedDefinition` — so an entry for one
+     * carries a type and no locations, which is a truthful answer rather than a gap.
+     *
+     * ITERATIVE, exactly as [pathAt] is and for the same reason: a recursive
+     * full-tree walk is bounded by the tree's depth and this repo's corpus carries
+     * chains deep enough to crash one.
+     */
+    fun identifiers(): List<Node> {
+        val found = ArrayList<Node>()
+        val stack = ArrayList<Node>()
+        stack.add(sourceFile)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if ((node as NodeBase).kindId == NodeKind.IDENTIFIER) found.add(node)
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        // The walk order is a property of `forEachChild` and of the stack, i.e. of
+        // this implementation; the ORDER A CALLER SEES must not be. Sorted on the raw
+        // pair, which is a total order over distinct nodes.
+        found.sortWith(compareBy({ it.pos }, { it.end }))
+        return found
+    }
+
+    /**
      * The chain of nodes containing [offset], source file FIRST and the narrowest
      * node last, or empty when [offset] is in no node at all.
      *

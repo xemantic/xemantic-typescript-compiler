@@ -102,6 +102,18 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
 
     var reads: Int = 0
         private set
+
+    /**
+     * Reads per path, so a test can calibrate on ONE file rather than on the sum.
+     *
+     * (API.3c) The sum is a fine unit for "did this rebuild" and a bad one for "how
+     * many times": a crawl reads a project's files a number of times that is a
+     * property of the crawl, and a per-path count is a property of the build.
+     */
+    private val readsByPath = HashMap<String, Int>()
+
+    /** How many times [path] has been read through this. */
+    fun readsOf(path: String): Int = readsByPath[PathUtil.normalize(path)] ?: 0
     var lists: Int = 0
         private set
 
@@ -114,6 +126,8 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
 
     override fun readText(path: String): String? {
         reads++
+        val key = PathUtil.normalize(path)
+        readsByPath[key] = (readsByPath[key] ?: 0) + 1
         return delegate.readText(path)
     }
 

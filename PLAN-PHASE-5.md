@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 914 (2026-08-17) — (API.3c): THE BATCH LANDS AND THE API IS NOW USABLE BY AN EDITOR — N SPANS COST
+ONE BUILD, MEASURED AT **34x** FOR HOVER AND **62x** WHEN EACH CARET IS ALSO ASKED FOR ITS DEFINITION.
+THE ROUND'S TECHNICAL PRODUCT IS THAT THE QUEUE ENTRY'S "IT NEEDS NO NEW MECHANISM" WAS TRUE OF THE
+CAPTURE AND **FALSE OF ITS KEY**: THE ONE THING BULK CHANGES IS A HASH DISTRIBUTION, AND NOTHING IN THIS
+REPO CAN SEE A DEGENERATE ONE.**
+
+- **THE CORRECTION, first, because it is the only place this item could silently create a defect.**
+  `TypeCaptureRequest.keysByFile` packs `(start, end)` into a `Long` and its KDoc said the packing was
+  left un-finalized DELIBERATELY — "these sets hold the handful of spans a host asked about, so no
+  bucket distribution exists to degenerate. Should a caller ever request spans in bulk, finalize the
+  key with an odd multiply as `packIdPair` does." **`Project.fileSemantics` IS that caller**, and the
+  collapse is round 889's in its purest form: `Long.hashCode` is `(int)(v xor (v ushr 32))`, so the
+  pack hashes to `start xor end` — and a node's `end` is its `start` plus its own length plus the
+  FOLLOWING token (round 910), i.e. the halves are not merely correlated, they are NEIGHBOURS.
+  Measured on a modelled whole-file population: **>400 distinct spans onto fewer than 40 distinct
+  hashes**, every bucket degenerate. Now `packIdPair`. Soundness is that function's two clauses and
+  both hold: nothing unpacks the key (the answers carry the node's own `start`/`end`) and nothing
+  iterates the sets. **Production pays nothing** — the per-node hook returns on a null per-file key
+  set BEFORE it packs anything, which `cost_gate.py`'s +0.00% is the evidence for.
+
+- **THE PUBLIC SHAPE, and why it is two members and one mechanism.**
+  `semanticsAt(fileName, offsets: List<Int>)` is the primitive and `fileSemantics(fileName)` is the
+  sweep, the second literally calling the first's helper over `SourceIndex.identifiers()`. An editor
+  needs both and they are not the same question: a sweep serves semantic highlighting and hover
+  prefetch, a multi-offset query serves a known set of carets. The value is
+  `SemanticInfo(start, end, kind, quickInfo, definitions)` — one per DISTINCT SPAN, sorted
+  `(start, end)` — so several carets in one identifier collapse to one entry and the result is
+  neither indexed by nor the same length as the input. **The ordering is imposed here rather than
+  inherited**, because the compiler's answer order is the order its walk reached the nodes, i.e. a
+  property of the check spine. An empty request does not build.
+
+- **THE CANDIDATE SET IS "EVERY `Identifier`", AND THE ARGUMENT IS THAT THE RULE HAS TO FIT IN A
+  SENTENCE.** Anything richer is a taste-driven list that drifts. Member names are IN (they are
+  identifiers and they are typed); their definition stays refused, so such an entry carries a type and
+  no locations — which is one span pinning both halves of the rule. Keywords, punctuation, literals and
+  larger expressions are out; a host wanting the type of `f(x)` asks `semanticsAt` for the caret it has.
+
+- **WHAT I DELIBERATELY DID NOT DO: re-express `quickInfoAt`/`definitionsAt` on the batch.** It would
+  have removed ~10 duplicated lines and made the EQUIVALENCE pin a tautology. They stay separate code,
+  so "the batch says span for span what the single-caret members say" is a comparison of two
+  independent paths and two independent builds, and drift between them is what it fails on. Recorded in
+  `Project.semanticsOf`'s KDoc so the next reader does not "clean it up".
+
+- **THE MEASUREMENT (34-identifier in-memory fixture, warm, two draws agreeing to 3%):**
+  `fileSemantics` = **1 compile, 100-103 ms**; the same 34 carets through `quickInfoAt` = **34
+  compiles, 3,373-3,377 ms (33.6x)**; each caret asked BOTH ways = **68 compiles, 6,209-6,474 ms
+  (60-63x)**. The ratio is what transfers — it is a count of compiles — and the ms are a property of a
+  tiny fixture.
+
+- **THE BUILD COUNTER IS A PER-PATH READ, AND THE FIRST VERSION OF IT WAS FLAKY.** Counting ALL Vfs
+  touches read 29 where 6 builds should be 30, once, and 30 on every rerun: some compiler cache warms
+  across builds within one JVM and takes a source read with it, so the sum is order-dependent — a pin
+  that cries wolf. Reads of `tsconfig.json` are exactly 1 per `ProjectCompiler.build` and are not
+  cached across builds, which a control pin establishes rather than assumes. Three consecutive runs of
+  the class, green.
+
+- **GATES: suite 14,567 -> 14,593 / 0 failures / 0 errors / 3 skipped = EXACTLY the 26 new pins** (22
+  `-project`, 4 core; module 111 -> 133, core 14,322 -> 14,326), XML-summed across all six modules.
+  **`cost_gate.py` +0.00% on all 20 counters** — here a control by construction (no capture is
+  requested on a production compile) and worth running because the key change is ON the hot walk's
+  hook, and proven live by the compile it drives (46 errors / 78 files). `huge_methods.py
+  --fail-over 0` clean on core (738 classes) AND, per round 909's blind-spot rule, on the `-project`
+  module explicitly — **12 classes against round 913's 11, i.e. the gate SAW the new code**.
+  `spine_closure_audit.py` 46 handlers, all supersets, run although no `spine*EnterNode` changed.
+  Build warning-clean. No wall A/B: production executes not one new instruction.
+
+- **WHAT IS LEFT, unchanged: member go-to-definition** (needs the receiver's type and its property
+  symbol — the capture hook is the right place, the scope chain is not the right mechanism) and
+  `(API.4)` completions. And one honest coarseness the sweep makes visible: the capture types an
+  identifier NODE, so a member name and a parameter's own declaration name answer `any` rather than
+  what a host would like; that is (API.3a)'s behaviour seen in bulk, not something batching introduced.
+
 **Round 913 (2026-08-17) — (API.3b): GO-TO-DEFINITION LANDS, AND THE ROUND'S PRODUCT IS THAT **THE QUEUE
 ENTRY'S OWN PREMISE WAS WRONG**: (API.3a)'s ambient lesson does NOT transfer, because a definition's
 walk-scoped input is not the checking ambient at all — it is `spineCurrentScope`, which the spine
@@ -704,155 +776,6 @@ Priced BEFORE the fix; the extraction landed, the fix did not. `docs/perf/iterat
   gate is a real one here, not a control: the round rewrites the enumeration primitive every walk in the
   compiler goes through.
 
-**Round 904 (2026-08-14) — (WARM.31): THE WHOLE BOXED-PRIMITIVE-KEY FAMILY IS **REFUSED** — 14 SITES,
-**2,698,745 OPERATIONS PER REBUILD, A 6.58 ns PREMIUM, 17.7 ms = 0.334% FOR ALL OF THEM TOGETHER** AND
-**0.064% FOR THE LARGEST SINGLE ONE**. AND THE 29.4 ms THAT RANKED IT WAS ONE DRAW OF A **4x-UNSTABLE**
-NUMBER: THE SAME LEAF FAMILY READS **72.9 ms AND 19.0 ms IN ROUND 899's OWN TWO DUMPS, SAME BINARY.**
-
-Priced BEFORE a line of fix; no production behaviour change. `docs/perf/boxed-primitive-key-price.md`.
-
-- **(A) THE THRESHOLD WAS COMPUTED BEFORE THE CENSUS RAN, AND IT IS WHAT CLOSED THE FAMILY.** At a
-  generous 10 ns premium against the ~17 ms floor, a single site needs **~1.7 M operations per
-  rebuild**. **The whole check spine visits 856,962 nodes** — so *every per-node memo in the compiler
-  is refused by arithmetic before any build*, and the question reduced to whether any site is driven
-  by something other than node count. None is: the largest of the fourteen is **519,478 ops = 30% of
-  the single-site threshold**.
-
-- **(B) THE CENSUS, WITH BOTH CONTROLS HITTING EXACTLY.** `--boxedKeyCensus`, deterministic, two
-  processes agreeing to the last digit. Top sites per rebuild: `importedSymbolGeneralCache` 519,478,
-  `Relation.cache` 456,660, `relationComparisonStack` 444,446 (**max live 27**), the enum caches
-  427,024, the ten spine `nodeId` memos 319,558; total **2,698,745** over 14 sites. **Site 6 is
-  exactly 2x round 900's `risgCalls` (259,739) and site 11 is >= 2x round 896's `symAdds` (24,232)** —
-  two independently-recorded populations reached by a different instrument, which is what says the
-  hooks are on the right operations.
-
-- **(C) THE `-128..127` DEFLATION DOES NOT APPLY, WHICH HAD TO BE CHECKED RATHER THAN ASSUMED.**
-  `Integer.valueOf` caches small ints, so a small-key site boxes nothing new — but ids here run to
-  millions and `nodeId`s to 275,470, and **only 0.41% of all keys fall in the cache**. The filter that
-  could have refused half the family for free refuses none of it.
-
-- **(D) TWO SITES ARE NOT REFUSED BY PRICE BUT BY *SHAPE*, WHICH IS THE PART A FUTURE "JUST MIGRATE
-  THEM ALL" PROPOSAL NEEDS.** `Binder.lexicalScopes` is **ITERATED** (`for ((_, scope) in
-  result.lexicalScopes)`), and `IntKeyMap`/`LongKeyMap` have no iterator *by design* — which is
-  exactly what makes the rounds-754/776/778 order hazard a compile error rather than a review item,
-  and is the same exemption CLAUDE.md already grants `Binder.nodeToSymbol`. And `relationComparisonStack`
-  / `relation{Source,Target}Targets` / the two in-progress sentinels are **transient add/remove stacks
-  with max live 27 / 18 / 5** — their successor is a linear array, not a map at all.
-
-- **(E) THE PREMIUM, AND THE INSTRUMENT CORRECTION IT FORCED.** Two arms, two `r`, mirrored rotation,
-  8 draws per arm: a boxed `HashMap<Long, ·>` probe is **8.53 ns**, a `LongKeyMap` probe **1.96 ns**,
-  premium **6.58 ns [4.88-8.27]**. **A SINGLE-`r` `A − B` OVER-READS THIS BY UP TO 23%** — the standing
-  advice that the timestamp boundary "cancels between the arms at equal `r`" is **false when the arms'
-  boundaries differ**, and here they do (**88.0 vs 76.1 ns**), so `A − B` reads 8.07 at `r = 8` and
-  7.07 at `r = 24` against a true 6.58. Fit `p(r) = cost + boundary/r` per ARM and difference the
-  COSTS; the two implied boundaries are then a free check on the fit, and they reproduce both measured
-  values to 0.01 ns. **Round 903's arms were already SLOPES at two `r`, so its 12.98 ns premium and its
-  refusal are unaffected** — but the two rounds together are why this is now a law rather than a note.
-
-- **(F) THE FINDING THAT REACHES BACK INTO THE RANKING ITSELF: LEAF INSTABILITY IS PER-*MECHANISM*,
-  NOT PER-ROW.** Round 868 established that LEAF attribution is unstable across processes and it is
-  always quoted about one frame (`HashMap.getNode` 9.66% vs 3.70%). Run over **round 899's own two
-  dumps — same binary, same round** — the boxed-primitive leaf FAMILY reads **72.9 ms and 19.0 ms**,
-  a **4x** disagreement, because C2 inlined `Integer.equals` into its callers in the second process.
-  **So the 29.4 ms that put this on the candidate list was one draw of a number with a 4x spread**, and
-  an aggregation that SUMS inlinable stdlib leaves inherits the instability at family scale. Minimum
-  two processes for any family share; `scripts/boxed_key_leaves.py` carries the warning in its own
-  docstring, and its stated purpose is to LOCATE an owner, never to price one.
-
-- **(G) A THIRD REUSABLE CONSTANT, AND A BAND THAT MUST NOT BE INHERITED.** `docs/perf/warm-leaf-profile.md`
-  § 33.8's "an `Integer`-keyed probe is ~15-30 ns" is **over by 1.8-3.5x**. This *strengthens* round
-  900's refusal of candidate (1) — its 84.3 ns/probe was over by **10x**, not the 3-6x recorded — and
-  it means a `LongKeyMap`/`IntKeyMap` probe is ~2 ns, now confirmed twice (rounds 903 and 904). A next
-  agent can refuse a NEW boxed-key site for free: **population x 6.58 ns**.
-
-- **(H) GATES.** Suite **14,409 -> 14,416 / 0 failures / 0 errors / 3 skipped** = exactly the 7 new
-  pins. `cost_gate.py` **+0.00% on all 20 counters** — the expected control. `huge_methods.py
-  --fail-over 0`: 0 over the limit. Build warning-clean. **The pins DISCRIMINATE**: ablating the
-  `bkPush` on the relation stack reddens exactly one pin, the one that names it, on a binary that
-  otherwise builds and passes — round 902's law applied prospectively, an arm shown REACHED rather
-  than merely applied. **No wall A/B, for the thirteenth round running, and nothing to A/B.**
-
-**Round 903 (2026-08-14) — (WARM.30): THE CANDIDATE THIS FILE AND CLAUDE.md BOTH CERTIFIED AS "THE ONE
-JFR ROW WORTH BELIEVING" IS **REFUSED AT 0.085%, AND ITS ROW IS OVER BY 6.3x** — BECAUSE THE
-PLAUSIBILITY ARGUMENT THAT ADMITTED IT APPEALED TO A MAGNITUDE NOBODY HAD MEASURED. THE RECURSION IS
-REAL AND IT IS **TWO NODES DEEP**.**
-
-Priced BEFORE a line of fix, one instrument, no production behaviour change.
-`docs/perf/type-node-key-price.md`.
-
-- **(A) THE CANDIDATE, AND THE STATUS IT HELD.** `state.nodeTypes` (`Checker.kt:166`) is a
-  `HashMap<TypeNode, Type>` keyed by the AST **value**; every concrete `TypeNode` is a `data class`
-  (139 of them in `Ast.kt`, **zero** `override fun equals`), so each probe is a recursive structural
-  hash — round 471's hazard. JFR: **57.1 ms**, the largest single map owner. Rounds 894-899 refuted
-  eight of nine JFR-ranked candidates by dividing the row by its own population; this one **passed**
-  that division at 161 ns/op, and CLAUDE.md recorded it as *"what makes that row worth believing"*.
-  **That sentence is the round's subject.** A recursive `hashCode` licenses any rate you like — the
-  check appealed to the depth of the recursion, and the depth had never been measured.
-
-- **(B) THE CENSUS DECIDED IT BEFORE THE AMPLIFIER RAN.** `--typeNodeKeyCensus`:
-  `calls 287,062 / hits 116,999 / misses 59,283 / bypassed 110,780`, **unindexed keys 0**.
-  **Probe-weighted mean key subtree: 2.7567 nodes (max 337); 73.6% of probes present a key of at most
-  TWO nodes.** At the measured 5.47 ns/node, 161 ns/op needs a **29.4**-node mean — exactly the 25-40
-  the design predicted the row would require, and **10.7x** what exists. *The row was refuted by its
-  own arithmetic the moment its population was known.*
-
-- **(C) THE AMPLIFIER, THREE ARMS, AND THE PRIZE MEASURED DIRECTLY RATHER THAN BY PROXY.** `r = 8`
-  and `r = 24`, 16 draws per `r`, two mirrored batches (round 891 — one rotation is a batch, not a
-  result). Every sink an exact multiple of `r`; no arm flat.
-
-  | arm | what it probes | ns/op |
-  |---|---|---:|
-  | A | `nodeTypes[node]` — deep hash + bucket + deep equals | **15.09** |
-  | B | the same probe against a `(file, nodeId)` `LongKeyMap` | **2.11** |
-  | C | `isPerFileDependentRefNode` — the second owner | **12.88** |
-
-  `A − B` is the deep key's premium, i.e. **the prize of the proposed fix**, not a proxy for it.
-  The map GET is amplified rather than `node.hashCode()` because a data-class hash is a pure function
-  of an immutable object and C2 may hoist it — **and the exact-multiple sink falsifier would still
-  pass**, which is the one failure mode that falsifier cannot see.
-
-- **(D) THE DECISION: REFUSED BY 3.7x.** `(A − B) x 354,131 = 4.60 ms = 0.085%` of the 5,429 ms
-  denominator, against this arc's ~0.31% (~17 ms) floor; **2.5x under it even at the most generous
-  single-draw bound** (6.77 ms = 0.125%). `A − B` is an *upper* bound — arm B's key is computed
-  outside every timestamp pair — so the refusal is certain rather than marginal. **Round 896's
-  sentinel-set candidate falls with it**: 118,566 of those ops at this premium is 1.54 ms, against
-  the 3-5 ms it was refused at on a soundness ground that no longer has to be argued.
-
-- **(E) THE CORRECTION TO THE JFR ATTRIBUTION, WHICH STANDS WHATEVER THE VERDICT — AND WHICH THE
-  ROUND FOUND BEFORE MEASURING ANYTHING.** The row has **TWO owners**, and a leaf-frame profile
-  cannot separate them: `cacheable` (`Checker.kt:104175`) calls `isPerFileDependentRefNode`
-  (`Checker.kt:99546`), *itself a recursive subtree walk over the same subtree the hash walks*, on
-  **every** call — cacheable or not. 12.88 ns x 287,062 = **3.70 ms (0.068%)**. Family total
-  **5.34 + 3.70 = 9.04 ms against a 57.1 ms row = over by 6.3x**, the ninth consecutive JFR
-  over-read and at the top of the recorded 2.1-21x band. *An instrument that had bracketed only the
-  map probe would have charged the walk to the hash and reported roughly double the prize.*
-
-- **(F) ROUND 902's LAW DOES **NOT** BITE HERE, AND THAT IS INFORMATION RATHER THAN AN EXCEPTION.**
-  Probe-weighted and object-weighted key sizes differ by **6.6%** (2.7567 vs 2.5856), not by round
-  902's 193x. The law says which weighting to *check*; it does not say which one always wins. A round
-  that assumed the probe weighting must dominate would have been right about the method and wrong
-  about this population.
-
-- **(G) WHAT THE DEEP KEY ACTUALLY BUYS, MEASURED — AND WHY IT IS NOT A LICENCE TO RE-KEY.** The
-  structural key's entire semantic effect is **130 shared probes of 176,282 (0.074%)**, read off the
-  two arms' sink difference and exactly `130 x r` at both `r` in both batches. The unit fixture had
-  *passed* an `A == B` sink equality that the real population refutes; it is now a `<=` bound with
-  the difference reported as a number. **`PerFileTypeNameCacheCollisionTest` pins the case where that
-  sharing is WRONG**, so 0.074% is the size of the benefit, not of the risk.
-
-- **(H) ARM C NEARLY SHIPPED AS A ROUND-902 DEAD ARM.** `isPerFileDependentRefNode` opens with
-  `if (multiFileModuleTypeNames.isEmpty() …) return false` — on a program without such names it
-  prices a field read while reading, in every driver output, exactly like a subtree walk. A REACHED
-  control was added *before* the number was quoted and reports **5**, so the arm is live. Round 902's
-  lesson applied one round later, prospectively rather than in the post-mortem.
-
-- **(I) GATES.** Suite **14,409 / 0 failures / 0 errors / 3 skipped** (+13 = exactly the new pins;
-  baseline 14,396). `cost_gate.py` **+0.00% on all 18 counters** — the expected control for an
-  instrument-only round (round 876). `huge_methods.py --fail-over 0`: **0 over the limit**
-  (`getTypeFromTypeNodeCore` grew and stays under; `Checker.<init>` 5,753/8,000). Build
-  warning-clean. **No wall A/B, for the twelfth round running, and nothing to A/B** — the round lands
-  an instrument and a refusal.
-
 ---
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -944,12 +867,24 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   core by a forward token scan of the declaring file's own text. **19 pins, four-arm ablation, all
   gates green.**
 
-- [ ] **(API.3c) Batch a whole file's spans into ONE build.** The core `TypeCaptureRequest` already
+- [x] **(API.3c) Batch a whole file's spans into ONE build.** The core `TypeCaptureRequest` already
   takes a SET of spans and `Project.quickInfoAt` deliberately does not cache its build (a capture build
   types nodes the checker had no reason to type, so its diagnostics are not reusable — pinned). So
   "semantic info for file X" is already one compile away from being one compile; exposing it turns
   hover-per-keystroke from N builds into 1. **This is the item that makes the API practical for an
-  editor** and it needs no new mechanism.
+  editor** and it needs no new mechanism. **LANDED round 914** —
+  `Project.semanticsAt(fileName, offsets)` (the primitive) and `Project.fileSemantics(fileName)` (the
+  sweep, expressed on it), answering `SemanticInfo(start, end, kind, quickInfo, definitions)`: ONE
+  build for any span count, both answers per span, distinct spans sorted `(start, end)`. Measured
+  **1 compile / 100 ms against 34 compiles / 3,373 ms and 68 compiles / 6,209 ms** on a
+  34-identifier fixture. **THE PREMISE'S ONE ERROR, and it is the round's technical product: "it
+  needs no new mechanism" is true of the CAPTURE and false of its KEY.** `TypeCaptureRequest`'s
+  packed `(start, end)` key was left un-finalized with a note saying to finalize it "should a caller
+  ever request spans in bulk" — and bulk is exactly what this item is: `Long.hashCode` folds
+  `(a shl 32) or b` onto `a xor b`, and a node's `end` is its `start` plus a token or two, so a whole
+  file's spans collapse onto a few dozen hashes (measured: **>400 spans onto <40 hashes**, round
+  889's defect verbatim). It now goes through `packIdPair`, pinned by a measuring test with a raw-pack
+  negative control. **26 pins, all gates green.**
 
   <details><summary>the design decision, recorded round 910 and confirmed round 911</summary>
 

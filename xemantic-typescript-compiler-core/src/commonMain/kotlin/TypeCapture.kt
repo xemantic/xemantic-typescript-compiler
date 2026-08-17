@@ -167,8 +167,11 @@ data class CapturedDefinition(
  * ## Cost
  *
  * A capture is a COMPILE. It BATCHES, which is what makes that acceptable: one
- * build can capture every span in a file, so "semantic info for file X" is one
- * compile rather than N.
+ * build captures every span in the request, so "semantic info for file X" is one
+ * compile rather than N. (API.3c) exposes that — `Project.semanticsAt` and
+ * `Project.fileSemantics` — and the only thing bulk changed in here is that the
+ * per-file key sets are now big enough for their hash spread to matter, so
+ * [packSpanKey] finalizes the pack.
  *
  * ## Off is free
  *
@@ -198,12 +201,6 @@ data class TypeCaptureRequest(
     /**
      * The spans indexed by file, as packed `(start, end)` keys — the form the
      * checker's per-node test needs.
-     *
-     * The packing is round 889's degenerate shape (`Long.hashCode` folds
-     * `(a shl 32) or b` onto `a xor b`) and it is left un-finalized DELIBERATELY:
-     * these sets hold the handful of spans a host asked about, so no bucket
-     * distribution exists to degenerate. Should a caller ever request spans in
-     * bulk, finalize the key with an odd multiply as `packIdPair` does.
      */
     internal val keysByFile: Map<String, Set<Long>> =
         spans.groupBy { it.fileName }
@@ -211,8 +208,35 @@ data class TypeCaptureRequest(
 
     internal companion object {
 
-        /** `(start, end)` as one key. */
-        internal fun packSpanKey(start: Int, end: Int): Long =
-            (start.toLong() shl 32) or (end.toLong() and 0xFFFFFFFFL)
+        /**
+         * `(start, end)` as one key, through [packIdPair]'s multiplicative
+         * finalizer.
+         *
+         * (API.3c) THE FINALIZER IS LOAD-BEARING HERE AND WAS NOT BEFORE, AND THE
+         * REASON IS ROUND 889's IN ITS PUREST FORM. `java.lang.Long.hashCode` is
+         * `(int) (v xor (v ushr 32))`, so a plain `(start shl 32) or end` hashes to
+         * exactly `start xor end` — and a node's `end` is its `pos` plus its own
+         * length plus the following token (round 910), i.e. the two halves are not
+         * merely correlated, they are NEIGHBOURS. `pos xor (pos + 12)` is a small
+         * number for every position in the file, so a whole file's identifier spans
+         * collapse onto a few dozen hashes: exactly the degenerate bucket
+         * distribution that treeified `Relation.cache`.
+         *
+         * While a request held "the handful of spans a host asked about" that could
+         * not bite and this packing was deliberately left raw, with a note saying to
+         * finalize it should spans ever be requested in BULK. `Project.fileSemantics`
+         * is that caller, so the note is now cashed in. `TypeCaptureKeySpreadTest`
+         * measures the collapse rather than asserting it, and fails on the raw form.
+         *
+         * Soundness is [packIdPair]'s and holds by the same two clauses: nothing
+         * unpacks the key (the [CapturedType]/[CapturedDefinition] answers carry the
+         * real `start`/`end` from the node, never from the key), and nothing iterates
+         * the sets — they are membership tests in the checker's per-node hook.
+         *
+         * Costs production NOTHING: the hook returns on a null per-file key set
+         * BEFORE it packs anything, so no uncaptured compile ever performs the
+         * multiply.
+         */
+        internal fun packSpanKey(start: Int, end: Int): Long = packIdPair(start, end)
     }
 }
