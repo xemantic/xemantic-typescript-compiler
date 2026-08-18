@@ -2403,7 +2403,14 @@ class Parser(
             beforeCloseParen = trailingComments()
             parseExpected(SyntaxKind.CloseParen)
             afterCloseParen = trailingComments()
-            VariableDeclaration(name = name, type = type, initializer = initializer)
+            // (GATE.2) A span, so a caret on `err` in `catch (err)` descends to it.
+            // Built here rather than defaulted to [0, 0): a node with an empty span
+            // is one `SourceIndex.pathAt` can never enter, so every position query
+            // answered about the catch clause instead of the variable.
+            VariableDeclaration(
+                name = name, type = type, initializer = initializer,
+                pos = name.pos, end = initializer?.end ?: type?.end ?: name.end,
+            )
         } else null
         val block = parseBlockOrMissing()
         return CatchClause(
@@ -2982,7 +2989,11 @@ class Parser(
                     reportError("An index signature must have a type annotation.", code = 1021,
                         overrideStart = pos, overrideLength = nodeEnd - pos)
                 }
-                val param = Parameter(name = paramName, type = paramType)
+                // (GATE.2) A span — see parseCatchClause.
+                val param = Parameter(
+                    name = paramName, type = paramType,
+                    pos = paramName.pos, end = paramType?.end ?: paramName.end,
+                )
                 return IndexSignature(parameters = listOf(param),
                     type = type, modifiers = modifiers, pos = pos, end = getEnd(),
                     leadingComments = comments)
@@ -3578,12 +3589,20 @@ class Parser(
         if (token == SyntaxKind.NewKeyword &&
             lookAhead { nextToken(); token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan }
         ) {
+            // (GATE.2) The name is synthesized, but the text it names is REAL — the
+            // `new` keyword — so it carries that keyword's own span rather than the
+            // default `[0, 0)`. A zero-span node at offset 0 is one no descent can
+            // enter and one a whole-file identifier sweep reports as an empty entry
+            // at the top of the file. `getPos()` here rather than the member's
+            // `pos`, which for `abstract new (): T` is the modifier's.
+            val newPos = getPos()
             nextToken()
+            val newName = Identifier("new", pos = newPos, end = getEnd())
             val typeParams = parseTypeParametersOpt()
             val params = parseParameterList()
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             return MethodDeclaration(
-                name = Identifier("new"),
+                name = newName,
                 typeParameters = typeParams,
                 parameters = params,
                 type = type,
@@ -3791,7 +3810,11 @@ class Parser(
             reportError("An index signature cannot have a rest parameter.", code = 1017,
                 overrideStart = dotDotDotPos, overrideLength = 3)
             // When TS1017 fires, suppress TS1021 (TypeScript doesn't emit both for the same sig)
-            val param = Parameter(name = paramName, type = paramType)
+            // (GATE.2) A span — see parseCatchClause.
+            val param = Parameter(
+                name = paramName, type = paramType,
+                pos = paramName.pos, end = paramType?.end ?: paramName.end,
+            )
             return IndexSignature(parameters = listOf(param), type = type, modifiers = modifiers, pos = pos, end = getEnd())
         }
         if (isIndex || isIndexWithAccessMod) {
@@ -3815,7 +3838,13 @@ class Parser(
                 parseAssignmentExpression()
                 initEndForTs2371 = scanner.getPrevTokenEnd()
             }
-            params.add(Parameter(name = paramName, type = paramType))
+            // (GATE.2) A span — see parseCatchClause.
+            params.add(
+                Parameter(
+                    name = paramName, type = paramType,
+                    pos = paramName.pos, end = paramType.end,
+                ),
+            )
             // Parse any additional parameters (invalid — TS1096 for multi-param index signature)
             var hasExtraParams = false
             while (token == SyntaxKind.Comma) {
@@ -4117,8 +4146,14 @@ class Parser(
             reportError("A 'namespace' declaration should not be declared using the 'module' keyword. Please use the 'namespace' keyword instead.", code = 1540)
         }
         val name: Expression = if (isGlobal) {
-            // `declare global { ... }` — no module name, just the body
-            Identifier(text = "global", pos = pos, end = pos + 6)
+            // `declare global { ... }` — no module name, just the body.
+            // (GATE.2) `getEnd()`, not `pos + 6`: every other node in this parser
+            // carries the END OF THE FOLLOWING TOKEN, and a reader that snaps that
+            // back to the token stream (`SourceIndex.realEndOf`) turns an already-
+            // exact end into the end of the token BEFORE it — an empty span, which
+            // no descent can enter. The name is the one node here that broke the
+            // convention, so a caret on `global` answered about the module.
+            Identifier(text = "global", pos = pos, end = getEnd())
         } else if (token == SyntaxKind.StringLiteral) {
             parseStringLiteral()
         } else {
@@ -5975,8 +6010,14 @@ class Parser(
         val pos = getPos()
         // Any identifier or keyword is valid as a JSX tag name
         val text = scanner.getTokenValue()
-        val id = Identifier(text = text, pos = pos, end = getEnd())
+        // (GATE.2) `getEnd()` AFTER the `nextToken()`, so the tag name carries the
+        // end of the FOLLOWING token like every other node in this parser. Read
+        // before it, the end is already exact, and a reader that snaps it back to
+        // the token stream (`SourceIndex.realEndOf`) lands on the token BEFORE the
+        // name — an empty span no descent can enter, so a caret on `div` answered
+        // about the whole opening element.
         nextToken()
+        val id = Identifier(text = text, pos = pos, end = getEnd())
         // Handle qualified name: Foo.Bar.Baz
         val tagName: Expression = if (token == SyntaxKind.Dot) {
             var expr: Expression = id
@@ -5984,8 +6025,9 @@ class Parser(
                 nextToken() // consume .
                 val rightPos = getPos()
                 val rightText = scanner.getTokenValue()
-                val right = Identifier(text = rightText, pos = rightPos, end = getEnd())
+                // (GATE.2) after the `nextToken()`, as above.
                 nextToken()
+                val right = Identifier(text = rightText, pos = rightPos, end = getEnd())
                 expr = PropertyAccessExpression(expression = expr, name = right, pos = pos, end = getEnd())
             }
             expr
@@ -7209,7 +7251,11 @@ class Parser(
             parseParameterList()
         } else if (isIdentifier()) {
             hasParens = false
-            listOf(Parameter(name = parseIdentifier()))
+            // (GATE.2) A span, so a caret on `x` in `x => x + 1` descends to the
+            // parameter rather than stopping at the arrow — see parseCatchClause.
+            val paramPos = getPos()
+            val paramName = parseIdentifier()
+            listOf(Parameter(name = paramName, pos = paramPos, end = getEnd()))
         } else {
             hasParens = true
             parseParameterList()

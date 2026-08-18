@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.JsxText
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NodeKind
@@ -32,6 +33,7 @@ import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.ParserFlags
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.QualifiedName
+import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
 import com.xemantic.typescript.compiler.Scanner
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SyntaxKind
@@ -85,19 +87,32 @@ import com.xemantic.typescript.compiler.forEachChild
  * order as the parse it rides beside, and paid only by a host that asks a position
  * question. Nothing in the compile path is touched.
  *
- * The scan reproduces exactly ONE of the parser's context-sensitive re-scans — the
- * template one, see [scanTokens] — and deliberately none of the others
- * (`reScanSlashToken`, `reScanGreaterToken`, `scanJsxText`). The asymmetry is not
- * taste: those two directions fail differently. A context-free scan that SPLITS a
- * contextual token into several (a regex literal `/ab/` scanning as `/`, `ab`, `/`,
- * a `>>` scanning as one token where the parser wants two) only ADDS ends and leaves
- * every real token boundary present, so `realEnd` is unchanged and the worst case is
- * a bound that is never too HIGH — a node the descent declines to enter, reported as
- * its parent. A scan that MERGES across a real boundary is a different animal, and
- * (API.5) measured it: one unhandled `${` de-synchronises the token stream for the
- * WHOLE REST OF THE FILE, which is a wrong answer at every later position rather
- * than a coarse one. That is why the template case is handled and the splitting
- * cases are not.
+ * The scan reproduces the parser's context-sensitive lexing in two ways and
+ * deliberately not in a third. The template re-scan is reproduced by TRACKING the
+ * substitution nesting exactly as `Parser` does (see [scanTokens]); the regular
+ * expression and the JSX text are reproduced by ASKING THE PARSE (see
+ * [contextualLexemes]), because the parser turns each of them into a node carrying
+ * its own raw text and therefore its own exact span; and `reScanGreaterToken` is not
+ * reproduced at all.
+ *
+ * The asymmetry is not taste, it is round 919's law. A context-free scan that SPLITS
+ * a contextual token into several (a `>>` scanning as one token where the parser
+ * wants two) only ADDS ends and leaves every real token boundary present, so
+ * `realEnd` is unchanged and the worst case is a bound that is never too HIGH — a
+ * node the descent declines to enter, reported as its parent. A scan that MERGES
+ * across a real boundary is a different animal: one unhandled `${` de-synchronises
+ * the token stream for the WHOLE REST OF THE FILE, which is a wrong answer at every
+ * later position rather than a coarse one.
+ *
+ * **A regular expression is a splitting case that turns into a merging one whenever
+ * its body holds a quote or a backtick**, which is what (GATE.2) measured: tsc's own
+ * `utilities.ts` contains ``/\r\n|[\\`…]/g``, whose backtick opened a
+ * `NoSubstitutionTemplateLiteral` running to the next backtick anywhere in the file
+ * — a 25,761-character token that swallowed the twelve identifiers after it. JSX
+ * text is the same shape one construct over (`<p>it's fine</p>`). So both are taken
+ * from the parse rather than guessed, which is also why nothing here has to decide
+ * the undecidable question of whether a `/` divides or quotes: whatever the parser
+ * decided, this index reproduces, and the two can therefore never disagree.
  *
  * ## The boundary convention
  *
@@ -126,7 +141,7 @@ internal class SourceIndex private constructor(
      * quantity a node carries is an END that overshoots by one token, and mapping
      * it back needs the PREVIOUS end.
      */
-    private val tokenEnds: IntArray,
+    internal val tokenEnds: IntArray,
     /**
      * (API.4a) Every token's START offset, parallel to [tokenEnds].
      *
@@ -140,11 +155,11 @@ internal class SourceIndex private constructor(
      * and never inside one, which is what makes [completionAnchorAt]'s comment
      * detection a scan of one gap rather than a second lexer.
      */
-    private val tokenStarts: IntArray,
+    internal val tokenStarts: IntArray,
     /** (API.4a) Every token's kind, parallel to [tokenEnds]. */
-    private val tokenKinds: Array<SyntaxKind>,
+    internal val tokenKinds: Array<SyntaxKind>,
     /** (API.4a) The text this index describes — the anchor reports a PREFIX. */
-    private val text: String,
+    internal val text: String,
 ) {
 
     companion object {
@@ -159,7 +174,24 @@ internal class SourceIndex private constructor(
          * them from `computeParserFlags`, which is the compiler's own single source
          * for them.
          */
-        fun of(text: String, fileName: String, flags: ParserFlags): SourceIndex {
+        fun of(
+            text: String,
+            fileName: String,
+            flags: ParserFlags,
+            /**
+             * (GATE.2) False reproduces the PRE-(GATE.2) scan, which took no
+             * contextual lexeme from the parse.
+             *
+             * It exists so the invariant gate has a positive control, and for no
+             * other reason: a checker that cannot see a broken index reads exactly
+             * like one whose subject is correct (round 849), and every rule in
+             * `TokenIndexInvariants` would otherwise be green whether it worked or
+             * not. This is the in-binary OFF arm the equivalence pin needs — the
+             * same shape `--spineMaskOff` has in the compiler. Nothing in `Project`
+             * passes it.
+             */
+            useParseAsLexerOracle: Boolean = true,
+        ): SourceIndex {
             val sourceFile = Parser(
                 text,
                 fileName,
@@ -168,7 +200,10 @@ internal class SourceIndex private constructor(
                 needsJsxFlag = flags.needsJsxFlag,
                 noImplicitAny = flags.noImplicitAny,
             ).parse()
-            val tokens = scanTokens(text)
+            val tokens = scanTokens(
+                text,
+                if (useParseAsLexerOracle) contextualLexemes(sourceFile) else emptyList(),
+            )
             return SourceIndex(
                 sourceFile = sourceFile,
                 textLength = text.length,
@@ -185,6 +220,80 @@ internal class SourceIndex private constructor(
             val ends: IntArray,
             val kinds: Array<SyntaxKind>,
         )
+
+        /**
+         * (GATE.2) One lexeme whose extent only the PARSER could know, taken from the
+         * node the parser built for it.
+         */
+        private class ContextualLexeme(
+            val start: Int,
+            val end: Int,
+            val kind: SyntaxKind,
+        )
+
+        /**
+         * (GATE.2) Every regular-expression literal and every run of JSX text in
+         * [root], in ascending position order.
+         *
+         * ## Why these two, and why from the tree
+         *
+         * They are the two lexemes a context-free `Scanner.scan()` loop cannot
+         * approximate SAFELY. Both may legally contain a quote or a backtick — the
+         * measured cases are tsc's own ``/\r\n|[\\`…]/g`` and any JSX text with an
+         * apostrophe in it — and a quote reached by the context-free loop opens a
+         * string or, far worse, a template literal that runs to the next backtick
+         * ANYWHERE IN THE FILE. That is a merge, and by round 919's law a merge
+         * de-synchronises the stream to end of file rather than degrading one answer.
+         *
+         * The parser already decided both questions, and — this is the part that
+         * makes the mechanism exact rather than another heuristic — it recorded its
+         * decision as a node holding the lexeme's RAW text. A
+         * `RegularExpressionLiteralNode`'s `text` is `Scanner.getTokenText()`, i.e.
+         * the characters from the opening `/` to the last flag, and a `JsxText`'s is
+         * what `Scanner.scanJsxText()` returned; in both cases `pos + text.length` is
+         * the exact end, with none of `Node.end`'s one-token overshoot. So there is
+         * nothing left to guess: [scanTokens] emits the lexeme verbatim and resumes
+         * the scanner past it.
+         *
+         * The consequence worth stating is that this index cannot disagree with the
+         * tree it describes. A `/` the parser read as division has no node here, so
+         * the scan reads it as division too; a `/` the parser read as a regex has
+         * one, so the scan reads it as a regex. The undecidable question is never
+         * asked.
+         *
+         * ITERATIVE, like every other full-tree walk in this class: real TypeScript
+         * carries expression chains deep enough to crash a recursive one.
+         */
+        private fun contextualLexemes(root: SourceFile): List<ContextualLexeme> {
+            val found = ArrayList<ContextualLexeme>()
+            val stack = ArrayList<Node>()
+            stack.add(root)
+            while (stack.isNotEmpty()) {
+                val node = stack.removeAt(stack.size - 1)
+                when (node) {
+                    is RegularExpressionLiteralNode ->
+                        if (node.text.isNotEmpty()) {
+                            found.add(
+                                ContextualLexeme(
+                                    node.pos,
+                                    node.pos + node.text.length,
+                                    SyntaxKind.RegularExpressionLiteral,
+                                ),
+                            )
+                        }
+                    is JsxText ->
+                        if (node.text.isNotEmpty()) {
+                            found.add(
+                                ContextualLexeme(node.pos, node.pos + node.text.length, SyntaxKind.JsxText),
+                            )
+                        }
+                    else -> Unit
+                }
+                forEachChild(node) { child -> stack.add(child) }
+            }
+            found.sortBy { it.start }
+            return found
+        }
 
         /**
          * Every token in [text], in scan order — so [Tokens.ends] is ascending.
@@ -228,7 +337,7 @@ internal class SourceIndex private constructor(
          * node in the file to a coarser answer, which is the same graceful direction
          * as the class KDoc's split case.
          */
-        private fun scanTokens(text: String): Tokens {
+        private fun scanTokens(text: String, lexemes: List<ContextualLexeme>): Tokens {
             val scanner = Scanner(text)
             val starts = ArrayList<Int>()
             val ends = ArrayList<Int>()
@@ -238,8 +347,39 @@ internal class SourceIndex private constructor(
             // then a `}` is just a `}`.
             val substitutions = ArrayList<Int>()
             var previousEnd = -1
+            // The next lexeme the parse says the context-free scan cannot see.
+            var lexeme = 0
             while (true) {
                 var token = scanner.scan()
+                // (GATE.2) A lexeme the PARSER recognised and this loop cannot: emit
+                // it verbatim and resume past it. Checked before the template
+                // bookkeeping below, which a regex and a JSX run are both outside of.
+                val tokenStart = scanner.getTokenPos()
+                while (lexeme < lexemes.size &&
+                    (lexemes[lexeme].end <= tokenStart || lexemes[lexeme].end <= previousEnd)
+                ) {
+                    lexeme++
+                }
+                if (lexeme < lexemes.size &&
+                    scanner.getPos() > lexemes[lexeme].start &&
+                    lexemes[lexeme].start >= previousEnd
+                ) {
+                    val contextual = lexemes[lexeme]
+                    // The scanned token began BEFORE the lexeme (a `/` before its own
+                    // regex body). Keeping its prefix is a SPLIT, which is always safe.
+                    if (tokenStart < contextual.start) {
+                        starts.add(tokenStart)
+                        ends.add(contextual.start)
+                        kinds.add(token)
+                    }
+                    starts.add(contextual.start)
+                    ends.add(contextual.end)
+                    kinds.add(contextual.kind)
+                    previousEnd = contextual.end
+                    lexeme++
+                    scanner.resetToPosition(contextual.end)
+                    continue
+                }
                 when {
                     token == SyntaxKind.TemplateHead -> substitutions.add(0)
                     substitutions.isEmpty() -> Unit
@@ -578,6 +718,11 @@ internal class SourceIndex private constructor(
         SyntaxKind.TemplateHead,
         SyntaxKind.TemplateMiddle,
         SyntaxKind.TemplateTail,
+        // (GATE.2) JSX text is a literal here for the same reason a string is: what
+        // the user is typing between two tags is prose, not a name, and the token
+        // level cannot tell a tag completion from prose anyway — which is exactly the
+        // grammar-position mechanism § 10a refuses keywords for.
+        SyntaxKind.JsxText,
         -> true
         else -> false
     }

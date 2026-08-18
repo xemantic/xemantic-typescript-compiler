@@ -4,7 +4,7 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 919, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 920, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
@@ -13,14 +13,26 @@ names `(API.4b)` — and **find-references plus document highlights** `(API.5)`.
 Not yet: keywords (§ 10a says why they are refused rather than guessed), rename,
 signature help. See the `(API.*)` items in `PLAN-PHASE-5.md`.
 
-> **If you are on a version before round 919, upgrade before trusting any
-> position.** `(BUG.2)`: the token index behind every position-directed query
-> de-synchronised at the first template literal with a `${…}` substitution, and the
-> damage was not local — the whole rest of the file was wrong, so `nodeInfoAt`,
-> `quickInfoAt`, `definitionsAt` and `completionsAt` all answered about a huge
-> enclosing node instead of the one at the caret. Measured on tsc's own
-> `checker.ts`: 50,684 tokens for 3,151,772 characters, the longest of them 62,089
-> characters. Fixed and pinned.
+> **If you are on a version before round 920, upgrade before trusting any
+> position.** Two rounds of the same defect class, both fixed and both now covered
+> by an invariant gate that runs over real TypeScript rather than over fixtures:
+>
+> - `(BUG.2)`, round 919: the token index de-synchronised at the first template
+>   literal with a `${…}` substitution, and the damage ran to end of file — so
+>   `nodeInfoAt`, `quickInfoAt`, `definitionsAt` and `completionsAt` all answered
+>   about a huge enclosing node instead of the one at the caret. On tsc's own
+>   `checker.ts`: 50,684 tokens for 3,151,772 characters, longest token 62,089.
+> - `(GATE.2)`, round 920: the same thing at a **backtick inside a regular
+>   expression** (a shape tsc's own `utilities.ts` contains), and — separately — a
+>   **parenthesis-less arrow parameter**, an index-signature parameter, a `catch`
+>   variable, `declare global`'s `global`, a JSX tag name and a construct
+>   signature's `new` all carried spans no lookup could enter, so a caret on any of
+>   them answered about the enclosing construct. The arrow-parameter case alone is
+>   **328 sites in tsc's 78 compiler sources**.
+>
+> The gate is `TokenIndexInvariants` plus `TokenIndexGateTest`, and it now holds
+> over **1,327 files / 101,287,620 characters / 3,936,158 identifiers** with zero
+> violations.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -252,7 +264,10 @@ Building the preference in would make two adjacent nodes both contain the
 boundary, and an ambiguous primitive cannot be layered on.
 
 A caret in whitespace or inside a comment belongs to no node, so the innermost
-*enclosing* node answers. An offset past end-of-file, a negative offset, or an
+*enclosing* node answers. **A caret on a real construct never should**, and until
+round 920 several did — see the box at the top; if you are writing a host, that is
+the failure shape to test for, because an enclosing node is a plausible-looking
+answer rather than an obviously wrong one. An offset past end-of-file, a negative offset, or an
 unknown file returns `null` rather than throwing — "is there a node here" has a
 truthful negative answer.
 
@@ -479,9 +494,11 @@ receiver is then recovered from the parse. What follows from that:
   all work. Our parser always builds a property access for a `.` — it
   synthesizes an empty name and reports TS1003 — so there is a real receiver node
   even when nothing has been typed after the dot.
-- A caret inside a **string, template, regular expression, numeric literal or
-  comment** answers `kind = NONE` / `refusal = NO_COMPLETION_CONTEXT`, **and does
-  not compile**. A `.` inside a string or a comment is not a member anchor.
+- A caret inside a **string, template, regular expression, numeric literal,
+  comment or JSX text** answers `kind = NONE` / `refusal = NO_COMPLETION_CONTEXT`,
+  **and does not compile**. A `.` inside a string or a comment is not a member
+  anchor, and what a user types between two JSX tags is prose. (JSX text joined
+  that list in round 920, when the token index learned to see it at all.)
 - A caret at the very **end of the file** is a real position here, unlike
   `nodeInfoAt` (§ 7), whose spans are half-open and exclude it.
 

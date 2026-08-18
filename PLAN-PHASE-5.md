@@ -20,6 +20,105 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 920 (2026-08-18) — (GATE.2): THE INSTRUMENT ROUND 919 DID NOT BUILD, AND IT FOUND **FIVE MORE
+DEFECTS ON ITS FIRST RUN** — INCLUDING (BUG.2) IN A SECOND COSTUME (A BACKTICK INSIDE A REGULAR
+EXPRESSION, IN tsc's OWN SOURCE) AND A `[0, 0)` PARAMETER SPAN THAT MADE EVERY CARET ON A
+PARENTHESIS-LESS ARROW PARAMETER — **328 SITES IN 78 FILES** — ANSWER ABOUT THE ARROW. ALL FIVE FIXED;
+101 MB OF REAL TypeScript NOW PASSES TEN INVARIANTS WITH ZERO VIOLATIONS.**
+
+- **WHAT THE GATE ASSERTS, AND WHY IT IS STATED AGAINST THE PARSE.** Ten rules, all true of ANY correct
+  implementation so none needs a baseline: the tokens partition the text and the scan reaches EOF; every
+  gap between two tokens holds only whitespace or a comment; a string literal never crosses a line break;
+  a non-literal token is under 512 characters; **every identifier the PARSER found starts a token of
+  exactly its length**, and `realEndOf` answers that end; a descent to an identifier's own position
+  reaches that identifier; a path strictly nests and every node on it contains the offset; and
+  offset↔coordinate round-trips against an INDEPENDENT restatement of round 915's terminator rule
+  (comparing `LineMap` to a second copy of its own arithmetic would prove nothing). **The parse is the
+  oracle** — it is the context-sensitive lexer this index approximates — which is what makes a MERGE
+  expressible at all: a token that swallowed an identifier leaves no token starting where the parser
+  says one starts. `TokenIndexInvariants` collects rather than throws and caps PER RULE, so one broken
+  file reports its shape instead of its first symptom.
+
+- **THREE CORPORA, AND THE CHOICE IS HALF THE ROUND.** (1) An adversarial shape corpus, written here —
+  cheap, named, and carrying exactly the weakness that let (BUG.2) live: it can only hold shapes somebody
+  thought of. (2) **The real `lib.*.d.ts` sources** (`RealLibFiles.files`, **2.39 MB**, 60-odd files, the
+  largest 2.35 MB) — real TypeScript written by the TypeScript team for their own purposes, already
+  embedded in this repo since the real-lib migration, so hermetic with **no vendored tree and no
+  licensing question**; its weakness is the mirror (a declaration file has no regex and no JSX), which is
+  why neither corpus stands alone. (3) The corpus the round was actually developed against,
+  `build/bench/tsc-project-*`, is a **local artifact** and therefore lives in a RUNNER, not the suite:
+  `scripts/round920-token-gate.sh` + `RealSourceTokenGateMain` **REFUSE with exit 2** on a missing tree,
+  a tree with no TypeScript, or a stale class dir (with round 853's positive control that the runner's
+  own class is in it). A test reading it would pass quietly in CI, which is precisely rounds 853 and 873.
+
+- **DEFECT A — (BUG.2) IN A SECOND COSTUME, AND IT WAS IN tsc's OWN SOURCE ALL ALONG.**
+  `utilities.ts` declares ``const backtickQuoteEscapedCharsRegExp = /\r\n|[\\`\u0000-…]/g;``. The
+  context-free loop reads the `/` as a Slash and the **backtick inside the character class** then opens
+  a `NoSubstitutionTemplateLiteral` that runs to the next backtick anywhere in the file: a **25,761-
+  character token** swallowing the twelve identifiers after it. The sibling `/[\\'…]/g` opens a string
+  literal instead, which our scanner terminates at the line break — so the same defect is file-wide for a
+  backtick and line-wide for a quote, and only the loud half was ever going to be noticed.
+
+- **THE FIX IS THE MECHANISM WORTH KEEPING: ASK THE PARSE.** A `RegularExpressionLiteralNode`'s `text`
+  is `Scanner.getTokenText()` and a `JsxText`'s is what `scanJsxText()` returned, so `pos + text.length`
+  is the EXACT end in both cases — no `Node.end` overshoot, nothing to guess. `SourceIndex` now collects
+  those two node kinds, emits each verbatim and resumes the scanner past it. **The undecidable question
+  is therefore never asked**: whatever the parser decided a `/` was, the index reproduces, so the index
+  and the tree it describes cannot disagree — which is a stronger property than any heuristic (a
+  "previous token suggests a regex" rule) could have, and it generalises to any future contextual lexeme
+  the parser turns into a node. JSX text was added by the same argument one construct over (`<p>it's
+  fine</p>`), and a caret inside JSX text now answers `NONE`/`NO_COMPLETION_CONTEXT` rather than
+  completing prose as a free name.
+
+- **DEFECTS B-E ARE ALL ONE SENTENCE: A NODE WHOSE SPAN NO DESCENT CAN ENTER.** (B) A parenthesis-less
+  arrow's parameter, an index signature's parameter and a `catch` clause's variable were constructed with
+  `Parameter`/`VariableDeclaration`'s DEFAULT `pos = 0, end = 0`, so `realEndOf` clamps to `pos` and
+  `pathAt` skips them — **328 sites in tsc's 78 compiler sources**, making this the API's single most
+  common wrong answer, and none of the 233 `-project` pins saw it because `(y) => …` is fine and only
+  `y => …` is not. (C) `declare global`'s `global` name and (D) every JSX tag name carried an **exact**
+  end where every other node in this parser carries the end of the FOLLOWING token — so snapping back to
+  the token stream lands on the token BEFORE the name, an empty span again. (E) the synthetic `new` of a
+  construct signature sat at `[0, 0)` and is now the `new` keyword's own span (`getPos()`, not the
+  member's `pos`, which for `abstract new (): T` is the modifier's). Eight one-line parser edits; **core
+  pins unchanged at 14,341**, so nothing in the corpus was pinning the wrong spans.
+
+- **BEFORE AND AFTER, MEASURED.** Compiler profile before: **50 of 78 files** violating, 339
+  `IDENTIFIER_IS_REACHABLE` and 12 `IDENTIFIER_IS_A_TOKEN` (both capped at 12 per file). All eight
+  profiles after: **1,327 files, 101,287,620 characters, 11,299,274 tokens, 3,936,158 identifiers, ZERO
+  violations**, longest token 2,259 (a legitimate emit-helper template) against 25,761 before.
+
+- **COST, since the scan changed.** The oracle adds one iterative walk over the file's own AST:
+  `SourceIndex.of` over 9,977,097 chars is **358 ms on, 326 ms off = +32 ms, +9.9%** (interleaved arms,
+  first round discarded, five recorded). It is paid ONLY by a host's position query — nothing in the
+  compile path builds an index — which is why `cost_gate.py` is **+0.00% on all 20 counters** and is a
+  control here rather than a gate, exactly as in round 919.
+
+- **THE POSITIVE CONTROL IS IN THE BINARY.** `SourceIndex.of(…, useParseAsLexerOracle = false)`
+  reproduces the pre-(GATE.2) scan; it exists solely so the gate has an arm that must redden, because a
+  checker that cannot see a broken index reads exactly like one whose subject is correct (round 849).
+  Same shape as `--spineMaskOff`. Nothing in `Project` passes it.
+
+- **PINS: +9** (`-project` 233 -> 242; core UNCHANGED at 14,341). Three corpus sweeps, four
+  defect-specific pins (each written on what follows the defect, never on the defect itself — the
+  failure is not local), one lib-corpus size assertion so a corpus that silently emptied cannot make
+  every rule vacuous (round 849), and the OFF-arm control.
+
+- **GATES: suite 14,708 -> 14,717 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules. `cost_gate.py` **+0.00% on all 20 counters** (46 errors, 78 files — live).
+  `huge_methods.py --fail-over 0` clean on core (**745 classes, 15,890 methods, 0 over**) and on
+  `-project` explicitly (**24 classes, 249 methods, 0 over**). `spine_closure_audit.py` 46 handlers all
+  supersets, run although no `spine*EnterNode` changed. Warning-clean (the 7 `w:` under `--rerun-tasks`
+  are the daemon test's pre-existing `Thread.id` deprecations).
+
+- **SUCCESSOR, ranked, and unchanged from round 919's ranking except that (1) is now safer to build
+  because its caret resolution is finally trustworthy on real source.** (1) **Signature help** — a
+  call's callee resolves through (API.3d)'s receiver path, the argument index is a token-level question
+  the completion anchor already answers, and the only new thing is rendering a `Signature`. (2) **The
+  refusal backlog as one item** — accessibility filtering, contextual object-literal keys, element
+  access, keywords: all four want the same missing where-is-the-caret-in-the-grammar mechanism. (3)
+  **Rename** — (API.5) plus an edit plan, and the edit plan is the work. (4) **The incremental seam**.
+  **I would take (1).**
+
 **Round 919 (2026-08-18) — (API.5): FIND REFERENCES + DOCUMENT HIGHLIGHTS LAND WITH **ZERO COMPILER
 CHANGES**, AND THE ROUND'S REAL PRODUCT IS THE THING THE COST MEASUREMENT WALKED INTO: **THE TOKEN INDEX
 BEHIND EVERY POSITION-DIRECTED QUERY THIS ARC HAS SHIPPED WAS DE-SYNCHRONISED BY THE FIRST `${…}` IN A
@@ -1407,6 +1506,43 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   cost the same); **peak heap ~1.9 GB, so 512 MB is not enough**. Key spread needed nothing: both
   packers were already finalized (round 914's `packIdPair`). **19 pins**, eight-arm ablation, **every
   arm a DISTINCT set**. `docs/language-service.md` § 10b.
+
+- [x] **(GATE.2) A REAL-SOURCE INVARIANT GATE for the language-service position APIs — LANDED, round
+  920, and it found FOUR MORE DEFECTS on its first run.** (BUG.2) was live for nine rounds behind a
+  green suite because **a hand-written fixture for a lexical API does not contain what real source
+  contains**; round 919 fixed the template case and did not build the instrument. This is it.
+  **`TokenIndexInvariants`** (commonTest) asserts ten rules true of ANY correct implementation — the
+  tokens partition the text and the scan reaches EOF; every gap holds only trivia; a string literal
+  never crosses a line break; a non-literal token is short; **every identifier the PARSER found starts
+  a token of exactly its length** and `realEndOf` answers that end; a descent to an identifier's own
+  position reaches it; a path strictly nests; and offset↔coordinate round-trips against an
+  INDEPENDENT restatement of round 915's terminator rule. **The parse is the oracle** — it is the
+  context-sensitive lexer this index approximates, so a merge is exactly "an identifier with no token
+  starting at it". **THREE CORPORA, and the choice is the point.** Hermetic and permanent
+  (`TokenIndexGateTest`): an adversarial shape corpus plus **the real `lib.*.d.ts` sources**
+  (`RealLibFiles.files`, 2.39 MB of TypeScript nobody wrote for this test, already embedded, no
+  vendored tree and no licensing question). Local-only: `build/bench/tsc-project-*` via
+  `scripts/round920-token-gate.sh` + `RealSourceTokenGateMain`, which **REFUSES (exit 2) rather than
+  skips** — a gate reading a local artifact that passes quietly where the artifact is absent is round
+  853's and round 873's failure mode. **FOUND, all four real, all fixed:** (A) **a backtick inside a
+  regular expression** (tsc's own `` /\r\n|[\\`…]/g ``) opened a template literal running to the
+  next backtick anywhere in the file — a **25,761-character token** that swallowed the twelve
+  identifiers after it, i.e. (BUG.2) in its second costume; (B) a **parenthesis-less arrow parameter**,
+  an **index-signature parameter** and a **`catch` variable** were built with the default `[0, 0)`
+  span, so no descent could enter them — **328 sites in tsc's 78 sources**, the API's single most
+  common wrong answer; (C) `declare global`'s **`global`** name carried an EXACT end where every other
+  node carries the following token's; (D) **JSX tag names** did the same, and (E) the synthetic
+  **`new`** name of a construct signature was at `[0, 0)`. **THE FIX FOR (A) IS THE MECHANISM WORTH
+  KEEPING: ask the parse.** A `RegularExpressionLiteralNode` and a `JsxText` each carry their own RAW
+  text, so `pos + text.length` is exact; `SourceIndex` collects them and emits them verbatim, resuming
+  the scanner past each. The undecidable "does this `/` divide or quote" is therefore never asked —
+  whatever the parser decided, the index reproduces, so the two cannot disagree. **AFTER: 1,327 files,
+  101,287,620 characters, 11,299,274 tokens, 3,936,158 identifiers, ZERO violations**, against 50 of
+  78 files failing on the compiler profile alone before. **COST**: the oracle is +32 ms on 9,977,097
+  chars = **+9.9% of `SourceIndex.of`** (358 vs 326 ms), paid only by a host's position query;
+  `cost_gate.py` **+0.00% on all 20 counters** because nothing in the compile path builds an index.
+  **POSITIVE CONTROL**: `SourceIndex.of(…, useParseAsLexerOracle = false)` is the in-binary OFF arm —
+  the shape `--spineMaskOff` has — and the gate's own control asserts it reddens.
 
 DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
 sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->
