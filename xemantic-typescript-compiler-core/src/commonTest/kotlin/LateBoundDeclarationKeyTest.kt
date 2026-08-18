@@ -318,6 +318,24 @@ class LateBoundDeclarationKeyTest {
     }
 
     @Test
+    fun `a late-bound key satisfies a NAMESPACE-LOCAL implements clause`() {
+        // The namespace-local sibling of [checkImplementsClauses] (`fnsCheckClass`), which
+        // the shared walker deliberately does not own. Its positive control is one line up:
+        // the same shape with a genuinely missing member IS TS2420 in both compilers.
+        val d = check(
+            k + "namespace NS { interface I { [K]: number }\n" +
+                "export class C implements I { [K]: number = 1; } }"
+        )
+        assert(d.none { it.code == 2420 })
+    }
+
+    @Test
+    fun `a namespace-local implements clause still reports a genuinely missing member`() {
+        val d = check("namespace NS { interface I { q: number }\nexport class C implements I { } }")
+        assert(d.any { it.code == 2420 })
+    }
+
+    @Test
     fun `an incompatible late-bound member is reported ONCE`() {
         // The co-emission: the dedicated walker that owned this verdict while the key was
         // dropped now shares it with the general relation, which finds the same member
