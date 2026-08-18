@@ -475,14 +475,55 @@ internal object SyntaxRoles {
      * expression chains deep enough to crash a recursive one.
      */
     fun stringElementAccesses(root: Node): List<Pair<Node, String>> {
-        val found = ArrayList<Pair<Node, String>>()
+        val accesses = stringMemberNameAccesses(root)
+        val found = ArrayList<Pair<Node, String>>(accesses.size)
+        for ((literal, _) in accesses) found.add(literal to literal.text)
+        return found
+    }
+
+    /**
+     * (API.12) The `o["…"]` whose member-name literal begins at [literalStart], or
+     * null when the literal there names no member.
+     *
+     * The completion anchor's half of [stringElementAccesses], and deliberately the
+     * SAME walk: "a string literal is a member name only in an element-access
+     * position" is one predicate, and a completion that offered members at a position
+     * the occurrence sweep does not recognise would invite the user to write text a
+     * later rename could not find. Sharing the enumeration makes that agreement
+     * structural rather than a matter of two definitions being kept in step.
+     *
+     * [literalStart] is the literal's own `pos`, which for a literal is the token's
+     * first character — the parser records a token's start after skipping leading
+     * trivia, so a block comment between the `[` and the quote does not shift it.
+     *
+     * The whole ACCESS is returned rather than its receiver, because the caller needs
+     * both halves: the receiver is what a type is enumerated from and the literal is
+     * what says whether the closing quote is there.
+     */
+    fun stringElementAccessAt(root: Node, literalStart: Int): ElementAccessExpression? {
+        for ((literal, access) in stringMemberNameAccesses(root)) {
+            if (literal.pos == literalStart) return access
+        }
+        return null
+    }
+
+    /**
+     * Every `o["…"]` in [root], as `(the member-name literal, the access)`.
+     *
+     * ITERATIVE, as every full-tree walk in this module is: the corpus carries
+     * expression chains deep enough to crash a recursive one.
+     */
+    private fun stringMemberNameAccesses(
+        root: Node,
+    ): List<Pair<StringLiteralNode, ElementAccessExpression>> {
+        val found = ArrayList<Pair<StringLiteralNode, ElementAccessExpression>>()
         val stack = ArrayList<Node>()
         stack.add(root)
         while (stack.isNotEmpty()) {
             val node = stack.removeAt(stack.size - 1)
             if (node is ElementAccessExpression) {
                 val argument = node.argumentExpression
-                if (argument is StringLiteralNode) found.add(argument to argument.text)
+                if (argument is StringLiteralNode) found.add(argument to node)
             }
             forEachChild(node) { child -> stack.add(child) }
         }

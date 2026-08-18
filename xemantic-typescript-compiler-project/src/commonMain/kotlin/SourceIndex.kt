@@ -548,24 +548,26 @@ internal class SourceIndex private constructor(
      * 1. An [offset] outside `0 .. textLength` answers [CompletionKind.NONE].
      *    Unlike [pathAt] the file's own END is legitimate here: a caret after the
      *    last character is where a user types, and there is no node there to want.
-     * 2. A caret STRICTLY INSIDE a string, template, regular-expression or numeric
-     *    literal token answers NONE. Strictly: at such a token's first offset the
-     *    caret is before its opening quote and at its last it is after the closing
-     *    one, and neither is inside the literal.
-     * 3. A caret inside a COMMENT answers NONE. Comments are not tokens here — the
+     * 2. A caret inside the STRING of an `o["…"]` answers [CompletionKind.MEMBER]
+     *    with the element access's receiver — see the section below.
+     * 3. A caret otherwise inside a string, template, regular-expression or numeric
+     *    literal token answers NONE. Strictly inside: at such a token's first offset
+     *    the caret is before its opening quote and at its last it is after the
+     *    closing one, and neither is inside the literal.
+     * 4. A caret inside a COMMENT answers NONE. Comments are not tokens here — the
      *    scanner consumes them as leading trivia before recording a token's start —
      *    so they live entirely in the GAPS between consecutive tokens, and the gap
      *    the caret falls in is re-read for `//` and comment-open markers. That is
      *    exact rather than heuristic precisely because a string literal IS a token
      *    and can never appear in a gap.
-     * 4. Otherwise the WORD under the caret is found: the token W with
+     * 5. Otherwise the WORD under the caret is found: the token W with
      *    `start < offset <= end` whose first character can begin an identifier.
      *    Strictly greater than `start`, so a caret immediately BEFORE a word is not
      *    inside it and completes as an insertion; less-or-equal `end`, so a caret
      *    immediately after `o.fo|` is inside `fo`. Keywords qualify — `new` and
      *    `class` are legal property names, and a half-typed identifier is often a
      *    keyword prefix.
-     * 5. The token immediately before the word (or before the caret, when there is
+     * 6. The token immediately before the word (or before the caret, when there is
      *    no word) decides the kind: a `.` or `?.` makes it
      *    [CompletionKind.MEMBER], anything else [CompletionKind.FREE_NAME]. Only
      *    NON-EMPTY tokens are considered, which is what stops the zero-width
@@ -604,10 +606,52 @@ internal class SourceIndex private constructor(
      * [CompletionAnchor.receiver], i.e. an empty list. Refusing is deliberate: the
      * alternative is to guess a receiver from bracket-balanced text, and a
      * confidently wrong receiver produces a confidently wrong list.
+     *
+     * ## (API.12) The caret inside `o["`
+     *
+     * A string literal is a member NAME when it is the argument of an element
+     * access, and nowhere else — the rule (API.9) gave the occurrence sweep, applied
+     * to a caret instead of to a node, and read out of the SAME enumeration
+     * ([SyntaxRoles.stringElementAccessAt]) so the two cannot drift. So a caret in
+     * such a literal is a MEMBER anchor whose receiver is the expression before the
+     * `[`, and the member enumeration behind it is unchanged: the same union rule,
+     * the same accessibility filter, the same `this` and export-table legs. Only the
+     * anchor is new, which is the whole of this feature.
+     *
+     * **The span is the TEXT, quotes EXCLUDED**, the same span a member rename
+     * writes into (`occurrenceSpanOf`) — so an accepted item produces `o["alpha"]`
+     * with exactly one pair of quotes, and the item's `name` is the member's own
+     * spelling, unquoted. tsc 7.0.2 answers identically, measured: for a literal at
+     * `[460,467)` its edit range is `[461,466)` and its `newText` carries no quotes.
+     * A member whose spelling is NOT an identifier — `"has space"`, `"1abc"` — is
+     * offered HERE and only here, which is the reason element access exists.
+     *
+     * **An UNTERMINATED literal is the common editing state and is answered.** The
+     * user who has typed `o["` has no closing quote yet, so the caret is at the
+     * token's END rather than inside it, and the text span runs to that end. That is
+     * the one place termination changes an answer, and it is read from the parser's
+     * own `isUnterminated` rather than from a character test.
+     *
+     * **What is deliberately NOT answered here**, each measured against tsc:
+     *
+     * - a caret in a `` o[`p`] `` TEMPLATE, which tsc completes. Refused for the
+     *   reason the shared enumeration exists: (API.9)'s occurrence population is
+     *   string literals only, so a member written through a template is one a later
+     *   rename cannot find — offering it would invite text this API cannot maintain.
+     *   Same conservative direction as (API.11)'s object-literal method.
+     * - a caret BEFORE the opening quote (`o[|"p"]`), where tsc offers free names.
+     *   It is left NONE, which is what every literal's first offset already answers.
+     * - an indexed-access TYPE (`type T = Bag["|"]`). tsc offers FREE NAMES there,
+     *   not member names, so refusing diverges from tsc by exactly as much as
+     *   offering members would.
+     * - a string in an argument whose parameter is a literal union or a `keyof`
+     *   (`w("|")` where `w` takes `keyof Bag`), which tsc completes from the
+     *   CONTEXTUAL type. That is a different resolution, not a different anchor.
      */
     fun completionAnchorAt(offset: Int): CompletionAnchor {
         if (offset < 0 || offset > textLength) return CompletionAnchor.none(offset)
         val containing = tokenContaining(offset)
+        stringMemberAnchorAt(offset, containing)?.let { return it }
         if (containing >= 0 && isUncompletableLiteral(tokenKinds[containing])) {
             return CompletionAnchor.none(offset)
         }
@@ -640,6 +684,74 @@ internal class SourceIndex private constructor(
             anchorStart,
             replacementEnd,
             receiverOfDotAt(tokenStarts[before]),
+        )
+    }
+
+    /**
+     * (API.12) The MEMBER anchor for a caret inside the string of an `o["…"]`, or
+     * null when the caret is not in one.
+     *
+     * ## Where the caret can be, which is two places and not one
+     *
+     * A closed literal CONTAINS the caret, and [containing] has already found the
+     * token. An UNTERMINATED one does not: the user who has typed `o["` has a
+     * one-character token and types at the offset just PAST it, which no token
+     * contains — and that is the state a completion request is normally made in, so
+     * it is answered rather than treated as an edge case. The two are told apart by
+     * the parser's own [StringLiteralNode.isUnterminated], never by looking for a
+     * closing quote in the text: past a CLOSED literal the caret is outside the
+     * string and completes free names, which is what tsc answers there too.
+     *
+     * A caret AT the opening quote is not inside the string and is refused, which is
+     * simply what every literal's first offset already answered.
+     *
+     * ## The span
+     *
+     * `[literalStart + 1, textEnd)` — the TEXT, with the quotes excluded, where
+     * `textEnd` is the token's end for an unterminated literal and one before it for
+     * a closed one. Accepting an item therefore replaces the whole member name the
+     * caret is in and nothing else, leaving exactly one pair of quotes. It is the
+     * same span `occurrenceSpanOf` gives a rename, computed here from the TOKEN
+     * because the token stream is what has an exact end for a literal the parse
+     * left unterminated.
+     */
+    private fun stringMemberAnchorAt(offset: Int, containing: Int): CompletionAnchor? {
+        val token: Int
+        val caretIsInsideToken: Boolean
+        if (containing >= 0) {
+            if (tokenKinds[containing] != SyntaxKind.StringLiteral) return null
+            token = containing
+            caretIsInsideToken = true
+        } else {
+            val before = tokenEndingAtOrBefore(offset)
+            if (before < 0 || tokenEnds[before] != offset) return null
+            if (tokenKinds[before] != SyntaxKind.StringLiteral) return null
+            token = before
+            caretIsInsideToken = false
+        }
+        val literalStart = tokenStarts[token]
+        // At or before the opening quote the caret is not in the string at all.
+        if (offset <= literalStart) return null
+        val access = SyntaxRoles.stringElementAccessAt(sourceFile, literalStart) ?: return null
+        val literal = access.argumentExpression as? StringLiteralNode ?: return null
+        // A ONE-CHARACTER token is the lone opening quote and cannot be closed —
+        // which the parser's own flag gets WRONG, because it decides termination by
+        // comparing the raw text's last character to its first and a lone `"` is
+        // both. That degenerate literal is exactly the state `o["` is in, i.e. the
+        // one this feature exists for, so the arithmetic is checked as well as the
+        // flag. It is arithmetic and not a character test: a closed literal has at
+        // least an opening and a closing quote.
+        val unterminated = literal.isUnterminated || tokenEnds[token] - literalStart < 2
+        if (!caretIsInsideToken && !unterminated) return null
+        val textStart = literalStart + 1
+        val textEnd = if (unterminated) tokenEnds[token] else tokenEnds[token] - 1
+        if (offset < textStart || offset > textEnd) return null
+        return CompletionAnchor(
+            CompletionKind.MEMBER,
+            text.substring(textStart, offset),
+            textStart,
+            textEnd,
+            access.expression,
         )
     }
 

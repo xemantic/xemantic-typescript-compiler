@@ -222,8 +222,122 @@ class CompletionAnchorTest {
         assert(anchor.receiver == null)
     }
 
+    // --- (API.12) MEMBER: the caret is inside the string of an element access -----
+
+    @Test
+    fun `a caret just inside the opening quote of an element access is a MEMBER anchor`() {
+        val marked = "declare const o: { alpha: 1 };\nconst r = o[\"\u2038\"];\n"
+        val anchor = anchorAt(marked)
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.prefix == "")
+        // A pure insertion INSIDE the quotes: nothing has been typed yet.
+        assert(anchor.replacementStart == anchor.replacementEnd)
+        assert(anchor.receiver != null)
+    }
+
+    @Test
+    fun `the element access span is the TEXT, with both quotes outside it`() {
+        val marked = "declare const o: { alpha: 1 };\nconst r = o[\"al\u2038pha\"];\n"
+        val anchor = anchorAt(marked)
+        val text = marked.replace(CARET.toString(), "")
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.prefix == "al")
+        // The SECOND `alpha` — the first is the type literal's member declaration.
+        assert(anchor.replacementStart == text.indexOf("\"alpha\"") + 1)
+        assert(anchor.replacementEnd == anchor.replacementStart + "alpha".length)
+        // The quotes are on the OUTSIDE — the span accepting an item replaces is the
+        // literal's text, exactly as `occurrenceSpanOf` gives a rename.
+        assert(text[anchor.replacementStart - 1] == '"')
+        assert(text[anchor.replacementEnd] == '"')
+    }
+
+    @Test
+    fun `a SINGLE-quoted element access anchors exactly as a double-quoted one does`() {
+        val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o['al\u2038pha'];\n")
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.prefix == "al")
+        assert(anchor.receiver != null)
+    }
+
+    @Test
+    fun `an UNTERMINATED element access string at end of file is a MEMBER anchor`() {
+        // THE COMMON EDITING STATE: the caret is one past a ONE-CHARACTER token,
+        // contained by no token at all, and only the parser's own `isUnterminated`
+        // separates it from a caret past a CLOSED literal's quote.
+        val text = "declare const o: { alpha: 1 };\nconst r = o[\""
+        val anchor = indexOf(text).completionAnchorAt(text.length)
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.prefix == "")
+        assert(anchor.replacementStart == text.length)
+        assert(anchor.replacementEnd == text.length)
+        assert(anchor.receiver != null)
+    }
+
+    @Test
+    fun `an UNTERMINATED element access string before a newline reports its prefix`() {
+        val text = "declare const o: { alpha: 1 };\nconst r = o[\"al\n"
+        val caret = text.length - 1
+        val anchor = indexOf(text).completionAnchorAt(caret)
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.prefix == "al")
+        // The span runs to the token's end, which for an unterminated literal is
+        // where the line breaks — there is no closing quote to step back over.
+        assert(anchor.replacementStart == caret - 2)
+        assert(anchor.replacementEnd == caret)
+    }
+
+    @Test
+    fun `a caret AT the opening quote is not inside the string and admits no completion`() {
+        // Measured divergence from tsc, which answers free names there. Stated in
+        // `completionAnchorAt`: it is what every literal's first offset answers.
+        val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o[\u2038\"alpha\"];\n")
+        assert(anchor.kind == CompletionKind.NONE)
+    }
+
+    @Test
+    fun `a caret PAST the closing quote is a FREE_NAME anchor again`() {
+        val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o[\"alpha\"\u2038];\n")
+        assert(anchor.kind == CompletionKind.FREE_NAME)
+    }
+
+    /**
+     * The caret past a closing quote that NO TOKEN BEGINS AT — a space follows —
+     * which is the only shape that reaches the "a closed literal's end is outside
+     * it" rule: with `]` hard against the quote, the caret is inside the `]` token
+     * and the token-kind test refuses first. Round 929's ablation found the rule
+     * unreachable by every other pin in this file, which is a missing pin rather
+     * than a redundant guard (CLAUDE.md, round 902).
+     */
+    @Test
+    fun `a caret past a closing quote followed by a SPACE is a FREE_NAME anchor`() {
+        val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o[\"alpha\"\u2038 ];\n")
+        assert(anchor.kind == CompletionKind.FREE_NAME)
+    }
+
+    @Test
+    fun `negative control - a TEMPLATE element access admits no completion`() {
+        // A stated divergence from tsc: (API.9)'s occurrence population is string
+        // literals only, so a member written through a template is one a rename
+        // cannot find, and this API does not offer text it cannot maintain.
+        val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o[`al\u2038pha`];\n")
+        assert(anchor.kind == CompletionKind.NONE)
+    }
+
+    @Test
+    fun `negative control - an INDEXED ACCESS TYPE admits no completion`() {
+        // tsc offers FREE NAMES here rather than member names, so refusing diverges
+        // from it by exactly as much as offering members would.
+        val anchor = anchorAt("interface Bag { alpha: 1 }\ntype T = Bag[\"al\u2038pha\"];\n")
+        assert(anchor.kind == CompletionKind.NONE)
+    }
+
     // --- NONE: positions that admit no completion ---------------------------------
 
+    /**
+     * (API.12) Also the boundary pin for the element-access classifier: this literal
+     * is in no element access, so a classifier keyed on the TOKEN rather than on the
+     * position would answer members here.
+     */
     @Test
     fun `a caret inside a string literal admits no completion`() {
         val anchor = anchorAt("const s = \"ab\u2038cd\";\n")

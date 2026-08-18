@@ -653,7 +653,10 @@ receiver is then recovered from the parse. What follows from that:
   comment or JSX text** answers `kind = NONE` / `refusal = NO_COMPLETION_CONTEXT`,
   **and does not compile**. A `.` inside a string or a comment is not a member
   anchor, and what a user types between two JSX tags is prose. (JSX text joined
-  that list in round 920, when the token index learned to see it at all.)
+  that list in round 920, when the token index learned to see it at all.) **The one
+  exception is the string of an `o["…"]`**, which is a member position — see below.
+- A caret inside the **string of an element access** (`o["p"]`) is a MEMBER caret,
+  and the receiver is the expression before the `[`.
 - A caret at the very **end of the file** is a real position here, unlike
   `nodeInfoAt` (§ 7), whose spans are half-open and exclude it.
 
@@ -667,6 +670,33 @@ typed and is what you filter by. `replacementStart until replacementEnd` is what
 accepting an item must *replace*, and it covers the whole word the caret is in —
 so accepting in the middle of `o.fo|o` leaves no `o` behind. With no word under
 the caret the two offsets are equal and an accepted item is inserted.
+
+**Inside `o["`, which is a member caret** (`(API.12)`, and this is a change from
+round 928). `kind` is `MEMBER`, the receiver is the expression before the `[`, and
+the member list is the same one a dot gets — the same union rule, the same
+accessibility filter, the same `this` and export-table legs. Three things are
+particular to it, all measured against tsc 7.0.2:
+
+- **`replacementStart until replacementEnd` is the literal's TEXT, quotes
+  EXCLUDED**, and an item's `name` is the member's own spelling, unquoted. Accepting
+  one therefore leaves exactly one pair of quotes. It is the same span a member
+  rename writes into (§ 10d), so completing a name and then renaming it edit the
+  same characters.
+- **A member whose spelling is not an identifier is offered** — `"has space"`,
+  `"1abc"` — which is the reason element access exists. An index signature
+  contributes nothing, because it is not a name a user can accept.
+- **A half-typed `o["` with no closing quote is answered**, which is the state a
+  completion request is normally made in. `o["p"|]`, past the closing quote, is a
+  free-name caret again.
+
+Four positions inside a string are deliberately still `NONE`, each stated because
+tsc answers differently: a **template** (`` o[`p`] ``), which tsc completes and this
+does not, because § 10b's occurrence sweep is string literals only and a member
+written through a template is one a rename cannot find; a caret **at** the opening
+quote, where tsc offers free names; an **indexed-access type** (`type T = Bag["p"]`),
+where tsc offers free names rather than members; and a string whose **contextual**
+type is a literal union or a `keyof` (`f("|")`), which tsc completes and which is a
+different resolution rather than a different anchor.
 
 **What the member list contains.**
 
@@ -1380,7 +1410,7 @@ your host.
 
 ## 14. State of the API — the two-minute version
 
-Rounds 909–928 built this in nineteen increments, and the detail is spread across as
+Rounds 909–929 built this in twenty increments, and the detail is spread across as
 many session notes. This section is the summary a next agent or a host author should
 read instead.
 
@@ -1395,7 +1425,7 @@ read instead.
 | hover | § 8 | complete for values, members and member declarations; an enum member's declaration name reports nothing |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
 | the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
-| completions, members and free names, with accessibility and keywords | § 10a | complete except inside a string (`o["`) |
+| completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` included; a template `` o[`p`] `` refuses |
 | find references, document highlights, read-vs-write | § 10b | complete |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
 | rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the three gaps below |
@@ -1443,15 +1473,17 @@ wire `documentHighlightsAt` rather than `referencesAt` to caret movement.**
    thing that changes the cost table, and it is the architectural inversion
    (`docs/ARCHITECTURE-RETHINK.md`), not an API item.
 2. **A computed object-literal key** `{ ["p"]: v }` is outside the swept population, so
-   it is neither found nor renamed *and not reported either*. tsc renames it. This is the
-   only silent gap in the list.
+   it is neither found nor renamed *and not reported either*. tsc renames it. One of the
+   two silent gaps in the list; the other is 6.
 3. **An object literal's own METHOD** (`{ om() { … } }`) resolves to nothing — see § 9.
    It refuses a rename loudly.
 4. **A member on an `any` receiver** cannot be placed, so it refuses a member rename.
 5. **A shorthand in a literal nothing contextually types** likewise.
-6. **Completion inside a string** (`o["`) answers `NO_COMPLETION_CONTEXT`; every other
-   query answers an element access. Lifting it is a position classifier, not a
-   resolution.
+6. **A member named by a TEMPLATE element access** (`` o[`p`] ``) is outside the
+   occurrence population, so it is neither found nor renamed *and not reported
+   either* — the second silent gap, measured in round 929 (tsc counts it as a
+   reference). Completion refuses that position for the same reason, which is stated
+   rather than silent.
 7. **An enum member's declaration name reports no type** on hover.
 8. **Hover picks one subject where a span names two** — a shorthand reports the local.
    References, definition and rename answer both.
@@ -1465,6 +1497,7 @@ wire `documentHighlightsAt` rather than `referencesAt` to caret movement.**
 
 Every behaviour above was **read out of tsc 7.0.2's own language server** before it was
 written — `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, driven by `scripts/lsp_hover.py`,
-`scripts/lsp_member_refs.py` and `scripts/lsp_rename.py` — and where this API diverges,
+`scripts/lsp_member_refs.py`, `scripts/lsp_rename.py` and `scripts/lsp_completion.py` —
+and where this API diverges,
 the divergence is stated rather than discovered. That is the standing method, and it is
 the cheapest thing a next round can reuse.
