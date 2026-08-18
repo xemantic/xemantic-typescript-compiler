@@ -1,3 +1,639 @@
+**Round 927 (2026-08-18) — (API.10): ONE SPAN, TWO SYMBOLS. THE LAST OF ROUND 922'S FIVE
+REFUSALS IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CAPTURE FILING ONE ANSWER PER SPAN
+WAS NEVER THE OBSTACLE** — tsc's own relation between a shorthand's two symbols is
+ASYMMETRIC, so what was missing was a ROLE, not a second answer.**
+
+- **STEP 1 WAS tsc ITSELF AND IT DECIDED THE WHOLE DESIGN.** `scripts/lsp_rename.py` +
+  `lsp_member_refs.py` over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, 32 carets in two files,
+  references / rename / definition / hover at each. (A one-line fix to `lsp_rename.py`: its
+  `main()` was unguarded, so IMPORTING it — which `lsp_member_refs.py` does — ran the rename
+  driver instead.) What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 |
+|---|---|
+| `{ p: v }` in a call ARGUMENT / an ANNOTATION / a `return` / a NESTED key / an ARRAY element / `satisfies` / `as` / a TERNARY branch / a parameter DEFAULT / a class-PROPERTY initializer / an arrow's EXPRESSION body | **all eleven** in the member's group |
+| the same key, caret ON it | the UNION of TWO groups — the contextual member's AND the literal's OWN property's, so an `o.p` reading the literal is in the answer while the member's own group does NOT contain it |
+| `{ p: v }` with NO contextual type | the literal's own property alone; go-to-definition answers the KEY ITSELF |
+| `takesGeneric<Shape>({ p })` vs `takesGeneric({ p })` assigned to `Shape` | **in** the group / **NOT** in it — the inferred parameter is a naked `T` and names no member |
+| `{ ["p"]: v }` | in the group, quotes excluded from the edit; `{ [K]: v }` is the const `K` |
+| `{ p }` and `const { p } = o` | **ONE span, TWO symbols, and the relation is NOT symmetric**: the MEMBER's group CONTAINS the token, a caret ON the token answers the LOCAL's group and nothing else (2 spans) |
+| renaming each side of a shorthand | `{ renamed: p }` from the member, `{ p: renamed }` from the local — both compile |
+| definition on a shorthand | **TWO locations** for an object literal's (local, member); the member alone for a binding pattern's |
+
+- **THE MECHANISM: THREE DECLARATION SETS, EACH READ BY A DIFFERENT QUESTION.** A capture
+  still files ONE `CapturedDefinition` per span; what it gained is a third field, and the
+  three now differ in exactly which of NAVIGATION / SEED / MEMBERSHIP they carry.
+  `locations` is all three — what the caret MEANS. `related` (round 926's heritage edge) is
+  SEED + MEMBERSHIP, and (API.10) puts a second tie there: an object-literal key's OWN
+  property, which is what makes a caret on `{ p: v } satisfies Shape` answer both groups and
+  a caret on `sat.p` answer only the literal's. The new `shorthand` is NAVIGATION +
+  MEMBERSHIP and deliberately **not** SEED — that is the asymmetry, and it is why the local's
+  group and the member's never merge through the span they share. Round 926 called this
+  boundary structural; measured, it is a missing role.
+- **THE CONTEXTUAL TYPE IS COMPUTED BY WALKING *OUT*, SYNTACTICALLY — the exact dual of
+  round 926's `typeCaptureDestructured`, and it had to be written rather than read off the
+  checker.** `Checker.contextualType` is walk-scoped ambient a capture cannot trust at an
+  arbitrary node, and `cpaCtxAt` pull-derives it over the LEGACY ctx edges and STOPS at every
+  statement edge, so it cannot see an annotation at all; CLAUDE.md's own note that `ctxObj` is
+  null in a ternary branch is the same gap from the other side — and tsc answers there.
+  `typeCaptureContextualType` reads type NODES and resolved SIGNATURES only, so it is a
+  function of the position; a call's argument instantiates the callee's signature with the
+  call's EXPLICIT type arguments, which is why the explicit/inferred generic split falls out
+  rather than being encoded.
+- **THE FREE KEY BRANCH IS NOT A NICETY.** A key with no contextual type resolves to its OWN
+  declaration, and without that every object-literal key in the program resolves to nothing —
+  which is an unresolved identifier spelling the member's name, i.e. round 925's completeness
+  net refusing the very member rename this round set out to enable. Arm A9 measures it.
+- **PINS +19** (`-project` 445 -> 464, core UNCHANGED at 14,341; suite **14,920 -> 14,939 /
+  0 failures / 3 skipped**). 17 are the new `ProjectContextualKeyTest`. **THREE EXISTING PINS
+  CHANGED MEANING** and each says so in place: `ProjectDefinitionTest`'s "an object-literal
+  KEY being declared answers empty" (round 913) is now "answers its own declaration, or the
+  CONTEXTUAL member", and `ProjectRenameTest`'s "a member also supplied by a contextual
+  shorthand is refused" (round 925) became TWO pins asserting the RESULTING TEXT of both
+  expansions.
+- **TEN-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is
+  asserted, restored from a sha256-verified snapshot. `scripts/round927-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 shorthand-not-grouped | `shorthand` is not a MEMBERSHIP term | **7** | the whole asymmetric half — the member's group loses both tokens |
+| A2 shorthand-in-seed | `shorthand` joins the SEED, i.e. `related`'s role | 4 | why it is a THIRD field: a caret on the token merges the two groups |
+| A3 no-expansion-direction | a shorthand always expands the local's way | 3 | THE DISCRIMINATOR — `{ p: renamed }` written where `{ renamed: p }` is meant |
+| A4 no-contextual-key-leg | an object-literal key resolves to nothing again | **10** | the pre-(API.10) boundary, in every query |
+| A5 key-own-property-not-related | a contextual key drops the literal's OWN property | 1 | the symmetric half — `sat.p` and the key stop being one thing |
+| A6 no-ternary-passthrough | the out-walk does not cross a ternary's branches | 1 | the position the checker's own contextual type is missing outright |
+| A7 no-explicit-instantiation | a call's EXPLICIT type arguments stop instantiating | 2 | the generic split is computed, not encoded |
+| A8 verify-by-locations | the verification asks a shorthand's OTHER answer by the wrong key | 3 | (see below — same set as A3) |
+| A9 free-key-answers-nothing | a key with no contextual type resolves to nothing | 4 | the completeness net's own refusal, re-armed |
+| A10 shorthand-not-a-definition-target | go-to-definition drops the shorthand's member | 1 | the one place both meanings are handed over side by side |
+
+**Nine distinct sets, and the tenth is the round's process finding: A3 and A8 redden EXACTLY
+the same three tests, and neither is redundant.** They are two guards on the SAME property —
+which way a shorthand expands — at two different layers, and round 925's verification is why
+no input separates them: a wrong expansion is caught by the applied-and-recompiled check, so
+BOTH mistakes turn a working member rename into a REFUSAL rather than into wrong text. They
+differ only in the conflict's DETAIL ("the applied edit did not produce 'X' here" vs "after
+the rename this names a different declaration set"), which no pin can assert because a pin
+cannot make a claim about an ablated binary. **The general law: when a later layer refuses
+exactly what an earlier layer would get wrong, the two are indistinguishable to any
+ablation — record them as one observable and say which layer does what, rather than calling
+either redundant (round 807's rule needs this qualifier).**
+
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and a real gate here
+  rather than a control, because this round adds core code on the capture path.
+  `huge_methods.py --fail-over 0` clean on core (750 classes, 16,009 methods, 0 over) and on
+  `-project` explicitly (48 classes, 458 methods, 0 over). `spine_closure_audit.py` not
+  applicable — no `spine*EnterNode` changed; the round-920 token gate not applicable —
+  `SourceIndex` and the parser are untouched, which is also why the swept population did not
+  move. Warning-clean.
+- **WHAT IS STILL REFUSED, and it is now a SHORTER list than the mechanism.** (1) **A second
+  declaration of the same member name** — `interface Other { p }` beside `interface Shape { p }`
+  refuses a rename of `Shape.p`, because a member's DECLARATION name is bound by no scope and
+  has no receiver, so it resolves to nothing and the completeness net cannot rule it out. This
+  is pre-existing (API.8/9) and is the reason this round's rename pins run on a second, smaller
+  file pair. (2) A **shorthand whose member cannot be PLACED** — a literal nothing contextually
+  types, an un-annotated destructured parameter — which keeps `CONTEXTUAL_SHORTHAND` as its
+  conflict kind. (3) A **computed key** `{ ["p"]: v }`, which is a silent gap rather than a
+  refusal: its literal is outside the swept population, and putting it there without resolving
+  it would make every such key an obstacle.
+- **SUCCESSOR, ranked.** (1) **A member declaration name should resolve to its own SYMBOL** —
+  it is now the single largest thing refusing a member rename, one function
+  (`typeCaptureMemberDeclarationAt`) and one measured hazard: resolving it to *itself* is NOT
+  enough, because the net's real quarry is a MERGED declaration the group missed, and only the
+  symbol's whole declaration list puts that back in the group. (2) **completion inside `o["`** —
+  an ANCHOR question, not a resolution one. (3) **the incremental / re-entrant seam** — every
+  query here is still a full rebuild and a rename is two; it is the right end state and the
+  wrong next step, because it is the architecture inversion rather than an API item. **I would
+  take (1)**: it is small, it is measured, and it is what stands between a member rename and
+  "it always works".
+
+**Round 926 (2026-08-18) — (API.9): THE MEMBER OCCURRENCE SET. ROUND 925 MEASURED IT SHORT BY
+THREE KINDS AND REFUSED A MEMBER RENAME BECAUSE OF THEM; **ALL THREE ARE CLOSED**, AND THE
+ROUND'S PRODUCT IS THAT THE THIRD ONE'S SHAPE WAS DECIDED BY tsc RATHER THAN BY REASONING —
+TWICE, AGAINST TWO DIFFERENT WRONG DESIGNS THIS ROUND HAD ALREADY WRITTEN.**
+
+- **STEP 1 WAS tsc ITSELF AND IT DECIDED EVERYTHING.** `scripts/lsp_member_refs.py` (new; it
+  reuses `lsp_rename.py`'s client) drives `textDocument/references` and `textDocument/rename`
+  over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, and `textDocument/definition` beside it. Three
+  fixtures, 25 carets. What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 answers |
+|---|---|
+| an interface member `Shape.p` | **13 spans / 2 files** — every `o.p`, the `o["p"]` LITERAL, five binding-element property names, TWO implementors' declarations, their `this.p`, a `u.p`, the declaration |
+| the string literal of `o["p"]` | the same 13; the edit span is `[77,78)` for a literal at `[76,79)` — **the quotes are excluded** |
+| a plain `"p"` elsewhere in the file | **not a reference** |
+| `const { p: local } = o`, on the `p` | the member's group; on the `local`, the local's |
+| `const { p } = o` (SHORTHAND) | ONE span meaning TWO things — renaming the member writes `renamed: p`, renaming the local writes `p: renamed` |
+| a class with the same members and **no `implements`** | **2 spans** — its own declaration and its own `this.p`. **STRUCTURAL COMPATIBILITY DOES NOT RELATE** |
+| `override p` in a class extending an implementor | in the interface's group — the edge is **TRANSITIVE** |
+| `interface A {p}` + `interface B {p}` + `class C implements A, B {p}`, caret on `A.p` | **7 spans, and `b.p` is NOT among them** — the edge does **not** chain between siblings |
+| **go-to-definition on an implementor's own `p`** | **THAT MEMBER**, where references answers the base's whole group |
+| an object-literal key `{ p: v }` / `f({ p: "w" })` | in the group — the one kind NOT closed here |
+
+- **KINDS 1 AND 2 ARE POPULATION AND RECEIVER QUESTIONS AND WERE CHEAP.** A binding element's
+  `propertyName` is already an identifier the sweep visits; what it lacked was a RECEIVER, and
+  the pattern's source is not an expression to the left of a dot — it is the annotation or
+  initializer one to three levels up (`typeCaptureDestructured`, which handles a nested pattern
+  by asking the level above for its own member, and answers null rather than guessing for an
+  array pattern or an un-annotated parameter). An `o["p"]` needed the POPULATION widened:
+  `SourceIndex.occurrenceNodes()` is `identifiers()` plus the string literals that name a
+  member, and it is the ONE non-`Identifier` this API resolves. `identifiers()` is untouched —
+  `fileSemantics`' contract ("every `Identifier`, and nothing else") is documented.
+
+- **KIND 3 TOOK TWO WRONG DESIGNS, AND BOTH WERE CAUGHT BY MEASUREMENT RATHER THAN BY REVIEW.**
+  (i) The first put the base's declaration into `CapturedDefinition.locations`. tsc's
+  go-to-definition refutes it: an implementor's member navigates to ITSELF. So the edge is a
+  SEPARATE field, `CapturedDefinition.related`, which grouping reads and `definitionsAt` does
+  not — arm A10 restores the mistake. (ii) The second carried the edge only on a member's
+  DECLARATION NAME and then reached the rest of the group by a transitive closure. Two pins
+  failed at once: a `this.p` inside the implementor stayed out, and closing transitively merges
+  the `A`/`B`/`C` fixture that tsc keeps apart. **The rule that survives both is tsc's own and
+  is per-OCCURRENCE**: every occurrence carries its resolved symbol PLUS the bases that symbol
+  implements, and two occurrences are the same thing when those sets MEET. Arm A5 restores the
+  declaration-only edge; arm A4 removes `related` from the grouping.
+
+- **RENAME REFUSES STRICTLY LESS, AND THE PIN THAT SHOWS IT IS THE OLD ONE REWRITTEN.** Round
+  925's `a member with an implementor elsewhere is refused` and `a member also reached by a
+  string element access is refused` now assert the RESULTING TEXT of the renamed lines. **The
+  discriminator for the element access is the QUOTES** — the edit span is
+  `SourceIndex.occurrenceSpanOf`, the text between them, so a plan built from the token span
+  writes `bracket[renamedBracketed]`, which compiles and means something else (arm A1). What
+  still refuses: a CONTEXTUAL SHORTHAND, and an `o["p"]` the search cannot PLACE (a member of
+  an `any`), which keeps `ELEMENT_ACCESS` as its conflict kind because an unplaceable bracket
+  is a different report to a user than an unplaceable identifier.
+
+- **THE SHORTHAND IS REFUSED ON PURPOSE AND THE REASON IS STRUCTURAL, NOT EFFORT.** tsc holds
+  TWO symbols for the one token of `const { p } = o` and expands in whichever direction the
+  caret asks; a capture files ONE answer per span, so admitting it would make the local's group
+  and the member's group share a span and merge whenever a caret landed on it. That is the same
+  boundary the contextual object-literal key sits behind, and they are now the same refusal.
+
+- **ONE VERIFICATION BUG THE ROUND FOUND IN ITS OWN WORK, and it is a general shape.** The
+  rename's third check looks up what each occurrence resolved to BEFORE, keyed by the capture's
+  key — the NODE's raw `pos`. An element-access edit begins one character later, so keying the
+  lookup by the EDIT's start missed, read as an empty expectation, and refused every
+  element-access rename as `WOULD_CHANGE_MEANING`. `PlannedEdit.nodePos` carries the key
+  explicitly; arm A8 restores the mistake. **When an edit span and an identity key stop
+  coinciding, every map keyed by one and read by the other fails silently and in the
+  conservative direction.**
+
+- **PINS +20**, `-project` 425 -> 445, core UNCHANGED at 14,341; suite **14,900 -> 14,920 / 0
+  failures / 0 errors / 3 skipped**. 18 are the new `ProjectMemberOccurrenceTest`, whose whole
+  design is one discriminator per kind: an `o["p"]` beside two unrelated `"p"` literals, a
+  `{ p: local }` beside an unrelated `local`, and a `Structural` class carrying the same member
+  with no `implements`. The tsc-parity assertion is an exact SET, not a size.
+
+- **TEN-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is
+  asserted, restored from a sha256-verified snapshot. `scripts/round926-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 quote-span | the edit span covers the literal's whole TOKEN | **8** | THE QUOTES — the plan writes `bracket[renamedBracketed]`, which compiles |
+| A2 no-element-population | the sweep is `identifiers()` again | 8 | the pre-(API.9) boundary; it differs from A1 by the caret-on-the-literal pin |
+| A3 no-binding-leg | a binding element's `propertyName` resolves to nothing | 5 | kind 1, including its nested / rest / parameter routes |
+| A4 related-not-grouped | `related` is not a GROUPING term | **9** | kind 3 entirely, in every query |
+| A5 declaration-only-edge | the edge rides only a member DECLARATION name | 4 | this round's second wrong design — a `this.p` inside the implementor falls out |
+| A6 one-level-edge | the heritage walk does not recurse | 1 | the `override` two edges away |
+| A7 seed-without-related | the SEED drops its heritage half | 2 | a caret ON an implementor answers only the classes below it |
+| A8 verify-by-edit-start | the verification keys its own answer by the EDIT's start | 2 | this round's own measured bug: every element-access rename reads as a change of meaning |
+| A9 no-unplaceable-net | an `o["p"]` the search cannot place stops refusing | 1 | the surviving `ELEMENT_ACCESS` conflict |
+| A10 definition-follows-edge | go-to-definition follows the heritage edge | 2 | this round's FIRST wrong design, and the divergence from tsc it would have been |
+
+**All ten reddened a DISTINCT set.** **A10 IS ALSO THIS ROUND'S PROCESS FINDING, and it is round
+902's trap verbatim**: written against the general construction site alone it read **0 red**, which
+is indistinguishable from "the guard is redundant" — because a member DECLARATION name returns
+early from `typeCaptureMemberDeclarationAt` and never reaches that line, so the injected mistake
+was NOT REACHED. Fixed by patching BOTH sites, and the round added the pin the gap exposed (a
+member USE inside an implementor also carries the edge, and its definition must still be that
+class's member).
+
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and here it is a real
+  gate rather than a control, because this round DOES add core code on the capture path.
+  `huge_methods.py --fail-over 0` clean on core (largest 5,651) and on `-project` explicitly
+  (largest 246). The round-920 token gate re-run because `SourceIndex` changed: **1,327 files,
+  101,287,620 chars, 3,936,158 identifiers, 0 violations.** `spine_closure_audit.py` not
+  applicable — no `spine*EnterNode` changed. Warning-clean.
+
+- **MEASURED ON tsc's OWN SOURCES** (78 files, 9,977,097 chars, real libs, warm),
+  `OccurrenceCostMain` (new): the swept population goes **381,670 -> 381,672**. Tsc's own
+  compiler sources contain exactly **TWO** `o["…"]` accesses, so the element-access half is
+  arithmetically free; the heritage edge runs per member occurrence inside the same walk and
+  did not move the wall either — `referencesAt` on `SyntaxKind` reads **9.1-13.0 s** against
+  round 925's 10.6-16.0 s, i.e. the same band, with the same **9,827** hits (a control: that
+  symbol is not a member, so its group must not have changed). `fileSemantics` is untouched by
+  construction — it enumerates `identifiers()`, whose documented contract did not change.
+
+- **SUCCESSOR, ranked.** (1) **contextual object-literal keys** — now the ONLY thing that
+  refuses a member rename, the last of round 922's five refusals, and the same shape as the
+  binding SHORTHAND this round refused for a structural reason (one span, two symbols): both
+  want a capture that can file more than one answer per span, so they are one item rather than
+  two. (2) **completion inside `o["`** — hover, definition, references and rename all answer an
+  element access now, but a caret in the string still answers `NO_COMPLETION_CONTEXT`; that is
+  an ANCHOR question, not a resolution one. (3) **the incremental / re-entrant seam** — every
+  query here is a full rebuild and rename is two. **I would take (1)**: it is the last refusal
+  standing between a member rename and "it always works", and this round showed the shorthand
+  and the contextual key are the same mechanism.
+
+**Round 925 (2026-08-18) — (API.8): RENAME. THE OCCURRENCE SET WAS ALREADY THERE; THE ROUND'S PRODUCT
+IS THAT **THE PLAN IS VERIFIED BY APPLYING IT AND COMPILING THE PROGRAM AGAIN**, SO EVERY SAFETY CLAIM
+HERE IS A COMPILER RUN RATHER THAN A READING OF THE CODE.**
+
+- **STEP 1 WAS tsc ITSELF, AND IT DECIDED THREE DESIGNS AND FOUND TWO PLACES TO BEAT IT.** Round 924's
+  technique, one method over: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` answers `textDocument/rename` and
+  `prepareRename`, so `scripts/lsp_rename.py` drives 22 carets over a fixture built for the hard shapes
+  and prints, per caret, the edits AND the resulting text. What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 |
+|---|---|
+| the local of an object shorthand `{ p }` | `p` -> **`p: newName`** (the key is preserved) |
+| the local of a binding shorthand `const { z }` | `z` -> **`z: newName`** |
+| the PROPERTY behind that binding shorthand | `z` -> **`newName: z`** (mirrored) |
+| an interface member with an implementor and an `o["p"]` | **5 spans**, including the string literal and the implementor's `p` |
+| `import { p }`, caret on the import clause | `p` -> `p as newName`; the export in the other file untouched |
+| `import { p as q }`, caret on `p` | the EXPORT is renamed, in both files |
+| a lib member (`"abc".length`) | `prepareRename` **ERROR**: *"You cannot rename elements that are defined in the standard TypeScript library."* |
+| a string literal | `prepareRename` **ERROR**: *"You cannot rename this element."* |
+| **rename to `useZ` where `const useZ` already exists** | **NO refusal** — it writes the second one |
+| **rename to `class` / to `1bad`** | **NO refusal** — it writes `const class = 1` |
+
+  The last two rows are why this feature validates the new name and checks collisions: they are not
+  parity work, they are places where the reference implementation is worse.
+
+- **THE OCCURRENCE SET WAS MEASURED BEFORE ANY CODE, AND IT IS COMPLETE FOR FREE NAMES AND NOT FOR
+  MEMBERS.** The same fixture through `Project.referencesAt`: the local, the shorthand and the
+  cross-file import are exactly tsc's sets; the interface member is **2 spans against tsc's 5**. The
+  three missing are a binding element's `propertyName` (a receiver-based resolution the capture does not
+  do), an `o["p"]` (a string literal — outside the identifier population by construction, § 10b's
+  boundary) and an IMPLEMENTOR's member (a different symbol here; tsc relates base and derived).
+  **That is the STOP-AND-REPORT the brief asked for, cashed as a refusal rather than as a blocker**:
+  members are not planned around, they are refused WITH THE EVIDENCE.
+
+- **THE COMPLETENESS NET, and the split that makes it usable.** A SPELLING scan, used as a safety net and
+  never as the answer: an identifier spelling the old name is fine when it is in the group (it IS an
+  occurrence) or when it RESOLVED to something else (the compiler proved it is a different symbol); what
+  is left is unresolved, and unresolved is not unrelated. **The position split is load-bearing**: a member
+  declaration name resolves to nothing here, so an unsplit net would let `interface I { p: string }`
+  anywhere in the program refuse renaming an unrelated local `p`. So a member rename is judged by the
+  MEMBER positions and a plain binding by the FREE ones, with two obstacles that have no resolution to
+  consult at all — an element access and a property-hiding shorthand — checked only for a member.
+
+- **THE VERIFICATION IS THE ROUND.** The plan is applied to a scratch `OverlayVfs` wrapped around the
+  project's own (so nothing is observable through `updateFile`, `diagnostics` or the parse caches) and the
+  program is BUILT AGAIN. Three checks, each seeing something the others cannot: (1) the plan RE-READS —
+  every position it says it put the new name is re-parsed and must hold it, so an expansion whose
+  arithmetic is wrong fails here and not in the user's buffer; (2) NO NEW DIAGNOSTIC, compared as a
+  `(file, code)` multiset — this is the COLLISION check; (3) NOTHING MOVED — every renamed occurrence and
+  every identifier that ALREADY spelled the new name must resolve to exactly what it resolved to before.
+  **(3) is the CAPTURE check and it is the whole reason for the second build**: renaming a file-level `a`
+  to `b` where a function body holds its own `b` moves that body's reads onto the local, with agreeing
+  types and NO diagnostic anywhere. Arm A4 removes it and reddens exactly the pin that says so.
+
+- **ONE MEASURED DESIGN CORRECTION, and it is the sort of thing only running it finds.** The expectation
+  for a renamed occurrence must be ITS OWN prior answer, mapped through the edits — not "the symbol's
+  declarations". While it was in the tree the stronger-looking form refused three CORRECT
+  renames — an enum member, an interface member, and (in combination with an `export { newName as p }`
+  rewrite that this round then dropped for its own reasons) an exported function — because a member's
+  declaration name resolves to nothing here and so does an `ExportSpecifier`'s `propertyName`, so the check
+  was reporting this API's own blind spots as changes of meaning. Arm A10 restores the mistake and reddens 2.
+
+- **A DIVERGENCE FROM tsc, DECIDED AND STATED.** A bare `export { p }` and a bare `import { p }` are
+  replaced PLAINLY, where tsc expands both (`export { newName as p }`) to preserve the module's public
+  name. tsc can, because it holds the local and the exported symbol as TWO symbols and renames the one the
+  caret is on; here they are ONE (that is what makes find-references answer across the import hop), so the
+  whole group renames together and the plain form is the consistent one — expanding would additionally
+  make `export { p }` behave differently from `export const p`, whose public name a rename does change.
+
+- **REFUSED, each with a reason and a pin**: a declaration in a LIBRARY (the safety refusal — tsc's own
+  words); an ALIASED import, because the group then spells the symbol two ways and one new name cannot be
+  applied to both (tsc picks by caret because it has two symbols to pick between); an unresolved import; a
+  caret on EITHER half of an `import { p as q }` (the `p` and the `q` both resolve to nothing, which is
+  § 9's boundary); a reserved or malformed new name and a no-op rename — **all four of those without
+  compiling anything**; and a member whose occurrence set cannot be shown complete.
+
+- **PINS +35**, `-project` 390 -> 425, core UNCHANGED at 14,341. **14 are parse-only** (`RenameShapeTest`)
+  and were written first. THE DISCRIMINATOR is the shorthand, asserted as the exact resulting TEXT of both
+  affected lines — a plain occurrence rewrite passes every count-based assertion and renames the object's
+  key. **APPLY-AND-RECHECK**: two pins apply the plan through `updateFile` and assert the program's
+  diagnostics are byte-identical, which is an INDEPENDENT oracle of the verification `renameAt` runs
+  internally (that one goes through a scratch overlay and the capture path; this one through the ordinary
+  diagnostic path), so the two agreeing is not a tautology.
+
+- **TWELVE-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is asserted
+  (round 922's rule: `git diff --shortstat` is vacuous on a tree carrying the round's own work), restored
+  from a sha256-verified snapshot. `scripts/round925-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 shorthand-plain | rewrite a shorthand as a plain occurrence | **5** | THE DISCRIMINATOR — it compiles and renames the object's key |
+| A2 no-lib-refusal | drop `DECLARED_IN_A_LIBRARY` | 1 | the safety refusal |
+| A3 no-diagnostic-check | verification without its diagnostic half | 1 | the COLLISION check |
+| A4 no-capture-check | verification without its resolution half | 1 | the CAPTURE check — a rename that compiles and lies |
+| A5 name-matching | group by SPELLING instead of by declaration set | 3 | the text-search rename; it also breaks the plan/refusal contract |
+| A6 no-completeness-net | no net at all | 3 | all three member obstacles at once |
+| A7 no-alias-refusal | apply one new name to two spellings | 1 | the `import { a as b }` group |
+| A8 no-reserved-check | tsc's own behaviour (`const class = 1`) | 1 | the reserved word, distinguished from "not an identifier" |
+| A9 raw-node-end | the raw `Node.end` for the edit span | **12** | round 910's span law, which reaches into the FOLLOWING token |
+| A10 expect-seed | expect the seed instead of each occurrence's own prior answer | 2 | this round's own measured mistake: it refuses CORRECT member renames |
+| A11 no-shorthand-net | the net without its shorthand half | 1 | the contextually supplied key |
+| A12 no-element-access-net | the net without its element-access half | 1 | the `o["p"]` |
+
+**All twelve compiled, all twelve reddened, and all twelve sets are DISTINCT** — A11 and A12 are the two
+halves A6 removes together, and A5 differs from A6 by the contract pin, which is how each is separated
+from the others rather than merely being non-empty.
+
+- **GATES.** Suite **14,865 -> 14,900 / 0 failures / 0 errors / 3 skipped = exactly the +35**, re-run on
+  the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20 counters** — a CONTROL here
+  rather than a gate, since the round changes no core code at all. `huge_methods.py --fail-over 0` clean
+  on core and on `-project` explicitly (largest method there 233 bytecodes). `spine_closure_audit.py` and
+  the round-920 token gate are not applicable: no `spine*EnterNode` and no `SourceIndex`/parser change.
+  Warning-clean.
+
+- **MEASURED ON tsc's OWN SOURCES** (78 files, 9,977,097 chars, 381,670 identifiers, real libs, warm),
+  `RenameCostMain`: renaming `createTypeChecker` is 3 edits in 2 files, **13.3-14.3 s** against
+  `referencesAt`'s 8.4-8.7 s; renaming **`SyntaxKind` is 9,827 edits across 49 files, 23.9-24.5 s**
+  against `referencesAt`'s 10.6-16.0 s. So the verification build costs less than the sweep on a small
+  rename (it carries only the renamed occurrences as capture spans, against the sweep's 381,670) and about
+  as much on a large one. A refusal decided on syntax alone costs nothing.
+
+- **SUCCESSOR, ranked.** (1) **go-to-definition for an element access `o["p"]`** — a small tail on a query
+  that already works, and this round gave it a second reason: an `o["p"]` anywhere is what refuses
+  renaming the member `p`, so closing it narrows (API.8)'s largest refusal as well. (2) **contextual
+  object-literal keys** — the same shape one mechanism further out (a `{ p }` supplied contextually is the
+  other member-rename refusal), and it is the last of round 922's five refusals still standing. (3) **the
+  incremental / re-entrant seam** — every query here is a full rebuild and rename is now two of them.
+  **I would take (1)**: it is the cheapest of the three and it is the one that makes an existing feature
+  refuse less.
+
+**Round 924 (2026-08-18) — (BUG.4): QUICK INFO ON A MEMBER NAME. THE ITEM SAID IT REPORTS
+`any`; MEASURED AGAINST tsc 7.0.2's OWN LANGUAGE SERVER IT IS **WORSE THAN THAT** — IT REPORTS
+THE TYPE OF WHATEVER UNRELATED BINDING SHARES THE MEMBER'S SPELLING, AND `any` ONLY WHERE
+NOTHING DOES.**
+
+- **THE STEP-1 TABLE, TAKEN AGAINST A RUNNING tsc 7.0.2 RATHER THAN AGAINST A READING OF IT.**
+  `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` is an LSP server, so the ground truth for a hover is
+  obtainable directly: a 70-line Python client (`initialize` / `didOpen` / `textDocument/hover`)
+  over the SAME fixture gives tsc's own answer at every caret. The fixture is built to
+  discriminate — every member is deliberately spelled like a file-level `const` of ANOTHER type
+  (`k` a `string` property and a `boolean` const, `value` a `number` property and a `string`
+  const, `p` a `string` field and a `number` const) — because a member name is bound by no
+  scope, so "type the name" does not fail loudly, it resolves to the collider.
+
+| position (member spelled like a file-level `const` of another type) | BEFORE | AFTER | tsc 7.0.2 |
+|---|---|---|---|
+| `o.k` — `k: string`, free `const k: boolean` | **`boolean`** | `string` | `string` |
+| `o?.k` through an optional chain | **`boolean`** | `string` | `string` |
+| `localObj.k` — an object literal's own member | **`boolean`** | `number` | `number` |
+| `o.inherited` — declared on a base, free `const inherited: number` | **`number`** | `boolean` | `boolean` |
+| `o.loose` — the member really IS `any`, free `const loose: string` | **`string`** | `any` | `any` |
+| `o.m` / `m` in `o.m()` — a method name | `any` | `() => number` | `(): number` |
+| `box.value` — `BoxLike<number>`, free `const value: string` | **`string`** | `number` | `number` |
+| `box.wrap` — a generic method | `any` | `() => number[]` | `(): number[]` |
+| `u.p` — union receiver, free `const p: number` | **`number`** | `string \| number` | `string \| number` |
+| `t.k` — receiver is `T extends Shape` | **`boolean`** | `string` | `string` |
+| `n.q` inside `if (typeof n.q === "string")` | **`boolean`** | `string` | `string` |
+| `imp.field` — imported interface, free `const field: boolean` | **`boolean`** | `string` | `string` |
+| `C.s` — a static, free `const s: string` | **`string`** | `number` | `number` |
+| `Color.Red` — an enum member | `any` | `Color.Red` | `Color.Red = 0` |
+| `NS.nsMember` — a namespace member | `number` | `number` | `number` |
+| `d.p` — a class instance member | **`number`** | `string` | `string` |
+| `this.p` directly in a method | **`number`** | `string` | `string` |
+| `this.p` in a nested arrow | **`number`** | `string` | `string` |
+| `super.p` where the subclass OVERRIDES `p` | **`number`** | the BASE's | the BASE's |
+| `ix["num"]` — caret on the string literal | `string` (coincidence) | `number` | `number` |
+| `NS.Plain` — a qualified TYPE name | `any` | `Plain` | `interface NS.Plain` |
+| `this.s` in a STATIC method | **`string`** | `any` (REFUSED) | `number` |
+| `{ k2 }` — a shorthand key | `5` | `5` (REFUSED) | `number` |
+| `sh.k2` — an object-literal member's widening | `5` | `5` | `number` |
+| CONTROL free `k` at its own declaration | `boolean` | `boolean` | `boolean` |
+| CONTROL the RECEIVER `o` of `o.k` | `Shape` | `Shape` | `Shape` |
+| CONTROL a free TYPE name `Shape` | `Shape` | `Shape` | `interface Shape` |
+
+- **THE MECHANISM, AND IT IS A CHANNEL RATHER THAN A MECHANISM — WHICH THE ITEM PREDICTED AND A
+  MEASUREMENT CONFIRMED BEFORE ANY DESIGN WAS COMMITTED.** The rule is tsc's own:
+  `getTypeOfSymbolAtLocation` moves off the right-hand side of a property access ONTO THE ACCESS
+  and takes the type of that expression, so **the type of the `p` in `o.p` is the type of `o.p`**.
+  A throwaway probe that did only that was measured over the whole fixture FIRST: it answers
+  correctly for the generic instantiation, the inherited member, the union receiver, the
+  type-parameter receiver, the static side, the enum member, the namespace member AND the
+  flow-NARROWED member — because `computeRawTypeOfPropertyAccess` already implements every one of
+  those and none of them needed a rule here. That probe is the reason the landed fix contains no
+  member-table walk: **the brief's `propertyTypeOnCarrier` / `resolveGenericPropertyType` route was
+  the right instinct and the wrong altitude** — the compiler's own access typing calls them, and
+  reaching past it would have re-derived (and, at a member table, mis-derived) what it already
+  does.
+
+- **THE ONE RECEIVER THAT NEEDS THE CARRIER, WHICH IS EXACTLY (API.3d)'s.** The probe answered
+  `any` for `this.p` and `super.p`, and for the same reason round 916 recorded: **`this` is
+  `Identifier("this")` in this parser** — there is no `ThisExpression` node — so it reaches
+  `getTypeOfExpression` as a name nothing binds, and the access inherits the `any`. The leg reads
+  `currentClassForThis`, which round 923's `typeCaptureThisClass` ascent installs, and then the
+  compiler's own `resolveMemberPropertyType`. It is **ADDITIVE**: where it cannot decide, the
+  access's own type answers, which is `any` — a non-answer, never a wrong name. That is what makes
+  the static-member refusal below a strict improvement rather than a new hole.
+
+- **TWO NEIGHBOURS CASHED, ONE REFUSED WITH ITS REASON RE-STATED.** (i) An ELEMENT ACCESS
+  `o["p"]`: the caret lands on the string literal, whose own type is `string` **whatever the
+  member is** — so the old answer was right by coincidence for a `string` member and wrong for the
+  `number` one measured. Same rule, one more parent test. Round 922's ranking said this needed "a
+  capture channel plus a member lookup BY TEXT"; typing the access needs neither, so the remaining
+  half of that refusal (go-to-DEFINITION for a non-identifier) is now smaller than it was written.
+  (ii) A QUALIFIED TYPE NAME `N.T` has no access expression to type, so it goes through (API.3d)'s
+  export table and reports the DECLARED type — refused when the left side is not a bare name,
+  exactly as the definition leg refuses `A.B.x`. (iii) An object literal's own key stays refused
+  on round 922's unchanged ground (the CONTEXTUAL type is walk-scoped state this capture does not
+  read, and is absent outright in a ternary branch), so a shorthand `{ p }` keeps reporting the
+  LOCAL it references — true about a different subject.
+
+- **THREE DIVERGENCES FROM tsc SURVIVE AND EACH IS NAMED RATHER THAN ASSERTED AWAY.** `this.s`
+  inside a STATIC method answers `any`: a static `this` is `typeof C`, which
+  `currentClassForThis: ClassDeclaration?` cannot model (round 916's own note), so the leg declines
+  — it used to answer the collider's `string`, so a wrong name became a non-answer. `sh.k2` reads
+  `5` where tsc reads `number`: that is this compiler's own object-literal inference, visible
+  through the access and not a capture question — and in the same run `holder.member` DOES widen to
+  `number`, so it is the shorthand's `const`-literal source and not a missing widening rule.
+  `NS.T` renders as `Alias` when the file also declares `type Alias = NS.T`: the display layer
+  names an interned type by whatever alias the program gave it, which a second namespace type with
+  no alias (`NS.Plain` -> `Plain`) proves is not specific to members.
+- **PINS +27** (`-project` 363 -> 390; core UNCHANGED at 14,341 — nothing was added that a core
+  test can reach without the `-project` anchor). `ProjectMemberHoverTest` IS the step-1 table turned
+  into assertions, positives and negative controls together, and every expected value in it was
+  read out of tsc 7.0.2 rather than predicted — which is how `sh.k2` came to be recorded as a
+  DIVERGENCE and `holder.member` as an agreement, two facts a prediction had exactly backwards.
+
+- **EIGHT-ARM ABLATION**, one mistake at a time, each anchored by an occurrence-count assertion
+  (round 922: `git diff --shortstat` is vacuous on a tree carrying the round's own uncommitted
+  work) and restored from a **sha256-verified** snapshot, never `git checkout`
+  (`scripts/round924-ablate.py`). All eight compiled; **seven reddened a DISTINCT set**:
+
+  | arm | red | what it proves |
+  |---|---|---|
+  | A1 the channel off (the pre-fix behaviour) | **21** | every positive member pin; all controls GREEN |
+  | A2 a member-TABLE read instead of the access | **3** | the two generic pins + narrowing — CLAUDE.md's shared-symbol trap, caught by its own pins |
+  | A3 no `resolveStructuredTypeMembers` in the `super` leg | **0** | MEASURED-REDUNDANT, recorded as that and not as coverage |
+  | A4 free-name FALLBACK wherever the access says `any` | **2** | the naive fix: `o.loose` and static `this` |
+  | A5 no `this`/`super` carrier leg | **4** | its own set |
+  | A6 `super` answered from the THIS type | **1** | uniquely its own — the override case |
+  | A7 no element-access leg | **1** | uniquely its own |
+  | A8 no qualified-name leg | **1** | uniquely its own |
+
+  A3 is kept rather than deleted: the call states the reader's precondition and costs nothing on a
+  capture-only path, and its zero says `getPropertyOfType` resolves the table anyway on THIS
+  fixture — which is a measurement, not a proof that no shape needs it.
+- **GATES.** Suite 14,838 -> **14,865 / 0 failures / 0 errors / 3 skipped = exactly the +27**,
+  XML-summed over all six modules with a real parser and re-run on the byte-restored
+  post-ablation tree. `cost_gate.py` **+0.00% on all 20 counters** — and a CONTROL rather than a
+  gate this round, stated as such: `typeCaptureReportedType` has ONE call site,
+  `typeCaptureRecord`, which is reached only from `typeCaptureVisit`, which returns at its first
+  line when no capture was requested, i.e. on every production build. Its own run compiles 78
+  files to 46 errors, so the instrument is live (round 853's frozen-classpath green is what that
+  sentence exists to exclude). `huge_methods.py --fail-over 0` clean on core and, per round 909's
+  blind-spot rule, on `-project` explicitly. `spine_closure_audit.py` 46 handlers all supersets,
+  run although no `spine*EnterNode` changed. The **8-profile `--listAll` grid** is
+  `added=0 removed=0` on every profile — a TWO-BINARY grid, HEAD's `Checker.kt` rebuilt against
+  the round's, since the change has no runtime switch; the expected result and therefore a control
+  for the reachability argument above, not evidence for it.
+- **THE DISCRIMINATORS, WRITTEN FIRST.** `a member name reports the MEMBER type and not a
+  colliding free binding` together with `a generic member reports the INSTANTIATED type`. Every
+  rival implementation fails one: the pre-fix behaviour fails the first (that is the bug); a fix
+  that merely stops answering `any` — a free-name FALLBACK wherever the access says `any` — passes
+  both and fails `a member that really is any reports any` and the static-`this` pin (arm A4); and
+  a member-TABLE read passes the first and fails the second, because an interface member's symbol
+  is shared by every instantiation and its cached type is the bare `T` (arm A2). The collider
+  bindings live in THE SAME FILE deliberately: a top-level binding in another MODULE is not in this
+  file's scope at all, so it could never have been the wrong answer and would discriminate nothing.
+
+- **SUCCESSOR, ranked.** (1) **RENAME** — unchanged from rounds 922/923 and still the item with the
+  most user-visible value; (API.5) supplies the occurrence sets and `ReferenceUse` the read/write
+  split, so what is left is the EDIT PLAN, where a shorthand `{ p }` and an `import { p as q }` do
+  not rewrite the way a plain occurrence does. (2) **go-to-definition for an element access** —
+  round 922 ranked it as wanting "a capture channel plus member-lookup-by-text", and this round
+  cashed the HOVER half without needing either, so what remains is narrower than it was written:
+  offering a DECLARATION for a non-identifier node. (3) the incremental / re-entrant seam. **I
+  would take (1)**: (2) shrank this round and is now a small tail on a query that already works,
+  while rename is the last big thing an editor needs that this API cannot do.
+
+**Round 923 (2026-08-18) — (BUG.3): THE LAYER QUESTION *WAS* THE ROUND, AND THE ANSWER IS THAT
+**THE CHECKER IS RIGHT AND THE CAPTURE WAS WRONG** — SETTLED BY MEASUREMENT AGAINST tsc 7.0.2 ITSELF
+BEFORE A LINE WAS WRITTEN.**
+
+- **THE STEP-1 TABLE, WHICH IS THE ROUND'S PRODUCT.** Round 922 recorded "a caret on `this.` inside a
+  NESTED ARROW answers no members" without saying which layer owned it, and the two possibilities had
+  wildly different blast radii: if the CHECKER lost class-`this` inside an arrow then `this.typo` is
+  silently unchecked in one of the most common shapes in the language, which outranks any API
+  symptom. A 24-line fixture — `this` in a method, in an arrow, in an arrow inside an arrow, in a
+  `function` EXPRESSION, in a `function` DECLARATION, in an object-literal method, in an arrow inside
+  an object literal, in a getter, a setter, a constructor, a property initializer, a static method, a
+  static-member arrow, a `function` nested inside an arrow, and a class expression's method's arrow —
+  compiled through the ORDINARY diagnostic path gives **17 diagnostics BYTE-IDENTICAL to tsc 7.0.2**:
+
+  | position | xtsc | tsc 7.0.2 |
+  |---|---|---|
+  | `this.p` directly in a method | TS2339 on `C` | TS2339 on `C` |
+  | ... in an ARROW in that method | TS2339 on `C` | TS2339 on `C` |
+  | ... in an arrow inside an arrow | TS2339 on `C` | TS2339 on `C` |
+  | ... in a `function` EXPRESSION | TS2683 implicit-any `this` | TS2683 |
+  | ... in a `function` DECLARATION | TS2683 | TS2683 |
+  | ... in a `function` inside an arrow | TS2683 | TS2683 |
+  | ... in a static method / its arrow | TS2339 on `typeof C` | TS2339 on `typeof C` |
+  | ... in a property initializer / its arrow | TS2339 on `C` | TS2339 on `C` |
+  | ... in a constructor | TS2339 on `C` | TS2339 on `C` |
+  | ... in a getter's arrow / a setter's arrow | TS2339 on `C` | TS2339 on `C` |
+  | a CORRECT `this.real` in each of those | SILENT | SILENT |
+
+  Two divergences in the whole table and NEITHER is about arrows, both pre-existing and both recorded
+  rather than touched: an object-literal method's `this.p` is a **false NEGATIVE** here (tsc emits
+  TS2339 on `{ k(): void; }`), and a class EXPRESSION's instance type DISPLAYS as `(Anonymous class)`
+  where tsc says `CE` — a form divergence in a type NAME. **So the verdict is (b): capture-only, zero
+  corpus risk, and the compiler-correctness worry the item raised is answered NO.**
+
+- **THE MECHANISM OF THE DEFECT, once the layer was known.** `typeCaptureVisit` installed
+  `currentClassForThis = frame.classForThis` from `ctaFrames.last()`. A **cta frame is a
+  TYPE-checking context and `this` is not one of the things it threads**: the `is ArrowFunction ->`
+  arm of the frame push calls `ctaFnBodyFrame` with no `classForThis`, so it defaults to null, and
+  the checker does not care because `this` reaches the DIAGNOSTICS through B101's own walk-scoped
+  installs — which an arrow deliberately preserves (`Checker.kt` says so in as many words:
+  *"a function expression rebinds `this`; clear the enclosing class (an arrow, below, preserves
+  `this`)"*).
+
+- **THE FIX IS `typeCaptureThisClass`, AND WHAT IT IS *NOT* IS THE INTERESTING PART.** A pull-based
+  ascent of the parent chain, transparent to `ArrowFunction` and opaque to everything else that binds
+  `this`. It is deliberately **not** round 922's `typeCaptureEnclosingClass` — that answers "which
+  class body is this caret lexically in", which is the ACCESSIBILITY question, and it would happily
+  offer a class's members inside a `function` expression. And it is deliberately **not** the
+  checker's own `spineCaClassCtx`, even though that is the same shape and exists for exactly this
+  purpose: its KDoc records that a nested `FunctionDeclaration` is **bug-compatibly transparent** to
+  it, so reusing it verbatim would have passed every other pin in the round and failed precisely at
+  `function inner() { this.| }`. Arm A2 is that measurement. What the ascent DOES reuse is the RULE
+  those installs state — free function and function expression clear, arrow preserves, object-literal
+  member clears, class member sets per static/instance.
+
+- **BIAS: PROVE TO OFFER**, the mirror of round 922's prove-to-hide one level down. A static member
+  (whose `this` is `typeof C`, which `currentClassForThis: ClassDeclaration?` cannot model), an
+  object literal's method, a `function` at any depth, a CLASS EXPRESSION and a caret in no class at
+  all all answer NOTHING. The class-expression stop is load-bearing rather than cosmetic: without it
+  the ascent walks straight past `const K = class { m() { this.| } }` written inside a method of `C`
+  and answers with **`C`'s** members — a confident, plausible, wrong list, which is the one failure
+  mode a completion UI gives the user no way out of.
+
+- **TWO SIDE FINDINGS, both stated rather than fixed.** (1) **An EXPRESSION-bodied arrow already
+  worked**, and the reason is the mechanism's own shape: a cta frame is pushed at a `Block` enter, so
+  an arrow with no block pushes none and `ctaFrames.last()` was still the enclosing METHOD's frame.
+  The bug was never "arrows" — it was arrows that OPEN A BLOCK, which is why the item's own
+  reproduction and the fix's pin have to be written with braces. (2) **Quick info on a member name is
+  a SEPARATE, RECEIVER-INDEPENDENT gap and the brief's "they share the path" is false.** `quickInfoAt`
+  resolves the NARROWEST node at the caret — the member identifier — and asks for the type of that
+  name as if it were free, so it reports `any` for `o.k` with an ordinary receiver, for `this.p`
+  inside a METHOD where completions and definitions both answer correctly, and for `this.p` inside a
+  nested arrow alike. Measured all three; pinning it here would have pinned the wrong subject, and it
+  is named as a successor instead.
+
+- **PINS +20** (`-project` 343 -> 363; core UNCHANGED at 14,341 — nothing was added that a core test
+  can reach without the `-project` anchor). `ProjectThisReceiverTest` IS the step-1 table turned into
+  assertions, positives and negative controls together. Round 922's in-file note in
+  `ProjectMemberAccessibilityTest` — which explains why `this` is not a receiver there — was UPDATED
+  IN PLACE naming the round that closed the gap, never deleted.
+
+- **THE DISCRIMINATORS, written first.** `an arrow nested in an arrow answers` together with
+  `a function EXPRESSION in a method answers NOTHING`. Every rival implementation fails one of the
+  two: reading the cta frame fails the first (that is the bug); "any caret lexically inside a class
+  answers" — i.e. `typeCaptureEnclosingClass`, already in the file — passes the first and fails the
+  second; "the innermost function-like decides, whatever it is" fails the first, because an arrow
+  binds no `this` at all.
+
+- **SEVEN-ARM ABLATION**, one mistake at a time, each restored from a **sha256-verified** snapshot
+  (`scripts/round923-ablate.sh`). A1 an arrow is not transparent (the pre-fix behaviour expressed
+  inside the new ascent) -> **10**. A2 a `function` is transparent, i.e. `spineCaClassCtx` reused
+  verbatim -> **3**, exactly the three `function` pins. A3 a static member answers with the instance
+  class -> **2**. A4 an object-literal member keeps ascending -> **1**. A5 the ascent does not stop at
+  a class EXPRESSION -> **0**. A6 the install reverted to `frame.classForThis`, the whole fix off ->
+  **9**. **A5 is recorded as a MEASURED-REDUNDANT guard, not as coverage** (CLAUDE.md's rule that an
+  undiscriminated seam is as often a redundant guard as a blind pin): the member arm's
+  `as? ClassDeclaration` cast already answers null for a class expression's method, so the two guards
+  are mutually redundant there. **A7 exists to prove the pin is not vacuous** — A4 and A5 TOGETHER,
+  which reddens the class-expression pin; it is explicitly NOT an attribution (round 807 forbids a
+  combined arm for that) but a redundancy demonstration.
+
+- **GATES.** Suite 14,818 -> **14,838 / 0 failures / 0 errors / 3 skipped = exactly the +20**,
+  XML-summed over all six modules. `cost_gate.py` **+0.00% on all 20 counters**, and a real gate
+  rather than round 853's frozen-classpath green — its own run compiles 78 files to 46 errors.
+  `huge_methods.py --fail-over 0` clean on core (**750 classes, 15,983 methods, 0 over**) and, per
+  round 909's blind-spot rule, on `-project` explicitly (**35 classes, 326 methods, 0 over**).
+  `spine_closure_audit.py` 46 handlers, all supersets. **The 8-profile `--listAll` grid is
+  `added=0 removed=0` on EVERY profile** (`scripts/round923-grid.sh`, profiles enumerated by their
+  `tsconfig.json` and the run refusing below 8) — and it is a TWO-BINARY grid, HEAD's `Checker.kt`
+  rebuilt against the round's, because the change has no runtime switch. That result is the expected
+  one and is a CONTROL: `typeCaptureThisClass` is reachable only from `typeCaptureVisit`, which
+  returns at its first line when no capture was requested, i.e. on every production build.
+  Warning-clean (the only `w:` lines are pre-existing `Thread.id` deprecations in a daemon test).
+
+- **SUCCESSOR, ranked.** (1) **RENAME** — unchanged from round 922's ranking, and still the item with
+  the most user-visible value: find-references plus an edit plan, where the edit plan is the work.
+  (2) **quick info on a member NAME** — newly named and newly measured here, small and mechanical
+  (route the member caret through the same member resolution completions and definitions already
+  use), and it fixes hover for EVERY receiver, not just `this`. (3) **element access `o["p"]`** —
+  round 922's corrected reason still stands. (4) the incremental / re-entrant seam. **I would take
+  (2) then (1)**: (2) is the smallest thing that removes a wrong answer a user sees on every hover.
+
 **Round 922 (2026-08-18) — (API.7): THE SYNTACTIC-ROLE MECHANISM, AND **THREE OF THE FIVE REFUSALS
 CASHED**. THE ROUND'S PRODUCT IS THE CORRECTION TO ITS OWN RANKING: THE BACKLOG WAS PROMOTED AS ONE
 ITEM BECAUSE "ALL FIVE WANT THE SAME MISSING MECHANISM", AND **ONLY THREE DO** — THE OTHER TWO WERE
