@@ -368,6 +368,18 @@ What answers, concretely:
 | `N.x` / `N.T` where `N` is a namespace, module alias or enum | the export's declaration |
 | `"s".length`, `arr.push` | the **lib**'s declaration (see the lib note below) |
 
+**`this` is a receiver, and where it points is a property of the position.** An
+arrow function does not rebind `this` — TypeScript gives it whatever encloses it —
+so a caret on `this.` inside an arrow, inside an arrow inside an arrow, or inside an
+arrow in a constructor, getter, setter or property initializer, answers with the
+enclosing class's members. Everything that *does* rebind `this` answers **nothing**
+rather than guessing: a `function` expression or declaration at any depth (TypeScript
+types its `this` as `any`, and the compiler emits TS2683 for a member read there), an
+object literal's own method, a static member (whose `this` is `typeof C`), a class
+*expression* (which the compiler's `this` context cannot name), and a caret in no
+class at all. The bias is *prove to offer*: an empty answer here means "not a class
+instance", never "lost".
+
 **An empty list is a normal answer**, and these are the ways to get one:
 
 - there is no node at the offset, or the file is unknown;
@@ -953,10 +965,13 @@ stale text and nothing worse.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.
-- **`this.` inside a nested arrow** answers no members at all, because the class
-  the capture reads `this` from is null there. Found while building `(API.7)`'s
-  accessibility pins; unrelated to accessibility, and a caret on `this.` directly
-  inside a method is unaffected.
+- **quick info on a member NAME** — hovering the `p` of `o.p` reports `any`, and it
+  is not a `this` problem: `quickInfoAt` resolves the *narrowest* node at the caret,
+  which is the member identifier, and asks the checker for the type of that name as
+  if it were a free one. Completions and go-to-definition both consult the member
+  resolution at that caret; hover does not. Measured on an ordinary receiver, on
+  `this` inside a method and on `this` inside a nested arrow — the same answer in
+  all three, so the fix is one channel, not three.
 - **rename** — it is find-references plus an edit plan, and the edit plan is where
   the work is: a shorthand `{ p }` and an `import { p as q }` do not rewrite the way
   a plain occurrence does.

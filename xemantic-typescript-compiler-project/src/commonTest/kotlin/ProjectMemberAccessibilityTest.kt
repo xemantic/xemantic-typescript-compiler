@@ -75,10 +75,14 @@ class ProjectMemberAccessibilityTest {
      * shape that silently selects a different site the moment the fixture grows — is
      * impossible here.
      *
-     * `this` is deliberately NOT the receiver anywhere. A caret on `this.` inside a
-     * NESTED ARROW answers no members at all today (`currentClassForThis` is null
-     * there — a pre-existing (API.4a) gap, unrelated to accessibility), so a pin
-     * written with it would measure that gap instead of this filter.
+     * `this` is deliberately NOT the receiver anywhere. When this file was written a
+     * caret on `this.` inside a NESTED ARROW answered no members at all — a
+     * pre-existing (API.4a) gap, unrelated to accessibility — so a pin using it would
+     * have measured that gap instead of this filter. **(BUG.3), round 923, FIXED the
+     * gap** (`ProjectThisReceiverTest`, and one of its pins asserts that this filter
+     * still offers a `private` member through a nested arrow), and the receivers here
+     * stay named anyway: a named receiver exercises the round-922 ascent, which is
+     * what this file is about.
      */
     private val main = """
         import { Imported } from "./b";

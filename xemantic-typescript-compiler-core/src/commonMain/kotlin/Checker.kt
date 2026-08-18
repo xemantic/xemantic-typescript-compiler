@@ -5230,7 +5230,16 @@ class Checker(
         val savedTpDecls = currentTypeParamDecls
         val savedTpScope = currentTypeParamScope
         val savedFlowGraph = currentFlowGraph
-        currentClassForThis = frame.classForThis
+        // (BUG.3) NOT `frame.classForThis`. A cta frame is a TYPE-checking context and
+        // `this` is not one of the things it threads: the frame an ARROW body pushes
+        // carries null there, so a caret on `this.` inside one answered no members at
+        // all, while the same caret directly in the method answered correctly. The
+        // checker itself is unaffected and was measured to be — the same shapes
+        // compiled through the ordinary diagnostic path are byte-identical to tsc
+        // 7.0.2 — because `this` reaches the diagnostics through B101's own
+        // walk-scoped installs, which an arrow deliberately preserves. This is the
+        // pull-based reconstruction of exactly those installs.
+        currentClassForThis = typeCaptureThisClass(node)
         inNonArrowFunctionBody = frame.inFn
         inAsyncFunctionBody = frame.inAsync
         inGeneratorFunctionBody = frame.inGen
@@ -6080,6 +6089,84 @@ class Checker(
     private fun typeCaptureDeclaringClass(symbol: Symbol): Node? {
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
         return typeCaptureEnclosingClass(declaration)
+    }
+
+    /**
+     * (BUG.3) The class whose INSTANCE `this` denotes at [node], or null.
+     *
+     * ## Why this is not [typeCaptureEnclosingClass]
+     *
+     * That one answers "which class body is this caret lexically in", which is the
+     * accessibility question. This one answers "what does `this` MEAN here", and the
+     * two come apart at every non-arrow function: a `function` expression or
+     * declaration REBINDS `this` (TypeScript types it `any`, and both tsc and this
+     * compiler emit TS2683 for `this.p` there), while an ARROW does not rebind it at
+     * all and simply inherits whatever encloses it.
+     *
+     * ## Why it is not [spineCaClassCtx] either
+     *
+     * That is the checker's own pull-based reconstruction of `currentClassForThis`
+     * and has the right SHAPE — an innermost-boundary-first ascent — but it is
+     * deliberately bug-compatible with a narrower legacy walker on one arm: a nested
+     * `FunctionDeclaration` is transparent to it. Reusing it verbatim would answer
+     * `function inner() { this.| }` inside a method with the enclosing class's
+     * members, which is a confident wrong list. The RULE this reproduces is the one
+     * the checker's own B101 installs state and enforce — a free function and a
+     * function expression clear the class, an arrow preserves it, an object-literal
+     * member clears it, and a class member sets it per static/instance.
+     *
+     * ## The bias: PROVE TO OFFER
+     *
+     * Every position this cannot place answers null, so `this` offers nothing rather
+     * than guessing. That covers a static member (whose `this` is `typeof C`, which
+     * `currentClassForThis` does not model), an object literal's method, a CLASS
+     * EXPRESSION ([currentClassForThis] is typed `ClassDeclaration?`, so an anonymous
+     * class is unrepresentable) and a caret in no class at all. The class-expression
+     * arm is load-bearing rather than cosmetic: without it the ascent would walk
+     * straight past `const K = class { m() { this.| } }` written inside a method of
+     * `C` and answer with `C`'s members.
+     *
+     * INV.2(a) stamps `parent` on every node, so this is a pointer walk; the cap is
+     * against a corrupt chain and nothing else.
+     */
+    private fun typeCaptureThisClass(node: Node): ClassDeclaration? {
+        var current: Node = node
+        var steps = 0
+        while (steps++ < TYPE_CAPTURE_ENCLOSING_MAX_DEPTH) {
+            val parent = (current as NodeBase).parent ?: return null
+            when (parent) {
+                // Transparent: an arrow binds no `this` of its own, anywhere in it.
+                is ArrowFunction -> {}
+                // Opaque, and the whole reason this is not [spineCaClassCtx].
+                is FunctionExpression, is FunctionDeclaration -> return null
+                is MethodDeclaration ->
+                    return typeCaptureThisOwner(parent, ModifierFlag.Static in parent.modifiers)
+                is GetAccessor ->
+                    return typeCaptureThisOwner(parent, ModifierFlag.Static in parent.modifiers)
+                is SetAccessor ->
+                    return typeCaptureThisOwner(parent, ModifierFlag.Static in parent.modifiers)
+                is PropertyDeclaration ->
+                    return typeCaptureThisOwner(parent, ModifierFlag.Static in parent.modifiers)
+                is Constructor -> return typeCaptureThisOwner(parent, isStatic = false)
+                // A static initializer block's `this` is `typeof C`.
+                is ClassStaticBlockDeclaration -> return null
+                // Reached without passing a member — a heritage clause, a computed
+                // member name, a decorator. Nothing above may claim the caret.
+                is ClassDeclaration, is ClassExpression -> return null
+                is SourceFile -> return null
+                else -> {}
+            }
+            current = parent
+        }
+        return null
+    }
+
+    /** (BUG.3) The [ClassDeclaration] whose INSTANCE side [member] belongs to, or null
+     *  — null for a static one, and null for an OBJECT LITERAL's member, whose parent
+     *  is an [ObjectLiteralExpression] and whose `this` is that literal. */
+    private fun typeCaptureThisOwner(member: Node, isStatic: Boolean): ClassDeclaration? {
+        if (isStatic) return null
+        return (member as NodeBase).parent as? ClassDeclaration
     }
 
     /**
