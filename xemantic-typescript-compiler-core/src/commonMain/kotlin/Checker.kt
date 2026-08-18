@@ -80666,8 +80666,23 @@ interface DataView {
                 }
                 val tail = chain ?: continue
                 val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                // Round 937 — (CHK.5)(a): the general relation now REACHES this verdict too.
+                // Before stage (a) an interface whose only member was `[c0]` had NO members,
+                // so the structural comparison was vacuous and this walker was the sole
+                // emitter; with the key late-bound the relation finds the same incompatible
+                // member and emits the same code at the same span, differing only in the
+                // property NAME it prints — `'1'` (the late-bound name) against this walker's
+                // `'[c0]'`, which is the one tsc prints. CLAUDE.md's rule for a walker a
+                // relation rule catches up with: RETRACT, then emit, keyed on
+                // (code, fileName, start, message) — never on the position alone (round 746:
+                // two legitimate diagnostics can share one position).
+                val dupMessage = "Type '$srcName' is not assignable to type '$tgtName'."
+                diagnostics.removeAll {
+                    it.code == 2322 && it.fileName == fileName && it.start == lhs.pos &&
+                        it.message == dupMessage
+                }
                 diagnostics.add(Diagnostic(
-                    message = "Type '$srcName' is not assignable to type '$tgtName'.",
+                    message = dupMessage,
                     category = DiagnosticCategory.Error, code = 2322,
                     fileName = fileName, line = line, character = ch,
                     start = lhs.pos, length = lhs.text.length,
@@ -109970,7 +109985,16 @@ interface DataView {
                 // Named method — create a function type with call signature(s).
                 // Skip unnamed members (call/construct signatures) — those are
                 // tracked separately, not as property types.
+                // Round 937 — (CHK.5)(a): a computed METHOD name is a FOURTH independent
+                // extraction site (B451), and it fails in the quietest way of all four —
+                // by returning `anyType`, so `interface I { [K](): number }` DECLARED the
+                // member `p` (TS2741 fired for a missing one) and typed it `any`, i.e. the
+                // member existed and its return type did not. Deliberately narrow: only a
+                // ComputedPropertyName is routed, so a StringLiteralNode-named method keeps
+                // answering `anyType` exactly as it did — that is a separate pre-existing
+                // gap and not this stage's.
                 val methodName = (decl.name as? Identifier)?.text
+                    ?: (decl.name as? ComputedPropertyName)?.let { declaredMemberName(it) }
                 if (methodName.isNullOrEmpty() || methodName == "new") return anyType
                 // B280: a method on a NAMESPACE-NESTED interface/class must resolve its
                 // param/return annotations with the containing namespace's exports in
@@ -110559,7 +110583,7 @@ interface DataView {
                 }
                 when (member) {
                     is PropertyDeclaration -> {
-                        val name = getMemberName(member.name) ?: computedLiteralKey(member.name) ?: continue
+                        val name = declaredMemberName(member.name) ?: continue
                         val propSymbol = Symbol(SymbolFlags.Property, name)
                         propSymbol.declarations.add(member)
                         propSymbol.valueDeclaration = member
@@ -110572,7 +110596,7 @@ interface DataView {
                         }
                     }
                     is MethodDeclaration -> {
-                        val name = getMemberName(member.name) ?: continue
+                        val name = declaredMemberName(member.name) ?: continue
                         // Call signatures (empty name) and construct signatures ("new") are
                         // tracked as signatures, not as named properties.
                         if (name.isEmpty() || name == "new") {
@@ -110674,7 +110698,7 @@ interface DataView {
                         }
                     }
                     is GetAccessor -> {
-                        val name = getMemberName(member.name) ?: continue
+                        val name = declaredMemberName(member.name) ?: continue
                         val existing = members[name]
                         val sym = if (existing != null) {
                             // B54.6: accessor-pair declaration merging — if a SetAccessor was
@@ -110697,7 +110721,7 @@ interface DataView {
                         }
                     }
                     is SetAccessor -> {
-                        val name = getMemberName(member.name) ?: continue
+                        val name = declaredMemberName(member.name) ?: continue
                         val existing = members[name]
                         val sym = if (existing != null) {
                             // B54.6: see comment in GetAccessor branch.
@@ -110912,6 +110936,73 @@ interface DataView {
             else -> null
         }
     }
+
+    /**
+     * Round 937 — (CHK.5)(a): the member name a DECLARATION-side name node spells,
+     * including a LATE-BOUND computed key.
+     *
+     * This is the declaration-side twin of [staticMemberNameOf] (the object-literal
+     * namer round 935 landed), and it exists so the two sides cannot drift. The whole
+     * of rounds 933-936 is one lesson restated: **B451 records that member-NAME
+     * extraction has >= 5 INDEPENDENT sites, and a key named at one and dropped at
+     * another produces two contradictory diagnostics in ONE compile.** Round 936 landed
+     * `[K]` on the object-literal side alone, and that is exactly what
+     * `interface I { [K]: number }; const x: I = { [K]: 1 }` then measured as: the
+     * literal named the member `p`, the interface declared nothing, and the excess
+     * check reported a key both compilers accept (TS2353 `'[K]'`, a false positive
+     * this fixes).
+     *
+     * Every row was READ from tsc 7.0.2 on a scratch project before this was written,
+     * in both directions:
+     *
+     *  - `interface I { [K]: number }` / `class C { [K]: number }` / `type T = { [K]: number }`
+     *    all declare a member `p` in tsc — reading it is TS2322 against a `string`,
+     *    where this compiler was SILENT for the interface and type literal (a false
+     *    NEGATIVE) and **TS2339, a false POSITIVE, for the class**;
+     *  - `const x: I = {}` is TS2741 in tsc (it names the key AS WRITTEN, `'[K]'`) and
+     *    was silent here;
+     *  - every key spelling round 935/936 already resolves works here identically —
+     *    `[CE.P]`, `[SE.Q]`, `[NS.K]`, `` [TT] `` for a template-literal type, a
+     *    numeric `[N]`, an alias chain — because this asks the SAME helper.
+     *
+     * **[getMemberName] is deliberately asked first and deliberately not changed.**
+     * B451 is explicit that it feeds ~20 callers including duplicate detection and
+     * abstract tracking; the widening belongs at the member-BUILDING call sites, which
+     * is what this wrapper is. Its `[Symbol.X]` arm keeps winning for a well-known
+     * symbol, which is what makes an interface's `[Symbol.iterator]` member match the
+     * object literal's (round 723).
+     *
+     * **REFUSED, with tsc's own answer measured, and the refusals are not omissions.**
+     * A key whose type is `string` (`let LW = "p"`), a literal UNION, or a dotted path
+     * through a value (`obj.k`) gives tsc's interface a STRING INDEX SIGNATURE rather
+     * than a named member — a different modelling gap, recorded in (CHK.5), and one
+     * that late binding must not pretend to close. A `unique symbol` key is (CHK.5)(d)
+     * and MUST stay refused on both sides at once: naming `[S]` here alone would make
+     * `{ [S]: 1 }` against an interface that has it — silent in both compilers today —
+     * a false positive. A key imported from another FILE is (CHK.5)(c).
+     */
+    private fun declaredMemberName(name: NameNode): String? =
+        getMemberName(name) ?: computedLiteralKey(name) ?: lateBoundComputedKeyName(name)
+
+    /**
+     * Round 937 — (CHK.5)(a): the COMPUTED half of [declaredMemberName], for the sibling
+     * walkers that collect a class's OWN member names from the AST and compare them
+     * against a resolved TYPE's member table.
+     *
+     * Those walkers read `(m.name as? Identifier)?.text` and nothing else, which was
+     * consistent while the type side dropped a computed key too — and became B451's drift
+     * the moment it stopped: `interface T8 { [c4]: number }` / `declare class T9 implements
+     * T8 { [c4]: number }` (the corpus's `dynamicNames`) had the INTERFACE's members named
+     * `a` and `1` from its type and the CLASS's named nothing from its AST, so T9 "did not
+     * implement" a member it declares one line down — TS2420/TS2720 false positives that
+     * tsc does not have.
+     *
+     * Deliberately the computed arm ONLY: a `"p"`-spelled or numeric member name is left
+     * refusing at those sites exactly as it was, because widening THAT is a separate
+     * pre-existing gap with its own population and not this stage's.
+     */
+    private fun declaredComputedMemberName(name: Node?): String? =
+        (name as? ComputedPropertyName)?.let { declaredMemberName(it) }
 
     /** B451: a computed member/property name `[<literal>]` whose inner expression is a
      *  numeric, string or NO-SUBSTITUTION TEMPLATE literal is a STATIC key (`[2]`→"2",
@@ -131930,10 +132021,16 @@ interface DataView {
         val classMemberNames = mutableSetOf<String>()
         for (member in classDecl.members) {
             val memberName = when (member) {
-                is PropertyDeclaration -> (member.name as? Identifier)?.text
-                is MethodDeclaration -> (member.name as? Identifier)?.text
-                is GetAccessor -> (member.name as? Identifier)?.text
-                is SetAccessor -> (member.name as? Identifier)?.text
+                // Round 937 — (CHK.5)(a): the INTERFACE side of this comparison comes from
+                // the resolved TYPE and the CLASS side from the AST, so the two namers must
+                // be the SAME one (B451). Reading `(name as? Identifier)?.text` here made
+                // `interface I { 1: string }` + `class C implements I { 1: string }` a TS2420
+                // false positive at HEAD, with no computed key involved — the drift was
+                // pre-existing and merely unreachable while the type side dropped `[c1]` too.
+                is PropertyDeclaration -> declaredMemberName(member.name)
+                is MethodDeclaration -> declaredMemberName(member.name)
+                is GetAccessor -> declaredMemberName(member.name)
+                is SetAccessor -> declaredMemberName(member.name)
                 is Constructor -> {
                     // Parameter properties count as class members
                     for (param in member.parameters) {
@@ -144068,7 +144165,13 @@ interface DataView {
         // for TS2322 and simultaneously FP'd TS2339 from this walker, in ONE compile.
         // The archive's B451 entry is explicit that this family has >= 5 independent
         // extraction sites; one shared definition is the only thing that keeps them level.
-        is ComputedPropertyName -> computedLiteralKey(nameNode)
+        // Round 937 — (CHK.5)(a): and LATE-BOUND keys for the same reason, one round on.
+        // `class C { [K]: number }` with `const K = "p"` declares `p` at the type-building
+        // site now, so a walker that still refused the key would answer "definitely no such
+        // member" for a member the type HAS — which is precisely the TS2339 false positive
+        // this stage exists to close (`c.p`, measured against tsc 7.0.2, which reads it as
+        // `number`). [lookupInstanceMemberInResolvableChain] is that firewall's entry.
+        is ComputedPropertyName -> computedLiteralKey(nameNode) ?: lateBoundComputedKeyName(nameNode)
         else -> null
     }
 
@@ -154918,11 +155021,17 @@ interface DataView {
         for (d in sym.declarations) {
             if (d !is ClassDeclaration) continue
             for (m in d.members) {
+                // Round 937 — (CHK.5)(a): the TARGET side of B175's comparison is
+                // `tt.properties`, i.e. the resolved TYPE, which names every member
+                // spelling — so this AST-Identifier-only collection is the same B451 drift
+                // one walker over. `interface T { 1: string }` against
+                // `declare class C { static 1: string }` was TS2741 at HEAD with no computed
+                // key involved; the `dynamicNames` baseline reached it once `[c1]` named `1`.
                 val (nm, mods) = when (m) {
-                    is PropertyDeclaration -> (m.name as? Identifier)?.text to m.modifiers
-                    is MethodDeclaration -> (m.name as? Identifier)?.text to m.modifiers
-                    is GetAccessor -> (m.name as? Identifier)?.text to m.modifiers
-                    is SetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                    is PropertyDeclaration -> declaredMemberName(m.name) to m.modifiers
+                    is MethodDeclaration -> declaredMemberName(m.name) to m.modifiers
+                    is GetAccessor -> declaredMemberName(m.name) to m.modifiers
+                    is SetAccessor -> declaredMemberName(m.name) to m.modifiers
                     else -> null to null
                 }
                 if (nm != null && mods != null && (ModifierFlag.Static in mods) == staticSide) out.add(nm)
@@ -160339,12 +160448,13 @@ interface DataView {
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> {
-                    val name = when (val n = member.name) {
-                        is Identifier -> n.text
-                        is StringLiteralNode -> n.text
-                        is NumericLiteralNode -> n.text
-                        else -> continue
-                    }
+                    // Round 937 — (CHK.5)(a): a TYPE LITERAL's members are the THIRD
+                    // independent re-spelling of this `when` (B451), and it was the one
+                    // that still knew nothing about a computed key at all — so
+                    // `type T = { ["s"]: number }` and `type T = { [K]: number }` alike
+                    // declared NO member and `t.s` / `t.p` FP'd TS2339 on `{}`, where
+                    // tsc reads them as ordinary members (measured, 7.0.2).
+                    val name = declaredMemberName(member.name) ?: continue
                     if (name.isEmpty()) {
                         // Parser placeholder for `[K in T]: V` — skip; emit anyType for the literal.
                         sawMappedTypePlaceholder = true
@@ -160360,9 +160470,14 @@ interface DataView {
                 }
                 is MethodDeclaration -> {
                     val nameNode = member.name
+                    // Round 937 — (CHK.5)(a): as above, and note the `else` here is `""`
+                    // (a CALL signature) rather than `continue`, so a computed METHOD name
+                    // that could not be named was silently read as a call signature. Only a
+                    // name node this namer refuses still falls through to that reading.
                     val name = when (nameNode) {
                         is Identifier -> nameNode.text
                         is StringLiteralNode -> nameNode.text
+                        is ComputedPropertyName -> declaredMemberName(nameNode) ?: ""
                         else -> ""
                     }
                     // 17.10a: Build the call/construct/method signature's own type
@@ -169315,11 +169430,17 @@ interface DataView {
 
     private fun fnsClassMemberNames(cls: ClassDeclaration): Set<String> {
         val names = mutableSetOf<String>()
+        // Round 937 — (CHK.5)(a): the same levelling as [checkImplementsClauses], for the
+        // namespace-local sibling of that walker.
         for (m in cls.members) when (m) {
-            is PropertyDeclaration -> (m.name as? Identifier)?.text?.let { names.add(it) }
-            is MethodDeclaration -> (m.name as? Identifier)?.text?.let { names.add(it) }
-            is GetAccessor -> (m.name as? Identifier)?.text?.let { names.add(it) }
-            is SetAccessor -> (m.name as? Identifier)?.text?.let { names.add(it) }
+            is PropertyDeclaration ->
+                ((m.name as? Identifier)?.text ?: declaredComputedMemberName(m.name))?.let { names.add(it) }
+            is MethodDeclaration ->
+                ((m.name as? Identifier)?.text ?: declaredComputedMemberName(m.name))?.let { names.add(it) }
+            is GetAccessor ->
+                ((m.name as? Identifier)?.text ?: declaredComputedMemberName(m.name))?.let { names.add(it) }
+            is SetAccessor ->
+                ((m.name as? Identifier)?.text ?: declaredComputedMemberName(m.name))?.let { names.add(it) }
             is Constructor -> for (p in m.parameters) if (p.modifiers.isNotEmpty()) (p.name as? Identifier)?.text?.let { names.add(it) }
             else -> {}
         }
