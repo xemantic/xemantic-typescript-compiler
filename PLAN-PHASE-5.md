@@ -20,6 +20,80 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 931a (2026-08-18) — (API.15): AN ENUM MEMBER'S DECLARATION NAME REPORTS ITS OWN
+TYPE. THE LAST POSITION IN THIS API ANSWERING A PLAUSIBLE **WRONG** TYPE INSTEAD OF
+NOTHING IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CALL EVERY OTHER MEMBER LEG
+MAKES ANSWERS `any` HERE** — the fix is not "ask the owner harder", it is a different
+mint.**
+
+- **STEP 1 WAS tsc, 15 CARETS.** `scripts/lsp_hover.py` over `tools/tsgo-7.0.2/lib/tsc
+  --lsp -stdio`, five enum shapes plus controls:
+
+| caret | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `enum Plain { Alpha }` decl | `(enum member) Plain.Alpha = 0` | **`any`** | `Plain.Alpha` |
+| `enum Valued { Gamma = 5 }` decl | `(enum member) Valued.Gamma = 5` | **`any`** | `Valued.Gamma` |
+| `const enum Konst { Eps }` decl | `(enum member) Konst.Eps = 0` | **`any`** | `Konst.Eps` |
+| `enum Str { Zeta = "z" }` decl | `(enum member) Str.Zeta = "z"` | **`any`** | `Str.Zeta` |
+| `declare enum Amb { Iota }` decl | `(enum member) Amb.Iota` — **no value** | **`any`** | `Amb.Iota` |
+| the USE of each | the same string as its declaration | already right | unchanged |
+| `interface I { p }` decl (control) | `(property) I.p: string` | `string` | `string` |
+| `enum Plain` NAME (control) | `enum Plain` | untouched | untouched |
+
+- **THE DIVERGENCE IS DELIBERATE AND IT IS THE PAGE'S OWN CONVENTION: tsc decorates the
+  answer with the member's VALUE and `QuickInfo.displayString` renders TYPES** (that is
+  what it is documented as, and what every other row of § 8 carries), so agreeing about
+  the type is agreeing. The ambient row is the cheapest evidence that this costs
+  nothing: tsc drops the value there — a non-const ambient member with no initializer
+  HAS none, CLAUDE.md's rule — and a value-free rendering has no such case to get wrong.
+- **THE MECHANISM, AND WHY THE GENERAL LEG COULD NOT REACH IT.** `(API.11)`'s owner leg
+  reads the owner's DECLARED type and asks it for the member; an enum's declared type is
+  a member-LESS `Type.Object` (we mint one opaque type per enum where tsc models the
+  union of its members), so the collection found nothing, the leg answered null and the
+  name fell through to the free-name path — which types a name nothing binds as `any`.
+  The new leg (`Checker.typeCaptureEnumMemberType`, 8 lines) takes the enum symbol's own
+  export table and mints through **`getDeclaredTypeOfEnumMember` and nothing else**,
+  which is the interning helper CLAUDE.md requires for this key space, so the reported
+  type is the very instance the use site reports.
+- **THE ROUND'S PRODUCT, MEASURED AS ARM A2: `getTypeOfSymbol(memberSymbol)` — the call
+  every other member leg in this capture makes — answers `any` for ALL FIVE enum
+  shapes.** So the interning helper is not a stylistic preference here; it is the only
+  call that answers at all, and a next agent reading the leg's one-line body has that
+  written into its KDoc rather than having to re-run the experiment.
+- **THREE-ARM ABLATION, each arm restored from a sha256-verified snapshot, each proved
+  REACHED** (round 902's dead-arm trap):
+
+| arm | mistake | result | reached? |
+|---|---|---|---|
+| A1 | drop the owner-identity check (`declarations.any { it === owner }`) | **0 red — MEASURED REDUNDANT** on all six probe shapes | proved by A1b, which moves the same site |
+| A1b | force that check to refuse | all five enum shapes back to `any`, control (a class field) unchanged | the leg's whole population moves — this IS the reach proof, and it reproduces round 930's measured defect exactly |
+| A2 | mint with `getTypeOfSymbol` instead of `getDeclaredTypeOfEnumMember` | all five back to `any` | same |
+
+  A1's zero is a REDUNDANT GUARD and is recorded as one, with its reason: round 748's
+  lexical scope space binds a block-scoped `enum`, so the owner name always finds the
+  enum under the caret — a block-scoped shadow, an import collision, a namespace
+  nesting, an import ALIAS shadow and a merged pair all answer identically without it.
+  It is kept as the sibling leg's rule and NOT claimed as a pin; what IS pinned is the
+  import-alias shadow's ANSWER (`Local.Alpha`, never the imported `Kind.Alpha`), which
+  is the only shape where the two candidate enums have DIFFERENT names and the display
+  can therefore tell them apart. The first draft of that control named both enums
+  `Outer` and could not discriminate in principle — a pin over a shape whose two
+  outcomes RENDER THE SAME is no pin, which is round 907's "split the identity by the
+  axis the mistake could be confined to" in the display layer.
+- **PINS +2 and one INVERTED.** `LanguageServiceStateTest`'s deliberate defect pin
+  becomes `an enum member's declaration name reports the SAME type its use reports` and
+  says so in place (round 930 wrote it expecting exactly this edit); beside it, all five
+  shapes and the import-alias control. `ProjectMemberDeclarationTest`'s hover test gains
+  the enum row against its existing collider fixture. Suite **14,996 → 14,998 / 0
+  failures / 3 skipped**.
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round
+  adds core code; `huge_methods.py --fail-over 0` clean on core (750 classes, largest
+  6,353) and on `-project` explicitly (48 classes). No `SourceIndex`/parser change, so
+  the round-920 token gate does not apply. `docs/language-service.md` §§ 8, 13, 14 (gap
+  7 struck, the maturity row, the audit table, the status paragraph).
+- **§ 14's gap list: 10 → 9 live, and the *prove to offer* rule has no live violation
+  left.** Every remaining gap is a silence or a stated refusal.
+
 **Round 930 (2026-08-18) — (API.13): § 14 AUDITED BY EXECUTION. THE ROUND'S PRODUCT IS
 THAT **A PAGE OF PROSE ABOUT BEHAVIOUR DECAYS AT ABOUT ONE FALSE CLAIM PER THREE ROUNDS**
 — § 14 was written in round 928 and had FOUR false claims by round 930, one of them a
@@ -1845,7 +1919,7 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
 
-- [ ] **(API.15) AN ENUM MEMBER'S DECLARATION NAME REPORTS `any` — the one live violation
+- [x] **(API.15) AN ENUM MEMBER'S DECLARATION NAME REPORTS `any` — LANDED, round 931; the one live violation
   of *prove to offer* in this API.** Measured round 930 on four shapes (plain, valued,
   `const enum`, string enum): `quickInfoAt` on the `Alpha` of `enum Plain { Alpha }`
   answers `QuickInfo(displayString = "any")`, where tsc 7.0.2 answers
@@ -1861,6 +1935,12 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   declaration name reports the WRONG type and its use reports the right one`, so closing
   it must edit that test, § 8 and § 14's gap 7 together. Definitions and references for
   the same position are already complete; only the TYPE is wrong.
+  **LANDED**: `typeCaptureEnumMemberType`, eight lines, minting through
+  `getDeclaredTypeOfEnumMember` — and the measured product is that the obvious
+  alternative does NOT work (`getTypeOfSymbol` on an enum member symbol answers `any`,
+  arm A2). Five shapes report the member's type, the same instance the use site
+  reports; tsc's extra decoration is the member's VALUE, which this API deliberately
+  does not render (§ 8). The defect pin is inverted in place.
 
 - [x] **(API.12) COMPLETION INSIDE `o["` — LANDED, round 929; the last query that did not
   answer an element access.** A caret in the string of `o["…"]` is a MEMBER caret whose

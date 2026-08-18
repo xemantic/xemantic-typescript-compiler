@@ -52,10 +52,11 @@ import kotlin.test.Test
  *
  * ## Two of these pin a DEFECT rather than a guarantee
  *
- * `an enum member's declaration name reports the wrong type` and the two silent-miss
- * tests assert what the compiler does TODAY and what tsc 7.0.2 does instead, so that
- * closing either is a deliberate edit here rather than an accident nobody notices —
- * which is the same reason § 14 lists them at all. Each says so in its own comment.
+ * The two silent-miss tests assert what the compiler does TODAY and what tsc 7.0.2
+ * does instead, so that closing either is a deliberate edit here rather than an
+ * accident nobody notices — which is the same reason § 14 lists them at all. Each says
+ * so in its own comment. It works: the third such pin, the enum member declaration
+ * name's `any`, was INVERTED in place by (API.15) in round 931.
  */
 class LanguageServiceStateTest {
 
@@ -144,18 +145,74 @@ class LanguageServiceStateTest {
     // --- gap 7: an enum member's declaration name -------------------------------
 
     @Test
-    fun `an enum member's declaration name reports the WRONG type and its use reports the right one`() {
-        // PINS A DEFECT. § 14's gap 7 said this position "reports no type"; measured, it
-        // reports `any` — a plausible wrong answer, which is exactly what the page's
-        // *prove to offer* rule exists to forbid. tsc 7.0.2 answers
-        // `(enum member) Plain.Alpha = 0` at the same caret. Closing it must edit this
-        // test, § 14's gap list and § 8 together.
+    fun `an enum member's declaration name reports the SAME type its use reports`() {
+        // (API.15), round 931 — WAS A DEFECT PIN. Round 930 measured this caret
+        // answering `any`: a plausible wrong answer, which is what *prove to offer*
+        // exists to forbid, and § 14's gap 7. It now answers the member's own type, the
+        // very instance the USE site answers. tsc 7.0.2 answers
+        // `(enum member) Plain.Alpha = 0` here; the value is tsc's decoration and this
+        // API renders TYPES, so agreeing about the type is agreeing (§ 8).
         val source = "enum Plain { Alpha, Beta }\nconst u = Plain.Alpha;\nexport { u };\n"
         val project = projectWith(source)
         val declaration = project.quickInfoAt(file, offsetOf(source, "Alpha", plus = 1))
-        assert(declaration?.displayString == "any")
+        assert(declaration?.displayString == "Plain.Alpha")
         val use = project.quickInfoAt(file, offsetOf(source, "Alpha", occurrence = 1, plus = 1))
         assert(use?.displayString == "Plain.Alpha")
+    }
+
+    @Test
+    fun `every enum shape reports its member declaration name and its use alike`() {
+        // (API.15) The four shapes round 930 measured all-`any`, plus the AMBIENT one
+        // whose member tsc reports WITHOUT a value (`(enum member) Amb.Iota`) because a
+        // non-const ambient member with no initializer has none — a distinction that
+        // does not reach this surface at all, since what is rendered is the type.
+        val source =
+            "enum Plain { Alpha, Beta }\n" +
+                "enum Valued { Gamma = 5 }\n" +
+                "const enum Konst { Eps }\n" +
+                "enum Str { Zeta = \"z\" }\n" +
+                "declare enum Amb { Iota }\n" +
+                "const u = [Plain.Beta, Valued.Gamma, Konst.Eps, Str.Zeta, Amb.Iota];\n" +
+                "export { u };\n"
+        val project = projectWith(source)
+        for ((needle, expected) in listOf(
+            "Beta" to "Plain.Beta",
+            "Gamma = 5" to "Valued.Gamma",
+            "Eps" to "Konst.Eps",
+            "Zeta = " to "Str.Zeta",
+            "Iota" to "Amb.Iota",
+        )) {
+            val declaration = project.quickInfoAt(file, offsetOf(source, needle, plus = 1))
+            assert(declaration?.displayString == expected)
+        }
+    }
+
+    @Test
+    fun `a local enum shadowing an IMPORTED one reports its own member and not the import's`() {
+        // (API.15)'s NEGATIVE CONTROL. The leg answers a NAME, so the failure it must not
+        // have is resolving the OWNER to some other same-spelled enum: here an
+        // `import { Kind as Local }` puts a foreign enum with the same member spelling in
+        // scope, and the block-scoped `enum Local` is the one the caret stands in. The
+        // two are told apart by the name in the answer — `Local.Alpha`, never
+        // `Kind.Alpha` — which is why the shadow is given a DIFFERENT enum name than the
+        // import's own.
+        val project = Project.open(
+            "/proj",
+            InMemoryVfs(
+                mapOf(
+                    "/proj/tsconfig.json" to config,
+                    "/proj/src/b.ts" to "export enum Kind { Alpha = 1 }\n",
+                    file to "import { Kind as Local } from \"./b\";\n" +
+                        "function g(): number { enum Local { Alpha = 2 } return Local.Alpha; }\n" +
+                        "export { g, Kind };\n",
+                ),
+            ),
+        )
+        val source = "import { Kind as Local } from \"./b\";\n" +
+            "function g(): number { enum Local { Alpha = 2 } return Local.Alpha; }\n" +
+            "export { g, Kind };\n"
+        val local = project.quickInfoAt(file, offsetOf(source, "Alpha = 2", plus = 1))
+        assert(local?.displayString == "Local.Alpha")
     }
 
     // --- gap 3: an object literal's own method ----------------------------------

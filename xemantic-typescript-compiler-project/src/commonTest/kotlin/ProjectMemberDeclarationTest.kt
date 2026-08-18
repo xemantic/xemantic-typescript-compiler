@@ -317,6 +317,12 @@ class ProjectMemberDeclarationTest {
         )
         assert(project.quickInfoAt(mainFile, offsetOf("stat = 1"))?.displayString == "number")
         assert(project.quickInfoAt(mainFile, offsetOf("tl: string"))?.displayString == "string")
+        // (API.15) The one owner whose declared type carries NO members — an enum's is a
+        // member-less `Type.Object` — so it needs its own leg and reported `any` until
+        // round 931. It reports the member's own interned type, which is what its USE
+        // reports at the line below.
+        assert(project.quickInfoAt(mainFile, offsetOf("Alpha = 1"))?.displayString == "E.Alpha")
+        assert(project.quickInfoAt(mainFile, offsetOf("E.Alpha", 0, main) + 2)?.displayString == "E.Alpha")
     }
 
     // --- rename: the point of the round -------------------------------------------

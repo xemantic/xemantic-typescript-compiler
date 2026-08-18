@@ -4,7 +4,7 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 928, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 931, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
@@ -27,8 +27,11 @@ as the local's, expanding in whichever direction the rename came from — and `(
 **a member's own declaration name resolves to its own symbol**, so a member renames
 **from its declaration**, that name navigates and hovers, and a **merged** declaration,
 an **overload set** and an **accessor pair** are one group from any of their
-declaration names. Not yet: a computed key `{ ["p"]: v }` is outside the swept
-population, and an object literal's own member declaration is deliberately left alone.
+declaration names — and `(API.15)`, **an enum member's declaration name reports the
+member's own type** rather than `any`, which was the last position in this surface
+answering a plausible WRONG type instead of nothing. Not yet: a computed key
+`{ ["p"]: v }` is outside the swept population, and an object literal's own member
+declaration is deliberately left alone.
 See the `(API.*)` items in `PLAN-PHASE-5.md`, and **§ 14 for where the whole API
 stands**.
 
@@ -411,11 +414,21 @@ round 928 it went through the same wrong question and reported `any`, or the typ
 whatever unrelated binding shared the spelling — the same collider shape, one position
 over. It now reports the member's own type, resolved through its **owner** (§ 9). An
 overload set reports the whole overloaded type rather than the signature under the
-caret, which is coarser than tsc and never wrong; an **enum member's** declaration name
-is the one member declaration kind this does not cover, and round 930 measured what it
-actually does there: it reports **`any`** — the non-answer this rule replaced everywhere
-else, not an absent answer — where tsc 7.0.2 reports `(enum member) Plain.Alpha = 0`.
-Pinned as a defect by `LanguageServiceStateTest`, so closing it is a deliberate edit.
+caret, which is coarser than tsc and never wrong.
+
+`(API.15)` finishes that row with the one member declaration kind the owner leg could
+not reach — an **enum member's**. An enum's declared type is a member-LESS object here
+(this compiler mints one opaque type for the whole enum where tsc models it as the union
+of its members), so asking the owner for `Alpha` found nothing and the name fell through
+to the free-name path and reported **`any`**: not an absent answer but a wrong one, and
+until round 931 the one live violation of *prove to offer* on this page. It now reports
+the member's own type — the very instance its USE reports, minted only through the
+compiler's own interning helper — so `Alpha` in `enum Plain { Alpha }` reads
+`Plain.Alpha` at its declaration and at every use. tsc says `(enum member) Plain.Alpha =
+0` there: it decorates the answer with the member's VALUE, and this API renders TYPES
+(that is what `displayString` is), so the value is deliberately not part of it — which
+also means an ambient member with no value, which tsc reports as plain
+`(enum member) Amb.Iota`, is no special case here.
 
 `this` and `super` are the one shape needing a second mechanism, for the reason
 § 9 gives about go-to-definition: they are plain identifiers in this parser, so
@@ -1416,11 +1429,6 @@ stale text and nothing worse.
   930 measured what that costs a rename, and it is not uniform: with no contextual type
   the method still renames completely from either end, and with one the key becomes an
   unresolved occurrence and the rename refuses (§ 10d).
-- **an enum member's declaration name reports `any`** — it navigates and it renames, but
-  `quickInfoAt` on it answers the wrong type rather than the member's value, because an
-  enum's declared type carries no member table for the owner leg to ask (§ 8). Round 930
-  measured it: `any`, not "nothing", which makes it the one live violation of *prove to
-  offer*.
 - **a computed object-literal key** (`{ ["p"]: v }`) is neither found nor renamed: its
   literal is outside the swept population, and putting it there without resolving it
   would turn every such key into a rename obstacle. Round 930 measured what happens
@@ -1467,7 +1475,7 @@ read instead.
 | in-memory edits, including files that exist nowhere but the overlay | § 5 | complete |
 | offset ⟷ (line, character) | § 6 | complete — `\n`, `\r\n` and a lone `\r` all agree with the compiler's own diagnostics |
 | what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (re-run round 930, 1,327 files, zero violations) |
-| hover | § 8 | complete for values, members and member declarations; an enum member's declaration name reports `any` — gap 7 |
+| hover | § 8 | complete for values, members and member declarations, an enum member's included since `(API.15)` |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
 | the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
 | completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` included; a template `` o[`p`] `` refuses |
@@ -1490,8 +1498,10 @@ why a rename that cannot show its occurrence set complete refuses with the evide
 rather than shipping a partial plan.
 
 The refusals are listed per member (§§ 9, 10a–10d). The ones that are gaps rather than
-principles are in the list below. Gap 7 is the one place the rule is currently **broken**
-rather than applied: `any` is a plausible wrong answer, not a refusal.
+principles are in the list below. Round 930 found ONE place where the rule was broken
+rather than applied — an enum member's declaration name answering `any`, a plausible
+wrong answer and not a refusal — and round 931 closed it (gap 7). Every remaining gap is
+a silence or a stated refusal.
 
 ### What it costs
 
@@ -1548,10 +1558,12 @@ caret movement.**
    the template keeps spelling the old name, and the resulting program still compiles
    clean, so no gate this API has can see it. tsc counts it as a reference. Completion
    refuses that position for the same reason, which is stated rather than silent.
-7. **An enum member's declaration name reports `any`** on hover — a wrong answer, not an
-   absent one, and the one live violation of *prove to offer* on this page. tsc reports
-   `(enum member) Plain.Alpha = 0`. Its *use* reports `Plain.Alpha` correctly, and its
-   definition and references are complete; only the declaration name's TYPE is wrong.
+7. ~~An enum member's declaration name reports `any`.~~ **CLOSED round 931**, `(API.15)`
+   — it reports the member's own type (`Plain.Alpha`), the same instance its use
+   reports, in all five enum shapes. tsc additionally decorates the answer with the
+   member's VALUE (`(enum member) Plain.Alpha = 0`); this API renders types, so that
+   part is a deliberate divergence rather than a gap (§ 8). The number is kept so the
+   round notes and the table below keep referring to the same gap.
 8. **Hover picks one subject where a span names two** — a shorthand reports the local.
    References, definition and rename answer both.
 9. **`export { p }` / `import { p }` rename plainly** where tsc expands them, because
@@ -1565,7 +1577,7 @@ caret movement.**
 |---|---|---|
 | positions carry a lone-`\r` defect | **STALE** — closed in round 915, three rounds before this section was written | a `\r`-terminated fixture: TS2322 on line 3, TS1123 on line 3, `positionAt` line 3 |
 | `super.p` goes to the base's declaration (§ 9's table, and the row above) | **WRONG** — it answered nothing while hover at the same caret answered correctly | fixed this round: the receiver leg had a `this` carrier and no `super` one. tsc navigates to `Base.pb`; so does this now |
-| an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reports `any` | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0` |
+| an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reported `any`; **closed round 931** | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0`. `(API.15)` gave the leg its own mint; five shapes now report the member's type |
 | an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type the plan carries both occurrences from either caret and the applied text compiles; with one it is `OCCURRENCES_INCOMPLETE` at the key. Found by measuring the correction — this round's own lesson, applied to itself |
 | a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
 | a template element access is silently missed | **TRUE**, and now proven end to end | the applied rename compiles clean with the old name still in the template |

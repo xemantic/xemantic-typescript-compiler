@@ -7466,6 +7466,7 @@ class Checker(
         val node = typeCaptureMemberNameIdentifier(member)?.takeIf { it === nodeIn } ?: return null
         val owner = (member as NodeBase).parent ?: return null
         if (owner is ObjectLiteralExpression) return null
+        if (owner is EnumDeclaration) return typeCaptureEnumMemberType(owner, node.text)
         val ownerType = when (owner) {
             is TypeLiteral -> getTypeFromTypeNode(owner)
             else -> typeCaptureOwnerSymbol(owner)?.let { getDeclaredTypeOfSymbol(it) }
@@ -7473,6 +7474,66 @@ class Checker(
         val symbols = ArrayList<Symbol>(2)
         typeCaptureCollectMembers(ownerType, node.text, symbols, 0)
         return symbols.firstOrNull()?.let { getTypeOfSymbol(it) }
+    }
+
+    /**
+     * (API.15) The type of the enum member [name] the enum [owner] declares, or null.
+     *
+     * ## Why this leg exists at all, when the one above it looks general
+     *
+     * The general leg reads the OWNER's declared type and asks it for the member.
+     * That works for every owner but this one: **an enum's own type is a member-LESS
+     * `Type.Object`** (CLAUDE.md — tsc models a literal enum as the union of its
+     * members and we mint one opaque object for the whole enum), so
+     * [typeCaptureCollectMembers] finds nothing there, the leg answers null and the
+     * name falls through to the free-name path, which types a name nothing binds as
+     * `any`. Measured round 930 on four shapes: `any` at every enum member
+     * declaration name, where tsc 7.0.2 answers `(enum member) Plain.Alpha = 0` and
+     * where this API's OWN use site (`Plain.Alpha`) already answers `Plain.Alpha`.
+     * That made it the one place in the language-service surface where a plausible
+     * WRONG answer was given instead of no answer.
+     *
+     * ## The one mint
+     *
+     * [getDeclaredTypeOfEnumMember] and nothing else — it interns on the CANONICAL
+     * enum symbol, so the type this reports is the very instance the use site
+     * reports, and a per-symbol mint here would split one member into two non-equal
+     * types (CLAUDE.md's standing rule for this key space). The member symbol comes
+     * from the enum symbol's own export table, which is where the canonical member
+     * lives; a name absent from it, a symbol that is not an [SymbolFlags.EnumMember]
+     * and an `anyType` answer all return null, which leaves the position exactly as
+     * it was rather than replacing one wrong answer with another.
+     *
+     * The obvious alternative is MEASURED and it does not work: ablated to
+     * `getTypeOfSymbol(memberSymbol)` — the call every other member leg here makes —
+     * all five enum shapes answer `any` again, because an enum member's type exists
+     * only through the declared-type route. So this is not a stylistic preference for
+     * the interning helper; it is the only call that answers at all.
+     *
+     * ## The soundness condition, and the honest note about it
+     *
+     * The owner name is resolved through the scope chain, so it could in principle
+     * land on some OTHER same-spelled enum — and unlike the general leg, whose answer
+     * would then merely be a differently-shaped type, this one reports a NAME
+     * (`Other.Alpha`), i.e. exactly the plausible-wrong-answer failure it exists to
+     * remove. So the resolved symbol is trusted only when the enum we are standing in
+     * is one of its own declarations, which is [typeCaptureMemberDeclarations]' rule
+     * one function over. MEASURED REDUNDANT in round 931 on every shape that could be
+     * constructed — a block-scoped shadow, an import collision, a namespace nesting,
+     * an import ALIAS shadow and a merged pair all answer identically with the check
+     * dropped, because round 748's lexical scope space binds a block-scoped enum and
+     * the name therefore finds the enum under the caret. It is kept as the sibling
+     * leg's rule rather than claimed as a pin; the control that IS pinned is the
+     * import-alias shadow's ANSWER (`Local.Alpha`, never `Kind.Alpha`).
+     */
+    private fun typeCaptureEnumMemberType(owner: EnumDeclaration, name: String): Type? {
+        val enumSymbol = typeCaptureOwnerSymbol(owner)
+            ?.takeIf { symbol -> symbol.declarations.any { it === owner } }
+            ?: return null
+        if (enumSymbol.flags.hasNone(SymbolFlags.Enum)) return null
+        val memberSymbol = enumSymbol.exports?.get(name) ?: return null
+        if (memberSymbol.flags.hasNone(SymbolFlags.EnumMember)) return null
+        return getDeclaredTypeOfEnumMember(memberSymbol).takeIf { it !== anyType }
     }
 
     /**
