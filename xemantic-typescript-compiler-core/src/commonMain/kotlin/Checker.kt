@@ -110914,17 +110914,29 @@ interface DataView {
     }
 
     /** B451: a computed member/property name `[<literal>]` whose inner expression is a
-     *  numeric or string literal is a STATIC key (`[2]`→"2", `["bar"]`→"bar") — tsc
-     *  treats these like the bare `2`/`"bar"` forms. Returns null for genuinely dynamic
-     *  computed names (`[expr]`, `[Symbol.x]`, `[`tmpl`]`). Applied ONLY at the
-     *  type-BUILDING sites (object-literal / interface-class member maps), NOT the shared
-     *  [getMemberName] (which feeds duplicate-detection / abstract-tracking). Unblocks
-     *  `literalsInComputedProperties1` (`x[2]`/`y[2]`/`z[2]` resolving). */
+     *  numeric, string or NO-SUBSTITUTION TEMPLATE literal is a STATIC key (`[2]`→"2",
+     *  `["bar"]`→"bar", a backtick-quoted `bar`→"bar") — tsc treats all three like the
+     *  bare `2`/`"bar"` forms, because each spells one fixed name at parse time. Returns
+     *  null for genuinely dynamic computed names: `[expr]`, `[Symbol.x]`, `[K]` where `K`
+     *  is a binding, and a SUBSTITUTING template — those name no fixed member and tsc
+     *  reports the literal as failing to supply one (round 933 measured all of them).
+     *
+     *  Applied ONLY at the type-BUILDING sites (object-literal / interface-class member
+     *  maps), NOT the shared [getMemberName] (which feeds duplicate-detection /
+     *  abstract-tracking). Unblocks `literalsInComputedProperties1` (`x[2]`/`y[2]`/`z[2]`
+     *  resolving).
+     *
+     *  Round 933 added the template arm: without it a backtick-quoted key was the ONE
+     *  fixed-name spelling this compiler could not see, so `{ [`p`]: v }` did not supply
+     *  a required `p` (TS2741) and an interface's or class's own backtick-quoted member
+     *  did not resolve (TS2339) — three false positives tsc does not have, where the
+     *  quote-spelled twin one character away was already correct. */
     private fun computedLiteralKey(name: NameNode): String? {
         val cpn = name as? ComputedPropertyName ?: return null
         return when (val e = cpn.expression) {
             is NumericLiteralNode -> e.text
             is StringLiteralNode -> e.text
+            is NoSubstitutionTemplateLiteralNode -> e.text
             else -> null
         }
     }
@@ -143562,11 +143574,13 @@ interface DataView {
         is NumericLiteralNode -> nameNode.text
         // B451: a computed member name `[2]`/`["4"]` with a literal inner is a STATIC key,
         // so `z[2]` resolves against the instance member rather than FP'ing TS2339.
-        is ComputedPropertyName -> when (val e = nameNode.expression) {
-            is NumericLiteralNode -> e.text
-            is StringLiteralNode -> e.text
-            else -> null
-        }
+        // Round 933: DELEGATED to [computedLiteralKey] rather than re-spelling its `when`.
+        // The two copies had drifted — this one still refused a backtick-quoted key after
+        // the type-building site accepted it, so a class's own `` [`cp`] `` member resolved
+        // for TS2322 and simultaneously FP'd TS2339 from this walker, in ONE compile.
+        // The archive's B451 entry is explicit that this family has >= 5 independent
+        // extraction sites; one shared definition is the only thing that keeps them level.
+        is ComputedPropertyName -> computedLiteralKey(nameNode)
         else -> null
     }
 

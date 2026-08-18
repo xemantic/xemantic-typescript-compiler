@@ -1502,6 +1502,15 @@ read instead.
 > `ProjectComputedKeyTest` and by `ProjectContextualKeyTest`. Round 932 additionally
 > corrected a claim this audit had passed as TRUE — hover on an object-literal key — by
 > the same method that found the rest: measuring it.
+>
+> **Amended by round 933, one layer DOWN.** Round 932 left `ProjectComputedKeyTest`'s
+> fixture on OPTIONAL members because the CHECKER did not accept a backtick-quoted
+> computed key as supplying the member it names. That is now fixed in `Checker.kt`
+> (`computedLiteralKey` grew a no-substitution-template arm; `classMemberNameText` was
+> made to delegate to it rather than re-spell it), so all three literal key spellings —
+> `[2]`, `["p"]` and `` [`p`] `` — are one member name at every extraction site, in the
+> service and in the compiler alike. What remains open below this API is `{ [K]: v }`,
+> which needs the key's TYPE and is a late-binding gap, not a spelling one.
 
 ### What it answers
 

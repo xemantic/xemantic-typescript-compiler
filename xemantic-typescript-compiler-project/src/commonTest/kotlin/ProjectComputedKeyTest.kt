@@ -76,11 +76,19 @@ class ProjectComputedKeyTest {
 
     /**
      * The members are OPTIONAL, and that is a statement about the CHECKER rather than a
-     * convenience: a computed key whose literal is a no-substitution TEMPLATE does not
-     * yet supply the member it names (`{ [`p`]: v }` against a required `p` is TS2741 —
-     * measured this round), while the quoted and bare forms do. That gap is one layer
-     * below this API and is left alone here; making the members optional keeps this
-     * fixture about the language SERVICE.
+     * convenience.
+     *
+     * Round 932 recorded one gap here: a computed key whose literal is a no-substitution
+     * TEMPLATE did not supply the member it names (`{ [`p`]: v }` against a required `p`
+     * was TS2741) while the quoted and bare forms did. **Round 933 CLOSED that one** —
+     * `computedLiteralKey` grew the template arm, so all three literal spellings are now
+     * one member name at every extraction site.
+     *
+     * What is still open, and why the members stay optional: `{ [K]: v }` — the fixture's
+     * `viaConst` — supplies nothing, because naming a member through a `const` binding
+     * needs the key's TYPE, which this compiler does not late-bind (round 933 measured it
+     * against tsc, which does). That gap is one layer below this API and is left alone
+     * here; optional members keep this fixture about the language SERVICE.
      */
     private val other = """
         export interface Shape { p?: string; q?: number; n?: Nested; }

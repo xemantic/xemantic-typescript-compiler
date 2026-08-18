@@ -1,3 +1,460 @@
+**Round 922 (2026-08-18) — (API.7): THE SYNTACTIC-ROLE MECHANISM, AND **THREE OF THE FIVE REFUSALS
+CASHED**. THE ROUND'S PRODUCT IS THE CORRECTION TO ITS OWN RANKING: THE BACKLOG WAS PROMOTED AS ONE
+ITEM BECAUSE "ALL FIVE WANT THE SAME MISSING MECHANISM", AND **ONLY THREE DO** — THE OTHER TWO WERE
+NEVER BLOCKED ON A GRAMMAR POSITION AT ALL, AND SAYING SO IS WORTH MORE THAN LANDING THEM BADLY.**
+
+- **THE MECHANISM: `SyntaxRoles`, a PULL-BASED ASCENT of the parent chain** (`-project`,
+  `SyntaxRoles.kt`). INV.2(a) stamps `parent` on every node, so a role is a pointer walk needing no
+  side table and no second traversal — the INV.4 reach classifiers' shape, and round 875's
+  measurement is why it is pull and not push (a maintained status is **11.1x** more work, because it
+  computes every classifier at every node while a pull folds only the ancestors of the nodes actually
+  asked about). Two questions, one traversal: `referenceUse(node)` answers about a NODE and
+  `grammarPositionOf(path)` about a CARET, the second expressed on the first — an identifier is in an
+  EXPRESSION position exactly when it is a value occurrence. **Every `===` in the file is deliberate**:
+  AST nodes are `data class`es, so a `current in parent.elements` would be round 471's deep structural
+  compare of two arbitrary expressions where identity was meant.
+
+- **IT DOES NOT ALL LIVE IN ONE MODULE, AND THAT WAS THE RIGHT CALL.** The accessibility filter's
+  caret-side question is the same ascent, but its other half — the member's DECLARING class and
+  whether the caret's class derives from it — needs symbols and heritage resolution, neither of which
+  crosses the module boundary. So it is a sibling ascent in `Checker.kt`
+  (`typeCaptureEnclosingClass` / `typeCaptureDerivesFrom` / `typeCaptureResolveClassDeclaration`),
+  which is what the brief meant by deciding the home PER QUESTION.
+
+- **CASHED (1): MEMBER-COMPLETION ACCESSIBILITY — round 917's refusal.** `private` (including a
+  `#name` field) is offered only inside its declaring class, `protected` only there or in a class
+  deriving from it, statics by the same rule; the ascent goes out of a nested arrow, through its
+  method, to the class, and the heritage walk follows `extends` through the same scope lookup and
+  IMPORT HOP the definition legs use. **THE BIAS IS PROVE-TO-HIDE and it is the whole safety
+  argument**: an unresolvable base, a missing declaring class or a chain past its depth cap leaves the
+  member OFFERED, because round 917's stated objection — a list that has silently lost a real
+  candidate is indistinguishable from a complete one — is only answered by hiding what is decided.
+  `accessibility` is still reported on what survives.
+
+- **CASHED (2): KEYWORD COMPLETIONS — round 918's refusal**, and BOUNDED EXPLICITLY. A STATEMENT
+  caret gets the statement and declaration starters plus the expression starters; an EXPRESSION caret
+  gets the expression starters ONLY (this is what keeps `interface` out of `f(|)`); a TYPE caret gets
+  the fourteen primitive type names plus `keyof` and `typeof`; a class body, a heritage clause and an
+  import clause get NOTHING. Context-gated: `await` on an enclosing async function, `yield` on a
+  generator, `super` on a class, `return` on a function, `break` on a loop or `switch`, `continue` on
+  a loop (the scan stopping at the first function-like, since a loop does not reach into a nested
+  function), and `import`/`export`/`declare`/`namespace`/`interface`/`type`/`enum` on a module or
+  namespace body. **NOT offered anywhere, stated rather than hidden**: every CONTINUATION keyword
+  (`else`, `case`, `extends`, `implements`, `as`, `satisfies`, `infer`, `readonly`, the accessibility
+  modifiers) — their positions are ones the classifier declines to name. The list is short by choice;
+  what it guarantees is that every item COMPILES WHERE IT IS OFFERED, which is the property the member
+  half already had. One coarseness recorded: a caret whose word is already a complete keyword (`if|`)
+  usually reads as the EXPRESSION position, because the parser has built the statement that keyword
+  starts — it loses suggestions and never invents one.
+
+- **CASHED (3): READ-vs-WRITE — round 919's refusal**, `ReferenceLocation.use`. The write set is
+  stated completely (simple `=` including a member's last segment, destructuring in either bracket
+  form at any depth with defaults / renaming / shorthand / rest, a `for (x of/in …)` head, a
+  parameter's and a variable/binding-element declaration's own name); `READ_WRITE` is the compound
+  assignments and `++`/`--`; and **`UNCLASSIFIED` is a fourth state, not a default** — a
+  type-position name, a declaration name that binds no storage, an object-literal key, a binding
+  element's source property name, a label. That state is what keeps round 919's objection answered: an
+  occurrence the classifier does not place is reported as unplaced. **The ascent is why the
+  destructuring cases are free**: an array literal inside an object literal inside an array literal is
+  three pass-through steps and then ONE assignment test, with no per-shape rule.
+
+- **REFUSED, AND THE REASON IS NOW SHARPER THAN THE RANKING'S — THIS IS THE ROUND'S FINDING.** The
+  backlog was promoted as ONE item on the premise that all five wanted "where is this caret in the
+  grammar". **Element access (`o["p"]`) and contextual object-literal keys (`{ p: v }`) never did.**
+  Recognising either shape is ONE test on the node's own parent — no ascent, no classifier, and
+  `SyntaxRoles` supplies nothing either of them was waiting for. What each actually lacks is SEMANTIC:
+  the element access needs the capture to accept a NON-IDENTIFIER node and to look a member up BY TEXT
+  on the receiver's type (the receiver resolution itself is (API.3d)'s and is already here — the
+  missing part is the CHANNEL); the object-literal key needs the CONTEXTUAL type, walk-scoped state
+  this capture does not read and which is absent outright in positions such as a ternary branch, i.e.
+  a third resolution mechanism beside the scope chain and the receiver. **So the correct successor
+  ranking splits them**: element access is small and mechanical, contextual keys are a mechanism.
+
+- **TWO EXISTING ANSWERS CHANGED, loudly.** `completionsAt` at a MEMBER caret no longer returns
+  inaccessible members, and at a FREE_NAME caret now returns keyword items (`kind = "Keyword"`) mixed
+  into the list. `ReferenceLocation` gained a `use` property. Round 917's and round 918's pins
+  asserting the old refusals were **UPDATED IN PLACE with an in-file comment naming the round that
+  inverted them**, never deleted.
+
+- **A PROCESS TRAP FOUND BY RUNNING THE PROTOCOL, now in CLAUDE.md: round 855's "dry-run each arm for
+  a real diff" is VACUOUS on a tree carrying the round's own uncommitted work.** `git diff
+  --shortstat` printed `2 files changed, 146 insertions(+), 1 deletion(-)` for arm a1 AND for a2 —
+  the round's whole diff, identically, for every arm — so it can no longer tell a landed edit from an
+  unlanded one. What actually carried the run is the `patch` helper's ANCHOR-COUNT assertion (exactly
+  one occurrence, or exit 3); the script now compares against the ablation's OWN SNAPSHOT, which is
+  the only baseline that is a property of the arm. Round 789's "commit the harness first" is the other
+  fix and remains the better one.
+
+- **FOUND IN PASSING, unrelated to accessibility and recorded rather than fixed: a caret on `this.`
+  inside a NESTED ARROW answers NO members at all** (`currentClassForThis` is null there), where the
+  same caret directly inside a method answers correctly. It cost one pin, which was rewritten onto a
+  named receiver — a better discriminator anyway, since it exercises the new ascent rather than the
+  `this` leg. Queued below as (BUG.3).
+
+- **PINS +45** (`-project` 298 -> 343; core UNCHANGED at 14,341 — nothing was added there that a core
+  test can reach without the `-project` anchor). 32 of them are PARSE-ONLY (`SyntaxRoleTest`: no
+  checker, no build, ~5 s to run), which is what makes the mechanism cheap to re-verify.
+  **THE DISCRIMINATORS, each written first**: for read/write, round 919's own three shapes
+  (`[x] = pair`, `({ x } = o)`, `for (x of xs)`), which the naive "left of `=` or operand of `++`"
+  rule calls READS — plus `the same brackets in a value position are READS`, which fails the OTHER
+  shortcut ("anything under an assignment's left-hand side"); for keywords, an EXPRESSION position
+  asserted not to offer `interface` and a non-async function asserted not to offer `await`; for
+  accessibility, a caret inside a SUBCLASS METHOD, which every rival rule ("inside any class",
+  "inside the declaring class", "no filter") passes the easy cases and fails alone.
+
+- **FOURTEEN-ARM ABLATION, one mistake at a time, each restored from a sha256-verified snapshot; all
+  fourteen compiled and ALL FOURTEEN reddened a DISTINCT set.** A1 array literal not a pass-through
+  -> 4. A2 object literal not a pass-through -> 4. A3 `for-of` head not a write -> 1. A4 a member name
+  does not ascend to its access -> 2. A5 declaration names read as values -> 4. A6 type-position names
+  read as values -> 2. A7 every free caret is a STATEMENT position (the unconditional list) -> 3,
+  including the `interface` discriminator. A8 `await`/`yield` ungated -> 3. A9 module-level starters
+  everywhere -> 2. A10 `break`/`continue` ungated -> 2. A11 keywords read at the CARET rather than at
+  the word's start -> 2. A12 accessibility hides whenever the caret is inside ANY class -> 4,
+  including the subclass discriminator. A13 the enclosing-class ascent stops at an arrow -> 1, exactly
+  the nested-arrow pin. A14 no filter at all (the pre-(API.7) behaviour) -> 8.
+  `scripts/round922-ablate.sh`.
+
+- **GATES: suite 14,773 -> 14,818 / 0 failures / 0 errors / 3 skipped = EXACTLY the +45**, XML-summed
+  over all six modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on
+  all 20 counters** — a real gate, since `Checker.kt` grew ~130 lines reachable from the capture hook
+  on the hot walk, and proven live by its own 46-error / 78-file compile. `huge_methods.py
+  --fail-over 0` clean on core (**750 classes, 15,981 methods, 0 over**) and, per round 909's
+  blind-spot rule, on `-project` explicitly (**35 classes, 326 methods, 0 over**; the largest new
+  method is `SyntaxRoles.keywordsFor` at 194 bytecodes). `spine_closure_audit.py` 46 handlers all
+  supersets. `scripts/round920-token-gate.sh` **1,327 files, 101,287,620 chars, ZERO violations** —
+  run because `SourceIndex` gained a member. Warning-clean. No wall A/B: production executes not one
+  new instruction, every addition sitting behind a hook that returns on a null per-file key set.
+
+- **SUCCESSOR, ranked.** (1) **RENAME** — it is (API.5) plus an edit plan, the edit plan is the work
+  (`{ p }` and `import { p as q }` do not rewrite like a plain occurrence), and `ReferenceUse` is now
+  available to it, which a rename UI wants. (2) **element access `o["p"]`** — small and mechanical
+  now that its reason is named: a capture channel for a non-identifier node plus a member lookup by
+  text, with the receiver resolution already in place. (3) **the incremental / re-entrant seam**
+  (`docs/ARCHITECTURE-RETHINK.md`) — still the only thing that changes the cost model, and still the
+  change most likely to cost a month. **I would take (1).**
+
+**Round 921 (2026-08-18) — (API.6): SIGNATURE HELP LANDS, EVERY OVERLOAD. THE RANKING'S PREMISE —
+"three-quarters built" — HELD FOR THE CALLEE AND WAS WRONG ABOUT THE ANCHOR: THIS IS THE FIRST QUERY
+IN THE ARC WHOSE SUBJECT IS A **REGION THE PARSE CARRIES NO NODE FOR**, AND THREE OF ITS ORDINARY
+CASES DEFEAT A CONTAINMENT TEST OUTRIGHT.**
+
+- **THE CALLEE HALF WAS EXACTLY AS RANKED, WHICH IS WORTH SAYING BECAUSE THE ANCHOR HALF WAS NOT.**
+  `getCalleeType` + `getCallSignaturesOfType` — the argument checker's own pair — answered a plain
+  name, a METHOD through a receiver, an imported function, a callee that is ITSELF a call and a
+  DECORATOR factory with no rule of their own. Two additions were needed and both are (API.3d)'s
+  second mechanism reappearing: a NAMESPACE/module/enum member is on no TYPE at all (arm A5, 1 red
+  uniquely its own — measured at ZERO signatures before the export-table leg existed), and a `new`
+  needs `getReturnTypeOfNewExpression`'s own resolution behind it, because a class NAME does not type
+  as its own constructor while the INSTANCE type carries the construct signatures (round 475).
+
+- **THE ANCHOR IS THE ROUND. Signature help asks about the argument LIST, and the parse has no node
+  for one.** Three ordinary cases: `f(a, b|)` sits at the real END of `b`, so the half-open spans put
+  it outside `b` and the answer is still argument 1; `f(a, |)`'s second argument does not exist in the
+  tree; and for `f(` at end of file or `f(a,` before a `}` **the call node's own real end lies BEFORE
+  the caret**, so no descent reaches it at all. **The parser recovery was read out of `Parser.kt`
+  before any code was written** (round 917's discipline): `parseArgumentListWorker` breaks on
+  end-of-file and on a `}` and then runs `parseExpected(CloseParen)`, so the `CallExpression` EXISTS in
+  every one of those shapes — which is what makes a token-level anchor possible instead of a
+  refusal. The region is BRACKET-MATCHED over the token stream, stopping early at a closer that does
+  not match the top of the stack (an unmatched `}` means the enclosing block is closing, and the
+  argument list ends there rather than running to EOF), and template substitutions need no rule of
+  their own because (BUG.2)'s re-scan already turns their `}` into a template middle or tail.
+
+- **THE ARGUMENT INDEX IS A COUNT OF COMMAS, AND WHICH COMMAS IS DECIDED BY THE ARGUMENTS' OWN
+  SPANS.** A comma inside one of the arguments belongs to that argument's syntax, so a nested call, an
+  object literal, an arrow parameter list and a `Map<string, number>` TYPE ARGUMENT are all excluded
+  by ONE test — and that last one is the case no bracket-depth scan could have handled, since `<` and
+  `>` are not brackets. Arm A8 (count every comma) reddens exactly those four.
+
+- **THE ACTIVE-SIGNATURE RULE IS TWO CONDITIONS AND NO SCORING, AND BOTH HALVES ARE ABLATED.** The
+  FIRST signature that could still become this call: room for the argument the caret is on (its index
+  is within the parameter list, or the signature ends in a REST parameter, or it takes none and none
+  were passed — a `()` signature IS satisfied by the empty argument list the caret sits in), AND
+  `signatureAcceptsArgs` over the arguments already FINISHED, which is the same verdict
+  `resolveCallOverload` selects an overload with, so a host's highlighted overload and the compiler's
+  chosen one cannot drift apart. **The argument the caret is IN is deliberately not judged** — it is
+  half-typed by construction, so judging it would flip the highlight back and forth under the user's
+  hands. Nothing qualifying answers 0, reported rather than hidden. A6 (always 0) reddens 2, A7 (arity
+  only) reddens 1 of those 2 — a strict subset distinguished by the pin it leaves GREEN, which is the
+  round-918-A4 shape and is the measurement made a second time.
+
+- **ONE COMPILER-SIDE SURPRISE, AND IT WOULD HAVE SHIPPED A PLAUSIBLE-LOOKING LIE.** A parameter
+  declared with a BINDING PATTERN is dropped from `Signature.parameters` by `getParameterSymbols`
+  unless the signature was built for display, and the surviving symbols keep a POSITIONAL zip of the
+  declaration's annotations — so rendering `function destructured({ a, b }: O, tail: string)` from the
+  symbols alone prints **`destructured(tail: O)`**: one parameter short AND the survivor wearing its
+  neighbour's type. Not a coarse answer, a wrong one. The DECLARATION is rendered instead whenever its
+  parameter list is longer, with the pattern spelled as source and each type resolved from its
+  annotation (arm A10, 1 red uniquely its own).
+
+- **ONE TYPE-PRINTING CONVENTION, ON PURPOSE.** Every type goes through `typeToString` — hover's
+  renderer — and deliberately NOT through the existing `signatureToString`, whose `p?: string |
+  undefined` is a TS2345 MESSAGE convention rather than a signature label. A signature label and a
+  hover string describing the same type must not be able to disagree. Parameter ranges index the
+  LABEL and are recorded AS IT IS BUILT (arm A11): searching for `name: type` afterwards finds the
+  wrong occurrence the moment one parameter's type mentions another's spelling.
+
+- **A GENERIC CALLEE RENDERS UNINSTANTIATED** — `pickFrom<T>(xs: T[], index: number): T`. Inferring
+  `T` would mean inferring it from arguments that are not finished, so the value would change under
+  every keystroke and be wrong for the argument still being written; and the declared form is what
+  tells the reader that `T` is inferred at all.
+
+- **REFUSED, each with a reason and a pin**: a TAGGED TEMPLATE (no parenthesized argument list —
+  counting template substitutions is a second mechanism), TYPE ARGUMENTS (`f<|>(x)` is not an argument
+  list), `super(...)` (an ordinary `Identifier` in this parser, bound to nothing, so an EMPTY
+  signature list rather than the base constructor — stated so it does not read as a resolution
+  failure), and a SPREAD's arity (`f(...xs, |)` reports argument 1, because the commas say so).
+  **NOT refused and pinned as covered**: decorator factories and a callee that is itself a call.
+
+- **PINS: +56** (`-project` 242 -> 298; core UNCHANGED at 14,341 — nothing was added there a core test
+  can reach without the `-project` anchor). 30 parse-only anchor pins written FIRST and 26 end-to-end.
+  **THE DISCRIMINATOR, written first**: an OVERLOADED callee asserted as an EXACT list of three
+  labels. Every plausible shortcut — resolve the callee's type and render it, take the one overload
+  resolution picks, match the callee by NAME — answers ONE signature and passes every other pin in the
+  file.
+
+- **ELEVEN-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All eleven compiled;
+  ALL ELEVEN reddened a DISTINCT set.** **A1** the anchor keeps the OUTERMOST call -> 1. **A2** only
+  the FIRST overload reported -> 1, the discriminator. **A3** no rest-parameter clamp -> 1, uniquely
+  its own. **A4** no receiver path (only a bare name resolves a callee) -> 2. **A5** no export-table
+  leg -> 1, uniquely its own. **A6** activeSignature always 0 -> 2. **A7** activeSignature by arity
+  alone -> 1. **A8** every comma counts -> 4. **A9** the region is the call's own real end rather than
+  bracket-matched -> 6, every incomplete-call pin plus the past-the-paren negative. **A10** no
+  declaration render for a dropped binding-pattern parameter -> 1. **A11** label ranges not followed
+  -> 1. `scripts/round921-ablate.sh`.
+
+- **GATES: suite 14,717 -> 14,773 / 0 failures / 0 errors / 3 skipped = EXACTLY the +56**, XML-summed
+  over all six modules. `cost_gate.py` **+0.00% on all 20 counters** — a real gate this round, since
+  `Checker.kt` grew ~370 lines reachable from the capture hook on the hot walk, and proven live by its
+  own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**750 classes, 15,976
+  methods, 0 over**) and, per round 909's blind-spot rule, on `-project` explicitly (**28 classes, 280
+  methods, 0 over**). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. `scripts/round920-token-gate.sh` **1,327 files, 101,287,620 chars, ZERO
+  violations** — run because `SourceIndex` gained members. Warning-clean. No wall A/B: production
+  executes not one new instruction — every addition sits behind a hook that returns on a null per-file
+  key set.
+
+- **SUCCESSOR, ranked.** (1) **The refusal backlog as ONE item** — member completion's accessibility
+  filter, contextual object-literal keys, element access `o["p"]`, keyword completions, and now
+  read-vs-write on a reference: **all five want the same missing mechanism**, "where does this caret
+  sit in the grammar / relative to a declaration", so they are one round rather than five, and the
+  backlog is now long enough that the mechanism is cheaper than the refusals. (2) **Rename** — it is
+  (API.5) plus an edit plan, and the edit plan is the work (`{ p }` and `import { p as q }` do not
+  rewrite like a plain occurrence). (3) **The incremental/re-entrant seam**
+  (`docs/ARCHITECTURE-RETHINK.md`) — the right end state and the wrong next step: every figure in this
+  arc is dominated by a full rebuild, so it is the only thing that changes the cost model, and it is
+  also the change most likely to cost a month. **I would take (1).**
+
+**Round 920 (2026-08-18) — (GATE.2): THE INSTRUMENT ROUND 919 DID NOT BUILD, AND IT FOUND **FIVE MORE
+DEFECTS ON ITS FIRST RUN** — INCLUDING (BUG.2) IN A SECOND COSTUME (A BACKTICK INSIDE A REGULAR
+EXPRESSION, IN tsc's OWN SOURCE) AND A `[0, 0)` PARAMETER SPAN THAT MADE EVERY CARET ON A
+PARENTHESIS-LESS ARROW PARAMETER — **328 SITES IN 78 FILES** — ANSWER ABOUT THE ARROW. ALL FIVE FIXED;
+101 MB OF REAL TypeScript NOW PASSES TEN INVARIANTS WITH ZERO VIOLATIONS.**
+
+- **WHAT THE GATE ASSERTS, AND WHY IT IS STATED AGAINST THE PARSE.** Ten rules, all true of ANY correct
+  implementation so none needs a baseline: the tokens partition the text and the scan reaches EOF; every
+  gap between two tokens holds only whitespace or a comment; a string literal never crosses a line break;
+  a non-literal token is under 512 characters; **every identifier the PARSER found starts a token of
+  exactly its length**, and `realEndOf` answers that end; a descent to an identifier's own position
+  reaches that identifier; a path strictly nests and every node on it contains the offset; and
+  offset↔coordinate round-trips against an INDEPENDENT restatement of round 915's terminator rule
+  (comparing `LineMap` to a second copy of its own arithmetic would prove nothing). **The parse is the
+  oracle** — it is the context-sensitive lexer this index approximates — which is what makes a MERGE
+  expressible at all: a token that swallowed an identifier leaves no token starting where the parser
+  says one starts. `TokenIndexInvariants` collects rather than throws and caps PER RULE, so one broken
+  file reports its shape instead of its first symptom.
+
+- **THREE CORPORA, AND THE CHOICE IS HALF THE ROUND.** (1) An adversarial shape corpus, written here —
+  cheap, named, and carrying exactly the weakness that let (BUG.2) live: it can only hold shapes somebody
+  thought of. (2) **The real `lib.*.d.ts` sources** (`RealLibFiles.files`, **2.39 MB**, 60-odd files, the
+  largest 2.35 MB) — real TypeScript written by the TypeScript team for their own purposes, already
+  embedded in this repo since the real-lib migration, so hermetic with **no vendored tree and no
+  licensing question**; its weakness is the mirror (a declaration file has no regex and no JSX), which is
+  why neither corpus stands alone. (3) The corpus the round was actually developed against,
+  `build/bench/tsc-project-*`, is a **local artifact** and therefore lives in a RUNNER, not the suite:
+  `scripts/round920-token-gate.sh` + `RealSourceTokenGateMain` **REFUSE with exit 2** on a missing tree,
+  a tree with no TypeScript, or a stale class dir (with round 853's positive control that the runner's
+  own class is in it). A test reading it would pass quietly in CI, which is precisely rounds 853 and 873.
+
+- **DEFECT A — (BUG.2) IN A SECOND COSTUME, AND IT WAS IN tsc's OWN SOURCE ALL ALONG.**
+  `utilities.ts` declares ``const backtickQuoteEscapedCharsRegExp = /\r\n|[\\`\u0000-…]/g;``. The
+  context-free loop reads the `/` as a Slash and the **backtick inside the character class** then opens
+  a `NoSubstitutionTemplateLiteral` that runs to the next backtick anywhere in the file: a **25,761-
+  character token** swallowing the twelve identifiers after it. The sibling `/[\\'…]/g` opens a string
+  literal instead, which our scanner terminates at the line break — so the same defect is file-wide for a
+  backtick and line-wide for a quote, and only the loud half was ever going to be noticed.
+
+- **THE FIX IS THE MECHANISM WORTH KEEPING: ASK THE PARSE.** A `RegularExpressionLiteralNode`'s `text`
+  is `Scanner.getTokenText()` and a `JsxText`'s is what `scanJsxText()` returned, so `pos + text.length`
+  is the EXACT end in both cases — no `Node.end` overshoot, nothing to guess. `SourceIndex` now collects
+  those two node kinds, emits each verbatim and resumes the scanner past it. **The undecidable question
+  is therefore never asked**: whatever the parser decided a `/` was, the index reproduces, so the index
+  and the tree it describes cannot disagree — which is a stronger property than any heuristic (a
+  "previous token suggests a regex" rule) could have, and it generalises to any future contextual lexeme
+  the parser turns into a node. JSX text was added by the same argument one construct over (`<p>it's
+  fine</p>`), and a caret inside JSX text now answers `NONE`/`NO_COMPLETION_CONTEXT` rather than
+  completing prose as a free name.
+
+- **DEFECTS B-E ARE ALL ONE SENTENCE: A NODE WHOSE SPAN NO DESCENT CAN ENTER.** (B) A parenthesis-less
+  arrow's parameter, an index signature's parameter and a `catch` clause's variable were constructed with
+  `Parameter`/`VariableDeclaration`'s DEFAULT `pos = 0, end = 0`, so `realEndOf` clamps to `pos` and
+  `pathAt` skips them — **328 sites in tsc's 78 compiler sources**, making this the API's single most
+  common wrong answer, and none of the 233 `-project` pins saw it because `(y) => …` is fine and only
+  `y => …` is not. (C) `declare global`'s `global` name and (D) every JSX tag name carried an **exact**
+  end where every other node in this parser carries the end of the FOLLOWING token — so snapping back to
+  the token stream lands on the token BEFORE the name, an empty span again. (E) the synthetic `new` of a
+  construct signature sat at `[0, 0)` and is now the `new` keyword's own span (`getPos()`, not the
+  member's `pos`, which for `abstract new (): T` is the modifier's). Eight one-line parser edits; **core
+  pins unchanged at 14,341**, so nothing in the corpus was pinning the wrong spans.
+
+- **BEFORE AND AFTER, MEASURED.** Compiler profile before: **50 of 78 files** violating, 339
+  `IDENTIFIER_IS_REACHABLE` and 12 `IDENTIFIER_IS_A_TOKEN` (both capped at 12 per file). All eight
+  profiles after: **1,327 files, 101,287,620 characters, 11,299,274 tokens, 3,936,158 identifiers, ZERO
+  violations**, longest token 2,259 (a legitimate emit-helper template) against 25,761 before.
+
+- **COST, since the scan changed.** The oracle adds one iterative walk over the file's own AST:
+  `SourceIndex.of` over 9,977,097 chars is **358 ms on, 326 ms off = +32 ms, +9.9%** (interleaved arms,
+  first round discarded, five recorded). It is paid ONLY by a host's position query — nothing in the
+  compile path builds an index — which is why `cost_gate.py` is **+0.00% on all 20 counters** and is a
+  control here rather than a gate, exactly as in round 919.
+
+- **THE POSITIVE CONTROL IS IN THE BINARY.** `SourceIndex.of(…, useParseAsLexerOracle = false)`
+  reproduces the pre-(GATE.2) scan; it exists solely so the gate has an arm that must redden, because a
+  checker that cannot see a broken index reads exactly like one whose subject is correct (round 849).
+  Same shape as `--spineMaskOff`. Nothing in `Project` passes it.
+
+- **PINS: +9** (`-project` 233 -> 242; core UNCHANGED at 14,341). Three corpus sweeps, four
+  defect-specific pins (each written on what follows the defect, never on the defect itself — the
+  failure is not local), one lib-corpus size assertion so a corpus that silently emptied cannot make
+  every rule vacuous (round 849), and the OFF-arm control.
+
+- **GATES: suite 14,708 -> 14,717 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules. `cost_gate.py` **+0.00% on all 20 counters** (46 errors, 78 files — live).
+  `huge_methods.py --fail-over 0` clean on core (**745 classes, 15,890 methods, 0 over**) and on
+  `-project` explicitly (**24 classes, 249 methods, 0 over**). `spine_closure_audit.py` 46 handlers all
+  supersets, run although no `spine*EnterNode` changed. Warning-clean (the 7 `w:` under `--rerun-tasks`
+  are the daemon test's pre-existing `Thread.id` deprecations).
+
+- **SUCCESSOR, ranked, and unchanged from round 919's ranking except that (1) is now safer to build
+  because its caret resolution is finally trustworthy on real source.** (1) **Signature help** — a
+  call's callee resolves through (API.3d)'s receiver path, the argument index is a token-level question
+  the completion anchor already answers, and the only new thing is rendering a `Signature`. (2) **The
+  refusal backlog as one item** — accessibility filtering, contextual object-literal keys, element
+  access, keywords: all four want the same missing where-is-the-caret-in-the-grammar mechanism. (3)
+  **Rename** — (API.5) plus an edit plan, and the edit plan is the work. (4) **The incremental seam**.
+  **I would take (1).**
+
+**Round 919 (2026-08-18) — (API.5): FIND REFERENCES + DOCUMENT HIGHLIGHTS LAND WITH **ZERO COMPILER
+CHANGES**, AND THE ROUND'S REAL PRODUCT IS THE THING THE COST MEASUREMENT WALKED INTO: **THE TOKEN INDEX
+BEHIND EVERY POSITION-DIRECTED QUERY THIS ARC HAS SHIPPED WAS DE-SYNCHRONISED BY THE FIRST `${…}` IN A
+FILE, AND THE DAMAGE RAN TO END OF FILE** — so on real TypeScript, `nodeInfoAt` / `quickInfoAt` /
+`definitionsAt` / `completionsAt` had been answering about a huge enclosing node since round 910. It was
+invisible to every fixture because a hand-written fixture rarely carries a substituting template.**
+
+- **(BUG.2), FOUND BY MEASURING RATHER THAN BY TESTING.** The first real-profile run of `referencesAt`
+  returned **0** for a caret sitting exactly on `getTypeOfSymbol` in tsc's `checker.ts`, and
+  `nodeInfoAt` there answered `Block(44581, 3125407)` — the whole file's body. The cause is one missing
+  contextual re-scan: `SourceIndex.scanTokens` ran a bare `Scanner.scan()` loop, so the `}` closing a
+  `${…}` read as a CloseBrace, the `|` after it as an operator, and the CLOSING BACKTICK opened a fresh
+  `NoSubstitutionTemplateLiteral` running to the next backtick anywhere in the file. **checker.ts
+  scanned as 50,684 tokens for 3,151,772 characters, longest token 62,089.** The class KDoc had
+  PREDICTED this shape ("it could only go wrong by MERGING … a template head scanned as one whole
+  template token") and then priced it wrong — it called the consequence "a COARSER answer", where a
+  merge is not local at all: every later node's `realEnd` snaps back below its own `pos`, so `pathAt`
+  refuses to enter it. **The general law, now in CLAUDE.md: a SPLIT is a safe approximation of a
+  context-sensitive lexer and a MERGE is not, because a merge de-synchronises the stream.** The two
+  splitting re-scans (`reScanSlashToken`, `reScanGreaterToken`) stay deliberately absent; only the
+  template one is reproduced, exactly as `Parser` does it (a `TemplateHead` pushes, braces inside are
+  counted, the closing `}` is re-scanned into a middle or a tail — so nesting works by construction).
+
+- **THE IDENTITY QUESTION WAS VERIFIED BEFORE ANY CODE WAS WRITTEN, and the brief's proposal needed one
+  correction.** A whole-program probe (spans for every identifier in every file, one build, print the
+  declaration set of each) confirmed: the import alias's own `import { }` clause, every use, and the
+  export are ONE set, because `typeCaptureFollowImportAlias` already hops; two merged `interface I`
+  blocks give EVERY occurrence the same two-declaration set; three same-spelled bindings over two files
+  give three DISJOINT sets. **The correction is that the relation must be INTERSECTION, not equality**:
+  a member of a UNION receiver resolves to one declaration PER CONSTITUENT, so `u.p` on
+  `{p: string} | {p: number}` would be a different group from a plainly identical `a.p`. Equality is
+  the degenerate case every single-symbol position gets.
+
+- **ZERO CORE CHANGES, WHICH IS THE ARCHITECTURAL POINT AND NOT A BOAST.** The grouping key is a set of
+  declaration SPANS — a value — so no `Symbol` crosses the boundary and the entire feature sits above
+  the compiler in `-project`. `cost_gate.py` is therefore a CONTROL rather than a gate this round
+  (+0.00% on all 20 counters is the expected answer when the compiler is not touched at all), and
+  `huge_methods.py` matters only on `-project`, where round 909's blind-spot rule applies.
+
+- **THE ONE HOLE, STATED AND PINNED RATHER THAN PAPERED OVER.** A MEMBER's own declaration name is
+  bound by no scope and has no receiver, so the capture resolves it to nothing — which is exactly why
+  `definitionsAt` documents an empty answer there. It is recovered from the sweep's own evidence (an
+  occurrence that resolved TO that span proves the caret is a declaration of that symbol), and the
+  recovery deliberately seeds with the ONE matching declaration rather than the whole set the
+  occurrence carried: adopting the set would make `p` of `interface A` group with the unrelated `p` of
+  `interface B` merely because some `u.p` may refer to either (**arm A5, 1 red, uniquely its own**).
+  What survives is exactly one truthful gap — **a member declared and NEVER USED answers EMPTY rather
+  than a list of one**, where tsc answers one — and it has its own pin saying so.
+
+- **READ-vs-WRITE IS REFUSED, and the reason is round 913's pattern rather than laziness.** `x = 1` and
+  `x++` are trivially writes; `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose
+  identifier sits under an array literal, an object literal and a `for` head. A rule built from the
+  easy positions reports the destructuring ones as READS — and a host cannot tell a complete answer
+  from an incomplete one, which is worse than no field. `isDeclaration` IS reported, because it is
+  exact: membership in the declaration set the compiler produced, never a guess about which parent
+  kinds declare a name.
+
+- **MEASURED ON THE REAL PROFILE** (78 files, 9,977,097 chars, **381,670 identifiers**, real libs,
+  warm, outside Gradle at `-Xmx4g`): plain rebuild **5.5-5.9 s**; `documentHighlightsAt` on
+  `checker.ts` (125,289 of those identifiers) **6.0-7.2 s**, one build; `referencesAt` **8.3-9.9 s** on
+  a clean project (one build) and **13.0-13.5 s** on a dirty one (two — `files`' build has to run
+  first, because the program's file list is a question only a build answers). **The sweep is 2.5-4 s on
+  top of the rebuild WHATEVER the caret**: a local of `createTypeChecker` with 168 hits in one file and
+  `SyntaxKind` with **9,827 hits across 49 files** cost the same, because the cost is resolving all
+  381,670 identifiers. **Peak heap ~1.9 GB** — the Gradle test JVM's 512 MB OOMs, which is itself worth
+  documenting for a host. Key spread needed no work: round 914 already routed both packers through
+  `packIdPair`.
+
+- **PINS: +24** (`-project` 209 -> 233; core UNCHANGED at 14,341). 19 reference pins + 5 (BUG.2) pins.
+  **THE DISCRIMINATOR, written first**: three bindings, one spelling, two files — a body local, a
+  file-level `const` and an export elsewhere — asserted as three EXACT, DISJOINT sets, because a name
+  match answers a six-element set for all three carets and a SIZE assertion would be satisfied by any
+  three of them. **ONE PIN WAS WRITTEN VACUOUS AND CAUGHT BY ITS OWN ARM**: `no token swallows the text
+  between two template literals` asserted `pathAt(offset).isNotEmpty()`, which is true for EVERY offset
+  inside a file (the source file always answers) — arm A6 left it green. It is now `every identifier in
+  the file is reachable by a descent to its own position`, which is the property the de-sync destroys,
+  and A6 reddens it.
+
+- **EIGHT-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All eight compiled;
+  ALL EIGHT reddened a DISTINCT set.** **A1** identity by NAME instead of by declaration set (the grep
+  arm) -> **3 red**, including the discriminator. **A2** a document highlight does not restrict to its
+  file -> **1 red**. **A3** an occurrence reports the RAW `Node.end` -> **1 red**, the span-exactness
+  pin. **A4** the caret-IS-a-declaration recovery removed -> **2 red**. **A5** that recovery adopts the
+  whole set the occurrence carried -> **1 red, uniquely its own** (the union pin). **A6** (BUG.2) the
+  template re-scan removed -> **4 red**. **A7** the import-alias hop removed (core) -> **6 red**,
+  spanning three test classes. **A8** only the FIRST declaration of a symbol recorded (core) -> **4
+  red**, the merged and overloaded rows. `scripts/round919-ablate.sh`.
+
+- **GATES: suite 14,684 -> 14,708 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20
+  counters** (a control — the compiler was not touched — and proven live by its own 46-error / 78-file
+  compile). `huge_methods.py --fail-over 0` clean on core (**745 classes, 15,890 methods, 0 over**) and
+  on `-project` explicitly (**22 classes, 236 methods, 0 over**; the largest new method is
+  `referencesOf` at 877). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. Warning-clean under `--rerun-tasks`.
+
+- **SUCCESSOR, ranked.** (1) **Signature help** — the biggest remaining editor feature, and its
+  mechanism is already three-quarters built: a call's callee resolves through exactly (API.3d)'s
+  receiver path, the argument index is a token-level question the completion anchor already answers,
+  and the only new thing is rendering a `Signature`. (2) **The refusal backlog as one item** — member
+  completion's accessibility filter, contextual object-literal keys, element access `o["p"]`, keywords:
+  all four want the same missing mechanism (where the caret sits relative to a declaration / a grammar
+  production), so they are one round rather than four. (3) **Rename** — it is (API.5) plus an edit
+  plan, and the edit plan is the work (`{ p }` and `import { p as q }` do not rewrite like a plain
+  occurrence). (4) **The incremental/re-entrant seam** (`docs/ARCHITECTURE-RETHINK.md`) — the right
+  end state and the wrong next step: every figure above is dominated by a full rebuild, so it is the
+  only thing that changes the cost model, and it is also the change most likely to cost a month. **I
+  would take (1).**
+
 **Round 918 (2026-08-18) — (API.4b): FREE-NAME COMPLETIONS LAND, AND THE ROUND'S PRODUCT IS THAT THE TWO
 RULES THE BRIEF TOLD ME TO COPY FROM `lexLevelHasName` ARE **BOTH WRONG FOR THIS CHAIN** — THEY BELONG TO AN
 ASCENT THAT HAS A SECOND, THREADED POPULATION TO FALL BACK ON, AND TRANSPLANTED ONTO `spineScopeLookup`'s
