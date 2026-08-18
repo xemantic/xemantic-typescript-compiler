@@ -377,7 +377,8 @@ internal class SourceIndex private constructor(
                 prefix,
                 anchorStart,
                 replacementEnd,
-                null,
+                receiver = null,
+                scopeAnchor = scopeAnchorAt(offset),
             )
         }
         return CompletionAnchor(
@@ -388,6 +389,34 @@ internal class SourceIndex private constructor(
             receiverOfDotAt(tokenStarts[before]),
         )
     }
+
+    /**
+     * (API.4b) The node whose SCOPE is the scope in force at [offset] — the anchor a
+     * free-name completion is captured at.
+     *
+     * The innermost node ENCLOSING the caret, which is [pathAt]'s own answer, with
+     * the source file standing in wherever [pathAt] answers nothing: a caret past
+     * the last character of the file, and a caret in the trailing trivia of the last
+     * statement, are both positions a user types at and both sit in the file's own
+     * scope.
+     *
+     * ## Why enclosing is the right relation, and why nothing narrower exists
+     *
+     * A completion caret is BETWEEN nodes by construction. In
+     * `function f() { const b = 1;\n  co| }` the caret sits at the real end of the
+     * `co` expression statement, so the statement does not contain it (spans are
+     * half-open) and the innermost enclosing node is the function's BODY BLOCK —
+     * whose scope, since a function-like's immediate body shares its function's
+     * scope in the binder, is exactly the scope holding `f`'s parameters and locals.
+     * That is the answer wanted, and it is reached with no special case: the same
+     * rule gives the enclosing block for a caret on a blank line, the class for a
+     * caret in a class body, and the source file for a caret between top-level
+     * statements.
+     *
+     * The node is only ever used to NAME a span the checker matches on, so a coarser
+     * answer degrades to a coarser scope and never to a wrong one.
+     */
+    private fun scopeAnchorAt(offset: Int): Node = pathAt(offset).lastOrNull() ?: sourceFile
 
     /**
      * The receiver of the member access whose dot starts at [dotStart], or null when

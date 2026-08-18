@@ -20,6 +20,114 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 918 (2026-08-18) — (API.4b): FREE-NAME COMPLETIONS LAND, AND THE ROUND'S PRODUCT IS THAT THE TWO
+RULES THE BRIEF TOLD ME TO COPY FROM `lexLevelHasName` ARE **BOTH WRONG FOR THIS CHAIN** — THEY BELONG TO AN
+ASCENT THAT HAS A SECOND, THREADED POPULATION TO FALL BACK ON, AND TRANSPLANTED ONTO `spineScopeLookup`'s
+CHAIN ONE OF THEM DELETES EVERY FILE-LEVEL NAME AND THE OTHER DELETES EVERY NAMESPACE MEMBER. BOTH
+DIVERGENCES ARE ABLATED RATHER THAN ARGUED.**
+
+- **IT LANDED BY DELETING ONE REFUSAL, EXACTLY AS (API.4a) DESIGNED IT TO.** `FREE_NAMES_NOT_IMPLEMENTED`
+  is gone; `CompletionList`, `CompletionItem` and `Project.completionsAt`'s signature did not move. The
+  mechanism is a THIRD span list — `TypeCaptureRequest.scopeSpans` -> `CapturedScope` /
+  `CapturedName(name, kind)` — unioned into `keysByFile` the way `memberSpans` is, so the per-node hot-path
+  guard is byte-identical and `cost_gate.py` reads **+0.00% on all 20 counters**.
+
+- **THE ONE STRUCTURAL NOVELTY: THIS IS THE FIRST CAPTURE THAT ADMITS A NON-`Expression` NODE.** A
+  completion caret is BETWEEN nodes by construction, so the anchor is the innermost node ENCLOSING it —
+  `pathAt(offset).lastOrNull() ?: sourceFile` — which for `function f() { const b = 1;\n  <caret> }` is the
+  function's BODY BLOCK, and a function-like's immediate body SHARES its function's scope in the binder, so
+  that is exactly the scope holding `f`'s parameters and locals. No special case, no EOF branch: the same
+  rule gives the enclosing block on a blank line, the class in a class body and the source file past the
+  last character. `typeCaptureVisit`'s `node !is Expression` gate now yields to a scope span and to nothing
+  else, so no other capture gained a population.
+
+- **THE ENUMERATION IS `spineScopeLookup`'s OWN WALK, RUN TO EXHAUSTION**, and that identity is the whole
+  correctness argument rather than a coincidence: every level's `symbols` then its `existing`, innermost
+  first, first sighting wins, then the merged and lib GLOBALS filtered through `globalsForFile` (INV.3(c),
+  so one module's exported name is not offered inside another). **A name the list offers is a name
+  `definitionsAt` will resolve, and a name it hides is hidden because something nearer binds the spelling** —
+  pinned directly, by completing at a caret and then navigating from a use of one of the names offered
+  there.
+
+- **DIVERGENCE 1 — `LexicalScope.existing` IS READ, against CLAUDE.md's round-748 rule as the brief quoted
+  it.** That rule is about a RESOLVER whose soundness argument is precisely that `symbols` excludes
+  everything the main binder bound, so it cannot change how any existing name resolves. An ENUMERATION has
+  no such freedom: the source file's own `symbols` holds only the B83.5 block-hoisted leftovers, so a
+  `symbols`-only sweep offers **no file-level declaration and no import at all**. `spineScopeLookup` has
+  read both deliberately since (API.3b); this reads exactly what it reads. **Arm A5 measures it: 8 red.**
+
+- **DIVERGENCE 2 — `lexLevelHasName`'s UNTRUSTED-LEVEL SKIP IS NOT APPLIED.** That skip exists because the
+  aliased Module/Enum table carries all merged members while the unresolved-names walk it serves applies its
+  own export filtering — so trusting the level would SUPPRESS a genuine TS2304. It is sound there because
+  that chain has a THREADED population underneath it. This chain has none, so the skip answers **nothing at
+  all** at a caret inside a namespace body, where every one of the namespace's own members is legally
+  writable. The cost of not skipping is stated rather than hidden: a namespace merged across files can offer
+  a sibling declaration's non-exported member. **Arm A3 measures it: 1 red, uniquely its own.**
+
+- **A FREE-NAME ITEM CARRIES NO `typeText`, AND THE DECIDING ARGUMENT IS CORRECTNESS RATHER THAN COST.**
+  Measured at a caret in a real function body of the compiler profile (78 files, ~10 M chars, real libs):
+  **1,628 items**; the enumeration itself **0.39-0.64 ms**; adding a type to every item **+2.6-14.3 ms** —
+  i.e. 4-28x the enumeration but noise against the query's own **5.3-8.9 s** warm rebuild. What decides it is
+  that **618 of 1,629 (37.9%) would render `any`/`error`/`unknown`**, because a free name may name a TYPE —
+  an interface, a type alias, a namespace — for which `getTypeOfSymbol` is not the question being asked;
+  decorating 38% of a list with a lie is worse than decorating none of it. (On a two-file toy project the
+  COST argument bites too, in the opposite direction from the real one: 2,232 items, enumeration 0.55 ms,
+  typing them all 26-170 ms against a whole query of 125-360 ms — **20-75% of the wall.**) The field stays a
+  non-null `String` and is `""`, so no signature moved; a host wanting the type of the item its user
+  highlighted asks `quickInfoAt`, which is `completionItem/resolve`'s shape.
+
+- **KEYWORDS ARE REFUSED, WITH A REASON AND A PIN.** A useful keyword list is context-sensitive —
+  `interface` may start a statement and may not appear inside an expression, `await` only inside an async
+  function — and the anchor is a TOKEN-level device that knows what precedes the caret, not which grammar
+  production it sits in. An unconditional list would offer items that do not compile, which is the one thing
+  the member half already refuses to do (a union receiver offers only members present on every constituent
+  for exactly that reason).
+
+- **TWO IMPRECISIONS PINNED AS DECISIONS RATHER THAN LEFT AS ACCIDENTS**: a `let` declared LATER in the same
+  block IS offered (a block's bindings are a set, not a sequence — the binding exists and is merely in its
+  temporal dead zone, which is what tsc offers too), and a function's body locals are visible from inside its
+  own PARAMETER DEFAULTS, because the binder's function scope is flat.
+
+- **PINS: +22** (`-project` 191 -> 209, core 14,337 -> 14,341). **THE DISCRIMINATOR, written first**, is
+  (API.4a)'s inverted: a body local SHADOWING a name imported from ANOTHER FILE must appear ONCE and be the
+  LOCAL — the wrong answer is not empty and not a crash but the same spelling meaning something else, and
+  `kind` separates them (`VariableDeclaration` vs `ImportSpecifier`). **THE SHARP NEGATIVE** is a SIBLING
+  scope: another function's local, and a block that closed before the caret — an enumeration built over the
+  file's nodes rather than an ascent passes every positive pin and fails only there. The core
+  `ScopeCaptureMeasurementTest` is the in-walk-vs-post-hoc measurement, and the answer is sharper than
+  either query before it: post-hoc there is nothing to fall through TO — the ascent walks no levels and
+  answers with the globals leg alone, so a parameter and a type parameter are simply GONE while the
+  shadowed OUTER binding stands where the local should be, under the same name and the same `kind`.
+
+- **SEVEN-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All seven compiled; SIX
+  reddened a DISTINCT set.** **A1** the scope leg never records -> **18 red** (every free-name pin). **A2**
+  no shadowing dedup, an outer level overwrites an inner one -> **1 red, uniquely its own** — the
+  discriminator. **A3** apply the untrusted-level rule -> **1 red, uniquely its own** — the namespace pin.
+  **A4** enumerate POST-HOC -> **14 red**, and it is distinguished from A1 by the four pins it leaves GREEN
+  (`the lib globals are offered` and the three rows whose subject survives on the globals leg), which is the
+  measurement made a second time. **A5** read `symbols` only -> **8 red**. **A6** no globals leg -> **6 red**,
+  uniquely reddening the post-hoc control. **A7** drop the writable-name filter -> **0 red, UNDISCRIMINATED
+  and recorded in-file as such** rather than claimed: no non-identifier spelling reaches this fixture's chain
+  or globals, so the filter guards a shape the test does not carry, and its sort and dedup assertions are
+  pinned by no arm at all.
+
+- **GATES: suite 14,662 -> 14,684 / 0 failures / 0 errors / 3 skipped = EXACTLY the +22**, XML-summed over
+  all six modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20
+  counters** — a real gate, since `Checker.kt` grew ~190 lines reachable from the hook on the hot walk, and
+  proven live by its own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**745
+  classes, 15,890 methods, 0 over**) and, per round 909's blind-spot rule, on `-project` explicitly (**21
+  classes, 216 methods, 0 over**). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. Warning-clean. No wall A/B: production executes not one new instruction — every
+  addition sits behind a hook that returns on a null per-file key set.
+
+- **WHAT THIS LEAVES.** `(API.4)` is complete in both halves. The named gaps are keywords (above),
+  contextual object-literal keys (a caret on `{ p| : v }` is answered as an ordinary free name, where the
+  useful answer is the CONTEXTUAL type's property — the third mechanism (API.3d) already refused), and the
+  fact that a completion is still a FULL REBUILD: **5.3-8.9 s warm on the compiler profile, of which the
+  enumeration is under a millisecond.** A host must debounce, and the lever for that is the architecture
+  inversion, not this API.
+
 **Round 917 (2026-08-17) — (API.4a): THE COMPLETION ANCHOR + MEMBER COMPLETIONS. THE ROUND'S PRODUCT
 IS THAT THE ANCHOR — THE PART EVERY PREVIOUS (API.\*) ROUND CALLED "GENUINELY NEW" — TURNED OUT TO NEED
 **NO PARSER WORK AT ALL**, BECAUSE THIS PARSER ALREADY RECOVERS A DANGLING `.` INTO A REAL
@@ -1081,11 +1189,31 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   **`Project.completionsAt(fileName, offset): CompletionList`.** Free names are an explicit
   `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`, never a silent empty list.
 
-- [ ] **(API.4b) FREE-NAME completions + keywords.** The second half of (API.4). **Lands by deleting
-  one refusal**: `Project.completionsAt` maps `CompletionKind.FREE_NAME` to
-  `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`; replacing that with a candidate list needs NO change
-  to `CompletionList`, `CompletionItem` or the method signature, which is the constraint (API.4a) was
-  designed under.
+- [x] **(API.4b) FREE-NAME completions — LANDED, round 918; KEYWORDS REFUSED with a reason.** It did
+  land by deleting one refusal: `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED` is gone and no
+  signature moved. **THE MECHANISM** is a THIRD span list (`TypeCaptureRequest.scopeSpans` ->
+  `CapturedScope` / `CapturedName(name, kind)`), unioned into `keysByFile` exactly as `memberSpans` is,
+  and it is the ONE capture that also admits a NON-`Expression` node — a free caret is anchored at the
+  innermost node ENCLOSING it, routinely a Block or the source file. **THE ENUMERATION IS
+  `spineScopeLookup`'s OWN WALK, RUN TO EXHAUSTION** — every level's `symbols` then its `existing`,
+  innermost first, first sighting wins — then the merged/lib GLOBALS filtered through
+  `globalsForFile` (INV.3(c)). That identity is the correctness argument: *a name the list offers is a
+  name `definitionsAt` will resolve, and a name it hides is hidden because something nearer binds the
+  spelling.* **TWO DIVERGENCES FROM THE ENTRY AS WRITTEN, both deliberate and both ablated.** (i)
+  `LexicalScope.existing` IS read: round 748's `symbols`-only rule is about a RESOLVER whose soundness
+  is that it cannot change how an existing name resolves, and an enumeration reading `symbols` only
+  offers no file-level declaration and no import at all (arm A5, 8 red). (ii) `lexLevelHasName`'s
+  UNTRUSTED-level skip is NOT applied: it belongs to a chain with a second, export-filtered threaded
+  population to fall back on, and this chain has none — applying it answers nothing inside every
+  namespace body (arm A3, 1 red, uniquely its own). **A FREE-NAME ITEM CARRIES NO `typeText`**, decided
+  on measurement: at a caret in a real file of the compiler profile the list is **1,628 items**, the
+  enumeration itself **0.39-0.64 ms**, adding a type to every item **+2.6-14.3 ms** — and **618 of
+  1,629 (37.9%) would render `any`/`error`**, because a free name may name a TYPE. **KEYWORDS ARE
+  REFUSED**: a useful list is context-sensitive and the anchor is token-level, so an unconditional one
+  offers items that do not compile — the thing the member half already refuses to do. **22 pins**
+  (18 `-project`, 4 core `ScopeCaptureMeasurementTest`), **seven-arm ablation, six DISTINCT sets**;
+  A7 (drop the writable-name filter) read **0 red** and is recorded in-file as an UNDISCRIMINATED
+  guard rather than claimed. All gates green.
 
   **WHAT IS ALREADY YOURS, do not re-derive it.** The anchor: `completionAnchorAt` already returns
   `FREE_NAME` with the correct prefix and replacement span at every free position, and already answers

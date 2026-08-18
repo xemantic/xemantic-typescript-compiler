@@ -94,13 +94,14 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * [completionsAt] answers what may be WRITTEN at a caret. It is the one query whose
  * position cannot be a node — the user is mid-identifier or sitting just after a
  * `.` — so it resolves the caret against the token stream and reports what it found
- * ([CompletionKind]) beside the candidates. Member completions are answered; free
- * names are an explicit, documented refusal, not a silent empty list.
+ * ([CompletionKind]) beside the candidates. Both halves are answered: members from
+ * the receiver's type, free names from the lexical scope chain. Keywords are not,
+ * for the reason stated there.
  *
  * ## What this class is NOT
  *
- * It is not a full language service: there is no find-references, no free-name
- * completion yet, and no incremental reuse of a previous build's internal state.
+ * It is not a full language service: there is no find-references, no rename, no
+ * keyword completion, and no incremental reuse of a previous build's internal state.
  * A query on a dirty project is a FULL rebuild, and that is a property of the
  * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
@@ -512,21 +513,51 @@ public class Project private constructor(
     }
 
     /**
-     * (API.4a) What may be written at [offset] in [fileName] — the completion
-     * answer.
+     * (API.4a, API.4b) What may be written at [offset] in [fileName] — the
+     * completion answer.
      *
-     * ## What is answered, and what is refused
+     * ## What is answered
      *
-     * MEMBER completions — the caret follows a `.` or a `?.` — are answered: the
-     * receiver's type is computed during the build and every member it has comes
-     * back. FREE-NAME completions are REFUSED with
-     * [CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED] rather than answered with a
-     * silent empty list, because a host cannot otherwise tell "nothing is in scope"
-     * from "this compiler does not do that yet". Everything else about a free-name
-     * caret — its [CompletionList.kind], its [CompletionList.prefix] and its
-     * replacement span — IS answered and is correct today; (API.4b) fills in the
-     * candidates by removing that refusal, which needs no change to any signature
-     * here.
+     * MEMBER completions — the caret follows a `.` or a `?.` — are answered from the
+     * receiver's TYPE: every member it has, its bases' included, comes back.
+     *
+     * FREE-NAME completions are answered from the LEXICAL SCOPE CHAIN in force at
+     * the caret, enumerated during the build for the reason nothing else here can
+     * be asked afterwards — the chain is torn down per file as the checker walks.
+     * What comes back is every name the chain binds, innermost first and each
+     * spelling ONCE (so a local shadowing an import appears as the local, not
+     * twice), then the file's own declarations and imports, then the enclosing
+     * namespaces', then the merged and lib GLOBALS filtered by what is actually
+     * visible in this file (INV.3(c) — one module's exported name is not offered
+     * inside another). A free-name item carries a name and a kind and no type; see
+     * [CompletionItem] for the measurement behind that.
+     *
+     * ## What is deliberately NOT answered, each with its reason
+     *
+     * **KEYWORDS.** A useful keyword list is context-sensitive — `interface` may be
+     * written where a statement may start and not inside an expression, `await` only
+     * inside an async function, `extends` only in a heritage clause — and the anchor
+     * is a TOKEN-level device that knows what precedes the caret and not what
+     * grammar production it sits in. An unconditional list would offer items that do
+     * not compile, which is the one thing the member half already refuses to do (a
+     * union receiver offers only members present on every constituent for exactly
+     * that reason). So keywords are a host's own concern until there is a
+     * grammar-position mechanism to key them on, and this offers none.
+     *
+     * **A TYPE per free-name item** — see [CompletionItem].
+     *
+     * **FILTERING by the typed prefix**, at either kind. The prefix is reported and
+     * the full set comes back; ranking is host policy and a cut list cannot be
+     * re-ranked ([CompletionList]).
+     *
+     * ## Two known imprecisions, stated rather than hidden
+     *
+     * A name declared LATER in the same block is offered (`co|` above a `const
+     * count`), because a block's bindings are a set and not a sequence. That is what
+     * tsc does too — the binding exists, it is merely in its temporal dead zone.
+     * And a function's body locals are visible from inside its own PARAMETER
+     * DEFAULTS, because the binder's function scope is flat; writing one there is an
+     * error the checker reports separately.
      *
      * ## The anchor is a token question, not a node question
      *
@@ -569,10 +600,52 @@ public class Project private constructor(
                 CompletionRefusal.NO_COMPLETION_CONTEXT,
             )
         val anchor = index.completionAnchorAt(offset)
+        val key = keyOf(fileName)
+        if (anchor.kind == CompletionKind.FREE_NAME) {
+            // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
+            val node = anchor.scopeAnchor
+                ?: return CompletionList(
+                    anchor.kind,
+                    anchor.prefix,
+                    anchor.replacementStart,
+                    anchor.replacementEnd,
+                    emptyList(),
+                    null,
+                )
+            val span = TypeCaptureSpan(key, node.pos, node.end)
+            val captured = ProjectCompiler(overlay)
+                .build(
+                    projectPath,
+                    noEmit = true,
+                    typeCapture = TypeCaptureRequest(
+                        spans = emptyList(),
+                        scopeSpans = listOf(span),
+                    ),
+                )
+                .capturedScopes
+                .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
+            return CompletionList(
+                CompletionKind.FREE_NAME,
+                anchor.prefix,
+                anchor.replacementStart,
+                anchor.replacementEnd,
+                captured?.names.orEmpty().map {
+                    CompletionItem(
+                        name = it.name,
+                        kind = it.kind,
+                        // Empty by decision, not by omission — see [CompletionItem].
+                        typeText = "",
+                        optional = false,
+                        readonly = false,
+                        accessibility = "public",
+                    )
+                },
+                null,
+            )
+        }
         val refusal = when (anchor.kind) {
             CompletionKind.NONE -> CompletionRefusal.NO_COMPLETION_CONTEXT
-            CompletionKind.FREE_NAME -> CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED
-            CompletionKind.MEMBER -> null
+            else -> null
         }
         val receiver = anchor.receiver
         // A refused kind and a `.` with no receiver both answer without building: a
@@ -587,7 +660,6 @@ public class Project private constructor(
                 refusal,
             )
         }
-        val key = keyOf(fileName)
         // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
         val span = TypeCaptureSpan(key, receiver.pos, receiver.end)
         val captured = ProjectCompiler(overlay)

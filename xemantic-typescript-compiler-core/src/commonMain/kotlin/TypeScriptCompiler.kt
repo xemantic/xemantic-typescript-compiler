@@ -63,6 +63,11 @@ data class CompilationResult(
      * empty is a real answer ("that receiver has no members").
      */
     val capturedMembers: List<CapturedMembers> = emptyList(),
+    /**
+     * (API.4b) What the lexical scope chain binds at the request's `scopeSpans`, or
+     * empty. One entry per span the checker reached.
+     */
+    val capturedScopes: List<CapturedScope> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -1179,6 +1184,7 @@ class TypeScriptCompiler {
             capturedTypes = checker.capturedTypes,
             capturedDefinitions = checker.capturedDefinitions,
             capturedMembers = checker.capturedMembers,
+            capturedScopes = checker.capturedScopes,
         )
     }
 
@@ -1663,6 +1669,7 @@ class TypeScriptCompiler {
             capturedTypes = checker.capturedTypes,
             capturedDefinitions = checker.capturedDefinitions,
             capturedMembers = checker.capturedMembers,
+            capturedScopes = checker.capturedScopes,
         )
     }
 

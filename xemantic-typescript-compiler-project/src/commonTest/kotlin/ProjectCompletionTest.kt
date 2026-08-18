@@ -427,15 +427,24 @@ class ProjectCompletionTest {
 
     // --- the refusals -------------------------------------------------------------
 
+    /**
+     * (API.4b) THIS PIN'S MEANING CHANGED, which is logged rather than quiet: it
+     * asserted `refusal == FREE_NAMES_NOT_IMPLEMENTED` while (API.4a) shipped only
+     * the member half, and that refusal no longer exists. What it guarded — that the
+     * ANCHOR of a free-name caret is correct even where the candidate list is not
+     * this test's subject — it still guards, and it now additionally asserts that a
+     * list comes back at all. The candidates themselves are
+     * `ProjectFreeNameCompletionTest`'s subject.
+     */
     @Test
-    fun `a free-name caret is REFUSED with a reason, and its anchor is still correct`() {
+    fun `a free-name caret is ANSWERED, and its anchor is still correct`() {
         val project = projectWith()
         val at = offsetOf("readHolder = holder") + "readHolder = ho".length
         val completions = project.completionsAt(mainFile, at)
         assert(completions.kind == CompletionKind.FREE_NAME)
-        assert(completions.refusal == CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED)
-        assert(completions.items.isEmpty())
-        // The half that IS implemented is reported and is usable today.
+        assert(completions.refusal == null)
+        assert(completions.items.any { it.name == "holder" })
+        // The anchor half, unchanged.
         assert(completions.prefix == "ho")
         assert(completions.replacementStart == offsetOf("readHolder = holder") + "readHolder = ".length)
         assert(completions.replacementEnd == completions.replacementStart + "holder".length)

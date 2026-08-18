@@ -29,9 +29,8 @@ package com.xemantic.typescript.compiler.project
  * (API.4a) What sort of completion a caret is asking for.
  *
  * Reported even when no items come back, because the two facts are independent: a
- * [MEMBER] caret on a receiver with no members and a [FREE_NAME] caret this version
- * does not answer are both empty lists, and a host that greys out a menu wants to
- * tell them apart.
+ * [MEMBER] caret on a receiver with no members and a [NONE] caret are both empty
+ * lists, and a host that greys out a menu wants to tell them apart.
  */
 public enum class CompletionKind {
 
@@ -43,8 +42,8 @@ public enum class CompletionKind {
 
     /**
      * The caret is at a free position, so the candidates are everything the lexical
-     * scope chain binds there, plus the keywords legal at that position. NOT
-     * ANSWERED yet — see [CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED].
+     * scope chain binds there. ANSWERED since (API.4b) — KEYWORDS are deliberately
+     * not among them, see [Project.completionsAt].
      */
     FREE_NAME,
 
@@ -67,14 +66,6 @@ public enum class CompletionKind {
 public enum class CompletionRefusal {
 
     /**
-     * (API.4b) Free-name completion — enumerating the lexical scope chain and the
-     * keywords legal at the position — is not implemented. The anchor is correct and
-     * is reported ([CompletionList.prefix] and the replacement span are usable); only
-     * the candidate list is missing.
-     */
-    FREE_NAMES_NOT_IMPLEMENTED,
-
-    /**
      * The position admits no completion at all: inside a string, a template, a
      * regular expression, a numeric literal or a comment, or outside the file's text.
      */
@@ -85,22 +76,43 @@ public enum class CompletionRefusal {
  * (API.4a) ONE candidate a host may offer, with everything it needs to render the
  * item and nothing it would have to ask a second question for.
  *
- * @property name the text to insert, exactly as it must be written after the dot.
- * @property kind the `SyntaxKind` name of the member's own declaration —
- *   `PropertyDeclaration` for a property (interface members are class elements in
- *   this parser, so a property signature is one too), `MethodDeclaration` for a
- *   method, `GetAccessor` / `SetAccessor` for an accessor, `Parameter` for a
- *   constructor parameter property, `EnumMember` for an enum member, `"Unknown"`
- *   for a synthesized member carrying no declaration. THIS is how a method is told
- *   from a property; there is no separate flag.
+ * ## A free-name item carries less than a member item, and that is a decision
+ *
+ * (API.4b) At a [CompletionKind.FREE_NAME] caret [typeText] is EMPTY, [optional] and
+ * [readonly] are false and [accessibility] is `"public"` — only [name] and [kind]
+ * are answers. The reason is measured and is recorded in `docs/language-service.md`:
+ * a free caret sees hundreds of names, almost all of them lib globals, and typing
+ * every one of them is work the checker had no other reason to do on the one query
+ * a host wants to run per keystroke. It is also the more CORRECT answer, because a
+ * free name may name a type — an interface, a type alias, a namespace — for which
+ * "the type of the symbol" renders `any` and decorates the item with a lie. A host
+ * showing the type of the item its user has highlighted asks [Project.quickInfoAt]
+ * for that one item, which is what an LSP `completionItem/resolve` does.
+ *
+ * Empty rather than null so that (API.4a)'s signature does not move; it is
+ * unambiguous, because no type renders as the empty string.
+ *
+ * @property name the text to insert, exactly as it must be written.
+ * @property kind the `SyntaxKind` name of the declaration behind the item. For a
+ *   MEMBER: `PropertyDeclaration` for a property (interface members are class
+ *   elements in this parser, so a property signature is one too),
+ *   `MethodDeclaration` for a method, `GetAccessor` / `SetAccessor` for an accessor,
+ *   `Parameter` for a constructor parameter property, `EnumMember` for an enum
+ *   member. For a FREE NAME: `VariableDeclaration`, `Parameter`,
+ *   `FunctionDeclaration`, `ClassDeclaration`, `InterfaceDeclaration`,
+ *   `TypeParameter`, `ImportSpecifier`, … — which is also what tells a local binding
+ *   from the outer one it shadows. `"Unknown"` for a symbol carrying no declaration.
+ *   THIS is how a method is told from a property; there is no separate flag.
  * @property typeText the member's type, rendered as the compiler renders it in a
  *   diagnostic. Through a UNION receiver it is the distinct types the member has
- *   across the constituents, joined by `" | "`.
+ *   across the constituents, joined by `" | "`. EMPTY for a free name — see above.
  * @property optional the member is declared `p?`, or is optional on any constituent
- *   of a union receiver.
- * @property readonly any contributing declaration carries `readonly`.
+ *   of a union receiver. Always false for a free name.
+ * @property readonly any contributing declaration carries `readonly`. Always false
+ *   for a free name.
  * @property accessibility `"public"`, `"protected"` or `"private"`. REPORTED AND NOT
- *   ACTED ON — see [Project.completionsAt].
+ *   ACTED ON — see [Project.completionsAt]. Always `"public"` for a free name:
+ *   nothing the scope chain binds at a position is inaccessible from it.
  */
 public data class CompletionItem(
     val name: String,

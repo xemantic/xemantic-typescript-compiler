@@ -64,6 +64,13 @@ import com.xemantic.typescript.compiler.Node
  *   also null for a `.` the parse did not turn into a member access (see
  *   [SourceIndex.completionAnchorAt] for that recovery rule), which is the one case
  *   where a MEMBER anchor answers no items.
+ * @property scopeAnchor (API.4b) for [CompletionKind.FREE_NAME], the node whose
+ *   SCOPE is the scope in force at the caret — the innermost node enclosing the
+ *   position, or the source file when the caret is past the last character. Null
+ *   for every other kind. It is a node and not the offset because the compiler
+ *   matches a capture on a node's raw `(pos, end)` identity, and because "which
+ *   node is this caret in" is a question with real subtleties that this module
+ *   answers once (see [SourceIndex]).
  */
 internal class CompletionAnchor(
     val kind: CompletionKind,
@@ -71,6 +78,7 @@ internal class CompletionAnchor(
     val replacementStart: Int,
     val replacementEnd: Int,
     val receiver: Node?,
+    val scopeAnchor: Node? = null,
 ) {
 
     companion object {

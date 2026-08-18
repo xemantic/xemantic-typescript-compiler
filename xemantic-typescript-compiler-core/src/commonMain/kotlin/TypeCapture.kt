@@ -220,6 +220,54 @@ data class CapturedMembers(
 )
 
 /**
+ * (API.4b) ONE name the lexical scope chain binds at a requested
+ * [TypeCaptureRequest.scopeSpans] position — a free-name completion candidate.
+ *
+ * VALUE-TYPED for [CapturedType]'s reason, and deliberately CARRYING NO TYPE. That
+ * is the round-918 decision and it is a measurement, not a taste: a real caret sees
+ * hundreds of names (measured below and in `docs/language-service.md`), almost all
+ * of them lib globals, and typing every one of them costs a `getTypeOfSymbol` plus
+ * a `typeToString` per item — work the checker had no other reason to do, on a
+ * query a host wants to run per keystroke. The second reason is correctness rather
+ * than cost: a free name may name a TYPE (an interface, a type alias, a namespace,
+ * an enum), and `getTypeOfSymbol` of such a symbol is not "the type of the name" at
+ * all — it renders `any`, which is a confidently wrong decoration. A host that
+ * wants the type of the ONE item its user has highlighted asks `Project.quickInfoAt`
+ * for it, which is the shape every LSP server uses (`completionItem/resolve`).
+ *
+ * @property name the text to insert, exactly as it must be written.
+ * @property kind the `SyntaxKind` name of the declaration that binds it —
+ *   `VariableDeclaration`, `Parameter`, `FunctionDeclaration`, `ClassDeclaration`,
+ *   `InterfaceDeclaration`, `TypeParameter`, `ImportSpecifier`, `EnumMember`, … —
+ *   or `"Unknown"` for a symbol carrying no declaration. THIS is what a completion
+ *   widget renders as an icon, and it is also what tells a LOCAL binding from the
+ *   outer one it shadows.
+ */
+data class CapturedName(
+    val name: String,
+    val kind: String,
+)
+
+/**
+ * (API.4b) Everything in scope at a requested [TypeCaptureRequest.scopeSpans] span
+ * — the free-name half of a completion list.
+ *
+ * Keyed on the query span exactly as [CapturedMembers] is, by the RAW `(pos, end)`
+ * pair. An entry exists whenever the checker reached the span, so an empty [names]
+ * is a real answer and is distinguishable from no entry at all.
+ *
+ * @property names deduplicated by name — INNERMOST WINS, which is what makes a
+ *   shadowed outer binding disappear rather than appear twice — and sorted by name
+ *   ascending, for [CapturedMembers.members]' reason.
+ */
+data class CapturedScope(
+    val fileName: String,
+    val start: Int,
+    val end: Int,
+    val names: List<CapturedName>,
+)
+
+/**
  * (API.3) A set of positions a compile is asked to record the type AT, handed to
  * the compiler BEFORE the build.
  *
@@ -319,17 +367,56 @@ data class TypeCaptureRequest(
      * call/construct signatures, which have no name to complete.
      */
     val memberSpans: List<TypeCaptureSpan> = emptyList(),
+    /**
+     * (API.4b) The spans to additionally ENUMERATE THE LEXICAL SCOPE CHAIN AT — a
+     * free-name completion request names the node it is anchored at here, and gets
+     * [CapturedScope] back.
+     *
+     * ## Why a third list, and why the node rather than the caret
+     *
+     * [memberSpans]' argument applies unchanged: this population must stay apart
+     * from [spans], because `Project.fileSemantics` hands in every identifier in a
+     * file and enumerating a whole scope chain at each of them would be quadratic
+     * for answers nobody sweeps for.
+     *
+     * A caret is not a node, so the CALLER — which owns a token index — resolves it
+     * to the innermost node enclosing the position and names THAT node's span. The
+     * scope in force at a node is the scope the spine has active when it enters it,
+     * which is exactly the quantity a completion needs and is exactly the quantity
+     * that does not survive the walk: `spineCurrentScope` is nulled per file by the
+     * spine's teardown, so there is no post-hoc option at all
+     * (`ScopeCaptureMeasurementTest` measures that rather than asserting it).
+     *
+     * ## What the enumeration is
+     *
+     * THE SAME WALK `spineScopeLookup` PERFORMS, ENUMERATED. Every level from the
+     * innermost outwards contributes its own scope-space bindings and then the
+     * binder table it aliases, first sighting wins, and the ascent ends at the
+     * source file — after which the merged GLOBALS are added, each filtered through
+     * the per-file visibility rule (INV.3(c)) so a module-only name another file
+     * declares is not offered here. That the enumeration and the lookup are one
+     * traversal is the whole correctness argument: a name this offers is a name
+     * `Project.definitionsAt` will resolve, and a name it hides is hidden because
+     * something nearer binds the spelling.
+     *
+     * NOT answered, each for a reason stated in `Project.completionsAt`: KEYWORDS
+     * (they are a grammar-position question this token-level anchor cannot ask), a
+     * per-item TYPE (see [CapturedName]), and any filtering by the typed prefix
+     * (the host filters — `CompletionList` carries the argument).
+     */
+    val scopeSpans: List<TypeCaptureSpan> = emptyList(),
 ) {
 
     /**
      * The spans indexed by file, as packed `(start, end)` keys — the form the
      * checker's per-node test needs.
      *
-     * (API.4a) The UNION of [spans] and [memberSpans]: this set is what the hot-path
-     * guard tests, and a member span has to pass it to be visited at all.
+     * (API.4a) The UNION of [spans], [memberSpans] and (API.4b) [scopeSpans]: this
+     * set is what the hot-path guard tests, and a member or scope span has to pass
+     * it to be visited at all.
      */
     internal val keysByFile: Map<String, Set<Long>> =
-        (spans + memberSpans).groupBy { it.fileName }
+        (spans + memberSpans + scopeSpans).groupBy { it.fileName }
             .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
 
     /**
@@ -338,6 +425,11 @@ data class TypeCaptureRequest(
      */
     internal val memberKeysByFile: Map<String, Set<Long>> =
         memberSpans.groupBy { it.fileName }
+            .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
+
+    /** (API.4b) The [scopeSpans] alone, in the same form and read at the same place. */
+    internal val scopeKeysByFile: Map<String, Set<Long>> =
+        scopeSpans.groupBy { it.fileName }
             .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
 
     internal companion object {

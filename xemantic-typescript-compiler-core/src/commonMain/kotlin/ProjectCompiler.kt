@@ -86,6 +86,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** (API.4a) What the types at the request's `memberSpans` call their own,
          *  or empty — the member half of a completion list. */
         val capturedMembers: List<CapturedMembers> = emptyList(),
+        /** (API.4b) What the lexical scope chain binds at the request's
+         *  `scopeSpans`, or empty — the free-name half of a completion list. */
+        val capturedScopes: List<CapturedScope> = emptyList(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -281,6 +284,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             capturedTypes = result.capturedTypes,
             capturedDefinitions = result.capturedDefinitions,
             capturedMembers = result.capturedMembers,
+            capturedScopes = result.capturedScopes,
         )
     }
 

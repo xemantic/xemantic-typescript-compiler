@@ -4,13 +4,13 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 917, 2026-08-17).** Landed: diagnostics, in-memory edits,
+**Status (round 918, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
-in one build — and **member completions** `(API.4a)`. Not yet: free-name
-completions `(API.4b)`, which `completionsAt` refuses explicitly rather than
-answering empty. See the `(API.*)` items in `PLAN-PHASE-5.md`.
+in one build — and **completions**, both halves: members `(API.4a)` and free
+names `(API.4b)`. Not yet: keywords (§ 10a says why they are refused rather than
+guessed), find-references, rename. See the `(API.*)` items in `PLAN-PHASE-5.md`.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -95,6 +95,7 @@ you call them.
 | `definitionsAt` | **full build, every call** | same mechanism, same caveat |
 | `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
 | `fileSemantics(f)` | **ONE full build** | every identifier in the file |
+| `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -449,15 +450,12 @@ val list: CompletionList = project.completionsAt(path, offset)
 //                optional: Boolean, readonly: Boolean, accessibility: String)
 ```
 
-**Member completions are answered; free names are refused, out loud.** A caret
-after a `.` or a `?.` gets the members of the expression to its left. A caret at
-a free position gets `kind = FREE_NAME` and
-`refusal = FREE_NAMES_NOT_IMPLEMENTED` — an empty list *with a stated reason*, so
-your host can tell "nothing is in scope here" from "this compiler cannot do that
-yet" and fall back to a word-based completer only in the second case. Everything
-else about a free-name caret — the prefix, the replacement span — is correct
-today and usable; `(API.4b)` fills in the candidates without changing a
-signature.
+**Both halves are answered.** A caret after a `.` or a `?.` gets the members of
+the expression to its left. A caret at a free position gets everything the
+lexical scope chain binds there. `kind` says which question was asked, and it is
+reported whether or not any items come back — a receiver with no members and a
+position where nothing may be completed at all are both empty lists, and you will
+want to tell them apart. **Keywords are not offered**; see below.
 
 **This is the one query whose position is not a node.** Every other semantic
 member starts from a node at the caret; a completion request has none by
@@ -518,9 +516,67 @@ rule, where hiding on a half-implemented test would silently lose real
 candidates. `kind` is how you tell a method from a property — there is no
 separate flag.
 
+**What the free-name list contains.** Everything the scope chain in force at the
+caret binds, from the innermost level outwards: the enclosing function's
+parameters and type parameters, its locals and its nested declarations, every
+enclosing block's and loop's and `catch`'s bindings, the enclosing class's and
+interface's type parameters, the enclosing namespaces' members, the file's own
+declarations and its imports, and finally the merged and lib **globals** filtered
+by what is actually visible in *this* file (one module's exported name is not
+offered inside another).
+
+**Each spelling appears once, as the innermost binding.** A body local that
+shadows an import is one item and it is the local — its `kind` is
+`VariableDeclaration` where the import's would be `ImportSpecifier`. The
+enumeration is literally the same chain walk go-to-definition performs to resolve
+one name, run to exhaustion, which is the whole correctness argument: *a name the
+list offers is a name `definitionsAt` will resolve, and a name it hides is hidden
+because something nearer binds the spelling.*
+
+**A free-name item carries no `typeText`** — it is `""`, and `optional`,
+`readonly` and `accessibility` are likewise not answers there. `kind` is the
+answer, and it is the icon a completion widget wants. The reason is measured, on
+this repo's own compiler-profile fixture (78 files, ~10 M chars, real libs):
+
+| quantity, at a caret in a real function body | measured |
+|---|---|
+| items offered | **1,628** |
+| the enumeration itself | **0.39 – 0.64 ms** |
+| adding `typeText` to every item | **+2.6 – 14.3 ms** (4 – 28× the enumeration) |
+| items whose `typeText` would render `any`/`error` | **618 of 1,629 = 37.9 %** |
+
+That last row is the deciding one: a free name may name a *type* — an interface,
+a type alias, a namespace — for which "the type of the symbol" is not a
+meaningful question, and decorating 38 % of the list with `any` is worse than
+decorating none of it. (On a two-file toy project the cost argument bites too:
+2,232 items there, enumeration 0.55 ms, and typing them all is 26–170 ms against
+a whole query of 125–360 ms.) If you want the type of the item your user has
+highlighted, ask `quickInfoAt` for that one item — the shape an LSP server's
+`completionItem/resolve` already has.
+
+**Keywords are not offered, deliberately.** A useful keyword list is
+context-sensitive: `interface` may start a statement and may not appear inside an
+expression, `await` belongs only inside an async function, `extends` only in a
+heritage clause. The anchor here is a *token-level* device — it knows what
+precedes the caret, not which grammar production it sits in — so an unconditional
+list would offer items that do not compile, which is the one thing the member
+half already refuses to do. Merge your own keyword list into ours if you want
+one; nothing about the result depends on ours being empty.
+
+**Two known imprecisions, stated rather than hidden.** A name declared *later* in
+the same block is offered (a block's bindings are a set, not a sequence — the
+binding exists and is merely in its temporal dead zone, which is what tsc offers
+too). And a function's body locals are visible from inside its own *parameter
+defaults*, because the binder's function scope is flat; writing one there is an
+error the checker reports separately.
+
 **Cost: one compile, one caret.** The same caveats as hover (§ 8): it builds, and
 that build is not the `diagnostics()` build. Batching many carets is
-`semanticsAt`'s question, not this one.
+`semanticsAt`'s question, not this one. Measured on the compiler profile above, a
+free-name completion is **5.3 – 8.9 s warm** — essentially all of it the rebuild,
+with the enumeration under a millisecond of it. **So debounce.** This is not a
+per-keystroke query on a project of that size, and the reason is the compiler's
+lack of incremental reuse (§ 3), not the completion machinery.
 
 ## 11. Rules that apply to everything
 
@@ -619,15 +675,15 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **`(API.4b)` free-name completions** — everything a caret's lexical scope binds,
-  plus the keywords legal at that position. The anchor already reports the caret
-  correctly (`kind`, `prefix`, replacement span); what is missing is the
-  enumeration, which is a different traversal of the scope chain from the
-  single-name lookup `definitionsAt` performs, and a larger one — the outer
-  levels of a real program hold hundreds of symbols. It lands by dropping
-  `CompletionRefusal.FREE_NAMES_NOT_IMPLEMENTED`, with no signature change here.
+- **keyword completions** — see § 10a for why they are refused rather than
+  guessed. They need a grammar-position mechanism the token-level anchor does not
+  have; until one exists, merge your own list into ours.
 - **contextual object-literal keys** — `{ p: v }`'s own `p` still answers
-  nothing, because the useful target is the contextual type's property (§ 9).
+  nothing, in either query: the useful target is the contextual type's property
+  (§ 9), and a caret there is answered today as an ordinary free name.
+- **member completion after an unparsable receiver** — a `.` the parse did not
+  turn into a member access answers an empty list rather than guessing a receiver
+  out of bracket-balanced text.
 
 None of these change what is documented above. The one thing that would is the
 architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) that makes the checker

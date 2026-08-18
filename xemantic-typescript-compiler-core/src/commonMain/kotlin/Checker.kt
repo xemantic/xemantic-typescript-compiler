@@ -5005,6 +5005,18 @@ class Checker(
         typeCapture?.memberKeysByFile ?: emptyMap()
 
     /**
+     * (API.4b) The subset of [typeCaptureKeysByFile] whose LEXICAL SCOPE CHAIN is
+     * also to be enumerated — the free-name completion anchors.
+     *
+     * A third map for [typeCaptureMemberKeysByFile]' reason, and it additionally
+     * decides whether a NON-[Expression] node is visited at all: a completion at a
+     * free position is usually anchored at a Block or a statement, which no other
+     * capture has any use for.
+     */
+    private val typeCaptureScopeKeysByFile: Map<String, Set<Long>> =
+        typeCapture?.scopeKeysByFile ?: emptyMap()
+
+    /**
      * The requested spans of the file the spine is walking, or null.
      *
      * Null for EVERY file when nothing was requested, which is what makes the
@@ -5022,6 +5034,17 @@ class Checker(
      * path. Set beside its sibling in [checkSpine]'s per-file loop.
      */
     private var typeCaptureMemberKeysCurrentFile: Set<Long>? = null
+
+    /**
+     * (API.4b) The scope-enumeration spans of the file the spine is walking, or
+     * null.
+     *
+     * Read from inside [typeCaptureVisit] — but, unlike its member sibling, BEFORE
+     * the [Expression] gate rather than after it, because a free-name anchor is
+     * routinely a statement or a Block. It is still off the hot path: the read
+     * happens only once a span has already matched [typeCaptureKeysCurrentFile].
+     */
+    private var typeCaptureScopeKeysCurrentFile: Set<Long>? = null
 
     /**
      * The captured type answers, keyed by the span asked about, FIRST WINS.
@@ -5095,6 +5118,25 @@ class Checker(
         get() = typeCaptureMemberResults.values.toList()
 
     /**
+     * (API.4b) The captured SCOPE ENUMERATIONS, keyed and ordered exactly as
+     * [typeCaptureResults] is, and resolved on a span collision by exactly
+     * [typeCaptureMemberNodes]' deepest-wins rule.
+     */
+    private val typeCaptureScopeResults = LinkedHashMap<TypeCaptureSpan, CapturedScope>()
+
+    /** (API.4b) Which NODE produced each entry of [typeCaptureScopeResults]. */
+    private val typeCaptureScopeNodes = HashMap<TypeCaptureSpan, Node>()
+
+    /**
+     * (API.4b) What the lexical scope chain binds at the requested scope spans.
+     *
+     * `internal` for the reason [capturedTypes] is: the compile driver reads it into
+     * [CompilationResult.capturedScopes].
+     */
+    internal val capturedScopes: List<CapturedScope>
+        get() = typeCaptureScopeResults.values.toList()
+
+    /**
      * (API.3) Records the type at [node] when its RAW span is one the caller asked
      * about.
      *
@@ -5109,7 +5151,13 @@ class Checker(
      * its caret to a node first and asks about that node's span. A span nothing in
      * the program carries simply yields no answer.
      *
-     * Only an [Expression] is typed. `currentCheckFileName` is installed for the
+     * Only an [Expression] is typed — and, before (API.4b), only an [Expression]
+     * was VISITED. A free-name completion anchor is routinely a statement or a
+     * Block (the caret sits between nodes), so a span that asked for a scope
+     * enumeration passes the kind gate too; nothing else does, so no other capture
+     * gained a population.
+     *
+     * `currentCheckFileName` is installed for the
      * call because the spine's own handlers install-and-restore it per anchor
      * dispatch, so at an arbitrary node it is at rest — and it is the key
      * `getTypeOfIdentifier` reaches `fileLocalTypeMaps` through. Everything else the
@@ -5118,8 +5166,10 @@ class Checker(
      */
     private fun typeCaptureVisit(node: Node) {
         val keys = typeCaptureKeysCurrentFile ?: return
-        if (TypeCaptureRequest.packSpanKey(node.pos, node.end) !in keys) return
-        if (node !is Expression) return
+        val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
+        if (key !in keys) return
+        val wantsScope = typeCaptureScopeKeysCurrentFile?.contains(key) == true
+        if (node !is Expression && !wantsScope) return
         val frame = ctaFrames.lastOrNull()
         if (frame == null) {
             typeCaptureRecordAt(node, spineFileName)
@@ -5178,18 +5228,26 @@ class Checker(
      * whole shape of (API.3b) versus (API.3a) and is worth stating: the cta frames
      * are install-and-restore, the lexical scope chain is not.
      */
-    private fun typeCaptureRecordAt(node: Expression, fileName: String) {
-        typeCaptureRecord(node, fileName)
-        if (node is Identifier) typeCaptureRecordDefinition(node, fileName)
-        // (API.4a) The member enumeration, for the spans that asked for one. The
-        // membership test is HERE rather than at the per-node hook because the node
-        // has already matched the union key set by the time this runs: a completion
-        // costs the spine nothing that a hover does not already cost.
-        val memberKeys = typeCaptureMemberKeysCurrentFile
-        if (memberKeys != null &&
-            TypeCaptureRequest.packSpanKey(node.pos, node.end) in memberKeys
-        ) {
-            typeCaptureRecordMembers(node, fileName)
+    private fun typeCaptureRecordAt(node: Node, fileName: String) {
+        val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
+        if (node is Expression) {
+            typeCaptureRecord(node, fileName)
+            if (node is Identifier) typeCaptureRecordDefinition(node, fileName)
+            // (API.4a) The member enumeration, for the spans that asked for one. The
+            // membership test is HERE rather than at the per-node hook because the
+            // node has already matched the union key set by the time this runs: a
+            // completion costs the spine nothing that a hover does not already cost.
+            val memberKeys = typeCaptureMemberKeysCurrentFile
+            if (memberKeys != null && key in memberKeys) {
+                typeCaptureRecordMembers(node, fileName)
+            }
+        }
+        // (API.4b) The scope enumeration. Deliberately OUTSIDE the [Expression]
+        // gate: a free-name caret between statements is anchored at a Block or at
+        // the source file, which is not an expression and has no type to record.
+        val scopeKeys = typeCaptureScopeKeysCurrentFile
+        if (scopeKeys != null && key in scopeKeys) {
+            typeCaptureRecordScope(node, fileName)
         }
     }
 
@@ -5247,6 +5305,137 @@ class Checker(
             current = (current as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * (API.4b) Records what the lexical scope chain binds AT [node], first-wins with
+     * [typeCaptureRecordMembers]' deepest-wins exception.
+     *
+     * The whole answer is a function of [spineCurrentScope], which is why it can
+     * only be taken here: the spine nulls that chain when it leaves a file
+     * ([spineScopeClear]), so a post-hoc query sees an empty chain and can answer
+     * with globals and nothing else — `ScopeCaptureMeasurementTest` measures exactly
+     * that, through [postHocScopeNamesForTesting].
+     *
+     * An entry is written even when nothing was found, so "the anchor was reached
+     * and binds nothing" stays distinguishable from "the span was never walked".
+     */
+    private fun typeCaptureRecordScope(node: Node, fileName: String) {
+        val span = TypeCaptureSpan(fileName, node.pos, node.end)
+        val previous = typeCaptureScopeNodes[span]
+        if (previous != null && !typeCaptureIsDescendantOf(node, previous)) return
+        typeCaptureScopeNodes[span] = node
+        typeCaptureScopeResults[span] =
+            CapturedScope(fileName, node.pos, node.end, typeCaptureScopeNames(fileName))
+    }
+
+    /**
+     * (API.4b) Every name writable bare at the spine's current position, innermost
+     * binding first and each spelling once.
+     *
+     * ## This is [spineScopeLookup]'s walk, enumerated
+     *
+     * Level by level from [spineCurrentScope] outwards: the level's own scope-space
+     * bindings ([LexicalScope.symbols]) and then the binder table it aliases
+     * ([LexicalScope.existing]), first sighting wins, then the parent. That is
+     * literally the traversal [spineScopeLookup] performs to answer ONE name, run to
+     * exhaustion — which is the correctness argument in one sentence: **a name this
+     * offers is a name go-to-definition will resolve, and a name it hides is hidden
+     * because something nearer binds the spelling.** Any other traversal would let
+     * the two disagree, and a completion list that offers what navigation cannot
+     * follow is worse than a shorter one.
+     *
+     * ## Why `existing` is read here although INV.2(c) tells a RESOLVER not to
+     *
+     * CLAUDE.md's round-748 rule — *"a checker resolver consulting `lexicalScopes`
+     * must read `scope.symbols` ONLY"* — is about a resolver whose soundness
+     * argument is that it cannot change how any existing name resolves, which holds
+     * precisely because `symbols` excludes everything the main binder bound. An
+     * ENUMERATION has no such freedom: the source file's own `symbols` holds only
+     * the block-hoisted leftovers (B83.5), so a `symbols`-only sweep would offer no
+     * file-level declaration and no import at all. [spineScopeLookup] already reads
+     * both, deliberately and since (API.3b); this reads exactly what it reads.
+     *
+     * ## Why the untrusted-level rule is NOT applied, which is a divergence
+     *
+     * [lexLevelHasName] SKIPS a ModuleDeclaration or EnumDeclaration level, because
+     * there the aliased table carries all merged members while the unresolved-names
+     * walk it serves applies its own export filtering — so trusting the level would
+     * SUPPRESS a genuine TS2304. That rule belongs to that chain, which has a second,
+     * threaded population to fall back on. This chain has none: skipping those levels
+     * would offer nothing at all at a caret inside a namespace body, where every one
+     * of the namespace's own members is legally writable. The cost of not skipping is
+     * that a namespace merged across files can offer a sibling declaration's
+     * non-exported member; `ProjectFreeNameCompletionTest` pins the namespace case,
+     * and applying the rule reddens it.
+     */
+    private fun typeCaptureScopeNames(fileName: String): List<CapturedName> {
+        val collected = LinkedHashMap<String, Symbol>()
+        var scope = spineCurrentScope
+        while (scope != null) {
+            for ((name, symbol) in scope.symbols) if (name !in collected) collected[name] = symbol
+            scope.existing?.let { table ->
+                for ((name, symbol) in table) if (name !in collected) collected[name] = symbol
+            }
+            scope = scope.parent
+        }
+        typeCaptureCollectGlobalNames(collected, fileName)
+        val names = ArrayList<CapturedName>(collected.size)
+        for ((name, symbol) in collected) {
+            if (!typeCaptureIsWritableName(name)) continue
+            val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+            names.add(CapturedName(name, declaration?.kind?.name ?: "Unknown"))
+        }
+        names.sortBy { it.name }
+        return names
+    }
+
+    /**
+     * (API.4b) Adds the merged GLOBALS visible in [fileName] to [out], skipping
+     * every spelling something nearer already bound.
+     *
+     * ## The per-file filter is the point, not a precaution
+     *
+     * A bare `globals` sweep is exactly the INV.3 conflation this repo spent a
+     * migration removing: it would offer one module file's exported name inside
+     * every other file. [globalsForFile] is the primitive that answers "does this
+     * name have a meaning HERE", and it returns null exactly where the legacy
+     * consult would have leaked. Under INV.3(d) most module-only names are not in
+     * [globals] at all, so the filter is usually a set membership and a return —
+     * but it is what makes the sweep correct rather than accidentally correct.
+     *
+     * The key set is SNAPSHOT before the loop: [globalsForFile] can resolve an
+     * import alias on its way to an answer, and iterating a table a callee may touch
+     * is a concurrent-modification bug that would fire on a project shape no test
+     * here happens to carry.
+     */
+    private fun typeCaptureCollectGlobalNames(out: MutableMap<String, Symbol>, fileName: String) {
+        val names = globals.keys.toList()
+        for (name in names) {
+            if (name in out) continue
+            out[name] = globalsForFile(fileName, name) ?: continue
+        }
+    }
+
+    /**
+     * (API.4b) True when [name] can be typed at a free position as it stands.
+     *
+     * A symbol table's keys are not all identifiers: the compiler's own entries are
+     * `__`-prefixed, an object type's index signature and a quoted member land under
+     * spellings with spaces and punctuation in them, and a completion that inserts
+     * one of those produces text that does not parse. The test is on the CHARACTERS
+     * rather than on a flag, because the property wanted is exactly "this is a
+     * writable identifier".
+     */
+    private fun typeCaptureIsWritableName(name: String): Boolean {
+        if (name.isEmpty() || name.startsWith("__")) return false
+        val first = name[0]
+        if (!(first.isLetter() || first == '_' || first == '$')) return false
+        for (i in 1 until name.length) {
+            val c = name[i]
+            if (!(c.isLetterOrDigit() || c == '_' || c == '$')) return false
+        }
+        return true
     }
 
     /**
@@ -5904,6 +6093,22 @@ class Checker(
         }
         return found?.let { typeCaptureDefinitionAt(it, fileName) }
     }
+
+    /**
+     * (API.4b) TEST-ONLY — the post-hoc twin of [postHocDefinitionAtSpanForTesting],
+     * for the SCOPE ENUMERATION question.
+     *
+     * Runs [typeCaptureScopeNames] — the very enumeration the capture runs — after
+     * `init`, when [spineScopeClear] has nulled the chain. The ascent therefore has
+     * no levels to walk and the answer collapses to the globals leg alone, which is
+     * how a "keep the checker and ask it later" completion would behave: every
+     * parameter, every local and every block binding simply gone, and — worse than
+     * absent — an outer or imported binding of the same spelling offered in the
+     * shadowing local's place. `ScopeCaptureMeasurementTest` measures that rather
+     * than asserting it.
+     */
+    internal fun postHocScopeNamesForTesting(fileName: String): List<CapturedName> =
+        typeCaptureScopeNames(fileName)
 
     // ── INV.4 check spine (round 514) ──────────────────────────────────────
     // Per-file context for the single-pass check spine — the ONE preorder walk
@@ -24197,6 +24402,10 @@ class Checker(
                 typeCaptureMemberKeysCurrentFile =
                     if (typeCaptureMemberKeysByFile.isEmpty()) null
                     else typeCaptureMemberKeysByFile[sf.fileName]
+                // (API.4b) likewise, and likewise read only after a span matched.
+                typeCaptureScopeKeysCurrentFile =
+                    if (typeCaptureScopeKeysByFile.isEmpty()) null
+                    else typeCaptureScopeKeysByFile[sf.fileName]
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
