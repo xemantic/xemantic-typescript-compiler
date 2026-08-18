@@ -291,6 +291,10 @@ internal object SyntaxRoles {
                 // `o.p = 1` writes `p`; `o` in the same expression is READ, which is
                 // why only the NAME edge ascends and the receiver edge does not.
                 parent is PropertyAccessExpression && parent.name === current -> current = parent
+                // (API.9) …and `o["p"] = 1` writes `p` by the same rule. Only the
+                // ARGUMENT edge ascends, for the same reason the receiver edge does not.
+                parent is ElementAccessExpression && parent.argumentExpression === current ->
+                    current = parent
                 parent is BinaryExpression && parent.left === current &&
                     isAssignmentOperator(parent.operator) ->
                     return if (parent.operator == SyntaxKind.Equals) {
@@ -373,6 +377,20 @@ internal object SyntaxRoles {
     data class Rewrite(val text: String, val nameOffset: Int)
 
     /**
+     * (API.9) The NAME [node] spells — its own text for an identifier, and the text
+     * between the quotes for the string literal of an `o["p"]`.
+     *
+     * The two occurrence populations meet here, so a caller comparing an occurrence
+     * against the old name reads one function rather than casting to [Identifier] and
+     * crashing on the literal. Anything else answers `""`, which matches no name.
+     */
+    fun occurrenceText(node: Node): String = when (node) {
+        is Identifier -> node.text
+        is StringLiteralNode -> node.text
+        else -> ""
+    }
+
+    /**
      * True when [node] names a MEMBER OF A TYPE rather than something a scope binds.
      *
      * This is the axis the completeness net is split on, and the split matters in both
@@ -395,6 +413,9 @@ internal object SyntaxRoles {
             is PropertyAssignment -> parent.name === node
             is BindingElement -> parent.propertyName === node
             is NamedTupleMember -> parent.name === node
+            // (API.9) `o["p"]` — a member position whose name is a string literal, and
+            // since this round an occurrence rather than only an obstacle.
+            is ElementAccessExpression -> parent.argumentExpression === node
             else -> false
         }
     }
@@ -424,11 +445,13 @@ internal object SyntaxRoles {
      * Every `o["…"]` in [root] whose member is named by a STRING LITERAL, as
      * `(the literal node, its text)`.
      *
-     * A string literal is not an identifier, so such an access is outside the
-     * population `Project.referencesAt` sweeps — it can be neither found nor renamed
-     * here. This exists so it can be DETECTED: a member rename that leaves one behind
-     * produces a program that does not compile, so the presence of one spelling the old
-     * name is a refusal.
+     * (API.9) A string literal is not an identifier, so such an access used to be
+     * outside the population `Project.referencesAt` sweeps — it could be neither found
+     * nor renamed, only DETECTED, and detecting one was what refused a member rename.
+     * It is now the second half of `SourceIndex.occurrenceNodes`, i.e. part of the
+     * population, and this enumeration is what puts it there. The other positions a
+     * string literal can occupy are deliberately not enumerated: a literal that names
+     * no member is not a candidate for anything.
      *
      * ITERATIVE, as every full-tree walk in this module is: the corpus carries
      * expression chains deep enough to crash a recursive one.

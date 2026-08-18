@@ -20,6 +20,112 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 926 (2026-08-18) — (API.9): THE MEMBER OCCURRENCE SET. ROUND 925 MEASURED IT SHORT BY
+THREE KINDS AND REFUSED A MEMBER RENAME BECAUSE OF THEM; **ALL THREE ARE CLOSED**, AND THE
+ROUND'S PRODUCT IS THAT THE THIRD ONE'S SHAPE WAS DECIDED BY tsc RATHER THAN BY REASONING —
+TWICE, AGAINST TWO DIFFERENT WRONG DESIGNS THIS ROUND HAD ALREADY WRITTEN.**
+
+- **STEP 1 WAS tsc ITSELF AND IT DECIDED EVERYTHING.** `scripts/lsp_member_refs.py` (new; it
+  reuses `lsp_rename.py`'s client) drives `textDocument/references` and `textDocument/rename`
+  over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, and `textDocument/definition` beside it. Three
+  fixtures, 25 carets. What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 answers |
+|---|---|
+| an interface member `Shape.p` | **13 spans / 2 files** — every `o.p`, the `o["p"]` LITERAL, five binding-element property names, TWO implementors' declarations, their `this.p`, a `u.p`, the declaration |
+| the string literal of `o["p"]` | the same 13; the edit span is `[77,78)` for a literal at `[76,79)` — **the quotes are excluded** |
+| a plain `"p"` elsewhere in the file | **not a reference** |
+| `const { p: local } = o`, on the `p` | the member's group; on the `local`, the local's |
+| `const { p } = o` (SHORTHAND) | ONE span meaning TWO things — renaming the member writes `renamed: p`, renaming the local writes `p: renamed` |
+| a class with the same members and **no `implements`** | **2 spans** — its own declaration and its own `this.p`. **STRUCTURAL COMPATIBILITY DOES NOT RELATE** |
+| `override p` in a class extending an implementor | in the interface's group — the edge is **TRANSITIVE** |
+| `interface A {p}` + `interface B {p}` + `class C implements A, B {p}`, caret on `A.p` | **7 spans, and `b.p` is NOT among them** — the edge does **not** chain between siblings |
+| **go-to-definition on an implementor's own `p`** | **THAT MEMBER**, where references answers the base's whole group |
+| an object-literal key `{ p: v }` / `f({ p: "w" })` | in the group — the one kind NOT closed here |
+
+- **KINDS 1 AND 2 ARE POPULATION AND RECEIVER QUESTIONS AND WERE CHEAP.** A binding element's
+  `propertyName` is already an identifier the sweep visits; what it lacked was a RECEIVER, and
+  the pattern's source is not an expression to the left of a dot — it is the annotation or
+  initializer one to three levels up (`typeCaptureDestructured`, which handles a nested pattern
+  by asking the level above for its own member, and answers null rather than guessing for an
+  array pattern or an un-annotated parameter). An `o["p"]` needed the POPULATION widened:
+  `SourceIndex.occurrenceNodes()` is `identifiers()` plus the string literals that name a
+  member, and it is the ONE non-`Identifier` this API resolves. `identifiers()` is untouched —
+  `fileSemantics`' contract ("every `Identifier`, and nothing else") is documented.
+
+- **KIND 3 TOOK TWO WRONG DESIGNS, AND BOTH WERE CAUGHT BY MEASUREMENT RATHER THAN BY REVIEW.**
+  (i) The first put the base's declaration into `CapturedDefinition.locations`. tsc's
+  go-to-definition refutes it: an implementor's member navigates to ITSELF. So the edge is a
+  SEPARATE field, `CapturedDefinition.related`, which grouping reads and `definitionsAt` does
+  not — arm A10 restores the mistake. (ii) The second carried the edge only on a member's
+  DECLARATION NAME and then reached the rest of the group by a transitive closure. Two pins
+  failed at once: a `this.p` inside the implementor stayed out, and closing transitively merges
+  the `A`/`B`/`C` fixture that tsc keeps apart. **The rule that survives both is tsc's own and
+  is per-OCCURRENCE**: every occurrence carries its resolved symbol PLUS the bases that symbol
+  implements, and two occurrences are the same thing when those sets MEET. Arm A5 restores the
+  declaration-only edge; arm A4 removes `related` from the grouping.
+
+- **RENAME REFUSES STRICTLY LESS, AND THE PIN THAT SHOWS IT IS THE OLD ONE REWRITTEN.** Round
+  925's `a member with an implementor elsewhere is refused` and `a member also reached by a
+  string element access is refused` now assert the RESULTING TEXT of the renamed lines. **The
+  discriminator for the element access is the QUOTES** — the edit span is
+  `SourceIndex.occurrenceSpanOf`, the text between them, so a plan built from the token span
+  writes `bracket[renamedBracketed]`, which compiles and means something else (arm A1). What
+  still refuses: a CONTEXTUAL SHORTHAND, and an `o["p"]` the search cannot PLACE (a member of
+  an `any`), which keeps `ELEMENT_ACCESS` as its conflict kind because an unplaceable bracket
+  is a different report to a user than an unplaceable identifier.
+
+- **THE SHORTHAND IS REFUSED ON PURPOSE AND THE REASON IS STRUCTURAL, NOT EFFORT.** tsc holds
+  TWO symbols for the one token of `const { p } = o` and expands in whichever direction the
+  caret asks; a capture files ONE answer per span, so admitting it would make the local's group
+  and the member's group share a span and merge whenever a caret landed on it. That is the same
+  boundary the contextual object-literal key sits behind, and they are now the same refusal.
+
+- **ONE VERIFICATION BUG THE ROUND FOUND IN ITS OWN WORK, and it is a general shape.** The
+  rename's third check looks up what each occurrence resolved to BEFORE, keyed by the capture's
+  key — the NODE's raw `pos`. An element-access edit begins one character later, so keying the
+  lookup by the EDIT's start missed, read as an empty expectation, and refused every
+  element-access rename as `WOULD_CHANGE_MEANING`. `PlannedEdit.nodePos` carries the key
+  explicitly; arm A8 restores the mistake. **When an edit span and an identity key stop
+  coinciding, every map keyed by one and read by the other fails silently and in the
+  conservative direction.**
+
+- **PINS +19**, `-project` 425 -> 444, core UNCHANGED at 14,341; suite **14,900 -> 14,919 / 0
+  failures / 0 errors / 3 skipped**. 17 are the new `ProjectMemberOccurrenceTest`, whose whole
+  design is one discriminator per kind: an `o["p"]` beside two unrelated `"p"` literals, a
+  `{ p: local }` beside an unrelated `local`, and a `Structural` class carrying the same member
+  with no `implements`. The tsc-parity assertion is an exact SET, not a size.
+
+- **TEN-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is
+  asserted, restored from a sha256-verified snapshot. `scripts/round926-ablate.py`.
+
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and here it is a real
+  gate rather than a control, because this round DOES add core code on the capture path.
+  `huge_methods.py --fail-over 0` clean on core (largest 5,651) and on `-project` explicitly
+  (largest 246). The round-920 token gate re-run because `SourceIndex` changed: **1,327 files,
+  101,287,620 chars, 3,936,158 identifiers, 0 violations.** `spine_closure_audit.py` not
+  applicable — no `spine*EnterNode` changed. Warning-clean.
+
+- **MEASURED ON tsc's OWN SOURCES** (78 files, 9,977,097 chars, real libs, warm),
+  `OccurrenceCostMain` (new): the swept population goes **381,670 -> 381,672**. Tsc's own
+  compiler sources contain exactly **TWO** `o["…"]` accesses, so the element-access half is
+  arithmetically free; the heritage edge runs per member occurrence inside the same walk and
+  did not move the wall either — `referencesAt` on `SyntaxKind` reads **9.1-13.0 s** against
+  round 925's 10.6-16.0 s, i.e. the same band, with the same **9,827** hits (a control: that
+  symbol is not a member, so its group must not have changed). `fileSemantics` is untouched by
+  construction — it enumerates `identifiers()`, whose documented contract did not change.
+
+- **SUCCESSOR, ranked.** (1) **contextual object-literal keys** — now the ONLY thing that
+  refuses a member rename, the last of round 922's five refusals, and the same shape as the
+  binding SHORTHAND this round refused for a structural reason (one span, two symbols): both
+  want a capture that can file more than one answer per span, so they are one item rather than
+  two. (2) **completion inside `o["`** — hover, definition, references and rename all answer an
+  element access now, but a caret in the string still answers `NO_COMPLETION_CONTEXT`; that is
+  an ANCHOR question, not a resolution one. (3) **the incremental / re-entrant seam** — every
+  query here is a full rebuild and rename is two. **I would take (1)**: it is the last refusal
+  standing between a member rename and "it always works", and this round showed the shorthand
+  and the contextual key are the same mechanism.
+
 **Round 925 (2026-08-18) — (API.8): RENAME. THE OCCURRENCE SET WAS ALREADY THERE; THE ROUND'S PRODUCT
 IS THAT **THE PLAN IS VERIFIED BY APPLYING IT AND COMPILING THE PROGRAM AGAIN**, SO EVERY SAFETY CLAIM
 HERE IS A COMPILER RUN RATHER THAN A READING OF THE CODE.**
@@ -1664,6 +1770,24 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   were updated in place: member completions no longer include inaccessible members, and a free-name
   list now carries keyword items (`kind = "Keyword"`). **+45 pins** (32 parse-only), **fourteen-arm
   ablation, all fourteen a DISTINCT set**, all gates green. `docs/language-service.md` §§ 10a, 10b.
+
+- [x] **(API.9) THE MEMBER OCCURRENCE SET — LANDED, round 926; TWO OF THE THREE KINDS CLOSED
+  OUTRIGHT, THE THIRD CLOSED FOR A DECLARED HERITAGE EDGE AND STILL REFUSED FOR A CONTEXTUAL
+  ONE.** Round 925 measured a member's occurrence set at 2 spans against tsc's 5 and named the
+  three missing kinds. Closed: **(1) a binding element's `propertyName`** (`const { p: local }`
+  — a receiver question; the pattern's source is the annotation or initializer one to three
+  levels up, `Checker.typeCaptureDestructured`), **(2) an element access `o["p"]`** (a
+  POPULATION question; `SourceIndex.occurrenceNodes()` is `identifiers()` plus the string
+  literals that name a member, and the edit span is the text BETWEEN the quotes), and **(3) an
+  IMPLEMENTOR's member** via `CapturedDefinition.related` — a DECLARED heritage edge, computed
+  per OCCURRENCE, which is what makes a `this.p` inside an implementor part of the interface's
+  group. **Still refused: a contextually supplied key, and the binding SHORTHAND `const { p }`,
+  for the same structural reason** — one span carrying two symbols, which a capture filing one
+  answer per span cannot express. `referencesAt`, `documentHighlightsAt` and `renameAt` improve
+  together because the set is wired once; `definitionsAt` deliberately does NOT follow the
+  heritage edge, because tsc's own go-to-definition on an implementor's member answers that
+  member. +19 pins, ten-arm ablation, `cost_gate.py` +0.00%, population 381,670 -> 381,672 on
+  tsc's own sources. `docs/language-service.md` §§ 9, 10b, 10d.
 
 - [x] **(API.8) RENAME — LANDED, round 925.** `RenamePlan(oldName, newName, files, refusal,
   conflicts)` / `FileRename(fileName, edits)` / `RenameEdit(start, end, newText)` /

@@ -80,9 +80,10 @@ class ProjectRenameTest {
      * - `outer` and `inner` are the CAPTURE pair: `host` reads `outer` and holds its
      *   own `inner`, so renaming either onto the other's spelling compiles and lies;
      * - `Solo.solitary` is a member whose occurrence set IS provably complete;
-     * - `Contract.shared` has an IMPLEMENTOR, `bracket.bracketed` an ELEMENT ACCESS and
-     *   `Ctx.ctxKey` a CONTEXTUAL SHORTHAND — the three ways a member rename cannot be
-     *   shown complete;
+     * - `Contract.shared` has an IMPLEMENTOR and `bracket.bracketed` an ELEMENT ACCESS —
+     *   two of round 925's three member obstacles, both CLOSED by (API.9) and both now
+     *   pinned as the resulting text rather than as a refusal — while `Ctx.ctxKey` has a
+     *   CONTEXTUAL SHORTHAND, which is the one still refused;
      * - `localAlias` crosses an `as`, and `"abc".length` lands in a library.
      */
     private val main = """
@@ -378,34 +379,67 @@ class ProjectRenameTest {
     }
 
     /**
-     * An IMPLEMENTOR's member is a different symbol here and would be left behind, so
-     * the class would stop implementing its interface. Refused, with the implementor's
-     * own span named.
+     * (API.9) THE REFUSAL THIS ROUND CASHED, half one. An IMPLEMENTOR's member used to be
+     * a different symbol here, so the class would have stopped implementing its
+     * interface and the whole rename was refused; a DECLARED heritage edge now ties the
+     * two, and the plan edits both. Asserted as the resulting TEXT of both lines,
+     * because a plan of the right size can still have edited the wrong spans.
      */
     @Test
-    fun `a member with an implementor elsewhere is refused and the implementor is named`() {
+    fun `a member with an implementor is renamed on the interface and on the class`() {
         val project = projectWith()
         val plan = project.renameAt(mainFile, offsetOf("shared: string"), "renamedShared")
-        assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
-        assert(plan.files.isEmpty())
+        assert(plan.refusal == null)
+        val text = applied(plan, mainFile, main)
+        assert(lineWith(text, "interface Contract") == "interface Contract { renamedShared: string; }")
         assert(
-            plan.conflicts.single().kind == RenameConflictKind.UNRESOLVED_OCCURRENCE,
+            lineWith(text, "class Implementor") ==
+                """class Implementor implements Contract { renamedShared = "x"; }""",
         )
-        assert(plan.conflicts.single().start == offsetOf("""shared = "x""""))
+        assert(lineWith(text, "const readShared") == "const readShared = contract.renamedShared;")
     }
 
     /**
-     * `o["p"]` names its member with a string literal, which is outside the population
-     * this API can find at all. Missing it breaks the program, so its presence refuses
-     * the rename rather than being silently skipped.
+     * (API.9) THE REFUSAL THIS ROUND CASHED, half two, and the discriminator is the
+     * QUOTES. `o["p"]` names its member with a string literal, which is now swept and
+     * renamed — but the edit covers the literal's TEXT and not its quotes, so an
+     * off-by-one produces `bracket[renamedBracketed]` or a doubled quote. Asserting the
+     * resulting line is the only form that sees that; a count or an offset does not.
      */
     @Test
-    fun `a member also reached by a string element access is refused`() {
+    fun `a member also reached by a string element access is renamed inside the quotes`() {
         val project = projectWith()
         val plan = project.renameAt(mainFile, offsetOf("bracketed: number"), "renamedBracketed")
-        assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
-        assert(plan.conflicts.single().kind == RenameConflictKind.ELEMENT_ACCESS)
-        assert(plan.conflicts.single().start == offsetOf("""bracket["bracketed"]""") + 8)
+        assert(plan.refusal == null)
+        val text = applied(plan, mainFile, main)
+        assert(
+            lineWith(text, "const readBracket") ==
+                """const readBracket = bracket["renamedBracketed"];""",
+        )
+        assert(lineWith(text, "const readDot") == "const readDot = bracket.renamedBracketed;")
+        assert(
+            lineWith(text, "declare const bracket") ==
+                "declare const bracket: { renamedBracketed: number };",
+        )
+    }
+
+    /**
+     * (API.9) …and applying THAT plan leaves the program compiling exactly as it did —
+     * the independent oracle, run through the ordinary diagnostic path rather than
+     * through the verification `renameAt` performs internally. It is the pin that says
+     * the newly-covered kinds are edited CORRECTLY and not merely edited.
+     */
+    @Test
+    fun `applying a plan over the newly covered member kinds leaves the program compiling`() {
+        val project = projectWith()
+        val before = project.diagnostics().map { it.code }.sorted()
+        for (name in listOf("shared: string", "bracketed: number")) {
+            val fresh = projectWith()
+            val plan = fresh.renameAt(mainFile, offsetOf(name), "renamedByThePlan")
+            assert(plan.refusal == null)
+            fresh.updateFile(mainFile, applied(plan, mainFile, main))
+            assert(fresh.diagnostics().map { it.code }.sorted() == before)
+        }
     }
 
     /**
@@ -420,6 +454,25 @@ class ProjectRenameTest {
         assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
         assert(plan.conflicts.single().kind == RenameConflictKind.CONTEXTUAL_SHORTHAND)
         assert(plan.conflicts.single().start == offsetOf("{ ctxKey }") + 2)
+    }
+
+    /**
+     * (API.9) The element access is an occurrence when it RESOLVES; one that does not —
+     * a member of an `any`, which nothing can place — is still a refusal, and it keeps
+     * its own conflict kind because "a bracket naming something unplaceable" is a
+     * different report to a user than "an identifier that would not resolve".
+     */
+    @Test
+    fun `an element access this search cannot place still refuses the rename`() {
+        val text = main + """
+            declare const loose: any;
+            console.log(loose["bracketed"]);
+        """.trimIndent() + "\n"
+        val project = projectWith(mainText = text)
+        val plan = project.renameAt(mainFile, offsetOf("bracketed: number", text = text), "renamedB")
+        assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
+        assert(plan.conflicts.single().kind == RenameConflictKind.ELEMENT_ACCESS)
+        assert(plan.conflicts.single().start == text.indexOf("""loose["bracketed"]""") + 7)
     }
 
     // --- aliases -------------------------------------------------------------------
@@ -507,7 +560,10 @@ class ProjectRenameTest {
     @Test
     fun `a refusal carries no edits and a plan carries no refusal`() {
         val project = projectWith()
-        val refused = project.renameAt(mainFile, offsetOf("shared: string"), "renamedShared")
+        // (API.9) A CONTEXTUAL SHORTHAND, which is the member obstacle this round did
+        // NOT close — the implementor and the element access that used to stand here
+        // both produce plans now.
+        val refused = project.renameAt(mainFile, offsetOf("ctxKey: string"), "renamedCtxKey")
         assert(refused.refusal != null && refused.files.isEmpty() && !refused.isApplicable)
         val planned = project.renameAt(mainFile, offsetOf("local = 1"), "renamedLocal")
         assert(planned.refusal == null && planned.conflicts.isEmpty() && planned.isApplicable)

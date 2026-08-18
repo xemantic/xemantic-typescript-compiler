@@ -4,7 +4,7 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 925, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 926, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
@@ -15,10 +15,23 @@ names `(API.4b)`, **find-references plus document highlights** `(API.5)`,
 **read-versus-write on every reference**) — and `(API.8)`, **RENAME**: an edit
 plan that expands a `{ p }` shorthand instead of renaming the object's key, and
 that is **verified by applying it and compiling again**, so a collision or a
-capture withdraws it rather than reaching your buffer (§ 10d). Not yet:
-contextual object-literal keys, go-to-definition for an element access `o["p"]`.
-See the `(API.*)` items in `PLAN-PHASE-5.md`.
+capture withdraws it rather than reaching your buffer (§ 10d) — and `(API.9)`,
+**the member occurrence set**, which closes two of the three kinds round 925
+measured it short by: an **element access** `o["p"]` and a **binding element's
+property name** `const { p: local } = o` are now found, navigable and renamed,
+and a member's **implementors** join its group through a declared heritage edge.
+Not yet: contextual object-literal keys. See the `(API.*)` items in
+`PLAN-PHASE-5.md`.
 
+> **`(API.9)` changes what three queries ANSWER, and in the widening direction.**
+> `referencesAt`, `documentHighlightsAt` and `renameAt` now return more spans for a
+> MEMBER — an `o["p"]`, a `const { p: … }` and every implementor's own declaration —
+> and `renameAt` therefore refuses in fewer places. `definitionsAt` answers an
+> element access and a binding element's property name where it used to answer
+> nothing; it deliberately does **not** answer the base for an implementor's own
+> member (§ 9). A host that assumed every reference span is an identifier must handle
+> a string literal's span, which covers the text *between* the quotes.
+>
 > **`(API.7)` changed two answers you may already depend on.** `completionsAt` at a
 > MEMBER caret no longer returns inaccessible members (§ 10a), and at a FREE_NAME
 > caret it now returns keyword items with `kind = "Keyword"` mixed into the list
@@ -416,6 +429,8 @@ What answers, concretely:
 | a member declared by **merged** interfaces (overloads) | **one location per contributing declaration** |
 | a member of a **union** receiver | **one per constituent** that declares it, in constituent order |
 | `N.x` / `N.T` where `N` is a namespace, module alias or enum | the export's declaration |
+| `o["p"]`, caret on the string literal | the property declaration — `(API.9)` |
+| `const { p: local } = o`, caret on the `p` | the property declaration — `(API.9)` |
 | `"s".length`, `arr.push` | the **lib**'s declaration (see the lib note below) |
 
 **`this` is a receiver, and where it points is a property of the position.** An
@@ -437,12 +452,13 @@ instance", never "lost".
 - the name resolves to a symbol with no declaration to point at;
 - **nothing declares the member** (`(o as any).absent`) — silence, never the
   nearest same-named anything;
-- **an element access** (`o["p"]`) — the argument is a literal, not an identifier,
-  and only identifiers are offered a definition;
 - **an object-literal key being declared** (`{ p: v }`) — the useful answer is the
   *contextual* type's property, which is a third mechanism and is not built;
 - **a member's own declaration name** (`interface I { p: string }`) — it already
-  *is* the declaration;
+  *is* the declaration. `(API.9)` did not change this, deliberately: an
+  implementor's `p` answers **that member** and not the interface's, which is what
+  tsc answers too. The relation to the base is a *reference* fact, not a
+  navigation one, and § 10b is where it shows up;
 - **a chained namespace segment** (`A.B.x`) — the middle segment would have to be
   resolved the same way, for a case one caret to the left already answers.
 
@@ -743,6 +759,35 @@ None of the following is special-cased; all of it falls out of that rule:
 | a **member** (`o.p`) | its uses plus the declaration, in the declaring file |
 | an **inherited** or generically instantiated member | the base / uninstantiated declaration, so uses through both sides are one group |
 | an **overloaded** member | one group, both signatures flagged |
+| a member named by a **string literal** (`o["p"]`) | that access, with the span covering the text *between* the quotes — `(API.9)` |
+| a member named by a **binding element** (`const { p: local } = o`) | the `p`, and not the `local` it binds — `(API.9)` |
+| a member's **implementors** (`class C implements I`) | every class that declares it under a declared `implements`/`extends` — `(API.9)` |
+
+**`(API.9)`: three kinds joined the population, and the third is not like the other
+two.** An element access and a binding element's property name are ordinary members
+whose *name* is not an identifier after a dot; they resolve through a receiver like
+everything else, and the only new thing about them is where the receiver comes from
+(the access's own expression, and the type the pattern destructures).
+
+An IMPLEMENTOR is different: `class C implements I { p = 1 }` declares its own `p`,
+which is a separate declaration, and it is in `I.p`'s group because a **declared
+heritage edge** ties the two. Three properties of that edge are worth knowing, and
+all three were measured against tsc 7.0.2 rather than chosen:
+
+- **Structural compatibility does not count.** A class with the same members and no
+  `implements` is a different symbol — it answers its own two references, not the
+  interface's thirteen.
+- **It is transitive.** An `override p` in a class extending an implementor is in the
+  interface's group, two edges away.
+- **It does not chain between siblings.** With `interface A { p }`,
+  `interface B { p }` and `class C implements A, B { p }`, a caret on `A`'s `p`
+  answers `C`'s `p` and every use of `C` — and does **not** answer `b.p` or `B`'s
+  `p`. Each occurrence carries its own symbol plus the bases that symbol implements,
+  and two occurrences are the same thing when those sets meet; a transitive closure
+  over the whole group would merge the two interfaces, and tsc does not.
+
+A caret on `C`'s own `p` legitimately answers **both** groups, because that member
+really is both.
 
 **READ versus WRITE is reported** (`(API.7)`, and it was refused in round 919).
 `use` is one of `READ`, `WRITE`, `READ_WRITE` or `UNCLASSIFIED`, and it is a fact
@@ -777,9 +822,10 @@ guess about which parent kinds declare a name.
   and never used answers an **empty** list rather than a list of one. tsc answers
   one. Free names are unaffected: a `const`, a parameter, a function, a class, an
   interface or an import all resolve from their own declaration name.
-- **Only identifiers.** A keyword, a literal, punctuation or trivia answers empty
-  **and does not build**. An element access (`o["p"]`) names its member with a string
-  literal, so it is neither found nor searchable — § 9's boundary, unchanged.
+- **Identifiers, and the string literal of an `o["p"]`.** A keyword, any other
+  literal, punctuation or trivia answers empty **and does not build**. A string
+  literal is swept only where it names a member: `const unrelated = "p"` is not a
+  reference to `p`, which is the difference between this and a text search.
 - **The program, not the libraries.** A declaration in a `lib.*.d.ts` comes back
   (flagged), because the caret resolved to it; no lib file is swept for uses.
 
@@ -797,6 +843,18 @@ On this repo's own compiler profile — tsc's 78 source files, 9,977,097 charact
 | `documentHighlightsAt` — `checker.ts`, 125,289 identifiers | 1 | **6.0 – 7.2 s** |
 | `referencesAt` on a **clean** project | 1 | **8.3 – 9.9 s** |
 | `referencesAt` on a **dirty** project | 2 | **13.0 – 13.5 s** |
+
+**`(API.9)` cost nothing measurable, and the reason is a counter rather than a
+stopwatch.** Widening the swept population from identifiers to *identifiers plus the
+string literals that name a member* takes it from **381,670 to 381,672** on that
+profile — tsc's own compiler sources contain exactly **two** `o["…"]` accesses in
+9,977,097 characters. The heritage edge is computed per member occurrence during the
+same walk and did not move the wall either: `referencesAt` on `SyntaxKind` measures
+**9.1 – 13.0 s** here against the 10.6 – 16.0 s recorded before it, i.e. the same
+band. `fileSemantics` is untouched by construction — it enumerates `identifiers()`,
+whose contract did not change — and measures 5.6 – 10.6 s for `checker.ts`'s 16,274
+spans. Absolute milliseconds are only comparable within the run that took them; the
+**population** is the figure that transfers.
 
 The sweep itself is 2.5 – 4 s on top of the rebuild it rides, whatever the caret:
 resolving 381,670 identifiers costs the same whether the answer is 168 hits in one
@@ -998,7 +1056,7 @@ of the code. That is also why this costs a second build.
 | `DECLARED_IN_A_LIBRARY` | some declaration is in a `lib.*.d.ts`, which has no path on disk. Renaming the uses alone does not compile. tsc refuses the same thing |
 | `ALIASED_SYMBOL` | the group spells the symbol two ways because an `import { a as b }` was crossed. One new name cannot be applied to both, and picking a side would be a guess |
 | `UNRESOLVED_IMPORT` | a declaration IS the import binding, i.e. the module did not resolve |
-| `OCCURRENCES_INCOMPLETE` | some identifier spelling the old name could be an occurrence and could not be resolved. **The member-rename refusal** — an implementor, an `o["p"]`, a contextually supplied key |
+| `OCCURRENCES_INCOMPLETE` | some occurrence spelling the old name could be one of this symbol's and could not be resolved. **The member-rename refusal** — since `(API.9)` that is a contextually supplied key, a second declaration of the same member name, or a member on an `any` receiver; an implementor and an `o["p"]` are no longer among them |
 | `WOULD_NOT_COMPILE` | the verification build produced diagnostics the original did not |
 | `WOULD_CHANGE_MEANING` | the verification build resolved something somewhere else |
 
@@ -1011,8 +1069,8 @@ RESOLVED to something else; what is left is unresolved, and unresolved is not un
 
 | `RenameConflictKind` | what it is |
 |---|---|
-| `UNRESOLVED_OCCURRENCE` | an identifier spelling the old name in a position that could name this symbol, which the search could not resolve — **an implementor's member**, a second declaration of the same member name, a member on an `any` receiver |
-| `ELEMENT_ACCESS` | an `o["p"]`. Its member is a string literal, so it is outside the population this API can find at all (§ 10b draws the same boundary). tsc rewrites these; missing one breaks the program, so here it refuses |
+| `UNRESOLVED_OCCURRENCE` | an identifier spelling the old name in a position that could name this symbol, which the search could not resolve — a second declaration of the same member name, a member on an `any` receiver |
+| `ELEMENT_ACCESS` | an `o["p"]` the search could not resolve — a member of an `any`. A resolvable one is now an ordinary occurrence and is renamed *inside its quotes* (`(API.9)`); the kind survives because an unplaceable bracket is a different report to a user than an unplaceable identifier |
 | `CONTEXTUAL_SHORTHAND` | a `{ p }` or a `const { p } = o` met while renaming a MEMBER — the property comes from the object literal's *contextual* type or from the pattern's own token, which is the third resolution mechanism this API does not have (§ 9) |
 | `NEW_DIAGNOSTIC` | a diagnostic the renamed program has and the original did not |
 | `RESOLUTION_CHANGED` | a span that meant one thing before the rename and another after |
@@ -1030,9 +1088,14 @@ the scope chain, and the sweep covers every identifier of every program file, so
 is complete by construction.
 
 **A member rename works when it can be shown complete** and is refused loudly when it
-cannot. An interface member with one declaration and identifier-only uses renames across
-files; the same member with an implementing class, an `o["p"]` or a contextually supplied
-shorthand does not.
+cannot — and since `(API.9)` "complete" covers considerably more. An interface member
+renames across files together with **every implementor's own declaration**, every
+`o["p"]` that names it (inside the quotes, leaving them alone) and every
+`const { p: … } = o` that destructures it. What still refuses is a **contextually
+supplied shorthand** — a `{ p }` in an object literal, or a `const { p } = o` whose one
+token is both the member and a local — because the property's identity there comes from
+the *contextual* type or from the pattern's own token, which is the third resolution
+mechanism this API does not have (§ 9).
 
 ### Cost, measured
 
@@ -1153,15 +1216,11 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **element access** (`o["p"]`) — **hover answers it since (BUG.4)** (§ 8), but
-  there is still no definition and no completion inside the string. `(API.7)`
-  sharpened why, and hover cashing it narrowed the remainder further: recognising
-  the shape was never the hard part (one test on the node's parent), and typing the
-  access needed no member lookup by text at all. What definition still wants is a
-  DECLARATION for a non-identifier node, which is a different question from a type.
-  Since `(API.8)` this also has a second, sharper consequence: an `o["p"]` anywhere
-  in the program is what REFUSES renaming the member `p` (§ 10d), because a member
-  named by a string literal is outside the population a reference sweep can find.
+- **completion inside `o["`** — hover, go-to-definition, references and rename all
+  answer an element access since `(BUG.4)` and `(API.9)`, but a caret inside a string
+  literal still answers `NO_COMPLETION_CONTEXT` (§ 10a). That refusal is about the
+  ANCHOR — a caret in a string is prose almost everywhere else — and lifting it means
+  a position classifier, not a resolution.
 - **contextual object-literal keys** — `{ p: v }`'s own `p` still has no definition,
   and hover describes the wrong subject for a shorthand `{ p }` (it reports the LOCAL
   `p` the shorthand references, § 8). The useful target is the *contextual* type's
@@ -1169,8 +1228,8 @@ stale text and nothing worse.
   a contextual type is walk-scoped state the capture does not read — in a ternary
   branch it does not exist at all. That is a third resolution mechanism beside the
   scope chain and the receiver, and no syntactic classification supplies it. It is
-  the other thing that refuses a member rename (§ 10d): a contextually supplied
-  `{ p }` is a place the plan would have to edit and cannot prove it should.
+  the ONE remaining thing that refuses a member rename (§ 10d): a contextually
+  supplied `{ p }` is a place the plan would have to edit and cannot prove it should.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.

@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.QualifiedName
 import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
 import com.xemantic.typescript.compiler.Scanner
 import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.forEachChild
 
@@ -491,6 +492,50 @@ internal class SourceIndex private constructor(
         // pair, which is a total order over distinct nodes.
         found.sortWith(compareBy({ it.pos }, { it.end }))
         return found
+    }
+
+    /**
+     * (API.9) The population a REFERENCE sweep asks about: every [identifiers] node,
+     * plus every STRING LITERAL that names the member of an element access.
+     *
+     * The second half is the boundary round 925 measured this API to be short at, and
+     * it is a boundary of the POPULATION rather than of the resolution: `o["p"]` is an
+     * ordinary member access whose name happens not to be an identifier, and tsc 7.0.2
+     * puts it in the group (measured — thirteen spans for an interface member, one of
+     * them the literal). Nothing else about a string literal is asked: a literal in any
+     * other position is not swept, so `const unrelated = "p"` is not a reference and a
+     * spelling scan's answer and this one differ by exactly that.
+     *
+     * [identifiers] stays as it is because [Project.fileSemantics] enumerates through
+     * it and its contract — "every `Identifier`, and nothing else" — is a documented
+     * one; the two populations are deliberately different questions.
+     */
+    fun occurrenceNodes(): List<Node> {
+        val found = ArrayList<Node>(identifiers())
+        for ((literal, _) in SyntaxRoles.stringElementAccesses(sourceFile)) found.add(literal)
+        found.sortWith(compareBy({ it.pos }, { it.end }))
+        return found
+    }
+
+    /**
+     * (API.9) [node]'s NAME span — what an editor highlights and what a rename must
+     * replace — as `start` in the first slot and `end` in the second.
+     *
+     * For an identifier that is [realEndOf] and the node's own `pos`. For the string
+     * literal of an `o["p"]` it is the TEXT BETWEEN THE QUOTES, which is both what tsc
+     * edits (measured: `[77,78)` for a literal occupying `[76,79)`) and the only span a
+     * rename may write into — replacing the quotes too would write `o[newName]`.
+     *
+     * A literal the token scan cannot place, or one left UNTERMINATED by a partial
+     * edit, falls back to its whole span rather than to arithmetic that would eat a
+     * real character.
+     */
+    fun occurrenceSpanOf(node: Node): IntArray {
+        val end = realEndOf(node)
+        if (node is StringLiteralNode && !node.isUnterminated && end - node.pos >= 2) {
+            return intArrayOf(node.pos + 1, end - 1)
+        }
+        return intArrayOf(node.pos, end)
     }
 
     // --- (API.4a) the completion anchor ------------------------------------------

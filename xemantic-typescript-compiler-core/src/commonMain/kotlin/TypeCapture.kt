@@ -126,16 +126,23 @@ data class CapturedDeclaration(
  * `super.p`) and the qualified `N.x` / `N.T` of a namespace, a module alias or an
  * enum, the last three answered from the export table rather than from a type.
  *
+ * (API.9) An ELEMENT ACCESS names its member with a STRING LITERAL (`o["p"]`), and
+ * a BINDING ELEMENT's `propertyName` names one with an identifier no scope binds
+ * (the `p` of `const { p: local } = o`). Both are member positions with a receiver
+ * — the access's own expression, and the type the pattern destructures — so both go
+ * through the same collection as `o.p`, and the string literal is the one query
+ * span in this API that is not an [Identifier].
+ *
  * ## What answers NOTHING, and why each is a refusal rather than a gap
  *
- * An element access (`o["p"]`) — its argument is a string literal, not an
- * identifier, and only identifiers are offered a definition. A PropertyAssignment
- * name (`{ p: v }`) — the answer would be the CONTEXTUAL type's property, which is
- * not a function of any receiver and is not in hand at an arbitrary node. A member
- * DECLARATION's own name (`interface I { p: string }`) — it already IS the
- * declaration. A chained namespace segment (`A.B.x`) — the middle segment would
- * have to be resolved the same way, for a case one caret to the left already
- * answers. A LABEL — not a symbol at all.
+ * A PropertyAssignment name (`{ p: v }`) — the answer would be the CONTEXTUAL
+ * type's property, which is not a function of any receiver and is not in hand at an
+ * arbitrary node. A member DECLARATION's own name (`interface I { p: string }`) —
+ * it already IS the declaration, and [related] rather than [locations] is where a
+ * class member's relation to the base it implements is recorded. A chained
+ * namespace segment (`A.B.x`) — the middle segment would have to be resolved the
+ * same way, for a case one caret to the left already answers. A LABEL — not a
+ * symbol at all.
  *
  * @property name the resolved symbol's name — the spelling that was looked up,
  *   which after an import hop may differ from the identifier at the query span.
@@ -146,6 +153,16 @@ data class CapturedDeclaration(
  *   receiver contributes one per constituent that declares the member, in
  *   constituent order. EMPTY never happens — a symbol with no declarations is not
  *   recorded at all.
+ * @property related (API.9) declarations this occurrence is tied to by a DECLARED
+ *   HERITAGE EDGE and is not a navigation target for — the `p` of
+ *   `class Impl implements Shape` is related to `Shape`'s `p`, transitively through
+ *   the whole `extends`/`implements` closure. It is a SEPARATE field rather than
+ *   more [locations] because the two questions have different answers and both were
+ *   measured against tsc 7.0.2: go-to-definition on an implementor's member answers
+ *   THAT MEMBER, while find-references on it answers the base's whole group. Empty
+ *   for everything else, and in particular for a class whose shape merely happens to
+ *   match — a structurally compatible member with no heritage clause is a different
+ *   symbol to tsc too, which is what makes this an edge rather than a similarity.
  */
 data class CapturedDefinition(
     val fileName: String,
@@ -153,6 +170,7 @@ data class CapturedDefinition(
     val end: Int,
     val name: String,
     val locations: List<CapturedDeclaration>,
+    val related: List<CapturedDeclaration> = emptyList(),
 )
 
 /**

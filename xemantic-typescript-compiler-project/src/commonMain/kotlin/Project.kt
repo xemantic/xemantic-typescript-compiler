@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
+import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -1080,7 +1081,7 @@ public class Project private constructor(
         // Only an identifier names anything, and a caret that cannot be answered must
         // not pay for a compile — the rule `completionsAt` and `semanticsAt` already
         // follow.
-        val caret = index.pathAt(offset).lastOrNull() as? Identifier ?: return emptyList()
+        val caret = occurrenceCaret(index, offset) ?: return emptyList()
         // The program's files are what a build computes, so this asks for them the
         // only way there is; `build()` is cached whenever nothing has been edited.
         val swept = build().programFiles.map { keyOf(it) }
@@ -1113,7 +1114,7 @@ public class Project private constructor(
      */
     public fun documentHighlightsAt(fileName: String, offset: Int): List<ReferenceLocation> {
         val index = sourceIndexOf(fileName) ?: return emptyList()
-        val caret = index.pathAt(offset).lastOrNull() as? Identifier ?: return emptyList()
+        val caret = occurrenceCaret(index, offset) ?: return emptyList()
         val key = keyOf(fileName)
         return referencesOf(key, caret, listOf(key), restrictToQueryFile = true)
     }
@@ -1138,26 +1139,23 @@ public class Project private constructor(
         restrictToQueryFile: Boolean,
     ): List<ReferenceLocation> {
         val spans = ArrayList<TypeCaptureSpan>()
-        // Every swept identifier's REAL end, by (file, pos). The capture speaks the
-        // RAW `(pos, end)` identity and a caller must be told the real extent, so the
-        // translation is recorded here rather than re-derived per answer.
-        val realEnds = HashMap<String, HashMap<Int, Int>>(sweptFiles.size)
-        // (API.7) And each one's syntactic ROLE, by the same key. Classified here,
-        // from the parse this module already owns, because read-versus-write is a
-        // question about the OCCURRENCE and not about the symbol — the compiler's
-        // answer is the same for every hit in the group.
-        val uses = HashMap<String, HashMap<Int, ReferenceUse>>(sweptFiles.size)
+        // Every swept occurrence's REAL span and syntactic ROLE, by (file, pos). The
+        // capture speaks the RAW `(pos, end)` identity and a caller must be told the
+        // real extent, so the translation is recorded here rather than re-derived per
+        // answer — and since (API.9) the extent is a start as well as an end, because
+        // an `o["p"]`'s span is the text BETWEEN the quotes. The role is classified
+        // here, from the parse this module already owns, because read-versus-write is a
+        // question about the OCCURRENCE and not about the symbol.
+        val extents = HashMap<String, HashMap<Int, SweptSpan>>(sweptFiles.size)
         for (file in sweptFiles) {
             val index = sourceIndexOf(file) ?: continue
-            val ends = HashMap<Int, Int>()
-            val roles = HashMap<Int, ReferenceUse>()
-            for (id in index.identifiers()) {
+            val found = HashMap<Int, SweptSpan>()
+            for (id in index.occurrenceNodes()) {
                 spans.add(TypeCaptureSpan(file, id.pos, id.end))
-                ends[id.pos] = index.realEndOf(id)
-                roles[id.pos] = SyntaxRoles.referenceUse(id)
+                val span = index.occurrenceSpanOf(id)
+                found[id.pos] = SweptSpan(span[0], span[1], SyntaxRoles.referenceUse(id))
             }
-            realEnds[file] = ends
-            uses[file] = roles
+            extents[file] = found
         }
         if (spans.isEmpty()) return emptyList()
         val definitions = ProjectCompiler(overlay)
@@ -1167,17 +1165,22 @@ public class Project private constructor(
         val hits = LinkedHashMap<Pair<String, Int>, ReferenceLocation>()
         for (definition in definitions) {
             if (restrictToQueryFile && definition.fileName != queryFile) continue
-            if (definition.locations.none { it in seed }) continue
-            val end = realEnds[definition.fileName]?.get(definition.start) ?: continue
+            if (!definitionMeets(definition, seed)) continue
+            val extent = extents[definition.fileName]?.get(definition.start) ?: continue
             hits[definition.fileName to definition.start] = ReferenceLocation(
                 fileName = definition.fileName,
-                start = definition.start,
-                end = end,
+                start = extent.start,
+                end = extent.end,
+                // A declaration is a span the seed names, or — since (API.9) — one that
+                // RESOLVES TO ITSELF, which is what an implementor's own member does.
+                // The second half keeps the flag a property of the occurrence rather
+                // than of which caret the search happened to start from.
                 isDeclaration = seed.any {
                     it.fileName == definition.fileName && it.start == definition.start
+                } || definition.locations.any {
+                    it.fileName == definition.fileName && it.start == definition.start
                 },
-                use = uses[definition.fileName]?.get(definition.start)
-                    ?: ReferenceUse.UNCLASSIFIED,
+                use = extent.use,
             )
         }
         // The declarations themselves. Most are already above — a free name's
@@ -1195,12 +1198,51 @@ public class Project private constructor(
                     // A declaration in a file the sweep never covered — a `lib.*.d.ts`
                     // — has no node here to classify, and an unplaced occurrence is
                     // reported as unplaced rather than defaulted to a read.
-                    use = uses[location.fileName]?.get(location.start)
+                    use = extents[location.fileName]?.get(location.start)?.use
                         ?: ReferenceUse.UNCLASSIFIED,
                 )
             }
         }
         return hits.values.sortedWith(compareBy({ it.fileName }, { it.start }))
+    }
+
+    /** One swept occurrence's real extent and role — see [referencesOf]. */
+    private class SweptSpan(val start: Int, val end: Int, val use: ReferenceUse)
+
+    /**
+     * True when [definition] belongs to the group [seed] names.
+     *
+     * Identity is intersection of declaration sets (§ 10b), and since (API.9) the set
+     * an occurrence offers is its [CapturedDefinition.locations] PLUS its
+     * [CapturedDefinition.related] — the declarations a DECLARED heritage edge ties it
+     * to. The two are separate fields because go-to-definition may read only the first:
+     * measured against tsc 7.0.2, `textDocument/definition` on an implementor's member
+     * answers that member and `textDocument/references` on it answers the base's whole
+     * group.
+     *
+     * Note that this cannot merge two unrelated groups. A class implementing two
+     * interfaces that both declare `p` puts its OWN member in both groups, which is
+     * correct — it is both — while every other occurrence still carries only its own
+     * interface's declaration and no edge runs between them.
+     */
+    private fun definitionMeets(
+        definition: CapturedDefinition,
+        seed: Set<CapturedDeclaration>,
+    ): Boolean =
+        definition.locations.any { it in seed } || definition.related.any { it in seed }
+
+    /**
+     * The node a reference or rename caret names, or null when it names nothing.
+     *
+     * An identifier, or — since (API.9) — the STRING LITERAL of an `o["p"]`, which is
+     * the one non-identifier this API resolves. Everything else (a keyword, punctuation,
+     * trivia, any other literal) answers null, and a caret that cannot be answered must
+     * not pay for a compile: the rule `completionsAt` and `semanticsAt` already follow.
+     */
+    private fun occurrenceCaret(index: SourceIndex, offset: Int): Node? {
+        val node = index.pathAt(offset).lastOrNull() ?: return null
+        if (node is Identifier) return node
+        return if (SyntaxRoles.isMemberPosition(node) && node is StringLiteralNode) node else null
     }
 
     /**
@@ -1236,7 +1278,13 @@ public class Project private constructor(
                 definition.start == caret.pos &&
                 definition.end == caret.end
             ) {
-                return definition.locations.toSet()
+                // (API.9) …plus what a heritage edge TIES it to. A caret on an
+                // implementor's own `p` must find the interface's whole group, which is
+                // what tsc answers (measured, thirteen spans); seeding with the
+                // implementor's own declaration alone would find only the classes below
+                // it. `related` is empty for every other occurrence, so this is the
+                // identity leg unchanged everywhere else.
+                return definition.locations.toSet() + definition.related
             }
         }
         for (definition in definitions) {
@@ -1333,9 +1381,9 @@ public class Project private constructor(
     public fun renameAt(fileName: String, offset: Int, newName: String): RenamePlan {
         val index = sourceIndexOf(fileName)
             ?: return refusedRename("", newName, RenameRefusal.NOT_AN_IDENTIFIER)
-        val caret = index.pathAt(offset).lastOrNull() as? Identifier
+        val caret = occurrenceCaret(index, offset)
             ?: return refusedRename("", newName, RenameRefusal.NOT_AN_IDENTIFIER)
-        val oldName = caret.text
+        val oldName = SyntaxRoles.occurrenceText(caret)
         // Reserved BEFORE well-formed: `class` scans as a keyword, so the general test
         // would report it as "not an identifier" and hide the real reason.
         if (newName in SyntaxRoles.RESERVED_WORDS) {
@@ -1379,7 +1427,10 @@ public class Project private constructor(
         val identifiers = LinkedHashMap<String, List<Node>>(files.size)
         for (file in files) {
             val index = sourceIndexOf(file) ?: continue
-            val found = index.identifiers()
+            // (API.9) [SourceIndex.occurrenceNodes], not `identifiers()`: an `o["p"]`
+            // is an occurrence a plan must EDIT, and one it cannot see is exactly what
+            // used to refuse the whole rename.
+            val found = index.occurrenceNodes()
             indexes[file] = index
             identifiers[file] = found
             for (id in found) spans.add(TypeCaptureSpan(file, id.pos, id.end))
@@ -1420,7 +1471,7 @@ public class Project private constructor(
         // performs, kept here as raw keys because an EDIT needs the node.
         val group = LinkedHashSet<Pair<String, Int>>()
         for (definition in sweep.definitions) {
-            if (definition.locations.none { it in seed }) continue
+            if (!definitionMeets(definition, seed)) continue
             group.add(definition.fileName to definition.start)
         }
         for (location in seed) group.add(location.fileName to location.start)
@@ -1442,7 +1493,7 @@ public class Project private constructor(
         }
         // ONE new name cannot spell two things. An `import { a as b }` makes the alias
         // and the original one symbol here, so the group carries both spellings.
-        if (occurrences.any { (it.node as Identifier).text != oldName }) {
+        if (occurrences.any { SyntaxRoles.occurrenceText(it.node) != oldName }) {
             return refuse(RenameRefusal.ALIASED_SYMBOL)
         }
         // A declaration that IS the import binding means the module never resolved, so
@@ -1470,12 +1521,17 @@ public class Project private constructor(
                 RenameRefusal.OCCURRENCES_INCOMPLETE,
             )
             val rewrite = SyntaxRoles.renameRewrite(occurrence.node, oldName, newName)
+            // (API.9) [SourceIndex.occurrenceSpanOf], not `pos`/`realEndOf`: an
+            // `o["p"]`'s edit replaces the text BETWEEN the quotes, and writing over
+            // the quotes too would produce `o[newName]`.
+            val span = index.occurrenceSpanOf(occurrence.node)
             planned.getOrPut(occurrence.fileName) { ArrayList() }.add(
                 PlannedEdit(
-                    start = occurrence.node.pos,
-                    end = index.realEndOf(occurrence.node),
+                    start = span[0],
+                    end = span[1],
                     newText = rewrite.text,
                     nameOffset = rewrite.nameOffset,
+                    nodePos = occurrence.node.pos,
                 ),
             )
         }
@@ -1490,12 +1546,20 @@ public class Project private constructor(
      * An edit before it is published, carrying where the NEW NAME lands inside its own
      * replacement — which a shorthand expansion (`p` -> `p: newName`) moves, and which
      * the verification pass needs in order to ask about the right span.
+     *
+     * (API.9) [nodePos] is the occurrence NODE's raw `pos`, which is the key every
+     * capture answer is filed under and is NOT [start] for an `o["p"]` — there the edit
+     * begins one character in, past the opening quote. Carried rather than re-derived
+     * because the verification looks up what this occurrence resolved to BEFORE, and a
+     * lookup by the edit's start silently misses and reads as "it now means something
+     * else".
      */
     private class PlannedEdit(
         val start: Int,
         val end: Int,
         val newText: String,
         val nameOffset: Int,
+        val nodePos: Int,
     )
 
     /**
@@ -1553,40 +1617,38 @@ public class Project private constructor(
         for ((file, found) in sweep.identifiers) {
             val index = sweep.indexes[file] ?: continue
             for (id in found) {
-                if ((id as Identifier).text != oldName) continue
+                if (SyntaxRoles.occurrenceText(id) != oldName) continue
                 val key = file to id.pos
+                val span = index.occurrenceSpanOf(id)
                 val memberPosition = SyntaxRoles.isMemberPosition(id)
                 if (key !in group && key !in resolved &&
                     memberPosition == reachedThroughQualifier
                 ) {
-                    conflicts.add(
-                        RenameConflict(
-                            RenameConflictKind.UNRESOLVED_OCCURRENCE, file, id.pos,
-                            index.realEndOf(id),
-                            "an identifier spelled '$oldName' that the search could not resolve",
-                        ),
-                    )
+                    // (API.9) An element access is no longer a separate obstacle: it is
+                    // swept, so one the search RESOLVED is in the group and one it did
+                    // not is unresolved like any other member position. The kind is kept
+                    // because the two failures are different things to a user — a
+                    // literal that could not be placed names a member of an `any`, which
+                    // is not the same report as an identifier that could not be.
+                    val kind =
+                        if (id is StringLiteralNode) RenameConflictKind.ELEMENT_ACCESS
+                        else RenameConflictKind.UNRESOLVED_OCCURRENCE
+                    val detail =
+                        if (id is StringLiteralNode) {
+                            "an element access naming '$oldName' the search could not resolve"
+                        } else {
+                            "an identifier spelled '$oldName' that the search could not resolve"
+                        }
+                    conflicts.add(RenameConflict(kind, file, span[0], span[1], detail))
                 }
                 if (symbolIsMember && key !in group && SyntaxRoles.isPropertyHidingShorthand(id)) {
                     conflicts.add(
                         RenameConflict(
-                            RenameConflictKind.CONTEXTUAL_SHORTHAND, file, id.pos,
-                            index.realEndOf(id),
+                            RenameConflictKind.CONTEXTUAL_SHORTHAND, file, span[0], span[1],
                             "a shorthand spelled '$oldName' whose property this API cannot resolve",
                         ),
                     )
                 }
-            }
-            if (!reachedThroughQualifier) continue
-            for ((literal, text) in SyntaxRoles.stringElementAccesses(index.sourceFile)) {
-                if (text != oldName) continue
-                conflicts.add(
-                    RenameConflict(
-                        RenameConflictKind.ELEMENT_ACCESS, file, literal.pos,
-                        index.realEndOf(literal),
-                        "an element access naming '$oldName' with a string literal",
-                    ),
-                )
             }
         }
         return conflicts.sortedWith(compareBy({ it.fileName }, { it.start }))
@@ -1681,7 +1743,13 @@ public class Project private constructor(
             for (edit in edits) {
                 val at = shift(file, edit.start) + edit.nameOffset
                 val node = index.pathAt(at).lastOrNull()
-                if (node !is Identifier || node.pos != at || node.text != newName) {
+                // (API.9) …and the span the edit produced must START where the plan said
+                // it would. For an `o["p"]` that is the literal's TEXT, so the node's own
+                // `pos` is one character earlier — which is precisely the arithmetic this
+                // check exists to catch, hence the span rather than the node's `pos`.
+                val produced = node != null && index.occurrenceSpanOf(node)[0] == at &&
+                    SyntaxRoles.occurrenceText(node) == newName
+                if (!produced) {
                     conflicts.add(
                         RenameConflict(
                             RenameConflictKind.RESOLUTION_CHANGED, file, at, at + newName.length,
@@ -1692,17 +1760,17 @@ public class Project private constructor(
                 }
                 asked.add(TypeCaptureSpan(file, node.pos, node.end))
                 expectedPlaces[file to node.pos] =
-                    resolvedBefore[file to edit.start] ?: emptySet()
+                    resolvedBefore[file to edit.nodePos] ?: emptySet()
             }
         }
         for ((file, found) in sweep.identifiers) {
             for (id in found) {
-                if ((id as Identifier).text != newName) continue
+                if (SyntaxRoles.occurrenceText(id) != newName) continue
                 val expected = resolvedBefore[file to id.pos] ?: continue
                 val index = newIndexes[file]
                 val node = if (index == null) id else {
                     index.pathAt(shift(file, id.pos)).lastOrNull()
-                        ?.takeIf { it is Identifier && it.text == newName } ?: continue
+                        ?.takeIf { SyntaxRoles.occurrenceText(it) == newName } ?: continue
                 }
                 asked.add(TypeCaptureSpan(file, node.pos, node.end))
                 expectedPlaces[file to node.pos] = expected

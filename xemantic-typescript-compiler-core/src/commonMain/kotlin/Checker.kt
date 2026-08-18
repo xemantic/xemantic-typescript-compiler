@@ -5281,7 +5281,13 @@ class Checker(
         val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
         if (node is Expression) {
             typeCaptureRecord(node, fileName)
-            if (node is Identifier) typeCaptureRecordDefinition(node, fileName)
+            // (API.9) …and a string literal that NAMES a member, `o["p"]`. It is the
+            // one non-[Identifier] the definition path accepts, and it is accepted at
+            // the record site rather than inside so that no other literal in the
+            // program pays for the test.
+            if (node is Identifier || typeCaptureIsMemberStringLiteral(node)) {
+                typeCaptureRecordDefinition(node, fileName)
+            }
             // (API.4a) The member enumeration, for the spans that asked for one. The
             // membership test is HERE rather than at the per-node hook because the
             // node has already matched the union key set by the time this runs: a
@@ -6271,7 +6277,7 @@ class Checker(
      * jump. (API.3d) it goes to [typeCaptureMemberSymbols] instead, which resolves
      * it through its RECEIVER; the positions that have no receiver stay silent.
      */
-    private fun typeCaptureRecordDefinition(id: Identifier, fileName: String) {
+    private fun typeCaptureRecordDefinition(id: Node, fileName: String) {
         val span = TypeCaptureSpan(fileName, id.pos, id.end)
         if (span in typeCaptureDefinitions) return
         typeCaptureDefinitions[span] = typeCaptureDefinitionAt(id, fileName) ?: return
@@ -6285,9 +6291,14 @@ class Checker(
      * refutes can run the very same resolution with the walk's state gone — see
      * [postHocDefinitionAtSpanForTesting]. It reads state and writes none.
      */
-    private fun typeCaptureDefinitionAt(id: Identifier, fileName: String): CapturedDefinition? {
+    private fun typeCaptureDefinitionAt(id: Node, fileName: String): CapturedDefinition? {
+        // (API.9) A class or interface member's own DECLARATION name is neither of the
+        // two, and its answer is a third shape: it declares itself, and it may be TIED
+        // to a base's declaration by a heritage edge. Kept out of the symbol path below
+        // because that path has no way to express "related but not a target".
+        if (id is Identifier) typeCaptureMemberDeclarationAt(id, fileName)?.let { return it }
         val symbols =
-            if (typeCaptureIsFreeName(id)) {
+            if (id is Identifier && typeCaptureIsFreeName(id)) {
                 val resolved =
                     spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
                 listOf(typeCaptureFollowImportAlias(resolved))
@@ -6306,7 +6317,200 @@ class Checker(
             }
         }
         if (locations.isEmpty()) return null
-        return CapturedDefinition(fileName, id.pos, id.end, symbols[0].name, locations.toList())
+        // (API.9) …and what a DECLARED HERITAGE EDGE ties the resolved member to. This
+        // is computed for every occurrence and not only for a declaration name, because
+        // that is what tsc does and the difference is measurable: a `this.p` inside a
+        // class implementing an interface is in the interface's group (measured, and it
+        // is in the group two `extends` levels down as well), and it can only get there
+        // by carrying the edge itself.
+        val related = typeCaptureRootDeclarations(symbols, locations)
+        return CapturedDefinition(
+            fileName, id.pos, id.end, symbols[0].name, locations.toList(), related,
+        )
+    }
+
+    /**
+     * (API.9) The declarations a DECLARED HERITAGE EDGE ties [symbols] to, excluding
+     * anything already in [own].
+     *
+     * ## Why this is per-OCCURRENCE and not a closure over the answers
+     *
+     * Measured against tsc 7.0.2 on `interface A { p }`, `interface B { p }`,
+     * `class C implements A, B { p }`: a caret on `A`'s `p` answers seven references
+     * including `C`'s `p` and every use of `C`, and does NOT include `b.p` or `B`'s `p`.
+     * So the relation does not chain from one interface to the other through their
+     * shared implementor — which rules out a transitive closure over the group, and
+     * leaves exactly this: every occurrence carries its own symbol PLUS the bases that
+     * symbol implements, and two occurrences are the same thing when those sets meet.
+     * The same measurement is what says a `this.p` inside the implementor belongs to the
+     * interface's group, which a declaration-name-only edge cannot express.
+     */
+    private fun typeCaptureRootDeclarations(
+        symbols: List<Symbol>,
+        own: Set<CapturedDeclaration>,
+    ): List<CapturedDeclaration> {
+        var related: LinkedHashSet<CapturedDeclaration>? = null
+        for (symbol in symbols) {
+            for (declaration in symbol.declarations) {
+                val name = typeCaptureMemberName(declaration) ?: continue
+                val heritage = typeCaptureOwnHeritage(declaration) ?: continue
+                val out = related ?: LinkedHashSet<CapturedDeclaration>().also { related = it }
+                typeCaptureCollectInherited(heritage, name, out, HashSet(), 0)
+            }
+        }
+        val found = related ?: return emptyList()
+        found.removeAll(own)
+        return found.toList()
+    }
+
+    /**
+     * (API.9) The single-token name of [declaration] when it is a CLASS or INTERFACE
+     * member, or null — the test that decides whether a heritage edge can exist at all.
+     */
+    private fun typeCaptureMemberName(declaration: Node): String? = when (declaration) {
+        is PropertyDeclaration -> (declaration.name as? Identifier)?.text
+        is MethodDeclaration -> (declaration.name as? Identifier)?.text
+        is GetAccessor -> (declaration.name as? Identifier)?.text
+        is SetAccessor -> (declaration.name as? Identifier)?.text
+        else -> null
+    }
+
+    /** (API.9) The heritage clauses of the class or interface [member] is declared in. */
+    private fun typeCaptureOwnHeritage(member: Node): List<HeritageClause>? =
+        when (val owner = (member as NodeBase).parent) {
+            is ClassDeclaration -> owner.heritageClauses
+            is ClassExpression -> owner.heritageClauses
+            is InterfaceDeclaration -> owner.heritageClauses
+            else -> null
+        }
+
+    /**
+     * (API.9) The answer for a MEMBER'S OWN DECLARATION NAME that a heritage clause
+     * ties to a base's declaration — or null when [id] is not one, or when nothing it
+     * inherits from declares the spelling.
+     *
+     * ## Why this is a third shape and not more [CapturedDefinition.locations]
+     *
+     * Both halves were READ OUT of tsc 7.0.2's own language server rather than
+     * reasoned about, and they disagree. `textDocument/definition` on the `p` of
+     * `class Impl implements Shape` answers **that member**, not `Shape`'s;
+     * `textDocument/references` on it answers **`Shape`'s whole group**, thirteen
+     * spans across two files. So the base declaration is an identity edge and not a
+     * navigation target, which is exactly what [CapturedDefinition.related] is.
+     *
+     * ## Why the edge is DECLARED heritage and nothing weaker
+     *
+     * Also measured: a class with the same members and NO `implements` answers two
+     * references — its own declaration and its own `this.p` — so structural
+     * compatibility does not relate. That is the discriminator this leg is pinned
+     * against, and it is also what makes the leg cheap: it asks the heritage clauses,
+     * never the assignability engine.
+     *
+     * The closure is TRANSITIVE because tsc's is: an `override p` in a class extending
+     * an implementor is in the interface's group, and it reaches it two edges away. The
+     * walk therefore collects the member on every base type reachable through
+     * `extends`/`implements`, bounded by [TYPE_CAPTURE_MEMBER_MAX_DEPTH] and by a
+     * visited set on the heritage NODES — a cyclic `extends` is a program the checker
+     * reports separately and must not hang this.
+     *
+     * Nothing is recorded when no base declares the name, which keeps this leg's blast
+     * radius to exactly the members that inherit: a class member with no heritage
+     * answers what it answered before, which is nothing.
+     */
+    private fun typeCaptureMemberDeclarationAt(
+        id: Identifier,
+        fileName: String,
+    ): CapturedDefinition? {
+        val member = (id as NodeBase).parent ?: return null
+        val named = when (member) {
+            is PropertyDeclaration -> member.name === id
+            is MethodDeclaration -> member.name === id
+            is GetAccessor -> member.name === id
+            is SetAccessor -> member.name === id
+            else -> false
+        }
+        if (!named) return null
+        val heritage = typeCaptureOwnHeritage(member) ?: return null
+        val own = typeCaptureDeclarationLocation(member) ?: return null
+        val related = LinkedHashSet<CapturedDeclaration>()
+        typeCaptureCollectInherited(heritage, id.text, related, HashSet(), 0)
+        related.remove(own)
+        if (related.isEmpty()) return null
+        return CapturedDefinition(
+            fileName, id.pos, id.end, id.text, listOf(own), related.toList(),
+        )
+    }
+
+    /**
+     * (API.9) Every declaration of [name] reachable from [clauses] through declared
+     * heritage, transitively, into [out].
+     *
+     * [seen] is keyed on the heritage ENTRY node rather than on a type, because the
+     * type is what this is trying to obtain and a base that does not resolve must still
+     * terminate the walk.
+     */
+    private fun typeCaptureCollectInherited(
+        clauses: List<HeritageClause>,
+        name: String,
+        out: MutableSet<CapturedDeclaration>,
+        seen: MutableSet<ExpressionWithTypeArguments>,
+        depth: Int,
+    ) {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return
+        for (clause in clauses) {
+            for (entry in clause.types) {
+                if (!seen.add(entry)) continue
+                val symbols = ArrayList<Symbol>(2)
+                typeCaptureCollectMembers(getTypeFromBaseTypeExpression(entry), name, symbols, 0)
+                for (symbol in symbols) {
+                    for (declaration in symbol.declarations) {
+                        typeCaptureDeclarationLocation(declaration)?.let { out.add(it) }
+                    }
+                }
+                // ...and the base's own bases. `resolveStructuredTypeMembers` already
+                // copies an inherited member DOWN, so the type walk above usually
+                // answers for the whole chain; this covers the case it cannot — a base
+                // that OVERRIDES the member hides the grandparent's declaration behind
+                // its own, and tsc puts both in the group.
+                val declaration = typeCaptureHeritageDeclaration(entry)
+                val above = when (declaration) {
+                    is ClassDeclaration -> declaration.heritageClauses
+                    is ClassExpression -> declaration.heritageClauses
+                    is InterfaceDeclaration -> declaration.heritageClauses
+                    else -> null
+                } ?: continue
+                typeCaptureCollectInherited(above, name, out, seen, depth + 1)
+            }
+        }
+    }
+
+    /** (API.9) The class or interface declaration a heritage entry names, or null. */
+    private fun typeCaptureHeritageDeclaration(entry: ExpressionWithTypeArguments): Node? {
+        val root = entry.expression as? Identifier ?: return null
+        val symbol = spineScopeLookup(root.text)
+            ?: lookupPerFileForNode(root, root.text)
+            ?: return null
+        val resolved = typeCaptureFollowImportAlias(symbol)
+        for (declaration in resolved.declarations) {
+            if (declaration is ClassDeclaration ||
+                declaration is ClassExpression ||
+                declaration is InterfaceDeclaration
+            ) {
+                return declaration
+            }
+        }
+        return null
+    }
+
+    /**
+     * (API.9) True when [node] is the STRING LITERAL that names the member of an
+     * element access — the `"p"` of `o["p"]`, and nothing else that is spelled the
+     * same way anywhere in the program.
+     */
+    private fun typeCaptureIsMemberStringLiteral(node: Node): Boolean {
+        if (node !is StringLiteralNode) return false
+        val parent = (node as NodeBase).parent
+        return parent is ElementAccessExpression && parent.argumentExpression === node
     }
 
     /**
@@ -6349,7 +6553,13 @@ class Checker(
      * second already IS the declaration. A shorthand `{ p }` is not a member position
      * at all — it is a reference to the local `p`, which the free-name path answers.
      */
-    private fun typeCaptureMemberSymbols(id: Identifier): List<Symbol> {
+    private fun typeCaptureMemberSymbols(id: Node): List<Symbol> {
+        // (API.9) The two member positions whose receiver is not the node to the left
+        // of a dot. Both were measured against tsc 7.0.2 to be ordinary members of the
+        // group — a `const { p: local } = o` and an `o["p"]` are two of the three spans
+        // round 925 measured this API to be short by.
+        typeCaptureIndirectMemberSymbols(id)?.let { return it }
+        if (id !is Identifier) return emptyList()
         val receiver: Node = when (val parent = (id as NodeBase).parent) {
             is PropertyAccessExpression -> if (parent.name === id) parent.expression else return emptyList()
             is QualifiedName -> if (parent.right === id) parent.left else return emptyList()
@@ -6374,6 +6584,92 @@ class Checker(
         val receiverExpression = receiver as? Expression ?: return emptyList()
         typeCaptureCollectMembers(getTypeOfExpression(receiverExpression), name, symbols, 0)
         return symbols
+    }
+
+    /**
+     * (API.9) The property symbol(s) for the two member positions that name their
+     * member with something other than an identifier after a dot — or null when [node]
+     * is neither, which is the "ask the ordinary path" answer.
+     *
+     * ## An ELEMENT ACCESS, `o["p"]`
+     *
+     * The receiver is the access's own expression and the member name is the literal's
+     * text, so the member lookup is the same one `o.p` performs. Only a STRING literal:
+     * a computed `o[i]` names no member statically, and a template literal is a
+     * different node this deliberately does not accept. This is the one query span in
+     * the whole API that is not an [Identifier], which is why
+     * [typeCaptureDefinitionAt] takes a [Node].
+     *
+     * ## A BINDING ELEMENT's `propertyName`, `const { p: local } = o`
+     *
+     * `p` names a member of the type being destructured and `local` names the binding
+     * this file introduces — [typeCaptureIsFreeName] has always known that and answered
+     * nothing for the `p`. What it needs is a receiver, and the pattern's source is not
+     * an expression to the left of a dot: it is the annotation or initializer of
+     * whatever the pattern belongs to, one or more levels up. [typeCaptureDestructured]
+     * computes it.
+     *
+     * A SHORTHAND (`const { p } = o`, `propertyName == null`) is deliberately NOT here.
+     * Its single token is BOTH the member and the local — tsc holds two symbols for it
+     * and expands the rename in whichever direction the caret asks — while a capture
+     * records ONE answer per span, so admitting it would make the local's group and the
+     * member's group share a span and merge whenever a caret landed on it. It stays a
+     * refusal, and rename's completeness net still names it.
+     */
+    private fun typeCaptureIndirectMemberSymbols(node: Node): List<Symbol>? {
+        val parent = (node as NodeBase).parent ?: return null
+        if (parent is ElementAccessExpression) {
+            if (node !is StringLiteralNode || parent.argumentExpression !== node) return null
+            val symbols = ArrayList<Symbol>(2)
+            typeCaptureCollectMembers(
+                getTypeOfExpression(parent.expression), node.text, symbols, 0,
+            )
+            return symbols
+        }
+        if (parent is BindingElement && parent.propertyName === node) {
+            val name = (node as? Identifier)?.text ?: return null
+            val source = typeCaptureDestructured(parent, 0) ?: return emptyList()
+            val symbols = ArrayList<Symbol>(2)
+            typeCaptureCollectMembers(source, name, symbols, 0)
+            return symbols
+        }
+        return null
+    }
+
+    /**
+     * (API.9) The type the binding pattern containing [element] destructures, or null
+     * when it cannot be decided here.
+     *
+     * Three owners, walked outwards: a [VariableDeclaration] and a [Parameter] each
+     * carry the source as an ANNOTATION or (for the declaration) an INITIALIZER, and a
+     * nested [BindingElement] carries it as its own member of the level above. The
+     * annotation is preferred over the initializer for the reason every annotation is
+     * preferred: it is what the program says, where the initializer is what the
+     * checker infers.
+     *
+     * Null rather than a guess whenever the chain runs out — an un-annotated parameter
+     * whose type is contextual, an array pattern, a `for (const { p } of xs)` head. A
+     * null makes the position resolve to nothing, which is what it did before this
+     * existed, so every unhandled owner degrades to the previous behaviour rather than
+     * to a wrong one.
+     */
+    private fun typeCaptureDestructured(element: BindingElement, depth: Int): Type? {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return null
+        val pattern = (element as NodeBase).parent as? ObjectBindingPattern ?: return null
+        return when (val owner = (pattern as NodeBase).parent) {
+            is VariableDeclaration ->
+                owner.type?.let { getTypeFromTypeNode(it) }
+                    ?: owner.initializer?.let { getTypeOfExpression(it) }
+            is Parameter -> owner.type?.let { getTypeFromTypeNode(it) }
+            is BindingElement -> {
+                val above = typeCaptureDestructured(owner, depth + 1) ?: return null
+                val name = (owner.propertyName ?: owner.name) as? Identifier ?: return null
+                val symbols = ArrayList<Symbol>(2)
+                typeCaptureCollectMembers(above, name.text, symbols, 0)
+                symbols.firstOrNull()?.let { getTypeOfSymbol(it) }
+            }
+            else -> null
+        }
     }
 
     /**
