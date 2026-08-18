@@ -225,7 +225,18 @@ class TemplateComputedMemberKeyTest {
     @Test
     fun `negative control - a backtick-quoted key names ITS OWN text and not a neighbour`() {
         // A key that spells `other` must NOT satisfy a required `p`: the arm reads
-        // the template's cooked text, it does not merely admit every template.
+        // the template's cooked text, it does not merely admit every template. An
+        // arm that invented the name "p" emits NOTHING here, which is what this
+        // discriminates.
+        //
+        // ROUND 934 REWROTE THE EXPECTED DIAGNOSTIC, and the rewrite is a move
+        // TOWARDS tsc rather than away from it. Round 933 asserted the TS2741 this
+        // compiler happened to produce; `tsc 7.0.2` reports **TS2353** for all four
+        // spellings of this shape (measured: `` [`other`] ``, `["other"]`, `other`,
+        // `[1]`, each naming the key as written), because the excess check runs
+        // first and returns. Round 934 gave the excess check the computed key, so
+        // the row now matches tsc — and asserting the message names the key's own
+        // TEXT keeps the same mistake in view, more sharply than TS2741 did.
         check(
             """
             interface Req { p: number }
@@ -233,8 +244,9 @@ class TemplateComputedMemberKeyTest {
             """
         ) should {
             have(any {
-                it.code == 2741 &&
-                    it.message == "Property 'p' is missing in type '{ other: number; }' but required in type 'Req'."
+                it.code == 2353 &&
+                    it.message == "Object literal may only specify known properties, " +
+                    "and '[`other`]' does not exist in type 'Req'."
             })
         }
     }

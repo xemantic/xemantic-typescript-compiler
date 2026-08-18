@@ -110966,6 +110966,85 @@ interface DataView {
     }
 
     /**
+     * Round 934: the STATIC member name an OBJECT-LITERAL element declares, exactly as
+     * [getTypeOfObjectLiteral] names it — a bare Identifier, a string or numeric literal,
+     * or a computed key whose inner expression is a literal ([computedLiteralKey]) or a
+     * well-known-symbol path ([computedSymbolKey]).
+     *
+     * **This exists so the excess-property check cannot drift from the type builder.**
+     * B451 records that member-NAME extraction has >= 5 INDEPENDENT sites which each drop
+     * `ComputedPropertyName` by default, and round 933 measured what that costs: a class's
+     * backtick-quoted member resolved for one site and FP'd TS2339 from the other IN ONE
+     * COMPILE. Here the two sites failed in the opposite direction — [getTypeOfObjectLiteral]
+     * had named `["zz"]`/`` [`zz`] ``/`7` for a long time, so the literal's TYPE carried the
+     * member, and [checkExcessProperties] then looked for the AST node that declared it with
+     * a `when` that knew only `Identifier` and `StringLiteralNode`, found nothing, and
+     * emitted nothing. A false NEGATIVE (tsc reports TS2353 for every one of those
+     * spellings, measured on 7.0.2) that no profile and no corpus baseline could see.
+     */
+    private fun objLitElementMemberName(prop: Node): String? = when (prop) {
+        is PropertyAssignment -> staticMemberNameOf(prop.name)
+        is ShorthandPropertyAssignment -> prop.name.text
+        is MethodDeclaration -> staticMemberNameOf(prop.name)
+        else -> null
+    }
+
+    /**
+     * The member name a NAME node SPELLS, or null when it spells nothing fixed.
+     *
+     * **The computed arm is [computedLiteralKey] ONLY, and dropping [computedSymbolKey]
+     * here is load-bearing rather than an omission.** That helper INVENTS the name
+     * `"[<dotted path>]"` for any dotted computed key, which is a placeholder that lets a
+     * well-known-symbol member match STRUCTURALLY (round 723) — it is not a claim about
+     * what the key spells. Used as an excess-check name it manufactures a false positive
+     * on the one shape tsc late-binds: `const enum E { P = "p" }; const o: { p?: number }
+     * = { [E.P]: 1 }` is SILENT in tsc (measured) and would be reported here as the excess
+     * key `'[E.P]'`, because "[E.P]" is in no target's member table. A key whose name
+     * needs the key's TYPE — a binding `[K]`, an enum member `[E.P]`, a `unique symbol`
+     * `[S]`, a well-known symbol `[Symbol.iterator]` — is therefore OUT of the excess
+     * check in both directions, which is the same line round 933 drew for the supply
+     * direction, and the same open item: late binding.
+     */
+    private fun staticMemberNameOf(n: NameNode): String? = when (n) {
+        is Identifier -> n.text
+        is StringLiteralNode -> n.text
+        is NumericLiteralNode -> n.text
+        is ComputedPropertyName -> computedLiteralKey(n)
+        else -> null
+    }
+
+    /**
+     * Round 934: the `[start, end)` of a property name AS WRITTEN — `zz`, `"zz"`, `` `zz` ``,
+     * `7`, `["zz"]`, `[ "zz" ]`, `[Symbol.iterator]`. tsc's TS2353/TS2561 names the key with
+     * its delimiters kept and squiggles exactly this span (measured: `indexSignatures1`'s
+     * `~~~~~` under `[sym]` and `~~~~~~~~~` under `'someKey'`), so the message text and the
+     * diagnostic length are both read from the source rather than from the cooked name.
+     *
+     * The computed arm scans for the closing `]` starting PAST the inner expression, never
+     * from the `[` — a string key may itself contain one (`["a]b"]`, which tsc renders whole).
+     * Returns null rather than guessing when the span cannot be established; the caller then
+     * falls back to the cooked name, which is what every pre-934 emission used.
+     */
+    private fun writtenMemberNameSpan(n: NameNode, source: String): Pair<Int, Int>? {
+        val start = n.pos
+        if (start < 0 || start >= source.length) return null
+        val end = when (n) {
+            is Identifier -> start + n.text.length
+            is StringLiteralNode -> expressionTrueEnd(n)
+            is NumericLiteralNode -> expressionTrueEnd(n)
+            is NoSubstitutionTemplateLiteralNode -> expressionTrueEnd(n)
+            is ComputedPropertyName -> {
+                var i = expressionTrueEnd(n.expression)
+                while (i < source.length && source[i] != ']') i++
+                if (i >= source.length) return null
+                i + 1
+            }
+            else -> return null
+        }
+        return if (end > start && end <= source.length) start to end else null
+    }
+
+    /**
      * Get the properties of a type, triggering lazy resolution if needed.
      */
     private fun getPropertiesOfType(type: Type): List<Symbol> {
@@ -156500,6 +156579,48 @@ interface DataView {
         }
     }
 
+    /**
+     * Round 934: one excess key of a fresh object literal — its COOKED member name (the
+     * key the target's name set is keyed by, and what a spelling suggestion is computed
+     * from) beside the text AS WRITTEN and that text's span, which is what tsc prints in
+     * TS2353/TS2561 and what it squiggles.
+     */
+    /**
+     * Round 934: does the excess-check TARGET absorb [name] through a NUMERIC index
+     * signature? [collectTargetPropertyNames] already bails outright on a STRING index
+     * signature (it makes every key known); a numeric one is narrower — it applies only
+     * to a numerically-named key, which is tsc's `getApplicableIndexInfoForName`.
+     *
+     * The name test reads the AST as well as the cooked string on purpose: our
+     * object-literal member name for a numeric key is the literal's SOURCE TEXT, where
+     * tsc's is the numeric VALUE's canonical string, so `{ 1e3: v }` is named "1e3" here
+     * and "1000" there. `isNumericLiteralName("1e3")` is false — correctly, for a STRING
+     * key `"1e3"`, which tsc reports as excess — so a NumericLiteralNode key is admitted
+     * by its node kind instead, which is what makes both rows match tsc.
+     */
+    private fun numericIndexAbsorbsKey(target: Type, name: String, nameNode: NameNode): Boolean {
+        if (!targetHasNumberIndexInfo(target)) return false
+        val inner = (nameNode as? ComputedPropertyName)?.expression ?: nameNode
+        return inner is NumericLiteralNode || isNumericLiteralName(name)
+    }
+
+    /** Any-constituent numeric index signature, mirroring [collectTargetPropertyNames]'s
+     *  own intersection/union flattening (a key is excess only if NO constituent takes it). */
+    private fun targetHasNumberIndexInfo(type: Type): Boolean = when (type) {
+        is Type.Interface -> type.declaredNumberIndexInfo != null || type.numberIndexInfo != null
+        is Type.Object -> type.numberIndexInfo != null
+        is Type.Intersection -> type.types.any { targetHasNumberIndexInfo(it) }
+        is Type.Union -> type.types.any { targetHasNumberIndexInfo(it) }
+        else -> false
+    }
+
+    private data class ExcessProp(
+        val name: String,
+        val display: String,
+        val pos: Int,
+        val length: Int,
+    )
+
     private fun checkExcessProperties(
         objLiteral: ObjectLiteralExpression,
         sourceType: Type,
@@ -156525,7 +156646,7 @@ interface DataView {
         val sourceProps = sourceType.properties ?: return false
         // Collect all target property names, flattening intersections
         val targetPropNames = collectTargetPropertyNames(targetType) ?: return false
-        val excessProps = mutableListOf<Pair<String, Int>>() // (propName, position)
+        val excessProps = mutableListOf<ExcessProp>()
         for (sourceProp in sourceProps) {
             val name = sourceProp.name
             // B66.5: OBJECT_PROTOTYPE_PROPERTIES (toString, valueOf, hasOwnProperty, …)
@@ -156553,24 +156674,41 @@ interface DataView {
                     mems?.any { m -> ((m as? PropertyDeclaration)?.name as? BigIntLiteralNode)?.text == name } == true
                 } == true
                 if (targetDeclaresBigintNamed) continue
-                // Find the position of this property in the object literal
+                // Find the AST property that declared this member. Round 934: the
+                // predicate is [objLitElementMemberName] — the SAME naming
+                // getTypeOfObjectLiteral used to mint `sourceProp`, so a member that
+                // exists in the source TYPE always has its declaring node found here.
+                // The pre-934 `when` knew only Identifier and StringLiteralNode, so
+                // `{ 7: v }`, `{ ["zz"]: v }`, `` { [`zz`]: v } `` and
+                // `{ [Symbol.iterator]: v }` were typed as members, judged excess, and
+                // then silently dropped for want of a position.
                 val propNode = objLiteral.properties.firstOrNull { prop ->
-                    when (prop) {
-                        is PropertyAssignment -> (prop.name as? Identifier)?.text == name
-                                || (prop.name as? StringLiteralNode)?.text == name
-                        is ShorthandPropertyAssignment -> prop.name.text == name
-                        is MethodDeclaration -> (prop.name as? Identifier)?.text == name
-                        else -> false
-                    }
+                    objLitElementMemberName(prop) == name
                 }
                 if (propNode != null) {
-                    val propPos = when (propNode) {
-                        is PropertyAssignment -> propNode.name.pos
-                        is ShorthandPropertyAssignment -> propNode.name.pos
-                        is MethodDeclaration -> propNode.name.pos
-                        else -> propNode.pos
+                    val nameNode = when (propNode) {
+                        is PropertyAssignment -> propNode.name
+                        is ShorthandPropertyAssignment -> propNode.name
+                        is MethodDeclaration -> propNode.name
+                        else -> null
                     }
-                    excessProps.add(name to propPos)
+                    // tsc names the key WITH its delimiters and squiggles the written
+                    // span (`'["zz"]'`, `''someKey''`); for a bare Identifier the two
+                    // are the same string and the same length, which is why every
+                    // pre-934 corpus baseline is untouched by this.
+                    // Round 934: a NUMERIC index signature absorbs a numerically-named
+                    // key exactly as a STRING one absorbs every key (which
+                    // collectTargetPropertyNames already answers, by bailing). tsc's
+                    // isKnownProperty consults the APPLICABLE index info, so
+                    // `{ [k: number]: T }` accepts `7`, `[7]`, `"7"`, `["7"]` and
+                    // `` [`7`] `` and rejects `"1e3"` — all five measured on 7.0.2. This
+                    // guard could not matter before this round: a numerically-named key
+                    // never found its declaring node, so it never reached an emission.
+                    if (nameNode != null && numericIndexAbsorbsKey(targetType, name, nameNode)) continue
+                    val written = nameNode?.let { writtenMemberNameSpan(it, source) }
+                    val propPos = written?.first ?: nameNode?.pos ?: propNode.pos
+                    val display = written?.let { source.substring(it.first, it.second) } ?: name
+                    excessProps.add(ExcessProp(name, display, propPos, display.length))
                 }
             }
         }
@@ -156587,32 +156725,38 @@ interface DataView {
         // emitters), so this can only REMOVE over-emission, never drop a wanted line.
         val firstExcess = excessProps.firstOrNull()
         if (firstExcess != null) {
-            val (propName, propPos) = firstExcess
+            // `propName` is the COOKED member name (what the target's name set is keyed
+            // by, hence what the spelling suggestion is computed from); `display` is the
+            // key as WRITTEN, which is what tsc prints and squiggles.
+            val propName = firstExcess.name
+            val display = firstExcess.display
+            val propPos = firstExcess.pos
+            val propLen = firstExcess.length
             val (line, character) = getLineAndCharacterOfPosition(source, propPos)
             // Check for spelling suggestion (TS2561) vs plain excess (TS2353)
             val suggestion = getSpellingSuggestionFromNames(propName, targetPropNames)
             if (suggestion != null) {
                 diagnostics.add(Diagnostic(
-                    message = "Object literal may only specify known properties, but '$propName' does not exist in type '$displayTarget'. Did you mean to write '$suggestion'?",
+                    message = "Object literal may only specify known properties, but '$display' does not exist in type '$displayTarget'. Did you mean to write '$suggestion'?",
                     category = DiagnosticCategory.Error,
                     code = 2561,
                     fileName = fileName,
                     line = line,
                     character = character,
                     start = propPos,
-                    length = propName.length,
+                    length = propLen,
                     relatedInformation = listOfNotNull(parentRelated),
                 ))
             } else {
                 diagnostics.add(Diagnostic(
-                    message = "Object literal may only specify known properties, and '$propName' does not exist in type '$displayTarget'.",
+                    message = "Object literal may only specify known properties, and '$display' does not exist in type '$displayTarget'.",
                     category = DiagnosticCategory.Error,
                     code = 2353,
                     fileName = fileName,
                     line = line,
                     character = character,
                     start = propPos,
-                    length = propName.length,
+                    length = propLen,
                     relatedInformation = listOfNotNull(parentRelated),
                 ))
             }
@@ -156631,11 +156775,10 @@ interface DataView {
             ?.let { selectUnionMemberByObjLitDiscriminant(it, objLiteral) }
         for (propNode in objLiteral.properties) {
             if (propNode !is PropertyAssignment) continue
-            val propName = when (val n = propNode.name) {
-                is Identifier -> n.text
-                is StringLiteralNode -> n.text
-                else -> continue
-            }
+            // Round 934: the same naming as above, so a nested literal under a COMPUTED
+            // key is descended into (`{ ["n"]: { p: 1, zz: 2 } }` — tsc reports the inner
+            // `zz`, measured).
+            val propName = objLitElementMemberName(propNode) ?: continue
             if (propName !in targetPropNames) continue // already flagged
             val nestedInit = propNode.initializer
             if (nestedInit !is ObjectLiteralExpression) continue

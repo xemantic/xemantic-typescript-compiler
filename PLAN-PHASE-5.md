@@ -20,6 +20,149 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 934 (2026-08-18) — (CHK.2): A COMPUTED OBJECT-LITERAL KEY NEVER REACHED THE
+EXCESS-PROPERTY CHECK. THE ROUND'S PRODUCT IS THAT **A DIAGNOSTIC CAN BE COMPUTED IN
+FULL AND THEN DROPPED FOR WANT OF A POSITION** — `getTypeOfObjectLiteral` had named
+`["zz"]`, `` [`zz`] `` and `7` for years, so the literal's TYPE carried the member and
+`checkExcessProperties` correctly judged it excess; it then looked for the AST node
+that declared it with a `when` knowing only `Identifier` and `StringLiteralNode`, found
+nothing, and emitted nothing. **The failure is the exact mirror of round 933's**: there
+one of B451's >= 5 extraction sites had been widened and another had not, so a member
+resolved for one consumer and FP'd for the other IN ONE COMPILE; here the two sites
+disagreed the other way and the result was SILENCE — a program tsc rejects that this
+compiler accepted, with nothing anywhere to see it.
+
+- **STEP 1 WAS tsc 7.0.2, DIRECT, on five scratch projects.** Every row below was READ
+  from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit
+  --listAll` on the SAME directory — never reasoned. **The FN reproduced at HEAD
+  exactly as round 933 recorded it, and the extension found two more rows it did not
+  have** (a BARE numeric key, and every position beyond a plain assignment).
+
+**Direction 2, EXTENDED** (`interface Opt { p?: number }` unless named; a row is a false
+NEGATIVE when tsc emits and we do not, a false POSITIVE when the reverse):
+
+| the key / the shape | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `{ p: 1, zz: 2 }` | TS2353 `'zz'` | TS2353 `'zz'` | TS2353 `'zz'` |
+| `{ p: 1, "zz": 2 }` | TS2353 `'"zz"'` | TS2353 `'zz'` — form | TS2353 `'"zz"'` |
+| `{ p: 1, 'zz': 2 }` | TS2353 `''zz''` | `'zz'` — form | `''zz''` |
+| ``{ p: 1, [`zz`]: 2 }`` | TS2353 `` '[`zz`]' `` | **silent — FN** | `` '[`zz`]' `` |
+| `{ p: 1, ["zz"]: 2 }` | TS2353 `'["zz"]'` | **silent — FN** | `'["zz"]'` |
+| `{ p: 1, [ "zz" ]: 2 }` | TS2353 `'[ "zz" ]'` | **silent — FN** | `'[ "zz" ]'` |
+| `{ p: 1, ["a]b"]: 2 }` | TS2353 `'["a]b"]'` | **silent — FN** | `'["a]b"]'` |
+| `{ p: 1, 7: 2 }` | TS2353 `'7'` | **silent — FN, NOT in round 933's table** | `'7'` |
+| `{ p: 1, [7]: 2 }` / `{ p: 1, ["7"]: 2 }` | TS2353 `'[7]'` / `'["7"]'` | **silent — FN** | as tsc |
+| `{ ["mm"]() {} }` | TS2353 `'["mm"]'` | **silent — FN** | `'["mm"]'` |
+| the same key in `satisfies` / an ARGUMENT / a `return` / a NESTED literal | TS2353 ×4 | **silent ×4 — FN** | as tsc ×4 |
+| ``{ p: 1, [`zz${x}`]: 2 }`` — a SUBSTITUTING template | silent | silent | silent |
+| `{ p: 1, ["zz"]: 2 }` vs `{ …; [k: string]: T }` | silent | silent | silent |
+| `{ p: 1, [7]: 2 }` vs `{ …; [k: number]: T }` | silent | silent | **silent — see the FP below** |
+| `{ p: 1, "1e3": 2 }` vs `{ …; [k: number]: T }` | TS2353 `'"1e3"'` | `'1e3'` — form | `'"1e3"'` |
+| `{ [E.P]: 1 }`, `const enum E { P = "p" }` | silent (late-bound to `p`) | silent | **silent — see the FP below** |
+| `{ [K]: 1 }` / `{ [E.Q]: 1 }` / `{ [S]: 1 }` / `{ [Symbol.iterator]: 1 }` | TS2353 | silent | **silent — STILL OPEN** |
+| `{ get ["gg"]() {} }` | TS2353 `'["gg"]'` | silent | **silent — STILL OPEN** |
+
+- **THE ROUND'S OWN NEAR MISS, AND IT IS WHY THE TABLE WAS EXTENDED BEFORE ANYTHING WAS
+  DESIGNED: THE FIRST TWO DRAFTS EACH TURNED AN FN INTO AN **FP**, ON A ROW ROUND 933's
+  FIVE-ROW TABLE DOES NOT CONTAIN.** (i) Admitting a numeric key exposed a TARGET-side
+  gap that could not matter before — `collectTargetPropertyNames` bails outright on a
+  STRING index signature and knows nothing of a NUMERIC one, which applies only to a
+  numerically-named key — so `{ [7]: 2 }` against `{ [k: number]: T }` was reported where
+  tsc is silent. (ii) Naming the computed key with `computedLiteralKey ?: computedSymbolKey`
+  — the obvious "delegate to the type builder" move, and the shape round 933's own lesson
+  argues for — reported `'[E.P]'` for `const enum E { P = "p" }; const o: Opt = { [E.P]: 1 }`,
+  which tsc LATE-BINDS to the existing `p` and accepts. **`computedSymbolKey` INVENTS the
+  name `"[<dotted>]"` so a well-known-symbol member can match STRUCTURALLY (round 723); it
+  is not a claim about what the key spells, and it cannot tell `Symbol.iterator` from `E.P`.**
+  Both are now guards with a discriminating negative control apiece (arms A3 and A4).
+- **SO THE LINE THIS ROUND DRAWS IS ONE SENTENCE, AND IT IS ROUND 933's LINE IN THE OTHER
+  DIRECTION: the excess check acts on a computed key exactly when the key is a LITERAL
+  spelling one fixed name.** Every key that needs the key's TYPE — a binding `[K]`, an
+  enum member `[E.P]`, a `unique symbol` `[S]`, a well-known symbol `[Symbol.iterator]` —
+  stays out in BOTH directions and is the same open item, late binding. Per round 765
+  those FNs are NOT pinned; the FP they would produce is.
+- **THE MESSAGE FORM IS MATCHED RATHER THAN RECORDED, BECAUSE IT MEASURED FREE.** tsc
+  names the key WITH its delimiters and squiggles the whole written key (`indexSignatures1`'s
+  baseline puts five tildes under `[sym]` and nine under `'someKey'`); the key node's span
+  is in hand at the emission, so it is one substring. **It is free because no ACTIVE corpus
+  test has a delimited excess key**: of the eleven `.errors.txt` baselines whose TS2353/TS2561
+  names a key with brackets or quotes, ten are not generated at all and the eleventh
+  (`checkDestructuringShorthandAssigment2`, `'[k]'`) belongs to a different emitter. A bare
+  identifier renders and measures exactly as before, which is why nothing moved. **Half-matching
+  was the alternative and was refused**: rendering computed keys as written while leaving
+  `"zz"` bare is a third convention nobody asked for.
+- **ONE PIN CHANGED, AND IT CHANGED TOWARDS tsc.** Round 933's
+  `` `negative control - a backtick-quoted key names ITS OWN text and not a neighbour` ``
+  asserted the TS2741 this compiler happened to produce for
+  ``interface Req { p: number }; const r: Req = { [`other`]: 1 }``. Measured this round,
+  **tsc reports TS2353 there** — for all four spellings of that shape — because the excess
+  check runs first and returns. The pin now asserts tsc's line, and asserting that the
+  message names the key's own TEXT keeps the same injected mistake in view more sharply
+  than TS2741 did. It is the only red the whole suite produced.
+- **SIBLING SITES: ONE OF TWELVE `code = 2353` EMITTERS WAS TOUCHED.** `checkExcessProperties`
+  (~17 call sites — assignment, argument, `satisfies`, `return`, array element, nested), which
+  is why every position in the table moves together. The other eleven are dedicated
+  corpus-shape walkers with their own gates and their own name extraction (B451's list plus
+  the B482/B513/B576/B331 families); none was touched and none needs to be for this shape —
+  `checkDestructuringShorthandAssigment2` shows one of them already rendering `'[k]'` with
+  its brackets, i.e. this family has been divided about the message form for a long time and
+  this round moves the general path onto tsc's side of it.
+- **EVERY PROFILE-BASED INSTRUMENT IS A CONTROL HERE, MEASURED NOT ASSUMED — the same
+  structural blindness round 933 found, re-measured for this shape.** Across all eight
+  profiles' `src` (1,249 `.ts` files) an object-literal computed key matches **8 times, all
+  eight the SAME line** (`parser.ts:10634`) and that line is a DESTRUCTURING pattern, not an
+  object literal; a bare numeric key matches 120 times and every hit inspected is inside a
+  comment or a template string. So `cost_gate.py`'s `+0.00%` on all 20 counters and the
+  grid's `added=0 removed=0` on all eight profiles are the EXPECTED answers (round 853's law:
+  a `+0.00%` streak is a reason to audit the instrument, and the audit is that grep).
+
+- **PINS +20, one class, `ComputedKeyExcessPropertyTest`.** Each spelling has its own row;
+  the form rows assert the exact tsc-measured message AND, for `["zz"]`, the `length == 6`
+  that the cooked name (2) cannot produce. Five negative controls: an existing member, a
+  string index signature, a numeric index signature over all four numeric spellings, a
+  SUBSTITUTING template, and the dotted `[E.P]` key. One positive control keeps the numeric
+  guard from becoming a blanket (`"1e3"` is still excess against a numeric index signature).
+
+- **SIX-ARM ABLATION, one mistake at a time, each applied to and restored from a
+  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (`scripts/round934-ablate.py`;
+  every arm read `ran 20`, and the dead-arm check diffs against the SNAPSHOT rather than HEAD).
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 | the shared naming loses its computed arm | **10** | the pre-934 boundary — every computed spelling, in every position, in one set |
+| A2 | the shared naming loses its `NumericLiteralNode` arm | **1** | the bare `7:` key, which is not a computed key at all |
+| A3 | the numeric-index absorption guard is dropped | **1** | draft (i)'s false positive, and only it |
+| A4 | the computed arm reuses `computedSymbolKey`'s invented name | **1** | draft (ii)'s false positive, and only it |
+| A5 | message and squiggle fall back to the COOKED name | **12** | the written-span rendering — including both quoted-key rows, which no other arm touches |
+| A6 | the NESTED descent reverts to the pre-934 `when` | **1** | the nested-under-a-computed-key row, and only it |
+
+  Four arms have a uniquely-their-own failure. **Four of the twenty pins are undiscriminated
+  by any arm and are recorded as such rather than claimed** (round 807's law): the
+  bare-identifier control, the existing-member control, the string-index control and the
+  substituting-template control all guard a FUTURE widening; the last of them is already
+  ablated by round 933's A3.
+
+- **GATES.** Suite **15,035 → 15,055 / 0 failures / 3 skipped** (summed over all six modules
+  with an XML parser); **no corpus baseline moved**, so no `logicalParityDivergence` was
+  needed. `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0` clean,
+  751 classes (+1: the `ExcessProp` carrier), 0 over. `spine_closure_audit.py` clean (46
+  handlers, 40 audited) — a control, nothing on the spine changed. **The 8-profile grid is a
+  BEFORE/AFTER BINARY grid** (`scripts/round934-grid.sh`, round 813's shape; profiles
+  enumerated by the presence of a `tsconfig.json` and REFUSED below 8): all eight
+  `added=0 removed=0`, 46/94 diagnostics unchanged.
+
+- **NEXT.** `(CHK.3)` — LATE BINDING: a computed key whose expression has a string-literal
+  TYPE. It is now the SAME open item in both directions and both tables name it — supply
+  (`{ [K]: v }` / `{ [E.P]: v }` do not satisfy a required member here and do in tsc) and
+  excess (`[K]`, `[E.Q]`, `[S]`, `[Symbol.iterator]` are TS2353 in tsc and silent here) —
+  so it should be closed once, at `computedLiteralKey`'s caller, by asking the key's type
+  rather than its spelling. **The two directions must land together**: the FP guarded by
+  arm A4 is exactly what a half-landing produces. `SyntaxRoles.isMemberPosition` refuses
+  the same shape on the language-service side and has to move with it. A smaller residue,
+  worth one paragraph rather than a round: `getTypeOfObjectLiteral`'s GetAccessor/SetAccessor
+  arms do not name a computed key at all, so `{ get ["gg"]() {} }` declares no member —
+  which is a SUPPLY-direction gap in (CHK.1)'s family, not this one.
+
 **Round 933 (2026-08-18) — (CHK.1): A BACKTICK-QUOTED COMPUTED MEMBER KEY NAMES A
 MEMBER. THE ROUND'S PRODUCT IS THAT **A FALSE POSITIVE CAN BE INVISIBLE TO EVERY
 INSTRUMENT THIS REPOSITORY HAS AND STILL BE REAL: THE EIGHT tsc PROFILES CONTAIN
@@ -1802,6 +1945,65 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   counters; `huge_methods.py --fail-over 0` clean on both modules; the round-920 token
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
+
+- [ ] **(CHK.3) LATE-BIND A COMPUTED KEY WHOSE EXPRESSION HAS A STRING-LITERAL *TYPE* —
+  `{ [K]: v }`, `{ [E.P]: v }`, `{ [S]: v }`, `{ [Symbol.iterator]: v }`. NOW THE SAME OPEN
+  ITEM IN BOTH DIRECTIONS, with tsc 7.0.2's answer measured on every row (rounds 933, 934).**
+  SUPPLY: `const enum E { P = "p" }; const r: Req = { [E.P]: 1 }` satisfies a required `p`
+  in tsc and does not here (TS2741 — an FP). EXCESS: the same keys spelling a name the target
+  LACKS are TS2353 in tsc, named as written (`'[K]'`, `'[E.Q]'`, `'[S]'`, `'[Symbol.iterator]'`),
+  and are silent here (an FN). Both are one mechanism: tsc resolves the key EXPRESSION's type
+  and late-binds a string-literal-typed key to that name, where `computedLiteralKey` reads the
+  key's SPELLING. **THE TWO DIRECTIONS MUST LAND TOGETHER, and round 934 measured what a
+  half-landing costs**: naming the excess key with `computedSymbolKey`'s INVENTED
+  `"[<dotted>]"` placeholder reports `{ [E.P]: 1 }` as excess — a false positive on a program
+  tsc accepts — because a name that is right for STRUCTURAL matching (round 723's well-known
+  symbols) is wrong as a claim about what the key spells. That FP is pinned in
+  `ComputedKeyExcessPropertyTest`; the FNs deliberately are NOT (round 765: a known-open gap
+  is a countdown, not a guard). **`SyntaxRoles.isMemberPosition` refuses the identical shape
+  on the language-service side (round 932, deliberately: `[K]` spells no fixed name and tsc
+  reads it as a reference to `K` alone) and has to move in the same commit or the checker and
+  the API will disagree about what a member name is.** Smaller residue in the same family,
+  worth a paragraph rather than a round: `getTypeOfObjectLiteral`'s GetAccessor/SetAccessor
+  arms do not name a computed key at all, so `{ get ["gg"]() {} }` declares no member and is
+  invisible to both directions.
+
+- [x] **(CHK.2) A COMPUTED OBJECT-LITERAL KEY NEVER REACHED THE EXCESS-PROPERTY CHECK —
+  LANDED, round 934. A false NEGATIVE in every position, from ONE name-extraction `when`,
+  and the diagnostic was being computed in full before it was dropped.** Round 933 measured
+  the row and left it: ``{ p: 1, [`zz`]: 2 }`` and `{ p: 1, ["zz"]: 2 }` against
+  `interface Opt { p?: number }` are TS2353 in tsc 7.0.2 and were silent here. Extended
+  before designing, it is larger: a BARE numeric key `{ 7: 2 }` escapes too (so the omission
+  is not about computed keys at all), and every position escapes together — `satisfies`, an
+  ARGUMENT, a `return`, a NESTED literal under a computed key, a computed METHOD name.
+  **The cause is the exact mirror of (CHK.1)'s**: `getTypeOfObjectLiteral` had named all of
+  those keys for years, so the source TYPE carried the member and `checkExcessProperties`
+  judged it excess correctly — and then looked for the AST node that declared it with a
+  `when` knowing only `Identifier` and `StringLiteralNode`, found nothing, and emitted
+  nothing. The lookup is now ONE shared predicate (`objLitElementMemberName`), so the type
+  builder and the excess check cannot disagree about what an element names.
+  **THE ROUND'S REAL PRODUCT IS THE TWO NEAR MISSES, EACH OF WHICH TURNED THE FN INTO AN
+  FP ON A ROW ROUND 933's TABLE DOES NOT CONTAIN.** (i) Admitting a numeric key exposed a
+  TARGET-side gap that could not matter before — `collectTargetPropertyNames` bails on a
+  STRING index signature and knows nothing of a NUMERIC one — so `{ [7]: 2 }` against
+  `{ [k: number]: T }` was reported where tsc is silent. (ii) Naming the key with
+  `computedLiteralKey ?: computedSymbolKey` (the obvious delegation) reported `'[E.P]'` for
+  `const enum E { P = "p" }` + `{ [E.P]: 1 }`, which tsc late-binds to the existing `p` and
+  accepts — **`computedSymbolKey` INVENTS `"[<dotted>]"` so a well-known-symbol member can
+  match structurally (round 723); it is not a claim about what the key spells and cannot
+  tell `Symbol.iterator` from `E.P`.** Both are guards with a discriminating negative
+  control apiece. **So the line is round 933's line in the other direction: the excess check
+  acts on a computed key exactly when the key is a LITERAL spelling one fixed name**; every
+  key needing the key's TYPE stays out in BOTH directions and is (CHK.3). **The message FORM
+  is matched rather than recorded** — tsc keeps the delimiters (`'["zz"]'`, `''zz''`) and
+  squiggles the whole written key, the span is in hand, and no ACTIVE corpus test has a
+  delimited excess key (ten of the eleven such baselines are not generated; the eleventh
+  belongs to another emitter). 20 pins + one round-933 pin rewritten to tsc's own answer
+  (it asserted a TS2741 that tsc does not emit); six-arm ablation, all reached, four with a
+  uniquely-their-own failure, four pins recorded as undiscriminated rather than claimed.
+  **Every profile instrument is a CONTROL and it was measured**: across all eight profiles'
+  1,249 `.ts` files an object-literal computed key matches 8 times — all eight the same
+  destructuring pattern — so `+0.00%` and `added=0 removed=0` are the expected answers.
 
 - [x] **(CHK.1) A BACKTICK-QUOTED COMPUTED MEMBER KEY NAMES A MEMBER — LANDED, round 933.
   Three FALSE POSITIVES tsc does not have, from ONE missing `when` arm, in a spelling the
