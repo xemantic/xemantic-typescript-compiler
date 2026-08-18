@@ -1489,8 +1489,7 @@ wire `documentHighlightsAt` rather than `referencesAt` to caret movement.**
    References, definition and rename answer both.
 9. **`export { p }` / `import { p }` rename plainly** where tsc expands them, because
    here they are one symbol. Stated in § 10d, deliberate.
-10. **Lone-`\r` line numbering** disagrees between the parser and the checker (`(BUG.1)`).
-11. **No LSP layer.** This is an embedding API; the protocol, its 0-based coordinates and
+10. **No LSP layer.** This is an embedding API; the protocol, its 0-based coordinates and
     its lifecycle are a host's job. § 12 is the shape.
 
 ### How each of these was decided
