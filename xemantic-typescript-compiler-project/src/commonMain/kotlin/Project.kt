@@ -548,7 +548,11 @@ public class Project private constructor(
             .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(listOf(span)))
             .capturedDefinitions
             .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
-            ?.locations
+            // (API.10) …PLUS what a SHORTHAND's one token also names. `{ p }` under a
+            // contextual type navigates to the local AND to the member, which is what
+            // tsc answers; `related` stays out, because a heritage edge is a grouping
+            // fact and not a navigation one.
+            ?.let { it.locations + it.shorthand }
             ?.map { DefinitionLocation(it.fileName, it.start, it.length, it.kind) }
             ?: emptyList()
     }
@@ -1212,24 +1216,28 @@ public class Project private constructor(
     /**
      * True when [definition] belongs to the group [seed] names.
      *
-     * Identity is intersection of declaration sets (§ 10b), and since (API.9) the set
-     * an occurrence offers is its [CapturedDefinition.locations] PLUS its
-     * [CapturedDefinition.related] — the declarations a DECLARED heritage edge ties it
-     * to. The two are separate fields because go-to-definition may read only the first:
-     * measured against tsc 7.0.2, `textDocument/definition` on an implementor's member
-     * answers that member and `textDocument/references` on it answers the base's whole
-     * group.
+     * Identity is intersection of declaration sets (§ 10b), and the set an occurrence
+     * offers is ALL THREE of its fields — which is exactly why membership and the seed
+     * are computed by different functions. [referenceSeed] takes [CapturedDefinition]'s
+     * first two; this takes all three, and [CapturedDefinition.shorthand] is the
+     * difference: measured on tsc 7.0.2, a caret on `{ p }` answers the LOCAL's group
+     * (two spans) while the MEMBER's group CONTAINS that token. A relation that finds
+     * without identifying is what one span carrying two symbols looks like from here.
      *
      * Note that this cannot merge two unrelated groups. A class implementing two
      * interfaces that both declare `p` puts its OWN member in both groups, which is
      * correct — it is both — while every other occurrence still carries only its own
-     * interface's declaration and no edge runs between them.
+     * interface's declaration and no edge runs between them. The same holds one
+     * mechanism over: a shorthand belongs to the local's group and to the member's, and
+     * because it is never in a SEED the two groups never meet through it.
      */
     private fun definitionMeets(
         definition: CapturedDefinition,
         seed: Set<CapturedDeclaration>,
     ): Boolean =
-        definition.locations.any { it in seed } || definition.related.any { it in seed }
+        definition.locations.any { it in seed } ||
+            definition.related.any { it in seed } ||
+            definition.shorthand.any { it in seed }
 
     /**
      * The node a reference or rename caret names, or null when it names nothing.
@@ -1478,6 +1486,17 @@ public class Project private constructor(
 
         val nodes = HashMap<Pair<String, Int>, Node>()
         for ((file, found) in sweep.identifiers) for (id in found) nodes[file to id.pos] = id
+        // (API.10) …and WHICH WAY each occurrence was reached. A SHORTHAND is in the
+        // group through `locations` when the LOCAL is being renamed and through
+        // `shorthand` when the MEMBER is, and the two expand the one token in opposite
+        // directions. Every other occurrence answers false and is a plain replacement.
+        val reachedAsMember = HashMap<Pair<String, Int>, Boolean>()
+        for (definition in sweep.definitions) {
+            if (definition.shorthand.isEmpty()) continue
+            if (definition.locations.any { it in seed }) continue
+            if (!definition.shorthand.any { it in seed }) continue
+            reachedAsMember[definition.fileName to definition.start] = true
+        }
         val occurrences = ArrayList<RenameOccurrence>(group.size)
         for (key in group) {
             val node = nodes[key] ?: return refuse(
@@ -1489,7 +1508,7 @@ public class Project private constructor(
                     ),
                 ),
             )
-            occurrences.add(RenameOccurrence(key.first, node))
+            occurrences.add(RenameOccurrence(key.first, node, reachedAsMember[key] == true))
         }
         // ONE new name cannot spell two things. An `import { a as b }` makes the alias
         // and the original one symbol here, so the group carries both spellings.
@@ -1520,7 +1539,8 @@ public class Project private constructor(
             val index = sweep.indexes[occurrence.fileName] ?: return refuse(
                 RenameRefusal.OCCURRENCES_INCOMPLETE,
             )
-            val rewrite = SyntaxRoles.renameRewrite(occurrence.node, oldName, newName)
+            val rewrite =
+                SyntaxRoles.renameRewrite(occurrence.node, oldName, newName, occurrence.asMember)
             // (API.9) [SourceIndex.occurrenceSpanOf], not `pos`/`realEndOf`: an
             // `o["p"]`'s edit replaces the text BETWEEN the quotes, and writing over
             // the quotes too would produce `o[newName]`.
@@ -1532,6 +1552,7 @@ public class Project private constructor(
                     newText = rewrite.text,
                     nameOffset = rewrite.nameOffset,
                     nodePos = occurrence.node.pos,
+                    asMember = occurrence.asMember,
                 ),
             )
         }
@@ -1539,8 +1560,16 @@ public class Project private constructor(
         return verifyRename(oldName, newName, sweep, seed, group, planned)
     }
 
-    /** One place the plan will edit: the file it is in and the identifier node there. */
-    private class RenameOccurrence(val fileName: String, val node: Node)
+    /**
+     * One place the plan will edit: the file it is in, the identifier node there, and
+     * (API.10) whether the group reached it as a MEMBER — which for a SHORTHAND decides
+     * which of the token's two meanings moves.
+     */
+    private class RenameOccurrence(
+        val fileName: String,
+        val node: Node,
+        val asMember: Boolean,
+    )
 
     /**
      * An edit before it is published, carrying where the NEW NAME lands inside its own
@@ -1560,6 +1589,7 @@ public class Project private constructor(
         val newText: String,
         val nameOffset: Int,
         val nodePos: Int,
+        val asMember: Boolean,
     )
 
     /**
@@ -1732,9 +1762,20 @@ public class Project private constructor(
         // rename with a "meaning changed" that is this API's own blind spot rather than
         // a fact about the program.
         val resolvedBefore = HashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
+        // (API.10) …and, for a SHORTHAND expanded because the MEMBER moved, the OTHER
+        // of the token's two answers. `{ p }` resolves to the local before the rename
+        // and the `renamed` of `{ renamed: p }` resolves to the MEMBER after it, so
+        // asking for the local's declaration there reports a correct expansion as a
+        // change of meaning — the same silent, conservative failure round 926 found
+        // when an edit span and an identity key stopped coinciding.
+        val resolvedBeforeAsMember = HashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
         for (definition in sweep.definitions) {
             resolvedBefore[definition.fileName to definition.start] =
                 definition.locations.map { placeOf(it.fileName, it.start) }.toSet()
+            if (definition.shorthand.isNotEmpty()) {
+                resolvedBeforeAsMember[definition.fileName to definition.start] =
+                    definition.shorthand.map { placeOf(it.fileName, it.start) }.toSet()
+            }
         }
         val asked = ArrayList<TypeCaptureSpan>()
         val expectedPlaces = LinkedHashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
@@ -1759,8 +1800,10 @@ public class Project private constructor(
                     return refuse(RenameRefusal.WOULD_CHANGE_MEANING)
                 }
                 asked.add(TypeCaptureSpan(file, node.pos, node.end))
-                expectedPlaces[file to node.pos] =
-                    resolvedBefore[file to edit.nodePos] ?: emptySet()
+                val before =
+                    if (edit.asMember) resolvedBeforeAsMember[file to edit.nodePos]
+                    else resolvedBefore[file to edit.nodePos]
+                expectedPlaces[file to node.pos] = before ?: emptySet()
             }
         }
         for ((file, found) in sweep.identifiers) {
@@ -1873,9 +1916,10 @@ public class Project private constructor(
         val definitions = HashMap<Long, List<DefinitionLocation>>(result.capturedDefinitions.size)
         for (captured in result.capturedDefinitions) {
             if (captured.fileName != key) continue
-            definitions[packSpan(captured.start, captured.end)] = captured.locations.map {
-                DefinitionLocation(it.fileName, it.start, it.length, it.kind)
-            }
+            definitions[packSpan(captured.start, captured.end)] =
+                (captured.locations + captured.shorthand).map {
+                    DefinitionLocation(it.fileName, it.start, it.length, it.kind)
+                }
         }
         return distinct.values.map { node ->
             val spanKey = spanKeyOf(node)

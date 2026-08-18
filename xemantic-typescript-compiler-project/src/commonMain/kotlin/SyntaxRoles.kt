@@ -358,17 +358,31 @@ internal object SyntaxRoles {
      * rename does change; and `import { p as newName }` would name an export that no
      * longer exists.
      *
+     * (API.10) A SHORTHAND EXPANDS IN WHICHEVER DIRECTION IT WAS REACHED FROM, which is
+     * what [asMember] decides and what makes it the whole feature's discriminator. The
+     * one token names two things, so a rename of the LOCAL must keep the key
+     * (`{ p: newName }`) and a rename of the MEMBER must keep the value
+     * (`{ newName: p }`). Both were read out of tsc 7.0.2 rather than reasoned about,
+     * and both compile — which is why writing the wrong one is silent, and why no
+     * assertion about the EDIT COUNT can see it.
+     *
      * [nameOffset] is where the NEW NAME begins inside [text]. The verification pass
      * needs it: it re-asks the compiler what the renamed occurrence resolves to, and
-     * for a shorthand expansion that question is about a span three characters in.
+     * for a shorthand expansion that question is about a span three characters in — or,
+     * when the member is what moved, about the span at offset zero.
      */
-    fun renameRewrite(node: Node, oldName: String, newName: String): Rewrite {
+    fun renameRewrite(
+        node: Node,
+        oldName: String,
+        newName: String,
+        asMember: Boolean = false,
+    ): Rewrite {
         val parent = parentOf(node)
+        val shorthand = parent is ShorthandPropertyAssignment && parent.name === node ||
+            parent is BindingElement && parent.propertyName == null && parent.name === node
         return when {
-            parent is ShorthandPropertyAssignment && parent.name === node ->
-                Rewrite("$oldName: $newName", oldName.length + 2)
-            parent is BindingElement && parent.propertyName == null && parent.name === node ->
-                Rewrite("$oldName: $newName", oldName.length + 2)
+            shorthand && asMember -> Rewrite("$newName: $oldName", 0)
+            shorthand -> Rewrite("$oldName: $newName", oldName.length + 2)
             else -> Rewrite(newName, 0)
         }
     }
@@ -425,12 +439,16 @@ internal object SyntaxRoles {
      * `{ p }` or a binding pattern's `const { p } = o`.
      *
      * Both are occurrences of a PROPERTY that no identifier of that property's spelling
-     * marks: the object literal's key comes from its CONTEXTUAL type (the third
-     * resolution mechanism this API does not have — `Project.definitionsAt` refuses
-     * object-literal keys for exactly that reason), and the binding pattern's source
-     * property is named by the same token as the local it binds. So while renaming a
-     * MEMBER, a shorthand spelling the old name is a place the plan would have to edit
-     * and cannot prove it should — which is a refusal, not an omission.
+     * marks: the object literal's key comes from its CONTEXTUAL type and the binding
+     * pattern's source property is named by the same token as the local it binds.
+     *
+     * (API.10) Since the capture resolves both, this is no longer the shape's whole
+     * story — a shorthand whose member the search PLACED is an ordinary member of the
+     * group and gets expanded. What is left is the residue: a shorthand whose source
+     * type could not be decided at all (a literal with no contextual type, an
+     * un-annotated destructured parameter). While renaming a MEMBER, such a token is a
+     * place the plan would have to edit and cannot prove it should — a refusal, not an
+     * omission.
      */
     fun isPropertyHidingShorthand(node: Node): Boolean {
         val parent = parentOf(node) ?: return false

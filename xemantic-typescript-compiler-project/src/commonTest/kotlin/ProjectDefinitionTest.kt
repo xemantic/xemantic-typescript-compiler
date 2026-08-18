@@ -316,13 +316,29 @@ class ProjectDefinitionTest {
         assert(project.definitionsAt(mainFile, at).isEmpty())
     }
 
+    /**
+     * (API.10) REPLACES round 913's `a caret on an object-literal KEY being declared
+     * answers empty`. The third mechanism it named — the literal's CONTEXTUAL type —
+     * now exists, so the two halves of the shape answer differently and both were read
+     * out of tsc 7.0.2: a key with no contextual type is its own declaration and
+     * navigates to ITSELF, while a key that a contextual type supplies navigates to
+     * THAT type's member.
+     *
+     * The discriminator is the unrelated top-level `member`: an answer derived from the
+     * scope chain would name it, and neither of these does.
+     */
     @Test
-    fun `a caret on an object-literal KEY being declared answers empty`() {
+    fun `an object-literal KEY answers its own declaration, or the CONTEXTUAL member`() {
         val project = projectWith()
-        // `{ member: 1 }`'s own `member` is a declaration, not a reference, and the
-        // answer a host would want is the CONTEXTUAL type's property — a third
-        // mechanism this round did not build. Refused rather than guessed.
-        assert(project.definitionsAt(mainFile, offsetOf("member: 1")).isEmpty())
+        val free = project.definitionsAt(mainFile, offsetOf("member: 1"))
+        assert(free.map { it.fileName to it.start } == listOf(mainFile to offsetOf("member: 1")))
+        // `merged` is annotated `Merged`, an interface declared TWICE — so the answer is
+        // the `a` of the declaration that carries it, and not the other one.
+        val contextual = project.definitionsAt(mainFile, offsetOf("= { a:") + 4)
+        assert(
+            contextual.map { it.fileName to it.start } ==
+                listOf(mainFile to offsetOf("Merged { a: string; }") + "Merged { ".length),
+        )
     }
 
     @Test

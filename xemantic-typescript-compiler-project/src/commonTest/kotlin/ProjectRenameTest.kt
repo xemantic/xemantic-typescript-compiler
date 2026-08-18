@@ -83,7 +83,9 @@ class ProjectRenameTest {
      * - `Contract.shared` has an IMPLEMENTOR and `bracket.bracketed` an ELEMENT ACCESS —
      *   two of round 925's three member obstacles, both CLOSED by (API.9) and both now
      *   pinned as the resulting text rather than as a refusal — while `Ctx.ctxKey` has a
-     *   CONTEXTUAL SHORTHAND, which is the one still refused;
+     *   CONTEXTUAL SHORTHAND, which (API.10) closed — leaving `Unplaceable.unplaceable`,
+     *   whose shorthand sits in a literal NOTHING contextually types, as the residue that
+     *   is still refused;
      * - `localAlias` crosses an `as`, and `"abc".length` lands in a library.
      */
     private val main = """
@@ -117,12 +119,18 @@ class ProjectRenameTest {
         const ctxKey = "v";
         const ctxObject: Ctx = { ctxKey };
         const readCtx = ctxObject.ctxKey;
+        interface Unplaceable { unplaceable: string; }
+        const unplaceable = "u";
+        const looseObject = { unplaceable };
+        declare const looseHost: Unplaceable;
+        const readUnplaceable = looseHost.unplaceable;
         export const useImported = imported;
         export const useAlias = localAlias;
         const libLength = "abc".length;
         export { topFunction };
         console.log(objectShorthand, readBoxed, host, readWidth, readSolitary, readShared);
         console.log(readDot, readBracket, readCtx, useImported, useAlias, libLength, Implementor);
+        console.log(looseObject, readUnplaceable);
     """.trimIndent() + "\n"
 
     private val other = """
@@ -443,17 +451,57 @@ class ProjectRenameTest {
     }
 
     /**
-     * A contextually-typed `{ ctxKey }` supplies a property whose identity comes from
-     * the object literal's CONTEXTUAL type — the third resolution mechanism this API
-     * does not have. Refused.
+     * (API.10) REPLACES round 925's `a member also supplied by a contextual shorthand is
+     * refused`. The contextual type now resolves, so the shorthand is an ORDINARY member
+     * of the group — and the assertion is the RESULTING TEXT, because the token means two
+     * things and both expansions compile.
+     *
+     * THE DISCRIMINATOR: renaming the MEMBER must write `{ renamedCtxKey: ctxKey }` and
+     * renaming the LOCAL must write `{ ctxKey: renamedLocal }`. An implementation that
+     * files one answer per span writes the same text for both and passes every
+     * count-based assertion. The local `ctxKey` must also be LEFT ALONE here.
      */
     @Test
-    fun `a member also supplied by a contextual shorthand is refused`() {
+    fun `renaming a member expands a contextual shorthand the other way round`() {
         val project = projectWith()
         val plan = project.renameAt(mainFile, offsetOf("ctxKey: string"), "renamedCtxKey")
+        assert(plan.refusal == null)
+        val text = applied(plan, mainFile, main)
+        assert("const ctxObject: Ctx = { renamedCtxKey: ctxKey };" in text)
+        assert("interface Ctx { renamedCtxKey: string; }" in text)
+        assert("const readCtx = ctxObject.renamedCtxKey;" in text)
+        assert("""const ctxKey = "v";""" in text)
+    }
+
+    /**
+     * (API.10) …and the same span reached from the LOCAL, which is the other half of the
+     * discriminator. tsc 7.0.2 answers the local's group alone for a caret ON the token
+     * (two spans), so the member's own declaration must NOT move.
+     */
+    @Test
+    fun `renaming the local behind a contextual shorthand expands it the usual way`() {
+        val project = projectWith()
+        val plan = project.renameAt(mainFile, offsetOf("{ ctxKey }") + 2, "renamedLocal")
+        assert(plan.refusal == null)
+        val text = applied(plan, mainFile, main)
+        assert("const ctxObject: Ctx = { ctxKey: renamedLocal };" in text)
+        assert("interface Ctx { ctxKey: string; }" in text)
+        assert("""const renamedLocal = "v";""" in text)
+    }
+
+    /**
+     * (API.10) THE SURVIVING SHORTHAND REFUSAL. A shorthand is an occurrence when its
+     * member can be PLACED; one in a literal that NOTHING contextually types cannot be,
+     * so it keeps `CONTEXTUAL_SHORTHAND` — which is a different report to a user than an
+     * identifier that would not resolve, exactly as `ELEMENT_ACCESS` is.
+     */
+    @Test
+    fun `a shorthand whose member cannot be placed still refuses the rename`() {
+        val project = projectWith()
+        val plan = project.renameAt(mainFile, offsetOf("unplaceable: string"), "renamedUnplaceable")
         assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
         assert(plan.conflicts.single().kind == RenameConflictKind.CONTEXTUAL_SHORTHAND)
-        assert(plan.conflicts.single().start == offsetOf("{ ctxKey }") + 2)
+        assert(plan.conflicts.single().start == offsetOf("{ unplaceable }") + 2)
     }
 
     /**
@@ -560,10 +608,11 @@ class ProjectRenameTest {
     @Test
     fun `a refusal carries no edits and a plan carries no refusal`() {
         val project = projectWith()
-        // (API.9) A CONTEXTUAL SHORTHAND, which is the member obstacle this round did
-        // NOT close — the implementor and the element access that used to stand here
-        // both produce plans now.
-        val refused = project.renameAt(mainFile, offsetOf("ctxKey: string"), "renamedCtxKey")
+        // (API.10) A shorthand whose member cannot be PLACED — `loose` is an `any`, so
+        // nothing supplies the literal a contextual type. The contextual shorthand that
+        // used to stand here produces a plan now, as the implementor and the element
+        // access did one round earlier.
+        val refused = project.renameAt(mainFile, offsetOf("unplaceable: string"), "renamedUnplaceable")
         assert(refused.refusal != null && refused.files.isEmpty() && !refused.isApplicable)
         val planned = project.renameAt(mainFile, offsetOf("local = 1"), "renamedLocal")
         assert(planned.refusal == null && planned.conflicts.isEmpty() && planned.isApplicable)

@@ -133,16 +133,24 @@ data class CapturedDeclaration(
  * through the same collection as `o.p`, and the string literal is the one query
  * span in this API that is not an [Identifier].
  *
+ * (API.10) An object-literal KEY (`{ p: v }`) and a SHORTHAND (`{ p }`,
+ * `const { p } = o`) name a member through a third channel again: the object
+ * literal's CONTEXTUAL type, computed by walking OUT from the literal to whatever
+ * supplies it — an annotation, a call's parameter, a `satisfies`, the enclosing
+ * literal's own key. That walk is the dual of the binding pattern's above, and it is
+ * SYNTACTIC on purpose: the checker's own contextual type is walk-scoped state a
+ * capture cannot read at an arbitrary node, and is absent outright in positions
+ * (a ternary branch) where tsc answers.
+ *
  * ## What answers NOTHING, and why each is a refusal rather than a gap
  *
- * A PropertyAssignment name (`{ p: v }`) — the answer would be the CONTEXTUAL
- * type's property, which is not a function of any receiver and is not in hand at an
- * arbitrary node. A member DECLARATION's own name (`interface I { p: string }`) —
- * it already IS the declaration, and [related] rather than [locations] is where a
- * class member's relation to the base it implements is recorded. A chained
- * namespace segment (`A.B.x`) — the middle segment would have to be resolved the
- * same way, for a case one caret to the left already answers. A LABEL — not a
- * symbol at all.
+ * A member DECLARATION's own name (`interface I { p: string }`) — it already IS the
+ * declaration, and [related] rather than [locations] is where a class member's
+ * relation to the base it implements is recorded. A COMPUTED key (`{ ["p"]: v }`) —
+ * its literal is outside the swept population, and admitting it without resolving it
+ * would turn every such key into a rename obstacle. A chained namespace segment
+ * (`A.B.x`) — the middle segment would have to be resolved the same way, for a case
+ * one caret to the left already answers. A LABEL — not a symbol at all.
  *
  * @property name the resolved symbol's name — the spelling that was looked up,
  *   which after an import hop may differ from the identifier at the query span.
@@ -153,16 +161,38 @@ data class CapturedDeclaration(
  *   receiver contributes one per constituent that declares the member, in
  *   constituent order. EMPTY never happens — a symbol with no declarations is not
  *   recorded at all.
- * @property related (API.9) declarations this occurrence is tied to by a DECLARED
- *   HERITAGE EDGE and is not a navigation target for — the `p` of
- *   `class Impl implements Shape` is related to `Shape`'s `p`, transitively through
- *   the whole `extends`/`implements` closure. It is a SEPARATE field rather than
- *   more [locations] because the two questions have different answers and both were
- *   measured against tsc 7.0.2: go-to-definition on an implementor's member answers
- *   THAT MEMBER, while find-references on it answers the base's whole group. Empty
- *   for everything else, and in particular for a class whose shape merely happens to
- *   match — a structurally compatible member with no heritage clause is a different
- *   symbol to tsc too, which is what makes this an edge rather than a similarity.
+ * @property related declarations this occurrence is TIED to and is not a navigation
+ *   target for. Two ties put a declaration here, and both were measured against tsc
+ *   7.0.2 rather than reasoned about.
+ *
+ *   (API.9) A DECLARED HERITAGE EDGE — the `p` of `class Impl implements Shape` is
+ *   related to `Shape`'s `p`, transitively through the whole `extends`/`implements`
+ *   closure. It is a SEPARATE field rather than more [locations] because the two
+ *   questions have different answers: go-to-definition on an implementor's member
+ *   answers THAT MEMBER, while find-references on it answers the base's whole group.
+ *   In particular NOT a class whose shape merely happens to match — a structurally
+ *   compatible member with no heritage clause is a different symbol to tsc too,
+ *   which is what makes this an edge rather than a similarity.
+ *
+ *   (API.10) An object-literal key's OWN property, when [locations] names the
+ *   CONTEXTUAL type's member instead. `{ p: v } satisfies Shape` is an occurrence of
+ *   `Shape.p` AND the declaration of the literal's own `p`, and tsc's group for a
+ *   caret there is the union of both symbols' groups (measured: twenty-one spans,
+ *   including the `sat.p` that reads the literal's own property). Navigation
+ *   answers the contextual member alone, which is why the own property is here.
+ * @property shorthand (API.10) the MEMBER a SHORTHAND's single token ALSO names —
+ *   the `p` of `{ p }` under a contextual type, and the `p` of `const { p } = o`.
+ *
+ *   This is the one field whose relation is ASYMMETRIC, and the asymmetry is tsc's,
+ *   measured on both shorthands: a caret ON the token answers the LOCAL's group and
+ *   nothing else (two spans), while the MEMBER's group CONTAINS the token. So these
+ *   declarations FIND this occurrence without IDENTIFYING it — a consumer must use
+ *   them for membership and for navigation, and must NOT put them in the seed a
+ *   caret here names. [related], whose relation is symmetric, cannot express that.
+ *
+ *   A rename reaching the token through this field has to EXPAND it in the opposite
+ *   direction from one reaching it through [locations]: `{ newName: p }` where the
+ *   member is renamed, `{ p: newName }` where the local is.
  */
 data class CapturedDefinition(
     val fileName: String,
@@ -171,6 +201,7 @@ data class CapturedDefinition(
     val name: String,
     val locations: List<CapturedDeclaration>,
     val related: List<CapturedDeclaration> = emptyList(),
+    val shorthand: List<CapturedDeclaration> = emptyList(),
 )
 
 /**

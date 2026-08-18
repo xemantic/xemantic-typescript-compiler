@@ -6297,6 +6297,10 @@ class Checker(
         // to a base's declaration by a heritage edge. Kept out of the symbol path below
         // because that path has no way to express "related but not a target".
         if (id is Identifier) typeCaptureMemberDeclarationAt(id, fileName)?.let { return it }
+        // (API.10) An object-literal KEY is neither of the two either: its member comes
+        // from the literal's CONTEXTUAL type, and its own property is a declaration in
+        // its own right. Both, in the two fields whose roles differ.
+        if (id is Identifier) typeCaptureObjectLiteralKeyAt(id, fileName)?.let { return it }
         val symbols =
             if (id is Identifier && typeCaptureIsFreeName(id)) {
                 val resolved =
@@ -6324,9 +6328,290 @@ class Checker(
         // is in the group two `extends` levels down as well), and it can only get there
         // by carrying the edge itself.
         val related = typeCaptureRootDeclarations(symbols, locations)
+        // (API.10) …and the MEMBER a SHORTHAND's one token also names. Computed here
+        // rather than in a leg of its own because a shorthand IS a free name — the
+        // local is what the caret means — and this is the second thing the same token
+        // says.
+        val shorthand =
+            if (id is Identifier) typeCaptureShorthandMember(id, locations) else emptyList()
         return CapturedDefinition(
-            fileName, id.pos, id.end, symbols[0].name, locations.toList(), related,
+            fileName, id.pos, id.end, symbols[0].name, locations.toList(), related, shorthand,
         )
+    }
+
+    /**
+     * (API.10) The definition answer for an object-literal KEY, `{ p: v }`, or null
+     * when [id] is not one.
+     *
+     * ## Two symbols, two fields, because tsc gives them different roles
+     *
+     * The key DECLARES the literal's own property and REFERS to the contextual type's
+     * member, and tsc 7.0.2 answers with both in different ways: go-to-definition
+     * names the contextual member alone, while find-references from the key answers
+     * the UNION of the two symbols' groups (measured — twenty-one spans on a fixture
+     * whose contextual group is twenty, the extra one being an `o.p` that reads the
+     * literal's OWN property). So [CapturedDefinition.locations] carries the
+     * contextual member and [CapturedDefinition.related] the own property, which is
+     * exactly the split `related` already means: tied, but not a navigation target.
+     *
+     * With NO contextual type the key is only a declaration, and then the own property
+     * IS the answer — which is also what tsc navigates to. That branch is not a
+     * nicety: without it every object-literal key in the program resolves to nothing,
+     * and an unresolved identifier spelling the name is what refuses a member rename.
+     */
+    private fun typeCaptureObjectLiteralKeyAt(
+        id: Identifier,
+        fileName: String,
+    ): CapturedDefinition? {
+        val assignment = (id as NodeBase).parent as? PropertyAssignment ?: return null
+        if (assignment.name !== id) return null
+        val own = typeCaptureDeclarationLocation(assignment) ?: return null
+        val literal = (assignment as NodeBase).parent as? ObjectLiteralExpression
+        val members =
+            if (literal == null) emptyList() else typeCaptureContextualMembers(literal, id.text)
+        val locations = LinkedHashSet<CapturedDeclaration>()
+        for (symbol in members) {
+            for (declaration in symbol.declarations) {
+                typeCaptureDeclarationLocation(declaration)?.let { locations.add(it) }
+            }
+        }
+        locations.remove(own)
+        if (locations.isEmpty()) {
+            return CapturedDefinition(fileName, id.pos, id.end, id.text, listOf(own))
+        }
+        return CapturedDefinition(
+            fileName, id.pos, id.end, id.text, locations.toList(), listOf(own),
+        )
+    }
+
+    /**
+     * (API.10) The MEMBER declarations a SHORTHAND's single token also names, excluding
+     * anything already in [own] — empty for everything that is not a shorthand.
+     *
+     * Two shapes, one rule. An object literal's `{ p }` names the CONTEXTUAL type's
+     * `p`; a binding pattern's `const { p } = o` names the DESTRUCTURED type's `p`.
+     * Both were measured on tsc 7.0.2 and behave identically in both directions: the
+     * member's group contains the token, a caret on the token answers the local's
+     * group alone, and a rename expands the token in whichever direction it was
+     * reached from.
+     *
+     * Empty rather than a guess wherever the source type cannot be decided — a literal
+     * with no contextual type, an un-annotated destructured parameter — which leaves
+     * the occurrence exactly what it was before this existed: a plain local reference.
+     */
+    private fun typeCaptureShorthandMember(
+        id: Identifier,
+        own: Set<CapturedDeclaration>,
+    ): List<CapturedDeclaration> {
+        val parent = (id as NodeBase).parent ?: return emptyList()
+        val source: Type = when {
+            parent is ShorthandPropertyAssignment && parent.name === id -> {
+                val literal = (parent as NodeBase).parent as? ObjectLiteralExpression
+                    ?: return emptyList()
+                typeCaptureContextualType(literal, 0) ?: return emptyList()
+            }
+            parent is BindingElement && parent.propertyName == null && parent.name === id ->
+                typeCaptureDestructured(parent, 0) ?: return emptyList()
+            else -> return emptyList()
+        }
+        val symbols = ArrayList<Symbol>(2)
+        typeCaptureCollectMembers(source, id.text, symbols, 0)
+        if (symbols.isEmpty()) return emptyList()
+        val out = LinkedHashSet<CapturedDeclaration>()
+        for (symbol in symbols) {
+            for (declaration in symbol.declarations) {
+                typeCaptureDeclarationLocation(declaration)?.let { if (it !in own) out.add(it) }
+            }
+        }
+        return out.toList()
+    }
+
+    /**
+     * (API.10) Every symbol the CONTEXTUAL type of [literal] calls [name].
+     */
+    private fun typeCaptureContextualMembers(
+        literal: ObjectLiteralExpression,
+        name: String,
+    ): List<Symbol> {
+        val contextual = typeCaptureContextualType(literal, 0) ?: return emptyList()
+        val symbols = ArrayList<Symbol>(2)
+        typeCaptureCollectMembers(contextual, name, symbols, 0)
+        return symbols
+    }
+
+    /**
+     * (API.10) The type that CONTEXTUALLY types [node], computed by walking OUT of it,
+     * or null when nothing here supplies one.
+     *
+     * ## Why this is written here rather than read off the checker
+     *
+     * The checker's own `contextualType` is walk-scoped ambient: it is installed and
+     * restored around the expression that needs it, so at an arbitrary captured node it
+     * holds whatever the covering statement anchor left there — and in a ternary branch
+     * it is null outright, where tsc answers. `cpaCtxAt` pull-derives it over the same
+     * legacy edges and stops at every statement edge, so it cannot see an annotation.
+     * This walk is SYNTACTIC and reads only type NODES and resolved signatures, so it
+     * is a function of the position and of nothing the walk happens to be doing — the
+     * same property that makes [typeCaptureDestructured] sound, of which this is the
+     * exact dual (that one walks out of a binding pattern to find what is destructured;
+     * this walks out of a literal to find what receives it).
+     *
+     * ## The positions, every one of them measured against tsc 7.0.2
+     *
+     * A variable declaration's, a parameter's and a class property's ANNOTATION; a
+     * `return` statement (the enclosing function's return annotation); an arrow's
+     * EXPRESSION body (the arrow's own contextual type's single call signature's
+     * return); an `as` / `satisfies` / `<T>` assertion's type; an enclosing literal's
+     * key; an array literal's element; a call's or a `new`'s ARGUMENT, through the
+     * callee's signatures, instantiated by the call's EXPLICIT type arguments where it
+     * has them. Parentheses and a ternary's branches pass through.
+     *
+     * A GENERIC call with INFERRED type arguments deliberately answers the naked type
+     * parameter and therefore nothing — which is tsc's answer too: `takesGeneric({ p })`
+     * assigned to `Shape` does NOT put the key in `Shape.p`'s group.
+     *
+     * Null rather than a guess everywhere else, so every unhandled position degrades to
+     * the behaviour that existed before this did.
+     */
+    private fun typeCaptureContextualType(node: Expression, depth: Int): Type? {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return null
+        val type = when (val parent = (node as NodeBase).parent) {
+            is ParenthesizedExpression -> typeCaptureContextualType(parent, depth + 1)
+            is ConditionalExpression ->
+                if (parent.whenTrue === node || parent.whenFalse === node) {
+                    typeCaptureContextualType(parent, depth + 1)
+                } else {
+                    null
+                }
+            is AsExpression ->
+                if (parent.expression === node) getTypeFromTypeNode(parent.type) else null
+            is SatisfiesExpression ->
+                if (parent.expression === node) getTypeFromTypeNode(parent.type) else null
+            is TypeAssertionExpression ->
+                if (parent.expression === node) getTypeFromTypeNode(parent.type) else null
+            is VariableDeclaration ->
+                if (parent.initializer === node) parent.type?.let { getTypeFromTypeNode(it) } else null
+            is Parameter ->
+                if (parent.initializer === node) parent.type?.let { getTypeFromTypeNode(it) } else null
+            is PropertyDeclaration ->
+                if (parent.initializer === node) parent.type?.let { getTypeFromTypeNode(it) } else null
+            is ReturnStatement ->
+                if (parent.expression === node) typeCaptureReturnAnnotation(parent) else null
+            is ArrowFunction ->
+                if (parent.body === node) typeCaptureExpressionBodyContext(parent, depth) else null
+            is PropertyAssignment -> {
+                if (parent.initializer !== node) {
+                    null
+                } else {
+                    val literal = (parent as NodeBase).parent as? ObjectLiteralExpression
+                    val key = (parent.name as? Identifier)?.text
+                        ?: (parent.name as? StringLiteralNode)?.text
+                    if (literal == null || key == null) {
+                        null
+                    } else {
+                        typeCaptureContextualMembers(literal, key)
+                            .firstOrNull()?.let { getTypeOfSymbol(it) }
+                    }
+                }
+            }
+            is ArrayLiteralExpression ->
+                if (parent.elements.any { it === node }) {
+                    (typeCaptureContextualType(parent, depth + 1) as? Type.Reference)
+                        ?.takeIf { isArrayLikeReference(it) }
+                        ?.resolvedTypeArguments?.firstOrNull()
+                } else {
+                    null
+                }
+            is CallExpression ->
+                typeCaptureArgumentContext(
+                    parent.arguments.indexOfFirst { it === node },
+                    typeCaptureCallSignaturesOf(parent.expression),
+                    parent.typeArguments,
+                )
+            is NewExpression ->
+                typeCaptureArgumentContext(
+                    parent.arguments?.indexOfFirst { it === node } ?: -1,
+                    typeCaptureConstructSignaturesOf(parent),
+                    parent.typeArguments,
+                )
+            else -> null
+        }
+        return if (type === anyType || type === errorType) null else type
+    }
+
+    /** (API.10) The return-type annotation of the function-like [statement] returns from. */
+    private fun typeCaptureReturnAnnotation(statement: ReturnStatement): Type? {
+        var current: Node? = (statement as NodeBase).parent
+        while (current != null) {
+            val annotation = when (current) {
+                is FunctionDeclaration -> current.type
+                is FunctionExpression -> current.type
+                is ArrowFunction -> current.type
+                is MethodDeclaration -> current.type
+                is GetAccessor -> current.type
+                is Constructor -> return null
+                else -> null
+            }
+            if (annotation != null) return getTypeFromTypeNode(annotation)
+            if (current is FunctionDeclaration || current is FunctionExpression ||
+                current is ArrowFunction || current is MethodDeclaration ||
+                current is GetAccessor || current is SetAccessor
+            ) {
+                return null
+            }
+            current = (current as NodeBase).parent
+        }
+        return null
+    }
+
+    /** (API.10) The contextual type of an arrow's EXPRESSION body — the arrow's own
+     *  contextual type's single call signature's return type. */
+    private fun typeCaptureExpressionBodyContext(arrow: ArrowFunction, depth: Int): Type? {
+        arrow.type?.let { return getTypeFromTypeNode(it) }
+        val outer = typeCaptureContextualType(arrow, depth + 1) as? Type.Object ?: return null
+        resolveStructuredTypeMembers(outer)
+        val signatures = outer.callSignatures ?: return null
+        if (signatures.size != 1) return null
+        return signatures[0].resolvedReturnType
+    }
+
+    /**
+     * (API.10) The type of parameter [index] across [signatures], as one contextual
+     * type — or null when there is no such parameter.
+     *
+     * Every signature contributes, because an overloaded callee has no ONE answer here
+     * and the alternative is to pick arbitrarily: a union of the candidates is the same
+     * coarseness a union RECEIVER already gets, and it is coarse in the direction that
+     * offers more declarations rather than the wrong one.
+     */
+    private fun typeCaptureArgumentContext(
+        index: Int,
+        signatures: List<Signature>,
+        typeArguments: List<TypeNode>?,
+    ): Type? {
+        if (index < 0 || signatures.isEmpty()) return null
+        val types = ArrayList<Type>(2)
+        for (signature in signatures) {
+            val parameters = signature.typeParameters
+            val instantiated =
+                if (!typeArguments.isNullOrEmpty() && !parameters.isNullOrEmpty()) {
+                    instantiateSignature(
+                        signature,
+                        createTypeMapper(parameters, typeArguments.map { getTypeFromTypeNode(it) }),
+                    )
+                } else {
+                    signature
+                }
+            val parameter = instantiated.parameters.getOrNull(index) ?: continue
+            val type = getTypeOfSymbol(parameter)
+            if (type === anyType || type === errorType) continue
+            if (types.none { it === type }) types.add(type)
+        }
+        return when (types.size) {
+            0 -> null
+            1 -> types[0]
+            else -> getUnionType(types)
+        }
     }
 
     /**

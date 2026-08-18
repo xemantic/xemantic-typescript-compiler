@@ -20,6 +20,115 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 927 (2026-08-18) — (API.10): ONE SPAN, TWO SYMBOLS. THE LAST OF ROUND 922'S FIVE
+REFUSALS IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CAPTURE FILING ONE ANSWER PER SPAN
+WAS NEVER THE OBSTACLE** — tsc's own relation between a shorthand's two symbols is
+ASYMMETRIC, so what was missing was a ROLE, not a second answer.**
+
+- **STEP 1 WAS tsc ITSELF AND IT DECIDED THE WHOLE DESIGN.** `scripts/lsp_rename.py` +
+  `lsp_member_refs.py` over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, 32 carets in two files,
+  references / rename / definition / hover at each. (A one-line fix to `lsp_rename.py`: its
+  `main()` was unguarded, so IMPORTING it — which `lsp_member_refs.py` does — ran the rename
+  driver instead.) What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 |
+|---|---|
+| `{ p: v }` in a call ARGUMENT / an ANNOTATION / a `return` / a NESTED key / an ARRAY element / `satisfies` / `as` / a TERNARY branch / a parameter DEFAULT / a class-PROPERTY initializer / an arrow's EXPRESSION body | **all eleven** in the member's group |
+| the same key, caret ON it | the UNION of TWO groups — the contextual member's AND the literal's OWN property's, so an `o.p` reading the literal is in the answer while the member's own group does NOT contain it |
+| `{ p: v }` with NO contextual type | the literal's own property alone; go-to-definition answers the KEY ITSELF |
+| `takesGeneric<Shape>({ p })` vs `takesGeneric({ p })` assigned to `Shape` | **in** the group / **NOT** in it — the inferred parameter is a naked `T` and names no member |
+| `{ ["p"]: v }` | in the group, quotes excluded from the edit; `{ [K]: v }` is the const `K` |
+| `{ p }` and `const { p } = o` | **ONE span, TWO symbols, and the relation is NOT symmetric**: the MEMBER's group CONTAINS the token, a caret ON the token answers the LOCAL's group and nothing else (2 spans) |
+| renaming each side of a shorthand | `{ renamed: p }` from the member, `{ p: renamed }` from the local — both compile |
+| definition on a shorthand | **TWO locations** for an object literal's (local, member); the member alone for a binding pattern's |
+
+- **THE MECHANISM: THREE DECLARATION SETS, EACH READ BY A DIFFERENT QUESTION.** A capture
+  still files ONE `CapturedDefinition` per span; what it gained is a third field, and the
+  three now differ in exactly which of NAVIGATION / SEED / MEMBERSHIP they carry.
+  `locations` is all three — what the caret MEANS. `related` (round 926's heritage edge) is
+  SEED + MEMBERSHIP, and (API.10) puts a second tie there: an object-literal key's OWN
+  property, which is what makes a caret on `{ p: v } satisfies Shape` answer both groups and
+  a caret on `sat.p` answer only the literal's. The new `shorthand` is NAVIGATION +
+  MEMBERSHIP and deliberately **not** SEED — that is the asymmetry, and it is why the local's
+  group and the member's never merge through the span they share. Round 926 called this
+  boundary structural; measured, it is a missing role.
+- **THE CONTEXTUAL TYPE IS COMPUTED BY WALKING *OUT*, SYNTACTICALLY — the exact dual of
+  round 926's `typeCaptureDestructured`, and it had to be written rather than read off the
+  checker.** `Checker.contextualType` is walk-scoped ambient a capture cannot trust at an
+  arbitrary node, and `cpaCtxAt` pull-derives it over the LEGACY ctx edges and STOPS at every
+  statement edge, so it cannot see an annotation at all; CLAUDE.md's own note that `ctxObj` is
+  null in a ternary branch is the same gap from the other side — and tsc answers there.
+  `typeCaptureContextualType` reads type NODES and resolved SIGNATURES only, so it is a
+  function of the position; a call's argument instantiates the callee's signature with the
+  call's EXPLICIT type arguments, which is why the explicit/inferred generic split falls out
+  rather than being encoded.
+- **THE FREE KEY BRANCH IS NOT A NICETY.** A key with no contextual type resolves to its OWN
+  declaration, and without that every object-literal key in the program resolves to nothing —
+  which is an unresolved identifier spelling the member's name, i.e. round 925's completeness
+  net refusing the very member rename this round set out to enable. Arm A9 measures it.
+- **PINS +19** (`-project` 445 -> 464, core UNCHANGED at 14,341; suite **14,920 -> 14,939 /
+  0 failures / 3 skipped**). 17 are the new `ProjectContextualKeyTest`. **THREE EXISTING PINS
+  CHANGED MEANING** and each says so in place: `ProjectDefinitionTest`'s "an object-literal
+  KEY being declared answers empty" (round 913) is now "answers its own declaration, or the
+  CONTEXTUAL member", and `ProjectRenameTest`'s "a member also supplied by a contextual
+  shorthand is refused" (round 925) became TWO pins asserting the RESULTING TEXT of both
+  expansions.
+- **TEN-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is
+  asserted, restored from a sha256-verified snapshot. `scripts/round927-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 shorthand-not-grouped | `shorthand` is not a MEMBERSHIP term | **7** | the whole asymmetric half — the member's group loses both tokens |
+| A2 shorthand-in-seed | `shorthand` joins the SEED, i.e. `related`'s role | 4 | why it is a THIRD field: a caret on the token merges the two groups |
+| A3 no-expansion-direction | a shorthand always expands the local's way | 3 | THE DISCRIMINATOR — `{ p: renamed }` written where `{ renamed: p }` is meant |
+| A4 no-contextual-key-leg | an object-literal key resolves to nothing again | **10** | the pre-(API.10) boundary, in every query |
+| A5 key-own-property-not-related | a contextual key drops the literal's OWN property | 1 | the symmetric half — `sat.p` and the key stop being one thing |
+| A6 no-ternary-passthrough | the out-walk does not cross a ternary's branches | 1 | the position the checker's own contextual type is missing outright |
+| A7 no-explicit-instantiation | a call's EXPLICIT type arguments stop instantiating | 2 | the generic split is computed, not encoded |
+| A8 verify-by-locations | the verification asks a shorthand's OTHER answer by the wrong key | 3 | (see below — same set as A3) |
+| A9 free-key-answers-nothing | a key with no contextual type resolves to nothing | 4 | the completeness net's own refusal, re-armed |
+| A10 shorthand-not-a-definition-target | go-to-definition drops the shorthand's member | 1 | the one place both meanings are handed over side by side |
+
+**Nine distinct sets, and the tenth is the round's process finding: A3 and A8 redden EXACTLY
+the same three tests, and neither is redundant.** They are two guards on the SAME property —
+which way a shorthand expands — at two different layers, and round 925's verification is why
+no input separates them: a wrong expansion is caught by the applied-and-recompiled check, so
+BOTH mistakes turn a working member rename into a REFUSAL rather than into wrong text. They
+differ only in the conflict's DETAIL ("the applied edit did not produce 'X' here" vs "after
+the rename this names a different declaration set"), which no pin can assert because a pin
+cannot make a claim about an ablated binary. **The general law: when a later layer refuses
+exactly what an earlier layer would get wrong, the two are indistinguishable to any
+ablation — record them as one observable and say which layer does what, rather than calling
+either redundant (round 807's rule needs this qualifier).**
+
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and a real gate here
+  rather than a control, because this round adds core code on the capture path.
+  `huge_methods.py --fail-over 0` clean on core (750 classes, 16,009 methods, 0 over) and on
+  `-project` explicitly (48 classes, 458 methods, 0 over). `spine_closure_audit.py` not
+  applicable — no `spine*EnterNode` changed; the round-920 token gate not applicable —
+  `SourceIndex` and the parser are untouched, which is also why the swept population did not
+  move. Warning-clean.
+- **WHAT IS STILL REFUSED, and it is now a SHORTER list than the mechanism.** (1) **A second
+  declaration of the same member name** — `interface Other { p }` beside `interface Shape { p }`
+  refuses a rename of `Shape.p`, because a member's DECLARATION name is bound by no scope and
+  has no receiver, so it resolves to nothing and the completeness net cannot rule it out. This
+  is pre-existing (API.8/9) and is the reason this round's rename pins run on a second, smaller
+  file pair. (2) A **shorthand whose member cannot be PLACED** — a literal nothing contextually
+  types, an un-annotated destructured parameter — which keeps `CONTEXTUAL_SHORTHAND` as its
+  conflict kind. (3) A **computed key** `{ ["p"]: v }`, which is a silent gap rather than a
+  refusal: its literal is outside the swept population, and putting it there without resolving
+  it would make every such key an obstacle.
+- **SUCCESSOR, ranked.** (1) **A member declaration name should resolve to its own SYMBOL** —
+  it is now the single largest thing refusing a member rename, one function
+  (`typeCaptureMemberDeclarationAt`) and one measured hazard: resolving it to *itself* is NOT
+  enough, because the net's real quarry is a MERGED declaration the group missed, and only the
+  symbol's whole declaration list puts that back in the group. (2) **completion inside `o["`** —
+  an ANCHOR question, not a resolution one. (3) **the incremental / re-entrant seam** — every
+  query here is still a full rebuild and a rename is two; it is the right end state and the
+  wrong next step, because it is the architecture inversion rather than an API item. **I would
+  take (1)**: it is small, it is measured, and it is what stands between a member rename and
+  "it always works".
+
 **Round 926 (2026-08-18) — (API.9): THE MEMBER OCCURRENCE SET. ROUND 925 MEASURED IT SHORT BY
 THREE KINDS AND REFUSED A MEMBER RENAME BECAUSE OF THEM; **ALL THREE ARE CLOSED**, AND THE
 ROUND'S PRODUCT IS THAT THE THIRD ONE'S SHAPE WAS DECIDED BY tsc RATHER THAN BY REASONING —
@@ -1791,6 +1900,29 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   were updated in place: member completions no longer include inaccessible members, and a free-name
   list now carries keyword items (`kind = "Keyword"`). **+45 pins** (32 parse-only), **fourteen-arm
   ablation, all fourteen a DISTINCT set**, all gates green. `docs/language-service.md` §§ 10a, 10b.
+
+- [x] **(API.10) ONE SPAN, TWO SYMBOLS — LANDED, round 927; the LAST of round 922's five
+  refusals.** A contextually typed object-literal KEY (`{ p: v }`) and both SHORTHANDS
+  (`{ p }`, `const { p } = o`) are occurrences of the member the literal's CONTEXTUAL
+  type supplies. **The capture still files ONE answer per span** — round 926 read that
+  as the structural obstacle and it is not: tsc's relation between a shorthand's two
+  symbols is ASYMMETRIC (the member's group CONTAINS the token; a caret ON the token
+  answers the LOCAL's group alone), so what was missing was a ROLE.
+  `CapturedDefinition` now carries three declaration sets differing in which of
+  NAVIGATION / SEED / MEMBERSHIP they hold: `locations` all three, `related` seed +
+  membership (the heritage edge, and now an object-literal key's OWN property),
+  `shorthand` navigation + membership and deliberately NOT seed. The contextual type is
+  computed by a SYNTACTIC walk OUT of the literal (`Checker.typeCaptureContextualType`,
+  the dual of round 926's `typeCaptureDestructured`) covering eleven positions read out
+  of tsc 7.0.2, because the checker's own contextual type is walk-scoped and `cpaCtxAt`
+  stops at every statement edge. `renameAt` expands a shorthand in whichever direction
+  it was reached from — `{ renamed: p }` vs `{ p: renamed }`, the round's discriminator,
+  since both compile and both are one edit. **Still refused**: a second declaration of
+  the same member name (pre-existing, and the named successor), a shorthand whose member
+  cannot be placed, and a computed key. +19 pins, ten-arm ablation (nine distinct sets;
+  A3/A8 share one because the round-925 verification refuses exactly what a wrong
+  expansion would write), `cost_gate.py` +0.00%. `docs/language-service.md` §§ 8, 9,
+  10b, 10d, 13.
 
 - [x] **(API.9) THE MEMBER OCCURRENCE SET — LANDED, round 926; TWO OF THE THREE KINDS CLOSED
   OUTRIGHT, THE THIRD CLOSED FOR A DECLARED HERITAGE EDGE AND STILL REFUSED FOR A CONTEXTUAL

@@ -174,4 +174,5 @@ def main():
     lsp.notify("exit", {})
 
 
-main()
+if __name__ == "__main__":  # importing this module must not run the driver
+    main()
