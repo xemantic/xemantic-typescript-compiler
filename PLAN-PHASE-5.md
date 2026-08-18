@@ -90,14 +90,35 @@ TWICE, AGAINST TWO DIFFERENT WRONG DESIGNS THIS ROUND HAD ALREADY WRITTEN.**
   coinciding, every map keyed by one and read by the other fails silently and in the
   conservative direction.**
 
-- **PINS +19**, `-project` 425 -> 444, core UNCHANGED at 14,341; suite **14,900 -> 14,919 / 0
-  failures / 0 errors / 3 skipped**. 17 are the new `ProjectMemberOccurrenceTest`, whose whole
+- **PINS +20**, `-project` 425 -> 445, core UNCHANGED at 14,341; suite **14,900 -> 14,920 / 0
+  failures / 0 errors / 3 skipped**. 18 are the new `ProjectMemberOccurrenceTest`, whose whole
   design is one discriminator per kind: an `o["p"]` beside two unrelated `"p"` literals, a
   `{ p: local }` beside an unrelated `local`, and a `Structural` class carrying the same member
   with no `implements`. The tsc-parity assertion is an exact SET, not a size.
 
 - **TEN-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is
   asserted, restored from a sha256-verified snapshot. `scripts/round926-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 quote-span | the edit span covers the literal's whole TOKEN | **8** | THE QUOTES — the plan writes `bracket[renamedBracketed]`, which compiles |
+| A2 no-element-population | the sweep is `identifiers()` again | 8 | the pre-(API.9) boundary; it differs from A1 by the caret-on-the-literal pin |
+| A3 no-binding-leg | a binding element's `propertyName` resolves to nothing | 5 | kind 1, including its nested / rest / parameter routes |
+| A4 related-not-grouped | `related` is not a GROUPING term | **9** | kind 3 entirely, in every query |
+| A5 declaration-only-edge | the edge rides only a member DECLARATION name | 4 | this round's second wrong design — a `this.p` inside the implementor falls out |
+| A6 one-level-edge | the heritage walk does not recurse | 1 | the `override` two edges away |
+| A7 seed-without-related | the SEED drops its heritage half | 2 | a caret ON an implementor answers only the classes below it |
+| A8 verify-by-edit-start | the verification keys its own answer by the EDIT's start | 2 | this round's own measured bug: every element-access rename reads as a change of meaning |
+| A9 no-unplaceable-net | an `o["p"]` the search cannot place stops refusing | 1 | the surviving `ELEMENT_ACCESS` conflict |
+| A10 definition-follows-edge | go-to-definition follows the heritage edge | 2 | this round's FIRST wrong design, and the divergence from tsc it would have been |
+
+**All ten reddened a DISTINCT set.** **A10 IS ALSO THIS ROUND'S PROCESS FINDING, and it is round
+902's trap verbatim**: written against the general construction site alone it read **0 red**, which
+is indistinguishable from "the guard is redundant" — because a member DECLARATION name returns
+early from `typeCaptureMemberDeclarationAt` and never reaches that line, so the injected mistake
+was NOT REACHED. Fixed by patching BOTH sites, and the round added the pin the gap exposed (a
+member USE inside an implementor also carries the edge, and its definition must still be that
+class's member).
 
 - **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and here it is a real
   gate rather than a control, because this round DOES add core code on the capture path.
@@ -1786,7 +1807,7 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   answer per span cannot express. `referencesAt`, `documentHighlightsAt` and `renameAt` improve
   together because the set is wired once; `definitionsAt` deliberately does NOT follow the
   heritage edge, because tsc's own go-to-definition on an implementor's member answers that
-  member. +19 pins, ten-arm ablation, `cost_gate.py` +0.00%, population 381,670 -> 381,672 on
+  member. +20 pins, ten-arm ablation, `cost_gate.py` +0.00%, population 381,670 -> 381,672 on
   tsc's own sources. `docs/language-service.md` §§ 9, 10b, 10d.
 
 - [x] **(API.8) RENAME — LANDED, round 925.** `RenamePlan(oldName, newName, files, refusal,

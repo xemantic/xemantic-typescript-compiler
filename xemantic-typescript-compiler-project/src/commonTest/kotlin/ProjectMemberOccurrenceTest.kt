@@ -284,6 +284,23 @@ class ProjectMemberOccurrenceTest {
     }
 
     /**
+     * …and neither does a member USE inside an implementor. `this.p` in `Impl` carries
+     * the heritage edge — that is what puts it in the interface's group — and its
+     * DEFINITION is still `Impl`'s own member alone. The two pins are separate because
+     * the edge is attached at two different places: a declaration name gets it from
+     * its own class, a use gets it from the symbol it resolved to.
+     */
+    @Test
+    fun `go to definition on a use inside an implementor answers that class's member`() {
+        val project = projectWith()
+        val definitions = project.definitionsAt(mainFile, offsetOf("return this.p", 0) + 12)
+        assert(
+            definitions.map { "${it.fileName.substringAfterLast('/')}@${it.start}" } ==
+                listOf("a.ts@${offsetOf("""p = "a"""")}"),
+        )
+    }
+
+    /**
      * …while an element access and a binding element's property name DO gain one, and
      * it is the interface's declaration — which is also what tsc answers for both.
      */

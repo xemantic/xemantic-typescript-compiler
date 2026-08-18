@@ -71,11 +71,19 @@ ARMS = {
     "A9-no-unplaceable-net": (PROJECT, [(
         "                if (key !in group && key !in resolved &&\n                    memberPosition == reachedThroughQualifier\n                ) {",
         "                if (key !in group && key !in resolved && id !is StringLiteralNode &&\n                    memberPosition == reachedThroughQualifier\n                ) {")]),
-    # Go-to-definition widens to the base as well — the divergence from tsc this
-    # round deliberately did NOT take.
-    "A10-definition-follows-edge": (CHECKER, [(
-        "            fileName, id.pos, id.end, symbols[0].name, locations.toList(), related,",
-        "            fileName, id.pos, id.end, symbols[0].name, (locations + related).toList(), related,")]),
+    # Go-to-definition widens to the base as well — the divergence from tsc this round
+    # deliberately did NOT take. BOTH construction sites, because the edge is attached at
+    # two of them: a member DECLARATION name returns early from
+    # `typeCaptureMemberDeclarationAt`, so patching only the general path leaves the
+    # implementor case untouched and the arm DEAD (round 902's trap, and this arm was
+    # written that way on its first pass — it read 0 red, which is indistinguishable from
+    # a redundant guard).
+    "A10-definition-follows-edge": (CHECKER, [
+        ("            fileName, id.pos, id.end, symbols[0].name, locations.toList(), related,",
+         "            fileName, id.pos, id.end, symbols[0].name, (locations + related).toList(), related,"),
+        ("            fileName, id.pos, id.end, id.text, listOf(own), related.toList(),",
+         "            fileName, id.pos, id.end, id.text, listOf(own) + related, related.toList(),"),
+    ]),
 }
 
 
