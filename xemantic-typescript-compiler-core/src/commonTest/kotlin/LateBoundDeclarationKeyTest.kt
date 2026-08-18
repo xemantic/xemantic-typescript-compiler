@@ -277,6 +277,59 @@ class LateBoundDeclarationKeyTest {
         assert(d.any { it.code == 2741 })
     }
 
+    // ── the SIBLING walkers whose class side reads the AST and whose target side
+    //    reads the resolved TYPE (B451's drift, one walker over) ─────────────
+
+    @Test
+    fun `a late-bound key satisfies an implements clause`() {
+        val d = check(k + "interface I { [K]: number }\nclass C implements I { [K]: number = 1; }")
+        assert(d.none { it.code == 2420 })
+        assert(d.none { it.code == 2720 })
+    }
+
+    @Test
+    fun `a numerically spelled member satisfies an implements clause`() {
+        // No computed key in sight: `checkImplementsClauses` read the class side as
+        // `(name as? Identifier)?.text` while the interface side came from the resolved
+        // type, so this was TS2420 at HEAD. Unreachable through the corpus only because
+        // the shapes that exercise it are the late-bound ones.
+        val d = check("interface I { 1: string }\nclass C implements I { 1: string = \"x\"; }")
+        assert(d.none { it.code == 2420 })
+    }
+
+    @Test
+    fun `a numerically spelled STATIC satisfies a numerically named target`() {
+        // The B175 class-value branch, whose `classMemberNamesTransitive` had the same
+        // Identifier-only reading against a target built from `tt.properties`.
+        val d = check(
+            "interface T0 { 1: string }\ndeclare class C { static 1: string; }\n" +
+                "declare let t0: T0;\nt0 = C;"
+        )
+        assert(d.none { it.code == 2741 })
+    }
+
+    @Test
+    fun `a late-bound STATIC satisfies its target`() {
+        val d = check(
+            k + "interface T0 { [K]: string }\ndeclare class C { static [K]: string; }\n" +
+                "declare let t0: T0;\nt0 = C;"
+        )
+        assert(d.none { it.code == 2741 })
+    }
+
+    @Test
+    fun `an incompatible late-bound member is reported ONCE`() {
+        // The co-emission: the dedicated walker that owned this verdict while the key was
+        // dropped now shares it with the general relation, which finds the same member
+        // incompatible. The walker retracts, so the count is one — and it is the walker's
+        // message that survives, because `'[c0]'` is what tsc prints.
+        val d = check(
+            "const c0 = \"1\";\ninterface T1 { [c0]: number }\ninterface T2 { [c0]: string }\n" +
+                "declare let t1: T1;\ndeclare let t2: T2;\nt1 = t2;"
+        )
+        assert(d.count { it.code == 2322 } == 1)
+    }
+
     // ── the cross-pass determinism pins: a member name is a function of the PROGRAM ──
 
     @Test
