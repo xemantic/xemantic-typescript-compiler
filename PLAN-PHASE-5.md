@@ -20,6 +20,116 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 919 (2026-08-18) — (API.5): FIND REFERENCES + DOCUMENT HIGHLIGHTS LAND WITH **ZERO COMPILER
+CHANGES**, AND THE ROUND'S REAL PRODUCT IS THE THING THE COST MEASUREMENT WALKED INTO: **THE TOKEN INDEX
+BEHIND EVERY POSITION-DIRECTED QUERY THIS ARC HAS SHIPPED WAS DE-SYNCHRONISED BY THE FIRST `${…}` IN A
+FILE, AND THE DAMAGE RAN TO END OF FILE** — so on real TypeScript, `nodeInfoAt` / `quickInfoAt` /
+`definitionsAt` / `completionsAt` had been answering about a huge enclosing node since round 910. It was
+invisible to every fixture because a hand-written fixture rarely carries a substituting template.**
+
+- **(BUG.2), FOUND BY MEASURING RATHER THAN BY TESTING.** The first real-profile run of `referencesAt`
+  returned **0** for a caret sitting exactly on `getTypeOfSymbol` in tsc's `checker.ts`, and
+  `nodeInfoAt` there answered `Block(44581, 3125407)` — the whole file's body. The cause is one missing
+  contextual re-scan: `SourceIndex.scanTokens` ran a bare `Scanner.scan()` loop, so the `}` closing a
+  `${…}` read as a CloseBrace, the `|` after it as an operator, and the CLOSING BACKTICK opened a fresh
+  `NoSubstitutionTemplateLiteral` running to the next backtick anywhere in the file. **checker.ts
+  scanned as 50,684 tokens for 3,151,772 characters, longest token 62,089.** The class KDoc had
+  PREDICTED this shape ("it could only go wrong by MERGING … a template head scanned as one whole
+  template token") and then priced it wrong — it called the consequence "a COARSER answer", where a
+  merge is not local at all: every later node's `realEnd` snaps back below its own `pos`, so `pathAt`
+  refuses to enter it. **The general law, now in CLAUDE.md: a SPLIT is a safe approximation of a
+  context-sensitive lexer and a MERGE is not, because a merge de-synchronises the stream.** The two
+  splitting re-scans (`reScanSlashToken`, `reScanGreaterToken`) stay deliberately absent; only the
+  template one is reproduced, exactly as `Parser` does it (a `TemplateHead` pushes, braces inside are
+  counted, the closing `}` is re-scanned into a middle or a tail — so nesting works by construction).
+
+- **THE IDENTITY QUESTION WAS VERIFIED BEFORE ANY CODE WAS WRITTEN, and the brief's proposal needed one
+  correction.** A whole-program probe (spans for every identifier in every file, one build, print the
+  declaration set of each) confirmed: the import alias's own `import { }` clause, every use, and the
+  export are ONE set, because `typeCaptureFollowImportAlias` already hops; two merged `interface I`
+  blocks give EVERY occurrence the same two-declaration set; three same-spelled bindings over two files
+  give three DISJOINT sets. **The correction is that the relation must be INTERSECTION, not equality**:
+  a member of a UNION receiver resolves to one declaration PER CONSTITUENT, so `u.p` on
+  `{p: string} | {p: number}` would be a different group from a plainly identical `a.p`. Equality is
+  the degenerate case every single-symbol position gets.
+
+- **ZERO CORE CHANGES, WHICH IS THE ARCHITECTURAL POINT AND NOT A BOAST.** The grouping key is a set of
+  declaration SPANS — a value — so no `Symbol` crosses the boundary and the entire feature sits above
+  the compiler in `-project`. `cost_gate.py` is therefore a CONTROL rather than a gate this round
+  (+0.00% on all 20 counters is the expected answer when the compiler is not touched at all), and
+  `huge_methods.py` matters only on `-project`, where round 909's blind-spot rule applies.
+
+- **THE ONE HOLE, STATED AND PINNED RATHER THAN PAPERED OVER.** A MEMBER's own declaration name is
+  bound by no scope and has no receiver, so the capture resolves it to nothing — which is exactly why
+  `definitionsAt` documents an empty answer there. It is recovered from the sweep's own evidence (an
+  occurrence that resolved TO that span proves the caret is a declaration of that symbol), and the
+  recovery deliberately seeds with the ONE matching declaration rather than the whole set the
+  occurrence carried: adopting the set would make `p` of `interface A` group with the unrelated `p` of
+  `interface B` merely because some `u.p` may refer to either (**arm A5, 1 red, uniquely its own**).
+  What survives is exactly one truthful gap — **a member declared and NEVER USED answers EMPTY rather
+  than a list of one**, where tsc answers one — and it has its own pin saying so.
+
+- **READ-vs-WRITE IS REFUSED, and the reason is round 913's pattern rather than laziness.** `x = 1` and
+  `x++` are trivially writes; `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose
+  identifier sits under an array literal, an object literal and a `for` head. A rule built from the
+  easy positions reports the destructuring ones as READS — and a host cannot tell a complete answer
+  from an incomplete one, which is worse than no field. `isDeclaration` IS reported, because it is
+  exact: membership in the declaration set the compiler produced, never a guess about which parent
+  kinds declare a name.
+
+- **MEASURED ON THE REAL PROFILE** (78 files, 9,977,097 chars, **381,670 identifiers**, real libs,
+  warm, outside Gradle at `-Xmx4g`): plain rebuild **5.5-5.9 s**; `documentHighlightsAt` on
+  `checker.ts` (125,289 of those identifiers) **6.0-7.2 s**, one build; `referencesAt` **8.3-9.9 s** on
+  a clean project (one build) and **13.0-13.5 s** on a dirty one (two — `files`' build has to run
+  first, because the program's file list is a question only a build answers). **The sweep is 2.5-4 s on
+  top of the rebuild WHATEVER the caret**: a local of `createTypeChecker` with 168 hits in one file and
+  `SyntaxKind` with **9,827 hits across 49 files** cost the same, because the cost is resolving all
+  381,670 identifiers. **Peak heap ~1.9 GB** — the Gradle test JVM's 512 MB OOMs, which is itself worth
+  documenting for a host. Key spread needed no work: round 914 already routed both packers through
+  `packIdPair`.
+
+- **PINS: +24** (`-project` 209 -> 233; core UNCHANGED at 14,341). 19 reference pins + 5 (BUG.2) pins.
+  **THE DISCRIMINATOR, written first**: three bindings, one spelling, two files — a body local, a
+  file-level `const` and an export elsewhere — asserted as three EXACT, DISJOINT sets, because a name
+  match answers a six-element set for all three carets and a SIZE assertion would be satisfied by any
+  three of them. **ONE PIN WAS WRITTEN VACUOUS AND CAUGHT BY ITS OWN ARM**: `no token swallows the text
+  between two template literals` asserted `pathAt(offset).isNotEmpty()`, which is true for EVERY offset
+  inside a file (the source file always answers) — arm A6 left it green. It is now `every identifier in
+  the file is reachable by a descent to its own position`, which is the property the de-sync destroys,
+  and A6 reddens it.
+
+- **EIGHT-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All eight compiled;
+  ALL EIGHT reddened a DISTINCT set.** **A1** identity by NAME instead of by declaration set (the grep
+  arm) -> **3 red**, including the discriminator. **A2** a document highlight does not restrict to its
+  file -> **1 red**. **A3** an occurrence reports the RAW `Node.end` -> **1 red**, the span-exactness
+  pin. **A4** the caret-IS-a-declaration recovery removed -> **2 red**. **A5** that recovery adopts the
+  whole set the occurrence carried -> **1 red, uniquely its own** (the union pin). **A6** (BUG.2) the
+  template re-scan removed -> **4 red**. **A7** the import-alias hop removed (core) -> **6 red**,
+  spanning three test classes. **A8** only the FIRST declaration of a symbol recorded (core) -> **4
+  red**, the merged and overloaded rows. `scripts/round919-ablate.sh`.
+
+- **GATES: suite 14,684 -> 14,708 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20
+  counters** (a control — the compiler was not touched — and proven live by its own 46-error / 78-file
+  compile). `huge_methods.py --fail-over 0` clean on core (**745 classes, 15,890 methods, 0 over**) and
+  on `-project` explicitly (**22 classes, 236 methods, 0 over**; the largest new method is
+  `referencesOf` at 877). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. Warning-clean under `--rerun-tasks`.
+
+- **SUCCESSOR, ranked.** (1) **Signature help** — the biggest remaining editor feature, and its
+  mechanism is already three-quarters built: a call's callee resolves through exactly (API.3d)'s
+  receiver path, the argument index is a token-level question the completion anchor already answers,
+  and the only new thing is rendering a `Signature`. (2) **The refusal backlog as one item** — member
+  completion's accessibility filter, contextual object-literal keys, element access `o["p"]`, keywords:
+  all four want the same missing mechanism (where the caret sits relative to a declaration / a grammar
+  production), so they are one round rather than four. (3) **Rename** — it is (API.5) plus an edit
+  plan, and the edit plan is the work (`{ p }` and `import { p as q }` do not rewrite like a plain
+  occurrence). (4) **The incremental/re-entrant seam** (`docs/ARCHITECTURE-RETHINK.md`) — the right
+  end state and the wrong next step: every figure above is dominated by a full rebuild, so it is the
+  only thing that changes the cost model, and it is also the change most likely to cost a month. **I
+  would take (1).**
+
 **Round 918 (2026-08-18) — (API.4b): FREE-NAME COMPLETIONS LAND, AND THE ROUND'S PRODUCT IS THAT THE TWO
 RULES THE BRIEF TOLD ME TO COPY FROM `lexLevelHasName` ARE **BOTH WRONG FOR THIS CHAIN** — THEY BELONG TO AN
 ASCENT THAT HAS A SECOND, THREADED POPULATION TO FALL BACK ON, AND TRANSPLANTED ONTO `spineScopeLookup`'s
@@ -1253,6 +1363,50 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   whose local shadows a same-named binding in ANOTHER FILE must offer the local ONCE and must not
   offer the other file's; and the member pins must stay green, i.e. a free-name enumeration must not
   leak into a member position — the failure round 913 refused and round 916's arm A2 catches.
+
+- [x] **(BUG.2) The `-project` token index de-synchronised at the first `${…}` — LANDED, round 919.**
+  Found by (API.5)'s cost measurement, not by a test. `SourceIndex.scanTokens` ran a context-free
+  `Scanner.scan()` loop and the parser re-scans the `}` that closes a template substitution
+  (`reScanTemplateToken`); without that, the `}` reads as a CloseBrace, whatever follows reads as
+  operators, and the CLOSING BACKTICK opens a fresh `NoSubstitutionTemplateLiteral` that runs to the
+  next backtick **anywhere in the file**. Unlike a SPLIT (which only adds ends and is why the slash and
+  greater-than re-scans are still deliberately absent) a MERGE de-synchronises the stream **for the
+  rest of the file**, so every later node's `realEnd` snaps back, `pathAt` cannot descend into it, and
+  `nodeInfoAt` / `quickInfoAt` / `definitionsAt` / `completionsAt` all answer about a huge enclosing
+  node. Measured on tsc's own `checker.ts`: **50,684 tokens for 3,151,772 characters, the longest
+  62,089**, and a caret on a top-level function's name resolving to the whole file's `Block`. The fix
+  tracks substitution nesting exactly as `Parser` does (a `TemplateHead` pushes, braces inside are
+  counted, the closing `}` is re-scanned into a middle or a tail). `TemplateTokenSyncTest`, 5 pins,
+  arm A6.
+
+- [x] **(API.5) FIND REFERENCES + DOCUMENT HIGHLIGHTS — LANDED, round 919.** `ReferenceLocation(
+  fileName, start, end, isDeclaration)`; **`Project.referencesAt(fileName, offset)`** (the program)
+  and **`Project.documentHighlightsAt(fileName, offset)`** (one file). **ZERO core changes** — the
+  whole feature is (API.3c)'s batch turned inside out, above the compiler. **THE IDENTITY QUESTION,
+  which the brief said to verify rather than inherit, VERIFIED AND ANSWERED: a DECLARATION-LOCATION SET
+  is a sound proxy for "the same symbol", but the relation is INTERSECTION, not equality.** Measured on
+  a probe fixture before any code was written: the import alias, its `import { }` clause, every use and
+  the export are ONE set (the capture's alias hop already unifies them); two merged `interface I`
+  blocks give every occurrence the SAME two-declaration set (equality would not split them); three
+  same-spelled `collide` bindings over two files give three DISJOINT sets. Equality FAILS on one shape
+  only, and it is a real one: a member of a UNION receiver resolves to one declaration per constituent,
+  so `u.p` and a single-constituent `a.p` would be different groups. **THE ONE HOLE, stated and pinned
+  rather than papered over:** a MEMBER's own declaration name is bound by no scope and has no receiver,
+  so the capture resolves it to nothing (which is exactly why `definitionsAt` answers empty there). It
+  is recovered from the sweep's own evidence — an occurrence that resolved TO that span proves the
+  caret is a declaration — which leaves exactly one truthful gap: **a member declared and never used
+  answers EMPTY rather than a list of one** (tsc answers one). Free names are unaffected. **REFUSED
+  with reasons:** read-vs-write (`[x] = pair` / `({x} = o)` / `for (x of xs)` are writes under an array
+  literal, an object literal and a `for` head, so a rule built from `x = 1` and `x++` reports them as
+  READS and a host cannot tell a complete answer from an incomplete one — the same grammar-position
+  mechanism keywords are refused for); lib files are not swept for uses; element access. **MEASURED on
+  the compiler profile** (78 files, 9,977,097 chars, **381,670 identifiers**, real libs, warm): plain
+  rebuild 5.5-5.9 s; `documentHighlightsAt` **6.0-7.2 s** (1 build); `referencesAt` **8.3-9.9 s** clean
+  (1 build) and **13.0-13.5 s** dirty (2 — `files`' build first); the sweep is 2.5-4 s on top of the
+  rebuild WHATEVER the caret (168 hits in 1 file and **9,827 hits across 49 files** for `SyntaxKind`
+  cost the same); **peak heap ~1.9 GB, so 512 MB is not enough**. Key spread needed nothing: both
+  packers were already finalized (round 914's `packIdPair`). **19 pins**, eight-arm ablation, **every
+  arm a DISTINCT set**. `docs/language-service.md` § 10b.
 
 DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
 sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->

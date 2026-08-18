@@ -85,19 +85,19 @@ import com.xemantic.typescript.compiler.forEachChild
  * order as the parse it rides beside, and paid only by a host that asks a position
  * question. Nothing in the compile path is touched.
  *
- * The scan is a plain `Scanner.scan()` loop, so it does NOT reproduce the parser's
- * context-sensitive re-scans (`reScanSlashToken`, `reScanTemplateToken`,
- * `scanJsxText`). That is sound in one direction and not the other, and the
- * direction it is sound in is the one that matters: a context-free scan can only
- * SPLIT a contextual token into several (a regex literal `/ab/` scans as `/`, `ab`,
- * `/`), which ADDS ends and leaves every real token boundary present, so
- * `realEnd` is unchanged. It could only go wrong by MERGING across a real
- * boundary — a template head `` `a${ `` scanned as one whole template token —
- * where the greatest-end-below search then answers too low and the node's span
- * comes out short or empty. A short span is not a wrong answer, it is a COARSER
- * one: the descent simply does not enter that node and reports its parent. No
- * position can ever be attributed to the wrong file, the wrong statement or a
- * sibling, because a bound derived this way is never too HIGH.
+ * The scan reproduces exactly ONE of the parser's context-sensitive re-scans — the
+ * template one, see [scanTokens] — and deliberately none of the others
+ * (`reScanSlashToken`, `reScanGreaterToken`, `scanJsxText`). The asymmetry is not
+ * taste: those two directions fail differently. A context-free scan that SPLITS a
+ * contextual token into several (a regex literal `/ab/` scanning as `/`, `ab`, `/`,
+ * a `>>` scanning as one token where the parser wants two) only ADDS ends and leaves
+ * every real token boundary present, so `realEnd` is unchanged and the worst case is
+ * a bound that is never too HIGH — a node the descent declines to enter, reported as
+ * its parent. A scan that MERGES across a real boundary is a different animal, and
+ * (API.5) measured it: one unhandled `${` de-synchronises the token stream for the
+ * WHOLE REST OF THE FILE, which is a wrong answer at every later position rather
+ * than a coarse one. That is why the template case is handled and the splitting
+ * cases are not.
  *
  * ## The boundary convention
  *
@@ -189,6 +189,35 @@ internal class SourceIndex private constructor(
         /**
          * Every token in [text], in scan order — so [Tokens.ends] is ascending.
          *
+         * ## The one contextual re-scan this loop MUST perform, and why
+         *
+         * `Scanner.scan()` is context-free and the parser is not: at three places it
+         * re-scans the current token under a context only it knows
+         * (`reScanSlashToken`, `reScanGreaterToken`, `reScanTemplateToken`). Two of
+         * those are harmless here — they only ever SPLIT one token into several, which
+         * ADDS ends and leaves every real boundary present, so [realEndOf] is
+         * unchanged. **The template one is not**, and (API.5) measured what it costs:
+         * on a `` `${a}|${b}` `` the context-free loop reads the `}` of a substitution
+         * as a CloseBrace, then the `|` as an operator, and then the closing backtick
+         * OPENS a fresh `NoSubstitutionTemplateLiteral` that runs to the next backtick
+         * anywhere in the file. That is a MERGE, and unlike a split it does not stay
+         * local: the token stream is de-synchronised **for the rest of the file**, so
+         * every node after the first substituting template literal gets a `realEnd`
+         * snapped back to some earlier token, [pathAt] cannot descend into it, and
+         * every position-directed query silently answers about a huge enclosing node
+         * instead. Measured on this repo's own compiler profile before the fix:
+         * `checker.ts` scanned as **50,684 tokens for 3,151,772 characters**, the
+         * longest of them **62,089 characters**, and a caret on a top-level function
+         * name resolved to the whole file's `Block`.
+         *
+         * So the substitution nesting is tracked exactly as `Parser` tracks it: a
+         * `TemplateHead` opens a substitution, braces inside it are counted, and the
+         * `}` that closes it is re-scanned into a `TemplateMiddle` (the substitution
+         * stays open) or a `TemplateTail` (it closes). `reScanTemplateToken` rewinds
+         * to the current token's own start, so the recorded start is unaffected and
+         * only the end and the kind change. Nested templates work by construction —
+         * the inner `TemplateHead` pushes its own counter.
+         *
          * The loop terminates on end-of-file, and ALSO on a token that did not
          * advance the scanner. That second exit is a fail-safe rather than a
          * reachable case: this class is meant to run inside a long-lived host, and
@@ -197,16 +226,39 @@ internal class SourceIndex private constructor(
          * repo a daemon (CLAUDE.md, round 873: a request that never returns holds
          * the compile thread for good). Truncating the index degrades every later
          * node in the file to a coarser answer, which is the same graceful direction
-         * as the class KDoc's merge case.
+         * as the class KDoc's split case.
          */
         private fun scanTokens(text: String): Tokens {
             val scanner = Scanner(text)
             val starts = ArrayList<Int>()
             val ends = ArrayList<Int>()
             val kinds = ArrayList<SyntaxKind>()
+            // One entry per OPEN template substitution, holding how many plain `{`
+            // are still unclosed inside it. Empty means "not in a substitution", and
+            // then a `}` is just a `}`.
+            val substitutions = ArrayList<Int>()
             var previousEnd = -1
             while (true) {
-                val token = scanner.scan()
+                var token = scanner.scan()
+                when {
+                    token == SyntaxKind.TemplateHead -> substitutions.add(0)
+                    substitutions.isEmpty() -> Unit
+                    token == SyntaxKind.OpenBrace ->
+                        substitutions[substitutions.size - 1] = substitutions.last() + 1
+                    token == SyntaxKind.CloseBrace ->
+                        if (substitutions.last() > 0) {
+                            substitutions[substitutions.size - 1] = substitutions.last() - 1
+                        } else {
+                            token = scanner.reScanTemplateToken()
+                            // A middle keeps the substitution open at depth 0; a tail
+                            // closes it. Any other answer means the rewind found no
+                            // template after all, and leaving the entry would swallow
+                            // every later `}` — so it closes too.
+                            if (token != SyntaxKind.TemplateMiddle) {
+                                substitutions.removeAt(substitutions.size - 1)
+                            }
+                        }
+                }
                 val end = scanner.getPos()
                 starts.add(scanner.getTokenPos())
                 ends.add(end)
@@ -267,9 +319,17 @@ internal class SourceIndex private constructor(
      * would multiply the capture set for answers nobody sweeps for.
      *
      * MEMBER names are included (the `p` of `o.p`, a property signature's name):
-     * they are typed, which is the sweep's primary product. Their go-to-definition
-     * answer is deliberately empty — see `CapturedDefinition` — so an entry for one
-     * carries a type and no locations, which is a truthful answer rather than a gap.
+     * they are typed, which is the sweep's primary product, and since (API.3d) a
+     * member USE also carries a definition — resolved through its receiver. A
+     * member's own DECLARATION name still resolves to nothing (`CapturedDefinition`
+     * says why), so an entry for one carries a type and no locations, which is a
+     * truthful answer rather than a gap.
+     *
+     * (API.5) This is also the population a reference sweep asks about, per file for
+     * `Project.documentHighlightsAt` and over every program file for
+     * `Project.referencesAt` — so the boundary drawn here is the boundary of what
+     * can be FOUND, which is why an element access (`o["p"]`, whose member is a
+     * string literal) is neither searchable nor findable.
      *
      * ITERATIVE, exactly as [pathAt] is and for the same reason: a recursive
      * full-tree walk is bounded by the tree's depth and this repo's corpus carries

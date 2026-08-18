@@ -4,13 +4,23 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 918, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 919, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
-in one build — and **completions**, both halves: members `(API.4a)` and free
-names `(API.4b)`. Not yet: keywords (§ 10a says why they are refused rather than
-guessed), find-references, rename. See the `(API.*)` items in `PLAN-PHASE-5.md`.
+in one build — **completions**, both halves: members `(API.4a)` and free
+names `(API.4b)` — and **find-references plus document highlights** `(API.5)`.
+Not yet: keywords (§ 10a says why they are refused rather than guessed), rename,
+signature help. See the `(API.*)` items in `PLAN-PHASE-5.md`.
+
+> **If you are on a version before round 919, upgrade before trusting any
+> position.** `(BUG.2)`: the token index behind every position-directed query
+> de-synchronised at the first template literal with a `${…}` substitution, and the
+> damage was not local — the whole rest of the file was wrong, so `nodeInfoAt`,
+> `quickInfoAt`, `definitionsAt` and `completionsAt` all answered about a huge
+> enclosing node instead of the one at the caret. Measured on tsc's own
+> `checker.ts`: 50,684 tokens for 3,151,772 characters, the longest of them 62,089
+> characters. Fixed and pinned.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -96,6 +106,8 @@ you call them.
 | `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
 | `fileSemantics(f)` | **ONE full build** | every identifier in the file |
 | `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build |
+| `documentHighlightsAt(f, o)` | **ONE full build** | sweeps this file's identifiers |
+| `referencesAt(f, o)` | **ONE build clean, TWO dirty** | sweeps the whole program's; § 10b has the measured figures |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -578,6 +590,94 @@ with the enumeration under a millisecond of it. **So debounce.** This is not a
 per-keystroke query on a project of that size, and the reason is the compiler's
 lack of incremental reuse (§ 3), not the completion machinery.
 
+## 10b. Find references, and document highlights
+
+```kotlin
+val all: List<ReferenceLocation>  = project.referencesAt(path, offset)          // the program
+val here: List<ReferenceLocation> = project.documentHighlightsAt(path, offset)  // this file
+// ReferenceLocation(fileName: String, start: Int, end: Int, isDeclaration: Boolean)
+```
+
+**Identity is the declaration set, never the spelling.** Every identifier in every
+program file goes into ONE build; the checker resolves each of them as it walks past
+— through the lexical scope chain for a free name, through the receiver's type for a
+member, exactly as § 9 does — and two occurrences are the same thing when their sets
+of declarations **intersect**.
+
+Intersection rather than equality for one measured reason: a member of a union
+receiver resolves to one declaration *per constituent*, so `u.p` on
+`{p: string} | {p: number}` would land in a different group from a plainly identical
+`a.p`. Equality is the degenerate case and is what every single-symbol position gets.
+
+None of the following is special-cased; all of it falls out of that rule:
+
+| you point at | what you get |
+|---|---|
+| a use of an **imported** name | the export, the `import { … }` clause and every use, in both files |
+| the **export** itself | the same group, from the other side |
+| a name **shadowed** by a body local | only the binding the caret is on — three same-spelled bindings are three groups |
+| a **merged** symbol (`interface` twice) | one group, with **every** contributing declaration flagged |
+| a **member** (`o.p`) | its uses plus the declaration, in the declaring file |
+| an **inherited** or generically instantiated member | the base / uninstantiated declaration, so uses through both sides are one group |
+| an **overloaded** member | one group, both signatures flagged |
+
+**The declaration comes back, flagged.** `isDeclaration` marks the spans that *are*
+declarations rather than uses, the way tsc's `isDefinition` does — filter on it if
+you want uses only. It is exact: membership in the set the compiler produced, not a
+guess about which parent kinds declare a name.
+
+### What is refused, and why
+
+- **READ versus WRITE is not reported.** `x = 1` and `x++` are trivially writes;
+  `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose identifier sits
+  under an array literal, an object literal or a `for` head. A rule built from the
+  easy positions calls the destructuring ones READS, and you could not tell a
+  complete answer from an incomplete one. Deciding it properly is the same
+  grammar-position mechanism keyword completions are refused for (§ 10a).
+- **A caret on a MEMBER's own declaration name works only when that member is used
+  somewhere.** `p` in `interface I { p: string }` is bound by no scope and has no
+  receiver, which is exactly why § 9 answers no definition there. The reference
+  search recovers it from the sweep's own evidence — if an occurrence resolved *to*
+  that span, the caret is one of that symbol's declarations — so a member declared
+  and never used answers an **empty** list rather than a list of one. tsc answers
+  one. Free names are unaffected: a `const`, a parameter, a function, a class, an
+  interface or an import all resolve from their own declaration name.
+- **Only identifiers.** A keyword, a literal, punctuation or trivia answers empty
+  **and does not build**. An element access (`o["p"]`) names its member with a string
+  literal, so it is neither found nor searchable — § 9's boundary, unchanged.
+- **The program, not the libraries.** A declaration in a `lib.*.d.ts` comes back
+  (flagged), because the caret resolved to it; no lib file is swept for uses.
+
+Sorted by `(fileName, start)` ascending, one entry per span. `start until end` is
+half-open and **exact** — the identifier's own text, not a raw `Node.end`.
+
+### Cost, measured
+
+On this repo's own compiler profile — tsc's 78 source files, 9,977,097 characters,
+**381,670 identifiers**, real libs, warm:
+
+| query | builds | wall |
+|---|---|---|
+| a plain rebuild, for reference | 1 | 5.5 – 5.9 s |
+| `documentHighlightsAt` — `checker.ts`, 125,289 identifiers | 1 | **6.0 – 7.2 s** |
+| `referencesAt` on a **clean** project | 1 | **8.3 – 9.9 s** |
+| `referencesAt` on a **dirty** project | 2 | **13.0 – 13.5 s** |
+
+The sweep itself is 2.5 – 4 s on top of the rebuild it rides, whatever the caret:
+resolving 381,670 identifiers costs the same whether the answer is 168 hits in one
+file (a local of `createTypeChecker`) or **9,827 hits across 49 files**
+(`SyntaxKind`, imported nearly everywhere). The second build in the dirty row is
+`files`' — the program's file list is a question only a build answers — so a host
+that has just asked for `diagnostics()` pays one build, not two.
+
+**Budget memory as well as time.** A whole-program sweep holds a resolution per
+identifier: peak heap on that profile is **~1.9 GB**, and the default 512 MB of a
+plain JVM is not enough. `documentHighlightsAt` does not have this shape — it holds
+one file's.
+
+**So: `documentHighlightsAt` is the one to wire to caret movement** (debounced —
+it still builds), and `referencesAt` is the one a user asks for explicitly.
+
 ## 11. Rules that apply to everything
 
 **Paths.** Every path crossing the API is normalized and made absolute through
@@ -684,6 +784,11 @@ stale text and nothing worse.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.
+- **read versus write on a reference** — § 10b says why a partial answer there is
+  refused, and it is the same grammar-position mechanism the keyword list needs.
+- **rename** — it is find-references plus an edit plan, and the edit plan is where
+  the work is: a shorthand `{ p }` and an `import { p as q }` do not rewrite the way
+  a plain occurrence does.
 
 None of these change what is documented above. The one thing that would is the
 architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) that makes the checker

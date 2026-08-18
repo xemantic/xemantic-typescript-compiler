@@ -25,8 +25,11 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.CapturedDeclaration
+import com.xemantic.typescript.compiler.CapturedDefinition
 import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Diagnostic
+import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
@@ -89,6 +92,15 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * going to perform anyway. Reach for those; the single-caret pair remains for the
  * host that genuinely has one caret and one question.
  *
+ * ## References
+ *
+ * [referencesAt] and [documentHighlightsAt] answer the converse question — not
+ * "where does this name point" but "what else points where this name does" — and
+ * they are the same batched build turned inside out: every identifier in the
+ * program (or in one file) is resolved in ONE walk and grouped by the DECLARATION
+ * SET each one resolved to. So the grouping key is a value, no `Symbol` crosses
+ * the boundary, and a name match is never what decides identity.
+ *
  * ## Completions
  *
  * [completionsAt] answers what may be WRITTEN at a caret. It is the one query whose
@@ -100,8 +112,8 @@ import com.xemantic.typescript.compiler.computeParserFlags
  *
  * ## What this class is NOT
  *
- * It is not a full language service: there is no find-references, no rename, no
- * keyword completion, and no incremental reuse of a previous build's internal state.
+ * It is not a full language service: there is no rename, no keyword completion, no
+ * signature help, and no incremental reuse of a previous build's internal state.
  * A query on a dirty project is a FULL rebuild, and that is a property of the
  * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
@@ -761,6 +773,266 @@ public class Project private constructor(
     public fun fileSemantics(fileName: String): List<SemanticInfo> {
         val index = sourceIndexOf(fileName) ?: return emptyList()
         return semanticsOf(fileName, index, index.identifiers())
+    }
+
+    /**
+     * (API.5) Every place in the PROGRAM that refers to the same thing as the caret
+     * at [offset] in [fileName] — the find-references answer.
+     *
+     * ## How "the same thing" is decided, and why it is not a name match
+     *
+     * A text search is not an answer: two bindings spelled alike are two things, and
+     * offering the wrong one is the failure this whole API is built to avoid. What
+     * decides it here is the **set of declarations** each occurrence resolves to.
+     * Every identifier in every program file is handed to ONE build, the checker
+     * resolves each of them while it walks past it — through the lexical scope chain
+     * for a free name and through the receiver's type for a member, exactly as
+     * [definitionsAt] does — and two occurrences are the same thing when their
+     * declaration sets INTERSECT.
+     *
+     * Intersection rather than equality, for one measured reason: a member of a UNION
+     * receiver resolves to one declaration per constituent (`u.p` where
+     * `u: {p: string} | {p: number}` names both), so equality would put `u.p` in a
+     * different group from the single-constituent `a.p` that is plainly the same
+     * declaration. Equality is the degenerate case and is what every single-symbol
+     * position gets.
+     *
+     * What that buys, none of it special-cased:
+     *
+     * - an **import** and the name it imports are one group, because the capture hops
+     *   the alias to the original — so `import { foo }`, every use of `foo` here, and
+     *   `export const foo` over there all answer together;
+     * - **merged declarations** (an `interface` written twice, a function and a
+     *   namespace of one name) do not split: every occurrence names the same
+     *   multi-declaration set;
+     * - a **shadowed** name does not leak: the body local, the file-level binding it
+     *   shadows and a third of the same spelling in another file are three groups,
+     *   because the walk's own chain resolved each of them;
+     * - an **inherited** or **generically instantiated** member answers with the base
+     *   or the uninstantiated declaration, so uses through a derived type and through
+     *   the base are one group.
+     *
+     * ## The declaration is included, flagged
+     *
+     * [ReferenceLocation.isDeclaration] marks the spans that ARE declarations of the
+     * caret's symbol rather than uses of it, the way tsc's own `isDefinition` does. A
+     * host that wants uses only filters on it. The flag is exact: it is membership in
+     * the declaration set the compiler produced, not a guess about which parent kinds
+     * declare a name.
+     *
+     * ## What is refused, and why each is a refusal rather than a gap
+     *
+     * **READ versus WRITE is not reported.** An editor colours the two differently
+     * and this deliberately offers no field for it. The reason is that a partial
+     * answer is worse than none here: `x = 1` and `x++` are trivially writes, and
+     * `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose identifier sits
+     * under an array literal, an object literal or a `for` head — so a rule built from
+     * the easy positions reports the destructuring ones as READS, and a host cannot
+     * tell a complete answer from an incomplete one. Deciding it properly is a
+     * grammar-position question, which is the same mechanism keyword completions are
+     * refused for (§ [completionsAt]).
+     *
+     * **A caret on a MEMBER's own declaration name is answered only when that member
+     * is referenced somewhere.** `p` in `interface I { p: string }` is bound by no
+     * scope and has no receiver, so the capture resolves it to nothing — exactly why
+     * [definitionsAt] answers empty there. The reference search recovers it anyway,
+     * because the evidence is in the sweep: if any occurrence resolved TO that span,
+     * the caret is a declaration of that occurrence's symbol. A member declared and
+     * never used therefore answers an EMPTY list rather than a list of one. Free names
+     * are unaffected — a `const`, a parameter, a function, a class, an interface, an
+     * import all resolve from their own declaration name, so a caret there is the
+     * ordinary case.
+     *
+     * **Only identifiers.** A caret on a keyword, a literal, punctuation or trivia
+     * answers empty AND DOES NOT BUILD. An element access (`o["p"]`) names its member
+     * with a string literal, so it is neither found nor searchable — the same boundary
+     * [definitionsAt] draws.
+     *
+     * **The program, not the libraries.** The sweep covers the program's own files.
+     * A declaration in a `lib.*.d.ts` still comes back (flagged
+     * [ReferenceLocation.isDeclaration]) because the caret resolved to it, but no lib
+     * file is swept for uses — `"abc".length` finds the lib's `length` and the uses in
+     * your own code, never the lib's internal ones.
+     *
+     * ## Order, and duplicates
+     *
+     * Sorted by `(fileName, start)` ascending. The ordering is imposed here rather
+     * than inherited from the compiler, whose answer order is the order its walk
+     * happened to reach the nodes. One entry per distinct span.
+     *
+     * ## Cost — read this before wiring it to a keybinding
+     *
+     * TWO builds on a dirty project and ONE on a clean one: the file list is a
+     * question about the program, so [files]' build runs first (cached when nothing
+     * has been edited), and the sweep itself is a single capture build carrying every
+     * identifier in every program file. That is the same trick [fileSemantics] plays,
+     * widened from one file to the program — a count of compiles, so it does not grow
+     * with the number of carets, only with the program.
+     *
+     * It is linear in the program and it is not cheap. `docs/language-service.md`
+     * carries the measured figure on this repo's own 78-file compiler profile. Use
+     * [documentHighlightsAt] for the per-caret case; this is the one a user asks for
+     * explicitly.
+     */
+    public fun referencesAt(fileName: String, offset: Int): List<ReferenceLocation> {
+        val index = sourceIndexOf(fileName) ?: return emptyList()
+        // Only an identifier names anything, and a caret that cannot be answered must
+        // not pay for a compile — the rule `completionsAt` and `semanticsAt` already
+        // follow.
+        val caret = index.pathAt(offset).lastOrNull() as? Identifier ?: return emptyList()
+        // The program's files are what a build computes, so this asks for them the
+        // only way there is; `build()` is cached whenever nothing has been edited.
+        val swept = build().programFiles.map { keyOf(it) }
+        return referencesOf(keyOf(fileName), caret, swept, restrictToQueryFile = false)
+    }
+
+    /**
+     * (API.5) Every place in THIS FILE that refers to the same thing as the caret —
+     * the document-highlight answer.
+     *
+     * [referencesAt] restricted to one file, and it exists as its own member because
+     * the cost differs by the size of the program: an editor asks this on every caret
+     * move, and sweeping the whole program for an answer it will draw in one buffer
+     * would be paying for the other files' identifiers to be typed and resolved.
+     * Here the sweep is one file's identifiers, which is [fileSemantics]' population,
+     * and there is no [files] build in front of it because no file list is needed.
+     *
+     * Everything else is [referencesAt]'s and unchanged: the same declaration-set
+     * identity, the same [ReferenceLocation.isDeclaration] flag, the same refusal of
+     * a read/write distinction, the same ordering.
+     *
+     * ## The one behaviour that is NOT just a filter
+     *
+     * The caret's own resolution is taken from this file's sweep, so the fallback that
+     * recovers a caret on a MEMBER's declaration name ([referencesAt]) can only see
+     * evidence in THIS file: `p` in `interface I { p: string }` highlights only when
+     * some `o.p` in the same file resolves to it. Filtering [referencesAt]'s answer
+     * would differ there — and would cost a whole-program build to produce a
+     * one-file answer, which is the trade this member exists to refuse.
+     */
+    public fun documentHighlightsAt(fileName: String, offset: Int): List<ReferenceLocation> {
+        val index = sourceIndexOf(fileName) ?: return emptyList()
+        val caret = index.pathAt(offset).lastOrNull() as? Identifier ?: return emptyList()
+        val key = keyOf(fileName)
+        return referencesOf(key, caret, listOf(key), restrictToQueryFile = true)
+    }
+
+    /**
+     * The one build both reference queries perform, and the grouping of its answers.
+     *
+     * [sweptFiles] is the population whose identifiers become capture spans — the
+     * whole program for [referencesAt], the one queried file for
+     * [documentHighlightsAt] — and [restrictToQueryFile] additionally drops answers
+     * outside [queryFile], which matters only for a DECLARATION the caret resolves to
+     * in a file that was never swept.
+     *
+     * Note what is not done: no `Symbol` is asked for and none crosses the boundary.
+     * The grouping key is a set of declaration SPANS, which is a value, which is what
+     * lets the whole feature sit above the compiler rather than inside it.
+     */
+    private fun referencesOf(
+        queryFile: String,
+        caret: Node,
+        sweptFiles: List<String>,
+        restrictToQueryFile: Boolean,
+    ): List<ReferenceLocation> {
+        val spans = ArrayList<TypeCaptureSpan>()
+        // Every swept identifier's REAL end, by (file, pos). The capture speaks the
+        // RAW `(pos, end)` identity and a caller must be told the real extent, so the
+        // translation is recorded here rather than re-derived per answer.
+        val realEnds = HashMap<String, HashMap<Int, Int>>(sweptFiles.size)
+        for (file in sweptFiles) {
+            val index = sourceIndexOf(file) ?: continue
+            val ends = HashMap<Int, Int>()
+            for (id in index.identifiers()) {
+                spans.add(TypeCaptureSpan(file, id.pos, id.end))
+                ends[id.pos] = index.realEndOf(id)
+            }
+            realEnds[file] = ends
+        }
+        if (spans.isEmpty()) return emptyList()
+        val definitions = ProjectCompiler(overlay)
+            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(spans))
+            .capturedDefinitions
+        val seed = referenceSeed(definitions, queryFile, caret) ?: return emptyList()
+        val hits = LinkedHashMap<Pair<String, Int>, ReferenceLocation>()
+        for (definition in definitions) {
+            if (restrictToQueryFile && definition.fileName != queryFile) continue
+            if (definition.locations.none { it in seed }) continue
+            val end = realEnds[definition.fileName]?.get(definition.start) ?: continue
+            hits[definition.fileName to definition.start] = ReferenceLocation(
+                fileName = definition.fileName,
+                start = definition.start,
+                end = end,
+                isDeclaration = seed.any {
+                    it.fileName == definition.fileName && it.start == definition.start
+                },
+            )
+        }
+        // The declarations themselves. Most are already above — a free name's
+        // declaration name resolves to its own symbol — but a MEMBER's declaration
+        // name resolves to nothing, and a declaration in a file the sweep never
+        // covered (a lib) cannot be there at all.
+        for (location in seed) {
+            if (restrictToQueryFile && location.fileName != queryFile) continue
+            hits.getOrPut(location.fileName to location.start) {
+                ReferenceLocation(
+                    fileName = location.fileName,
+                    start = location.start,
+                    end = location.start + location.length,
+                    isDeclaration = true,
+                )
+            }
+        }
+        return hits.values.sortedWith(compareBy({ it.fileName }, { it.start }))
+    }
+
+    /**
+     * The declaration set the caret names — the identity every other occurrence is
+     * tested against — or null when the caret names nothing.
+     *
+     * Two legs, in this order.
+     *
+     * 1. The caret's OWN captured resolution. This is the ordinary case and covers
+     *    every free name (including a free name's own declaration, which resolves to
+     *    the symbol it declares) and every member USE.
+     *
+     * 2. The caret IS a declaration. A member's declaration name is bound by no scope
+     *    and has no receiver, so the capture resolves it to nothing; but the sweep
+     *    already holds the evidence, because an occurrence that resolved to this exact
+     *    span declares the caret to be one of that symbol's declarations.
+     *
+     * The second leg seeds with the ONE matching declaration rather than with the
+     * whole set the occurrence carried, and that is not a shortcut. An occurrence on
+     * a UNION receiver names one declaration per constituent, so adopting its whole
+     * set would make `p` of `interface A` group with `p` of the unrelated
+     * `interface B` merely because some `u.p` may refer to either. The cost is that a
+     * caret on ONE declaration of an OVERLOADED member reports the other overload's
+     * declaration only when some use points at both — coarser, never wrong.
+     */
+    private fun referenceSeed(
+        definitions: List<CapturedDefinition>,
+        queryFile: String,
+        caret: Node,
+    ): Set<CapturedDeclaration>? {
+        for (definition in definitions) {
+            if (definition.fileName == queryFile &&
+                definition.start == caret.pos &&
+                definition.end == caret.end
+            ) {
+                return definition.locations.toSet()
+            }
+        }
+        for (definition in definitions) {
+            for (location in definition.locations) {
+                // By (file, start): two declarations cannot begin at one offset, and
+                // the length is computed on two sides of the module boundary.
+                if (location.fileName == queryFile && location.start == caret.pos) {
+                    return setOf(location)
+                }
+            }
+        }
+        return null
     }
 
     /**
