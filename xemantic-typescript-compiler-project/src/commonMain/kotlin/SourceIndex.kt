@@ -508,13 +508,21 @@ internal class SourceIndex private constructor(
      * other position is not swept, so `const unrelated = "p"` is not a reference and a
      * spelling scan's answer and this one differ by exactly that.
      *
+     * (API.17) …and every OTHER literal in a member-NAME position, which is now the
+     * same enumeration: `{ "p": v }`, `{ ["p"]: v }`, ``{ [`p`]: v }`` and a computed
+     * member declaration. [SyntaxRoles.memberNameLiterals] states the one predicate they
+     * all pass, and an element access is one of its cases rather than a case of its own.
+     * A computed key was the LAST silent miss in this API — with the contextual member
+     * OPTIONAL, stranding it costs no diagnostic, so the applied rename compiled clean
+     * with the old name still spelled in the literal.
+     *
      * [identifiers] stays as it is because [Project.fileSemantics] enumerates through
      * it and its contract — "every `Identifier`, and nothing else" — is a documented
      * one; the two populations are deliberately different questions.
      */
     fun occurrenceNodes(): List<Node> {
         val found = ArrayList<Node>(identifiers())
-        for ((literal, _) in SyntaxRoles.stringElementAccesses(sourceFile)) found.add(literal)
+        found.addAll(SyntaxRoles.memberNameLiterals(sourceFile))
         found.sortWith(compareBy({ it.pos }, { it.end }))
         return found
     }

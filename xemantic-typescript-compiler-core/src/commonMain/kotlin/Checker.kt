@@ -6299,8 +6299,11 @@ class Checker(
         if (id is Identifier) typeCaptureMemberDeclarationAt(id, fileName)?.let { return it }
         // (API.10) An object-literal KEY is neither of the two either: its member comes
         // from the literal's CONTEXTUAL type, and its own property is a declaration in
-        // its own right. Both, in the two fields whose roles differ.
-        if (id is Identifier) typeCaptureObjectLiteralKeyAt(id, fileName)?.let { return it }
+        // its own right. Both, in the two fields whose roles differ. (API.17) A COMPUTED
+        // key, `{ ["p"]: v }`, is the same question asked through one more node, so it
+        // is the same leg rather than a second one — which is what makes the two agree
+        // about the free-key branch, about `related` and about the contextual walk.
+        typeCaptureObjectLiteralKeyAt(id, fileName)?.let { return it }
         val symbols =
             if (id is Identifier && typeCaptureIsFreeName(id)) {
                 val resolved =
@@ -6360,15 +6363,21 @@ class Checker(
      * and an unresolved identifier spelling the name is what refuses a member rename.
      */
     private fun typeCaptureObjectLiteralKeyAt(
-        id: Identifier,
+        id: Node,
         fileName: String,
     ): CapturedDefinition? {
-        val assignment = (id as NodeBase).parent as? PropertyAssignment ?: return null
-        if (assignment.name !== id) return null
-        val own = typeCaptureDeclarationLocation(assignment) ?: return null
+        val (assignment, name) = typeCaptureObjectLiteralKey(id) ?: return null
+        // The key's OWN declaration is the key NODE ITSELF, which for a computed one is
+        // the literal rather than the whole `["p"]: v`: it has to be a span the
+        // occurrence sweep also carries, or the rename's group holds a key with no node
+        // behind it and refuses its own answer. For a bare `{ p: v }` and a `{ "p": v }`
+        // this is what [typeCaptureDeclarationLocation] on the ASSIGNMENT already
+        // answered — [typeCaptureDeclarationName] unwraps a [PropertyAssignment] to
+        // exactly this node — so the two spellings stay one answer.
+        val own = typeCaptureDeclarationLocation(id) ?: return null
         val literal = (assignment as NodeBase).parent as? ObjectLiteralExpression
         val members =
-            if (literal == null) emptyList() else typeCaptureContextualMembers(literal, id.text)
+            if (literal == null) emptyList() else typeCaptureContextualMembers(literal, name)
         val locations = LinkedHashSet<CapturedDeclaration>()
         for (symbol in members) {
             for (declaration in symbol.declarations) {
@@ -6377,12 +6386,59 @@ class Checker(
         }
         locations.remove(own)
         if (locations.isEmpty()) {
-            return CapturedDefinition(fileName, id.pos, id.end, id.text, listOf(own))
+            return CapturedDefinition(fileName, id.pos, id.end, name, listOf(own))
         }
         return CapturedDefinition(
-            fileName, id.pos, id.end, id.text, locations.toList(), listOf(own),
+            fileName, id.pos, id.end, name, locations.toList(), listOf(own),
         )
     }
+
+    /**
+     * (API.17) The object-literal key [node] is, as `(its PropertyAssignment, the
+     * member name it spells)` — or null when [node] is not one, or spells no fixed
+     * name.
+     *
+     * Three spellings, one answer: `{ p: v }`, `{ "p": v }` and, through a
+     * [ComputedPropertyName], `{ ["p"]: v }` and ``{ [`p`]: v }``.
+     *
+     * THE ASYMMETRY IS LOAD-BEARING. A bare identifier is a key's name when it sits
+     * directly under the assignment and is a VALUE when it sits under a computed name:
+     * `{ [K]: v }` names the binding `K`, and the member it ends up spelling is decided
+     * at run time. tsc 7.0.2 reads it exactly that way (measured — the const's own two
+     * spans, and renaming it writes `[renamed]`), so the computed branch admits a
+     * LITERAL only and everything else stays on the free-name path.
+     */
+    private fun typeCaptureObjectLiteralKey(node: Node): Pair<PropertyAssignment, String>? {
+        val parent = (node as NodeBase).parent
+        if (parent is PropertyAssignment) {
+            if (parent.name !== node) return null
+            return parent to (typeCaptureKeyName(node) ?: return null)
+        }
+        if (parent !is ComputedPropertyName || parent.expression !== node) return null
+        val name = typeCaptureLiteralMemberName(node) ?: return null
+        val assignment = (parent as NodeBase).parent as? PropertyAssignment ?: return null
+        return if (assignment.name === parent) assignment to name else null
+    }
+
+    /** (API.17) The member name a DIRECT key [node] spells — its text, or the literal's. */
+    private fun typeCaptureKeyName(node: Node): String? = when (node) {
+        is Identifier -> node.text
+        else -> typeCaptureLiteralMemberName(node)
+    }
+
+    /**
+     * (API.17) The member name [assignment]'s key spells, or null when it spells none.
+     *
+     * The same three spellings as [typeCaptureObjectLiteralKey], asked from the
+     * assignment rather than from the key — which is what the contextual walk needs
+     * when it steps OUT of a nested literal and has to say which member of the outer
+     * type received it.
+     */
+    private fun typeCaptureAssignmentKeyName(assignment: PropertyAssignment): String? =
+        when (val name = assignment.name) {
+            is ComputedPropertyName -> typeCaptureLiteralMemberName(name.expression)
+            else -> typeCaptureKeyName(name)
+        }
 
     /**
      * (API.10) The MEMBER declarations a SHORTHAND's single token also names, excluding
@@ -6504,8 +6560,11 @@ class Checker(
                     null
                 } else {
                     val literal = (parent as NodeBase).parent as? ObjectLiteralExpression
-                    val key = (parent.name as? Identifier)?.text
-                        ?: (parent.name as? StringLiteralNode)?.text
+                    // (API.17) …and a COMPUTED key names the outer member too, which is
+                    // what makes a NESTED `{ ["n"]: { ["inner"]: v } }` resolve: without
+                    // it the step out of the inner literal has no name to look up and
+                    // the inner key resolves only to itself.
+                    val key = typeCaptureAssignmentKeyName(parent)
                     if (literal == null || key == null) {
                         null
                     } else {
@@ -6910,11 +6969,23 @@ class Checker(
      * string does, and tsc 7.0.2 puts it in the member's reference set (measured).
      * The two are one population here, which is [typeCaptureLiteralMemberName]'s
      * whole job.
+     *
+     * (API.17) …and a COMPUTED NAME spells one the same way — `{ ["p"]: v }`, and a
+     * class's or an interface's `["p"]`. The literal is admitted for every computed
+     * name and not only an object literal's, because the population is what makes a
+     * miss VISIBLE: the object-literal key resolves below, and a computed member
+     * declaration does not and is then an occurrence a rename must report it cannot
+     * place rather than one it never saw. `{ [K]: v }` is not here — it spells no
+     * fixed name, and tsc reads that position as a reference to `K` alone (measured).
      */
     private fun typeCaptureIsMemberNameLiteral(node: Node): Boolean {
         if (typeCaptureLiteralMemberName(node) == null) return false
-        val parent = (node as NodeBase).parent
-        return parent is ElementAccessExpression && parent.argumentExpression === node
+        return when (val parent = (node as NodeBase).parent) {
+            is ElementAccessExpression -> parent.argumentExpression === node
+            is ComputedPropertyName -> parent.expression === node
+            is PropertyAssignment -> parent.name === node
+            else -> false
+        }
     }
 
     /**
@@ -7280,10 +7351,16 @@ class Checker(
      * (API.3b) The single-token name node of [declaration], or null.
      *
      * Only a single-token name is returned, so a binding pattern (`const { a } = o`
-     * as the VariableDeclaration behind a whole-pattern symbol) and a computed
-     * member name fall back to the declaration. The kinds listed are the ones the
-     * binder and the INV.2(c) lexical pass actually attach to a [Symbol]; a kind
-     * not listed is not wrong, only coarser.
+     * as the VariableDeclaration behind a whole-pattern symbol) falls back to the
+     * declaration. The kinds listed are the ones the binder and the INV.2(c) lexical
+     * pass actually attach to a [Symbol]; a kind not listed is not wrong, only coarser.
+     *
+     * (API.17) A COMPUTED name unwraps to the literal INSIDE it — `["p"]` answers the
+     * `"p"` — and that is not cosmetic. The answer is a rename's SEED, and the group it
+     * seeds is looked up by `(file, start)` against the swept occurrence nodes: with the
+     * whole `["p"]: v` returned, the seed named an offset (the `[`) that no occurrence
+     * begins at, and every such rename refused itself with `no identifier node at this
+     * occurrence`. Coarser is not free here.
      */
     private fun typeCaptureDeclarationName(declaration: Node): Node? {
         val name: Node? = when (declaration) {
@@ -7316,6 +7393,10 @@ class Checker(
             // A default import's binder declaration is the whole statement.
             is ImportDeclaration -> declaration.importClause?.name
             else -> null
+        }
+        if (name is ComputedPropertyName) {
+            val inner = name.expression
+            return if (typeCaptureLiteralMemberName(inner) != null) inner else null
         }
         return when (name) {
             is Identifier, is StringLiteralNode, is NumericLiteralNode -> name
@@ -7457,11 +7538,19 @@ class Checker(
      * it finds, which is the interface. Refused when the left side is not a bare
      * name, exactly as the definition leg refuses `A.B.x`.
      *
-     * NOT closed, deliberately: an object literal's own key (`{ p: v }`). Its useful
-     * answer is the CONTEXTUAL type's property — walk-scoped state this capture does
-     * not read and which is absent outright in positions such as a ternary branch —
-     * so a shorthand `{ p }` keeps reporting the LOCAL `p` it references, which is
-     * a true statement about a different subject. Round 922's reason, unchanged.
+     * An OBJECT-LITERAL KEY (`{ p: v }`, `{ "p": v }`, `{ ["p"]: v }`) was recorded
+     * here as deliberately NOT closed, on the ground that its useful answer is the
+     * CONTEXTUAL type's property and that the contextual type is walk-scoped state a
+     * capture cannot read. (API.10) then built [typeCaptureContextualType], which is
+     * purely SYNTACTIC and is therefore exactly the mechanism that reason said did not
+     * exist — and nobody came back for the type. (API.17) did:
+     * [typeCaptureObjectLiteralKeyType] is that leg, and before it a key answered `any`
+     * or the COLLIDER's type, which is the same confidently-wrong answer this KDoc
+     * opens by describing.
+     *
+     * STILL not closed, deliberately: a SHORTHAND `{ p }`, which keeps reporting the
+     * LOCAL `p` it references — a true statement about a different subject where the
+     * span names two. Round 922's reason, narrowed to the one shape it still holds for.
      */
     private fun typeCaptureReportedType(node: Expression): Type =
         typeCaptureMemberAccessType(node)
@@ -7581,8 +7670,52 @@ class Checker(
                 else typeCaptureElementAccessMemberType(parent, node)
             is QualifiedName ->
                 if (parent.right !== node) null else typeCaptureQualifiedNameType(parent)
+            // (API.17) An OBJECT-LITERAL KEY, `{ p: v }` and `{ ["p"]: v }`. See
+            // [typeCaptureObjectLiteralKeyType] for what this cashes in.
+            is PropertyAssignment ->
+                if (parent.name !== node) null else typeCaptureObjectLiteralKeyType(node)
+            is ComputedPropertyName ->
+                if (parent.expression !== node) null
+                else typeCaptureObjectLiteralKeyType(node)
             else -> null
         }
+
+    /**
+     * (API.17) The type of the member an object-literal KEY names, or null when [node]
+     * is a computed name that belongs to no object literal.
+     *
+     * ## A refusal whose stated reason had already been removed
+     *
+     * [typeCaptureReportedType] recorded this position as deliberately NOT closed, and
+     * its reason was that the useful answer is the literal's CONTEXTUAL member and that
+     * the contextual type is walk-scoped state a capture cannot read. (API.10) then
+     * built [typeCaptureContextualType] — a purely SYNTACTIC walk out of the literal,
+     * a function of the position and of nothing the walk happens to be doing — for
+     * go-to-definition, and nobody came back for the type. Measured before this round,
+     * on the same fixture shape (BUG.4) was written against: a key answered `any` where
+     * nothing shared its spelling and the COLLIDER'S type where something did — `{ p: 1
+     * }` for a `number` member reported `string`, the type of an unrelated file-level
+     * `const p`. That is the confidently-wrong answer *prove to offer* exists to
+     * prevent, one position over from where (BUG.4) and (API.11) each found it.
+     *
+     * ## The two answers, and why the fallback is not a guess
+     *
+     * The CONTEXTUAL member's type when the literal has one — `(property) Shape.p:
+     * number` is what tsc 7.0.2 reports there — and otherwise the key's OWN value,
+     * which is what tsc reports for a free key (`(property) z: number`, and `(property)
+     * ["z"]: number` for the computed spelling; this API renders types, so both are
+     * `number` here). Never the enclosing scope, which is the one answer that can name
+     * a different subject.
+     */
+    private fun typeCaptureObjectLiteralKeyType(node: Node): Type? {
+        val (assignment, name) = typeCaptureObjectLiteralKey(node) ?: return null
+        val literal = (assignment as NodeBase).parent as? ObjectLiteralExpression
+        if (literal != null) {
+            val members = typeCaptureContextualMembers(literal, name)
+            members.firstOrNull()?.let { return getTypeOfSymbol(it) }
+        }
+        return getTypeOfExpression(assignment.initializer)
+    }
 
     /**
      * (BUG.4)/(API.16) The type of the member the LITERAL [node] names in [access], or

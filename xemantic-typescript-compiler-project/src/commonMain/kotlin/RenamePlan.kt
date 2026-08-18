@@ -247,11 +247,17 @@ public enum class RenameConflictKind {
     UNRESOLVED_OCCURRENCE,
 
     /**
-     * An element access naming a member with a string literal — `o["p"]`. Its member
-     * is not an identifier, so it is outside the population this API can find at all
-     * (`Project.referencesAt` draws the same boundary). tsc rewrites these; this
-     * refuses, because finding them would need a mechanism that does not exist here
-     * and missing one breaks the program.
+     * A member named by a LITERAL that the search could not place — the `"p"` of an
+     * `o["p"]`, of a `{ ["p"]: v }`, of a `class C { ["p"] = 1 }` or of a
+     * `const { "p": local } = o`. Every one of them is SWEPT since (API.17), so this
+     * no longer means "outside the population": it means the search saw the span and
+     * could not prove which member it names, which is the one thing that must never
+     * become silence — a rename that strands such a literal produces a program that
+     * still compiles and no longer means the same thing.
+     *
+     * The name is kept from (API.9), when an element access was the only shape that
+     * reached here, so a host branching on it keeps working; [detail] says which shape
+     * it actually is.
      */
     ELEMENT_ACCESS,
 

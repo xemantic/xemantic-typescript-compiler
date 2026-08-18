@@ -20,6 +20,152 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 932 (2026-08-18) — (API.17): A COMPUTED OBJECT-LITERAL KEY. § 14's GAP 2 — THE
+LAST SILENT SHAPE ANYWHERE IN THIS API — IS CLOSED, AND THE ROUND'S PRODUCT IS THAT
+**A REFUSAL'S STATED REASON CAN EXPIRE WITHOUT ANYONE NOTICING: `typeCaptureReportedType`
+REFUSED TO TYPE AN OBJECT-LITERAL KEY *BECAUSE THE CONTEXTUAL TYPE IS WALK-SCOPED STATE A
+CAPTURE CANNOT READ*, AND (API.10) BUILT EXACTLY THAT MECHANISM ONE ROUND LATER.**
+
+- **STEP 1 WAS tsc, five oracles over three fixtures** (`lsp_member_refs.py`,
+  `lsp_rename.py`, `lsp_hover.py`, `lsp_definition.py`, `lsp_completion.py`). Every row
+  below was READ, not reasoned:
+
+| caret / query | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| references of `Shape.p`, one `{ ["p"]: v }` in the file | **6** spans, the key's `[232,233)` among them | 4 — silently short | 6 |
+| the key's span | the TEXT, **quotes excluded** | — | the same |
+| the same with the member OPTIONAL (`q?`) | 5 | 4 — **and the rename went through** | 5 |
+| a NESTED computed key under a computed key | 5 | 0 | 5 |
+| `` { [`p`]: v } `` template key | in the group | 0 | in the group |
+| `{ "p": v }` quoted key | in the group | 0 | in the group |
+| `{ [K]: v }` where `K` is a `const` | the **binding**'s 2 spans, not the member's | the same | the same |
+| a key with NO contextual type | 1 — itself | 0 | 1 |
+| hover on `{ p: v }` (contextual) | `(property) Shape.p: number` | **`string`** — an unrelated `const p` | `number` |
+| hover on `{ ["p"]: v }` | `(property) Shape.p: number` | `string` (the literal's own) | `number` |
+| hover on a free key | `(property) ["z"]: number` | `string` | `number` |
+| definition on a computed key | the member's declaration | none | the same |
+| rename from either end | rewrites the key, delimiters kept | refused / silent | rewrites it |
+| completion inside `{ ["‸"]: }` | **null result** | NONE | NONE — parity |
+| `interface I { ["ip"]: n }` + `i.ip` | 3 spans, rename rewrites all | refused | 3 spans, rewritten |
+
+- **THE POPULATION IS THE WHOLE FEATURE FOR THE THIRD ROUND RUNNING, AND THIS TIME IT
+  COLLAPSED INTO ONE PREDICATE.** `SourceIndex.occurrenceNodes` used to be identifiers
+  plus a dedicated element-access enumeration; it is now identifiers plus every node for
+  which `isMemberPosition && isMemberNameLiteral` holds — which SUBSUMES (API.9)'s
+  element accesses and (API.16)'s templates and adds `{ "p": v }`, `{ ["p"]: v }`,
+  ``{ [`p`]: v }`` and a class's or an interface's `["p"]`. `isMemberPosition` was
+  already the predicate `Project.occurrenceCaret` used to decide whether a caret ON such
+  a literal names anything, and already the axis the completeness net splits its
+  obstacles on, so **the set a caret may land in, the set a sweep reports and the set a
+  rename edits are now one set by construction** rather than three definitions kept in
+  step.
+- **A LITERAL THIS API CANNOT *RESOLVE* STILL BELONGS IN THE POPULATION, AND THAT IS THE
+  WHOLE ARGUMENT FOR "PROVE TO OFFER" HOLDING WITHOUT EXCEPTION.** A computed METHOD key
+  (`{ ["m"]() {} }`) and a computed member of a TYPE LITERAL are members the CHECKER does
+  not put in a member table at all — measured, `c.cm()` hovers `any` and resolves
+  nowhere — so nothing places them. Swept, they become a stated `OCCURRENCES_INCOMPLETE`
+  conflict; unswept, they were a span nobody looked at. Seen-and-unplaced is a refusal;
+  unseen is a silence.
+- **`{ [K]: v }` IS DELIBERATELY OUT, AND THE ASYMMETRY IS LOAD-BEARING.** A computed
+  name that is a BINDING spells no fixed member — the value is decided at run time — and
+  tsc reads it as a reference to `K` alone (measured: two spans, and renaming it writes
+  `[renamed]`). `isMemberPosition`'s computed arm therefore filters to LITERALS where its
+  element-access arm does not, because calling `[K]` a member position flips the
+  completeness net's polarity for every ordinary `const` rename. **A mid-round draft did
+  not filter, and the regression it produced is arm C4**: `{ [K]: v }` resolved to a
+  member named `K`, the const's own group lost its use, and its hover changed subject.
+- **THE ROUND'S SECOND HALF WAS AN AUDIT FINDING, and it is the (API.16) product one
+  round on.** `typeCaptureReportedType`'s KDoc listed an object-literal key as
+  deliberately NOT closed and gave one reason: the useful answer is the CONTEXTUAL type's
+  property, and a contextual type is walk-scoped state a capture cannot read. (API.10)
+  then wrote `typeCaptureContextualType`, which is purely SYNTACTIC and is therefore
+  precisely the mechanism that reason said did not exist. Nobody came back for it.
+  Measured this round on a (BUG.4)-shaped fixture: **every** object-literal key answered
+  `any`, or the COLLIDER's type where a same-spelled binding existed — `{ p: 1 }` against
+  a `number` member reported `string`, the type of an unrelated file-level `const p`.
+  That is the confidently-wrong answer *prove to offer* exists to prevent, and round
+  930's own audit passed it as TRUE because its caret list did not include a key.
+- **ONE CHECKER GAP WAS MEASURED AND LEFT ALONE, and it is stated in the fixture's KDoc**:
+  a computed key whose literal is a no-substitution TEMPLATE does not supply the member it
+  names (`{ [`p`]: v }` against a required `p` is TS2741), while the quoted and bare forms
+  do. That is one layer below this API; the language service resolves the template key
+  regardless, which is why the pin fixture's members are optional.
+
+- **A ZERO ARM WAS A BLIND PIN, NOT A REDUNDANT GUARD — round 902's trap, caught by
+  reading the FIXTURE rather than the arm.** C5 (the contextual walk stops reading a
+  COMPUTED outer key) read 0 red on its first pass with a plausible story ready; the
+  truth is that the nested pin's outer key was written as an IDENTIFIER (`n: { ["inner"]:
+  v }`), so the shape exercised nothing. The fixture now nests under a computed key
+  (`["n"]: { ["inner"]: v }`) and asserts that it does, in the pin itself — a fixture
+  that must be a certain shape says so, or the next edit quietly removes the coverage.
+
+- **PINS +18, FOUR INVERTED.** The new `ProjectComputedKeyTest` (16) carries the round's
+  own shape: the occurrence set as an EXACT list against a fixture spelling `p` four more
+  times in positions that are not the member, the delimiter-excluded span for a quote and
+  a backtick alike, the caret-in-the-key direction, the nested computed key, `{ [K]: v }`
+  in both directions, the free key, go-to-definition, four hovers, the completion
+  refusal, and two renames asserted on the RESULTING TEXT. `ProjectContextualKeyTest`
+  gains the computed key to its exact set and turns its refusal pin into an occurrence
+  pin. The four inverted are round 930's two computed-key defect pins (now the rewrite and
+  the loud refusal one shape over) and round 927's two refusal pins, each saying so in
+  place.
+
+- **WHAT REMAINS REFUSED, and NOTHING IS SILENT.** A computed or quoted METHOD key
+  (`{ ["m"]() {} }`, `{ "m"() {} }`), a computed member of a TYPE LITERAL, and a binding
+  element's string `propertyName` (`const { "p": local } = o`) are all SWEPT and all
+  unplaced, so a rename that meets one refuses with `OCCURRENCES_INCOMPLETE` and names
+  the span — measured, all three, on one fixture whose member is OPTIONAL, which is the
+  shape that used to go through quietly. A caret ON one of them answers empty and refuses
+  `NO_SYMBOL`. Completion inside any computed key answers `NONE`, which is tsc's own
+  answer (a null result) at every one of four carets. And a computed member DECLARATION
+  in a CLASS or an INTERFACE now RESOLVES — `i.ip` and `["ip"]` are one group of three
+  spans and rename together, which fell out of the same declaration-name unwrap.
+
+- **TEN-ARM ABLATION, one mistake at a time, each arm applied to and restored from a
+  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (round 931's
+  dead-arm trap: a zero-red arm with a zero ran-count is not a redundant guard, it is no
+  arm at all). `scripts/round932-ablate.py`; every arm read `ran 549`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| C1 | the population is element accesses ONLY | **14** | the pre-932 boundary — every query, in one set |
+| C2 | the key's OWN declaration comes from the ASSIGNMENT, not the key node | **0 — MEASURED REDUNDANT** | see below |
+| C3 | a declaration's name stops unwrapping a COMPUTED name to its literal | 2 | the rename SEED, and C2's reach proof |
+| C4 | a computed key that is a NAME is admitted as if it spelled that name | 3 | `{ [K]: v }` — the regression this round backed out mid-flight |
+| C5 | the contextual walk stops reading a COMPUTED outer key | 2 | the NESTED key, and only it |
+| C6 | hover's object-literal-key arms are dropped | 2 | the audit finding: `any`, or the collider's type |
+| C7 | `isMemberPosition`'s computed arm stops filtering to LITERALS | **0 — MEASURED REDUNDANT** | see below |
+| C7b | THE REACH PROOF for C7: the same arm removed outright | **14** | the line is live and load-bearing in the other direction |
+| C8 | a literal DECLARATION reports its raw extent, delimiters included | 1 | the span a host highlights for a computed member declaration |
+| C9 | `occurrenceCaret` stops accepting a member-name literal | 6 | the FROM-the-literal direction, for all three spellings |
+
+  **Eight distinct non-empty sets, and the two zeros are recorded as redundant guards
+  with a REASON each rather than claimed as pins.** C2 is redundant *given* C3:
+  `typeCaptureDeclarationName` unwraps a computed name, so asking
+  `typeCaptureDeclarationLocation` for the ASSIGNMENT and for the KEY NODE answer the
+  same `CapturedDeclaration` — two guards on one property at two layers, which is round
+  927's A3/A8 law and its qualifier to round 807. C7's filter is redundant because
+  nothing else in the population walk can reach `{ [K]: v }`'s identifier — but the arm
+  it guards is emphatically live, which C7b measures at 14.
+- **GATES.** Suite **15,006 → 15,024 / 0 failures / 0 errors / 3 skipped** (core
+  UNCHANGED at 14,341; `-project` 531 → 549). `cost_gate.py` **+0.00% on all 20
+  counters** — a real gate, since the round changes core; `huge_methods.py --fail-over
+  0` clean on core (750 classes, 16,020 methods) and on `-project` explicitly (48
+  classes, 465 methods); the round-920 token gate re-run because `SourceIndex` changed —
+  **1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations**.
+  `spine_closure_audit.py` not applicable. `docs/language-service.md` §§ 8, 9, 10b, 10d,
+  13, 14.
+- **§ 14's gap list: 8 → 7 live of the ten ever numbered, and the page's headline claim
+  now holds without exception.** *Prove to offer* — every position either answers
+  correctly or refuses and says why — had three live exceptions three rounds ago; round
+  931 took two and this one takes the last. **Nothing anywhere in this API is silent.**
+
+- **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
+  about this API and the only thing that moves the cost table. Below it, the three
+  shapes above whose members the CHECKER does not put in a member table (a computed
+  method key, a computed type-literal member), which are a checker item rather than an
+  API one.
+
 **Round 931b (2026-08-18) — (API.16): A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS.
 § 14's GAP 6 — THE ONE GENUINELY SILENT GAP IN THIS API — IS CLOSED, AND THE ROUND'S
 PRODUCT IS THAT **A REFUSAL WITH ONE STATED REASON IS AN ASSET: ROUND 929's TEMPLATE
@@ -1994,6 +2140,34 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   counters; `huge_methods.py --fail-over 0` clean on both modules; the round-920 token
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
+
+- [x] **(API.17) A COMPUTED OBJECT-LITERAL KEY `{ ["p"]: v }` — LANDED, round 932; § 14's gap 2,
+  and the LAST silent shape anywhere in this API.** Round 930 measured a computed key as
+  "usually reported" — `WOULD_NOT_COMPILE` where the contextual member is REQUIRED,
+  `OCCURRENCES_INCOMPLETE` where the literal has no contextual type — and SILENT in exactly
+  one shape: an OPTIONAL member, where stranding the key costs no diagnostic, so the applied
+  rename compiled clean with the old name still spelled in the literal and no gate in this
+  repository could see it. tsc 7.0.2 counts the key as a reference, hovers it as the member,
+  navigates to the member's declaration and renames it (measured, six spans on a fixture
+  carrying one). **The landing is a POPULATION change and one predicate**: `occurrenceNodes`
+  now sweeps every literal for which `isMemberPosition && isMemberNameLiteral` holds, which
+  subsumes (API.9)'s element accesses, (API.16)'s templates, `{ "p": v }`, `{ ["p"]: v }`,
+  ``{ [`p`]: v }`` and a class's or an interface's `["p"]` — so the set a caret may land in,
+  the set a sweep reports and the set a rename must edit are ONE set by construction rather
+  than three definitions kept in step. **A literal the API cannot RESOLVE still belongs in it**:
+  seen-and-unplaced is a stated `OCCURRENCES_INCOMPLETE` conflict, unseen is a silent miss.
+  **`{ [K]: v }` is deliberately out** — it spells no fixed name and tsc reads it as a
+  reference to the binding `K` alone (measured); the asymmetry with the element-access arm is
+  stated in `SyntaxRoles.isMemberPosition`, because calling it a member position flips the
+  completeness net's polarity for every ordinary `const` rename. **THE ROUND'S SECOND HALF WAS
+  AN AUDIT FINDING**: `typeCaptureReportedType` recorded an object-literal key's TYPE as
+  deliberately not closed *because the contextual type is walk-scoped state a capture cannot
+  read* — and (API.10) built `typeCaptureContextualType`, a purely syntactic walk, one round
+  later. Nobody came back. Measured before this round, EVERY key — computed or bare —
+  answered `any`, or the COLLIDER's type where a same-spelled binding existed. Closed by
+  `typeCaptureObjectLiteralKeyType`, the contextual member's type with the key's own value as
+  the fallback, which is what tsc reports in both shapes. +18 pins, four inverted; ten-arm
+  ablation. `docs/language-service.md` §§ 8, 9, 10b, 10d, 14.
 
 - [x] **(API.16) A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS — LANDED, round 931; § 14's
   gap 6, the ONE genuinely silent gap in this API, is closed.** ``o[`p`]`` was outside

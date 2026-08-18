@@ -230,6 +230,9 @@ class ProjectContextualKeyTest {
             "a.ts@${keyOf("in-classprop")}",
             "a.ts@${keyOf("in-generic")}",
             "a.ts@${keyOf("in-union")}",
+            // (API.17) …and the COMPUTED key, which round 927 stated as a refusal and
+            // round 932 closed — one span, in the same group, reached by the same leg.
+            "a.ts@${offsetOf("""["p"]""") + 2}",
             "a.ts@${offsetOf("{ p, q }") + 2}",
             "a.ts@${offsetOf("const { p } = annotated") + 8}",
             "a.ts@${offsetOf("annotated.p") + 10}",
@@ -314,17 +317,33 @@ class ProjectContextualKeyTest {
     }
 
     /**
-     * A COMPUTED key is a refusal, stated: its string literal is outside the swept
-     * population, and admitting it without resolving it would turn every such key into a
-     * rename obstacle. tsc DOES rename it, so this is a known divergence rather than a
-     * disagreement about what the key means.
+     * (API.17), round 932 — WAS a pin on a REFUSAL. Round 927 left a COMPUTED key out of
+     * the swept population, on the ground that admitting it without resolving it would
+     * turn every such key into a rename obstacle; the resolution is the same contextual
+     * leg one node deeper, so the key is an ordinary occurrence now. Both directions,
+     * because the caret and the sweep are two different questions: the member's group
+     * CONTAINS the key, and a caret IN the key answers the member's whole group.
      */
     @Test
-    fun `a computed key is REFUSED and is not an occurrence`() {
+    fun `a computed key is an occurrence and answers the group from inside it`() {
         val project = projectWith()
         val inComputed = offsetOf("""["p"]""") + 2
-        assert("a.ts@$inComputed" !in places(shapeGroup(project)))
-        assert(project.referencesAt(mainFile, inComputed).isEmpty())
+        assert("a.ts@$inComputed" in places(shapeGroup(project)))
+        assert(places(project.referencesAt(mainFile, inComputed)) == places(shapeGroup(project)))
+    }
+
+    /**
+     * The SPAN excludes the quotes, which is what a rename writes into and what tsc
+     * edits (measured: `[232,233)` for a literal occupying `[231,234)`). Asserted as the
+     * TEXT rather than as offsets, because the failure that matters is `{ [newName]: v }`
+     * — which compiles and means something else.
+     */
+    @Test
+    fun `a computed key occurrence covers the text between the quotes`() {
+        val project = projectWith()
+        val inComputed = offsetOf("""["p"]""") + 2
+        val key = shapeGroup(project).single { it.fileName == mainFile && it.start == inComputed }
+        assert(main.substring(key.start, key.end) == "p")
     }
 
     /**

@@ -35,6 +35,7 @@ import com.xemantic.typescript.compiler.BreakStatement
 import com.xemantic.typescript.compiler.CaseClause
 import com.xemantic.typescript.compiler.ClassDeclaration
 import com.xemantic.typescript.compiler.ClassExpression
+import com.xemantic.typescript.compiler.ComputedPropertyName
 import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.ContinueStatement
 import com.xemantic.typescript.compiler.DefaultClause
@@ -449,6 +450,14 @@ internal object SyntaxRoles {
             // filtered where the population is built, never here, because "is this the
             // argument of an element access" is all this predicate claims.
             is ElementAccessExpression -> parent.argumentExpression === node
+            // (API.17) A COMPUTED NAME, `{ ["p"]: v }` / `class C { ["p"] = 1 }`. Only
+            // the LITERAL forms, and the asymmetry with the element-access arm above is
+            // deliberate rather than an oversight: `{ [K]: v }` is a reference to the
+            // binding `K` and to nothing else — tsc answers the const's own group there,
+            // two spans, measured — so calling it a member position would flip the
+            // completeness net's polarity for every ordinary `const K` rename.
+            is ComputedPropertyName ->
+                parent.expression === node && isMemberNameLiteral(node)
             else -> false
         }
     }
@@ -502,6 +511,55 @@ internal object SyntaxRoles {
         val accesses = stringMemberNameAccesses(root)
         val found = ArrayList<Pair<Node, String>>(accesses.size)
         for ((literal, _) in accesses) found.add(literal to occurrenceText(literal))
+        return found
+    }
+
+    /**
+     * (API.17) Every LITERAL in [root] that spells the name of a member — the `"p"` of
+     * `o["p"]`, of ``o[`p`]``, of `{ "p": v }`, of `{ ["p"]: v }`, of
+     * ``{ [`p`]: v }``, of `class C { ["p"] = 1 }` and of every other position
+     * [isMemberPosition] accepts.
+     *
+     * ## One predicate, which is the whole point
+     *
+     * (API.9) enumerated element accesses, (API.16) widened that to templates, and each
+     * time the population was the feature. This is the same question asked once: "is
+     * this literal in a MEMBER NAME position", which is [isMemberPosition] — already
+     * the predicate `Project.occurrenceCaret` uses to decide whether a caret ON such a
+     * literal names anything, and already the predicate the completeness net splits its
+     * obstacles on. So the set a caret can be placed in, the set a sweep reports and the
+     * set a rename must edit are now ONE set by construction rather than three
+     * definitions kept in step.
+     *
+     * ## Why a literal this API cannot RESOLVE still belongs here
+     *
+     * A class's or an interface's `["p"]` is a member declaration with no resolution
+     * leg, so it enters the sweep and stays unplaced — and that is the useful outcome:
+     * an occurrence the sweep can SEE and cannot place is a stated
+     * `OCCURRENCES_INCOMPLETE` conflict, while one it cannot see at all is a silent
+     * miss. § 14's gap 2 was exactly the second kind, and it was the last one: with the
+     * contextual member OPTIONAL, stranding a computed key costs no diagnostic, so the
+     * applied rename compiled clean with the old name still spelled in the literal and
+     * no gate in this repository could see it.
+     *
+     * A computed name that is NOT a literal (`{ [K]: v }`) is deliberately absent: it
+     * spells no fixed member name, and tsc 7.0.2 reads that position as a reference to
+     * the binding `K` and to nothing else (measured — two spans, the `const` and this
+     * use, and renaming it writes `[renamed]`). The ordinary free-name path already
+     * answers it that way, so admitting it here would put one token in two populations.
+     *
+     * ITERATIVE, as every full-tree walk in this module is: the corpus carries
+     * expression chains deep enough to crash a recursive one.
+     */
+    fun memberNameLiterals(root: Node): List<Node> {
+        val found = ArrayList<Node>()
+        val stack = ArrayList<Node>()
+        stack.add(root)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (isMemberNameLiteral(node) && isMemberPosition(node)) found.add(node)
+            forEachChild(node) { child -> stack.add(child) }
+        }
         return found
     }
 

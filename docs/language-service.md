@@ -31,9 +31,13 @@ declaration names — `(API.15)`, **an enum member's declaration name reports th
 member's own type** rather than `any`, which was the last position in this surface
 answering a plausible WRONG type instead of nothing — and `(API.16)`, **a member named
 by a TEMPLATE element access** (`` o[`p`] ``) **is an ordinary occurrence**: found,
-highlighted, hovered, renamed and completed, where before it was missed in SILENCE.
-Not yet: a computed key `{ ["p"]: v }` is outside the swept population, and an object
-literal's own member declaration is deliberately left alone.
+highlighted, hovered, renamed and completed, where before it was missed in SILENCE —
+and `(API.17)`, **every literal that names a member is one population**, so a COMPUTED
+object-literal key (`{ ["p"]: v }`), a quoted key (`{ "p": v }`) and a computed member
+DECLARATION join it, and an object-literal key finally reports the MEMBER's type on
+hover instead of the enclosing scope's. **Nothing this API answers is silent any more**:
+what it cannot place, it names. Not yet: an object literal's own METHOD declaration is
+deliberately left alone.
 See the `(API.*)` items in `PLAN-PHASE-5.md`, and **§ 14 for where the whole API
 stands**.
 
@@ -439,13 +443,18 @@ walk-scoped state instead. When it cannot be — a caret in a **static** member,
 whose `this` is `typeof C` and which this compiler does not model — the answer is
 `any`: a non-answer, never a wrong name.
 
-**HOVER alone still picks ONE subject where a span names two.** `(API.10)` gave
-go-to-definition, find-references and rename the contextual member behind an
-object-literal key and behind both shorthands (§ 9, § 10b), but a hover is one line
-of text and cannot show two: a `{ p: v }` key reports the type the checker computed
-at that node, and a shorthand `{ p }` reports the **local** it references — true
-about a different subject than tsc, which describes the contextual member for an
-object literal's form. That is a display choice, not a resolution gap.
+**HOVER STILL PICKS ONE SUBJECT WHERE A SPAN NAMES TWO — but only for a SHORTHAND.**
+`(API.10)` gave go-to-definition, find-references and rename the contextual member
+behind an object-literal key and behind both shorthands (§ 9, § 10b), and left the
+TYPE alone on the ground that a contextual type is walk-scoped state a capture cannot
+read. That ground had already gone: `(API.10)`'s own contextual walk is purely
+syntactic. `(API.17)` cashed it — **an object-literal key, computed or not, reports the
+CONTEXTUAL member's type**, or its own value's type where nothing types the literal,
+which is what tsc reports in both shapes. Before it, every key answered `any`, or the
+type of whatever unrelated binding happened to share the spelling. What remains is the
+shorthand `{ p }`, which reports the **local** it references — true about a different
+subject than tsc, which describes the contextual member. That one is a display choice,
+not a resolution gap: a hover is one line of text and cannot show two.
 
 One display note, because it looks like a bug and is not: a type reported here is
 named by the compiler's own renderer, which names an interned type by whatever
@@ -531,9 +540,6 @@ instance", never "lost".
 - the name resolves to a symbol with no declaration to point at;
 - **nothing declares the member** (`(o as any).absent`) — silence, never the
   nearest same-named anything;
-- **a computed object-literal key** (`{ ["p"]: v }`) — its string literal is outside
-  the swept population, and admitting it without resolving it would turn every such
-  key into a rename obstacle. tsc *does* answer it; this is a stated divergence;
 - **an object literal's own member declaration** (`{ om() { … } }`) — `(API.10)`'s key
   leg answers a `{ p: v }` key and its shorthands, and an object literal's METHOD is
   deliberately outside it: a contextually typed literal's method is an occurrence of the
@@ -620,9 +626,8 @@ val entry = many.firstOrNull { offset >= it.start && offset < it.end }
 The ordering is imposed by the API rather than inherited from the compiler, whose
 answer order is the order its walk happened to reach the nodes.
 
-**`quickInfo` may be null and `definitions` may be empty** — independently. An
-object-literal key being declared has a type and, deliberately, no definition
-(§ 9). An entry with neither is still returned: "there is a node here and the compiler had nothing to
+**`quickInfo` may be null and `definitions` may be empty** — independently. An object
+literal's own METHOD name has a type and, deliberately, no definition (§ 9). An entry with neither is still returned: "there is a node here and the compiler had nothing to
 say about it" is a different answer from "there is nothing here", and only your
 UI knows which to draw.
 
@@ -983,15 +988,17 @@ guess about which parent kinds declare a name.
   itself and a merged / overloaded / accessor-paired member answers its siblings' names
   too. The evidence recovery survives underneath as a fallback and nothing depends on
   it.
-- **A computed key** (`{ ["p"]: v }`). Its literal is not in the swept population,
-  and putting it there without resolving it would make every such key a rename
-  obstacle. tsc renames it; this is a stated divergence, not a disagreement about
-  what the key means.
-- **Identifiers, and the member-naming literal of an `o["p"]` or a `` o[`p`] ``.** A
-  keyword, any other literal, punctuation or trivia answers empty **and does not
-  build**. Such a literal is swept only where it names a member: `const unrelated =
-  "p"` and an unrelated `` `p` `` are not references to `p`, which is the difference
-  between this and a text search.
+- **Identifiers, and EVERY LITERAL IN A MEMBER-NAME POSITION** — the `"p"` of an
+  `o["p"]`, of a `` o[`p`] ``, of a `{ ["p"]: v }`, of a `{ "p": v }`, of a
+  ``{ [`p`]: v }`` and of a class's or an interface's `["p"]`. `(API.17)` made that one
+  predicate rather than three, so the set a caret may land in, the set this sweep
+  reports and the set a rename edits cannot drift apart. A keyword, any other literal,
+  punctuation or trivia answers empty **and does not build**; and a literal is swept
+  only where it NAMES a member, so `const unrelated = "p"` and an unrelated `` `p` ``
+  are not references to `p`, which is the difference between this and a text search.
+- **A computed key that is a NAME** (`{ [K]: v }`) is a reference to the binding `K`
+  and to nothing else — it spells no fixed member name, the value is decided at run
+  time, and that is tsc's answer there too (measured: the const's own two spans).
 - **The program, not the libraries.** A declaration in a `lib.*.d.ts` comes back
   (flagged), because the caret resolved to it; no lib file is swept for uses.
 
@@ -1021,6 +1028,13 @@ band. `fileSemantics` is untouched by construction — it enumerates `identifier
 whose contract did not change — and measures 5.6 – 10.6 s for `checker.ts`'s 16,274
 spans. Absolute milliseconds are only comparable within the run that took them; the
 **population** is the figure that transfers.
+
+`(API.17)` widened the population again — to identifiers plus every literal in a
+member-NAME position, which adds computed and quoted object-literal keys and computed
+member declarations — and the argument above is unchanged in shape: such literals are
+rare in real TypeScript, and tsc's own sources are the extreme case of that. The counts
+here have **not** been re-taken, so read them as `(API.9)`'s measurement and not as
+today's.
 
 The sweep itself is 2.5 – 4 s on top of the rebuild it rides, whatever the caret:
 resolving 381,670 identifiers costs the same whether the answer is 168 hits in one
@@ -1234,7 +1248,7 @@ of the code. That is also why this costs a second build.
 | `DECLARED_IN_A_LIBRARY` | some declaration is in a `lib.*.d.ts`, which has no path on disk. Renaming the uses alone does not compile. tsc refuses the same thing |
 | `ALIASED_SYMBOL` | the group spells the symbol two ways because an `import { a as b }` was crossed. One new name cannot be applied to both, and picking a side would be a guess |
 | `UNRESOLVED_IMPORT` | a declaration IS the import binding, i.e. the module did not resolve |
-| `OCCURRENCES_INCOMPLETE` | some occurrence spelling the old name could be one of this symbol's and could not be resolved. **The member-rename refusal** — since `(API.11)` that is a member on an `any` receiver (by `o.p` or by `o["p"]`), a shorthand in a literal nothing contextually types, or an object literal's own METHOD; a *second declaration of the same member name*, an implementor, an `o["p"]` and a contextually supplied key are no longer among them |
+| `OCCURRENCES_INCOMPLETE` | some occurrence spelling the old name could be one of this symbol's and could not be resolved. **The member-rename refusal** — since `(API.11)` that is a member on an `any` receiver (by `o.p` or by `o["p"]`), a shorthand in a literal nothing contextually types, or an object literal's own METHOD; a *second declaration of the same member name*, an implementor, an `o["p"]`, a contextually supplied key and — since `(API.17)` — a computed or quoted key are no longer among them |
 | `WOULD_NOT_COMPILE` | the verification build produced diagnostics the original did not |
 | `WOULD_CHANGE_MEANING` | the verification build resolved something somewhere else |
 
@@ -1294,12 +1308,15 @@ Three things still refuse it, and each is a different sort of thing:
   net cannot rule out. Round 930 measured the other half: in a literal nothing
   contextually types, the group is complete and the rename goes through.
 
-A **computed key** (`{ ["p"]: v }`) is not in the swept population, so it is never
-rewritten; round 930 measured what that costs. Where stranding it breaks the program the
-apply-and-recheck stage refuses with `WOULD_NOT_COMPILE`, and where the literal has no
-contextual type the completeness gate refuses with `OCCURRENCES_INCOMPLETE`. It is a
-SILENT gap in exactly one shape — a contextual member that is **optional**, where
-dropping it costs no diagnostic for the recheck to find. tsc renames it in all three.
+A **computed key** (`{ ["p"]: v }`) is rewritten since `(API.17)`, delimiters preserved,
+in every one of its three shapes — and it was the last SILENT one. Round 930 measured
+what its absence cost: where stranding it broke the program the apply-and-recheck stage
+refused with `WOULD_NOT_COMPILE`, where the literal had no contextual type the
+completeness gate refused with `OCCURRENCES_INCOMPLETE`, and where the contextual member
+was **optional** it went through in silence, because dropping it costs no diagnostic for
+the recheck to find. A quoted key (`{ "p": v }`) and a computed member DECLARATION are in
+the same population for the same reason: what this API cannot place, it now at least
+SEES, and an occurrence it can see and cannot place is a stated conflict.
 
 A **template element access** (`` o[`p`] ``) was the silent one with no such saving
 grace — outside the population, refused by nothing, and left spelling the old name in a
@@ -1447,11 +1464,6 @@ stale text and nothing worse.
   930 measured what that costs a rename, and it is not uniform: with no contextual type
   the method still renames completely from either end, and with one the key becomes an
   unresolved occurrence and the rename refuses (§ 10d).
-- **a computed object-literal key** (`{ ["p"]: v }`) is neither found nor renamed: its
-  literal is outside the swept population, and putting it there without resolving it
-  would turn every such key into a rename obstacle. Round 930 measured what happens
-  next: the rename is REFUSED in two of the three shapes and goes through silently only
-  where the contextual member is optional (§ 14, gap 2).
 - **hover on a shorthand `{ p }` describes the LOCAL** (§ 8), where tsc describes the
   contextual member for an object literal's form and the local for a binding pattern's.
   References, go-to-definition and rename answer both since `(API.10)`; only the
@@ -1471,7 +1483,7 @@ your host.
 
 ## 14. State of the API — the two-minute version
 
-Rounds 909–930 built this in twenty-one increments, and the detail is spread across as
+Rounds 909–932 built this in twenty-three increments, and the detail is spread across as
 many session notes. This section is the summary a next agent or a host author should
 read instead.
 
@@ -1484,6 +1496,12 @@ read instead.
 > the ceremony is the thing the audit found first: this section was three rounds old and
 > already listed a defect that had been fixed *before it was written*. A page of prose
 > about behaviour drifts within three rounds; the pins are what stop it.
+>
+> **Amended by rounds 931 and 932**, which closed gaps 6, 7 and 2 and inverted the four
+> pins that asserted them; `(API.17)`'s own claims are defended by
+> `ProjectComputedKeyTest` and by `ProjectContextualKeyTest`. Round 932 additionally
+> corrected a claim this audit had passed as TRUE — hover on an object-literal key — by
+> the same method that found the rest: measuring it.
 
 ### What it answers
 
@@ -1493,11 +1511,11 @@ read instead.
 | in-memory edits, including files that exist nowhere but the overlay | § 5 | complete |
 | offset ⟷ (line, character) | § 6 | complete — `\n`, `\r\n` and a lone `\r` all agree with the compiler's own diagnostics |
 | what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (re-run round 930, 1,327 files, zero violations) |
-| hover | § 8 | complete for values, members and member declarations, an enum member's included since `(API.15)` |
+| hover | § 8 | complete for values, members, member declarations and object-literal KEYS — an enum member's since `(API.15)`, a key's own since `(API.17)` |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
 | the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
 | completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` and `` o[` `` included |
-| find references, document highlights, read-vs-write | § 10b | complete |
+| find references, document highlights, read-vs-write | § 10b | complete — the population is every identifier plus every literal in a member-NAME position (`(API.17)`) |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
 | rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the gaps below |
 
@@ -1516,10 +1534,22 @@ why a rename that cannot show its occurrence set complete refuses with the evide
 rather than shipping a partial plan.
 
 The refusals are listed per member (§§ 9, 10a–10d). The ones that are gaps rather than
-principles are in the list below. Round 930 found ONE place where the rule was broken
-rather than applied — an enum member's declaration name answering `any`, a plausible
-wrong answer and not a refusal — and round 931 closed it (gap 7). Every remaining gap is
-a silence or a stated refusal.
+principles are in the list below.
+
+**AND SINCE ROUND 932 THE RULE HOLDS WITHOUT EXCEPTION — which is this page's headline
+claim, so it is worth saying exactly what it means.** Every position this API answers
+either answers correctly, or refuses and says why. Nothing is silently missed and
+nothing answers a plausible wrong thing. Three rounds took the last three exceptions:
+round 931 closed an enum member's declaration name answering `any` (gap 7 — a wrong
+answer, not a refusal) and a template element access being missed without a word (gap
+6), and round 932 closed the computed object-literal key (gap 2), whose OPTIONAL-member
+shape was the last place a rename could complete while leaving an occurrence of the old
+name behind — with no diagnostic, no failing gate and nothing in any output to see it
+by. Round 932 also found, by measuring the neighbour, that hover on ANY object-literal
+key reported the enclosing scope rather than the member, and closed that too. The
+mechanism behind the last one is worth a host author's attention: **a literal this API
+cannot RESOLVE is nonetheless SWEPT**, so it becomes a stated `OCCURRENCES_INCOMPLETE`
+conflict instead of a span nobody looked at.
 
 ### What it costs
 
@@ -1554,20 +1584,33 @@ caret movement.**
 
 ### The known gaps, all of them
 
+**Seven live of the ten ever numbered** — 2, 6 and 7 are closed and their numbers are
+kept so the round notes keep pointing at the same thing. **None of the seven is a
+silence**: each is a stated refusal, a deliberate divergence, or the architecture.
+
 1. **No incrementality.** Every query rebuilds; a rename builds twice. This is the one
    thing that changes the cost table, and it is the architectural inversion
    (`docs/ARCHITECTURE-RETHINK.md`), not an API item.
-2. **A computed object-literal key** `{ ["p"]: v }` is outside the swept population, so
-   it is neither found by `referencesAt` nor rewritten by a rename. *Corrected round
-   930*: it is **usually reported** — the recheck refuses with `WOULD_NOT_COMPILE` when
-   stranding the key breaks the program, and the completeness gate refuses with
-   `OCCURRENCES_INCOMPLETE` when the literal has no contextual type. It goes through
-   **silently** in exactly one shape: a contextual member that is **optional**, where
-   dropping it costs no diagnostic. tsc counts the key as a reference and renames it.
+2. ~~A computed object-literal key `{ ["p"]: v }` is outside the swept population.~~
+   **CLOSED round 932**, `(API.17)` — and it was the last SILENT shape anywhere in this
+   API. Round 930 measured it as reported in two of its three shapes
+   (`WOULD_NOT_COMPILE` where stranding the key breaks the program,
+   `OCCURRENCES_INCOMPLETE` where the literal has no contextual type) and silent in the
+   third, an **optional** contextual member, where dropping it costs no diagnostic. All
+   three are now answers: the key is an ordinary occurrence, found, highlighted, hovered,
+   navigated and renamed over the TEXT rather than the quotes — as are `{ "p": v }`,
+   ``{ [`p`]: v }`` and a computed member DECLARATION, which fall out of the same one
+   predicate. `{ [K]: v }` is deliberately NOT one: it spells no fixed name and is a
+   reference to the binding `K`, which is tsc's answer too. The number is kept so the
+   round notes keep referring to the same gap.
 3. **An object literal's own METHOD** (`{ om() { … } }`) has no definition of its own —
    `definitionsAt` on the declaration name answers empty, see § 9. *Corrected round 930*:
    it does **not** refuse a rename. A use of it resolves to the declaration, so the
    occurrence set is complete and `renameAt` rewrites both ends from either caret.
+   *Round 932*: a computed or quoted METHOD key (`{ ["om"]() { … } }`) is SWEPT but
+   still unresolved, so it is now a stated `OCCURRENCES_INCOMPLETE` conflict rather
+   than a span nobody looked at — the same treatment a computed member DECLARATION in a
+   class or an interface gets where the checker does not put it in a member table.
 4. **A member on an `any` receiver** cannot be placed, so it refuses a member rename.
 5. **A shorthand in a literal nothing contextually types** likewise.
 6. ~~A member named by a TEMPLATE element access is silently missed.~~ **CLOSED round
@@ -1596,7 +1639,8 @@ caret movement.**
 | `super.p` goes to the base's declaration (§ 9's table, and the row above) | **WRONG** — it answered nothing while hover at the same caret answered correctly | fixed this round: the receiver leg had a `this` carrier and no `super` one. tsc navigates to `Base.pb`; so does this now |
 | an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reported `any`; **closed round 931** | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0`. `(API.15)` gave the leg its own mint; five shapes now report the member's type |
 | an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type the plan carries both occurrences from either caret and the applied text compiles; with one it is `OCCURRENCES_INCOMPLETE` at the key. Found by measuring the correction — this round's own lesson, applied to itself |
-| a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
+| a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes; **CLOSED round 932** | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
+| hover, everywhere the audit looked | **TRUE where it looked, and it did not look at an object-literal KEY** — round 932 found every one of them reporting `any`, or the type of an unrelated same-spelled binding | `{ p: 1 }` against `interface Shape { p: number }`, beside a file-level `const p: string`, reported `string`. An audit is only as wide as its caret list |
 | a template element access is silently missed | **TRUE**, proven end to end; **closed round 931** | the applied rename compiled clean with the old name still in the template. `(API.16)` widened the occurrence population to it, and the pin that asserted the silence now asserts the rewrite |
 | `documentHighlightsAt` costs 6.0 – 7.2 s | **TRUE of `checker.ts`** and unqualified — 5.0 – 5.5 s on `types.ts` | the row is a statement about a FILE; the table above says so now |
 | a plain rebuild is 5.5 – 5.9 s (§ 14) / ~5.2 s (§ 3) | **BOTH DRIFTED**, in opposite directions | re-taken: 5.0 – 5.5 s warm, ~9 s for the first rebuild in a process |

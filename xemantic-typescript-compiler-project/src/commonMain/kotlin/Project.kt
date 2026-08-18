@@ -1192,17 +1192,21 @@ public class Project private constructor(
         // covered (a lib) cannot be there at all.
         for (location in seed) {
             if (restrictToQueryFile && location.fileName != queryFile) continue
+            // (API.17) …through the SWEPT extent where there is one, so a declaration
+            // named by a LITERAL reports the same span an occurrence of it reports —
+            // the text, delimiters excluded. The capture speaks raw `(pos, end)` and
+            // has no [SourceIndex] to narrow with; this does.
+            val extent = extents[location.fileName]?.get(location.start)
             hits.getOrPut(location.fileName to location.start) {
                 ReferenceLocation(
                     fileName = location.fileName,
-                    start = location.start,
-                    end = location.start + location.length,
+                    start = extent?.start ?: location.start,
+                    end = extent?.end ?: (location.start + location.length),
                     isDeclaration = true,
                     // A declaration in a file the sweep never covered — a `lib.*.d.ts`
                     // — has no node here to classify, and an unplaced occurrence is
                     // reported as unplaced rather than defaulted to a read.
-                    use = extents[location.fileName]?.get(location.start)?.use
-                        ?: ReferenceUse.UNCLASSIFIED,
+                    use = extent?.use ?: ReferenceUse.UNCLASSIFIED,
                 )
             }
         }
@@ -1241,10 +1245,11 @@ public class Project private constructor(
     /**
      * The node a reference or rename caret names, or null when it names nothing.
      *
-     * An identifier, or — since (API.9) — the member-naming LITERAL of an `o["p"]` and,
-     * since (API.16), of a ``o[`p`]``: the only non-identifiers this API resolves. tsc
-     * answers a caret in either of them with the member's whole group, measured, and so
-     * does this. Everything else (a keyword, punctuation, trivia, any other literal)
+     * An identifier, or a member-naming LITERAL: the `"p"` of an `o["p"]` (API.9), of a
+     * ``o[`p`]`` (API.16) and, since (API.17), of every other member-NAME position —
+     * `{ "p": v }`, `{ ["p"]: v }`, a class's `["p"]`. tsc answers a caret in any of
+     * them with the member's whole group, measured, and so does this wherever the
+     * literal can be placed; where it cannot, the answer is empty rather than a guess. Everything else (a keyword, punctuation, trivia, any other literal)
      * answers null, and a caret that cannot be answered must not pay for a compile: the
      * rule `completionsAt` and `semanticsAt` already follow.
      */
@@ -1633,9 +1638,10 @@ public class Project private constructor(
      * - renaming a plain binding, the FREE positions are.
      *
      * Two obstacles have no resolution to consult at all and are checked only for a
-     * member: an `o["p"]`, whose member is a string literal and therefore outside the
-     * population this API can find, and a SHORTHAND, whose property comes from a
-     * contextual type or from the binding pattern's own token.
+     * member: a member named by a LITERAL the search could not place — an `o["p"]` on
+     * an `any`, a computed member DECLARATION, a string-named method — and a
+     * SHORTHAND, whose property comes from a contextual type or from the binding
+     * pattern's own token.
      */
     private fun completenessConflicts(
         oldName: String,
@@ -1665,13 +1671,17 @@ public class Project private constructor(
                     // because the two failures are different things to a user — a
                     // literal that could not be placed names a member of an `any`, which
                     // is not the same report as an identifier that could not be.
-                    val literalAccess = SyntaxRoles.isMemberNameLiteral(id)
+                    // (API.17) …and the literal is no longer only an element access's:
+                    // a computed key, a string key and a class's computed member name
+                    // all arrive here, which is what turns the last silent miss in this
+                    // API into a stated one.
+                    val literalName = SyntaxRoles.isMemberNameLiteral(id)
                     val kind =
-                        if (literalAccess) RenameConflictKind.ELEMENT_ACCESS
+                        if (literalName) RenameConflictKind.ELEMENT_ACCESS
                         else RenameConflictKind.UNRESOLVED_OCCURRENCE
                     val detail =
-                        if (literalAccess) {
-                            "an element access naming '$oldName' the search could not resolve"
+                        if (literalName) {
+                            "a literal naming the member '$oldName' the search could not place"
                         } else {
                             "an identifier spelled '$oldName' that the search could not resolve"
                         }

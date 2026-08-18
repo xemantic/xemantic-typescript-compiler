@@ -268,41 +268,63 @@ class LanguageServiceStateTest {
         assert(plan.conflicts.any { it.kind == RenameConflictKind.UNRESOLVED_OCCURRENCE && it.start == literalKey })
     }
 
-    // --- gap 2: a computed object-literal key -----------------------------------
+    // --- gap 2: a computed object-literal key, CLOSED round 932 -----------------
 
     @Test
-    fun `a computed key that a rename would strand is REFUSED with the evidence`() {
-        // § 14's gap 2 said a computed key is "not reported either". Two of its three
-        // shapes report loudly, each through a different gate: the apply-and-recheck
-        // one, and the unresolved-occurrence one.
+    fun `a computed key is REWRITTEN by a rename in both its contextual shapes`() {
+        // (API.17), round 932 — WAS a pin on two REFUSALS. Round 930 measured a
+        // computed key as "usually reported": loudly through the apply-and-recheck gate
+        // where the member is required, and loudly through the unresolved-occurrence
+        // gate where the literal has no contextual type. Both are now ANSWERS: the key
+        // is an ordinary occurrence, so the rename edits it, which is what tsc does.
         val contextual =
             "interface I { p: number }\nconst o: I = { [\"p\"]: 1 };\nconst v = o.p;\nexport { o, v };\n"
         val required = projectWith(contextual)
             .renameAt(file, offsetOf(contextual, "o.p", plus = 2), "q")
-        assert(required.refusal == RenameRefusal.WOULD_NOT_COMPILE)
-        assert(required.conflicts.any { it.kind == RenameConflictKind.NEW_DIAGNOSTIC })
+        assert(required.refusal == null)
+        assert(applied(contextual, required).contains("{ [\"q\"]: 1 }"))
 
+        // With NO contextual type the key declares the literal's own property, so the
+        // rename is that property's — one file, three spans, and the key among them.
         val inferred = "const o = { [\"p\"]: 1 };\nconst v = o.p;\nexport { o, v };\n"
         val uncontextual = projectWith(inferred)
             .renameAt(file, offsetOf(inferred, "o.p", plus = 2), "q")
-        assert(uncontextual.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
-        assert(uncontextual.conflicts.any { it.kind == RenameConflictKind.UNRESOLVED_OCCURRENCE })
+        assert(uncontextual.refusal == null)
+        assert(applied(inferred, uncontextual).contains("{ [\"q\"]: 1 }"))
     }
 
     @Test
-    fun `a computed key IS silently stranded where the member it supplies is OPTIONAL`() {
-        // PINS A DEFECT, and the one shape of gap 2 that is genuinely silent: with the
-        // contextual member optional, dropping it costs no diagnostic, so the recheck
-        // has nothing to refuse on and the key is left spelling the old name. tsc
-        // renames it — measured over its LSP, the key's string IS in the member's
-        // reference set.
+    fun `a computed key supplying an OPTIONAL member is rewritten and not stranded`() {
+        // (API.17), round 932 — WAS A DEFECT PIN, and the LAST silent shape in this API:
+        // with the contextual member optional, dropping the key costs no diagnostic, so
+        // the recheck had nothing to refuse on and the literal was left spelling the old
+        // name. Nothing in this repository could see that — the applied program compiled
+        // clean. tsc renames it, measured over its LSP, and so does this now.
         val source =
             "interface I { p?: number }\nconst o: I = { [\"p\"]: 1 };\nconst v = o.p;\nexport { o, v };\n"
         val project = projectWith(source)
         val plan = project.renameAt(file, offsetOf(source, "o.p", plus = 2), "q")
         assert(plan.isApplicable)
         assert(plan.conflicts.isEmpty())
-        assert(applied(source, plan).contains("[\"p\"]"))
+        val after = applied(source, plan)
+        assert(!after.contains("[\"p\"]"))
+        assert(after.contains("{ [\"q\"]: 1 }"))
+    }
+
+    @Test
+    fun `a literal key this API cannot place is refused LOUDLY rather than stranded`() {
+        // (API.17)'s stated boundary, and the reason the population admits a literal it
+        // cannot RESOLVE. A computed METHOD key (`{ ["m"]() {} }`) declares a member the
+        // checker does not put in the object literal's member table at all, so nothing
+        // places it — and because it is nonetheless SWEPT it becomes a conflict instead
+        // of a rename that leaves it spelling the old name. `m` is OPTIONAL here, which
+        // is precisely the shape that used to go through in silence.
+        val source =
+            "interface I { m?(): void }\nconst o: I = { [\"m\"]() {} };\n" +
+                "declare const u: I;\nconst v = u.m;\nexport { o, v };\n"
+        val plan = projectWith(source).renameAt(file, offsetOf(source, "u.m", plus = 2), "q")
+        assert(plan.refusal == RenameRefusal.OCCURRENCES_INCOMPLETE)
+        assert(plan.conflicts.any { it.kind == RenameConflictKind.ELEMENT_ACCESS })
     }
 
     // --- gap 6: a template element access, CLOSED round 931 ---------------------
