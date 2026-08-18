@@ -6707,23 +6707,137 @@ class Checker(
         fileName: String,
     ): CapturedDefinition? {
         val member = (id as NodeBase).parent ?: return null
-        val named = when (member) {
-            is PropertyDeclaration -> member.name === id
-            is MethodDeclaration -> member.name === id
-            is GetAccessor -> member.name === id
-            is SetAccessor -> member.name === id
-            else -> false
-        }
-        if (!named) return null
-        val heritage = typeCaptureOwnHeritage(member) ?: return null
+        if (typeCaptureMemberNameIdentifier(member) !== id) return null
+        val owner = (member as NodeBase).parent ?: return null
+        // (API.11) An OBJECT LITERAL's own member is left to (API.10)'s key leg and to
+        // what preceded it. A contextually typed literal's member is an occurrence of
+        // the CONTEXTUAL type's member, and resolving it to itself would take it out of
+        // the rename completeness net WITHOUT putting it in the group — a silent loss
+        // where the present refusal is loud.
+        if (owner is ObjectLiteralExpression) return null
         val own = typeCaptureDeclarationLocation(member) ?: return null
+        // (API.11) EVERY declaration of the member, not the one under the caret. That
+        // is the whole point of this leg: a MERGED interface, an OVERLOAD set and an
+        // ACCESSOR PAIR are each ONE member with several declaration names, and tsc
+        // puts all of them in one group (measured on tsc 7.0.2: `both` declared in two
+        // `interface Merged` blocks answers three references and two definitions from
+        // EITHER of them). It is also what makes a member declared and NEVER used
+        // answer at all.
+        val locations = LinkedHashSet<CapturedDeclaration>()
+        for (declaration in typeCaptureMemberDeclarations(owner, id.text)) {
+            typeCaptureDeclarationLocation(declaration)?.let { locations.add(it) }
+        }
+        // The declaration under the caret is one of them whatever the owner route
+        // managed, so this is a fallback and an invariant at once.
+        locations.add(own)
         val related = LinkedHashSet<CapturedDeclaration>()
-        typeCaptureCollectInherited(heritage, id.text, related, HashSet(), 0)
-        related.remove(own)
-        if (related.isEmpty()) return null
+        typeCaptureOwnHeritage(member)?.let {
+            typeCaptureCollectInherited(it, id.text, related, HashSet(), 0)
+        }
+        related.removeAll(locations)
         return CapturedDefinition(
-            fileName, id.pos, id.end, id.text, listOf(own), related.toList(),
+            fileName, id.pos, id.end, id.text, locations.toList(), related.toList(),
         )
+    }
+
+    /**
+     * (API.11) The single-token NAME of a member DECLARATION, or null when [member] is
+     * not one — the closed set of kinds this leg answers for.
+     *
+     * Interface and type-literal members ride the class-element arms, because that is
+     * what the parser produces for them ([typeCaptureIsFreeName] says the same). A
+     * computed name is not an [Identifier] and therefore answers null, which is the
+     * same silence every other computed member position gets here.
+     */
+    private fun typeCaptureMemberNameIdentifier(member: Node): Identifier? =
+        when (member) {
+            is PropertyDeclaration -> member.name as? Identifier
+            is MethodDeclaration -> member.name as? Identifier
+            is GetAccessor -> member.name as? Identifier
+            is SetAccessor -> member.name as? Identifier
+            // (API.11) An enum's member is a declaration name with an owner too, and
+            // tsc answers it exactly as it answers an interface's.
+            is EnumMember -> member.name as? Identifier
+            else -> null
+        }
+
+    /**
+     * (API.11) Every declaration of the member the OWNER of a member declaration calls
+     * [name] — the FOURTH resolution mechanism, and the exact dual of a member USE's
+     * receiver.
+     *
+     * ## Why the owner, and why not the member SYMBOL
+     *
+     * A member USE resolves through its RECEIVER, an object-literal key through its
+     * CONTEXTUAL type, a free name through the SCOPE CHAIN. A member's own DECLARATION
+     * name has none of the three; what it does have is the class, interface, type
+     * literal or enum it is declared IN, so that is what is asked.
+     *
+     * The obvious implementation — resolve the name to its `Symbol` and read
+     * `Symbol.declarations` — is NOT enough here, and the measurement is worth keeping:
+     * this compiler's interface merge is LAST-WINS for a same-named member (round 884's
+     * `mergeSingleSymbol` adopts), so the merged `Merged.both` symbol carries only the
+     * SECOND block's declaration and a caret on the FIRST would answer about a span it
+     * is not. tsc accumulates. So the declaration list is reconstructed one level up,
+     * from the OWNER symbol's own declarations — each of which is a container that may
+     * hold a member of this name — which is exactly where the information survives.
+     *
+     * ## The soundness condition
+     *
+     * A container is trusted only when the owner we are standing in is one of the
+     * resolved symbol's own declarations. Without that, a name that resolves to some
+     * OTHER same-named declaration (a shadowed interface, an import of the same
+     * spelling) would contribute members of a type the caret has nothing to do with —
+     * the same failure a scope lookup of a member name produces, one level up. The
+     * owner itself is always a container, so an anonymous class expression and a type
+     * literal — neither of which has a name to resolve — answer from themselves.
+     */
+    private fun typeCaptureMemberDeclarations(owner: Node, name: String): List<Node> {
+        val containers = LinkedHashSet<Node>()
+        val ownerSymbol = typeCaptureOwnerSymbol(owner)
+        if (ownerSymbol != null && ownerSymbol.declarations.any { it === owner }) {
+            containers.addAll(ownerSymbol.declarations)
+        }
+        containers.add(owner)
+        val out = ArrayList<Node>(2)
+        for (container in containers) {
+            val members: List<Node> = when (container) {
+                is InterfaceDeclaration -> container.members
+                is ClassDeclaration -> container.members
+                is ClassExpression -> container.members
+                is TypeLiteral -> container.members
+                is EnumDeclaration -> container.members
+                else -> continue
+            }
+            for (candidate in members) {
+                if (typeCaptureMemberNameIdentifier(candidate)?.text == name) out.add(candidate)
+            }
+        }
+        return out
+    }
+
+    /**
+     * (API.11) The symbol a member declaration's OWNER declares, or null.
+     *
+     * Resolved exactly as [typeCaptureHeritageDeclaration] resolves a base's name — the
+     * spine's own scope chain first, then the node-keyed per-file lookup — which is
+     * what makes a merged `interface` answer with the MERGED symbol, i.e. with every
+     * block that contributes to it. Null for an owner with no name (a type literal, an
+     * anonymous class expression), which is not a gap: such an owner is its own only
+     * container.
+     */
+    private fun typeCaptureOwnerSymbol(owner: Node): Symbol? {
+        val ownerName = when (owner) {
+            is InterfaceDeclaration -> owner.name
+            is ClassDeclaration -> owner.name
+            is ClassExpression -> owner.name
+            is EnumDeclaration -> owner.name
+            else -> null
+        } ?: return null
+        val resolved = spineScopeLookup(ownerName.text)
+            ?: lookupPerFileForNode(ownerName, ownerName.text)
+            ?: return null
+        return typeCaptureFollowImportAlias(resolved)
     }
 
     /**
@@ -7309,7 +7423,40 @@ class Checker(
      * a true statement about a different subject. Round 922's reason, unchanged.
      */
     private fun typeCaptureReportedType(node: Expression): Type =
-        typeCaptureMemberAccessType(node) ?: getTypeOfExpression(node)
+        typeCaptureMemberAccessType(node)
+            ?: typeCaptureMemberDeclarationType(node)
+            ?: getTypeOfExpression(node)
+
+    /**
+     * (API.11) The type of the member [node] DECLARES, or null when it declares none.
+     *
+     * The same defect (BUG.4) closed for a member USE, one position over: the `p` of
+     * `interface Shape { p: string }` is bound by no scope either, so asking the
+     * compiler for "the type of the free name `p`" answered `any` where nothing shared
+     * the spelling and the COLLIDER's type where something did. Measured against tsc
+     * 7.0.2, every one of eighteen member declaration names reported `any` here and a
+     * real type there.
+     *
+     * The rule is (API.11)'s own — a member declaration name is resolved through its
+     * OWNER — and the type is then the member symbol's, so a generic member reports its
+     * declared form and an inherited one is not consulted at all (it is a different
+     * declaration). Null wherever the owner does not resolve or does not declare the
+     * name, which leaves the answer exactly what it was: a non-answer, never a wrong
+     * name.
+     */
+    private fun typeCaptureMemberDeclarationType(nodeIn: Expression): Type? {
+        val member = (nodeIn as NodeBase).parent ?: return null
+        val node = typeCaptureMemberNameIdentifier(member)?.takeIf { it === nodeIn } ?: return null
+        val owner = (member as NodeBase).parent ?: return null
+        if (owner is ObjectLiteralExpression) return null
+        val ownerType = when (owner) {
+            is TypeLiteral -> getTypeFromTypeNode(owner)
+            else -> typeCaptureOwnerSymbol(owner)?.let { getDeclaredTypeOfSymbol(it) }
+        } ?: return null
+        val symbols = ArrayList<Symbol>(2)
+        typeCaptureCollectMembers(ownerType, node.text, symbols, 0)
+        return symbols.firstOrNull()?.let { getTypeOfSymbol(it) }
+    }
 
     /**
      * (BUG.4) The type of the ACCESS [node] is the member name of, or null when

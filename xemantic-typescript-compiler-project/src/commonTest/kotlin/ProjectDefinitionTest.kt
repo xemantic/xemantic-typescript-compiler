@@ -341,12 +341,24 @@ class ProjectDefinitionTest {
         )
     }
 
+    /**
+     * (API.11) CHANGED MEANING, round 928. This pinned "answers empty" from round 913
+     * until round 928 made a member's own declaration name resolve through its OWNER —
+     * so it answers ITSELF now, which is what tsc 7.0.2 answers (measured: eighteen
+     * member declaration positions, every one navigating to its own name).
+     *
+     * The assertion is the SPAN and not merely non-emptiness, because "answers itself"
+     * is the whole claim: an owner route that found the wrong member would answer a
+     * plausible location in the right file.
+     */
     @Test
-    fun `a caret on an interface member's own declaration name answers empty`() {
+    fun `a caret on an interface member's own declaration name answers itself`() {
         val project = projectWith()
-        // It already IS the declaration; answering with itself is not useful and is
-        // not what this round set out to do.
-        assert(project.definitionsAt(mainFile, offsetOf("inherited: string")).isEmpty())
+        val at = offsetOf("inherited: string")
+        assert(
+            project.definitionsAt(mainFile, at).map { it.fileName to it.start } ==
+                listOf(mainFile to at),
+        )
     }
 
     @Test

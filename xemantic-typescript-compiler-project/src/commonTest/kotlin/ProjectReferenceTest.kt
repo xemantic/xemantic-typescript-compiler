@@ -311,15 +311,20 @@ class ProjectReferenceTest {
     }
 
     /**
-     * The stated limit of that recovery, pinned rather than left to be discovered: a
-     * member nothing refers to has no occurrence naming its span, so there is no
-     * evidence it is a declaration at all and the answer is EMPTY rather than a list
-     * of one. tsc answers one; this says so in `Project.referencesAt`.
+     * (API.11) CHANGED MEANING, round 928. Until then a member nothing refers to had no
+     * occurrence naming its span, so the sweep held no evidence that the caret was a
+     * declaration at all and the answer was EMPTY — the stated limit of round 925's
+     * evidence recovery. A member declaration name now resolves through its OWNER, so
+     * the caret carries its own answer and the list is one entry, flagged, which is
+     * what tsc 7.0.2 answers (measured).
      */
     @Test
-    fun `a member declared and never used answers empty - the stated limit`() {
+    fun `a member declared and never used answers itself`() {
         val project = projectWith()
-        assert(project.referencesAt(mainFile, offsetOf("unused: number")).isEmpty())
+        val at = offsetOf("unused: number")
+        val references = project.referencesAt(mainFile, at)
+        assert(places(references) == listOf("a.ts@$at"))
+        assert(references.single().isDeclaration)
     }
 
     /**

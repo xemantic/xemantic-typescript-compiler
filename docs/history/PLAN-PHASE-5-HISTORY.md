@@ -1,3 +1,398 @@
+**Round 918 (2026-08-18) — (API.4b): FREE-NAME COMPLETIONS LAND, AND THE ROUND'S PRODUCT IS THAT THE TWO
+RULES THE BRIEF TOLD ME TO COPY FROM `lexLevelHasName` ARE **BOTH WRONG FOR THIS CHAIN** — THEY BELONG TO AN
+ASCENT THAT HAS A SECOND, THREADED POPULATION TO FALL BACK ON, AND TRANSPLANTED ONTO `spineScopeLookup`'s
+CHAIN ONE OF THEM DELETES EVERY FILE-LEVEL NAME AND THE OTHER DELETES EVERY NAMESPACE MEMBER. BOTH
+DIVERGENCES ARE ABLATED RATHER THAN ARGUED.**
+
+- **IT LANDED BY DELETING ONE REFUSAL, EXACTLY AS (API.4a) DESIGNED IT TO.** `FREE_NAMES_NOT_IMPLEMENTED`
+  is gone; `CompletionList`, `CompletionItem` and `Project.completionsAt`'s signature did not move. The
+  mechanism is a THIRD span list — `TypeCaptureRequest.scopeSpans` -> `CapturedScope` /
+  `CapturedName(name, kind)` — unioned into `keysByFile` the way `memberSpans` is, so the per-node hot-path
+  guard is byte-identical and `cost_gate.py` reads **+0.00% on all 20 counters**.
+
+- **THE ONE STRUCTURAL NOVELTY: THIS IS THE FIRST CAPTURE THAT ADMITS A NON-`Expression` NODE.** A
+  completion caret is BETWEEN nodes by construction, so the anchor is the innermost node ENCLOSING it —
+  `pathAt(offset).lastOrNull() ?: sourceFile` — which for `function f() { const b = 1;\n  <caret> }` is the
+  function's BODY BLOCK, and a function-like's immediate body SHARES its function's scope in the binder, so
+  that is exactly the scope holding `f`'s parameters and locals. No special case, no EOF branch: the same
+  rule gives the enclosing block on a blank line, the class in a class body and the source file past the
+  last character. `typeCaptureVisit`'s `node !is Expression` gate now yields to a scope span and to nothing
+  else, so no other capture gained a population.
+
+- **THE ENUMERATION IS `spineScopeLookup`'s OWN WALK, RUN TO EXHAUSTION**, and that identity is the whole
+  correctness argument rather than a coincidence: every level's `symbols` then its `existing`, innermost
+  first, first sighting wins, then the merged and lib GLOBALS filtered through `globalsForFile` (INV.3(c),
+  so one module's exported name is not offered inside another). **A name the list offers is a name
+  `definitionsAt` will resolve, and a name it hides is hidden because something nearer binds the spelling** —
+  pinned directly, by completing at a caret and then navigating from a use of one of the names offered
+  there.
+
+- **DIVERGENCE 1 — `LexicalScope.existing` IS READ, against CLAUDE.md's round-748 rule as the brief quoted
+  it.** That rule is about a RESOLVER whose soundness argument is precisely that `symbols` excludes
+  everything the main binder bound, so it cannot change how any existing name resolves. An ENUMERATION has
+  no such freedom: the source file's own `symbols` holds only the B83.5 block-hoisted leftovers, so a
+  `symbols`-only sweep offers **no file-level declaration and no import at all**. `spineScopeLookup` has
+  read both deliberately since (API.3b); this reads exactly what it reads. **Arm A5 measures it: 8 red.**
+
+- **DIVERGENCE 2 — `lexLevelHasName`'s UNTRUSTED-LEVEL SKIP IS NOT APPLIED.** That skip exists because the
+  aliased Module/Enum table carries all merged members while the unresolved-names walk it serves applies its
+  own export filtering — so trusting the level would SUPPRESS a genuine TS2304. It is sound there because
+  that chain has a THREADED population underneath it. This chain has none, so the skip answers **nothing at
+  all** at a caret inside a namespace body, where every one of the namespace's own members is legally
+  writable. The cost of not skipping is stated rather than hidden: a namespace merged across files can offer
+  a sibling declaration's non-exported member. **Arm A3 measures it: 1 red, uniquely its own.**
+
+- **A FREE-NAME ITEM CARRIES NO `typeText`, AND THE DECIDING ARGUMENT IS CORRECTNESS RATHER THAN COST.**
+  Measured at a caret in a real function body of the compiler profile (78 files, ~10 M chars, real libs):
+  **1,628 items**; the enumeration itself **0.39-0.64 ms**; adding a type to every item **+2.6-14.3 ms** —
+  i.e. 4-28x the enumeration but noise against the query's own **5.3-8.9 s** warm rebuild. What decides it is
+  that **618 of 1,629 (37.9%) would render `any`/`error`/`unknown`**, because a free name may name a TYPE —
+  an interface, a type alias, a namespace — for which `getTypeOfSymbol` is not the question being asked;
+  decorating 38% of a list with a lie is worse than decorating none of it. (On a two-file toy project the
+  COST argument bites too, in the opposite direction from the real one: 2,232 items, enumeration 0.55 ms,
+  typing them all 26-170 ms against a whole query of 125-360 ms — **20-75% of the wall.**) The field stays a
+  non-null `String` and is `""`, so no signature moved; a host wanting the type of the item its user
+  highlighted asks `quickInfoAt`, which is `completionItem/resolve`'s shape.
+
+- **KEYWORDS ARE REFUSED, WITH A REASON AND A PIN.** A useful keyword list is context-sensitive —
+  `interface` may start a statement and may not appear inside an expression, `await` only inside an async
+  function — and the anchor is a TOKEN-level device that knows what precedes the caret, not which grammar
+  production it sits in. An unconditional list would offer items that do not compile, which is the one thing
+  the member half already refuses to do (a union receiver offers only members present on every constituent
+  for exactly that reason).
+
+- **TWO IMPRECISIONS PINNED AS DECISIONS RATHER THAN LEFT AS ACCIDENTS**: a `let` declared LATER in the same
+  block IS offered (a block's bindings are a set, not a sequence — the binding exists and is merely in its
+  temporal dead zone, which is what tsc offers too), and a function's body locals are visible from inside its
+  own PARAMETER DEFAULTS, because the binder's function scope is flat.
+
+- **PINS: +22** (`-project` 191 -> 209, core 14,337 -> 14,341). **THE DISCRIMINATOR, written first**, is
+  (API.4a)'s inverted: a body local SHADOWING a name imported from ANOTHER FILE must appear ONCE and be the
+  LOCAL — the wrong answer is not empty and not a crash but the same spelling meaning something else, and
+  `kind` separates them (`VariableDeclaration` vs `ImportSpecifier`). **THE SHARP NEGATIVE** is a SIBLING
+  scope: another function's local, and a block that closed before the caret — an enumeration built over the
+  file's nodes rather than an ascent passes every positive pin and fails only there. The core
+  `ScopeCaptureMeasurementTest` is the in-walk-vs-post-hoc measurement, and the answer is sharper than
+  either query before it: post-hoc there is nothing to fall through TO — the ascent walks no levels and
+  answers with the globals leg alone, so a parameter and a type parameter are simply GONE while the
+  shadowed OUTER binding stands where the local should be, under the same name and the same `kind`.
+
+- **SEVEN-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All seven compiled; SIX
+  reddened a DISTINCT set.** **A1** the scope leg never records -> **18 red** (every free-name pin). **A2**
+  no shadowing dedup, an outer level overwrites an inner one -> **1 red, uniquely its own** — the
+  discriminator. **A3** apply the untrusted-level rule -> **1 red, uniquely its own** — the namespace pin.
+  **A4** enumerate POST-HOC -> **14 red**, and it is distinguished from A1 by the four pins it leaves GREEN
+  (`the lib globals are offered` and the three rows whose subject survives on the globals leg), which is the
+  measurement made a second time. **A5** read `symbols` only -> **8 red**. **A6** no globals leg -> **6 red**,
+  uniquely reddening the post-hoc control. **A7** drop the writable-name filter -> **0 red, UNDISCRIMINATED
+  and recorded in-file as such** rather than claimed: no non-identifier spelling reaches this fixture's chain
+  or globals, so the filter guards a shape the test does not carry, and its sort and dedup assertions are
+  pinned by no arm at all.
+
+- **GATES: suite 14,662 -> 14,684 / 0 failures / 0 errors / 3 skipped = EXACTLY the +22**, XML-summed over
+  all six modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20
+  counters** — a real gate, since `Checker.kt` grew ~190 lines reachable from the hook on the hot walk, and
+  proven live by its own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**745
+  classes, 15,890 methods, 0 over**) and, per round 909's blind-spot rule, on `-project` explicitly (**21
+  classes, 216 methods, 0 over**). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. Warning-clean. No wall A/B: production executes not one new instruction — every
+  addition sits behind a hook that returns on a null per-file key set.
+
+- **WHAT THIS LEAVES.** `(API.4)` is complete in both halves. The named gaps are keywords (above),
+  contextual object-literal keys (a caret on `{ p| : v }` is answered as an ordinary free name, where the
+  useful answer is the CONTEXTUAL type's property — the third mechanism (API.3d) already refused), and the
+  fact that a completion is still a FULL REBUILD: **5.3-8.9 s warm on the compiler profile, of which the
+  enumeration is under a millisecond.** A host must debounce, and the lever for that is the architecture
+  inversion, not this API.
+
+**Round 917 (2026-08-17) — (API.4a): THE COMPLETION ANCHOR + MEMBER COMPLETIONS. THE ROUND'S PRODUCT
+IS THAT THE ANCHOR — THE PART EVERY PREVIOUS (API.\*) ROUND CALLED "GENUINELY NEW" — TURNED OUT TO NEED
+**NO PARSER WORK AT ALL**, BECAUSE THIS PARSER ALREADY RECOVERS A DANGLING `.` INTO A REAL
+`PropertyAccessExpression`; AND THAT THE ONE THING THAT DID BITE WAS A **SPAN COLLISION**, WHERE
+`o` AND `o.<nothing>` CARRY THE IDENTICAL `(pos, end)` PAIR AND FIRST-WINS ANSWERS `any`.**
+
+- **THE ANCHOR NEEDED NO PARSER CHANGE, AND THAT WAS READ OUT OF THE SOURCE BEFORE ANY CODE WAS
+  WRITTEN.** `Parser.kt`'s `Dot ->` arm is unconditional: when the token after `.` is neither an
+  identifier nor a keyword it reports TS1003 and synthesizes `Identifier(text = "", pos = getPos(),
+  end = getPos())`, then builds the access anyway. So `o.` at end of file, `o.` before a `}` and `o.`
+  before a newline all leave a receiver node in the tree, and the anchor never has to scan raw text
+  backwards balancing brackets — which was the design the queue entry anticipated and which would have
+  been the round's whole risk. The rule that finds it is exact rather than heuristic: **descend to the
+  character BEFORE the dot** (the dot is often the file's LAST token, so its own access node's real end
+  is snapped back below it and descending to the dot answers `SourceFile`), then walk back OUT to the
+  first `PropertyAccessExpression`/`QualifiedName` satisfying `realEnd(expression) <= dotStart <
+  name.pos`. Two dots in one path are at different offsets, so **at most one node can satisfy it** and
+  the walk direction does not matter.
+
+- **THE ONE REAL DEFECT, AND IT IS A PROPERTY OF THE CAPTURE DESIGN RATHER THAN OF COMPLETIONS: A RAW
+  SPAN DOES NOT ALWAYS IDENTIFY A NODE.** With the buffer ending IMMEDIATELY after the dot (no newline,
+  no next token), the synthesized name is zero-width at EOF, so the property access's `end` — read
+  after a one-token lookahead that sees only end-of-file — equals its RECEIVER's, and `holder` and
+  `holder.<nothing>` are both `(45, 52)`. Preorder reaches the access first, `typeToString` of an
+  empty-named property access is `any`, and first-wins then refuses the receiver's own record.
+  Measured: `holder.` read EMPTY while `holder. ` (one trailing space), `holder.;` and `holder.\n` all
+  read `[alpha, beta]` — a defect visible in exactly one of five shapes. **The fix states the missing
+  invariant rather than special-casing EOF: among nodes sharing a span, the DEEPEST is what was asked
+  about, so a later visit overwrites an earlier one IFF it is a DESCENDANT of it** (`parent`-chain
+  walk, run only on a collision). Two visits of the SAME node still keep the first, i.e. round 911's
+  tightest-ambient rule is untouched.
+
+- **THE MEMBER HALF WAS (API.3d) ONE QUESTION WIDER, AS ROUND 916 PREDICTED — AND THE PREDICTION HELD
+  DOWN TO THE LEG ORDER.** `this` first (its type is `currentClassForThis`, null in a static member),
+  then the EXPORT TABLE (a namespace's members are on no type and an enum's own type is member-LESS),
+  then `getTypeOfExpression` + `resolveStructuredTypeMembers`. What is NOT reused is the UNION RULE, and
+  the divergence is deliberate and stated in both KDocs: **go-to-definition COLLECTS across a union
+  and completions INTERSECT**, because "where is `p` declared" is asked about a name already in the
+  text while "what may I write here" must not offer something that will not compile. Nullish
+  constituents are SKIPPED rather than allowed to empty the intersection — otherwise every optional
+  chain and every `strictNullChecks` union answers nothing.
+
+- **OFF IS STILL FREE, AND IT IS STRUCTURAL RATHER THAN CAREFUL.** `memberSpans` is a SECOND span list
+  whose keys are UNIONED into `keysByFile`, so the per-node hot-path guard is byte-identical and the
+  member test happens only after a span has already matched. That is what keeps `fileSemantics` — which
+  hands in every identifier in a file — from enumerating a type at each of them. `cost_gate.py` reads
+  **+0.00% on all 20 counters**.
+
+- **WHAT IS ANSWERED**: members of an object/interface/class receiver including inherited ones (an
+  override ONCE), an intersection (both sides), a union (only members on EVERY constituent, with the
+  member's type rendered as the distinct constituent types joined by `|`), a nullish union (the
+  non-nullish arm), a merged interface, an imported interface, a namespace, an enum, `this`, a lib
+  primitive, and an incomplete `o.` in three buffer shapes. **WHAT IS REFUSED, each with a reason**:
+  free names (`FREE_NAMES_NOT_IMPLEMENTED` — an explicit refusal, not a silent empty list, which is
+  round 913's own pattern); strings/templates/regexes/numeric literals/comments and out-of-file
+  positions (`NO_COMPLETION_CONTEXT`, and they do NOT build); an `any` receiver and an unresolvable one
+  (empty, and NOT a refusal — the receiver was reached and genuinely has no members); accessibility
+  FILTERING — private and protected members are OFFERED with `accessibility` saying which they are,
+  because hiding one correctly depends on where the caret sits relative to the declaring class and a
+  half-done filter silently loses real candidates; a class's static side reached through an instance.
+
+- **A PIN WAS WRITTEN AS A DISCRIMINATOR, MEASURED NOT TO BE ONE, AND RENAMED — round 807's rule
+  applied to my own work.** `a receiver used NOWHERE else in the file still offers its members` was
+  written to catch the round-833 lazy-member-table rule, on the theory that every other receiver in
+  the fixture is resolved by its own `readX` line. It stays GREEN under arm A1: **a `declare const x:
+  T` declaration alone already resolves `T`'s table.** The rule IS load-bearing and the ONE receiver
+  whose table nothing else resolves is `this`, whose type comes from `resolveUncalledThisType` rather
+  than from a declaration the checker visited — so A1 is discriminated by the `this` pin, and the KDoc
+  now says so instead of claiming a discrimination it does not have.
+
+- **A TEST-FIXTURE TRAP WORTH ONE LINE: `|` IS A CARET MARKER AND A UNION SEPARATOR.** The first run of
+  `CompletionAnchorTest` failed one case because `marked.indexOf('|')` found the `|` of
+  `{ a: number } | undefined` rather than the caret, placing the caret 46 characters early — and the
+  test then measured a real anchor at the wrong offset and looked entirely correct while doing it. The
+  marker is U+2038 CARET now, with an assertion that exactly one appears.
+
+- **PINS: +49** (`-project` 142 -> 191; core UNCHANGED at 14,337 — nothing was added there that a core
+  test can reach without the `-project` anchor). 23 anchor pins, parse-only and written FIRST, plus 26
+  end-to-end. **THE DISCRIMINATOR** is (API.3d)'s inverted: a receiver whose members are spelled
+  exactly like two unrelated top-level bindings, asserted as an EXACT list — the wrong answer here is
+  not empty and not a crash, it is a SUPERSET that still contains the right names.
+
+- **SIX-ARM ABLATION, ONE MISTAKE AT A TIME (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). Every arm a DISTINCT
+  set; all six compiled.** **A1** no `resolveStructuredTypeMembers` -> **1 red** (`this`, see above).
+  **A2** the anchor ignores the prefix -> **5 red**, three of them parse-only anchor pins.
+  **A3** a union COLLECTS instead of intersecting -> **1 red, uniquely its own**. **A4** plain
+  first-wins, no descendant rule -> **1 red**, exactly the end-of-buffer pin — i.e. the defect above is
+  pinned by the one test that found it. **A5** no export-table leg -> **2 red** (namespace + enum).
+  **A6** nullish constituents not skipped -> **1 red, uniquely its own**.
+
+- **GATES: suite 14,613 -> 14,662 / 0 failures / 0 errors / 3 skipped**, XML-summed over all six
+  modules. `cost_gate.py` **+0.00% on all 20 counters**. `huge_methods.py --fail-over 0` clean on core
+  (**742 classes, 15,851 methods, 0 over**) and, per round 909's blind-spot rule, on `-project`
+  explicitly (**21 classes, 213 methods, 0 over**; the largest new method is `scanTokens` at 157).
+  `spine_closure_audit.py` 46 handlers all supersets, run although no `spine*EnterNode` changed.
+  Warning-clean. No wall A/B: production executes not one new instruction — every addition sits behind
+  a hook that returns on a null per-file key set.
+
+- **WHAT (API.4b) NOW NEEDS**, written into its queue entry rather than left implied: the anchor
+  already gives it a correct `FREE_NAME` kind, prefix and replacement span, so what is missing is the
+  ENUMERATION — and the structural fact that decides its shape is that `spineCurrentScope` is nulled
+  per file, so it must be captured DURING the walk (a third span list beside `memberSpans`) and the
+  anchor must start handing in a node for a free position, which today it does not. The size problem is
+  measured, not guessed (round 902: **290.94** symbols per real probe, 815 on the outer levels), so
+  whether a free-name item carries a `typeText` at all is a decision to take BEFORE building it.
+
+**Round 916 (2026-08-17) — (API.3d): MEMBER GO-TO-DEFINITION LANDS, AND THE ROUND'S PRODUCT IS THAT
+ROUND 913's REFUSAL WAS RIGHT FOR A REASON THAT SURVIVES THE FIX — THE MEMBER MECHANISM IS *A SECOND
+MECHANISM*, NOT A WIDENING OF THE FIRST, AND THE ABLATION ARM THAT PROVES IT IS THE ONE THAT RESOLVES A
+MEMBER BY A SCOPE LOOKUP: IT REDDENS **TEN** PINS, INCLUDING BOTH NEGATIVE CONTROLS THAT THE
+"MECHANISM ENTIRELY OFF" ARM LEAVES GREEN.**
+
+- **THE PREMISE HELD, WHICH IS WORTH SAYING BECAUSE THE LAST THREE (API.\*) ROUNDS ALL FOUND THEIRS
+  WRONG.** Round 913's sentence — *"member definitions need the receiver's type resolved and its
+  property symbol found, which is a separate mechanism and not this one"* — is exactly what was built,
+  in the same hook, with no new public type and no new field on `Checker`. A member answer is a
+  non-empty `definitions` list where one used to be empty; `DefinitionLocation` was already the right
+  value.
+
+- **WHAT MADE IT SMALL: THE AMBIENT THE HOOK ALREADY INSTALLS IS EXACTLY ENOUGH.** The task's first
+  constraint was to establish what ambient a receiver's type genuinely needs rather than write a
+  second install block. It needs none: the type at the member-access node was already being captured,
+  so round 911's `ctaM3StmtAnchorCore` prologue + `withCtaFrameLocals(frame)` is in force and
+  `getTypeOfExpression(receiver)` answers under it. The ONE place that needed anything extra was
+  `this`, and even there the answer was already installed — **`this` is `Identifier("this")` in this
+  parser (there is no `ThisExpression` node), so it reaches `getTypeOfExpression` as a name nothing
+  binds and types as `any`**; its real type comes from `currentClassForThis`, which the hook restores
+  from the cta frame and which the frame deliberately leaves NULL inside a STATIC member, so a static
+  `this` answers nothing rather than answering with instance members. Measured before that leg
+  existed, `this.inst` read EMPTY.
+
+- **WHAT MADE IT CORRECT: GOING THROUGH THE COMPILER'S OWN MEMBER RESOLUTION.** `resolveStructuredTypeMembers`
+  is what makes an INHERITED member answer with the BASE's own `Symbol` (`resolveInterfaceMembersCore`
+  copies the base's symbol object into the derived table) and a GENERIC instantiation answer with the
+  declaration rather than the substituted type (`resolveReferenceMembers` does
+  `newProp.declarations.addAll(prop.declarations)`). A hand-rolled walk of `type.members` would have
+  got both wrong, and CLAUDE.md's round-833 rule bites here too: a member table is LAZY, so a reader
+  that does not resolve first answers differently depending on whether an earlier line in the file
+  happened to resolve that type.
+
+- **ONE PLACE THE EXISTING CODE HAD TO CHANGE, AND IT WAS ONLY REACHABLE NOW.**
+  `typeCaptureDeclarationName` had no `PropertyAssignment` arm, so an object literal's own member
+  answered with the whole `size: 1` rather than with `size` — invisible until a member name resolved
+  at all. Three pins assert the span, and dropping the arm again (arm A5) reddens exactly those three.
+
+- **UNION AND INTERSECTION RECEIVERS COLLECT RATHER THAN PICK.** `getPropertyOfType`'s union rule ("the
+  property exists only if EVERY constituent has it, then return the first") is an assignability
+  question and is the wrong one here — a user asking where `p` is declared on `A | B` wants both
+  places, and a `p` on one constituent only is still a real declaration. So the member walk is its own
+  small collector with a depth cap, and the answer is deduplicated by `(file, start, length)` in
+  constituent order.
+
+- **WHAT IS DELIBERATELY STILL REFUSED, each for a stated reason** (KDoc, `docs/language-service.md`
+  § 9): `o["p"]` (the argument is a literal — only identifiers are offered a definition), `{ p: v }`'s
+  own key (the useful target is the CONTEXTUAL type's property, a third mechanism), a member's own
+  declaration name (it already IS the declaration), `A.B.x`'s tail (the middle segment would have to be
+  resolved the same way, for a case one caret to the left already answers), and anything unresolvable
+  (silence, never the nearest same-named thing). The LIB question was decided by CONSISTENCY rather
+  than by taste: `definitionsAt` already documents that a free name resolving into a lib answers with a
+  file the host may not be able to open, so a member is not given a different rule.
+
+- **A PIN'S MEANING WAS CHANGED, AND THAT IS LOGGED RATHER THAN QUIET.** Three pins asserted the old
+  refusal (core `DefinitionCaptureMeasurementTest`'s member case, `ProjectDefinitionTest`'s
+  "answers EMPTY", `ProjectSemanticsTest`'s "a type and deliberately no definition"). All three now
+  assert the MEMBER's declaration at the same span, and each says in-file that its meaning changed
+  because the gap closed — an unlogged pin change is indistinguishable from hiding a regression. A
+  NEW negative control replaces what they used to guard: an unresolvable member whose spelling IS a
+  file-level `const` must still answer nothing.
+
+- **PINS: +13** (core +1 net: the rewritten discriminator plus a new unresolvable-member control;
+  `-project` +9 net: 10 new, 1 rewritten in place). **THE DISCRIMINATOR, written first**: a member
+  whose spelling collides with an unrelated top-level binding in the same file — the wrong answer is
+  not empty or a crash, it is a *plausible location in the right file*, so only the OFFSET separates
+  them and both are asserted.
+
+- **FIVE-ARM ABLATION, ONE MISTAKE AT A TIME (round 807), each dry-run for a real diff (round 902),
+  restored from a byte-verified copy and never `git checkout` (round 851). Every arm a DISTINCT set;
+  185 tests ran in every arm and no arm failed to compile.** **A1** member path never taken -> **9
+  red**, every positive member pin, both "answers empty" controls GREEN. **A2** a member resolved by a
+  SCOPE LOOKUP — precisely the wrong answer round 913 refused — -> **10 red**, and it is the only arm
+  that reddens the two NEGATIVE controls (`an unresolvable member answers NOTHING`, `an object-literal
+  KEY being declared answers empty`), i.e. the pins written to catch a *guess* are the pins that catch
+  it. **A3** no union/intersection recursion -> **1 red, uniquely its own**. **A4** no export-table leg
+  -> **1 red, uniquely its own** (the namespace pin — a namespace's and an enum's members are on no
+  TYPE, so a type-only implementation is silent there). **A5** no `PropertyAssignment` name arm -> **3
+  red**, exactly the span assertions. Worth recording: the LIB pin cannot discriminate A2, because a
+  scope lookup of `length` also lands in a lib file — it is discriminated by A1, and saying so is the
+  round-807 rule against crediting a pin with discrimination it does not have.
+
+- **GATES: suite 14,603 -> 14,613 / 0 failures / 0 errors / 3 skipped = EXACTLY the +10 net** (core
+  14,336 -> 14,337, `-project` 133 -> 142), XML-summed over all six modules and re-run on the
+  byte-restored post-ablation tree. **`cost_gate.py` +0.00% on all 20 counters** — a real gate, since
+  the member walk is new code reachable from the capture hook on the hot walk, and proven live by its
+  own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**739 classes, 15,801
+  methods, 0 over**; `Checker.<init>` unmoved at **5,813** — no new field) and, per round 909's
+  blind-spot rule, on `-project` explicitly (12 classes). `spine_closure_audit.py` 46 handlers all
+  supersets, run although no `spine*EnterNode` changed. Warning-clean. No wall A/B: production executes
+  not one new instruction — the member walk sits inside a hook that returns on a null per-file key set.
+
+- **WHAT THIS LEAVES (API.4), asked for explicitly.** It leaves it with **less to build, but not with
+  its hard half done**. What transfers is real and is the part that would have been most likely to be
+  got wrong: "what does this receiver's type call things" now has a tested answer, including the lazy
+  member table, the inherited-symbol rule, unions and the namespace/enum export leg — completions'
+  member half is that same resolution one question wider (ENUMERATE `type.members` rather than look up
+  one name). What does NOT transfer is the anchoring: every mechanism in this round starts from *a
+  node that exists at the caret*, and a completion request by definition has none — the user is
+  mid-identifier or sitting just after a `.`, so the capture request cannot be a span at all and needs
+  a "nearest enclosing node + the scope in force there" shape that nothing here provides. The free-name
+  half is also genuinely new: `spineScopeLookup` answers ONE name and completions need the chain
+  ENUMERATED, which is a different traversal of `LexicalScope` (and CLAUDE.md's round-902 warning
+  applies — the outer levels are large, mean 815 symbols on a real probe). So: the member seam is
+  bought, the anchor and the enumeration are not.
+
+**Round 915 (2026-08-17) — (BUG.1): THE LONE-`\r` SELF-INCONSISTENCY IS CLOSED, AND THE SWEEP THE ITEM
+ASKED FOR FOUND **FIVE** OFFSET→LINE CONVERTERS WHERE THE QUEUE NAMED TWO — FOUR OF THEM WRONG, EACH A
+PRIVATE COPY OF A LOOP NOBODY KNEW WAS DUPLICATED. THE ROUND'S REAL PRODUCT IS THE **SECOND** REASON
+THE FAMILY WAS INVISIBLE: THE STRING ENTRY POINT BEHIND THE ENTIRE GENERATED CORPUS **NORMALISES
+`\r` AWAY BEFORE THE PARSER RUNS**, SO NO CORPUS FIXTURE COULD EVER HAVE CAUGHT THIS — NOT "none
+happens to have a lone `\r`", BUT "none CAN".**
+
+- **THE PREMISE HELD.** `Parser.computeLineStarts` broke a line at `\n`, `\r\n` and a lone `\r`
+  (tsc's rule); `Checker.lineStartsFor` was `for (i in source.indices) if (source[i] == '\n')`. So a
+  SYNTAX diagnostic numbered a classic-Mac file's lines and a SEMANTIC one reported line 1.
+
+- **THE SWEEP — the part a future agent cannot re-derive cheaply.** Grepping for *definitions* rather
+  than call sites (`fun *LineChar*`/`fun *LineStarts*`/`line++`/`ln++`/`curLine++`) found **five**
+  independent implementations of one conversion, all in `commonMain`, all private, none referring to
+  each other: (1) `Parser.computeLineStarts` — CORRECT, the reference; (2) `Checker.lineStartsFor`
+  (`\n` only) — the queued bug; (3) `Checker.posOfLineCol` — the INVERSE, `\n` only, so the two
+  directions did not even round-trip; (4) `TypeScriptCompiler.positionToLineCharacter` (`\n` only) —
+  ~14 diagnostic call sites; (5) `TypeScriptCompiler`'s inline TS2688 loop and `Transformer`'s JSX
+  dev-runtime `lineNumber`/`columnNumber` loop, both `\n` only, the latter feeding EMITTED JavaScript
+  rather than a diagnostic; (6) `CompilerOptions.computeLineAndColumn` for tsconfig positions, a
+  THIRD convention — `\n` breaks the line and `\r` is treated as ZERO-WIDTH. Six copies, three
+  conventions. **The `-project` module's `LineMap` was already right** and is deliberately left a
+  reimplementation (it also carries `lineContentEnds`, which the compiler has no use for), so it is
+  the one place the rule is stated twice — pinned by a differential, not by restatement.
+
+- **WHAT LANDED.** A new `LineStarts.kt` holding the convention as ONE function,
+  `lineBreakWidthAt(text, i)` — `0`, `1` or `2` — plus the two traversal shapes built on it:
+  `computeLineStarts` (moved out of `Parser.kt`, now `internal`, byte-identical logic) and
+  `lineAndCharacterAt` (a BOUNDED scan for the sites with nothing to memoize on). All five wrong
+  copies now delegate. `posOfLineCol` reads the same memoized index the forward direction does, which
+  is what makes the round-trip structural rather than coincidental. **Deliberately NOT one function**:
+  a scan that stops at the offset and an index that spans the file are different algorithms, so they
+  share the RULE and are pinned to agree at every offset of six terminator-mixed texts.
+
+- **THE FINDING, and it is bigger than the bug.** `TypeScriptCompiler.compile(String)` →
+  `parseMultiFileSource` opens with `.replace("\r\n", "\n").replace("\r", "\n")`. Every generated
+  corpus test and every `diagnose()`-based pin goes through it, so **a `\r` cannot reach the Parser
+  from that entry point at all**. The corpus's one genuinely lone-`\r` fixture
+  (`templateStringMultiline3`) is normalised before it is parsed. Only the project/`Vfs` path
+  preserves terminators — which is exactly the path the new `(API.*)` embedding API sits on, i.e. the
+  bug was becoming reachable just as it was found. The first version of the core pin was therefore
+  **VACUOUS AND PASSED**: it built `\r` text, the harness turned it into `\n` text, and "the two
+  halves agree" was a statement about a file with no `\r` in it. `diagnoseVerbatim` now hands the
+  pipeline a `ParsedSource` directly.
+
+- **A SECOND VACUITY, found the same way.** A fixture beginning with `\r` is not a leading-line-break
+  test either: `parseMultiFileSource` drops blank lines before the first content line, so the pin read
+  line 1 for a correct compiler. Replaced with consecutive-and-trailing breaks after a real first line.
+
+- **PINS — 10 new (`LineTerminatorConsistencyTest`, core) + 1 (`ProjectPositionTest`) − 1 (the
+  `LineMapTest` case that pinned the divergence as permanent).** The sharp four are
+  self-consistency: a lone-`\r` file where TS2322 must land on line 3 and TS1128 on line 5 with every
+  diagnostic's `line` matching an independent restatement of the rule; the three-shape control
+  (`\n` / `\r\n` / `\r` must produce the SAME `(code, line)` table — this is what catches the obvious
+  double-count, which would read 5 and 9 for CRLF); consecutive + trailing breaks; and the CHARACTER
+  on the line after a lone `\r`. The other six pin the shared helper's edges (empty text, a text that
+  IS one `\r`, trailing breaks under all three shapes, the `\n` inside a `\r\n`, and scan-vs-index
+  agreement over all offsets of six texts) and are labelled in-file as NON-discriminating.
+
+- **ABLATION (restoring the pre-fix `\n`-only body by hand, never `git checkout`): exactly 5 pins
+  red** — the 4 discriminating core ones and the 1 new `-project` one — the 6 arithmetic guards and
+  all 12 other `ProjectPositionTest` cases green. Restored by hand and re-run green.
+
+- **GATES: suite 14,593 -> 14,603 / 0 failures / 0 errors / 3 skipped = EXACTLY the +10** (core
+  14,326 -> 14,336; `-project` unchanged at 133, being +1/−1), XML-summed over all six modules. **No
+  corpus baseline moved**, which is the load-bearing negative: `\n` and `\r\n` had to be untouched.
+  `cost_gate.py` **+0.00% on all 20 counters** — a real gate here, since the Checker's line index
+  changed shape, and proven live by its own 46-error / 78-file compile. `huge_methods.py --fail-over
+  0` clean on core (**739 classes, up from 738 — the gate SAW `LineStartsKt`**) and on `-project`
+  (12); `Checker.<init>` unmoved at 5,813 (no new field). Warning-clean. No wall A/B: `lineStartsFor`
+  is memoized per source and `computeLineStarts` is lazy, so the loop is not on any hot path — the
+  counters are the defensible instrument.
+
 **Round 914 (2026-08-17) — (API.3c): THE BATCH LANDS AND THE API IS NOW USABLE BY AN EDITOR — N SPANS COST
 ONE BUILD, MEASURED AT **34x** FOR HOVER AND **62x** WHEN EACH CARET IS ALSO ASKED FOR ITS DEFINITION.
 THE ROUND'S TECHNICAL PRODUCT IS THAT THE QUEUE ENTRY'S "IT NEEDS NO NEW MECHANISM" WAS TRUE OF THE
