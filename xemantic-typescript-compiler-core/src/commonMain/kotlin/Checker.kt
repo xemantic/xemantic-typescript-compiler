@@ -55509,7 +55509,7 @@ interface Iterator<T> {
     return?(value?: any): any;
     throw?(e?: any): any;
 }
-interface IterableIterator<T> extends Iterator<T> { }
+interface IterableIterator<T> extends Iterator<T> { [Symbol.iterator](): IterableIterator<T>; }
 interface ArrayIterator<T> { }
 interface MapIterator<T> { }
 interface SetIterator<T> { }
@@ -111038,8 +111038,25 @@ interface DataView {
     private fun lateBoundKeyValue(e: Expression, hops: Int): String? {
         if (hops > LATE_BIND_ALIAS_HOPS) return null
         enumMemberLateBoundKeyName(e)?.let { return it }
+        // Round 936: a QUALIFIED key — `NS.K`, `NS.Inner.K`, `NS.E.P`. tsc late-binds all
+        // three (measured) and this compiler answered TS2741 for every one of them, which
+        // is the same false positive round 935 closed for the unqualified spellings.
+        if (e is PropertyAccessExpression) return qualifiedLateBoundKeyValue(e, hops)
         val id = e as? Identifier ?: return null
-        val decl = lateBindResolveVarDecl(id) ?: return null
+        return lateBoundValueOfVarDecl(lateBindResolveVarDecl(id) ?: return null, hops)
+    }
+
+    /**
+     * Round 935, extracted round 936: the literal a resolved variable DECLARATION denotes.
+     *
+     * Shared by the unqualified route ([lateBindResolveVarDecl]) and the namespace one
+     * ([qualifiedLateBoundKeyValue]) so a namespace member obeys exactly the rules an
+     * outer-scope binding does — which is tsc's answer, measured on 7.0.2: `NS.K` for
+     * `export const K = "p"` binds, `NS.D` for `export declare const D: "p"` binds, and
+     * `NS.LW` for `export let LW = "p"` does NOT (it widened).
+     */
+    private fun lateBoundValueOfVarDecl(decl: VariableDeclaration, hops: Int): String? {
+        if (hops > LATE_BIND_ALIAS_HOPS) return null
         // A `const` initializer wins over an annotation: the reference is narrowed to it.
         val list = (decl as NodeBase).parent as? VariableDeclarationList
         if (list?.flags == SyntaxKind.ConstKeyword) {
@@ -111051,7 +111068,218 @@ interface DataView {
                 }
             }
         }
-        return (decl.type as? LiteralType)?.literal?.let { literalKeyValueOf(it) }
+        return lateBoundTypeNodeValue(decl.type, decl, hops)
+    }
+
+    /**
+     * Round 936: the literal a TYPE ANNOTATION denotes, through a bounded ALIAS chain.
+     *
+     * Round 935 read `decl.type as? LiteralType` and nothing else, which left two shapes
+     * tsc binds and this compiler reported TS2741 for (both measured on 7.0.2, both false
+     * positives, and both false NEGATIVES in the excess direction at the same time):
+     *
+     *  - a no-substitution TEMPLATE-LITERAL TYPE — ``declare const TT: `p` `` — which is a
+     *    string-literal type spelled the third way (the same asymmetry round 933 found for
+     *    the EXPRESSION spellings, one type-node level up);
+     *  - a TYPE ALIAS to either spelling, and a chain of them (`type LP = "p"`,
+     *    `type LP2 = LP`, `declare const A: LP2`).
+     *
+     * REFUSED, with tsc agreeing: a SUBSTITUTING template type (`` `p${string}` ``, whose
+     * spans are non-empty), an alias to a UNION (`type LU = "p" | "q"`), and a GENERIC
+     * alias or a type reference carrying arguments — none of those denotes one fixed name.
+     * The alias hop is syntactic for round 935's reason: a type-derived name is a function
+     * of the PASS, not of the program.
+     */
+    private fun lateBoundTypeNodeValue(t: TypeNode?, at: Node, hops: Int): String? {
+        if (hops > LATE_BIND_ALIAS_HOPS) return null
+        return when (t) {
+            is LiteralType -> literalKeyValueOf(t.literal)
+            is TemplateLiteralType -> templateLiteralTypeFixedText(t)
+            is ParenthesizedType -> lateBoundTypeNodeValue(t.type, at, hops + 1)
+            is TypeReference -> {
+                if (!t.typeArguments.isNullOrEmpty()) return null
+                val name = (t.typeName as? Identifier)?.text ?: return null
+                val alias = lateBindScanEnclosing(at) { st ->
+                    (st as? TypeAliasDeclaration)?.takeIf { it.name.text == name && it.typeParameters == null }
+                } ?: return null
+                lateBoundTypeNodeValue(alias.type, alias, hops + 1)
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Round 936: the ONE fixed string a template-literal TYPE denotes, or null.
+     *
+     * **`TemplateLiteralType` is NOT a structured node in this parser** — B65.1 builds it
+     * with `templateSpans = emptyList()` and the whole raw source slice (backticks and
+     * all) in `head.rawText`, because the checker's display path only ever needed the
+     * rendered text. So the obvious `templateSpans.isEmpty()` test is TRUE for every
+     * template type, substituting or not, and reading `head.text` answers `""` — a name
+     * that matches no member, which is worse than refusing: it reached the excess check
+     * as a real member and reported `` `p${string}` `` keys as excess, where tsc is silent.
+     * (Measured, this round, on the first build; the raw text is the only discriminator
+     * that exists here.)
+     *
+     * Refused, therefore: a slice carrying `${` (substituting — tsc says TS2741 for such a
+     * key, measured) and one carrying a BACKSLASH, where the raw and cooked texts come
+     * apart and this node keeps only the raw one.
+     */
+    private fun templateLiteralTypeFixedText(t: TemplateLiteralType): String? {
+        val raw = t.head.rawText ?: return null
+        if (raw.length < 2 || raw.first() != '`' || raw.last() != '`') return null
+        val inner = raw.substring(1, raw.length - 1)
+        if (inner.contains("\${") || inner.contains('\\')) return null
+        return inner
+    }
+
+    /**
+     * Round 936: the value a QUALIFIED late-bindable key denotes — `NS.K`, `NS.Inner.IK`,
+     * `NS.CE.P`, `NS.SE.Q` — resolved by descending NAMESPACE BODIES syntactically.
+     *
+     * Every row was READ from tsc 7.0.2 before this was written: a namespace-qualified
+     * const, a nested/dotted namespace's const, and a const-or-plain ENUM member declared
+     * inside a namespace all late-bind there, and every one of them was a TS2741 false
+     * positive here (supply) and a silent TS2353 false negative there (excess) — one
+     * missing capability showing up as opposite defects in the two directions, exactly as
+     * round 935 recorded for the unqualified case.
+     *
+     * SYNTACTIC, and deliberately so. The head could be resolved through
+     * [currentFileLocals], which is what [resolveEnumSymbolFileLevel] does — but that map
+     * is AMBIENT (round 911: it is not the same map in every pass), and round 935 measured
+     * what an ambient input costs a member name: the same key became two different members
+     * in ONE compile. Descending `ModuleBlock` statements is a function of the program.
+     * Namespace MERGING is covered because every statement of a level is scanned, not the
+     * first match; a dotted declaration (`namespace A.B { … }`) is matched by its whole
+     * name PATH. The one symbol-table consult left is the enum leaf, whose VALUES live in
+     * the binder's frozen tables and nowhere in the AST ([enumMemberValueFromDecl]).
+     */
+    private fun qualifiedLateBoundKeyValue(pa: PropertyAccessExpression, hops: Int): String? {
+        val segs = ArrayList<String>(4)
+        var cur: Expression = pa
+        while (cur is PropertyAccessExpression) {
+            segs.add(cur.name.text)
+            cur = unwrapParensExpr(cur.expression)
+        }
+        val head = cur as? Identifier ?: return null
+        segs.add(head.text)
+        segs.reverse()
+        var node: Node? = (pa as NodeBase).parent
+        while (node != null) {
+            lateBindStatementsOf(node)?.let { stmts ->
+                resolveDottedInStatements(stmts, segs, 0, hops)?.let { return it }
+            }
+            node = (node as NodeBase).parent
+        }
+        return null
+    }
+
+    /** Round 936: [path] from index [from] resolved against one statement list — a
+     *  namespace descent, an enum member, or the variable declaration at the end. */
+    private fun resolveDottedInStatements(
+        stmts: List<Statement>,
+        path: List<String>,
+        from: Int,
+        hops: Int,
+    ): String? {
+        if (hops > LATE_BIND_ALIAS_HOPS) return null
+        val remaining = path.size - from
+        if (remaining <= 0) return null
+        if (remaining == 1) {
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text == path[from]) {
+                        return lateBoundValueOfVarDecl(d, hops + 1)
+                    }
+                }
+            }
+            return null
+        }
+        for (st in stmts) {
+            when (st) {
+                is EnumDeclaration ->
+                    if (remaining == 2 && st.name.text == path[from]) {
+                        enumMemberValueFromDecl(st, path[from + 1])?.let { return it }
+                    }
+                is ModuleDeclaration -> {
+                    val np = moduleNamePath(st) ?: continue
+                    if (np.isEmpty() || np.size >= remaining) continue
+                    var matches = true
+                    for (i in np.indices) if (np[i] != path[from + i]) { matches = false; break }
+                    if (!matches) continue
+                    val body = st.body as? ModuleBlock ?: continue
+                    resolveDottedInStatements(body.statements, path, from + np.size, hops + 1)
+                        ?.let { return it }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /** Round 936: a `namespace` declaration's name as a PATH — `["A", "B"]` for
+     *  `namespace A.B { … }`, which the parser stores as a `PropertyAccessExpression`
+     *  name rather than as nested declarations. A string-named ambient module answers
+     *  null: its name is a module specifier, not a dotted path. */
+    private fun moduleNamePath(m: ModuleDeclaration): List<String>? {
+        val out = ArrayList<String>(2)
+        var cur: Expression = m.name
+        while (cur is PropertyAccessExpression) {
+            out.add(cur.name.text)
+            cur = cur.expression
+        }
+        val head = cur as? Identifier ?: return null
+        out.add(head.text)
+        out.reverse()
+        return out
+    }
+
+    /**
+     * Round 936: the string an ENUM MEMBER declared by [decl] denotes, reached through the
+     * binder's node->symbol table because the VALUES are not in the AST (an auto-numbered
+     * member has no initializer to read). [enumMemberEntries] is the reader that already
+     * knows the one member with no value at all — a value-less member of an AMBIENT
+     * non-`const` enum, round 746 — and it answers null for it rather than inventing one.
+     */
+    private fun enumMemberValueFromDecl(decl: EnumDeclaration, member: String): String? {
+        val res = owningSourceFile(decl)?.fileName?.let { fileResults[it] } ?: return null
+        val sym = res.nodeToSymbol[nodeKey(decl)] ?: return null
+        return enumMemberValueOf(canonicalEnumSymbol(sym), member)
+    }
+
+    /** Round 935, extracted round 936: an enum member's VALUE as a property name. */
+    private fun enumMemberValueOf(enumSym: Symbol, member: String): String? {
+        val entries = enumMemberEntries(enumSym) ?: return null
+        return when (val v = entries.firstOrNull { it.first == member }?.second) {
+            is ConstantValue.StringValue -> v.value
+            is ConstantValue.NumberValue -> v.toString()
+            null -> null
+        }
+    }
+
+    /** Round 936: the statement list a node OWNS, for the innermost-first late-binding
+     *  scan — the node set [lateBindResolveVarDecl] has walked since round 935. */
+    private fun lateBindStatementsOf(n: Node): List<Statement>? = when (n) {
+        is SourceFile -> n.statements
+        is ModuleBlock -> n.statements
+        is Block -> n.statements
+        is CaseClause -> n.statements
+        is DefaultClause -> n.statements
+        else -> null
+    }
+
+    /** Round 936: the innermost-first scan of the enclosing statement lists that
+     *  [lateBindResolveVarDecl] performs, with the pick left to the caller. */
+    private inline fun <T : Any> lateBindScanEnclosing(from: Node, pick: (Statement) -> T?): T? {
+        var cur: Node? = (from as NodeBase).parent
+        while (cur != null) {
+            lateBindStatementsOf(cur)?.let { stmts ->
+                for (st in stmts) pick(st)?.let { return it }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
     }
 
     /** Round 935: the property name a literal NODE spells for late binding — the string
@@ -111078,29 +111306,11 @@ interface DataView {
      * at all (B83.5 — block-scoped declarations are not bound), so the walk up the parent
      * chain is both the deterministic answer and the only one that covers both scopes.
      */
-    private fun lateBindResolveVarDecl(id: Identifier): VariableDeclaration? {
-        var cur: Node? = (id as NodeBase).parent
-        while (cur != null) {
-            val stmts = when (cur) {
-                is SourceFile -> cur.statements
-                is ModuleBlock -> cur.statements
-                is Block -> cur.statements
-                is CaseClause -> cur.statements
-                is DefaultClause -> cur.statements
-                else -> null
-            }
-            if (stmts != null) {
-                for (st in stmts) {
-                    if (st !is VariableStatement) continue
-                    for (d in st.declarationList.declarations) {
-                        if ((d.name as? Identifier)?.text == id.text) return d
-                    }
-                }
-            }
-            cur = (cur as NodeBase).parent
+    private fun lateBindResolveVarDecl(id: Identifier): VariableDeclaration? =
+        lateBindScanEnclosing(id) { st ->
+            (st as? VariableStatement)?.declarationList?.declarations
+                ?.firstOrNull { (it.name as? Identifier)?.text == id.text }
         }
-        return null
-    }
 
     /**
      * Round 935: the late-bound name of an `E.P` key — the enum member's VALUE.
@@ -111120,12 +111330,7 @@ interface DataView {
         val member = pa.name.text
         if (member.isEmpty()) return null
         val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
-        val entries = enumMemberEntries(sym) ?: return null
-        return when (val v = entries.firstOrNull { it.first == member }?.second) {
-            is ConstantValue.StringValue -> v.value
-            is ConstantValue.NumberValue -> v.toString()
-            null -> null
-        }
+        return enumMemberValueOf(sym, member)
     }
 
     /**
@@ -111172,8 +111377,47 @@ interface DataView {
         is Identifier -> n.text
         is StringLiteralNode -> n.text
         is NumericLiteralNode -> n.text
-        is ComputedPropertyName -> computedLiteralKey(n) ?: lateBoundComputedKeyName(n)
+        is ComputedPropertyName ->
+            computedLiteralKey(n) ?: lateBoundComputedKeyName(n) ?: wellKnownSymbolKey(n)
         else -> null
+    }
+
+    /**
+     * Round 936: the member name a WELL-KNOWN-SYMBOL key spells — `[Symbol.iterator]` —
+     * for the excess-property check, which is the ONE part of [computedSymbolKey]'s
+     * answer that is a claim about what the key spells rather than a placeholder.
+     *
+     * tsc reports `{ [Symbol.iterator]: 1 }` against `{ p?: number }` as **TS2353
+     * '[Symbol.iterator]'** and this compiler was silent (measured on 7.0.2, both
+     * directions), while the SUPPLY direction has been right since round 723: the object
+     * literal's TYPE names such a member through [computedSymbolKey], and so does an
+     * interface's own `[Symbol.iterator]` member, so the two sides already match — only
+     * the excess check could not see the key at all.
+     *
+     * **NARROW ON PURPOSE, and the narrowness is the whole correctness argument.** Round
+     * 934 excluded [computedSymbolKey] here because it invents `"[<dotted>]"` for ANY
+     * dotted path, and tsc is SILENT for every computed key it cannot late-bind — measured
+     * this round over seven of them (`[LW]` for a `string`, a substituting template, a
+     * literal union, a `number`, a plain `symbol`, `[NS.LW]` for a widened namespace
+     * `let`, and `[obj.k]`), all of which would become false positives under the general
+     * helper. A well-known symbol is different because it IS a fixed name on both sides.
+     * So: the receiver must be the identifier `Symbol` itself, and it must not be a local
+     * binding of that name — a `const Symbol = …` in scope makes the key dynamic again,
+     * which the same innermost-first walk that resolves every other late-bound key answers.
+     *
+     * A `unique symbol` binding (`declare const S: unique symbol; { [S]: 1 }`) is NOT
+     * covered and cannot be until it has a type of its own: `[S]` and `[S2]` are one name
+     * to this compiler, and its DECLARATION side (`interface I { [S]: number }`) declares
+     * no member at all, so naming the key here would report `{ [S]: 1 }` against that
+     * interface as excess — a false positive where tsc is silent. See (CHK.5).
+     */
+    private fun wellKnownSymbolKey(n: ComputedPropertyName): String? {
+        val pa = unwrapParensExpr(n.expression) as? PropertyAccessExpression ?: return null
+        val recv = unwrapParensExpr(pa.expression) as? Identifier ?: return null
+        if (recv.text != "Symbol") return null
+        if (lateBindResolveVarDecl(recv) != null) return null
+        if (pa.name.text.isEmpty()) return null
+        return "[Symbol.${pa.name.text}]"
     }
 
     /**
