@@ -328,6 +328,53 @@ exists while the checker is at that position, so any new semantic feature must
 capture during the walk too. `(API.3)` in `PLAN-PHASE-5.md` has the full
 reasoning.
 
+### A MEMBER name reports the member's type
+
+**(BUG.4)** The `p` of `o.p` is not a name any scope binds, so asking the compiler
+for "the type of `p`" is the wrong question — before round 924 that is what this
+did, and the answer was `any` where nothing in the file shared the spelling and
+**the type of whatever unrelated binding did** where something shared it. Measured
+against tsc 7.0.2's own language server, twelve of fifteen member positions in a
+fixture whose properties are deliberately spelled like file-level `const`s of other
+types answered with the collider: `o.k` read `boolean` for a `string` property.
+
+The rule now is tsc's own: **the type of a member name is the type of the access it
+is the name of.** So everything the checker knows about member access applies with
+no rule of its own —
+
+| position | reported |
+|---|---|
+| `o.p` where `p: string` | `string` |
+| `box.value` where `box: BoxLike<number>` | `number` — instantiated, not `T` |
+| `o.inherited`, declared on a base | the base's declared type |
+| `u.p` where `u: A \| B` | `string \| number` |
+| `t.k` where `t: T`, `T extends Shape` | through the constraint |
+| `n.q` inside `if (typeof n.q === "string")` | `string` — **narrowed** |
+| `C.s`, a static | `number` |
+| `this.p`, in a method or any nesting of arrows | the field's type |
+| `super.p` | the **base's** member, not an override |
+| `o["p"]`, caret on the string literal | the member's type |
+| `N.T`, a qualified type name | the declared type |
+
+`this` and `super` are the one shape needing a second mechanism, for the reason
+§ 9 gives about go-to-definition: they are plain identifiers in this parser, so
+they type as `any` and the access does too. The class is recovered from the
+walk-scoped state instead. When it cannot be — a caret in a **static** member,
+whose `this` is `typeof C` and which this compiler does not model — the answer is
+`any`: a non-answer, never a wrong name.
+
+**Still refused, and it is the same refusal § 9 records:** an object literal's own
+key (`{ p: v }`, including the shorthand `{ p }`). Its useful answer is the
+CONTEXTUAL type's property, which is walk-scoped state this capture does not read
+and which is absent outright in positions such as a ternary branch. A shorthand
+therefore reports the LOCAL it references — true about a different subject.
+
+One display note, because it looks like a bug and is not: a type reported here is
+named by the compiler's own renderer, which names an interned type by whatever
+alias the program gave it. With `type Alias = NS.T` in scope, hovering `T` renders
+`Alias`. That is the same synonym a free type name renders and it is not specific
+to members.
+
 ## 9. Semantic queries: go to definition
 
 ```kotlin
@@ -951,27 +998,22 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **element access** (`o["p"]`) — still no definition and no completion inside the
-  string. `(API.7)` sharpened why: recognising the shape was never the hard part
-  (it is one test on the node's parent). What is missing is a capture channel for a
-  non-identifier node plus a member lookup *by text* on the receiver's type. The
-  receiver resolution itself is already here — it is what member go-to-definition
-  runs on.
-- **contextual object-literal keys** — `{ p: v }`'s own `p` still answers nothing,
-  in either query. The useful target is the *contextual* type's property (§ 9), and
+- **element access** (`o["p"]`) — **hover answers it since (BUG.4)** (§ 8), but
+  there is still no definition and no completion inside the string. `(API.7)`
+  sharpened why, and hover cashing it narrowed the remainder further: recognising
+  the shape was never the hard part (one test on the node's parent), and typing the
+  access needed no member lookup by text at all. What definition still wants is a
+  DECLARATION for a non-identifier node, which is a different question from a type.
+- **contextual object-literal keys** — `{ p: v }`'s own `p` still has no definition,
+  and hover describes the wrong subject for a shorthand `{ p }` (it reports the LOCAL
+  `p` the shorthand references, § 8). The useful target is the *contextual* type's
+  property (§ 9), and
   a contextual type is walk-scoped state the capture does not read — in a ternary
   branch it does not exist at all. That is a third resolution mechanism beside the
   scope chain and the receiver, and no syntactic classification supplies it.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.
-- **quick info on a member NAME** — hovering the `p` of `o.p` reports `any`, and it
-  is not a `this` problem: `quickInfoAt` resolves the *narrowest* node at the caret,
-  which is the member identifier, and asks the checker for the type of that name as
-  if it were a free one. Completions and go-to-definition both consult the member
-  resolution at that caret; hover does not. Measured on an ordinary receiver, on
-  `this` inside a method and on `this` inside a nested arrow — the same answer in
-  all three, so the fix is one channel, not three.
 - **rename** — it is find-references plus an edit plan, and the edit plan is where
   the work is: a shorthand `{ p }` and an `import { p as q }` do not rewrite the way
   a plain occurrence does.

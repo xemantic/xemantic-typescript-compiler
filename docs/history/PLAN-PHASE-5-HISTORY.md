@@ -1,3 +1,75 @@
+**Round 914 (2026-08-17) — (API.3c): THE BATCH LANDS AND THE API IS NOW USABLE BY AN EDITOR — N SPANS COST
+ONE BUILD, MEASURED AT **34x** FOR HOVER AND **62x** WHEN EACH CARET IS ALSO ASKED FOR ITS DEFINITION.
+THE ROUND'S TECHNICAL PRODUCT IS THAT THE QUEUE ENTRY'S "IT NEEDS NO NEW MECHANISM" WAS TRUE OF THE
+CAPTURE AND **FALSE OF ITS KEY**: THE ONE THING BULK CHANGES IS A HASH DISTRIBUTION, AND NOTHING IN THIS
+REPO CAN SEE A DEGENERATE ONE.**
+
+- **THE CORRECTION, first, because it is the only place this item could silently create a defect.**
+  `TypeCaptureRequest.keysByFile` packs `(start, end)` into a `Long` and its KDoc said the packing was
+  left un-finalized DELIBERATELY — "these sets hold the handful of spans a host asked about, so no
+  bucket distribution exists to degenerate. Should a caller ever request spans in bulk, finalize the
+  key with an odd multiply as `packIdPair` does." **`Project.fileSemantics` IS that caller**, and the
+  collapse is round 889's in its purest form: `Long.hashCode` is `(int)(v xor (v ushr 32))`, so the
+  pack hashes to `start xor end` — and a node's `end` is its `start` plus its own length plus the
+  FOLLOWING token (round 910), i.e. the halves are not merely correlated, they are NEIGHBOURS.
+  Measured on a modelled whole-file population: **>400 distinct spans onto fewer than 40 distinct
+  hashes**, every bucket degenerate. Now `packIdPair`. Soundness is that function's two clauses and
+  both hold: nothing unpacks the key (the answers carry the node's own `start`/`end`) and nothing
+  iterates the sets. **Production pays nothing** — the per-node hook returns on a null per-file key
+  set BEFORE it packs anything, which `cost_gate.py`'s +0.00% is the evidence for.
+
+- **THE PUBLIC SHAPE, and why it is two members and one mechanism.**
+  `semanticsAt(fileName, offsets: List<Int>)` is the primitive and `fileSemantics(fileName)` is the
+  sweep, the second literally calling the first's helper over `SourceIndex.identifiers()`. An editor
+  needs both and they are not the same question: a sweep serves semantic highlighting and hover
+  prefetch, a multi-offset query serves a known set of carets. The value is
+  `SemanticInfo(start, end, kind, quickInfo, definitions)` — one per DISTINCT SPAN, sorted
+  `(start, end)` — so several carets in one identifier collapse to one entry and the result is
+  neither indexed by nor the same length as the input. **The ordering is imposed here rather than
+  inherited**, because the compiler's answer order is the order its walk reached the nodes, i.e. a
+  property of the check spine. An empty request does not build.
+
+- **THE CANDIDATE SET IS "EVERY `Identifier`", AND THE ARGUMENT IS THAT THE RULE HAS TO FIT IN A
+  SENTENCE.** Anything richer is a taste-driven list that drifts. Member names are IN (they are
+  identifiers and they are typed); their definition stays refused, so such an entry carries a type and
+  no locations — which is one span pinning both halves of the rule. Keywords, punctuation, literals and
+  larger expressions are out; a host wanting the type of `f(x)` asks `semanticsAt` for the caret it has.
+
+- **WHAT I DELIBERATELY DID NOT DO: re-express `quickInfoAt`/`definitionsAt` on the batch.** It would
+  have removed ~10 duplicated lines and made the EQUIVALENCE pin a tautology. They stay separate code,
+  so "the batch says span for span what the single-caret members say" is a comparison of two
+  independent paths and two independent builds, and drift between them is what it fails on. Recorded in
+  `Project.semanticsOf`'s KDoc so the next reader does not "clean it up".
+
+- **THE MEASUREMENT (34-identifier in-memory fixture, warm, two draws agreeing to 3%):**
+  `fileSemantics` = **1 compile, 100-103 ms**; the same 34 carets through `quickInfoAt` = **34
+  compiles, 3,373-3,377 ms (33.6x)**; each caret asked BOTH ways = **68 compiles, 6,209-6,474 ms
+  (60-63x)**. The ratio is what transfers — it is a count of compiles — and the ms are a property of a
+  tiny fixture.
+
+- **THE BUILD COUNTER IS A PER-PATH READ, AND THE FIRST VERSION OF IT WAS FLAKY.** Counting ALL Vfs
+  touches read 29 where 6 builds should be 30, once, and 30 on every rerun: some compiler cache warms
+  across builds within one JVM and takes a source read with it, so the sum is order-dependent — a pin
+  that cries wolf. Reads of `tsconfig.json` are exactly 1 per `ProjectCompiler.build` and are not
+  cached across builds, which a control pin establishes rather than assumes. Three consecutive runs of
+  the class, green.
+
+- **GATES: suite 14,567 -> 14,593 / 0 failures / 0 errors / 3 skipped = EXACTLY the 26 new pins** (22
+  `-project`, 4 core; module 111 -> 133, core 14,322 -> 14,326), XML-summed across all six modules.
+  **`cost_gate.py` +0.00% on all 20 counters** — here a control by construction (no capture is
+  requested on a production compile) and worth running because the key change is ON the hot walk's
+  hook, and proven live by the compile it drives (46 errors / 78 files). `huge_methods.py
+  --fail-over 0` clean on core (738 classes) AND, per round 909's blind-spot rule, on the `-project`
+  module explicitly — **12 classes against round 913's 11, i.e. the gate SAW the new code**.
+  `spine_closure_audit.py` 46 handlers, all supersets, run although no `spine*EnterNode` changed.
+  Build warning-clean. No wall A/B: production executes not one new instruction.
+
+- **WHAT IS LEFT, unchanged: member go-to-definition** (needs the receiver's type and its property
+  symbol — the capture hook is the right place, the scope chain is not the right mechanism) and
+  `(API.4)` completions. And one honest coarseness the sweep makes visible: the capture types an
+  identifier NODE, so a member name and a parameter's own declaration name answer `any` rather than
+  what a host would like; that is (API.3a)'s behaviour seen in bulk, not something batching introduced.
+
 **Round 907 (2026-08-15) — (WARM.34): THE COUNT QUESTION IS **REFUSED BY ITS OWN CENSUS**, AND THE
 `lexLevelHasName` FAMILY IS **CLOSED ENTIRELY**. THE QUEUE'S PREMISE WAS WRONG IN THE SAME WAY ROUND
 902's OWN LAW PREDICTS: **"THE O(depth) ASCENT" DESCRIBES THE *CHAIN* (3.69 STEPS), NOT THE *PROBES*

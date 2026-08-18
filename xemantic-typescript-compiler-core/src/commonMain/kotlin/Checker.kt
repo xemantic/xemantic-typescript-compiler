@@ -6653,7 +6653,7 @@ class Checker(
         val savedCheckFileName = currentCheckFileName
         currentCheckFileName = fileName
         try {
-            val text = typeToString(getTypeOfExpression(node))
+            val text = typeToString(typeCaptureReportedType(node))
             typeCaptureResults[span] = CapturedType(
                 fileName = fileName,
                 start = node.pos,
@@ -6664,6 +6664,142 @@ class Checker(
         } finally {
             currentCheckFileName = savedCheckFileName
         }
+    }
+
+    /**
+     * (BUG.4) The type a capture must report AT [node] — which for a MEMBER NAME is
+     * NOT the type of that name.
+     *
+     * ## What was wrong, and it was worse than a missing answer
+     *
+     * A capture types the node the caller's caret resolved to, and for `o.p` that is
+     * the DEEPEST node: the member identifier `p`. Handing that identifier to
+     * [getTypeOfExpression] asks the compiler "what is the free name `p`", because a
+     * member name is bound by no scope — so the answer was whatever unrelated `p` the
+     * file happened to declare, and `any` only where nothing did. Measured against
+     * tsc 7.0.2's own language server on a fixture whose members are deliberately
+     * spelled like file-level `const`s of OTHER types, twelve of fifteen member
+     * positions answered with the collider's type: `o.k` read `boolean` for a
+     * `string` property, `box.value` read `string` for a `number` one, `this.p` read
+     * `number` for a `string` field. A confidently wrong hover, not a blank one.
+     *
+     * ## The rule, which is tsc's own
+     *
+     * tsc's `getTypeOfSymbolAtLocation` moves off the right-hand side of a property
+     * access ONTO THE ACCESS and takes the type of that expression. So does this: the
+     * type of the `p` in `o.p` is the type of `o.p`. Everything the checker knows
+     * about member access then applies with no rule of its own —
+     * [computeRawTypeOfPropertyAccess] instantiates a generic member through
+     * [resolveGenericPropertyType], distributes over a union receiver, reaches a type
+     * parameter's members through its constraint, reads the static side of a class
+     * and narrows the access by the flow graph. All six were measured to agree with
+     * tsc 7.0.2 after this change and to disagree before it.
+     *
+     * ## The ONE receiver that needs a carrier, and why
+     *
+     * `this` and `super` are `Identifier("this")` / `Identifier("super")` in this
+     * parser — there is no `ThisExpression` node — so they reach [getTypeOfExpression]
+     * as names nothing binds and type as `any`, which makes the access `any` too.
+     * That is the same gap (API.3d) had to fill for go-to-definition, and it is
+     * filled the same way: from [currentClassForThis], which [typeCaptureVisit]
+     * reconstructs by an ascent (BUG.3) rather than reading off a cta frame. The leg
+     * is ADDITIVE — when it cannot decide (no enclosing class, a static member where
+     * `currentClassForThis` is deliberately null, an unresolvable base) the access's
+     * own type answers, which is `any`: a non-answer, and never a wrong name.
+     *
+     * ## The two neighbours this also closes, and the one it does not
+     *
+     * An ELEMENT ACCESS `o["p"]` — the caret lands on the string literal, whose own
+     * type is `string` whatever the member is, so the answer was right by coincidence
+     * for a `string` member and wrong for every other. Same rule, same reason: the
+     * type of the literal in `o["p"]` is the type of `o["p"]`. (The go-to-definition
+     * refusal recorded in [CapturedDefinition] is untouched — that one is about
+     * offering a DECLARATION for a non-identifier, a different question.)
+     *
+     * A QUALIFIED TYPE NAME `N.T` — no access expression exists to type, so it goes
+     * through (API.3d)'s export table instead and reports the DECLARED type of what
+     * it finds, which is the interface. Refused when the left side is not a bare
+     * name, exactly as the definition leg refuses `A.B.x`.
+     *
+     * NOT closed, deliberately: an object literal's own key (`{ p: v }`). Its useful
+     * answer is the CONTEXTUAL type's property — walk-scoped state this capture does
+     * not read and which is absent outright in positions such as a ternary branch —
+     * so a shorthand `{ p }` keeps reporting the LOCAL `p` it references, which is
+     * a true statement about a different subject. Round 922's reason, unchanged.
+     */
+    private fun typeCaptureReportedType(node: Expression): Type =
+        typeCaptureMemberAccessType(node) ?: getTypeOfExpression(node)
+
+    /**
+     * (BUG.4) The type of the ACCESS [node] is the member name of, or null when
+     * [node] is not a member name at all.
+     *
+     * Null is the "not a member position" answer and nothing else — every leg that
+     * accepts the position returns a type, falling back to the access's own type
+     * rather than to null, so a member name can never be re-asked as a free name.
+     */
+    private fun typeCaptureMemberAccessType(node: Expression): Type? =
+        when (val parent = (node as NodeBase).parent) {
+            is PropertyAccessExpression ->
+                if (parent.name !== node) null else typeCapturePropertyAccessType(parent)
+            // Only a string literal: a computed `o[i]` names no member, and the caret
+            // there is on an ordinary expression whose own type is the right answer.
+            is ElementAccessExpression ->
+                if (node !is StringLiteralNode || parent.argumentExpression !== node) null
+                else getTypeOfExpression(parent)
+            is QualifiedName ->
+                if (parent.right !== node) null else typeCaptureQualifiedNameType(parent)
+            else -> null
+        }
+
+    /** (BUG.4) The type of [access], with the `this`/`super` carrier leg. */
+    private fun typeCapturePropertyAccessType(access: PropertyAccessExpression): Type {
+        val receiver = access.expression
+        if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
+            typeCaptureThisMemberType(receiver, access.name.text)?.let { return it }
+        }
+        return getTypeOfExpression(access)
+    }
+
+    /**
+     * (BUG.4) [name] on the type `this` (or `super`) has here, or null.
+     *
+     * [resolveMemberPropertyType] is the compiler's own per-constituent member
+     * typing — the one [computeRawTypeOfPropertyAccess] uses for a union receiver —
+     * so the apparent type, a generic instantiation and an intersection are all
+     * handled here by not being handled here. It reaches the member table through
+     * [getPropertyOfType], which resolves it first, so round 833's laziness rule is
+     * satisfied by construction rather than by a call this could forget.
+     *
+     * `super` reads the BASE types rather than the this-type. Both answer the same
+     * thing for an inherited member — [resolveStructuredTypeMembers] copies a base's
+     * symbol into the derived table — and they differ exactly where the derived class
+     * OVERRIDES the member, which is the case `super` is written for.
+     */
+    private fun typeCaptureThisMemberType(receiver: Identifier, name: String): Type? {
+        val cls = currentClassForThis ?: return null
+        val thisType = resolveUncalledThisType(cls) ?: return null
+        if (receiver.text != "super") return resolveMemberPropertyType(thisType, name)
+        val declared = thisType as? Type.Interface ?: return null
+        resolveStructuredTypeMembers(declared)
+        val bases = declared.baseTypes ?: return null
+        for (base in bases) resolveMemberPropertyType(base, name)?.let { return it }
+        return null
+    }
+
+    /**
+     * (BUG.4) The declared type of the `T` in a qualified TYPE name `N.T`, or null.
+     *
+     * A type position carries no access expression to type, so this reuses
+     * (API.3d)'s export-table leg — which already covers a namespace, a module alias
+     * and an enum — and reports what that symbol DECLARES. `any`/`errorType` is
+     * refused rather than reported: it means the symbol names no type, and the
+     * free-name fallback above says exactly as little with less confidence.
+     */
+    private fun typeCaptureQualifiedNameType(qualified: QualifiedName): Type? {
+        val exported = typeCaptureExportedMember(qualified.left, qualified.right.text)
+            ?: return null
+        return getDeclaredTypeOfSymbol(exported).takeIf { it !== anyType && it !== errorType }
     }
 
     /**

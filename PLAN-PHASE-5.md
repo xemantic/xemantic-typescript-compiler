@@ -20,6 +20,154 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 924 (2026-08-18) — (BUG.4): QUICK INFO ON A MEMBER NAME. THE ITEM SAID IT REPORTS
+`any`; MEASURED AGAINST tsc 7.0.2's OWN LANGUAGE SERVER IT IS **WORSE THAN THAT** — IT REPORTS
+THE TYPE OF WHATEVER UNRELATED BINDING SHARES THE MEMBER'S SPELLING, AND `any` ONLY WHERE
+NOTHING DOES.**
+
+- **THE STEP-1 TABLE, TAKEN AGAINST A RUNNING tsc 7.0.2 RATHER THAN AGAINST A READING OF IT.**
+  `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` is an LSP server, so the ground truth for a hover is
+  obtainable directly: a 70-line Python client (`initialize` / `didOpen` / `textDocument/hover`)
+  over the SAME fixture gives tsc's own answer at every caret. The fixture is built to
+  discriminate — every member is deliberately spelled like a file-level `const` of ANOTHER type
+  (`k` a `string` property and a `boolean` const, `value` a `number` property and a `string`
+  const, `p` a `string` field and a `number` const) — because a member name is bound by no
+  scope, so "type the name" does not fail loudly, it resolves to the collider.
+
+| position (member spelled like a file-level `const` of another type) | BEFORE | AFTER | tsc 7.0.2 |
+|---|---|---|---|
+| `o.k` — `k: string`, free `const k: boolean` | **`boolean`** | `string` | `string` |
+| `o?.k` through an optional chain | **`boolean`** | `string` | `string` |
+| `localObj.k` — an object literal's own member | **`boolean`** | `number` | `number` |
+| `o.inherited` — declared on a base, free `const inherited: number` | **`number`** | `boolean` | `boolean` |
+| `o.loose` — the member really IS `any`, free `const loose: string` | **`string`** | `any` | `any` |
+| `o.m` / `m` in `o.m()` — a method name | `any` | `() => number` | `(): number` |
+| `box.value` — `BoxLike<number>`, free `const value: string` | **`string`** | `number` | `number` |
+| `box.wrap` — a generic method | `any` | `() => number[]` | `(): number[]` |
+| `u.p` — union receiver, free `const p: number` | **`number`** | `string \| number` | `string \| number` |
+| `t.k` — receiver is `T extends Shape` | **`boolean`** | `string` | `string` |
+| `n.q` inside `if (typeof n.q === "string")` | **`boolean`** | `string` | `string` |
+| `imp.field` — imported interface, free `const field: boolean` | **`boolean`** | `string` | `string` |
+| `C.s` — a static, free `const s: string` | **`string`** | `number` | `number` |
+| `Color.Red` — an enum member | `any` | `Color.Red` | `Color.Red = 0` |
+| `NS.nsMember` — a namespace member | `number` | `number` | `number` |
+| `d.p` — a class instance member | **`number`** | `string` | `string` |
+| `this.p` directly in a method | **`number`** | `string` | `string` |
+| `this.p` in a nested arrow | **`number`** | `string` | `string` |
+| `super.p` where the subclass OVERRIDES `p` | **`number`** | the BASE's | the BASE's |
+| `ix["num"]` — caret on the string literal | `string` (coincidence) | `number` | `number` |
+| `NS.Plain` — a qualified TYPE name | `any` | `Plain` | `interface NS.Plain` |
+| `this.s` in a STATIC method | **`string`** | `any` (REFUSED) | `number` |
+| `{ k2 }` — a shorthand key | `5` | `5` (REFUSED) | `number` |
+| `sh.k2` — an object-literal member's widening | `5` | `5` | `number` |
+| CONTROL free `k` at its own declaration | `boolean` | `boolean` | `boolean` |
+| CONTROL the RECEIVER `o` of `o.k` | `Shape` | `Shape` | `Shape` |
+| CONTROL a free TYPE name `Shape` | `Shape` | `Shape` | `interface Shape` |
+
+- **THE MECHANISM, AND IT IS A CHANNEL RATHER THAN A MECHANISM — WHICH THE ITEM PREDICTED AND A
+  MEASUREMENT CONFIRMED BEFORE ANY DESIGN WAS COMMITTED.** The rule is tsc's own:
+  `getTypeOfSymbolAtLocation` moves off the right-hand side of a property access ONTO THE ACCESS
+  and takes the type of that expression, so **the type of the `p` in `o.p` is the type of `o.p`**.
+  A throwaway probe that did only that was measured over the whole fixture FIRST: it answers
+  correctly for the generic instantiation, the inherited member, the union receiver, the
+  type-parameter receiver, the static side, the enum member, the namespace member AND the
+  flow-NARROWED member — because `computeRawTypeOfPropertyAccess` already implements every one of
+  those and none of them needed a rule here. That probe is the reason the landed fix contains no
+  member-table walk: **the brief's `propertyTypeOnCarrier` / `resolveGenericPropertyType` route was
+  the right instinct and the wrong altitude** — the compiler's own access typing calls them, and
+  reaching past it would have re-derived (and, at a member table, mis-derived) what it already
+  does.
+
+- **THE ONE RECEIVER THAT NEEDS THE CARRIER, WHICH IS EXACTLY (API.3d)'s.** The probe answered
+  `any` for `this.p` and `super.p`, and for the same reason round 916 recorded: **`this` is
+  `Identifier("this")` in this parser** — there is no `ThisExpression` node — so it reaches
+  `getTypeOfExpression` as a name nothing binds, and the access inherits the `any`. The leg reads
+  `currentClassForThis`, which round 923's `typeCaptureThisClass` ascent installs, and then the
+  compiler's own `resolveMemberPropertyType`. It is **ADDITIVE**: where it cannot decide, the
+  access's own type answers, which is `any` — a non-answer, never a wrong name. That is what makes
+  the static-member refusal below a strict improvement rather than a new hole.
+
+- **TWO NEIGHBOURS CASHED, ONE REFUSED WITH ITS REASON RE-STATED.** (i) An ELEMENT ACCESS
+  `o["p"]`: the caret lands on the string literal, whose own type is `string` **whatever the
+  member is** — so the old answer was right by coincidence for a `string` member and wrong for the
+  `number` one measured. Same rule, one more parent test. Round 922's ranking said this needed "a
+  capture channel plus a member lookup BY TEXT"; typing the access needs neither, so the remaining
+  half of that refusal (go-to-DEFINITION for a non-identifier) is now smaller than it was written.
+  (ii) A QUALIFIED TYPE NAME `N.T` has no access expression to type, so it goes through (API.3d)'s
+  export table and reports the DECLARED type — refused when the left side is not a bare name,
+  exactly as the definition leg refuses `A.B.x`. (iii) An object literal's own key stays refused
+  on round 922's unchanged ground (the CONTEXTUAL type is walk-scoped state this capture does not
+  read, and is absent outright in a ternary branch), so a shorthand `{ p }` keeps reporting the
+  LOCAL it references — true about a different subject.
+
+- **THREE DIVERGENCES FROM tsc SURVIVE AND EACH IS NAMED RATHER THAN ASSERTED AWAY.** `this.s`
+  inside a STATIC method answers `any`: a static `this` is `typeof C`, which
+  `currentClassForThis: ClassDeclaration?` cannot model (round 916's own note), so the leg declines
+  — it used to answer the collider's `string`, so a wrong name became a non-answer. `sh.k2` reads
+  `5` where tsc reads `number`: that is this compiler's own object-literal inference, visible
+  through the access and not a capture question — and in the same run `holder.member` DOES widen to
+  `number`, so it is the shorthand's `const`-literal source and not a missing widening rule.
+  `NS.T` renders as `Alias` when the file also declares `type Alias = NS.T`: the display layer
+  names an interned type by whatever alias the program gave it, which a second namespace type with
+  no alias (`NS.Plain` -> `Plain`) proves is not specific to members.
+- **PINS +27** (`-project` 363 -> 390; core UNCHANGED at 14,341 — nothing was added that a core
+  test can reach without the `-project` anchor). `ProjectMemberHoverTest` IS the step-1 table turned
+  into assertions, positives and negative controls together, and every expected value in it was
+  read out of tsc 7.0.2 rather than predicted — which is how `sh.k2` came to be recorded as a
+  DIVERGENCE and `holder.member` as an agreement, two facts a prediction had exactly backwards.
+
+- **EIGHT-ARM ABLATION**, one mistake at a time, each anchored by an occurrence-count assertion
+  (round 922: `git diff --shortstat` is vacuous on a tree carrying the round's own uncommitted
+  work) and restored from a **sha256-verified** snapshot, never `git checkout`
+  (`scripts/round924-ablate.py`). All eight compiled; **seven reddened a DISTINCT set**:
+
+  | arm | red | what it proves |
+  |---|---|---|
+  | A1 the channel off (the pre-fix behaviour) | **21** | every positive member pin; all controls GREEN |
+  | A2 a member-TABLE read instead of the access | **3** | the two generic pins + narrowing — CLAUDE.md's shared-symbol trap, caught by its own pins |
+  | A3 no `resolveStructuredTypeMembers` in the `super` leg | **0** | MEASURED-REDUNDANT, recorded as that and not as coverage |
+  | A4 free-name FALLBACK wherever the access says `any` | **2** | the naive fix: `o.loose` and static `this` |
+  | A5 no `this`/`super` carrier leg | **4** | its own set |
+  | A6 `super` answered from the THIS type | **1** | uniquely its own — the override case |
+  | A7 no element-access leg | **1** | uniquely its own |
+  | A8 no qualified-name leg | **1** | uniquely its own |
+
+  A3 is kept rather than deleted: the call states the reader's precondition and costs nothing on a
+  capture-only path, and its zero says `getPropertyOfType` resolves the table anyway on THIS
+  fixture — which is a measurement, not a proof that no shape needs it.
+- **GATES.** Suite 14,838 -> **14,865 / 0 failures / 0 errors / 3 skipped = exactly the +27**,
+  XML-summed over all six modules with a real parser and re-run on the byte-restored
+  post-ablation tree. `cost_gate.py` **+0.00% on all 20 counters** — and a CONTROL rather than a
+  gate this round, stated as such: `typeCaptureReportedType` has ONE call site,
+  `typeCaptureRecord`, which is reached only from `typeCaptureVisit`, which returns at its first
+  line when no capture was requested, i.e. on every production build. Its own run compiles 78
+  files to 46 errors, so the instrument is live (round 853's frozen-classpath green is what that
+  sentence exists to exclude). `huge_methods.py --fail-over 0` clean on core and, per round 909's
+  blind-spot rule, on `-project` explicitly. `spine_closure_audit.py` 46 handlers all supersets,
+  run although no `spine*EnterNode` changed. The **8-profile `--listAll` grid** is
+  `added=0 removed=0` on every profile — a TWO-BINARY grid, HEAD's `Checker.kt` rebuilt against
+  the round's, since the change has no runtime switch; the expected result and therefore a control
+  for the reachability argument above, not evidence for it.
+- **THE DISCRIMINATORS, WRITTEN FIRST.** `a member name reports the MEMBER type and not a
+  colliding free binding` together with `a generic member reports the INSTANTIATED type`. Every
+  rival implementation fails one: the pre-fix behaviour fails the first (that is the bug); a fix
+  that merely stops answering `any` — a free-name FALLBACK wherever the access says `any` — passes
+  both and fails `a member that really is any reports any` and the static-`this` pin (arm A4); and
+  a member-TABLE read passes the first and fails the second, because an interface member's symbol
+  is shared by every instantiation and its cached type is the bare `T` (arm A2). The collider
+  bindings live in THE SAME FILE deliberately: a top-level binding in another MODULE is not in this
+  file's scope at all, so it could never have been the wrong answer and would discriminate nothing.
+
+- **SUCCESSOR, ranked.** (1) **RENAME** — unchanged from rounds 922/923 and still the item with the
+  most user-visible value; (API.5) supplies the occurrence sets and `ReferenceUse` the read/write
+  split, so what is left is the EDIT PLAN, where a shorthand `{ p }` and an `import { p as q }` do
+  not rewrite the way a plain occurrence does. (2) **go-to-definition for an element access** —
+  round 922 ranked it as wanting "a capture channel plus member-lookup-by-text", and this round
+  cashed the HOVER half without needing either, so what remains is narrower than it was written:
+  offering a DECLARATION for a non-identifier node. (3) the incremental / re-entrant seam. **I
+  would take (1)**: (2) shrank this round and is now a small tail on a query that already works,
+  while rename is the last big thing an editor needs that this API cannot do.
+
 **Round 923 (2026-08-18) — (BUG.3): THE LAYER QUESTION *WAS* THE ROUND, AND THE ANSWER IS THAT
 **THE CHECKER IS RIGHT AND THE CAPTURE WAS WRONG** — SETTLED BY MEASUREMENT AGAINST tsc 7.0.2 ITSELF
 BEFORE A LINE WAS WRITTEN.**
@@ -994,78 +1142,6 @@ happens to have a lone `\r`", BUT "none CAN".**
   is memoized per source and `computeLineStarts` is lazy, so the loop is not on any hot path — the
   counters are the defensible instrument.
 
-**Round 914 (2026-08-17) — (API.3c): THE BATCH LANDS AND THE API IS NOW USABLE BY AN EDITOR — N SPANS COST
-ONE BUILD, MEASURED AT **34x** FOR HOVER AND **62x** WHEN EACH CARET IS ALSO ASKED FOR ITS DEFINITION.
-THE ROUND'S TECHNICAL PRODUCT IS THAT THE QUEUE ENTRY'S "IT NEEDS NO NEW MECHANISM" WAS TRUE OF THE
-CAPTURE AND **FALSE OF ITS KEY**: THE ONE THING BULK CHANGES IS A HASH DISTRIBUTION, AND NOTHING IN THIS
-REPO CAN SEE A DEGENERATE ONE.**
-
-- **THE CORRECTION, first, because it is the only place this item could silently create a defect.**
-  `TypeCaptureRequest.keysByFile` packs `(start, end)` into a `Long` and its KDoc said the packing was
-  left un-finalized DELIBERATELY — "these sets hold the handful of spans a host asked about, so no
-  bucket distribution exists to degenerate. Should a caller ever request spans in bulk, finalize the
-  key with an odd multiply as `packIdPair` does." **`Project.fileSemantics` IS that caller**, and the
-  collapse is round 889's in its purest form: `Long.hashCode` is `(int)(v xor (v ushr 32))`, so the
-  pack hashes to `start xor end` — and a node's `end` is its `start` plus its own length plus the
-  FOLLOWING token (round 910), i.e. the halves are not merely correlated, they are NEIGHBOURS.
-  Measured on a modelled whole-file population: **>400 distinct spans onto fewer than 40 distinct
-  hashes**, every bucket degenerate. Now `packIdPair`. Soundness is that function's two clauses and
-  both hold: nothing unpacks the key (the answers carry the node's own `start`/`end`) and nothing
-  iterates the sets. **Production pays nothing** — the per-node hook returns on a null per-file key
-  set BEFORE it packs anything, which `cost_gate.py`'s +0.00% is the evidence for.
-
-- **THE PUBLIC SHAPE, and why it is two members and one mechanism.**
-  `semanticsAt(fileName, offsets: List<Int>)` is the primitive and `fileSemantics(fileName)` is the
-  sweep, the second literally calling the first's helper over `SourceIndex.identifiers()`. An editor
-  needs both and they are not the same question: a sweep serves semantic highlighting and hover
-  prefetch, a multi-offset query serves a known set of carets. The value is
-  `SemanticInfo(start, end, kind, quickInfo, definitions)` — one per DISTINCT SPAN, sorted
-  `(start, end)` — so several carets in one identifier collapse to one entry and the result is
-  neither indexed by nor the same length as the input. **The ordering is imposed here rather than
-  inherited**, because the compiler's answer order is the order its walk reached the nodes, i.e. a
-  property of the check spine. An empty request does not build.
-
-- **THE CANDIDATE SET IS "EVERY `Identifier`", AND THE ARGUMENT IS THAT THE RULE HAS TO FIT IN A
-  SENTENCE.** Anything richer is a taste-driven list that drifts. Member names are IN (they are
-  identifiers and they are typed); their definition stays refused, so such an entry carries a type and
-  no locations — which is one span pinning both halves of the rule. Keywords, punctuation, literals and
-  larger expressions are out; a host wanting the type of `f(x)` asks `semanticsAt` for the caret it has.
-
-- **WHAT I DELIBERATELY DID NOT DO: re-express `quickInfoAt`/`definitionsAt` on the batch.** It would
-  have removed ~10 duplicated lines and made the EQUIVALENCE pin a tautology. They stay separate code,
-  so "the batch says span for span what the single-caret members say" is a comparison of two
-  independent paths and two independent builds, and drift between them is what it fails on. Recorded in
-  `Project.semanticsOf`'s KDoc so the next reader does not "clean it up".
-
-- **THE MEASUREMENT (34-identifier in-memory fixture, warm, two draws agreeing to 3%):**
-  `fileSemantics` = **1 compile, 100-103 ms**; the same 34 carets through `quickInfoAt` = **34
-  compiles, 3,373-3,377 ms (33.6x)**; each caret asked BOTH ways = **68 compiles, 6,209-6,474 ms
-  (60-63x)**. The ratio is what transfers — it is a count of compiles — and the ms are a property of a
-  tiny fixture.
-
-- **THE BUILD COUNTER IS A PER-PATH READ, AND THE FIRST VERSION OF IT WAS FLAKY.** Counting ALL Vfs
-  touches read 29 where 6 builds should be 30, once, and 30 on every rerun: some compiler cache warms
-  across builds within one JVM and takes a source read with it, so the sum is order-dependent — a pin
-  that cries wolf. Reads of `tsconfig.json` are exactly 1 per `ProjectCompiler.build` and are not
-  cached across builds, which a control pin establishes rather than assumes. Three consecutive runs of
-  the class, green.
-
-- **GATES: suite 14,567 -> 14,593 / 0 failures / 0 errors / 3 skipped = EXACTLY the 26 new pins** (22
-  `-project`, 4 core; module 111 -> 133, core 14,322 -> 14,326), XML-summed across all six modules.
-  **`cost_gate.py` +0.00% on all 20 counters** — here a control by construction (no capture is
-  requested on a production compile) and worth running because the key change is ON the hot walk's
-  hook, and proven live by the compile it drives (46 errors / 78 files). `huge_methods.py
-  --fail-over 0` clean on core (738 classes) AND, per round 909's blind-spot rule, on the `-project`
-  module explicitly — **12 classes against round 913's 11, i.e. the gate SAW the new code**.
-  `spine_closure_audit.py` 46 handlers, all supersets, run although no `spine*EnterNode` changed.
-  Build warning-clean. No wall A/B: production executes not one new instruction.
-
-- **WHAT IS LEFT, unchanged: member go-to-definition** (needs the receiver's type and its property
-  symbol — the capture hook is the right place, the scope chain is not the right mechanism) and
-  `(API.4)` completions. And one honest coarseness the sweep makes visible: the capture types an
-  identifier NODE, so a member name and a parameter's own declaration name answer `any` rather than
-  what a host would like; that is (API.3a)'s behaviour seen in bulk, not something batching introduced.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1459,17 +1535,26 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   list now carries keyword items (`kind = "Keyword"`). **+45 pins** (32 parse-only), **fourteen-arm
   ablation, all fourteen a DISTINCT set**, all gates green. `docs/language-service.md` §§ 10a, 10b.
 
-- [ ] **(BUG.4) Quick info on a MEMBER NAME reports `any`, for every receiver** — measured in round
-  923 while diagnosing (BUG.3), and it is NOT a `this` problem: `quickInfoAt` resolves the NARROWEST
-  node at the caret, which for `o.p` is the member identifier `p`, and records
-  `getTypeOfExpression` of it — a bare name nothing in scope binds. Reads `any` for an ordinary
-  receiver, for `this.p` directly inside a method and for `this.p` inside a nested arrow alike, so it
-  is receiver-independent and one query over from the member resolution that completions
-  (`typeCaptureCompletionMembers`) and go-to-definition (`typeCaptureMemberSymbols`) BOTH already
-  consult correctly. The fix is a channel, not a mechanism: route a member caret through that same
-  resolution and report the member's type. **It CHANGES an existing API answer at every member
-  hover**, so it is round-922-loud and wants its pins written first; `ProjectThisReceiverTest`'s
-  closing KDoc records the measurement.
+- [x] **(BUG.4) Quick info on a MEMBER NAME reports the wrong type, for every receiver — FIXED,
+  round 924.** The item said it reports `any`; **measured against tsc 7.0.2's own LSP it reports
+  the type of whatever unrelated binding shares the member's spelling**, and `any` only where
+  nothing does — 16 of 23 wrong member positions read a collider, 6 read `any`, one was right by
+  coincidence. **The fix is tsc's own rule**: `getTypeOfSymbolAtLocation` moves off the right-hand
+  side of a property access ONTO THE ACCESS, so the type of the `p` in `o.p` is the type of `o.p`
+  — and a probe of exactly that, measured before any design was committed, was already correct for
+  the generic instantiation, the inherited member, the union receiver, the type-parameter receiver,
+  the static side, the enum and namespace members and the flow-NARROWED member, because
+  `computeRawTypeOfPropertyAccess` implements all of them. So the landed fix contains **no member
+  walk**: the brief's carrier route was the right instinct at the wrong altitude, and a member-table
+  read is exactly what arm A2 shows failing (the two generic pins plus narrowing). The ONE receiver
+  needing (API.3d)'s carrier is `this`/`super`, which are plain identifiers in this parser and type
+  as `any`; the leg is ADDITIVE, so where it cannot decide the access answers `any` rather than a
+  wrong name. **NEIGHBOURS CASHED**: an element access `o["p"]` (the caret is on the literal, whose
+  own `string` made the old answer right only by coincidence) and a qualified TYPE name `N.T`
+  (through the export table). **STILL REFUSED**: an object literal's own key, on round 922's
+  unchanged contextual-type ground. **THREE tsc DIVERGENCES named rather than asserted away**:
+  `this` in a static member (`typeof C` is unmodelled), an object-literal member's literal widening,
+  and a type rendered under a synonymous alias.
 
 - [x] **(BUG.3) A caret on `this.` inside a NESTED ARROW answers NO members — FIXED, round 923.**
   **THE LAYER QUESTION WAS THE ITEM, AND THE ANSWER IS CAPTURE-ONLY.** Settled by MEASUREMENT before

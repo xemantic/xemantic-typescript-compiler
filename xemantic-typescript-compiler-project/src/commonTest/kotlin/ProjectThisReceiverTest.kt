@@ -348,16 +348,21 @@ class ProjectThisReceiverTest {
     }
 
     /**
-     * QUICK INFO on a member name is NOT on this path and is NOT fixed here — stated
-     * because the obvious expectation is that it would be.
+     * QUICK INFO on a member name was NOT on this path and was NOT fixed here —
+     * **CLOSED SINCE by (BUG.4), round 924**, and this note is kept because it is
+     * what named the gap and because the reasoning it records is still why the fix
+     * lives somewhere else.
      *
-     * Measured: `quickInfoAt` resolves the NARROWEST node at the caret, which for
-     * `this.real` is the member Identifier `real`, and records
-     * `getTypeOfExpression` of it — a bare name nothing in scope binds, so `any`.
-     * The same reading of `o.k` with an ORDINARY receiver, and of `this.aDirect`
-     * directly inside a method where completions and definitions both answer
-     * correctly, is `any` too. So the gap is RECEIVER-INDEPENDENT and one query
-     * over: quick info does not consult the member resolution at all. Attributing it
-     * to `this` would be wrong, and pinning it here would pin the wrong subject.
+     * Measured here: `quickInfoAt` resolves the NARROWEST node at the caret, which
+     * for `this.real` is the member Identifier `real`, and recorded
+     * `getTypeOfExpression` of it — a bare name nothing in scope binds. The same
+     * reading of `o.k` with an ORDINARY receiver, and of `this.aDirect` directly
+     * inside a method where completions and definitions both answer correctly,
+     * behaved the same. So the gap was RECEIVER-INDEPENDENT, and attributing it to
+     * `this` would have been wrong. Round 924 measured what that reading really
+     * produced — not `any` but the type of whatever unrelated binding shared the
+     * spelling — and fixed it by typing the ACCESS rather than the name.
+     * `ProjectMemberHoverTest` is where it is pinned; the `this`/`super` leg there
+     * reads the very `currentClassForThis` this round's ascent installs.
      */
 }

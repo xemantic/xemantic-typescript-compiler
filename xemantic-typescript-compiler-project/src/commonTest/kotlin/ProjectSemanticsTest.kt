@@ -285,6 +285,14 @@ class ProjectSemanticsTest {
         val entry = project.fileSemantics(mainFile).single { it.start == at }
         assert(entry.kind == "Identifier")
         assert(entry.quickInfo != null)
+        // (BUG.4) STRENGTHENED, round 924: this used to assert only that the swept
+        // member carried SOME type, because the type it carried was a free-name
+        // resolution of the member's spelling and therefore not worth asserting. A
+        // sweep now carries the member's own type, so the batch pins it. `number`
+        // rather than `1`: an object literal's property initialized with a numeric
+        // literal widens, which is the compiler's own inference and is exactly why
+        // this is read out of a run rather than predicted.
+        assert(entry.quickInfo.displayString == "number")
         // Resolved through the receiver, so it is the object literal's own `member`
         // — a batch that dropped the member mechanism reads an empty list here.
         assert(entry.definitions.size == 1)
