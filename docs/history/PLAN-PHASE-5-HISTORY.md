@@ -1,3 +1,117 @@
+**Round 928 (2026-08-18) — (API.11): A MEMBER DECLARATION NAME RESOLVES TO ITS OWN SYMBOL.
+THE ROUND'S PRODUCT IS THAT **"ITS OWN SYMBOL" IS NOT A `Symbol` HERE** — this compiler's
+interface merge is LAST-WINS for a same-named member, so the merged symbol's declaration
+list is SHORT, and the whole list has to be reconstructed one level up, from the OWNER.**
+
+- **STEP 1 WAS tsc ITSELF, 22 carets over two fixtures** (`scripts/lsp_member_refs.py` plus a
+  definition+hover driver over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`). References /
+  definitions / hover at every member DECLARATION kind, beside the same measurement on this
+  compiler — so the whole round is a diff of two measured tables, never a prediction:
+
+| caret (a member's own declaration name) | tsc refs / defs | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `interface Shape { p }`, used | 5 / 1 | 5 / **0** | 5 / 1 |
+| `both` declared in TWO merged `interface Merged` blocks | 3 / 2 | **0 / 0** and **2 / 0** | 3 / 2 from EITHER |
+| a member declared and NEVER used | 1 / 1 | **0 / 0** | 1 / 1 |
+| an OVERLOAD set, from any of its 3 signatures | 4 / 3 | **2 / 0** | 4 / 3 |
+| a getter and its setter | 4 / 2 | **3 / 0** | 4 / 2 |
+| a class property implementing an interface | 5 / 1 | 5 / 1 | 5 / 1 |
+| a static, a `#private`, a method, a type-literal member, an enum member | 2 / 1 | 2 / **0** | 2 / 1 |
+| an object literal's METHOD | 2 / 1 | 2 / **0** | 2 / 0 — deliberately |
+| HOVER, every one of the eighteen | a real type | **`any` everywhere** | the member's type (enum member excepted) |
+
+- **THE MECHANISM IS A FOURTH RESOLUTION ROUTE, AND IT IS THE RECEIVER'S EXACT DUAL.** A free
+  name goes through the SCOPE CHAIN, a member use through its RECEIVER, an object-literal key
+  through its CONTEXTUAL type; a member's own declaration name has none of the three and does
+  have the class / interface / type literal / enum it is declared **in**, so that OWNER is
+  asked (`Checker.typeCaptureMemberDeclarations`, one function, plus
+  `typeCaptureOwnerSymbol` and `typeCaptureMemberNameIdentifier`).
+- **THE HAZARD THE ITEM NAMED IS REAL AND IS *BIGGER* THAN IT LOOKED.** "Resolve it to itself"
+  is not enough, and neither is "resolve it to its `Symbol` and take `Symbol.declarations`":
+  **round 884's `mergeSingleSymbol` ADOPTS**, so a member declared in two merged `interface`
+  blocks ends up as one symbol carrying only the SECOND block's declaration — measured, a
+  caret on the FIRST answered `[decl2, decl1]` and a caret on the SECOND answered `[decl2]`.
+  tsc accumulates. So the declaration list is reconstructed from the OWNER symbol's OWN
+  declarations, each of which is a container that may hold a member of this name, which is
+  where the information survives. Arms A2 and A3 separate the two failures.
+- **WHY THAT MATTERS BEYOND TIDINESS**: making a declaration name resolve REMOVES it from the
+  rename completeness net, and the net's real quarry is precisely a merged declaration the
+  group missed. A leg that resolved to itself would have turned round 927's loud refusal into
+  a SILENTLY SHORT rename.
+- **ONE DELIBERATE EXCLUSION, IN THE CONSERVATIVE DIRECTION**: an OBJECT LITERAL's own member
+  is left to (API.10)'s key leg and to what preceded it. A contextually typed literal's method
+  is an occurrence of the CONTEXTUAL type's member, and (API.10) covers `PropertyAssignment`
+  and the shorthands but not a method; resolving one to itself would take it out of the net
+  without putting it in the group. tsc answers it — stated divergence, arm A5.
+- **HOVER CAME ALONG FOR ~20 LINES AND IT WAS (BUG.4) ONE POSITION OVER**: a member declaration
+  name was asked as a FREE name, so it read `any`, or the type of whatever unrelated binding
+  shared the spelling. `typeCaptureMemberDeclarationType` asks the owner's type instead. An
+  enum member is the one kind still unanswered (an enum's declared type carries no member
+  table), and an overload set reports the whole overloaded type rather than the signature
+  under the caret — coarser than tsc, never wrong.
+- **PINS +16** (`-project` 464 -> 480, core UNCHANGED at 14,341; suite **14,939 -> 14,955 / 0
+  failures / 3 skipped**), all in the new `ProjectMemberDeclarationTest`, plus **TWO EXISTING
+  PINS CHANGED MEANING** and each says so in place: `ProjectDefinitionTest`'s "a caret on an
+  interface member's own declaration name answers EMPTY" (round 913) is now "answers ITSELF",
+  and `ProjectReferenceTest`'s "a member declared and never used answers EMPTY — the stated
+  limit" (round 925) is now "answers itself". Four rename pins are apply-and-recheck (round
+  925's strongest shape) and every positive assertion is on SPANS or on resulting TEXT, never
+  on a count.
+- **NINE-ARM ABLATION**, one mistake at a time, anchored replacements with asserted occurrence
+  counts, restored from a sha256-verified on-disk snapshot (`scripts/round928-ablate.py`), and
+  a POSITIVE RUN CONTROL per arm (480 tests must have run — round 808's empty-results trap,
+  which the first pass hit because Gradle writes its failure summary to STDERR and the driver
+  read only stdout, reporting seven real results as "BUILD PROBLEM").
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 leg-off | the whole leg returns null | **24** | the pre-928 boundary, (API.9)'s heritage tie included |
+| A2 own-only | THE NAIVE FIX — a declaration name resolves to ITSELF | 8 | merged / overload / accessor lose their siblings, in defs AND rename |
+| A3 no-merged-containers | the owner SYMBOL's other declarations stop being containers | 3 | the merged half alone — A2 minus overloads and accessors |
+| A4 no-owner-identity-check | any same-named owner elsewhere contributes members | **0** | MEASURED-REDUNDANT, see below |
+| A5 objlit-not-excluded | an object literal's own member joins the leg | 1 | the (API.10) boundary this leg must not cross |
+| A6 no-enum-member | an enum's member stops being a declaration name | 1 | the enum arm |
+| A7 no-hover-leg | the declaration name is asked as a free name again | 1 | (BUG.4) one position over |
+| A8 no-heritage-related | the (API.9) heritage tie is dropped | 9 | that this round did not break the previous one |
+| A9 own-not-added | the caret's own declaration is not force-added | **0** | MEASURED-REDUNDANT, see below |
+
+  **Seven distinct non-empty sets; A2 ⊃ A3 and A1 ⊃ everything, which is what a boundary arm
+  is for.** The two zero arms are REACHED and not dead, and the proof is another arm rather
+  than a counter (round 902's trap answered without new instrumentation): **A3 mutates the
+  BODY of the `if` whose CONDITION A4 weakens**, and A3 reddens 3 tests, so the condition is
+  evaluated with both terms true — the identity term is simply never the deciding one on any
+  shape I could build, because `spineScopeLookup` consults the INV.2(c) scope space first and
+  therefore finds the INNERMOST owner (the fixture's block-scoped `interface Shape` resolves
+  to itself, not to the imported one). **A2 empties the loop whose result A9 backstops**, and
+  the affected pins then observe exactly ONE location, which can only be the one A9's line
+  adds — so that line executes, and it is redundant because the parser puts every member of a
+  container in that container's own `members` list. Both are recorded as redundant GUARDS
+  rather than claimed as pins (round 807's rule).
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and a real gate here
+  rather than a control, since the round adds core code on the capture path.
+  `huge_methods.py --fail-over 0` clean on core (750 classes, 16,013 methods, 0 over) and on
+  `-project` explicitly (48 classes, 458 methods, 0 over). `spine_closure_audit.py` not
+  applicable (no `spine*EnterNode` changed); the round-920 token gate not applicable
+  (`SourceIndex` and the parser untouched, which is also why the swept population is
+  unmoved at 381,672 on tsc's own sources). Warning-clean.
+- **WHAT IS STILL REFUSED**, and it is now three small things: a member on an `any` receiver
+  (by `o.p` or `o["p"]`), a shorthand in a literal nothing contextually types, and an object
+  literal's own METHOD. A computed key `{ ["p"]: v }` remains the one SILENT gap.
+- **AND ONE PAGE THAT DID NOT EXIST**: `docs/language-service.md` § 14, **State of the API —
+  the two-minute version**: what it answers with a maturity column, the one rule behind every
+  refusal (*prove to offer*), the measured cost table, and all eleven known gaps in one list.
+  Rounds 909-928 are nineteen increments spread over as many session notes; this is the page
+  to read instead.
+- **SUCCESSOR, ranked.** (1) **The incremental / re-entrant seam** — it is now the largest
+  thing about this API by a wide margin: every query is a full rebuild (5.5-5.9 s warm on
+  tsc's own sources) and a rename is two, and § 14's cost table is the case for it. It is the
+  architecture inversion (`docs/ARCHITECTURE-RETHINK.md`) rather than an API item, which is
+  exactly why it needs the owner to choose it. (2) **Completion inside `o["`** — an ANCHOR
+  question, one classifier, and the last query that does not answer an element access.
+  (3) An **LSP protocol layer**, which the owner deferred. **I would put (1) to the owner and
+  take (2) meanwhile**: the feature surface is done enough that another feature is worth less
+  than making the ones there cheap.
+
 **Round 927 (2026-08-18) — (API.10): ONE SPAN, TWO SYMBOLS. THE LAST OF ROUND 922'S FIVE
 REFUSALS IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CAPTURE FILING ONE ANSWER PER SPAN
 WAS NEVER THE OBSTACLE** — tsc's own relation between a shorthand's two symbols is

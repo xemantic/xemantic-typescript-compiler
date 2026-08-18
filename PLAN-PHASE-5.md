@@ -20,6 +20,141 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 937 (2026-08-18) — (CHK.5)(a): THE DECLARATION SIDE OF LATE-BOUND COMPUTED KEYS.
+ONE MISSING CAPABILITY, SIX EXTRACTION SITES, AND THE ROUND'S PRODUCT IS THAT **LEVELLING
+ONE SITE OF THE B451 FAMILY MAKES A *PRE-EXISTING* DRIFT IN ITS SIBLINGS REACHABLE — AND
+THE SIBLING THAT BREAKS IS NOT THE ONE THAT SHARES THE FEATURE, IT IS THE ONE WHOSE TWO
+HALVES READ DIFFERENT REPRESENTATIONS.** `checkImplementsClauses` and
+`classMemberNamesTransitive` compare a class's AST member names against a TARGET built
+from the resolved TYPE; both read `(name as? Identifier)?.text`. That was harmless while
+the type side dropped a computed key too, and became TS2420 / TS2741 false positives the
+moment it stopped — **including two that contain no computed key at all**
+(`interface I { 1: string }` + `class C implements I { 1: string }`, and the same through
+a `static 1`), which measured as false positives at HEAD and had simply never been reached.**
+
+- **STEP 1 WAS tsc 7.0.2, DIRECT, on nine scratch projects — 40 rows, both directions,
+  read from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit
+  --listAll` on the SAME directory before anything was written.**
+
+| the shape | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `interface I { [K]: number }`, `i.p` into a `string` | TS2322 | **silent — FN** | TS2322 |
+| `class C { [K]: number }`, `c.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `type T = { [K]: number }`, `t.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `interface I { [K](): number }`, `i.p()` | TS2322 | **silent — FN** | TS2322 |
+| `class C { [K](): number }`, `c.p()` | TS2322 | **silent — FN** | TS2322 |
+| `interface I { get [K](): number }`, `i.p` | TS2322 | **silent — FN** | TS2322 |
+| `class C { static [K]: number }`, `C.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `const x: I = {}` (a required `[K]`) | TS2741 `'[K]'` | **silent — FN** | TS2741 `'p'` |
+| `const x: I = { [K]: 1 }` — the key on BOTH sides | silent | **TS2353 `'[K]'` — FP** | silent |
+| `const x: I = { p: 1 }` | silent | **TS2353 `'p'` — FP** | silent |
+| `[CE.P]` / `[SE.Q]` / `[NS.K]` / `` [TT] `` / `[N]`=`1e3` / an alias chain | TS2322 | **silent — FN** | TS2322 |
+| a member INHERITED through an interface or class `extends` | TS2322 | **silent / FP** | TS2322 |
+| an interface inside a namespace, keyed on that namespace's const | TS2322 | **silent — FN** | TS2322 |
+| `class C implements I` where both spell `[K]` | silent | silent | silent — closed by A6 |
+| `interface I { 1: string }` + `class C implements I { 1: string }` | silent | **TS2420 — FP** | silent |
+| `interface T { 1: string }` + `declare class C { static 1: string }`, `t = C` | silent | **TS2741 — FP** | silent |
+| `interface J { [k: string]: number }` (an index signature) | — | unchanged | unchanged — control |
+| `{ [P in keyof T]: number }` (a mapped type) | — | unchanged | unchanged — control |
+| `let LW = "p"` / a literal UNION / `[obj.k]` as the key | TS2322 (an INDEX SIGNATURE) | silent | **still open** — a different gap |
+| `declare const S: unique symbol`, `interface I { [S]: number }`, `= {}` | TS2741 `'[S]'` | silent | **still open**, (CHK.5)(d) |
+| `[C.B]` (a class `static readonly`) / `[IK]` imported from a FILE | TS2322 | **TS2339 / FP** | **still open**, (CHK.5)(c) |
+| `interface Dup { p: number; [K]: string }` | TS2300 x2 + TS2717 | silent | **TS2322** — see below |
+
+- **THE ROW THAT MADE THIS ONE ROUND RATHER THAN TWO IS THE KEY ON BOTH SIDES.** Round 936
+  predicted that naming a `unique symbol` key on the literal side alone would INVERT the
+  defect; measured, the inversion was **already live for a plain const** — round 935 named
+  `[K]` for the object literal, the interface named nothing, and
+  `const x: I = { [K]: 1 }` was reported as the excess key `'[K]'` on a program both
+  compilers accept. Naming one side of a member comparison is not half a fix; it is a new
+  defect, and it is why (CHK.5)(d) still must land on both sides in ONE commit.
+- **THE SIX SITES, and the fourth failed in the quietest way of all.** (1) the
+  class/interface member loop (property/method/get/set); (2) `getTypeFromTypeLiteral`,
+  which re-spelled the `when` a third time and knew nothing about a computed key at all;
+  (3) `classMemberNameText`, the TS2339 firewall's namer (`lookupInstanceMemberInResolvableChain`
+  answers "definitely no such member" through it, which is the class FP);
+  (4) **`getTypeOfSymbolWorker`'s method branch, which returns `anyType` for a name it
+  cannot read — so the member WAS declared (a missing one was correctly TS2741) and typed
+  `any`, i.e. the member existed and its return type did not**; (5) `checkImplementsClauses`
+  and (6) `classMemberNamesTransitive`, the two AST-vs-TYPE comparisons above.
+- **`checkComputedLiteralKeyMembers` NOW RETRACTS BEFORE IT EMITS** — CLAUDE.md's rule for
+  a dedicated walker a relation rule catches up with. With `[c0]` bound, the general
+  relation finds the same member incompatible and emits the same code at the same span,
+  differing only in the property NAME (`'1'` against the walker's `'[c0]'`, which is what
+  tsc prints). Keyed on (code, fileName, start, message), never on the position alone.
+- **THE ONE NEW DIVERGENCE, STATED RATHER THAN HIDDEN: a DUPLICATE.**
+  `interface Dup { p: number; [K]: string }` is TS2300 x2 + TS2717 in tsc, which keeps the
+  FIRST type; our member map is last-wins for **every** duplicate spelling — measured at
+  HEAD for a plain `p: number; p: string` and for `["p"]` alike, both of which produce the
+  same spurious TS2322 — so the late-bound key merely joins a population that was already
+  wrong. **The program is an ERROR program in tsc and we moved from 0 diagnostics to 1**,
+  of the wrong code. Not pinned (round 765: a known-open gap is a countdown), recorded as
+  (CHK.5)(b)'s territory, and NOT a `logicalParityDivergence` — no baseline moved.
+- **THE STRING-INDEX-SIGNATURE ROWS ARE A DIFFERENT GAP AND MUST NOT BE ABSORBED HERE.**
+  A key typed `string`, a literal union, or `obj.k` gives tsc's INTERFACE (and class) a
+  string index signature rather than a named member — `interface I { [LW]: number }` makes
+  `i.p` a `number` in tsc — and one of those (`class C2 { [LW]: number }`, `c2.p`) is still
+  a TS2339 false positive here. Late binding must refuse them; closing them is index-signature
+  modelling, now recorded in (CHK.5).
+
+- **PINS +38, one class, `LateBoundDeclarationKeyTest`** (15,108 -> 15,146 / 0 failures /
+  3 skipped, summed over all six modules with an XML parser): sixteen READ rows, four
+  SUPPLY rows, seven refusals that are tsc's own answer (including the `unique symbol`
+  row pinned as the AGREEMENT both compilers hold today rather than as the gap), five
+  sibling-walker rows with their positive control, and **three cross-pass determinism
+  pins** — round 935's core pin re-asked of a table that, unlike an object literal's type,
+  is BUILT ONCE AND CACHED, so an ambient-dependent name would freeze whichever pass
+  touched the type first (round 776's law).
+
+- **TEN-ARM ABLATION** (`scripts/round937-ablate.py`), each arm applied to and restored
+  from a sha256-verified on-disk snapshot, each diffed against the SNAPSHOT rather than
+  HEAD, each asserting `ran 91`, and all three late-binding pin classes running.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 | the declaration-side namer loses late binding entirely | **22** | the pre-937 boundary — every declaration row at once |
+| A2 | the TYPE LITERAL site reverts to its own `when` | **2** | the type-literal rows, and only those |
+| A3 | a computed METHOD name no longer reaches `getTypeOfSymbolWorker` | **2** | the two method-return-type rows, and only those |
+| A4 | `classMemberNameText` refuses a late-bound key | **5** | every CLASS row — the TS2339 firewall |
+| A5 | the member loop's METHOD and ACCESSOR arms only | **3** | the method + get-accessor rows |
+| A6 | `checkImplementsClauses` reverts to Identifier-only | **2** | the implements rows, including the numeric one |
+| A7 | `classMemberNamesTransitive` reverts to Identifier-only | **2** | the class-STATIC rows through B175 |
+| A8 | the walker stops retracting the relation's duplicate | **1** | `reported ONCE`, and only it |
+| A9 | the member loop's PROPERTY arm alone | **17** | the sites are separable — 17 of A1's 22 |
+| A10 | `fnsClassMemberNames` (namespace-local) reverts | **0** | **REDUNDANT GIVEN ITS SIBLING**, with the reason |
+
+- **THE ZERO ARM WAS INTERROGATED, NOT ASSUMED (round 936's law), AND THE ANSWER IS THE
+  THIRD POSSIBILITY THE PROTOCOL NAMES.** A10 first read 0 with NO pin covering that
+  walker, which is round 902's dead-arm/blind-pin ambiguity; a dedicated pin was added
+  **plus a positive control that the walker is REACHED** — and the control was verified by
+  a PassLab census naming `checkFuzzyNamespaceThisReturns` as the emitter, not by assuming
+  it. It still reads 0, and the mechanism is exact: **`fnsRequired` reads the INTERFACE
+  side from the AST too, Identifier-only, so both halves of that walker refuse the key and
+  mask each other.** That walker is AST-vs-AST SYMMETRIC and never drifted; the levelling
+  is kept because it makes the class side a SUPERSET (suppression-only) and is the half a
+  future widening of `fnsRequired` will need — recorded as redundant, not claimed.
+
+- **GATES.** Suite **15,108 -> 15,146 / 0 failures / 3 skipped**; **no corpus baseline
+  moved in the shipped state**, and the two that moved mid-round (`dynamicNames`,
+  `dynamicNamesErrors`) are the whole reason the sibling walkers and the retraction are in
+  this commit — each was judged against tsc for that exact fixture and each was a false
+  positive or a duplicate, never a lost diagnostic, so no `logicalParityDivergence` was
+  needed. `cost_gate.py` GREEN, largest move **+0.04%** (`typeNode.cacheable` /
+  `typeNode.bypassed`; `mapped.keyed` +0.03%, `globals.lookups` +0.01%) — the profiles'
+  `[SyntaxKind.X]` and `[Symbol.iterator]` DECLARATION-side member resolutions, rebaselined
+  with `--update` in the same commit, and `output.errors` unchanged at 46.
+  `huge_methods.py --fail-over 0` clean on **all six** module class dirs (core 751 classes,
+  0 over, largest 7,702). The **8-profile before/after BINARY grid**
+  (`scripts/round937-grid.sh`): all eight `added=0 removed=0`, 46/94 diagnostics unchanged
+  — a RESULT rather than a control, because those profiles carry 57 `[Symbol.iterator](`
+  interface members and 32 `[SyntaxKind.X]:` keys per member name.
+  `spine_closure_audit.py` not run: nothing on the spine changed.
+
+- **NEXT.** `(CHK.5)` continues at **(b)** — TS1117 / TS2300 / TS2717 for a late-bound
+  duplicate, which this round gave a second reason to want; then **(c)** the cross-file and
+  class-static keys; then **(d)** the `unique symbol` type, on both sides in one commit.
+  Newly recorded there: the **index-signature** rows, which are neither (a) nor (d).
+
 **Round 936 (2026-08-18) — (CHK.4): THE QUALIFIED, TYPE-ANNOTATION AND WELL-KNOWN-SYMBOL
 ROUTES. THREE CAPABILITIES, SIX DEFECTS, ONE COMMIT — AND THE ROUND'S PRODUCT IS THAT
 **A NODE THIS PARSER DOES NOT STRUCTURE ANSWERS A NAME QUESTION WITH A CONFIDENT EMPTY
@@ -1089,120 +1224,6 @@ quote — so the classifier that reads it has to check the ARITHMETIC as well as
   small, but it needs the checker to resolve `` o[`p`] `` as a member access first.
   (3) An **LSP protocol layer**, which the owner deferred.
 
-**Round 928 (2026-08-18) — (API.11): A MEMBER DECLARATION NAME RESOLVES TO ITS OWN SYMBOL.
-THE ROUND'S PRODUCT IS THAT **"ITS OWN SYMBOL" IS NOT A `Symbol` HERE** — this compiler's
-interface merge is LAST-WINS for a same-named member, so the merged symbol's declaration
-list is SHORT, and the whole list has to be reconstructed one level up, from the OWNER.**
-
-- **STEP 1 WAS tsc ITSELF, 22 carets over two fixtures** (`scripts/lsp_member_refs.py` plus a
-  definition+hover driver over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`). References /
-  definitions / hover at every member DECLARATION kind, beside the same measurement on this
-  compiler — so the whole round is a diff of two measured tables, never a prediction:
-
-| caret (a member's own declaration name) | tsc refs / defs | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `interface Shape { p }`, used | 5 / 1 | 5 / **0** | 5 / 1 |
-| `both` declared in TWO merged `interface Merged` blocks | 3 / 2 | **0 / 0** and **2 / 0** | 3 / 2 from EITHER |
-| a member declared and NEVER used | 1 / 1 | **0 / 0** | 1 / 1 |
-| an OVERLOAD set, from any of its 3 signatures | 4 / 3 | **2 / 0** | 4 / 3 |
-| a getter and its setter | 4 / 2 | **3 / 0** | 4 / 2 |
-| a class property implementing an interface | 5 / 1 | 5 / 1 | 5 / 1 |
-| a static, a `#private`, a method, a type-literal member, an enum member | 2 / 1 | 2 / **0** | 2 / 1 |
-| an object literal's METHOD | 2 / 1 | 2 / **0** | 2 / 0 — deliberately |
-| HOVER, every one of the eighteen | a real type | **`any` everywhere** | the member's type (enum member excepted) |
-
-- **THE MECHANISM IS A FOURTH RESOLUTION ROUTE, AND IT IS THE RECEIVER'S EXACT DUAL.** A free
-  name goes through the SCOPE CHAIN, a member use through its RECEIVER, an object-literal key
-  through its CONTEXTUAL type; a member's own declaration name has none of the three and does
-  have the class / interface / type literal / enum it is declared **in**, so that OWNER is
-  asked (`Checker.typeCaptureMemberDeclarations`, one function, plus
-  `typeCaptureOwnerSymbol` and `typeCaptureMemberNameIdentifier`).
-- **THE HAZARD THE ITEM NAMED IS REAL AND IS *BIGGER* THAN IT LOOKED.** "Resolve it to itself"
-  is not enough, and neither is "resolve it to its `Symbol` and take `Symbol.declarations`":
-  **round 884's `mergeSingleSymbol` ADOPTS**, so a member declared in two merged `interface`
-  blocks ends up as one symbol carrying only the SECOND block's declaration — measured, a
-  caret on the FIRST answered `[decl2, decl1]` and a caret on the SECOND answered `[decl2]`.
-  tsc accumulates. So the declaration list is reconstructed from the OWNER symbol's OWN
-  declarations, each of which is a container that may hold a member of this name, which is
-  where the information survives. Arms A2 and A3 separate the two failures.
-- **WHY THAT MATTERS BEYOND TIDINESS**: making a declaration name resolve REMOVES it from the
-  rename completeness net, and the net's real quarry is precisely a merged declaration the
-  group missed. A leg that resolved to itself would have turned round 927's loud refusal into
-  a SILENTLY SHORT rename.
-- **ONE DELIBERATE EXCLUSION, IN THE CONSERVATIVE DIRECTION**: an OBJECT LITERAL's own member
-  is left to (API.10)'s key leg and to what preceded it. A contextually typed literal's method
-  is an occurrence of the CONTEXTUAL type's member, and (API.10) covers `PropertyAssignment`
-  and the shorthands but not a method; resolving one to itself would take it out of the net
-  without putting it in the group. tsc answers it — stated divergence, arm A5.
-- **HOVER CAME ALONG FOR ~20 LINES AND IT WAS (BUG.4) ONE POSITION OVER**: a member declaration
-  name was asked as a FREE name, so it read `any`, or the type of whatever unrelated binding
-  shared the spelling. `typeCaptureMemberDeclarationType` asks the owner's type instead. An
-  enum member is the one kind still unanswered (an enum's declared type carries no member
-  table), and an overload set reports the whole overloaded type rather than the signature
-  under the caret — coarser than tsc, never wrong.
-- **PINS +16** (`-project` 464 -> 480, core UNCHANGED at 14,341; suite **14,939 -> 14,955 / 0
-  failures / 3 skipped**), all in the new `ProjectMemberDeclarationTest`, plus **TWO EXISTING
-  PINS CHANGED MEANING** and each says so in place: `ProjectDefinitionTest`'s "a caret on an
-  interface member's own declaration name answers EMPTY" (round 913) is now "answers ITSELF",
-  and `ProjectReferenceTest`'s "a member declared and never used answers EMPTY — the stated
-  limit" (round 925) is now "answers itself". Four rename pins are apply-and-recheck (round
-  925's strongest shape) and every positive assertion is on SPANS or on resulting TEXT, never
-  on a count.
-- **NINE-ARM ABLATION**, one mistake at a time, anchored replacements with asserted occurrence
-  counts, restored from a sha256-verified on-disk snapshot (`scripts/round928-ablate.py`), and
-  a POSITIVE RUN CONTROL per arm (480 tests must have run — round 808's empty-results trap,
-  which the first pass hit because Gradle writes its failure summary to STDERR and the driver
-  read only stdout, reporting seven real results as "BUILD PROBLEM").
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 leg-off | the whole leg returns null | **24** | the pre-928 boundary, (API.9)'s heritage tie included |
-| A2 own-only | THE NAIVE FIX — a declaration name resolves to ITSELF | 8 | merged / overload / accessor lose their siblings, in defs AND rename |
-| A3 no-merged-containers | the owner SYMBOL's other declarations stop being containers | 3 | the merged half alone — A2 minus overloads and accessors |
-| A4 no-owner-identity-check | any same-named owner elsewhere contributes members | **0** | MEASURED-REDUNDANT, see below |
-| A5 objlit-not-excluded | an object literal's own member joins the leg | 1 | the (API.10) boundary this leg must not cross |
-| A6 no-enum-member | an enum's member stops being a declaration name | 1 | the enum arm |
-| A7 no-hover-leg | the declaration name is asked as a free name again | 1 | (BUG.4) one position over |
-| A8 no-heritage-related | the (API.9) heritage tie is dropped | 9 | that this round did not break the previous one |
-| A9 own-not-added | the caret's own declaration is not force-added | **0** | MEASURED-REDUNDANT, see below |
-
-  **Seven distinct non-empty sets; A2 ⊃ A3 and A1 ⊃ everything, which is what a boundary arm
-  is for.** The two zero arms are REACHED and not dead, and the proof is another arm rather
-  than a counter (round 902's trap answered without new instrumentation): **A3 mutates the
-  BODY of the `if` whose CONDITION A4 weakens**, and A3 reddens 3 tests, so the condition is
-  evaluated with both terms true — the identity term is simply never the deciding one on any
-  shape I could build, because `spineScopeLookup` consults the INV.2(c) scope space first and
-  therefore finds the INNERMOST owner (the fixture's block-scoped `interface Shape` resolves
-  to itself, not to the imported one). **A2 empties the loop whose result A9 backstops**, and
-  the affected pins then observe exactly ONE location, which can only be the one A9's line
-  adds — so that line executes, and it is redundant because the parser puts every member of a
-  container in that container's own `members` list. Both are recorded as redundant GUARDS
-  rather than claimed as pins (round 807's rule).
-- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — OFF IS FREE, and a real gate here
-  rather than a control, since the round adds core code on the capture path.
-  `huge_methods.py --fail-over 0` clean on core (750 classes, 16,013 methods, 0 over) and on
-  `-project` explicitly (48 classes, 458 methods, 0 over). `spine_closure_audit.py` not
-  applicable (no `spine*EnterNode` changed); the round-920 token gate not applicable
-  (`SourceIndex` and the parser untouched, which is also why the swept population is
-  unmoved at 381,672 on tsc's own sources). Warning-clean.
-- **WHAT IS STILL REFUSED**, and it is now three small things: a member on an `any` receiver
-  (by `o.p` or `o["p"]`), a shorthand in a literal nothing contextually types, and an object
-  literal's own METHOD. A computed key `{ ["p"]: v }` remains the one SILENT gap.
-- **AND ONE PAGE THAT DID NOT EXIST**: `docs/language-service.md` § 14, **State of the API —
-  the two-minute version**: what it answers with a maturity column, the one rule behind every
-  refusal (*prove to offer*), the measured cost table, and all eleven known gaps in one list.
-  Rounds 909-928 are nineteen increments spread over as many session notes; this is the page
-  to read instead.
-- **SUCCESSOR, ranked.** (1) **The incremental / re-entrant seam** — it is now the largest
-  thing about this API by a wide margin: every query is a full rebuild (5.5-5.9 s warm on
-  tsc's own sources) and a rename is two, and § 14's cost table is the case for it. It is the
-  architecture inversion (`docs/ARCHITECTURE-RETHINK.md`) rather than an API item, which is
-  exactly why it needs the owner to choose it. (2) **Completion inside `o["`** — an ANCHOR
-  question, one classifier, and the last query that does not answer an element access.
-  (3) An **LSP protocol layer**, which the owner deferred. **I would put (1) to the owner and
-  take (2) meanwhile**: the feature surface is done enough that another feature is worth less
-  than making the ones there cheap.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1629,44 +1650,54 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
 
-- [ ] **(CHK.5) THE DECLARATION SIDE AND THE `unique symbol` AXIS — what round 936
-  measured and deliberately did not take, staged so a next agent does not re-derive it.**
-  Rounds 933-936 closed the OBJECT-LITERAL side of computed keys in both directions.
-  What is left is one cheap stage, one medium one and one genuinely large one, and the
-  order matters because taking the large one alone INVERTS a defect (measured).
-  **(a) THE MEMBER-BUILDING SITES, SYNTACTIC — the cheap stage, and it needs no new
-  machinery.** `interface IK { [K]: number }` and `class CK { [K]: number }` late-bind in
-  tsc and declare NO member here, so `i.p` degrades to `any` (silent where tsc says
-  TS2322) and a class's `c.p` is **TS2339, a false positive**. `lateBoundComputedKeyName`
-  already answers `p` for `[K]`, `[E.P]`, `[NS.K]`, `` [`p`] `` and an alias-annotated
-  const, and it is a function of the PROGRAM (round 935's law), so the work is to reach it
-  from the member-building CALL SITES — never from `getMemberName` itself, which B451
-  records as feeding ~20 callers including duplicate detection and abstract tracking.
-  **(b) TS1117 for a late-bound duplicate** (`{ p: 1, [K]: 2 }` is TS1117 in tsc, silent
-  here). Our member tables are name->symbol maps and cannot express a duplicate at all,
-  so this is NOT the member-table problem it looks like: the duplicate check is a separate
-  AST scan, so it can ask the same syntactic namer. Stage (a) first — a name that exists
-  in one scan and not the other is exactly round 933's defect.
-  **(c) A CONST IMPORTED FROM ANOTHER FILE** (`import { IK } from "./k"; { [IK]: 1 }`):
-  tsc binds, we answer TS2741 (supply) and stay silent (excess) — measured round 936. The
-  syntactic walk cannot cross a file by construction; the route is the frozen binder
-  tables (`resolveAlias`), which are deterministic and therefore allowed under round 935's
-  law. A CLASS's `static readonly B = "p"` key (`[C.B]`) is the same shape one container
-  over and is also an FP today.
-  **(d) THE `unique symbol` TYPE — the only genuinely large piece, and it must land on
-  BOTH sides in ONE commit.** `declare const S: unique symbol` types as plain `symbol`
-  here, so `[S]` and `[S2]` are ONE name; tsc reports `{ [S2]: 1 }` against
-  `{ [S]: number }` as TS2353 `'[S2]'` and `{ [S]: 1 }` against `{ p?: number }` as
-  TS2353 `'[S]'`, and both are silent here. **Naming the key on the literal side ALONE is
-  a regression, measured**: the declaration side declares no member for `[S]` either, so
-  `{ [S]: 1 }` against an interface that HAS it — silent in both compilers today — would
-  become a false positive. What is needed is a `unique symbol` type keyed by the
-  DECLARATION (tsc's `__@<desc>@<id>`, i.e. a name that survives a rename and an import,
-  which a spelling-keyed one does not) plus stage (a) so both sides read it.
-  **WHAT ROUND 936 ALREADY BANKED AND MUST NOT BE UNDONE**: the WELL-KNOWN-symbol half is
-  DONE and is deliberately not `computedSymbolKey` in general — tsc is SILENT for every
-  computed key it cannot late-bind (measured over seven of them), so the excess naming
-  admits `Symbol.<name>` with no local `Symbol` binding and nothing else.
+- [ ] **(CHK.5) COMPUTED KEYS — STAGE (a) IS LANDED (round 937); (b), (c), (d) AND A
+  NEWLY MEASURED INDEX-SIGNATURE AXIS REMAIN.**
+  **(a) THE MEMBER-BUILDING SITES — DONE, round 937.** `interface I { [K]: number }`,
+  `class C { [K]: number }` and `type T = { [K]: number }` now declare the member, in the
+  property, method, get- and set-accessor forms, for every key spelling round 935/936
+  resolves. It was NOT one site: six had to be levelled onto one namer, and two of them
+  (`checkImplementsClauses`, `classMemberNamesTransitive`) compare a class's AST names to
+  a target built from the resolved TYPE, so levelling the type side made a PRE-EXISTING
+  Identifier-only drift reachable — two false positives with no computed key in them
+  (`interface I { 1: string }` + `class C implements I { 1: string }`, and the same through
+  a `static 1`) were closed as part of it. `checkComputedLiteralKeyMembers` now retracts
+  before it emits, because the general relation reaches its TS2322 verdict once the key
+  binds. Session note has the 40-row table and the 10-arm ablation.
+  **(b) A LATE-BOUND DUPLICATE — now wanted for TWO reasons.** `{ p: 1, [K]: 2 }` is
+  TS1117 in tsc and silent here; `interface Dup { p: number; [K]: string }` is TS2300 x2 +
+  TS2717 in tsc, which keeps the FIRST type, and round 937 made it emit a spurious TS2322
+  here instead. **That TS2322 is NOT a computed-key defect** — our member map is last-wins
+  for EVERY duplicate spelling, measured at HEAD for a plain `p: number; p: string` and for
+  `["p"]` — so (b) is two things: teach the duplicate SCAN the same syntactic namer (it is
+  a separate AST scan, so it can just ask), and decide whether the member map should be
+  first-wins for a duplicate, which is where the spurious TS2322 lives.
+  **(c) A CONST IMPORTED FROM ANOTHER FILE, AND A CLASS `static readonly` KEY.**
+  `import { IK } from "./k"; interface I { [IK]: number }` and `[C.B]` where
+  `class C { static readonly B = "p" }`: both bind in tsc, both are still a false positive
+  here (measured again round 937, on the DECLARATION side as well as the literal one). The
+  syntactic walk cannot cross a file by construction; the route is the frozen binder tables
+  (`resolveAlias`), which are deterministic and therefore allowed under round 935's law.
+  **(d) THE `unique symbol` TYPE — unchanged, and round 937 CONFIRMED why it cannot land
+  alone.** `declare const S: unique symbol` types as plain `symbol` here, so `[S]` and
+  `[S2]` are ONE name. Round 936 predicted that naming the key on the literal side alone
+  would invert the defect; round 937 measured the SAME inversion already live for a plain
+  const (`const x: I = { [K]: 1 }` was TS2353 `'[K]'`, a false positive) and closed it by
+  landing both sides together. (d) needs a `unique symbol` type keyed by the DECLARATION
+  (tsc's `__@<desc>@<id>`, a name that survives a rename and an import) and both sides in
+  ONE commit.
+  **(e) NEW — THE INDEX-SIGNATURE AXIS, measured round 937 and belonging to neither (a) nor
+  (d).** A computed key whose type is `string` (`let LW = "p"`), a literal UNION, or a
+  dotted path through a VALUE (`obj.k`) gives tsc's interface, class and type literal a
+  STRING INDEX SIGNATURE rather than a named member — `interface I { [LW]: number }` makes
+  `i.p` a `number` in tsc, and `class C { [LW]: number }` likewise, where `c.p` is still
+  **TS2339, a false positive** here. Late binding must keep REFUSING these keys; closing
+  them is index-signature modelling. Round 936's `{ [L]: number; }`-vs-`{}` display row is
+  the same gap seen from the display side.
+  **WHAT MUST NOT BE UNDONE**: the WELL-KNOWN-symbol route is deliberately not
+  `computedSymbolKey` in general (tsc is SILENT for every computed key it cannot late-bind,
+  measured over seven of them), and `getMemberName` itself stays unchanged — B451 records
+  it as feeding ~20 callers including duplicate detection and abstract tracking, so the
+  widening lives in `declaredMemberName` at the member-BUILDING call sites.
 
 - [x] **(CHK.4) THE QUALIFIED, TYPE-ANNOTATION AND WELL-KNOWN-SYMBOL ROUTES — LANDED,
   round 936, both directions, and the residue is re-scoped as (CHK.5) above.** Three
