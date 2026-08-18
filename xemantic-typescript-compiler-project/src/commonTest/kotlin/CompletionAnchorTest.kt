@@ -315,12 +315,35 @@ class CompletionAnchorTest {
     }
 
     @Test
-    fun `negative control - a TEMPLATE element access admits no completion`() {
-        // A stated divergence from tsc: (API.9)'s occurrence population is string
-        // literals only, so a member written through a template is one a rename
-        // cannot find, and this API does not offer text it cannot maintain.
+    fun `a TEMPLATE element access is a MEMBER anchor over the text inside the backticks`() {
+        // (API.16), round 931 — WAS A REFUSAL, for exactly one reason: (API.9)'s
+        // occurrence population was string literals only, so a member written through
+        // a template was one a rename could not find. The population now includes it,
+        // so the refusal is retired rather than relaxed. The span excludes the
+        // BACKTICKS for the reason it excludes the quotes: writing over them produces
+        // `o[alpha]`, which compiles and means something else.
+        val source = "declare const o: { alpha: 1 };\nconst r = o[`alpha`];\n"
         val anchor = anchorAt("declare const o: { alpha: 1 };\nconst r = o[`al\u2038pha`];\n")
-        assert(anchor.kind == CompletionKind.NONE)
+        assert(anchor.kind == CompletionKind.MEMBER)
+        assert(anchor.receiver != null)
+        assert(anchor.replacementStart == source.indexOf("`alpha`") + 1)
+        assert(anchor.replacementEnd == source.indexOf("`alpha`") + 6)
+        assert(anchor.prefix == "al")
+    }
+
+    @Test
+    fun `negative control - a template WITH substitutions is no member anchor`() {
+        // (API.16) The boundary of the widened population, and it is a NODE-CLASS
+        // boundary rather than a judgement: a template carrying a substitution spells
+        // no fixed member name, so it is neither swept nor completed. tsc offers
+        // nothing inside such a template's HEAD either (measured); inside its TAIL it
+        // offers FREE names, where this answers none — the same stated divergence every
+        // other caret-inside-a-template already carries.
+        val head = anchorAt(
+            "declare const o: { alpha: 1 };\ndeclare const x: string;\n" +
+                "const r = o[`al\u2038${'$'}{x}`];\n",
+        )
+        assert(head.kind == CompletionKind.NONE)
     }
 
     @Test

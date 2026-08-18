@@ -38,7 +38,6 @@ import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
-import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -1242,15 +1241,21 @@ public class Project private constructor(
     /**
      * The node a reference or rename caret names, or null when it names nothing.
      *
-     * An identifier, or — since (API.9) — the STRING LITERAL of an `o["p"]`, which is
-     * the one non-identifier this API resolves. Everything else (a keyword, punctuation,
-     * trivia, any other literal) answers null, and a caret that cannot be answered must
-     * not pay for a compile: the rule `completionsAt` and `semanticsAt` already follow.
+     * An identifier, or — since (API.9) — the member-naming LITERAL of an `o["p"]` and,
+     * since (API.16), of a ``o[`p`]``: the only non-identifiers this API resolves. tsc
+     * answers a caret in either of them with the member's whole group, measured, and so
+     * does this. Everything else (a keyword, punctuation, trivia, any other literal)
+     * answers null, and a caret that cannot be answered must not pay for a compile: the
+     * rule `completionsAt` and `semanticsAt` already follow.
      */
     private fun occurrenceCaret(index: SourceIndex, offset: Int): Node? {
         val node = index.pathAt(offset).lastOrNull() ?: return null
         if (node is Identifier) return node
-        return if (SyntaxRoles.isMemberPosition(node) && node is StringLiteralNode) node else null
+        return if (SyntaxRoles.isMemberPosition(node) && SyntaxRoles.isMemberNameLiteral(node)) {
+            node
+        } else {
+            null
+        }
     }
 
     /**
@@ -1660,11 +1665,12 @@ public class Project private constructor(
                     // because the two failures are different things to a user — a
                     // literal that could not be placed names a member of an `any`, which
                     // is not the same report as an identifier that could not be.
+                    val literalAccess = SyntaxRoles.isMemberNameLiteral(id)
                     val kind =
-                        if (id is StringLiteralNode) RenameConflictKind.ELEMENT_ACCESS
+                        if (literalAccess) RenameConflictKind.ELEMENT_ACCESS
                         else RenameConflictKind.UNRESOLVED_OCCURRENCE
                     val detail =
-                        if (id is StringLiteralNode) {
+                        if (literalAccess) {
                             "an element access naming '$oldName' the search could not resolve"
                         } else {
                             "an identifier spelled '$oldName' that the search could not resolve"

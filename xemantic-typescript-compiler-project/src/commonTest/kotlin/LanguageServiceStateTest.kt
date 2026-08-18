@@ -305,7 +305,7 @@ class LanguageServiceStateTest {
         assert(applied(source, plan).contains("[\"p\"]"))
     }
 
-    // --- gap 6: a template element access ---------------------------------------
+    // --- gap 6: a template element access, CLOSED round 931 ---------------------
 
     private val templateSource =
         """
@@ -317,26 +317,28 @@ class LanguageServiceStateTest {
         """.trimIndent() + "\n"
 
     @Test
-    fun `a template element access is outside the occurrence set and outside the rename`() {
-        // PINS A DEFECT — the second of § 14's two silent gaps, and the sharper one:
-        // the rename applies, the template keeps spelling the old name, and the
-        // resulting program still compiles clean, so nothing anywhere reports it. tsc
-        // counts the template's `p` as a reference (measured over its LSP).
+    fun `a template element access is INSIDE the occurrence set and the rename`() {
+        // (API.16), round 931 — WAS A DEFECT PIN, and the sharper of § 14's two silent
+        // gaps: the rename applied, the template kept spelling the old name, and the
+        // resulting program still compiled clean, so nothing anywhere reported it. tsc
+        // counts the template's `p` as a reference (measured over its LSP) and now so
+        // does this, which is what makes the rename complete rather than quiet.
         val project = projectWith(templateSource)
         val caret = offsetOf(templateSource, "o.p", plus = 2)
         val references = project.referencesAt(file, caret)
-        assert(references.size == 2)
-        assert(references.none { it.start == offsetOf(templateSource, "o[`p`]", plus = 3) })
+        assert(references.size == 3)
+        assert(references.any { it.start == offsetOf(templateSource, "o[`p`]", plus = 3) })
 
         assert(project.diagnostics().isEmpty())
         val plan = project.renameAt(file, caret, "q")
         assert(plan.isApplicable)
         assert(plan.conflicts.isEmpty())
         val after = applied(templateSource, plan)
-        assert(after.contains("o[`p`]"))
+        assert(after.contains("o[`q`]"))
         assert(after.contains("interface I { q: number }"))
-        // The whole reason it is silent: the stranded access is an error in neither
-        // program, so no gate this API has can see it.
+        // The applied program still compiles — which it did BEFORE this was fixed too,
+        // with the old name stranded in the template. That is why the assertion above
+        // reads the TEXT: a clean recheck is a control here, never the evidence.
         assert(projectWith(after).diagnostics().isEmpty())
     }
 

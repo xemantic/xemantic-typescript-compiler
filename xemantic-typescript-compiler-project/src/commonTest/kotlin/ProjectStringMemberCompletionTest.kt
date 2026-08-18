@@ -240,19 +240,23 @@ class ProjectStringMemberCompletionTest {
     }
 
     /**
-     * A stated divergence, not an omission: tsc completes a template element access
-     * and this API refuses it, because (API.9)'s occurrence population is string
-     * literals only — a member written through a template is one a later rename
-     * cannot find, and offering it would invite text this API cannot maintain. The
-     * same conservative direction (API.11) took for an object literal's own method.
+     * (API.16), round 931 — WAS A REFUSAL. Round 929 refused this position for ONE
+     * reason: (API.9)'s occurrence population was string literals only, so a member
+     * written through a template was one a later rename could not find, and this API
+     * does not offer text it cannot maintain. Round 931 put the template IN that
+     * population, which retires the reason rather than weakening it — the same
+     * enumeration serves both, so completion and rename still cannot drift about what a
+     * member name is. tsc completes it identically (measured: two items, the edit range
+     * inside the backticks), and so now does this.
      */
     @Test
-    fun `negative control - a caret in a TEMPLATE element access is refused`() {
+    fun `a caret in a TEMPLATE element access completes exactly as a quoted one does`() {
         val project = projectWith()
-        val completions = project.completionsAt(mainFile, insideBracketOf("bag[`alpha`]"))
-        assert(completions.kind == CompletionKind.NONE)
-        assert(completions.refusal == CompletionRefusal.NO_COMPLETION_CONTEXT)
-        assert(completions.items.isEmpty())
+        val template = project.completionsAt(mainFile, insideBracketOf("bag[`alpha`]"))
+        val quoted = project.completionsAt(mainFile, insideBracketOf("""bag["alpha"]"""))
+        assert(template.kind == CompletionKind.MEMBER)
+        assert(template.refusal == null)
+        assert(template.items.map { it.name } == quoted.items.map { it.name })
     }
 
     /**

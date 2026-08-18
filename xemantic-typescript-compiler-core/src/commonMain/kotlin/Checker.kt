@@ -5281,11 +5281,11 @@ class Checker(
         val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
         if (node is Expression) {
             typeCaptureRecord(node, fileName)
-            // (API.9) …and a string literal that NAMES a member, `o["p"]`. It is the
-            // one non-[Identifier] the definition path accepts, and it is accepted at
-            // the record site rather than inside so that no other literal in the
-            // program pays for the test.
-            if (node is Identifier || typeCaptureIsMemberStringLiteral(node)) {
+            // (API.9) …and a literal that NAMES a member, `o["p"]` or — since
+            // (API.16) — ``o[`p`]``. Those are the only non-[Identifier] spans the
+            // definition path accepts, and they are accepted at the record site rather
+            // than inside so that no other literal in the program pays for the test.
+            if (node is Identifier || typeCaptureIsMemberNameLiteral(node)) {
                 typeCaptureRecordDefinition(node, fileName)
             }
             // (API.4a) The member enumeration, for the spans that asked for one. The
@@ -6902,14 +6902,36 @@ class Checker(
     }
 
     /**
-     * (API.9) True when [node] is the STRING LITERAL that names the member of an
-     * element access — the `"p"` of `o["p"]`, and nothing else that is spelled the
-     * same way anywhere in the program.
+     * (API.9) True when [node] is the LITERAL that names the member of an element
+     * access — the `"p"` of `o["p"]`, and nothing else that is spelled the same way
+     * anywhere in the program.
+     *
+     * (API.16) A no-substitution TEMPLATE (``o[`p`]``) names a member exactly as a
+     * string does, and tsc 7.0.2 puts it in the member's reference set (measured).
+     * The two are one population here, which is [typeCaptureLiteralMemberName]'s
+     * whole job.
      */
-    private fun typeCaptureIsMemberStringLiteral(node: Node): Boolean {
-        if (node !is StringLiteralNode) return false
+    private fun typeCaptureIsMemberNameLiteral(node: Node): Boolean {
+        if (typeCaptureLiteralMemberName(node) == null) return false
         val parent = (node as NodeBase).parent
         return parent is ElementAccessExpression && parent.argumentExpression === node
+    }
+
+    /**
+     * (API.16) The member name a LITERAL element-access argument spells, or null when
+     * it spells none.
+     *
+     * The closed set is a string literal and a NO-SUBSTITUTION template, and the
+     * exclusion is the point: a `TemplateExpression` — one WITH substitutions,
+     * ``o[`p${x}`]`` — is a different node class with no fixed text, so it cannot be
+     * accepted by accident. tsc refuses that position outright (measured: zero
+     * references, and `prepareRename` answers `You cannot rename this element`), which
+     * is the same answer null produces here.
+     */
+    private fun typeCaptureLiteralMemberName(node: Node): String? = when (node) {
+        is StringLiteralNode -> node.text
+        is NoSubstitutionTemplateLiteralNode -> node.text
+        else -> null
     }
 
     /**
@@ -7010,11 +7032,12 @@ class Checker(
      * ## An ELEMENT ACCESS, `o["p"]`
      *
      * The receiver is the access's own expression and the member name is the literal's
-     * text, so the member lookup is the same one `o.p` performs. Only a STRING literal:
-     * a computed `o[i]` names no member statically, and a template literal is a
-     * different node this deliberately does not accept. This is the one query span in
-     * the whole API that is not an [Identifier], which is why
-     * [typeCaptureDefinitionAt] takes a [Node].
+     * text, so the member lookup is the same one `o.p` performs. Only a literal that
+     * spells a fixed name — a string or, since (API.16), a no-substitution TEMPLATE: a
+     * computed `o[i]` names no member statically and a template WITH substitutions has
+     * no fixed text to name one with. These are the only query spans in the whole API
+     * that are not an [Identifier], which is why [typeCaptureDefinitionAt] takes a
+     * [Node].
      *
      * ## A BINDING ELEMENT's `propertyName`, `const { p: local } = o`
      *
@@ -7035,10 +7058,11 @@ class Checker(
     private fun typeCaptureIndirectMemberSymbols(node: Node): List<Symbol>? {
         val parent = (node as NodeBase).parent ?: return null
         if (parent is ElementAccessExpression) {
-            if (node !is StringLiteralNode || parent.argumentExpression !== node) return null
+            if (parent.argumentExpression !== node) return null
+            val name = typeCaptureLiteralMemberName(node) ?: return null
             val symbols = ArrayList<Symbol>(2)
             typeCaptureCollectMembers(
-                getTypeOfExpression(parent.expression), node.text, symbols, 0,
+                getTypeOfExpression(parent.expression), name, symbols, 0,
             )
             return symbols
         }
@@ -7548,15 +7572,49 @@ class Checker(
         when (val parent = (node as NodeBase).parent) {
             is PropertyAccessExpression ->
                 if (parent.name !== node) null else typeCapturePropertyAccessType(parent)
-            // Only a string literal: a computed `o[i]` names no member, and the caret
-            // there is on an ordinary expression whose own type is the right answer.
+            // Only a member-naming literal: a computed `o[i]` names no member, and the
+            // caret there is on an ordinary expression whose own type is the right
+            // answer. (API.16) added the no-substitution template to that set — with a
+            // resolution of its own, see below.
             is ElementAccessExpression ->
-                if (node !is StringLiteralNode || parent.argumentExpression !== node) null
-                else getTypeOfExpression(parent)
+                if (parent.argumentExpression !== node) null
+                else typeCaptureElementAccessMemberType(parent, node)
             is QualifiedName ->
                 if (parent.right !== node) null else typeCaptureQualifiedNameType(parent)
             else -> null
         }
+
+    /**
+     * (BUG.4)/(API.16) The type of the member the LITERAL [node] names in [access], or
+     * null when it names none.
+     *
+     * A STRING literal takes the ACCESS's own type, which is (BUG.4)'s rule and the
+     * better answer: the compiler's own element-access typing is what applies the flow
+     * narrowing, the union distribution and the index signatures, so the type of the
+     * `"p"` in `o["p"]` is the type of `o["p"]`.
+     *
+     * A no-substitution TEMPLATE cannot take that route, and the reason is worth
+     * stating because it is not a language rule but this compiler's: element-access
+     * typing keys a named member off a STRING literal argument, so ``o[`p`]`` types as
+     * `any` — measured. Routing the template through the access would therefore have
+     * replaced this position's old answer (`string`, the literal's own type, wrong but
+     * harmless) with `any`, i.e. re-created the very *prove to offer* violation
+     * (API.15) closed one round earlier. So the member is resolved directly, through
+     * the same receiver walk the definition leg uses, and the access's own type is the
+     * fallback. tsc 7.0.2 answers `(property) I.p: number` at both carets; this now
+     * answers the same type at both, minus the flow narrowing the template form does
+     * not carry.
+     */
+    private fun typeCaptureElementAccessMemberType(
+        access: ElementAccessExpression,
+        node: Node,
+    ): Type? = when (node) {
+        is StringLiteralNode -> getTypeOfExpression(access)
+        is NoSubstitutionTemplateLiteralNode ->
+            typeCaptureIndirectMemberSymbols(node)?.firstOrNull()?.let { getTypeOfSymbol(it) }
+                ?: getTypeOfExpression(access)
+        else -> null
+    }
 
     /** (BUG.4) The type of [access], with the `this`/`super` carrier leg. */
     private fun typeCapturePropertyAccessType(access: PropertyAccessExpression): Type {

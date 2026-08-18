@@ -27,11 +27,13 @@ as the local's, expanding in whichever direction the rename came from — and `(
 **a member's own declaration name resolves to its own symbol**, so a member renames
 **from its declaration**, that name navigates and hovers, and a **merged** declaration,
 an **overload set** and an **accessor pair** are one group from any of their
-declaration names — and `(API.15)`, **an enum member's declaration name reports the
+declaration names — `(API.15)`, **an enum member's declaration name reports the
 member's own type** rather than `any`, which was the last position in this surface
-answering a plausible WRONG type instead of nothing. Not yet: a computed key
-`{ ["p"]: v }` is outside the swept population, and an object literal's own member
-declaration is deliberately left alone.
+answering a plausible WRONG type instead of nothing — and `(API.16)`, **a member named
+by a TEMPLATE element access** (`` o[`p`] ``) **is an ordinary occurrence**: found,
+highlighted, hovered, renamed and completed, where before it was missed in SILENCE.
+Not yet: a computed key `{ ["p"]: v }` is outside the swept population, and an object
+literal's own member declaration is deliberately left alone.
 See the `(API.*)` items in `PLAN-PHASE-5.md`, and **§ 14 for where the whole API
 stands**.
 
@@ -404,7 +406,7 @@ no rule of its own —
 | `C.s`, a static | `number` |
 | `this.p`, in a method or any nesting of arrows | the field's type |
 | `super.p` | the **base's** member, not an override |
-| `o["p"]`, caret on the string literal | the member's type |
+| `o["p"]` and `` o[`p`] ``, caret on the member-naming literal | the member's type |
 | `N.T`, a qualified type name | the declared type |
 
 `(API.11)` adds the row this table was missing — a member's own **declaration** name
@@ -499,7 +501,7 @@ What answers, concretely:
 | a member declared by **merged** interfaces (overloads) | **one location per contributing declaration** |
 | a member of a **union** receiver | **one per constituent** that declares it, in constituent order |
 | `N.x` / `N.T` where `N` is a namespace, module alias or enum | the export's declaration |
-| `o["p"]`, caret on the string literal | the property declaration — `(API.9)` |
+| `o["p"]` and `` o[`p`] ``, caret on the member-naming literal | the property declaration — `(API.9)`, `(API.16)` |
 | `const { p: local } = o`, caret on the `p` | the property declaration — `(API.9)` |
 | `{ p: v }` where something contextually types the literal | the **contextual** type's member — `(API.10)` |
 | `{ p: v }` where nothing does | the key **itself** — it is the declaration |
@@ -672,9 +674,11 @@ receiver is then recovered from the parse. What follows from that:
   **and does not compile**. A `.` inside a string or a comment is not a member
   anchor, and what a user types between two JSX tags is prose. (JSX text joined
   that list in round 920, when the token index learned to see it at all.) **The one
-  exception is the string of an `o["…"]`**, which is a member position — see below.
-- A caret inside the **string of an element access** (`o["p"]`) is a MEMBER caret,
-  and the receiver is the expression before the `[`.
+  exception is the member-naming literal of an `o["…"]`**, which is a member position —
+  see below.
+- A caret inside the **member-naming literal of an element access** — `o["p"]` and,
+  since `(API.16)`, `` o[`p`] `` — is a MEMBER caret, and the receiver is the
+  expression before the `[`.
 - A caret at the very **end of the file** is a real position here, unlike
   `nodeInfoAt` (§ 7), whose spans are half-open and exclude it.
 
@@ -707,14 +711,22 @@ particular to it, all measured against tsc 7.0.2:
   completion request is normally made in. `o["p"|]`, past the closing quote, is a
   free-name caret again.
 
-Four positions inside a string are deliberately still `NONE`, each stated because
-tsc answers differently: a **template** (`` o[`p`] ``), which tsc completes and this
-does not, because § 10b's occurrence sweep is string literals only and a member
-written through a template is one a rename cannot find; a caret **at** the opening
-quote, where tsc offers free names; an **indexed-access type** (`type T = Bag["p"]`),
-where tsc offers free names rather than members; and a string whose **contextual**
-type is a literal union or a `keyof` (`f("|")`), which tsc completes and which is a
-different resolution rather than a different anchor.
+**Inside a `` o[`p`] `` TEMPLATE too, since `(API.16)`** — and the reason this
+changed is worth reading, because round 929 refused it for exactly one reason and
+round 931 removed that reason rather than overruling it: the refusal said "§ 10b's
+occurrence sweep is string literals only, so a member written through a template is
+one a rename cannot find". The sweep now finds it, so the refusal has nothing left to
+protect. The two share ONE enumeration, which is what keeps them from drifting apart
+about what a member name is. A no-substitution template only: a template carrying a
+**substitution** (`` o[`p${x}`] ``) spells no fixed name, and tsc offers nothing inside
+its head either.
+
+Three positions inside a string are deliberately still `NONE`, each stated because
+tsc answers differently: a caret **at** the opening quote, where tsc offers free
+names; an **indexed-access type** (`type T = Bag["p"]`), where tsc offers free names
+rather than members; and a string whose **contextual** type is a literal union or a
+`keyof` (`f("|")`), which tsc completes and which is a different resolution rather
+than a different anchor.
 
 **What the member list contains.**
 
@@ -873,7 +885,7 @@ None of the following is special-cased; all of it falls out of that rule:
 | a **member** (`o.p`) | its uses plus the declaration, in the declaring file |
 | an **inherited** or generically instantiated member | the base / uninstantiated declaration, so uses through both sides are one group |
 | an **overloaded** member | one group, both signatures flagged |
-| a member named by a **string literal** (`o["p"]`) | that access, with the span covering the text *between* the quotes — `(API.9)` |
+| a member named by a **string literal** (`o["p"]`) or a **template** (`` o[`p`] ``) | that access, with the span covering the text *between* the delimiters — `(API.9)`, `(API.16)` |
 | a member named by a **binding element** (`const { p: local } = o`) | the `p`, and not the `local` it binds — `(API.9)` |
 | a member's **implementors** (`class C implements I`) | every class that declares it under a declared `implements`/`extends` — `(API.9)` |
 | an object-literal **key** a contextual type supplies (`{ p: v }`) | that key, from either side — `(API.10)` |
@@ -975,10 +987,11 @@ guess about which parent kinds declare a name.
   and putting it there without resolving it would make every such key a rename
   obstacle. tsc renames it; this is a stated divergence, not a disagreement about
   what the key means.
-- **Identifiers, and the string literal of an `o["p"]`.** A keyword, any other
-  literal, punctuation or trivia answers empty **and does not build**. A string
-  literal is swept only where it names a member: `const unrelated = "p"` is not a
-  reference to `p`, which is the difference between this and a text search.
+- **Identifiers, and the member-naming literal of an `o["p"]` or a `` o[`p`] ``.** A
+  keyword, any other literal, punctuation or trivia answers empty **and does not
+  build**. Such a literal is swept only where it names a member: `const unrelated =
+  "p"` and an unrelated `` `p` `` are not references to `p`, which is the difference
+  between this and a text search.
 - **The program, not the libraries.** A declaration in a `lib.*.d.ts` comes back
   (flagged), because the caret resolved to it; no lib file is swept for uses.
 
@@ -1235,7 +1248,7 @@ RESOLVED to something else; what is left is unresolved, and unresolved is not un
 | `RenameConflictKind` | what it is |
 |---|---|
 | `UNRESOLVED_OCCURRENCE` | an identifier spelling the old name in a position that could name this symbol, which the search could not resolve — a member on an `any` receiver, an object literal's own method |
-| `ELEMENT_ACCESS` | an `o["p"]` the search could not resolve — a member of an `any`. A resolvable one is now an ordinary occurrence and is renamed *inside its quotes* (`(API.9)`); the kind survives because an unplaceable bracket is a different report to a user than an unplaceable identifier |
+| `ELEMENT_ACCESS` | an `o["p"]` — or, since `(API.16)`, a `` o[`p`] `` — the search could not resolve, i.e. a member of an `any`. A resolvable one is an ordinary occurrence and is renamed *inside its delimiters* (`(API.9)`); the kind survives because an unplaceable bracket is a different report to a user than an unplaceable identifier |
 | `CONTEXTUAL_SHORTHAND` | a `{ p }` or a `const { p } = o` met while renaming a MEMBER whose property could NOT be placed — a literal nothing contextually types, an un-annotated destructured parameter. A placeable one is now an ordinary occurrence and is EXPANDED (`(API.10)`); the kind survives for `ELEMENT_ACCESS`'s reason |
 | `NEW_DIAGNOSTIC` | a diagnostic the renamed program has and the original did not |
 | `RESOLUTION_CHANGED` | a span that meant one thing before the rename and another after |
@@ -1256,7 +1269,8 @@ is complete by construction.
 **A member rename works when it can be shown complete** and is refused loudly when it
 cannot — and since `(API.10)` "complete" covers considerably more again. An interface
 member renames across files together with **every implementor's own declaration**, every
-`o["p"]` that names it (inside the quotes, leaving them alone), every
+`o["p"]` and every `` o[`p`] `` that names it (inside the delimiters, leaving them
+alone), every
 `const { p: … } = o` that destructures it, every **object-literal key** a contextual
 type supplies, and both **shorthands**, each expanded the member's way.
 
@@ -1287,10 +1301,14 @@ contextual type the completeness gate refuses with `OCCURRENCES_INCOMPLETE`. It 
 SILENT gap in exactly one shape — a contextual member that is **optional**, where
 dropping it costs no diagnostic for the recheck to find. tsc renames it in all three.
 
-A **template element access** (`` o[`p`] ``) is the silent one with no such saving grace:
-it is outside the population too, nothing refuses, and the rename leaves it spelling the
-old name in a program that still compiles clean (§ 14, gap 6). tsc counts it as a
-reference.
+A **template element access** (`` o[`p`] ``) was the silent one with no such saving
+grace — outside the population, refused by nothing, and left spelling the old name in a
+program that still compiled clean. `(API.16)` closed it in round 931: it is an ordinary
+occurrence now, found by `referencesAt`, highlighted, hovered and rewritten, with the
+edit covering the text and **not the backticks** for the same reason it excludes the
+quotes. A template carrying a **substitution** (`` o[`p${x}`] ``) spells no fixed member
+name and stays out — it is neither an occurrence nor an obstacle, and a caret in it
+renames nothing, which is what tsc answers there too.
 
 ### Cost, measured
 
@@ -1478,7 +1496,7 @@ read instead.
 | hover | § 8 | complete for values, members and member declarations, an enum member's included since `(API.15)` |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
 | the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
-| completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` included; a template `` o[`p`] `` refuses |
+| completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` and `` o[` `` included |
 | find references, document highlights, read-vs-write | § 10b | complete |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
 | rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the gaps below |
@@ -1552,12 +1570,11 @@ caret movement.**
    occurrence set is complete and `renameAt` rewrites both ends from either caret.
 4. **A member on an `any` receiver** cannot be placed, so it refuses a member rename.
 5. **A shorthand in a literal nothing contextually types** likewise.
-6. **A member named by a TEMPLATE element access** (`` o[`p`] ``) is outside the
-   occurrence population, so it is neither found nor renamed **and not reported
-   either** — the one genuinely silent gap, and the sharpest one: the rename applies,
-   the template keeps spelling the old name, and the resulting program still compiles
-   clean, so no gate this API has can see it. tsc counts it as a reference. Completion
-   refuses that position for the same reason, which is stated rather than silent.
+6. ~~A member named by a TEMPLATE element access is silently missed.~~ **CLOSED round
+   931**, `(API.16)` — `` o[`p`] `` is an ordinary occurrence: found, highlighted,
+   hovered, renamed (over the text, not the backticks) and completed. A template with a
+   **substitution** (`` o[`p${x}`] ``) spells no fixed name and is deliberately out, as
+   it is in tsc. The number is kept so the round notes keep referring to the same gap.
 7. ~~An enum member's declaration name reports `any`.~~ **CLOSED round 931**, `(API.15)`
    — it reports the member's own type (`Plain.Alpha`), the same instance its use
    reports, in all five enum shapes. tsc additionally decorates the answer with the
@@ -1580,7 +1597,7 @@ caret movement.**
 | an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reported `any`; **closed round 931** | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0`. `(API.15)` gave the leg its own mint; five shapes now report the member's type |
 | an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type the plan carries both occurrences from either caret and the applied text compiles; with one it is `OCCURRENCES_INCOMPLETE` at the key. Found by measuring the correction — this round's own lesson, applied to itself |
 | a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
-| a template element access is silently missed | **TRUE**, and now proven end to end | the applied rename compiles clean with the old name still in the template |
+| a template element access is silently missed | **TRUE**, proven end to end; **closed round 931** | the applied rename compiled clean with the old name still in the template. `(API.16)` widened the occurrence population to it, and the pin that asserted the silence now asserts the rewrite |
 | `documentHighlightsAt` costs 6.0 – 7.2 s | **TRUE of `checker.ts`** and unqualified — 5.0 – 5.5 s on `types.ts` | the row is a statement about a FILE; the table above says so now |
 | a plain rebuild is 5.5 – 5.9 s (§ 14) / ~5.2 s (§ 3) | **BOTH DRIFTED**, in opposite directions | re-taken: 5.0 – 5.5 s warm, ~9 s for the first rebuild in a process |
 | everything else in this section | **TRUE** | one fixture per claim, and the pins listed above |

@@ -28,6 +28,7 @@ package com.xemantic.typescript.compiler.project
 import com.xemantic.typescript.compiler.CallExpression
 import com.xemantic.typescript.compiler.JsxText
 import com.xemantic.typescript.compiler.NewExpression
+import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NodeKind
@@ -496,7 +497,8 @@ internal class SourceIndex private constructor(
 
     /**
      * (API.9) The population a REFERENCE sweep asks about: every [identifiers] node,
-     * plus every STRING LITERAL that names the member of an element access.
+     * plus every LITERAL that names the member of an element access — a string, and
+     * since (API.16) a no-substitution TEMPLATE.
      *
      * The second half is the boundary round 925 measured this API to be short at, and
      * it is a boundary of the POPULATION rather than of the resolution: `o["p"]` is an
@@ -526,13 +528,24 @@ internal class SourceIndex private constructor(
      * edits (measured: `[77,78)` for a literal occupying `[76,79)`) and the only span a
      * rename may write into — replacing the quotes too would write `o[newName]`.
      *
+     * (API.16) A no-substitution TEMPLATE is the same rule with the same reason and the
+     * same measurement — tsc edits `[110,111)` for a ``o[`p`]`` whose literal occupies
+     * `[109,112)` — so the delimiter is stripped for it too. Writing over the backticks
+     * would produce `o[newName]`, which compiles and means something else, which is the
+     * failure round 926 measured for the quote form.
+     *
      * A literal the token scan cannot place, or one left UNTERMINATED by a partial
      * edit, falls back to its whole span rather than to arithmetic that would eat a
      * real character.
      */
     fun occurrenceSpanOf(node: Node): IntArray {
         val end = realEndOf(node)
-        if (node is StringLiteralNode && !node.isUnterminated && end - node.pos >= 2) {
+        val delimited = when (node) {
+            is StringLiteralNode -> !node.isUnterminated
+            is NoSubstitutionTemplateLiteralNode -> !node.isUnterminated
+            else -> false
+        }
+        if (delimited && end - node.pos >= 2) {
             return intArrayOf(node.pos + 1, end - 1)
         }
         return intArrayOf(node.pos, end)
@@ -719,13 +732,13 @@ internal class SourceIndex private constructor(
         val token: Int
         val caretIsInsideToken: Boolean
         if (containing >= 0) {
-            if (tokenKinds[containing] != SyntaxKind.StringLiteral) return null
+            if (!isMemberNameLiteralToken(tokenKinds[containing])) return null
             token = containing
             caretIsInsideToken = true
         } else {
             val before = tokenEndingAtOrBefore(offset)
             if (before < 0 || tokenEnds[before] != offset) return null
-            if (tokenKinds[before] != SyntaxKind.StringLiteral) return null
+            if (!isMemberNameLiteralToken(tokenKinds[before])) return null
             token = before
             caretIsInsideToken = false
         }
@@ -733,7 +746,7 @@ internal class SourceIndex private constructor(
         // At or before the opening quote the caret is not in the string at all.
         if (offset <= literalStart) return null
         val access = SyntaxRoles.stringElementAccessAt(sourceFile, literalStart) ?: return null
-        val literal = access.argumentExpression as? StringLiteralNode ?: return null
+        val literal = access.argumentExpression
         // A ONE-CHARACTER token is the lone opening quote and cannot be closed —
         // which the parser's own flag gets WRONG, because it decides termination by
         // comparing the raw text's last character to its first and a lone `"` is
@@ -741,7 +754,12 @@ internal class SourceIndex private constructor(
         // one this feature exists for, so the arithmetic is checked as well as the
         // flag. It is arithmetic and not a character test: a closed literal has at
         // least an opening and a closing quote.
-        val unterminated = literal.isUnterminated || tokenEnds[token] - literalStart < 2
+        val parsedUnterminated = when (literal) {
+            is StringLiteralNode -> literal.isUnterminated
+            is NoSubstitutionTemplateLiteralNode -> literal.isUnterminated
+            else -> return null
+        }
+        val unterminated = parsedUnterminated || tokenEnds[token] - literalStart < 2
         if (!caretIsInsideToken && !unterminated) return null
         val textStart = literalStart + 1
         val textEnd = if (unterminated) tokenEnds[token] else tokenEnds[token] - 1
@@ -872,6 +890,16 @@ internal class SourceIndex private constructor(
         while (best >= 0 && tokenStarts[best] >= tokenEnds[best]) best--
         return best
     }
+
+    /**
+     * (API.16) True for the token kinds that can carry a member NAME in an element
+     * access — a string and a no-substitution template, and nothing else.
+     *
+     * A `TemplateHead` is deliberately absent: it is the first token of a template WITH
+     * substitutions, which spells no fixed name, and tsc refuses the position outright.
+     */
+    private fun isMemberNameLiteralToken(kind: SyntaxKind): Boolean =
+        kind == SyntaxKind.StringLiteral || kind == SyntaxKind.NoSubstitutionTemplateLiteral
 
     /** True for the literal kinds a caret inside offers no completion in. */
     private fun isUncompletableLiteral(kind: SyntaxKind): Boolean = when (kind) {

@@ -20,6 +20,82 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 931b (2026-08-18) — (API.16): A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS.
+§ 14's GAP 6 — THE ONE GENUINELY SILENT GAP IN THIS API — IS CLOSED, AND THE ROUND'S
+PRODUCT IS THAT **A REFUSAL WITH ONE STATED REASON IS AN ASSET: ROUND 929's TEMPLATE
+COMPLETION REFUSAL WAS CASHED, NOT OVERRULED, BECAUSE ITS REASON WAS WRITTEN DOWN AND
+THIS ROUND REMOVED IT.**
+
+- **STEP 1 WAS tsc, four oracles over one fixture** (`lsp_member_refs.py`,
+  `lsp_rename.py`, `lsp_hover.py`, `lsp_completion.py`):
+
+| caret / query | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| references of `I.p`, with a ``o[`p`]`` in the file | 4 spans, the template's `[110,111)` among them | 3 — **silently short** | 4 |
+| the template's span | the TEXT, **backticks excluded** | — | the same |
+| references FROM a caret inside the template | the same 4 | none | the same 4 |
+| rename from the member declaration | rewrites ``o[`z`]`` | left `` `p` `` behind, **no conflict, no diagnostic** | rewrites it |
+| rename FROM a caret inside the template | the whole group | nothing | the whole group |
+| hover inside the template | `(property) I.p: number` | `string` (the literal's own type) | `number` |
+| completion in ``o[`‸`]`` | 2 items, edit `[77,77)` | NONE — stated refusal | 2 items, edit `[77,77)` |
+| completion in ``o[`al‸`]`` | edit `[94,96)` over `al` | NONE | the same |
+| ``o[`p${x}`]`` — references | **0** | 0 | 0 |
+| ``o[`p${x}`]`` — rename | `prepareRename` REFUSES | refuses | refuses |
+| completion in a substitution template's HEAD | **null result** | NONE | NONE |
+
+- **THE POPULATION IS THE WHOLE FEATURE, exactly as it was in round 926**: one predicate
+  (`SyntaxRoles.isMemberNameLiteral`) and one enumeration now admit a no-substitution
+  TEMPLATE beside the string, and `occurrenceNodes` / the completion anchor / the core
+  capture all read it. **The refusal that remains is a NODE-CLASS boundary rather than a
+  judgement**: a template with substitutions is a `TemplateExpression`, a different class
+  with no fixed text, so it cannot be admitted by accident — and its HEAD is a
+  `StringLiteralNode` that is not an element-access ARGUMENT, so it is not swept either,
+  which is why it is not an obstacle to the member's rename.
+- **THE ONE PLACE THE STRING'S OWN ROUTE DOES NOT TRANSFER IS HOVER, and it would have
+  re-opened (API.15) one round after closing it.** (BUG.4)'s rule is "the type of the
+  `"p"` in `o["p"]` is the type of `o["p"]`" — right for a string because the compiler's
+  element-access typing keys a named member off a STRING literal argument. It does not
+  key off a template, so ``o[`p`]`` types as `any`, and routing the template through the
+  access would have replaced this position's old answer (`string` — wrong but harmless)
+  with `any`, i.e. a plausible WRONG type where there had been a harmless one. The member
+  is resolved through the RECEIVER instead, which is the definition leg's own walk. The
+  divergence that remains is stated: no flow narrowing through the template form.
+- **SEVEN-ARM ABLATION, each arm applied to a hash-verified snapshot and restored to one,
+  each proved REACHED:**
+
+| arm | mistake | red | verdict |
+|---|---|---|---|
+| B1 | the shared enumeration accepts strings only | **7** — including BOTH completion pins | the population is the feature, and the shared walk is why completion moves with it |
+| B2 | the span keeps the backticks | **5** | the delimiter rule, and it also breaks the substitution-template control |
+| B3 | the CORE capture's literal set narrowed | **7**, a different set — hover and the substitution control in, completion out | completion needs no core change, which is round 929's claim re-measured |
+| B4 | `occurrenceCaret` accepts strings only | **1** | the FROM-the-template direction, and only it |
+| B5 | hover routed through the access type | **1** | reproduces the `any` above |
+| B6 | the token predicate additionally admits a `TemplateHead` | **0 — MEASURED REDUNDANT** | the shared walk refuses a substitution template first, so the token kind cannot decide it |
+| B6b | the token predicate narrowed to `StringLiteral` | **2** (both completion pins) | THE REACH PROOF for B6: the same line is live and load-bearing in the other direction |
+
+  B4's first pass read **`ran 0`** and was a DEAD ARM — the mistake used a type the file
+  no longer imports, so nothing compiled — which is round 902's trap in its purest form:
+  the driver had a `git diff --shortstat` per arm and it was GREEN. What separates them
+  is the ran-count, so the driver asserts one; a zero-red arm with a zero ran-count is
+  not a redundant guard, it is no arm at all.
+- **PINS +8, TWO INVERTED.** `ProjectMemberOccurrenceTest` gains a KIND 4 section (the
+  occurrence, the span, the caret direction, the applied rename, the substitution control
+  in both directions, and hover) over its own fixture, so no count asserted by (API.9)'s
+  own pins moves; `CompletionAnchorTest` gains the substitution refusal. The two
+  inverted are round 930's silent-miss pin (now asserting the REWRITE) and round 929's
+  template completion refusal (now asserting it completes exactly as the quoted form
+  does), each saying so in place. Suite **14,998 → 15,006 / 0 failures / 3 skipped**.
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round
+  changes core; `huge_methods.py --fail-over 0` clean on core (750 classes) and on
+  `-project` (48); the round-920 token gate re-run because `SourceIndex` changed —
+  **1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations**.
+  `docs/language-service.md` §§ 8, 9, 10a, 10b, 10d, 14.
+- **§ 14's gap list: 9 → 8 live**, and both of round 930's deliberate defect pins are now
+  inverted. What remains silent anywhere in this API is ONE shape: a computed key
+  `{ ["p"]: v }` whose contextual member is OPTIONAL (gap 2).
+- **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
+  about this API and the only thing that moves the cost table.
+
 **Round 931a (2026-08-18) — (API.15): AN ENUM MEMBER'S DECLARATION NAME REPORTS ITS OWN
 TYPE. THE LAST POSITION IN THIS API ANSWERING A PLAUSIBLE **WRONG** TYPE INSTEAD OF
 NOTHING IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CALL EVERY OTHER MEMBER LEG
@@ -1918,6 +1994,29 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   counters; `huge_methods.py --fail-over 0` clean on both modules; the round-920 token
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
+
+- [x] **(API.16) A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS — LANDED, round 931; § 14's
+  gap 6, the ONE genuinely silent gap in this API, is closed.** ``o[`p`]`` was outside
+  (API.9)'s occurrence population, so `referencesAt` / `documentHighlightsAt` / `renameAt`
+  missed it AND SAID NOTHING: round 930 proved it end to end — the rename applies, the
+  template keeps spelling the old name, and the applied program has ZERO diagnostics, so
+  no gate this API has can see it. tsc 7.0.2 counts it as a reference, renames it, hovers
+  it as `(property) I.p: number` and completes inside it (all measured). It is now an
+  ordinary occurrence in every one of those queries, with the edit covering the TEXT and
+  **not the backticks** — round 926's rule one delimiter over, and the same measured span
+  tsc writes. **Round 929's completion refusal is CASHED rather than overruled**: it
+  refused for exactly one reason, that the sweep could not find such a member, and the
+  sweep now can — the two still share ONE enumeration, so they cannot drift apart about
+  what a member name is. **REFUSED, and it is a NODE-CLASS boundary rather than a
+  judgement**: a template carrying a SUBSTITUTION (``o[`p${x}`]``) spells no fixed name,
+  so it is neither an occurrence nor an obstacle and its caret renames nothing — which is
+  tsc's answer there too (zero references, `prepareRename` refuses). **The one place a
+  second mechanism was needed is HOVER**: this compiler's element-access typing keys a
+  named member off a STRING literal, so routing the template through the access would
+  have answered `any` — the (API.15) violation one round later — and the member is
+  resolved through the receiver instead. +8 pins, two inverted; seven-arm ablation, five
+  distinct red sets plus one MEASURED-REDUNDANT guard with its reach proved by a
+  narrowing twin. `docs/language-service.md` §§ 8, 9, 10a, 10b, 10d, 14.
 
 - [x] **(API.15) AN ENUM MEMBER'S DECLARATION NAME REPORTS `any` — LANDED, round 931; the one live violation
   of *prove to offer* in this API.** Measured round 930 on four shapes (plain, valued,

@@ -465,6 +465,145 @@ class ProjectMemberOccurrenceTest {
      * follows it through a dot: `o["p"] = 1` writes `p`. Its own pin, because the
      * literal reaches `ascendUse` by an edge no identifier ever takes.
      */
+    // --- (API.16) KIND 4: an element access named by a TEMPLATE ------------------
+
+    /**
+     * The fixture for the template kind, kept out of [main] so that no count asserted
+     * above moves. `unrelatedTemplate` is the discriminator a token- or spelling-driven
+     * answer fails: it spells the member exactly and names nothing, because it is in no
+     * element access.
+     */
+    private val templateMain = """
+        import { Shape } from "./b";
+        declare const o: Shape;
+        declare const x: string;
+        export const direct = o.p;
+        export const viaTemplate = o[`p`];
+        export const viaSubstitution = o[`p${'$'}{x}`];
+        export const unrelatedTemplate = `p`;
+    """.trimIndent() + "\n"
+
+    /**
+     * (API.16) THE ROUND'S POINT. Until round 931 a member named by a template was
+     * outside the occurrence population and the miss was SILENT — the rename applied,
+     * the template kept spelling the old name, and the applied program still compiled,
+     * so no gate this API has could see it. tsc 7.0.2 counts it as a reference
+     * (measured, four spans including the template's `[110,111)`), and so does this.
+     */
+    @Test
+    fun `a TEMPLATE element access is an occurrence and an unrelated template is not`() {
+        val project = projectWith(mainText = templateMain)
+        val group = project.referencesAt(otherFile, offsetOf("p: string", 0, other))
+        val inTemplate = offsetOf("o[`p`]", 0, templateMain) + 3
+        assert("a.ts@$inTemplate" in places(group))
+        assert("a.ts@${offsetOf("unrelatedTemplate = `p`", 0, templateMain) + 21}" !in places(group))
+    }
+
+    /**
+     * The SPAN is the text and not the BACKTICKS, which is round 926's rule for quotes
+     * one delimiter over: a plan built from the token span writes `o[renamed]`, which
+     * compiles and means something else. tsc edits `[110,111)` for a literal occupying
+     * `[109,112)` — measured — and so does this.
+     */
+    @Test
+    fun `a TEMPLATE occurrence covers the text and not the backticks`() {
+        val project = projectWith(mainText = templateMain)
+        val group = project.referencesAt(otherFile, offsetOf("p: string", 0, other))
+        val inTemplate = offsetOf("o[`p`]", 0, templateMain) + 3
+        val span = group.single { it.fileName == mainFile && it.start == inTemplate }
+        assert(templateMain.substring(span.start, span.end) == "p")
+    }
+
+    /**
+     * A caret INSIDE the template answers the member's whole group, which is the other
+     * direction and the one tsc also answers (four references from that caret, and a
+     * `prepareRename` over the same span).
+     */
+    @Test
+    fun `a caret inside a TEMPLATE element access answers the member's group`() {
+        val project = projectWith(mainText = templateMain)
+        val fromTemplate = project.referencesAt(mainFile, offsetOf("o[`p`]", 0, templateMain) + 3)
+        val fromDeclaration = project.referencesAt(otherFile, offsetOf("p: string", 0, other))
+        assert(places(fromTemplate) == places(fromDeclaration))
+    }
+
+    /**
+     * THE INDEPENDENT ORACLE, and the pin that would have caught the silent miss: the
+     * plan is APPLIED and the program compiled again. The template must carry the new
+     * name — the old text is what a stranded rename leaves behind, and it compiles
+     * either way, which is exactly why reading the text is not enough on its own.
+     */
+    @Test
+    fun `a TEMPLATE element access is REWRITTEN by a member rename`() {
+        val project = projectWith(mainText = templateMain)
+        val plan = project.renameAt(otherFile, offsetOf("p: string", 0, other), "renamed")
+        assert(plan.isApplicable)
+        assert(plan.refusal == null)
+        var applied = templateMain
+        plan.files.single { it.fileName == mainFile }.edits
+            .sortedByDescending { it.start }
+            .forEach { applied = applied.substring(0, it.start) + it.newText + applied.substring(it.end) }
+        assert(applied.contains("o[`renamed`]"))
+        assert(!applied.contains("o[`p`]"))
+        // …and the applied program is a program: one pair of backticks, no stranded
+        // member, and the substitution template — which names nothing — untouched.
+        val rechecked = Project.open(
+            "/proj",
+            InMemoryVfs(
+                mapOf(
+                    "/proj/tsconfig.json" to config,
+                    mainFile to applied,
+                    otherFile to other.replace("p: string", "renamed: string"),
+                ),
+            ),
+        )
+        assert(rechecked.diagnostics().isEmpty())
+    }
+
+    /**
+     * NEGATIVE CONTROL, and parity: a template WITH substitutions spells no fixed name,
+     * so it is in no group and its caret renames nothing. tsc refuses it the same way —
+     * zero references, and `prepareRename` answers "You cannot rename this element".
+     */
+    @Test
+    fun `negative control - a template WITH substitutions names no member`() {
+        val project = projectWith(mainText = templateMain)
+        val group = project.referencesAt(otherFile, offsetOf("p: string", 0, other))
+        val inSubstitution = offsetOf("o[`p\${x}`]", 0, templateMain) + 3
+        assert("a.ts@$inSubstitution" !in places(group))
+        val refused = projectWith(mainText = templateMain).renameAt(mainFile, inSubstitution, "renamed")
+        assert(!refused.isApplicable)
+        assert(refused.files.isEmpty())
+    }
+
+    /**
+     * …and it is not an obstacle either: the rename of a member the substitution
+     * template happens to SPELL goes through, because the head of such a template is
+     * not in an element-access argument position and is therefore not swept at all.
+     */
+    @Test
+    fun `a template WITH substitutions does not refuse the member's rename`() {
+        val project = projectWith(mainText = templateMain)
+        val plan = project.renameAt(otherFile, offsetOf("p: string", 0, other), "renamed")
+        assert(plan.conflicts.isEmpty())
+        assert(plan.refusal == null)
+    }
+
+    /**
+     * (API.16) HOVER at the same caret, which needed a resolution of its own. This
+     * compiler's element-access typing keys a named member off a STRING literal
+     * argument, so `o[`p`]` types as `any` — routing the template through the access
+     * would have answered `any` here, which is the *prove to offer* violation (API.15)
+     * closed one round earlier. The member is resolved through the receiver instead.
+     * tsc answers `(property) Shape.p: string` at this caret and at the string form's.
+     */
+    @Test
+    fun `hover inside a TEMPLATE element access reports the member's type`() {
+        val project = projectWith(mainText = templateMain)
+        val hover = project.quickInfoAt(mainFile, offsetOf("o[`p`]", 0, templateMain) + 3)
+        assert(hover?.displayString == "string")
+    }
+
     @Test
     fun `an element access on the left of an assignment is a write`() {
         val text = main + """

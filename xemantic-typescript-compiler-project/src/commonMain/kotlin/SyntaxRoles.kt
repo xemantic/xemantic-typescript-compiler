@@ -65,6 +65,7 @@ import com.xemantic.typescript.compiler.ModuleDeclaration
 import com.xemantic.typescript.compiler.NamedTupleMember
 import com.xemantic.typescript.compiler.NamespaceExport
 import com.xemantic.typescript.compiler.NamespaceImport
+import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NonNullExpression
@@ -392,7 +393,8 @@ internal object SyntaxRoles {
 
     /**
      * (API.9) The NAME [node] spells — its own text for an identifier, and the text
-     * between the quotes for the string literal of an `o["p"]`.
+     * between the quotes (or, since (API.16), the BACKTICKS) for the literal of an
+     * `o["p"]`.
      *
      * The two occurrence populations meet here, so a caller comparing an occurrence
      * against the old name reads one function rather than casting to [Identifier] and
@@ -401,8 +403,22 @@ internal object SyntaxRoles {
     fun occurrenceText(node: Node): String = when (node) {
         is Identifier -> node.text
         is StringLiteralNode -> node.text
+        is NoSubstitutionTemplateLiteralNode -> node.text
         else -> ""
     }
+
+    /**
+     * (API.16) True when [node] is a LITERAL that can spell a member name — a string
+     * or a no-substitution template.
+     *
+     * The exclusion is what this is for: a template WITH substitutions
+     * (``o[`p${x}`]``) is a `TemplateExpression`, a different node class with no fixed
+     * text, so it cannot be admitted by accident. tsc refuses that position outright —
+     * zero references, and `prepareRename` answers "You cannot rename this element" —
+     * so refusing it is parity rather than a limitation.
+     */
+    fun isMemberNameLiteral(node: Node): Boolean =
+        node is StringLiteralNode || node is NoSubstitutionTemplateLiteralNode
 
     /**
      * True when [node] names a MEMBER OF A TYPE rather than something a scope binds.
@@ -428,7 +444,10 @@ internal object SyntaxRoles {
             is BindingElement -> parent.propertyName === node
             is NamedTupleMember -> parent.name === node
             // (API.9) `o["p"]` — a member position whose name is a string literal, and
-            // since this round an occurrence rather than only an obstacle.
+            // since this round an occurrence rather than only an obstacle. (API.16) A
+            // ``o[`p`]`` is the same position; a COMPUTED `o[i]` reaches here too and is
+            // filtered where the population is built, never here, because "is this the
+            // argument of an element access" is all this predicate claims.
             is ElementAccessExpression -> parent.argumentExpression === node
             else -> false
         }
@@ -460,7 +479,7 @@ internal object SyntaxRoles {
     }
 
     /**
-     * Every `o["…"]` in [root] whose member is named by a STRING LITERAL, as
+     * Every `o["…"]` in [root] whose member is named by a LITERAL, as
      * `(the literal node, its text)`.
      *
      * (API.9) A string literal is not an identifier, so such an access used to be
@@ -471,13 +490,18 @@ internal object SyntaxRoles {
      * string literal can occupy are deliberately not enumerated: a literal that names
      * no member is not a candidate for anything.
      *
+     * (API.16) A NO-SUBSTITUTION TEMPLATE names a member the same way, and until round
+     * 931 it was the one occurrence kind this API missed SILENTLY: the rename applied,
+     * the template kept spelling the old name, and the resulting program compiled
+     * clean, so no gate here could see it. It is now the same population.
+     *
      * ITERATIVE, as every full-tree walk in this module is: the corpus carries
      * expression chains deep enough to crash a recursive one.
      */
     fun stringElementAccesses(root: Node): List<Pair<Node, String>> {
         val accesses = stringMemberNameAccesses(root)
         val found = ArrayList<Pair<Node, String>>(accesses.size)
-        for ((literal, _) in accesses) found.add(literal to literal.text)
+        for ((literal, _) in accesses) found.add(literal to occurrenceText(literal))
         return found
     }
 
@@ -515,15 +539,15 @@ internal object SyntaxRoles {
      */
     private fun stringMemberNameAccesses(
         root: Node,
-    ): List<Pair<StringLiteralNode, ElementAccessExpression>> {
-        val found = ArrayList<Pair<StringLiteralNode, ElementAccessExpression>>()
+    ): List<Pair<Node, ElementAccessExpression>> {
+        val found = ArrayList<Pair<Node, ElementAccessExpression>>()
         val stack = ArrayList<Node>()
         stack.add(root)
         while (stack.isNotEmpty()) {
             val node = stack.removeAt(stack.size - 1)
             if (node is ElementAccessExpression) {
                 val argument = node.argumentExpression
-                if (argument is StringLiteralNode) found.add(argument to node)
+                if (isMemberNameLiteral(argument)) found.add(argument to node)
             }
             forEachChild(node) { child -> stack.add(child) }
         }
