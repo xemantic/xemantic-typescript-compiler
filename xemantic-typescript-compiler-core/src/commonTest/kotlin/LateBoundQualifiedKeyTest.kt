@@ -269,8 +269,12 @@ class LateBoundQualifiedKeyTest {
     fun `negative control - a locally shadowed Symbol makes the key dynamic again`() {
         // `Symbol` resolving to a local binding is not the global well-known-symbol
         // object, so the key spells nothing fixed and tsc reports nothing.
+        // THE TARGET MUST BE FILE-LEVEL: an `interface` declared inside a function body
+        // is not bound at all (B83.5), so the annotation degrades to `any`, no excess
+        // check runs, and `none { 2353 }` is vacuously true - measured, this pin read
+        // GREEN against a binary with the shadow guard deleted (round 902's trap).
         val d = check(
-            "function f() {\n  const Symbol = { iterator: \"zz\" };\n" + opt +
+            opt + "function f() {\n  const Symbol = { iterator: \"zz\" };\n" +
                 "  const o: Opt = { [Symbol.iterator]: 1 };\n  return o;\n}\nvoid f;"
         )
         assert(d.none { it.code == 2353 })

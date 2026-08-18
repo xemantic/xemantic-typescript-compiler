@@ -10,7 +10,7 @@ so a build that never reached the tests cannot read as "the mistake changed noth
 (round 808). Both late-binding pin classes run, so an arm that reddens round 935's rows
 as well as this round's is visible rather than hidden by the filter.
 
-Usage:  python3 scripts/round936-ablate.py [A1 .. A11]
+Usage:  python3 scripts/round936-ablate.py [A1 .. A12]
 """
 import glob
 import hashlib
@@ -93,6 +93,12 @@ ARMS = [
         "the well-known route is widened to ANY dotted receiver — round 934's exclusion undone",
         '        if (recv.text != "Symbol") return null\n',
         "",
+    ),
+    (
+        "A12",
+        "the well-known route hands back computedSymbolKey's INVENTED name for any dotted key",
+        '        return "[Symbol.${pa.name.text}]"\n',
+        "        return computedSymbolKey(n)\n",
     ),
     (
         "A11",
