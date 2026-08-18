@@ -6973,10 +6973,27 @@ class Checker(
         // `currentClassForThis` is set from the cta frame and is deliberately NULL
         // inside a STATIC member (the frame's own rule), so a static `this` answers
         // nothing rather than answering with instance members.
-        if (receiver is Identifier && receiver.text == "this") {
+        if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
             val cls = currentClassForThis ?: return emptyList()
             val thisType = resolveUncalledThisType(cls) ?: return emptyList()
-            typeCaptureCollectMembers(thisType, name, symbols, 0)
+            if (receiver.text != "super") {
+                typeCaptureCollectMembers(thisType, name, symbols, 0)
+                return symbols
+            }
+            // (API.13) `super` reads the BASE declarations rather than the this-type's,
+            // exactly as [typeCaptureThisMemberType] does for the TYPE of the same
+            // access: the two answer the same symbol for an inherited member (a base's
+            // own [Symbol] is copied into the derived table) and differ precisely where
+            // the derived class OVERRIDES it, which is the case `super` is written for.
+            // Measured against tsc 7.0.2: `super.pb` navigates to `Base.pb` in both the
+            // overridden and the inherited shape.
+            val declared = thisType as? Type.Interface ?: return emptyList()
+            resolveStructuredTypeMembers(declared)
+            val bases = declared.baseTypes ?: return emptyList()
+            for (base in bases) {
+                typeCaptureCollectMembers(base, name, symbols, 0)
+                if (symbols.isNotEmpty()) return symbols
+            }
             return symbols
         }
         typeCaptureExportedMember(receiver, name)?.let { return listOf(it) }

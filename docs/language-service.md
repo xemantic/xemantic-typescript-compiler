@@ -188,8 +188,9 @@ no checker, because the checker's construction *is* the compilation. What makes
 a re-query cheap anyway is the compiler's process-global, **content-keyed** parse
 cache, which every unedited file hits — so the second build of an N-file project
 re-parses only what changed. For scale: a warm rebuild of the TypeScript
-compiler's own 78-file sources is ~5.2 s; a normal application project is far
-less.
+compiler's own 78-file sources is **5.0 – 5.5 s** (re-taken round 930; the first
+rebuild in a process is ~9 s, so a host's first query is not the steady state); a
+normal application project is far less.
 
 Two consequences for a host:
 
@@ -286,12 +287,11 @@ Line terminators: `\n`, `\r\n` and a lone `\r` all break a line. U+2028 / U+2029
 deliberately do **not** — tsc splits there but this compiler does not, and a
 coordinate that no diagnostic of ours can ever carry is worse than none.
 
-> **Known defect, tracked as `(BUG.1)`:** on text using a **lone `\r`** as its
-> terminator, the parser and the checker disagree about line numbering — a
-> syntax diagnostic numbers the lines and a semantic one reports line 1. `\n`
-> and `\r\n` are unaffected. Classic-Mac line endings are practically extinct,
-> which is why this has never mattered, but if your host normalizes buffers, do
-> it before handing them over.
+All three terminators agree across the whole compiler, and that is pinned rather
+than assumed: `(BUG.1)` — a lone `\r` numbered by the parser and ignored by the
+checker, so that a syntax diagnostic and a semantic one disagreed about the line —
+was closed in round 915, and `ProjectPositionTest`'s `a lone CR file's diagnostics
+agree with this map too` fails on any compiler that reopens it.
 
 ## 7. Syntactic queries: what is at this position
 
@@ -412,7 +412,10 @@ whatever unrelated binding shared the spelling — the same collider shape, one 
 over. It now reports the member's own type, resolved through its **owner** (§ 9). An
 overload set reports the whole overloaded type rather than the signature under the
 caret, which is coarser than tsc and never wrong; an **enum member's** declaration name
-still reports nothing, and that is the one member declaration kind this does not cover.
+is the one member declaration kind this does not cover, and round 930 measured what it
+actually does there: it reports **`any`** — the non-answer this rule replaced everywhere
+else, not an absent answer — where tsc 7.0.2 reports `(enum member) Plain.Alpha = 0`.
+Pinned as a defect by `LanguageServiceStateTest`, so closing it is a deliberate edit.
 
 `this` and `super` are the one shape needing a second mechanism, for the reason
 § 9 gives about go-to-definition: they are plain identifiers in this parser, so
@@ -496,7 +499,9 @@ What answers, concretely:
 arrow function does not rebind `this` — TypeScript gives it whatever encloses it —
 so a caret on `this.` inside an arrow, inside an arrow inside an arrow, or inside an
 arrow in a constructor, getter, setter or property initializer, answers with the
-enclosing class's members. Everything that *does* rebind `this` answers **nothing**
+enclosing class's members. `super.p` rides the same carrier and answers the **base's**
+declaration — the override's, never — which round 930 added and measured against tsc.
+Everything that *does* rebind `this` answers **nothing**
 rather than guessing: a `function` expression or declaration at any depth (TypeScript
 types its `this` as `any`, and the compiler emits TS2683 for a member read there), an
 object literal's own method, a static member (whose `this` is `typeof C`), a class
@@ -1003,6 +1008,12 @@ identifier: peak heap on that profile is **~1.9 GB**, and the default 512 MB of 
 plain JVM is not enough. `documentHighlightsAt` does not have this shape — it holds
 one file's.
 
+Round 930 re-took this table and every row held its band on the caret it was taken
+at — `documentHighlightsAt` 6.3 s on `checker.ts`, `referencesAt` 9.1 s clean / 14.1 s
+dirty — which is also how it found that the row is a statement about a FILE: the same
+call on `types.ts` is 5.0 – 5.5 s. The re-taken figures, with their carets named, are in
+§ 14; the runner is `scripts/round930-ls-cost.sh`.
+
 **So: `documentHighlightsAt` is the one to wire to caret movement** (debounced —
 it still builds), and `referencesAt` is the one a user asks for explicitly.
 
@@ -1251,10 +1262,22 @@ Three things still refuse it, and each is a different sort of thing:
   types, an un-annotated destructured parameter;
 - **a member on an `any` receiver**, reached by `o.p` or by `o["p"]`;
 - **an object literal's own METHOD** (`{ om() { … } }`), which is deliberately outside
-  both this leg and `(API.10)`'s key leg — see § 9.
+  both this leg and `(API.10)`'s key leg — see § 9 — **once a contextual type supplies
+  it**: the key then spells the member's name and resolves to nothing, which is what the
+  net cannot rule out. Round 930 measured the other half: in a literal nothing
+  contextually types, the group is complete and the rename goes through.
 
-A **computed key** (`{ ["p"]: v }`) is a silent gap rather than a refusal: it is not in
-the swept population, so it is neither renamed nor reported. tsc renames it.
+A **computed key** (`{ ["p"]: v }`) is not in the swept population, so it is never
+rewritten; round 930 measured what that costs. Where stranding it breaks the program the
+apply-and-recheck stage refuses with `WOULD_NOT_COMPILE`, and where the literal has no
+contextual type the completeness gate refuses with `OCCURRENCES_INCOMPLETE`. It is a
+SILENT gap in exactly one shape — a contextual member that is **optional**, where
+dropping it costs no diagnostic for the recheck to find. tsc renames it in all three.
+
+A **template element access** (`` o[`p`] ``) is the silent one with no such saving grace:
+it is outside the population too, nothing refuses, and the rename leaves it spelling the
+old name in a program that still compiles clean (§ 14, gap 6). tsc counts it as a
+reference.
 
 ### Cost, measured
 
@@ -1274,6 +1297,11 @@ The second build is the verification, and it costs less than the first on a smal
 and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is the
 same shape, ~1.9 GB peak on that profile, and the default 512 MB of a plain JVM is not
 enough.
+
+Round 930 re-took both rename rows on the same carets: `createTypeChecker` 14.3 s and
+`SyntaxKind` 20.1 – 21.0 s clean, 19.6 – 26.7 s dirty. Same order, same shape; the
+absolute numbers are a property of the run that took them and only the § 14 table is
+kept current. The runner is `scripts/round930-ls-cost.sh`.
 
 **So: this is a query a user asks for explicitly.** Do not wire it to a keystroke, and
 prefer to refuse early — a bad new name costs nothing at all.
@@ -1380,17 +1408,24 @@ stale text and nothing worse.
   literal still answers `NO_COMPLETION_CONTEXT` (§ 10a). That refusal is about the
   ANCHOR — a caret in a string is prose almost everywhere else — and lifting it means
   a position classifier, not a resolution.
-- **an object literal's own METHOD** (`{ om() { … } }`) is answered by nothing: it is
-  outside `(API.10)`'s key leg (which takes `{ p: v }` and the shorthands) and
+- **an object literal's own METHOD** (`{ om() { … } }`) has no definition of its own: it
+  is outside `(API.10)`'s key leg (which takes `{ p: v }` and the shorthands) and
   deliberately outside `(API.11)`'s owner leg, because a contextually typed literal's
   method is an occurrence of the contextual type's member and resolving it to itself
-  would take it out of rename's completeness net without putting it in the group.
-- **an enum member's declaration name reports no type** — it navigates and it renames,
-  but `quickInfoAt` on it answers nothing rather than the member's value, because an
-  enum's declared type carries no member table to ask (§ 8).
-- **a computed object-literal key** (`{ ["p"]: v }`) is neither found nor renamed, and
-  is not reported either: its literal is outside the swept population, and putting it
-  there without resolving it would turn every such key into a rename obstacle.
+  would take it out of rename's completeness net without putting it in the group. Round
+  930 measured what that costs a rename, and it is not uniform: with no contextual type
+  the method still renames completely from either end, and with one the key becomes an
+  unresolved occurrence and the rename refuses (§ 10d).
+- **an enum member's declaration name reports `any`** — it navigates and it renames, but
+  `quickInfoAt` on it answers the wrong type rather than the member's value, because an
+  enum's declared type carries no member table for the owner leg to ask (§ 8). Round 930
+  measured it: `any`, not "nothing", which makes it the one live violation of *prove to
+  offer*.
+- **a computed object-literal key** (`{ ["p"]: v }`) is neither found nor renamed: its
+  literal is outside the swept population, and putting it there without resolving it
+  would turn every such key into a rename obstacle. Round 930 measured what happens
+  next: the rename is REFUSED in two of the three shapes and goes through silently only
+  where the contextual member is optional (§ 14, gap 2).
 - **hover on a shorthand `{ p }` describes the LOCAL** (§ 8), where tsc describes the
   contextual member for an object literal's form and the local for a binding pattern's.
   References, go-to-definition and rename answer both since `(API.10)`; only the
@@ -1410,9 +1445,19 @@ your host.
 
 ## 14. State of the API — the two-minute version
 
-Rounds 909–929 built this in twenty increments, and the detail is spread across as
+Rounds 909–930 built this in twenty-one increments, and the detail is spread across as
 many session notes. This section is the summary a next agent or a host author should
 read instead.
+
+> **It is PINNED, and dated.** Round 930 audited every claim below **by execution** — a
+> fixture through the API, tsc 7.0.2's own language server as the oracle where the claim
+> is about parity, the cost table re-taken on the profile — and every claim a test can
+> defend is now defended by `LanguageServiceStateTest` (`-project`, `src/commonTest`) or
+> by the class named beside it. Lines a test cannot defend are marked **(not pinnable)**.
+> Audited **2026-08-18**; four claims were false and are corrected here. The reason for
+> the ceremony is the thing the audit found first: this section was three rounds old and
+> already listed a defect that had been fixed *before it was written*. A page of prose
+> about behaviour drifts within three rounds; the pins are what stop it.
 
 ### What it answers
 
@@ -1420,15 +1465,15 @@ read instead.
 |---|---|---|
 | diagnostics, whole program or one file | § 4 | complete |
 | in-memory edits, including files that exist nowhere but the overlay | § 5 | complete |
-| offset ⟷ (line, character) | § 6 | complete, one known defect (lone `\r`, § 6) |
-| what node is at this position | § 7 | complete, gated over 101 M characters of real TypeScript |
-| hover | § 8 | complete for values, members and member declarations; an enum member's declaration name reports nothing |
+| offset ⟷ (line, character) | § 6 | complete — `\n`, `\r\n` and a lone `\r` all agree with the compiler's own diagnostics |
+| what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (re-run round 930, 1,327 files, zero violations) |
+| hover | § 8 | complete for values, members and member declarations; an enum member's declaration name reports `any` — gap 7 |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
 | the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
 | completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` included; a template `` o[`p`] `` refuses |
 | find references, document highlights, read-vs-write | § 10b | complete |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
-| rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the three gaps below |
+| rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the gaps below |
 
 Everything crossing the surface is a **value** — no AST, no `Symbol`, no `Type` — which
 is what lets the compiler underneath change without breaking a host.
@@ -1445,27 +1490,39 @@ why a rename that cannot show its occurrence set complete refuses with the evide
 rather than shipping a partial plan.
 
 The refusals are listed per member (§§ 9, 10a–10d). The ones that are gaps rather than
-principles are in the list below.
+principles are in the list below. Gap 7 is the one place the rule is currently **broken**
+rather than applied: `any` is a plausible wrong answer, not a refusal.
 
 ### What it costs
 
 Per § 3, and this is the number that shapes a host: **almost every semantic query is a
 full rebuild**, because `ProjectCompiler.Result` is a flat value that retains no checker.
-On tsc's own 78 sources (9,977,097 characters, 381,670 identifiers, real libs, warm):
+Re-taken round 930 on tsc's own 78 sources (9,977,097 characters, 381,670 identifiers,
+real libs, warm, one process per battery, three rotations):
 
-| query | builds | wall |
-|---|---|---|
-| a plain rebuild, for reference | 1 | 5.5 – 5.9 s |
-| `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk |
-| `quickInfoAt`, `definitionsAt`, `completionsAt`, `signatureHelpAt` | 1 **each** | rebuild each |
-| `documentHighlightsAt` | 1 | 6.0 – 7.2 s |
-| `referencesAt` | 1 clean, 2 dirty | 8.3 – 13.5 s, ~1.9 GB peak |
-| `renameAt` | 2, 3 dirty | 13.3 – 24.5 s |
-| a refusal decided on syntax alone | **0** | microseconds |
+| query | builds | wall | caret |
+|---|---|---|---|
+| a plain rebuild, for reference | 1 | 5.0 – 5.5 s | — |
+| `quickInfoAt` / `definitionsAt` / `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
+| `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk: 5.0 s on `types.ts`, 6.2 s on `checker.ts` | — |
+| `documentHighlightsAt` | 1 | 5.0 – 5.5 s on `types.ts`, **6.3 s on `checker.ts`** | it sweeps one FILE, so the file is the cost |
+| `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 s clean, 13.2 – 14.8 s dirty | whole program either way |
+| `renameAt` | 2, 3 dirty | 14.3 s (`createTypeChecker`, 3 edits) – 21.0 s (`SyntaxKind`, 9,827 edits); 19.6 – 26.7 s dirty | the plan's size shows |
+| a refusal decided on syntax alone | **0** | microseconds | — |
+
+**The `builds` column is pinned** (`LanguageServiceStateTest`, counted at the backing
+`Vfs`) and **the `wall` column is not pinnable** — it is a property of one box on one
+day, a timed assertion over a compile is a coin flip, and only figures taken in one run
+are comparable to each other. Re-take it with `scripts/round930-ls-cost.sh` rather than
+quoting a number from another round beside a fresh one. Memory is the other budget: a
+whole-program sweep holds a resolution per identifier and the default 512 MB of a plain
+JVM is nowhere near enough (§ 10b).
 
 A normal application project is far smaller, and the ratios are what transfer: batching
-34 carets is **34×** cheaper than asking one at a time (§ 10). So: **debounce, batch, and
-wire `documentHighlightsAt` rather than `referencesAt` to caret movement.**
+34 carets is **34 compiles cheaper** than asking one at a time (§ 10) — a ratio of
+BUILDS, which is why it holds at any project size and why it is the half that is pinned.
+So: **debounce, batch, and wire `documentHighlightsAt` rather than `referencesAt` to
+caret movement.**
 
 ### The known gaps, all of them
 
@@ -1473,30 +1530,54 @@ wire `documentHighlightsAt` rather than `referencesAt` to caret movement.**
    thing that changes the cost table, and it is the architectural inversion
    (`docs/ARCHITECTURE-RETHINK.md`), not an API item.
 2. **A computed object-literal key** `{ ["p"]: v }` is outside the swept population, so
-   it is neither found nor renamed *and not reported either*. tsc renames it. One of the
-   two silent gaps in the list; the other is 6.
-3. **An object literal's own METHOD** (`{ om() { … } }`) resolves to nothing — see § 9.
-   It refuses a rename loudly.
+   it is neither found by `referencesAt` nor rewritten by a rename. *Corrected round
+   930*: it is **usually reported** — the recheck refuses with `WOULD_NOT_COMPILE` when
+   stranding the key breaks the program, and the completeness gate refuses with
+   `OCCURRENCES_INCOMPLETE` when the literal has no contextual type. It goes through
+   **silently** in exactly one shape: a contextual member that is **optional**, where
+   dropping it costs no diagnostic. tsc counts the key as a reference and renames it.
+3. **An object literal's own METHOD** (`{ om() { … } }`) has no definition of its own —
+   `definitionsAt` on the declaration name answers empty, see § 9. *Corrected round 930*:
+   it does **not** refuse a rename. A use of it resolves to the declaration, so the
+   occurrence set is complete and `renameAt` rewrites both ends from either caret.
 4. **A member on an `any` receiver** cannot be placed, so it refuses a member rename.
 5. **A shorthand in a literal nothing contextually types** likewise.
 6. **A member named by a TEMPLATE element access** (`` o[`p`] ``) is outside the
-   occurrence population, so it is neither found nor renamed *and not reported
-   either* — the second silent gap, measured in round 929 (tsc counts it as a
-   reference). Completion refuses that position for the same reason, which is stated
-   rather than silent.
-7. **An enum member's declaration name reports no type** on hover.
+   occurrence population, so it is neither found nor renamed **and not reported
+   either** — the one genuinely silent gap, and the sharpest one: the rename applies,
+   the template keeps spelling the old name, and the resulting program still compiles
+   clean, so no gate this API has can see it. tsc counts it as a reference. Completion
+   refuses that position for the same reason, which is stated rather than silent.
+7. **An enum member's declaration name reports `any`** on hover — a wrong answer, not an
+   absent one, and the one live violation of *prove to offer* on this page. tsc reports
+   `(enum member) Plain.Alpha = 0`. Its *use* reports `Plain.Alpha` correctly, and its
+   definition and references are complete; only the declaration name's TYPE is wrong.
 8. **Hover picks one subject where a span names two** — a shorthand reports the local.
    References, definition and rename answer both.
 9. **`export { p }` / `import { p }` rename plainly** where tsc expands them, because
    here they are one symbol. Stated in § 10d, deliberate.
 10. **No LSP layer.** This is an embedding API; the protocol, its 0-based coordinates and
-    its lifecycle are a host's job. § 12 is the shape.
+    its lifecycle are a host's job. § 12 is the shape. **(not pinnable)**
+
+### What the round-930 audit changed
+
+| claim as written | verdict | evidence |
+|---|---|---|
+| positions carry a lone-`\r` defect | **STALE** — closed in round 915, three rounds before this section was written | a `\r`-terminated fixture: TS2322 on line 3, TS1123 on line 3, `positionAt` line 3 |
+| `super.p` goes to the base's declaration (§ 9's table, and the row above) | **WRONG** — it answered nothing while hover at the same caret answered correctly | fixed this round: the receiver leg had a `this` carrier and no `super` one. tsc navigates to `Base.pb`; so does this now |
+| an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reports `any` | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0` |
+| an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type the plan carries both occurrences from either caret and the applied text compiles; with one it is `OCCURRENCES_INCOMPLETE` at the key. Found by measuring the correction — this round's own lesson, applied to itself |
+| a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
+| a template element access is silently missed | **TRUE**, and now proven end to end | the applied rename compiles clean with the old name still in the template |
+| `documentHighlightsAt` costs 6.0 – 7.2 s | **TRUE of `checker.ts`** and unqualified — 5.0 – 5.5 s on `types.ts` | the row is a statement about a FILE; the table above says so now |
+| a plain rebuild is 5.5 – 5.9 s (§ 14) / ~5.2 s (§ 3) | **BOTH DRIFTED**, in opposite directions | re-taken: 5.0 – 5.5 s warm, ~9 s for the first rebuild in a process |
+| everything else in this section | **TRUE** | one fixture per claim, and the pins listed above |
 
 ### How each of these was decided
 
 Every behaviour above was **read out of tsc 7.0.2's own language server** before it was
 written — `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, driven by `scripts/lsp_hover.py`,
-`scripts/lsp_member_refs.py`, `scripts/lsp_rename.py` and `scripts/lsp_completion.py` —
-and where this API diverges,
+`scripts/lsp_definition.py`, `scripts/lsp_member_refs.py`, `scripts/lsp_rename.py` and
+`scripts/lsp_completion.py` — and where this API diverges,
 the divergence is stated rather than discovered. That is the standing method, and it is
 the cheapest thing a next round can reuse.
