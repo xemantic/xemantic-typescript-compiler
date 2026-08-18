@@ -42,8 +42,8 @@ public enum class CompletionKind {
 
     /**
      * The caret is at a free position, so the candidates are everything the lexical
-     * scope chain binds there. ANSWERED since (API.4b) — KEYWORDS are deliberately
-     * not among them, see [Project.completionsAt].
+     * scope chain binds there, plus — since (API.7) — the KEYWORDS its grammar
+     * position admits. See [Project.completionsAt] for which, and for the gates.
      */
     FREE_NAME,
 
@@ -102,7 +102,10 @@ public enum class CompletionRefusal {
  *   `FunctionDeclaration`, `ClassDeclaration`, `InterfaceDeclaration`,
  *   `TypeParameter`, `ImportSpecifier`, … — which is also what tells a local binding
  *   from the outer one it shadows. `"Unknown"` for a symbol carrying no declaration.
- *   THIS is how a method is told from a property; there is no separate flag.
+ *   (API.7) `"Keyword"` for a keyword the caret's grammar position admits — the one
+ *   value that names no declaration at all, and the one a host renders with a
+ *   different icon. THIS is how a method is told from a property; there is no
+ *   separate flag.
  * @property typeText the member's type, rendered as the compiler renders it in a
  *   diagnostic. Through a UNION receiver it is the distinct types the member has
  *   across the constituents, joined by `" | "`. EMPTY for a free name — see above.
@@ -110,9 +113,12 @@ public enum class CompletionRefusal {
  *   of a union receiver. Always false for a free name.
  * @property readonly any contributing declaration carries `readonly`. Always false
  *   for a free name.
- * @property accessibility `"public"`, `"protected"` or `"private"`. REPORTED AND NOT
- *   ACTED ON — see [Project.completionsAt]. Always `"public"` for a free name:
- *   nothing the scope chain binds at a position is inaccessible from it.
+ * @property accessibility `"public"`, `"protected"` or `"private"`. (API.7) An
+ *   inaccessible member is no longer OFFERED — see [Project.completionsAt] for the
+ *   rule and for the prove-to-hide bias — so this describes what survived the filter,
+ *   which is what a host greying an item rather than hiding it wants. Always
+ *   `"public"` for a free name and for a keyword: nothing the scope chain binds at a
+ *   position is inaccessible from it.
  */
 public data class CompletionItem(
     val name: String,
@@ -149,6 +155,8 @@ public data class CompletionItem(
  * @property replacementEnd one past the last — half-open, like every span in this
  *   API.
  * @property items the candidates, deduplicated by name and sorted by name ascending.
+ *   (API.7) At a [CompletionKind.FREE_NAME] caret this includes the KEYWORDS legal
+ *   there, carrying `kind = "Keyword"`.
  *   The order is imposed rather than inherited: a member table's iteration order is
  *   an implementation property and a list a user reads must not reorder under a
  *   checker change.

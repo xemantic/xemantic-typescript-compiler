@@ -327,18 +327,23 @@ class ProjectCompletionTest {
         assert(!method.optional)
     }
 
+    /**
+     * UPDATED BY (API.7), WHICH IS A BEHAVIOUR CHANGE TO AN EXISTING ANSWER. Round 917
+     * asserted here that `secret` and `guarded` ARE offered, and said why: filtering
+     * them correctly needs to know where the caret sits relative to the declaring
+     * class, which was a mechanism it did not build. `SyntaxRoles`' sibling ascent in
+     * the checker is that mechanism, so this caret — at FILE level, outside `Access` —
+     * now sees neither. `ProjectMemberAccessibilityTest` carries the discriminating
+     * cases (inside the class, inside a subclass); this one stays here because it also
+     * pins that ACCESSIBILITY IS STILL REPORTED on what survives.
+     */
     @Test
-    fun `private and protected members are OFFERED and reported as such`() {
+    fun `private and protected members are HIDDEN from a caret outside the class`() {
         val project = projectWith()
         val items = project.completionsAt(mainFile, afterDotOf("access.pub")).items
             .associateBy { it.name }
-        assert(items.keys == setOf("pub", "secret", "guarded", "computed", "greet"))
-        // Accessibility filtering is refused, not half-done: whether an inaccessible
-        // member should be hidden depends on where the caret is relative to the
-        // declaring class, so the fact is REPORTED and the host decides.
+        assert(items.keys == setOf("pub", "computed", "greet"))
         assert(items["pub"]!!.accessibility == "public")
-        assert(items["secret"]!!.accessibility == "private")
-        assert(items["guarded"]!!.accessibility == "protected")
         assert(items["computed"]!!.kind == "GetAccessor")
         assert(items["computed"]!!.typeText == "string")
     }

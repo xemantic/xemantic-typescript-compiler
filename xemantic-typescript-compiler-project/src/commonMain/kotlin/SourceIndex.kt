@@ -581,6 +581,12 @@ internal class SourceIndex private constructor(
                 replacementEnd,
                 receiver = null,
                 scopeAnchor = scopeAnchorAt(offset),
+                // (API.7) The grammar position is read at the WORD's own start, not at
+                // the caret: `co|` sits at the real end of the `co` statement, so the
+                // caret is enclosed by the BLOCK while the word is enclosed by the
+                // identifier the parser built — and it is that identifier's parent that
+                // says which production the word is part of.
+                keywords = SyntaxRoles.keywordsFor(pathAt(if (word >= 0) anchorStart else offset)),
             )
         }
         return CompletionAnchor(

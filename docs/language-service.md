@@ -4,15 +4,24 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 921, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 922, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
 in one build — **completions**, both halves: members `(API.4a)` and free
-names `(API.4b)`, **find-references plus document highlights** `(API.5)` — and
-**signature help** `(API.6)`, every overload. Not yet: keywords (§ 10a says why
-they are refused rather than guessed), rename. See the `(API.*)` items in
+names `(API.4b)`, **find-references plus document highlights** `(API.5)`,
+**signature help** `(API.6)`, every overload — and `(API.7)`, which cashed three
+standing refusals at once: **member completions now enforce `private` /
+`protected`**, **keyword completions are offered** where they compile, and
+**read-versus-write is reported** on every reference. Not yet: contextual
+object-literal keys, element access `o["p"]`, rename. See the `(API.*)` items in
 `PLAN-PHASE-5.md`.
+
+> **`(API.7)` changed two answers you may already depend on.** `completionsAt` at a
+> MEMBER caret no longer returns inaccessible members (§ 10a), and at a FREE_NAME
+> caret it now returns keyword items with `kind = "Keyword"` mixed into the list
+> (filter on the kind if you were treating every item as a symbol).
+> `ReferenceLocation` gained a `use` field (§ 10b).
 
 > **If you are on a version before round 920, upgrade before trusting any
 > position.** Two rounds of the same defect class, both fixed and both now covered
@@ -118,7 +127,7 @@ you call them.
 | `definitionsAt` | **full build, every call** | same mechanism, same caveat |
 | `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
 | `fileSemantics(f)` | **ONE full build** | every identifier in the file |
-| `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build |
+| `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build; keywords cost nothing extra |
 | `documentHighlightsAt(f, o)` | **ONE full build** | sweeps this file's identifiers |
 | `referencesAt(f, o)` | **ONE build clean, TWO dirty** | sweeps the whole program's; § 10b has the measured figures |
 | `signatureHelpAt(f, o)` | **full build, every call** | free at a caret in no argument list — those do not build |
@@ -484,7 +493,7 @@ the expression to its left. A caret at a free position gets everything the
 lexical scope chain binds there. `kind` says which question was asked, and it is
 reported whether or not any items come back — a receiver with no members and a
 position where nothing may be completed at all are both empty lists, and you will
-want to tell them apart. **Keywords are not offered**; see below.
+want to tell them apart. **Keywords are offered at a free caret**; see below.
 
 **This is the one query whose position is not a node.** Every other semantic
 member starts from a node at the caret; a completion request has none by
@@ -539,13 +548,22 @@ Items are **deduplicated by name and sorted by name** — the order is imposed b
 the API, because a member table's own iteration order is an implementation
 property.
 
-**Accessibility is reported, not enforced.** `private` and `protected` members
-**are offered**, with `accessibility` saying which they are. Whether to hide one
-depends on where the caret sits relative to the declaring class, which is a
-mechanism this round did not build; reporting the fact lets you apply your own
-rule, where hiding on a half-implemented test would silently lose real
-candidates. `kind` is how you tell a method from a property — there is no
-separate flag.
+**Accessibility is enforced** (`(API.7)`, and this is a change from round 917).
+A `private` member — including a `#name` field — is offered only inside its
+declaring class; a `protected` one only inside that class or a class deriving
+from it. Statics obey the same rule, and a caret in a nested arrow inside a
+method counts as inside that method's class. The base may be in another file:
+the heritage walk follows the import.
+
+The filter **hides only what it can prove inaccessible.** A member whose
+declaring class cannot be found, a base named by an expression the compiler does
+not resolve there, a heritage chain past its depth cap — every unknown leaves
+the member offered. That bias is the reason the feature could be turned on at
+all: a list that has silently lost a real candidate looks exactly like a
+complete one. `accessibility` still reports what survived, so greying an item
+out instead of hiding it is still open to you.
+
+`kind` is how you tell a method from a property — there is no separate flag.
 
 **What the free-name list contains.** Everything the scope chain in force at the
 caret binds, from the innermost level outwards: the enclosing function's
@@ -585,14 +603,37 @@ a whole query of 125–360 ms.) If you want the type of the item your user has
 highlighted, ask `quickInfoAt` for that one item — the shape an LSP server's
 `completionItem/resolve` already has.
 
-**Keywords are not offered, deliberately.** A useful keyword list is
-context-sensitive: `interface` may start a statement and may not appear inside an
-expression, `await` belongs only inside an async function, `extends` only in a
-heritage clause. The anchor here is a *token-level* device — it knows what
-precedes the caret, not which grammar production it sits in — so an unconditional
-list would offer items that do not compile, which is the one thing the member
-half already refuses to do. Merge your own keyword list into ours if you want
-one; nothing about the result depends on ours being empty.
+**Keywords are offered** (`(API.7)`, and this is a change from round 918), with
+`kind = "Keyword"`. Round 918 refused them because a useful list is
+context-sensitive and the anchor knew what preceded the caret, not which grammar
+production it sat in. It knows now.
+
+| where the caret is | what you get |
+|---|---|
+| a statement may begin here | the statement and declaration starters **plus** the expression starters |
+| an expression position | the expression starters only — this is what keeps `interface` out of `f(\|)` |
+| a type position | `any bigint boolean keyof never null number object string symbol typeof undefined unknown void` |
+| a class or interface body, a heritage clause, an import clause | **nothing** |
+
+and each of these needs its context, or it is not offered: `await` an enclosing
+`async` function, `yield` a generator, `super` a class, `return` a function,
+`break` a loop or a `switch`, `continue` a loop, and `import` / `export` /
+`declare` / `namespace` / `interface` / `type` / `enum` a module or namespace
+body rather than a function body.
+
+**The list is short by choice, not by omission.** Continuation keywords —
+`else`, `case`, `extends`, `implements`, `as`, `satisfies`, `infer`, `readonly`,
+the accessibility modifiers — are offered nowhere, because their positions are
+ones this classifier declines to name. Merge your own list for those. What every
+item here does guarantee is that it *compiles where it is offered*, which is the
+property the member half already had. One more coarseness worth knowing: a caret
+whose word is already a complete keyword (`if|`) usually reports the *expression*
+position, because the parser has built the statement that keyword starts and the
+caret is inside it — that loses suggestions and never invents one.
+
+Keywords appear at free-name carets only; after a `.` no keyword may be written.
+A spelling the scope chain also binds (a variable named `type` is legal) comes
+back once, as the binding.
 
 **Two known imprecisions, stated rather than hidden.** A name declared *later* in
 the same block is offered (a block's bindings are a set, not a sequence — the
@@ -614,7 +655,8 @@ lack of incremental reuse (§ 3), not the completion machinery.
 ```kotlin
 val all: List<ReferenceLocation>  = project.referencesAt(path, offset)          // the program
 val here: List<ReferenceLocation> = project.documentHighlightsAt(path, offset)  // this file
-// ReferenceLocation(fileName: String, start: Int, end: Int, isDeclaration: Boolean)
+// ReferenceLocation(fileName: String, start: Int, end: Int,
+//                   isDeclaration: Boolean, use: ReferenceUse)
 ```
 
 **Identity is the declaration set, never the spelling.** Every identifier in every
@@ -640,6 +682,24 @@ None of the following is special-cased; all of it falls out of that rule:
 | an **inherited** or generically instantiated member | the base / uninstantiated declaration, so uses through both sides are one group |
 | an **overloaded** member | one group, both signatures flagged |
 
+**READ versus WRITE is reported** (`(API.7)`, and it was refused in round 919).
+`use` is one of `READ`, `WRITE`, `READ_WRITE` or `UNCLASSIFIED`, and it is a fact
+about the *occurrence*, so one symbol's hits routinely carry several values.
+
+- `WRITE` is the left of a simple `=` — including a member, `o.p = 1`, where only
+  the last segment is the write — a destructuring target in either bracket form at
+  any depth, with defaults, renaming, shorthand and rest, the head of a
+  `for (x of/in …)`, a parameter's own name, and a variable or binding-element
+  declaration's own name.
+- `READ_WRITE` is the compound assignments and `++` / `--`, prefix and postfix.
+- `UNCLASSIFIED` is an occurrence that is not a value use at all: a type-position
+  name, a declaration name that binds no storage (a function, class, interface,
+  type alias, enum, namespace, type parameter, import or export specifier, class
+  member name), an object-literal key being declared, a binding element's source
+  property name, a label. It exists so that what the classifier does *not* place
+  stays visible instead of being defaulted to a read — which is precisely what
+  round 919 refused to ship.
+
 **The declaration comes back, flagged.** `isDeclaration` marks the spans that *are*
 declarations rather than uses, the way tsc's `isDefinition` does — filter on it if
 you want uses only. It is exact: membership in the set the compiler produced, not a
@@ -647,12 +707,6 @@ guess about which parent kinds declare a name.
 
 ### What is refused, and why
 
-- **READ versus WRITE is not reported.** `x = 1` and `x++` are trivially writes;
-  `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose identifier sits
-  under an array literal, an object literal or a `for` head. A rule built from the
-  easy positions calls the destructuring ones READS, and you could not tell a
-  complete answer from an incomplete one. Deciding it properly is the same
-  grammar-position mechanism keyword completions are refused for (§ 10a).
 - **A caret on a MEMBER's own declaration name works only when that member is used
   somewhere.** `p` in `interface I { p: string }` is bound by no scope and has no
   receiver, which is exactly why § 9 answers no definition there. The reference
@@ -885,17 +939,24 @@ stale text and nothing worse.
 
 ## 13. What is coming, and what would change
 
-- **keyword completions** — see § 10a for why they are refused rather than
-  guessed. They need a grammar-position mechanism the token-level anchor does not
-  have; until one exists, merge your own list into ours.
-- **contextual object-literal keys** — `{ p: v }`'s own `p` still answers
-  nothing, in either query: the useful target is the contextual type's property
-  (§ 9), and a caret there is answered today as an ordinary free name.
+- **element access** (`o["p"]`) — still no definition and no completion inside the
+  string. `(API.7)` sharpened why: recognising the shape was never the hard part
+  (it is one test on the node's parent). What is missing is a capture channel for a
+  non-identifier node plus a member lookup *by text* on the receiver's type. The
+  receiver resolution itself is already here — it is what member go-to-definition
+  runs on.
+- **contextual object-literal keys** — `{ p: v }`'s own `p` still answers nothing,
+  in either query. The useful target is the *contextual* type's property (§ 9), and
+  a contextual type is walk-scoped state the capture does not read — in a ternary
+  branch it does not exist at all. That is a third resolution mechanism beside the
+  scope chain and the receiver, and no syntactic classification supplies it.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.
-- **read versus write on a reference** — § 10b says why a partial answer there is
-  refused, and it is the same grammar-position mechanism the keyword list needs.
+- **`this.` inside a nested arrow** answers no members at all, because the class
+  the capture reads `this` from is null there. Found while building `(API.7)`'s
+  accessibility pins; unrelated to accessibility, and a caret on `this.` directly
+  inside a method is unaffected.
 - **rename** — it is find-references plus an edit plan, and the edit plan is where
   the work is: a shorthand `{ p }` and an `import { p as q }` do not rewrite the way
   a plain occurrence does.

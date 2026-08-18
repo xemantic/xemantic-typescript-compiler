@@ -331,21 +331,32 @@ class ProjectFreeNameCompletionTest {
     }
 
     /**
-     * KEYWORDS ARE NOT OFFERED, and that is a stated refusal rather than an
-     * oversight: a useful keyword list is context-sensitive — `interface` may start
-     * a statement and may not appear inside an expression — and the anchor is a
-     * TOKEN-level device with no grammar position to key one on. Offering an
-     * unconditional list would offer items that do not compile, which is the one
-     * thing the member half already refuses to do.
+     * UPDATED BY (API.7), WHICH IS A BEHAVIOUR CHANGE TO AN EXISTING ANSWER. Round
+     * 918 asserted here that NO keyword is offered, and named the exact reason it
+     * could not offer one: a useful list is context-sensitive and the anchor was a
+     * token-level device with no grammar position to key it on. `SyntaxRoles` is that
+     * grammar position, so the assertion is inverted rather than deleted — and it is
+     * still the CONTEXT that is pinned, not the list.
+     *
+     * The `/*A*/` caret is a STATEMENT position inside a plain (non-async) function
+     * body, so: the always-legal statement starters are there, `return` is there
+     * because a function encloses it, and the module-level declaration starters and
+     * `await` are NOT — which is exactly round 918's argument, now enforced instead
+     * of avoided.
      */
     @Test
-    fun `keywords are NOT offered`() {
+    fun `keywords ARE offered since API7 and only the ones legal at the caret`() {
         val names = namesAt(projectWith(), "A")
+        assert("function" in names)
+        assert("const" in names)
+        assert("return" in names)
         assert("interface" !in names)
-        assert("function" !in names)
-        assert("const" !in names)
-        assert("return" !in names)
+        assert("import" !in names)
         assert("await" !in names)
+        // A keyword item is told from a scope binding by its kind, and by nothing else.
+        val items = completionsAt(projectWith(), "A").items.associateBy { it.name }
+        assert(items["const"]!!.kind == "Keyword")
+        assert(items["fileLevel"]!!.kind != "Keyword")
     }
 
     /**

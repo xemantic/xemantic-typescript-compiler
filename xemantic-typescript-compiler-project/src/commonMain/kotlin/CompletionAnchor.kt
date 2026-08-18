@@ -71,6 +71,12 @@ import com.xemantic.typescript.compiler.Node
  *   matches a capture on a node's raw `(pos, end)` identity, and because "which
  *   node is this caret in" is a question with real subtleties that this module
  *   answers once (see [SourceIndex]).
+ * @property keywords (API.7) the KEYWORDS legal at this caret, decided by
+ *   `SyntaxRoles.keywordsFor` from the caret's grammar position and gated on the
+ *   enclosing function's `async`/generator-ness, the enclosing class, the enclosing
+ *   loop and whether the statement list is a module body. Empty for every kind but
+ *   [CompletionKind.FREE_NAME]: after a `.` the candidates are a type's members and
+ *   no keyword may be written at all.
  */
 internal class CompletionAnchor(
     val kind: CompletionKind,
@@ -79,6 +85,7 @@ internal class CompletionAnchor(
     val replacementEnd: Int,
     val receiver: Node?,
     val scopeAnchor: Node? = null,
+    val keywords: List<String> = emptyList(),
 ) {
 
     companion object {

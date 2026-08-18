@@ -513,12 +513,25 @@ public class Project private constructor(
      *
      * ## What answers EMPTY, deliberately
      *
-     * An element access (`o["p"]`) — the argument is a literal, and only identifiers
-     * are offered a definition. An object-literal property name (`{ p: v }`) — the
-     * answer would be a contextual type's property, which is a third mechanism. A
-     * member's own DECLARATION name — it already is the declaration. A chained
+     * A member's own DECLARATION name — it already is the declaration. A chained
      * namespace segment (`A.B.x`). Labels, keywords, literals and any offset outside
      * every node: they name nothing, through either mechanism.
+     *
+     * Two more, and (API.7) SHARPENED THE REASON FOR BOTH — they were ranked with the
+     * keyword and read/write refusals as wanting one missing "grammar position"
+     * mechanism, and they do not. Recognising either shape is ONE test on the node's
+     * own parent, which needed no classifier and never did; what each lacks is
+     * SEMANTIC.
+     *
+     * - **an element access** (`o["p"]`) — the member is named by a string literal, so
+     *   answering it needs the capture to accept a non-identifier node and to look a
+     *   member up BY TEXT on the receiver's type. The receiver resolution is (API.3d)'s
+     *   and is already here; the missing part is the channel, not the position.
+     * - **an object-literal key being declared** (`{ p: v }`) — the useful target is
+     *   the CONTEXTUAL type's property, and a contextual type is walk-scoped state this
+     *   capture does not read (it is also absent outright in positions such as a
+     *   ternary branch). That is a third resolution mechanism beside the scope chain
+     *   and the receiver, and no syntactic classification supplies it.
      */
     public fun definitionsAt(fileName: String, offset: Int): List<DefinitionLocation> {
         val index = sourceIndexOf(fileName) ?: return emptyList()
@@ -557,16 +570,6 @@ public class Project private constructor(
      *
      * ## What is deliberately NOT answered, each with its reason
      *
-     * **KEYWORDS.** A useful keyword list is context-sensitive — `interface` may be
-     * written where a statement may start and not inside an expression, `await` only
-     * inside an async function, `extends` only in a heritage clause — and the anchor
-     * is a TOKEN-level device that knows what precedes the caret and not what
-     * grammar production it sits in. An unconditional list would offer items that do
-     * not compile, which is the one thing the member half already refuses to do (a
-     * union receiver offers only members present on every constituent for exactly
-     * that reason). So keywords are a host's own concern until there is a
-     * grammar-position mechanism to key them on, and this offers none.
-     *
      * **A TYPE per free-name item** — see [CompletionItem].
      *
      * **FILTERING by the typed prefix**, at either kind. The prefix is reported and
@@ -595,14 +598,48 @@ public class Project private constructor(
      * turn into a member access answers an empty list rather than guessing a
      * receiver from raw text.
      *
-     * ## What this offers that tsc would not, deliberately
+     * ## ACCESSIBILITY IS ENFORCED since (API.7), and this changed an answer
      *
-     * PRIVATE and PROTECTED members are OFFERED, with
-     * [CompletionItem.accessibility] saying which they are. Filtering them correctly
-     * depends on where the caret is relative to the declaring class — inside the
-     * class, inside a subclass, or outside — and that is a second mechanism this
-     * round did not build; reporting the fact lets a host apply its own rule, where
-     * hiding them on a half-implemented test would silently lose real candidates.
+     * A `private` member (including a `#name` field) is offered only inside its
+     * declaring class, and a `protected` one only inside that class or a class that
+     * derives from it — statics included, and a caret in a nested arrow inside a
+     * method counts as inside the method's class. Round 917 REPORTED accessibility and
+     * refused to act on it, for a stated reason: filtering needs to know where the
+     * caret sits relative to the declaring class. `SyntaxRoles`' sibling ascent inside
+     * the checker is that mechanism.
+     *
+     * The filter is biased and the bias is the whole safety argument: IT HIDES ONLY
+     * WHAT IT CAN PROVE INACCESSIBLE. A member whose declaring class cannot be found,
+     * a base class named by an expression the checker does not resolve, a heritage
+     * chain past its depth cap — every unknown leaves the item OFFERED, because a list
+     * that has silently lost a real candidate is indistinguishable from a complete
+     * one. [CompletionItem.accessibility] still reports what survives, so a host that
+     * wants to grey an item rather than hide it has what it needs.
+     *
+     * ## KEYWORDS ARE OFFERED since (API.7), and only where they compile
+     *
+     * Round 918 refused them and named the reason: a useful list is context-sensitive
+     * and the anchor was a token-level device with no grammar position to key one on.
+     * `SyntaxRoles.keywordsFor` is that grammar position. A STATEMENT caret gets the
+     * statement and declaration starters plus the expression starters; an EXPRESSION
+     * caret gets the expression starters ONLY, which is what keeps `interface` out of
+     * `f(|)`; a TYPE caret gets the primitive type names plus `keyof` and `typeof`; a
+     * class body, a heritage clause and an import clause get NOTHING. `await` needs an
+     * enclosing async function, `yield` a generator, `super` a class, `return` a
+     * function, `break` a loop or a `switch`, `continue` a loop, and `import` /
+     * `export` / `declare` / `namespace` / `interface` / `type` / `enum` a module or
+     * namespace body.
+     *
+     * The list is deliberately SHORT rather than complete: continuation keywords
+     * (`else`, `case`, `extends`, `implements`, `as`, `satisfies`, `infer`, `readonly`,
+     * the accessibility modifiers) are not offered anywhere, because their positions
+     * are ones this classifier declines to name. Merge your own list for those; every
+     * item in THIS one compiles where it is offered, which is the property the member
+     * half already had. A keyword item's [CompletionItem.kind] is `"Keyword"`, and a
+     * spelling the scope chain also binds is reported as the BINDING, once.
+     *
+     * Keywords are offered at FREE-NAME carets only; after a `.` no keyword may be
+     * written at all.
      *
      * ## Cost
      *
@@ -625,6 +662,18 @@ public class Project private constructor(
         val anchor = index.completionAnchorAt(offset)
         val key = keyOf(fileName)
         if (anchor.kind == CompletionKind.FREE_NAME) {
+            // (API.7) The keywords are a purely syntactic answer and cost no build, so
+            // they are merged in whether or not the scope enumeration produces one.
+            val keywords = anchor.keywords.map {
+                CompletionItem(
+                    name = it,
+                    kind = "Keyword",
+                    typeText = "",
+                    optional = false,
+                    readonly = false,
+                    accessibility = "public",
+                )
+            }
             // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
             val node = anchor.scopeAnchor
                 ?: return CompletionList(
@@ -632,7 +681,7 @@ public class Project private constructor(
                     anchor.prefix,
                     anchor.replacementStart,
                     anchor.replacementEnd,
-                    emptyList(),
+                    keywords.sortedBy { it.name },
                     null,
                 )
             val span = TypeCaptureSpan(key, node.pos, node.end)
@@ -652,17 +701,20 @@ public class Project private constructor(
                 anchor.prefix,
                 anchor.replacementStart,
                 anchor.replacementEnd,
-                captured?.names.orEmpty().map {
-                    CompletionItem(
-                        name = it.name,
-                        kind = it.kind,
-                        // Empty by decision, not by omission — see [CompletionItem].
-                        typeText = "",
-                        optional = false,
-                        readonly = false,
-                        accessibility = "public",
-                    )
-                },
+                mergeKeywords(
+                    captured?.names.orEmpty().map {
+                        CompletionItem(
+                            name = it.name,
+                            kind = it.kind,
+                            // Empty by decision, not by omission — see [CompletionItem].
+                            typeText = "",
+                            optional = false,
+                            readonly = false,
+                            accessibility = "public",
+                        )
+                    },
+                    keywords,
+                ),
                 null,
             )
         }
@@ -712,6 +764,26 @@ public class Project private constructor(
             },
             null,
         )
+    }
+
+    /**
+     * (API.7) The scope's names and the position's keywords as ONE sorted list.
+     *
+     * A keyword whose spelling the scope chain also binds — a variable literally named
+     * `type`, which is legal — is kept as the BINDING and the keyword is dropped: the
+     * scope's answer is the one a host can navigate to, and offering the spelling twice
+     * would render two identical rows.
+     */
+    private fun mergeKeywords(
+        names: List<CompletionItem>,
+        keywords: List<CompletionItem>,
+    ): List<CompletionItem> {
+        val bound = names.mapTo(HashSet(names.size)) { it.name }
+        val merged = ArrayList<CompletionItem>(names.size + keywords.size)
+        merged.addAll(names)
+        for (keyword in keywords) if (keyword.name !in bound) merged.add(keyword)
+        merged.sortBy { it.name }
+        return merged
     }
 
     /**
@@ -942,17 +1014,20 @@ public class Project private constructor(
      * the declaration set the compiler produced, not a guess about which parent kinds
      * declare a name.
      *
-     * ## What is refused, and why each is a refusal rather than a gap
+     * ## READ versus WRITE — refused by round 919, ANSWERED since (API.7)
      *
-     * **READ versus WRITE is not reported.** An editor colours the two differently
-     * and this deliberately offers no field for it. The reason is that a partial
-     * answer is worse than none here: `x = 1` and `x++` are trivially writes, and
-     * `[x] = pair`, `({ x } = o)` and `for (x of xs)` are writes whose identifier sits
-     * under an array literal, an object literal or a `for` head — so a rule built from
-     * the easy positions reports the destructuring ones as READS, and a host cannot
-     * tell a complete answer from an incomplete one. Deciding it properly is a
-     * grammar-position question, which is the same mechanism keyword completions are
-     * refused for (§ [completionsAt]).
+     * [ReferenceLocation.use] reports it. Round 919's refusal named the exact reason
+     * it could not: `x = 1` and `x++` are trivially writes while `[x] = pair`,
+     * `({ x } = o)` and `for (x of xs)` are writes whose identifier sits under an
+     * array literal, an object literal or a `for` head, so a rule built from the easy
+     * positions calls the destructuring ones READS. `SyntaxRoles` is the mechanism
+     * that was missing — a pull-based ascent of the parent chain in which a
+     * destructuring pattern of any depth is a run of pass-through steps ending at ONE
+     * assignment test — and [ReferenceUse] states the whole write set. An occurrence
+     * the classifier does not place is [ReferenceUse.UNCLASSIFIED] rather than a read,
+     * so the gap the refusal was protecting stays visible.
+     *
+     * ## What is refused, and why each is a refusal rather than a gap
      *
      * **A caret on a MEMBER's own declaration name is answered only when that member
      * is referenced somewhere.** `p` in `interface I { p: string }` is bound by no
@@ -1020,8 +1095,8 @@ public class Project private constructor(
      * and there is no [files] build in front of it because no file list is needed.
      *
      * Everything else is [referencesAt]'s and unchanged: the same declaration-set
-     * identity, the same [ReferenceLocation.isDeclaration] flag, the same refusal of
-     * a read/write distinction, the same ordering.
+     * identity, the same [ReferenceLocation.isDeclaration] flag, the same
+     * [ReferenceLocation.use] classification, the same ordering.
      *
      * ## The one behaviour that is NOT just a filter
      *
@@ -1063,14 +1138,22 @@ public class Project private constructor(
         // RAW `(pos, end)` identity and a caller must be told the real extent, so the
         // translation is recorded here rather than re-derived per answer.
         val realEnds = HashMap<String, HashMap<Int, Int>>(sweptFiles.size)
+        // (API.7) And each one's syntactic ROLE, by the same key. Classified here,
+        // from the parse this module already owns, because read-versus-write is a
+        // question about the OCCURRENCE and not about the symbol — the compiler's
+        // answer is the same for every hit in the group.
+        val uses = HashMap<String, HashMap<Int, ReferenceUse>>(sweptFiles.size)
         for (file in sweptFiles) {
             val index = sourceIndexOf(file) ?: continue
             val ends = HashMap<Int, Int>()
+            val roles = HashMap<Int, ReferenceUse>()
             for (id in index.identifiers()) {
                 spans.add(TypeCaptureSpan(file, id.pos, id.end))
                 ends[id.pos] = index.realEndOf(id)
+                roles[id.pos] = SyntaxRoles.referenceUse(id)
             }
             realEnds[file] = ends
+            uses[file] = roles
         }
         if (spans.isEmpty()) return emptyList()
         val definitions = ProjectCompiler(overlay)
@@ -1089,6 +1172,8 @@ public class Project private constructor(
                 isDeclaration = seed.any {
                     it.fileName == definition.fileName && it.start == definition.start
                 },
+                use = uses[definition.fileName]?.get(definition.start)
+                    ?: ReferenceUse.UNCLASSIFIED,
             )
         }
         // The declarations themselves. Most are already above — a free name's
@@ -1103,6 +1188,11 @@ public class Project private constructor(
                     start = location.start,
                     end = location.start + location.length,
                     isDeclaration = true,
+                    // A declaration in a file the sweep never covered — a `lib.*.d.ts`
+                    // — has no node here to classify, and an unplaced occurrence is
+                    // reported as unplaced rather than defaulted to a read.
+                    use = uses[location.fileName]?.get(location.start)
+                        ?: ReferenceUse.UNCLASSIFIED,
                 )
             }
         }

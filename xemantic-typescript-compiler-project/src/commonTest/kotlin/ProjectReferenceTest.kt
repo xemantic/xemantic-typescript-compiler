@@ -98,6 +98,9 @@ class ProjectReferenceTest {
         export const readShared = united.shared;
         export let counter: number = 0;
         export function bump(): void { counter = counter + 1; }
+        export function bumpMore(): void { counter += 1; counter++; }
+        declare const pair: number[];
+        export function destructure(): void { [counter] = pair; }
     """.trimIndent() + "\n"
 
     private val other = """
@@ -470,5 +473,61 @@ class ProjectReferenceTest {
             val text = if (reference.fileName == mainFile) main else other
             assert(text.substring(reference.start, reference.end) == "imported")
         }
+    }
+    /**
+     * (API.7) READ versus WRITE, end to end — round 919's refusal, cashed.
+     *
+     * ONE symbol, five occurrences, FOUR different answers, and the point is that the
+     * classification is per OCCURRENCE: every hit here carries the same declaration
+     * set, so an implementation that asked the compiler (which answers about the
+     * SYMBOL) could only ever return one value for all five.
+     *
+     * The destructuring row is the discriminator round 919 named. A rule built from
+     * `counter = …` and `counter++` reports `[counter] = pair` as a READ, and this is
+     * the assertion that fails it.
+     */
+    @Test
+    fun `read versus write is reported per occurrence`() {
+        val project = projectWith()
+        val byStart = project.referencesAt(mainFile, offsetOf("counter"))
+            .associateBy { it.start }
+        // The declaration itself — a `let` binding receiving its first value.
+        assert(byStart[offsetOf("counter")]!!.use == ReferenceUse.WRITE)
+        assert(byStart[offsetOf("counter")]!!.isDeclaration)
+        // `counter = counter + 1`: a write and, three characters later, a read.
+        assert(byStart[offsetOf("counter", 1)]!!.use == ReferenceUse.WRITE)
+        assert(byStart[offsetOf("counter", 2)]!!.use == ReferenceUse.READ)
+        // `counter += 1` and `counter++` read the old value before storing.
+        assert(byStart[offsetOf("counter", 3)]!!.use == ReferenceUse.READ_WRITE)
+        assert(byStart[offsetOf("counter", 4)]!!.use == ReferenceUse.READ_WRITE)
+        // THE DISCRIMINATOR: `[counter] = pair`.
+        assert(byStart[offsetOf("counter", 5)]!!.use == ReferenceUse.WRITE)
+    }
+
+    /**
+     * A name that is not a value use at all is reported as UNCLASSIFIED rather than as
+     * a read — the state that keeps the gap round 919 refused to hide VISIBLE.
+     */
+    @Test
+    fun `a type name is UNCLASSIFIED and its use through a value is not`() {
+        val project = projectWith()
+        val uses = project.referencesAt(mainFile, offsetOf("Shape", 1))
+            .filter { it.fileName == mainFile }
+            .map { it.use }
+        assert(uses.isNotEmpty())
+        assert(uses.all { it == ReferenceUse.UNCLASSIFIED })
+    }
+
+    /**
+     * `documentHighlightsAt` reports it too — the two members share one code path and
+     * a divergence there would be a silent one.
+     */
+    @Test
+    fun `document highlights carry the same classification`() {
+        val project = projectWith()
+        val byStart = project.documentHighlightsAt(mainFile, offsetOf("counter"))
+            .associateBy { it.start }
+        assert(byStart[offsetOf("counter", 1)]!!.use == ReferenceUse.WRITE)
+        assert(byStart[offsetOf("counter", 2)]!!.use == ReferenceUse.READ)
     }
 }

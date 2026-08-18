@@ -26,6 +26,52 @@
 package com.xemantic.typescript.compiler.project
 
 /**
+ * (API.7) How an occurrence USES what it names — read, written, or neither.
+ *
+ * Round 919 refused this distinction outright, and the refusal was right at the time:
+ * `x = 1` and `x++` are trivially writes while `[x] = pair`, `({ x } = o)` and
+ * `for (x of xs)` are writes whose identifier sits under an array literal, an object
+ * literal and a `for` head — so a rule built from the easy positions reports the
+ * destructuring ones as READS, and a host cannot tell a complete answer from an
+ * incomplete one. What makes the answer expressible now is `SyntaxRoles`, a
+ * pull-based ascent of the parent chain in which a destructuring pattern of any depth
+ * is a run of pass-through steps ending at one assignment test.
+ *
+ * [UNCLASSIFIED] exists so that the gap round 919 refused to hide stays visible: an
+ * occurrence this classifier does not place is reported as unplaced, never defaulted
+ * to [READ].
+ */
+public enum class ReferenceUse {
+
+    /** The occurrence reads the value. The ordinary case, and the default of nothing. */
+    READ,
+
+    /**
+     * The occurrence stores a value and does not read one first: the left of a simple
+     * `=` (including a member, `o.p = 1`), a destructuring target in either bracket
+     * form at any depth — with defaults, renaming, shorthand and rest — the head of a
+     * `for (x of/in …)`, a parameter's own name, and a variable or binding-element
+     * declaration's own name.
+     */
+    WRITE,
+
+    /**
+     * The occurrence reads the old value and stores a new one: a compound assignment
+     * (`+=` and the rest) and the update operators `++` / `--`, prefix and postfix.
+     */
+    READ_WRITE,
+
+    /**
+     * The occurrence is not a value use at all, so neither answer would be true: a
+     * TYPE-position name, a declaration name that binds no storage (a function, class,
+     * interface, type alias, enum, namespace, type parameter, import or export
+     * specifier, or class-member name), an object-literal key being declared, a
+     * binding element's source property name, and a label.
+     */
+    UNCLASSIFIED,
+}
+
+/**
  * (API.5) One place that refers to the same thing as the caret — a find-references
  * or document-highlight hit.
  *
@@ -61,12 +107,15 @@ package com.xemantic.typescript.compiler.project
  *   set comes out of the compiler's own resolution, not out of a guess about which
  *   parent kinds declare a name.
  *
- *   NOT reported, deliberately: whether a use is a READ or a WRITE. See
- *   [Project.referencesAt] for why a partial answer there is worse than none.
+ * @property use (API.7) whether the occurrence READS or WRITES what it names, or is
+ *   not a value use at all. Round 919 refused this and round 921's mechanism cashed
+ *   it; [ReferenceUse] states the complete write set and names what stays
+ *   unclassified rather than defaulting it to a read.
  */
 public data class ReferenceLocation(
     val fileName: String,
     val start: Int,
     val end: Int,
     val isDeclaration: Boolean,
+    val use: ReferenceUse,
 )

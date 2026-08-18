@@ -5322,13 +5322,21 @@ class Checker(
         currentCheckFileName = fileName
         try {
             val collected = typeCaptureCompletionMembers(node)
+            // (API.7) The class governing `private`/`protected` access AT THE CARET.
+            // A pointer walk out of the receiver, so a caret in a nested arrow inside a
+            // method reaches the method's class exactly as a caret in the method body
+            // does, and a caret in a class nested inside another reaches the INNER one
+            // — which is the rule, `private` being per-class rather than per-nesting.
+            val enclosingClass = typeCaptureEnclosingClass(node)
             val members = ArrayList<CapturedMember>(collected.size)
             for ((name, symbols) in collected) {
                 // An empty name is a member table's own placeholder and `__`-prefixed
                 // names are the compiler's internal entries; neither is writable
                 // after a dot, so neither is a completion.
                 if (name.isEmpty() || name.startsWith("__")) continue
-                members.add(typeCaptureMemberItem(name, symbols))
+                val item = typeCaptureMemberItem(name, symbols)
+                if (typeCaptureMemberInaccessible(item, symbols, enclosingClass)) continue
+                members.add(item)
             }
             members.sortBy { it.name }
             typeCaptureMemberResults[span] =
@@ -6014,6 +6022,131 @@ class Checker(
                 else -> "public"
             },
         )
+    }
+
+    /**
+     * (API.7) True when [item] is PROVABLY inaccessible from a caret governed by
+     * [enclosingClass] — the accessibility filter round 917 refused to build.
+     *
+     * ## Prove-to-hide, never guess-to-hide
+     *
+     * Every unknown answers ACCESSIBLE. A member whose declaring class cannot be
+     * found, a base class named by an expression this does not resolve, a heritage
+     * chain that runs past its depth cap — each leaves the item in the list, because a
+     * completion list that has silently lost a real candidate is indistinguishable
+     * from a complete one, which is exactly why round 917 reported accessibility
+     * instead of acting on it. Hiding happens only where the rule is decided.
+     *
+     * ## The rule
+     *
+     * `private` (including a `#name` field, which carries no modifier and is private
+     * by its spelling) is visible only INSIDE its declaring class. `protected` is
+     * visible inside the declaring class and inside any class that derives from it.
+     * Both hold for `static` members unchanged, because the governing class of the
+     * caret and the declaring class of the member are the same two questions either
+     * way.
+     */
+    private fun typeCaptureMemberInaccessible(
+        item: CapturedMember,
+        symbols: List<Symbol>,
+        enclosingClass: Node?,
+    ): Boolean {
+        if (item.accessibility == "public") return false
+        // A member reached through a UNION receiver is declared once per constituent;
+        // it is offered when ANY contributing declaration is reachable, which is the
+        // permissive direction this filter is deliberately biased in.
+        for (symbol in symbols) {
+            val declaring = typeCaptureDeclaringClass(symbol) ?: return false
+            if (enclosingClass === declaring) return false
+            if (item.accessibility == "private") continue
+            if (enclosingClass == null) continue
+            when (typeCaptureDerivesFrom(enclosingClass, declaring, 0)) {
+                true -> return false
+                // Unknown: a base this could not resolve. Cannot prove, so does not hide.
+                null -> return false
+                false -> Unit
+            }
+        }
+        return true
+    }
+
+    /**
+     * (API.7) The class [symbol]'s declaration belongs to, or null.
+     *
+     * An ascent rather than a direct `parent` read, because a constructor PARAMETER
+     * PROPERTY (`constructor(private x: number)`) declares a member from two levels
+     * down.
+     */
+    private fun typeCaptureDeclaringClass(symbol: Symbol): Node? {
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
+        return typeCaptureEnclosingClass(declaration)
+    }
+
+    /**
+     * (API.7) The innermost class declaration or expression enclosing [node], or null.
+     *
+     * INV.2(a) stamps `parent` at the end of every parse, so this is a pointer walk;
+     * the cap is against a corrupt chain and nothing else.
+     */
+    private fun typeCaptureEnclosingClass(node: Node): Node? {
+        var current: Node? = node
+        var steps = 0
+        while (current != null && steps++ < TYPE_CAPTURE_ENCLOSING_MAX_DEPTH) {
+            if (current is ClassDeclaration || current is ClassExpression) return current
+            current = (current as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * (API.7) Whether [cls] derives from [target]: true, false, or NULL for "a base
+     * could not be resolved, so this cannot say".
+     *
+     * The third state is the whole point — see [typeCaptureMemberInaccessible].
+     */
+    private fun typeCaptureDerivesFrom(cls: Node, target: Node, depth: Int): Boolean? {
+        if (cls === target) return true
+        if (depth > TYPE_CAPTURE_HERITAGE_MAX_DEPTH) return null
+        val heritage = when (cls) {
+            is ClassDeclaration -> cls.heritageClauses
+            is ClassExpression -> cls.heritageClauses
+            else -> null
+        } ?: return false
+        var unknown = false
+        for (clause in heritage) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) continue
+            for (type in clause.types) {
+                val base = typeCaptureResolveClassDeclaration(type.expression)
+                if (base == null) {
+                    unknown = true
+                    continue
+                }
+                when (typeCaptureDerivesFrom(base, target, depth + 1)) {
+                    true -> return true
+                    null -> unknown = true
+                    false -> Unit
+                }
+            }
+        }
+        return if (unknown) null else false
+    }
+
+    /**
+     * (API.7) The class [expression] names, through the spine's own scope chain and
+     * the import hop [typeCaptureExportedMember] uses, or null when it names none.
+     *
+     * A BARE identifier only: a qualified base (`extends ns.Base`) would need its
+     * middle segment resolved the same way, and answering null there is the
+     * conservative direction — an unresolved base makes the whole verdict UNKNOWN,
+     * which leaves the member offered.
+     */
+    private fun typeCaptureResolveClassDeclaration(expression: Node): Node? {
+        val root = expression as? Identifier ?: return null
+        val resolved =
+            spineScopeLookup(root.text) ?: lookupPerFileForNode(root, root.text) ?: return null
+        return typeCaptureFollowImportAlias(resolved)
+            .declarations
+            .firstOrNull { it is ClassDeclaration || it is ClassExpression }
     }
 
     /**
@@ -53044,6 +53177,12 @@ class Checker(
          *  this is a fail-safe, not a policy. A primitive `const`, so it costs the
          *  class's static initializer nothing (round 820). */
         private const val TYPE_CAPTURE_MEMBER_MAX_DEPTH = 8
+
+        /** (API.7) Cap on the parent walk out of a node to its enclosing class. */
+        private const val TYPE_CAPTURE_ENCLOSING_MAX_DEPTH = 512
+
+        /** (API.7) Cap on the `extends` chain the accessibility filter follows. */
+        private const val TYPE_CAPTURE_HERITAGE_MAX_DEPTH = 12
 
         /** (ENGINE.2b) round 788: node budget for [cpaArgsMayConsumeContext]'s bounded
          *  pre-gate scan. Exhausting it answers TRUE (compute as before), so the budget

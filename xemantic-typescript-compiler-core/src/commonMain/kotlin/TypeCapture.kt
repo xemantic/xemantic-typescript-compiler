@@ -180,11 +180,10 @@ data class CapturedDefinition(
  *   union may be absent through the union.
  * @property readonly true when ANY contributing declaration carries `readonly`.
  * @property accessibility `"public"`, `"protected"` or `"private"`, read from the
- *   declaration's modifiers. It is REPORTED AND NOT ACTED ON: whether an
- *   inaccessible member should be offered depends on where the caret is relative to
- *   the declaring class, which is a second mechanism (see
- *   [TypeCaptureRequest.memberSpans]). A host that wants tsc's filtering applies it
- *   here; one that wants to grey the item out has what it needs either way.
+ *   declaration's modifiers. (API.7) An inaccessible member is no longer RECORDED at
+ *   all — see [TypeCaptureRequest.memberSpans] for the rule and its prove-to-hide
+ *   bias — so this describes what survived the filter, which is what a caller greying
+ *   an item rather than hiding it needs.
  */
 data class CapturedMember(
     val name: String,
@@ -464,10 +463,25 @@ data class TypeCaptureRequest(
      * a veto would make every `strictNullChecks` union and every optional chain
      * answer nothing.
      *
-     * NOT answered: accessibility filtering (reported per member instead, see
-     * [CapturedMember.accessibility]), the static side of a class reached through an
-     * instance (only the instance member table is read), and index signatures and
-     * call/construct signatures, which have no name to complete.
+     * (API.7) ACCESSIBILITY IS FILTERED. A `private` member (including a `#name`
+     * field, which is private by its spelling and carries no modifier) is recorded
+     * only when the SPAN'S OWN enclosing class — a `parent` ascent out of the receiver
+     * node, so a caret in a nested arrow inside a method reaches that method's class —
+     * is the class declaring it; a `protected` one also when the enclosing class
+     * derives from the declaring one, following `extends` through the same scope
+     * lookup and import hop the definition legs use. Statics obey the same rule
+     * unchanged.
+     *
+     * THE BIAS IS PROVE-TO-HIDE, and it is the reason this could be turned on at all.
+     * Every unknown — a member whose declaring class cannot be found, a base named by
+     * an expression not resolved here, a heritage chain past its depth cap — leaves
+     * the member RECORDED. Round 917 refused this feature on the ground that a list
+     * which has silently lost a real candidate is indistinguishable from a complete
+     * one; hiding only what is decided is what keeps that true.
+     *
+     * NOT answered: the static side of a class reached through an instance (only the
+     * instance member table is read), and index signatures and call/construct
+     * signatures, which have no name to complete.
      */
     val memberSpans: List<TypeCaptureSpan> = emptyList(),
     /**

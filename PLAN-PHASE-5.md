@@ -20,6 +20,141 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 922 (2026-08-18) — (API.7): THE SYNTACTIC-ROLE MECHANISM, AND **THREE OF THE FIVE REFUSALS
+CASHED**. THE ROUND'S PRODUCT IS THE CORRECTION TO ITS OWN RANKING: THE BACKLOG WAS PROMOTED AS ONE
+ITEM BECAUSE "ALL FIVE WANT THE SAME MISSING MECHANISM", AND **ONLY THREE DO** — THE OTHER TWO WERE
+NEVER BLOCKED ON A GRAMMAR POSITION AT ALL, AND SAYING SO IS WORTH MORE THAN LANDING THEM BADLY.**
+
+- **THE MECHANISM: `SyntaxRoles`, a PULL-BASED ASCENT of the parent chain** (`-project`,
+  `SyntaxRoles.kt`). INV.2(a) stamps `parent` on every node, so a role is a pointer walk needing no
+  side table and no second traversal — the INV.4 reach classifiers' shape, and round 875's
+  measurement is why it is pull and not push (a maintained status is **11.1x** more work, because it
+  computes every classifier at every node while a pull folds only the ancestors of the nodes actually
+  asked about). Two questions, one traversal: `referenceUse(node)` answers about a NODE and
+  `grammarPositionOf(path)` about a CARET, the second expressed on the first — an identifier is in an
+  EXPRESSION position exactly when it is a value occurrence. **Every `===` in the file is deliberate**:
+  AST nodes are `data class`es, so a `current in parent.elements` would be round 471's deep structural
+  compare of two arbitrary expressions where identity was meant.
+
+- **IT DOES NOT ALL LIVE IN ONE MODULE, AND THAT WAS THE RIGHT CALL.** The accessibility filter's
+  caret-side question is the same ascent, but its other half — the member's DECLARING class and
+  whether the caret's class derives from it — needs symbols and heritage resolution, neither of which
+  crosses the module boundary. So it is a sibling ascent in `Checker.kt`
+  (`typeCaptureEnclosingClass` / `typeCaptureDerivesFrom` / `typeCaptureResolveClassDeclaration`),
+  which is what the brief meant by deciding the home PER QUESTION.
+
+- **CASHED (1): MEMBER-COMPLETION ACCESSIBILITY — round 917's refusal.** `private` (including a
+  `#name` field) is offered only inside its declaring class, `protected` only there or in a class
+  deriving from it, statics by the same rule; the ascent goes out of a nested arrow, through its
+  method, to the class, and the heritage walk follows `extends` through the same scope lookup and
+  IMPORT HOP the definition legs use. **THE BIAS IS PROVE-TO-HIDE and it is the whole safety
+  argument**: an unresolvable base, a missing declaring class or a chain past its depth cap leaves the
+  member OFFERED, because round 917's stated objection — a list that has silently lost a real
+  candidate is indistinguishable from a complete one — is only answered by hiding what is decided.
+  `accessibility` is still reported on what survives.
+
+- **CASHED (2): KEYWORD COMPLETIONS — round 918's refusal**, and BOUNDED EXPLICITLY. A STATEMENT
+  caret gets the statement and declaration starters plus the expression starters; an EXPRESSION caret
+  gets the expression starters ONLY (this is what keeps `interface` out of `f(|)`); a TYPE caret gets
+  the fourteen primitive type names plus `keyof` and `typeof`; a class body, a heritage clause and an
+  import clause get NOTHING. Context-gated: `await` on an enclosing async function, `yield` on a
+  generator, `super` on a class, `return` on a function, `break` on a loop or `switch`, `continue` on
+  a loop (the scan stopping at the first function-like, since a loop does not reach into a nested
+  function), and `import`/`export`/`declare`/`namespace`/`interface`/`type`/`enum` on a module or
+  namespace body. **NOT offered anywhere, stated rather than hidden**: every CONTINUATION keyword
+  (`else`, `case`, `extends`, `implements`, `as`, `satisfies`, `infer`, `readonly`, the accessibility
+  modifiers) — their positions are ones the classifier declines to name. The list is short by choice;
+  what it guarantees is that every item COMPILES WHERE IT IS OFFERED, which is the property the member
+  half already had. One coarseness recorded: a caret whose word is already a complete keyword (`if|`)
+  usually reads as the EXPRESSION position, because the parser has built the statement that keyword
+  starts — it loses suggestions and never invents one.
+
+- **CASHED (3): READ-vs-WRITE — round 919's refusal**, `ReferenceLocation.use`. The write set is
+  stated completely (simple `=` including a member's last segment, destructuring in either bracket
+  form at any depth with defaults / renaming / shorthand / rest, a `for (x of/in …)` head, a
+  parameter's and a variable/binding-element declaration's own name); `READ_WRITE` is the compound
+  assignments and `++`/`--`; and **`UNCLASSIFIED` is a fourth state, not a default** — a
+  type-position name, a declaration name that binds no storage, an object-literal key, a binding
+  element's source property name, a label. That state is what keeps round 919's objection answered: an
+  occurrence the classifier does not place is reported as unplaced. **The ascent is why the
+  destructuring cases are free**: an array literal inside an object literal inside an array literal is
+  three pass-through steps and then ONE assignment test, with no per-shape rule.
+
+- **REFUSED, AND THE REASON IS NOW SHARPER THAN THE RANKING'S — THIS IS THE ROUND'S FINDING.** The
+  backlog was promoted as ONE item on the premise that all five wanted "where is this caret in the
+  grammar". **Element access (`o["p"]`) and contextual object-literal keys (`{ p: v }`) never did.**
+  Recognising either shape is ONE test on the node's own parent — no ascent, no classifier, and
+  `SyntaxRoles` supplies nothing either of them was waiting for. What each actually lacks is SEMANTIC:
+  the element access needs the capture to accept a NON-IDENTIFIER node and to look a member up BY TEXT
+  on the receiver's type (the receiver resolution itself is (API.3d)'s and is already here — the
+  missing part is the CHANNEL); the object-literal key needs the CONTEXTUAL type, walk-scoped state
+  this capture does not read and which is absent outright in positions such as a ternary branch, i.e.
+  a third resolution mechanism beside the scope chain and the receiver. **So the correct successor
+  ranking splits them**: element access is small and mechanical, contextual keys are a mechanism.
+
+- **TWO EXISTING ANSWERS CHANGED, loudly.** `completionsAt` at a MEMBER caret no longer returns
+  inaccessible members, and at a FREE_NAME caret now returns keyword items (`kind = "Keyword"`) mixed
+  into the list. `ReferenceLocation` gained a `use` property. Round 917's and round 918's pins
+  asserting the old refusals were **UPDATED IN PLACE with an in-file comment naming the round that
+  inverted them**, never deleted.
+
+- **A PROCESS TRAP FOUND BY RUNNING THE PROTOCOL, now in CLAUDE.md: round 855's "dry-run each arm for
+  a real diff" is VACUOUS on a tree carrying the round's own uncommitted work.** `git diff
+  --shortstat` printed `2 files changed, 146 insertions(+), 1 deletion(-)` for arm a1 AND for a2 —
+  the round's whole diff, identically, for every arm — so it can no longer tell a landed edit from an
+  unlanded one. What actually carried the run is the `patch` helper's ANCHOR-COUNT assertion (exactly
+  one occurrence, or exit 3); the script now compares against the ablation's OWN SNAPSHOT, which is
+  the only baseline that is a property of the arm. Round 789's "commit the harness first" is the other
+  fix and remains the better one.
+
+- **FOUND IN PASSING, unrelated to accessibility and recorded rather than fixed: a caret on `this.`
+  inside a NESTED ARROW answers NO members at all** (`currentClassForThis` is null there), where the
+  same caret directly inside a method answers correctly. It cost one pin, which was rewritten onto a
+  named receiver — a better discriminator anyway, since it exercises the new ascent rather than the
+  `this` leg. Queued below as (BUG.3).
+
+- **PINS +45** (`-project` 298 -> 343; core UNCHANGED at 14,341 — nothing was added there that a core
+  test can reach without the `-project` anchor). 32 of them are PARSE-ONLY (`SyntaxRoleTest`: no
+  checker, no build, ~5 s to run), which is what makes the mechanism cheap to re-verify.
+  **THE DISCRIMINATORS, each written first**: for read/write, round 919's own three shapes
+  (`[x] = pair`, `({ x } = o)`, `for (x of xs)`), which the naive "left of `=` or operand of `++`"
+  rule calls READS — plus `the same brackets in a value position are READS`, which fails the OTHER
+  shortcut ("anything under an assignment's left-hand side"); for keywords, an EXPRESSION position
+  asserted not to offer `interface` and a non-async function asserted not to offer `await`; for
+  accessibility, a caret inside a SUBCLASS METHOD, which every rival rule ("inside any class",
+  "inside the declaring class", "no filter") passes the easy cases and fails alone.
+
+- **FOURTEEN-ARM ABLATION, one mistake at a time, each restored from a sha256-verified snapshot; all
+  fourteen compiled and ALL FOURTEEN reddened a DISTINCT set.** A1 array literal not a pass-through
+  -> 4. A2 object literal not a pass-through -> 4. A3 `for-of` head not a write -> 1. A4 a member name
+  does not ascend to its access -> 2. A5 declaration names read as values -> 4. A6 type-position names
+  read as values -> 2. A7 every free caret is a STATEMENT position (the unconditional list) -> 3,
+  including the `interface` discriminator. A8 `await`/`yield` ungated -> 3. A9 module-level starters
+  everywhere -> 2. A10 `break`/`continue` ungated -> 2. A11 keywords read at the CARET rather than at
+  the word's start -> 2. A12 accessibility hides whenever the caret is inside ANY class -> 4,
+  including the subclass discriminator. A13 the enclosing-class ascent stops at an arrow -> 1, exactly
+  the nested-arrow pin. A14 no filter at all (the pre-(API.7) behaviour) -> 8.
+  `scripts/round922-ablate.sh`.
+
+- **GATES: suite 14,773 -> 14,818 / 0 failures / 0 errors / 3 skipped = EXACTLY the +45**, XML-summed
+  over all six modules and re-run on the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on
+  all 20 counters** — a real gate, since `Checker.kt` grew ~130 lines reachable from the capture hook
+  on the hot walk, and proven live by its own 46-error / 78-file compile. `huge_methods.py
+  --fail-over 0` clean on core (**750 classes, 15,981 methods, 0 over**) and, per round 909's
+  blind-spot rule, on `-project` explicitly (**35 classes, 326 methods, 0 over**; the largest new
+  method is `SyntaxRoles.keywordsFor` at 194 bytecodes). `spine_closure_audit.py` 46 handlers all
+  supersets. `scripts/round920-token-gate.sh` **1,327 files, 101,287,620 chars, ZERO violations** —
+  run because `SourceIndex` gained a member. Warning-clean. No wall A/B: production executes not one
+  new instruction, every addition sitting behind a hook that returns on a null per-file key set.
+
+- **SUCCESSOR, ranked.** (1) **RENAME** — it is (API.5) plus an edit plan, the edit plan is the work
+  (`{ p }` and `import { p as q }` do not rewrite like a plain occurrence), and `ReferenceUse` is now
+  available to it, which a rename UI wants. (2) **element access `o["p"]`** — small and mechanical
+  now that its reason is named: a capture channel for a non-identifier node plus a member lookup by
+  text, with the receiver resolution already in place. (3) **the incremental / re-entrant seam**
+  (`docs/ARCHITECTURE-RETHINK.md`) — still the only thing that changes the cost model, and still the
+  change most likely to cost a month. **I would take (1).**
+
 **Round 921 (2026-08-18) — (API.6): SIGNATURE HELP LANDS, EVERY OVERLOAD. THE RANKING'S PREMISE —
 "three-quarters built" — HELD FOR THE CALLEE AND WAS WRONG ABOUT THE ANCHOR: THIS IS THE FIRST QUERY
 IN THE ARC WHOSE SUBJECT IS A **REGION THE PARSE CARRIES NO NODE FOR**, AND THREE OF ITS ORDINARY
@@ -1656,6 +1791,39 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `cost_gate.py` **+0.00% on all 20 counters** because nothing in the compile path builds an index.
   **POSITIVE CONTROL**: `SourceIndex.of(…, useParseAsLexerOracle = false)` is the in-binary OFF arm —
   the shape `--spineMaskOff` has — and the gate's own control asserts it reddens.
+
+- [x] **(API.7) THE SYNTACTIC-ROLE MECHANISM + THREE OF THE FIVE STANDING REFUSALS — LANDED, round
+  922.** The backlog was promoted as ONE item on round 921's premise that all five wanted the same
+  missing "where is this caret in the grammar" mechanism. **Three did and two did not, which is the
+  round's product.** BUILT: `SyntaxRoles` (`-project`), a PULL-BASED parent-chain ascent —
+  `referenceUse(node)` for a node's role, `grammarPositionOf(path)` / `keywordsFor(path)` for a
+  caret's — plus a sibling ascent in `Checker.kt` for the half of accessibility that needs symbols and
+  heritage (the home is decided PER QUESTION, not forced). Pull rather than push on round 875's
+  measurement (a maintained status is 11.1x the work); identity comparisons throughout, because AST
+  nodes are `data class`es (round 471). **CASHED: (a) member-completion ACCESSIBILITY** — `private`
+  only inside the declaring class, `protected` there or in a derived one, statics alike, the ascent
+  reaching out of a nested arrow and the heritage walk following an IMPORT; biased PROVE-TO-HIDE, so
+  every unknown leaves the member offered, which is the only answer to round 917's stated objection.
+  **(b) KEYWORD completions**, bounded explicitly to STATEMENT / EXPRESSION / TYPE positions with
+  `await`, `yield`, `super`, `return`, `break`, `continue` and the module-level declaration starters
+  each gated, and every continuation keyword refused outright. **(c) READ-vs-WRITE**
+  (`ReferenceLocation.use`), with the write set stated completely and `UNCLASSIFIED` as a fourth state
+  rather than a default. **STILL REFUSED, with the reason CORRECTED**: an element access (`o["p"]`)
+  and a contextual object-literal key (`{ p: v }`) were never blocked on a grammar position at all —
+  recognising either shape is one test on the node's parent — and what each lacks is SEMANTIC (a
+  capture channel plus member-lookup-by-text; a contextual type, which is walk-scoped and absent
+  outright in a ternary branch). **TWO EXISTING ANSWERS CHANGED** and their round-917 / round-918 pins
+  were updated in place: member completions no longer include inaccessible members, and a free-name
+  list now carries keyword items (`kind = "Keyword"`). **+45 pins** (32 parse-only), **fourteen-arm
+  ablation, all fourteen a DISTINCT set**, all gates green. `docs/language-service.md` §§ 10a, 10b.
+
+- [ ] **(BUG.3) A caret on `this.` inside a NESTED ARROW answers NO members** — found while building
+  (API.7)'s accessibility pins and unrelated to accessibility. `typeCaptureCompletionMembers` reads
+  `currentClassForThis`, which the capture hook restores from the cta frame and which is null inside
+  an arrow nested in a method; the same caret directly inside the method answers correctly. Also
+  affects `definitionsAt` through `this.p` there. The fix is in the ambient the hook installs, so it
+  is a CORPUS-risk change and wants its own round: read round 911's install (`ctaM3StmtAnchorCore`'s
+  prologue + `withCtaFrameLocals`) before touching it.
 
 - [x] **(API.6) SIGNATURE HELP — LANDED, round 921.** `SignatureHelp(signatures, activeSignature,
   activeArgument)` / `SignatureInfo(label, parameters, returnTypeText, activeParameter)` /
