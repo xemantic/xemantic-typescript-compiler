@@ -20,6 +20,136 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 925 (2026-08-18) — (API.8): RENAME. THE OCCURRENCE SET WAS ALREADY THERE; THE ROUND'S PRODUCT
+IS THAT **THE PLAN IS VERIFIED BY APPLYING IT AND COMPILING THE PROGRAM AGAIN**, SO EVERY SAFETY CLAIM
+HERE IS A COMPILER RUN RATHER THAN A READING OF THE CODE.**
+
+- **STEP 1 WAS tsc ITSELF, AND IT DECIDED THREE DESIGNS AND FOUND TWO PLACES TO BEAT IT.** Round 924's
+  technique, one method over: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` answers `textDocument/rename` and
+  `prepareRename`, so `scripts/lsp_rename.py` drives 22 carets over a fixture built for the hard shapes
+  and prints, per caret, the edits AND the resulting text. What was READ rather than reasoned:
+
+| caret | tsc 7.0.2 |
+|---|---|
+| the local of an object shorthand `{ p }` | `p` -> **`p: newName`** (the key is preserved) |
+| the local of a binding shorthand `const { z }` | `z` -> **`z: newName`** |
+| the PROPERTY behind that binding shorthand | `z` -> **`newName: z`** (mirrored) |
+| an interface member with an implementor and an `o["p"]` | **5 spans**, including the string literal and the implementor's `p` |
+| `import { p }`, caret on the import clause | `p` -> `p as newName`; the export in the other file untouched |
+| `import { p as q }`, caret on `p` | the EXPORT is renamed, in both files |
+| a lib member (`"abc".length`) | `prepareRename` **ERROR**: *"You cannot rename elements that are defined in the standard TypeScript library."* |
+| a string literal | `prepareRename` **ERROR**: *"You cannot rename this element."* |
+| **rename to `useZ` where `const useZ` already exists** | **NO refusal** — it writes the second one |
+| **rename to `class` / to `1bad`** | **NO refusal** — it writes `const class = 1` |
+
+  The last two rows are why this feature validates the new name and checks collisions: they are not
+  parity work, they are places where the reference implementation is worse.
+
+- **THE OCCURRENCE SET WAS MEASURED BEFORE ANY CODE, AND IT IS COMPLETE FOR FREE NAMES AND NOT FOR
+  MEMBERS.** The same fixture through `Project.referencesAt`: the local, the shorthand and the
+  cross-file import are exactly tsc's sets; the interface member is **2 spans against tsc's 5**. The
+  three missing are a binding element's `propertyName` (a receiver-based resolution the capture does not
+  do), an `o["p"]` (a string literal — outside the identifier population by construction, § 10b's
+  boundary) and an IMPLEMENTOR's member (a different symbol here; tsc relates base and derived).
+  **That is the STOP-AND-REPORT the brief asked for, cashed as a refusal rather than as a blocker**:
+  members are not planned around, they are refused WITH THE EVIDENCE.
+
+- **THE COMPLETENESS NET, and the split that makes it usable.** A SPELLING scan, used as a safety net and
+  never as the answer: an identifier spelling the old name is fine when it is in the group (it IS an
+  occurrence) or when it RESOLVED to something else (the compiler proved it is a different symbol); what
+  is left is unresolved, and unresolved is not unrelated. **The position split is load-bearing**: a member
+  declaration name resolves to nothing here, so an unsplit net would let `interface I { p: string }`
+  anywhere in the program refuse renaming an unrelated local `p`. So a member rename is judged by the
+  MEMBER positions and a plain binding by the FREE ones, with two obstacles that have no resolution to
+  consult at all — an element access and a property-hiding shorthand — checked only for a member.
+
+- **THE VERIFICATION IS THE ROUND.** The plan is applied to a scratch `OverlayVfs` wrapped around the
+  project's own (so nothing is observable through `updateFile`, `diagnostics` or the parse caches) and the
+  program is BUILT AGAIN. Three checks, each seeing something the others cannot: (1) the plan RE-READS —
+  every position it says it put the new name is re-parsed and must hold it, so an expansion whose
+  arithmetic is wrong fails here and not in the user's buffer; (2) NO NEW DIAGNOSTIC, compared as a
+  `(file, code)` multiset — this is the COLLISION check; (3) NOTHING MOVED — every renamed occurrence and
+  every identifier that ALREADY spelled the new name must resolve to exactly what it resolved to before.
+  **(3) is the CAPTURE check and it is the whole reason for the second build**: renaming a file-level `a`
+  to `b` where a function body holds its own `b` moves that body's reads onto the local, with agreeing
+  types and NO diagnostic anywhere. Arm A4 removes it and reddens exactly the pin that says so.
+
+- **ONE MEASURED DESIGN CORRECTION, and it is the sort of thing only running it finds.** The expectation
+  for a renamed occurrence must be ITS OWN prior answer, mapped through the edits — not "the symbol's
+  declarations". While it was in the tree the stronger-looking form refused three CORRECT
+  renames — an enum member, an interface member, and (in combination with an `export { newName as p }`
+  rewrite that this round then dropped for its own reasons) an exported function — because a member's
+  declaration name resolves to nothing here and so does an `ExportSpecifier`'s `propertyName`, so the check
+  was reporting this API's own blind spots as changes of meaning. Arm A10 restores the mistake and reddens 2.
+
+- **A DIVERGENCE FROM tsc, DECIDED AND STATED.** A bare `export { p }` and a bare `import { p }` are
+  replaced PLAINLY, where tsc expands both (`export { newName as p }`) to preserve the module's public
+  name. tsc can, because it holds the local and the exported symbol as TWO symbols and renames the one the
+  caret is on; here they are ONE (that is what makes find-references answer across the import hop), so the
+  whole group renames together and the plain form is the consistent one — expanding would additionally
+  make `export { p }` behave differently from `export const p`, whose public name a rename does change.
+
+- **REFUSED, each with a reason and a pin**: a declaration in a LIBRARY (the safety refusal — tsc's own
+  words); an ALIASED import, because the group then spells the symbol two ways and one new name cannot be
+  applied to both (tsc picks by caret because it has two symbols to pick between); an unresolved import; a
+  caret on EITHER half of an `import { p as q }` (the `p` and the `q` both resolve to nothing, which is
+  § 9's boundary); a reserved or malformed new name and a no-op rename — **all four of those without
+  compiling anything**; and a member whose occurrence set cannot be shown complete.
+
+- **PINS +35**, `-project` 390 -> 425, core UNCHANGED at 14,341. **14 are parse-only** (`RenameShapeTest`)
+  and were written first. THE DISCRIMINATOR is the shorthand, asserted as the exact resulting TEXT of both
+  affected lines — a plain occurrence rewrite passes every count-based assertion and renames the object's
+  key. **APPLY-AND-RECHECK**: two pins apply the plan through `updateFile` and assert the program's
+  diagnostics are byte-identical, which is an INDEPENDENT oracle of the verification `renameAt` runs
+  internally (that one goes through a scratch overlay and the capture path; this one through the ordinary
+  diagnostic path), so the two agreeing is not a tautology.
+
+- **TWELVE-ARM ABLATION**, one mistake at a time, anchored replacements whose occurrence count is asserted
+  (round 922's rule: `git diff --shortstat` is vacuous on a tree carrying the round's own work), restored
+  from a sha256-verified snapshot. `scripts/round925-ablate.py`.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 shorthand-plain | rewrite a shorthand as a plain occurrence | **5** | THE DISCRIMINATOR — it compiles and renames the object's key |
+| A2 no-lib-refusal | drop `DECLARED_IN_A_LIBRARY` | 1 | the safety refusal |
+| A3 no-diagnostic-check | verification without its diagnostic half | 1 | the COLLISION check |
+| A4 no-capture-check | verification without its resolution half | 1 | the CAPTURE check — a rename that compiles and lies |
+| A5 name-matching | group by SPELLING instead of by declaration set | 3 | the text-search rename; it also breaks the plan/refusal contract |
+| A6 no-completeness-net | no net at all | 3 | all three member obstacles at once |
+| A7 no-alias-refusal | apply one new name to two spellings | 1 | the `import { a as b }` group |
+| A8 no-reserved-check | tsc's own behaviour (`const class = 1`) | 1 | the reserved word, distinguished from "not an identifier" |
+| A9 raw-node-end | the raw `Node.end` for the edit span | **12** | round 910's span law, which reaches into the FOLLOWING token |
+| A10 expect-seed | expect the seed instead of each occurrence's own prior answer | 2 | this round's own measured mistake: it refuses CORRECT member renames |
+| A11 no-shorthand-net | the net without its shorthand half | 1 | the contextually supplied key |
+| A12 no-element-access-net | the net without its element-access half | 1 | the `o["p"]` |
+
+**All twelve compiled, all twelve reddened, and all twelve sets are DISTINCT** — A11 and A12 are the two
+halves A6 removes together, and A5 differs from A6 by the contract pin, which is how each is separated
+from the others rather than merely being non-empty.
+
+- **GATES.** Suite **14,865 -> 14,900 / 0 failures / 0 errors / 3 skipped = exactly the +35**, re-run on
+  the byte-restored post-ablation tree. `cost_gate.py` **+0.00% on all 20 counters** — a CONTROL here
+  rather than a gate, since the round changes no core code at all. `huge_methods.py --fail-over 0` clean
+  on core and on `-project` explicitly (largest method there 233 bytecodes). `spine_closure_audit.py` and
+  the round-920 token gate are not applicable: no `spine*EnterNode` and no `SourceIndex`/parser change.
+  Warning-clean.
+
+- **MEASURED ON tsc's OWN SOURCES** (78 files, 9,977,097 chars, 381,670 identifiers, real libs, warm),
+  `RenameCostMain`: renaming `createTypeChecker` is 3 edits in 2 files, **13.3-14.3 s** against
+  `referencesAt`'s 8.4-8.7 s; renaming **`SyntaxKind` is 9,827 edits across 49 files, 23.9-24.5 s**
+  against `referencesAt`'s 10.6-16.0 s. So the verification build costs less than the sweep on a small
+  rename (it carries only the renamed occurrences as capture spans, against the sweep's 381,670) and about
+  as much on a large one. A refusal decided on syntax alone costs nothing.
+
+- **SUCCESSOR, ranked.** (1) **go-to-definition for an element access `o["p"]`** — a small tail on a query
+  that already works, and this round gave it a second reason: an `o["p"]` anywhere is what refuses
+  renaming the member `p`, so closing it narrows (API.8)'s largest refusal as well. (2) **contextual
+  object-literal keys** — the same shape one mechanism further out (a `{ p }` supplied contextually is the
+  other member-rename refusal), and it is the last of round 922's five refusals still standing. (3) **the
+  incremental / re-entrant seam** — every query here is a full rebuild and rename is now two of them.
+  **I would take (1)**: it is the cheapest of the three and it is the one that makes an existing feature
+  refuse less.
+
 **Round 924 (2026-08-18) — (BUG.4): QUICK INFO ON A MEMBER NAME. THE ITEM SAID IT REPORTS
 `any`; MEASURED AGAINST tsc 7.0.2's OWN LANGUAGE SERVER IT IS **WORSE THAN THAT** — IT REPORTS
 THE TYPE OF WHATEVER UNRELATED BINDING SHARES THE MEMBER'S SPELLING, AND `any` ONLY WHERE
@@ -1534,6 +1664,56 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   were updated in place: member completions no longer include inaccessible members, and a free-name
   list now carries keyword items (`kind = "Keyword"`). **+45 pins** (32 parse-only), **fourteen-arm
   ablation, all fourteen a DISTINCT set**, all gates green. `docs/language-service.md` §§ 10a, 10b.
+
+- [x] **(API.8) RENAME — LANDED, round 925.** `RenamePlan(oldName, newName, files, refusal,
+  conflicts)` / `FileRename(fileName, edits)` / `RenameEdit(start, end, newText)` /
+  `RenameConflict(kind, fileName, start, end, detail)` + `RenameRefusal` (11) and
+  `RenameConflictKind` (5); **`Project.renameAt(fileName, offset, newName)`**. **ZERO core
+  changes** — the whole feature sits above the compiler on (API.5)'s sweep and (API.7)'s parent
+  ascent. **STEP 1 WAS tsc ITSELF, and it decided three designs**: `scripts/lsp_rename.py` drives
+  `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`'s `textDocument/prepareRename` + `rename` over a
+  22-caret fixture and prints the resulting TEXT, so `{ p }` -> `{ p: newName }`, `const { z }`
+  -> `{ z: newName }` (local) vs `{ newName: z }` (property), and the lib refusal's exact wording
+  were READ rather than reasoned. It also showed **two places to do BETTER than tsc**: tsc
+  validates neither the new name (`const class = 1`, `const 1bad = 1`) nor collisions (it writes
+  a second `const useZ` beside the first). **THE OCCURRENCE SET WAS MEASURED BEFORE ANY CODE and
+  it is NOT complete for members** — on the same fixture tsc's member rename edits 5 spans and
+  ours resolves 2, missing a binding element's `propertyName`, an `o["p"]` (a string literal, so
+  outside the identifier population by construction) and an IMPLEMENTOR's member (a different
+  symbol here). So members are not planned around, they are **refused with the evidence**:
+  a spelling scan is used as a SAFETY NET — never as the answer — and an identifier spelling the
+  old name that is neither in the group nor resolved elsewhere is a conflict. **The position
+  split inside that net is load-bearing**: a member declaration name resolves to nothing, so
+  without it an `interface I { p }` anywhere would refuse renaming an unrelated local `p`.
+  **THEN THE PLAN IS VERIFIED BY APPLYING IT AND COMPILING AGAIN** (a scratch `OverlayVfs` around
+  the project's own, so nothing is observable): it must re-read, it must add no diagnostic
+  (**the COLLISION check**), and every renamed occurrence plus every identifier that ALREADY
+  spelled the new name must resolve to exactly what it resolved to before (**the CAPTURE check** —
+  renaming a file-level `a` to `b` where a body holds its own `b` compiles, produces no
+  diagnostic anywhere, and means something else; arm A4 is the only thing that sees it).
+  **ONE MEASURED DESIGN CORRECTION**: the expectation for a renamed occurrence is its OWN prior
+  answer, not the seed — demanding the seed reports this API's own blind spot (a member's
+  declaration name resolves to nothing) as a change of meaning, and refused three correct member
+  renames before it was fixed (arm A10). **DIVERGENCE FROM tsc, stated**: a bare `export { p }` /
+  `import { p }` is replaced PLAINLY where tsc expands to `newName as p` — our identity crosses
+  the alias hop, so the local and the export are one symbol and the whole group renames together;
+  expanding would make `export { p }` behave differently from `export const p`. **REFUSED, each
+  with a reason**: a declaration in a library, an ALIASED import (`import { a as b }` — one new
+  name cannot spell two things, and tsc picks by caret because it has two symbols), an unresolved
+  import, a caret on either half of an `as`, a reserved or malformed new name (**no build**), and
+  a member whose set cannot be shown complete. **PINS +35** (`-project` 390 -> 425; core UNCHANGED
+  at 14,341) — 14 parse-only shape pins written FIRST. THE DISCRIMINATOR is the shorthand, asserted
+  as the exact resulting TEXT of both lines, because a plain rewrite passes every count-based
+  assertion and renames the object's key. **APPLY-AND-RECHECK** pins apply the plan through
+  `updateFile` and assert the diagnostics are byte-identical — an independent oracle of the
+  verification `renameAt` runs internally. **TWELVE-ARM ABLATION**, one mistake at a time, anchored
+  replacements with an asserted occurrence count, restored from a sha256-verified snapshot.
+  **GATES**: suite 14,865 -> **14,900 / 0 failures / 0 errors / 3 skipped = exactly the +35**;
+  `cost_gate.py` **+0.00% on all 20 counters** (a control: no core change);
+  `huge_methods.py --fail-over 0` clean on core and on `-project` explicitly. **MEASURED ON tsc's
+  OWN SOURCES**: renaming `SyntaxKind` in `types.ts` produces **9,827 edits across 49 files** in
+  23.9-24.5 s warm (against `referencesAt`'s 10.6-16.0 s); `createTypeChecker` is 3 edits in
+  13.3-14.3 s. `docs/language-service.md` § 10d; harness `RenameCostMain`.
 
 - [x] **(BUG.4) Quick info on a MEMBER NAME reports the wrong type, for every receiver — FIXED,
   round 924.** The item said it reports `any`; **measured against tsc 7.0.2's own LSP it reports

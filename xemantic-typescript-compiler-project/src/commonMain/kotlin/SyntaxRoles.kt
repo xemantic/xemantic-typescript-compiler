@@ -71,6 +71,7 @@ import com.xemantic.typescript.compiler.NonNullExpression
 import com.xemantic.typescript.compiler.ObjectLiteralExpression
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.ParenthesizedExpression
+import com.xemantic.typescript.compiler.ParserFlags
 import com.xemantic.typescript.compiler.PostfixUnaryExpression
 import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyAccessExpression
@@ -83,6 +84,7 @@ import com.xemantic.typescript.compiler.ShorthandPropertyAssignment
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SpreadAssignment
 import com.xemantic.typescript.compiler.SpreadElement
+import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.Statement
 import com.xemantic.typescript.compiler.SwitchStatement
 import com.xemantic.typescript.compiler.SyntaxKind
@@ -92,6 +94,7 @@ import com.xemantic.typescript.compiler.TypeParameter
 import com.xemantic.typescript.compiler.TypeQuery
 import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.WhileStatement
+import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.isAssignmentOperator
 
 /**
@@ -325,6 +328,177 @@ internal object SyntaxRoles {
 
     /** [node]'s parent, or null at the root or on an unindexed node (INV.2(a)). */
     private fun parentOf(node: Node): Node? = (node as NodeBase).parent
+
+
+    // --- (API.8) the rename questions ---------------------------------------
+
+    /**
+     * (API.8) THE REPLACEMENT one occurrence needs — the heart of the edit plan, and
+     * the reason rename is not "find references and swap the text".
+     *
+     * Three constructs spell a binding AND a property with ONE identifier, so a plain
+     * replacement compiles and silently changes what the program means:
+     *
+     * - an object literal's SHORTHAND, `{ p }` — replacing it with `{ newName }`
+     *   renames the object's KEY as well as the value it reads. The expansion
+     *   `{ p: newName }` keeps the key and moves only the reference.
+     * - a binding pattern's SHORTHAND, `const { p } = o` — same identifier, same
+     *   trap, other direction: `{ newName }` would destructure a property that does
+     *   not exist. The expansion is `{ p: newName }`.
+     * A bare `export { p }` and a bare `import { p }` are deliberately NOT in that
+     * list, though tsc expands both. Our symbol identity crosses the alias hop, so the
+     * local and the export it names are ONE thing here and the whole group is being
+     * renamed together — which makes the plain replacement the CONSISTENT one. Writing
+     * `export { newName as p }` to preserve the module's public name would also make
+     * `export { p }` behave differently from `export const p`, whose public name this
+     * rename does change; and `import { p as newName }` would name an export that no
+     * longer exists.
+     *
+     * [nameOffset] is where the NEW NAME begins inside [text]. The verification pass
+     * needs it: it re-asks the compiler what the renamed occurrence resolves to, and
+     * for a shorthand expansion that question is about a span three characters in.
+     */
+    fun renameRewrite(node: Node, oldName: String, newName: String): Rewrite {
+        val parent = parentOf(node)
+        return when {
+            parent is ShorthandPropertyAssignment && parent.name === node ->
+                Rewrite("$oldName: $newName", oldName.length + 2)
+            parent is BindingElement && parent.propertyName == null && parent.name === node ->
+                Rewrite("$oldName: $newName", oldName.length + 2)
+            else -> Rewrite(newName, 0)
+        }
+    }
+
+    /** What [renameRewrite] answers: the replacement text and where the new name is in it. */
+    data class Rewrite(val text: String, val nameOffset: Int)
+
+    /**
+     * True when [node] names a MEMBER OF A TYPE rather than something a scope binds.
+     *
+     * This is the axis the completeness net is split on, and the split matters in both
+     * directions: an unresolved `p` in `interface I { p: string }` can never be an
+     * occurrence of a local `p`, and an unresolved `p` in `o.p` can never be an
+     * occurrence of a parameter. Treating either as a risk would refuse almost every
+     * ordinary rename; treating neither as one is how a member rename misses an
+     * implementor.
+     */
+    fun isMemberPosition(node: Node): Boolean {
+        val parent = parentOf(node) ?: return false
+        return when (parent) {
+            is PropertyAccessExpression -> parent.name === node
+            is QualifiedName -> parent.right === node
+            is PropertyDeclaration -> parent.name === node
+            is MethodDeclaration -> parent.name === node
+            is GetAccessor -> parent.name === node
+            is SetAccessor -> parent.name === node
+            is EnumMember -> parent.name === node
+            is PropertyAssignment -> parent.name === node
+            is BindingElement -> parent.propertyName === node
+            is NamedTupleMember -> parent.name === node
+            else -> false
+        }
+    }
+
+    /**
+     * True when [node] is a SHORTHAND that hides a property name — an object literal's
+     * `{ p }` or a binding pattern's `const { p } = o`.
+     *
+     * Both are occurrences of a PROPERTY that no identifier of that property's spelling
+     * marks: the object literal's key comes from its CONTEXTUAL type (the third
+     * resolution mechanism this API does not have — `Project.definitionsAt` refuses
+     * object-literal keys for exactly that reason), and the binding pattern's source
+     * property is named by the same token as the local it binds. So while renaming a
+     * MEMBER, a shorthand spelling the old name is a place the plan would have to edit
+     * and cannot prove it should — which is a refusal, not an omission.
+     */
+    fun isPropertyHidingShorthand(node: Node): Boolean {
+        val parent = parentOf(node) ?: return false
+        return when (parent) {
+            is ShorthandPropertyAssignment -> parent.name === node
+            is BindingElement -> parent.propertyName == null && parent.name === node
+            else -> false
+        }
+    }
+
+    /**
+     * Every `o["…"]` in [root] whose member is named by a STRING LITERAL, as
+     * `(the literal node, its text)`.
+     *
+     * A string literal is not an identifier, so such an access is outside the
+     * population `Project.referencesAt` sweeps — it can be neither found nor renamed
+     * here. This exists so it can be DETECTED: a member rename that leaves one behind
+     * produces a program that does not compile, so the presence of one spelling the old
+     * name is a refusal.
+     *
+     * ITERATIVE, as every full-tree walk in this module is: the corpus carries
+     * expression chains deep enough to crash a recursive one.
+     */
+    fun stringElementAccesses(root: Node): List<Pair<Node, String>> {
+        val found = ArrayList<Pair<Node, String>>()
+        val stack = ArrayList<Node>()
+        stack.add(root)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is ElementAccessExpression) {
+                val argument = node.argumentExpression
+                if (argument is StringLiteralNode) found.add(argument to argument.text)
+            }
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        return found
+    }
+
+    /**
+     * True when [name] is a single IDENTIFIER token, decided by the compiler's own
+     * lexer rather than by a character predicate.
+     *
+     * Round 920's parse-as-lexer-oracle, in its smallest form: a hand-written
+     * `isLetterOrDigit` test would disagree with the scanner about `$`, about `_`,
+     * about a Unicode letter and about an escape, and the disagreement would be
+     * invisible — the rename would simply produce a file that does not parse.
+     */
+    fun isIdentifierName(name: String): Boolean {
+        if (name.isEmpty()) return false
+        val index = SourceIndex.of(
+            name,
+            "rename-candidate.ts",
+            ParserFlags(
+                forceJsx = false,
+                topLevelAwait = false,
+                needsJsxFlag = false,
+                noImplicitAny = false,
+            ),
+        )
+        // Two tokens: the candidate and the zero-width end of file. Anything else
+        // is whitespace, a second word, or a token that split.
+        if (index.tokenKinds.size != 2 || index.tokenKinds[1] != SyntaxKind.EndOfFile) {
+            return false
+        }
+        return index.tokenStarts[0] == 0 && index.tokenEnds[0] == name.length &&
+            index.tokenKinds[0] == SyntaxKind.Identifier
+    }
+
+    /**
+     * The words that may not become a binding's name.
+     *
+     * The ECMAScript reserved words plus the strict-mode reserved ones — every file
+     * this compiler checks is a module or is checked under `strict`, and a rename must
+     * not depend on which. `type`, `any`, `as`, `of` and the rest of TypeScript's
+     * CONTEXTUAL keywords are deliberately absent: `const type = 1` is legal, and
+     * refusing it would be inventing a rule the language does not have.
+     *
+     * [isIdentifierName] alone does not answer this — our scanner reports `class` as a
+     * keyword token and `type` as one too, so the token kind cannot separate the
+     * reserved from the contextual.
+     */
+    val RESERVED_WORDS: Set<String> = setOf(
+        "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+        "default", "delete", "do", "else", "enum", "export", "extends", "false",
+        "finally", "for", "function", "if", "implements", "import", "in", "instanceof",
+        "interface", "let", "new", "null", "package", "private", "protected", "public",
+        "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof",
+        "var", "void", "while", "with", "yield",
+    )
 
     // --- (API.7) the caret question -------------------------------------------
 

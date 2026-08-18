@@ -4,18 +4,20 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 922, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 925, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
 in one build — **completions**, both halves: members `(API.4a)` and free
 names `(API.4b)`, **find-references plus document highlights** `(API.5)`,
-**signature help** `(API.6)`, every overload — and `(API.7)`, which cashed three
-standing refusals at once: **member completions now enforce `private` /
-`protected`**, **keyword completions are offered** where they compile, and
-**read-versus-write is reported** on every reference. Not yet: contextual
-object-literal keys, element access `o["p"]`, rename. See the `(API.*)` items in
-`PLAN-PHASE-5.md`.
+**signature help** `(API.6)`, every overload, `(API.7)`'s three cashed refusals
+(**member completions enforce `private` / `protected`**, **keyword completions**,
+**read-versus-write on every reference**) — and `(API.8)`, **RENAME**: an edit
+plan that expands a `{ p }` shorthand instead of renaming the object's key, and
+that is **verified by applying it and compiling again**, so a collision or a
+capture withdraws it rather than reaching your buffer (§ 10d). Not yet:
+contextual object-literal keys, go-to-definition for an element access `o["p"]`.
+See the `(API.*)` items in `PLAN-PHASE-5.md`.
 
 > **`(API.7)` changed two answers you may already depend on.** `completionsAt` at a
 > MEMBER caret no longer returns inaccessible members (§ 10a), and at a FREE_NAME
@@ -131,6 +133,7 @@ you call them.
 | `documentHighlightsAt(f, o)` | **ONE full build** | sweeps this file's identifiers |
 | `referencesAt(f, o)` | **ONE build clean, TWO dirty** | sweeps the whole program's; § 10b has the measured figures |
 | `signatureHelpAt(f, o)` | **full build, every call** | free at a caret in no argument list — those do not build |
+| `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -901,6 +904,158 @@ print one parameter short with the survivor wearing its neighbour's type.
 build is not the `diagnostics()` build. A caret in no argument list does not build.
 So debounce, exactly as for completions.
 
+## 10d. Rename
+
+```kotlin
+val plan: RenamePlan = project.renameAt(path, offset, "betterName")
+// RenamePlan(oldName: String, newName: String, files: List<FileRename>,
+//            refusal: RenameRefusal?, conflicts: List<RenameConflict>)
+// FileRename(fileName: String, edits: List<RenameEdit>)
+// RenameEdit(start: Int, end: Int, newText: String)
+// RenameConflict(kind: RenameConflictKind, fileName: String, start: Int, end: Int, detail: String)
+```
+
+**Nothing is applied.** A host owns its buffers, so the answer is a value. What is
+promised is that it is *directly* applicable: one file's edits are non-overlapping and
+sorted by `start` ascending, so
+
+```kotlin
+for (file in plan.files) {
+    var text = buffers[file.fileName]!!
+    for (edit in file.edits.asReversed()) {
+        text = text.substring(0, edit.start) + edit.newText + text.substring(edit.end)
+    }
+    buffers[file.fileName] = text
+}
+```
+
+is the whole application — no offset arithmetic, no re-derivation.
+
+**The contract in one line: `refusal != null` if and only if `files` is empty.** A
+refusal never comes with a partial plan, because a partial rename produces code that
+does not compile and is worse than no rename; and a plan never comes with a refusal
+attached as a warning you may ignore. `conflicts` is the EVIDENCE for a refusal the
+search discovered rather than a separate severity — it is empty for a successful plan.
+
+### The occurrence set is find-references'; the EDIT PLAN is the work
+
+Identity is the declaration set, never the spelling (§ 10b), so a shadowed binding, an
+import hop, a merged symbol and a member through its receiver all behave exactly as
+`referencesAt` documents. What rename adds is that **an occurrence is not always
+replaced by the new name**. Two constructs spell a binding AND a property with one
+identifier, and the plain rewrite compiles while changing what the program means; two
+more spell a local AND a module's public name, and there the plain rewrite is what this
+API does deliberately:
+
+| source | renaming | becomes |
+|---|---|---|
+| `const o = { p }` | the local `p` | `{ p: newName }` |
+| `const { p } = o` | the local `p` | `const { p: newName } = o` |
+| `export { p }` | the local `p` | `export { newName }` — see below |
+| `import { p } from "./m"` | the symbol | `import { newName } from "./m"` |
+
+The first two are the discriminator this feature is tested against: `{ newName }`
+compiles and it has renamed the object's KEY.
+
+**The last two are a deliberate divergence from tsc, and it is worth knowing.** tsc
+expands both — `export { newName as p }`, `import { p as newName }` — because it holds
+the local and the exported symbol as two symbols and renames only the one your caret is
+on. Here they are ONE symbol (that is what lets find-references answer across the
+import hop at all), so the whole group is renamed together and the plain replacement is
+the consistent one: expanding would make `export { p }` behave differently from
+`export const p`, whose public name a rename does change.
+
+### Then it is CHECKED, by applying it and compiling again
+
+The plan is applied to a scratch copy of the program — your buffers are untouched —
+and that program is built. Three things must hold or the plan is withdrawn:
+
+1. **it re-reads.** Every position the plan says it put the new name is re-parsed and
+   must in fact hold it.
+2. **no new diagnostic.** This is what catches a COLLISION: renaming onto a name already
+   declared in a scope the rename reaches is a redeclaration error. *tsc's own language
+   server does not check this* — measured, `renameAt("p" -> "useZ")` in a file that
+   already has `const useZ` gives you two of them.
+3. **nothing resolves anywhere else.** Every renamed occurrence, and every identifier
+   that ALREADY spelled the new name, must resolve after the rename to exactly what it
+   resolved to before. This is the CAPTURE check and it is the one a diagnostic count
+   cannot do: renaming a file-level `a` to `b` where some function body holds its own
+   `b` moves that body's reads onto the local, with types that agree and no error
+   anywhere.
+
+So the safety claims here are claims about a compiler run rather than about a reading
+of the code. That is also why this costs a second build.
+
+### What is refused, and why each is a refusal rather than a gap
+
+| `RenameRefusal` | when |
+|---|---|
+| `NOT_AN_IDENTIFIER` | the caret is on a keyword, a literal, punctuation, trivia, an unknown file — **no build** |
+| `NEW_NAME_IS_RESERVED` | `class`, `return`, `let`, … — **no build**. tsc does not check this and will write `const class = 1` |
+| `NEW_NAME_IS_NOT_AN_IDENTIFIER` | decided by SCANNING the name, so `Ünïcödé` passes and `1bad`, `has-dash`, `two words` do not — **no build** |
+| `NEW_NAME_UNCHANGED` | a no-op is not a plan — **no build** |
+| `NO_SYMBOL` | the caret resolves to nothing this search can name: an object-literal key, the `p` or the `q` of `import { p as q }`, a member declared and never used |
+| `DECLARED_IN_A_LIBRARY` | some declaration is in a `lib.*.d.ts`, which has no path on disk. Renaming the uses alone does not compile. tsc refuses the same thing |
+| `ALIASED_SYMBOL` | the group spells the symbol two ways because an `import { a as b }` was crossed. One new name cannot be applied to both, and picking a side would be a guess |
+| `UNRESOLVED_IMPORT` | a declaration IS the import binding, i.e. the module did not resolve |
+| `OCCURRENCES_INCOMPLETE` | some identifier spelling the old name could be an occurrence and could not be resolved. **The member-rename refusal** — an implementor, an `o["p"]`, a contextually supplied key |
+| `WOULD_NOT_COMPILE` | the verification build produced diagnostics the original did not |
+| `WOULD_CHANGE_MEANING` | the verification build resolved something somewhere else |
+
+**`OCCURRENCES_INCOMPLETE` is the one to understand**, because it is the boundary of
+what this API can see. The occurrence set is resolution-based; a *spelling* scan is then
+used as a SAFETY NET — never as the answer — to ask whether that set can be shown
+complete. An identifier spelling the old name is fine when it is in the group or when it
+RESOLVED to something else; what is left is unresolved, and unresolved is not unrelated.
+`conflicts` names every one:
+
+| `RenameConflictKind` | what it is |
+|---|---|
+| `UNRESOLVED_OCCURRENCE` | an identifier spelling the old name in a position that could name this symbol, which the search could not resolve — **an implementor's member**, a second declaration of the same member name, a member on an `any` receiver |
+| `ELEMENT_ACCESS` | an `o["p"]`. Its member is a string literal, so it is outside the population this API can find at all (§ 10b draws the same boundary). tsc rewrites these; missing one breaks the program, so here it refuses |
+| `CONTEXTUAL_SHORTHAND` | a `{ p }` or a `const { p } = o` met while renaming a MEMBER — the property comes from the object literal's *contextual* type or from the pattern's own token, which is the third resolution mechanism this API does not have (§ 9) |
+| `NEW_DIAGNOSTIC` | a diagnostic the renamed program has and the original did not |
+| `RESOLUTION_CHANGED` | a span that meant one thing before the rename and another after |
+
+The position split inside that net is load-bearing: a member's declaration name resolves
+to nothing here, so without it an `interface I { p: string }` anywhere in the program
+would refuse renaming an unrelated local `p`. So a *member* rename is judged by the
+member positions and a *plain binding* rename by the free ones.
+
+### What this means in practice
+
+**Renaming a local, a parameter, a function, a class, an interface, a type alias, a type
+parameter, an enum, a namespace or an imported name works** — those are resolved through
+the scope chain, and the sweep covers every identifier of every program file, so the set
+is complete by construction.
+
+**A member rename works when it can be shown complete** and is refused loudly when it
+cannot. An interface member with one declaration and identifier-only uses renames across
+files; the same member with an implementing class, an `o["p"]` or a contextually supplied
+shorthand does not.
+
+### Cost, measured
+
+On this repo's own compiler profile — tsc's 78 source files, 9,977,097 characters,
+381,670 identifiers, real libs, warm:
+
+| query | builds | wall |
+|---|---|---|
+| `referencesAt`, for reference | 1 | 8.4 – 8.7 s |
+| `renameAt` — `createTypeChecker`, 3 edits in 2 files | 2 | **13.3 – 14.3 s** |
+| `referencesAt` on `SyntaxKind` | 1 | 10.6 – 16.0 s |
+| `renameAt` — `SyntaxKind`, **9,827 edits in 49 files** | 2 | **23.9 – 24.5 s** |
+| a refusal decided on syntax alone | **0** | microseconds |
+
+The second build is the verification, and it costs less than the first on a small rename
+(it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
+and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is the
+same shape, ~1.9 GB peak on that profile, and the default 512 MB of a plain JVM is not
+enough.
+
+**So: this is a query a user asks for explicitly.** Do not wire it to a keystroke, and
+prefer to refuse early — a bad new name costs nothing at all.
+
 ## 11. Rules that apply to everything
 
 **Paths.** Every path crossing the API is normalized and made absolute through
@@ -1004,19 +1159,21 @@ stale text and nothing worse.
   the shape was never the hard part (one test on the node's parent), and typing the
   access needed no member lookup by text at all. What definition still wants is a
   DECLARATION for a non-identifier node, which is a different question from a type.
+  Since `(API.8)` this also has a second, sharper consequence: an `o["p"]` anywhere
+  in the program is what REFUSES renaming the member `p` (§ 10d), because a member
+  named by a string literal is outside the population a reference sweep can find.
 - **contextual object-literal keys** — `{ p: v }`'s own `p` still has no definition,
   and hover describes the wrong subject for a shorthand `{ p }` (it reports the LOCAL
   `p` the shorthand references, § 8). The useful target is the *contextual* type's
   property (§ 9), and
   a contextual type is walk-scoped state the capture does not read — in a ternary
   branch it does not exist at all. That is a third resolution mechanism beside the
-  scope chain and the receiver, and no syntactic classification supplies it.
+  scope chain and the receiver, and no syntactic classification supplies it. It is
+  the other thing that refuses a member rename (§ 10d): a contextually supplied
+  `{ p }` is a place the plan would have to edit and cannot prove it should.
 - **member completion after an unparsable receiver** — a `.` the parse did not
   turn into a member access answers an empty list rather than guessing a receiver
   out of bracket-balanced text.
-- **rename** — it is find-references plus an edit plan, and the edit plan is where
-  the work is: a shorthand `{ p }` and an `import { p as q }` do not rewrite the way
-  a plain occurrence does.
 
 None of these change what is documented above. The one thing that would is the
 architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) that makes the checker

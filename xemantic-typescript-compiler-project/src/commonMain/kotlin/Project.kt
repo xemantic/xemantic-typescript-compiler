@@ -30,7 +30,11 @@ import com.xemantic.typescript.compiler.CapturedDefinition
 import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.Identifier
+import com.xemantic.typescript.compiler.ImportClause
+import com.xemantic.typescript.compiler.ImportSpecifier
+import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
@@ -1245,6 +1249,522 @@ public class Project private constructor(
             }
         }
         return null
+    }
+
+
+    // --- (API.8) rename ------------------------------------------------------------
+
+    /**
+     * (API.8) THE EDIT PLAN that renames whatever the caret names to [newName] — or the
+     * reason there is none.
+     *
+     * ```kotlin
+     * val plan = project.renameAt("/proj/src/a.ts", 142, "betterName")
+     * if (plan.refusal != null) reportToUser(plan.refusal, plan.conflicts)
+     * else for (file in plan.files) applyBackToFront(file.fileName, file.edits)
+     * ```
+     *
+     * NOTHING IS APPLIED HERE. A host owns its buffers, so the answer is a value; what
+     * is promised is that it is *directly* applicable — one file's edits are
+     * non-overlapping and sorted ascending, so `edits.asReversed()` needs no offset
+     * arithmetic.
+     *
+     * ## The occurrence set is [referencesAt]'s, and the EDIT PLAN is the work
+     *
+     * Identity is the declaration set, never the spelling — so a shadowed binding, an
+     * import hop, a merged symbol and a member through its receiver all behave exactly
+     * as [referencesAt] documents. What rename adds is that **an occurrence is not
+     * always replaced by the new name**: `{ p }`, `const { p } = o` and `export { p }`
+     * each spell two things with one identifier, and [RenameEdit] states what each
+     * becomes and why. A rename built as "find references, swap the text" compiles and
+     * silently renames an object's KEY.
+     *
+     * ## Then it is CHECKED, by applying it and re-compiling
+     *
+     * The plan is applied to a scratch copy of the program — the overlay wrapped in a
+     * second overlay, so this project's own buffers are untouched — and that program is
+     * built again. Two things are then true or the plan is withdrawn:
+     *
+     * - it introduces **no diagnostic** the original did not have. That is what catches
+     *   a COLLISION: renaming to a name already declared in the same scope is TS2451,
+     *   and tsc's own language server, measured, does not check this at all and will
+     *   happily write two `const useZ` into your file.
+     * - **nothing resolves anywhere else.** Every renamed occurrence must still name
+     *   the symbol it named, and every identifier that ALREADY spelled [newName] must
+     *   still name what it named. That is what catches a CAPTURE — a rename that
+     *   compiles and means something different, which no diagnostic count can see:
+     *   renaming a file-level `a` to `b` where some function body holds its own `b`
+     *   moves that body's reads onto the local, with types that agree and no error.
+     *
+     * The verification is the reason the safety claims here are claims about a compiler
+     * run rather than about a reading of the code, and it is why this costs a second
+     * build (see the cost note below).
+     *
+     * ## What is refused
+     *
+     * [RenameRefusal] enumerates it with a reason each. The ones worth knowing before
+     * you wire this up:
+     *
+     * - a symbol declared in a **library** — the declaration cannot be edited, so
+     *   renaming the uses alone produces a program that does not compile. tsc refuses
+     *   the same thing;
+     * - an **aliased** import or export (`import { a as b }`) — our identity crosses the
+     *   alias hop, so `a` and `b` are ONE symbol here and one new name cannot spell
+     *   both. tsc has two symbols and picks by which name the caret is on; with one, a
+     *   pick would be a guess;
+     * - a **member whose occurrence set cannot be shown to be complete** — an
+     *   implementor's member, a second declaration of the same member name, an
+     *   `o["p"]`, an object-literal key supplied contextually. Every obstacle is listed
+     *   in [RenamePlan.conflicts]. **This is where most member renames land**, and it is
+     *   the honest answer: a member rename that misses an implementor produces a class
+     *   that no longer implements its interface;
+     * - a **new name** that is not an identifier or is a reserved word. tsc checks
+     *   neither and will write `const class = 1`.
+     *
+     * ## Cost
+     *
+     * A whole-program identifier sweep, exactly [referencesAt]'s, and then a **second
+     * build** to verify — so roughly twice [referencesAt], plus [files]' build when the
+     * project is dirty. A caret that refuses on syntax alone (not an identifier, a bad
+     * new name, the same name) costs NOTHING: no build happens. `docs/language-service.md`
+     * carries the measured figures. This is a query a user asks for explicitly; do not
+     * wire it to a keystroke.
+     */
+    public fun renameAt(fileName: String, offset: Int, newName: String): RenamePlan {
+        val index = sourceIndexOf(fileName)
+            ?: return refusedRename("", newName, RenameRefusal.NOT_AN_IDENTIFIER)
+        val caret = index.pathAt(offset).lastOrNull() as? Identifier
+            ?: return refusedRename("", newName, RenameRefusal.NOT_AN_IDENTIFIER)
+        val oldName = caret.text
+        // Reserved BEFORE well-formed: `class` scans as a keyword, so the general test
+        // would report it as "not an identifier" and hide the real reason.
+        if (newName in SyntaxRoles.RESERVED_WORDS) {
+            return refusedRename(oldName, newName, RenameRefusal.NEW_NAME_IS_RESERVED)
+        }
+        if (!SyntaxRoles.isIdentifierName(newName)) {
+            return refusedRename(oldName, newName, RenameRefusal.NEW_NAME_IS_NOT_AN_IDENTIFIER)
+        }
+        if (newName == oldName) {
+            return refusedRename(oldName, newName, RenameRefusal.NEW_NAME_UNCHANGED)
+        }
+        val sweep = renameSweep()
+        val seed = referenceSeed(sweep.definitions, keyOf(fileName), caret)
+            ?: return refusedRename(oldName, newName, RenameRefusal.NO_SYMBOL)
+        return planRename(oldName, newName, sweep, seed)
+    }
+
+    /** A refusal decided without a build — [RenamePlan]'s contract with no plan. */
+    private fun refusedRename(
+        oldName: String,
+        newName: String,
+        refusal: RenameRefusal,
+    ): RenamePlan = RenamePlan(oldName, newName, emptyList(), refusal, emptyList())
+
+    /**
+     * The whole-program identifier sweep a rename runs on, in ONE build.
+     *
+     * Deliberately not expressed on [referencesOf], which performs the same build:
+     * that member answers with finished [ReferenceLocation]s, and a rename needs the
+     * NODES (to decide each occurrence's replacement), the per-file parses (to shift
+     * offsets and re-parse the result) and the whole definition table (to tell an
+     * identifier that resolved ELSEWHERE from one that resolved nowhere). Rebuilding
+     * those from a list of spans would be re-deriving what this already has — and the
+     * duplication buys the same independent oracle `semanticsOf` documents: the
+     * reference tests and the rename tests can disagree.
+     */
+    private fun renameSweep(): RenameSweep {
+        val files = build().programFiles.map { keyOf(it) }
+        val spans = ArrayList<TypeCaptureSpan>()
+        val indexes = LinkedHashMap<String, SourceIndex>(files.size)
+        val identifiers = LinkedHashMap<String, List<Node>>(files.size)
+        for (file in files) {
+            val index = sourceIndexOf(file) ?: continue
+            val found = index.identifiers()
+            indexes[file] = index
+            identifiers[file] = found
+            for (id in found) spans.add(TypeCaptureSpan(file, id.pos, id.end))
+        }
+        val result = ProjectCompiler(overlay)
+            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(spans))
+        return RenameSweep(indexes, identifiers, result.capturedDefinitions, result.diagnostics)
+    }
+
+    /** [renameSweep]'s answer — see it for why a rename needs all four. */
+    private class RenameSweep(
+        val indexes: Map<String, SourceIndex>,
+        val identifiers: Map<String, List<Node>>,
+        val definitions: List<CapturedDefinition>,
+        val diagnostics: List<Diagnostic>,
+    )
+
+    /**
+     * The plan proper: group the occurrences, refuse what cannot be done correctly,
+     * write the edits, then verify them by applying and re-compiling.
+     */
+    private fun planRename(
+        oldName: String,
+        newName: String,
+        sweep: RenameSweep,
+        seed: Set<CapturedDeclaration>,
+    ): RenamePlan {
+        fun refuse(refusal: RenameRefusal, conflicts: List<RenameConflict> = emptyList()) =
+            RenamePlan(oldName, newName, emptyList(), refusal, conflicts)
+
+        // THE SAFETY REFUSAL. A declaration outside the swept program is a `lib.*.d.ts`,
+        // which has no path on disk and which this rename may not edit — so renaming
+        // the uses alone would leave the program not compiling.
+        if (seed.any { it.fileName !in sweep.indexes }) {
+            return refuse(RenameRefusal.DECLARED_IN_A_LIBRARY)
+        }
+        // Every occurrence of the symbol, as (file, start) — the grouping `referencesOf`
+        // performs, kept here as raw keys because an EDIT needs the node.
+        val group = LinkedHashSet<Pair<String, Int>>()
+        for (definition in sweep.definitions) {
+            if (definition.locations.none { it in seed }) continue
+            group.add(definition.fileName to definition.start)
+        }
+        for (location in seed) group.add(location.fileName to location.start)
+
+        val nodes = HashMap<Pair<String, Int>, Node>()
+        for ((file, found) in sweep.identifiers) for (id in found) nodes[file to id.pos] = id
+        val occurrences = ArrayList<RenameOccurrence>(group.size)
+        for (key in group) {
+            val node = nodes[key] ?: return refuse(
+                RenameRefusal.OCCURRENCES_INCOMPLETE,
+                listOf(
+                    RenameConflict(
+                        RenameConflictKind.UNRESOLVED_OCCURRENCE, key.first, key.second,
+                        key.second, "no identifier node at this occurrence",
+                    ),
+                ),
+            )
+            occurrences.add(RenameOccurrence(key.first, node))
+        }
+        // ONE new name cannot spell two things. An `import { a as b }` makes the alias
+        // and the original one symbol here, so the group carries both spellings.
+        if (occurrences.any { (it.node as Identifier).text != oldName }) {
+            return refuse(RenameRefusal.ALIASED_SYMBOL)
+        }
+        // A declaration that IS the import binding means the module never resolved, so
+        // renaming the local would leave the export it names untouched.
+        if (seed.any { isImportBindingName(nodes[it.fileName to it.start]) }) {
+            return refuse(RenameRefusal.UNRESOLVED_IMPORT)
+        }
+
+        val symbolIsMember = seed.any {
+            val node = nodes[it.fileName to it.start]
+            node != null && SyntaxRoles.isMemberPosition(node)
+        }
+        val conflicts = completenessConflicts(
+            oldName, sweep, group, symbolIsMember,
+            reachedThroughQualifier = symbolIsMember ||
+                occurrences.any { SyntaxRoles.isMemberPosition(it.node) },
+        )
+        if (conflicts.isNotEmpty()) {
+            return refuse(RenameRefusal.OCCURRENCES_INCOMPLETE, conflicts)
+        }
+
+        val planned = HashMap<String, MutableList<PlannedEdit>>()
+        for (occurrence in occurrences) {
+            val index = sweep.indexes[occurrence.fileName] ?: return refuse(
+                RenameRefusal.OCCURRENCES_INCOMPLETE,
+            )
+            val rewrite = SyntaxRoles.renameRewrite(occurrence.node, oldName, newName)
+            planned.getOrPut(occurrence.fileName) { ArrayList() }.add(
+                PlannedEdit(
+                    start = occurrence.node.pos,
+                    end = index.realEndOf(occurrence.node),
+                    newText = rewrite.text,
+                    nameOffset = rewrite.nameOffset,
+                ),
+            )
+        }
+        for (edits in planned.values) edits.sortBy { it.start }
+        return verifyRename(oldName, newName, sweep, seed, group, planned)
+    }
+
+    /** One place the plan will edit: the file it is in and the identifier node there. */
+    private class RenameOccurrence(val fileName: String, val node: Node)
+
+    /**
+     * An edit before it is published, carrying where the NEW NAME lands inside its own
+     * replacement — which a shorthand expansion (`p` -> `p: newName`) moves, and which
+     * the verification pass needs in order to ask about the right span.
+     */
+    private class PlannedEdit(
+        val start: Int,
+        val end: Int,
+        val newText: String,
+        val nameOffset: Int,
+    )
+
+    /**
+     * True when [node] is the name an import CLAUSE binds — the shape a seed
+     * declaration takes when the module could not be resolved.
+     */
+    private fun isImportBindingName(node: Node?): Boolean {
+        if (node == null) return false
+        val parent = (node as NodeBase).parent ?: return false
+        return when (parent) {
+            is ImportSpecifier -> parent.name === node
+            is ImportClause -> parent.name === node
+            is NamespaceImport -> parent.name === node
+            else -> false
+        }
+    }
+
+    /**
+     * THE COMPLETENESS NET: every place that could be an occurrence of this symbol and
+     * could not be shown to be one.
+     *
+     * A spelling scan used as a SAFETY NET and never as the answer — the occurrence set
+     * stays resolution-based, and this only decides whether to trust it. An identifier
+     * spelling the old name is fine when it is in the group (it IS an occurrence) or
+     * when it RESOLVED to something else (the compiler proved it is a different
+     * symbol). What is left is *unresolved*, and unresolved is not unrelated.
+     *
+     * The position split is what keeps this from refusing every ordinary rename. A
+     * member declaration name resolves to nothing (it is bound by no scope and has no
+     * receiver — `Project.definitionsAt` says so), so without the split an
+     * `interface I { p: string }` anywhere in the program would block renaming a local
+     * `p`. So:
+     *
+     * - renaming something reached through a qualifier — a member, an enum's member, a
+     *   namespace's export — the MEMBER positions are the risk;
+     * - renaming a plain binding, the FREE positions are.
+     *
+     * Two obstacles have no resolution to consult at all and are checked only for a
+     * member: an `o["p"]`, whose member is a string literal and therefore outside the
+     * population this API can find, and a SHORTHAND, whose property comes from a
+     * contextual type or from the binding pattern's own token.
+     */
+    private fun completenessConflicts(
+        oldName: String,
+        sweep: RenameSweep,
+        group: Set<Pair<String, Int>>,
+        symbolIsMember: Boolean,
+        reachedThroughQualifier: Boolean,
+    ): List<RenameConflict> {
+        val resolved = HashSet<Pair<String, Int>>(sweep.definitions.size)
+        for (definition in sweep.definitions) {
+            if (definition.locations.isNotEmpty()) resolved.add(definition.fileName to definition.start)
+        }
+        val conflicts = ArrayList<RenameConflict>()
+        for ((file, found) in sweep.identifiers) {
+            val index = sweep.indexes[file] ?: continue
+            for (id in found) {
+                if ((id as Identifier).text != oldName) continue
+                val key = file to id.pos
+                val memberPosition = SyntaxRoles.isMemberPosition(id)
+                if (key !in group && key !in resolved &&
+                    memberPosition == reachedThroughQualifier
+                ) {
+                    conflicts.add(
+                        RenameConflict(
+                            RenameConflictKind.UNRESOLVED_OCCURRENCE, file, id.pos,
+                            index.realEndOf(id),
+                            "an identifier spelled '$oldName' that the search could not resolve",
+                        ),
+                    )
+                }
+                if (symbolIsMember && key !in group && SyntaxRoles.isPropertyHidingShorthand(id)) {
+                    conflicts.add(
+                        RenameConflict(
+                            RenameConflictKind.CONTEXTUAL_SHORTHAND, file, id.pos,
+                            index.realEndOf(id),
+                            "a shorthand spelled '$oldName' whose property this API cannot resolve",
+                        ),
+                    )
+                }
+            }
+            if (!reachedThroughQualifier) continue
+            for ((literal, text) in SyntaxRoles.stringElementAccesses(index.sourceFile)) {
+                if (text != oldName) continue
+                conflicts.add(
+                    RenameConflict(
+                        RenameConflictKind.ELEMENT_ACCESS, file, literal.pos,
+                        index.realEndOf(literal),
+                        "an element access naming '$oldName' with a string literal",
+                    ),
+                )
+            }
+        }
+        return conflicts.sortedWith(compareBy({ it.fileName }, { it.start }))
+    }
+
+    /**
+     * APPLY THE PLAN TO A SCRATCH COPY OF THE PROGRAM AND COMPILE IT AGAIN — the step
+     * that turns this feature's safety from an argument into a measurement.
+     *
+     * The scratch copy is [OverlayVfs] wrapped around this project's own overlay, so
+     * nothing here is observable through [updateFile], [diagnostics] or the parse
+     * caches — the renamed texts exist for exactly one build.
+     *
+     * Three things are checked, and each catches a failure the others cannot:
+     *
+     * 1. **the plan re-reads.** Each edited file is re-parsed and the new name must be
+     *    the identifier at every position the plan says it put one. An expansion that
+     *    got its own arithmetic wrong fails here rather than in the user's buffer.
+     * 2. **no new diagnostic.** A COLLISION — the new name already declared in a scope
+     *    the rename reaches — is a redeclaration error, and this is what sees it.
+     * 3. **nothing moved.** Every renamed occurrence, and every identifier that ALREADY
+     *    spelled the new name, must resolve after the rename to exactly what it resolved
+     *    to before — its OWN old answer, mapped through the edits, never "the symbol's
+     *    declarations". That distinction is load-bearing: a member's declaration NAME
+     *    resolves to nothing here, so the stronger-looking expectation would report this
+     *    API's own blind spot as a change of meaning. This is the CAPTURE check, and it
+     *    is the only one of the three that can see a rename which compiles and means
+     *    something else.
+     *
+     * Declarations are compared by `(fileName, start)` alone. Two declarations cannot
+     * begin at one offset — the same fact [referenceSeed] leans on — and a LENGTH would
+     * additionally have to model the edits inside a coarse whole-declaration span.
+     */
+    private fun verifyRename(
+        oldName: String,
+        newName: String,
+        sweep: RenameSweep,
+        seed: Set<CapturedDeclaration>,
+        group: Set<Pair<String, Int>>,
+        planned: Map<String, MutableList<PlannedEdit>>,
+    ): RenamePlan {
+        val conflicts = ArrayList<RenameConflict>()
+        fun refuse(refusal: RenameRefusal) =
+            RenamePlan(oldName, newName, emptyList(), refusal, conflicts.sortedWith(compareBy({ it.fileName }, { it.start })))
+
+        // Where an offset in the OLD text lands in the new one: every edit that ends at
+        // or before it has already changed the length in front of it.
+        fun shift(file: String, offset: Int): Int {
+            var delta = 0
+            for (edit in planned[file].orEmpty()) {
+                if (edit.end <= offset) delta += edit.newText.length - (edit.end - edit.start)
+            }
+            return offset + delta
+        }
+        // A declaration's place after the rename. A renamed one moves to wherever its
+        // own replacement put the new name; anything else only shifts.
+        fun placeOf(fileName: String, start: Int): Pair<String, Int> {
+            val edit = planned[fileName].orEmpty().firstOrNull { it.start == start }
+            return fileName to (shift(fileName, start) + (edit?.nameOffset ?: 0))
+        }
+
+        val scratch = OverlayVfs(overlay)
+        val newIndexes = HashMap<String, SourceIndex>(planned.size)
+        val options = parseOptions ?: TsConfigLoader(overlay).load(configPath).options
+            .also { parseOptions = it }
+        for ((file, edits) in planned) {
+            var text = overlay.readText(file) ?: return refuse(RenameRefusal.OCCURRENCES_INCOMPLETE)
+            for (edit in edits.asReversed()) {
+                text = text.substring(0, edit.start) + edit.newText + text.substring(edit.end)
+            }
+            scratch.put(file, text)
+            newIndexes[file] = SourceIndex.of(text, file, computeParserFlags(file, text, options))
+        }
+
+        // (1) the plan re-reads, and (3)'s subject set: the renamed occurrences in the
+        // new text, plus every identifier that already spelled the new name.
+        // What each span resolved to BEFORE, by (file, start). The expectation for every
+        // span asked about below is its own old answer, mapped — never the seed. A
+        // MEMBER's declaration name resolves to nothing (it is bound by no scope and has
+        // no receiver), so demanding that it name the seed would refuse every member
+        // rename with a "meaning changed" that is this API's own blind spot rather than
+        // a fact about the program.
+        val resolvedBefore = HashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
+        for (definition in sweep.definitions) {
+            resolvedBefore[definition.fileName to definition.start] =
+                definition.locations.map { placeOf(it.fileName, it.start) }.toSet()
+        }
+        val asked = ArrayList<TypeCaptureSpan>()
+        val expectedPlaces = LinkedHashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
+        for ((file, edits) in planned) {
+            val index = newIndexes[file] ?: continue
+            for (edit in edits) {
+                val at = shift(file, edit.start) + edit.nameOffset
+                val node = index.pathAt(at).lastOrNull()
+                if (node !is Identifier || node.pos != at || node.text != newName) {
+                    conflicts.add(
+                        RenameConflict(
+                            RenameConflictKind.RESOLUTION_CHANGED, file, at, at + newName.length,
+                            "the applied edit did not produce '$newName' here",
+                        ),
+                    )
+                    return refuse(RenameRefusal.WOULD_CHANGE_MEANING)
+                }
+                asked.add(TypeCaptureSpan(file, node.pos, node.end))
+                expectedPlaces[file to node.pos] =
+                    resolvedBefore[file to edit.start] ?: emptySet()
+            }
+        }
+        for ((file, found) in sweep.identifiers) {
+            for (id in found) {
+                if ((id as Identifier).text != newName) continue
+                val expected = resolvedBefore[file to id.pos] ?: continue
+                val index = newIndexes[file]
+                val node = if (index == null) id else {
+                    index.pathAt(shift(file, id.pos)).lastOrNull()
+                        ?.takeIf { it is Identifier && it.text == newName } ?: continue
+                }
+                asked.add(TypeCaptureSpan(file, node.pos, node.end))
+                expectedPlaces[file to node.pos] = expected
+            }
+        }
+
+        val after = ProjectCompiler(scratch)
+            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(asked))
+
+        // (2) no new diagnostic. Compared by (file, code) as a MULTISET: a rename
+        // rewrites the names inside messages, so the message text moves for reasons
+        // that are not regressions, while a count per code does not.
+        val bag = HashMap<Pair<String, Int>, Int>()
+        for (diagnostic in sweep.diagnostics) {
+            val key = (diagnostic.fileName ?: "") to diagnostic.code
+            bag[key] = (bag[key] ?: 0) + 1
+        }
+        for (diagnostic in after.diagnostics) {
+            val file = diagnostic.fileName ?: ""
+            val key = file to diagnostic.code
+            val left = bag[key] ?: 0
+            if (left > 0) {
+                bag[key] = left - 1
+            } else {
+                val start = diagnostic.start ?: 0
+                conflicts.add(
+                    RenameConflict(
+                        RenameConflictKind.NEW_DIAGNOSTIC, file,
+                        start, start + (diagnostic.length ?: 0),
+                        "TS${diagnostic.code}: ${diagnostic.message}",
+                    ),
+                )
+            }
+        }
+        if (conflicts.isNotEmpty()) return refuse(RenameRefusal.WOULD_NOT_COMPILE)
+
+        // (3) nothing moved.
+        val resolvedAfter = HashMap<Pair<String, Int>, Set<Pair<String, Int>>>()
+        for (definition in after.capturedDefinitions) {
+            resolvedAfter[definition.fileName to definition.start] =
+                definition.locations.map { it.fileName to it.start }.toSet()
+        }
+        for ((where, expected) in expectedPlaces) {
+            val got = resolvedAfter[where] ?: emptySet()
+            if (got != expected) {
+                conflicts.add(
+                    RenameConflict(
+                        RenameConflictKind.RESOLUTION_CHANGED, where.first, where.second,
+                        where.second + newName.length,
+                        "after the rename this names a different declaration set",
+                    ),
+                )
+            }
+        }
+        if (conflicts.isNotEmpty()) return refuse(RenameRefusal.WOULD_CHANGE_MEANING)
+
+        val files = planned.entries
+            .map { (file, edits) ->
+                FileRename(file, edits.map { RenameEdit(it.start, it.end, it.newText) })
+            }
+            .sortedBy { it.fileName }
+        return RenamePlan(oldName, newName, files, null, emptyList())
     }
 
     /**
