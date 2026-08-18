@@ -456,6 +456,15 @@ internal object SyntaxRoles {
             // binding `K` and to nothing else — tsc answers the const's own group there,
             // two spans, measured — so calling it a member position would flip the
             // completeness net's polarity for every ordinary `const K` rename.
+            // ROUND 935 RE-MEASURED THIS AGAINST THE CHECKER AND CONFIRMED IT RATHER
+            // THAN SUPERSEDING IT. That round made the CHECKER late-bind `{ [K]: v }` to
+            // the member `p` (tsc's own `isTypeUsableAsPropertyName`), so the natural
+            // reading is that this arm must widen to match — and tsc says no: asked for
+            // the references of `Shape.p` on a file whose literal carries `[K]`, its LSP
+            // answers TWO spans, the declaration and a plain `{ p: 2 }`, and not the key.
+            // The checker and the language service DELIBERATELY disagree about what a
+            // member name is, in tsc as here: the key SUPPLIES the member and SPELLS the
+            // binding, and only the second is what a rename may edit.
             is ComputedPropertyName ->
                 parent.expression === node && isMemberNameLiteral(node)
             else -> false

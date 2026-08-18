@@ -110966,6 +110966,169 @@ interface DataView {
     }
 
     /**
+     * Round 935 — LATE BINDING: the member name a computed key spells through its
+     * key expression's **TYPE** rather than through its spelling.
+     *
+     * tsc's rule is `isTypeUsableAsPropertyName` — a computed key names a fixed member
+     * when the key expression's type is a string-literal, number-literal or
+     * unique-symbol type — and every row below was READ from `tsc 7.0.2` on a scratch
+     * project, in BOTH directions, before this was written:
+     *
+     *  - `const K = "p"` / `const K2 = K` / `let L2: "p"` / `declare const D: "p"`:
+     *    late-binds to `p` (a `const`'s CONST-NESS is not the criterion — a `let` with
+     *    a literal ANNOTATION binds too, and a `const` whose type widened does not).
+     *  - a string ENUM member, `const` or not (`[E.P]` where `P = "p"`): binds to `p`.
+     *  - a numeric enum member and a number-literal-typed binding: bind to the VALUE's
+     *    canonical string (`7`, `1000` — not the source text).
+     *  - REFUSED, with tsc agreeing on every one: a widened `let L` (`string`), a
+     *    string-literal UNION (`declare const U: "p" | "q"`), a plain `symbol`, a bare
+     *    type parameter, and a SUBSTITUTING template. All of those are TS2741 in tsc.
+     *
+     * **This is asked BEFORE [computedSymbolKey], and that order is the whole point.**
+     * That helper INVENTS `"[<dotted>]"` so a well-known-symbol member can match
+     * STRUCTURALLY (round 723) and cannot tell `Symbol.iterator` from `E.P`; round 934
+     * measured the false positive it manufactures when used as a claim about what a key
+     * SPELLS (`{ [E.P]: 1 }` reported as an excess key `'[E.P]'` against `{ p?: number }`,
+     * which tsc late-binds and accepts). Late binding answers `p` for that key, so the
+     * invented placeholder is reached only by the dotted paths that really are dynamic.
+     *
+     * **A refusal is the pre-935 behaviour, never a wrong name** — this returns null
+     * whenever the key's type is not a literal, so an unresolved or contextually
+     * unavailable key degrades to exactly what it did before.
+     *
+     * OUT OF SCOPE and stated rather than hidden: `unique symbol` has no type of its own
+     * here (`declare const S: unique symbol` types as plain `symbol`, measured), so
+     * `[S]` and `[S2]` are still one name to this compiler; and tsc late-binds INTERFACE
+     * and CLASS members and its duplicate-key check (TS1117) through the same rule, which
+     * needs member tables computed after type resolution — see (CHK.4).
+     */
+    private fun lateBoundComputedKeyName(name: NameNode): String? {
+        val cpn = name as? ComputedPropertyName ?: return null
+        return lateBoundKeyValue(unwrapParensExpr(cpn.expression), 0)
+    }
+
+    /**
+     * Round 935: the literal a late-bindable key EXPRESSION denotes, resolved
+     * SYNTACTICALLY — an enum member's value, or the declaration a name resolves to.
+     *
+     * **It is syntactic because a TYPE-based answer is not a function of the program,
+     * and this round measured what that costs.** The first draft asked
+     * [getTypeOfExpression] for the key's type, exactly as tsc's `isTypeUsableAsPropertyName`
+     * does — and a FILE-LEVEL un-annotated `const K = "p"` then answered `"p"` in the
+     * assignability pass and the widened `string` in the pass behind TS2339, so ONE key
+     * was two different members in ONE compile: `const obj = { [K]: 1 }; obj.p` produced
+     * the correct TS2322 *and* `Property 'p' does not exist on type '{}'` together. That
+     * is round 933's two-extraction-sites signature reached through ambient state rather
+     * than through a second `when` (round 911: a literal's type is computed in more than
+     * one ambient, and [currentLocalTypes] is not the same map in both).
+     *
+     * The resolution, innermost first, mirroring [collectUniqueSymbolConstNames]' shape:
+     *  - a `const` whose INITIALIZER is a literal — regardless of its annotation, because
+     *    a `const` reference is narrowed to that literal at every use (which is what makes
+     *    `const U: "p" | "q" = "p"` a late-bindable key in tsc, measured);
+     *  - any declaration whose ANNOTATION is a literal type (`let L2: "p"`,
+     *    `declare const D: "p"`, `declare const N: 7`) — const-ness is not the criterion;
+     *  - a `const` alias chain (`const K2 = K`), bounded at [LATE_BIND_ALIAS_HOPS].
+     *
+     * Everything else answers null, i.e. the pre-935 behaviour: a widened `let L`, a
+     * genuine literal UNION (`declare const U2: "p" | "q"`), a plain `symbol`, a bare type
+     * parameter and a SUBSTITUTING template are all refused — and tsc reports TS2741 for
+     * every one of them (measured), so the refusals are parity, not omissions.
+     */
+    private fun lateBoundKeyValue(e: Expression, hops: Int): String? {
+        if (hops > LATE_BIND_ALIAS_HOPS) return null
+        enumMemberLateBoundKeyName(e)?.let { return it }
+        val id = e as? Identifier ?: return null
+        val decl = lateBindResolveVarDecl(id) ?: return null
+        // A `const` initializer wins over an annotation: the reference is narrowed to it.
+        val list = (decl as NodeBase).parent as? VariableDeclarationList
+        if (list?.flags == SyntaxKind.ConstKeyword) {
+            decl.initializer?.let { init ->
+                literalKeyValueOf(init)?.let { return it }
+                val inner = unwrapParensExpr(init)
+                if (inner is Identifier || inner is PropertyAccessExpression) {
+                    lateBoundKeyValue(inner, hops + 1)?.let { return it }
+                }
+            }
+        }
+        return (decl.type as? LiteralType)?.literal?.let { literalKeyValueOf(it) }
+    }
+
+    /** Round 935: the property name a literal NODE spells for late binding — the string
+     *  as written, or a number's CANONICAL text (tsc names `[N]` where `N: 1e3` "1000",
+     *  not "1e3"), which is why this reads the value rather than the source text. */
+    private fun literalKeyValueOf(e: Expression): String? = when (val u = unwrapParensExpr(e)) {
+        is StringLiteralNode -> u.text
+        is NoSubstitutionTemplateLiteralNode -> u.text
+        is NumericLiteralNode -> u.text.toDoubleOrNull()?.let { Type.NumberLiteral(it).toString() }
+        is PrefixUnaryExpression -> {
+            val n = u.operand as? NumericLiteralNode
+            if (u.operator == SyntaxKind.Minus && n != null) {
+                n.text.toDoubleOrNull()?.let { Type.NumberLiteral(-it).toString() }
+            } else null
+        }
+        else -> null
+    }
+
+    /**
+     * Round 935: the VariableDeclaration a late-bindable key name resolves to, by an
+     * INNERMOST-FIRST scan of the enclosing statement lists ([ctaM3NearestList]'s node
+     * set). A scope-chain consult would be ambient (INV.4(c)(i)'s `spineCurrentScope` is
+     * maintained by the walk) and [lookupPerFileForNode] cannot see a function-body local
+     * at all (B83.5 — block-scoped declarations are not bound), so the walk up the parent
+     * chain is both the deterministic answer and the only one that covers both scopes.
+     */
+    private fun lateBindResolveVarDecl(id: Identifier): VariableDeclaration? {
+        var cur: Node? = (id as NodeBase).parent
+        while (cur != null) {
+            val stmts = when (cur) {
+                is SourceFile -> cur.statements
+                is ModuleBlock -> cur.statements
+                is Block -> cur.statements
+                is CaseClause -> cur.statements
+                is DefaultClause -> cur.statements
+                else -> null
+            }
+            if (stmts != null) {
+                for (st in stmts) {
+                    if (st !is VariableStatement) continue
+                    for (d in st.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text == id.text) return d
+                    }
+                }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * Round 935: the late-bound name of an `E.P` key — the enum member's VALUE.
+     *
+     * An enum member could not answer through its TYPE even if the type route were
+     * deterministic: since round 741 its type is a member-less `Type.Object` interned on
+     * `"<enumSymId>#<member>"` and carries no value, which is why `const z: "q" = E.P` is
+     * silent here where tsc says `Type 'E' is not assignable`. The value lives in the enum
+     * tables, and [enumMemberEntries] is the reader that already knows the one case with
+     * NO value: a member with no initializer in an AMBIENT non-`const` enum (round 746 —
+     * we auto-number it for the Transformer, tsc gives it none). Such a member answers
+     * null here rather than binding to an invented number.
+     */
+    private fun enumMemberLateBoundKeyName(e: Expression): String? {
+        val pa = e as? PropertyAccessExpression ?: return null
+        val enumIdent = (pa.expression as? Identifier)?.text ?: return null
+        val member = pa.name.text
+        if (member.isEmpty()) return null
+        val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
+        val entries = enumMemberEntries(sym) ?: return null
+        return when (val v = entries.firstOrNull { it.first == member }?.second) {
+            is ConstantValue.StringValue -> v.value
+            is ConstantValue.NumberValue -> v.toString()
+            null -> null
+        }
+    }
+
+    /**
      * Round 934: the STATIC member name an OBJECT-LITERAL element declares, exactly as
      * [getTypeOfObjectLiteral] names it — a bare Identifier, a string or numeric literal,
      * or a computed key whose inner expression is a literal ([computedLiteralKey]) or a
@@ -111009,7 +111172,7 @@ interface DataView {
         is Identifier -> n.text
         is StringLiteralNode -> n.text
         is NumericLiteralNode -> n.text
-        is ComputedPropertyName -> computedLiteralKey(n)
+        is ComputedPropertyName -> computedLiteralKey(n) ?: lateBoundComputedKeyName(n)
         else -> null
     }
 
@@ -118425,7 +118588,8 @@ interface DataView {
                         // Round 723: a well-known-symbol key is a real member; without
                         // computedSymbolKey it was DROPPED and the target then reported it
                         // missing (tsc's own Set<TElement> literal).
-                        is ComputedPropertyName -> computedLiteralKey(n) ?: computedSymbolKey(n) ?: continue
+                        is ComputedPropertyName -> computedLiteralKey(n) ?: lateBoundComputedKeyName(n)
+                            ?: computedSymbolKey(n) ?: continue
                         else -> continue
                     }
                     val propCtx = ctxObj?.members?.get(name)?.let { sym ->
@@ -118555,7 +118719,8 @@ interface DataView {
                         is StringLiteralNode -> n.text
                         // Round 723: the METHOD form `{ [Symbol.iterator]() {…} }` — the
                         // same member the PropertyAssignment branch above now keeps.
-                        is ComputedPropertyName -> computedLiteralKey(n) ?: computedSymbolKey(n) ?: continue
+                        is ComputedPropertyName -> computedLiteralKey(n) ?: lateBoundComputedKeyName(n)
+                            ?: computedSymbolKey(n) ?: continue
                         else -> continue
                     }
                     val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
@@ -182175,6 +182340,9 @@ private val REGEX_BINARY_PROPS = setOf(
  * block", i.e. the loop body carries on at the next section.
  */
 private const val CAAS_NONE = 0
+/** Round 935: how many `const` alias hops late binding follows (`const K2 = K`). */
+private const val LATE_BIND_ALIAS_HOPS = 8
+
 private const val CAAS_CONTINUE = 1
 private const val CAAS_BREAK = 2
 private const val CAAS_RETURN = 3

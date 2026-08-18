@@ -20,6 +20,150 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 935 (2026-08-18) — (CHK.3): LATE-BOUND COMPUTED KEYS, BOTH DIRECTIONS IN ONE
+COMMIT. THE ROUND'S PRODUCT IS THAT **tsc's OWN RULE IS NOT PORTABLE AS WRITTEN: A MEMBER
+NAME DERIVED FROM A *TYPE* IS NOT A FUNCTION OF THE PROGRAM HERE**, and the first draft —
+which ported `isTypeUsableAsPropertyName` literally — produced the CORRECT diagnostic and a
+CONTRADICTORY one in the SAME compile, which is round 933's two-extraction-sites signature
+reached through ambient state instead of through a second `when`.**
+
+- **STEP 1 WAS tsc 7.0.2, DIRECT, on ~40 scratch projects.** Every row below was READ from
+  `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit --listAll` on
+  the SAME directory — never reasoned. **Both defects reproduced at HEAD exactly as rounds
+  933/934 recorded them, and extending the table before designing paid for itself twice**
+  (see the two corrections below).
+
+**Direction 1 — SUPPLY** (`interface Req { p: number }`, `const r: Req = { <key>: 1 }`;
+a row is a false POSITIVE when tsc is silent and we are not).
+
+| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `[K]`, `const K = "p"` | silent | **TS2741 — FP** | silent |
+| `[K2]`, `const K2 = K` | silent | **TS2741 — FP** | silent |
+| `[L2]`, `let L2: "p" = "p"` | silent | **TS2741 — FP** | silent |
+| `[D]`, `declare const D: "p"` | silent | **TS2741 — FP** | silent |
+| `[U]`, `const U: "p" \| "q" = "p"` | silent (CFA-narrowed) | **TS2741 — FP** | silent |
+| `[CE.P]`, `const enum CE { P = "p" }` | silent | **TS2741 — FP** | silent |
+| `[SE.P]`, a PLAIN `enum SE { P = "p" }` | silent | **TS2741 — FP** | silent |
+| `[N]`, `const N = 1e3` vs `{ 1000: number }` | silent | **TS2741 — FP** | silent |
+| `[NE.P]`, `enum NE { P = 0 }` vs `Req` | TS2353 | TS2741 | **TS2353 — parity** |
+| `[L]`, `let L = "p"` (widened) | TS2741 | TS2741 | TS2741 — refused, parity |
+| `[U2]`, `declare const U2: "p" \| "q"` | TS2741 | TS2741 | TS2741 — refused, parity |
+| `[PS]`, `declare const PS: symbol` | TS2741 | TS2741 | TS2741 — refused, parity |
+| `[k]`, `<KK extends string>(k: KK)` | TS2741 | TS2741 | TS2741 — refused, parity |
+| `[AE.X]`, `declare enum AE { X }` | TS2741 | TS2741 | TS2741 — refused, parity |
+| `[S]` / `[Symbol.iterator]` | TS2353 | TS2741 | TS2741 — **STILL OPEN, (CHK.4)** |
+
+**Direction 2 — EXCESS** (`interface Opt { p?: number }`; a row is a false NEGATIVE when
+tsc emits and we do not). tsc names the key **as written**, which round 934 already renders.
+
+| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `[KZ]`, `const KZ = "zz"` | TS2353 `'[KZ]'` | **silent — FN** | TS2353 `'[KZ]'` |
+| `[CE.Q]` (const enum) | TS2353 `'[CE.Q]'` | **silent — FN** | TS2353 `'[CE.Q]'` |
+| `[SE.Q]` (plain enum) | TS2353 `'[SE.Q]'` | **silent — FN** | TS2353 `'[SE.Q]'` |
+| `[NE.P]` (numeric enum) | TS2353 `'[NE.P]'` | **silent — FN** | TS2353 `'[NE.P]'` |
+| the same in an ARGUMENT / a NESTED literal | TS2353 | **silent — FN** | TS2353 |
+| `[CE.P]` / `[K]` naming an EXISTING member | silent | silent | silent — the A4 FP, guarded |
+| `[N]` vs a NUMERIC index signature | silent | silent | silent — round 934's guard holds |
+| `[S]` / `[Symbol.iterator]` | TS2353 | silent | silent — **STILL OPEN, (CHK.4)** |
+
+- **THE FIRST DRAFT WAS tsc's OWN RULE AND IT HAD TO BE THROWN AWAY — THIS IS THE ROUND.**
+  tsc late-binds when `isTypeUsableAsPropertyName(checkComputedPropertyName(name))`, so the
+  draft asked `getTypeOfExpression(key)` and accepted a `Type.StringLiteral`/`NumberLiteral`.
+  It made every supply and excess row above green — **and then**
+  `const K = "p"; const obj = { [K]: 1 }; obj.p` emitted the correct TS2322 **AND**
+  `Property 'p' does not exist on type '{}'` **in one compile**. Diagnosed by bisecting the
+  DECLARATION rather than the key: annotated (`const K: "p"`), `declare`d and FUNCTION-BODY
+  consts are all clean, and only the FILE-LEVEL **un-annotated** const splits — its literal
+  type exists in `currentLocalTypes` as (WIDEN.1) records it and the pass behind TS2339 does
+  not have that map (round 911: a literal is typed in more than one ambient). **A name that
+  a member table is built from must be a function of the PROGRAM, and a type-derived one
+  here is a function of the PASS.**
+- **SO THE LANDED RESOLUTION IS SYNTACTIC**, which is also what makes it cheap: an enum
+  member's VALUE through `enumMemberEntries` (whose ambient-non-`const` OPAQUE rule, round
+  746, turns out to be tsc's own answer — `declare enum AE { X }` is TS2741 in tsc too), or
+  the declaration a name resolves to by an INNERMOST-FIRST walk of the enclosing statement
+  lists. The walk is not a stylistic choice: `lookupPerFileForNode` cannot see a
+  function-body local at all (B83.5) and a scope-chain consult would be ambient again.
+- **TWO RULES THE EXTENDED TABLE CORRECTED, BOTH THE OPPOSITE OF THE OBVIOUS ONE.**
+  (i) `const`-ness is NOT the criterion — `let L2: "p"` late-binds and a widened `const`
+  would not — so a literal ANNOTATION binds for any declaration. (ii) A `const`'s literal
+  INITIALIZER beats its own annotation, because a `const` reference is CFA-narrowed to it;
+  that is the only reading under which `const U: "p" | "q" = "p"` late-binds in tsc, and a
+  first pass that read the annotation would have called it a union and refused. **A genuine
+  union needs `declare const U2: "p" | "q"`** — the narrowing makes the initialized form a
+  useless control, and it read "silent" for the wrong reason on the first table.
+- **ORDER IS THE FIX FOR ROUND 934's ARM-A4 FALSE POSITIVE, at its source.**
+  `lateBoundComputedKeyName` is asked BEFORE `computedSymbolKey` at all three naming sites,
+  so `[CE.P]` answers `p` and the invented `"[<dotted>]"` placeholder is reached only by the
+  dotted paths that really are dynamic. Round 934 had to EXCLUDE that helper from the excess
+  naming; it no longer has to.
+- **THE LANGUAGE-SERVICE SIDE WAS RE-MEASURED AND STAYS PUT — THE QUEUE'S "it has to move in
+  the same commit" IS WITHDRAWN, ON tsc's OWN ANSWER.** `SyntaxRoles.isMemberPosition`
+  refuses `{ [K]: v }`; asked for the references of `Shape.p` on a file whose literal carries
+  `[K]`, tsc's LSP answers **2** spans — the declaration and a plain `{ p: 2 }` — and not the
+  key. **The checker and the language service deliberately disagree about what a member name
+  is, in tsc as here**: the key SUPPLIES the member and SPELLS the binding, and only the
+  second is what a rename may edit. The reason is recorded beside the arm.
+- **THE PROFILES ARE *NOT* A CONTROL THIS TIME, unlike rounds 933 and 934 — measured, not
+  assumed.** Across all eight profiles' 1,249 `.ts` files the late-bindable shape occurs in
+  bulk: `[SyntaxKind.<Member>]:` object-literal keys (32 hits per member name — `parser.ts`'s
+  `forEachChildTable`, `visitorPublic.ts`'s `visitEachChildTable`) plus 57 `[Symbol.iterator](`.
+  So the 8-profile grid was a real test of a real population, and its `added=0 removed=0` is
+  a result rather than a tautology — as is the fact that `globals.lookups` MOVED (+0.09%),
+  which is those keys' enum resolutions and the only cost this round has.
+
+- **PINS +25, one class, `LateBoundComputedKeyTest`.** Ten supply rows, five negative
+  controls whose refusal is tsc's answer (widened `let`, genuine union, plain `symbol`, bare
+  type parameter, ambient value-less enum member), five excess rows including the argument
+  and nested positions, three excess negative controls (the A4 FP, an existing member, the
+  numeric-index absorption) — and **the round's core pin, `a late-bound key is one member in
+  every pass`**, which asserts `none { 2339 }` together with exactly one TS2322 and is the
+  only thing in the suite that can see the type-route defect, because each pass alone is green.
+
+- **EIGHT-ARM ABLATION, one mistake at a time, each applied to and restored from a
+  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (`scripts/round935-ablate.py`;
+  the dead-arm check diffs against the SNAPSHOT rather than HEAD).
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 | late binding is off entirely | **16** | the pre-935 boundary — every supply and every excess row in one set |
+| A2 | only the EXCESS side loses it (the type builder still binds) | **5** | the five excess rows, and that the two sites are separable |
+| A3 | the ENUM route is dropped | **5** | every enum row, in both directions, and only those |
+| A4 | the const-INITIALIZER route is dropped | **9** | the const rows including the alias chain, the union-annotated const and the body local |
+| A5 | the literal-ANNOTATION route is dropped | **2** | the `let L2: "p"` and `declare const D: "p"` rows, and only those |
+| A6 | the `const` guard is dropped (a `let` initializer binds too) | **1** | the widened-`let` negative control, and only it |
+| A7 | a numeric key is named by its SOURCE TEXT, not its value | **2** | the `1e3` -> `1000` pair, after the pin was repaired (below) |
+| A8 | an AMBIENT value-less enum member binds to an invented number | **1** | the round-746 opaque-value control, and only it |
+
+  **Every arm has a uniquely-its-own failure, and A7 is the round's second methodological
+  finding: it first read ZERO and that was a BLIND PIN, not a redundant guard** (round 902's
+  trap). The pin asserted `none { 2741 }` for `{ [N]: 1 }` against `{ 1000: number }`, and a
+  MISNAMED key is not reported by the missing-property emitter at all — the EXCESS emitter
+  fires first and short-circuits it, exactly as tsc's does. Probed rather than assumed
+  (`const N = 7` against the same target reads TS2353 in BOTH compilers), the pin now
+  asserts neither code fires and a new POSITIVE control asserts that `{ "1e3": number }` —
+  the target a text-named key WOULD satisfy — is reported excess. 24 pins -> 25.
+
+- **GATES.** Suite **15,055 → 15,080 / 0 failures / 3 skipped** (summed over all six modules
+  with an XML parser); **no corpus baseline moved**, so no `logicalParityDivergence` was
+  needed. `cost_gate.py`: 18 of 20 counters `+0.00%`, `globals.lookups` **748,522 → 749,220
+  (+0.09%)** and `globals.misses` **732,172 → 732,840 (+0.09%)** — the enum-symbol
+  resolutions the profiles' `[SyntaxKind.X]:` keys now perform, far inside the ±2% band and
+  rebaselined with `--update` in this commit. `huge_methods.py --fail-over 0` clean on BOTH
+  module class dirs (largest method 5,651). `spine_closure_audit.py` clean (46 handlers, 40
+  audited) — a control, nothing on the spine changed. **The 8-profile grid is a BEFORE/AFTER
+  BINARY grid** (`scripts/round935-grid.sh`, round 813's shape; profiles enumerated by the
+  presence of a `tsconfig.json` and REFUSED below 8): all eight `added=0 removed=0`,
+  46/94 diagnostics unchanged.
+
+- **NEXT.** `(CHK.4)` — the DECLARATION side (an interface's / a class's own `[K]` member and
+  the duplicate-key TS1117, all of which need member tables computed AFTER type resolution)
+  and the SYMBOL axis (a `unique symbol` has no type of its own here, so `[S]` and `[S2]` are
+  one name). Both are modelling items with tsc's answers already measured in the queue entry;
+  the cheap residue beside them is a `NS.K` namespace-const key, which is an FP today.
+
 **Round 934 (2026-08-18) — (CHK.2): A COMPUTED OBJECT-LITERAL KEY NEVER REACHED THE
 EXCESS-PROPERTY CHECK. THE ROUND'S PRODUCT IS THAT **A DIAGNOSTIC CAN BE COMPUTED IN
 FULL AND THEN DROPPED FOR WANT OF A POSITION** — `getTypeOfObjectLiteral` had named
@@ -151,8 +295,8 @@ NEGATIVE when tsc emits and we do not, a false POSITIVE when the reverse):
   enumerated by the presence of a `tsconfig.json` and REFUSED below 8): all eight
   `added=0 removed=0`, 46/94 diagnostics unchanged.
 
-- **NEXT.** `(CHK.3)` — LATE BINDING: a computed key whose expression has a string-literal
-  TYPE. It is now the SAME open item in both directions and both tables name it — supply
+- **NEXT.** `(CHK.3)` — LATE BINDING (LANDED round 935; the residue is (CHK.4)): a
+  computed key whose expression has a string-literal TYPE. It is now the SAME open item in both directions and both tables name it — supply
   (`{ [K]: v }` / `{ [E.P]: v }` do not satisfy a required member here and do in tsc) and
   excess (`[K]`, `[E.Q]`, `[S]`, `[Symbol.iterator]` are TS2353 in tsc and silent here) —
   so it should be closed once, at `computedLiteralKey`'s caller, by asking the key's type
@@ -1946,27 +2090,64 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   gate re-run (1,327 files, 101,287,620 chars, zero violations — which is § 14's own
   "101 M characters" claim, verified).
 
-- [ ] **(CHK.3) LATE-BIND A COMPUTED KEY WHOSE EXPRESSION HAS A STRING-LITERAL *TYPE* —
-  `{ [K]: v }`, `{ [E.P]: v }`, `{ [S]: v }`, `{ [Symbol.iterator]: v }`. NOW THE SAME OPEN
-  ITEM IN BOTH DIRECTIONS, with tsc 7.0.2's answer measured on every row (rounds 933, 934).**
-  SUPPLY: `const enum E { P = "p" }; const r: Req = { [E.P]: 1 }` satisfies a required `p`
-  in tsc and does not here (TS2741 — an FP). EXCESS: the same keys spelling a name the target
-  LACKS are TS2353 in tsc, named as written (`'[K]'`, `'[E.Q]'`, `'[S]'`, `'[Symbol.iterator]'`),
-  and are silent here (an FN). Both are one mechanism: tsc resolves the key EXPRESSION's type
-  and late-binds a string-literal-typed key to that name, where `computedLiteralKey` reads the
-  key's SPELLING. **THE TWO DIRECTIONS MUST LAND TOGETHER, and round 934 measured what a
-  half-landing costs**: naming the excess key with `computedSymbolKey`'s INVENTED
-  `"[<dotted>]"` placeholder reports `{ [E.P]: 1 }` as excess — a false positive on a program
-  tsc accepts — because a name that is right for STRUCTURAL matching (round 723's well-known
-  symbols) is wrong as a claim about what the key spells. That FP is pinned in
-  `ComputedKeyExcessPropertyTest`; the FNs deliberately are NOT (round 765: a known-open gap
-  is a countdown, not a guard). **`SyntaxRoles.isMemberPosition` refuses the identical shape
-  on the language-service side (round 932, deliberately: `[K]` spells no fixed name and tsc
-  reads it as a reference to `K` alone) and has to move in the same commit or the checker and
-  the API will disagree about what a member name is.** Smaller residue in the same family,
-  worth a paragraph rather than a round: `getTypeOfObjectLiteral`'s GetAccessor/SetAccessor
-  arms do not name a computed key at all, so `{ get ["gg"]() {} }` declares no member and is
-  invisible to both directions.
+- [ ] **(CHK.4) DECLARATION-SIDE LATE BINDING AND THE SYMBOL AXIS — what round 935
+  deliberately did NOT take, with tsc 7.0.2's answer measured on every row.** Round 935
+  landed late binding for the OBJECT LITERAL in both directions; the residue is a
+  MODELLING item and is written here so the next agent does not re-derive it.
+  (a) **The DECLARATION side**: `interface IK { [K]: number }` and `class CK { [K]: number }`
+  late-bind in tsc (probed by assigning `i.p` to an incompatible primitive: TS2322 there,
+  SILENT here for the interface — it degrades to `any` — and **TS2339, a false positive**,
+  for the class), and so does the duplicate-key check (`{ p: 1, [K]: 2 }` is **TS1117** in
+  tsc, silent here). That needs member tables computed AFTER type resolution — tsc's
+  `getResolvedMembersOrExportsOfSymbol` + `SymbolLinks.lateSymbol`, tsgo's per-checker
+  forwarding map — i.e. the same shape (CHK.x) would need for `--shareBind`, not a widening.
+  (b) **The SYMBOL axis**: `declare const S: unique symbol` types as plain `symbol` here
+  (measured: `const z: string = S` says `Type 'symbol'` where tsc says `typeof S`), so `[S]`
+  and `[S2]` are ONE name to this compiler and `computedSymbolKey`'s invented `"[<dotted>]"`
+  placeholder still owns them. tsc reports `{ [S2]: 1 }` against `{ [S]: number }` as
+  **TS2353 '[S2]'** and `{ [S]: 1 }` / `{ [Symbol.iterator]: 1 }` against `{ p?: number }`
+  as TS2353; all are silent here. A `unique symbol` TYPE is the unblocker and it is not small.
+  (c) **Three one-line residues**: a `NS.K` namespace const key (tsc binds, we answer TS2741 —
+  an FP, and the cheapest of the four); a template-literal TYPE annotation with no
+  initializer (`declare const TT: `p``); and a `string`-typed computed key, which gives
+  tsc's literal a STRING INDEX SIGNATURE we do not model — visible only as the printed
+  source type of an otherwise-identical TS2741 (`{ [L]: number; }` vs `{}`), so it is a
+  FORM divergence on a row where the diagnostic already matches.
+  **THE ONE THING NOT TO "FIX" HERE**: `SyntaxRoles.isMemberPosition` refuses `{ [K]: v }`
+  on the language-service side and round 935 RE-MEASURED that against the landed checker —
+  tsc's LSP answers TWO references for `Shape.p` on a file whose literal carries `[K]`, so
+  the checker and the language service deliberately disagree about what a member name is,
+  in tsc as here. The key SUPPLIES the member and SPELLS the binding; only the second is
+  what a rename may edit.
+
+- [x] **(CHK.3) LATE-BOUND COMPUTED KEYS — LANDED, round 935, BOTH DIRECTIONS IN ONE
+  COMMIT. One missing capability was a false POSITIVE on one side and a false NEGATIVE on
+  the other, and the round's product is that **tsc's own rule is NOT PORTABLE AS WRITTEN**.**
+  Supply: `const K = "p"` / `const enum E { P = "p" }` + `{ [K]: 1 }` / `{ [E.P]: 1 }`
+  satisfy a required `p` in tsc and were TS2741 here. Excess: the same keys spelling a name
+  the target LACKS are TS2353 in tsc, named as WRITTEN, and were silent here. Both are now
+  parity, plus every row the table was extended with before designing: a const ALIAS chain,
+  a `let` with a literal ANNOTATION (const-ness is not the criterion), a `declare const`, a
+  const whose literal INITIALIZER beats a union annotation, a plain (non-`const`) string
+  enum, a NUMERIC enum member and a numeric const (named by the VALUE's canonical string,
+  so `1e3` is "1000"), a body-local const and an inner const SHADOWING an outer one.
+  Refused, with tsc agreeing on every one: a widened `let`, a genuine literal UNION, a plain
+  `symbol`, a bare type parameter, a substituting template, and an AMBIENT non-`const` enum
+  member with no initializer (round 746's opaque rule turns out to be tsc's own answer).
+  **THE FIRST DRAFT PORTED `isTypeUsableAsPropertyName` LITERALLY — the key expression's
+  TYPE — AND IT MEASURED AS A NAME THAT IS NOT A FUNCTION OF THE PROGRAM**: a FILE-LEVEL
+  un-annotated `const K = "p"` answers the literal in the assignability pass and the widened
+  `string` in the pass behind TS2339, so `const obj = { [K]: 1 }; obj.p` emitted the correct
+  TS2322 **and** `Property 'p' does not exist on type '{}'` in ONE compile — round 933's
+  two-extraction-sites signature reached through ambient state (round 911) instead of through
+  a second `when`. The landed resolution is SYNTACTIC (an enum member's VALUE via
+  `enumMemberEntries`; otherwise the declaration a name resolves to, by an innermost-first
+  walk of the enclosing statement lists — `lookupPerFileForNode` cannot see a body local at
+  all, B83.5, and a scope-chain consult would be ambient again), and the pin that fails if
+  the type route returns asserts the two passes AGREE, because each pass alone is green.
+  `lateBoundComputedKeyName` is asked BEFORE `computedSymbolKey` at all three naming sites,
+  which is also what retires round 934's arm-A4 false positive at its source rather than by
+  exclusion. 25 pins, 8-arm ablation (every arm with a uniquely-its-own failure). What is left is (CHK.4) above.
 
 - [x] **(CHK.2) A COMPUTED OBJECT-LITERAL KEY NEVER REACHED THE EXCESS-PROPERTY CHECK —
   LANDED, round 934. A false NEGATIVE in every position, from ONE name-extraction `when`,
