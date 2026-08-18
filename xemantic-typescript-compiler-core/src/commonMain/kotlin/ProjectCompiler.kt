@@ -89,6 +89,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** (API.4b) What the lexical scope chain binds at the request's
          *  `scopeSpans`, or empty — the free-name half of a completion list. */
         val capturedScopes: List<CapturedScope> = emptyList(),
+        /** (API.6) Every signature the callees at the request's `signatureSpans`
+         *  have, or empty — the signature-help answer. */
+        val capturedSignatures: List<CapturedSignatures> = emptyList(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -285,6 +288,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             capturedDefinitions = result.capturedDefinitions,
             capturedMembers = result.capturedMembers,
             capturedScopes = result.capturedScopes,
+            capturedSignatures = result.capturedSignatures,
         )
     }
 

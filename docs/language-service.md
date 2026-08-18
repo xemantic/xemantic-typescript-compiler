@@ -4,14 +4,15 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 920, 2026-08-18).** Landed: diagnostics, in-memory edits,
+**Status (round 921, 2026-08-18).** Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
 in one build — **completions**, both halves: members `(API.4a)` and free
-names `(API.4b)` — and **find-references plus document highlights** `(API.5)`.
-Not yet: keywords (§ 10a says why they are refused rather than guessed), rename,
-signature help. See the `(API.*)` items in `PLAN-PHASE-5.md`.
+names `(API.4b)`, **find-references plus document highlights** `(API.5)` — and
+**signature help** `(API.6)`, every overload. Not yet: keywords (§ 10a says why
+they are refused rather than guessed), rename. See the `(API.*)` items in
+`PLAN-PHASE-5.md`.
 
 > **If you are on a version before round 920, upgrade before trusting any
 > position.** Two rounds of the same defect class, both fixed and both now covered
@@ -120,6 +121,7 @@ you call them.
 | `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build |
 | `documentHighlightsAt(f, o)` | **ONE full build** | sweeps this file's identifiers |
 | `referencesAt(f, o)` | **ONE build clean, TWO dirty** | sweeps the whole program's; § 10b has the measured figures |
+| `signatureHelpAt(f, o)` | **full build, every call** | free at a caret in no argument list — those do not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
 **A query on a dirty project is a full rebuild.** That is a property of the
@@ -694,6 +696,97 @@ one file's.
 
 **So: `documentHighlightsAt` is the one to wire to caret movement** (debounced —
 it still builds), and `referencesAt` is the one a user asks for explicitly.
+
+## 10c. Signature help
+
+```kotlin
+val help: SignatureHelp? = project.signatureHelpAt(path, offset)
+// SignatureHelp(signatures: List<SignatureInfo>, activeSignature: Int, activeArgument: Int)
+// SignatureInfo(label: String, parameters: List<ParameterInfo>,
+//               returnTypeText: String, activeParameter: Int)
+// ParameterInfo(name: String, typeText: String, optional: Boolean, isRest: Boolean,
+//               labelStart: Int, labelEnd: Int)
+```
+
+**Every overload comes back, in declaration order** — that is the feature. An
+editor shows "2 of 3" and lets the user page through, so answering with the one
+signature overload resolution would pick is the failure this exists to avoid.
+
+**Two different negatives.** `null` means *the caret is in no argument list*: on
+the callee, past the closing paren, in a comment, in an unknown file. A non-null
+answer with an **empty** `signatures` means *the caret is in an argument list and
+the callee has no signatures* — it is `any`, unresolvable, or not callable. Only
+the second is worth a log line.
+
+**The anchor is a token question, like a completion's.** There is no node at the
+caret in `f(a, |)`; and for an argument list the user has not closed — `f(` at end
+of file, `f(a,` before a `}` — the call node's own real end lies *before* the
+caret, so no descent reaches it. The parser does build the call in every one of
+those cases (it creates a `CallExpression` the moment it sees a `(` and then
+reports the missing `)`), so the argument list is recovered by **bracket matching
+over the token stream** and the argument index by **counting commas**, which is
+what an argument index physically is. Two consequences worth knowing:
+
+- an argument list left open ends at the token that closes the *enclosing*
+  construct — the `}` of the function you are typing in — rather than running to
+  end of file;
+- a comma that belongs to one of the arguments is not a separator, so a nested
+  call, an object literal and a `Map<string, number>` type argument all count as
+  one argument with no rule of their own.
+
+**`activeArgument` is a fact about the text; `activeParameter` is per signature.**
+The first is the number of this argument list's commas before the caret, so it may
+exceed every signature's parameter count. The second is what it means *for one
+signature*, and it **clamps to a rest parameter**: at `push(a, b, c|)` the third
+argument still highlights `...items`. A signature with no rest that has run out of
+parameters reports `-1` rather than pointing at its last one.
+
+**Which signature is active.** The first that could still become this call: one
+with room for the argument the caret is on (its index is within the parameter
+list, or the signature ends in a rest parameter, or it takes no parameters and
+none have been passed), *and* that accepts every argument you have already
+**finished** — judged by the same predicate the compiler selects an overload with.
+The argument the caret is *in* is deliberately not judged: it is half-typed by
+construction, so testing it would flip the highlighted overload back and forth
+under the user's hands. When nothing qualifies the answer is `0`, reported rather
+than hidden.
+
+**The label, and the ranges inside it.** `label` is the whole signature on one
+line — `pickFrom<T>(xs: T[], index: number): T` — with `new ` in front of a
+construct signature, and the callee's own spelling when it has one (a callee that
+is an expression, `(fs[i])(…)`, contributes no name rather than an invented one).
+Each `ParameterInfo` carries `labelStart until labelEnd` **into that label**, which
+is what an editor bolds. Every type in it goes through the same renderer
+`quickInfoAt` uses, deliberately: a host must never have to reconcile two spellings
+of one type.
+
+**A generic callee renders uninstantiated** — `<T>(xs: T[], …): T`, not a
+substitution. Inferring `T` would mean inferring it from arguments that are not
+finished, and the declared form is what tells the reader that `T` is inferred at
+all.
+
+**What answers, concretely.** A plain function, an **overloaded** one, a **method**
+through a receiver, a **constructor** (`new C(`), an **imported** function, a
+**namespace** member, a callee that is itself a **call** (`f()(`), a **decorator
+factory** (`@dec(`), and a function with a **destructured** parameter — that last
+one is rendered from its declaration, because the compiler drops binding-pattern
+parameters from a signature's symbols and rendering from the symbols alone would
+print one parameter short with the survivor wearing its neighbour's type.
+
+**What is refused, each for a reason.**
+
+- **tagged templates** (`` tag`a${b}` ``) — no parenthesized argument list, and
+  counting template substitutions as arguments is a second mechanism;
+- **type arguments** (`f<|>(x)`) — not an argument list;
+- **`super(...)`** — `super` is an ordinary identifier in this parser and binds to
+  nothing, so it answers an empty signature list rather than the enclosing class's
+  base constructor;
+- **a spread's arity** — `f(...xs, |)` reports argument 1, because the commas say
+  so and how many arguments `xs` contributes is not a syntactic question.
+
+**Cost: one compile, one caret,** with hover's caveats (§ 8) — it builds, and that
+build is not the `diagnostics()` build. A caret in no argument list does not build.
+So debounce, exactly as for completions.
 
 ## 11. Rules that apply to everything
 

@@ -268,6 +268,109 @@ data class CapturedScope(
 )
 
 /**
+ * (API.6) ONE call's span, plus WHICH ARGUMENT the caret is in — what a signature
+ * help request names.
+ *
+ * The only capture span carrying a payload beyond the span itself, and it has to:
+ * "which overload is the active one" is a question about the argument the user is
+ * TYPING, and that argument is not a node. `f(a, |)` parses to a call with ONE
+ * argument while the caret sits in the second slot, so the checker cannot recover
+ * the index from the tree — it is a property of the COMMAS, which only the caller's
+ * token index can count (see `SourceIndex.signatureAnchorAt`). Recomputing it here
+ * would be the second approximation of a caret [TypeCaptureSpan] exists to prevent.
+ *
+ * [start] and [end] are the CALL node's raw `(pos, end)` identity, exactly as
+ * [TypeCaptureSpan]'s are.
+ *
+ * @property activeArgument the 0-based index of the argument slot the caret is in.
+ *   Never negative; it may exceed the number of arguments the parse produced, which
+ *   is the ordinary trailing-comma case.
+ */
+data class SignatureCaptureSpan(
+    val fileName: String,
+    val start: Int,
+    val end: Int,
+    val activeArgument: Int,
+)
+
+/**
+ * (API.6) ONE parameter of a rendered signature, and where it sits in the
+ * signature's own label.
+ *
+ * [labelStart] `until` [labelEnd] index [CapturedSignature.label], NOT the source
+ * file — they are what an editor bolds while the user types that argument. They are
+ * recorded AS THE LABEL IS BUILT rather than searched for afterwards, because a
+ * search for `name: type` finds the wrong occurrence the moment a parameter's TYPE
+ * mentions another parameter's spelling.
+ *
+ * @property name the parameter's name, or its destructuring pattern rendered as
+ *   source (`{ a, b }`), without the `...` of a rest parameter.
+ * @property typeText the parameter's type as the compiler renders it — the SAME
+ *   renderer hover uses, deliberately, so a host never has to reconcile two
+ *   spellings of one type.
+ * @property optional true when a caller may omit it: declared `p?`, or carrying a
+ *   default. A rest parameter is NOT reported optional — it is reported [isRest],
+ *   and the two facts mean different things to a widget.
+ * @property isRest true for `...args: T[]`.
+ */
+data class CapturedSignatureParameter(
+    val name: String,
+    val typeText: String,
+    val optional: Boolean,
+    val isRest: Boolean,
+    val labelStart: Int,
+    val labelEnd: Int,
+)
+
+/**
+ * (API.6) ONE signature of the callee at a requested [SignatureCaptureSpan] —
+ * usually the only one, and one of several when the callee is OVERLOADED.
+ *
+ * @property label the whole signature on one line: the callee's name where it has a
+ *   syntactic one, its type parameters where it declares any, the parameter list,
+ *   and the return type — `pick<T>(xs: T[], i: number): T`. A construct signature is
+ *   prefixed `new `.
+ * @property parameters in declaration order, each carrying its own range within
+ *   [label].
+ * @property returnTypeText the return type alone, for a host that lays the signature
+ *   out itself rather than showing [label].
+ * @property activeParameter the index into [parameters] the caret's argument lands
+ *   on, or -1 when this signature has no parameter for it. It is NOT simply the
+ *   request's `activeArgument`: once the caret is past the fixed parameters of a
+ *   signature ending in a REST parameter it clamps to that rest parameter, because
+ *   every further argument feeds it.
+ */
+data class CapturedSignature(
+    val label: String,
+    val parameters: List<CapturedSignatureParameter>,
+    val returnTypeText: String,
+    val activeParameter: Int,
+)
+
+/**
+ * (API.6) Every signature the callee of the call at a requested
+ * [SignatureCaptureSpan] has.
+ *
+ * Keyed on the query span exactly as [CapturedMembers] is, by the RAW `(pos, end)`
+ * pair. An entry exists whenever the checker reached the call, so an empty
+ * [signatures] is a real answer ("this callee has no call signatures — it is `any`,
+ * or unresolvable, or not callable") and stays distinguishable from no entry at all.
+ *
+ * @property signatures in DECLARATION ORDER, which is overload resolution order and
+ *   is what an editor's "2 of 3" counts through. Not sorted, unlike
+ *   [CapturedMembers.members]: here the order is the language's, not the
+ *   implementation's.
+ * @property activeSignature the index into [signatures] a host should show first.
+ */
+data class CapturedSignatures(
+    val fileName: String,
+    val start: Int,
+    val end: Int,
+    val signatures: List<CapturedSignature>,
+    val activeSignature: Int,
+)
+
+/**
  * (API.3) A set of positions a compile is asked to record the type AT, handed to
  * the compiler BEFORE the build.
  *
@@ -405,18 +508,54 @@ data class TypeCaptureRequest(
      * (the host filters — `CompletionList` carries the argument).
      */
     val scopeSpans: List<TypeCaptureSpan> = emptyList(),
+    /**
+     * (API.6) The CALL spans to resolve the callee's SIGNATURES of — a signature
+     * help request names the call it is inside here, and gets [CapturedSignatures]
+     * back.
+     *
+     * A fourth list for [memberSpans]' reason, and it is the only one whose elements
+     * are not plain [TypeCaptureSpan]s: see [SignatureCaptureSpan] for why the active
+     * ARGUMENT has to travel with the span rather than be recomputed here.
+     *
+     * ## What is answered
+     *
+     * The call signatures of the callee's type for a `CallExpression`, and the
+     * CONSTRUCT signatures for a `NewExpression`. The callee is resolved by the
+     * compiler's own `getCalleeType`, which is what makes a method through a
+     * receiver (`o.m(`), a callee that is itself a call (`f()(`), a namespace member
+     * and an imported function all answer without a rule of their own — it is
+     * (API.3d)'s receiver path, one question wider.
+     *
+     * EVERY overload comes back, in declaration order, because showing one of three
+     * is the failure signature help exists to avoid.
+     *
+     * ## What is NOT answered, each for a stated reason
+     *
+     * A TAGGED TEMPLATE (`` tag`x` ``) has no parenthesized argument list, so the
+     * caller's anchor never names one — its argument positions are template
+     * substitutions and counting them is a different mechanism. `super(...)` resolves
+     * through no callee type here (`super` is an ordinary `Identifier` in this
+     * parser and binds to nothing), so it answers an empty list rather than the
+     * enclosing class's constructor. TYPE ARGUMENTS (`f<|>(x)`) are not an argument
+     * list. A SPREAD argument makes the index ambiguous — the caller counts commas,
+     * so `f(...xs, |)` reports argument 1 whatever `xs` contains.
+     */
+    val signatureSpans: List<SignatureCaptureSpan> = emptyList(),
 ) {
 
     /**
      * The spans indexed by file, as packed `(start, end)` keys — the form the
      * checker's per-node test needs.
      *
-     * (API.4a) The UNION of [spans], [memberSpans] and (API.4b) [scopeSpans]: this
-     * set is what the hot-path guard tests, and a member or scope span has to pass
-     * it to be visited at all.
+     * (API.4a) The UNION of [spans], [memberSpans], (API.4b) [scopeSpans] and
+     * (API.6) [signatureSpans]: this set is what the hot-path guard tests, and a
+     * member, scope or signature span has to pass it to be visited at all.
      */
     internal val keysByFile: Map<String, Set<Long>> =
-        (spans + memberSpans + scopeSpans).groupBy { it.fileName }
+        (
+            spans + memberSpans + scopeSpans +
+                signatureSpans.map { TypeCaptureSpan(it.fileName, it.start, it.end) }
+            ).groupBy { it.fileName }
             .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
 
     /**
@@ -431,6 +570,17 @@ data class TypeCaptureRequest(
     internal val scopeKeysByFile: Map<String, Set<Long>> =
         scopeSpans.groupBy { it.fileName }
             .mapValues { (_, group) -> group.mapTo(HashSet()) { packSpanKey(it.start, it.end) } }
+
+    /**
+     * (API.6) The [signatureSpans] alone — a MAP rather than a set, because the value
+     * is the active argument index the span travels with. Read at the same place its
+     * siblings are, i.e. never on the hot path.
+     */
+    internal val signatureArgsByFile: Map<String, Map<Long, Int>> =
+        signatureSpans.groupBy { it.fileName }
+            .mapValues { (_, group) ->
+                group.associate { packSpanKey(it.start, it.end) to it.activeArgument }
+            }
 
     internal companion object {
 

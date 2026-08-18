@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 921 (2026-08-18) — (API.6): SIGNATURE HELP LANDS, EVERY OVERLOAD. THE RANKING'S PREMISE —
+"three-quarters built" — HELD FOR THE CALLEE AND WAS WRONG ABOUT THE ANCHOR: THIS IS THE FIRST QUERY
+IN THE ARC WHOSE SUBJECT IS A **REGION THE PARSE CARRIES NO NODE FOR**, AND THREE OF ITS ORDINARY
+CASES DEFEAT A CONTAINMENT TEST OUTRIGHT.**
+
+- **THE CALLEE HALF WAS EXACTLY AS RANKED, WHICH IS WORTH SAYING BECAUSE THE ANCHOR HALF WAS NOT.**
+  `getCalleeType` + `getCallSignaturesOfType` — the argument checker's own pair — answered a plain
+  name, a METHOD through a receiver, an imported function, a callee that is ITSELF a call and a
+  DECORATOR factory with no rule of their own. Two additions were needed and both are (API.3d)'s
+  second mechanism reappearing: a NAMESPACE/module/enum member is on no TYPE at all (arm A5, 1 red
+  uniquely its own — measured at ZERO signatures before the export-table leg existed), and a `new`
+  needs `getReturnTypeOfNewExpression`'s own resolution behind it, because a class NAME does not type
+  as its own constructor while the INSTANCE type carries the construct signatures (round 475).
+
+- **THE ANCHOR IS THE ROUND. Signature help asks about the argument LIST, and the parse has no node
+  for one.** Three ordinary cases: `f(a, b|)` sits at the real END of `b`, so the half-open spans put
+  it outside `b` and the answer is still argument 1; `f(a, |)`'s second argument does not exist in the
+  tree; and for `f(` at end of file or `f(a,` before a `}` **the call node's own real end lies BEFORE
+  the caret**, so no descent reaches it at all. **The parser recovery was read out of `Parser.kt`
+  before any code was written** (round 917's discipline): `parseArgumentListWorker` breaks on
+  end-of-file and on a `}` and then runs `parseExpected(CloseParen)`, so the `CallExpression` EXISTS in
+  every one of those shapes — which is what makes a token-level anchor possible instead of a
+  refusal. The region is BRACKET-MATCHED over the token stream, stopping early at a closer that does
+  not match the top of the stack (an unmatched `}` means the enclosing block is closing, and the
+  argument list ends there rather than running to EOF), and template substitutions need no rule of
+  their own because (BUG.2)'s re-scan already turns their `}` into a template middle or tail.
+
+- **THE ARGUMENT INDEX IS A COUNT OF COMMAS, AND WHICH COMMAS IS DECIDED BY THE ARGUMENTS' OWN
+  SPANS.** A comma inside one of the arguments belongs to that argument's syntax, so a nested call, an
+  object literal, an arrow parameter list and a `Map<string, number>` TYPE ARGUMENT are all excluded
+  by ONE test — and that last one is the case no bracket-depth scan could have handled, since `<` and
+  `>` are not brackets. Arm A8 (count every comma) reddens exactly those four.
+
+- **THE ACTIVE-SIGNATURE RULE IS TWO CONDITIONS AND NO SCORING, AND BOTH HALVES ARE ABLATED.** The
+  FIRST signature that could still become this call: room for the argument the caret is on (its index
+  is within the parameter list, or the signature ends in a REST parameter, or it takes none and none
+  were passed — a `()` signature IS satisfied by the empty argument list the caret sits in), AND
+  `signatureAcceptsArgs` over the arguments already FINISHED, which is the same verdict
+  `resolveCallOverload` selects an overload with, so a host's highlighted overload and the compiler's
+  chosen one cannot drift apart. **The argument the caret is IN is deliberately not judged** — it is
+  half-typed by construction, so judging it would flip the highlight back and forth under the user's
+  hands. Nothing qualifying answers 0, reported rather than hidden. A6 (always 0) reddens 2, A7 (arity
+  only) reddens 1 of those 2 — a strict subset distinguished by the pin it leaves GREEN, which is the
+  round-918-A4 shape and is the measurement made a second time.
+
+- **ONE COMPILER-SIDE SURPRISE, AND IT WOULD HAVE SHIPPED A PLAUSIBLE-LOOKING LIE.** A parameter
+  declared with a BINDING PATTERN is dropped from `Signature.parameters` by `getParameterSymbols`
+  unless the signature was built for display, and the surviving symbols keep a POSITIONAL zip of the
+  declaration's annotations — so rendering `function destructured({ a, b }: O, tail: string)` from the
+  symbols alone prints **`destructured(tail: O)`**: one parameter short AND the survivor wearing its
+  neighbour's type. Not a coarse answer, a wrong one. The DECLARATION is rendered instead whenever its
+  parameter list is longer, with the pattern spelled as source and each type resolved from its
+  annotation (arm A10, 1 red uniquely its own).
+
+- **ONE TYPE-PRINTING CONVENTION, ON PURPOSE.** Every type goes through `typeToString` — hover's
+  renderer — and deliberately NOT through the existing `signatureToString`, whose `p?: string |
+  undefined` is a TS2345 MESSAGE convention rather than a signature label. A signature label and a
+  hover string describing the same type must not be able to disagree. Parameter ranges index the
+  LABEL and are recorded AS IT IS BUILT (arm A11): searching for `name: type` afterwards finds the
+  wrong occurrence the moment one parameter's type mentions another's spelling.
+
+- **A GENERIC CALLEE RENDERS UNINSTANTIATED** — `pickFrom<T>(xs: T[], index: number): T`. Inferring
+  `T` would mean inferring it from arguments that are not finished, so the value would change under
+  every keystroke and be wrong for the argument still being written; and the declared form is what
+  tells the reader that `T` is inferred at all.
+
+- **REFUSED, each with a reason and a pin**: a TAGGED TEMPLATE (no parenthesized argument list —
+  counting template substitutions is a second mechanism), TYPE ARGUMENTS (`f<|>(x)` is not an argument
+  list), `super(...)` (an ordinary `Identifier` in this parser, bound to nothing, so an EMPTY
+  signature list rather than the base constructor — stated so it does not read as a resolution
+  failure), and a SPREAD's arity (`f(...xs, |)` reports argument 1, because the commas say so).
+  **NOT refused and pinned as covered**: decorator factories and a callee that is itself a call.
+
+- **PINS: +56** (`-project` 242 -> 298; core UNCHANGED at 14,341 — nothing was added there a core test
+  can reach without the `-project` anchor). 30 parse-only anchor pins written FIRST and 26 end-to-end.
+  **THE DISCRIMINATOR, written first**: an OVERLOADED callee asserted as an EXACT list of three
+  labels. Every plausible shortcut — resolve the callee's type and render it, take the one overload
+  resolution picks, match the callee by NAME — answers ONE signature and passes every other pin in the
+  file.
+
+- **ELEVEN-ARM ABLATION, one mistake at a time (round 807), each dry-run for a real diff (round 902),
+  restored from a sha256-verified snapshot and never `git checkout` (round 851). All eleven compiled;
+  ALL ELEVEN reddened a DISTINCT set.** **A1** the anchor keeps the OUTERMOST call -> 1. **A2** only
+  the FIRST overload reported -> 1, the discriminator. **A3** no rest-parameter clamp -> 1, uniquely
+  its own. **A4** no receiver path (only a bare name resolves a callee) -> 2. **A5** no export-table
+  leg -> 1, uniquely its own. **A6** activeSignature always 0 -> 2. **A7** activeSignature by arity
+  alone -> 1. **A8** every comma counts -> 4. **A9** the region is the call's own real end rather than
+  bracket-matched -> 6, every incomplete-call pin plus the past-the-paren negative. **A10** no
+  declaration render for a dropped binding-pattern parameter -> 1. **A11** label ranges not followed
+  -> 1. `scripts/round921-ablate.sh`.
+
+- **GATES: suite 14,717 -> 14,773 / 0 failures / 0 errors / 3 skipped = EXACTLY the +56**, XML-summed
+  over all six modules. `cost_gate.py` **+0.00% on all 20 counters** — a real gate this round, since
+  `Checker.kt` grew ~370 lines reachable from the capture hook on the hot walk, and proven live by its
+  own 46-error / 78-file compile. `huge_methods.py --fail-over 0` clean on core (**750 classes, 15,976
+  methods, 0 over**) and, per round 909's blind-spot rule, on `-project` explicitly (**28 classes, 280
+  methods, 0 over**). `spine_closure_audit.py` 46 handlers all supersets, run although no
+  `spine*EnterNode` changed. `scripts/round920-token-gate.sh` **1,327 files, 101,287,620 chars, ZERO
+  violations** — run because `SourceIndex` gained members. Warning-clean. No wall A/B: production
+  executes not one new instruction — every addition sits behind a hook that returns on a null per-file
+  key set.
+
+- **SUCCESSOR, ranked.** (1) **The refusal backlog as ONE item** — member completion's accessibility
+  filter, contextual object-literal keys, element access `o["p"]`, keyword completions, and now
+  read-vs-write on a reference: **all five want the same missing mechanism**, "where does this caret
+  sit in the grammar / relative to a declaration", so they are one round rather than five, and the
+  backlog is now long enough that the mechanism is cheaper than the refusals. (2) **Rename** — it is
+  (API.5) plus an edit plan, and the edit plan is the work (`{ p }` and `import { p as q }` do not
+  rewrite like a plain occurrence). (3) **The incremental/re-entrant seam**
+  (`docs/ARCHITECTURE-RETHINK.md`) — the right end state and the wrong next step: every figure in this
+  arc is dominated by a full rebuild, so it is the only thing that changes the cost model, and it is
+  also the change most likely to cost a month. **I would take (1).**
+
 **Round 920 (2026-08-18) — (GATE.2): THE INSTRUMENT ROUND 919 DID NOT BUILD, AND IT FOUND **FIVE MORE
 DEFECTS ON ITS FIRST RUN** — INCLUDING (BUG.2) IN A SECOND COSTUME (A BACKTICK INSIDE A REGULAR
 EXPRESSION, IN tsc's OWN SOURCE) AND A `[0, 0)` PARAMETER SPAN THAT MADE EVERY CARET ON A
@@ -1543,6 +1656,68 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `cost_gate.py` **+0.00% on all 20 counters** because nothing in the compile path builds an index.
   **POSITIVE CONTROL**: `SourceIndex.of(…, useParseAsLexerOracle = false)` is the in-binary OFF arm —
   the shape `--spineMaskOff` has — and the gate's own control asserts it reddens.
+
+- [x] **(API.6) SIGNATURE HELP — LANDED, round 921.** `SignatureHelp(signatures, activeSignature,
+  activeArgument)` / `SignatureInfo(label, parameters, returnTypeText, activeParameter)` /
+  `ParameterInfo(name, typeText, optional, isRest, labelStart, labelEnd)`; **`Project.signatureHelpAt(
+  fileName, offset)`**, null when the caret is in no argument list and an EMPTY signature list when it
+  is in one whose callee has none. A FOURTH capture list — `TypeCaptureRequest.signatureSpans:
+  List<SignatureCaptureSpan>`, the only one carrying a payload beyond the span, because the ACTIVE
+  ARGUMENT is a property of the COMMAS and `f(a, |)` parses to a call with one argument.
+  **THE PREMISE — "three-quarters built" — HELD FOR THE CALLEE AND WAS WRONG ABOUT THE ANCHOR.**
+  `getCalleeType` + `getCallSignaturesOfType` answered a method through a receiver, an import, a
+  callee that is itself a call and a decorator factory with no rule of their own, exactly as ranked;
+  what the completion anchor did NOT already answer is which call and which argument, because
+  **signature help is the first query in this arc whose subject is a REGION the parse carries no node
+  for**. Three shapes defeat containment: `f(a, b|)` is at the real END of `b` (half-open, so outside
+  it) and yet is argument 1; `f(a, |)`'s second argument does not exist in the tree; and for `f(` at
+  EOF or `f(a,` before a `}` the call node's own real end lies BEFORE the caret, so no descent reaches
+  it. **THE PARSER RECOVERY WAS READ OUT OF `Parser.kt` BEFORE ANY CODE, as round 917 did**:
+  `parseArgumentListWorker` breaks on end-of-file and on a `}` and then runs `parseExpected(CloseParen)`,
+  so the `CallExpression` EXISTS in every one of those shapes — which is what makes a token-level
+  anchor possible at all. So the region is **bracket-matched over the token stream** (stopping early at
+  a closer that does not match the top of the stack — an unmatched `}` means the enclosing block is
+  closing) and the index is **a count of this list's own commas**, where "its own" is decided by
+  testing the ARGUMENTS' spans: a comma inside a nested call, an object literal or a
+  `Map<string, number>` type argument is excluded by ONE test, with no per-construct rule and no need
+  to lex `<`/`>` (arm A8, 4 red). **THE ACTIVE-SIGNATURE RULE, stated so it can be argued with**: the
+  FIRST signature that could still become this call — room for the caret's argument (its index is
+  within the parameter list, or the signature ends in a rest, or it takes none and none were passed)
+  AND `signatureAcceptsArgs` over the arguments already FINISHED, which is the same verdict
+  `resolveCallOverload` selects with, so a host's highlighted overload and the compiler's chosen one
+  cannot drift. The argument the caret is IN is deliberately not judged — half-typed by construction,
+  so judging it would flip the highlight under the user's hands. Nothing qualifying answers 0,
+  reported not hidden. Arms A6 (always 0) and A7 (arity only) redden different sets, so both halves of
+  the rule are load-bearing. **ONE COMPILER-SIDE SURPRISE, FIXED**: a parameter declared with a
+  BINDING PATTERN is dropped from `Signature.parameters` by `getParameterSymbols` and the survivors
+  keep a POSITIONAL zip of the declaration's annotations, so rendering from the symbols alone prints
+  `destructured(tail: { a: number; b: number })` — one parameter short AND wearing its neighbour's
+  type, i.e. a plausible-looking lie. The DECLARATION is rendered instead whenever its parameter list
+  is longer (arm A10, 1 red uniquely its own). **RENDERING reuses `typeToString`** — hover's renderer —
+  and deliberately NOT `signatureToString`, whose `p?: string | undefined` is a TS2345 message
+  convention; parameter ranges are recorded AS THE LABEL IS BUILT (arm A11), because searching for
+  `name: type` finds the wrong occurrence as soon as one parameter's type mentions another's spelling.
+  A GENERIC callee renders UNINSTANTIATED (`pickFrom<T>(xs: T[], index: number): T`) — inferring `T`
+  means inferring from arguments that are not finished. **REFUSED with reasons**: tagged templates (no
+  parenthesized list), type arguments, `super(...)` (an ordinary identifier here, bound to nothing —
+  empty list, pinned), and a spread's arity. **NOT refused, and pinned**: decorator factories and a
+  call-callee. **PINS +56** (`-project` 242 -> 298; core UNCHANGED at 14,341) — 30 parse-only anchor
+  pins written FIRST, 26 end-to-end. THE DISCRIMINATOR is an OVERLOADED callee asserted as an EXACT
+  list of three labels: every shortcut (render the callee's type, take the overload resolution picks,
+  match by name) answers ONE and passes every other pin. **ELEVEN-ARM ABLATION, one mistake at a time,
+  each dry-run for a real diff and restored from a sha256-verified snapshot; all eleven compiled and
+  ALL ELEVEN reddened a DISTINCT set** — A1 outermost call 1, A2 first overload only 1 (the
+  discriminator), A3 no rest clamp 1, A4 no receiver path 2, A5 no export-table leg 1, A6
+  activeSignature always 0 -> 2, A7 arity-only 1 (a strict subset of A6, distinguished by the pin it
+  leaves GREEN), A8 all commas 4, A9 region = the call's real end 6, A10 no declaration render 1, A11
+  label ranges not followed 1. `scripts/round921-ablate.sh`. **GATES: suite 14,717 -> 14,773 / 0
+  failures / 0 errors / 3 skipped = EXACTLY the +56**; `cost_gate.py` **+0.00% on all 20 counters** — a
+  real gate, since `Checker.kt` grew ~370 lines reachable from the hook on the hot walk;
+  `huge_methods.py --fail-over 0` clean on core (750 classes, 15,976 methods) and on `-project`
+  explicitly (28 classes, 280 methods); `spine_closure_audit.py` 46 handlers all supersets;
+  `scripts/round920-token-gate.sh` 1,327 files / 101,287,620 chars / ZERO violations. No wall A/B:
+  production executes not one new instruction — every addition sits behind a hook that returns on a
+  null per-file key set. `docs/language-service.md` § 10c.
 
 DENOMINATORS, so every % below converts. Last MEASURED warm rebuild **5,242.6 ms** (round 899, per-arm
 sd 2.51%); JFR profile denominator **5,429 ms**; **1% = 54.3 ms**. Cross-round: 5,859 (pre-887) ->

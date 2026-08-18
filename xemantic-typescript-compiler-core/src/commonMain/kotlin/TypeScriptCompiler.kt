@@ -68,6 +68,12 @@ data class CompilationResult(
      * empty. One entry per span the checker reached.
      */
     val capturedScopes: List<CapturedScope> = emptyList(),
+    /**
+     * (API.6) Every signature the callees at the request's `signatureSpans` have, or
+     * empty. One entry per span the checker reached; an entry whose `signatures` is
+     * empty is a real answer ("that callee has none").
+     */
+    val capturedSignatures: List<CapturedSignatures> = emptyList(),
 ) {
     /** `true` if any diagnostic with [DiagnosticCategory.Error] category was produced. */
     val hasErrors: Boolean get() = diagnostics.any { it.category == DiagnosticCategory.Error }
@@ -1185,6 +1191,7 @@ class TypeScriptCompiler {
             capturedDefinitions = checker.capturedDefinitions,
             capturedMembers = checker.capturedMembers,
             capturedScopes = checker.capturedScopes,
+            capturedSignatures = checker.capturedSignatures,
         )
     }
 
@@ -1670,6 +1677,7 @@ class TypeScriptCompiler {
             capturedDefinitions = checker.capturedDefinitions,
             capturedMembers = checker.capturedMembers,
             capturedScopes = checker.capturedScopes,
+            capturedSignatures = checker.capturedSignatures,
         )
     }
 

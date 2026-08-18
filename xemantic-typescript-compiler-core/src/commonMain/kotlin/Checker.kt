@@ -5017,6 +5017,18 @@ class Checker(
         typeCapture?.scopeKeysByFile ?: emptyMap()
 
     /**
+     * (API.6) The subset of [typeCaptureKeysByFile] whose callee's SIGNATURES are
+     * also to be resolved — the signature-help anchors — mapped to the argument the
+     * caret is in.
+     *
+     * A fourth map for [typeCaptureMemberKeysByFile]' reason, and a MAP rather than
+     * a set because the active argument index travels with the span
+     * ([SignatureCaptureSpan] says why it cannot be recomputed here).
+     */
+    private val typeCaptureSignatureArgsByFile: Map<String, Map<Long, Int>> =
+        typeCapture?.signatureArgsByFile ?: emptyMap()
+
+    /**
      * The requested spans of the file the spine is walking, or null.
      *
      * Null for EVERY file when nothing was requested, which is what makes the
@@ -5045,6 +5057,15 @@ class Checker(
      * happens only once a span has already matched [typeCaptureKeysCurrentFile].
      */
     private var typeCaptureScopeKeysCurrentFile: Set<Long>? = null
+
+    /**
+     * (API.6) The signature-help anchors of the file the spine is walking, or null.
+     *
+     * Read from inside [typeCaptureRecordAt], i.e. only once a span has already
+     * matched [typeCaptureKeysCurrentFile] — so it adds nothing to the per-node hot
+     * path. Set beside its siblings in [checkSpine]'s per-file loop.
+     */
+    private var typeCaptureSignatureArgsCurrentFile: Map<Long, Int>? = null
 
     /**
      * The captured type answers, keyed by the span asked about, FIRST WINS.
@@ -5135,6 +5156,25 @@ class Checker(
      */
     internal val capturedScopes: List<CapturedScope>
         get() = typeCaptureScopeResults.values.toList()
+
+    /**
+     * (API.6) The captured SIGNATURE LISTS, keyed and ordered exactly as
+     * [typeCaptureResults] is, and resolved on a span collision by exactly
+     * [typeCaptureMemberNodes]' deepest-wins rule.
+     */
+    private val typeCaptureSignatureResults = LinkedHashMap<TypeCaptureSpan, CapturedSignatures>()
+
+    /** (API.6) Which NODE produced each entry of [typeCaptureSignatureResults]. */
+    private val typeCaptureSignatureNodes = HashMap<TypeCaptureSpan, Node>()
+
+    /**
+     * (API.6) The signatures of the callees at the requested signature spans.
+     *
+     * `internal` for the reason [capturedTypes] is: the compile driver reads it into
+     * [CompilationResult.capturedSignatures].
+     */
+    internal val capturedSignatures: List<CapturedSignatures>
+        get() = typeCaptureSignatureResults.values.toList()
 
     /**
      * (API.3) Records the type at [node] when its RAW span is one the caller asked
@@ -5241,6 +5281,16 @@ class Checker(
             if (memberKeys != null && key in memberKeys) {
                 typeCaptureRecordMembers(node, fileName)
             }
+            // (API.6) The signature resolution, for the spans that asked for one.
+            // Same placement and same argument as the member enumeration: the node
+            // has already matched the union key set by the time this runs.
+            val signatureArgs = typeCaptureSignatureArgsCurrentFile
+            if (signatureArgs != null) {
+                val activeArgument = signatureArgs[key]
+                if (activeArgument != null) {
+                    typeCaptureRecordSignatures(node, fileName, activeArgument)
+                }
+            }
         }
         // (API.4b) The scope enumeration. Deliberately OUTSIDE the [Expression]
         // gate: a free-name caret between statements is anchored at a Block or at
@@ -5305,6 +5355,368 @@ class Checker(
             current = (current as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * (API.6) Records every signature the callee of the call at [node] has, and
+     * which of them is the active one for the argument the caret is in.
+     *
+     * First-wins with [typeCaptureRecordMembers]' deepest-wins exception, for the
+     * same reasons.
+     *
+     * ## The callee resolution is (API.3d)'s, not a new one
+     *
+     * [getCalleeType] is what the argument checker itself calls, so a plain name, a
+     * METHOD through a receiver, a namespace member, an imported function, an
+     * element access and a callee that is ITSELF a call all resolve here with no
+     * rule of their own — which is the whole reason this is a small addition rather
+     * than a mechanism. A `NewExpression` asks for CONSTRUCT signatures instead, and
+     * falls back to [getReturnTypeOfNewExpression]'s own resolution when the callee's
+     * value type carries none: a class NAME in value position does not type as its
+     * own constructor here, while the INSTANCE type it resolves to does carry the
+     * class's construct signatures (round 475).
+     *
+     * An entry is written even when nothing was found, so a caller can tell "the
+     * call was reached and its callee has no signatures" from "the span was never
+     * walked" — the two are different facts and only one of them is a bug. A span
+     * that turns out not to be a call at all claims nothing, so a collision cannot
+     * make a real call's answer disappear.
+     */
+    private fun typeCaptureRecordSignatures(node: Expression, fileName: String, activeArgument: Int) {
+        val callee: Expression
+        val arguments: List<Expression>
+        // Non-null exactly for a `new`, which is what says CONSTRUCT signatures are
+        // wanted — carried as the node rather than as a boolean so the construct leg
+        // needs no cast back.
+        val construct: NewExpression?
+        when (node) {
+            is CallExpression -> {
+                callee = node.expression
+                arguments = node.arguments
+                construct = null
+            }
+            is NewExpression -> {
+                callee = node.expression
+                arguments = node.arguments ?: emptyList()
+                construct = node
+            }
+            else -> return
+        }
+        val span = TypeCaptureSpan(fileName, node.pos, node.end)
+        val previous = typeCaptureSignatureNodes[span]
+        if (previous != null && !typeCaptureIsDescendantOf(node, previous)) return
+        typeCaptureSignatureNodes[span] = node
+        val savedCheckFileName = currentCheckFileName
+        currentCheckFileName = fileName
+        try {
+            val signatures =
+                if (construct != null) typeCaptureConstructSignaturesOf(construct)
+                else typeCaptureCallSignaturesOf(callee)
+            val name = typeCaptureCalleeName(callee)
+            val rendered = signatures.map {
+                typeCaptureRenderSignature(it, construct != null, name, activeArgument)
+            }
+            typeCaptureSignatureResults[span] = CapturedSignatures(
+                fileName = fileName,
+                start = node.pos,
+                end = node.end,
+                signatures = rendered,
+                activeSignature = typeCaptureActiveSignature(signatures, arguments, activeArgument),
+            )
+        } finally {
+            currentCheckFileName = savedCheckFileName
+        }
+    }
+
+    /**
+     * (API.6) The call signatures `<callee>(…)` may select.
+     *
+     * Two legs, and the first is the same second mechanism (API.3d) and (API.4a)
+     * both needed: a NAMESPACE's, a MODULE's and an ENUM's members are on no TYPE at
+     * all — they are entries in an export table — so `ns.fn(` answers nothing
+     * through [getCalleeType], which resolves the receiver to `any`. Measured before
+     * this leg existed: zero signatures for a namespace-qualified callee.
+     *
+     * ADDITIVE by construction: the export leg is consulted first and only ADOPTED
+     * when it produced signatures, so every shape the type path already answered is
+     * untouched. That ordering is what keeps a class's static side, whose members are
+     * mirrored into both tables, answering the same as before.
+     */
+    private fun typeCaptureCallSignaturesOf(callee: Expression): List<Signature> {
+        if (callee is PropertyAccessExpression) {
+            val exported = typeCaptureExportedMember(callee.expression, callee.name.text)
+            if (exported != null) {
+                val exportedSignatures = getCallSignaturesOfType(getTypeOfSymbol(exported))
+                if (exportedSignatures.isNotEmpty()) return exportedSignatures
+            }
+        }
+        return getCallSignaturesOfType(getCalleeType(callee))
+    }
+
+    /**
+     * (API.6) The construct signatures `new <callee>(…)` may select.
+     *
+     * Two legs, in this order, and the second is not a fallback for a failure but for
+     * a DIFFERENT SHAPE: a `declare var X: XConstructor` types as an interface whose
+     * construct signatures the first leg finds, while a `class C` NAME does not type
+     * as its own constructor at all — the construct signatures live on the INSTANCE
+     * type (round 475: `resolveInterfaceMembers` populates a class instance's own
+     * constructor plus its bases', inherited-first). [getReturnTypeOfNewExpression] is
+     * what already knows how to reach that instance type through every shape the
+     * compiler supports (a namespace-qualified class, a clodule, an explicit type
+     * argument list), so it is asked rather than re-derived.
+     */
+    private fun typeCaptureConstructSignaturesOf(node: NewExpression): List<Signature> {
+        val direct = getConstructSignaturesOfType(getCalleeType(node.expression))
+        if (direct.isNotEmpty()) return direct
+        val instance = getReturnTypeOfNewExpression(node)
+        if (instance === anyType || instance === errorType) return emptyList()
+        return getConstructSignaturesOfType(instance)
+    }
+
+    /**
+     * (API.6) The name to put in front of a rendered signature, or `""`.
+     *
+     * Syntactic and deliberately shallow: the callee's own spelling where it has one
+     * (`f`, and the `m` of `o.m`), nothing at all for a computed or expression callee
+     * (`(fs[i])(…)`). A label is a thing a user READS, so it names what the user
+     * wrote; inventing a name for an anonymous callee — the declaration's, say —
+     * would put a spelling in the label that is not the one at the caret.
+     */
+    private fun typeCaptureCalleeName(callee: Expression): String = when (callee) {
+        is Identifier -> callee.text
+        is PropertyAccessExpression -> callee.name.text
+        is ParenthesizedExpression -> typeCaptureCalleeName(callee.expression)
+        is NonNullExpression -> typeCaptureCalleeName(callee.expression)
+        else -> ""
+    }
+
+    /**
+     * (API.6) [sig] as one line of text, with each parameter's range inside that line.
+     *
+     * ## One type-printing convention, on purpose
+     *
+     * Every type here goes through [typeToString] — the renderer hover uses and the
+     * renderer a diagnostic message uses. A signature help label and a hover string
+     * describing the same type must not be able to disagree, so no second convention
+     * is introduced; the ONE place an AST-derived rendering is used instead is the
+     * misaligned-declaration path below, which is exactly where the resolved types
+     * are known not to correspond to the parameters.
+     *
+     * Deliberately NOT [signatureToString]: that renderer serves diagnostics, where a
+     * `p?: string` is spelled `p?: string | undefined` because a TS2345 message is
+     * about assignability. A signature label is about what a caller may WRITE.
+     *
+     * ## Generic signatures render UNINSTANTIATED
+     *
+     * `<T>(xs: T[], i: number): T` rather than a substitution. Instantiating would
+     * mean inferring `T` from arguments the user has not finished typing — the value
+     * would change under every keystroke and be wrong for the argument still being
+     * written — and the declared form is what tells the reader that `T` is inferred
+     * at all.
+     *
+     * ## Where a parameter list is rendered from the AST instead
+     *
+     * A parameter declared with a BINDING PATTERN (`function f({ a }: O, b: number)`)
+     * is dropped from `Signature.parameters` by [getParameterSymbols] unless the
+     * signature was built for display, and the surviving symbols keep a POSITIONAL
+     * zip of the declaration's type annotations — so rendering such a signature from
+     * the symbols alone would print `f(b: O)`: one parameter short, and the survivor
+     * wearing its neighbour's type. That is a plausible-looking lie rather than a
+     * coarse answer, so when the declaration's own parameter list is longer, THE
+     * DECLARATION is what is rendered: the pattern spelled as source and each type
+     * resolved from its annotation.
+     */
+    private fun typeCaptureRenderSignature(
+        sig: Signature,
+        isConstruct: Boolean,
+        name: String,
+        activeArgument: Int,
+    ): CapturedSignature {
+        val label = StringBuilder()
+        if (isConstruct) label.append("new ")
+        label.append(name)
+        val typeParameters = sig.typeParameters
+        if (!typeParameters.isNullOrEmpty()) {
+            label.append('<')
+            label.append(typeParameters.joinToString(", ") { typeParamToString(it) })
+            label.append('>')
+        }
+        label.append('(')
+        val parameters = ArrayList<CapturedSignatureParameter>()
+        for (part in typeCaptureSignatureParameters(sig)) {
+            if (parameters.isNotEmpty()) label.append(", ")
+            val start = label.length
+            if (part.isRest) label.append("...")
+            label.append(part.name)
+            if (part.optional) label.append('?')
+            label.append(": ").append(part.typeText)
+            parameters.add(
+                CapturedSignatureParameter(
+                    name = part.name,
+                    typeText = part.typeText,
+                    optional = part.optional,
+                    isRest = part.isRest,
+                    labelStart = start,
+                    labelEnd = label.length,
+                ),
+            )
+        }
+        label.append(')')
+        val returnTypeText = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
+        label.append(": ").append(returnTypeText)
+        return CapturedSignature(
+            label = label.toString(),
+            parameters = parameters,
+            returnTypeText = returnTypeText,
+            activeParameter = typeCaptureActiveParameter(parameters, activeArgument),
+        )
+    }
+
+    /** (API.6) One parameter of a signature, before it is written into a label. */
+    private class SignatureParameterPart(
+        val name: String,
+        val typeText: String,
+        val optional: Boolean,
+        val isRest: Boolean,
+    )
+
+    /**
+     * (API.6) [sig]'s parameters as text — from its own symbols, or from its
+     * declaration when the two disagree in LENGTH (see [typeCaptureRenderSignature]).
+     */
+    private fun typeCaptureSignatureParameters(sig: Signature): List<SignatureParameterPart> {
+        val declared = typeCaptureDeclaredParameters(sig.declaration)
+            ?.filter { (it.name as? Identifier)?.text != "this" }
+        if (declared != null && declared.size > sig.parameters.size) {
+            return declared.map { parameter ->
+                SignatureParameterPart(
+                    name = when (val n = parameter.name) {
+                        is Identifier -> n.text
+                        is ObjectBindingPattern, is ArrayBindingPattern ->
+                            formatBindingPatternFromAst(n as Node)
+                        else -> "_"
+                    },
+                    typeText = typeCaptureAnnotationText(parameter),
+                    optional = !parameter.dotDotDotToken &&
+                        (parameter.questionToken || parameter.initializer != null),
+                    isRest = parameter.dotDotDotToken,
+                )
+            }
+        }
+        return sig.parameters.mapIndexed { index, symbol ->
+            val declaration = symbol.valueDeclaration as? Parameter
+            val isRest = declaration?.dotDotDotToken == true
+            SignatureParameterPart(
+                name = when (val n = declaration?.name) {
+                    is ObjectBindingPattern, is ArrayBindingPattern ->
+                        formatBindingPatternFromAst(n as Node)
+                    else -> symbol.name
+                },
+                typeText = typeToString(getTypeOfSymbol(symbol)),
+                // `minArgumentCount` is the DECLARATION's required count, so this one
+                // test covers `p?`, a defaulted parameter and everything after a rest.
+                optional = !isRest && index >= sig.minArgumentCount,
+                isRest = isRest,
+            )
+        }
+    }
+
+    /** (API.6) The parameter list of a signature's declaration, or null. */
+    private fun typeCaptureDeclaredParameters(declaration: Node?): List<Parameter>? =
+        when (declaration) {
+            is FunctionDeclaration -> declaration.parameters
+            is FunctionExpression -> declaration.parameters
+            is ArrowFunction -> declaration.parameters
+            is MethodDeclaration -> declaration.parameters
+            is Constructor -> declaration.parameters
+            is FunctionType -> declaration.parameters
+            is ConstructorType -> declaration.parameters
+            else -> null
+        }
+
+    /**
+     * (API.6) A parameter's annotated type as text, resolved through the compiler and
+     * rendered by [typeToString].
+     *
+     * The AST spelling is preferred only where the resolution FAILED — a signature
+     * rendered on this path was built with its type-parameter scope already torn
+     * down, so a `T` resolves to `errorType`, and printing `error` where the source
+     * says `T` would be worse than either. That is the same fallback
+     * [formatParameter] applies for the same reason.
+     */
+    private fun typeCaptureAnnotationText(parameter: Parameter): String {
+        val typeNode = parameter.type ?: return "any"
+        val resolved = getTypeFromTypeNode(typeNode)
+        if (resolved === errorType || resolved === unresolvedType) {
+            return formatTypeForDisplay(typeNode) ?: "any"
+        }
+        return typeToString(resolved)
+    }
+
+    /**
+     * (API.6) Which parameter of a rendered signature the caret's argument lands on,
+     * or -1.
+     *
+     * The clamp is the whole content: once the caret is past a signature's fixed
+     * parameters, a signature ending in a REST parameter is still receiving arguments
+     * — every one of them feeds that parameter — so `push(a, b, c|)` must keep
+     * `...items` highlighted rather than fall off the end. A signature with no rest
+     * has genuinely run out of parameters, and -1 says so rather than pointing at the
+     * last one.
+     */
+    private fun typeCaptureActiveParameter(
+        parameters: List<CapturedSignatureParameter>,
+        activeArgument: Int,
+    ): Int = when {
+        activeArgument < 0 -> -1
+        activeArgument < parameters.size -> activeArgument
+        parameters.lastOrNull()?.isRest == true -> parameters.size - 1
+        else -> -1
+    }
+
+    /**
+     * (API.6) Which of [signatures] a host should show first.
+     *
+     * ## The rule, stated so it can be argued with
+     *
+     * The FIRST signature that could still become this call, which is two conditions
+     * and no scoring:
+     *
+     * 1. it has room for the argument the caret is on — that argument's index is
+     *    within its parameter list, or it ends in a REST parameter, or it takes no
+     *    parameters and the call so far passes none (a `()` signature IS satisfied by
+     *    the empty argument list the caret is sitting in);
+     * 2. it accepts every argument the user has already FINISHED — the arguments
+     *    strictly before the active one — judged by [signatureAcceptsArgs], which is
+     *    the same verdict [resolveCallOverload] selects an overload with, so a host's
+     *    highlighted overload and the compiler's chosen one cannot drift apart.
+     *
+     * The argument the caret is IN is deliberately not judged: it is half-typed by
+     * construction, so testing it would flip the highlighted overload back and forth
+     * as the user types.
+     *
+     * When nothing qualifies the answer is 0 rather than -1: a caller that already
+     * has a non-empty list wants an index it can show, and "the first one" is the
+     * declaration order answer. That is reported rather than hidden — the case is a
+     * call that matches no overload, which the diagnostics say anyway.
+     */
+    private fun typeCaptureActiveSignature(
+        signatures: List<Signature>,
+        arguments: List<Expression>,
+        activeArgument: Int,
+    ): Int {
+        val completed = arguments.take(activeArgument.coerceAtLeast(0))
+        for ((index, sig) in signatures.withIndex()) {
+            val hasRest = (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)
+                ?.dotDotDotToken == true
+            val hasRoom = activeArgument < sig.parameters.size || hasRest ||
+                (sig.parameters.isEmpty() && arguments.isEmpty())
+            if (!hasRoom) continue
+            if (!signatureAcceptsArgs(sig, completed)) continue
+            return index
+        }
+        return 0
     }
 
     /**
@@ -24406,6 +24818,10 @@ class Checker(
                 typeCaptureScopeKeysCurrentFile =
                     if (typeCaptureScopeKeysByFile.isEmpty()) null
                     else typeCaptureScopeKeysByFile[sf.fileName]
+                // (API.6) likewise, and likewise read only after a span matched.
+                typeCaptureSignatureArgsCurrentFile =
+                    if (typeCaptureSignatureArgsByFile.isEmpty()) null
+                    else typeCaptureSignatureArgsByFile[sf.fileName]
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||

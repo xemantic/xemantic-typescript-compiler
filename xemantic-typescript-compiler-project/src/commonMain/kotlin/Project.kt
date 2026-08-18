@@ -33,6 +33,7 @@ import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.SignatureCaptureSpan
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -110,10 +111,20 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * the receiver's type, free names from the lexical scope chain. Keywords are not,
  * for the reason stated there.
  *
+ * ## Signature help
+ *
+ * [signatureHelpAt] answers what may be PASSED at a caret: every signature the
+ * callee has, in declaration order, which of them applies to the arguments typed so
+ * far, and which parameter the caret's argument lands on. Its anchor is
+ * [completionsAt]'s kind of question rather than [quickInfoAt]'s — there is no node
+ * at a caret in `f(a, |)`, and for an argument list the user has not closed the
+ * call's own real end lies BEFORE the caret — so the call is recovered by bracket
+ * matching over the token stream and the argument index by counting commas.
+ *
  * ## What this class is NOT
  *
- * It is not a full language service: there is no rename, no keyword completion, no
- * signature help, and no incremental reuse of a previous build's internal state.
+ * It is not a full language service: there is no rename, no keyword completion, and
+ * no incremental reuse of a previous build's internal state.
  * A query on a dirty project is a FULL rebuild, and that is a property of the
  * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
@@ -700,6 +711,117 @@ public class Project private constructor(
                 )
             },
             null,
+        )
+    }
+
+    /**
+     * (API.6) What may be passed at [offset] in [fileName] — the signature-help
+     * answer — or null when the caret is in no argument list.
+     *
+     * ## Two different negatives
+     *
+     * NULL means "the caret is not inside a call's argument list": on a callee, past
+     * a closing paren, in a comment, in an unknown file. A non-null answer with an
+     * EMPTY [SignatureHelp.signatures] means "the caret IS in an argument list and
+     * the callee has no signatures" — it is `any`, unresolvable, or not callable. A
+     * host draws nothing in either case and only the second is worth a log line.
+     *
+     * ## Every overload, in declaration order
+     *
+     * The callee's whole signature list comes back, which is the feature: an editor
+     * shows "2 of 3" and lets the user page through. The callee is resolved by the
+     * compiler's own callee resolution — the (API.3d) receiver path — so a method
+     * through a receiver, a namespace member, an imported function and a callee that
+     * is itself a call all answer without a rule of their own.
+     *
+     * ## Which one is ACTIVE
+     *
+     * The first signature that could still become this call: one that has room for
+     * the argument the caret is on (its index is within the parameter list, or the
+     * signature ends in a rest parameter, or it takes no parameters and none have
+     * been passed) AND that accepts every argument the user has already FINISHED,
+     * judged by the same predicate the compiler selects an overload with. The
+     * argument the caret is IN is deliberately not judged — it is half-typed by
+     * construction, so testing it would flip the highlighted overload back and forth
+     * under the user's hands. When nothing qualifies the answer is 0, reported rather
+     * than hidden.
+     *
+     * ## A GENERIC callee renders UNINSTANTIATED
+     *
+     * `pick<T>(xs: T[], i: number): T`, not a substitution. Inferring `T` would mean
+     * inferring it from arguments that are not finished, and the declared form is
+     * what tells the reader that `T` is inferred at all.
+     *
+     * ## The anchor is a token question, like a completion's and unlike everything else
+     *
+     * There is no node at a caret in `f(a, |)`, and for `f(` at end of file or
+     * `f(a,` before a `}` the call node's own real end lies BEFORE the caret — so no
+     * descent reaches it. The parser does build the call in all of those cases (it
+     * creates a `CallExpression` the moment it sees a `(` and then reports the
+     * missing `)`), so the region is recovered by BRACKET MATCHING over the token
+     * stream and the argument index by COUNTING COMMAS, which is what an argument
+     * index physically is. `SourceIndex.signatureAnchorAt` carries the full rule.
+     *
+     * ## What is refused, each with a reason
+     *
+     * - a TAGGED TEMPLATE (`` tag`a${b}` ``) — it has no parenthesized argument list,
+     *   and counting template substitutions as arguments is a second mechanism;
+     * - TYPE ARGUMENTS (`f<|>(x)`) — not an argument list;
+     * - `super(...)` — `super` is an ordinary identifier in this parser and binds to
+     *   nothing, so its callee type resolves to nothing; the answer is an empty
+     *   signature list rather than the enclosing class's constructor;
+     * - a JSX attribute list — not a call;
+     * - READING a spread's arity: `f(...xs, |)` reports argument 1, because the
+     *   commas say so and how many arguments `xs` contributes is not a syntactic
+     *   question.
+     *
+     * DECORATOR factories (`@dec(|)`) and a callee that is itself a call (`f()(|)`)
+     * are NOT refused — they are ordinary calls and fall out of the general rule.
+     *
+     * ## Cost
+     *
+     * ONE build, with the same caveats [quickInfoAt] documents: it does not read or
+     * fill the [diagnostics] cache. A caret in no argument list DOES NOT BUILD.
+     */
+    public fun signatureHelpAt(fileName: String, offset: Int): SignatureHelp? {
+        val index = sourceIndexOf(fileName) ?: return null
+        val anchor = index.signatureAnchorAt(offset) ?: return null
+        val key = keyOf(fileName)
+        val call = anchor.call
+        // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
+        val captured = ProjectCompiler(overlay)
+            .build(
+                projectPath,
+                noEmit = true,
+                typeCapture = TypeCaptureRequest(
+                    spans = emptyList(),
+                    signatureSpans = listOf(
+                        SignatureCaptureSpan(key, call.pos, call.end, anchor.activeArgument),
+                    ),
+                ),
+            )
+            .capturedSignatures
+            .firstOrNull { it.fileName == key && it.start == call.pos && it.end == call.end }
+        return SignatureHelp(
+            signatures = captured?.signatures.orEmpty().map { signature ->
+                SignatureInfo(
+                    label = signature.label,
+                    parameters = signature.parameters.map {
+                        ParameterInfo(
+                            name = it.name,
+                            typeText = it.typeText,
+                            optional = it.optional,
+                            isRest = it.isRest,
+                            labelStart = it.labelStart,
+                            labelEnd = it.labelEnd,
+                        )
+                    },
+                    returnTypeText = signature.returnTypeText,
+                    activeParameter = signature.activeParameter,
+                )
+            },
+            activeSignature = captured?.activeSignature ?: 0,
+            activeArgument = anchor.activeArgument,
         )
     }
 

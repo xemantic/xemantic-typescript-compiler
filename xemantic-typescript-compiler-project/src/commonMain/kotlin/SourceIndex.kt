@@ -25,7 +25,9 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.CallExpression
 import com.xemantic.typescript.compiler.JsxText
+import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NodeKind
@@ -757,6 +759,210 @@ internal class SourceIndex private constructor(
             }
         }
         return false
+    }
+
+    // --- (API.6) the signature-help anchor -----------------------------------------
+
+    /**
+     * (API.6) The innermost CALL whose argument list contains [offset], and which
+     * argument slot the caret is in — or null when the caret is in no argument list.
+     *
+     * ## Why this is not [pathAt]'s answer
+     *
+     * Signature help asks a question about a REGION the parse does not carry a node
+     * for. Three of its cases defeat a containment test outright:
+     *
+     * - `f(a, b|)` — the caret is at the real END of `b`, so the half-open spans put
+     *   it outside `b` and inside the call, and yet the answer is argument 1, not 2;
+     * - `f(a, |)` — the second argument does not exist in the tree at all;
+     * - `f(a, ` before a `}`, or `f(` at end of file — the call node's own real end is
+     *   snapped back to the last token it managed to consume, which is BEFORE the
+     *   caret, so no descent reaches the call. (The node itself exists: this parser
+     *   builds a `CallExpression` the moment it sees a `(`, reporting the missing `)`
+     *   — `parseArgumentListWorker` breaks on end-of-file and on a `}` and then runs
+     *   `parseExpected(CloseParen)`.)
+     *
+     * So the region is computed from the TOKEN STREAM by bracket matching, anchored
+     * at the call's own open paren, and the ARGUMENT INDEX is a count of commas —
+     * which is what an argument index physically is.
+     *
+     * ## The region
+     *
+     * From one past the `(` to the token that closes it. Matching walks a small
+     * bracket stack over `()`, `[]` and `{}`, and stops EARLY at a closer that does
+     * not match the top of the stack: an unmatched `}` means the enclosing block is
+     * closing while our paren is still open, i.e. the user has not typed the `)` yet,
+     * and the argument list ends there. Template substitutions need no rule of their
+     * own — [scanTokens] re-scans the `}` that closes one into a template middle or
+     * tail, so it is not a `}` here at all.
+     *
+     * A caret AT the closing paren is inside (it is still in the last argument's
+     * slot); one past it is not. A caret on the callee, or on the `(` itself, is not
+     * in the argument list either.
+     *
+     * ## The argument index
+     *
+     * The number of commas of THIS argument list before the caret. A comma inside one
+     * of the arguments is not one of them, and the arguments the parse produced are
+     * exactly what says which those are — so a comma inside `g(x, y)`, inside
+     * `{ a: 1, b: 2 }` and inside `Map<string, number>` is excluded by the same test,
+     * with no per-construct rule and no need to lex type arguments.
+     *
+     * ## Innermost
+     *
+     * Every call in the file is a candidate and the one with the LATEST open paren
+     * wins. Nesting makes that exact rather than a heuristic: an inner call's `(` is
+     * inside the outer call's region, so `f(g(|))` answers `g`, while `f(g(x), |)`
+     * answers `f` because the caret is past `g`'s `)` and outside its region.
+     *
+     * A TAGGED TEMPLATE is not a candidate — it has no parenthesized argument list —
+     * and neither is a `new C` written without parentheses, whose `arguments` is null.
+     *
+     * ## Cost
+     *
+     * ONE walk of this file's own tree per query, plus a bounded token scan for the
+     * winning call. The walk is the price of the incomplete case rather than
+     * laziness: a candidate set taken from [pathAt] would be a handful of nodes and
+     * would not contain the call at all whenever the user has not typed the `)`,
+     * which is precisely when signature help is wanted. It is the same order as
+     * [identifiers], and it is nothing beside the compile the answer needs.
+     */
+    fun signatureAnchorAt(offset: Int): SignatureAnchor? {
+        if (offset < 0 || offset > textLength) return null
+        var best: SignatureAnchor? = null
+        val stack = ArrayList<Node>()
+        stack.add(sourceFile)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            forEachChild(node) { child -> stack.add(child) }
+            val arguments: List<Node> = when (node) {
+                is CallExpression -> node.arguments
+                is NewExpression -> node.arguments ?: continue
+                else -> continue
+            }
+            val openParen = openParenTokenOf(node) ?: continue
+            val start = tokenEnds[openParen]
+            if (offset < start) continue
+            if (best != null && start <= best.argumentListStart) continue
+            val end = argumentListEndFrom(openParen)
+            if (offset > end) continue
+            best = SignatureAnchor(
+                call = node,
+                activeArgument = argumentIndexIn(arguments, openParen, end, offset),
+                argumentListStart = start,
+                argumentListEnd = end,
+            )
+        }
+        return best
+    }
+
+    /**
+     * The index of [call]'s own open-paren token, or null when the parse has none —
+     * which happens for a `new C` with no parentheses and for a call whose `(` the
+     * recovery never reached.
+     *
+     * Searched forward from past the CALLEE and past any TYPE ARGUMENT list, so a
+     * type argument that itself contains parentheses (`f<(x: A) => B>(y)`) does not
+     * supply a false answer, and bounded by the call's own raw `end` so a
+     * malformed node cannot adopt a paren belonging to something else.
+     */
+    private fun openParenTokenOf(call: Node): Int? {
+        val callee: Node
+        val typeArguments: List<Node>?
+        when (call) {
+            is CallExpression -> {
+                callee = call.expression
+                typeArguments = call.typeArguments
+            }
+            is NewExpression -> {
+                callee = call.expression
+                typeArguments = call.typeArguments
+            }
+            else -> return null
+        }
+        var from = realEndOf(callee)
+        typeArguments?.lastOrNull()?.let { from = maxOf(from, realEndOf(it)) }
+        var index = firstTokenStartingAtOrAfter(from)
+        while (index < tokenKinds.size && tokenStarts[index] < call.end) {
+            if (tokenKinds[index] == SyntaxKind.OpenParen) return index
+            index++
+        }
+        return null
+    }
+
+    /**
+     * Where the argument list opened by the token at [openParen] ends — the offset of
+     * the token that closes it, or the end of the file.
+     *
+     * See [signatureAnchorAt] for the rule; the early stop on a MISMATCHED closer is
+     * what makes an unterminated call answer a region rather than nothing.
+     */
+    private fun argumentListEndFrom(openParen: Int): Int {
+        val expected = ArrayList<SyntaxKind>()
+        expected.add(SyntaxKind.CloseParen)
+        var index = openParen + 1
+        while (index < tokenKinds.size) {
+            when (val kind = tokenKinds[index]) {
+                SyntaxKind.OpenParen -> expected.add(SyntaxKind.CloseParen)
+                SyntaxKind.OpenBracket -> expected.add(SyntaxKind.CloseBracket)
+                SyntaxKind.OpenBrace -> expected.add(SyntaxKind.CloseBrace)
+                SyntaxKind.CloseParen, SyntaxKind.CloseBracket, SyntaxKind.CloseBrace -> {
+                    if (kind != expected.last()) return tokenStarts[index]
+                    expected.removeAt(expected.size - 1)
+                    if (expected.isEmpty()) return tokenStarts[index]
+                }
+                SyntaxKind.EndOfFile -> return textLength
+                else -> Unit
+            }
+            index++
+        }
+        return textLength
+    }
+
+    /**
+     * How many of this argument list's own commas lie before [offset] — the argument
+     * slot the caret is in.
+     *
+     * A comma that falls inside one of [arguments] belongs to that argument's own
+     * syntax (a nested call, an object literal, a type argument list) and is not one
+     * of this list's separators.
+     */
+    private fun argumentIndexIn(
+        arguments: List<Node>,
+        openParen: Int,
+        regionEnd: Int,
+        offset: Int,
+    ): Int {
+        var count = 0
+        var index = openParen + 1
+        while (index < tokenKinds.size &&
+            tokenStarts[index] < offset &&
+            tokenStarts[index] < regionEnd
+        ) {
+            if (tokenKinds[index] == SyntaxKind.Comma) {
+                val at = tokenStarts[index]
+                if (arguments.none { at >= it.pos && at < realEndOf(it) }) count++
+            }
+            index++
+        }
+        return count
+    }
+
+    /** The first token starting at or after [offset], or [tokenStarts]`.size`. */
+    private fun firstTokenStartingAtOrAfter(offset: Int): Int {
+        var lo = 0
+        var hi = tokenStarts.size - 1
+        var best = tokenStarts.size
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (tokenStarts[mid] >= offset) {
+                best = mid
+                hi = mid - 1
+            } else {
+                lo = mid + 1
+            }
+        }
+        return best
     }
 
     /**
