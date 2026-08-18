@@ -101,6 +101,12 @@ ARMS = [
         "        return computedSymbolKey(n)\n",
     ),
     (
+        "A13",
+        "the WHOLE narrowness is undone - the route IS computedSymbolKey again",
+        '    private fun wellKnownSymbolKey(n: ComputedPropertyName): String? {\n        val pa = unwrapParensExpr(n.expression) as? PropertyAccessExpression ?: return null\n        val recv = unwrapParensExpr(pa.expression) as? Identifier ?: return null\n        if (recv.text != "Symbol") return null\n        if (lateBindResolveVarDecl(recv) != null) return null\n        if (pa.name.text.isEmpty()) return null\n        return "[Symbol.${pa.name.text}]"\n    }\n',
+        '    private fun wellKnownSymbolKey(n: ComputedPropertyName): String? {\n        return computedSymbolKey(n)\n    }\n',
+    ),
+    (
         "A11",
         "the `const` guard is dropped — a widened namespace `let` late-binds",
         "        if (list?.flags == SyntaxKind.ConstKeyword) {\n",
