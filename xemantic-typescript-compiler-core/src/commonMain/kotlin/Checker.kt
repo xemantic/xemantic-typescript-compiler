@@ -47134,22 +47134,32 @@ class Checker(
             // Determine which members to flag with TS2300.
             // TypeScript's rules (derived from test baselines):
             // - getter + setter (complete pair) → ALLOWED
-            // - complete accessor pair (get+set) + property → only flag the property
+            // - accessor(s) + property, every accessor FIRST → only flag the property
+            //   (round 940 — (CHK.7)(iii); it used to require a COMPLETE pair)
             // - duplicate getters (2+) or setters (2+) → flag ALL in the group
             // - method + property (method first) → only flag the property
             // - property + method (property first) → flag ALL (both property and method)
             // - property + property → only flag the second and subsequent properties (not the first)
             // - method + getter/setter → flag ALL
-            val hasCompleteAccessorPair = hasGetter && hasSetter && getterCount == 1 && setterCount == 1
             val membersToFlag: List<MemberInfo> = when {
                 getterCount >= 2 || setterCount >= 2 -> group // all conflict when either accessor is duplicated
                 hasMethod && (hasGetter || hasSetter) -> group // method + accessor → all
-                hasProperty && hasCompleteAccessorPair -> {
-                    // Complete get+set pair plus property:
-                    // - If property comes AFTER the pair completes → only flag the property
-                    //   (the accessor pair is the intended definition)
-                    // - If property comes BEFORE the pair completes → flag all
-                    //   (property "first" creates a non-accessor binding and the pair conflicts)
+                hasProperty && (hasGetter || hasSetter) -> {
+                    // ACCESSOR(s) + property. Round 940 — (CHK.7)(iii): the branch used to
+                    // split on whether the accessor pair was COMPLETE, and the incomplete
+                    // arm flagged the whole group. Pristine tsc does not: it flags only the
+                    // PROPERTY whenever every accessor precedes it, complete pair or not.
+                    //
+                    // Read off pristine's own baselines rather than argued:
+                    //   `privateNameDuplicateField` — `class { get #foo() {…}; #foo = "foo" }`
+                    //   and its `set` twin are TS2300 at the FIELD ONLY (lines 107 / 157 /
+                    //   382); the mirrored `#foo = "foo"; get #foo() {…}` is TS2300 at BOTH
+                    //   (17 / 18). `duplicateClassElements` — `public x; get x; set x` flags
+                    //   all three, `get x2; set x2; public x2` flags only `x2`.
+                    // The mechanism it reproduces is tsc's `PropertyExcludes = None`: a
+                    // property declared LAST never trips the binder's duplicate check, so
+                    // only the checker's own per-class scan reports it, and that one reports
+                    // at the current member alone.
                     val propIdx = group.indexOfFirst { it.kind == "property" }
                     val lastAccessorIdx = maxOf(
                         group.indexOfLast { it.kind == "getter" },
@@ -47161,9 +47171,6 @@ class Checker(
                         group
                     }
                 }
-                hasProperty && (hasGetter || hasSetter) ->
-                    // Incomplete accessor + property: both conflict
-                    group
                 hasMethod && hasProperty -> {
                     // method + property: if method comes FIRST, only flag the property;
                     // if property comes FIRST, flag ALL
@@ -73733,7 +73740,7 @@ interface DataView {
             is Identifier -> name.text
             is StringLiteralNode -> name.text
             is NumericLiteralNode -> normalizeNumericLiteral(name.text)
-            is ComputedPropertyName -> evaluateComputedPropertyName(name.expression)
+            is ComputedPropertyName -> evaluateComputedPropertyName(name)
             else -> null
         }
     }
@@ -73754,25 +73761,68 @@ interface DataView {
         }
     }
 
-    /** Evaluate simple constant computed property expressions to their string key value. */
-    private fun evaluateComputedPropertyName(expr: Expression): String? {
-        return when (expr) {
-            is NumericLiteralNode -> normalizeNumericLiteral(expr.text)
-            is StringLiteralNode -> expr.text  // ["+1"] → "+1"
+    /**
+     * The name a COMPUTED object-literal key contributes to the duplicate scan
+     * ([checkObjectLiteralDuplicates]), or null when the key names nothing fixed.
+     *
+     * **Round 940 — (CHK.7)(i): THIS NAMER IS *SPELLING*-KEYED FOR THE REFERENCE ARMS, AND
+     * A SPELLING IS NOT A NAME — SO A REPEATED *DYNAMIC* KEY WAS A FALSE POSITIVE.**
+     * `var s: symbol; var x = { [s]: 0, [s]() { }, get [s]() { … } }` is TS1117 ×2 here and
+     * SILENT in pristine tsc (`symbolProperty1` / `symbolProperty3`, read offline with
+     * `scripts/pristine_oracle.py`): tsc late-binds a computed key only when the key
+     * EXPRESSION's type is usable as a property name, and a plain `symbol` is not, so the
+     * two `[s]` members are two distinct dynamic keys there and one invented name here.
+     * **The corpus cannot see it** — pristine's own negative control for the shape
+     * (`duplicateObjectLiteralProperty_computedNameNegative1`) uses two DIFFERENT
+     * identifiers, which a spelling key satisfies exactly as a value key would.
+     *
+     * **THE REFUSAL IS BOUNDED BY EVIDENCE, AND THAT BOUND IS LOAD-BEARING.** A blanket
+     * "abstain unless late-bindable" regresses `duplicateObjectLiteralProperty_computedName3`
+     * (an ACTIVE gate): its keys are `[keys.n]` / `[keys.E1.A]` through an
+     * `import * as keys`, which pristine binds through the key's TYPE and round 935's
+     * SYNTACTIC resolver deliberately cannot follow across a file. So the order is:
+     *   1. a LITERAL spelling names itself (numeric normalized, so `1` / `[1]` / `[+1]` /
+     *      `"1"` are one name — `duplicateObjectLiteralProperty_computedName1`);
+     *   2. else [lateBoundComputedKeyName] — the key's real name when we can prove one
+     *      (`duplicateObjectLiteralProperty_computedName2`'s `[n]` / `[s]` / `[E1.A]` /
+     *      `[E2.B]`), then [wellKnownSymbolKey] for `[Symbol.x]`;
+     *   3. else, ABSTAIN **only when the key's own declaration is in hand and still does
+     *      not denote one fixed name** — i.e. an Identifier whose `var`/`let`/`const`
+     *      declaration [lateBindResolveVarDecl] found and (2) then refused. That is
+     *      exactly `var s: symbol` and `var s = Symbol`, and exactly not `keys.n`;
+     *   4. else keep the pre-940 invented spelling, which is what the cross-file and
+     *      otherwise-unresolvable keys still ride on.
+     *
+     * Step 3 is a claim about a declaration we READ, never about one we failed to find —
+     * "unknown" keeps the old answer, so the refusal can only ever remove a duplicate we
+     * have evidence is not one.
+     */
+    private fun evaluateComputedPropertyName(cpn: ComputedPropertyName): String? {
+        val expr = cpn.expression
+        when (expr) {
+            is NumericLiteralNode -> return normalizeNumericLiteral(expr.text)
+            is StringLiteralNode -> return expr.text  // ["+1"] → "+1"
             is PrefixUnaryExpression -> {
                 val operand = expr.operand
-                if (operand is NumericLiteralNode) {
-                    val d = operand.text.toDoubleOrNull() ?: return null
-                    val value = when (expr.operator) {
-                        SyntaxKind.Plus -> d
-                        SyntaxKind.Minus -> -d
-                        else -> return null
-                    }
-                    if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
-                } else null
+                if (operand !is NumericLiteralNode) return null
+                val d = operand.text.toDoubleOrNull() ?: return null
+                val value = when (expr.operator) {
+                    SyntaxKind.Plus -> d
+                    SyntaxKind.Minus -> -d
+                    else -> return null
+                }
+                return if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
             }
-            // Identifier and PropertyAccess references — compare syntactically
-            // Prefix with __@computed: to avoid conflicts with regular property names
+            else -> {}
+        }
+        // (2) the key's REAL name, when the program proves one.
+        lateBoundComputedKeyName(cpn)?.let { return it }
+        wellKnownSymbolKey(cpn)?.let { return it }
+        // (3) ABSTAIN: the declaration is in hand and denotes no fixed name.
+        if (expr is Identifier && lateBindResolveVarDecl(expr) != null) return null
+        // (4) unresolvable — keep the pre-940 syntactic comparison.
+        // Prefix with __@computed: to avoid conflicts with regular property names.
+        return when (expr) {
             is Identifier -> "__@computed:${expr.text}"
             is PropertyAccessExpression -> {
                 val path = computedPropertyAccessPath(expr) ?: return null
@@ -159634,6 +159684,19 @@ interface DataView {
             is MethodDeclaration -> decl.name
             is PropertyDeclaration -> decl.name
             else -> null
+        }
+        // Round 940 — (CHK.5)(f): a member declared by a COMPUTED key is named AS WRITTEN,
+        // which is what pristine tsc prints wherever it names one — `'[E.A]'`
+        // (`assignmentCompatWithEnumIndexer`), `'["a"]'` (`duplicateIdentifierComputedName`,
+        // an ACTIVE gate), `'[c1]'` (`dynamicNamesErrors`, ACTIVE), `'[Symbol.toPrimitive]'`
+        // (`symbolProperty21`) — and where tsgo agrees, so we were the outlier. Before this,
+        // `const K = "p"; interface I { [K]: number }; const x: I = {}` said
+        // `Property 'p' is missing`, naming the late-bound VALUE the source never contains.
+        // [computedKeyWrittenText] answers null for a spelling it cannot reproduce exactly,
+        // so a message can never carry a name the source does not have; a NON-computed
+        // member keeps its bare name, which is this change's negative control.
+        if (nameNode is ComputedPropertyName) {
+            computedKeyWrittenText(nameNode)?.let { return it }
         }
         if (nameNode is StringLiteralNode && !isValidJsIdentifier(name)) {
             // TypeScript's type-display PRESERVES the source quote style of a
