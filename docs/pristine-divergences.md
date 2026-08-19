@@ -78,7 +78,7 @@ top-level classifier cannot recognise. **(CHK.10) is CONFIRMED genuine** by the 
 
 ---
 
-## 1. The table — 318 ours-only rows over 79 fixtures, at round 942 (**297 over 75** after round 946)
+## 1. The table — 318 ours-only rows over 79 fixtures, at round 942 (**251 over 71** after round 948)
 
 The row counts are AT `967c2e53` (round 941's own before-arm) so the buckets stay
 comparable; the right-hand column records what each has cost since.
@@ -87,7 +87,7 @@ comparable; the right-hand column records what each has cost since.
 |---:|---:|---|---|---|---|
 | 89 | 23.9 | FP — type system / inference | **83 genuine FP · 6 convention** | `variadicTuples1` TS2322 ×15 + TS2345 ×14 | **SUB-TRIAGED round 943** — 68 of the 83 are MODELLING; 2 fixed |
 | 59 | 15.8 | HARNESS — jsx configuration | **harness artefact** | `tsxLibraryManagedAttributes` TS2874 ×27 | not yet measured |
-| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | **SUB-TRIAGED round 947** — six families, not two; 15 rows fixed, 8 re-bucketed |
+| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | **SUB-TRIAGED round 947** — six families, not two; 15 rows fixed, 8 re-bucketed; **`using` CLOSED round 948, 33 -> 2**, leaving P2 alone |
 | 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 ×17 | owner decision, (CHK.13) |
 | 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23 rows) | frozen subsystem |
 | 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 | (CHK.9) CLOSED round 945; (CHK.10) open |
@@ -172,7 +172,7 @@ are wrong in a way that matters, and the bucket is SIX families, not two** (meas
 
 | # | family | fixtures | rows | what it really is |
 |---|---|---|---:|---|
-| P1 | `using` / `await using` declarations | `usingDeclarations*` ×4 | **33** | a genuine unimplemented FEATURE — **SCOPED OUT, (CHK.25)** |
+| P1 | `using` / `await using` declarations | `usingDeclarations*` ×4 | **33** | a genuine unimplemented FEATURE — **CLOSED round 948, § 3g** (33 -> 2, and 2 true positives GAINED) |
 | P2 | `infer U extends T` vs the conditional's own `?` | `inferTypesWithExtends1` | **8** | a genuine parser gap needing a parse CONTEXT — **SCOPED OUT, (CHK.26)** |
 | P3 | `abstract new (…) => T` | `inferTypes1` | **5** | one grammar production — **CLOSED round 947** (+6 more rows outside this bucket) |
 | P4 | an `infer` in a CONSTRUCTOR type's RETURN | `inferTypes1` 33/34-equivalent, `inferTypesWithExtends1` | **2** | not a parser gap at all — a CHECKER walker missing one arm — **CLOSED round 947** (+2 outside) |
@@ -696,6 +696,58 @@ scoped-out pins.
 
 ---
 
+## 3g. Closed by round 948 — (CHK.25), 33 rows over four fixtures
+
+`using x = expr;` reported **TS1434 `Unexpected keyword or identifier.`** at the `using`
+and then TS2304 for every name the failed statement never bound. The feature is TypeScript
+5.2's explicit resource management and this compiler had none of it.
+
+**The representation is tsc's own and needs no new node.** A `VariableDeclarationList`'s
+`flags` field already IS the head token, so `using` is `SyntaxKind.UsingKeyword` and needs no
+`forEachChild` arm, no `NodeKind`, and no binder arm — the binder's `isVar` test already reads
+any non-`var` head as block-scoped, which is exactly what a `using` name is (measured: a
+`using` declared inside a block is invisible after it, where a `var` in the same position
+hoists to the function). `await using` is two tokens collapsed onto a synthetic
+`SyntaxKind.AwaitUsingKeyword`, which the scanner never produces (tsc spells the same
+distinction `NodeFlags.AwaitUsing`).
+
+**The whole risk is the CONTEXTUAL KEYWORD, and it is where the round's discriminating pins
+are.** `using` is an ordinary identifier everywhere else — the eight compiler profiles carry
+**336** occurrences of it and **zero** `using` declarations, which is also why the 8-profile
+binary grid is byte-identical on all eight. What makes the statement arm additive is tsc's
+lookahead (`isUsingDeclaration`): a binding identifier or a `{` binding pattern **on the same
+line**. An `[` is deliberately not a start (`using[x]` is an element access, so an array
+binding pattern is unreachable from a `using` head), and the same-line test is what keeps ASI
+intact. The for-head uses tsc's `disallowOf` variant, so `for (using of xs)` still iterates
+the VALUE `using`.
+
+**What landed with it**: the grammar diagnostics tsc attaches to the form — TS1155
+(`must be initialized`), TS1492 (`may not have binding patterns`), TS1493 / TS1494 (a for-in
+head), TS1491 / TS1495 (a modifier on the declaration) — each pinned against pristine's own
+squiggle length; the disposability rule TS2850 / TS2851, positive-evidence-only and switched
+off entirely unless the program's own lib declares `Disposable`; and a VERBATIM emit of the
+head, which is tsc's output at a target with explicit resource management (rewriting it to
+`var` would silently DELETE the disposal — a wrong answer rather than a missing one).
+
+**What is deliberately NOT here, all false NEGATIVES**: the DOWNLEVEL emit (tsc's
+`__addDisposableResource` / `__disposeResources` helpers), `declare using` (TS1545), the
+`case` / `default`-clause rule (TS1547 / TS1548), the `await using` CONTEXT rules
+(TS2852 / TS2853 / TS2854, TS18054), and the TS2850 nested elaboration with its TS2728 related
+info. Queued as **(CHK.27)**.
+
+**Measured**: ours-only **282 -> 251** over 74 -> 71 fixtures, pristine-only **769 -> 767**
+(the two TS2353 of `usingDeclarationsWithObjectLiterals1` are now EMITTED — true positives
+gained, because the excess-property check finally reaches a file that used to fail to parse),
+**zero fixtures regressed**, zero of ~13k corpus baselines moved, 8-profile binary grid
+`added=0 removed=0` on all eight, emit `diff -r` clean on 78 + 252 files.
+
+**The two rows left in the family are not about `using` at all**: `using C3 = @dec class { … }`
+takes TS1206 `Decorators are not valid here.` — and so does `const C3 = @dec class { … }`. A
+decorated class EXPRESSION in an initializer is refused by this compiler, and the `using`
+cascade had been masking it. Queued as **(CHK.28)**.
+
+---
+
 ## 4. What to take next
 
 Ranked by (rows × confidence it is a genuine FP × smallness). **Round 943's sub-triage
@@ -714,7 +766,11 @@ small work left is elsewhere.
    half~~ — **CLOSED round 945, § 3d.1**, where its filed sign turned out to be backwards
    (an FP family invisible to both instruments, not the FN one the four TS2488 rows
    suggested). Those four rows were **(CHK.22)** and are **CLOSED round 946, § 3e** —
-   pristine-only 773 -> 769 with ours-only FLAT at 297.
+   pristine-only 773 -> 769 with ours-only FLAT at 297. ~~`using` / `await using`
+   declarations (33 rows)~~ — **CLOSED round 948, § 3g**, the largest single cascade in the
+   whole population: ours-only 282 -> 251, pristine-only 769 -> 767 (two TS2353 GAINED,
+   because the excess-property check now reaches a file that used to fail to parse), zero
+   fixtures regressed. **(CHK.25)**
 4. ~~`abstract new (…) => T`~~ and ~~an `infer` in a constructor type's return~~ —
    **CLOSED round 947, § 3f**, 15 rows. The bucket's own label was wrong twice: `infer X
    extends` already parsed, and the "parenthesized infer" defect was a CHECKER walker's
@@ -722,7 +778,8 @@ small work left is elsewhere.
    — the largest single cascade in the whole population and a genuine feature — and the
    **`infer U extends T` / conditional-`?` disambiguation (8 rows, (CHK.26))**, which needs
    a parse CONTEXT rather than a production. Eight further rows were RE-BUCKETED to § 2.5
-   as recovery divergences on deliberately illegal fixtures. **(CHK.14) CLOSED**
+   as recovery divergences on deliberately illegal fixtures. **(CHK.14) CLOSED**;
+   **(CHK.25) CLOSED round 948** — what remains of that bucket is (CHK.26) alone.
 5. **The `instanceof` INTERSECTION tail (1 row here, but a general rule)** — tsc's
    `getNarrowedType` falls back to `t & candidate` when neither direction relates; ours
    answers the candidate alone, so the branch join widens. **(CHK.15)**

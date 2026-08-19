@@ -1901,27 +1901,22 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `infer` still does not RESOLVE through a constructor type (`D<new () => K>` answers `any`),
   and the recorded `modifiers` set is read by nothing — TS2511 is its named future consumer.
 
-- [ ] **(CHK.25) `using` / `await using` DECLARATIONS DO NOT PARSE — 33 OURS-ONLY ROWS OVER
-  FOUR FIXTURES, THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION (sub-triaged
-  round 947, `docs/pristine-divergences.md` § 2.3 P1).** `using x = expr;` reports
-  **TS1434 `Unexpected keyword or identifier.`** at the `using` and then **TS2304** for every
-  name the failed statement never bound (`usingDeclarationsWithObjectLiterals1` 12,
-  `usingDeclarationsNamedEvaluationDecoratorsAndClassFields` 10,
-  `usingDeclarationsDeclarationEmit.2` 7, `.1` 4). **SCOPED OUT of round 947 deliberately, and
-  the reason is its SIZE, not its difficulty**: it is a statement form (a `VariableStatement`
-  whose declaration list carries a `using` / `await using` flag), plus binding, plus the
-  block-scoped rules tsc attaches to it (no destructuring, an initializer required, not in a
-  `for-in`, the `Symbol.dispose` / `Symbol.asyncDispose` disposability check), plus EMIT —
-  and upstream pins the emit hard: **439 `usingDeclarations*` baselines exist in
-  `typescript-repo/tests/baselines/reference`, most carrying `(module=…,target=…)`
-  variations**. Two facts a next agent needs before starting. (i) **The generated corpus gates
-  NONE of it** — this sparse clone carries essentially no `using` case file (one, and it is a
-  parse-error fixture), so the only instruments are the four pristine fixtures and
-  hand-written pins; a landing must therefore bring its own emit gate. (ii) **`using` is a
-  contextual keyword and an ordinary identifier**, so the statement production needs tsc's
-  lookahead — an identifier on the SAME LINE, not `of` / `in` — or `const using = 1; using
-  + 1;` changes meaning. That is the round-947 lesson at statement scope: the LOOKAHEAD is
-  what makes such an arm additive, and it is what an ablation arm must remove.
+- [x] **(CHK.25) `using` / `await using` DECLARATIONS DID NOT PARSE — 33 OURS-ONLY ROWS OVER
+  FOUR FIXTURES, THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION. LANDED round
+  948: ours-only **282 -> 251** over 74 -> 71 fixtures, pristine-only **769 -> 767** (two
+  TS2353 GAINED), zero fixtures regressed, zero corpus baselines moved.** `using x = expr;`
+  reported TS1434 at the `using` and then TS2304 for every name the failed statement never
+  bound. **The representation is tsc's own and needed no new node**: a
+  `VariableDeclarationList`'s `flags` field already IS the head token, so `using` is
+  `SyntaxKind.UsingKeyword` — no `forEachChild` arm, no `NodeKind`, no binder arm, because the
+  binder's `isVar` test already reads any non-`var` head as block-scoped. `await using` is two
+  tokens collapsed onto a synthetic `SyntaxKind.AwaitUsingKeyword` the scanner never produces.
+  **The whole risk was the CONTEXTUAL KEYWORD and it did NOT materialise anywhere**: the eight
+  profiles carry 336 occurrences of `using` as an identifier / property name and zero
+  declarations, and the binary grid is byte-identical on all eight. Landed with the grammar
+  rules (TS1155 / TS1492 / TS1493 / TS1494 / TS1491 / TS1495), the disposability rule
+  (TS2850 / TS2851, positive-evidence-only and switched off unless the lib declares
+  `Disposable`), and a VERBATIM emit of the head. `docs/pristine-divergences.md` § 3g.
 
 - [ ] **(CHK.26) `infer U extends T` FOLLOWED BY A CONDITIONAL `?` IS PARSED AS A CONSTRAINED
   INFER WHERE tsc PARSES A CONDITIONAL — 8 OURS-ONLY ROWS, `inferTypesWithExtends1` lines 95 /
@@ -1942,6 +1937,35 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   rollback primitive (`tryParseTypeParameters` is the reference shape). Pinned SILENT-side by
   `AbstractConstructorTypeTest.scoped out - an infer constraint is not re-read as the
   enclosing conditional`, which asserts today's TS1005 so the fix has to move it.
+
+- [ ] **(CHK.27) THE `using` FALSE NEGATIVES ROUND 948 LEFT BEHIND — ALL FOUR ARE FEATURES
+  THIS COMPILER SIMPLY DOES NOT HAVE, AND NONE COSTS AN OURS-ONLY ROW.** (i) **The DOWNLEVEL
+  EMIT.** The head is emitted VERBATIM, which is tsc's own output only at a target with
+  explicit resource management (>= ESNext); below it tsc rewrites the block through
+  `__addDisposableResource` / `__disposeResources`, and the ~439 `usingDeclarations*` baselines
+  upstream are mostly `(module=…,target=…)` variations of exactly that. Verbatim is the SAFE
+  half of the choice — rewriting the head to `var` would silently delete the disposal — but a
+  low target now emits a `using` a downlevel runtime cannot execute. **This clone carries no
+  `using` case file, so the generated corpus still gates none of it**; an emit landing needs
+  its own gate (`--outDir` + `diff -r`, since `--noEmit` makes every instrument here blind to
+  transform/emit). (ii) **`declare using` — TS1545 `'using' declarations are not allowed in
+  ambient contexts.`** (and TS1546); it needs an arm in `parseDeclareDeclaration`, which
+  round 948 did not touch, so `declare using x: T;` still cascades. (iii) **The `case` /
+  `default`-clause rule, TS1547 / TS1548**, which tsc decides from `declarationList.parent
+  .parent` being a clause. (iv) **The `await using` CONTEXT rules — TS2852 / TS2853 / TS2854 and
+  TS18054**; a top-level `await using` in a non-module file, or one inside a class static
+  block, is silent today. Also unreproduced: TS2850's nested
+  `Property '[Symbol.dispose]' is missing …` elaboration and its TS2728 related info.
+
+- [ ] **(CHK.28) A DECORATED CLASS *EXPRESSION* IN AN INITIALIZER IS REFUSED — TS1206
+  `Decorators are not valid here.`, 2 OURS-ONLY ROWS
+  (`usingDeclarationsNamedEvaluationDecoratorsAndClassFields` lines 14 / 18, round 948).**
+  `const C = @dec class { }` and `using C = @dec class { }` both take it; pristine accepts
+  both (decorators on class expressions have been legal since TS 5.0). **It is NOT a `using`
+  defect** — the `using` parse cascade had merely been masking it, which is why closing
+  (CHK.25) took the fixture 10 -> 2 rather than 10 -> 0. Reproduce with
+  `const C3 = @dec class { static x = 1; };` at any target; the emitter half (tsc's
+  `__esDecorate` for a class expression) is a separate question from the checker's refusal.
 
 - [ ] **(CHK.15) THE `instanceof` POSITIVE BRANCH HAS NO INTERSECTION TAIL — 1 OURS-ONLY ROW,
   BUT A GENERAL RULE (`controlFlowInstanceofWithSymbolHasInstance` line 26, round 942).**

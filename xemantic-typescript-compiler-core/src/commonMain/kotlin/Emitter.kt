@@ -386,6 +386,14 @@ class Emitter(
         val keyword = when (node.flags) {
             SyntaxKind.LetKeyword -> "let"
             SyntaxKind.ConstKeyword -> "const"
+            // A `using` head is emitted VERBATIM.  That is tsc's own output at a target
+            // that has explicit resource management (>= ESNext, see the
+            // `usingDeclarationsDeclarationEmit.*.js` baselines); the DOWNLEVEL form needs
+            // tsc's `__addDisposableResource` / `__disposeResources` helpers and is not
+            // implemented — but rewriting the head to `var` would silently DELETE the
+            // disposal, which is a wrong answer rather than a missing one.
+            SyntaxKind.UsingKeyword -> "using"
+            SyntaxKind.AwaitUsingKeyword -> "await using"
             else -> "var"
         }
         write(keyword)

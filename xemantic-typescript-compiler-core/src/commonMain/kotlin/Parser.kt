@@ -938,6 +938,11 @@ class Parser(
         } else {
             parseVariableStatement()
         }
+        // `using x = e;` / `await using x = e;` (TS 5.2).  Both heads are ordinary
+        // identifiers otherwise, so the LOOKAHEAD is the whole of what makes these arms
+        // additive: without it `const using = 1; using + 1;` becomes a declaration.
+        UsingKeyword -> if (isUsingDeclaration()) parseVariableStatement() else parseStatementFallback()
+        AwaitKeyword -> if (isAwaitUsingDeclaration()) parseVariableStatement() else parseStatementFallback()
         FunctionKeyword -> parseFunctionDeclarationOrExpression()
         ClassKeyword -> parseClassDeclaration()
         IfKeyword -> parseIfStatement()
@@ -1131,7 +1136,14 @@ class Parser(
                 } else stmt
             } else stmt
         }
-        else -> {
+        else -> parseStatementFallback()
+    }
+
+    /** The un-dispatched statement tail: a labeled statement, the missing-label recovery,
+     *  or an expression statement.  Extracted verbatim from `parseStatementDispatch`'s
+     *  `else` so the `using` / `await using` arms can decline to a head-identical path. */
+    private fun parseStatementFallback(): Statement? {
+        return run {
             if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
                 parseLabeledStatement()
             } else if (token == Colon) {
@@ -1307,8 +1319,16 @@ class Parser(
 
     private fun parseVariableDeclarationList(inForInitializer: Boolean = false): VariableDeclarationList {
         val pos = getPos()
-        val flags = token
-        nextToken() // consume var/let/const
+        // tsc `parseVariableDeclarationList`: the head token IS the list's flags, except
+        // that `await using` is TWO tokens collapsed onto one synthetic flags value
+        // (tsc's `NodeFlags.AwaitUsing`); `await` is consumed here and the `using` by the
+        // shared `nextToken()` below.  Reaching here with `await` at all means a caller's
+        // `isAwaitUsingDeclaration()` lookahead already succeeded.
+        val flags = if (token == SyntaxKind.AwaitKeyword) {
+            nextToken() // consume `await`; `using` is now current
+            SyntaxKind.AwaitUsingKeyword
+        } else token
+        nextToken() // consume var/let/const/using
         // Capture inline comments between keyword and first declaration (e.g. `var /*c*/ x`)
         val keywordTrailingComments = scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
         val decls = mutableListOf<VariableDeclaration>()
@@ -2006,6 +2026,20 @@ class Parser(
         )
     }
 
+    private fun parseForInitializerDeclList(): VariableDeclarationList {
+        disallowIn = true
+        val v = parseVariableDeclarationList(inForInitializer = true)
+        disallowIn = false
+        return v
+    }
+
+    private fun parseForInitializerExpression(): Expression {
+        disallowIn = true
+        val e = parseExpression()
+        disallowIn = false
+        return e
+    }
+
     private fun parseForStatement(): Statement {
         val pos = getPos()
         val comments = leadingComments()
@@ -2019,12 +2053,16 @@ class Parser(
         // and skip all the semicolon parsing (matching TypeScript's error recovery).
         var forMissingHeader = false
         val initializer: Node? = when (token) {
-            VarKeyword, LetKeyword, ConstKeyword -> {
-                disallowIn = true
-                val v = parseVariableDeclarationList(inForInitializer = true)
-                disallowIn = false
-                v
-            }
+            VarKeyword, LetKeyword, ConstKeyword -> parseForInitializerDeclList()
+            // `for (using x of xs)` / `for (await using x of xs)`.  `disallowOf` is what
+            // keeps `for (using of xs)` an iteration over the VALUE `using` (tsc
+            // `nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLineDisallowOf`).
+            UsingKeyword -> if (isUsingDeclaration(disallowOf = true)) {
+                parseForInitializerDeclList()
+            } else parseForInitializerExpression()
+            AwaitKeyword -> if (isAwaitUsingDeclaration()) {
+                parseForInitializerDeclList()
+            } else parseForInitializerExpression()
             Semicolon -> null
             CloseParen -> {
                 // `for ()` — missing init AND semicolons. Report TS1109 "Expression expected"
@@ -2033,12 +2071,7 @@ class Parser(
                 forMissingHeader = true
                 null
             }
-            else -> {
-                disallowIn = true
-                val e = parseExpression()
-                disallowIn = false
-                e
-            }
+            else -> parseForInitializerExpression()
         }
 
         // Capture trailing comments on the initializer (between init and in/of/;)
@@ -4791,6 +4824,11 @@ class Parser(
         val modifiers = setOf(ModifierFlag.Export)
         return when (token) {
             VarKeyword, LetKeyword -> parseVariableStatement(modifiers, comments)
+            // `export using x = e;` PARSES and is then a checker error (TS1491) — tsc's
+            // `parseDeclarationWorker` takes the modifiers and `checkGrammarModifiers`
+            // rejects them, so the declaration still binds and its body still checks.
+            UsingKeyword if isUsingDeclaration() -> parseVariableStatement(modifiers, comments)
+            AwaitKeyword if isAwaitUsingDeclaration() -> parseVariableStatement(modifiers, comments)
             ConstKeyword -> if (lookAhead { nextToken(); token == EnumKeyword }) {
                 nextToken(); parseEnumDeclaration(modifiers + ModifierFlag.Const, comments)
             } else {
@@ -10040,6 +10078,46 @@ class Parser(
     }
 
     private fun isIdentifier(): Boolean = isIdentifierToken(token)
+
+    // -----------------------------------------------------------------------
+    // `using` / `await using` declaration heads (TS 5.2, explicit resource management)
+    //
+    // `using` is a CONTEXTUAL keyword: `const using = 1; using + 1;` and `using.foo()`
+    // and `{ using: 1 }` must keep meaning what they meant.  What separates a
+    // declaration head from an ordinary identifier is tsc's LOOKAHEAD
+    // (`isUsingDeclaration` / `isAwaitUsingDeclaration`, parser.ts) — a binding
+    // identifier or a `{` binding pattern on the SAME LINE.  An `[` is deliberately NOT
+    // a start: `using[x]` is an element access.  ASI is why the same-line test is
+    // load-bearing (`using\nx` is two expression statements).
+    // -----------------------------------------------------------------------
+
+    /** tsc `nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine`. Advances. */
+    private fun nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine(
+        disallowOf: Boolean,
+    ): Boolean {
+        nextToken()
+        // In a for-head `of` is the loop operator, so `for (using of x)` iterates the
+        // VALUE `using` — unless what follows makes `of` the declarator NAME.
+        if (disallowOf && token == SyntaxKind.OfKeyword) {
+            return lookAhead {
+                nextToken()
+                token == SyntaxKind.Equals || token == SyntaxKind.Semicolon ||
+                    token == SyntaxKind.Colon
+            }
+        }
+        return (isIdentifier() || token == SyntaxKind.OpenBrace) && !scanner.hasPrecedingLineBreak()
+    }
+
+    /** tsc `isUsingDeclaration` — the current token is `using`. */
+    private fun isUsingDeclaration(disallowOf: Boolean = false): Boolean =
+        lookAhead { nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine(disallowOf) }
+
+    /** tsc `isAwaitUsingDeclaration` — the current token is `await`. */
+    private fun isAwaitUsingDeclaration(disallowOf: Boolean = false): Boolean = lookAhead {
+        if (nextToken() == SyntaxKind.UsingKeyword) {
+            nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine(disallowOf)
+        } else false
+    }
 
     /** tsc createIdentifier for declaration-name positions: an identifier-capable token
      *  parses normally; a RESERVED keyword reports TS1359 "Identifier expected. '{0}' is

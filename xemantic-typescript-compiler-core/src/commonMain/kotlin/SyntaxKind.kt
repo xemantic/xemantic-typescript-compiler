@@ -189,6 +189,11 @@ enum class SyntaxKind {
     UniqueKeyword,
     UnknownKeyword,
     UsingKeyword,
+    /** NOT a token — the scanner never produces it.  It is the
+     *  [VariableDeclarationList.flags] value for an `await using` declaration, the way
+     *  [UsingKeyword] / [LetKeyword] / [ConstKeyword] / [VarKeyword] are for the other four
+     *  declaration heads (tsc spells the same distinction `NodeFlags.AwaitUsing`). */
+    AwaitUsingKeyword,
     VarKeyword,
     VoidKeyword,
     WhileKeyword,

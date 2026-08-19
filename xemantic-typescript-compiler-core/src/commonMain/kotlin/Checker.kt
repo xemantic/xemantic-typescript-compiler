@@ -27105,6 +27105,8 @@ class Checker(
                 spineCollectObjLitVar(node)
                 spineCheckConstInitializer(node)
                 spineCheckDestructuringInitializer(node)
+                spineCheckUsingDeclarator(node)
+                spineCheckUsingDisposable(node)
             }
             NodeKind.CLASS_EXPRESSION -> {
                 node as ClassExpression
@@ -27131,6 +27133,7 @@ class Checker(
             NodeKind.FOR_IN_STATEMENT -> {
                 node as ForInStatement
                 spineCheckForInLhsType(node)
+                spineCheckUsingForInHead(node)
                 spineCheckStrictForInOfDecls(node.initializer)
                 spineCheckForInOfOptionalChainLhs(
                     node.initializer, 2780,
@@ -27213,6 +27216,7 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientVarInitializers(node)
                 spineCheckStrictVarStatement(node)
+                spineCheckUsingStatementModifiers(node)
                 spineDupIdEnter(node)
             }
             NodeKind.ENUM_DECLARATION -> {
@@ -31822,6 +31826,268 @@ class Checker(
             start = name.pos,
             length = name.text.length,
         ))
+    }
+
+    /**
+     * `"using"` / `"await using"` for a declaration list whose head is one of them, null
+     * for `var` / `let` / `const`.  tsc spells the same test
+     * `getCombinedNodeFlags(node) & NodeFlags.BlockScoped` against `Using` / `AwaitUsing`;
+     * here the head token IS the flags (`Parser.parseVariableDeclarationList`), and the
+     * string is also the `{0}` of every one of these diagnostics.
+     */
+    private fun usingDeclarationKeyword(flags: SyntaxKind): String? = when (flags) {
+        SyntaxKind.UsingKeyword -> "using"
+        SyntaxKind.AwaitUsingKeyword -> "await using"
+        else -> null
+    }
+
+    private fun emitUsingGrammarError(start: Int, end: Int, message: String, code: Int) {
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = (end - start).coerceAtLeast(1),
+        ))
+    }
+
+    /**
+     * The exclusive END of a binding NAME's own text.  `NodeBase.end` is the end of the
+     * token FOLLOWING the node (CLAUDE.md), so it cannot be used for a squiggle: an
+     * Identifier's real end is its text length, and a binding pattern's is its matching
+     * bracket, found by counting from its opener.  Returns null when the source does not
+     * support the walk (an unterminated pattern), so the caller can decline rather than
+     * invent a span.
+     */
+    private fun bindingNameTextEnd(name: Node): Int? = when (name) {
+        is Identifier -> name.pos + name.text.length
+        is ObjectBindingPattern, is ArrayBindingPattern -> {
+            val open = if (name is ObjectBindingPattern) '{' else '['
+            val close = if (name is ObjectBindingPattern) '}' else ']'
+            var i = name.pos
+            var depth = 0
+            var found = -1
+            while (i < spineSource.length) {
+                val c = spineSource[i]
+                if (c == open) depth++
+                else if (c == close) {
+                    depth--
+                    if (depth == 0) { found = i + 1; break }
+                }
+                i++
+            }
+            if (found > 0) found else null
+        }
+        else -> null
+    }
+
+    /**
+     * The `using` / `await using` DECLARATOR grammar (tsc `checkGrammarVariableDeclaration`,
+     * the two `blockScopeKind` switches):
+     *   * TS1492 `'using' declarations may not have binding patterns.` — the parser parses
+     *     an object binding pattern eagerly (tsc does the same, so the error is a CHECK
+     *     rather than a parse failure), and an array pattern never gets here at all
+     *     because `using[x]` is an element access.
+     *   * TS1155 `'using' declarations must be initialized.` — the `const` rule one arm
+     *     over; a `for-in`/`for-of` iteration variable is exempt by the same owner gate
+     *     [spineCheckConstInitializer] uses.
+     * Positive-evidence-only, in round 946's sense: both fire only for a head this
+     * compiler could not parse at all before, so a gap here is a false NEGATIVE.
+     */
+    private fun spineCheckUsingDeclarator(decl: VariableDeclaration) {
+        if (spineIsDts) return
+        val list = decl.parent as? VariableDeclarationList ?: return
+        val keyword = usingDeclarationKeyword(list.flags) ?: return
+        if (decl.name is ObjectBindingPattern || decl.name is ArrayBindingPattern) {
+            val end = bindingNameTextEnd(decl.name) ?: return
+            emitUsingGrammarError(
+                decl.name.pos, end,
+                "'$keyword' declarations may not have binding patterns.", 1492,
+            )
+            return
+        }
+        if (decl.initializer != null) return
+        val name = decl.name as? Identifier ?: return
+        // Only a VariableStatement / plain `for(;;)` head requires an initializer — the
+        // for-in / for-of iteration variable is initialized BY the iteration.
+        when (list.parent) {
+            is VariableStatement, is ForStatement -> {}
+            else -> return
+        }
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "'$keyword' declarations must be initialized.",
+            category = DiagnosticCategory.Error,
+            code = 1155,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
+        ))
+    }
+
+    /**
+     * TS2850 / TS2851 — the DISPOSABILITY of a `using` / `await using` initializer
+     * (tsc `checkVariableLikeDeclaration`: assignability to `Disposable | null | undefined`,
+     * resp. `AsyncDisposable | Disposable | null | undefined`).
+     *
+     * **POSITIVE-EVIDENCE-ONLY** (round 946's rule for a check landed with no corpus gate):
+     * it fires only where the initializer's type is fully resolved and provably carries no
+     * dispose method, so every gap is a false NEGATIVE.  Three deliberate refusals, each of
+     * which a wrong answer would turn into a false positive on a construct nothing in the
+     * corpus exercises:
+     *   * the whole check is OFF unless the program's own lib declares `Disposable` /
+     *     `AsyncDisposable` — tsc's `getGlobalDisposableType(…) !== emptyObjectType` guard,
+     *     and the embedded lib declares neither;
+     *   * a union, an intersection, a type parameter, a signature-bearing or index-signature
+     *     type, and every `any` / `unknown` / `never` / error type are silent;
+     *   * an EMPTY member table is only evidence when the initializer is syntactically an
+     *     object LITERAL — the embedded lib writes real interfaces with empty bodies, so
+     *     "no members" otherwise means "not resolved" (the (CHK.22) trap, one type over).
+     * The nested `Property '[Symbol.dispose]' is missing …` elaboration and its TS2728
+     * related info are NOT reproduced; no fixture in the sweep population carries either.
+     */
+    private fun spineCheckUsingDisposable(decl: VariableDeclaration) {
+        if (spineIsDts) return
+        val init = decl.initializer ?: return
+        val list = decl.parent as? VariableDeclarationList ?: return
+        val keyword = usingDeclarationKeyword(list.flags) ?: return
+        val isAsync = keyword == "await using"
+        if (globalsForFile(spineFileName, "Disposable") == null) return
+        if (isAsync && globalsForFile(spineFileName, "AsyncDisposable") == null) return
+        if (!provablyNotDisposable(getTypeOfExpression(init), isAsync, init)) return
+        val start = init.pos
+        val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = if (isAsync)
+                "The initializer of an 'await using' declaration must be either an object " +
+                    "with a '[Symbol.asyncDispose]()' or '[Symbol.dispose]()' method, or be " +
+                    "'null' or 'undefined'."
+            else
+                "The initializer of a 'using' declaration must be either an object with a " +
+                    "'[Symbol.dispose]()' method, or be 'null' or 'undefined'.",
+            category = DiagnosticCategory.Error,
+            code = if (isAsync) 2851 else 2850,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun provablyNotDisposable(type: Type, isAsync: Boolean, init: Expression): Boolean {
+        // `null` / `undefined` / `void` are explicitly LEGAL initializers.
+        if (type.flags.hasAny(
+                TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never or TypeFlags.Null or
+                    TypeFlags.Undefined or TypeFlags.Void or TypeFlags.TypeParameter)) return false
+        if (type === errorType || type === anyType || type === unknownType) return false
+        if (type is Type.Union || type is Type.Intersection) return false
+        // A primitive can never carry the method — tsc rejects `using x = 1` outright.
+        if (type.flags.hasAny(
+                TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or
+                    TypeFlags.BigInt or TypeFlags.ESSymbolLike)) return true
+        val carrier = type as? Type.Object ?: return false
+        resolveStructuredTypeMembers(carrier)
+        if (carrier.stringIndexInfo != null || carrier.numberIndexInfo != null) return false
+        if (getCallSignaturesOfType(carrier).isNotEmpty()) return false
+        if (getConstructSignaturesOfType(carrier).isNotEmpty()) return false
+        if (carrier.properties.isNullOrEmpty() && init !is ObjectLiteralExpression) return false
+        if (getPropertyOfType(carrier, SYMBOL_DISPOSE_MEMBER) != null) return false
+        if (isAsync && getPropertyOfType(carrier, SYMBOL_ASYNC_DISPOSE_MEMBER) != null) return false
+        return true
+    }
+
+    /**
+     * TS1491 / TS1495 `'{0}' modifier cannot appear on a 'using' declaration.` — tsc
+     * `checkGrammarModifiers`.  `export using x = e;` and `declare using x: T;` PARSE
+     * (tsc takes the modifiers and then rejects them), so the declaration still binds.
+     */
+    /**
+     * The start of the modifier word [text] in the run of modifiers immediately preceding
+     * [declKeywordPos], or null when it is not one of them.  Walks backwards over
+     * whitespace and identifier words and stops at the first word that is not a modifier,
+     * so it cannot reach into the previous statement.
+     */
+    private fun isDeclarationModifierWord(w: String): Boolean = when (w) {
+        "export", "declare", "default", "abstract", "async", "const", "public", "private",
+        "protected", "readonly", "static", "override", "accessor" -> true
+        else -> false
+    }
+
+    private fun modifierTokenPosBefore(declKeywordPos: Int, text: String): Int? {
+        var i = declKeywordPos
+        while (i > 0) {
+            while (i > 0 && spineSource[i - 1].isWhitespace()) i--
+            val end = i
+            while (i > 0 && (spineSource[i - 1].isLetter() || spineSource[i - 1] == '_')) i--
+            if (i == end) return null
+            val word = spineSource.substring(i, end)
+            if (word == text) return i
+            if (!isDeclarationModifierWord(word)) return null
+        }
+        return null
+    }
+
+    private fun spineCheckUsingStatementModifiers(stmt: VariableStatement) {
+        if (spineIsDts) return
+        val keyword = usingDeclarationKeyword(stmt.declarationList.flags) ?: return
+        val code = if (keyword == "using") 1491 else 1495
+        for (m in listOf(ModifierFlag.Export, ModifierFlag.Declare, ModifierFlag.Default)) {
+            if (m !in stmt.modifiers) continue
+            val text = when (m) {
+                ModifierFlag.Export -> "export"
+                ModifierFlag.Declare -> "declare"
+                else -> "default"
+            }
+            // A VariableStatement's `pos` is its DECLARATION KEYWORD, not its first
+            // modifier (`Parser.parseVariableStatement` takes `pos` after the caller has
+            // consumed them), so the modifier token is found by walking BACKWARDS over
+            // the run of whitespace-separated modifier words that precedes it.
+            val at = modifierTokenPosBefore(stmt.pos, text) ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, at)
+            val article = if (keyword == "using") "a" else "an"
+            diagnostics.add(Diagnostic(
+                message = "'$text' modifier cannot appear on $article '$keyword' declaration.",
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = at,
+                length = text.length,
+            ))
+        }
+    }
+
+    /**
+     * TS1493 / TS1494 `The left-hand side of a 'for...in' statement cannot be a 'using'
+     * declaration.` — tsc `checkGrammarVariableDeclarationList`'s `isForInStatement`
+     * arm.  `for...of` is LEGAL and deliberately not covered.
+     */
+    private fun spineCheckUsingForInHead(stmt: ForInStatement) {
+        if (spineIsDts) return
+        val list = stmt.initializer as? VariableDeclarationList ?: return
+        val keyword = usingDeclarationKeyword(list.flags) ?: return
+        val code = if (keyword == "using") 1493 else 1494
+        // The list's own `end` is the end of the `in` that follows it, so the span stops at
+        // the last declarator's own text instead.
+        val last = list.declarations.lastOrNull()
+        val end = if (last != null && last.initializer == null && last.type == null) {
+            bindingNameTextEnd(last.name) ?: list.end
+        } else list.end
+        emitUsingGrammarError(
+            list.pos, end,
+            "The left-hand side of a 'for...in' statement cannot be " +
+                (if (keyword == "using") "a 'using'" else "an 'await using'") + " declaration.",
+            code,
+        )
     }
 
     /**
@@ -50813,6 +51079,9 @@ class Checker(
     private fun variableStatementKeyword(stmt: VariableStatement): String = when (stmt.declarationList.flags) {
         SyntaxKind.LetKeyword -> "let"
         SyntaxKind.ConstKeyword -> "const"
+        // A `using` head is `.d.ts`-illegal anyway (TS1545), but the span this feeds must
+        // still name the keyword that is actually in the source.
+        SyntaxKind.UsingKeyword, SyntaxKind.AwaitUsingKeyword -> "using"
         else -> "var"
     }
 
@@ -54211,6 +54480,8 @@ class Checker(
          *  this compiler's member tables (round 723's `"[<dotted>]"` scheme, minted
          *  by [getMemberName]'s well-known-symbol arm). */
         private const val SYMBOL_ITERATOR_MEMBER = "[Symbol.iterator]"
+        private const val SYMBOL_DISPOSE_MEMBER = "[Symbol.dispose]"
+        private const val SYMBOL_ASYNC_DISPOSE_MEMBER = "[Symbol.asyncDispose]"
 
         /** (CHK.22) [iterableOperandFailure]'s verdicts. `const val Int`s rather than
          *  an enum: a Kotlin `private const val` of a primitive is emitted with a
