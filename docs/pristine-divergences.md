@@ -78,7 +78,7 @@ top-level classifier cannot recognise. **(CHK.10) is CONFIRMED genuine** by the 
 
 ---
 
-## 1. The table — 318 ours-only rows over 79 fixtures, at round 942
+## 1. The table — 318 ours-only rows over 79 fixtures, at round 942 (**313 over 78** after round 944)
 
 The row counts are AT `967c2e53` (round 941's own before-arm) so the buckets stay
 comparable; the right-hand column records what each has cost since.
@@ -122,7 +122,7 @@ sweep, not re-derived by hand) and the summary is:
 | S2 | recursive conditional / mapped types over tuples | 13 | the instantiation-depth bail (TS2589) and a deferred conditional that never evaluates | genuine FP | **MODELLING** |
 | S10 | residue — one mechanism each | 11 | ten singletons, listed below | genuine FP | **MODELLING** |
 | S4 | the strict-family default in another costume | 6 | TS2683 (`noImplicitThis`), TS7019 (`noImplicitAny`) and three TS2322 that are `strictNullChecks` | **deliberate convention** | owner decision, (CHK.13) |
-| S6 | lib availability at the DEFAULT target | 5 | `libFeatureAvailable` reads the RAW `ES3` default; tsc's `getEmitScriptTarget` defaults an unset target to the LATEST | genuine FP | **SMALL-MEDIUM**, (CHK.17) |
+| S6 | lib availability at the DEFAULT target | 5 -> **2** | `libFeatureAvailable` read the RAW `ES3` default; tsc's `getEmitScriptTarget` defaults an unset target to the LATEST | genuine FP | **FIXED round 944** (CHK.17); the 2 left were never a cascade |
 | S5 | `keyof` of an intersection / index signature / remapped mapped type | 4 | `keyof (X & T)` loses `keyof T` and the index signature's `string \| number` | genuine FP | MODELLING |
 | S7 | write through a generic indexed access | 3 | we say TS2862 where pristine says TS2322 — same position, both reject | **form** | MEDIUM, (CHK.18) |
 | S8 | an alias type parameter shadowed in the TS2344 walker | 2 | the walker resolved type ARGUMENTS with no type-parameter scope | genuine FP | **FIXED round 943** |
@@ -390,6 +390,54 @@ which is how the class/interface half was found. A regression guard that fails i
 
 ---
 
+## 3d. Closed by round 944 — (CHK.17), 3 rows and a systematic real-world false positive
+
+**LIB AVAILABILITY WAS DECIDED FROM `CompilerOptions.target`, WHOSE `ES3` ZERO VALUE IS
+INDISTINGUISHABLE FROM "THE USER NAMED NO TARGET".** tsc has ONE such notion,
+`getEmitScriptTarget` (`utilities.ts`: `(target === ES3 ? undefined : target) ??
+LatestStandard`), and `getDefaultLibFileName` picks the default lib from it — so an unset
+`target` loads `lib.es2025.full.d.ts` there and loaded `lib.d.ts` here. A project with no
+`target` in its tsconfig was therefore told `Cannot find name 'AsyncIterableIterator'. Do
+you need to change your target library?` and had every later-lib interface member filtered
+out from under it.
+
+`CompilerOptions.libTarget` (unset -> ES2024, explicit -> itself, `es5` included) is now the
+one input to `libFeatureAvailable`, `libProvidesGlobalAt` and the lib-SET resolution in
+`bindRealLibs` / `RealLibSnapshots.prewarmParsedLibFiles`. **Not `effectiveTarget`**: it maps
+an explicit `es3`/`es5` UP to ES2015 and would delete that program's genuine TS2550/TS2583 —
+round 941 met the identical fork at TS18028 and refused it for the same reason.
+
+**Measured: ours-only 316 -> 313, pristine-only 775 -> 775, zero fixtures regressed** —
+`uniqueSymbols` 221 (TS2583), `uniqueSymbolsDeclarations` 217 (TS2583),
+`intersectionTypeInference3` 12 (TS2550, `Array.from`).
+
+**THE ENTRY THAT SAID THIS WAS DELIBERATE WAS SAYING IT WAS INVISIBLE.** CLAUDE.md recorded
+the raw-`ES3` reading as a design decision confined away from the corpus. What is true is
+that **the corpus never tested either answer**: of the case files that reach a lib-availability
+mechanism at all, **0 of 55** touching a `LIB_MIN_TARGET` member name, **0 of the ~30**
+referencing a `LIB_GLOBAL_INTRODUCING` global, and **0 of the 26** whose baseline carries an
+`and N more` member count omit `@target`/`@lib`. That is why the suite is 15,262/0 with NO
+baseline moved, and it was stated as a prediction before the run rather than read off it.
+
+### 3d.1 The DOWNLEVEL half is a separate question with the OPPOSITE sign — (CHK.21)
+
+The ~25 `options.target < ES2015` gates in `Checker.kt` (TS1250, TS2802, TS2737, TS1501/TS1503,
+TS2659/TS2660, TS2340/TS2855, TS2396, the TS2488/TS2461 message fork, the tslib-helper checks)
+still read the RAW target, so at an unset target they behave as ES3 where tsc behaves as
+ES2025. Answered against pristine SEPARATELY, as it had to be, and the two halves do not move
+together:
+
+| direction | rows over the 611 fixtures (304 with no `@target`) |
+|---|---|
+| ours-only (false positive) | **0** — no downlevel-gated code appears in the ours-only set at all |
+| pristine-only (false negative) | **4** — `for-of16` x2, `for-of29`, `iteratorSpreadInArray10`, all TS2488 |
+
+So the lib half was an FP family and the downlevel half is an FN family; fixing it would ADD
+diagnostics, over ~25 sites whose corpus blast radius is nothing like the lib family's (every
+`for-of` fixture reaches one). It is queued rather than bundled in.
+
+---
+
 ## 4. What to take next
 
 Ranked by (rows × confidence it is a genuine FP × smallness). **Round 943's sub-triage
@@ -403,13 +451,9 @@ small work left is elsewhere.
    `this[<late-bound key>] = …`. Small, in the arc's own family, and **CONFIRMED genuine by
    round 943's strict-default arm** (§ 0b: that fixture's own baseline carries 20 TS2564, so
    pristine had the flag ON and the rows are not the convention). **(CHK.10)**
-3. **Lib availability at the DEFAULT target (5 rows here, and a systematic real-world FP)** —
-   `libFeatureAvailable` answers `options.target >= intro` off a RAW `ES3` default and
-   `RealLibResolver.resolve` picks the lib SET from the same field, where tsc's
-   `getEmitScriptTarget` defaults an UNSET target to the latest standard. So a project with
-   no `target` in its tsconfig gets `Cannot find name 'AsyncIterableIterator'. Do you need to
-   change your target library?` from us and nothing from tsc. This is round 941's TS18028
-   defect one family over, and its blast radius is the whole default lib set. **(CHK.17)**
+3. ~~Lib availability at the DEFAULT target~~ — **CLOSED round 944, § 3d.** Its successor
+   in this family is the DOWNLEVEL half, which is a FALSE-NEGATIVE item rather than an FP
+   one: 0 ours-only and 4 pristine-only rows. **(CHK.21)**
 4. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
    `abstract new (…) => T` (6 rows) and `infer X extends` (17) are the same class.
    **(CHK.14)**

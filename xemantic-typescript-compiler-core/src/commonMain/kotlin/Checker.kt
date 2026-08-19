@@ -8328,8 +8328,13 @@ class Checker(
         // [checkLibOption]; raising it from the resolution rather than from a raw
         // `options.lib` x `libMap` check is what keeps it off the embedded-lib path
         // (the corpus never resolves real libs, so no baseline can move).
-        realLibUnknownNames = RealLibResolver.resolve(libNames, options.target).unknownNames
-        val results = RealLibSnapshots.bindLibFiles(libNames, options.target, options)
+        // (CHK.17) round 944: the lib SET is picked by [CompilerOptions.libTarget] — tsc's
+        // `getDefaultLibFileName(getEmitScriptTarget(options))`, i.e. an UNSET target loads
+        // the LATEST full lib, not `lib.d.ts`. Must stay in step with
+        // [RealLibSnapshots.prewarmParsedLibFiles], whose warmed key set is by construction
+        // the key set the `--workers` partition checkers then read.
+        realLibUnknownNames = RealLibResolver.resolve(libNames, options.libTarget).unknownNames
+        val results = RealLibSnapshots.bindLibFiles(libNames, options.libTarget, options)
         val merged: SymbolTable = symbolTable()
         for (result in results) {
             val ast = result.sourceFile
@@ -56063,11 +56068,13 @@ interface DataView {
 
     /** B237: does the active lib config provide the global [name] introduced at [intro]?
      *  Empty @lib = the DEFAULT lib derives from the target (lib.es5+dom for es5, …), so
-     *  availability is `options.target >= intro`. An explicit @lib provides the name via
-     *  a cumulative full es-version >= intro or the name's dotted home sub-library. */
+     *  availability is `options.libTarget >= intro` — [CompilerOptions.libTarget], NOT the
+     *  raw target, because an UNSET target is tsc's LATEST standard and not `ES3`
+     *  ((CHK.17) round 944). An explicit @lib provides the name via a cumulative full
+     *  es-version >= intro or the name's dotted home sub-library. */
     private fun libProvidesGlobalAt(name: String, intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.target >= intro
+        if (options.lib.isEmpty()) return options.libTarget >= intro
         val introNum = intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->
             val l = l0.lowercase()
@@ -56093,12 +56100,14 @@ interface DataView {
     }
 
     /** B238: is a lib FEATURE introduced at [intro] available under the active config?
-     *  Empty @lib → the default lib derives from the target (`options.target >= intro`).
+     *  Empty @lib → the default lib derives from the target (`options.libTarget >= intro`
+     *  — [CompilerOptions.libTarget], NOT the raw target: an UNSET target is tsc's LATEST
+     *  standard, not `ES3`, (CHK.17) round 944).
      *  Explicit @lib → any entry whose BASE es-version (dotted entries count their
      *  prefix level — conservative towards suppression) is >= intro provides it. */
     private fun libFeatureAvailable(intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.target >= intro
+        if (options.lib.isEmpty()) return options.libTarget >= intro
         val introNum = if (intro == ScriptTarget.ESNext) 9999
             else intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->

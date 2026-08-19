@@ -257,14 +257,44 @@ data class CompilerOptions(
         // tsc getEmitScriptTarget: an UNSET target (or ES3) maps to LatestStandard (ES2025).
         // We use ES2024 (our top standard target) for an unset target — so emit keeps native
         // class fields / async / spread (useDefineForClassFields ≥ ES2022 → true). An EXPLICIT
-        // ES3/ES5 still maps to ES2015 (legacy downlevel). NOTE: the checker reads RAW
-        // `options.target` (stays ES3) for lib-availability / `target < ES2015` gates, so only
-        // the emit dimension changes for no-@target tests (classPropertyInferenceFromBroaderTypeConst).
+        // ES3/ES5 still maps to ES2015 (legacy downlevel). This is the EMIT dimension only;
+        // LIB AVAILABILITY is [libTarget] (round 944) and the `target < ES2015` DOWNLEVEL
+        // gates still read the RAW `options.target`.
         get() = when {
             !targetExplicitlySet -> ScriptTarget.ES2024
             target <= ScriptTarget.ES5 -> ScriptTarget.ES2015
             else -> target
         }
+
+    /**
+     * (CHK.17) round 944 — the target every **lib-availability** question is decided
+     * against: which default lib set is loaded, whether a later-lib global resolves
+     * (TS2583/TS2585), and whether a later-lib interface member is filtered out of its
+     * interface (TS2550).
+     *
+     * tsc has ONE such notion, `getEmitScriptTarget` (`utilities.ts`), which maps an
+     * UNSET `target` to `ScriptTarget.LatestStandard` and picks the default lib from
+     * THAT (`getDefaultLibFileName`: unset -> `lib.es2025.full.d.ts`). Our top standard
+     * target is ES2024, so an unset target answers ES2024 here — the same value
+     * [effectiveTarget] already gives the emitter, which is what makes the two
+     * dimensions agree for a project that names no target.
+     *
+     * **Not [effectiveTarget]**: that maps an EXPLICIT `es3`/`es5` UP to ES2015, which
+     * would hand an `@target: es5` program the ES2015 lib and delete every genuine
+     * TS2550/TS2583 it is supposed to get. Round 941 met the identical fork at TS18028
+     * and refused `effectiveTarget` for the same reason. **Not the raw [target]**
+     * either: its `ES3` zero value is indistinguishable from "the user said nothing",
+     * which is what made `Cannot find name 'AsyncIterableIterator'. Do you need to
+     * change your target library?` fire on a tsconfig with no `target` at all.
+     *
+     * An EXPLICIT `es3` stays ES3 here where tsc 6 answers LatestStandard for it too
+     * (it dropped ES3 as a target). Neither instrument can observe that — the corpus
+     * skips every explicit es3/es5 config (`usesUnsupportedOption`) and no pristine
+     * fixture sets `@target: es3` — and keeping it raw is consistent with the
+     * `target <= ES5` gates beside it.
+     */
+    val libTarget: ScriptTarget
+        get() = if (targetExplicitlySet) target else ScriptTarget.ES2024
 
     val effectiveModule: ModuleKind
         get() = module ?: when {

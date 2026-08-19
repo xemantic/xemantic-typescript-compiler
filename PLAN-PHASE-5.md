@@ -20,6 +20,111 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 944 (2026-08-19) — (CHK.17): LIB AVAILABILITY WAS DECIDED FROM A TARGET DEFAULT THAT
+MEANS TWO THINGS AT ONCE — `CompilerOptions.target`'s `ES3` ZERO VALUE IS INDISTINGUISHABLE
+FROM "THE USER NAMED NO TARGET" — AND THE CLAUDE.md ENTRY CALLING THAT DELIBERATE WAS
+RECORDING THAT IT IS *INVISIBLE*, NOT THAT IT IS TESTED. Landed as a third target notion,
+`libTarget`; sweep 316 -> 313 with pristine-only FLAT; the DOWNLEVEL half is measured, has the
+OPPOSITE sign, and is queued rather than bundled in.**
+
+**THE MEASURED TABLE — the round's whole first act, and it is what decided the scope.**
+
+| question | instrument | unset `@target` | explicit `@target` |
+|---|---|---|---|
+| what does PRISTINE do | pinned tsc 6 `getEmitScriptTarget` + `getDefaultLibFileName` | `LatestStandard` = ES2025 -> `lib.es2025.full.d.ts` (an explicit `es3` too) | itself; `es5` -> `lib.d.ts` |
+| what did WE do (lib availability) | `libFeatureAvailable` / `libProvidesGlobalAt` / `bindRealLibs` | raw `ES3` -> `lib.d.ts` | itself |
+| ours-only rows, LIB family | 611-fixture pristine sweep | **3** (`uniqueSymbols` 221, `uniqueSymbolsDeclarations` 217 TS2583; `intersectionTypeInference3` 12 TS2550) | **0** |
+| ours-only rows, DOWNLEVEL family | same | **0** | **0** |
+| pristine-only rows, DOWNLEVEL family | same | **4** (`for-of16` x2, `for-of29`, `iteratorSpreadInArray10`, TS2488) | — |
+| corpus reachability | case-file census | `LIB_MIN_TARGET` members 0/55 · `LIB_GLOBAL_INTRODUCING` globals 0/~30 · `and N more` baselines 0/26 name no target | — |
+
+**SO THE TWO QUESTIONS THE TASK SEPARATED HAVE OPPOSITE SIGNS**, which is exactly why they
+must not be one change: lib availability is a FALSE-POSITIVE family (we say something tsc does
+not), the `target < ES2015` downlevel gates are a FALSE-NEGATIVE family (we stay silent where
+tsc speaks). (CHK.17) took the first; (CHK.21) carries the second with its evidence.
+
+**AND THE CORPUS QUESTION WAS ANSWERED BEFORE THE FIRST BUILD, WHICH IS WHAT MADE THE ROUND
+SAFE.** CLAUDE.md said "the CHECKER reads RAW `options.target` for lib-availability … so
+TS2488/TS2550/TS2583 are unchanged for no-`@target` tests" — a claim that the corpus is
+*consistent* with the raw reading. Three greps over `typescript-repo/tests/cases` say why:
+**every** case file that reaches a lib-availability mechanism names its `@target` or its
+`@lib` — 0 of 55 files using a `LIB_MIN_TARGET` member name, 0 of the ~30 referencing an
+`Atomics`/`BigInt`/`AsyncIterable*`/`Reflect`-class global, and 0 of the 26 baselines carrying
+an `and N more` member count (the B85.2 count-shift hazard). **The corpus never tested either
+answer.** The prediction "no baseline will move" was written down first and the suite then
+returned exactly that: **15,248 -> 15,262 / 0 failures / 3 skipped**, the +14 being this
+round's pins.
+
+**THE FIX.** `libTarget = if (targetExplicitlySet) target else ScriptTarget.ES2024` — four
+call sites (`libFeatureAvailable`, `libProvidesGlobalAt`, `bindRealLibs`'s
+`RealLibResolver.resolve` + `RealLibSnapshots.bindLibFiles`, and
+`prewarmParsedLibFiles`, which must stay in step or the `--workers` prewarm warms a different
+key set than the checkers read). **`effectiveTarget` is the wrong notion and the pins say so
+out loud**: it maps an explicit `es3`/`es5` UP to ES2015, which would hand an `@target: es5`
+program the ES2015 lib and delete every genuine TS2550/TS2583 — round 941 met the identical
+fork at TS18028 and refused it for the same reason. An explicit `es3` stays ES3 where tsc 6
+answers LatestStandard for it too; neither instrument can see that (the corpus skips every
+explicit es3/es5 config, no pristine fixture sets `@target: es3`), and it is recorded rather
+than guessed at.
+
+**A PIN THAT ASSERTED THE OPPOSITE OF THE TRUTH IS THIS ROUND'S BEST FINDING.** "the default
+lib set for an explicit es5 target is the es5 one" asserted `"es2018.asynciterable" !in keys`
+and went RED: **the es5 default closure already carries the whole es2015 layer AND
+`es2018.asynciterable`**, pulled in behind `lib.d.ts` -> dom by the DOM libs' own
+`/// <reference lib=… />`. So at an explicit `es5` a later-lib GLOBAL's TS2583 comes from the
+availability GATE and not from the file being absent, and the SET half is load-bearing only
+for later-lib MEMBERS. The ablation reproduces that split exactly (A3 vs A4 below), and the
+pin now discriminates on `es2017.string` / `es2024.full`, which do separate the two sets.
+
+**ABLATION — 4 arms, one mistake at a time, from a sha256-verified THREE-FILE snapshot**
+(`scripts/round944-ablate.py`; a change spanning three files needs a dict snapshot, or
+restoring one file and leaving another ablated is a combined arm wearing a single arm's name),
+each arm diffed against the SNAPSHOT and never with `git checkout`, each asserting `ran 14`:
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---:|---|
+| A1 | `libTarget` reads the RAW target again — the whole fix | **5** | every unset-target pin plus the accessor |
+| A2 | `libTarget` becomes `effectiveTarget` — the BOUND | **3** | the explicit-`es5` pins, DISJOINT from A1; the `Reflect` pin exists solely for this arm, because `AsyncIterableIterator` (es2018) is still unavailable at ES2015 and could not separate them |
+| A3 | the availability GATE alone reverts; the SET keeps the fix | **2** | the two later-lib GLOBAL pins, uniquely |
+| A4 | the lib SET alone reverts; the GATE keeps the fix | **1** | the later-lib MEMBER pin, uniquely |
+
+A3's and A4's red sets are DISJOINT and their union is a proper subset of A1's, which is the
+gate-vs-set separation stated above. **Six of the 14 pins are green in all four arms and are
+recorded as REGRESSION GUARDS rather than claimed as discriminators** (round 807): the
+es2017-accessor pin, the four explicit-target positive controls that no arm can reach
+(`es5`/`es2017` still report an es2018 global, `es2018` resolves it, `es5` still reports a
+later-lib member) and the explicit-`@lib` pin, which asserts the property that makes the
+8-profile grid a control at all.
+
+**GATES.** Suite **15,262 / 0 failures / 3 skipped**, summed over all six modules with an XML
+parser, NO corpus baseline moved. **8-profile grid, both arms REBUILT this round** (profiles
+enumerated by `tsconfig.json`, refused below 8): `added=0 removed=0` on ALL EIGHT — and it is a
+CONTROL by construction, since every profile sets `target: es2020` AND `lib: ["es2020"]`, so
+neither half of the change can reach it. **630-fixture pristine sweep 316 -> 313 rows over
+79 -> 78 fixtures, pristine-only 775 -> 775, ZERO regressed**; the before arm reproduced round
+943's closing number exactly, which is the provenance check. `cost_gate.py`: **every counter
++0.00%** — the EXPECTED answer, not a green light (round 876), because the compiler profile
+names both `target` and `lib`, so it is a control that the explicit path is untouched; the
+positive control that the binary really changed is the 14 pins, which cannot compile without
+`libTarget`. `huge_methods.py --fail-over 0` green on all six module class dirs (751 / 48 / 20 /
+14 / 7 / 2 classes scanned — the differing counts are the per-dir positive control). No
+`spine*EnterNode` changed, so `spine_closure_audit.py` does not apply.
+
+**PROVENANCE.** Grid (after), sweep (after) and all four ablation arms were measured at
+`Checker.kt` `7b78f8e8…`, `CompilerOptions.kt` `b9f80781…`, `RealLibs.kt` `1b951943…`, which is
+the committed tree byte for byte; the before arm at HEAD's `1e134146…` / `3d5fc8d9…` /
+`ad5d0394…`.
+
+**ONE CORRECTION TO ROUND 943'S OWN ENTRY.** (CHK.17) was filed as "5 rows — 3 direct, each
+with a cascaded TS2322". The three direct rows are gone and **both TS2322 remain**
+(`uniqueSymbols` 226, `uniqueSymbolsDeclarations` 222), so they were never a cascade: they are
+a contextual-typing row about a `unique symbol` return in an object literal, and they belong
+with S3 rather than S6.
+
+**NEXT.** (CHK.9) `indexSignatures1` TS1268 x12 and (CHK.10) definite assignment through a
+late-bound `this[k] = …` are the smallest genuine-FP items left; (CHK.21) is the sibling of
+this round with the evidence already measured.
+
 **Round 943 (2026-08-19) — (CHK.8b): THE 89-ROW "FP — TYPE SYSTEM / INFERENCE" BUCKET,
 SUB-TRIAGED — AND THE HONEST HEADLINE IS THAT **68 OF ITS 83 GENUINE ROWS (82%) ARE FOUR
 MODELLING ITEMS, I.E. A FEATURE LIST, NOT A DEFECT LIST**. Six more rows are the
@@ -2339,23 +2444,35 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   grid added=0 removed=0, suite 15,235 -> 15,248 with no baseline moved.
   `docs/pristine-divergences.md` § 3c.
 
-- [ ] **(CHK.17) LIB AVAILABILITY IS DECIDED FROM THE *RAW* `ES3` TARGET DEFAULT WHERE tsc
-  DEFAULTS AN UNSET TARGET TO THE LATEST — 5 OURS-ONLY ROWS, AND A SYSTEMATIC REAL-WORLD FP
-  (round 943).** `libFeatureAvailable` answers `options.lib.isEmpty() -> options.target >= intro`
-  and `RealLibResolver.resolve(libNames, options.target)` picks the lib SET from the same
-  field, both off `CompilerOptions.target`'s `ES3` default; tsc's `getEmitScriptTarget`
-  defaults an UNSET target to the latest standard, so its default lib is `lib.esnext.full`.
-  A project with no `target` in its tsconfig therefore gets **TS2583 `Cannot find name
-  'AsyncIterableIterator'. Do you need to change your target library?`** (pristine
-  `uniqueSymbols` line 221 / `uniqueSymbolsDeclarations` line 217, each with a cascaded
-  TS2322) and **TS2550 for `Array.from`** (`intersectionTypeInference3` line 12) where
-  pristine is silent. **This is round 941's TS18028 defect one family over and the same
-  shape of fix — `options.targetExplicitlySet` decides — but its blast radius is bigger:
-  the lib SET, not just a gate**, so it wants its own round with the 8-profile grid, the
-  sweep and a corpus run (the corpus uses the EMBEDDED lib, so the two halves must be
-  measured separately). Note the CLAUDE.md entry that records the current behaviour as
-  deliberate ("the CHECKER reads RAW `options.target` for lib-availability") — round 943's
-  evidence is that pristine disagrees, so that entry is the thing to re-judge first.
+- [x] **(CHK.17) LIB AVAILABILITY WAS DECIDED FROM THE *RAW* `ES3` TARGET DEFAULT WHERE tsc
+  DEFAULTS AN UNSET TARGET TO THE LATEST — LANDED, round 944.** `CompilerOptions.libTarget`
+  (unset -> ES2024, explicit -> itself, `es5` included) is now the one input to
+  `libFeatureAvailable`, `libProvidesGlobalAt` and the lib-SET resolution in `bindRealLibs` /
+  `RealLibSnapshots.prewarmParsedLibFiles`; NOT `effectiveTarget`, which maps an explicit
+  `es5` UP to ES2015 and would delete that program's genuine TS2550/TS2583 (round 941's
+  TS18028 fork). Sweep **316 -> 313**, pristine-only 775 -> 775, zero fixtures regressed,
+  8-profile grid `added=0 removed=0` on all eight (every profile sets BOTH `target: es2020`
+  and `lib: ["es2020"]`, so it is a pure control), suite **15,248 -> 15,262 / 0** with NO
+  corpus baseline moved. The CLAUDE.md entry that recorded the raw reading as deliberate is
+  corrected: it was INVISIBLE, not tested — 0 of 55 case files touching a `LIB_MIN_TARGET`
+  member name, 0 of the ~30 referencing a `LIB_GLOBAL_INTRODUCING` global and 0 of the 26
+  carrying an `and N more` count omit `@target`/`@lib`.
+
+- [ ] **(CHK.21) THE ~25 `options.target < ES2015` DOWNLEVEL GATES STILL READ THE RAW TARGET,
+  AND MEASURED AGAINST PRISTINE THAT HALF IS A *FALSE NEGATIVE* FAMILY — 0 OURS-ONLY AND 4
+  PRISTINE-ONLY ROWS (round 944).** (CHK.17)'s sibling question, answered separately because
+  the two halves do not move together: over the 611-fixture population (304 of them with no
+  `@target`) the downlevel gates produce **no ours-only row at all**, while pristine reports
+  **TS2488** at `for-of16` (x2), `for-of29` and `iteratorSpreadInArray10` where we are silent —
+  the `if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) return` gates
+  suppressing a check tsc performs at its ES2025 default. So fixing it ADDS diagnostics rather
+  than removing false positives, over gates (TS1250, TS2802, TS2737, TS1501/TS1503,
+  TS2659/TS2660, TS2340/TS2855, TS2396, the TS2488/TS2461 message fork, the tslib-helper
+  checks) whose corpus blast radius is nothing like the lib family's — **every `for-of`
+  fixture reaches one**, where the lib family was measurably unreachable without an explicit
+  directive. Wants its own round with a corpus-cost arm measured BEFORE anything is designed.
+  Note `checkGlobalIterableRestOnlyBindingPattern`'s KDoc already documents why its own gate
+  must not read `effectiveTarget`; `libTarget` is the notion it would want.
 
 - [ ] **(CHK.18) `t[k] = v` THROUGH A GENERIC INDEXED ACCESS IS TS2862 WHERE PRISTINE SAYS
   TS2322 — 3 ROWS, A CODE DIVERGENCE RATHER THAN A FALSE POSITIVE
