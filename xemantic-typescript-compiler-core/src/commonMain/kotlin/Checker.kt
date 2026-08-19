@@ -7888,6 +7888,7 @@ class Checker(
     private var spineAccessorModifierActive: Boolean = false
     private var spineReservedIfaceParamsActive: Boolean = false
     private var spineForOfNonIterableActive: Boolean = false
+    private var spineIterableOperandActive: Boolean = false
     private var spineAbstractAccessorActive: Boolean = false
     private var spineWithStrictActive: Boolean = false
     // INV.4(b) batch 2 per-file spine state (cleared per file in checkSpine):
@@ -26145,6 +26146,17 @@ class Checker(
                 lname.startsWith("es2", ignoreCase = true) ||
                     lname.equals("esnext", ignoreCase = true)
             }
+        // (CHK.22) TS2488 — the ITERABILITY check. tsc reports an invalid iterable
+        // only under "uplevel iteration": `getIteratedTypeOrElementType` passes its
+        // errorNode to `getIterationTypesOfIterable` ONLY when
+        // `languageVersion >= ES2015 && getGlobalIterableType() !== emptyGenericType`.
+        // Below that (or with the ES2015+ libs excluded, or under `noLib`) the
+        // array-like leg owns the position — TS2495 / TS2461 / TS2569, whose gate is
+        // [spineForOfNonIterableActive] one field up. `downlevelIteration` is
+        // deliberately NOT admitted: it makes tsc CONSULT the iterable protocol but
+        // still passes `undefined` as the errorNode, so no diagnostic is produced.
+        spineIterableOperandActive = options.defaultedTarget >= ScriptTarget.ES2015 &&
+            !options.noLib && !spineForOfNonIterableActive
         spineAbstractAccessorActive = options.noImplicitAny || options.strict
         // (M0.4) round 652: the TS7057 implicit-any-yield anchors carry the
         // legacy pass's dispatch gate as a run-level flag.
@@ -27103,6 +27115,7 @@ class Checker(
                 node as ForOfStatement
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
+                if (!node.awaitModifier) spineCheckIterableOperand(node.expression)
                 spineCheckStrictForInOfDecls(node.initializer)
                 spineCheckForAwait(node)
                 spineCheckForInOfOptionalChainLhs(
@@ -27124,7 +27137,13 @@ class Checker(
                     "The left-hand side of a 'for...in' statement may not be an optional property access.",
                 )
             }
-            NodeKind.SPREAD_ELEMENT -> { node as SpreadElement; spineNoteIterationPosition(node.expression) }
+            NodeKind.SPREAD_ELEMENT -> {
+                node as SpreadElement
+                spineNoteIterationPosition(node.expression)
+                if ((node as NodeBase).parent is ArrayLiteralExpression) {
+                    spineCheckIterableOperand(node.expression)
+                }
+            }
             NodeKind.YIELD_EXPRESSION -> { node as YieldExpression; spineNoteYieldStar(node) }
             NodeKind.CALL_EXPRESSION -> {
                 node as CallExpression
@@ -30742,6 +30761,145 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * (CHK.22) TS2488 — **the operand of a `for...of` / array spread declares a
+     * `[Symbol.iterator]` member that cannot produce an iterator.**
+     *
+     * tsc's rule, read from `checker.ts` (`getIteratedTypeOrElementType` ->
+     * `getIterationTypesOfIterable` -> `getIterationTypesOfIterableSlow` ->
+     * `getIterationTypesOfIteratorWorker` -> `getIterationTypesOfMethod`):
+     *
+     *  1. the position is checked at all only under **uplevel iteration**
+     *     ([spineIterableOperandActive]);
+     *  2. `getPropertyOfType(type, "__@iterator")` — an **OPTIONAL** member yields
+     *     `methodType = undefined` (`method && !(method.flags & Optional)`), hence no
+     *     call signatures, hence `noIterationTypes`, hence **TS2488**;
+     *  3. a signature requiring an argument is filtered out by
+     *     `getMinArgumentCount(sig) === 0`; when NONE survives tsc emits TS2488 with a
+     *     TS2322 related chain — that population already belongs to B438e
+     *     ([badIteratorDisplay] / [spineResolveDeferredIterationChecks]) and is left
+     *     to it here;
+     *  4. otherwise the method's RETURN type must itself be an iterator, which
+     *     `getIterationTypesOfMethod(…, "next", …)` decides: a missing (or optional)
+     *     `next` pushes the related **TS2489 `An iterator must have a 'next()'
+     *     method.`** and returns `noIterationTypes`, so the root diagnostic is TS2488
+     *     carrying that related info.
+     *
+     * **THIS IMPLEMENTATION IS DELIBERATELY POSITIVE-EVIDENCE-ONLY, AND THAT IS THE
+     * WHOLE FP FIREWALL.** tsc's rule also rejects a type with NO `[Symbol.iterator]`
+     * at all; reproducing that half needs a complete model of what is iterable
+     * (arrays, strings, tuples, `Iterable<T>`, a constrained type parameter, every
+     * union of them, the built-in iterator families) and one gap in it is a false
+     * positive on the single most common construct in the language. So this fires
+     * ONLY when the member is FOUND and is provably broken, and BAILS on every
+     * question it cannot answer: a non-object type, a union, an intersection, a type
+     * parameter, `any`/`unknown`/`error`, an unresolvable member type, a member with
+     * no call signature, a return type whose member table is empty (an opaque or
+     * un-resolved interface — the EMBEDDED lib's `interface ArrayIterator<T> { }` is
+     * exactly this shape) or that carries a string index signature.
+     *
+     * Two consequences a next agent needs. (a) Under the **embedded** lib the only
+     * declaration of `[Symbol.iterator]` in the whole lib is
+     * `interface IterableIterator<T> extends Iterator<T>`, so the corpus population
+     * this can reach is *user* types that declare the member — which is why a check
+     * on `for...of` moved so few baselines. (b) The missing-member half is a FALSE
+     * NEGATIVE that stays open, deliberately, and is queued rather than guessed.
+     */
+    private fun spineCheckIterableOperand(expr: Expression) {
+        if (!spineIterableOperandActive || spineIsDts) return
+        val failure = iterableOperandFailure(getTypeOfExpression(expr)) ?: return
+        val start = expr.pos
+        val length = (expressionTrueEnd(expr) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        val related = if (failure == ITER_FAIL_NO_NEXT) listOf(Diagnostic(
+            message = "An iterator must have a 'next()' method.",
+            category = DiagnosticCategory.Error, code = 2489,
+            fileName = spineFileName, line = line, character = character,
+            start = start, length = length,
+        )) else emptyList()
+        diagnostics.add(Diagnostic(
+            message = "Type '${typeToString(getTypeOfExpression(expr))}' must have a " +
+                "'[Symbol.iterator]()' method that returns an iterator.",
+            category = DiagnosticCategory.Error, code = 2488,
+            fileName = spineFileName, line = line, character = character,
+            start = start, length = length,
+            relatedInformation = related,
+        ))
+    }
+
+    /**
+     * The verdict [spineCheckIterableOperand] emits on, or null for "silent" — which
+     * covers BOTH "this type is a perfectly good iterable" and "this compiler cannot
+     * tell". The two are not separated on purpose: every bail is a false negative and
+     * no bail is a false positive, which is the only asymmetry that makes a check on
+     * this construct safe to land.
+     */
+    private fun iterableOperandFailure(type: Type): Int? {
+        val carrier = type as? Type.Object ?: return null
+        if (carrier.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return null
+        val sym = getPropertyOfType(carrier, SYMBOL_ITERATOR_MEMBER) ?: return null
+        // (2) an optional `[Symbol.iterator]?()` supplies no method type at all.
+        if (isOptionalProperty(sym)) return ITER_FAIL_OPTIONAL
+        val methodType = propertyTypeOnCarrier(carrier, sym)
+        if (methodType === anyType || methodType === errorType || methodType === unknownType) return null
+        val sigs = getCallSignaturesOfType(methodType)
+        if (sigs.isEmpty()) return null
+        // (3) B438e owns the "every signature requires an argument" population.
+        val zeroArg = sigs.filter { it.minArgumentCount == 0 }
+        if (zeroArg.size != 1) return null
+        var ret = zeroArg[0].resolvedReturnType ?: return null
+        if (ret === anyType || ret === errorType || ret === unknownType) {
+            // A `this`-typed return reads as `any` here (this compiler has no
+            // polymorphic `this` type). tsc instantiates it to the RECEIVER, which is
+            // the carrier — so answering the carrier is tsc's answer, not a widening.
+            ret = iteratorMethodThisReturn(sym) ?: return null
+            if (ret !== carrier) return null
+        }
+        val retObj = ret as? Type.Object ?: return null
+        if (retObj.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return null
+        resolveStructuredTypeMembers(retObj)
+        if (retObj.stringIndexInfo != null) return null
+        // An EMPTY member table is "not resolved", not "has no next": the embedded
+        // lib's `interface ArrayIterator<T> { }` is declared exactly that way.
+        if (retObj.properties.isNullOrEmpty()) return null
+        val next = getPropertyOfType(retObj, "next")
+        // tsc ALSO treats an OPTIONAL `next` as missing — `getIterationTypesOfMethod`'s
+        // `!(methodName === "next" && (method.flags & Optional))` — so its full rule is
+        // `next == null || isOptionalProperty(next)`. **The optional half is REFUSED**:
+        // no pristine baseline in this clone measures it, and every refusal here costs a
+        // false NEGATIVE where a wrong fire costs a false POSITIVE on `for...of`. Round
+        // 946's A7 arm adopts the full rule and reddens the pin that forbids it, which is
+        // what makes the refusal a decision rather than an omission.
+        return if (next == null) ITER_FAIL_NO_NEXT else null
+    }
+
+    /**
+     * The carrier, when [sym]'s declaration provably returns `this` — a `this` return
+     * ANNOTATION or a body that is exactly `return this;`. Null otherwise.
+     *
+     * (`this` is parsed as an `Identifier` named `this` in this parser — there is no
+     * `ThisExpression` node; the TYPE position does have one, [ThisType].)
+     *
+     * This exists because `return this` and `(): this` both resolve to `anyType` in
+     * this compiler, so the RETURN-type leg of the rule above would bail on the
+     * commonest broken-iterator shape there is (`[Symbol.iterator]() { return this }`,
+     * which is pristine `for-of16` and `iteratorSpreadInArray10`). Modelling `this`
+     * generally is a separate item; reading it off the declaration is bounded to the
+     * one question asked here.
+     */
+    private fun iteratorMethodThisReturn(sym: Symbol): Type? {
+        val decl = sym.valueDeclaration ?: sym.declarations.firstOrNull()
+        val method = decl as? MethodDeclaration ?: return null
+        val cls = (method as NodeBase).parent as? ClassDeclaration ?: return null
+        val returnsThis = method.type is ThisType || run {
+            val body = method.body ?: return@run false
+            val only = body.statements.singleOrNull() as? ReturnStatement ?: return@run false
+            (only.expression as? Identifier)?.text == "this"
+        }
+        if (!returnsThis) return null
+        return resolveUncalledThisType(cls)
     }
 
     /**
@@ -54037,6 +54195,18 @@ class Checker(
     }
 
     companion object {
+        /** (CHK.22) the canonical member name a `[Symbol.iterator]` key spells in
+         *  this compiler's member tables (round 723's `"[<dotted>]"` scheme, minted
+         *  by [getMemberName]'s well-known-symbol arm). */
+        private const val SYMBOL_ITERATOR_MEMBER = "[Symbol.iterator]"
+
+        /** (CHK.22) [iterableOperandFailure]'s verdicts. `const val Int`s rather than
+         *  an enum: a Kotlin `private const val` of a primitive is emitted with a
+         *  `ConstantValue` attribute and costs `Checker.<clinit>` nothing (round 820),
+         *  where an enum class would add a static initializer of its own. */
+        private const val ITER_FAIL_OPTIONAL = 1
+        private const val ITER_FAIL_NO_NEXT = 2
+
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
          *  `init`, so an instance field declared after `init` would read null. */

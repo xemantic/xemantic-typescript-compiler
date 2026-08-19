@@ -78,7 +78,7 @@ top-level classifier cannot recognise. **(CHK.10) is CONFIRMED genuine** by the 
 
 ---
 
-## 1. The table — 318 ours-only rows over 79 fixtures, at round 942 (**313 over 78** after round 944)
+## 1. The table — 318 ours-only rows over 79 fixtures, at round 942 (**297 over 75** after round 946)
 
 The row counts are AT `967c2e53` (round 941's own before-arm) so the buckets stay
 comparable; the right-hand column records what each has cost since.
@@ -485,6 +485,99 @@ moved.**
 
 ---
 
+## 3e. Closed by round 946 — (CHK.22), 4 PRISTINE-ONLY rows: the iterability check
+
+**This is the first entry in this document that moves the PRISTINE-ONLY column and nothing
+else.** Everything above it closes a false POSITIVE; (CHK.22) closes a false NEGATIVE — a
+check tsc performs on the most common construct in the language and this compiler did not
+perform at all.
+
+Measured, one arm each, same box and same session:
+
+| column | before | after |
+|---|---:|---:|
+| OURS-ONLY (candidate false positives) | 297 over 75 fixtures | **297 over 75 fixtures** |
+| PRISTINE-ONLY | 773 | **769** |
+
+The four rows are `for-of16` (×2), `for-of29` and `iteratorSpreadInArray10`; **no other
+fixture moved in either direction**, which is the whole safety claim of the shape below.
+
+### 3e.1 tsc's rule, as established from its own sources
+
+`checker.ts`, `getIteratedTypeOrElementType` -> `getIterationTypesOfIterable` ->
+`getIterationTypesOfIterableWorker` -> `getIterationTypesOfIterableSlow` ->
+`getIterationTypesOfIteratorWorker` -> `getIterationTypesOfMethod`:
+
+| # | step | what it decides | our answer today |
+|---|---|---|---|
+| 0 | `uplevelIteration = languageVersion >= ES2015 && getGlobalIterableType() !== emptyGenericType` | the errorNode is passed ONLY then; below it the array-like leg owns the position (TS2495 / TS2461 / TS2569) | `defaultedTarget >= ES2015 && !noLib && !<es5-only lib>` |
+| 1 | `getPropertyOfType(type, "__@iterator")` | a MISSING member is TS2488 | **NOT IMPLEMENTED — scoped out, see 3e.3** |
+| 2 | `method && !(method.flags & SymbolFlags.Optional)` | an OPTIONAL `[Symbol.iterator]?()` supplies no method type, so no signatures, so TS2488 | implemented (`for-of29`) |
+| 3 | `filter(allSignatures, sig => getMinArgumentCount(sig) === 0)` | none surviving is TS2488 + a TS2322 related chain | left to **B438e**, which already owns it |
+| 4 | `getIterationTypesOfMethod(returnType, "next", …)` | a missing (or optional) `next` pushes the related **TS2489 `An iterator must have a 'next()' method.`** and makes the root TS2488 | implemented for a missing `next` (`for-of16`, `iteratorSpreadInArray10`); the OPTIONAL half refused |
+
+`downlevelIteration` is deliberately NOT in step 0's condition: it makes tsc CONSULT the
+iterable protocol but still passes `undefined` as the errorNode, so it produces no
+diagnostic.
+
+### 3e.2 What landed, and what makes it safe
+
+`spineCheckIterableOperand` / `iterableOperandFailure`, dispatched from the spine's
+`FOR_OF_STATEMENT` arm (not `for await`) and from its `SPREAD_ELEMENT` arm when the parent
+is an `ArrayLiteralExpression`. Neither needed a `SpineDispatch.enterClosure` change — both
+arms live in `spineEnterKindDispatch`, which runs unconditionally after round 888's mask.
+
+**The check is POSITIVE-EVIDENCE-ONLY, and that is the entire FP firewall.** It fires only
+when the `[Symbol.iterator]` member is FOUND and provably broken, and BAILS on every
+question it cannot answer: a non-object type, a union, an intersection, a type parameter,
+`any` / `unknown` / `error`, an unresolvable member type, a member with no call signature,
+more than one zero-argument signature, a return type whose member table is EMPTY, or one
+carrying a string index signature. Every bail is a false NEGATIVE by construction and no
+bail is a false positive — the only asymmetry that makes a check on `for...of` landable in
+one round.
+
+Two facts a next agent needs.
+
+* **`this` reads as `any` here.** `[Symbol.iterator]() { return this }` and
+  `[Symbol.iterator](): this` both resolve to `anyType` (this compiler has no polymorphic
+  `this` type), which would have made the commonest broken-iterator shape unreachable —
+  i.e. three of the four rows. `iteratorMethodThisReturn` answers the CARRIER when the
+  member's declaration provably returns `this`, which is tsc's own answer (it instantiates
+  `this` to the receiver) rather than a widening. Modelling `this` generally is a separate
+  item.
+* **The EMBEDDED lib declares `[Symbol.iterator]` in exactly ONE place** —
+  `interface IterableIterator<T> extends Iterator<T>` — so under the lib the corpus runs on,
+  the population this check can reach is *user* types that declare the member. That, plus
+  the positive-evidence rule, is why a new diagnostic on `for...of` and array spread moved
+  **zero** of ~13k corpus baselines. It also means `interface ArrayIterator<T> { }` (empty)
+  is a real shape in that lib, which is why an empty member table must read as "not
+  resolved" and never as "has no `next`".
+
+### 3e.3 Deliberately scoped OUT, with tsc's answer known
+
+Each of these is a FALSE NEGATIVE we now hold on purpose, and each has a named pin in
+`IterableOperandProtocolTest` so a later widening has to move it rather than discover the
+population by accident.
+
+| shape | tsc | why refused |
+|---|---|---|
+| a type that declares NO `[Symbol.iterator]` at all | TS2488 | needs a COMPLETE model of what is iterable (arrays, strings, tuples, `Iterable<T>`, constrained type parameters, every union of them, the built-in iterator families); one gap is an FP on the commonest construct in the language |
+| an iterator whose `next` is OPTIONAL | TS2488 + TS2489 | not measured against any pristine baseline in this clone |
+| an iterator type with an EMPTY member table, or a string index signature | TS2488 | indistinguishable here from "unresolved" / "the index absorbs `next`" |
+| `[Symbol.iterator]` requiring an argument, on a CLASS | TS2488 + a TS2322 chain | B438e owns the object-literal spelling and its hard-coded elaboration; a class shape would need the chain built |
+| a CALL-argument spread `f(...x)`, array DESTRUCTURING, `yield*`, `for await…of` | TS2488 / TS2504 / TS2569 | different `IterationUse` flags and different diagnostic families; one construct per round |
+
+### 3e.4 One FORM divergence, recorded
+
+`for-of29`'s message names the type as `{ [Symbol.iterator](): Iterator<string>; }` where
+pristine writes `{ [Symbol.iterator]?(): Iterator<string, any, any>; }` — our `typeToString`
+drops a member's `?` and does not fill a generic's defaulted type arguments. The sweep
+differences `(file, line, code)`, so the row counts as closed; no corpus baseline carries
+the shape, so no `logicalParityDivergences` entry is required. Both are display gaps that
+predate this round and are not specific to it.
+
+---
+
 ## 4. What to take next
 
 Ranked by (rows × confidence it is a genuine FP × smallness). **Round 943's sub-triage
@@ -502,8 +595,8 @@ small work left is elsewhere.
 3. ~~Lib availability at the DEFAULT target~~ — **CLOSED round 944, § 3d**; ~~the DOWNLEVEL
    half~~ — **CLOSED round 945, § 3d.1**, where its filed sign turned out to be backwards
    (an FP family invisible to both instruments, not the FN one the four TS2488 rows
-   suggested). Those four rows are now **(CHK.22)**: the for-of/spread operand's
-   `[Symbol.iterator]()` RETURN is never checked, at any target.
+   suggested). Those four rows were **(CHK.22)** and are **CLOSED round 946, § 3e** —
+   pristine-only 773 -> 769 with ours-only FLAT at 297.
 4. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
    `abstract new (…) => T` (6 rows) and `infer X extends` (17) are the same class.
    **(CHK.14)**

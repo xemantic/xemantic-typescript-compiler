@@ -20,6 +20,125 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 946 (2026-08-19) — (CHK.22): THE ITERABILITY CHECK. tsc REJECTS A `for...of` OR SPREAD
+OPERAND WHOSE `[Symbol.iterator]` IS OPTIONAL OR WHOSE RETURN TYPE HAS NO `next()`; THIS
+COMPILER PERFORMED NO SUCH CHECK AT ALL, AT ANY TARGET. LANDED POSITIVE-EVIDENCE-ONLY:
+PRISTINE-ONLY 773 -> 769 WITH OURS-ONLY FLAT AT 297 AND **ZERO** OF ~13k CORPUS BASELINES
+MOVED — the first entry in this arc that moves only the FALSE-NEGATIVE column.**
+
+**tsc's RULE, ESTABLISHED FROM ITS OWN `checker.ts` BEFORE ANYTHING WAS WRITTEN**
+(`getIteratedTypeOrElementType` -> `getIterationTypesOfIterable` ->
+`getIterationTypesOfIterableWorker` -> `getIterationTypesOfIterableSlow` ->
+`getIterationTypesOfIteratorWorker` -> `getIterationTypesOfMethod`):
+
+| # | step | tsc's decision | this round |
+|---|---|---|---|
+| 0 | `uplevelIteration = languageVersion >= ES2015 && getGlobalIterableType() !== emptyGenericType` | the errorNode is passed ONLY then — below it the array-like leg owns the position (TS2495 / TS2461 / TS2569) | gate = `defaultedTarget >= ES2015 && !noLib && !<es5-only @lib>`; **`downlevelIteration` deliberately NOT admitted** — it makes tsc CONSULT the protocol but still passes `undefined` as the errorNode |
+| 1 | `getPropertyOfType(type, "__@iterator")` returns nothing | TS2488 | **SCOPED OUT — (CHK.23)** |
+| 2 | `method && !(method.flags & SymbolFlags.Optional)` | an OPTIONAL `[Symbol.iterator]?()` supplies no method type, so no signatures, so TS2488 | **LANDED** (`for-of29`) |
+| 3 | `filter(sigs, getMinArgumentCount(sig) === 0)` empty | TS2488 + a TS2322 related chain | left to **B438e**, which already owns the object-literal spelling |
+| 4 | `getIterationTypesOfMethod(returnType, "next", …)` finds nothing | pushes the related **TS2489 `An iterator must have a 'next()' method.`**, root TS2488 | **LANDED** for a MISSING `next` (`for-of16` x2, `iteratorSpreadInArray10`); the OPTIONAL-`next` half refused |
+
+**WHAT WAS SCOPED IN: `for...of` AND ARRAY-LITERAL SPREAD. WHAT WAS SCOPED OUT: EVERYTHING
+ELSE, WITH tsc's ANSWER KNOWN FOR EVERY ROW** — the missing-member case (the big one), an
+optional `next`, an empty iterator member table, a string index signature, an
+argument-requiring `[Symbol.iterator]` on a CLASS, and the four other constructs (CALL-argument
+spread, array destructuring, `yield*`, `for await…of`, which carry different `IterationUse`
+flags and different diagnostic families). Queued as **(CHK.23)** with the table; **every one
+is pinned SILENT** so a later widening has to move a named pin.
+
+**THE DESIGN DECISION THE ROUND TURNS ON, AND IT IS NOT tsc's.** tsc's rule also rejects a
+type with NO `[Symbol.iterator]`; reproducing that needs a COMPLETE model of what is iterable
+(arrays, strings, tuples, `Iterable<T>`, a constrained type parameter, every union of them,
+the built-in iterator families) and **one gap in such a model is a false positive on the most
+common construct in the language**. So the landed check is POSITIVE-EVIDENCE-ONLY: it fires
+only where the member is FOUND and provably broken and BAILS on every question it cannot
+answer — a non-object type, a union, an intersection, a type parameter, `any`/`unknown`/
+`error`, an unresolvable member type, no call signature, more than one zero-argument
+signature, an EMPTY return-type member table, a string index signature. Every bail is a false
+NEGATIVE and no bail is a false positive. That asymmetry, and nothing else, is why a new
+diagnostic on `for...of` moved zero corpus baselines.
+
+**TWO MEASUREMENTS THAT DECIDED THE SHAPE.**
+
+1. **`this` READS AS `any` HERE.** `class C { m() { return this } n(): this { return this } }`
+   makes `c.m()` and `c.n()` both silent against a `string` target — this compiler has no
+   polymorphic `this` type — so `[Symbol.iterator]() { return this }`, which is THREE of the
+   four rows, would have bailed at step 4. `iteratorMethodThisReturn` answers the CARRIER when
+   the member's declaration provably returns `this` (a `ThisType` return annotation, or a body
+   that is exactly `return this;`), which is tsc's own answer — it instantiates `this` to the
+   receiver — rather than a widening. It is a stopgap and its KDoc says so; the general item is
+   queued as **(CHK.24)**.
+2. **THE EMBEDDED LIB DECLARES `[Symbol.iterator]` IN EXACTLY ONE PLACE**, `interface
+   IterableIterator<T> extends Iterator<T>`, and `interface ArrayIterator<T> { }` /
+   `interface Iterable<T> { }` are EMPTY there. So under the lib the corpus runs on, an empty
+   member table is a real and common shape and must read as "not resolved", never as "has no
+   `next`" — treating it as evidence would have lit up every array in the corpus. It is also
+   why the reachable corpus population is only *user* types that declare the member.
+
+**PROVENANCE.** After-arm grid, sweep and all 11 ablation arms at `Checker.kt` sha256
+`e45719de…`; the before arm is HEAD (`50c08ef1`) built from a reverted working copy, and the
+grid REFUSES if the two arms' `Checker.class` are byte-identical.
+
+**AN INSTRUMENT TRAP THAT COST ~40 MINUTES AND IS WORTH THE ENTRY.** The first "before" sweep
+read **334 ours-only / 776 pristine-only** — round *942*'s numbers, i.e. a binary three rounds
+stale — and spot-checking single fixtures on the SAME class dir answered 297/773 correctly.
+The class dir was fine: the scratchpad is shared between sessions, an eight-hour-old
+`sweep-before.json` from another session was already there, and the `until [[ -f <out> ]]`
+wait-loop matched it INSTANTLY while the real sweep was still running. **A wait loop keyed on a
+file's EXISTENCE proves nothing unless the file is deleted first** — and the failure is in the
+reassuring direction, because a stale sweep looks exactly like a fresh one.
+
+**ABLATION — 11 arms, one mistake at a time, applied to and restored from a sha256-verified
+snapshot (never `git checkout`), each asserting `ran 63`.**
+
+| arm | the injected mistake | RED | what it establishes |
+|---|---|---:|---|
+| A1 | the run gate never opens — the whole fix | **6** | every positive; the union of A2 and A3 plus nothing |
+| A2 | the OPTIONAL-member test (tsc's `!(flags & Optional)`) | **2** | the two `for-of29` pins, DISJOINT from A3 |
+| A3 | the `this`-return route | **4** | `for-of16` x2 + the spread + the `(): this` annotation |
+| A4 | the empty-member-table bail | **1** | the opaque member-less iterator stays silent |
+| A5 | the string-index bail | **1** | (first cut read RED 0 — A4's guard absorbed it; the fixture now carries a NAMED member too, which is what makes the two guards separable) |
+| A6 | the zero-argument signature filter | **1** | the argument-requiring CLASS shape; `Inv4SpineBatch2Test` stays green, so B438e is not double-emitted either way |
+| A7 | the BOUND — adopt tsc's FULL optional-`next` rule | **1** | the refusal is a DECISION, not an omission (first cut of that guard was DEAD CODE: `if (opt) return null` above `return null`; found by its arm reading RED 0) |
+| A8 | the LIB half of the run gate | **2** | `@lib: es5` and `noLib` both leave the position to the array-like leg |
+| A9 | the ARRAY-LITERAL parent gate on the spread | **1** | a CALL-argument spread is not this construct |
+| A10 | the `for await` gate | **1** | TS2504 owns the async protocol |
+| A11 | the `.d.ts` skip | **1** | (first cut read RED 0 — the fixture had no iteration position at all; the pin now carries a `for...of`, which our parser accepts in an ambient file) |
+
+**Three of the eleven arms first read RED 0 and all three were the ROUND's defect rather than
+the pin's**: one guard was literally dead code, one pin was absorbed by a neighbouring guard,
+one pin had no population. Round 902's law paying for itself three times in one batch — a
+green arm must be read as "the mistake was not reached" until proven otherwise. **15 of the 30
+pins are green in all 11 arms and are recorded as REGRESSION GUARDS rather than claimed as
+discriminators** (round 807): the eleven built-in-iterable negatives, the "declares no
+`[Symbol.iterator]`" false-negative pin, the B438e object-literal count pin, and the
+destructuring and `yield*` construct pins.
+
+**GATES.** Suite **15,294 -> 15,324 / 0 failures / 3 skipped** (+30 = exactly this round's
+pins), **NO corpus baseline moved**; 8-profile before/after binary grid **`added=0 removed=0`
+on ALL EIGHT** (enumerated by `tsconfig.json`, refusing below 8, refusing a truncated or empty
+capture, and refusing byte-identical arms); the 630-fixture pristine sweep, both arms in this
+session, **ours-only 297 -> 297 over 75 fixtures with ZERO regressed and pristine-only 773 ->
+769**; `cost_gate.py` `typeOfExpr.calls +0.22%` / `typeOfExpr.distinct +0.09%` /
+`globals.lookups +0.14%` / `typeNode.*` +0.02-0.04% — the per-operand type read the check
+performs, i.e. a reached-ness proof, rebaselined in the same commit; `huge_methods.py
+--fail-over 0` green on all six module class dirs (core 0 over, 751 classes scanned);
+`spine_closure_audit.py` green (no handler gate changed — both dispatch sites are in
+`spineEnterKindDispatch`, which runs unconditionally after round 888's mask).
+
+**ONE FORM DIVERGENCE, RECORDED AND NOT MECHANISED.** `for-of29`'s message names the type as
+`{ [Symbol.iterator](): Iterator<string>; }` where pristine writes
+`{ [Symbol.iterator]?(): Iterator<string, any, any>; }` — our `typeToString` drops a member's
+`?` and does not fill a generic's defaulted type arguments. The sweep differences
+`(file, line, code)` so the row is closed; no corpus baseline carries the shape, so no
+`logicalParityDivergences` entry is needed. Both gaps predate this round.
+
+**NEXT.** (CHK.10), definite assignment through a late-bound `this[k] = …` — 4 rows, confirmed
+genuine by round 943's strict-default arm. Then (CHK.18) and (CHK.15). The two entries this
+round opened are (CHK.23) — the missing half of the iterability check, whose big sub-item needs
+a model of what is iterable — and (CHK.24), the polymorphic `this` type.
+
 **Round 945 (2026-08-19) — (CHK.21): THE DOWNLEVEL GATES' FILED EVIDENCE WAS MISATTRIBUTED AND
 THE FAMILY'S SIGN IS THE OPPOSITE OF WHAT THE QUEUE SAID. The four pristine-only TS2488 rows are
 NOT gate suppression — we are silent for those shapes at `esnext` too — and what the gates really
@@ -1151,733 +1270,6 @@ a `static 1`), which measured as false positives at HEAD and had simply never be
   class-static keys; then **(d)** the `unique symbol` type, on both sides in one commit.
   Newly recorded there: the **index-signature** rows, which are neither (a) nor (d).
 
-**Round 936 (2026-08-18) — (CHK.4): THE QUALIFIED, TYPE-ANNOTATION AND WELL-KNOWN-SYMBOL
-ROUTES. THREE CAPABILITIES, SIX DEFECTS, ONE COMMIT — AND THE ROUND'S PRODUCT IS THAT
-**A NODE THIS PARSER DOES NOT STRUCTURE ANSWERS A NAME QUESTION WITH A CONFIDENT EMPTY
-STRING**: `TemplateLiteralType` carries `templateSpans = emptyList()` and the whole raw
-source slice in `head.rawText` (B65.1), so the obvious `templateSpans.isEmpty()` test is
-TRUE for a SUBSTITUTING template as well and `head.text` is `""` — a member name matching
-nothing, which is strictly worse than refusing, and it reached the excess check as a real
-member on the first build.**
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, on twelve scratch projects.** Every row below was READ
-  from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit --listAll`
-  on the SAME directory. Every capability is a false POSITIVE one way and a false NEGATIVE
-  the other, which is round 935's signature for one missing capability — and extending the
-  table before designing turned the queue's "three one-line residues" into three families.
-
-**Part A — the qualified and annotation routes** (`interface Req { p: number }` for supply,
-`interface Opt { p?: number }` for excess).
-
-| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `[NS.K]`, `export const K = "p"` | silent | **TS2741 — FP** | silent |
-| `[NS.K]` excess (`KZ = "zz"`) | TS2353 `'[NS.KZ]'` | **silent — FN** | TS2353 `'[NS.KZ]'` |
-| `[NS.In.IK]` nested namespace | silent | **TS2741 — FP** | silent |
-| `[DD.EE.Z]`, `namespace DD.EE` | silent | **TS2741 — FP** | silent |
-| `[M.K]`, a MERGED namespace's 2nd block | silent | **TS2741 — FP** | silent |
-| `[NS.CE.P]` const enum in a namespace | silent | **TS2741 — FP** | silent |
-| `[NS.SE.Q]` plain enum in a namespace | silent | **TS2741 — FP** | silent |
-| `[NS.D]`, `export declare const D: "p"` | silent | **TS2741 — FP** | silent |
-| `[After.K]`, namespace declared BELOW | silent | **TS2741 — FP** | silent |
-| ``[TT]``, ``declare const TT: `p` `` | silent | **TS2741 — FP** | silent |
-| `[A]`, `type LP = "p"` | silent | **TS2741 — FP** | silent |
-| `[A]`, `type LP2 = LP` (a chain) | silent | **TS2741 — FP** | silent |
-| `[A]`, ``type TL = `p` `` | silent | **TS2741 — FP** | silent |
-| `[NS.LW]`, `export let LW = "p"` | TS2741 | TS2741 | TS2741 — refused, parity |
-| ``[T2]``, ``declare const T2: `p${string}` `` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[A]`, `type LU = "p" \| "q"` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[L]`, `declare const L: string` | TS2741 `{ [L]: number; }` | TS2741 `{}` | unchanged — FORM |
-| `[C.B]`, `class C { static readonly B = "p" }` | silent | **TS2741 — FP** | **still open**, (CHK.5)(c) |
-| `[IK]` imported from another FILE | silent / TS2353 | **FP / FN** | **still open**, (CHK.5)(c) |
-
-- **THE `NS.K` FP IS GONE, AND IT WAS NEVER ONE ROW.** The queue called it "a namespace
-  const, the cheapest of the four"; measured, the same missing capability owns a nested
-  namespace, a dotted `namespace A.B` declaration, a MERGED namespace's second block, and
-  a const-or-plain ENUM member declared inside a namespace — five more FPs and their five
-  excess twins, all closed by one descent.
-- **THE DESCENT IS SYNTACTIC FOR ROUND 935's REASON, RESTATED ONE LEVEL UP.** The head
-  could have been resolved through `currentFileLocals`, which is what
-  `resolveEnumSymbolFileLevel` does — but that map is AMBIENT (round 911: not the same map
-  in every pass), and round 935 measured what an ambient input costs a member name. Walking
-  `ModuleBlock` statements is a function of the PROGRAM. Merging comes free because every
-  statement of a level is scanned rather than the first match, and use-before-declaration
-  comes free because a scan has no order. The ONE symbol-table consult left is the enum
-  leaf, and it is not a choice: an auto-numbered member has no initializer to read, so its
-  value exists only in the binder's frozen tables (`enumMemberEntries`, which also knows
-  the one member with NO value — round 746's ambient non-`const` rule, which round 935
-  measured to be tsc's own answer).
-- **THE `string`-KEY ROW IS A DISPLAY DIVERGENCE AND I AM CALLING IT NEITHER "form-only"
-  NOR A BUG.** tsc prints the source type as `{ [L]: number; }` (its literal gets a STRING
-  INDEX SIGNATURE) and we print `{}`; the code, the span and the top-level fact are
-  identical. Under `docs/logical-parity.md` § 2 that is NOT form — "a displayed type
-  denoting a different set of values" is in the MEANING table, and `{}` and
-  `{ [L]: number }` do denote different sets. But no program was found that OBSERVES it as
-  a different verdict: `{ [L]: 1 }` against `{ [k: string]: number }` and against
-  `Record<string, number>` is silent in BOTH compilers, and the excess direction is silent
-  in both too. So it is a modelling gap whose only measured observable is the printed type,
-  it is recorded as such in (CHK.5), and **no `logicalParityDivergence` was needed —
-  no corpus baseline moved, and that mechanism switches a BASELINE off, not a scratch row.**
-
-**Part B — the SYMBOL axis. THE VERDICT IS THAT IT SPLITS: the WELL-KNOWN half was small
-and is LANDED; the `unique symbol` half is MODELLING and is stopped, with the measurement
-that says so.**
-
-| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `{ [Symbol.iterator]: 1 }` vs `Opt` | TS2353 `'[Symbol.iterator]'` | **silent — FN** | TS2353 — parity |
-| `{ [Symbol.iterator]: () => 1 }` vs a target that HAS it | silent | silent | silent — parity |
-| `{ [S]: 1 }` vs `Opt`, `S: unique symbol` | TS2353 `'[S]'` | silent — FN | **still open** |
-| `{ [S2]: 1 }` vs `{ [S]: number }` | TS2353 `'[S2]'` | silent — FN | **still open** |
-| `{ [S]: 1 }` vs `{ [S]: number }` | silent | silent | silent — parity |
-| `interface HasS { [S]: number }`, `= {}` | TS2741 `'[S]'` | **silent — FN** | still open, declaration side |
-| `interface HasI { [Symbol.iterator]: … }`, `= {}` | TS2741 | TS2741 — parity | unchanged |
-| `{ [PS]: 1 }`, `PS: symbol` | silent | silent | silent — parity |
-
-- **WHY THE WELL-KNOWN HALF WAS SMALL: BOTH SIDES ALREADY AGREED AND ONLY THE EXCESS CHECK
-  COULD NOT SEE THE KEY.** Since round 723 `computedSymbolKey` names `[Symbol.iterator]`
-  for an object literal's TYPE and for an interface's own member alike, so the supply
-  direction has been right for 200 rounds; round 934 excluded that helper from the excess
-  naming WHOLESALE, and the exclusion is still right in general — **tsc is SILENT for every
-  computed key it cannot late-bind, measured this round over seven of them** (`[LW]` for a
-  `string`, a substituting template, a literal union, a `number`, a plain `symbol`,
-  `[NS.LW]`, `[obj.k]`), so re-admitting the invented `"[<dotted>]"` name generally turns
-  each into a false positive. The landed route therefore demands the receiver be the
-  identifier `Symbol` with no local binding of that name.
-- **AND IT COST ONE EMBEDDED-LIB LINE, WHICH IS THE ONLY RED THE SUITE PRODUCED.** The
-  embedded `IterableIterator<T>` did not declare the `[Symbol.iterator]()` member the real
-  lib declares, so an object literal supplying it against an `IterableIterator`-extending
-  interface read as EXCESS — round 456's pin, and an artefact of the approximation rather
-  than of the change (with the REAL libs the same fixture is silent in both compilers,
-  measured). Adding the member is strictly more faithful and the whole 13k-baseline corpus
-  is green with it.
-- **WHY THE `unique symbol` HALF IS MODELLING, AND THE MEASUREMENT THAT DECIDES IT.**
-  `declare const S: unique symbol` types as plain `symbol` here, so `[S]` and `[S2]` are
-  ONE name; the DECLARATION side declares no member for `[S]` at all; and therefore
-  **naming the key on the literal side alone INVERTS the defect** — `{ [S]: 1 }` against
-  an interface that HAS `[S]` is silent in both compilers today and would become a false
-  positive. A spelling-keyed name is not the fix either: it must survive a rename and an
-  import, which is exactly what tsc's declaration-keyed `__@<desc>@<id>` buys. So it needs
-  a `unique symbol` TYPE plus the declaration side, in ONE commit. Stopped and written up
-  as (CHK.5)(d) rather than attempted.
-
-**Part C — NOT ATTEMPTED, by instruction, and (CHK.5) is written in its place** as an
-executable four-stage plan: (a) the member-building sites adopt the existing SYNTACTIC
-namer — cheap, no new machinery, and it closes the interface FN and the class TS2339 FP;
-(b) TS1117 for a late-bound duplicate, which is NOT the member-table problem it looks like
-because the duplicate check is a separate AST scan; (c) the cross-file and class-static
-keys, whose route is the frozen binder tables; (d) the `unique symbol` type, the only
-genuinely large piece, with the inversion above as the reason it cannot land alone.
-
-- **PINS +28, one class, `LateBoundQualifiedKeyTest`.** Twelve supply rows, three refusal
-  controls that are tsc's answer, six excess rows, five excess negative controls covering
-  the keys tsc is silent about, and two cross-pass determinism pins (`none { 2339 }` plus
-  exactly one TS2322) — round 935's core pin re-asked of the namespace and template routes,
-  because the head resolution is exactly where an ambient answer would have gone.
-
-- **THIRTEEN-ARM ABLATION**, each arm applied to and restored from a sha256-verified
-  on-disk snapshot, each diffed against the SNAPSHOT rather than HEAD, each asserting
-  `ran 53` — and **both pin classes run**, so an arm reddening round 935's rows is visible
-  rather than hidden by the filter (A11 and A13 both do).
-
-| arm | the mistake | red | what it shows |
-|---|---|---|---|
-| A1 | the QUALIFIED route is off | **12** | the pre-936 boundary: every namespace row, both directions |
-| A2 | the ENUM leaf of the descent is dropped | **3** | the three enum-in-namespace rows and only those |
-| A3 | MERGING is lost — the first matching block decides | **1** | the merged-namespace row, and only it |
-| A4 | a DOTTED namespace name is truncated to its head | **1** | the `namespace DD.EE` row, and only it |
-| A5 | the template-literal TYPE route is dropped | **4** | the template rows, including its cross-pass pin |
-| A6 | the `${` discriminator is dropped | **1** | the substituting-template control, and only it |
-| A7 | the TYPE-ALIAS hop is dropped | **4** | the alias rows including the chain |
-| A8 | the well-known-symbol excess naming is dropped | **1** | the pre-936 boundary for Part B |
-| A9 | the local-`Symbol`-shadow guard is dropped | **1** | the shadow control — **after the pin was repaired** |
-| A10 | the receiver guard alone is dropped | **0** | REDUNDANT given its sibling, with a reason |
-| A12 | the hardcoded name alone is replaced | **0** | REDUNDANT given its sibling, with a reason |
-| A13 | BOTH — the route IS `computedSymbolKey` again | **5** | the narrowness, as one mistake |
-| A11 | the `const` guard is dropped | **3** | the widened-`let` controls in BOTH classes |
-
-- **TWO ZERO ARMS AND THEY ARE TWO DIFFERENT THINGS — WHICH IS THE ROUND'S SECOND
-  METHODOLOGICAL FINDING.** A9 first read **0** and was a **BLIND PIN** (round 902's trap):
-  its fixture declared the target `interface` INSIDE a function body, where B83.5 leaves it
-  unbound, so the annotation degraded to `any`, no excess check ran at all, and
-  `none { 2353 }` was vacuously true — the pin was green against a binary with the guard
-  deleted. Moved to file level, it reddens. A10 and A12 read **0** and are **REDUNDANT
-  GIVEN THEIR SIBLING** (round 927's law): the two halves of the narrowness mask each other
-  — dropping the receiver guard leaves a hardcoded `"[Symbol.<name>]"` return that no
-  longer matches the name the TYPE builder gives the same key, so the excess check finds no
-  declaring node and emits nothing; replacing the return leaves the receiver guard refusing
-  the key first. Neither is a claim the pins can test alone, so A13 undoes both as ONE
-  mistake and reddens 5. **A zero arm is not a verdict until you have asked which of the
-  two it is.**
-
-- **GATES.** Suite **15,080 → 15,108 / 0 failures / 3 skipped** (summed over all six
-  modules with an XML parser); **no corpus baseline moved**, so no `logicalParityDivergence`
-  was needed. `cost_gate.py` **+0.00% on all 20 counters** including `output.errors 46` —
-  and it is not a blind zero: the profiles' late-bindable keys are `[SyntaxKind.X]`, which
-  the round-935 enum route already answered, so the new routes are reached only where that
-  one declines. `huge_methods.py --fail-over 0` clean on EVERY module class dir (751
-  classes, 0 over, largest 6,353). **The 8-profile before/after BINARY grid**
-  (`scripts/round936-grid.sh`): all eight `added=0 removed=0`, 46/94 diagnostics unchanged
-  — and this one is a RESULT, not a control, because those profiles carry 57
-  `[Symbol.iterator](` keys, which is precisely the population Part B renames.
-  `spine_closure_audit.py` not run: nothing on the spine changed.
-
-- **NEXT.** `(CHK.5)`, in its stated order — (a) the member-building sites, which is cheap
-  and needs no new machinery; then (b) TS1117; then (c) the cross-file and class-static
-  keys; and only then (d) the `unique symbol` type, which must land on both sides at once.
-
-**Round 935 (2026-08-18) — (CHK.3): LATE-BOUND COMPUTED KEYS, BOTH DIRECTIONS IN ONE
-COMMIT. THE ROUND'S PRODUCT IS THAT **tsc's OWN RULE IS NOT PORTABLE AS WRITTEN: A MEMBER
-NAME DERIVED FROM A *TYPE* IS NOT A FUNCTION OF THE PROGRAM HERE**, and the first draft —
-which ported `isTypeUsableAsPropertyName` literally — produced the CORRECT diagnostic and a
-CONTRADICTORY one in the SAME compile, which is round 933's two-extraction-sites signature
-reached through ambient state instead of through a second `when`.**
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, on ~40 scratch projects.** Every row below was READ from
-  `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit --listAll` on
-  the SAME directory — never reasoned. **Both defects reproduced at HEAD exactly as rounds
-  933/934 recorded them, and extending the table before designing paid for itself twice**
-  (see the two corrections below).
-
-**Direction 1 — SUPPLY** (`interface Req { p: number }`, `const r: Req = { <key>: 1 }`;
-a row is a false POSITIVE when tsc is silent and we are not).
-
-| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `[K]`, `const K = "p"` | silent | **TS2741 — FP** | silent |
-| `[K2]`, `const K2 = K` | silent | **TS2741 — FP** | silent |
-| `[L2]`, `let L2: "p" = "p"` | silent | **TS2741 — FP** | silent |
-| `[D]`, `declare const D: "p"` | silent | **TS2741 — FP** | silent |
-| `[U]`, `const U: "p" \| "q" = "p"` | silent (CFA-narrowed) | **TS2741 — FP** | silent |
-| `[CE.P]`, `const enum CE { P = "p" }` | silent | **TS2741 — FP** | silent |
-| `[SE.P]`, a PLAIN `enum SE { P = "p" }` | silent | **TS2741 — FP** | silent |
-| `[N]`, `const N = 1e3` vs `{ 1000: number }` | silent | **TS2741 — FP** | silent |
-| `[NE.P]`, `enum NE { P = 0 }` vs `Req` | TS2353 | TS2741 | **TS2353 — parity** |
-| `[L]`, `let L = "p"` (widened) | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[U2]`, `declare const U2: "p" \| "q"` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[PS]`, `declare const PS: symbol` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[k]`, `<KK extends string>(k: KK)` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[AE.X]`, `declare enum AE { X }` | TS2741 | TS2741 | TS2741 — refused, parity |
-| `[S]` / `[Symbol.iterator]` | TS2353 | TS2741 | TS2741 — **STILL OPEN, (CHK.4)** |
-
-**Direction 2 — EXCESS** (`interface Opt { p?: number }`; a row is a false NEGATIVE when
-tsc emits and we do not). tsc names the key **as written**, which round 934 already renders.
-
-| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `[KZ]`, `const KZ = "zz"` | TS2353 `'[KZ]'` | **silent — FN** | TS2353 `'[KZ]'` |
-| `[CE.Q]` (const enum) | TS2353 `'[CE.Q]'` | **silent — FN** | TS2353 `'[CE.Q]'` |
-| `[SE.Q]` (plain enum) | TS2353 `'[SE.Q]'` | **silent — FN** | TS2353 `'[SE.Q]'` |
-| `[NE.P]` (numeric enum) | TS2353 `'[NE.P]'` | **silent — FN** | TS2353 `'[NE.P]'` |
-| the same in an ARGUMENT / a NESTED literal | TS2353 | **silent — FN** | TS2353 |
-| `[CE.P]` / `[K]` naming an EXISTING member | silent | silent | silent — the A4 FP, guarded |
-| `[N]` vs a NUMERIC index signature | silent | silent | silent — round 934's guard holds |
-| `[S]` / `[Symbol.iterator]` | TS2353 | silent | silent — **STILL OPEN, (CHK.4)** |
-
-- **THE FIRST DRAFT WAS tsc's OWN RULE AND IT HAD TO BE THROWN AWAY — THIS IS THE ROUND.**
-  tsc late-binds when `isTypeUsableAsPropertyName(checkComputedPropertyName(name))`, so the
-  draft asked `getTypeOfExpression(key)` and accepted a `Type.StringLiteral`/`NumberLiteral`.
-  It made every supply and excess row above green — **and then**
-  `const K = "p"; const obj = { [K]: 1 }; obj.p` emitted the correct TS2322 **AND**
-  `Property 'p' does not exist on type '{}'` **in one compile**. Diagnosed by bisecting the
-  DECLARATION rather than the key: annotated (`const K: "p"`), `declare`d and FUNCTION-BODY
-  consts are all clean, and only the FILE-LEVEL **un-annotated** const splits — its literal
-  type exists in `currentLocalTypes` as (WIDEN.1) records it and the pass behind TS2339 does
-  not have that map (round 911: a literal is typed in more than one ambient). **A name that
-  a member table is built from must be a function of the PROGRAM, and a type-derived one
-  here is a function of the PASS.**
-- **SO THE LANDED RESOLUTION IS SYNTACTIC**, which is also what makes it cheap: an enum
-  member's VALUE through `enumMemberEntries` (whose ambient-non-`const` OPAQUE rule, round
-  746, turns out to be tsc's own answer — `declare enum AE { X }` is TS2741 in tsc too), or
-  the declaration a name resolves to by an INNERMOST-FIRST walk of the enclosing statement
-  lists. The walk is not a stylistic choice: `lookupPerFileForNode` cannot see a
-  function-body local at all (B83.5) and a scope-chain consult would be ambient again.
-- **TWO RULES THE EXTENDED TABLE CORRECTED, BOTH THE OPPOSITE OF THE OBVIOUS ONE.**
-  (i) `const`-ness is NOT the criterion — `let L2: "p"` late-binds and a widened `const`
-  would not — so a literal ANNOTATION binds for any declaration. (ii) A `const`'s literal
-  INITIALIZER beats its own annotation, because a `const` reference is CFA-narrowed to it;
-  that is the only reading under which `const U: "p" | "q" = "p"` late-binds in tsc, and a
-  first pass that read the annotation would have called it a union and refused. **A genuine
-  union needs `declare const U2: "p" | "q"`** — the narrowing makes the initialized form a
-  useless control, and it read "silent" for the wrong reason on the first table.
-- **ORDER IS THE FIX FOR ROUND 934's ARM-A4 FALSE POSITIVE, at its source.**
-  `lateBoundComputedKeyName` is asked BEFORE `computedSymbolKey` at all three naming sites,
-  so `[CE.P]` answers `p` and the invented `"[<dotted>]"` placeholder is reached only by the
-  dotted paths that really are dynamic. Round 934 had to EXCLUDE that helper from the excess
-  naming; it no longer has to.
-- **THE LANGUAGE-SERVICE SIDE WAS RE-MEASURED AND STAYS PUT — THE QUEUE'S "it has to move in
-  the same commit" IS WITHDRAWN, ON tsc's OWN ANSWER.** `SyntaxRoles.isMemberPosition`
-  refuses `{ [K]: v }`; asked for the references of `Shape.p` on a file whose literal carries
-  `[K]`, tsc's LSP answers **2** spans — the declaration and a plain `{ p: 2 }` — and not the
-  key. **The checker and the language service deliberately disagree about what a member name
-  is, in tsc as here**: the key SUPPLIES the member and SPELLS the binding, and only the
-  second is what a rename may edit. The reason is recorded beside the arm.
-- **THE PROFILES ARE *NOT* A CONTROL THIS TIME, unlike rounds 933 and 934 — measured, not
-  assumed.** Across all eight profiles' 1,249 `.ts` files the late-bindable shape occurs in
-  bulk: `[SyntaxKind.<Member>]:` object-literal keys (32 hits per member name — `parser.ts`'s
-  `forEachChildTable`, `visitorPublic.ts`'s `visitEachChildTable`) plus 57 `[Symbol.iterator](`.
-  So the 8-profile grid was a real test of a real population, and its `added=0 removed=0` is
-  a result rather than a tautology — as is the fact that `globals.lookups` MOVED (+0.09%),
-  which is those keys' enum resolutions and the only cost this round has.
-
-- **PINS +25, one class, `LateBoundComputedKeyTest`.** Ten supply rows, five negative
-  controls whose refusal is tsc's answer (widened `let`, genuine union, plain `symbol`, bare
-  type parameter, ambient value-less enum member), five excess rows including the argument
-  and nested positions, three excess negative controls (the A4 FP, an existing member, the
-  numeric-index absorption) — and **the round's core pin, `a late-bound key is one member in
-  every pass`**, which asserts `none { 2339 }` together with exactly one TS2322 and is the
-  only thing in the suite that can see the type-route defect, because each pass alone is green.
-
-- **EIGHT-ARM ABLATION, one mistake at a time, each applied to and restored from a
-  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (`scripts/round935-ablate.py`;
-  the dead-arm check diffs against the SNAPSHOT rather than HEAD).
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 | late binding is off entirely | **16** | the pre-935 boundary — every supply and every excess row in one set |
-| A2 | only the EXCESS side loses it (the type builder still binds) | **5** | the five excess rows, and that the two sites are separable |
-| A3 | the ENUM route is dropped | **5** | every enum row, in both directions, and only those |
-| A4 | the const-INITIALIZER route is dropped | **9** | the const rows including the alias chain, the union-annotated const and the body local |
-| A5 | the literal-ANNOTATION route is dropped | **2** | the `let L2: "p"` and `declare const D: "p"` rows, and only those |
-| A6 | the `const` guard is dropped (a `let` initializer binds too) | **1** | the widened-`let` negative control, and only it |
-| A7 | a numeric key is named by its SOURCE TEXT, not its value | **2** | the `1e3` -> `1000` pair, after the pin was repaired (below) |
-| A8 | an AMBIENT value-less enum member binds to an invented number | **1** | the round-746 opaque-value control, and only it |
-
-  **Every arm has a uniquely-its-own failure, and A7 is the round's second methodological
-  finding: it first read ZERO and that was a BLIND PIN, not a redundant guard** (round 902's
-  trap). The pin asserted `none { 2741 }` for `{ [N]: 1 }` against `{ 1000: number }`, and a
-  MISNAMED key is not reported by the missing-property emitter at all — the EXCESS emitter
-  fires first and short-circuits it, exactly as tsc's does. Probed rather than assumed
-  (`const N = 7` against the same target reads TS2353 in BOTH compilers), the pin now
-  asserts neither code fires and a new POSITIVE control asserts that `{ "1e3": number }` —
-  the target a text-named key WOULD satisfy — is reported excess. 24 pins -> 25.
-
-- **GATES.** Suite **15,055 → 15,080 / 0 failures / 3 skipped** (summed over all six modules
-  with an XML parser); **no corpus baseline moved**, so no `logicalParityDivergence` was
-  needed. `cost_gate.py`: 18 of 20 counters `+0.00%`, `globals.lookups` **748,522 → 749,220
-  (+0.09%)** and `globals.misses` **732,172 → 732,840 (+0.09%)** — the enum-symbol
-  resolutions the profiles' `[SyntaxKind.X]:` keys now perform, far inside the ±2% band and
-  rebaselined with `--update` in this commit. `huge_methods.py --fail-over 0` clean on BOTH
-  module class dirs (largest method 5,651). `spine_closure_audit.py` clean (46 handlers, 40
-  audited) — a control, nothing on the spine changed. **The 8-profile grid is a BEFORE/AFTER
-  BINARY grid** (`scripts/round935-grid.sh`, round 813's shape; profiles enumerated by the
-  presence of a `tsconfig.json` and REFUSED below 8): all eight `added=0 removed=0`,
-  46/94 diagnostics unchanged.
-
-- **NEXT.** `(CHK.4)` — the DECLARATION side (an interface's / a class's own `[K]` member and
-  the duplicate-key TS1117, all of which need member tables computed AFTER type resolution)
-  and the SYMBOL axis (a `unique symbol` has no type of its own here, so `[S]` and `[S2]` are
-  one name). Both are modelling items with tsc's answers already measured in the queue entry;
-  the cheap residue beside them is a `NS.K` namespace-const key, which is an FP today.
-
-**Round 934 (2026-08-18) — (CHK.2): A COMPUTED OBJECT-LITERAL KEY NEVER REACHED THE
-EXCESS-PROPERTY CHECK. THE ROUND'S PRODUCT IS THAT **A DIAGNOSTIC CAN BE COMPUTED IN
-FULL AND THEN DROPPED FOR WANT OF A POSITION** — `getTypeOfObjectLiteral` had named
-`["zz"]`, `` [`zz`] `` and `7` for years, so the literal's TYPE carried the member and
-`checkExcessProperties` correctly judged it excess; it then looked for the AST node
-that declared it with a `when` knowing only `Identifier` and `StringLiteralNode`, found
-nothing, and emitted nothing. **The failure is the exact mirror of round 933's**: there
-one of B451's >= 5 extraction sites had been widened and another had not, so a member
-resolved for one consumer and FP'd for the other IN ONE COMPILE; here the two sites
-disagreed the other way and the result was SILENCE — a program tsc rejects that this
-compiler accepted, with nothing anywhere to see it.
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, on five scratch projects.** Every row below was READ
-  from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit
-  --listAll` on the SAME directory — never reasoned. **The FN reproduced at HEAD
-  exactly as round 933 recorded it, and the extension found two more rows it did not
-  have** (a BARE numeric key, and every position beyond a plain assignment).
-
-**Direction 2, EXTENDED** (`interface Opt { p?: number }` unless named; a row is a false
-NEGATIVE when tsc emits and we do not, a false POSITIVE when the reverse):
-
-| the key / the shape | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `{ p: 1, zz: 2 }` | TS2353 `'zz'` | TS2353 `'zz'` | TS2353 `'zz'` |
-| `{ p: 1, "zz": 2 }` | TS2353 `'"zz"'` | TS2353 `'zz'` — form | TS2353 `'"zz"'` |
-| `{ p: 1, 'zz': 2 }` | TS2353 `''zz''` | `'zz'` — form | `''zz''` |
-| ``{ p: 1, [`zz`]: 2 }`` | TS2353 `` '[`zz`]' `` | **silent — FN** | `` '[`zz`]' `` |
-| `{ p: 1, ["zz"]: 2 }` | TS2353 `'["zz"]'` | **silent — FN** | `'["zz"]'` |
-| `{ p: 1, [ "zz" ]: 2 }` | TS2353 `'[ "zz" ]'` | **silent — FN** | `'[ "zz" ]'` |
-| `{ p: 1, ["a]b"]: 2 }` | TS2353 `'["a]b"]'` | **silent — FN** | `'["a]b"]'` |
-| `{ p: 1, 7: 2 }` | TS2353 `'7'` | **silent — FN, NOT in round 933's table** | `'7'` |
-| `{ p: 1, [7]: 2 }` / `{ p: 1, ["7"]: 2 }` | TS2353 `'[7]'` / `'["7"]'` | **silent — FN** | as tsc |
-| `{ ["mm"]() {} }` | TS2353 `'["mm"]'` | **silent — FN** | `'["mm"]'` |
-| the same key in `satisfies` / an ARGUMENT / a `return` / a NESTED literal | TS2353 ×4 | **silent ×4 — FN** | as tsc ×4 |
-| ``{ p: 1, [`zz${x}`]: 2 }`` — a SUBSTITUTING template | silent | silent | silent |
-| `{ p: 1, ["zz"]: 2 }` vs `{ …; [k: string]: T }` | silent | silent | silent |
-| `{ p: 1, [7]: 2 }` vs `{ …; [k: number]: T }` | silent | silent | **silent — see the FP below** |
-| `{ p: 1, "1e3": 2 }` vs `{ …; [k: number]: T }` | TS2353 `'"1e3"'` | `'1e3'` — form | `'"1e3"'` |
-| `{ [E.P]: 1 }`, `const enum E { P = "p" }` | silent (late-bound to `p`) | silent | **silent — see the FP below** |
-| `{ [K]: 1 }` / `{ [E.Q]: 1 }` / `{ [S]: 1 }` / `{ [Symbol.iterator]: 1 }` | TS2353 | silent | **silent — STILL OPEN** |
-| `{ get ["gg"]() {} }` | TS2353 `'["gg"]'` | silent | **silent — STILL OPEN** |
-
-- **THE ROUND'S OWN NEAR MISS, AND IT IS WHY THE TABLE WAS EXTENDED BEFORE ANYTHING WAS
-  DESIGNED: THE FIRST TWO DRAFTS EACH TURNED AN FN INTO AN **FP**, ON A ROW ROUND 933's
-  FIVE-ROW TABLE DOES NOT CONTAIN.** (i) Admitting a numeric key exposed a TARGET-side
-  gap that could not matter before — `collectTargetPropertyNames` bails outright on a
-  STRING index signature and knows nothing of a NUMERIC one, which applies only to a
-  numerically-named key — so `{ [7]: 2 }` against `{ [k: number]: T }` was reported where
-  tsc is silent. (ii) Naming the computed key with `computedLiteralKey ?: computedSymbolKey`
-  — the obvious "delegate to the type builder" move, and the shape round 933's own lesson
-  argues for — reported `'[E.P]'` for `const enum E { P = "p" }; const o: Opt = { [E.P]: 1 }`,
-  which tsc LATE-BINDS to the existing `p` and accepts. **`computedSymbolKey` INVENTS the
-  name `"[<dotted>]"` so a well-known-symbol member can match STRUCTURALLY (round 723); it
-  is not a claim about what the key spells, and it cannot tell `Symbol.iterator` from `E.P`.**
-  Both are now guards with a discriminating negative control apiece (arms A3 and A4).
-- **SO THE LINE THIS ROUND DRAWS IS ONE SENTENCE, AND IT IS ROUND 933's LINE IN THE OTHER
-  DIRECTION: the excess check acts on a computed key exactly when the key is a LITERAL
-  spelling one fixed name.** Every key that needs the key's TYPE — a binding `[K]`, an
-  enum member `[E.P]`, a `unique symbol` `[S]`, a well-known symbol `[Symbol.iterator]` —
-  stays out in BOTH directions and is the same open item, late binding. Per round 765
-  those FNs are NOT pinned; the FP they would produce is.
-- **THE MESSAGE FORM IS MATCHED RATHER THAN RECORDED, BECAUSE IT MEASURED FREE.** tsc
-  names the key WITH its delimiters and squiggles the whole written key (`indexSignatures1`'s
-  baseline puts five tildes under `[sym]` and nine under `'someKey'`); the key node's span
-  is in hand at the emission, so it is one substring. **It is free because no ACTIVE corpus
-  test has a delimited excess key**: of the eleven `.errors.txt` baselines whose TS2353/TS2561
-  names a key with brackets or quotes, ten are not generated at all and the eleventh
-  (`checkDestructuringShorthandAssigment2`, `'[k]'`) belongs to a different emitter. A bare
-  identifier renders and measures exactly as before, which is why nothing moved. **Half-matching
-  was the alternative and was refused**: rendering computed keys as written while leaving
-  `"zz"` bare is a third convention nobody asked for.
-- **ONE PIN CHANGED, AND IT CHANGED TOWARDS tsc.** Round 933's
-  `` `negative control - a backtick-quoted key names ITS OWN text and not a neighbour` ``
-  asserted the TS2741 this compiler happened to produce for
-  ``interface Req { p: number }; const r: Req = { [`other`]: 1 }``. Measured this round,
-  **tsc reports TS2353 there** — for all four spellings of that shape — because the excess
-  check runs first and returns. The pin now asserts tsc's line, and asserting that the
-  message names the key's own TEXT keeps the same injected mistake in view more sharply
-  than TS2741 did. It is the only red the whole suite produced.
-- **SIBLING SITES: ONE OF TWELVE `code = 2353` EMITTERS WAS TOUCHED.** `checkExcessProperties`
-  (~17 call sites — assignment, argument, `satisfies`, `return`, array element, nested), which
-  is why every position in the table moves together. The other eleven are dedicated
-  corpus-shape walkers with their own gates and their own name extraction (B451's list plus
-  the B482/B513/B576/B331 families); none was touched and none needs to be for this shape —
-  `checkDestructuringShorthandAssigment2` shows one of them already rendering `'[k]'` with
-  its brackets, i.e. this family has been divided about the message form for a long time and
-  this round moves the general path onto tsc's side of it.
-- **EVERY PROFILE-BASED INSTRUMENT IS A CONTROL HERE, MEASURED NOT ASSUMED — the same
-  structural blindness round 933 found, re-measured for this shape.** Across all eight
-  profiles' `src` (1,249 `.ts` files) an object-literal computed key matches **8 times, all
-  eight the SAME line** (`parser.ts:10634`) and that line is a DESTRUCTURING pattern, not an
-  object literal; a bare numeric key matches 120 times and every hit inspected is inside a
-  comment or a template string. So `cost_gate.py`'s `+0.00%` on all 20 counters and the
-  grid's `added=0 removed=0` on all eight profiles are the EXPECTED answers (round 853's law:
-  a `+0.00%` streak is a reason to audit the instrument, and the audit is that grep).
-
-- **PINS +20, one class, `ComputedKeyExcessPropertyTest`.** Each spelling has its own row;
-  the form rows assert the exact tsc-measured message AND, for `["zz"]`, the `length == 6`
-  that the cooked name (2) cannot produce. Five negative controls: an existing member, a
-  string index signature, a numeric index signature over all four numeric spellings, a
-  SUBSTITUTING template, and the dotted `[E.P]` key. One positive control keeps the numeric
-  guard from becoming a blanket (`"1e3"` is still excess against a numeric index signature).
-
-- **SIX-ARM ABLATION, one mistake at a time, each applied to and restored from a
-  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (`scripts/round934-ablate.py`;
-  every arm read `ran 20`, and the dead-arm check diffs against the SNAPSHOT rather than HEAD).
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 | the shared naming loses its computed arm | **10** | the pre-934 boundary — every computed spelling, in every position, in one set |
-| A2 | the shared naming loses its `NumericLiteralNode` arm | **1** | the bare `7:` key, which is not a computed key at all |
-| A3 | the numeric-index absorption guard is dropped | **1** | draft (i)'s false positive, and only it |
-| A4 | the computed arm reuses `computedSymbolKey`'s invented name | **1** | draft (ii)'s false positive, and only it |
-| A5 | message and squiggle fall back to the COOKED name | **12** | the written-span rendering — including both quoted-key rows, which no other arm touches |
-| A6 | the NESTED descent reverts to the pre-934 `when` | **1** | the nested-under-a-computed-key row, and only it |
-
-  Four arms have a uniquely-their-own failure. **Four of the twenty pins are undiscriminated
-  by any arm and are recorded as such rather than claimed** (round 807's law): the
-  bare-identifier control, the existing-member control, the string-index control and the
-  substituting-template control all guard a FUTURE widening; the last of them is already
-  ablated by round 933's A3.
-
-- **GATES.** Suite **15,035 → 15,055 / 0 failures / 3 skipped** (summed over all six modules
-  with an XML parser); **no corpus baseline moved**, so no `logicalParityDivergence` was
-  needed. `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0` clean,
-  751 classes (+1: the `ExcessProp` carrier), 0 over. `spine_closure_audit.py` clean (46
-  handlers, 40 audited) — a control, nothing on the spine changed. **The 8-profile grid is a
-  BEFORE/AFTER BINARY grid** (`scripts/round934-grid.sh`, round 813's shape; profiles
-  enumerated by the presence of a `tsconfig.json` and REFUSED below 8): all eight
-  `added=0 removed=0`, 46/94 diagnostics unchanged.
-
-- **NEXT.** `(CHK.3)` — LATE BINDING (LANDED round 935; the residue is (CHK.4)): a
-  computed key whose expression has a string-literal TYPE. It is now the SAME open item in both directions and both tables name it — supply
-  (`{ [K]: v }` / `{ [E.P]: v }` do not satisfy a required member here and do in tsc) and
-  excess (`[K]`, `[E.Q]`, `[S]`, `[Symbol.iterator]` are TS2353 in tsc and silent here) —
-  so it should be closed once, at `computedLiteralKey`'s caller, by asking the key's type
-  rather than its spelling. **The two directions must land together**: the FP guarded by
-  arm A4 is exactly what a half-landing produces. `SyntaxRoles.isMemberPosition` refuses
-  the same shape on the language-service side and has to move with it. A smaller residue,
-  worth one paragraph rather than a round: `getTypeOfObjectLiteral`'s GetAccessor/SetAccessor
-  arms do not name a computed key at all, so `{ get ["gg"]() {} }` declares no member —
-  which is a SUPPLY-direction gap in (CHK.1)'s family, not this one.
-
-**Round 933 (2026-08-18) — (CHK.1): A BACKTICK-QUOTED COMPUTED MEMBER KEY NAMES A
-MEMBER. THE ROUND'S PRODUCT IS THAT **A FALSE POSITIVE CAN BE INVISIBLE TO EVERY
-INSTRUMENT THIS REPOSITORY HAS AND STILL BE REAL: THE EIGHT tsc PROFILES CONTAIN
-*ZERO* BACKTICK-QUOTED COMPUTED MEMBER KEYS, SO THE COST GATE, THE 8-PROFILE GRID
-AND THE WHOLE 13k-BASELINE CORPUS WERE ALL GREEN ON A COMPILER THAT REJECTED THREE
-PROGRAMS tsc ACCEPTS.** The gap was found only because round 932 tripped over one
-row of it while doing something else, and wrote it down.
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, on one scratch project per direction.** Every row
-  below was READ from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own
-  `MainKt --noEmit --listAll` on the SAME directory — never reasoned.
-
-**Direction 1 — does the key SUPPLY a required member?** (`interface Req { p: number }`,
-`const r: Req = { <key>: 1 }`; a row is a false positive when tsc is silent and we are not.)
-
-| the key | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `{ p: 1 }` | silent | silent | silent |
-| `{ "p": 1 }` | silent | silent | silent |
-| ``{ [`p`]: 1 }`` | silent | **TS2741 — FP** | silent |
-| `{ ["p"]: 1 }` | silent | silent | silent |
-| ``{ [`p${x}`]: 1 }`` | **TS2741** | TS2741 | TS2741 — parity, and now PINNED |
-| `{ [K]: 1 }`, `K` a `const "p"` | silent | **TS2741 — FP** | TS2741 — **STILL OPEN** |
-| `{ [E.P]: 1 }`, `E` a `const enum` | silent | **TS2741 — FP** | TS2741 — **STILL OPEN** |
-| `{ 1: 1 }` / `{ [1]: 1 }` vs `{ 1: number }` | silent | silent | silent |
-| `{ [S]: 1 }`, `S` a `unique symbol` | silent | silent | silent |
-
-**Direction 2 — the mirror, EXCESS-PROPERTY checking** (`interface Opt { p?: number }`;
-a row is a false NEGATIVE when tsc emits and we do not). **Measured, untouched, and it
-is a SECOND cause**, not the same one:
-
-| the key | tsc 7.0.2 | ours (before AND after) |
-|---|---|---|
-| `{ p: 1, zz: 2 }` | TS2353 `'zz'` | TS2353 `'zz'` |
-| `{ p: 1, "zz": 2 }` | TS2353 `'"zz"'` | TS2353 `'zz'` — **form divergence** |
-| ``{ p: 1, [`zz`]: 2 }`` | TS2353 `` '[`zz`]' `` | **silent — FN** |
-| `{ p: 1, ["zz"]: 2 }` | TS2353 `'["zz"]'` | **silent — FN** |
-| ``{ p: 1, [`zz${x}`]: 2 }`` | silent | silent |
-
-**Direction 3 — does an interface's / class's / literal's OWN backtick member RESOLVE?**
-(probe = assign it to an incompatible primitive, so the message NAMES the type found —
-rounds 760/762: asserting silence cannot tell "resolved" from "washed to something that
-swallows every access")
-
-| the declaration | tsc | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| ``interface I { [`ip`]: number }``, `i.ip` | TS2322 `number`→`string` | **TS2339 — FP** | TS2322 |
-| `interface I { ["is"]: number }` | TS2322 | TS2322 | TS2322 |
-| ``class C { [`cp`]: number }``, `c.cp` | TS2322 | **TS2322 *and* TS2339 in ONE compile** | TS2322 |
-| `class C { ["cs"]: number }` | TS2322 | TS2322 | TS2322 |
-| ``const o = { [`op`]: 1 }``, `o.op` | TS2322 | **TS2339 — FP** | TS2322 |
-
-- **THE FP REPRODUCED, AND IT WAS BIGGER THAN THE ROW ROUND 932 WROTE DOWN — THREE
-  DIAGNOSTICS, NOT ONE.** The named row was the object-literal supply; the interface
-  and class members were never looked at and fail the same way.
-- **THE CLASS ROW IS THE ROUND'S ONE REAL FINDING AND IT ONLY EXISTS BECAUSE THE FIX
-  WAS APPLIED IN TWO STEPS.** After `computedLiteralKey` alone, `class C { [`cp`] }`
-  read **TS2322 AND TS2339 at the same position in the same compile**: the type-building
-  site had found the member and the class-AST walker (`classMemberNameText`) had not,
-  because the two carry INDEPENDENT copies of the same `when`. The archive's B451 entry
-  says exactly this — "member-NAME extraction has >= 5 INDEPENDENT sites that each drop
-  ComputedPropertyName by default … adding computed-key support to one site silently
-  leaves the others FP'ing" — and the second copy is now a DELEGATION to the first, so
-  the two cannot drift again. **A widening applied to one extraction site is half a fix,
-  and the tell is two contradictory diagnostics rather than a missing one.**
-- **WHAT IS DELIBERATELY OUT, with tsc's own answer beside it.** A SUBSTITUTING template
-  spells no fixed member and tsc reports TS2741 for it — pinned in the POSITIVE, against
-  the exact message, so a later widening that swallows it reddens. `{ [K]: v }` and
-  `{ [E.P]: v }` need the key's TYPE (tsc late-binds a string-literal-typed key); that is
-  a modelling gap, not a spelling one, and it is NOT pinned — round 765's law: pinning a
-  known-open gap is a countdown, not a guard. The excess-property FN is likewise recorded
-  and unpinned; note it is SYMMETRIC across the spellings (`` [`zz`] `` and `["zz"]` both
-  escape), so this round did not move it in either direction.
-- **EVERY PROFILE-BASED INSTRUMENT IS A CONTROL HERE, AND THAT WAS MEASURED RATHER THAN
-  ASSUMED.** `grep -rEoh '\[`[^`]*`\]\s*[:(]'` over all eight profiles' `src` returns
-  ONE hit, and it is an array literal inside a spread (`fourslashImpl.ts:2443`), not a
-  computed key. So `cost_gate.py`'s +0.00% on all 20 counters and the grid's
-  `added=0 removed=0` on all eight profiles are the EXPECTED answers — round 853's law
-  applies (a `+0.00%` streak is a reason to audit the instrument), and the audit here is
-  the corpus grep plus the gate's own `MainKt` positive control, both of which passed.
-
-- **PINS +11, none inverted.** `TemplateComputedMemberKeyTest` (core, `commonTest`) writes
-  every backtick row BESIDE its quote-spelled B451 control in the same fixture, so a red
-  backtick row means "the two spellings disagree" rather than "member resolution is
-  broken". Every resolution pin assigns to an incompatible primitive and asserts the EXACT
-  TS2322 message; the class pin asserts `none { 2339 }` AND the TS2322, which is the only
-  pair that can see the two-site state above.
-
-- **THREE-ARM ABLATION, one mistake at a time, each applied to and restored from a
-  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (`scripts/round933-ablate.py`;
-  every arm read `ran 11`, and the dead-arm check diffs against the SNAPSHOT rather than
-  HEAD — a `git diff` here is non-empty for an arm that changed nothing, because HEAD
-  already differs by the round's own fix).
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 | `computedLiteralKey` loses its template arm | **6** | the pre-933 boundary — all three FP surfaces plus both negative controls, in one set |
-| A2 | `classMemberNameText` stops delegating and re-spells the old `when` | **1** | the SECOND site, and only it: the class pin is the only thing in the suite that sees it |
-| A3 | the template arm admits the key but invents the name `"p"` | **4** | the arm reads the template's TEXT — i.e. neither negative control is vacuous |
-
-- **GATES.** Suite **15,024 → 15,035 / 0 failures / 3 skipped** (summed over all four
-  modules with an XML parser); no corpus baseline moved, so no `logicalParityDivergence`
-  was needed. `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`
-  clean, 750 classes, 0 over. `spine_closure_audit.py` clean (46 handlers, 40 audited) —
-  a control, nothing on the spine changed. **The 8-profile grid is a BEFORE/AFTER BINARY
-  grid** (`scripts/round933-grid.sh`; this change has no in-binary arm, so it rebuilds the
-  pre-933 source, captures, and rebuilds the fixed one — round 813's shape), profiles
-  enumerated by the presence of a `tsconfig.json` and REFUSED below 8: all eight
-  `added=0 removed=0`, 46/94 diagnostics unchanged.
-
-- **NEXT.** `(CHK.2)` — the excess-property check never sees a computed key, so
-  ``{ [`zz`]: 1 }`` and `{ ["zz"]: 1 }` both escape TS2353. Direction 2's table is the
-  step-1 measurement already taken; the open question is WHICH of the twelve `code = 2353`
-  emitters owns the object-literal case and whether it filters computed keys syntactically
-  or simply never receives their names. `(CHK.3)` — late-binding a computed key whose
-  expression has a string-literal TYPE (`{ [K]: v }`, `{ [E.P]: v }`), which is the same
-  mechanism `SyntaxRoles.isMemberPosition` deliberately refuses on the language-service
-  side, so the two must be decided together or they will disagree.
-
-**Round 932 (2026-08-18) — (API.17): A COMPUTED OBJECT-LITERAL KEY. § 14's GAP 2 — THE
-LAST SILENT SHAPE ANYWHERE IN THIS API — IS CLOSED, AND THE ROUND'S PRODUCT IS THAT
-**A REFUSAL'S STATED REASON CAN EXPIRE WITHOUT ANYONE NOTICING: `typeCaptureReportedType`
-REFUSED TO TYPE AN OBJECT-LITERAL KEY *BECAUSE THE CONTEXTUAL TYPE IS WALK-SCOPED STATE A
-CAPTURE CANNOT READ*, AND (API.10) BUILT EXACTLY THAT MECHANISM ONE ROUND LATER.**
-
-- **STEP 1 WAS tsc, five oracles over three fixtures** (`lsp_member_refs.py`,
-  `lsp_rename.py`, `lsp_hover.py`, `lsp_definition.py`, `lsp_completion.py`). Every row
-  below was READ, not reasoned:
-
-| caret / query | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| references of `Shape.p`, one `{ ["p"]: v }` in the file | **6** spans, the key's `[232,233)` among them | 4 — silently short | 6 |
-| the key's span | the TEXT, **quotes excluded** | — | the same |
-| the same with the member OPTIONAL (`q?`) | 5 | 4 — **and the rename went through** | 5 |
-| a NESTED computed key under a computed key | 5 | 0 | 5 |
-| `` { [`p`]: v } `` template key | in the group | 0 | in the group |
-| `{ "p": v }` quoted key | in the group | 0 | in the group |
-| `{ [K]: v }` where `K` is a `const` | the **binding**'s 2 spans, not the member's | the same | the same |
-| a key with NO contextual type | 1 — itself | 0 | 1 |
-| hover on `{ p: v }` (contextual) | `(property) Shape.p: number` | **`string`** — an unrelated `const p` | `number` |
-| hover on `{ ["p"]: v }` | `(property) Shape.p: number` | `string` (the literal's own) | `number` |
-| hover on a free key | `(property) ["z"]: number` | `string` | `number` |
-| definition on a computed key | the member's declaration | none | the same |
-| rename from either end | rewrites the key, delimiters kept | refused / silent | rewrites it |
-| completion inside `{ ["‸"]: }` | **null result** | NONE | NONE — parity |
-| `interface I { ["ip"]: n }` + `i.ip` | 3 spans, rename rewrites all | refused | 3 spans, rewritten |
-
-- **THE POPULATION IS THE WHOLE FEATURE FOR THE THIRD ROUND RUNNING, AND THIS TIME IT
-  COLLAPSED INTO ONE PREDICATE.** `SourceIndex.occurrenceNodes` used to be identifiers
-  plus a dedicated element-access enumeration; it is now identifiers plus every node for
-  which `isMemberPosition && isMemberNameLiteral` holds — which SUBSUMES (API.9)'s
-  element accesses and (API.16)'s templates and adds `{ "p": v }`, `{ ["p"]: v }`,
-  ``{ [`p`]: v }`` and a class's or an interface's `["p"]`. `isMemberPosition` was
-  already the predicate `Project.occurrenceCaret` used to decide whether a caret ON such
-  a literal names anything, and already the axis the completeness net splits its
-  obstacles on, so **the set a caret may land in, the set a sweep reports and the set a
-  rename edits are now one set by construction** rather than three definitions kept in
-  step.
-- **A LITERAL THIS API CANNOT *RESOLVE* STILL BELONGS IN THE POPULATION, AND THAT IS THE
-  WHOLE ARGUMENT FOR "PROVE TO OFFER" HOLDING WITHOUT EXCEPTION.** A computed METHOD key
-  (`{ ["m"]() {} }`) and a computed member of a TYPE LITERAL are members the CHECKER does
-  not put in a member table at all — measured, `c.cm()` hovers `any` and resolves
-  nowhere — so nothing places them. Swept, they become a stated `OCCURRENCES_INCOMPLETE`
-  conflict; unswept, they were a span nobody looked at. Seen-and-unplaced is a refusal;
-  unseen is a silence.
-- **`{ [K]: v }` IS DELIBERATELY OUT, AND THE ASYMMETRY IS LOAD-BEARING.** A computed
-  name that is a BINDING spells no fixed member — the value is decided at run time — and
-  tsc reads it as a reference to `K` alone (measured: two spans, and renaming it writes
-  `[renamed]`). `isMemberPosition`'s computed arm therefore filters to LITERALS where its
-  element-access arm does not, because calling `[K]` a member position flips the
-  completeness net's polarity for every ordinary `const` rename. **A mid-round draft did
-  not filter, and the regression it produced is arm C4**: `{ [K]: v }` resolved to a
-  member named `K`, the const's own group lost its use, and its hover changed subject.
-- **THE ROUND'S SECOND HALF WAS AN AUDIT FINDING, and it is the (API.16) product one
-  round on.** `typeCaptureReportedType`'s KDoc listed an object-literal key as
-  deliberately NOT closed and gave one reason: the useful answer is the CONTEXTUAL type's
-  property, and a contextual type is walk-scoped state a capture cannot read. (API.10)
-  then wrote `typeCaptureContextualType`, which is purely SYNTACTIC and is therefore
-  precisely the mechanism that reason said did not exist. Nobody came back for it.
-  Measured this round on a (BUG.4)-shaped fixture: **every** object-literal key answered
-  `any`, or the COLLIDER's type where a same-spelled binding existed — `{ p: 1 }` against
-  a `number` member reported `string`, the type of an unrelated file-level `const p`.
-  That is the confidently-wrong answer *prove to offer* exists to prevent, and round
-  930's own audit passed it as TRUE because its caret list did not include a key.
-- **ONE CHECKER GAP WAS MEASURED AND LEFT ALONE, and it is stated in the fixture's KDoc**:
-  a computed key whose literal is a no-substitution TEMPLATE does not supply the member it
-  names (`{ [`p`]: v }` against a required `p` is TS2741), while the quoted and bare forms
-  do. That is one layer below this API; the language service resolves the template key
-  regardless, which is why the pin fixture's members are optional.
-
-- **A ZERO ARM WAS A BLIND PIN, NOT A REDUNDANT GUARD — round 902's trap, caught by
-  reading the FIXTURE rather than the arm.** C5 (the contextual walk stops reading a
-  COMPUTED outer key) read 0 red on its first pass with a plausible story ready; the
-  truth is that the nested pin's outer key was written as an IDENTIFIER (`n: { ["inner"]:
-  v }`), so the shape exercised nothing. The fixture now nests under a computed key
-  (`["n"]: { ["inner"]: v }`) and asserts that it does, in the pin itself — a fixture
-  that must be a certain shape says so, or the next edit quietly removes the coverage.
-
-- **PINS +18, FOUR INVERTED.** The new `ProjectComputedKeyTest` (16) carries the round's
-  own shape: the occurrence set as an EXACT list against a fixture spelling `p` four more
-  times in positions that are not the member, the delimiter-excluded span for a quote and
-  a backtick alike, the caret-in-the-key direction, the nested computed key, `{ [K]: v }`
-  in both directions, the free key, go-to-definition, four hovers, the completion
-  refusal, and two renames asserted on the RESULTING TEXT. `ProjectContextualKeyTest`
-  gains the computed key to its exact set and turns its refusal pin into an occurrence
-  pin. The four inverted are round 930's two computed-key defect pins (now the rewrite and
-  the loud refusal one shape over) and round 927's two refusal pins, each saying so in
-  place.
-
-- **WHAT REMAINS REFUSED, and NOTHING IS SILENT.** A computed or quoted METHOD key
-  (`{ ["m"]() {} }`, `{ "m"() {} }`), a computed member of a TYPE LITERAL, and a binding
-  element's string `propertyName` (`const { "p": local } = o`) are all SWEPT and all
-  unplaced, so a rename that meets one refuses with `OCCURRENCES_INCOMPLETE` and names
-  the span — measured, all three, on one fixture whose member is OPTIONAL, which is the
-  shape that used to go through quietly. A caret ON one of them answers empty and refuses
-  `NO_SYMBOL`. Completion inside any computed key answers `NONE`, which is tsc's own
-  answer (a null result) at every one of four carets. And a computed member DECLARATION
-  in a CLASS or an INTERFACE now RESOLVES — `i.ip` and `["ip"]` are one group of three
-  spans and rename together, which fell out of the same declaration-name unwrap.
-
-- **TEN-ARM ABLATION, one mistake at a time, each arm applied to and restored from a
-  sha256-verified on-disk snapshot, each with an asserted RAN-COUNT** (round 931's
-  dead-arm trap: a zero-red arm with a zero ran-count is not a redundant guard, it is no
-  arm at all). `scripts/round932-ablate.py`; every arm read `ran 549`.
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| C1 | the population is element accesses ONLY | **14** | the pre-932 boundary — every query, in one set |
-| C2 | the key's OWN declaration comes from the ASSIGNMENT, not the key node | **0 — MEASURED REDUNDANT** | see below |
-| C3 | a declaration's name stops unwrapping a COMPUTED name to its literal | 2 | the rename SEED, and C2's reach proof |
-| C4 | a computed key that is a NAME is admitted as if it spelled that name | 3 | `{ [K]: v }` — the regression this round backed out mid-flight |
-| C5 | the contextual walk stops reading a COMPUTED outer key | 2 | the NESTED key, and only it |
-| C6 | hover's object-literal-key arms are dropped | 2 | the audit finding: `any`, or the collider's type |
-| C7 | `isMemberPosition`'s computed arm stops filtering to LITERALS | **0 — MEASURED REDUNDANT** | see below |
-| C7b | THE REACH PROOF for C7: the same arm removed outright | **14** | the line is live and load-bearing in the other direction |
-| C8 | a literal DECLARATION reports its raw extent, delimiters included | 1 | the span a host highlights for a computed member declaration |
-| C9 | `occurrenceCaret` stops accepting a member-name literal | 6 | the FROM-the-literal direction, for all three spellings |
-
-  **Eight distinct non-empty sets, and the two zeros are recorded as redundant guards
-  with a REASON each rather than claimed as pins.** C2 is redundant *given* C3:
-  `typeCaptureDeclarationName` unwraps a computed name, so asking
-  `typeCaptureDeclarationLocation` for the ASSIGNMENT and for the KEY NODE answer the
-  same `CapturedDeclaration` — two guards on one property at two layers, which is round
-  927's A3/A8 law and its qualifier to round 807. C7's filter is redundant because
-  nothing else in the population walk can reach `{ [K]: v }`'s identifier — but the arm
-  it guards is emphatically live, which C7b measures at 14.
-- **GATES.** Suite **15,006 → 15,024 / 0 failures / 0 errors / 3 skipped** (core
-  UNCHANGED at 14,341; `-project` 531 → 549). `cost_gate.py` **+0.00% on all 20
-  counters** — a real gate, since the round changes core; `huge_methods.py --fail-over
-  0` clean on core (750 classes, 16,020 methods) and on `-project` explicitly (48
-  classes, 465 methods); the round-920 token gate re-run because `SourceIndex` changed —
-  **1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations**.
-  `spine_closure_audit.py` not applicable. `docs/language-service.md` §§ 8, 9, 10b, 10d,
-  13, 14.
-- **§ 14's gap list: 8 → 7 live of the ten ever numbered, and the page's headline claim
-  now holds without exception.** *Prove to offer* — every position either answers
-  correctly or refuses and says why — had three live exceptions three rounds ago; round
-  931 took two and this one takes the last. **Nothing anywhere in this API is silent.**
-
-- **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
-  about this API and the only thing that moves the cost table. Below it, the three
-  shapes above whose members the CHECKER does not put in a member table (a computed
-  method key, a computed type-literal member), which are a checker item rather than an
-  API one.
-
 **Round 931b (2026-08-18) — (API.16): A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS.
 § 14's GAP 6 — THE ONE GENUINELY SILENT GAP IN THIS API — IS CLOSED, AND THE ROUND'S
 PRODUCT IS THAT **A REFUSAL WITH ONE STATED REASON IS AN ASSET: ROUND 929's TEMPLATE
@@ -2664,17 +2056,52 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `target >= ES2015 || …` strict-mode determinations, which a flip makes unconditionally
   strict, and one per-fixture baseline pin). `docs/pristine-divergences.md` § 3d.1.
 
-- [ ] **(CHK.22) THE for-of / SPREAD OPERAND'S `[Symbol.iterator]()` RETURN IS NEVER CHECKED,
-  AT ANY TARGET — 4 PRISTINE-ONLY TS2488 ROWS (`for-of16` x2, `for-of29`,
-  `iteratorSpreadInArray10`, round 945).** Split out of (CHK.21), whose gates turned out not
-  to own them. Three shapes, all silent from us at `es5` / unset / `es2015` / `esnext` alike:
-  a class whose `[Symbol.iterator]()` returns `this` where `this` has no `next()` (pristine
-  adds a related TS2489 `An iterator must have a 'next()' method.`), an OPTIONAL
-  `[Symbol.iterator]?()` member, and the same class spread into an array literal. What is
-  missing is tsc's `getIterationTypesOfIterable` -> `getIterationTypesOfIteratorWorker`
-  chain: we accept the presence of a `[Symbol.iterator]` member without asking whether its
-  RETURN type is a valid Iterator. Note the message the fix must produce carries the RELATED
-  info, so a pin needs both.
+- [x] **(CHK.22) THE for-of / SPREAD OPERAND'S `[Symbol.iterator]()` RETURN IS NOW CHECKED —
+  LANDED, round 946: 4 PRISTINE-ONLY TS2488 ROWS -> 0 WITH OURS-ONLY FLAT, THE FIRST ENTRY IN
+  THIS ARC THAT MOVES ONLY THE FALSE-NEGATIVE COLUMN.** `spineCheckIterableOperand` /
+  `iterableOperandFailure` reproduce tsc's `getIterationTypesOfIterableSlow` ->
+  `getIterationTypesOfMethod("next")` chain for `for...of` and ARRAY-LITERAL spread: an
+  OPTIONAL `[Symbol.iterator]?()` is TS2488 (tsc's `method && !(method.flags & Optional)`),
+  and a zero-argument `[Symbol.iterator]()` whose RETURN type has no `next` is TS2488 + the
+  related **TS2489 `An iterator must have a 'next()' method.`**. **THE CHECK IS
+  POSITIVE-EVIDENCE-ONLY AND THAT IS THE WHOLE FP FIREWALL**: it fires only where the member
+  is FOUND and provably broken and bails on everything else, so every bail is a false
+  negative and no bail is a false positive — which is why a new diagnostic on the commonest
+  construct in the language moved **zero** of ~13k corpus baselines. **`this` READS AS `any`
+  HERE** (no polymorphic `this` type), so `[Symbol.iterator]() { return this }` — three of
+  the four rows — needed `iteratorMethodThisReturn`, a bounded declaration read that answers
+  the CARRIER, which is tsc's own answer rather than a widening. Sweep **297 -> 297
+  ours-only, pristine-only 773 -> 769**, zero fixtures regressed; 8-profile grid `added=0
+  removed=0`; suite **15,294 -> 15,324 / 0 / 3** with no baseline moved; `cost_gate.py`
+  `typeOfExpr.calls +0.22%` (the per-operand type read — a reached-ness proof), rebaselined
+  in the same commit. 11-arm ablation, every arm at `ran 63`.
+  `docs/pristine-divergences.md` § 3e.
+
+- [ ] **(CHK.23) THE MISSING HALF OF THE ITERABILITY CHECK — A TYPE WITH NO
+  `[Symbol.iterator]` AT ALL IS STILL ACCEPTED, AND SO ARE FOUR OTHER CONSTRUCTS (round 946,
+  scoped out with tsc's answer known for every row).** § 3e.3 of `docs/pristine-divergences.md`
+  is the table. The big one is the MISSING-member case, which is where tsc's rule needs a
+  complete model of what is iterable — arrays, strings, tuples, `Iterable<T>`, a constrained
+  type parameter, every union of them and the built-in iterator families — and one gap in
+  such a model is a false positive on `for...of`; note that under the EMBEDDED lib only
+  `IterableIterator<T>` declares `[Symbol.iterator]` at all, so the model cannot be built
+  from member lookup alone there. The rest, each already pinned SILENT in
+  `IterableOperandProtocolTest`: an OPTIONAL `next` (tsc reports it; refused because no
+  pristine baseline here measures it), an iterator type with an empty member table or a
+  string index signature, `[Symbol.iterator]` requiring an argument on a CLASS (B438e owns
+  only the object-literal spelling and its hard-coded TS2322 chain), and the four other
+  constructs — CALL-argument spread, array DESTRUCTURING, `yield*` and `for await…of`, whose
+  `IterationUse` flags carry different diagnostic families (TS2504 / TS2569 / TS2461).
+
+- [ ] **(CHK.24) THERE IS NO POLYMORPHIC `this` TYPE — `return this` AND `(): this` BOTH
+  RESOLVE TO `anyType` (round 946, measured).** `class C { m() { return this } n(): this
+  { return this } }` makes `c.m()` and `c.n()` answer `any`, so every `this`-returning
+  builder chain in a checked program is untyped and every rule that reads such a return
+  bails. Round 946 needed exactly one question answered — "does the carrier have `next`" —
+  and got it from `iteratorMethodThisReturn`, a bounded read of the member's DECLARATION;
+  that helper is a stopgap and says so. The general fix is tsc's `getThisType` plus the
+  `ThisType` type-node arm, and its blast radius is every method-chain return in the
+  program, so it needs the 8-profile grid and the 630-fixture sweep.
 
 - [ ] **(CHK.18) `t[k] = v` THROUGH A GENERIC INDEXED ACCESS IS TS2862 WHERE PRISTINE SAYS
   TS2322 — 3 ROWS, A CODE DIVERGENCE RATHER THAN A FALSE POSITIVE
