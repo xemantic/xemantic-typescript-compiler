@@ -13131,6 +13131,9 @@ class Checker(
      */
     private var lexicalBlockScopedEnumNames: Set<String> = emptySet()
 
+    /** (CHK.19) round 945 — the gate for [lexicalTypeAliasArity]; see [lexicalBlockScopedEnumNames]. */
+    private var lexicalBlockScopedTypeAliasNames: Set<String> = emptySet()
+
     /**
      * (REL.1)(c) step 4: the position-aware TYPE-space consult for a
      * function-body-scoped `enum`. Walks the node's ancestor chain outward over the
@@ -13172,6 +13175,54 @@ class Checker(
         return null
     }
 
+    /**
+     * (CHK.19) round 945 — the arity of a BLOCK-SCOPED type alias that shadows an outer
+     * (usually LIB) one, or null when no such declaration is visible from [node].
+     *
+     * CLAUDE.md's B83.5: `Binder.bindStatement` never binds a declaration nested inside a
+     * function body / block, so `function f() { type Omit<T> = ... }` is in no `locals` table
+     * and [getTypeParamInfo] — a whole-program, NAME-keyed scan — answers with the lib's
+     * two-parameter `Omit`, i.e. `Generic type 'Omit' requires 2 type argument(s)` for a
+     * one-argument use that pristine accepts. **In TYPE position that failure is silent for a
+     * UNIQUE name (it degrades to `any`) and WRONG for a SHADOWING one**, which is why only the
+     * shadowing half is a diagnostic at all.
+     *
+     * This is round 748's `lexicalTypeSymbolForNode` shape, one declaration kind over, and it
+     * inherits that round's two invariants: the walk reads `scope.symbols` ONLY, never
+     * `LexicalScope.existing` (which ALIASES the main binder's table, so reading it would put
+     * every INV.3 name back in play), and a name gate computed once keeps the hot type-reference
+     * path at a single set probe. Because `declareLexical` skips any name the main binder
+     * already bound in that container, a scope-space hit can only be a declaration the
+     * conventional tables do NOT have — so this cannot change how any bound name resolves.
+     */
+    private fun lexicalTypeAliasArity(node: Node, name: String): TypeParamInfo? {
+        if (name !in lexicalBlockScopedTypeAliasNames) return null
+        val owner = owningSourceFile(node) ?: return null
+        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
+        if (scopes.isEmpty()) return null
+        var cur: Node? = node
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0) {
+                val sym = scopes[id]?.symbols?.get(name)
+                if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                    val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration }
+                        as? TypeAliasDeclaration ?: return null
+                    val tps = decl.typeParameters.orEmpty()
+                    return TypeParamInfo(
+                        minRequired = tps.count { it.default == null },
+                        maxTotal = tps.size,
+                        displayName = name,
+                    )
+                }
+            }
+            if (cur is SourceFile) break
+            cur = cur.parent
+        }
+        return null
+    }
+
     private fun computeAllEnumValues() {
         // (REL.1)(c) step 4: scope-space enums first — a function-body-scoped enum is
         // invisible to the `result.locals` + namespace-exports walk below, so its
@@ -13180,9 +13231,15 @@ class Checker(
         // scope-symbol ids are a disjoint negative space, so this cannot perturb any
         // conventionally-bound enum's values.
         val blockScoped = HashSet<String>()
+        // (CHK.19) round 945: the block-scoped TYPE-ALIAS census rides this SAME sweep — a
+        // second pass over every scope of every file would be the identical walk for one more
+        // flag test, and this set is what keeps [lexicalTypeAliasArity]'s consult a single
+        // probe on the hot type-reference path.
+        val blockScopedAliases = HashSet<String>()
         for (result in binderResults) {
             for ((_, scope) in result.lexicalScopes) {
                 for ((symName, symbol) in scope.symbols) {
+                    if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) blockScopedAliases.add(symName)
                     if (!symbol.flags.hasAny(SymbolFlags.Enum)) continue
                     blockScoped.add(symName)
                     computeEnumSymbolValues(symbol)
@@ -13190,6 +13247,7 @@ class Checker(
             }
         }
         lexicalBlockScopedEnumNames = blockScoped
+        lexicalBlockScopedTypeAliasNames = blockScopedAliases
         for (result in binderResults) {
             for ((_, symbol) in result.locals) {
                 computeEnumValuesRecursive(symbol)
@@ -56305,8 +56363,13 @@ interface DataView {
         // AST-based (pollution-proof; the merged `globals` symbol carries both declarations).
         if (fileDeclaresNonGenericType(fileName, name)) return
 
-        // Look up type parameter info
-        val info = getTypeParamInfo(name, forTypePosition) ?: return
+        // Look up type parameter info. (CHK.19) round 945: a BLOCK-SCOPED type alias shadowing
+        // an outer/lib one wins, because [getTypeParamInfo] is a whole-program NAME scan that
+        // cannot see a declaration the binder never bound (CLAUDE.md's B83.5) and would answer
+        // with the lib's arity — `Generic type 'Omit' requires 2 type argument(s)` for a local
+        // one-parameter `Omit`.
+        val info = lexicalTypeAliasArity(typeRef, name)
+            ?: getTypeParamInfo(name, forTypePosition) ?: return
 
         // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
         if (info.maxTotal == 0) return

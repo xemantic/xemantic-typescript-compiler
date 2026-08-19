@@ -159,9 +159,53 @@ removed=0`, `cost_gate.py` +0.00%, suite 15,285/0/3 with no corpus baseline move
 | B3 | the generic test goes back to a bare `TypeReference` | **2** | the two CODE-divergence pins, disjoint from B1 and B2 |
 | B4 | `some(types, isValidIndexKeyType)` read as `every` — THE BOUND | **4** | the four BRANDED pins and **not** the template-literal one, whose constituents are all valid: a pin set that tested only the template-literal intersection would have been blind to this misreading |
 
-**NEXT.** (CHK.19) — a function-body type ALIAS is not bound, so the lib's two-parameter `Omit`
-answers for a local one-parameter one; then (CHK.10), definite assignment through a late-bound
-`this[k] = …`.
+**THIRD ACT — (CHK.19), B83.5 IN TYPE POSITION.** `function f50() { type Omit<T extends object>
+= …; type A = Omit<{ a: void; b: never }> }` reported `Generic type 'Omit' requires 2 type
+argument(s)`. The cause is exactly what CLAUDE.md's B83.5 says: the binder never binds a
+declaration nested in a function body, and `getTypeParamInfo` — the TS2314 walker's oracle — is a
+whole-program NAME scan with no node context, so the LIB's two-parameter `Omit` answered. Round
+748 closed the identical gap for `enum` with `lexicalTypeSymbolForNode`; this is that shape one
+declaration kind over, and it inherits both of its invariants: **the walk reads `scope.symbols`
+ONLY, never `LexicalScope.existing`** (which aliases the main binder's table), and a name gate —
+collected in the SAME sweep that already censuses block-scoped enums — keeps the hot
+type-reference path at one set probe. **What makes it safe is structural rather than careful**:
+`declareLexical` skips any name the main binder already bound in that container, so a scope-space
+hit can only be a declaration the conventional tables do not have, and no bound name can resolve
+differently. Measured: sweep **298 -> 297** with 0 added, pristine-only FLAT at 773, zero
+regressed; grid `added=0 removed=0`; suite **15,294/0/3**.
+
+**AND IT MOVED A COST COUNTER, WHICH IS WORTH THE PARAGRAPH.** `globals.lookups` 749,650 ->
+749,626 and `globals.misses` by the same **−24** (−0.003%): tsc's own sources DO carry
+block-scoped generic aliases (`PropOfRaw<T>` in commandLineParser.ts, `Mode` in tracing.ts,
+`ExportCollisionTrackerTable` in checker.ts …), and those references now answer from the local
+declaration instead of running `getTypeParamInfo`'s global scan. The 8-profile grid says no
+VERDICT changed, so the counter move is the skipped scan and nothing else; baseline rebaselined
+with `--update` in the same commit.
+
+**ITS ABLATION — 4 arms, AND THE HONEST RESULT IS THAT THEY DO NOT SEPARATE**
+(`scripts/round945c-ablate.py`, each asserting `ran 9`):
+
+| arm | the injected mistake | red | |
+|---|---|---:|---|
+| C1 | the consult is removed — the whole fix | **2** | |
+| C2 | the name GATE is inverted so the consult can never fire | **2** | |
+| C3 | the walk reads `LexicalScope.existing` instead of `symbols` | **2** | |
+| C4 | the ancestor walk is cut to the reference's own node | **2** | |
+
+**All four red sets are IDENTICAL** — the shadowing pin and the own-arity pin — because the
+consult is one path in SERIES (gate -> walk -> `symbols` -> arity) and breaking any link disables
+it in the same way. Recorded as four routes to one failure rather than as four discriminators
+(round 807): what they establish is that the consult is load-bearing and that `existing` does NOT
+carry a block-scoped declaration, and what they do NOT establish is any per-part attribution. The
+other seven pins are controls and regression guards, including B83.5's SILENT half (a body-scoped
+alias that shadows nothing was never a diagnostic) and the two that no arm can reach — the lib
+arity OUTSIDE the shadowing body, and two sibling bodies each answering with their own
+declaration.
+
+**NEXT.** (CHK.10), definite assignment through a late-bound `this[k] = …` — 4 rows, confirmed
+genuine by round 943's strict-default arm. Then (CHK.18) and (CHK.15). **(CHK.22) is this round's
+new entry** and is a modelling item: the for-of / spread operand's `[Symbol.iterator]()` RETURN is
+never checked, at any target.
 
 **Round 944 (2026-08-19) — (CHK.17): LIB AVAILABILITY WAS DECIDED FROM A TARGET DEFAULT THAT
 MEANS TWO THINGS AT ONCE — `CompilerOptions.target`'s `ES3` ZERO VALUE IS INDISTINGUISHABLE
@@ -2644,16 +2688,24 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   underlying gate is a real modelling gap that would show as a false POSITIVE the moment a
   program writes through a constrained generic index legally.
 
-- [ ] **(CHK.19) A FUNCTION-BODY TYPE ALIAS IS NOT BOUND, SO A LIB NAME WINS — 1 OURS-ONLY
-  TS2314 (`conditionalTypes1` line 297, round 943).** `function f50() { type Omit<T extends
-  object> = …; type A = Omit<{ a: void; b: never }> }` reports **`Generic type 'Omit'
-  requires 2 type argument(s)`** because the block-scoped alias is invisible (CLAUDE.md's
-  B83.5) and the LIB's two-parameter `Omit` answers instead. Round 748 closed exactly this
-  for `enum` with `lexicalTypeSymbolForNode` reading the INV.2(c) scope space (`scope.symbols`
-  only, never `existing`); a type ALIAS is the same shape one declaration kind over. Note the
-  same fixture shows the SILENT variant of this family too — `keyRemappingKeyofResult`'s
-  `type Orig` inside `function f<T>()` resolves, so the gap is specifically about a
-  block-scoped name that SHADOWS an outer one.
+- [x] **(CHK.19) A FUNCTION-BODY TYPE ALIAS IS NOT BOUND, SO THE LIB'S `Omit` WON — 1 OURS-ONLY
+  TS2314 -> 0 (`conditionalTypes1` line 297, round 945).** `getTypeParamInfo` is a whole-program,
+  NAME-keyed scan with no node context, so a block-scoped `type Omit<T>` (CLAUDE.md's B83.5: the
+  binder never binds a declaration nested in a function body) was invisible and the LIB's
+  two-parameter `Omit` answered the arity question. Closed with round 748's
+  `lexicalTypeSymbolForNode` shape one declaration kind over — a name gate computed in the SAME
+  sweep that already censuses block-scoped enums, then an ancestor walk over the INV.2(c)
+  `lexicalScopes` reading `scope.symbols` ONLY. **It does not re-open the INV.3 minefield the
+  B83.5 entry warns about, and the reason is structural**: `declareLexical` skips any name the
+  main binder already bound in that container, so a scope-space hit can only be a declaration the
+  conventional tables do not have. Measured: sweep **298 -> 297**, 0 added, pristine-only FLAT,
+  zero fixtures regressed; 8-profile grid `added=0 removed=0`; `cost_gate.py` moved **−24
+  `globals.lookups` (−0.003%)** — tsc's own sources carry block-scoped generic aliases
+  (`PropOfRaw<T>` in commandLineParser.ts among them) that now answer locally instead of running
+  the global scan, and the grid proves no verdict changed. **STILL OPEN, and named here rather
+  than left implicit**: `outerTypeParamNames` is supplied by the TypeAliasDeclaration caller only,
+  so a CLASS's or INTERFACE's own type parameters are still `emptySet()` and
+  `interface I<T> { [k: T]: string }`-style shapes keep the older answer.
 
 - [ ] **(CHK.20) VARIADIC TUPLE TYPES ARE UNMODELLED — 30 OURS-ONLY ROWS, THE SINGLE
   LARGEST FAMILY LEFT, AND IT IS A FEATURE RATHER THAN A DEFECT (`variadicTuples1`, round

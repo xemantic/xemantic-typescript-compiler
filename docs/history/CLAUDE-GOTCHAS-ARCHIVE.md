@@ -1,5 +1,29 @@
 # CLAUDE-GOTCHAS-ARCHIVE — corpus-era gotchas moved out of CLAUDE.md
 
+### Round 945 — block-scoped TYPE ALIASES and the TS2314 arity walker (`checkTypeArgCount` / `getTypeParamInfo` / `lexicalTypeAliasArity`)
+
+- **`getTypeParamInfo` is keyed by NAME ALONE and memoized, so it can never answer a
+  scope question** — a block-scoped declaration (CLAUDE.md's B83.5) is invisible to it and the
+  LIB's same-named generic answers instead. Do not add a node parameter: that memo is a
+  measured hot path (round 870). The consult belongs at `checkTypeArgCount`, which HAS the
+  reference node, and it must come FIRST (`lexicalTypeAliasArity(typeRef, name) ?: getTypeParamInfo(...)`).
+- **The scope-space walk reads `scope.symbols` ONLY.** `LexicalScope.existing` ALIASES the
+  main binder's table; reading it would put every INV.3 name back in play. Because
+  `declareLexical` skips any name the main binder already bound in that container, `symbols`
+  can only hold declarations the conventional tables do NOT have — which is what makes such a
+  consult provably unable to change how a bound name resolves (round 748's invariant, restated).
+- **The name gate rides `computeAllEnumValues`' existing sweep** — a second pass over every
+  scope of every file would be the same walk for one more flag test.
+- **This is worth −24 `globals.lookups` on the compiler profile**, because tsc's own sources
+  carry block-scoped generic aliases (`PropOfRaw<T>`, `Mode`, `ExportCollisionTrackerTable`)
+  whose references now skip the global scan. No diagnostic moves (8-profile grid clean).
+- **STILL OPEN**: `outerTypeParamNames` reaches `checkIndexSigsInMembers`/`checkTypeArgCount`
+  from the TypeAliasDeclaration caller ONLY, so a class's or interface's own type parameters
+  are still `emptySet()`.
+- **Its four-arm ablation does not separate**: the consult is one path in SERIES, so removing
+  it, inverting its gate, reading `existing`, or cutting the ancestor walk all redden the
+  IDENTICAL two pins. Four routes to one failure, not four discriminators.
+
 ### Round 945 — index-signature parameter types (`checkIndexSigsInMembers` / `classifyIndexParamType`, TS1268 / TS1337 / TS1021)
 
 - **tsc's rule is `checkGrammarIndexSignatureParameters`, and its three parts must stay in

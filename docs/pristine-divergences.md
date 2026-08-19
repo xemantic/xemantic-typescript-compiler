@@ -126,7 +126,7 @@ sweep, not re-derived by hand) and the summary is:
 | S5 | `keyof` of an intersection / index signature / remapped mapped type | 4 | `keyof (X & T)` loses `keyof T` and the index signature's `string \| number` | genuine FP | MODELLING |
 | S7 | write through a generic indexed access | 3 | we say TS2862 where pristine says TS2322 — same position, both reject | **form** | MEDIUM, (CHK.18) |
 | S8 | an alias type parameter shadowed in the TS2344 walker | 2 | the walker resolved type ARGUMENTS with no type-parameter scope | genuine FP | **FIXED round 943** |
-| S9 | a function-body type ALIAS is not bound | 1 | B83.5 in type position — the lib's `Omit` wins over a local one | genuine FP | MEDIUM, (CHK.19) |
+| S9 | a function-body type ALIAS is not bound | 1 | B83.5 in type position — the lib's `Omit` wins over a local one | genuine FP | **CLOSED round 945**, (CHK.19) |
 
 **Cause-class within the bucket: genuine FP 83, deliberate convention 6.** Of the 83,
 **68 (82%) are MODELLING** — four type-system capabilities this compiler does not have —
@@ -514,9 +514,12 @@ small work left is elsewhere.
    (3 rows). Both compilers reject; the code and the message differ, because our
    "generic and can only be indexed for reading" rule does not notice that the receiver's
    CONSTRAINT supplies a writable index signature. **(CHK.18)**
-7. **A function-body type ALIAS is not bound** (1 row, B83.5 in type position) — the lib's
-   two-parameter `Omit` wins over a local one-parameter `Omit` and we report TS2314.
-   Round 748 closed the same gap for `enum` via `lexicalTypeSymbolForNode`. **(CHK.19)**
+7. ~~A function-body type ALIAS is not bound~~ — **CLOSED round 945**, 1 -> 0. Round 748's
+   `lexicalTypeSymbolForNode` shape one declaration kind over: a name gate riding the existing
+   block-scoped-enum census, then an ancestor walk over the INV.2(c) scopes reading
+   `scope.symbols` only. It stays out of the INV.3 minefield structurally — `declareLexical`
+   skips any name the main binder bound, so a hit can only be a declaration the conventional
+   tables do not have. **(CHK.19)**
 8. **The strict-by-default convention (46 rows, up from 42)** — an owner-level decision, not
    a fix. **(CHK.13)**
 
