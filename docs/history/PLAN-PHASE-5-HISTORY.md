@@ -1,3 +1,125 @@
+**Round 929 (2026-08-18) — (API.12): COMPLETION INSIDE `o["`. THE LAST QUERY THAT DID
+NOT ANSWER AN ELEMENT ACCESS, AND THE ROUND'S PRODUCT IS THAT **THE PARSER'S OWN
+`isUnterminated` IS FALSE FOR THE ONE STATE THIS FEATURE EXISTS FOR** — a lone opening
+quote — so the classifier that reads it has to check the ARITHMETIC as well as the flag.**
+
+- **STEP 1 WAS tsc ITSELF, 21 carets over three fixtures** (`scripts/lsp_completion.py`,
+  new; it reuses `lsp_rename.py`'s client over `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`).
+  Every design decision below is a row of this table rather than a prediction:
+
+| caret | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `o["‸"]`, nothing typed | 4 items, labels UNQUOTED, edit `[441,441)` | NONE | 4 items, MEMBER |
+| `o["al‸pha"]` | 4 items, edit `[461,466)` — **the TEXT, quotes excluded** | NONE | the same |
+| `o["alpha‸"]` at the text's end | 4 items, edit over the whole text | NONE | the same |
+| `o['‸']` single quotes | 4 items | NONE | 4 items |
+| `` o[`‸`] `` TEMPLATE | 4 items | NONE | **NONE — deliberate** |
+| `o["‸"]` where `o` is `any` | **0 items** | NONE | 0 items, and NOT a refusal |
+| a NUMERIC index signature | only the named member | NONE | only the named member |
+| a STRING index signature | only the named member | NONE | only the named member |
+| an enum `E["‸"]` | its 2 members, kind `EnumMember` | NONE | its 2 members |
+| `this["‸"]` in a method | 3 items, the `private` one included | NONE | the same 3 |
+| **UNTERMINATED `o["‸`** before a newline | 2 items, **and NO textEdit at all** | NONE | 2 items, span to the token's end |
+| **UNTERMINATED `o["‸`** at end of file | 2 items, no textEdit | **FREE_NAME — the whole scope** | 2 items |
+| `o["alpha"‸]` past the closing quote | **free names** (1,074) | FREE_NAME | FREE_NAME |
+| `o[‸]`, no quotes at all | free names | FREE_NAME | FREE_NAME |
+| `o[‸"alpha"]`, before the opening quote | **free names** | NONE | NONE — stated |
+| a plain `"alpha"` that is no member name | **null result** | NONE | NONE |
+| an object-literal key `{ "‸": 1 }` | **null result** | NONE | NONE |
+| an indexed-access TYPE `Bag["‸"]` | **free names**, not members | NONE | NONE — stated |
+| `w("‸")` where `w` takes `keyof Bag` | the 2 keys, from the CONTEXTUAL type | NONE | NONE — a stated gap |
+
+- **THE ITEM SAID "AN ANCHOR QUESTION, ONE CLASSIFIER" AND THAT IS EXACTLY WHAT IT WAS:
+  the member enumeration is round 917's, UNCHANGED, and there is no core change at all.**
+  `Project.completionsAt` drives the member half entirely from `CompletionAnchor.receiver`,
+  so making the anchor answer `MEMBER` with the element access's `expression` buys the
+  union rule, the accessibility filter, the `this` leg and the export-table leg for free —
+  which is why the enum, the `any` receiver, the imported interface and the `private`
+  member all came back right on the first run. The classifier is one function
+  (`SourceIndex.stringMemberAnchorAt`) plus one enumeration
+  (`SyntaxRoles.stringElementAccessAt`), and the enumeration is **deliberately (API.9)'s
+  own walk** — "a string literal is a member name only in an element-access position" is
+  now ONE predicate serving both the occurrence sweep and the anchor, so completion and
+  rename cannot drift apart about what a member name is.
+- **THE ROUND'S PRODUCT, AND IT IS A TRAP FOR ANY READER OF `StringLiteralNode`:
+  `isUnterminated` IS FALSE FOR A LONE `"`.** `Parser.kt` decides it as
+  `startsWithQuote && raw.last() != quote`, and for a one-character raw text the first
+  character IS the last — so `bag["` at end of file parses as a TERMINATED empty string.
+  That is precisely the state a completion request is normally made in, and before this
+  round it answered `FREE_NAME`: the caret sits one past a one-character token, contained
+  by nothing, and the whole lexical scope (1,000+ lib names) was offered INSIDE the
+  string. The anchor therefore reads `isUnterminated || tokenEnd - start < 2` — arithmetic,
+  not a character test, since a closed literal needs an opening and a closing quote. Arm
+  A4 is exactly that term and reddens exactly the end-of-file pins.
+- **THE SPAN IS THE TEXT, QUOTES EXCLUDED — round 926's rule, one query over**, and it is
+  tsc's measured edit range. Accepting an item leaves exactly one pair of quotes, which is
+  asserted by APPLYING the edit and recompiling (round 925's shape) rather than by reading
+  the arithmetic back: a span that eats a quote writes `bag[has space]`, which does not
+  parse. Since it is the same span a member rename writes into, completing a name and then
+  renaming it edit the same characters.
+- **A MEMBER WHOSE SPELLING IS NOT AN IDENTIFIER (`"has space"`, `"1abc"`) IS OFFERED, AND
+  IT NEEDED NOTHING**: the member capture excludes only the empty and `__`-prefixed
+  spellings; `typeCaptureIsWritableName`, which would have filtered them, is the FREE-NAME
+  leg's and was never on this path.
+- **ONE REFUSAL IS THIS ROUND'S OWN CHOICE AND IS THE (API.11) PRECEDENT APPLIED**: a
+  TEMPLATE element access, which tsc completes. (API.9)'s occurrence population is string
+  literals only, so a member written through a template is one a later rename cannot find
+  — offering it would invite text this API cannot maintain. **And measuring that refusal
+  found a SILENT GAP one layer down: tsc counts `` o[`p`] `` as a reference** (4 spans on a
+  4-occurrence fixture), so our references and rename miss it and do not say so. Recorded
+  as § 14's gap 6; the old gap 6 was this round's own item.
+- **NINE-ARM ABLATION** (`scripts/round929-ablate.py`), one mistake at a time, anchored
+  replacements with asserted occurrence counts, restored from a sha256-verified on-disk
+  snapshot, with a per-arm POSITIVE RUN CONTROL (506 `-project` tests must have run).
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 classifier-off | the anchor answers nothing for a string caret | **18** | the pre-929 boundary |
+| A2 quote-span | the span starts at the QUOTE, not at the text | **10** | THE QUOTES — the accepted item writes `bag[alpha"]` |
+| A3 position-blind | the lookup ignores WHICH literal the caret is in | **10** | the plain-string boundary; differs from A2 by that pin and by the anchor-only pins |
+| A4 no-length-arithmetic | only the parser's `isUnterminated` is believed | 2 | the lone-quote defect, i.e. `o["` at end of file |
+| A5 no-caret-at-token-end | only a caret CONTAINED by a token is considered | 4 | every unterminated shape; A4 ⊂ A5 |
+| A6 past-closed-quote | a caret past a CLOSED literal's quote is admitted | **0** | MEASURED-REDUNDANT — see below |
+| A7 opening-quote | the caret AT the opening quote is admitted | **0** | MEASURED-REDUNDANT, an exactly equivalent later guard |
+| A8 token-kind | the caret's token KIND stops being consulted | **0** | MEASURED-REDUNDANT — a cost guard, not a correctness one |
+| A9 REACH CONTROL | A6's guard AND the span's upper bound, together | 1 | that A6's line is on that caret's path and its pin is not vacuous |
+
+  **Five distinct non-empty sets, with A1 ⊃ everything and A4 ⊂ A5.** The three zero arms
+  are REACHED and not dead, proved by other arms rather than by new instrumentation (round
+  928's mechanism): all three lines are strictly UPSTREAM of A2's edited line in the same
+  function, and A2 reddens 10 tests, so control passes them. Each is redundant for a
+  DIFFERENT stated reason — A7's condition is term-for-term identical to the span's lower
+  bound, A8's decision is made again by the node-kind requirement one level down, and A6
+  is the DUAL of the span's upper bound (arm A9b, run separately, is also 0 red, so either
+  guard alone answers that caret). A9 is deliberately TWO mistakes and is credited to no
+  pin (round 807): it exists only to show the pin is real.
+- **A ZERO ARM WAS A MISSING PIN, NOT A REDUNDANT GUARD — round 902's trap, hit and
+  fixed.** A6 read 0 red on its first pass with a plausible story ready; the truth is that
+  `o["alpha"‸]` never reaches A6's line at all, because `]` begins a token AT the caret and
+  the token-kind test refuses first. The rule is reachable only when NO token begins there
+  — `o["alpha"‸ ]`, with a space — which is a pin this file did not have. Added, and A9
+  then reddens it.
+- **GATES.** Suite **14,955 -> 14,981 / 0 failures / 0 errors / 3 skipped = exactly the
+  +26** (`-project` 480 -> 506, core UNCHANGED at 14,341). `cost_gate.py` **+0.00% on all
+  20 counters** — a CONTROL here rather than a gate, and structurally so: the round adds no
+  core code. `huge_methods.py --fail-over 0` clean on core and on `-project` explicitly.
+  The round-920 token gate re-run because `SourceIndex` changed. `spine_closure_audit.py`
+  not applicable. Warning-clean.
+- **PINS +26**: 10 parse-only anchor pins in `CompletionAnchorTest` and 16 end-to-end in
+  the new `ProjectStringMemberCompletionTest`. **THE DISCRIMINATOR** is round 917's own,
+  reused: a receiver whose members are spelled exactly like unrelated top-level bindings,
+  asserted as an EXACT list — the wrong answer here is the file's whole scope, a SUPERSET
+  that contains the right names. Two pins are REGRESSION pins rather than discriminators
+  (a caret past the closing quote must stay a free-name caret) and say so in place.
+- **SUCCESSOR, ranked, and unchanged from round 928 bar one item now closed.**
+  (1) **The incremental / re-entrant seam** — every query is a full rebuild (5.5-5.9 s warm
+  on tsc's own sources) and a rename is two; § 14's cost table is the case for it, and it
+  is the architecture inversion rather than an API item, which is why it needs the owner.
+  (2) **A template element access in the occurrence population** — newly measured as a
+  SILENT gap in references and rename, and the reason completion refuses that position;
+  small, but it needs the checker to resolve `` o[`p`] `` as a member access first.
+  (3) An **LSP protocol layer**, which the owner deferred.
+
 **Round 928 (2026-08-18) — (API.11): A MEMBER DECLARATION NAME RESOLVES TO ITS OWN SYMBOL.
 THE ROUND'S PRODUCT IS THAT **"ITS OWN SYMBOL" IS NOT A `Symbol` HERE** — this compiler's
 interface merge is LAST-WINS for a same-named member, so the merged symbol's declaration
