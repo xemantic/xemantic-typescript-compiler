@@ -20,6 +20,120 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 945 (2026-08-19) — (CHK.21): THE DOWNLEVEL GATES' FILED EVIDENCE WAS MISATTRIBUTED AND
+THE FAMILY'S SIGN IS THE OPPOSITE OF WHAT THE QUEUE SAID. The four pristine-only TS2488 rows are
+NOT gate suppression — we are silent for those shapes at `esnext` too — and what the gates really
+cost is SIX FALSE POSITIVES on any tsconfig that names no `target`. Landed by extending round
+944's notion (renamed `libTarget` -> `defaultedTarget`) to the 23 downlevel-gate lines; sweep
+313 -> 310, pristine-only FLAT, 8-profile grid clean, suite 15,272/0 with NO corpus baseline
+moved.**
+
+**THE FIRST ACT WAS TO RE-VERIFY THE ENTRY'S OWN EVIDENCE, AND IT DID NOT SURVIVE.** (CHK.21)
+was queued as a FALSE-NEGATIVE item because `for-of16` (x2), `for-of29` and
+`iteratorSpreadInArray10` carry a pristine TS2488 we do not emit, and the
+`if (target < ES2015 && !downlevelIteration) return` gates were assumed to be suppressing it.
+Run at an EXPLICIT target, where those gates are wide open:
+
+| shape | ours @es5 | @unset | @es2015 | @esnext | pristine |
+|---|---|---|---|---|---|
+| `for (v of new MyStringIterator)` — `[Symbol.iterator]()` returns a non-Iterator `this` | silent | silent | **silent** | **silent** | TS2488 x2 (+ related TS2489) |
+| `for (var v of iterableWithOptionalIterator)` — an OPTIONAL `[Symbol.iterator]?()` | silent | silent | **silent** | **silent** | TS2488 |
+| `[...new SymbolIterator]` | silent | silent | **silent** | **silent** | TS2488 |
+
+A gate that is open and still silent is not a gate: those rows are an **unimplemented iterability
+check** (tsc's `getIterationTypesOfIterable` -> `getIterationTypesOfIteratorWorker`), re-filed as
+**(CHK.22)**.
+
+**WHAT THE GATES ACTUALLY COST, MEASURED ON ONE 14-LINE FILE.** `options.target` defaults to
+`ES3`, indistinguishable from "the user named no target" — round 944 closed that ambiguity for
+the LIB half, this is the other half. Before / after at an unset target, with the explicit `es5`
+and `es2017` columns BYTE-IDENTICAL either way:
+
+| code | shape | before | after | pristine at its default |
+|---|---|---|---|---|
+| TS1250 | `{ function f() {} }` in strict mode | fires | silent | silent |
+| TS1501 | `/a/y` | fires | silent | silent |
+| TS1503 | `/(?<nm>a)/` | fires | silent | silent |
+| TS2659 | `super.` in an object-literal method | fires | silent | silent |
+| TS2737 | `1n` | fires | silent | silent |
+| TS18045 | `accessor p = 1` | fires | silent | silent |
+
+**THE ORACLE FOR THAT LAST COLUMN IS THE BASELINE CORPUS, NOT AN OPINION**: every TS1250 (7
+baselines), TS1501 (24), TS1503 (4), TS2396 (8), TS2659 (2), TS2737 (4), TS18045 (5) and TS2802
+(10) comes from a fixture with an EXPLICIT `@target`. Pristine never emits a downlevel-gated
+diagnostic at its default — which is what its own source says it must do
+(`utilities.ts` `_computedOptions.target`: `target === ES3 ? undefined : target ?? LatestStandard`,
+read directly, and `checker.ts:1529` `var languageVersion = getEmitScriptTarget(compilerOptions)`
+is the ONE notion its whole checker compares against ES2015).
+
+**THE FIX, AND THE THREE SITES DELIBERATELY LEFT RAW.** `libTarget` -> **`defaultedTarget`** (it
+no longer named its only consumer), now read by 23 downlevel-gate lines as well as the four lib
+ones. NOT `effectiveTarget`, for the MIRROR of round 944's reason: it maps an explicit `es5` UP to
+ES2015 and would OPEN every gate tsc keeps shut for that program. Kept raw, with the reasons in
+the accessor's KDoc: `spineDelIsStrict` and `spineStrictFileIsExprStrict`, whose shape is
+`target >= ES2015 || <other disjuncts>` — a mis-transcription of tsc's NESTED rule that is correct
+only while the raw target reads ES3, and which a flip would make unconditionally strict for every
+file — and `checkOperationsAvailableOnPromisedType`, a per-fixture baseline pin rather than a
+semantic gate.
+
+**WHY NO INSTRUMENT SAW IT, AND A CAVEAT FOR THE NEXT SWEEP READER.** **6,436 of the 6,573 case
+files in this clone name an explicit `@target`** (TypeScript pinned them when it dropped ES5); of
+the 213 that do not, a purpose-built before/after sweep moved **zero rows in either direction**.
+And the 630-fixture sweep's "304 fixtures with no `@target`" is largely an ARTEFACT — those
+fixtures' case files are absent from the sparse clone, so the sweep compiles them at an unset
+target it invented. It did still move: **313 -> 310 ours-only over 78 -> 76 fixtures, 0 added,
+pristine-only FLAT at 775, zero fixtures regressed**; the three removed rows are TS18045 on
+`esDecorators-classDeclaration-fields-{nonStatic,static}Accessor`, i.e. round 944's triage had
+them in a different bucket. The before arm reproduced round 944's closing 313 exactly — the
+provenance check.
+
+**21 PINS ENCODED THE FALSE POSITIVE AND ARE THE ROUND'S SECOND PRODUCT.** The M0.4
+spine-migration classes pinned TS2396 / TS2659 / TS2373+TS2454 at the DEFAULT target (one was
+literally named "at default target"), i.e. they relied on the ES3 zero value to open a gate for
+them. Re-pointed at `CompilerTestSupport.DOWNLEVEL_ES5`, which restores the exact population each
+was written to measure — **and A2 below shows they are genuine discriminators, not a repair of
+convenience**.
+
+**ABLATION — 6 arms, one mistake at a time, from a sha256-VERIFIED snapshot**
+(`scripts/round945-ablate.py`, each arm asserting `ran 104`, each diffed against the SNAPSHOT and
+never with `git checkout`). The arms may NOT touch `defaultedTarget` itself — that accessor is
+also round 944's lib fix — so every arm edits NAMED CALL SITES and `LibAvailabilityDefaultTargetTest`
+rides along in the filter to prove the two halves stay separate:
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---:|---|
+| A1 | all 23 lines read the RAW target — the whole fix | **3** | the three unset-target pins; the 14 lib pins and all 21 re-pointed pins stay GREEN, i.e. the halves are separable |
+| A2 | all 23 read `effectiveTarget` — the BOUND | **25** | the four explicit-es5 pins PLUS all 21 re-pointed ones, a set DISJOINT from A1's; this is what makes the re-pointed pins discriminators |
+| A3 | the TS2737 bigint pass gate alone | **2** | the bigint pin uniquely, plus the combined one |
+| A4 | `spineAccessorModifierActive` alone | **2** | the accessor pin uniquely, plus the combined one — disjoint from A3 but for the shared combined pin |
+| A5 | the TS1250 inner guard alone | **0** | **a REDUNDANT GUARD, recorded as such** (round 807): with the pass-slot gate keeping the fix the walker is never scheduled, so its own guard is unreachable |
+| A6 | the TS1250 pass gate AND its inner guard | **1** | the combined pin alone — TS1250/TS1501/TS1503/TS2659 have NO dedicated pin and are covered by that one test |
+
+**A TRAP THIS ROUND WALKED INTO AND ONE IT RE-LEARNED.** The first ablation attempt refused on a
+STALE LINE NUMBER (the KDoc above a gate had grown four lines when its "uses the RAW target
+deliberately" comment was rewritten) — the script now DERIVES its sites from the snapshot. And
+killing that run with `pkill -f "round945-ablate"` matched the invoking shell, died mid-arm and
+left arm A3's ablated `Checker.kt` in the tree with no marker: round 805's trap, caught only
+because the round hashes its own sources.
+
+**GATES.** Suite **15,272 / 0 failures / 3 skipped** summed over all six modules with an XML
+parser (15,262 -> +10, exactly this round's new pins), NO corpus baseline moved. **8-profile grid,
+both arms from hash-verified class dirs, profiles enumerated by `tsconfig.json` and refused below
+8: `added=0 removed=0` on ALL EIGHT** — a control by construction, since every profile sets
+`target: es2020`. `cost_gate.py`: every counter **+0.00%**, the EXPECTED answer (round 876) for
+the same reason. `huge_methods.py --fail-over 0` green on all six module class dirs (751 / 48 / 20
+/ 14 / 7 / 2 classes scanned — the differing counts are the per-dir positive control). No
+`spine*EnterNode` body changed, so `spine_closure_audit.py` does not apply.
+
+**PROVENANCE.** After-arm grid, sweep and all six ablation arms at `Checker.kt`
+`80c3e681...`, `CompilerOptions.kt` `f62d685e...`, `RealLibs.kt` `93a71612...`; the before arm at
+HEAD's `7b78f8e8...` / `b9f80781...` / `1b951943...`.
+
+**NEXT.** (CHK.9) `indexSignatures1` TS1268 x12 — tsc's rule is read and small
+(`isValidIndexKeyType`: an INTERSECTION is a valid key when it is not generic and SOME constituent
+is; our `classifyIndexParamType` has no intersection arm and its resolution is not even attempted
+for an `IntersectionType` NODE). Then (CHK.19), (CHK.10).
+
 **Round 944 (2026-08-19) — (CHK.17): LIB AVAILABILITY WAS DECIDED FROM A TARGET DEFAULT THAT
 MEANS TWO THINGS AT ONCE — `CompilerOptions.target`'s `ES3` ZERO VALUE IS INDISTINGUISHABLE
 FROM "THE USER NAMED NO TARGET" — AND THE CLAUDE.md ENTRY CALLING THAT DELIBERATE WAS
@@ -2458,21 +2572,33 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   member name, 0 of the ~30 referencing a `LIB_GLOBAL_INTRODUCING` global and 0 of the 26
   carrying an `and N more` count omit `@target`/`@lib`.
 
-- [ ] **(CHK.21) THE ~25 `options.target < ES2015` DOWNLEVEL GATES STILL READ THE RAW TARGET,
-  AND MEASURED AGAINST PRISTINE THAT HALF IS A *FALSE NEGATIVE* FAMILY — 0 OURS-ONLY AND 4
-  PRISTINE-ONLY ROWS (round 944).** (CHK.17)'s sibling question, answered separately because
-  the two halves do not move together: over the 611-fixture population (304 of them with no
-  `@target`) the downlevel gates produce **no ours-only row at all**, while pristine reports
-  **TS2488** at `for-of16` (x2), `for-of29` and `iteratorSpreadInArray10` where we are silent —
-  the `if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) return` gates
-  suppressing a check tsc performs at its ES2025 default. So fixing it ADDS diagnostics rather
-  than removing false positives, over gates (TS1250, TS2802, TS2737, TS1501/TS1503,
-  TS2659/TS2660, TS2340/TS2855, TS2396, the TS2488/TS2461 message fork, the tslib-helper
-  checks) whose corpus blast radius is nothing like the lib family's — **every `for-of`
-  fixture reaches one**, where the lib family was measurably unreachable without an explicit
-  directive. Wants its own round with a corpus-cost arm measured BEFORE anything is designed.
-  Note `checkGlobalIterableRestOnlyBindingPattern`'s KDoc already documents why its own gate
-  must not read `effectiveTarget`; `libTarget` is the notion it would want.
+- [x] **(CHK.21) THE 23 `options.target < ES2015` DOWNLEVEL GATE LINES NOW READ
+  `CompilerOptions.defaultedTarget` — AND THE ENTRY'S OWN EVIDENCE WAS MISATTRIBUTED, SO THE
+  FAMILY'S SIGN IS THE OPPOSITE OF WHAT IT SAID (round 945).** Round 944 filed this as a
+  FALSE-NEGATIVE item on four pristine-only TS2488 rows the gates were assumed to suppress.
+  Run at an EXPLICIT `es2015` and `esnext`, where those gates are wide open, we are **still
+  silent for all three shapes** — so no gate suppresses them and they are an unimplemented
+  iterability check, re-filed as **(CHK.22)**. The real family is a FALSE-POSITIVE one that
+  neither instrument could see: the raw target's `ES3` zero value made a tsconfig naming no
+  `target` collect **six** diagnostics pristine does not emit (TS1250, TS1501, TS1503,
+  TS2659, TS2737, TS18045 — measured on one 14-line file, before vs after, with the explicit
+  `es5` and `es2017` columns byte-identical). Oracle: **every** TS1250/TS1501/TS1503/TS2396/
+  TS2659/TS2737/TS18045/TS2802 baseline in the pristine corpus comes from a fixture with an
+  explicit `@target`. Three raw-target sites are KEPT with reasons in the KDoc (the two
+  `target >= ES2015 || …` strict-mode determinations, which a flip makes unconditionally
+  strict, and one per-fixture baseline pin). `docs/pristine-divergences.md` § 3d.1.
+
+- [ ] **(CHK.22) THE for-of / SPREAD OPERAND'S `[Symbol.iterator]()` RETURN IS NEVER CHECKED,
+  AT ANY TARGET — 4 PRISTINE-ONLY TS2488 ROWS (`for-of16` x2, `for-of29`,
+  `iteratorSpreadInArray10`, round 945).** Split out of (CHK.21), whose gates turned out not
+  to own them. Three shapes, all silent from us at `es5` / unset / `es2015` / `esnext` alike:
+  a class whose `[Symbol.iterator]()` returns `this` where `this` has no `next()` (pristine
+  adds a related TS2489 `An iterator must have a 'next()' method.`), an OPTIONAL
+  `[Symbol.iterator]?()` member, and the same class spread into an array literal. What is
+  missing is tsc's `getIterationTypesOfIterable` -> `getIterationTypesOfIteratorWorker`
+  chain: we accept the presence of a `[Symbol.iterator]` member without asking whether its
+  RETURN type is a valid Iterator. Note the message the fix must produce carries the RELATED
+  info, so a pin needs both.
 
 - [ ] **(CHK.18) `t[k] = v` THROUGH A GENERIC INDEXED ACCESS IS TS2862 WHERE PRISTINE SAYS
   TS2322 — 3 ROWS, A CODE DIVERGENCE RATHER THAN A FALSE POSITIVE

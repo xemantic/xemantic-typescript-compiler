@@ -241,11 +241,12 @@ class M04ObjLitSuperSpineMigrationTest {
     // ── TS2659: target below ES2015 ────────────────────────────────────────
 
     @Test
-    fun `TS2659 - object literal method at default target`() {
+    fun `TS2659 - object literal method at an explicit es5 target`() {
         val ds = diagnose(
             """
             const o = { m() { return super.x; } };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 1)
         assert(ds.count { it.code == 2660 } == 0)
@@ -259,7 +260,8 @@ class M04ObjLitSuperSpineMigrationTest {
                 get g() { return super.a; },
                 set s(v: number) { super.b; }
             };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 2)
     }
@@ -293,7 +295,8 @@ class M04ObjLitSuperSpineMigrationTest {
         val ds = diagnose(
             """
             const o = { m() { return super.a; }, p: function() { return super.b; } };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 1)
         assert(ds.count { it.code == 2660 } == 1)
@@ -306,7 +309,8 @@ class M04ObjLitSuperSpineMigrationTest {
         val ds = diagnose(
             """
             const o = { m() { return 1 + super.x; } };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 1)
     }
@@ -320,7 +324,8 @@ class M04ObjLitSuperSpineMigrationTest {
                 while (super.c) { }
                 const v = super.d;
             } };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 4)
     }
@@ -330,7 +335,8 @@ class M04ObjLitSuperSpineMigrationTest {
         val ds = diagnose(
             """
             const o = { m() { super.f(super.g); } };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 2)
     }
@@ -391,7 +397,8 @@ class M04ObjLitSuperSpineMigrationTest {
         val ds = diagnose(
             """
             for (const k in { m() { return super.x; } }) { }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 1)
     }
@@ -401,7 +408,8 @@ class M04ObjLitSuperSpineMigrationTest {
         val ds = diagnose(
             """
             for (const v of [{ m() { return super.x; } }]) { }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         )
         assert(ds.count { it.code == 2659 } == 1)
     }

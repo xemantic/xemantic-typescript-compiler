@@ -257,9 +257,10 @@ data class CompilerOptions(
         // tsc getEmitScriptTarget: an UNSET target (or ES3) maps to LatestStandard (ES2025).
         // We use ES2024 (our top standard target) for an unset target — so emit keeps native
         // class fields / async / spread (useDefineForClassFields ≥ ES2022 → true). An EXPLICIT
-        // ES3/ES5 still maps to ES2015 (legacy downlevel). This is the EMIT dimension only;
-        // LIB AVAILABILITY is [libTarget] (round 944) and the `target < ES2015` DOWNLEVEL
-        // gates still read the RAW `options.target`.
+        // ES3/ES5 still maps to ES2015 (legacy downlevel). **This is the EMIT dimension ONLY**:
+        // every CHECKER question — lib availability (round 944) and the `target < ES2015`
+        // downlevel gates (round 945) — is [defaultedTarget], which differs from this one at
+        // an explicit es3/es5 and agrees with it everywhere else.
         get() = when {
             !targetExplicitlySet -> ScriptTarget.ES2024
             target <= ScriptTarget.ES5 -> ScriptTarget.ES2015
@@ -267,14 +268,38 @@ data class CompilerOptions(
         }
 
     /**
-     * (CHK.17) round 944 — the target every **lib-availability** question is decided
-     * against: which default lib set is loaded, whether a later-lib global resolves
-     * (TS2583/TS2585), and whether a later-lib interface member is filtered out of its
-     * interface (TS2550).
+     * The target every **checker** question is decided against — tsc's own
+     * `getEmitScriptTarget`, which is the single notion its whole checker reads
+     * (`var languageVersion = getEmitScriptTarget(compilerOptions)`).
      *
-     * tsc has ONE such notion, `getEmitScriptTarget` (`utilities.ts`), which maps an
-     * UNSET `target` to `ScriptTarget.LatestStandard` and picks the default lib from
-     * THAT (`getDefaultLibFileName`: unset -> `lib.es2025.full.d.ts`). Our top standard
+     * Two consumer families, landed one round apart and measured separately because
+     * their divergences have OPPOSITE signs:
+     *  - **lib availability** ((CHK.17), round 944): which default lib set is loaded,
+     *    whether a later-lib global resolves (TS2583/TS2585), whether a later-lib
+     *    interface member is filtered out of its interface (TS2550). Reading the raw
+     *    target there was a FALSE-POSITIVE family — 3 rows over the pristine sweep.
+     *  - **the `target < ES2015` DOWNLEVEL gates** ((CHK.21), round 945; 23 lines): TS1250, TS2802,
+     *    TS2737, TS1501/TS1503, TS2659/TS2660, TS2340/TS2855, TS2396, TS18045, TS2318,
+     *    the TS2488/TS2461 message fork and the tslib-helper checks. Reading the raw
+     *    target there was a FALSE-NEGATIVE family — 4 pristine-only TS2488 rows, because
+     *    an unset target read as ES3 SUPPRESSED checks tsc runs at its default.
+     *
+     * (Round 944 introduced this as `libTarget`; the name was renamed in round 945 when
+     * the second family joined, because it no longer names its only consumer.)
+     *
+     * NOT every raw-`options.target` read is one of these. A gate whose shape is
+     * `target >= ES2015 || <other disjuncts>` — the strict-mode determinations
+     * `spineDelIsStrict` / `spineStrictFileIsExprStrict` — is a MIS-TRANSCRIPTION of
+     * tsc's nested rule that is CORRECT only while the raw target reads ES3 at an unset
+     * target: flipping those makes every file strict. They keep the raw target
+     * deliberately, and so does `checkOperationsAvailableOnPromisedType`, a per-fixture
+     * baseline pin rather than a semantic gate.
+     *
+     * tsc's definition, read off the pinned sources (`utilities.ts` `_computedOptions`):
+     * `const target = options.target === ES3 ? undefined : options.target;
+     * return target ?? ScriptTarget.LatestStandard`. It picks the default lib from THAT
+     * (`getDefaultLibFileName`: unset -> `lib.es2025.full.d.ts`) and it is also the
+     * `languageVersion` its checker compares against ES2015 everywhere. Our top standard
      * target is ES2024, so an unset target answers ES2024 here — the same value
      * [effectiveTarget] already gives the emitter, which is what makes the two
      * dimensions agree for a project that names no target.
@@ -282,7 +307,11 @@ data class CompilerOptions(
      * **Not [effectiveTarget]**: that maps an EXPLICIT `es3`/`es5` UP to ES2015, which
      * would hand an `@target: es5` program the ES2015 lib and delete every genuine
      * TS2550/TS2583 it is supposed to get. Round 941 met the identical fork at TS18028
-     * and refused `effectiveTarget` for the same reason. **Not the raw [target]**
+     * and refused `effectiveTarget` for the same reason. The downlevel gates refuse it
+     * for the MIRROR reason: an explicit `es5` mapped up to ES2015 would OPEN every
+     * `target < ES2015` gate that tsc keeps shut for that program — manufacturing false
+     * positives (and flipping TS2461 to TS2488) on exactly the projects the gates exist
+     * for. **Not the raw [target]**
      * either: its `ES3` zero value is indistinguishable from "the user said nothing",
      * which is what made `Cannot find name 'AsyncIterableIterator'. Do you need to
      * change your target library?` fire on a tsconfig with no `target` at all.
@@ -293,7 +322,7 @@ data class CompilerOptions(
      * fixture sets `@target: es3` — and keeping it raw is consistent with the
      * `target <= ES5` gates beside it.
      */
-    val libTarget: ScriptTarget
+    val defaultedTarget: ScriptTarget
         get() = if (targetExplicitlySet) target else ScriptTarget.ES2024
 
     val effectiveModule: ModuleKind

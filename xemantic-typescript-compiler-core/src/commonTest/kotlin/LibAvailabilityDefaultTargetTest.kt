@@ -31,7 +31,7 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * (CHK.17) round 944 — **lib availability is decided from [CompilerOptions.libTarget], and
+ * (CHK.17) round 944 — **lib availability is decided from [CompilerOptions.defaultedTarget], and
  * an UNSET `target` is the LATEST standard there, not `ES3`.**
  *
  * [CompilerOptions.target] defaults to [ScriptTarget.ES3], which is indistinguishable from
@@ -42,7 +42,7 @@ import kotlin.test.Test
  * and every later-lib interface member was filtered out from under it.
  *
  * Two halves, pinned separately because they can break separately: the lib **SET**
- * ([RealLibResolver.resolve] through [CompilerOptions.libTarget]) and the availability
+ * ([RealLibResolver.resolve] through [CompilerOptions.defaultedTarget]) and the availability
  * **GATE** (`libFeatureAvailable` / `libProvidesGlobalAt`). The explicit-`es5` pins are
  * the safety of the change: `effectiveTarget` maps es5 UP to ES2015 and would have
  * deleted every genuine TS2550/TS2583 (round 941 refused it at TS18028 for the same
@@ -54,13 +54,13 @@ class LibAvailabilityDefaultTargetTest {
 
     @Test
     fun `an unset target answers the latest standard for lib availability`() {
-        assert(CompilerOptions().libTarget == ScriptTarget.ES2024)
+        assert(CompilerOptions().defaultedTarget == ScriptTarget.ES2024)
     }
 
     @Test
     fun `an explicit es5 target answers es5 for lib availability`() {
         val o = CompilerOptions(target = ScriptTarget.ES5, targetExplicitlySet = true)
-        assert(o.libTarget == ScriptTarget.ES5)
+        assert(o.defaultedTarget == ScriptTarget.ES5)
         // the BOUND: effectiveTarget would answer ES2015 here and lose the es5 lib
         assert(o.effectiveTarget == ScriptTarget.ES2015)
     }
@@ -68,7 +68,7 @@ class LibAvailabilityDefaultTargetTest {
     @Test
     fun `an explicit es2017 target answers es2017 for lib availability`() {
         val o = CompilerOptions(target = ScriptTarget.ES2017, targetExplicitlySet = true)
-        assert(o.libTarget == ScriptTarget.ES2017)
+        assert(o.defaultedTarget == ScriptTarget.ES2017)
     }
 
     // ---- the lib SET --------------------------------------------------------------
@@ -79,7 +79,7 @@ class LibAvailabilityDefaultTargetTest {
     // family is decided by the availability GATE and not by the file set at all.
     @Test
     fun `the default lib set for an unset target is the latest full one`() {
-        val keys = RealLibResolver.resolve(null, CompilerOptions().libTarget).orderedKeys
+        val keys = RealLibResolver.resolve(null, CompilerOptions().defaultedTarget).orderedKeys
         assert("es2024.full" in keys)
         assert("es2017.string" in keys)
     }
@@ -87,7 +87,7 @@ class LibAvailabilityDefaultTargetTest {
     @Test
     fun `the default lib set for an explicit es5 target is the es5 one`() {
         val o = CompilerOptions(target = ScriptTarget.ES5, targetExplicitlySet = true)
-        val keys = RealLibResolver.resolve(null, o.libTarget).orderedKeys
+        val keys = RealLibResolver.resolve(null, o.defaultedTarget).orderedKeys
         assert("es5.full" in keys)
         assert("es2024.full" !in keys)
         assert("es2017.string" !in keys)
@@ -136,7 +136,7 @@ class LibAvailabilityDefaultTargetTest {
         }
     }
 
-    // An es2015-era global: the ONE shape that separates `libTarget` from
+    // An es2015-era global: the ONE shape that separates `defaultedTarget` from
     // `effectiveTarget`, because effectiveTarget maps an explicit es5 UP to ES2015 and
     // would make `Reflect` resolve for a program that asked for es5.
     private val reflect = "const p: object | null = Reflect.getPrototypeOf({});"

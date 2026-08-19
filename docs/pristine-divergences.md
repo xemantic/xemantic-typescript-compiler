@@ -419,22 +419,69 @@ referencing a `LIB_GLOBAL_INTRODUCING` global, and **0 of the 26** whose baselin
 `and N more` member count omit `@target`/`@lib`. That is why the suite is 15,262/0 with NO
 baseline moved, and it was stated as a prediction before the run rather than read off it.
 
-### 3d.1 The DOWNLEVEL half is a separate question with the OPPOSITE sign — (CHK.21)
+### 3d.1 The DOWNLEVEL half — CLOSED round 945, and its queue entry had the sign BACKWARDS
 
-The ~25 `options.target < ES2015` gates in `Checker.kt` (TS1250, TS2802, TS2737, TS1501/TS1503,
-TS2659/TS2660, TS2340/TS2855, TS2396, the TS2488/TS2461 message fork, the tslib-helper checks)
-still read the RAW target, so at an unset target they behave as ES3 where tsc behaves as
-ES2025. Answered against pristine SEPARATELY, as it had to be, and the two halves do not move
-together:
+Round 944 queued (CHK.21) as a FALSE-NEGATIVE item on the strength of four pristine-only
+TS2488 rows (`for-of16` x2, `for-of29`, `iteratorSpreadInArray10`) that the
+`if (target < ES2015 && !downlevelIteration) return` gates were assumed to be suppressing.
+**They are not.** Round 945's first act was to run those three fixtures' shapes at an
+EXPLICIT `es2015` and `esnext` target, where every one of those gates is wide open:
 
-| direction | rows over the 611 fixtures (304 with no `@target`) |
-|---|---|
-| ours-only (false positive) | **0** — no downlevel-gated code appears in the ours-only set at all |
-| pristine-only (false negative) | **4** — `for-of16` x2, `for-of29`, `iteratorSpreadInArray10`, all TS2488 |
+| fixture shape | our answer at `es5` | at unset | at `es2015` | at `esnext` | pristine |
+|---|---|---|---|---|---|
+| `for (v of new MyStringIterator)` (a `[Symbol.iterator]()` returning a non-Iterator `this`) | silent | silent | **silent** | **silent** | TS2488 x2 |
+| `for (var v of iterableWithOptionalIterator)` (an OPTIONAL `[Symbol.iterator]?()`) | silent | silent | **silent** | **silent** | TS2488 |
+| `[...new SymbolIterator]` | silent | silent | **silent** | **silent** | TS2488 |
 
-So the lib half was an FP family and the downlevel half is an FN family; fixing it would ADD
-diagnostics, over ~25 sites whose corpus blast radius is nothing like the lib family's (every
-`for-of` fixture reaches one). It is queued rather than bundled in.
+A gate that is open and still silent is not a gate. Those four rows are a **check this
+compiler does not implement at any target** — "does the for-of / spread operand's type have
+a `[Symbol.iterator]()` whose RETURN is a valid Iterator" — and they are re-filed as
+**(CHK.22)**, which is a modelling item, not a target one.
+
+**What the downlevel gates ARE is the mirror family: a FALSE-POSITIVE one, invisible to
+both instruments.** The raw `options.target` defaults to `ES3`, so a project whose tsconfig
+names no `target` was compiled as if it were being downleveled to ES3, and collected six
+diagnostics pristine does not emit. Measured on one 14-line file:
+
+| code | shape | ours at unset, BEFORE | ours at unset, AFTER | pristine at its default |
+|---|---|---|---|---|
+| TS1250 | `{ function f() {} }` in strict mode | fires | silent | silent |
+| TS1501 | `/a/y` | fires | silent | silent |
+| TS1503 | `/(?<nm>a)/` | fires | silent | silent |
+| TS2659 | `super.` in an object-literal method | fires | silent | silent |
+| TS2737 | `1n` | fires | silent | silent |
+| TS18045 | `accessor p = 1` | fires | silent | silent |
+
+The pristine oracle for the last column is the baseline corpus itself: **every** TS1250 (7
+baselines), TS1501 (24), TS1503 (4), TS2396 (8), TS2659 (2), TS2737 (4), TS18045 (5) and
+TS2802 (10) comes from a fixture with an EXPLICIT `@target`. Pristine never emits a
+downlevel-gated diagnostic at its default — which is what `getEmitScriptTarget`'s
+`target === ES3 ? undefined : target ?? LatestStandard` says it must do.
+
+**THE FIX.** `libTarget` was renamed **`defaultedTarget`** (it no longer names its only
+consumer) and is now read by the 23 downlevel-gate lines as well as the four lib ones.
+Three raw-`options.target` sites are DELIBERATELY left alone, and the KDoc says why: the
+two strict-mode determinations (`spineDelIsStrict`, `spineStrictFileIsExprStrict`) are
+`target >= ES2015 || <other disjuncts>`, a mis-transcription of tsc's nested rule that is
+correct only while the raw target reads ES3 — flipping them makes every file strict — and
+`checkOperationsAvailableOnPromisedType` is a per-fixture baseline pin rather than a
+semantic gate.
+
+**WHY NEITHER INSTRUMENT SAW IT, AND A CAVEAT THE NEXT SWEEP READER NEEDS.** The corpus
+cannot see it: **6,436 of the 6,573 case files in this clone name an explicit `@target`**
+(TypeScript pinned them when it dropped ES5), and of the 213 that do not, a
+before/after sweep moved **zero rows in either direction**. The 630-fixture sweep cannot
+see it either, for a reason worth recording: its "304 fixtures with no `@target`" is mostly
+an ARTEFACT of the sparse clone — those fixtures' case files are absent, so no directives
+are recovered and the sweep compiles them at an unset target it invented. A genuine
+no-`@target` population has to be built from case files that EXIST, and that is what the
+213-fixture arm is.
+
+What did move: 21 hand-written pins from the M0.4 spine-migration rounds, which had relied
+on the ES3 default to open the gate for them (one was even named "at default target"). They
+were re-pointed at an explicit `@target: es5` through `CompilerTestSupport.DOWNLEVEL_ES5`,
+which restores the exact population each was written to measure. **No corpus baseline
+moved.**
 
 ---
 
@@ -451,9 +498,11 @@ small work left is elsewhere.
    `this[<late-bound key>] = …`. Small, in the arc's own family, and **CONFIRMED genuine by
    round 943's strict-default arm** (§ 0b: that fixture's own baseline carries 20 TS2564, so
    pristine had the flag ON and the rows are not the convention). **(CHK.10)**
-3. ~~Lib availability at the DEFAULT target~~ — **CLOSED round 944, § 3d.** Its successor
-   in this family is the DOWNLEVEL half, which is a FALSE-NEGATIVE item rather than an FP
-   one: 0 ours-only and 4 pristine-only rows. **(CHK.21)**
+3. ~~Lib availability at the DEFAULT target~~ — **CLOSED round 944, § 3d**; ~~the DOWNLEVEL
+   half~~ — **CLOSED round 945, § 3d.1**, where its filed sign turned out to be backwards
+   (an FP family invisible to both instruments, not the FN one the four TS2488 rows
+   suggested). Those four rows are now **(CHK.22)**: the for-of/spread operand's
+   `[Symbol.iterator]()` RETURN is never checked, at any target.
 4. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
    `abstract new (…) => T` (6 rows) and `infer X extends` (17) are the same class.
    **(CHK.14)**

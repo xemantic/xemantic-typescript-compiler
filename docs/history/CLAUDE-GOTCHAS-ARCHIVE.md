@@ -1,5 +1,29 @@
 # CLAUDE-GOTCHAS-ARCHIVE — corpus-era gotchas moved out of CLAUDE.md
 
+### Round 945 — the `target < ES2015` DOWNLEVEL gates (TS1250 / TS1501 / TS1503 / TS2396 / TS2659 / TS2737 / TS18045 / TS2802 / TS2318 / TS2340-TS2855 / the TS2488-TS2461 fork / tslib helpers)
+
+- **All 23 of those lines read `CompilerOptions.defaultedTarget` (round 945), never the raw
+  `options.target` and never `effectiveTarget`.** Raw reads an UNSET target as `ES3` and fired six
+  diagnostics on any tsconfig naming no `target`; `effectiveTarget` maps an explicit `es5` UP to
+  ES2015 and would OPEN every gate for the one program they exist for.
+- **THREE raw-`options.target` reads survive on purpose and must not be swept with the rest.**
+  `spineDelIsStrict` and `spineStrictFileIsExprStrict` are `target >= ES2015 || <other disjuncts>` —
+  a mis-transcription of tsc's NESTED `isEffectiveStrictModeSourceFile` rule that is correct only
+  while the raw target reads ES3; flipping them makes EVERY file strict.
+  `checkOperationsAvailableOnPromisedType` is a per-fixture baseline pin, not a semantic gate.
+- **`checkBlockScopedFunctionDeclarations` (TS1250) is gated TWICE and the pass-slot gate is the
+  load-bearing one** — reverting only its own `if (target > ES5) return` guard changes NOTHING
+  (round 945's A5 arm, RED 0), because the pass is not scheduled at all at an unset target.
+- **A pin about any of these codes must name its target explicitly** (`CompilerTestSupport.DOWNLEVEL_ES5`).
+  21 pins written before round 945 relied on the ES3 default to open a gate for them, including
+  the whole TS2659 half of `M04ObjLitSuperSpineMigrationTest` and the TS2396 half of
+  `M04ArgsCollisionSpineMigrationTest`; the corpus could never see the difference, because 6,436 of
+  its 6,573 case files name an explicit `@target`.
+- **The for-of / spread ITERABILITY check is absent at every target** — a `[Symbol.iterator]()`
+  whose RETURN is not a valid Iterator, and an OPTIONAL `[Symbol.iterator]?()`, both draw a
+  pristine TS2488 (+ related TS2489) and nothing from us at `es5`/unset/`es2015`/`esnext` alike.
+  That is (CHK.22) and it is NOT a downlevel-gate question, however much the row placement suggests it.
+
 Archived 2026-07-06 (round 421) from CLAUDE.md (which had regrown 594 KB / ~147k
 tokens against its own 170 KB cap). These entries document CORPUS-UNIQUE pin
 walkers, per-test parser-recovery cascades, emitter/baseline byte-format

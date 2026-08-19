@@ -52,7 +52,8 @@ class M04ArgsCollisionSpineMigrationTest {
         diagnose(
             """
             function f(arguments: string, ...rest: any[]) {}
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 && it.message == "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters." })
         }
@@ -86,7 +87,8 @@ class M04ArgsCollisionSpineMigrationTest {
         diagnose(
             """
             function f(...arguments: any[]) {}
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 })
         }
@@ -113,7 +115,8 @@ class M04ArgsCollisionSpineMigrationTest {
                 constructor(arguments: string, ...r: any[]) {}
                 m(arguments: string, ...r: any[]) {}
             }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 && it.line == 2 })
             have(any { it.code == 2396 && it.line == 3 })
@@ -168,7 +171,8 @@ class M04ArgsCollisionSpineMigrationTest {
             const C = class {
                 m(arguments: string, ...r: any[]) {}
             };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 })
         }
@@ -211,7 +215,8 @@ class M04ArgsCollisionSpineMigrationTest {
             const o = {
                 m(arguments: string, ...r: any[]) {},
             };
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 })
         }
@@ -237,7 +242,8 @@ class M04ArgsCollisionSpineMigrationTest {
             """
             const g = (arguments: string, ...r: any[]) => {};
             const h = function (arguments: string, ...r: any[]) {};
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 && it.line == 1 })
             have(any { it.code == 2396 && it.line == 2 })
@@ -253,7 +259,8 @@ class M04ArgsCollisionSpineMigrationTest {
             namespace N {
                 export function f(arguments: string, ...r: any[]) {}
             }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 })
         }
@@ -296,7 +303,8 @@ class M04ArgsCollisionSpineMigrationTest {
                 const h = (arguments: string, ...r: any[]) => 2;
                 break;
             }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(none { it.code == 2396 && it.line == 1 })
             have(any { it.code == 2396 && it.line == 2 })
@@ -309,7 +317,8 @@ class M04ArgsCollisionSpineMigrationTest {
             """
             const x = ((arguments: string, ...r: any[]) => 1) ? 1 : 2;
             const y = 1 ? ((arguments: string, ...r: any[]) => 1) : 2;
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(none { it.code == 2396 && it.line == 1 })
             have(any { it.code == 2396 && it.line == 2 })
@@ -326,7 +335,8 @@ class M04ArgsCollisionSpineMigrationTest {
                     const g = (arguments: string, ...r: any[]) => 2;
                     break;
             }
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(none { it.code == 2396 && it.line == 2 })
             have(any { it.code == 2396 && it.line == 4 })
@@ -339,7 +349,8 @@ class M04ArgsCollisionSpineMigrationTest {
             """
             const s = `x${"$"}{(arguments: string, ...r: any[]) => 1}`;
             const t = typeof ((arguments: string, ...r: any[]) => 1);
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2396 && it.line == 1 })
             have(any { it.code == 2396 && it.line == 2 })
@@ -356,7 +367,8 @@ class M04ArgsCollisionSpineMigrationTest {
                 const b = (arguments: string, ...r: any[]) => 2;
             }
             lbl: (function (arguments: string, ...r: any[]) {})();
-            """
+            """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(count { it.code == 2396 } == 3)
         }

@@ -35,6 +35,27 @@ import org.intellij.lang.annotations.Language
  * without any directives. Shared declarations reused across a test class
  * are interpolated or concatenated into [source] by the caller.
  */
+/**
+ * The directive header for a pin whose SUBJECT is a `target < ES2015` DOWNLEVEL gate —
+ * TS1250 / TS1501 / TS1503 / TS2373 / TS2396 / TS2659 / TS2737 / TS18045 and their
+ * siblings.
+ *
+ * Such a pin must name its target EXPLICITLY. Round 945 ((CHK.21)) made every one of
+ * those gates read [CompilerOptions.defaultedTarget], so an UNSET target is the LATEST
+ * standard (tsc's `getEmitScriptTarget`) and the gates are SHUT there — which is what
+ * pristine does: across the whole baseline corpus every TS1250 / TS1501 / TS1503 /
+ * TS2396 / TS2659 / TS2737 / TS18045 comes from a fixture with an explicit `@target`.
+ * Twenty-one pins written before that round relied on [CompilerOptions.target]'s `ES3`
+ * zero value to open the gate for them, i.e. on the false positive; they were re-pointed
+ * here, which restores the exact population each was written to measure.
+ *
+ * `@ignoreDeprecations` keeps TS5107 ("Option 'target=ES5' is deprecated") out of the
+ * result — every re-pointed pin counts one code, so it would not have mattered, but a
+ * later exact-list assertion would trip over it.
+ */
+internal const val DOWNLEVEL_ES5: String =
+    "// @strict: true\n// @target: es5\n// @ignoreDeprecations: 6.0"
+
 internal fun diagnose(
     @Language("typescript") source: String,
     directives: String = "// @strict: true",

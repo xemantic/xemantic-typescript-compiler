@@ -373,6 +373,6 @@ object RealLibSnapshots {
      */
     fun prewarmParsedLibFiles(options: CompilerOptions) {
         if (!options.useRealLibs) return
-        parsedLibFiles(options.lib.ifEmpty { null }, options.libTarget)
+        parsedLibFiles(options.lib.ifEmpty { null }, options.defaultedTarget)
     }
 }

@@ -8328,13 +8328,13 @@ class Checker(
         // [checkLibOption]; raising it from the resolution rather than from a raw
         // `options.lib` x `libMap` check is what keeps it off the embedded-lib path
         // (the corpus never resolves real libs, so no baseline can move).
-        // (CHK.17) round 944: the lib SET is picked by [CompilerOptions.libTarget] — tsc's
+        // (CHK.17) round 944: the lib SET is picked by [CompilerOptions.defaultedTarget] — tsc's
         // `getDefaultLibFileName(getEmitScriptTarget(options))`, i.e. an UNSET target loads
         // the LATEST full lib, not `lib.d.ts`. Must stay in step with
         // [RealLibSnapshots.prewarmParsedLibFiles], whose warmed key set is by construction
         // the key set the `--workers` partition checkers then read.
-        realLibUnknownNames = RealLibResolver.resolve(libNames, options.libTarget).unknownNames
-        val results = RealLibSnapshots.bindLibFiles(libNames, options.libTarget, options)
+        realLibUnknownNames = RealLibResolver.resolve(libNames, options.defaultedTarget).unknownNames
+        val results = RealLibSnapshots.bindLibFiles(libNames, options.defaultedTarget, options)
         val merged: SymbolTable = symbolTable()
         for (result in results) {
             val ast = result.sourceFile
@@ -10484,7 +10484,7 @@ class Checker(
         // 34b. Check __esModule reserved export (TS1216)
         pass("checkEsModuleReservedExport") { checkEsModuleReservedExport() }
         // 35. Check block-scoped function declarations in ES5 strict mode (TS1250)
-        if (options.target < ScriptTarget.ES2015) {
+        if (options.defaultedTarget < ScriptTarget.ES2015) {
             pass("checkBlockScopedFunctionDeclarations") { checkBlockScopedFunctionDeclarations() }
         }
         // 35b. Check private identifiers targeting ES5 (TS18028).
@@ -11188,11 +11188,11 @@ class Checker(
         // 70. Check property used before initialization (TS2729)
         pass("checkPropertyUseBeforeInit") { checkPropertyUseBeforeInit() }
         // 71. Check downlevelIteration requirement (TS2802)
-        if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) {
+        if (options.defaultedTarget < ScriptTarget.ES2015 && !options.downlevelIteration) {
             pass("checkDownlevelIteration") { checkDownlevelIteration() }
         }
         // 71b. Check BigInt literals at targets lower than ES2020 (TS2737)
-        if (options.target < ScriptTarget.ES2020) {
+        if (options.defaultedTarget < ScriptTarget.ES2020) {
             pass("checkBigIntLiterals") { checkBigIntLiterals() }
         }
         // 71c. B291: bigint property names (TS1539/TS2464/TS2538/mapped-key TS2322)
@@ -26077,7 +26077,7 @@ class Checker(
         // global-augmentation handler is unconditional — it also covers .d.ts —
         // so since batch 1 the walk always runs; per-handler gates carry the
         // option/file-kind conditions.)
-        spineAccessorModifierActive = options.target < ScriptTarget.ES2015
+        spineAccessorModifierActive = options.defaultedTarget < ScriptTarget.ES2015
         spineReservedIfaceParamsActive =
             !options.strictExplicitlyFalse && !(options.noImplicitAny || options.strict)
         // TS2495 fires only when @lib EXPLICITLY excludes ES2015+ iterables
@@ -26134,7 +26134,7 @@ class Checker(
         // (M0.4) round 638: the args-collision anchors' run gate (the legacy
         // slot-42 dispatch gate, verbatim: TS2396 only below ES2015, TS1215
         // only with module files).
-        spineAcRunActive = options.target < ScriptTarget.ES2015 ||
+        spineAcRunActive = options.defaultedTarget < ScriptTarget.ES2015 ||
             binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
         // (M0.4) round 639: the evolving-empty-array scope dispatches' run
         // gate (the legacy driver gate, verbatim) + the legacy slot's
@@ -27983,7 +27983,7 @@ class Checker(
         if (level.paramsDone) return
         level.paramsDone = true
         addParamsToScope(params, level.scope)
-        if (es5HoistBody != null && options.target < ScriptTarget.ES2015) {
+        if (es5HoistBody != null && options.defaultedTarget < ScriptTarget.ES2015) {
             collectDeclaredNames(es5HoistBody.statements, level.scope)
         }
     }
@@ -38408,11 +38408,15 @@ class Checker(
      * `Iterable<any, void, undefined>`; when the explicit `@lib` lacks lib.es2015.iterable
      * (e.g. `@lib: es5` with `@target: es2015`), resolving that global fails → ONE
      * location-less TS2318 per program (sourceMapValidationDestructuringForArrayBindingPattern).
-     * Uses the RAW `options.target` (effectiveTarget maps es5 → ES2015 and would FP the
-     * es5 variant, whose baseline carries only TS5107).
+     * Uses [CompilerOptions.defaultedTarget] (round 945), NOT [CompilerOptions.effectiveTarget]:
+     * the reason this KDoc gave for the raw target — effectiveTarget maps an explicit es5 UP
+     * to ES2015 and would FP the es5 variant, whose baseline carries only TS5107 — is still
+     * the reason, and `defaultedTarget` satisfies it (an explicit es5 stays es5). What the raw
+     * target got WRONG is the other end: an UNSET target read as ES3, where tsc reads its
+     * LatestStandard default and runs this check.
      */
     private fun checkGlobalIterableRestOnlyBindingPattern() {
-        if (options.target < ScriptTarget.ES2015) return
+        if (options.defaultedTarget < ScriptTarget.ES2015) return
         if (libProvidesIterable()) return
         fun isRestOnlyOrEmpty(p: ArrayBindingPattern): Boolean =
             p.elements.isEmpty() ||
@@ -56068,13 +56072,13 @@ interface DataView {
 
     /** B237: does the active lib config provide the global [name] introduced at [intro]?
      *  Empty @lib = the DEFAULT lib derives from the target (lib.es5+dom for es5, …), so
-     *  availability is `options.libTarget >= intro` — [CompilerOptions.libTarget], NOT the
+     *  availability is `options.defaultedTarget >= intro` — [CompilerOptions.defaultedTarget], NOT the
      *  raw target, because an UNSET target is tsc's LATEST standard and not `ES3`
      *  ((CHK.17) round 944). An explicit @lib provides the name via a cumulative full
      *  es-version >= intro or the name's dotted home sub-library. */
     private fun libProvidesGlobalAt(name: String, intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.libTarget >= intro
+        if (options.lib.isEmpty()) return options.defaultedTarget >= intro
         val introNum = intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->
             val l = l0.lowercase()
@@ -56100,14 +56104,14 @@ interface DataView {
     }
 
     /** B238: is a lib FEATURE introduced at [intro] available under the active config?
-     *  Empty @lib → the default lib derives from the target (`options.libTarget >= intro`
-     *  — [CompilerOptions.libTarget], NOT the raw target: an UNSET target is tsc's LATEST
+     *  Empty @lib → the default lib derives from the target (`options.defaultedTarget >= intro`
+     *  — [CompilerOptions.defaultedTarget], NOT the raw target: an UNSET target is tsc's LATEST
      *  standard, not `ES3`, (CHK.17) round 944).
      *  Explicit @lib → any entry whose BASE es-version (dotted entries count their
      *  prefix level — conservative towards suppression) is >= intro provides it. */
     private fun libFeatureAvailable(intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.libTarget >= intro
+        if (options.lib.isEmpty()) return options.defaultedTarget >= intro
         val introNum = if (intro == ScriptTarget.ESNext) 9999
             else intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->
@@ -63397,7 +63401,7 @@ interface DataView {
                     bend++
                 }
                 val (line, ch) = getLineAndCharacterOfPosition(source, bstart)
-                val downlevel = options.target < ScriptTarget.ES2015
+                val downlevel = options.defaultedTarget < ScriptTarget.ES2015
                 diagnostics.add(Diagnostic(
                     message = if (downlevel) "Type 'undefined' is not an array type."
                     else "Type 'undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
@@ -63521,7 +63525,7 @@ interface DataView {
         }
         // Operand `number | undefined` is not iterable: TS2488 (ES2015+) / TS2461 (downlevel).
         val (l2, c2) = getLineAndCharacterOfPosition(source, operand.pos)
-        val downlevel = options.target < ScriptTarget.ES2015
+        val downlevel = options.defaultedTarget < ScriptTarget.ES2015
         diagnostics.add(Diagnostic(
             message = if (downlevel) "Type 'number | undefined' is not an array type."
             else "Type 'number | undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
@@ -75317,7 +75321,7 @@ interface DataView {
         }
         private fun checkFlagAvail(flag: Int, at: Int, size: Int) {
             val a = flagAvail(flag) ?: return
-            if (options.target < a.first)
+            if (options.defaultedTarget < a.first)
                 err(1501, "This regular expression flag is only available when targeting '${a.second}' or later.", at, size)
         }
         private fun scanFlags() {
@@ -75394,7 +75398,7 @@ interface DataView {
                                         else -> {
                                             scanGroupName(false)
                                             scanExpectedChar('>')
-                                            if (options.target < ScriptTarget.ES2018) {
+                                            if (options.defaultedTarget < ScriptTarget.ES2018) {
                                                 err(1503, "Named capturing groups are only available when targeting 'ES2018' or later.", groupNameStart, pos - groupNameStart)
                                             }
                                             numberOfCapturingGroups++
@@ -77739,7 +77743,7 @@ interface DataView {
     private fun spineSuEnterNode(node: Node) {
         if ((node as NodeBase).kindId != NodeKind.OBJECT_LITERAL_EXPRESSION) return
         node as ObjectLiteralExpression
-        val below2015 = options.target < ScriptTarget.ES2015
+        val below2015 = options.defaultedTarget < ScriptTarget.ES2015
         var canEmit = false
         for (prop in node.properties) {
             when (prop) {
@@ -77775,15 +77779,15 @@ interface DataView {
                 // Object-literal methods/accessors bind super (via __proto__)
                 // — valid from ES2015 up, TS2659 below.
                 is GetAccessor ->
-                    if (options.target < ScriptTarget.ES2015) {
+                    if (options.defaultedTarget < ScriptTarget.ES2015) {
                         prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                     }
                 is SetAccessor ->
-                    if (options.target < ScriptTarget.ES2015) {
+                    if (options.defaultedTarget < ScriptTarget.ES2015) {
                         prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                     }
                 is MethodDeclaration ->
-                    if (options.target < ScriptTarget.ES2015) {
+                    if (options.defaultedTarget < ScriptTarget.ES2015) {
                         prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                     }
                 is PropertyAssignment -> when (val init = prop.initializer) {
@@ -79173,7 +79177,7 @@ interface DataView {
      * collisions are a false-negative (acceptable).
      */
     private fun checkWeakMapWeakSetCollision() {
-        if (options.target < ScriptTarget.ES2015 || options.target >= ScriptTarget.ES2022) return
+        if (options.defaultedTarget < ScriptTarget.ES2015 || options.defaultedTarget >= ScriptTarget.ES2022) return
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             walkWeakMapCollisionInList(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
@@ -79386,10 +79390,13 @@ interface DataView {
     }
 
     // TS1250: Function declarations not allowed inside blocks in strict mode targeting ES5
-    // TypeScript fires this for target < ES2015 (raw target, not effective) regardless of
-    // explicit strict mode — block-scoped functions are undefined behavior in ES5.
+    // TypeScript fires this for `getEmitScriptTarget(options) < ES2015` regardless of explicit
+    // strict mode — block-scoped functions are undefined behavior in ES5. That notion is
+    // [CompilerOptions.defaultedTarget] (round 945), never [CompilerOptions.effectiveTarget]
+    // (which maps an explicit es5 UP) and never the raw target (whose ES3 zero value reads an
+    // UNSET target as downlevel, so this fired on programs tsc compiles at its ES2025 default).
     private fun checkBlockScopedFunctionDeclarations() {
-        if (options.target > ScriptTarget.ES5) return
+        if (options.defaultedTarget > ScriptTarget.ES5) return
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
@@ -87979,7 +87986,7 @@ interface DataView {
         // ES5; TypeScript instead fires TS2373 ("parameter ... cannot reference X
         // declared after it") + TS2454 ("used before being assigned"). Collect the
         // hoisted body-var names that aren't shadowed by param names.
-        val bodyVarRefs: Set<String> = if (body != null && options.target < ScriptTarget.ES2015) {
+        val bodyVarRefs: Set<String> = if (body != null && options.defaultedTarget < ScriptTarget.ES2015) {
             val names = mutableSetOf<String>()
             collectHoistedVarNamesFromStmts(body.statements, names)
             names - paramNameSet
@@ -91629,8 +91636,8 @@ interface DataView {
         // esModuleInterop helpers needed for CJS/AMD/UMD/NodeNext (not System/ES) modules
         val needsEsmHelpers = options.esModuleInterop && (em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
                 em == ModuleKind.UMD || em.isNodeNext)
-        // Class extends helpers needed when target < ES2015 (raw target)
-        val needsExtendsHelper = options.target <= ScriptTarget.ES5
+        // Class extends helpers needed when target < ES2015 ([CompilerOptions.defaultedTarget])
+        val needsExtendsHelper = options.defaultedTarget <= ScriptTarget.ES5
         // Decorator helpers always needed when experimentalDecorators is set
         val needsDecoratorHelper = options.experimentalDecorators
         // B98: an `async function` needs the __awaiter helper when target < ES2017.
@@ -91861,7 +91868,7 @@ interface DataView {
         // Get what tslib exports
         val tslibExports = getTslibExports(tslibResult.sourceFile)
 
-        val isEs5Target = options.target <= ScriptTarget.ES5
+        val isEs5Target = options.defaultedTarget <= ScriptTarget.ES5
         val hasDecorators = options.experimentalDecorators || options.emitDecoratorMetadata
         val hasAmbientTslib = ambientTslibResult != null
 
@@ -139744,7 +139751,7 @@ interface DataView {
         // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
         CpaSections.atQ(CpaSections.Q_SUPER)
         if (expr.expression is Identifier && (expr.expression).text == "super") {
-            if (options.target <= ScriptTarget.ES5) {
+            if (options.defaultedTarget <= ScriptTarget.ES5) {
                 checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
             } else {
                 checkSuperFieldAccessES2015Plus(expr, source, fileName, enclosingClassType)
@@ -150439,7 +150446,7 @@ interface DataView {
     private fun checkIntersectionNeverArrayDestructure() {
         // TS2488 uses the Symbol.iterator protocol; under ES3/ES5 without downlevelIteration
         // array-destructuring uses array-likeness (no iterator) → tsc emits NOTHING there.
-        if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) return
+        if (options.defaultedTarget < ScriptTarget.ES2015 && !options.downlevelIteration) return
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -167036,7 +167043,7 @@ interface DataView {
                                 // pure-null / pure-undefined sources only for the iterability error
                                 val display = when (bits) { 1 -> "null"; 2 -> "undefined"; else -> null }
                                 if (display != null) {
-                                    if (options.target >= ScriptTarget.ES2015) {
+                                    if (options.defaultedTarget >= ScriptTarget.ES2015) {
                                         emitAt(start, len,
                                             "Type '$display' must have a '[Symbol.iterator]()' method that returns an iterator.", 2488)
                                     } else {

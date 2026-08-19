@@ -119,6 +119,7 @@ class Inv4SpineBatch10Test {
                 var b: number;
             }
             """,
+            directives = DOWNLEVEL_ES5,
         ) should {
             have(any { it.code == 2373 })
             have(any { it.code == 2454 })
