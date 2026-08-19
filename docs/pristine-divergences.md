@@ -90,7 +90,7 @@ comparable; the right-hand column records what each has cost since.
 | 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | open, (CHK.14) |
 | 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 ×17 | owner decision, (CHK.13) |
 | 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23 rows) | frozen subsystem |
-| 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 | open, (CHK.9)/(CHK.10) |
+| 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 | (CHK.9) CLOSED round 945; (CHK.10) open |
 | 27 | 7.2 | FP — narrowing / control flow | **genuine FP** | `typeGuardNarrowsIndexedAccessOfKnownProperty1` (11 rows) | **16 of 27 FIXED round 942** |
 | 26 | 7.0 | **FIXED round 941** — private-identifier target gate | **genuine FP** | `strictPropertyInitialization` TS18028 ×16 | closed |
 | 13 | 3.5 | **FIXED round 941** — super-call statement scan | **genuine FP** | `derivedClassSuperProperties` TS2376 ×13 | closed |
@@ -491,9 +491,10 @@ Ranked by (rows × confidence it is a genuine FP × smallness). **Round 943's su
 changes this list**: the biggest bucket is now known to be four MODELLING items, so the
 small work left is elsewhere.
 
-1. **`indexSignatures1` TS1268 ×12** — one fixture, one code, a decidable predicate
-   ("does this parameter type reduce to string/number/symbol or a template-literal type",
-   through aliases, unions and intersections). The (CHK.5)(e) axis. **(CHK.9)**
+1. ~~`indexSignatures1` TS1268 ×12~~ — **CLOSED round 945**, 12 -> 0 with two true positives
+   gained. tsc's `isValidIndexKeyType` accepts an INTERSECTION that is not generic and has
+   SOME valid constituent — i.e. every BRANDED string — and its generic test reads the whole
+   resolved type, which is why `[key: T | number]` is TS1337 and not TS1268. **(CHK.9)**
 2. **`strictPropertyInitialization` TS2564 ×4** — definite assignment through
    `this[<late-bound key>] = …`. Small, in the arc's own family, and **CONFIRMED genuine by
    round 943's strict-default arm** (§ 0b: that fixture's own baseline carries 20 TS2564, so

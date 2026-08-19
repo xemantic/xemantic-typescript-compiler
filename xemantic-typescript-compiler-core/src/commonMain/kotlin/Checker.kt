@@ -132219,11 +132219,48 @@ interface DataView {
                 }
             }
             t is Type.TypeParam -> 1337
+            // (CHK.9) round 945 — tsc's `isValidIndexKeyType`: an INTERSECTION is a valid index
+            // key when it is not generic and SOME constituent is one.  That is the whole point of
+            // a BRANDED string (`type Id = string & { __tag: 'id' }`), which is a legal index
+            // parameter type in tsc and was TS1268 here.  Note `someType`/`everyType` distribute
+            // over UNIONS only, so an intersection is never split for the literal test above —
+            // `string & 'a'` is VALID in tsc, and reading `subs.any { it == 1337 }` here would be
+            // a divergence, not a strengthening.
+            t is Type.Intersection -> when {
+                t.types.any { it is Type.TypeParam } -> 1337
+                t.types.any { classifyIndexParamType(it, depth + 1) == 0 } -> 0
+                else -> 1268
+            }
             t.flags.hasAny(TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
                 TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral) -> 1337
             t.flags.hasAny(TypeFlags.String or TypeFlags.Number or
                 TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol) -> 0
             else -> 1268
+        }
+    }
+
+    /**
+     * (CHK.9) round 945 — does this index-signature parameter type NODE mention one of the
+     * enclosing declaration's own type parameters, directly or inside a union / intersection /
+     * parenthesis?
+     *
+     * tsc asks `isGenericType(getTypeFromTypeNode(node))` over the WHOLE resolved type, which is
+     * true of `T`, `T | number` and `T & string` alike, and answers TS1337 for all three. Ours
+     * has to ask the AST, because there is no type-parameter scope installed at this grammar
+     * check: an alias's own `T` resolves to `anyType` here, which [classifyIndexParamType] reads
+     * as TS1268 — that, and not a missing rule, is why `[key: T | number]` and `[key: T & string]`
+     * were a CODE divergence rather than an extra diagnostic.
+     */
+    private fun indexParamMentionsOuterTypeParam(
+        t: TypeNode?, names: Set<String>, depth: Int = 0,
+    ): Boolean {
+        if (names.isEmpty() || t == null || depth > 8) return false
+        return when (t) {
+            is TypeReference -> (t.typeName as? Identifier)?.text in names
+            is ParenthesizedType -> indexParamMentionsOuterTypeParam(t.type, names, depth + 1)
+            is UnionType -> t.types.any { indexParamMentionsOuterTypeParam(it, names, depth + 1) }
+            is IntersectionType -> t.types.any { indexParamMentionsOuterTypeParam(it, names, depth + 1) }
+            else -> false
         }
     }
 
@@ -132249,17 +132286,22 @@ interface DataView {
                 is ArrayType -> true
                 else -> false
             }
-            // TS1337: parameter type is a generic (TypeReference to a TypeParameter)
-            // or a literal type — TypeScript suggests using a mapped object type instead.
-            val isGeneric = pType is TypeReference && pType.typeName is Identifier &&
-                outerTypeParamNames.contains((pType.typeName).text)
+            // TS1337: parameter type is a generic (a TypeReference to a TypeParameter, or a
+            // union/intersection containing one — (CHK.9) round 945, mirroring tsc's
+            // `isGenericType(type)` over the whole resolved type) or a literal type; TypeScript
+            // suggests using a mapped object type instead.
+            val isGeneric = indexParamMentionsOuterTypeParam(pType, outerTypeParamNames)
             val isLiteral = pType is LiteralType
             // indexerConstraints2: resolve an aliased TypeReference / a UnionType param via the
             // type engine and classify it. Keeps every existing syntactic verdict; only adds
             // resolution for the alias/union shapes the syntax can't see through (`AliasedNumber`
             // = number → valid; `string | number` → valid; `"foo" | "bar"` → TS1337).
+            // (CHK.9) round 945: an INTERSECTION node is resolved too — `\`a\${string}\` &
+            // \`\${string}b\`` and every BRANDED string alias live there, and before this the
+            // node kind was not even offered to the type engine.
             val resolvedCode: Int? = if (!isAllowedSyntactic && !isGeneric && !isLiteral &&
-                    (pType is TypeReference || pType is UnionType)) {
+                    (pType is TypeReference || pType is UnionType ||
+                        pType is IntersectionType || pType is ParenthesizedType)) {
                 val rt = getTypeFromTypeNode(pType)
                 classifyIndexParamType(rt)
             } else null

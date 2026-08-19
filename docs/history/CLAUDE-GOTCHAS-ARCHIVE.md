@@ -1,5 +1,30 @@
 # CLAUDE-GOTCHAS-ARCHIVE — corpus-era gotchas moved out of CLAUDE.md
 
+### Round 945 — index-signature parameter types (`checkIndexSigsInMembers` / `classifyIndexParamType`, TS1268 / TS1337 / TS1021)
+
+- **tsc's rule is `checkGrammarIndexSignatureParameters`, and its three parts must stay in
+  ORDER: `someType(literal-or-unique) || isGenericType` -> TS1337 FIRST, then
+  `!everyType(isValidIndexKeyType)` -> TS1268.**
+- **`someType`/`everyType` distribute over UNIONS ONLY.** An INTERSECTION is therefore never
+  split for the TS1337 literal test (`string & 'a'` is a legal key), and is valid iff it is
+  not generic and **SOME** constituent is valid — reading that `some` as `every` refuses every
+  BRANDED string, which is the shape the whole rule exists for, while still accepting an
+  intersection of template literals (round 945's B4 arm: a pin set built only on the latter is
+  blind to it).
+- **The generic test must read the AST, not the resolved type.** There is no type-parameter
+  scope installed at this grammar check, so an alias's own `T` resolves to `anyType`, which
+  `classifyIndexParamType` reads as TS1268 — that is why `[key: T | number]` and
+  `[key: T & string]` were a CODE divergence (pristine: TS1337) rather than an extra
+  diagnostic. `indexParamMentionsOuterTypeParam` walks TypeReference / Parenthesized / Union /
+  Intersection.
+- **`outerTypeParamNames` is supplied by the TypeAliasDeclaration caller ONLY** — a class's or
+  interface's own type parameters still arrive as `emptySet()`, so `interface I<T> { [k: T]: string }`
+  is TS1268 where pristine says TS1337. Not in the measured population; a lead, not a claim.
+- **A `TemplateLiteralType` node resolves to a `Type.Intrinsic(TypeFlags.String)`**, so it
+  classifies as a valid key for free; what was missing was that an `IntersectionType` NODE was
+  never offered to the type engine at all (the resolution trigger listed only
+  `TypeReference`/`UnionType`).
+
 ### Round 945 — the `target < ES2015` DOWNLEVEL gates (TS1250 / TS1501 / TS1503 / TS2396 / TS2659 / TS2737 / TS18045 / TS2802 / TS2318 / TS2340-TS2855 / the TS2488-TS2461 fork / tslib helpers)
 
 - **All 23 of those lines read `CompilerOptions.defaultedTarget` (round 945), never the raw

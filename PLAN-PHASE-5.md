@@ -129,10 +129,39 @@ the same reason. `huge_methods.py --fail-over 0` green on all six module class d
 `80c3e681...`, `CompilerOptions.kt` `f62d685e...`, `RealLibs.kt` `93a71612...`; the before arm at
 HEAD's `7b78f8e8...` / `b9f80781...` / `1b951943...`.
 
-**NEXT.** (CHK.9) `indexSignatures1` TS1268 x12 — tsc's rule is read and small
-(`isValidIndexKeyType`: an INTERSECTION is a valid key when it is not generic and SOME constituent
-is; our `classifyIndexParamType` has no intersection arm and its resolution is not even attempted
-for an `IntersectionType` NODE). Then (CHK.19), (CHK.10).
+**SECOND ACT — (CHK.9), THE INDEX-SIGNATURE PARAMETER RULE.** tsc's
+`checkGrammarIndexSignatureParameters` resolves the parameter's type node and asks two
+questions in order: `someType(t, StringOrNumberLiteralOrUnique) || isGenericType(t)` -> TS1337,
+then `!everyType(t, isValidIndexKeyType)` -> TS1268, where a valid key is `String|Number|ESSymbol`,
+a pattern-literal type, **or an intersection that is not generic and has SOME valid constituent**.
+Three gaps, 12 rows, all in one fixture:
+
+| shape | ours before | pristine |
+|---|---|---|
+| `{ [key: TaggedString1]: string }` where `type TaggedString1 = string & { __tag }` (x9) | TS1268 | accepted |
+| `` { [x: `${string}xxx${string}` & `${string}yyy${string}`]: string } `` | TS1268 | accepted |
+| `[key: T \| number]` / `[key: T & string]` inside `type Invalid<T extends string>` | TS1268 | **TS1337** |
+
+The fix is three lines of rule: an Intersection arm in `classifyIndexParamType`, the
+`IntersectionType`/`ParenthesizedType` node kinds added to the resolution trigger, and
+`indexParamMentionsOuterTypeParam` — an AST walk, because there is no type-parameter scope
+installed at this grammar check and the alias's own `T` resolves to `anyType`, which the
+classifier reads as TS1268. **Measured: 12 -> 0 ours-only, sweep 310 -> 298, pristine-only
+775 -> 773 (two TRUE POSITIVES gained), zero fixtures regressed, 8-profile grid `added=0
+removed=0`, `cost_gate.py` +0.00%, suite 15,285/0/3 with no corpus baseline moved.**
+
+**ITS ABLATION — 4 arms** (`scripts/round945b-ablate.py`, each asserting `ran 13`):
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---:|---|
+| B1 | the Intersection arm is deleted | **5** | every valid-key pin |
+| B2 | the resolution TRIGGER narrows back to `TypeReference`/`UnionType` | **2** | the two pins whose parameter NODE is a syntactic intersection — a proper subset of B1, separating "cannot classify" from "never looked" |
+| B3 | the generic test goes back to a bare `TypeReference` | **2** | the two CODE-divergence pins, disjoint from B1 and B2 |
+| B4 | `some(types, isValidIndexKeyType)` read as `every` — THE BOUND | **4** | the four BRANDED pins and **not** the template-literal one, whose constituents are all valid: a pin set that tested only the template-literal intersection would have been blind to this misreading |
+
+**NEXT.** (CHK.19) — a function-body type ALIAS is not bound, so the lib's two-parameter `Omit`
+answers for a local one-parameter one; then (CHK.10), definite assignment through a late-bound
+`this[k] = …`.
 
 **Round 944 (2026-08-19) — (CHK.17): LIB AVAILABILITY WAS DECIDED FROM A TARGET DEFAULT THAT
 MEANS TWO THINGS AT ONCE — `CompilerOptions.target`'s `ES3` ZERO VALUE IS INDISTINGUISHABLE
@@ -2454,17 +2483,20 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   regressed, pristine-only 777 -> 776 (a true positive GAINED); 8-profile grid added=0
   removed=0 on all eight; suite 15,193 -> 15,214 with no baseline moved.
 
-- [ ] **(CHK.9) INDEX-SIGNATURE PARAMETER TYPES — 12 OURS-ONLY TS1268 ROWS IN ONE FIXTURE,
-  THE LARGEST REMAINING SINGLE-CODE FP FAMILY (`indexSignatures1`, ALIGNED, round 941).**
-  A parameter typed by a BRANDED string alias (`type TaggedString1 = string & { __brand }`),
-  or by a UNION or INTERSECTION of template-literal types, is legal in pristine and refused
-  by us: `interface I1 { [key: TaggedString1]: string }`, `{ [x: \`${string}xxx${string}\` &
-  \`${string}yyy${string}\`]: string }`, `type Rec1 = { [key: Id]: number }`. Two of the twelve
-  are a CODE divergence rather than an extra diagnostic — pristine says TS1337 at
-  `[key: T | number]` / `[key: T & string]` where we say TS1268. The predicate to build is
-  "does this parameter type REDUCE to string / number / symbol / a template-literal type",
-  through aliases, unions and intersections. This is (CHK.5)(e)'s axis with a fixture and a
-  count attached.
+- [x] **(CHK.9) INDEX-SIGNATURE PARAMETER TYPES — 12 OURS-ONLY TS1268 ROWS -> 0, AND TWO
+  TRUE POSITIVES GAINED (`indexSignatures1`, round 945).** tsc's rule, read off the pinned
+  sources (`checkGrammarIndexSignatureParameters` + `isValidIndexKeyType`), has three parts we
+  had two of. **The intersection arm was missing entirely**, so every BRANDED string
+  (`type Id = string & { __tag: 'id' }` — the shape the rule exists for) was TS1268, and an
+  `IntersectionType` NODE was not even offered to the type engine, so a syntactic
+  `` `${string}xxx${string}` & `${string}yyy${string}` `` never got a verdict either. **And the
+  generic test read only a bare `TypeReference`**, which is why `[key: T | number]` and
+  `[key: T & string]` were TS1268 where pristine says TS1337 — the cause being that an alias's
+  own `T` resolves to `anyType` at that grammar check, so the question has to be asked of the
+  AST. Note `someType`/`everyType` distribute over UNIONS only: an intersection is valid when
+  SOME constituent is (`string & 'a'` is a legal key), and reading that as `every` is the
+  round's B4 arm. Measured: sweep **310 -> 298** ours-only with 0 added, pristine-only
+  **775 -> 773**, zero fixtures regressed; 8-profile grid `added=0 removed=0`.
 
 - [ ] **(CHK.10) DEFINITE ASSIGNMENT THROUGH A LATE-BOUND ELEMENT ACCESS — 4 OURS-ONLY
   TS2564 ROWS (`strictPropertyInitialization`, ALIGNED, round 941).** `class C12 { [a]: number;
