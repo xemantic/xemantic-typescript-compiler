@@ -10482,8 +10482,15 @@ class Checker(
         if (options.target < ScriptTarget.ES2015) {
             pass("checkBlockScopedFunctionDeclarations") { checkBlockScopedFunctionDeclarations() }
         }
-        // 35b. Check private identifiers targeting ES5 (TS18028)
-        if (options.target <= ScriptTarget.ES5) {
+        // 35b. Check private identifiers targeting ES5 (TS18028).
+        // The gate is the target the USER ASKED FOR, not the raw field: an unset `target`
+        // defaults to ES3 here while tsc's `getEmitScriptTarget` defaults it to the latest
+        // standard, so reading the raw field alone made `class C { #x }` in a project with
+        // no `target` an error (round 941: 26 rows over four PRISTINE fixtures, and the
+        // corpus cannot see it because `usesUnsupportedOption` skips every explicit
+        // es3/es5 config). An EXPLICIT es3/es5 must keep firing, which is why this is not
+        // `effectiveTarget` — that maps an explicit ES5 up to ES2015.
+        if (options.targetExplicitlySet && options.target <= ScriptTarget.ES5) {
             pass("checkPrivateIdentifiersTarget") { checkPrivateIdentifiersTarget() }
         }
         // 35c. Check WeakMap/WeakSet name collisions with downlevel private-field emit (TS18027)
@@ -73899,19 +73906,30 @@ interface DataView {
                                 if (hasInitializedProps || hasParamProps) {
                                     // Check if super() exists somewhere in the constructor
                                     val hasSuperCall = member.body.statements.any { s ->
-                                        s is ExpressionStatement && s.expression is CallExpression &&
-                                            isSuperIdentifier((s.expression).expression)
+                                        s is ExpressionStatement && isSuperCallStatementExpression(s.expression)
                                     }
-                                    // Skip prologue directives ("use strict", etc.)
-                                    val firstNonPrologueStmt = member.body.statements.firstOrNull { s ->
-                                        !(s is ExpressionStatement && s.expression is StringLiteralNode)
+                                    // tsc `checkConstructorDeclaration`: walk the constructor's own
+                                    // statement list until EITHER the `super()` statement OR the
+                                    // first statement that IMMEDIATELY references `super`/`this`;
+                                    // TS2376 is the case where the reference wins. `super()` need
+                                    // NOT be first — any number of statements may precede it as
+                                    // long as none of them touches `this` in the constructor's own
+                                    // `this` scope, which is what makes a `function` declaration, a
+                                    // class expression's method or an object literal's accessor
+                                    // legal there. A prologue directive needs no special case: it
+                                    // is neither a super call nor a `this` reference, so the loop
+                                    // walks past it.
+                                    var superCallStatement: Statement? = null
+                                    for (s in member.body.statements) {
+                                        if (s is ExpressionStatement && isSuperCallStatementExpression(s.expression)) {
+                                            superCallStatement = s
+                                            break
+                                        }
+                                        if (nodeImmediatelyReferencesSuperOrThis(s)) break
                                     }
-                                    val isSuperFirst = firstNonPrologueStmt is ExpressionStatement &&
-                                        firstNonPrologueStmt.expression is CallExpression &&
-                                        isSuperIdentifier((firstNonPrologueStmt.expression).expression)
-                                    // TS2376 only fires when super IS called, just not as first statement
+                                    // TS2376 only fires when super IS called, just not soon enough
                                     // (TS2377 handles missing super entirely)
-                                    if (hasSuperCall && !isSuperFirst) {
+                                    if (hasSuperCall && superCallStatement == null) {
                                         val start = member.pos
                                         val (line, character) = getLineAndCharacterOfPosition(source, start)
                                         diagnostics.add(Diagnostic(
@@ -73981,6 +73999,66 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /**
+     * tsc's `isSuperCall(skipOuterExpressions(statement.expression))` — the shape that
+     * counts as *the* super-call statement of a constructor. The parenthesis skip is
+     * load-bearing: `(super());` is a root-level super call to tsc.
+     */
+    private fun isSuperCallStatementExpression(expr: Expression): Boolean {
+        var e: Expression = expr
+        while (e is ParenthesizedExpression) e = e.expression
+        return e is CallExpression && isSuperIdentifier(e.expression)
+    }
+
+    /**
+     * tsc's `nodeImmediatelyReferencesSuperOrThis` (checker.ts) together with
+     * `isThisContainerOrFunctionBlock` (utilities.ts): does [node] mention `this` or
+     * `super` in the CONSTRUCTOR's own `this` scope, i.e. at a place that would be
+     * evaluated before a later `super()` runs?
+     *
+     * The walk stops at an arrow function, a function declaration/expression and a
+     * property declaration (all of which evaluate their body later, arrows included —
+     * `const getThis = () => this` before `super()` is legal), and at a method-like
+     * BODY: tsc expresses that last one as "a `Block` whose parent is a Constructor /
+     * MethodDeclaration / GetAccessor / SetAccessor", which is why an object literal's
+     * or a class expression's COMPUTED MEMBER NAME is still reached while its body is
+     * not. Round 941 measured 13 false positives on pristine's own
+     * `derivedClassSuperProperties` from not having this rule at all.
+     */
+    private fun nodeImmediatelyReferencesSuperOrThis(node: Node): Boolean {
+        if (isThisIdentifier(node) || isSuperIdentifier(node)) return true
+        when (node) {
+            is ArrowFunction, is FunctionDeclaration, is FunctionExpression, is PropertyDeclaration -> return false
+            else -> {}
+        }
+        // tsc descends into a member/property-access NAME too; it simply cannot match
+        // there, because `this` in that position is an Identifier and not a ThisKeyword.
+        // Our parser has no ThisExpression (`this` IS an Identifier), so the name child
+        // has to be skipped explicitly or `{ this: 1 }` would read as a reference.
+        // ONLY a plain Identifier name is skipped: a COMPUTED name is `[this.p]`, whose
+        // `this` tsc does reach — `get [this.propName]() {}` before `super()` IS TS2376
+        // (pristine `derivedClassSuperProperties` lines 281 and 323, which a blanket name
+        // skip silently loses while every "no longer an error" pin stays green).
+        val nameChild: Node? = when (node) {
+            is PropertyAccessExpression -> node.name
+            is PropertyAssignment -> node.name as? Identifier
+            is MethodDeclaration -> node.name as? Identifier
+            is GetAccessor -> node.name as? Identifier
+            is SetAccessor -> node.name as? Identifier
+            is QualifiedName -> node.right
+            else -> null
+        }
+        val bodyOwner = node is Constructor || node is MethodDeclaration ||
+            node is GetAccessor || node is SetAccessor
+        var found = false
+        forEachChild(node) { child ->
+            if (!found && child !== nameChild && !(bodyOwner && child is Block)) {
+                if (nodeImmediatelyReferencesSuperOrThis(child)) found = true
+            }
+        }
+        return found
     }
 
     private fun isThisIdentifier(node: Node): Boolean =

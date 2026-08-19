@@ -211,6 +211,39 @@ def stem_of(case: Path) -> str:
 
 # ---------------------------------------------------------------- extraction
 
+
+_DIRECTIVE_LINE = re.compile(r"^[ \t]*//[ \t]*@[A-Za-z]+[ \t]*:")
+
+
+def _baseline_sources_exist(stem: str) -> bool:
+    """Can a baseline supply this case's source? (`.js` echo, or an errors annotation.)"""
+    for b in BASELINES.glob(f"{stem}*.js"):
+        rest = b.name[len(stem):-len(".js")]
+        if rest == "" or rest.startswith("("):
+            return True
+    return bool(baselines_for(stem))
+
+
+def _strip_harness_directives(text: str) -> str:
+    """Drop the `// @key: value` harness directives, as tsc's own harness does.
+
+    Empirically pinned against the baselines: the directive lines AND the blank run that
+    follows them are absent from the `==== file ====` body, so pristine's line 1 is the
+    first line of real source.  Directives elsewhere in the file are dropped in place.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    started = False
+    for line in lines:
+        if _DIRECTIVE_LINE.match(line):
+            continue
+        if not started and line.strip() == "":
+            continue
+        started = True
+        out.append(line)
+    return "\n".join(out)
+
+
 _JS_SECTION = re.compile(r"^//// \[([^\]]+)\]\s*$")
 _ERR_SECTION = re.compile(r"^==== (.+?) \(\d+ errors?\) ====\s*$")
 
@@ -225,11 +258,19 @@ def extract_sources(stem: str) -> dict[str, str]:
     files: dict[str, str] = {}
     # A single-file case that emits nothing (declaration-only, or `@noEmit`) has neither a
     # `.js` nor an `.errors.txt` baseline; its source survives only in `tests/cases`.
+    #
+    # THE CASE FILE IS THE LAST RESORT, NOT THE FIRST CHOICE (round 941).  It still carries
+    # the `// @target: …` harness directives that tsc's own harness STRIPS before compiling,
+    # so its line numbers are the baseline's plus the directive count -- and a sweep that
+    # differences (line, code) then reports EVERY row as a divergence in both directions.
+    # The pre-941 guard only looked for an exact `<stem>.js`, so every multi-variation case
+    # (`<stem>(target=es2015).js`) fell through to it: 27 of the sweep's 630 fixtures, and
+    # the single largest source of phantom "ours-only" rows.
     case = case_index().get(stem)
-    if case is not None and not list(BASELINES.glob(f"{stem}.js")):
+    if case is not None and not _baseline_sources_exist(stem):
         text = case.read_text(errors="replace")
         if "@filename" not in text.lower():
-            return {case.name: text}
+            return {case.name: _strip_harness_directives(text)}
     for b in sorted(BASELINES.glob(f"{stem}*.js")):
         rest = b.name[len(stem):-len(".js")]
         if rest != "" and not rest.startswith("("):
