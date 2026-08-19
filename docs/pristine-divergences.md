@@ -50,22 +50,26 @@ The two numbers are not comparable row-for-row; only same-instrument arms are.
 
 ---
 
-## 1. The table — 373 ours-only rows over 84 fixtures, at `967c2e53`
+## 1. The table — 318 ours-only rows over 79 fixtures, at round 942
 
-| rows | % | bucket | cause class | exemplar |
-|---:|---:|---|---|---|
-| 89 | 23.9 | FP — type system / inference | **genuine FP** | `variadicTuples1` TS2322 ×15 + TS2345 ×14 |
-| 59 | 15.8 | HARNESS — jsx configuration | **harness artefact** | `tsxLibraryManagedAttributes` TS2874 ×27 |
-| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) |
-| 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 ×17 |
-| 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23 rows) |
-| 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 |
-| 27 | 7.2 | FP — narrowing / control flow | **genuine FP** | `typeGuardNarrowsIndexedAccessOfKnownProperty1` (11 rows) |
-| 26 | 7.0 | **FIXED round 941** — private-identifier target gate | **genuine FP** | `strictPropertyInitialization` TS18028 ×16 |
-| 13 | 3.5 | **FIXED round 941** — super-call statement scan | **genuine FP** | `derivedClassSuperProperties` TS2376 ×13 |
+The row counts are AT `967c2e53` (round 941's own before-arm) so the buckets stay
+comparable; the right-hand column records what each has cost since.
+
+| rows | % | bucket | cause class | exemplar | status |
+|---:|---:|---|---|---|---|
+| 89 | 23.9 | FP — type system / inference | **genuine FP** | `variadicTuples1` TS2322 ×15 + TS2345 ×14 | open |
+| 59 | 15.8 | HARNESS — jsx configuration | **harness artefact** | `tsxLibraryManagedAttributes` TS2874 ×27 | not yet measured |
+| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | open, (CHK.14) |
+| 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 ×17 | owner decision, (CHK.13) |
+| 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23 rows) | frozen subsystem |
+| 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 | open, (CHK.9)/(CHK.10) |
+| 27 | 7.2 | FP — narrowing / control flow | **genuine FP** | `typeGuardNarrowsIndexedAccessOfKnownProperty1` (11 rows) | **16 of 27 FIXED round 942** |
+| 26 | 7.0 | **FIXED round 941** — private-identifier target gate | **genuine FP** | `strictPropertyInitialization` TS18028 ×16 | closed |
+| 13 | 3.5 | **FIXED round 941** — super-call statement scan | **genuine FP** | `derivedClassSuperProperties` TS2376 ×13 | closed |
 
 **Cause-class totals: genuine FP 182 (48.8%) · cascade 90 (24.1%) · harness artefact 59
-(15.8%) · deliberate convention 42 (11.3%).** 39 of the 182 are closed by this round.
+(15.8%) · deliberate convention 42 (11.3%).** 39 of the 182 were closed by round 941 and a
+further 16 by round 942, leaving **318** rows over **79** fixtures.
 
 **No ACTIVE-baseline row appears anywhere in the table.** The population is by construction
 the fixtures the generated suite does NOT gate: a row here is a shape whose baseline is
@@ -135,15 +139,19 @@ The residue of the (CHK.5)/(CHK.7) arc.
 * TS2307 / TS2304 in declaration-emit fixtures (7 rows) — a module the sweep's extraction
   cannot materialise plus two genuinely unresolved shadowed `infer` names.
 
-### 2.7 FP — narrowing / control flow (27 rows, 13 groups)
+### 2.7 FP — narrowing / control flow (27 rows → **11**, round 942 closed 16)
 
-* `typeGuardNarrowsIndexedAccessOfKnownProperty1` (11) — discriminated-union narrowing
-  through an ELEMENT ACCESS (`s['kind']`), which `getTypeOfElementAccess` does not apply
-  (CLAUDE.md records the same gap).
-* `Symbol.hasInstance` narrowing (`typeGuardsWithInstanceOfBySymbolHasInstance` 5,
-  `controlFlowInstanceofWithSymbolHasInstance` 6) — unmodelled, so the receiver stays
-  un-narrowed and every member read is TS2339.
-* `neverAsDiscriminantType` (2), `symbolProperty57/61` (3).
+* ~~`typeGuardNarrowsIndexedAccessOfKnownProperty1` (11)~~ — **CLOSED round 942, 11 → 0**;
+  see § 3.4.
+* `Symbol.hasInstance` narrowing: `typeGuardsWithInstanceOfBySymbolHasInstance`
+  **CLOSED, 5 → 0** (§ 3.5, and pristine-only 8 → 7 — a true positive GAINED);
+  `controlFlowInstanceofWithSymbolHasInstance` **7, UNCHANGED and MIS-BUCKETED** — round
+  941's queue entry read it as a `Symbol.hasInstance` fixture and **6 of its 7 rows are a
+  PARSER GAP**, `abstract new (...args: any) => infer U` inside a conditional type
+  (TS1005 ×3 / TS1068 ×2 / TS1128, plus the TS2355 / TS2564 / TS2304 they cascade into).
+  Its one genuine narrowing row is line 26, an `instanceof` whose positive branch answers
+  the CANDIDATE where tsc answers `t & candidate` — queued as (CHK.15).
+* `neverAsDiscriminantType` (2), `symbolProperty57` (1), `symbolProperty61` (2).
 
 ---
 
@@ -205,17 +213,97 @@ pins.
 
 ---
 
+## 3b. Closed by round 942 — (CHK.11) and (CHK.12), 16 rows
+
+Both families are the same sentence one level down: **tsc's `isMatchingReference` compares
+references by SYMBOL and ours compares the path STRINGS `getReferencePath` builds.**
+
+### 3.4 Element-access discriminant narrowing (11 rows, `typeGuardNarrowsIndexedAccessOfKnownProperty1`)
+
+`switch (s["kind"])` narrowed nothing while `switch (s.kind)` narrowed correctly. FOUR
+mechanisms, each measured against pristine's own baseline (that fixture has NO
+`.errors.txt`, i.e. pristine is SILENT for all of it) and re-read against `tsgo 7.0.2`:
+
+| # | mechanism | rows it owned |
+|---|---|---|
+| 1 | `singleLevelDiscriminantSegment` — the switch's discriminant reader accepts `name[seg]` beside `name.seg` | the `switch (s['dash-ok'])` group |
+| 2 | `getTypeOfElementAccess` flow-narrows its UNION RECEIVER (B1.1's gate, which its dotted twin has always had) | `z[1]` read as `string \| number` against a `number` target |
+| 3 | `getReferencePath` normalises an identifier-spellable string index onto the DOTTED segment | `s[0]["sub"].under["shape"]` — the fixture mixes both spellings inside ONE expression |
+| 4 | `requiredEnumSwitchKeys` + `paramMemberChainType` accept an element-access discriminant and a multi-segment receiver | the two TS2366 "function lacks ending return statement" |
+
+A FIFTH was written, measured INERT and REMOVED: the 17.34d half — narrowing the access's
+own union RESULT, the symmetric line to `getTypeOfPropertyAccess`. Its ablation arm
+reddened **none** of the round's 21 pins and no probe could be built where it fires
+(`if (typeof h[0] === "string") { … h[0] }` still reports the declared `string | number`
+with it in place, because the `typeof` guard does not reach an element-access reference at
+all). A flow walk with no consultation that can observe it is CLAUDE.md's round-887 shape;
+the receiver narrowing is what the fixture actually needed.
+
+Mechanism 3 is the one with a blast radius, and it is the tsc-correct direction: `x["a"]`
+and `x.a` are one reference. A non-spellable index (`"dash-ok"`, `0`, `"0"`) keeps round
+461's bracket encoding, so no path can collide with a dotted segment, and both
+`flowPathRoot` and `pathPrefixOf` already split on `[`.
+
+**Measured: 11 ours-only rows → 0.**
+
+### 3.5 `[Symbol.hasInstance]` narrowing (5 rows, `typeGuardsWithInstanceOfBySymbolHasInstance`)
+
+Round 838's `instanceTypeOfConstructorValue` named this leg as its one deliberate
+omission. `instanceof` now asks the RHS type for a `[Symbol.hasInstance]` method whose
+return is a non-`asserts` TYPE PREDICATE over parameter 0, and uses its target — which is
+what answers the three shapes `prototype` and the construct signatures cannot: a GENERIC
+construct signature (`new <T>(): B<T>` + `value is B<any>`), SEVERAL construct signatures
+(`value is C1 | C2`), and one returning a union.
+
+Two rules were read off pristine's baseline and confirmed against tsgo:
+
+* **A usable predicate DECIDES.** `value is any` narrows NOTHING and must not fall through
+  to the construct signature — pristine reports `string | F` at lines 142/143 with a
+  perfectly good `new (): any` sitting right there.
+* **An `instanceof` stays `checkDerived = true` even when the candidate came from a
+  predicate.** So a UNION candidate is DISTRIBUTED and its narrow-down direction is the
+  NOMINAL base-chain test, not assignability: `C1 | A` narrowed by `C1 | C2` is **C1**
+  (`A` is structurally a supertype of both candidates, and the assignability form mapped it
+  onto the whole union and then reported `bar1` missing on `C2`), while `B0 | string`
+  narrowed by `D1 extends B0` is still **D1**. Scoped to a union candidate, so round 425's
+  single-candidate arm — whose `tracker instanceof SymbolTrackerImpl` case depends on the
+  assignability form — is byte-identical.
+
+The member name is `[Symbol.hasInstance]`: round 723's `computedSymbolKey` names a
+well-known-symbol member by its bracketed dotted text, so the lookup is a plain
+`getPropertyOfType`. A `static [Symbol.hasInstance]` on a CLASS declaration is out of
+scope — `resolveInstanceOfRhsType` answers a class from its declared type before reaching
+here — and is recorded rather than guessed at.
+
+**Measured: 5 ours-only rows → 0, and pristine-only 8 → 7 (a true positive GAINED).**
+
+### 3.6 The queue entry was wrong about its own second fixture
+
+(CHK.12) was written as "11 rows over two fixtures". The second,
+`controlFlowInstanceofWithSymbolHasInstance`, is **7 rows and 6 of them are a PARSER GAP**
+(`abstract new (...args: any) => infer U`), not narrowing at all. That is the third round
+running in which re-measuring each row against pristine BEFORE building anything moved the
+scope — and it cost one command.
+
+---
+
 ## 4. What to take next
 
 Ranked by (rows × confidence it is a genuine FP × smallness):
 
 1. **`indexSignatures1` TS1268 ×12** — one fixture, one code, a decidable predicate
    ("does this parameter type reduce to string/number/symbol or a template-literal type",
-   through aliases, unions and intersections). The (CHK.5)(e) axis.
+   through aliases, unions and intersections). The (CHK.5)(e) axis. **(CHK.9)**
 2. **`strictPropertyInitialization` TS2564 ×4** — definite assignment through
-   `this[<late-bound key>] = …`. Small, and in the arc's own family.
-3. **Element-access discriminant narrowing (11 rows)** — `getTypeOfElementAccess` applies
-   no narrowing; CLAUDE.md already records the gap and its consumers.
-4. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
-5. **`Symbol.hasInstance` narrowing (11 rows)** — a self-contained narrowing rule.
-6. **The strict-by-default convention (42 rows)** — an owner-level decision, not a fix.
+   `this[<late-bound key>] = …`. Small, and in the arc's own family. **(CHK.10)**
+3. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
+   `abstract new (…) => T` (6 rows) and `infer X extends` (17) are the same class.
+   **(CHK.14)**
+4. **The `instanceof` INTERSECTION tail (1 row here, but a general rule)** — tsc's
+   `getNarrowedType` falls back to `t & candidate` when neither direction relates; ours
+   answers the candidate alone, so the branch join widens. **(CHK.15)**
+5. **The strict-by-default convention (42 rows)** — an owner-level decision, not a fix.
+   **(CHK.13)**
+
+~~Element-access discriminant narrowing~~ and ~~`Symbol.hasInstance` narrowing~~ are
+CLOSED (round 942, § 3.4 / § 3.5).

@@ -20,6 +20,121 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 942 (2026-08-19) — (CHK.11) + (CHK.12): THE TWO NARROWING FALSE-POSITIVE FAMILIES,
+AND THEY SHARE ONE CAUSE ONE LEVEL DOWN — **tsc's `isMatchingReference` compares references
+by SYMBOL and ours compares the path STRINGS `getReferencePath` builds.** 16 of the
+narrowing bucket's 27 ours-only rows closed; the sweep 334 -> 318 with ZERO fixtures
+regressed and a true positive GAINED.**
+
+**THE PRISTINE-vs-OURS TABLE** (our binary over pristine's OWN inputs, `(file, line, code)`
+differenced against pristine's own `.errors.txt`):
+
+| fixture | ours-only before | after | pristine-only before | after |
+|---|---:|---:|---:|---:|
+| `typeGuardNarrowsIndexedAccessOfKnownProperty1` (CHK.11) | 11 | **0** | 0 | 0 |
+| `typeGuardsWithInstanceOfBySymbolHasInstance` (CHK.12) | 5 | **0** | 8 | **7** |
+| `controlFlowInstanceofWithSymbolHasInstance` (CHK.12's other fixture) | 7 | 7 | 0 | 0 |
+
+**DID THE TWO FAMILIES SHARE A CAUSE? YES, and it is worth stating as one sentence**: both
+are the compiler asking "is this the same reference / the same instance type" through a
+representation that cannot express what tsc's does. (CHK.11) is the path STRING; (CHK.12) is
+the missing `[Symbol.hasInstance]` leg plus an `instanceof` that filters a UNION candidate
+with the STRUCTURAL relation where tsc uses the NOMINAL one. They were established as
+separate before either was designed — the queue said one was `getTypeOfElementAccess` and the
+other `resolveInstanceOfRhsType`, and both turned out to be true.
+
+**(CHK.11), FOUR mechanisms.** `singleLevelDiscriminantSegment` — the switch's discriminant
+reader accepts `name[seg]` beside `name.seg`. `getTypeOfElementAccess` flow-narrows its UNION
+RECEIVER, the B1.1 gate its dotted twin has always had. `getReferencePath` NORMALISES an
+identifier-spellable string index onto the DOTTED segment, because the fixture mixes both
+spellings inside ONE expression (`s[0]["sub"].under["shape"]`) — a non-spellable index
+(`"dash-ok"`, `0`) keeps round 461's bracket encoding, so no path can collide with a dotted
+segment and `flowPathRoot`/`pathPrefixOf` already split on `[`. And `requiredEnumSwitchKeys`
++ `paramMemberChainType` accept an element-access discriminant and a MULTI-segment receiver,
+which is the two TS2366 "function lacks ending return statement".
+
+**A FIFTH MECHANISM WAS WRITTEN, MEASURED INERT AND REMOVED — and the ablation is what found
+it.** Narrowing the access's own union RESULT (the 17.34d half, the exact symmetric line to
+`getTypeOfPropertyAccess`) looked obviously right and reddened **NONE** of the round's 21
+pins; no probe could be built where it fires either, because the `typeof` guard does not
+reach an element-access reference at all (`if (typeof h[0] === "string") { … h[0] }` still
+reports the declared `string | number` with it in place). A flow walk on a hot path with no
+consultation that can observe it is CLAUDE.md's round-887 shape, so it went — which also gave
+back part of the round's `narrow.walks` cost.
+
+**(CHK.12), and TWO rules read off PRISTINE's own baseline rather than guessed.** `instanceof`
+now asks the RHS type for a `[Symbol.hasInstance]` method whose return is a non-`asserts` TYPE
+PREDICATE over parameter 0, and uses its target — round 838's `instanceTypeOfConstructorValue`
+named that leg as its one deliberate omission, and it is what answers the three shapes
+`prototype` and the construct signatures cannot (a GENERIC construct signature, SEVERAL
+construct signatures, one returning `any`). (i) **A usable predicate DECIDES**: `value is any`
+narrows NOTHING and must not fall through to the construct signature — pristine reports
+`string | F` at its own lines 142/143 with a perfectly good `new (): any` beside it. (ii) **An
+`instanceof` stays `checkDerived = true` even when the candidate came from a predicate**, so a
+UNION candidate is DISTRIBUTED and its narrow-down direction is the NOMINAL base-chain test,
+not assignability: `C1 | A` narrowed by `C1 | C2` is **C1** (`A` is structurally a supertype
+of BOTH candidates, so the assignability form mapped it onto the whole union and then reported
+`bar1` missing on `C2`), while `B0 | string` narrowed by `D1 extends B0` is still **D1**.
+SCOPED to a union candidate, so round 425's single-candidate arm — whose `tracker instanceof
+SymbolTrackerImpl` case depends on the assignability form — is byte-identical.
+
+**AND THE QUEUE ENTRY WAS WRONG ABOUT ITS OWN SECOND FIXTURE, WHICH IS THE THIRD ROUND RUNNING
+THAT RE-MEASURING FIRST HAS PAID FOR.** (CHK.12) was written as "11 rows over two fixtures";
+`controlFlowInstanceofWithSymbolHasInstance` is **7 rows and SIX of them are a PARSER GAP** —
+`abstract new (...args: any) => infer U` — with TS1005/TS1068/TS1128 cascading into
+TS2355/TS2564/TS2304. Its one genuine narrowing row is the missing `instanceof` INTERSECTION
+tail. Both queued with their three-line probes as **(CHK.14)** and **(CHK.15)**; (CHK.14) also
+records a SECOND, separable defect the same probe found — the NON-abstract
+`T extends (new (…) => infer U) ? U : never` parses and then reports TS2304 for `U`, i.e. an
+`infer` inside a PARENTHESIZED extends clause does not publish its name.
+
+**ABLATION — 9 arms, ONE MISTAKE AT A TIME, from a sha256-VERIFIED snapshot, diffed against
+the SNAPSHOT and never with `git checkout`** (`scripts/round942-ablate.py`; every arm asserts
+`ran 21`):
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---:|---|
+| A1 | the switch discriminant reader refuses a BRACKET segment | 1 | the numeric-index pin — and ONLY that one, because a SPELLABLE index is already normalised onto the dotted branch by A3's mechanism |
+| A2 | an element access stops narrowing its UNION RECEIVER | 3 | the two element-access reads and the numeric-index pin |
+| A3 | a spellable string index stops normalising onto the dotted segment | 3 | exactly the three MIXED-SPELLING pins |
+| A4 | the exhaustive-switch key reader refuses an ELEMENT-ACCESS discriminant | 2 | both TS2366 pins |
+| A5 | the exhaustiveness receiver walk goes back to ONE dotted segment (round 470) | 1 | the DEEP mixed-spelling TS2366 pin |
+| A9 | an element access stops narrowing its own union RESULT | **0** | **nothing — which is why that mechanism was deleted rather than shipped** |
+| A6 | the `[Symbol.hasInstance]` leg is removed | 7 | every CHK.12 positive plus the `any` bound |
+| A7 | a UNION candidate stops being distributed nominally | 2 | the `C1 \| A` pair |
+| A8 | the leg's BOUND: a wide predicate target falls THROUGH instead of deciding | 1 | the `value is any` bound pin, alone |
+
+**TWO ARMS REFUSED ON THEIR FIRST RUN AND BOTH REFUSALS WERE THE HARNESS DOING ITS JOB**, not
+noise: A4's `if (false && expr is …)` mistake DROPS Kotlin's smart cast, so the arm stopped
+COMPILING and read `ran 0`; A9's anchor (`if (raw is Type.Union && getReferencePath(expr) …)`)
+occurs VERBATIM in `getTypeOfPropertyAccess` too, and the driver refused a 2-hit anchor rather
+than ablating the wrong function. Both were re-run with corrected mistakes. **Four pins are
+green in all nine arms and are recorded as REGRESSION GUARDS rather than claimed as
+discriminators**: the dotted-discriminant control, the dynamically-indexed bound, the
+non-first-parameter bound, and the no-`hasInstance` construct-signature control.
+
+**A THIRD TRAP, MEASURED: `o["a"]` where `a?: string` is `string` in this compiler, not
+`string | undefined`** — optionality is a symbol attribute and is not folded into the property
+type (CLAUDE.md already says so about the relation; it is equally true of the READ). A
+"negative control" written on that shape passed vacuously and had to be replaced with a
+MULTI-SEGMENT mixed-spelling shape, which is what pins the normalisation.
+
+**GATES.** Suite **15,214 -> 15,235 / 0 failures / 3 skipped** (+21 = exactly this round's
+pins), **NO corpus baseline moved**. **8-profile before/after BINARY grid** (two
+sha256-verified arms, profiles enumerated by `tsconfig.json` and refused below 8):
+**added=0 removed=0 on ALL EIGHT.** **630-fixture PRISTINE sweep, both arms: 334 -> 318 rows
+over 81 -> 79 fixtures, ZERO fixtures regressed, pristine-only 776 -> 775** (a true positive
+GAINED). `cost_gate.py` moves one family — `narrow.walks` **+0.15%** and `narrow.memoServed`
+**+0.14%**, the element-access receiver's new flow reads, with `typeOfExpr.calls` **-0.01%**
+because a narrowed receiver resolves its member without the union fold: a REACHED-NESS proof,
+rebaselined in the same commit. `huge_methods.py --fail-over 0` green on **all six** module
+class dirs. No `spine*EnterNode` changed, so `spine_closure_audit.py` does not apply.
+
+**NEXT.** (CHK.14) the `abstract new` / parenthesized-`infer` parser gaps (6 rows measured
+plus the 17-row `infer X extends` family and the 33-row `using` family they join); (CHK.15)
+the `instanceof` intersection tail. (CHK.9) and (CHK.10) are unchanged and still the smallest
+genuine-FP items; (CHK.13) remains an owner decision.
+
 **Round 941 (2026-08-19) — (CHK.8): THE 630-FIXTURE PRISTINE SWEEP, TRIAGED — AND THE
 ROUND'S FIRST PRODUCT IS THAT **THE INSTRUMENT WAS WRONG ABOUT 30% OF ITS OWN ROWS**.
 121 of round 940's 397 OURS-ONLY rows were the sweep's configuration, not the compiler's
@@ -2028,20 +2143,65 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   family — note that the triage classifier exempts this fixture by name from the
   strict-by-default bucket for exactly this reason.
 
-- [ ] **(CHK.11) ELEMENT-ACCESS DISCRIMINANT NARROWING — 11 OURS-ONLY ROWS
-  (`typeGuardNarrowsIndexedAccessOfKnownProperty1`, round 941).** `switch (s['kind'])` /
-  `s[0].sub.under["shape"]`: a discriminated union narrowed through an ELEMENT ACCESS with a
-  literal index. `getTypeOfElementAccess` applies no narrowing at all (CLAUDE.md records the
-  gap and its consumers; `getReferencePath` has handled the shape since round 461 and the
-  flow walk compares path STRINGS), so the receiver stays un-narrowed and every member read
-  is TS2339 / TS2322 / TS2366.
+- [x] **(CHK.11) ELEMENT-ACCESS DISCRIMINANT NARROWING — 11 OURS-ONLY ROWS -> 0
+  (`typeGuardNarrowsIndexedAccessOfKnownProperty1`, round 942).** The cause is one sentence:
+  **tsc's `isMatchingReference` compares references by SYMBOL and ours compares the path
+  STRINGS `getReferencePath` builds**, and every discriminant reader was written against the
+  DOTTED spelling alone. FOUR mechanisms, all measured: `singleLevelDiscriminantSegment` (the
+  switch reader accepts `name[seg]`); `getTypeOfElementAccess` flow-narrows its UNION
+  RECEIVER (B1.1's gate, which its dotted twin has always had); `getReferencePath`
+  NORMALISES an identifier-spellable string index onto the dotted segment, because the
+  fixture mixes both spellings inside one expression (`s[0]["sub"].under["shape"]`); and
+  `requiredEnumSwitchKeys` + `paramMemberChainType` accept an element-access discriminant and
+  a multi-segment receiver, which is the two TS2366. **A FIFTH — the 17.34d half, narrowing
+  the access's own union RESULT — was written, measured INERT (its ablation arm reddened NONE
+  of the 21 pins and no probe could be built where it fires) and REMOVED.** **Measured: 11 -> 0, sweep 334 -> 318 with zero fixtures regressed, 8-profile grid
+  added=0 removed=0.** `docs/pristine-divergences.md` § 3.4.
 
-- [ ] **(CHK.12) `Symbol.hasInstance` NARROWING — 11 OURS-ONLY ROWS OVER TWO FIXTURES
-  (`typeGuardsWithInstanceOfBySymbolHasInstance`, `controlFlowInstanceofWithSymbolHasInstance`,
-  round 941).** An `instanceof` whose RHS declares `static [Symbol.hasInstance](x): x is T`
-  narrows in pristine and not here, so every member read on the narrowed reference is
-  TS2339. Self-contained: one arm in the `instanceof` narrowing rule beside round 838's
-  `resolveInstanceOfRhsType`.
+- [x] **(CHK.12) `[Symbol.hasInstance]` NARROWING — 5 OURS-ONLY ROWS -> 0, AND THE ENTRY WAS
+  WRONG ABOUT ITS OWN SECOND FIXTURE (round 942).** `instanceof` now asks the RHS type for a
+  `[Symbol.hasInstance]` method whose return is a non-`asserts` TYPE PREDICATE over parameter
+  0 and uses its target — round 838's `instanceTypeOfConstructorValue` named that leg as its
+  one deliberate omission — which answers the three shapes `prototype` and the construct
+  signatures cannot: a GENERIC construct signature, SEVERAL construct signatures, and one
+  returning `any`. **Two rules read off PRISTINE's baseline and re-read off tsgo 7.0.2: a
+  usable predicate DECIDES (a `value is any` target narrows NOTHING and must not fall through
+  — pristine's own lines 142/143), and an `instanceof` stays `checkDerived = true` even when
+  the candidate came from a predicate, so a UNION candidate is DISTRIBUTED and its
+  narrow-down direction is the NOMINAL base-chain test (`C1 | A` narrowed by `C1 | C2` is
+  `C1`), scoped to a union candidate so round 425's single-candidate arm is byte-identical.**
+  Measured: 5 -> 0 with pristine-only 8 -> 7, i.e. a true positive GAINED.
+  **The entry's other fixture is MIS-BUCKETED**: `controlFlowInstanceofWithSymbolHasInstance`
+  is 7 rows of which **6 are a PARSER GAP** (`abstract new (...) => infer U`), queued as
+  (CHK.14), and 1 is the `instanceof` intersection tail, queued as (CHK.15). Out of scope by
+  construction: a `static [Symbol.hasInstance]` on a CLASS declaration, which
+  `resolveInstanceOfRhsType` answers from the declared type before the leg is reached.
+  `docs/pristine-divergences.md` § 3.5.
+
+- [ ] **(CHK.14) `abstract new (…) => T` DOES NOT PARSE, AND NEITHER DOES `infer U` INSIDE A
+  PARENTHESIZED CONDITIONAL EXTENDS — 6 OF THE 7 SURVIVING ROWS OF
+  `controlFlowInstanceofWithSymbolHasInstance` (MEASURED round 942, isolated to three lines).**
+  `type X = T extends (abstract new (...args: any) => infer U) ? U : never` gives
+  TS1005 ×3 / TS1068 ×2 / TS1128 and then cascades into TS2355 / TS2564 / TS2304 for the names
+  the failed parse never bound; the standalone `type X = abstract new () => number` fails the
+  same way. **A SECOND, SEPARABLE defect in the same three-line probe**: the NON-abstract form
+  `T extends (new (...args: any) => infer U) ? U : never` PARSES and then reports
+  **TS2304 `Cannot find name 'U'`** at the true branch — an `infer` inside a PARENTHESIZED
+  extends clause does not publish its name. Same class as the `using` / `infer X extends`
+  cascades in `docs/pristine-divergences.md` § 2.3; one parser feature closes each.
+
+- [ ] **(CHK.15) THE `instanceof` POSITIVE BRANCH HAS NO INTERSECTION TAIL — 1 OURS-ONLY ROW,
+  BUT A GENERAL RULE (`controlFlowInstanceofWithSymbolHasInstance` line 26, round 942).**
+  `s = new Set<number>(); if (s instanceof Promise) {} s.add(42)` reports
+  `Property 'add' does not exist on type 'Promise<any> | Set<number>'` where pristine is
+  silent: tsc's `getNarrowedType` ends in `maybeTypeOfKind(t, Instantiable) … ?
+  getIntersectionType([t, c])`, so the then-branch is `Set<number> & Promise<any>` and the
+  JOIN back is `Set<number>`; ours answers the CANDIDATE alone (`narrowByInstanceOf`'s
+  `isMatch -> classType`), so the join is a union. `narrowByCallPredicateWorker` already
+  carries the equivalent round-425 "positive-empty INTERSECTION fallback" for a PREDICATE
+  target — this is the same rule at the `instanceof` site, and its blast radius is every
+  `instanceof` in the program, so it needs the 8-profile grid and the 630-fixture sweep, not
+  a pin alone.
 
 - [ ] **(CHK.13) THE STRICT-BY-DEFAULT CONVENTION IS THE LARGEST *SYSTEMATIC* DIVERGENCE
   LEFT — 42 OURS-ONLY ROWS OVER 23 GROUPS, AND IT IS AN OWNER DECISION, NOT A FIX (round

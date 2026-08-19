@@ -1085,3 +1085,35 @@ The comma/nullish-predicates ordering contracts are STRUCTURAL since round 541 (
 - **`emitDeclarationOnly` still needs checker**: Multi-file compilation with `emitDeclarationOnly` must still parse/bind/check files for diagnostics like TS1210. But use `declarationOnly = true` to limit checks — running the full checker produces FPs like TS6131 that TypeScript's declaration-only mode suppresses.
 - **`isAlwaysTruthyExpr` vs `isAlwaysTruthyForOrExpr`**: In `||` contexts, TypeScript flags object-like expressions (function, arrow, object, array, class, regex) and non-empty string literals. Numeric literals and `new` expressions are NOT flagged in `||` but ARE flagged in `if`/`else if` conditions.
 
+
+### Round 942 — element-access narrowing and `[Symbol.hasInstance]` (per-walker detail)
+
+- **`singleLevelDiscriminantSegment(subjectPath, name)` is the ONE reader that decides "is this
+  subject exactly one member below the walked reference", for BOTH spellings.** `narrowBySwitchClause`
+  uses it twice (the direct subject and the round-425 ALIASED subject). It refuses a bracket segment
+  that itself contains a path separator (`name["a.b"]`) — a member name that is genuinely dotted, which
+  no name-keyed reader could tell from `name.a.b`; that is a known, recorded no-narrow, not an oversight.
+- **`requiredEnumSwitchKeys`'s element-access arm deliberately does NOT mirror round 477's AST
+  fallback**, because that fallback matches a member by an Identifier/StringLiteral declaration NAME and
+  a computed key (`["dash-ok"]: "square"`) does not present one. Only the resolved-type leg
+  (`requiredUnionDiscriminantKeys`) is reached from a bracket discriminant.
+- **`paramMemberChainType` is now a SEGMENT LOOP, not one dotted hop** (round 470's single segment is
+  its one-segment case). It accepts a literal-indexed element access beside a dotted access because
+  pristine's `typeGuardNarrowsIndexedAccessOfKnownProperty1` mixes both inside one receiver
+  (`s[0]["sub"].under["shape"]`). Still FP-safe by construction: its answer only feeds the
+  exhaustiveness proof, which only SUPPRESSES.
+- **`symbolHasInstancePredicateType` returns the RAW predicate target and the CALLER decides what a wide
+  one means** — that split is load-bearing: a usable predicate must DECIDE (answer "no narrowing" for
+  `value is any`) rather than fall through to `prototype`/the construct signatures, which is what
+  reproduces pristine's own `string | F` rows. It accepts only a `MethodDeclaration`-shaped member (an
+  interface member and a TypeLiteral member are both `ClassElement`, so one arm covers both), only an
+  IDENTIFIER predicate over PARAMETER 0, and never an `asserts` one. A `static [Symbol.hasInstance]` on
+  a CLASS is out of scope by construction — `resolveInstanceOfRhsType` answers a class from its declared
+  type before `instanceTypeOfConstructorValue` is reached.
+- **`narrowByInstanceOf`'s union-candidate arm uses `isInstanceOfClass` in BOTH directions (the nominal
+  test), and the single-candidate arm still uses `checkTypeRelatedTo` for the narrow-down direction.**
+  The asymmetry is deliberate and scoped: round 425's `tracker instanceof SymbolTrackerImpl` case depends
+  on the assignability form, and no union candidate could reach that arm before round 942 introduced one.
+- **The lib's `Function[Symbol.hasInstance]` returns `boolean`, not a predicate**, so the leg answers
+  null for it and every ordinary constructor keeps its pre-942 behaviour; that is why the 8-profile grid
+  is added=0 removed=0.
