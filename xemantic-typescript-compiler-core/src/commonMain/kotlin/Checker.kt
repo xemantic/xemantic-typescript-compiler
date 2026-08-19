@@ -39056,6 +39056,18 @@ class Checker(
                 type.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
                 collectInferTypeNames(type.type, scope)
             }
+            // A CONSTRUCT signature type is the function type's twin and publishes an
+            // `infer` exactly the same way — `T extends new () => infer U ? U : never`.
+            // Its ABSENCE here was the whole of the reported "an `infer` inside a
+            // parenthesized extends clause does not publish its name": parentheses are
+            // irrelevant (`ParenthesizedType` recurses two arms up), the CONSTRUCTOR is
+            // what was missing, and the unparenthesized spelling failed identically.
+            // `collectInferDecls`'s own ConstructorType arm names this walker as the
+            // sibling it is keeping parity with — the parity only went one way.
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { collectInferTypeNames(it, scope) } }
+                collectInferTypeNames(type.type, scope)
+            }
             is RestType -> collectInferTypeNames(type.type, scope)
             is TypeOperator -> collectInferTypeNames(type.type, scope)
             is NamedTupleMember -> collectInferTypeNames(type.type, scope)

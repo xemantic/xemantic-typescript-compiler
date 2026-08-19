@@ -9318,6 +9318,19 @@ class Parser(
 
     private fun parsePrimaryType(): TypeNode {
         val pos = getPos()
+        // `abstract new (…) => T` (TS 4.2) — an ABSTRACT construct signature type.
+        // tsc's `isStartOfFunctionTypeOrConstructorType` admits `abstract` here ONLY when
+        // the very next token is `new`; its `parseModifiersForConstructorType` then consumes
+        // the one modifier and falls into the ordinary constructor-type production.  The
+        // lookahead is what keeps this additive: `abstract` is a plain identifier in type
+        // position (`type X = abstract`, a type NAMED `abstract`), and every such spelling
+        // still reaches the `else` arm below untouched.
+        if (token == SyntaxKind.AbstractKeyword &&
+            scanner.lookAhead { scanner.scan() == SyntaxKind.NewKeyword }
+        ) {
+            nextToken()  // consume 'abstract'; the node still starts at `pos`
+            return parseConstructorType(modifiers = setOf(ModifierFlag.Abstract), startPos = pos)
+        }
         return when (token) {
             AnyKeyword, StringKeyword, NumberKeyword,
             BooleanKeyword, BigIntKeyword, SymbolKeyword,
@@ -9665,14 +9678,28 @@ class Parser(
         )
     }
 
-    private fun parseConstructorType(): TypeNode {
-        val pos = getPos()
+    /**
+     * `new (…) => T`, and since the `abstract` arm of [parsePrimaryType] also
+     * `abstract new (…) => T`.
+     *
+     * [startPos] exists because an `abstract` prefix has already been consumed by the time
+     * this runs, and the node must still span from that keyword — `getPos()` here would
+     * report the `new`.  -1 (the default) means "start where I am".
+     */
+    private fun parseConstructorType(
+        modifiers: Set<ModifierFlag> = emptySet(),
+        startPos: Int = -1,
+    ): TypeNode {
+        val pos = if (startPos >= 0) startPos else getPos()
         nextToken() // skip 'new'
         val typeParams = parseTypeParametersOpt()
         val params = parseParameterList()
         parseExpected(SyntaxKind.EqualsGreaterThan)
         val type = parseType()
-        return ConstructorType(typeParameters = typeParams, parameters = params, type = type, pos = pos, end = getEnd())
+        return ConstructorType(
+            typeParameters = typeParams, parameters = params, type = type,
+            modifiers = modifiers, pos = pos, end = getEnd(),
+        )
     }
 
     private fun parseImportType(): TypeNode {

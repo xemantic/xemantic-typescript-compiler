@@ -87,7 +87,7 @@ comparable; the right-hand column records what each has cost since.
 |---:|---:|---|---|---|---|
 | 89 | 23.9 | FP — type system / inference | **83 genuine FP · 6 convention** | `variadicTuples1` TS2322 ×15 + TS2345 ×14 | **SUB-TRIAGED round 943** — 68 of the 83 are MODELLING; 2 fixed |
 | 59 | 15.8 | HARNESS — jsx configuration | **harness artefact** | `tsxLibraryManagedAttributes` TS2874 ×27 | not yet measured |
-| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | open, (CHK.14) |
+| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** (from a parse failure) | `usingDeclarations*` (4 fixtures, 33 rows), `infer X extends` (17) | **SUB-TRIAGED round 947** — six families, not two; 15 rows fixed, 8 re-bucketed |
 | 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 ×17 | owner decision, (CHK.13) |
 | 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23 rows) | frozen subsystem |
 | 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 ×12 | (CHK.9) CLOSED round 945; (CHK.10) open |
@@ -163,12 +163,39 @@ i.e. the JSX namespace still is not resolved the way the real harness resolves i
 this bucket as **not yet measured** rather than as a compiler finding: it needs the
 fixture's real `@filename` layout and jsx-runtime shims, which this clone does not carry.
 
-### 2.3 PARSER GAP — unsupported syntax (59 rows, 29 groups)
+### 2.3 PARSER GAP — unsupported syntax (59 rows, 29 groups) — SUB-TRIAGED, round 947
 
-`using` / `await using` declarations (33 rows over four fixtures), `infer X extends`
-(17 over `inferTypes1` / `inferTypesWithExtends1`), `accessor` fields under ES decorators
-(3), `privateIndexer2` (3). Every row is a CASCADE: a parse failure followed by TS2304 /
-TS2693 for names the failed parse never bound. One parser feature closes each group.
+Round 941 filed this bucket as *"`using`, `infer X extends`"*. **Both halves of that label
+are wrong in a way that matters, and the bucket is SIX families, not two** (measured at
+`56f304a4`, where the bucket is **56** rows — round 945 having already closed the three
+`esDecorators-*` `accessor` rows as part of the downlevel-target family, § 3d.1):
+
+| # | family | fixtures | rows | what it really is |
+|---|---|---|---:|---|
+| P1 | `using` / `await using` declarations | `usingDeclarations*` ×4 | **33** | a genuine unimplemented FEATURE — **SCOPED OUT, (CHK.25)** |
+| P2 | `infer U extends T` vs the conditional's own `?` | `inferTypesWithExtends1` | **8** | a genuine parser gap needing a parse CONTEXT — **SCOPED OUT, (CHK.26)** |
+| P3 | `abstract new (…) => T` | `inferTypes1` | **5** | one grammar production — **CLOSED round 947** (+6 more rows outside this bucket) |
+| P4 | an `infer` in a CONSTRUCTOR type's RETURN | `inferTypes1` 33/34-equivalent, `inferTypesWithExtends1` | **2** | not a parser gap at all — a CHECKER walker missing one arm — **CLOSED round 947** (+2 outside) |
+| P5 | `privateIndexer2` — `private [x: string]: string` | 1 | **3** | a deliberately ILLEGAL fixture: **RE-BUCKETED to § 2.5** |
+| P6 | `topLevelAwaitErrors.1` — `@await` parameter decorators, `(infer A) extends …` | 2 | **5** | likewise deliberately illegal: **RE-BUCKETED to § 2.5** |
+
+**`infer X extends` ALREADY PARSED.** `T extends [infer U extends string] ? U : never`,
+`T extends { a: infer U extends number } ? U : never` and the bare
+`T extends infer U extends string ? U : never` are all silent today and have been:
+`parseTypeParameter` handles the constraint, because the `infer` production hands it the
+whole type parameter. What `inferTypesWithExtends1` actually reports (P2) is the
+**DISAMBIGUATION**: tsc's `tryParseConstraintOfInferType` parses `extends <type>` with
+conditional types disallowed and **rolls the whole `extends` back** when the next token is
+`?` — unless it is already in a disallow-conditional context — so
+`infer U extends number ? 1 : 0` is a CONDITIONAL and `T extends infer U extends string ?
+U : never` is a constrained infer. We take the constraint unconditionally, which is right
+for the second and cascades on the first. Closing it needs the `disallowConditionalTypes`
+CONTEXT threaded through `parseType`'s conditional production — i.e. an edit to the exact
+production the frozen-subsystem warning is about, not a one-arm addition. **(CHK.26)**
+
+**And the eight P5/P6 rows are not a gap at all.** `private [x: string]: string;` inside an
+object literal and `method1(@await [x]) {}` are inputs pristine itself rejects; what differs
+is the SHAPE of the recovery cascade, which is § 2.5's subject and a frozen subsystem.
 
 ### 2.4 CONVENTION — strict-by-default (42 rows, 23 groups)
 
@@ -578,6 +605,97 @@ predate this round and are not specific to it.
 
 ---
 
+## 3f. Closed by round 947 — (CHK.14), 15 rows over four fixtures
+
+Measured, one arm each, same box and same session, on the 630-fixture population:
+
+| column | before | after |
+|---|---:|---:|
+| OURS-ONLY (candidate false positives) | 297 over 75 fixtures | **282 over 74 fixtures** |
+| PRISTINE-ONLY | 769 | **769** |
+
+| fixture | before | after | which fix |
+|---|---:|---:|---|
+| `controlFlowInstanceofWithSymbolHasInstance` | 7 | **1** | `abstract new` (the 1 left is (CHK.15)) |
+| `inferTypes1` | 7 | **2** | `abstract new` (the 2 left are § 2.5 recovery) |
+| `inferTypesWithExtends1` | 10 | **8** | the constructor-type `infer` (the 8 left are (CHK.26)) |
+| `declarationEmitShadowingInferNotRenamed` | 2 | **0** | the constructor-type `infer` |
+
+**No other fixture moved in either direction**, and PRISTINE-ONLY is flat — so neither
+change deleted a true positive anywhere in the population.
+
+### 3f.1 `abstract new (…) => T` — one grammar production, guarded by one lookahead
+
+TypeScript 4.2's abstract construct signature type. tsc's
+`isStartOfFunctionTypeOrConstructorType` admits an `abstract` in type position **only when
+the very next token is `new`**, and `parseModifiersForConstructorType` then consumes that
+one modifier before the ordinary constructor-type production runs. `parsePrimaryType` now
+opens with exactly that test, and `ConstructorType` already carried a `modifiers` field for
+it to fill.
+
+**The lookahead is the whole of what keeps the arm additive**, because `abstract` is an
+ordinary identifier in type position — `type Named = abstract` is a reference to a type
+NAMED `abstract`, which `checkIdentifierResolved` exempts by name. Dropping the lookahead
+(ablation arm A2) reddens exactly that pin and nothing else.
+
+**The node starts at the `abstract`, not at the `new`** — the production's own `getPos()`
+would report the `new`, since the keyword is already consumed. **No diagnostic in the core
+can see the difference**: TS1386 (the union-parenthesization rule, which is what proves the
+abstract form produces a real `ConstructorType`) spans from the union MEMBER start to
+`prevTokenEnd`, never from `node.pos`. The span bound is therefore pinned in
+`-project`, where a node span is an ANSWER rather than an implementation detail — arm A4
+reads RED 0 in core and RED 1 there.
+
+### 3f.2 The `infer` half — and its filed diagnosis was backwards
+
+Round 942 recorded the second defect as *"an `infer` inside a PARENTHESIZED extends clause
+does not publish its name"*, and queued it as a parser item. **Parentheses are irrelevant
+and it is not the parser.** `collectInferTypeNames` — the walker that publishes a
+conditional's `infer` names into the scope the INV.4(c)(iii) family resolves the true branch
+against — recurses through `ParenthesizedType` and always has; what it had no arm for is
+**`ConstructorType`**. So the UNPARENTHESIZED spelling
+`T extends new () => infer U ? U : never` fails identically, and the PARENTHESIZED
+FUNCTION-type spelling `T extends ((a: any) => infer U) ? U : never` has always worked.
+
+Its sibling `collectInferDecls` carries the arm already, with a comment saying it is
+keeping "walker parity" with this one. **The parity only ever went one way.**
+
+**What is still held as a false NEGATIVE**: the `infer` now RESOLVES as a name but not as a
+TYPE — `D<new () => K>` where `type D<T> = T extends new () => infer U ? U : never` answers
+`any`, not `K`. Pinned as scoped-out. And `modifiers` on the parsed node is read by NOTHING
+in the checker: tsc's TS2511 through an abstract construct signature value is the named
+future consumer, so the abstract-ness is recorded faithfully on the AST and consulted
+nowhere — stated here rather than left for a next agent to discover.
+
+### 3f.3 The ablation — four arms, one mistake at a time
+
+`scripts/round947-ablate.py`, each arm applied to and restored from a sha256-verified
+snapshot (never `git checkout`), diffed against the SNAPSHOT rather than HEAD, each
+asserting `ran 19` across the two modules so a dead build or an empty `--tests` filter reads
+as a failure. Two arms per fix by design: one removes the fix, one removes its BOUND.
+
+| arm | the injected mistake | RED | what it establishes |
+|---|---|---:|---|
+| A1 | delete the `abstract new` production entirely | **7** | every abstract-form positive, plus the span pin |
+| A2 | the BOUND — fire on every `abstract` in type position, no `new` lookahead | **1** | uniquely: `abstract` alone in type position is still an ordinary type name |
+| A3 | delete the `ConstructorType` arm from `collectInferTypeNames` | **6** | every `infer`-through-a-constructor positive, both pristine shapes included |
+| A4 | the BOUND — start the node at the `new` | **1** | uniquely against A2/A3: the `abstract` keyword is inside the node (`-project` only) |
+
+**One pin first read GREEN under its own arm and it was the PIN's defect, not the guard's**
+(round 902's law): `a standalone abstract construct signature type parses` was written with
+`=> K` for a declared class, and the pre-947 misparse of THAT spelling — `abstract` as a
+type name followed by a `new` expression over a parenthesized arrow — happens to be silent.
+`=> number` is the spelling that cascades, and with it the pin reddens under A1.
+
+**8 of the 19 pins are green in all four arms and are recorded as regression guards or
+controls rather than claimed as discriminators** (round 807): the `abstract`-as-a-member-name
+and `abstract class` guards, the FUNCTION-type-`infer` guard, the plain-constructor-type span
+guard, the "the constructor type node starts at the abstract keyword" guard (arm A4 leaves it
+satisfied by the enclosing alias's own start), the TS2304 positive control, and the two
+scoped-out pins.
+
+---
+
 ## 4. What to take next
 
 Ranked by (rows × confidence it is a genuine FP × smallness). **Round 943's sub-triage
@@ -597,9 +715,14 @@ small work left is elsewhere.
    (an FP family invisible to both instruments, not the FN one the four TS2488 rows
    suggested). Those four rows were **(CHK.22)** and are **CLOSED round 946, § 3e** —
    pristine-only 773 -> 769 with ours-only FLAT at 297.
-4. **`using` declarations (33 rows)** — a parser feature; the largest single cascade.
-   `abstract new (…) => T` (6 rows) and `infer X extends` (17) are the same class.
-   **(CHK.14)**
+4. ~~`abstract new (…) => T`~~ and ~~an `infer` in a constructor type's return~~ —
+   **CLOSED round 947, § 3f**, 15 rows. The bucket's own label was wrong twice: `infer X
+   extends` already parsed, and the "parenthesized infer" defect was a CHECKER walker's
+   missing arm. What is left of the bucket is **`using` declarations (33 rows, (CHK.25))**
+   — the largest single cascade in the whole population and a genuine feature — and the
+   **`infer U extends T` / conditional-`?` disambiguation (8 rows, (CHK.26))**, which needs
+   a parse CONTEXT rather than a production. Eight further rows were RE-BUCKETED to § 2.5
+   as recovery divergences on deliberately illegal fixtures. **(CHK.14) CLOSED**
 5. **The `instanceof` INTERSECTION tail (1 row here, but a general rule)** — tsc's
    `getNarrowedType` falls back to `t & candidate` when neither direction relates; ours
    answers the candidate alone, so the branch join widens. **(CHK.15)**

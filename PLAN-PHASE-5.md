@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 947 (2026-08-19) — THE PARSER-GAP BUCKET SUB-TRIAGED: ROUND 941's LABEL
+("`using`, `infer X extends`") IS WRONG IN BOTH HALVES. THE BUCKET IS **SIX** FAMILIES;
+`infer X extends` ALREADY PARSES; THE "PARENTHESIZED `infer`" DEFECT IS NOT THE PARSER AT
+ALL. LANDED THE TWO SMALL ONES — OURS-ONLY **297 -> 282** OVER 75 -> 74 FIXTURES,
+PRISTINE-ONLY FLAT AT 769, ZERO FIXTURES REGRESSED, ZERO CORPUS BASELINES MOVED.**
+
+**THE SUB-TRIAGE FIRST, BECAUSE IT IS THE ROUND'S MAIN PRODUCT.** The bucket is 56 rows at
+HEAD (round 941 read 59; round 945 had already closed the three `esDecorators-*` `accessor`
+rows as part of its downlevel-target family without noticing they were counted here):
+
+| # | family | rows | verdict |
+|---|---|---:|---|
+| P1 | `using` / `await using` declarations | **33** | a genuine unimplemented FEATURE — SCOPED OUT, **(CHK.25)** |
+| P2 | `infer U extends T` vs the conditional's own `?` | **8** | a genuine gap needing a parse CONTEXT — SCOPED OUT, **(CHK.26)** |
+| P3 | `abstract new (…) => T` | **5** | one grammar production — **LANDED** (+6 rows outside the bucket) |
+| P4 | an `infer` in a CONSTRUCTOR type's RETURN | **2** | a CHECKER walker's missing arm — **LANDED** (+2 outside) |
+| P5/P6 | `privateIndexer2`, `topLevelAwaitErrors.1`, `inferTypes1` 83/85 | **8** | deliberately ILLEGAL inputs — **RE-BUCKETED** to the parser-RECOVERY bucket |
+
+**`infer X extends` PARSES AND ALWAYS HAS.** `T extends [infer U extends string] ? U :
+never`, `T extends { a: infer U extends number } ? U : never` and the bare
+`T extends infer U extends string ? U : never` are all silent today, because the `infer`
+production hands `parseTypeParameter` the whole type parameter and that function has always
+read a constraint. What `inferTypesWithExtends1` actually reports is tsc's DISAMBIGUATION
+rule (`tryParseConstraintOfInferType` + `disallowConditionalTypesAnd`), which is a parse
+CONTEXT threaded through `parseType`'s conditional production — i.e. an edit to the exact
+production CLAUDE.md's frozen-subsystem warning is about, not a one-arm addition. Scoped out
+with its mechanism written down.
+
+**`using` IS SCOPED OUT ON SIZE, NOT DIFFICULTY, AND THE DECIDING FACT IS AN INSTRUMENT ONE.**
+It is a statement form plus binding plus the block-scoped rules plus the disposability check
+plus EMIT — and **439 `usingDeclarations*` baselines exist upstream, most with
+`(module=…,target=…)` variations**, while this sparse clone carries essentially NO `using`
+case file, so **the generated corpus gates none of it**. A landing must bring its own emit
+gate; that is a round, not a rider.
+
+**WHAT LANDED (1), THE PARSER HALF.** `parsePrimaryType` opens with tsc's own test —
+`isStartOfFunctionTypeOrConstructorType` admits an `abstract` in type position ONLY when the
+very next token is `new`, and `parseModifiersForConstructorType` then consumes that one
+modifier before the ordinary constructor-type production runs. `ConstructorType` already
+carried the `modifiers` field. **The LOOKAHEAD is the whole of what makes the arm additive**
+— `abstract` is an ordinary identifier in type position (`type Named = abstract`), and
+dropping the lookahead reddens exactly that pin and nothing else.
+
+**WHAT LANDED (2), AND THE QUEUE ENTRY WAS BACKWARDS ABOUT IT.** (CHK.14) recorded the
+second defect as *"an `infer` inside a PARENTHESIZED extends clause does not publish its
+name"*. **Parentheses are irrelevant** — `collectInferTypeNames` recurses through
+`ParenthesizedType` and always has — and it is **not the parser**: the walker had no
+`ConstructorType` arm, so the UNPARENTHESIZED `T extends new () => infer U ? U : never`
+fails identically while the parenthesized FUNCTION-type spelling has always worked. Its
+sibling `collectInferDecls` carries the arm already, **with a comment saying it is keeping
+parity with this walker**. The parity only ever went one way. That one arm also closed
+`declarationEmitShadowingInferNotRenamed` (2 rows), which had been filed under
+"computed keys / declaration emit".
+
+**~40 MINUTES LOST TO A GRADLE BUILD I COULD NOT TELL FROM A SKIPPED ONE, AND THE FIX IS A
+POSITIVE CONTROL.** The `ConstructorType` arm read INERT through three rounds of probing —
+the fix was in the source, `javap`-visible line numbers matched, and the compiled behaviour
+was the OLD one. `./gradlew … -q 2>&1 | grep -E '^(e:|w:)'` prints nothing for a successful
+build, a skipped build AND a build whose output has not landed yet, so "BUILD_DONE" said
+nothing. What settled it in one run was making the walker register a MARKER name derived
+from the node class (`scope.addTypeParam("ZZ" + type::class.simpleName)`) and probing for
+that name: a marker that must resolve is a positive control on the whole path, source to
+class file to behaviour. (`strings` on the class file is NOT that control — its default
+minimum length is 4, so a 2-character literal reads as absent.)
+
+**ONE PIN FIRST READ GREEN UNDER ITS OWN ARM AND IT WAS THE PIN'S DEFECT** (round 902's law,
+paying for itself again): `a standalone abstract construct signature type parses` used
+`=> K` for a declared class, and the pre-947 misparse of THAT spelling — `abstract` as a type
+name followed by a `new` expression over a parenthesized arrow — happens to be silent.
+`=> number` cascades (TS2693), and with it the pin reddens under A1.
+
+**ABLATION — four arms, one mistake at a time, applied to and restored from a sha256-verified
+snapshot (never `git checkout`), each asserting `ran 19` ACROSS TWO MODULES.**
+
+| arm | the injected mistake | RED | what it establishes |
+|---|---|---:|---|
+| A1 | delete the `abstract new` production entirely | **7** | every abstract-form positive, plus the span pin |
+| A2 | the BOUND — fire on every `abstract` in type position, no `new` lookahead | **1** | uniquely: `abstract` alone in type position is still an ordinary type name |
+| A3 | delete the `ConstructorType` arm from `collectInferTypeNames` | **6** | every `infer`-through-a-constructor positive, both pristine shapes |
+| A4 | the BOUND — start the node at the `new` instead of the `abstract` | **1** | uniquely against A2/A3 — and RED **0** in core |
+
+**A4 IS THE ENTRY WORTH KEEPING: A SPAN BOUND CAN BE UNOBSERVABLE FROM THE CORE AND
+MEASURABLE ONE MODULE OVER.** No diagnostic in this compiler is positioned from a
+`ConstructorType`'s `pos` — TS1386 (the union-parenthesization rule, which is what proves the
+abstract form produces a real `ConstructorType` node rather than merely parsing) spans from
+the union MEMBER start to `prevTokenEnd`. So the four-arm core ablation read the dropped span
+as RED 0, which round 946's law says to treat as "the mistake was not reached" until proven
+otherwise. It WAS reached; the core simply cannot see a node span. `-project` can — that is
+round 910's whole subject — and three pins there make the bound measurable. **8 of the 19
+pins are green in all four arms and are recorded as regression guards or controls** (round
+807), including `the constructor type node starts at the abstract keyword`, which arm A4
+leaves satisfied by the enclosing alias's own start.
+
+**GATES.** Suite **15,324 -> 15,343 / 0 failures / 3 skipped** (+19 = exactly this round's
+pins), **NO corpus baseline moved**; 8-profile BEFORE/AFTER **BINARY** grid `added=0
+removed=0` on ALL EIGHT (`scripts/round947-grid.sh` — two snapshotted class dirs, since a
+grammar production cannot be switched off at run time, so it REFUSES when the two arms'
+`Parser.class` and `Checker.class` are byte-identical); the 630-fixture pristine sweep
+**297 -> 282 ours-only / 769 -> 769 pristine-only, zero fixtures regressed** (both arms run
+against the two class-dir snapshots, output files DELETED before the wait — round 946's
+stale-file trap); `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py
+--fail-over 0` green on all six module class dirs (largest core method 5,187);
+`round920-token-gate.sh` **ALL INVARIANTS HOLD, 1,327 files / 101 M chars / 0 violations**;
+`spine_closure_audit.py` green. The after-arm sources rebuild to the measured
+`Parser.class` / `Checker.class` byte for byte.
+
+**NEXT.** **(CHK.25)** `using` declarations (33 rows) is the largest single item left in the
+whole ours-only population and the one that needs its own round with an emit gate;
+**(CHK.26)** the `infer`-constraint disambiguation (8 rows) is smaller but touches the frozen
+conditional-type production. Otherwise the ranked list in
+`docs/pristine-divergences.md` § 4 is unchanged: **(CHK.10)** definite assignment through a
+late-bound `this[k]` (4 rows, confirmed genuine), then **(CHK.18)** and **(CHK.15)**.
+
 **Round 946 (2026-08-19) — (CHK.22): THE ITERABILITY CHECK. tsc REJECTS A `for...of` OR SPREAD
 OPERAND WHOSE `[Symbol.iterator]` IS OPTIONAL OR WHOSE RETURN TYPE HAS NO `next()`; THIS
 COMPILER PERFORMED NO SUCH CHECK AT ALL, AT ANY TARGET. LANDED POSITIVE-EVIDENCE-ONLY:
@@ -1135,217 +1248,6 @@ scans at all.**
   INSTANCE member when a static and an instance share a name — that last one is the
   unfinished `staticMembers` dual-population and not a duplicate rule at all.
 
-**Round 937 (2026-08-18) — (CHK.5)(a): THE DECLARATION SIDE OF LATE-BOUND COMPUTED KEYS.
-ONE MISSING CAPABILITY, SIX EXTRACTION SITES, AND THE ROUND'S PRODUCT IS THAT **LEVELLING
-ONE SITE OF THE B451 FAMILY MAKES A *PRE-EXISTING* DRIFT IN ITS SIBLINGS REACHABLE — AND
-THE SIBLING THAT BREAKS IS NOT THE ONE THAT SHARES THE FEATURE, IT IS THE ONE WHOSE TWO
-HALVES READ DIFFERENT REPRESENTATIONS.** `checkImplementsClauses` and
-`classMemberNamesTransitive` compare a class's AST member names against a TARGET built
-from the resolved TYPE; both read `(name as? Identifier)?.text`. That was harmless while
-the type side dropped a computed key too, and became TS2420 / TS2741 false positives the
-moment it stopped — **including two that contain no computed key at all**
-(`interface I { 1: string }` + `class C implements I { 1: string }`, and the same through
-a `static 1`), which measured as false positives at HEAD and had simply never been reached.**
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, on nine scratch projects — 40 rows, both directions,
-  read from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit
-  --listAll` on the SAME directory before anything was written.**
-
-| the shape | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `interface I { [K]: number }`, `i.p` into a `string` | TS2322 | **silent — FN** | TS2322 |
-| `class C { [K]: number }`, `c.p` | TS2322 | **TS2339 — FP** | TS2322 |
-| `type T = { [K]: number }`, `t.p` | TS2322 | **TS2339 — FP** | TS2322 |
-| `interface I { [K](): number }`, `i.p()` | TS2322 | **silent — FN** | TS2322 |
-| `class C { [K](): number }`, `c.p()` | TS2322 | **silent — FN** | TS2322 |
-| `interface I { get [K](): number }`, `i.p` | TS2322 | **silent — FN** | TS2322 |
-| `class C { static [K]: number }`, `C.p` | TS2322 | **TS2339 — FP** | TS2322 |
-| `const x: I = {}` (a required `[K]`) | TS2741 `'[K]'` | **silent — FN** | TS2741 `'p'` |
-| `const x: I = { [K]: 1 }` — the key on BOTH sides | silent | **TS2353 `'[K]'` — FP** | silent |
-| `const x: I = { p: 1 }` | silent | **TS2353 `'p'` — FP** | silent |
-| `[CE.P]` / `[SE.Q]` / `[NS.K]` / `` [TT] `` / `[N]`=`1e3` / an alias chain | TS2322 | **silent — FN** | TS2322 |
-| a member INHERITED through an interface or class `extends` | TS2322 | **silent / FP** | TS2322 |
-| an interface inside a namespace, keyed on that namespace's const | TS2322 | **silent — FN** | TS2322 |
-| `class C implements I` where both spell `[K]` | silent | silent | silent — closed by A6 |
-| `interface I { 1: string }` + `class C implements I { 1: string }` | silent | **TS2420 — FP** | silent |
-| `interface T { 1: string }` + `declare class C { static 1: string }`, `t = C` | silent | **TS2741 — FP** | silent |
-| `interface J { [k: string]: number }` (an index signature) | — | unchanged | unchanged — control |
-| `{ [P in keyof T]: number }` (a mapped type) | — | unchanged | unchanged — control |
-| `let LW = "p"` / a literal UNION / `[obj.k]` as the key | TS2322 (an INDEX SIGNATURE) | silent | **still open** — a different gap |
-| `declare const S: unique symbol`, `interface I { [S]: number }`, `= {}` | TS2741 `'[S]'` | silent | **still open**, (CHK.5)(d) |
-| `[C.B]` (a class `static readonly`) / `[IK]` imported from a FILE | TS2322 | **TS2339 / FP** | **still open**, (CHK.5)(c) |
-| `interface Dup { p: number; [K]: string }` | TS2300 x2 + TS2717 | silent | **TS2322** — see below |
-
-- **THE ROW THAT MADE THIS ONE ROUND RATHER THAN TWO IS THE KEY ON BOTH SIDES.** Round 936
-  predicted that naming a `unique symbol` key on the literal side alone would INVERT the
-  defect; measured, the inversion was **already live for a plain const** — round 935 named
-  `[K]` for the object literal, the interface named nothing, and
-  `const x: I = { [K]: 1 }` was reported as the excess key `'[K]'` on a program both
-  compilers accept. Naming one side of a member comparison is not half a fix; it is a new
-  defect, and it is why (CHK.5)(d) still must land on both sides in ONE commit.
-- **THE SIX SITES, and the fourth failed in the quietest way of all.** (1) the
-  class/interface member loop (property/method/get/set); (2) `getTypeFromTypeLiteral`,
-  which re-spelled the `when` a third time and knew nothing about a computed key at all;
-  (3) `classMemberNameText`, the TS2339 firewall's namer (`lookupInstanceMemberInResolvableChain`
-  answers "definitely no such member" through it, which is the class FP);
-  (4) **`getTypeOfSymbolWorker`'s method branch, which returns `anyType` for a name it
-  cannot read — so the member WAS declared (a missing one was correctly TS2741) and typed
-  `any`, i.e. the member existed and its return type did not**; (5) `checkImplementsClauses`
-  and (6) `classMemberNamesTransitive`, the two AST-vs-TYPE comparisons above.
-- **`checkComputedLiteralKeyMembers` NOW RETRACTS BEFORE IT EMITS** — CLAUDE.md's rule for
-  a dedicated walker a relation rule catches up with. With `[c0]` bound, the general
-  relation finds the same member incompatible and emits the same code at the same span,
-  differing only in the property NAME (`'1'` against the walker's `'[c0]'`, which is what
-  tsc prints). Keyed on (code, fileName, start, message), never on the position alone.
-- **THE ONE NEW DIVERGENCE, STATED RATHER THAN HIDDEN: a DUPLICATE.**
-  `interface Dup { p: number; [K]: string }` is TS2300 x2 + TS2717 in tsc, which keeps the
-  FIRST type; our member map is last-wins for **every** duplicate spelling — measured at
-  HEAD for a plain `p: number; p: string` and for `["p"]` alike, both of which produce the
-  same spurious TS2322 — so the late-bound key merely joins a population that was already
-  wrong. **The program is an ERROR program in tsc and we moved from 0 diagnostics to 1**,
-  of the wrong code. Not pinned (round 765: a known-open gap is a countdown), recorded as
-  (CHK.5)(b)'s territory, and NOT a `logicalParityDivergence` — no baseline moved.
-- **THE STRING-INDEX-SIGNATURE ROWS ARE A DIFFERENT GAP AND MUST NOT BE ABSORBED HERE.**
-  A key typed `string`, a literal union, or `obj.k` gives tsc's INTERFACE (and class) a
-  string index signature rather than a named member — `interface I { [LW]: number }` makes
-  `i.p` a `number` in tsc — and one of those (`class C2 { [LW]: number }`, `c2.p`) is still
-  a TS2339 false positive here. Late binding must refuse them; closing them is index-signature
-  modelling, now recorded in (CHK.5).
-
-- **PINS +38, one class, `LateBoundDeclarationKeyTest`** (15,108 -> 15,146 / 0 failures /
-  3 skipped, summed over all six modules with an XML parser): sixteen READ rows, four
-  SUPPLY rows, seven refusals that are tsc's own answer (including the `unique symbol`
-  row pinned as the AGREEMENT both compilers hold today rather than as the gap), five
-  sibling-walker rows with their positive control, and **three cross-pass determinism
-  pins** — round 935's core pin re-asked of a table that, unlike an object literal's type,
-  is BUILT ONCE AND CACHED, so an ambient-dependent name would freeze whichever pass
-  touched the type first (round 776's law).
-
-- **TEN-ARM ABLATION** (`scripts/round937-ablate.py`), each arm applied to and restored
-  from a sha256-verified on-disk snapshot, each diffed against the SNAPSHOT rather than
-  HEAD, each asserting `ran 91`, and all three late-binding pin classes running.
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 | the declaration-side namer loses late binding entirely | **22** | the pre-937 boundary — every declaration row at once |
-| A2 | the TYPE LITERAL site reverts to its own `when` | **2** | the type-literal rows, and only those |
-| A3 | a computed METHOD name no longer reaches `getTypeOfSymbolWorker` | **2** | the two method-return-type rows, and only those |
-| A4 | `classMemberNameText` refuses a late-bound key | **5** | every CLASS row — the TS2339 firewall |
-| A5 | the member loop's METHOD and ACCESSOR arms only | **3** | the method + get-accessor rows |
-| A6 | `checkImplementsClauses` reverts to Identifier-only | **2** | the implements rows, including the numeric one |
-| A7 | `classMemberNamesTransitive` reverts to Identifier-only | **2** | the class-STATIC rows through B175 |
-| A8 | the walker stops retracting the relation's duplicate | **1** | `reported ONCE`, and only it |
-| A9 | the member loop's PROPERTY arm alone | **17** | the sites are separable — 17 of A1's 22 |
-| A10 | `fnsClassMemberNames` (namespace-local) reverts | **0** | **REDUNDANT GIVEN ITS SIBLING**, with the reason |
-
-- **THE ZERO ARM WAS INTERROGATED, NOT ASSUMED (round 936's law), AND THE ANSWER IS THE
-  THIRD POSSIBILITY THE PROTOCOL NAMES.** A10 first read 0 with NO pin covering that
-  walker, which is round 902's dead-arm/blind-pin ambiguity; a dedicated pin was added
-  **plus a positive control that the walker is REACHED** — and the control was verified by
-  a PassLab census naming `checkFuzzyNamespaceThisReturns` as the emitter, not by assuming
-  it. It still reads 0, and the mechanism is exact: **`fnsRequired` reads the INTERFACE
-  side from the AST too, Identifier-only, so both halves of that walker refuse the key and
-  mask each other.** That walker is AST-vs-AST SYMMETRIC and never drifted; the levelling
-  is kept because it makes the class side a SUPERSET (suppression-only) and is the half a
-  future widening of `fnsRequired` will need — recorded as redundant, not claimed.
-
-- **GATES.** Suite **15,108 -> 15,146 / 0 failures / 3 skipped**; **no corpus baseline
-  moved in the shipped state**, and the two that moved mid-round (`dynamicNames`,
-  `dynamicNamesErrors`) are the whole reason the sibling walkers and the retraction are in
-  this commit — each was judged against tsc for that exact fixture and each was a false
-  positive or a duplicate, never a lost diagnostic, so no `logicalParityDivergence` was
-  needed. `cost_gate.py` GREEN, largest move **+0.04%** (`typeNode.cacheable` /
-  `typeNode.bypassed`; `mapped.keyed` +0.03%, `globals.lookups` +0.01%) — the profiles'
-  `[SyntaxKind.X]` and `[Symbol.iterator]` DECLARATION-side member resolutions, rebaselined
-  with `--update` in the same commit, and `output.errors` unchanged at 46.
-  `huge_methods.py --fail-over 0` clean on **all six** module class dirs (core 751 classes,
-  0 over, largest 7,702). The **8-profile before/after BINARY grid**
-  (`scripts/round937-grid.sh`): all eight `added=0 removed=0`, 46/94 diagnostics unchanged
-  — a RESULT rather than a control, because those profiles carry 57 `[Symbol.iterator](`
-  interface members and 32 `[SyntaxKind.X]:` keys per member name.
-  `spine_closure_audit.py` not run: nothing on the spine changed.
-
-- **NEXT.** `(CHK.5)` continues at **(b)** — TS1117 / TS2300 / TS2717 for a late-bound
-  duplicate, which this round gave a second reason to want; then **(c)** the cross-file and
-  class-static keys; then **(d)** the `unique symbol` type, on both sides in one commit.
-  Newly recorded there: the **index-signature** rows, which are neither (a) nor (d).
-
-**Round 931b (2026-08-18) — (API.16): A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS.
-§ 14's GAP 6 — THE ONE GENUINELY SILENT GAP IN THIS API — IS CLOSED, AND THE ROUND'S
-PRODUCT IS THAT **A REFUSAL WITH ONE STATED REASON IS AN ASSET: ROUND 929's TEMPLATE
-COMPLETION REFUSAL WAS CASHED, NOT OVERRULED, BECAUSE ITS REASON WAS WRITTEN DOWN AND
-THIS ROUND REMOVED IT.**
-
-- **STEP 1 WAS tsc, four oracles over one fixture** (`lsp_member_refs.py`,
-  `lsp_rename.py`, `lsp_hover.py`, `lsp_completion.py`):
-
-| caret / query | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| references of `I.p`, with a ``o[`p`]`` in the file | 4 spans, the template's `[110,111)` among them | 3 — **silently short** | 4 |
-| the template's span | the TEXT, **backticks excluded** | — | the same |
-| references FROM a caret inside the template | the same 4 | none | the same 4 |
-| rename from the member declaration | rewrites ``o[`z`]`` | left `` `p` `` behind, **no conflict, no diagnostic** | rewrites it |
-| rename FROM a caret inside the template | the whole group | nothing | the whole group |
-| hover inside the template | `(property) I.p: number` | `string` (the literal's own type) | `number` |
-| completion in ``o[`‸`]`` | 2 items, edit `[77,77)` | NONE — stated refusal | 2 items, edit `[77,77)` |
-| completion in ``o[`al‸`]`` | edit `[94,96)` over `al` | NONE | the same |
-| ``o[`p${x}`]`` — references | **0** | 0 | 0 |
-| ``o[`p${x}`]`` — rename | `prepareRename` REFUSES | refuses | refuses |
-| completion in a substitution template's HEAD | **null result** | NONE | NONE |
-
-- **THE POPULATION IS THE WHOLE FEATURE, exactly as it was in round 926**: one predicate
-  (`SyntaxRoles.isMemberNameLiteral`) and one enumeration now admit a no-substitution
-  TEMPLATE beside the string, and `occurrenceNodes` / the completion anchor / the core
-  capture all read it. **The refusal that remains is a NODE-CLASS boundary rather than a
-  judgement**: a template with substitutions is a `TemplateExpression`, a different class
-  with no fixed text, so it cannot be admitted by accident — and its HEAD is a
-  `StringLiteralNode` that is not an element-access ARGUMENT, so it is not swept either,
-  which is why it is not an obstacle to the member's rename.
-- **THE ONE PLACE THE STRING'S OWN ROUTE DOES NOT TRANSFER IS HOVER, and it would have
-  re-opened (API.15) one round after closing it.** (BUG.4)'s rule is "the type of the
-  `"p"` in `o["p"]` is the type of `o["p"]`" — right for a string because the compiler's
-  element-access typing keys a named member off a STRING literal argument. It does not
-  key off a template, so ``o[`p`]`` types as `any`, and routing the template through the
-  access would have replaced this position's old answer (`string` — wrong but harmless)
-  with `any`, i.e. a plausible WRONG type where there had been a harmless one. The member
-  is resolved through the RECEIVER instead, which is the definition leg's own walk. The
-  divergence that remains is stated: no flow narrowing through the template form.
-- **SEVEN-ARM ABLATION, each arm applied to a hash-verified snapshot and restored to one,
-  each proved REACHED:**
-
-| arm | mistake | red | verdict |
-|---|---|---|---|
-| B1 | the shared enumeration accepts strings only | **7** — including BOTH completion pins | the population is the feature, and the shared walk is why completion moves with it |
-| B2 | the span keeps the backticks | **5** | the delimiter rule, and it also breaks the substitution-template control |
-| B3 | the CORE capture's literal set narrowed | **7**, a different set — hover and the substitution control in, completion out | completion needs no core change, which is round 929's claim re-measured |
-| B4 | `occurrenceCaret` accepts strings only | **1** | the FROM-the-template direction, and only it |
-| B5 | hover routed through the access type | **1** | reproduces the `any` above |
-| B6 | the token predicate additionally admits a `TemplateHead` | **0 — MEASURED REDUNDANT** | the shared walk refuses a substitution template first, so the token kind cannot decide it |
-| B6b | the token predicate narrowed to `StringLiteral` | **2** (both completion pins) | THE REACH PROOF for B6: the same line is live and load-bearing in the other direction |
-
-  B4's first pass read **`ran 0`** and was a DEAD ARM — the mistake used a type the file
-  no longer imports, so nothing compiled — which is round 902's trap in its purest form:
-  the driver had a `git diff --shortstat` per arm and it was GREEN. What separates them
-  is the ran-count, so the driver asserts one; a zero-red arm with a zero ran-count is
-  not a redundant guard, it is no arm at all.
-- **PINS +8, TWO INVERTED.** `ProjectMemberOccurrenceTest` gains a KIND 4 section (the
-  occurrence, the span, the caret direction, the applied rename, the substitution control
-  in both directions, and hover) over its own fixture, so no count asserted by (API.9)'s
-  own pins moves; `CompletionAnchorTest` gains the substitution refusal. The two
-  inverted are round 930's silent-miss pin (now asserting the REWRITE) and round 929's
-  template completion refusal (now asserting it completes exactly as the quoted form
-  does), each saying so in place. Suite **14,998 → 15,006 / 0 failures / 3 skipped**.
-- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round
-  changes core; `huge_methods.py --fail-over 0` clean on core (750 classes) and on
-  `-project` (48); the round-920 token gate re-run because `SourceIndex` changed —
-  **1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations**.
-  `docs/language-service.md` §§ 8, 9, 10a, 10b, 10d, 14.
-- **§ 14's gap list: 9 → 8 live**, and both of round 930's deliberate defect pins are now
-  inverted. What remains silent anywhere in this API is ONE shape: a computed key
-  `{ ["p"]: v }` whose contextual member is OPTIONAL (gap 2).
-- **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
-  about this API and the only thing that moves the cost table.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1982,17 +1884,64 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `resolveInstanceOfRhsType` answers from the declared type before the leg is reached.
   `docs/pristine-divergences.md` § 3.5.
 
-- [ ] **(CHK.14) `abstract new (…) => T` DOES NOT PARSE, AND NEITHER DOES `infer U` INSIDE A
-  PARENTHESIZED CONDITIONAL EXTENDS — 6 OF THE 7 SURVIVING ROWS OF
-  `controlFlowInstanceofWithSymbolHasInstance` (MEASURED round 942, isolated to three lines).**
-  `type X = T extends (abstract new (...args: any) => infer U) ? U : never` gives
-  TS1005 ×3 / TS1068 ×2 / TS1128 and then cascades into TS2355 / TS2564 / TS2304 for the names
-  the failed parse never bound; the standalone `type X = abstract new () => number` fails the
-  same way. **A SECOND, SEPARABLE defect in the same three-line probe**: the NON-abstract form
-  `T extends (new (...args: any) => infer U) ? U : never` PARSES and then reports
-  **TS2304 `Cannot find name 'U'`** at the true branch — an `infer` inside a PARENTHESIZED
-  extends clause does not publish its name. Same class as the `using` / `infer X extends`
-  cascades in `docs/pristine-divergences.md` § 2.3; one parser feature closes each.
+- [x] **(CHK.14) `abstract new (…) => T` AND THE CONSTRUCTOR-TYPE `infer` — CLOSED round 947,
+  15 ours-only rows (297 -> 282), PRISTINE-ONLY FLAT at 769, zero fixtures regressed.**
+  `docs/pristine-divergences.md` § 3f. **This entry's own second half was diagnosed
+  backwards and the correction is the round's product**: the defect is NOT "an `infer`
+  inside a PARENTHESIZED extends clause does not publish its name" — parentheses are
+  irrelevant (`collectInferTypeNames` recurses through `ParenthesizedType` and always has),
+  the missing arm was **`ConstructorType`**, and the UNPARENTHESIZED spelling
+  `T extends new () => infer U ? U : never` failed identically while the parenthesized
+  FUNCTION-type spelling always worked. It is also not a parser item: it is a one-arm gap in
+  the INV.4(c)(iii) scope walker, whose sibling `collectInferDecls` carries the arm with a
+  comment about keeping parity with it. Landed alongside it: `parsePrimaryType`'s
+  `abstract`-then-`new` lookahead (tsc's `isStartOfFunctionTypeOrConstructorType` +
+  `parseModifiersForConstructorType`), whose SPAN bound is pinned in `-project` because no
+  core diagnostic reads a `ConstructorType`'s `pos`. Held as false NEGATIVES on purpose: the
+  `infer` still does not RESOLVE through a constructor type (`D<new () => K>` answers `any`),
+  and the recorded `modifiers` set is read by nothing — TS2511 is its named future consumer.
+
+- [ ] **(CHK.25) `using` / `await using` DECLARATIONS DO NOT PARSE — 33 OURS-ONLY ROWS OVER
+  FOUR FIXTURES, THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION (sub-triaged
+  round 947, `docs/pristine-divergences.md` § 2.3 P1).** `using x = expr;` reports
+  **TS1434 `Unexpected keyword or identifier.`** at the `using` and then **TS2304** for every
+  name the failed statement never bound (`usingDeclarationsWithObjectLiterals1` 12,
+  `usingDeclarationsNamedEvaluationDecoratorsAndClassFields` 10,
+  `usingDeclarationsDeclarationEmit.2` 7, `.1` 4). **SCOPED OUT of round 947 deliberately, and
+  the reason is its SIZE, not its difficulty**: it is a statement form (a `VariableStatement`
+  whose declaration list carries a `using` / `await using` flag), plus binding, plus the
+  block-scoped rules tsc attaches to it (no destructuring, an initializer required, not in a
+  `for-in`, the `Symbol.dispose` / `Symbol.asyncDispose` disposability check), plus EMIT —
+  and upstream pins the emit hard: **439 `usingDeclarations*` baselines exist in
+  `typescript-repo/tests/baselines/reference`, most carrying `(module=…,target=…)`
+  variations**. Two facts a next agent needs before starting. (i) **The generated corpus gates
+  NONE of it** — this sparse clone carries essentially no `using` case file (one, and it is a
+  parse-error fixture), so the only instruments are the four pristine fixtures and
+  hand-written pins; a landing must therefore bring its own emit gate. (ii) **`using` is a
+  contextual keyword and an ordinary identifier**, so the statement production needs tsc's
+  lookahead — an identifier on the SAME LINE, not `of` / `in` — or `const using = 1; using
+  + 1;` changes meaning. That is the round-947 lesson at statement scope: the LOOKAHEAD is
+  what makes such an arm additive, and it is what an ablation arm must remove.
+
+- [ ] **(CHK.26) `infer U extends T` FOLLOWED BY A CONDITIONAL `?` IS PARSED AS A CONSTRAINED
+  INFER WHERE tsc PARSES A CONDITIONAL — 8 OURS-ONLY ROWS, `inferTypesWithExtends1` lines 95 /
+  103 / 105 (sub-triaged round 947, § 2.3 P2).** **`infer X extends` itself ALREADY PARSES**
+  and has for as long as `parseTypeParameter` has handled a constraint — round 941's label for
+  this bucket named the wrong thing. What fails is the DISAMBIGUATION: tsc's
+  `tryParseConstraintOfInferType` parses `extends <type>` with conditional types DISALLOWED
+  and rolls the whole `extends` back when the next token is `?`, **unless it is already in a
+  disallow-conditional context** — so `T extends (infer U extends number ? 1 : 0) ? 1 : 0` is
+  a conditional inside the parens (pristine's own comment on the line says *"ok, parsed as
+  conditional"*) while `T extends infer U extends string ? U : never` keeps its constraint.
+  We take the constraint unconditionally and cascade TS1005 / TS1109 / TS1128. **The rollback
+  alone is NOT the fix and would break the second shape**: it needs the
+  `disallowConditionalTypes` CONTEXT threaded through `parseType`'s conditional production
+  (`extendsType` and a mapped type's `nameType` set it; a parenthesized type clears it) — an
+  edit to the production the frozen-subsystem warning is about, which is why round 947 scoped
+  it out rather than attempting it beside a landing change. `scanner.tryScan` is already the
+  rollback primitive (`tryParseTypeParameters` is the reference shape). Pinned SILENT-side by
+  `AbstractConstructorTypeTest.scoped out - an infer constraint is not re-read as the
+  enclosing conditional`, which asserts today's TS1005 so the fix has to move it.
 
 - [ ] **(CHK.15) THE `instanceof` POSITIVE BRANCH HAS NO INTERSECTION TAIL — 1 OURS-ONLY ROW,
   BUT A GENERAL RULE (`controlFlowInstanceofWithSymbolHasInstance` line 26, round 942).**

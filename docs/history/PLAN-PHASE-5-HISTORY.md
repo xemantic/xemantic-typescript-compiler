@@ -1,3 +1,216 @@
+**Round 937 (2026-08-18) — (CHK.5)(a): THE DECLARATION SIDE OF LATE-BOUND COMPUTED KEYS.
+ONE MISSING CAPABILITY, SIX EXTRACTION SITES, AND THE ROUND'S PRODUCT IS THAT **LEVELLING
+ONE SITE OF THE B451 FAMILY MAKES A *PRE-EXISTING* DRIFT IN ITS SIBLINGS REACHABLE — AND
+THE SIBLING THAT BREAKS IS NOT THE ONE THAT SHARES THE FEATURE, IT IS THE ONE WHOSE TWO
+HALVES READ DIFFERENT REPRESENTATIONS.** `checkImplementsClauses` and
+`classMemberNamesTransitive` compare a class's AST member names against a TARGET built
+from the resolved TYPE; both read `(name as? Identifier)?.text`. That was harmless while
+the type side dropped a computed key too, and became TS2420 / TS2741 false positives the
+moment it stopped — **including two that contain no computed key at all**
+(`interface I { 1: string }` + `class C implements I { 1: string }`, and the same through
+a `static 1`), which measured as false positives at HEAD and had simply never been reached.**
+
+- **STEP 1 WAS tsc 7.0.2, DIRECT, on nine scratch projects — 40 rows, both directions,
+  read from `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit
+  --listAll` on the SAME directory before anything was written.**
+
+| the shape | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `interface I { [K]: number }`, `i.p` into a `string` | TS2322 | **silent — FN** | TS2322 |
+| `class C { [K]: number }`, `c.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `type T = { [K]: number }`, `t.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `interface I { [K](): number }`, `i.p()` | TS2322 | **silent — FN** | TS2322 |
+| `class C { [K](): number }`, `c.p()` | TS2322 | **silent — FN** | TS2322 |
+| `interface I { get [K](): number }`, `i.p` | TS2322 | **silent — FN** | TS2322 |
+| `class C { static [K]: number }`, `C.p` | TS2322 | **TS2339 — FP** | TS2322 |
+| `const x: I = {}` (a required `[K]`) | TS2741 `'[K]'` | **silent — FN** | TS2741 `'p'` |
+| `const x: I = { [K]: 1 }` — the key on BOTH sides | silent | **TS2353 `'[K]'` — FP** | silent |
+| `const x: I = { p: 1 }` | silent | **TS2353 `'p'` — FP** | silent |
+| `[CE.P]` / `[SE.Q]` / `[NS.K]` / `` [TT] `` / `[N]`=`1e3` / an alias chain | TS2322 | **silent — FN** | TS2322 |
+| a member INHERITED through an interface or class `extends` | TS2322 | **silent / FP** | TS2322 |
+| an interface inside a namespace, keyed on that namespace's const | TS2322 | **silent — FN** | TS2322 |
+| `class C implements I` where both spell `[K]` | silent | silent | silent — closed by A6 |
+| `interface I { 1: string }` + `class C implements I { 1: string }` | silent | **TS2420 — FP** | silent |
+| `interface T { 1: string }` + `declare class C { static 1: string }`, `t = C` | silent | **TS2741 — FP** | silent |
+| `interface J { [k: string]: number }` (an index signature) | — | unchanged | unchanged — control |
+| `{ [P in keyof T]: number }` (a mapped type) | — | unchanged | unchanged — control |
+| `let LW = "p"` / a literal UNION / `[obj.k]` as the key | TS2322 (an INDEX SIGNATURE) | silent | **still open** — a different gap |
+| `declare const S: unique symbol`, `interface I { [S]: number }`, `= {}` | TS2741 `'[S]'` | silent | **still open**, (CHK.5)(d) |
+| `[C.B]` (a class `static readonly`) / `[IK]` imported from a FILE | TS2322 | **TS2339 / FP** | **still open**, (CHK.5)(c) |
+| `interface Dup { p: number; [K]: string }` | TS2300 x2 + TS2717 | silent | **TS2322** — see below |
+
+- **THE ROW THAT MADE THIS ONE ROUND RATHER THAN TWO IS THE KEY ON BOTH SIDES.** Round 936
+  predicted that naming a `unique symbol` key on the literal side alone would INVERT the
+  defect; measured, the inversion was **already live for a plain const** — round 935 named
+  `[K]` for the object literal, the interface named nothing, and
+  `const x: I = { [K]: 1 }` was reported as the excess key `'[K]'` on a program both
+  compilers accept. Naming one side of a member comparison is not half a fix; it is a new
+  defect, and it is why (CHK.5)(d) still must land on both sides in ONE commit.
+- **THE SIX SITES, and the fourth failed in the quietest way of all.** (1) the
+  class/interface member loop (property/method/get/set); (2) `getTypeFromTypeLiteral`,
+  which re-spelled the `when` a third time and knew nothing about a computed key at all;
+  (3) `classMemberNameText`, the TS2339 firewall's namer (`lookupInstanceMemberInResolvableChain`
+  answers "definitely no such member" through it, which is the class FP);
+  (4) **`getTypeOfSymbolWorker`'s method branch, which returns `anyType` for a name it
+  cannot read — so the member WAS declared (a missing one was correctly TS2741) and typed
+  `any`, i.e. the member existed and its return type did not**; (5) `checkImplementsClauses`
+  and (6) `classMemberNamesTransitive`, the two AST-vs-TYPE comparisons above.
+- **`checkComputedLiteralKeyMembers` NOW RETRACTS BEFORE IT EMITS** — CLAUDE.md's rule for
+  a dedicated walker a relation rule catches up with. With `[c0]` bound, the general
+  relation finds the same member incompatible and emits the same code at the same span,
+  differing only in the property NAME (`'1'` against the walker's `'[c0]'`, which is what
+  tsc prints). Keyed on (code, fileName, start, message), never on the position alone.
+- **THE ONE NEW DIVERGENCE, STATED RATHER THAN HIDDEN: a DUPLICATE.**
+  `interface Dup { p: number; [K]: string }` is TS2300 x2 + TS2717 in tsc, which keeps the
+  FIRST type; our member map is last-wins for **every** duplicate spelling — measured at
+  HEAD for a plain `p: number; p: string` and for `["p"]` alike, both of which produce the
+  same spurious TS2322 — so the late-bound key merely joins a population that was already
+  wrong. **The program is an ERROR program in tsc and we moved from 0 diagnostics to 1**,
+  of the wrong code. Not pinned (round 765: a known-open gap is a countdown), recorded as
+  (CHK.5)(b)'s territory, and NOT a `logicalParityDivergence` — no baseline moved.
+- **THE STRING-INDEX-SIGNATURE ROWS ARE A DIFFERENT GAP AND MUST NOT BE ABSORBED HERE.**
+  A key typed `string`, a literal union, or `obj.k` gives tsc's INTERFACE (and class) a
+  string index signature rather than a named member — `interface I { [LW]: number }` makes
+  `i.p` a `number` in tsc — and one of those (`class C2 { [LW]: number }`, `c2.p`) is still
+  a TS2339 false positive here. Late binding must refuse them; closing them is index-signature
+  modelling, now recorded in (CHK.5).
+
+- **PINS +38, one class, `LateBoundDeclarationKeyTest`** (15,108 -> 15,146 / 0 failures /
+  3 skipped, summed over all six modules with an XML parser): sixteen READ rows, four
+  SUPPLY rows, seven refusals that are tsc's own answer (including the `unique symbol`
+  row pinned as the AGREEMENT both compilers hold today rather than as the gap), five
+  sibling-walker rows with their positive control, and **three cross-pass determinism
+  pins** — round 935's core pin re-asked of a table that, unlike an object literal's type,
+  is BUILT ONCE AND CACHED, so an ambient-dependent name would freeze whichever pass
+  touched the type first (round 776's law).
+
+- **TEN-ARM ABLATION** (`scripts/round937-ablate.py`), each arm applied to and restored
+  from a sha256-verified on-disk snapshot, each diffed against the SNAPSHOT rather than
+  HEAD, each asserting `ran 91`, and all three late-binding pin classes running.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 | the declaration-side namer loses late binding entirely | **22** | the pre-937 boundary — every declaration row at once |
+| A2 | the TYPE LITERAL site reverts to its own `when` | **2** | the type-literal rows, and only those |
+| A3 | a computed METHOD name no longer reaches `getTypeOfSymbolWorker` | **2** | the two method-return-type rows, and only those |
+| A4 | `classMemberNameText` refuses a late-bound key | **5** | every CLASS row — the TS2339 firewall |
+| A5 | the member loop's METHOD and ACCESSOR arms only | **3** | the method + get-accessor rows |
+| A6 | `checkImplementsClauses` reverts to Identifier-only | **2** | the implements rows, including the numeric one |
+| A7 | `classMemberNamesTransitive` reverts to Identifier-only | **2** | the class-STATIC rows through B175 |
+| A8 | the walker stops retracting the relation's duplicate | **1** | `reported ONCE`, and only it |
+| A9 | the member loop's PROPERTY arm alone | **17** | the sites are separable — 17 of A1's 22 |
+| A10 | `fnsClassMemberNames` (namespace-local) reverts | **0** | **REDUNDANT GIVEN ITS SIBLING**, with the reason |
+
+- **THE ZERO ARM WAS INTERROGATED, NOT ASSUMED (round 936's law), AND THE ANSWER IS THE
+  THIRD POSSIBILITY THE PROTOCOL NAMES.** A10 first read 0 with NO pin covering that
+  walker, which is round 902's dead-arm/blind-pin ambiguity; a dedicated pin was added
+  **plus a positive control that the walker is REACHED** — and the control was verified by
+  a PassLab census naming `checkFuzzyNamespaceThisReturns` as the emitter, not by assuming
+  it. It still reads 0, and the mechanism is exact: **`fnsRequired` reads the INTERFACE
+  side from the AST too, Identifier-only, so both halves of that walker refuse the key and
+  mask each other.** That walker is AST-vs-AST SYMMETRIC and never drifted; the levelling
+  is kept because it makes the class side a SUPERSET (suppression-only) and is the half a
+  future widening of `fnsRequired` will need — recorded as redundant, not claimed.
+
+- **GATES.** Suite **15,108 -> 15,146 / 0 failures / 3 skipped**; **no corpus baseline
+  moved in the shipped state**, and the two that moved mid-round (`dynamicNames`,
+  `dynamicNamesErrors`) are the whole reason the sibling walkers and the retraction are in
+  this commit — each was judged against tsc for that exact fixture and each was a false
+  positive or a duplicate, never a lost diagnostic, so no `logicalParityDivergence` was
+  needed. `cost_gate.py` GREEN, largest move **+0.04%** (`typeNode.cacheable` /
+  `typeNode.bypassed`; `mapped.keyed` +0.03%, `globals.lookups` +0.01%) — the profiles'
+  `[SyntaxKind.X]` and `[Symbol.iterator]` DECLARATION-side member resolutions, rebaselined
+  with `--update` in the same commit, and `output.errors` unchanged at 46.
+  `huge_methods.py --fail-over 0` clean on **all six** module class dirs (core 751 classes,
+  0 over, largest 7,702). The **8-profile before/after BINARY grid**
+  (`scripts/round937-grid.sh`): all eight `added=0 removed=0`, 46/94 diagnostics unchanged
+  — a RESULT rather than a control, because those profiles carry 57 `[Symbol.iterator](`
+  interface members and 32 `[SyntaxKind.X]:` keys per member name.
+  `spine_closure_audit.py` not run: nothing on the spine changed.
+
+- **NEXT.** `(CHK.5)` continues at **(b)** — TS1117 / TS2300 / TS2717 for a late-bound
+  duplicate, which this round gave a second reason to want; then **(c)** the cross-file and
+  class-static keys; then **(d)** the `unique symbol` type, on both sides in one commit.
+  Newly recorded there: the **index-signature** rows, which are neither (a) nor (d).
+
+**Round 931b (2026-08-18) — (API.16): A MEMBER NAMED BY A TEMPLATE ELEMENT ACCESS.
+§ 14's GAP 6 — THE ONE GENUINELY SILENT GAP IN THIS API — IS CLOSED, AND THE ROUND'S
+PRODUCT IS THAT **A REFUSAL WITH ONE STATED REASON IS AN ASSET: ROUND 929's TEMPLATE
+COMPLETION REFUSAL WAS CASHED, NOT OVERRULED, BECAUSE ITS REASON WAS WRITTEN DOWN AND
+THIS ROUND REMOVED IT.**
+
+- **STEP 1 WAS tsc, four oracles over one fixture** (`lsp_member_refs.py`,
+  `lsp_rename.py`, `lsp_hover.py`, `lsp_completion.py`):
+
+| caret / query | tsc 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| references of `I.p`, with a ``o[`p`]`` in the file | 4 spans, the template's `[110,111)` among them | 3 — **silently short** | 4 |
+| the template's span | the TEXT, **backticks excluded** | — | the same |
+| references FROM a caret inside the template | the same 4 | none | the same 4 |
+| rename from the member declaration | rewrites ``o[`z`]`` | left `` `p` `` behind, **no conflict, no diagnostic** | rewrites it |
+| rename FROM a caret inside the template | the whole group | nothing | the whole group |
+| hover inside the template | `(property) I.p: number` | `string` (the literal's own type) | `number` |
+| completion in ``o[`‸`]`` | 2 items, edit `[77,77)` | NONE — stated refusal | 2 items, edit `[77,77)` |
+| completion in ``o[`al‸`]`` | edit `[94,96)` over `al` | NONE | the same |
+| ``o[`p${x}`]`` — references | **0** | 0 | 0 |
+| ``o[`p${x}`]`` — rename | `prepareRename` REFUSES | refuses | refuses |
+| completion in a substitution template's HEAD | **null result** | NONE | NONE |
+
+- **THE POPULATION IS THE WHOLE FEATURE, exactly as it was in round 926**: one predicate
+  (`SyntaxRoles.isMemberNameLiteral`) and one enumeration now admit a no-substitution
+  TEMPLATE beside the string, and `occurrenceNodes` / the completion anchor / the core
+  capture all read it. **The refusal that remains is a NODE-CLASS boundary rather than a
+  judgement**: a template with substitutions is a `TemplateExpression`, a different class
+  with no fixed text, so it cannot be admitted by accident — and its HEAD is a
+  `StringLiteralNode` that is not an element-access ARGUMENT, so it is not swept either,
+  which is why it is not an obstacle to the member's rename.
+- **THE ONE PLACE THE STRING'S OWN ROUTE DOES NOT TRANSFER IS HOVER, and it would have
+  re-opened (API.15) one round after closing it.** (BUG.4)'s rule is "the type of the
+  `"p"` in `o["p"]` is the type of `o["p"]`" — right for a string because the compiler's
+  element-access typing keys a named member off a STRING literal argument. It does not
+  key off a template, so ``o[`p`]`` types as `any`, and routing the template through the
+  access would have replaced this position's old answer (`string` — wrong but harmless)
+  with `any`, i.e. a plausible WRONG type where there had been a harmless one. The member
+  is resolved through the RECEIVER instead, which is the definition leg's own walk. The
+  divergence that remains is stated: no flow narrowing through the template form.
+- **SEVEN-ARM ABLATION, each arm applied to a hash-verified snapshot and restored to one,
+  each proved REACHED:**
+
+| arm | mistake | red | verdict |
+|---|---|---|---|
+| B1 | the shared enumeration accepts strings only | **7** — including BOTH completion pins | the population is the feature, and the shared walk is why completion moves with it |
+| B2 | the span keeps the backticks | **5** | the delimiter rule, and it also breaks the substitution-template control |
+| B3 | the CORE capture's literal set narrowed | **7**, a different set — hover and the substitution control in, completion out | completion needs no core change, which is round 929's claim re-measured |
+| B4 | `occurrenceCaret` accepts strings only | **1** | the FROM-the-template direction, and only it |
+| B5 | hover routed through the access type | **1** | reproduces the `any` above |
+| B6 | the token predicate additionally admits a `TemplateHead` | **0 — MEASURED REDUNDANT** | the shared walk refuses a substitution template first, so the token kind cannot decide it |
+| B6b | the token predicate narrowed to `StringLiteral` | **2** (both completion pins) | THE REACH PROOF for B6: the same line is live and load-bearing in the other direction |
+
+  B4's first pass read **`ran 0`** and was a DEAD ARM — the mistake used a type the file
+  no longer imports, so nothing compiled — which is round 902's trap in its purest form:
+  the driver had a `git diff --shortstat` per arm and it was GREEN. What separates them
+  is the ran-count, so the driver asserts one; a zero-red arm with a zero ran-count is
+  not a redundant guard, it is no arm at all.
+- **PINS +8, TWO INVERTED.** `ProjectMemberOccurrenceTest` gains a KIND 4 section (the
+  occurrence, the span, the caret direction, the applied rename, the substitution control
+  in both directions, and hover) over its own fixture, so no count asserted by (API.9)'s
+  own pins moves; `CompletionAnchorTest` gains the substitution refusal. The two
+  inverted are round 930's silent-miss pin (now asserting the REWRITE) and round 929's
+  template completion refusal (now asserting it completes exactly as the quoted form
+  does), each saying so in place. Suite **14,998 → 15,006 / 0 failures / 3 skipped**.
+- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round
+  changes core; `huge_methods.py --fail-over 0` clean on core (750 classes) and on
+  `-project` (48); the round-920 token gate re-run because `SourceIndex` changed —
+  **1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations**.
+  `docs/language-service.md` §§ 8, 9, 10a, 10b, 10d, 14.
+- **§ 14's gap list: 9 → 8 live**, and both of round 930's deliberate defect pins are now
+  inverted. What remains silent anywhere in this API is ONE shape: a computed key
+  `{ ["p"]: v }` whose contextual member is OPTIONAL (gap 2).
+- **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
+  about this API and the only thing that moves the cost table.
+
+---
+
 **Round 936 (2026-08-18) — (CHK.4): THE QUALIFIED, TYPE-ANNOTATION AND WELL-KNOWN-SYMBOL
 ROUTES. THREE CAPABILITIES, SIX DEFECTS, ONE COMMIT — AND THE ROUND'S PRODUCT IS THAT
 **A NODE THIS PARSER DOES NOT STRUCTURE ANSWERS A NAME QUESTION WITH A CONFIDENT EMPTY
