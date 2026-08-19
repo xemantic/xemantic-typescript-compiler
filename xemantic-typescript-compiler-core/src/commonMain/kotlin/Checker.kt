@@ -46889,20 +46889,47 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        data class PropInfo(val name: String, val nameNode: Node, val prop: PropertyDeclaration)
+        data class PropInfo(
+            val name: String,
+            /** The member name AS WRITTEN — differs from [name] only for a computed key. */
+            val display: String,
+            /** Round 938: eligible for TS2300/TS2687 — see [memberNameIsBinderVisible]. */
+            val binderVisible: Boolean,
+            val nameNode: Node,
+            val prop: PropertyDeclaration,
+        )
         val props = mutableListOf<PropInfo>()
         for (member in members) {
             if (member is PropertyDeclaration) {
-                val name = member.name
-                val text = getMemberNameText(name) ?: continue
-                props.add(PropInfo(text, name, member))
+                val nameNode = member.name
+                // Round 938 — (CHK.5)(b): this scan named an Identifier / string / numeric
+                // member and had NO computed arm at all, so `interface Dup { p: number;
+                // [K]: string }` and `interface Dup { ["p"]: number; [`p`]: string }` — both
+                // TS2300 x2 + TS2717 in tsc — were silent here even after round 937 gave the
+                // member TABLE those names. [duplicateScanComputedKey] is the class walker's
+                // namer too, so the two cannot drift apart again.
+                val (text, display) = if (nameNode is ComputedPropertyName) {
+                    val (d, k) = duplicateScanComputedKey(nameNode) ?: continue
+                    k to d
+                } else {
+                    val t = getMemberNameText(nameNode) ?: continue
+                    t to t
+                }
+                props.add(PropInfo(text, display, memberNameIsBinderVisible(nameNode), nameNode, member))
             }
         }
         val byName = props.groupBy { it.name }
         for ((memberName, group) in byName) {
             if (group.size >= 2) {
-                for (prop in group) {
-                    emitDuplicate2300(prop.name, prop.nameNode, source, fileName)
+                // Round 938 — (CHK.5)(b): TS2300 and TS2687 are the BINDER's duplicate
+                // checks and a LATE-BOUND key never reaches them. `dynamicNamesErrors`'
+                // pristine baseline is the measurement: `interface T0 { [c0]: number;
+                // 1: number }` is a duplicate by name and gets NOTHING, while its
+                // late-bound sibling T3 gets TS2717 alone. TS2717 below is ungated,
+                // because that one IS the checker's re-declaration check.
+                val binderDuplicate = group.all { it.binderVisible }
+                if (binderDuplicate) for (prop in group) {
+                    emitDuplicate2300(prop.display, prop.nameNode, source, fileName)
                 }
                 // TS2687: when same-named duplicate property declarations differ in their
                 // modifiers (visibility / readonly / OPTIONALITY), tsc additionally reports
@@ -46918,14 +46945,14 @@ class Checker(
                     }
                     return "$vis|${ModifierFlag.Readonly in p.modifiers}|${p.questionToken}"
                 }
-                if (group.map { modSig(it.prop) }.distinct().size > 1) {
+                if (binderDuplicate && group.map { modSig(it.prop) }.distinct().size > 1) {
                     for (info in group) {
                         val nameNode = info.nameNode
                         val len = when (nameNode) {
                             is StringLiteralNode -> nameNode.text.length + 2
                             is NumericLiteralNode -> nameNode.text.length
                             is Identifier -> nameNode.text.length
-                            else -> info.name.length
+                            else -> info.display.length
                         }
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
@@ -46951,14 +46978,18 @@ class Checker(
                         is StringLiteralNode -> firstName.text.length + 2
                         is NumericLiteralNode -> firstName.text.length
                         is Identifier -> firstName.text.length
-                        else -> group[0].name.length
+                        else -> group[0].display.length
                     }
                     val (firstLine, firstChar) = getLineAndCharacterOfPosition(source, firstStart)
                     for (i in 1 until group.size) {
                         val info = group[i]
                         val laterType = getPropertyTypeString(info.prop) ?: continue
                         if (laterType == firstType) continue
-                        val name = info.name
+                        // Round 938: tsc names the LATER member as written in the TS2717
+                        // text (`Property '[K]' must be of type 'number'`) and the FIRST one
+                        // in the related TS6203 — measured, and a no-op for every
+                        // non-computed spelling, where the two are the same string.
+                        val name = info.display
                         val nameNode = info.nameNode
                         val start = nameNode.pos
                         val length = when (nameNode) {
@@ -46978,7 +47009,7 @@ class Checker(
                             start = start,
                             length = length,
                             relatedInformation = listOf(Diagnostic(
-                                message = "'$name' was also declared here.",
+                                message = "'${group[0].display}' was also declared here.",
                                 category = DiagnosticCategory.Message,
                                 code = 6203,
                                 fileName = fileName,
@@ -47004,7 +47035,15 @@ class Checker(
     ) {
         // displayName is used in the message (string literals get extra quotes in TS: ''0'' for '0')
         // groupKey is used for duplicate comparison (only numeric literals are normalized)
-        data class MemberInfo(val displayName: String, val groupKey: String, val kind: String, val nameNode: Node, val memberNode: Node? = null)
+        data class MemberInfo(
+            val displayName: String,
+            val groupKey: String,
+            val kind: String,
+            val nameNode: Node,
+            val memberNode: Node? = null,
+            /** Round 938: eligible for TS2300 — see [memberNameIsBinderVisible]. */
+            val binderVisible: Boolean = true,
+        )
 
         fun memberKey(nameNode: Node): Pair<String, String>? {
             return when (nameNode) {
@@ -47028,17 +47067,16 @@ class Checker(
                     val quotedDisplay = "'${nameNode.text}'"
                     quotedDisplay to nameNode.text
                 }
-                is ComputedPropertyName -> {
-                    // B98.r58: literal computed name `["a"]` / `[0]` is a late-bound
-                    // stable member name; display `["a"]`, group by the inner literal
-                    // value (so two `["a"]` — or `a` and `["a"]` — collide). Non-literal
-                    // computed names (`[x]`, `[Symbol.iterator]`) are NOT duplicate-checkable.
-                    when (val e = nameNode.expression) {
-                        is StringLiteralNode -> "[\"${e.text}\"]" to e.text
-                        is NumericLiteralNode -> "[${e.text}]" to normalizeNumericKey(e.text)
-                        else -> null
-                    }
-                }
+                is ComputedPropertyName ->
+                    // B98.r58: a literal computed name `["a"]` / `[0]` is a stable member
+                    // name; display `["a"]`, group by the inner literal value (so two
+                    // `["a"]` — or `a` and `["a"]` — collide).
+                    // Round 938 — (CHK.5)(b): this used to be its own copy of that `when`
+                    // and knew two of the spellings; it now asks the one helper, which adds
+                    // the NO-SUBSTITUTION TEMPLATE spelling and every LATE-BOUND key
+                    // (`[K]`, `[E.P]`, `[NS.K]`) the member tables already declare. A
+                    // well-known-symbol key stays refused there, deliberately.
+                    duplicateScanComputedKey(nameNode)
                 else -> null
             }
         }
@@ -47056,19 +47094,23 @@ class Checker(
             when (member) {
                 is MethodDeclaration -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "method", member.name, member))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "method", member.name, member,
+                        binderVisible = memberNameIsBinderVisible(member.name)))
                 }
                 is PropertyDeclaration -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "property", member.name, member))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "property", member.name, member,
+                        binderVisible = memberNameIsBinderVisible(member.name)))
                 }
                 is GetAccessor -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "getter", member.name, member))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "getter", member.name, member,
+                        binderVisible = memberNameIsBinderVisible(member.name)))
                 }
                 is SetAccessor -> {
                     val (display, key) = memberKey(member.name) ?: continue
-                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "setter", member.name, member))
+                    memberInfos.add(MemberInfo(display, "$staticPrefix$key", "setter", member.name, member,
+                        binderVisible = memberNameIsBinderVisible(member.name)))
                 }
                 else -> {}
             }
@@ -47138,8 +47180,14 @@ class Checker(
                 else -> emptyList()
             }
 
-            for (info in membersToFlag) {
-                emitDuplicate2300(info.displayName, info.nameNode, source, fileName)
+            // Round 938 — (CHK.5)(b): TS2300 is the BINDER's duplicate check, so a
+            // LATE-BOUND key does not reach it (`dynamicNamesErrors`' pristine baseline —
+            // see [duplicateScanComputedKey]); TS2717 below is the checker's
+            // re-declaration check and is deliberately NOT gated the same way.
+            if (group.all { it.binderVisible }) {
+                for (info in membersToFlag) {
+                    emitDuplicate2300(info.displayName, info.nameNode, source, fileName)
+                }
             }
 
             // TS2717: Subsequent property declarations must have the same type
@@ -47186,7 +47234,7 @@ class Checker(
                                 start = start,
                                 length = length,
                                 relatedInformation = listOf(Diagnostic(
-                                    message = "'$name' was also declared here.",
+                                    message = "'${firstMember.displayName}' was also declared here.",
                                     category = DiagnosticCategory.Message,
                                     code = 6203,
                                     fileName = fileName,
@@ -47348,6 +47396,73 @@ class Checker(
         // 0.0 → "0", 1.0 → "1", etc.
         return if (num == num.toLong().toDouble()) num.toLong().toString() else text
     }
+
+    /**
+     * Round 938 — (CHK.5)(b): the `(display, group-key)` a COMPUTED member name contributes
+     * to a DUPLICATE-member scan, or null when the key spells no fixed name.
+     *
+     * The duplicate scans are AST scans that run beside the member-BUILDING sites round 937
+     * levelled onto [declaredMemberName], and they had their own, older, narrower copy of
+     * that `when` — B451's law one site further on. Measured on scratch projects against
+     * tsc 7.0.2 before this was written: `interface Dup { p: number; [K]: string }` and
+     * `interface Dup { ["p"]: number; [`p`]: string }` are TS2300 x2 + TS2717 there and were
+     * SILENT here, while round 937 had just made the same programs emit a spurious TS2322 —
+     * i.e. this compiler moved from 0 diagnostics to 1, of the wrong code.
+     *
+     * **The key is deliberately NOT [declaredMemberName], and the difference is the whole
+     * FP firewall.** [getMemberName]'s `[Symbol.X]` arm is skipped, so a WELL-KNOWN-SYMBOL
+     * key keeps being refused by these scans exactly as it was before — the eight tsc
+     * profiles carry 57 `[Symbol.iterator](` members, and admitting them here would be a new
+     * duplicate population measured by nothing that motivated this round. What is admitted
+     * is precisely the population round 933-937 taught the member tables: the three literal
+     * spellings and every late-bound key.
+     *
+     * A NUMERIC inner literal is normalized ([normalizeNumericKey], so `[0b11]` and `[3]`
+     * collide) exactly as the pre-938 arm did; the display is the key AS WRITTEN, which is
+     * what tsc prints.
+     *
+     * **THE KEY IS NOT ENOUGH — A CALLER MUST ALSO ASK [computedKeyIsBinderVisible], AND
+     * THE CORPUS IS WHAT SAYS SO.** `dynamicNamesErrors`' baseline is the measurement:
+     * `interface T0 { [c0]: number; 1: number }` with `const c0 = "1"` is a duplicate by
+     * NAME and pristine tsc reports **nothing at all** for it, while
+     * `interface T3 { [c0]: number; [c1]: string }` gets TS2717 and **no TS2300**. A
+     * LITERAL computed name is bound statically, so it reaches the binder's duplicate
+     * check; a LATE-BOUND one is resolved by the checker and only ever reaches the
+     * re-declaration check. tsc 7.0.2 emits TS2300 for both (measured on five scratch
+     * shapes) — that is a tsgo divergence and this compiler follows pristine tsc.
+     */
+    private fun duplicateScanComputedKey(cpn: ComputedPropertyName): Pair<String, String>? {
+        val e = cpn.expression
+        val key = if (e is NumericLiteralNode) normalizeNumericKey(e.text)
+        else computedLiteralKey(cpn) ?: lateBoundComputedKeyName(cpn) ?: return null
+        return (computedKeyWrittenText(cpn) ?: return null) to key
+    }
+
+    /** Round 938: a computed member name rendered AS WRITTEN (`["p"]`, `` [`p`] ``, `[K]`,
+     *  `[NS.K]`) — what tsc's `declarationNameToString` prints for one, and what the
+     *  duplicate scans put in a TS2300/TS2717 message. Returns null for a spelling this
+     *  renderer cannot reproduce exactly (a parenthesized or otherwise structured key), so a
+     *  message can never carry a name the source does not contain. Its length is also the
+     *  squiggle length, which is why it must be exact rather than approximate. */
+    private fun computedKeyWrittenText(cpn: ComputedPropertyName): String? {
+        fun txt(e: Expression): String? = when (e) {
+            is Identifier -> e.text
+            is StringLiteralNode -> "\"${e.text}\""
+            is NumericLiteralNode -> e.text
+            is NoSubstitutionTemplateLiteralNode -> "`${e.text}`"
+            is PropertyAccessExpression -> txt(e.expression)?.let { "$it.${e.name.text}" }
+            else -> null
+        }
+        return txt(cpn.expression)?.let { "[$it]" }
+    }
+
+    /** Round 938 — (CHK.5)(b): true when a member name is one the BINDER can see, i.e. is
+     *  eligible for TS2300 / TS2687. Everything but a computed name is; a computed one is
+     *  only when it spells a literal ([computedLiteralKey]), never when it LATE-BINDS
+     *  through a const or an enum member. See [duplicateScanComputedKey]'s note for the
+     *  `dynamicNamesErrors` baseline this is read from. */
+    private fun memberNameIsBinderVisible(name: Node): Boolean =
+        name !is ComputedPropertyName || computedLiteralKey(name) != null
 
     private fun emitDuplicate2300(
         name: String,
@@ -80600,6 +80715,19 @@ interface DataView {
                     if (!cm.isComputed && !first.isComputed) continue
                     val (line, ch) = getLineAndCharacterOfPosition(source, cm.namePos)
                     val (fl, fc) = getLineAndCharacterOfPosition(source, first.namePos)
+                    // Round 938 — (CHK.5)(b): RETRACT BEFORE EMITTING. The general interface
+                    // duplicate walker learned computed keys this round, so it reaches the
+                    // same TS2717 verdict at the same span for the sub-population this
+                    // walker was built for (both members named `[<identifier>]` where the
+                    // identifier is a top-level `const` bound to a literal) — measured as an
+                    // exact duplicate line. CLAUDE.md's rule for a dedicated walker a general
+                    // rule catches up with; this walker keeps the emission because it is the
+                    // DISPLAY authority its `dynamicNamesErrors` baseline pins. Keyed on
+                    // (code, file, start): a TS2717 belongs to one property DECLARATION, so
+                    // two of them cannot legitimately share a name-node start.
+                    diagnostics.removeAll {
+                        it.code == 2717 && it.fileName == fileName && it.start == cm.namePos
+                    }
                     diagnostics.add(Diagnostic(
                         message = "Subsequent property declarations must have the same type.  Property '${cm.display}' must be of type '${first.typeStr}', but here has type '${cm.typeStr}'.",
                         category = DiagnosticCategory.Error, code = 2717,
@@ -110551,6 +110679,10 @@ interface DataView {
             }
         }
 
+        // Round 938 — (CHK.5)(b): the OWN property declarations already seen in this
+        // symbol's declaration group, keyed by (staticness, member name). A DUPLICATE
+        // property is FIRST-WINS: see the guard in the PropertyDeclaration arm below.
+        val ownPropertyDecls = HashMap<String, PropertyDeclaration>()
         // Collect members from all declarations of this symbol
         for (decl in symbol.declarations) {
             val classMembers = when (decl) {
@@ -110584,6 +110716,45 @@ interface DataView {
                 when (member) {
                     is PropertyDeclaration -> {
                         val name = declaredMemberName(member.name) ?: continue
+                        // Round 938 — (CHK.5)(b): A DUPLICATE PROPERTY IS **FIRST-WINS**.
+                        //
+                        // `interface I { p: number; p: string }` (and the same in a class,
+                        // in a type literal, and across two MERGED `interface I` blocks) is
+                        // an error program in both compilers — but the type it leaves behind
+                        // is observable independently of the diagnostic, and this map was
+                        // LAST-WINS for every duplicate spelling, so `i.p` read `string`
+                        // where tsc reads `number`. Measured at HEAD on nine scratch
+                        // projects, and pristine tsc's own TS2717 text is the statement of
+                        // the rule — `classWithDuplicateIdentifier`'s baseline says
+                        // "Property 'c' must be of type 'number', but here has type
+                        // 'string'", i.e. the FIRST declaration is the canonical one.
+                        // tsc reaches it in the binder: `setValueDeclaration` replaces an
+                        // existing `valueDeclaration` only for an ambient-vs-non-ambient,
+                        // assignment-declaration or module-kind mismatch, so two same-kind
+                        // property declarations leave the FIRST installed.
+                        //
+                        // Round 937 landed the declaration side of late-bound computed keys
+                        // and thereby made `interface Dup { p: number; [K]: string }` a
+                        // duplicate for the first time — it emitted a spurious TS2322 naming
+                        // `string`. That diagnostic is this rule's, not a computed-key
+                        // defect: the same TS2322 was already there for a plain `p; p`.
+                        //
+                        // **THE GUARD IS THREE-WAY NARROW, and each clause is load-bearing.**
+                        //  - only against an OWN property of this declaration group, because
+                        //    [members] is PRE-POPULATED with the base types' members above —
+                        //    a class property that OVERRIDES an inherited one must still win,
+                        //    and testing `members[name] != null` would silently delete every
+                        //    override in the program;
+                        //  - only against another PropertyDeclaration, so a property beside a
+                        //    method or an accessor keeps exactly today's resolution (both are
+                        //    already parity: `class C { p: number; p(): void }` reads `number`
+                        //    in tsc and here);
+                        //  - only at equal STATIC-ness, because a static and an instance member
+                        //    of the same name are LEGAL and both live in this one map until the
+                        //    [staticMembers] dual-population is consumed — first-wins across
+                        //    that boundary would make `c.p` read the static's type.
+                        val propKey = (if (ModifierFlag.Static in member.modifiers) "static:" else "") + name
+                        if (ownPropertyDecls.put(propKey, member) != null) continue
                         val propSymbol = Symbol(SymbolFlags.Property, name)
                         propSymbol.declarations.add(member)
                         propSymbol.valueDeclaration = member
@@ -160445,6 +160616,8 @@ interface DataView {
         // When present, treat the entire literal as an opaque mapped type (→ anyType)
         // because we can't enumerate members precisely.
         var sawMappedTypePlaceholder = false
+        // Round 938 — (CHK.5)(b): the own PROPERTY names already declared by this literal.
+        val ownLiteralPropertyNames = HashSet<String>()
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> {
@@ -160460,6 +160633,16 @@ interface DataView {
                         sawMappedTypePlaceholder = true
                         continue
                     }
+                    // Round 938 — (CHK.5)(b): a duplicate property in a TYPE LITERAL is
+                    // FIRST-WINS, exactly as in an interface or a class body (measured:
+                    // `type T = { p: number; p: string }` reads `number` in tsc and read
+                    // `string` here). A type literal has no base types and no statics, so
+                    // the guard is the plain one — but it is still PROPERTY-vs-PROPERTY
+                    // only (a method arm writes this same map, and a property beside a
+                    // method keeps today's resolution), and it must also refuse to append a
+                    // SECOND entry to [properties], which is what the display and every
+                    // member enumeration read.
+                    if (!ownLiteralPropertyNames.add(name)) continue
                     val propType = if (member.type != null) getTypeFromTypeNode(member.type) else anyType
                     val sym = Symbol(SymbolFlags.Property, name)
                     sym.declarations.add(member)
