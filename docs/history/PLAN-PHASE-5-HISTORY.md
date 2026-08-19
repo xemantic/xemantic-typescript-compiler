@@ -1,3 +1,148 @@
+**Round 938 (2026-08-19) — (CHK.5)(b): A DUPLICATE MEMBER DECLARATION. TWO SEPARABLE
+DEFECTS, ONE COMMIT, AND THE ROUND'S PRODUCT IS THAT **ROUND 937's PREMISE WAS HALF WRONG,
+AND MEASURING IT FIRST IS WHAT SAID WHICH HALF.** (CHK.5)(b) was written as "our member map
+is last-wins for every duplicate spelling … so `interface Dup { p: number; [K]: string }`
+went from 0 diagnostics to 1 of the wrong code". The first half is exactly right. The
+second — the implied "and we do not report duplicates" — is not: **this compiler already
+emitted TS2300 x2 + TS2717 for a plain `interface I { p: number; p: string }`, byte-identical
+to tsc, and does so for a type literal, a class, an enum, two getters, a numeric member name
+and a class property-vs-method too.** What was missing was narrower and both halves are now
+closed: the surviving TYPE, and the fact that no COMPUTED spelling reached the duplicate
+scans at all.**
+
+- **STEP 1 WAS tsc 7.0.2, DIRECT, ON 32 SCRATCH PROJECTS — 22 shapes, then 10 more once the
+  first pass showed where the line was.** Every row was read from
+  `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit --listAll` on
+  the SAME directory, before anything was written; every duplicate carries a
+  `const probe: 0 = x.p` so the **surviving type is read out of the TS2322 message**,
+  independently of the diagnostic — the two defects are separable and had to be measured
+  separately.
+
+| the shape | tsc | ours BEFORE | ours AFTER |
+|---|---|---|---|
+| `interface I { p: number; p: string }` | TS2300 x2 + TS2717, `p` is `number` | **same diagnostics**, `p` is `string` | full parity |
+| `interface I { p: number; p: number }` | TS2300 x2, `number` | same | unchanged — control |
+| `class C { p: number; p: string }` | TS2717, `number` (+TS2300 x1 pristine / x2 tsgo) | TS2300 x1 + TS2717, `string` | `number`; TS2300 x1 kept — **pristine** |
+| `type T = { p: number; p: string }` | TS2300 x2 + TS2717, `number` | same diagnostics, `string` | full parity |
+| `interface I { p: number }` x2 blocks, differing | TS2717, `number` | silent, `string` | `number`; **TS2717 still missing** |
+| `interface I { p: number; p: string; p: boolean }` | 3x TS2300 + 2x TS2717, `number` | same, `boolean` | full parity |
+| `interface I { 1: number; 1: string }` | TS2300 x2 + TS2717, `number` | same, `string` | full parity |
+| `interface Dup { p: number; [K]: string }` | TS2300 x2 + TS2717, `number` | **silent, `string`** | TS2717, `number` — TS2300 refused, see below |
+| `interface Dup { ["p"]: number; [`p`]: string }` | TS2300 x2 + TS2717, `number` | **silent, `string`** | TS2300 x2 + TS2717, `number` |
+| `class C { p: number; [K]: string }` | TS2717, `number` | silent, `string` | TS2717, `number` |
+| `class C { ["p"]: number; [`p`]: string }` | TS2300 x2 (pristine x1) + TS2717 | silent | TS2300 x1 + TS2717 — **pristine** |
+| `interface I { [K]: number; [K2]: string }`, both `"p"` | TS2717 | TS2717 | TS2717 **exactly once** — the retraction |
+| `class C { static p: string; p: number }` | `c.p` `number`, `C.p` `string` | `c.p` `number`, `C.p` **`number`** | unchanged — **still open**, `staticMembers` |
+| `class B { p }` + `class D extends B { p }` | the override wins | the override wins | unchanged — control |
+| interface / class METHOD OVERLOAD set | silent | silent | unchanged — control |
+| `get p` + `set p`, index signature + named, identical merge | silent | silent | unchanged — controls |
+| `interface I { p: number; p(): void }` | TS2300 x2 | **silent** | **still open** — the scan sees properties only |
+| `const o = { p: 1, [K]: 2 }` | TS1117 | **silent** | **still open** — TS1117 has its own namer |
+| `interface I { p: number; p?: number }` | +TS2717 `number \| undefined` | no TS2717 | **still open** |
+| `declare const L: string; interface I { [L]; [L] }` | an INDEX SIGNATURE | silent | unchanged — (CHK.5)(e) |
+| `interface I { [Symbol.iterator](); [Symbol.iterator]() }` | silent | silent | unchanged — control |
+
+- **(i) FIRST-WINS, AT BOTH MEMBER-BUILDING SITES.** tsc reaches it in the BINDER —
+  `setValueDeclaration` replaces an existing `valueDeclaration` only across an ambient /
+  assignment-declaration / module-kind boundary, so two same-kind property declarations
+  leave the FIRST installed — and **pristine tsc's own TS2717 text is the statement of the
+  rule**: `classWithDuplicateIdentifier`'s baseline says "Property 'c' must be of type
+  'number', but here has type 'string'". Round 937's spurious TS2322 is this defect and not
+  a computed-key one; the same wrong type was already there for a plain `p; p`, which is why
+  the row belonged here rather than in (a).
+- **THE GUARD IS THREE-WAY NARROW AND THE ABLATION SAYS EVERY CLAUSE IS LOAD-BEARING.**
+  OWN members only — `members` is **PRE-POPULATED with the base types' members** before the
+  own-member loop runs, so the obvious `members[name] != null` test would silently delete
+  every property OVERRIDE in the program (arm A2 does exactly that and reddens the control);
+  PROPERTY-vs-PROPERTY only, so a property beside a method or an accessor keeps today's
+  resolution, both already parity; and at equal STATIC-ness only, because a static and an
+  instance member of one name are LEGAL and share this one map until the `staticMembers`
+  dual-population is consumed (arm A3).
+- **(ii) THE DUPLICATE SCANS ARE B451's LAW ONE SITE FURTHER ON.** They are AST scans
+  sitting beside the member-BUILDING sites round 937 levelled onto `declaredMemberName`, and
+  they carried an older, narrower copy of the same `when`: the class scan knew `["a"]` and
+  `[0]`, and the interface scan had **no computed arm at all** and looked only at
+  `PropertyDeclaration`s. Both now ask one namer (`duplicateScanComputedKey`), so the
+  NO-SUBSTITUTION TEMPLATE spelling and every late-bound key reach them.
+- **AND THIS IS WHERE THE TWO REFERENCES PART — THE ROUND'S SECOND FINDING, AND IT COST A
+  DESIGN.** The obvious reading of tsc 7.0.2 is that a late-bound duplicate is TS2300 x2 +
+  TS2717; the first build did that. **`dynamicNamesErrors`' PRISTINE baseline says
+  otherwise**: `interface T0 { [c0]: number; 1: number }` with `const c0 = "1"` is a
+  duplicate BY NAME and gets **nothing at all**, while its late-bound sibling
+  `interface T3 { [c0]: number; [c1]: string }` gets TS2717 and **no TS2300**. The mechanism
+  is exact and it is why the split is principled rather than curve-fitted: **TS2300/TS2687
+  are the BINDER's duplicate checks and a LITERAL computed name is bound statically, while a
+  LATE-BOUND one is resolved by the CHECKER and only ever reaches the re-declaration check.**
+  `memberNameIsBinderVisible` is that line. Arm A8 — following tsgo — reddens
+  `dynamicNamesErrors` itself, which is the measurement rather than an argument. The same
+  parting decides the neighbouring row: for a CLASS property-vs-property duplicate pristine
+  tsc flags only the SECOND declaration (`classWithDuplicateIdentifier`,
+  `duplicateIdentifierComputedName`) and tsgo flags both, so the walker's existing
+  `group.drop(1)` was already right and was left alone. **CLAUDE.md's standing directive —
+  diff against ORIGINAL tsc, do not chase tsgo divergences — is what this round exercised,
+  and rounds 933-937 all used tsgo as the sole reference; where a pristine baseline exists it
+  outranks it.**
+- **ONE CO-EMISSION, RETRACTED RATHER THAN AVOIDED.** With the interface scan naming
+  late-bound keys, B357's `checkComputedLiteralKeyMembers` reaches the same TS2717 at the
+  same span for the sub-population it was built for (both members `[<identifier>]` where the
+  identifier is a top-level `const` bound to a literal) — measured as an exact duplicate line.
+  It now RETRACTS before it emits, CLAUDE.md's rule for a dedicated walker a general rule
+  catches up with, keyed on (code, file, start): a TS2717 belongs to one property DECLARATION,
+  so two cannot legitimately share a name-node start. Arm A7 shows it: without the retraction
+  `dynamicNamesErrors` reports its line twice.
+- **DELIBERATELY REFUSED, AND THAT REFUSAL IS THE PROFILES' FIREWALL.** The scans do NOT ask
+  `getMemberName`'s `[Symbol.X]` arm, so a WELL-KNOWN-symbol key is exactly as invisible to
+  duplicate detection as it was before — the eight profiles carry **57 `[Symbol.iterator](`**
+  members, and admitting them would be a new duplicate population nothing in this round
+  motivated.
+- **PINS +22, one class, `DuplicateMemberDeclarationTest`** (15,146 -> 15,168 / 0 failures /
+  3 skipped, summed over all six modules with an XML parser): eight surviving-TYPE rows, six
+  negative controls that are precisely what a wrong fix breaks (the inherited override,
+  static-vs-instance, property-vs-method, an interface overload set, a get/set pair, an index
+  signature, two identical merged blocks), and eight diagnostic rows including the two
+  refusals. **No corpus baseline moved**, in the shipped state or at any point.
+- **NINE-ARM ABLATION** (`scripts/round938-ablate.py`), each arm applied to and restored from
+  a sha256-verified on-disk snapshot, each diffed against the SNAPSHOT rather than HEAD, each
+  asserting `ran 127` — and the filter deliberately carries the GENERATED `dynamicNames*`
+  corpus classes, which is what makes A7 and A8 legible.
+
+| arm | the mistake | red | what it uniquely shows |
+|---|---|---|---|
+| A1 | the member map goes back to LAST-WINS | **7** | the whole first-wins family at once |
+| A2 | the guard consults the WHOLE member map, not own members | 2 | the inherited OVERRIDE control — nothing else sees it |
+| A3 | the guard drops its STATIC-ness clause | 1 | static-vs-instance, and only it |
+| A4 | the TYPE LITERAL site goes back to last-wins | 1 | the type-literal row — the two sites are separable |
+| A5 | the CLASS scan's computed arm reverts to its pre-938 `when` | 2 | both class duplicate rows, and only those |
+| A6 | the INTERFACE scan loses its computed arm | 2 | both interface computed rows, and only those |
+| A7 | B357 stops retracting | 2 | the ONE-TS2717 pin **and `dynamicNamesErrors`** |
+| A8 | the binder-visibility rule is dropped (i.e. tsgo's answer) | **4** | three late-bound rows **and `dynamicNamesErrors`** |
+| A9 | the written-key renderer answers the BOUND key | 1 | the TS2717 message clause — **subsumed, see below** |
+
+- **EIGHT OF THE NINE HAVE A UNIQUELY-THEIR-OWN RED. THE NINTH IS RECORDED RATHER THAN
+  CLAIMED (round 807), AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT.** A9's display
+  can only be observed THROUGH a diagnostic that its own namer must first produce, so every
+  namer arm (A5, A6, A8) deletes the diagnostic and subsumes A9's failure by construction —
+  there is no fixture in which the message is wrong and the diagnostic is present on an
+  A6-ablated binary. Its distinctive signal is the MESSAGE clause of a pin two other arms
+  redden for a different reason; that is the honest statement, and no pin is credited with
+  discrimination it does not have.
+- **GATES.** Suite **15,146 -> 15,168 / 0 failures / 3 skipped**, no corpus baseline moved.
+  `cost_gate.py` **+0.00% on all 20 counters**, `output.errors` unchanged at 46 — which is the
+  EXPECTED answer here and is read as a control rather than a green light (round 876): the
+  change adds one `HashMap.put` per property to a scan that already ran, and the profiles
+  contain no duplicate member. `huge_methods.py --fail-over 0` clean on **all six** module
+  class dirs (core 751 classes, 0 over, largest 7,702 — `resolveInterfaceMembersCore` grew to
+  4,982 and is nowhere near the cliff). The **8-profile before/after BINARY grid**
+  (`scripts/round938-grid.sh`, profiles enumerated by `tsconfig.json` and refused below 8):
+  all eight **`added=0 removed=0`**, 46/94 diagnostics unchanged. `spine_closure_audit.py` not
+  run: nothing on the spine changed.
+- **NEXT.** `(CHK.5)` continues at **(c)** — the cross-file and class-static keys. Five gaps
+  measured this round with tsc's answer and recorded there rather than pinned (round 765): a
+  MERGED-interface TS2717, an interface property-vs-METHOD TS2300 pair, TS1117 for a
+  late-bound object-literal key, the required-vs-OPTIONAL TS2717, and `C.p` reading the
+  INSTANCE member when a static and an instance share a name — that last one is the
+  unfinished `staticMembers` dual-population and not a duplicate rule at all.
+
 **Round 937 (2026-08-18) — (CHK.5)(a): THE DECLARATION SIDE OF LATE-BOUND COMPUTED KEYS.
 ONE MISSING CAPABILITY, SIX EXTRACTION SITES, AND THE ROUND'S PRODUCT IS THAT **LEVELLING
 ONE SITE OF THE B451 FAMILY MAKES A *PRE-EXISTING* DRIFT IN ITS SIBLINGS REACHABLE — AND

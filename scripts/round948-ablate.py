@@ -51,8 +51,10 @@ TS1492 = """        if (decl.name is ObjectBindingPattern || decl.name is ArrayB
             return
         }
 """
-TS1155_GUARD = """        if (decl.initializer != null) return
-        val name = decl.name as? Identifier ?: return
+# The TS1155 half is switched off by its OWNER gate rather than by its initializer guard:
+# deleting the guard leaves `name` unresolved (a compile error, which reads as `ran 0`),
+# and inverting it would inject TWO mistakes at once.
+TS1155_OWNER_GATE = """            is VariableStatement, is ForStatement -> {}
 """
 DISPOSE_LIB_GUARD = """        if (globalsForFile(spineFileName, "Disposable") == null) return
 """
@@ -81,7 +83,7 @@ ARMS = {
     "A7": ("Emitter.kt", EMIT_ARMS, ""),
     # ── THE FIX, checker half, one diagnostic per arm.
     "A8": ("Checker.kt", TS1492, ""),
-    "A9": ("Checker.kt", TS1155_GUARD, "        return\n"),
+    "A9": ("Checker.kt", TS1155_OWNER_GATE, ""),
     "A10": ("Checker.kt", "                spineCheckUsingForInHead(node)\n", ""),
     "A11": ("Checker.kt", "                spineCheckUsingStatementModifiers(node)\n", ""),
     "A12": ("Checker.kt", "                spineCheckUsingDisposable(node)\n", ""),

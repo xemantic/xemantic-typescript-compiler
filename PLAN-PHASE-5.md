@@ -20,6 +20,113 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 948 (2026-08-19) — (CHK.25): `using` / `await using` DECLARATIONS DID NOT PARSE AT
+ALL, AND THAT WAS THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION. LANDED
+PARSE + BIND + THE GRAMMAR RULES + THE DISPOSABILITY RULE + A VERBATIM EMIT — OURS-ONLY
+**282 -> 251** OVER 74 -> 71 FIXTURES, PRISTINE-ONLY **769 -> 767** (TWO TRUE POSITIVES
+GAINED), ZERO FIXTURES REGRESSED, ZERO OF ~13k CORPUS BASELINES MOVED.**
+
+**WHAT tsc's GRAMMAR AND RULES ACTUALLY ARE.** `parseStatement` / `parseDeclarationWorker` /
+`parseForOrForInOrForOfStatement` each route a `using` (and an `await` whose next token is
+`using`) into `parseVariableStatement` **only behind a LOOKAHEAD** — `isUsingDeclaration` /
+`isAwaitUsingDeclaration`, both of which reduce to
+`nextTokenIsBindingIdentifierOrStartOfDestructuringOnSameLine`: a binding identifier or a `{`
+binding pattern, **on the same line**. An `[` is deliberately NOT a start, with tsc's own
+comment saying why (`using[x]` is an element access), which is what makes an ARRAY binding
+pattern unreachable from a statement-level `using` head. The for-head uses the `disallowOf`
+variant, so `for (using of xs)` iterates the VALUE `using` unless the token after `of` is
+`=` / `;` / `:`. `parseVariableDeclarationList` then folds the head into `NodeFlags`
+(`Using` / `AwaitUsing`, joining `Let` / `Const` in `NodeFlags.BlockScoped`). The rules are
+`checkGrammarVariableDeclaration` (TS1492 binding patterns, TS1155 must-be-initialized, both
+squiggling the declarator's NAME via `getErrorSpanForNode`),
+`checkGrammarVariableDeclarationList` (TS1493 / TS1494 for-in, TS1547 / TS1548 clause,
+TS1545 / TS1546 ambient), `checkGrammarModifiers` (TS1491 / TS1495) and
+`checkVariableLikeDeclaration`'s assignability of the initializer to
+`Disposable | null | undefined` resp. `AsyncDisposable | Disposable | null | undefined`
+(TS2850 / TS2851).
+
+**WHAT LANDED, AND THE REPRESENTATION NEEDED NO NEW NODE.** A `VariableDeclarationList`'s
+`flags` field in this compiler already IS the head TOKEN, so `using` is
+`SyntaxKind.UsingKeyword` — no `forEachChild` arm, no `NodeKind`, no binder arm, because
+`Binder.bindVariableStatement`'s `isVar` test already reads any non-`var` head as
+`SymbolFlags.BlockScopedVariable`. That is not an assumption: a `using` declared inside a
+block is invisible after it (TS2304) where a `var` in the same position hoists, which is the
+pin. `await using` is two tokens collapsed onto a synthetic `SyntaxKind.AwaitUsingKeyword`
+the scanner never produces (tsc's `NodeFlags.AwaitUsing`). **The ~98 sites that read
+`declarationList.flags` all test it as `== ConstKeyword` / `!= VarKeyword`, so a new head
+value is a false NEGATIVE at every one of them and never a false positive** — which is what
+made a statement form this size an additive change rather than a sweep.
+
+**THE CONTEXTUAL-KEYWORD RISK DID NOT MATERIALISE ANYWHERE, AND THE EVIDENCE IS ON BOTH
+SIDES.** The eight profiles carry **336** occurrences of `using` as an identifier / property
+name (`scanner.ts`'s own `using: SyntaxKind.UsingKeyword` among them) and **zero** `using`
+declarations, and the 8-profile BEFORE/AFTER **binary** grid is `added=0 removed=0` on all
+eight; the pins carry the shapes the profiles do not (`const using = 1`, `using.foo()`,
+`using[i]`, `{ using: 1 }`, a `using` parameter, a `using` class member, and ASI).
+
+**A PIN THAT MEASURED NOTHING, CAUGHT BY WRITING THE ABLATION ARM FIRST.** The
+`disallowOf` pin was originally `for (const of of using)` — a `const` head, which does not
+reach the `disallowOf` path at all. The shape that does is
+`let using = 0; for (using of xs)`, and arm A5 reddens exactly it and nothing else. The old
+shape survives as a regression guard (`of` is still usable as a declarator name).
+
+**WHAT IS QUEUED RATHER THAN LANDED.** **(CHK.27)** — the downlevel EMIT (tsc's
+`__addDisposableResource` / `__disposeResources`; the head is emitted VERBATIM, which is
+tsc's own output at >= ESNext and the safe half of the choice, since rewriting it to `var`
+would silently delete the disposal), `declare using` (TS1545), the case/default-clause rule
+(TS1547 / TS1548), and the `await using` CONTEXT rules (TS2852 / TS2853 / TS2854, TS18054),
+plus TS2850's nested elaboration and its TS2728 related info. **(CHK.28)** — the two rows
+still on `usingDeclarationsNamedEvaluationDecoratorsAndClassFields` are **not about `using`**:
+`const C = @dec class { }` takes TS1206 `Decorators are not valid here.` just as
+`using C = @dec class { }` does, i.e. a decorated class EXPRESSION in an initializer, which
+the `using` parse cascade had been masking.
+
+**GATES.** Suite **15,343 -> 15,381 / 0 failures / 3 skipped** (+38 = exactly this round's
+pins), **NO corpus baseline moved**; 8-profile BEFORE/AFTER **binary** grid (`scripts/round948-grid.sh`,
+two snapshotted class dirs whose `Parser.class` / `Checker.class` are asserted DIFFERENT)
+`added=0 removed=0` on ALL EIGHT; **EMIT-mode `diff -r` clean** over 78 + 252 emitted files on
+two profiles, both arms (the `--noEmit` blind spot); the 630-fixture pristine sweep, both arms
+against the two class-dir snapshots, output files DELETED before the wait: **282 -> 251
+ours-only over 74 -> 71 fixtures, 769 -> 767 pristine-only, ZERO fixtures regressed**;
+`cost_gate.py` **+0.00% on all 20 counters** (the expected answer — `using` is absent from the
+compiler profile — with the 38 pins as the positive control that the binary changed);
+`huge_methods.py --fail-over 0` green on all six module class dirs (largest core method 5,204);
+`round920-token-gate.sh` **ALL INVARIANTS HOLD, 1,327 files / 101 M chars / 0 violations**;
+`spine_closure_audit.py` green (46 handlers, 6 open, 40 audited). The after-arm sources rebuild
+to the measured `Parser.class` / `Checker.class` / `Emitter.class` byte for byte.
+
+**ABLATION — 13 arms, one mistake at a time, applied to and restored from a sha256-verified
+snapshot (never `git checkout`), each asserting `ran 38` ACROSS TWO MODULES.**
+
+| arm | the injected mistake | RED | uniquely |
+|---|---|---:|---|
+| A1 | delete the statement dispatch arms (the pre-948 grammar) | **13** | the two AST-SHAPE pins and the `await using` bind |
+| A2 | the BOUND — no lookahead, every statement-position `using` is a head | **4** | `using[i];` as an element access, `using.foo()` |
+| A3 | the BOUND — drop the SAME-LINE test (ASI) | **2** | — (a proper subset of A2 by construction) |
+| A4 | delete the for-head arms | **5** | both `for (using … of …)` positives |
+| A5 | the BOUND — `disallowOf = false` in the for head | **1** | `for (using of xs)` iterates the VALUE |
+| A6 | collapse `AwaitUsingKeyword` onto `UsingKeyword` | **5** | — (detected jointly by five pins) |
+| A7 | the emitter writes `var` for a `using` head | **1** | — (also A1, A6) |
+| A8 | delete TS1492 | **2** | — |
+| A9 | delete TS1155's owner gate | **3** | — |
+| A10 | delete TS1493 / TS1494 | **2** | — |
+| A11 | delete TS1491 / TS1495 | **2** | the `export using` case |
+| A12 | delete TS2850 / TS2851 | **3** | — |
+| A13 | the BOUND — no `Disposable`-in-lib guard on the disposability rule | **2** | — |
+
+Union **25 of 38**; the other **13 are regression guards / negative controls** and are
+recorded as such (round 807), including every "`using` is still an ordinary identifier" pin
+whose shape is not statement-INITIAL — `const using = 1; … using + 1` lives inside an
+initializer, so A2 cannot reach it, while its `-project` twin (`using[i];` at statement start)
+is red under A2. That contrast is round 806's pin-POSITION law in one pair.
+
+**TWO ARMS NEEDED REPAIR BEFORE THEY MEASURED ANYTHING, BOTH THE HARNESS'S FAULT.** A9's first
+anchor occurred TWICE in `Checker.kt` (`spineCheckConstInitializer` has the same two-line
+initializer guard) and was REFUSED by the driver's own uniqueness check; its second form
+deleted a `val` still referenced below, which is a COMPILE ERROR and prints as `ran 0` —
+indistinguishable from a dead build. The arm that works removes the OWNER gate, which is one
+mistake and leaves the function compiling.
+
 **Round 947 (2026-08-19) — THE PARSER-GAP BUCKET SUB-TRIAGED: ROUND 941's LABEL
 ("`using`, `infer X extends`") IS WRONG IN BOTH HALVES. THE BUCKET IS **SIX** FAMILIES;
 `infer X extends` ALREADY PARSES; THE "PARENTHESIZED `infer`" DEFECT IS NOT THE PARSER AT
@@ -127,9 +234,9 @@ stale-file trap); `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py
 `Parser.class` / `Checker.class` byte for byte.
 
 **NEXT.** **(CHK.25)** `using` declarations (33 rows) is the largest single item left in the
-whole ours-only population and the one that needs its own round with an emit gate;
-**(CHK.26)** the `infer`-constraint disambiguation (8 rows) is smaller but touches the frozen
-conditional-type production. Otherwise the ranked list in
+whole ours-only population and the one that needs its own round with an emit gate — **DONE,
+round 948**; **(CHK.26)** the `infer`-constraint disambiguation (8 rows) is smaller but touches
+the frozen conditional-type production. Otherwise the ranked list in
 `docs/pristine-divergences.md` § 4 is unchanged: **(CHK.10)** definite assignment through a
 late-bound `this[k]` (4 rows, confirmed genuine), then **(CHK.18)** and **(CHK.15)**.
 
@@ -1102,151 +1209,6 @@ one divergence is a message FORM the round that landed it had already recorded a
 - **NEXT.** `(CHK.5)` continues at **(c)**, unchanged. Two entries were added by this round:
   **(CHK.5)(f)** — the TS2741 key name — and **(CHK.7)**, four pre-existing pristine
   divergences with a fixture apiece.
-
-**Round 938 (2026-08-19) — (CHK.5)(b): A DUPLICATE MEMBER DECLARATION. TWO SEPARABLE
-DEFECTS, ONE COMMIT, AND THE ROUND'S PRODUCT IS THAT **ROUND 937's PREMISE WAS HALF WRONG,
-AND MEASURING IT FIRST IS WHAT SAID WHICH HALF.** (CHK.5)(b) was written as "our member map
-is last-wins for every duplicate spelling … so `interface Dup { p: number; [K]: string }`
-went from 0 diagnostics to 1 of the wrong code". The first half is exactly right. The
-second — the implied "and we do not report duplicates" — is not: **this compiler already
-emitted TS2300 x2 + TS2717 for a plain `interface I { p: number; p: string }`, byte-identical
-to tsc, and does so for a type literal, a class, an enum, two getters, a numeric member name
-and a class property-vs-method too.** What was missing was narrower and both halves are now
-closed: the surviving TYPE, and the fact that no COMPUTED spelling reached the duplicate
-scans at all.**
-
-- **STEP 1 WAS tsc 7.0.2, DIRECT, ON 32 SCRATCH PROJECTS — 22 shapes, then 10 more once the
-  first pass showed where the line was.** Every row was read from
-  `tools/tsgo-7.0.2/lib/tsc --noEmit -p .` and from our own `MainKt --noEmit --listAll` on
-  the SAME directory, before anything was written; every duplicate carries a
-  `const probe: 0 = x.p` so the **surviving type is read out of the TS2322 message**,
-  independently of the diagnostic — the two defects are separable and had to be measured
-  separately.
-
-| the shape | tsc | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `interface I { p: number; p: string }` | TS2300 x2 + TS2717, `p` is `number` | **same diagnostics**, `p` is `string` | full parity |
-| `interface I { p: number; p: number }` | TS2300 x2, `number` | same | unchanged — control |
-| `class C { p: number; p: string }` | TS2717, `number` (+TS2300 x1 pristine / x2 tsgo) | TS2300 x1 + TS2717, `string` | `number`; TS2300 x1 kept — **pristine** |
-| `type T = { p: number; p: string }` | TS2300 x2 + TS2717, `number` | same diagnostics, `string` | full parity |
-| `interface I { p: number }` x2 blocks, differing | TS2717, `number` | silent, `string` | `number`; **TS2717 still missing** |
-| `interface I { p: number; p: string; p: boolean }` | 3x TS2300 + 2x TS2717, `number` | same, `boolean` | full parity |
-| `interface I { 1: number; 1: string }` | TS2300 x2 + TS2717, `number` | same, `string` | full parity |
-| `interface Dup { p: number; [K]: string }` | TS2300 x2 + TS2717, `number` | **silent, `string`** | TS2717, `number` — TS2300 refused, see below |
-| `interface Dup { ["p"]: number; [`p`]: string }` | TS2300 x2 + TS2717, `number` | **silent, `string`** | TS2300 x2 + TS2717, `number` |
-| `class C { p: number; [K]: string }` | TS2717, `number` | silent, `string` | TS2717, `number` |
-| `class C { ["p"]: number; [`p`]: string }` | TS2300 x2 (pristine x1) + TS2717 | silent | TS2300 x1 + TS2717 — **pristine** |
-| `interface I { [K]: number; [K2]: string }`, both `"p"` | TS2717 | TS2717 | TS2717 **exactly once** — the retraction |
-| `class C { static p: string; p: number }` | `c.p` `number`, `C.p` `string` | `c.p` `number`, `C.p` **`number`** | unchanged — **still open**, `staticMembers` |
-| `class B { p }` + `class D extends B { p }` | the override wins | the override wins | unchanged — control |
-| interface / class METHOD OVERLOAD set | silent | silent | unchanged — control |
-| `get p` + `set p`, index signature + named, identical merge | silent | silent | unchanged — controls |
-| `interface I { p: number; p(): void }` | TS2300 x2 | **silent** | **still open** — the scan sees properties only |
-| `const o = { p: 1, [K]: 2 }` | TS1117 | **silent** | **still open** — TS1117 has its own namer |
-| `interface I { p: number; p?: number }` | +TS2717 `number \| undefined` | no TS2717 | **still open** |
-| `declare const L: string; interface I { [L]; [L] }` | an INDEX SIGNATURE | silent | unchanged — (CHK.5)(e) |
-| `interface I { [Symbol.iterator](); [Symbol.iterator]() }` | silent | silent | unchanged — control |
-
-- **(i) FIRST-WINS, AT BOTH MEMBER-BUILDING SITES.** tsc reaches it in the BINDER —
-  `setValueDeclaration` replaces an existing `valueDeclaration` only across an ambient /
-  assignment-declaration / module-kind boundary, so two same-kind property declarations
-  leave the FIRST installed — and **pristine tsc's own TS2717 text is the statement of the
-  rule**: `classWithDuplicateIdentifier`'s baseline says "Property 'c' must be of type
-  'number', but here has type 'string'". Round 937's spurious TS2322 is this defect and not
-  a computed-key one; the same wrong type was already there for a plain `p; p`, which is why
-  the row belonged here rather than in (a).
-- **THE GUARD IS THREE-WAY NARROW AND THE ABLATION SAYS EVERY CLAUSE IS LOAD-BEARING.**
-  OWN members only — `members` is **PRE-POPULATED with the base types' members** before the
-  own-member loop runs, so the obvious `members[name] != null` test would silently delete
-  every property OVERRIDE in the program (arm A2 does exactly that and reddens the control);
-  PROPERTY-vs-PROPERTY only, so a property beside a method or an accessor keeps today's
-  resolution, both already parity; and at equal STATIC-ness only, because a static and an
-  instance member of one name are LEGAL and share this one map until the `staticMembers`
-  dual-population is consumed (arm A3).
-- **(ii) THE DUPLICATE SCANS ARE B451's LAW ONE SITE FURTHER ON.** They are AST scans
-  sitting beside the member-BUILDING sites round 937 levelled onto `declaredMemberName`, and
-  they carried an older, narrower copy of the same `when`: the class scan knew `["a"]` and
-  `[0]`, and the interface scan had **no computed arm at all** and looked only at
-  `PropertyDeclaration`s. Both now ask one namer (`duplicateScanComputedKey`), so the
-  NO-SUBSTITUTION TEMPLATE spelling and every late-bound key reach them.
-- **AND THIS IS WHERE THE TWO REFERENCES PART — THE ROUND'S SECOND FINDING, AND IT COST A
-  DESIGN.** The obvious reading of tsc 7.0.2 is that a late-bound duplicate is TS2300 x2 +
-  TS2717; the first build did that. **`dynamicNamesErrors`' PRISTINE baseline says
-  otherwise**: `interface T0 { [c0]: number; 1: number }` with `const c0 = "1"` is a
-  duplicate BY NAME and gets **nothing at all**, while its late-bound sibling
-  `interface T3 { [c0]: number; [c1]: string }` gets TS2717 and **no TS2300**. The mechanism
-  is exact and it is why the split is principled rather than curve-fitted: **TS2300/TS2687
-  are the BINDER's duplicate checks and a LITERAL computed name is bound statically, while a
-  LATE-BOUND one is resolved by the CHECKER and only ever reaches the re-declaration check.**
-  `memberNameIsBinderVisible` is that line. Arm A8 — following tsgo — reddens
-  `dynamicNamesErrors` itself, which is the measurement rather than an argument. The same
-  parting decides the neighbouring row: for a CLASS property-vs-property duplicate pristine
-  tsc flags only the SECOND declaration (`classWithDuplicateIdentifier`,
-  `duplicateIdentifierComputedName`) and tsgo flags both, so the walker's existing
-  `group.drop(1)` was already right and was left alone. **CLAUDE.md's standing directive —
-  diff against ORIGINAL tsc, do not chase tsgo divergences — is what this round exercised,
-  and rounds 933-937 all used tsgo as the sole reference; where a pristine baseline exists it
-  outranks it.**
-- **ONE CO-EMISSION, RETRACTED RATHER THAN AVOIDED.** With the interface scan naming
-  late-bound keys, B357's `checkComputedLiteralKeyMembers` reaches the same TS2717 at the
-  same span for the sub-population it was built for (both members `[<identifier>]` where the
-  identifier is a top-level `const` bound to a literal) — measured as an exact duplicate line.
-  It now RETRACTS before it emits, CLAUDE.md's rule for a dedicated walker a general rule
-  catches up with, keyed on (code, file, start): a TS2717 belongs to one property DECLARATION,
-  so two cannot legitimately share a name-node start. Arm A7 shows it: without the retraction
-  `dynamicNamesErrors` reports its line twice.
-- **DELIBERATELY REFUSED, AND THAT REFUSAL IS THE PROFILES' FIREWALL.** The scans do NOT ask
-  `getMemberName`'s `[Symbol.X]` arm, so a WELL-KNOWN-symbol key is exactly as invisible to
-  duplicate detection as it was before — the eight profiles carry **57 `[Symbol.iterator](`**
-  members, and admitting them would be a new duplicate population nothing in this round
-  motivated.
-- **PINS +22, one class, `DuplicateMemberDeclarationTest`** (15,146 -> 15,168 / 0 failures /
-  3 skipped, summed over all six modules with an XML parser): eight surviving-TYPE rows, six
-  negative controls that are precisely what a wrong fix breaks (the inherited override,
-  static-vs-instance, property-vs-method, an interface overload set, a get/set pair, an index
-  signature, two identical merged blocks), and eight diagnostic rows including the two
-  refusals. **No corpus baseline moved**, in the shipped state or at any point.
-- **NINE-ARM ABLATION** (`scripts/round938-ablate.py`), each arm applied to and restored from
-  a sha256-verified on-disk snapshot, each diffed against the SNAPSHOT rather than HEAD, each
-  asserting `ran 127` — and the filter deliberately carries the GENERATED `dynamicNames*`
-  corpus classes, which is what makes A7 and A8 legible.
-
-| arm | the mistake | red | what it uniquely shows |
-|---|---|---|---|
-| A1 | the member map goes back to LAST-WINS | **7** | the whole first-wins family at once |
-| A2 | the guard consults the WHOLE member map, not own members | 2 | the inherited OVERRIDE control — nothing else sees it |
-| A3 | the guard drops its STATIC-ness clause | 1 | static-vs-instance, and only it |
-| A4 | the TYPE LITERAL site goes back to last-wins | 1 | the type-literal row — the two sites are separable |
-| A5 | the CLASS scan's computed arm reverts to its pre-938 `when` | 2 | both class duplicate rows, and only those |
-| A6 | the INTERFACE scan loses its computed arm | 2 | both interface computed rows, and only those |
-| A7 | B357 stops retracting | 2 | the ONE-TS2717 pin **and `dynamicNamesErrors`** |
-| A8 | the binder-visibility rule is dropped (i.e. tsgo's answer) | **4** | three late-bound rows **and `dynamicNamesErrors`** |
-| A9 | the written-key renderer answers the BOUND key | 1 | the TS2717 message clause — **subsumed, see below** |
-
-- **EIGHT OF THE NINE HAVE A UNIQUELY-THEIR-OWN RED. THE NINTH IS RECORDED RATHER THAN
-  CLAIMED (round 807), AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT.** A9's display
-  can only be observed THROUGH a diagnostic that its own namer must first produce, so every
-  namer arm (A5, A6, A8) deletes the diagnostic and subsumes A9's failure by construction —
-  there is no fixture in which the message is wrong and the diagnostic is present on an
-  A6-ablated binary. Its distinctive signal is the MESSAGE clause of a pin two other arms
-  redden for a different reason; that is the honest statement, and no pin is credited with
-  discrimination it does not have.
-- **GATES.** Suite **15,146 -> 15,168 / 0 failures / 3 skipped**, no corpus baseline moved.
-  `cost_gate.py` **+0.00% on all 20 counters**, `output.errors` unchanged at 46 — which is the
-  EXPECTED answer here and is read as a control rather than a green light (round 876): the
-  change adds one `HashMap.put` per property to a scan that already ran, and the profiles
-  contain no duplicate member. `huge_methods.py --fail-over 0` clean on **all six** module
-  class dirs (core 751 classes, 0 over, largest 7,702 — `resolveInterfaceMembersCore` grew to
-  4,982 and is nowhere near the cliff). The **8-profile before/after BINARY grid**
-  (`scripts/round938-grid.sh`, profiles enumerated by `tsconfig.json` and refused below 8):
-  all eight **`added=0 removed=0`**, 46/94 diagnostics unchanged. `spine_closure_audit.py` not
-  run: nothing on the spine changed.
-- **NEXT.** `(CHK.5)` continues at **(c)** — the cross-file and class-static keys. Five gaps
-  measured this round with tsc's answer and recorded there rather than pinned (round 765): a
-  MERGED-interface TS2717, an interface property-vs-METHOD TS2300 pair, TS1117 for a
-  late-bound object-literal key, the required-vs-OPTIONAL TS2717, and `C.p` reading the
-  INSTANCE member when a static and an instance share a name — that last one is the
-  unfinished `staticMembers` dual-population and not a duplicate rule at all.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
