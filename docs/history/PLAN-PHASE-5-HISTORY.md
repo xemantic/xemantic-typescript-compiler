@@ -1,3 +1,73 @@
+**Round 930 (2026-08-18) — (API.13): § 14 AUDITED BY EXECUTION. THE ROUND'S PRODUCT IS
+THAT **A PAGE OF PROSE ABOUT BEHAVIOUR DECAYS AT ABOUT ONE FALSE CLAIM PER THREE ROUNDS**
+— § 14 was written in round 928 and had FOUR false claims by round 930, one of them a
+defect that had been FIXED BEFORE IT WAS WRITTEN, and one of them a real defect the page
+had been promising for two rounds.**
+
+**THE AUDIT TABLE IS THE ROUND.** Every claim was established by RUNNING it — a fixture
+through the API, `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` as the oracle where the claim is
+about parity, the cost table re-taken on the compiler profile. Reading the source to
+confirm a claim was ruled out in advance, because that is exactly how the stale one
+survived.
+
+| § 14 claim | verdict | how it was established |
+|---|---|---|
+| positions carry a lone-`\r` defect (`(BUG.1)`, § 6 + the maturity row) | **STALE** — closed round 915 | a `\r`-terminated fixture: TS2322 line 3, TS1123 line 3, `positionAt` line 3, LF control identical |
+| go to definition is complete for `this`/**`super`** (§ 14's row AND § 9's own table, line 480) | **WRONG — a defect** | `definitionsAt` on `super.pb` answered `[]` while `quickInfoAt` at the same caret answered `number`; tsc navigates to `Base.pb`. **Fixed this round** |
+| an enum member's declaration name "reports nothing" | **WRONG, and worse than documented** | four enum shapes (plain / valued / `const enum` / string), all `any`; tsc: `(enum member) Plain.Alpha = 0`. Now (API.15) |
+| an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type `renameAt` from either end plans both occurrences and the applied text compiles; with one, `OCCURRENCES_INCOMPLETE` at the key. **Found by measuring the round's own correction** |
+| a computed key `{ ["p"]: v }` is "not reported either" | **OVERSTATED** — reported in 2 of 3 shapes | contextual+required → `WOULD_NOT_COMPILE`; no contextual type → `OCCURRENCES_INCOMPLETE`; contextual+**optional** → genuinely silent |
+| a template `` o[`p`] `` is silently missed | **TRUE**, proven end to end | rename applies, template keeps the old name, and the applied program has **zero** diagnostics — nothing anywhere can see it |
+| `documentHighlightsAt` 6.0–7.2 s | **TRUE of `checker.ts`**, unqualified | 6.3 s on `checker.ts`, **5.0–5.5 s on `types.ts`** — the row is a statement about a FILE |
+| a plain rebuild: 5.5–5.9 s (§ 14) vs ~5.2 s (§ 3) | **BOTH DRIFTED, opposite directions** | re-taken 5.0–5.5 s warm; ~9 s for the first rebuild in a process |
+| `referencesAt` 8.3–13.5 s / `renameAt` 13.3–24.5 s | **TRUE, band widened** | 8.3–10.2 clean, 13.2–14.8 dirty; rename 14.3 s (`createTypeChecker`) – 21.0 s (`SyntaxKind`), 19.6–26.7 dirty |
+| the build COUNTS (1 per query, 2 dirty refs, 2/3 rename, 0 for a syntax refusal) | **TRUE, every row** | counted at the backing `Vfs`, and now pinned |
+| "gated over 101 M characters" | **TRUE** | `round920-token-gate.sh` re-run: 1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations |
+| `o["` completes / a template refuses; keywords; accessibility; overlay-only files; UNCLASSIFIED; batching; the four rename refusals; export/import plainness; hover's one subject | **TRUE** | one fixture each; already pinned elsewhere, mapped rather than duplicated |
+
+- **THE DEFECT, AND WHY NOTHING SAW IT.** `Checker.typeCaptureMemberSymbols` — the
+  receiver leg behind go-to-definition — carried a `this` carrier and no `super` one, so
+  `super.p` reached `getTypeOfExpression` as a name nothing binds, typed `any`, and found
+  no members. Its TYPE twin `typeCaptureThisMemberType` has had the super branch since
+  (BUG.4), which is why **hover was right and definition was empty at the same caret** —
+  and why every reading of § 8 confirmed a claim § 9 was failing. The fix is eight lines
+  mirroring that twin: resolve the this-type, take its `baseTypes`, collect there. It is
+  the base's declaration in both directions — the override's never — measured against tsc
+  in both the overridden and the inherited shape (`scripts/lsp_definition.py`, new, the
+  fourth oracle beside hover/refs/rename/completion). It declines in a STATIC member, the
+  same decline the `this` rule already documents, and with no base class.
+- **WHAT IS NOW PINNED, AND WHAT CANNOT BE.** `LanguageServiceStateTest`, 15 tests: the
+  super leg and its two negative controls; the three gaps no test covered (the enum
+  declaration name, the objlit method's rename in BOTH its shapes, the template's silent
+  miss); the two
+  computed-key refusals and the one silent shape; the tagged-template refusal at the API
+  and not only at its anchor; and **the cost table's `builds` column, every row**. The
+  wall column is marked **(not pinnable)** in the page itself — a timed assertion over a
+  compile is a coin flip (round 868) — and is re-taken by
+  `scripts/round930-ls-cost.sh` + `LanguageServiceCostMain` instead: one process, one
+  project, three rotations, a discarded warm-up, so the arms are comparable to each other
+  and to nothing else.
+- **TWO PINS DELIBERATELY ASSERT A DEFECT** (the enum `any`, the two silent misses) and
+  say so in place, with tsc's answer beside them, so that closing either is an edit here
+  rather than an accident nobody notices. That is the same reason § 14 lists them at all.
+- **THE MAPPING STEP PAID FOR ITSELF**: before writing anything, all sixteen § 14 claims
+  were mapped onto the existing suite, which found 10 of them already pinned (positions in
+  `LineMapTest`/`ProjectPositionTest` — including round 915's own `a lone CR file's
+  diagnostics agree with this map too`, which is what proves the § 6 note stale — the
+  `o["` pair in `ProjectStringMemberCompletionTest`, read/write in `SyntaxRoleTest`,
+  batching in `ProjectSemanticsTest`, the refusals in `ProjectRenameTest`). Only the
+  unpinned six were written, so the class is additive rather than a second copy.
+- **GATES.** Suite **14,981 → 14,996 / 0 failures / 3 skipped** = exactly the +15.
+  `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round adds core
+  code, and structurally expected since the capture path is opt-in.
+  `huge_methods.py --fail-over 0` clean on core (750 classes scanned, largest 6,353) and
+  on `-project` explicitly (48 classes, largest 561). Round-920 token gate re-run.
+  `docs/language-service.md` §§ 3, 6, 8, 9, 10b, 10d and a rewritten § 14.
+- **SUCCESSOR**: (API.15), the enum member declaration hover — one leg, mechanism named in
+  the queue entry — and behind it the unchanged one, the incremental / re-entrant seam,
+  which is still the largest thing about this API and the only thing that moves the cost
+  table.
+
 **Round 929 (2026-08-18) — (API.12): COMPLETION INSIDE `o["`. THE LAST QUERY THAT DID
 NOT ANSWER AN ELEMENT ACCESS, AND THE ROUND'S PRODUCT IS THAT **THE PARSER'S OWN
 `isUnterminated` IS FALSE FOR THE ONE STATE THIS FEATURE EXISTS FOR** — a lone opening

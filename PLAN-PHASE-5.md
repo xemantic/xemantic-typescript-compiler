@@ -20,6 +20,123 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 939 (2026-08-19) — (CHK.6): THE COMPUTED-KEY FAMILY, RE-JUDGED AGAINST *PRISTINE*.
+NO CODE. THE ROUND'S PRODUCT IS AN INSTRUMENT AND A VERDICT: **`tools/tsgo-7.0.2/lib/tsc`
+IS THE ONLY REFERENCE THAT *RUNS* HERE AND IT IS NOT THE REFERENCE WE DIFF AGAINST — BUT
+THE PRISTINE ORACLE WAS ON DISK ALL ALONG, IN THE CORPUS'S OWN `tests/baselines/reference`,
+AND IT SAYS ROUNDS 933-938 LANDED NOTHING THAT PRISTINE CONTRADICTS.** Round 938 found the
+two references parting on its own territory and had to redesign around it; the worry this
+round was commissioned to settle is that rounds 933-937 had tsgo-only evidence for rows no
+corpus baseline covers. Measured: **the corpus protects far more of the family than the
+notes claim** — `dynamicNames`, `dynamicNamesErrors`, `duplicateIdentifierComputedName`,
+`destructuredLateBoundNameHasCorrectTypes`, `checkDestructuringShorthandAssigment2`, the
+three `duplicateObjectLiteralProperty_computedName*` and **7 of the 10 TS2717 baselines in
+the entire corpus** are ACTIVE, byte-exact gates sitting directly on these decisions.
+
+- **THE INSTRUMENT: `scripts/pristine_oracle.py`.** Given a code, a source pattern or a
+  fixture name it finds the PRISTINE baselines that exercise the shape and prints what
+  pristine tsc emitted — and labels every hit **ACTIVE / not generated**, i.e. whether the
+  suite is already gating it. Four things make it work rather than merely exist.
+  (i) **An ABSENT `.errors.txt` beside a present case is evidence**: it means pristine was
+  SILENT, which is exactly the half a "does tsc complain about this?" question needs.
+  (ii) **`tests/cases` in this clone is INCOMPLETE** — 6,537 files against 9,055 error
+  baselines, whole conformance directories missing — so a pattern search over it alone
+  misses silently; the search runs over the `.js` and `.errors.txt` baselines too, which
+  echo every input verbatim, via `grep` (0.2 s over 53,049 files; the pure-Python version
+  timed out at 120 s and is why the sweep is shelled out).
+  (iii) **`--extract DIR` writes pristine's own input back out**, so our compiler can be run
+  over exactly what pristine tsc saw — that is what turned this round from a reading
+  exercise into a measurement.
+  (iv) **`.types` / `.symbols` baselines answer naming questions with no diagnostic at
+  all**: `computedPropertyNames10_ES6.types` records `` [`hello bye`]() `` as the member
+  `"hello bye"` and `` [`hello ${a} bye`]() `` as `[x: string]`, which is round 933's whole
+  landed rule and its negative control, read straight off pristine.
+
+**THE CLASSIFICATION.** Every landed behavioural decision of rounds 933-938, one row each.
+**PRISTINE-CONFIRMED 22 · CORPUS-SILENT 10 · tsgo-ONLY 1 · PRISTINE-DIVERGENT 1**, and the
+one divergence is a message FORM the round that landed it had already recorded as open.
+
+| # | the landed decision | verdict | evidence |
+|---|---|---|---|
+| 933.1 | a backtick-quoted computed key NAMES a member | **PRISTINE-CONFIRMED** | `computedPropertyNames10_ES6.types` names the member `"hello bye"`; `11/13/16_ES6` carry the key on a class and on accessors and pristine is SILENT — and so are we, measured |
+| 933.2 | a SUBSTITUTING template names NO member | **PRISTINE-CONFIRMED** | same `.types` baseline: it contributes `[x: string]`, an index signature |
+| 933.3 | `classMemberNameText` DELEGATES (the two sites cannot drift) | CORPUS-SILENT | an internal-consistency rule; its observable (TS2322 + TS2339 in one compile) has no pristine fixture |
+| 934.1 | the excess check acts on a computed key spelling one fixed name, in every position | **PRISTINE-CONFIRMED, ACTIVE** | `checkDestructuringShorthandAssigment2` |
+| 934.2 | a BARE numeric key `{ 7: 2 }` is excess-checked | CORPUS-SILENT | swept all 92 TS2353 baselines: none names a bare numeric key |
+| 934.3 | the excess message names the key AS WRITTEN, delimiters kept | **PRISTINE-CONFIRMED ×3** | `'[k]'` (`checkDestructuringShorthandAssigment2`, ACTIVE, squiggle over the written key), `'[Symbol.toPrimitive]'` (`symbolProperty21`), **`'"resolution-mode"'`** (`nodeModulesImportTypeModeDeclarationEmitErrors1`) — the last is the `'"zz"'` row, a quoted key rendered WITH its quotes |
+| 934.4 | the NUMERIC-index-signature absorption guard | CORPUS-SILENT | |
+| 934.5 | `[E.P]` is not named by `computedSymbolKey`'s invented name | CORPUS-SILENT | superseded at its source by 935's ordering |
+| 934.6 | a substituting template stays OUT of the excess check | **PRISTINE-CONFIRMED** | the `.types` index-signature evidence above |
+| 935.1 | a `const`/`declare const`/annotated-`let` literal key LATE-BINDS (supply side silent) | **PRISTINE-CONFIRMED, ACTIVE ×2** | `dynamicNames`: `export const o1 = { [c4]: 1, … }` then `export const o2: T0 = o1` — silent; `destructuredLateBoundNameHasCorrectTypes`: `const named = "prop"` as a destructuring key |
+| 935.2 | an ENUM member's VALUE late-binds | **PRISTINE-CONFIRMED, ACTIVE** | `duplicateObjectLiteralProperty_computedName2`: `[E1.A]`/`[E1.A]` and `[E2.B]`/`[E2.B]` are duplicates in pristine, i.e. the key binds to the member's value |
+| 935.3 | a numeric key names its VALUE, not its source text | **PRISTINE-CONFIRMED** | `computedPropertyNames10_ES6.types`: `[0]()` is the member `0`, `[""]()` the member `""`; `duplicateObjectLiteralProperty_computedName1` (ACTIVE) makes `1` / `[1]` / `[+1]` / `"1"` one name and `"+1"` another |
+| 935.4 | the five REFUSALS (widened `let`, genuine union, plain `symbol`, bare TP, ambient value-less enum member) | **PRISTINE-CONFIRMED in kind** | `computedPropertyNames5/6/8/14/15/17/51_ES6`: pristine refuses a non-literal key outright (TS2464) rather than binding it |
+| 935.5 | the EXCESS direction for the same keys | CORPUS-SILENT | |
+| 935.6 | the name must be a function of the PROGRAM, not of the pass | CORPUS-SILENT | an invariant, not an output |
+| 935.7 | the language service does NOT treat `[K]` as a member position | **tsgo-only** | read from tsgo's LSP; no baseline expresses a rename's extent |
+| 936.1 | QUALIFIED heads late-bind (`NS.K`, nested, dotted, merged, enum-in-namespace) | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNames`: `namespace N { export const c2 = "a"; export interface T4 { [N.c2]: number … } }` plus `class T5 implements T4` — silent |
+| 936.2 | the TEMPLATE-LITERAL TYPE head | CORPUS-SILENT | |
+| 936.3 | the TYPE-ALIAS hops | CORPUS-SILENT | |
+| 936.4 | a WELL-KNOWN `[Symbol.X]` key is EXCESS, named as written | **PRISTINE-CONFIRMED, RE-RUN** | `symbolProperty21` — pristine `TS2353 '[Symbol.toPrimitive]'` at (10,5); our binary on the extracted fixture emits the same code, position and key name |
+| 936.5 | the `string`-typed key display (`{}` vs `{ [L]: number; }`) is a recorded GAP | **PRISTINE-CONFIRMED as a gap** | `indexSignatures1` prints `{ [sym]: number; }` for the same mechanism |
+| 936.6 | the embedded lib gains `IterableIterator[Symbol.iterator]()` | **PRISTINE-CONFIRMED** | tsc's own `lib.es2015.iterable.d.ts` declares exactly that member (`build/generated/real-lib`) |
+| 937.1 | an interface / class / type literal DECLARES and TYPES its own `[K]` member | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNames` declares `[c0]`/`[c1]`/`[s0]` on an interface, a `declare class` and a type alias, in a module and in a namespace |
+| 937.2 | a computed METHOD name reaches `getTypeOfSymbolWorker` | CORPUS-SILENT | |
+| 937.3 | `classMemberNameText` (the TS2339 firewall) knows late-bound keys | CORPUS-SILENT | |
+| 937.4 | the `implements` / transitive-name FP fixes, incl. the two NUMERIC rows | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNames`: `declare class T13 implements T2 { a: number; 1: string; [s2]: boolean }` and `declare class C { static 1: string; static [s2] }` — silent; this baseline is what MOVED mid-round-937 and forced the sibling walkers into that commit |
+| 937.5 | `checkComputedLiteralKeyMembers` RETRACTS | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNamesErrors` must carry its TS2717 exactly once (arm A7) |
+| 937.6 | TS2741 for a missing late-bound member is named **`'p'`** | **PRISTINE-DIVERGENT (FORM)** | pristine names the key AS WRITTEN wherever it names one — `'[E.A]'` (`assignmentCompatWithEnumIndexer`), `'["a"]'` (`duplicateIdentifierComputedName`, ACTIVE), `'[c1]'` (`dynamicNamesErrors`, ACTIVE), `'[Symbol.toPrimitive]'` — so `'[K]'` is the pristine answer. Verified live at HEAD. **No baseline covers the exact shape, which is why the suite is green**; recorded by round 937 against tsgo, and pristine AGREES with tsgo here. Queued as (CHK.5)(f) |
+| 938.1 | the member map is FIRST-WINS | **PRISTINE-CONFIRMED, ACTIVE ×7** | 7 of the 10 TS2717 baselines in the whole corpus are generated gates: `classWithDuplicateIdentifier`, `duplicateClassElements`, `gettersAndSettersErrors`, `interfaceDeclaration1`, `methodSignatureHandledDeclarationKindForSymbol`, `reassignStaticProp`, `dynamicNamesErrors` |
+| 938.2 | both duplicate SCANS learn the computed namer | **PRISTINE-CONFIRMED, ACTIVE** | `duplicateIdentifierComputedName`: TS2300 `'["a"]'` |
+| 938.3 | `memberNameIsBinderVisible` — a LATE-BOUND duplicate is TS2717 alone | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNamesErrors`; this is the row that made round 938 |
+| 938.4 | the class scan's `group.drop(1)` (the SECOND declaration only) | **PRISTINE-CONFIRMED, ACTIVE ×2** | `classWithDuplicateIdentifier`, `duplicateIdentifierComputedName` |
+| 938.5 | B357 retracts its duplicate TS2717 | **PRISTINE-CONFIRMED, ACTIVE** | `dynamicNamesErrors` (arm A7) |
+| 938.6 | a WELL-KNOWN-symbol key stays invisible to duplicate detection | **PRISTINE-CONFIRMED as a deliberate FN** | `uniqueSymbolsPropertyNames`: pristine emits TS1117 ×2 + TS2300 ×5 there and we emit none — the refusal's price, now measured rather than assumed |
+
+- **AND THE STRONGEST EVIDENCE IS NOT IN THE TABLE, BECAUSE IT IS A NEGATIVE: OUR BINARY WAS
+  RUN OVER EVERY UNGATED PRISTINE FIXTURE THAT CARRIES A COMPUTED MEMBER KEY.** `--extract`
+  materialises pristine's own input; the sweep ran `MainKt --noEmit --listAll` on **300** of
+  them (326 stems, 26 with no recoverable source) and differenced (line, code) against
+  pristine's baseline. **277 of 300 emit NOTHING pristine does not.** All 23 that do were
+  read: **four are the pre-existing divergences below, and NOT ONE of the remaining nineteen
+  is attributable to rounds 933-938** — they are checks this compiler does not implement, in
+  other families entirely (`using` declarations and the private-modifier grammar, which we do
+  not parse; index-signature PARAMETER types, which is (CHK.5)(e)'s own axis; super-call
+  ordering; a `declare global { interface SymbolConstructor }` augmentation that does not
+  merge; `Symbol.hasInstance` narrowing; a discriminant union with a `never` member; and
+  module resolution in a multi-file extraction). Everywhere else we emit FEWER diagnostics —
+  TS2464 / TS2564 / TS2699 / TS2804 / TS2411 / TS2454 — and where we do emit, the positions
+  match pristine exactly.
+- **FOUR PRISTINE DIVERGENCES *WERE* FOUND, AND ALL FOUR ARE OLDER THAN THIS FAMILY. THE
+  PROOF IS THE DIFF, NOT AN OPINION**: `git diff 0d38189f..HEAD` (the pre-933 parent) over
+  `Checker.kt` mentions `getPropertyName` / `getPropertyKeyName` / `evaluateComputedPropertyName` /
+  `checkObjectLiteralDuplicates` **zero times**, and `PrivateIdentifier` zero times. They are
+  queued as (CHK.7) with the fixture that shows each.
+- **THE ONE WORTH READING IS THE TS1117 NAMER, BECAUSE ITS NEGATIVE CONTROL IS VACUOUS.**
+  `evaluateComputedPropertyName` names an identifier key `__@computed:<text>` — a SPELLING,
+  not a value — so two occurrences of the same DYNAMIC key are a duplicate to us and not to
+  pristine: `var s: symbol; var x = { [s]: 0, [s]() {}, get [s]() {} }` (`symbolProperty1`,
+  `symbolProperty3`) is **TS1117 ×2, a false positive**. The corpus cannot see it: the three
+  `duplicateObjectLiteralProperty_computedName*` fixtures ARE active gates and we pass them,
+  and pristine's own negative-control fixture for this shape
+  (`duplicateObjectLiteralProperty_computedNameNegative1`) uses **two different** identifiers
+  (`[x]`, `[y]`), so it is satisfied by a spelling key as well as by a value key. Same namer,
+  opposite direction, is round 938's recorded gap (b2)(iii).
+- **METHOD NOTE, PAID FOR TWICE: A FIXED SCRATCH `tsconfig` MANUFACTURES FALSE POSITIVES.**
+  `uniqueSymbols` read two OURS-ONLY rows at `target: es2015` and one of them vanished at
+  `esnext` — the missing `AsyncIterableIterator` (TS2583) cascading into a TS2322. Every
+  OURS-ONLY row in this round was re-read at a second target before being believed, and the
+  pristine case's own `// @target` directive is the thing a next sweep should honour.
+- **GATES — NAMED AS NOT APPLICABLE RATHER THAN REPORTED GREEN.** This round adds one Python
+  script and documentation; **no Kotlin changed**, so there is nothing to compile, nothing for
+  `cost_gate.py` to count, no method to grow past 8,000 bytecodes and no binary to grid. The
+  suite therefore stands at round 938's **15,168 / 0 failures / 3 skipped** — the tree is
+  byte-identical to `022cdd42` in every compiled module. What WAS exercised is the compiled
+  binary at HEAD, **300 times**, against 300 pristine fixtures.
+- **NEXT.** `(CHK.5)` continues at **(c)**, unchanged. Two entries were added by this round:
+  **(CHK.5)(f)** — the TS2741 key name — and **(CHK.7)**, four pre-existing pristine
+  divergences with a fixture apiece.
+
 **Round 938 (2026-08-19) — (CHK.5)(b): A DUPLICATE MEMBER DECLARATION. TWO SEPARABLE
 DEFECTS, ONE COMMIT, AND THE ROUND'S PRODUCT IS THAT **ROUND 937's PREMISE WAS HALF WRONG,
 AND MEASURING IT FIRST IS WHAT SAID WHICH HALF.** (CHK.5)(b) was written as "our member map
@@ -1177,76 +1294,6 @@ mint.**
 - **§ 14's gap list: 10 → 9 live, and the *prove to offer* rule has no live violation
   left.** Every remaining gap is a silence or a stated refusal.
 
-**Round 930 (2026-08-18) — (API.13): § 14 AUDITED BY EXECUTION. THE ROUND'S PRODUCT IS
-THAT **A PAGE OF PROSE ABOUT BEHAVIOUR DECAYS AT ABOUT ONE FALSE CLAIM PER THREE ROUNDS**
-— § 14 was written in round 928 and had FOUR false claims by round 930, one of them a
-defect that had been FIXED BEFORE IT WAS WRITTEN, and one of them a real defect the page
-had been promising for two rounds.**
-
-**THE AUDIT TABLE IS THE ROUND.** Every claim was established by RUNNING it — a fixture
-through the API, `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` as the oracle where the claim is
-about parity, the cost table re-taken on the compiler profile. Reading the source to
-confirm a claim was ruled out in advance, because that is exactly how the stale one
-survived.
-
-| § 14 claim | verdict | how it was established |
-|---|---|---|
-| positions carry a lone-`\r` defect (`(BUG.1)`, § 6 + the maturity row) | **STALE** — closed round 915 | a `\r`-terminated fixture: TS2322 line 3, TS1123 line 3, `positionAt` line 3, LF control identical |
-| go to definition is complete for `this`/**`super`** (§ 14's row AND § 9's own table, line 480) | **WRONG — a defect** | `definitionsAt` on `super.pb` answered `[]` while `quickInfoAt` at the same caret answered `number`; tsc navigates to `Base.pb`. **Fixed this round** |
-| an enum member's declaration name "reports nothing" | **WRONG, and worse than documented** | four enum shapes (plain / valued / `const enum` / string), all `any`; tsc: `(enum member) Plain.Alpha = 0`. Now (API.15) |
-| an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type `renameAt` from either end plans both occurrences and the applied text compiles; with one, `OCCURRENCES_INCOMPLETE` at the key. **Found by measuring the round's own correction** |
-| a computed key `{ ["p"]: v }` is "not reported either" | **OVERSTATED** — reported in 2 of 3 shapes | contextual+required → `WOULD_NOT_COMPILE`; no contextual type → `OCCURRENCES_INCOMPLETE`; contextual+**optional** → genuinely silent |
-| a template `` o[`p`] `` is silently missed | **TRUE**, proven end to end | rename applies, template keeps the old name, and the applied program has **zero** diagnostics — nothing anywhere can see it |
-| `documentHighlightsAt` 6.0–7.2 s | **TRUE of `checker.ts`**, unqualified | 6.3 s on `checker.ts`, **5.0–5.5 s on `types.ts`** — the row is a statement about a FILE |
-| a plain rebuild: 5.5–5.9 s (§ 14) vs ~5.2 s (§ 3) | **BOTH DRIFTED, opposite directions** | re-taken 5.0–5.5 s warm; ~9 s for the first rebuild in a process |
-| `referencesAt` 8.3–13.5 s / `renameAt` 13.3–24.5 s | **TRUE, band widened** | 8.3–10.2 clean, 13.2–14.8 dirty; rename 14.3 s (`createTypeChecker`) – 21.0 s (`SyntaxKind`), 19.6–26.7 dirty |
-| the build COUNTS (1 per query, 2 dirty refs, 2/3 rename, 0 for a syntax refusal) | **TRUE, every row** | counted at the backing `Vfs`, and now pinned |
-| "gated over 101 M characters" | **TRUE** | `round920-token-gate.sh` re-run: 1,327 files, 101,287,620 chars, 3,936,158 identifiers, 0 violations |
-| `o["` completes / a template refuses; keywords; accessibility; overlay-only files; UNCLASSIFIED; batching; the four rename refusals; export/import plainness; hover's one subject | **TRUE** | one fixture each; already pinned elsewhere, mapped rather than duplicated |
-
-- **THE DEFECT, AND WHY NOTHING SAW IT.** `Checker.typeCaptureMemberSymbols` — the
-  receiver leg behind go-to-definition — carried a `this` carrier and no `super` one, so
-  `super.p` reached `getTypeOfExpression` as a name nothing binds, typed `any`, and found
-  no members. Its TYPE twin `typeCaptureThisMemberType` has had the super branch since
-  (BUG.4), which is why **hover was right and definition was empty at the same caret** —
-  and why every reading of § 8 confirmed a claim § 9 was failing. The fix is eight lines
-  mirroring that twin: resolve the this-type, take its `baseTypes`, collect there. It is
-  the base's declaration in both directions — the override's never — measured against tsc
-  in both the overridden and the inherited shape (`scripts/lsp_definition.py`, new, the
-  fourth oracle beside hover/refs/rename/completion). It declines in a STATIC member, the
-  same decline the `this` rule already documents, and with no base class.
-- **WHAT IS NOW PINNED, AND WHAT CANNOT BE.** `LanguageServiceStateTest`, 15 tests: the
-  super leg and its two negative controls; the three gaps no test covered (the enum
-  declaration name, the objlit method's rename in BOTH its shapes, the template's silent
-  miss); the two
-  computed-key refusals and the one silent shape; the tagged-template refusal at the API
-  and not only at its anchor; and **the cost table's `builds` column, every row**. The
-  wall column is marked **(not pinnable)** in the page itself — a timed assertion over a
-  compile is a coin flip (round 868) — and is re-taken by
-  `scripts/round930-ls-cost.sh` + `LanguageServiceCostMain` instead: one process, one
-  project, three rotations, a discarded warm-up, so the arms are comparable to each other
-  and to nothing else.
-- **TWO PINS DELIBERATELY ASSERT A DEFECT** (the enum `any`, the two silent misses) and
-  say so in place, with tsc's answer beside them, so that closing either is an edit here
-  rather than an accident nobody notices. That is the same reason § 14 lists them at all.
-- **THE MAPPING STEP PAID FOR ITSELF**: before writing anything, all sixteen § 14 claims
-  were mapped onto the existing suite, which found 10 of them already pinned (positions in
-  `LineMapTest`/`ProjectPositionTest` — including round 915's own `a lone CR file's
-  diagnostics agree with this map too`, which is what proves the § 6 note stale — the
-  `o["` pair in `ProjectStringMemberCompletionTest`, read/write in `SyntaxRoleTest`,
-  batching in `ProjectSemanticsTest`, the refusals in `ProjectRenameTest`). Only the
-  unpinned six were written, so the class is additive rather than a second copy.
-- **GATES.** Suite **14,981 → 14,996 / 0 failures / 3 skipped** = exactly the +15.
-  `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round adds core
-  code, and structurally expected since the capture path is opt-in.
-  `huge_methods.py --fail-over 0` clean on core (750 classes scanned, largest 6,353) and
-  on `-project` explicitly (48 classes, largest 561). Round-920 token gate re-run.
-  `docs/language-service.md` §§ 3, 6, 8, 9, 10b, 10d and a rewritten § 14.
-- **SUCCESSOR**: (API.15), the enum member declaration hover — one leg, mechanism named in
-  the queue entry — and behind it the unchanged one, the incremental / re-entrant seam,
-  which is still the largest thing about this API and the only thing that moves the cost
-  table.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1737,11 +1784,79 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   **TS2339, a false positive** here. Late binding must keep REFUSING these keys; closing
   them is index-signature modelling. Round 936's `{ [L]: number; }`-vs-`{}` display row is
   the same gap seen from the display side.
+  **(f) NEW — THE TS2741 KEY NAME, the family's ONE measured PRISTINE divergence (round 939).**
+  For a missing late-bound member we print `Property 'p' is missing in type '{}' but required
+  in type 'I'` where tsc prints `'[K]'`. **Pristine names the key AS WRITTEN wherever it names
+  one** — `'[E.A]'` (`assignmentCompatWithEnumIndexer`), `'["a"]'`
+  (`duplicateIdentifierComputedName`, an ACTIVE gate), `'[c1]'` (`dynamicNamesErrors`, ACTIVE),
+  `'[Symbol.toPrimitive]'` (`symbolProperty21`) — so pristine and tsgo AGREE here and we are
+  the outlier. Round 937 recorded it against tsgo; round 939 confirmed the convention against
+  pristine and verified our answer live at HEAD. No baseline covers the exact shape
+  (`const K = "p"; interface I { [K]: number }; const x: I = {}`), which is why the suite is
+  green — the fix is the written-key renderer round 938 already built for TS2300/TS2717,
+  applied at the missing-property emitter, and its negative control is that a NON-computed
+  missing member keeps its bare name.
   **WHAT MUST NOT BE UNDONE**: the WELL-KNOWN-symbol route is deliberately not
   `computedSymbolKey` in general (tsc is SILENT for every computed key it cannot late-bind,
   measured over seven of them), and `getMemberName` itself stays unchanged — B451 records
   it as feeding ~20 callers including duplicate detection and abstract tracking, so the
   widening lives in `declaredMemberName` at the member-BUILDING call sites.
+
+- [x] **(CHK.6) THE COMPUTED-KEY FAMILY RE-JUDGED AGAINST *PRISTINE* — DONE, round 939, and
+  the verdict is that rounds 933-938 landed NOTHING pristine contradicts.** Rounds 933-937
+  established their ground truth by running `tools/tsgo-7.0.2/lib/tsc`, the only reference
+  compiler that RUNS on this box; round 938 then found the two references parting on this
+  family's own territory, which left every row no corpus baseline covers resting on an oracle
+  this project deliberately does not follow. The pristine oracle turned out to be on disk all
+  along — `typescript-repo/tests/baselines/reference`, generated by the pinned pristine commit
+  — and is now `scripts/pristine_oracle.py` (`--code` / `--pattern` / `--fixture`, every hit
+  labelled ACTIVE vs not-generated, plus `--extract DIR`, which writes pristine's own input
+  back out so our binary can be run over exactly what pristine saw). **34 landed decisions
+  classified: 22 PRISTINE-CONFIRMED, 10 CORPUS-SILENT, 1 tsgo-ONLY, 1 PRISTINE-DIVERGENT** —
+  the TS2741 key name, a message FORM round 937 had already recorded, now (CHK.5)(f).
+  **The corpus protects much more of this family than the notes claimed**: `dynamicNames`,
+  `dynamicNamesErrors`, `duplicateIdentifierComputedName`,
+  `destructuredLateBoundNameHasCorrectTypes`, `checkDestructuringShorthandAssigment2`, the
+  three `duplicateObjectLiteralProperty_computedName*` and **7 of the 10 TS2717 baselines in
+  the whole corpus** are ACTIVE byte-exact gates sitting on these exact decisions.
+  **And the strongest evidence is a negative**: `--extract` materialises pristine's own input,
+  so our binary was run over **300** ungated pristine fixtures carrying a computed member key
+  and differenced (line, code) against pristine's baseline. **277 of 300 emit nothing pristine
+  does not**; of the 23 that do, four are (CHK.7) and NOT ONE of the other nineteen is
+  attributable to rounds 933-938 — they are unimplemented checks in other families (`using`
+  declarations, the private-modifier grammar, index-signature PARAMETER types, super-call
+  ordering, a `declare global { interface SymbolConstructor }` that does not merge,
+  `Symbol.hasInstance` narrowing, a `never` discriminant, module resolution). The four that
+  ARE pristine divergences are older than the family, proved by the diff rather than argued.
+
+- [ ] **(CHK.7) FOUR PRISTINE DIVERGENCES OLDER THAN THE COMPUTED-KEY FAMILY, each with the
+  fixture that shows it (found round 939 by `scripts/pristine_oracle.py`; all four proved
+  pre-existing by `git diff 0d38189f..HEAD`, which mentions none of the functions involved).**
+  **(i) TS1117 IS SPELLING-KEYED, SO A REPEATED *DYNAMIC* KEY IS A FALSE POSITIVE.**
+  `evaluateComputedPropertyName` names an identifier key `__@computed:<text>`, so
+  `var s: symbol; var x = { [s]: 0, [s]() {}, get [s]() {} }` is TS1117 x2 here and SILENT in
+  pristine (`symbolProperty1`, `symbolProperty3`). **The corpus cannot see it**: the three
+  `duplicateObjectLiteralProperty_computedName*` baselines ARE active gates and we pass them,
+  and pristine's own negative control for the shape
+  (`duplicateObjectLiteralProperty_computedNameNegative1`) uses two DIFFERENT identifiers
+  (`[x]`, `[y]`), so a spelling key satisfies it exactly as a value key would. This is the
+  same namer as (CHK.5)(b2)(iii), seen from the other side — a value-keyed rewrite closes
+  both, and needs the `symbolProperty1` shape as its negative control.
+  **(ii) `computedSymbolKey`'s INVENTED NAME MEETS AN UNCHECKED KEY EXPRESSION.**
+  `var obj = { [Symbol.nonsense]: 0 }; obj = {}` is TS2741 `'[Symbol.nonsense]'` here;
+  pristine reports TS2339 on the KEY (twice) and gives the literal no such member, so the
+  assignment is silent (`symbolProperty52`). Round 723's naming, not this family's — but the
+  root cause is that a computed key's EXPRESSION is never checked, which is also why we miss
+  pristine's TS2464 across the whole `computedPropertyNames*_ES6` set.
+  **(iii) A PRIVATE-NAME DUPLICATE IS REPORTED AT BOTH DECLARATIONS.** Pristine reports
+  TS2300 at the SECOND only; we report both, 25 extra lines on `privateNameDuplicateField`.
+  Neither round-938 scan is the emitter — `getMemberNameText` answers null for a
+  `PrivateIdentifier`, so private names never reach them — and the family's diff mentions
+  `PrivateIdentifier` zero times. Find the emitter first.
+  **(iv) STRING/NUMERIC MEMBER-NAME EQUIVALENCE IS NOT APPLIED IN THE DUPLICATE SCANS.**
+  `"1"` and `1.0` are the same member in tsc (ToNumber on the name);
+  `normalizeNumericKey` exists and is applied to a computed numeric key only, so
+  `numericStringNamedPropertyEquivalence` loses TS2300 x2 + TS2717. Small and self-contained.
 
 - [x] **(CHK.4) THE QUALIFIED, TYPE-ANNOTATION AND WELL-KNOWN-SYMBOL ROUTES — LANDED,
   round 936, both directions, and the residue is re-scoped as (CHK.5) above.** Three
