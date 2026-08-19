@@ -30,7 +30,7 @@ REPO = Path("/home/claude/git/xemantic-typescript-compiler")
 CK = REPO / "xemantic-typescript-compiler-core/src/commonMain/kotlin/Checker.kt"
 SNAP = REPO / "build/bench/round941/Checker.after.kt"
 OUT = REPO / "build/bench/round941"
-CLASSES = "*SuperCallNotFirstStatement*|*PrivateIdentifierTargetGate*"
+CLASSES = ["*SuperCallNotFirstStatement*", "*PrivateIdentifierTargetGate*"]
 EXPECTED_RAN = 21   # 16 TS2376 pins + 5 TS18028 pins
 
 ARMS: dict[str, tuple[str, str]] = {
@@ -96,7 +96,8 @@ def run_arm(name: str) -> str:
     subprocess.run(["rm", "-rf", str(REPO / "xemantic-typescript-compiler-core/build/test-results/jvmTest")])
     log = OUT / f"ablate.{name}.log"
     proc = subprocess.run(
-        ["./gradlew", ":xemantic-typescript-compiler-core:jvmTest", "--tests", CLASSES],
+        ["./gradlew", ":xemantic-typescript-compiler-core:jvmTest"]
+        + [a for c in CLASSES for a in ("--tests", c)],
         cwd=REPO, capture_output=True, text=True)
     log.write_text(proc.stdout + proc.stderr)
     if "BUILD FAILED" in proc.stdout and "compileKotlinJvm" in proc.stdout and "FAILED" in proc.stdout.split("BUILD FAILED")[0][-400:]:

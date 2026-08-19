@@ -20,6 +20,118 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 941 (2026-08-19) — (CHK.8): THE 630-FIXTURE PRISTINE SWEEP, TRIAGED — AND THE
+ROUND'S FIRST PRODUCT IS THAT **THE INSTRUMENT WAS WRONG ABOUT 30% OF ITS OWN ROWS**.
+121 of round 940's 397 OURS-ONLY rows were the sweep's configuration, not the compiler's
+answers, and all three defects failed in the reassuring direction — a phantom divergence
+looks exactly like a real one. Two false-positive families are then closed, both measured
+against pristine's own fixtures, both invisible to the corpus by construction.**
+
+**THE BUCKET TABLE — 373 ours-only rows over 84 fixtures at `967c2e53`, every row
+classified, the rules in `scripts/pristine_triage.py` and the evidence in
+`docs/pristine-divergences.md`.**
+
+| rows | % | bucket | cause class | exemplar |
+|---:|---:|---|---|---|
+| 89 | 23.9 | FP — type system / inference | **genuine FP** | `variadicTuples1` TS2322 x15 + TS2345 x14 |
+| 59 | 15.8 | HARNESS — jsx configuration | **harness artefact** | `tsxLibraryManagedAttributes` TS2874 x27 |
+| 59 | 15.8 | PARSER GAP — unsupported syntax | **cascade** | `usingDeclarations*` (33), `infer X extends` (17) |
+| 42 | 11.3 | CONVENTION — strict-by-default | **deliberate divergence** | `keyofAndIndexedAccess` TS2564 x17 |
+| 31 | 8.3 | PARSER RECOVERY on a malformed fixture | **cascade** | `mappedTypeProperties` (23) |
+| 27 | 7.2 | FP — computed keys / declaration emit | **genuine FP** | `indexSignatures1` TS1268 x12 |
+| 27 | 7.2 | FP — narrowing / control flow | **genuine FP** | `typeGuardNarrowsIndexedAccessOfKnownProperty1` (11) |
+| 26 | 7.0 | **FIXED — private-identifier target gate** | **genuine FP** | `strictPropertyInitialization` TS18028 x16 |
+| 13 | 3.5 | **FIXED — super-call statement scan** | **genuine FP** | `derivedClassSuperProperties` TS2376 x13 |
+
+**Cause-class totals: genuine FP 182 (48.8%) · cascade 90 (24.1%) · harness artefact 59
+(15.8%) · deliberate convention 42 (11.3%).** 39 of the 182 are closed here. **NO
+ACTIVE-BASELINE ROW APPEARS ANYWHERE IN THE TABLE** — the population is by construction the
+fixtures the generated suite does not gate, which is exactly why the corpus is green while
+these rows exist.
+
+- **DEFECT (a), AND IT IS THE ONE WITH A LESSON: `extract_sources` FELL BACK TO
+  `tests/cases` WHENEVER NO *EXACT* `<stem>.js` BASELINE EXISTED — i.e. FOR EVERY
+  MULTI-VARIATION CASE — AND THE CASE FILE STILL CARRIES THE `// @target:` HARNESS
+  DIRECTIVES THAT tsc STRIPS.** Every line number was then the baseline's PLUS the directive
+  count, so the sweep reported every row of those fixtures as a divergence in BOTH
+  directions: 27 of 630 fixtures, `commonMissingSemicolons` alone **42** phantom rows and
+  `classUsedBeforeInitializedVariables` **6** (which read as a tidy six-row TS2729 FP family
+  and is in fact six of pristine's own rows shifted by two). **The guard is now an ALIGNMENT
+  ORACLE**: each reconstructed input is compared line-for-line against pristine's own
+  `==== file ====` annotation and the verdict recorded per fixture. One fixture is
+  `misaligned` today (`classMemberWithMissingIdentifier2`); every other row above has been
+  read against a source pristine itself would recognise.
+- **DEFECT (b): DIRECTIVES WERE READ FROM THE *EXTRACTED* TEXT, AND THE `.js` BASELINE
+  ECHOES THE SOURCE VERBATIM *WITHOUT* THEM.** So a fixture whose source came from a
+  baseline recovered ZERO directives: `decoratorsOnComputedProperties` read **10** phantom
+  TS1166 for want of `@experimentalDecorators`, `jsxElementType` **46 -> 22** for want of
+  `@jsx`. The fix refuses to re-derive the mapping in Python — `TsConfigLoader` routes every
+  `compilerOptions` key through the SAME `applyDirective` the corpus harness uses, so the
+  fixture's directives are copied into the scratch tsconfig VERBATIM and unknown keys are
+  ignored by `applyDirective` itself.
+- **DEFECT (c): A MISSING CASE FILE LEFT NO TARGET AT ALL, WHERE THE BASELINE'S OWN
+  `(target=es2015)` SUFFIX IS THE LAST SURVIVING RECORD OF IT.** `derivedClassSuperProperties`
+  compiled at the esnext default, where tsc's TS2376 rule is switched off entirely by
+  `emitStandardClassFields` — i.e. the round's largest FP family was being measured under a
+  configuration in which the reference emits nothing.
+- **AND ROUND 940's FORCED `"strict": false` IS GONE**, which is what surfaced the
+  strict-by-default bucket (**+97 rows**). **373 is therefore NOT comparable to 397
+  row-for-row** — same commit, different instrument; only same-instrument arms are.
+
+**THE TWO FIXES.**
+
+- **(1) TS2376 — A `super` CALL NEED NOT BE FIRST.** Ours required `super()` to be the first
+  non-prologue statement. tsc (`checkConstructorDeclaration` +
+  `nodeImmediatelyReferencesSuperOrThis` + `isThisContainerOrFunctionBlock`) walks the
+  constructor's own statement list until EITHER the super call OR the first statement that
+  IMMEDIATELY references `this`/`super`, and only the second outcome is an error — so any
+  number of statements may precede `super()` as long as none touches `this` in the
+  constructor's own `this` scope. The walk stops at an arrow function (arrows evaluate
+  later: `const getThis = () => this` before `super()` is legal), a function
+  declaration/expression, a property declaration, and at a method-like BODY.
+  **THE BOUND IS THE INTERESTING HALF AND THE FIRST CUT GOT IT WRONG**: a method-like body
+  stops the walk, its NAME does not, so `get [this.propName]() {}` before `super()` IS still
+  TS2376 (pristine `derivedClassSuperProperties` lines 281 and 323). A cut that skipped
+  every member name lost both rows **while every "this is no longer an error" pin stayed
+  green** — only the sweep's PRISTINE-ONLY column showed it. Measured: 13 -> 0 ours-only and
+  pristine-only 20 -> 19, i.e. a true positive GAINED.
+- **(2) TS18028 — THE PRIVATE-IDENTIFIER GATE READS THE TARGET THE USER *ASKED FOR*.**
+  `CompilerOptions.target` defaults to `ES3` while tsc's `getEmitScriptTarget` defaults an
+  unset `target` to the latest standard, so a raw `target <= ES5` read made every `#field`
+  in a project with no `target` an error. The gate is now
+  `options.targetExplicitlySet && options.target <= ScriptTarget.ES5` — **not**
+  `effectiveTarget`, which maps an explicit ES5 up to ES2015 and would drop the true
+  positive an explicit `@target: es5` must keep. **The corpus is structurally blind to both
+  sides**: `usesUnsupportedOption` skips every explicit es3/es5 config, so no ACTIVE baseline
+  exercises this gate at all.
+
+- **FOUR-ARM ABLATION, ONE MISTAKE AT A TIME, TWO ARMS PER FIX** (`scripts/round941-ablate.py`,
+  from a sha256-verified snapshot, never `git checkout`, diffed against the SNAPSHOT, each
+  arm asserting **ran 21**): **A1 8 red / A2 2 / A3 1 / A4 2, four DISJOINT red sets.** A2 is
+  the one worth reading — it is exactly the defect the first cut shipped, and the pin that
+  catches it exists only because the sweep found it. **Eight of the 21 pins are green in all
+  four arms and are recorded as REGRESSION GUARDS rather than claimed** (round 807): the
+  parenthesized-`super()` and prologue-directive pins (A1 keeps both mechanisms), the three
+  TS2376 positive controls, the no-initialized-property control, and the two "an explicit
+  ES2015/ESNext target is silent" pins. **The driver's first run REFUSED all four arms at
+  `ran 0`** — Gradle takes no `|` alternation in a single `--tests` — which is round 856's
+  law paying for itself: without the ran-count assertion that would have printed as four
+  clean sweeps.
+- **GATES.** Suite **15,193 -> 15,214 / 0 failures / 3 skipped** (+21 = exactly this round's
+  pins), **NO corpus baseline moved**. `cost_gate.py` **+0.00% on all 20 counters**
+  including `output.errors 46` — expected, since neither fix is reachable from tsc's own
+  sources. `huge_methods.py --fail-over 0` green on **all six** module class dirs. The
+  **8-profile before/after BINARY grid** (`scripts/round941-grid.sh`, two sha256-verified
+  arms) **added=0 removed=0 on ALL EIGHT**. The **630-fixture sweep, both arms in the same
+  driver: 373 -> 334 rows over 84 -> 81 fixtures, ZERO fixtures regressed, pristine-only
+  777 -> 776.** No `spine*EnterNode` changed, so `spine_closure_audit.py` is not applicable.
+- **NEXT.** Five entries added with their bucket's evidence — **(CHK.9)** index-signature
+  parameter types (12 rows, the largest single-code FP family left), **(CHK.10)** definite
+  assignment through a late-bound element access (4), **(CHK.11)** element-access
+  discriminant narrowing (11), **(CHK.12)** `Symbol.hasInstance` narrowing (11), and
+  **(CHK.13)** the strict-by-default convention (42), which is an OWNER decision rather than
+  a fix. `(CHK.5)` still continues at (c); `(CHK.7)` still keeps (ii) and (iv).
+
 **Round 940 (2026-08-19) — (CHK.7)(i)+(iii) AND (CHK.5)(f): THREE PRISTINE DIVERGENCES,
 ALL FALSE POSITIVES, ALL CLOSED — AND THE ROUND'S PRODUCT IS THAT **ROUND 939's QUEUE
 ENTRY WAS WRONG ABOUT TWO OF ITS OWN FOUR ROWS, IN THE DIRECTION THAT DECIDES WHAT TO
@@ -1322,80 +1434,6 @@ THIS ROUND REMOVED IT.**
 - **SUCCESSOR**: unchanged — the incremental / re-entrant seam, still the largest thing
   about this API and the only thing that moves the cost table.
 
-**Round 931a (2026-08-18) — (API.15): AN ENUM MEMBER'S DECLARATION NAME REPORTS ITS OWN
-TYPE. THE LAST POSITION IN THIS API ANSWERING A PLAUSIBLE **WRONG** TYPE INSTEAD OF
-NOTHING IS CLOSED, AND THE ROUND'S PRODUCT IS THAT **THE CALL EVERY OTHER MEMBER LEG
-MAKES ANSWERS `any` HERE** — the fix is not "ask the owner harder", it is a different
-mint.**
-
-- **STEP 1 WAS tsc, 15 CARETS.** `scripts/lsp_hover.py` over `tools/tsgo-7.0.2/lib/tsc
-  --lsp -stdio`, five enum shapes plus controls:
-
-| caret | tsc 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|
-| `enum Plain { Alpha }` decl | `(enum member) Plain.Alpha = 0` | **`any`** | `Plain.Alpha` |
-| `enum Valued { Gamma = 5 }` decl | `(enum member) Valued.Gamma = 5` | **`any`** | `Valued.Gamma` |
-| `const enum Konst { Eps }` decl | `(enum member) Konst.Eps = 0` | **`any`** | `Konst.Eps` |
-| `enum Str { Zeta = "z" }` decl | `(enum member) Str.Zeta = "z"` | **`any`** | `Str.Zeta` |
-| `declare enum Amb { Iota }` decl | `(enum member) Amb.Iota` — **no value** | **`any`** | `Amb.Iota` |
-| the USE of each | the same string as its declaration | already right | unchanged |
-| `interface I { p }` decl (control) | `(property) I.p: string` | `string` | `string` |
-| `enum Plain` NAME (control) | `enum Plain` | untouched | untouched |
-
-- **THE DIVERGENCE IS DELIBERATE AND IT IS THE PAGE'S OWN CONVENTION: tsc decorates the
-  answer with the member's VALUE and `QuickInfo.displayString` renders TYPES** (that is
-  what it is documented as, and what every other row of § 8 carries), so agreeing about
-  the type is agreeing. The ambient row is the cheapest evidence that this costs
-  nothing: tsc drops the value there — a non-const ambient member with no initializer
-  HAS none, CLAUDE.md's rule — and a value-free rendering has no such case to get wrong.
-- **THE MECHANISM, AND WHY THE GENERAL LEG COULD NOT REACH IT.** `(API.11)`'s owner leg
-  reads the owner's DECLARED type and asks it for the member; an enum's declared type is
-  a member-LESS `Type.Object` (we mint one opaque type per enum where tsc models the
-  union of its members), so the collection found nothing, the leg answered null and the
-  name fell through to the free-name path — which types a name nothing binds as `any`.
-  The new leg (`Checker.typeCaptureEnumMemberType`, 8 lines) takes the enum symbol's own
-  export table and mints through **`getDeclaredTypeOfEnumMember` and nothing else**,
-  which is the interning helper CLAUDE.md requires for this key space, so the reported
-  type is the very instance the use site reports.
-- **THE ROUND'S PRODUCT, MEASURED AS ARM A2: `getTypeOfSymbol(memberSymbol)` — the call
-  every other member leg in this capture makes — answers `any` for ALL FIVE enum
-  shapes.** So the interning helper is not a stylistic preference here; it is the only
-  call that answers at all, and a next agent reading the leg's one-line body has that
-  written into its KDoc rather than having to re-run the experiment.
-- **THREE-ARM ABLATION, each arm restored from a sha256-verified snapshot, each proved
-  REACHED** (round 902's dead-arm trap):
-
-| arm | mistake | result | reached? |
-|---|---|---|---|
-| A1 | drop the owner-identity check (`declarations.any { it === owner }`) | **0 red — MEASURED REDUNDANT** on all six probe shapes | proved by A1b, which moves the same site |
-| A1b | force that check to refuse | all five enum shapes back to `any`, control (a class field) unchanged | the leg's whole population moves — this IS the reach proof, and it reproduces round 930's measured defect exactly |
-| A2 | mint with `getTypeOfSymbol` instead of `getDeclaredTypeOfEnumMember` | all five back to `any` | same |
-
-  A1's zero is a REDUNDANT GUARD and is recorded as one, with its reason: round 748's
-  lexical scope space binds a block-scoped `enum`, so the owner name always finds the
-  enum under the caret — a block-scoped shadow, an import collision, a namespace
-  nesting, an import ALIAS shadow and a merged pair all answer identically without it.
-  It is kept as the sibling leg's rule and NOT claimed as a pin; what IS pinned is the
-  import-alias shadow's ANSWER (`Local.Alpha`, never the imported `Kind.Alpha`), which
-  is the only shape where the two candidate enums have DIFFERENT names and the display
-  can therefore tell them apart. The first draft of that control named both enums
-  `Outer` and could not discriminate in principle — a pin over a shape whose two
-  outcomes RENDER THE SAME is no pin, which is round 907's "split the identity by the
-  axis the mistake could be confined to" in the display layer.
-- **PINS +2 and one INVERTED.** `LanguageServiceStateTest`'s deliberate defect pin
-  becomes `an enum member's declaration name reports the SAME type its use reports` and
-  says so in place (round 930 wrote it expecting exactly this edit); beside it, all five
-  shapes and the import-alias control. `ProjectMemberDeclarationTest`'s hover test gains
-  the enum row against its existing collider fixture. Suite **14,996 → 14,998 / 0
-  failures / 3 skipped**.
-- **GATES.** `cost_gate.py` **+0.00% on all 20 counters** — a real gate, since the round
-  adds core code; `huge_methods.py --fail-over 0` clean on core (750 classes, largest
-  6,353) and on `-project` explicitly (48 classes). No `SourceIndex`/parser change, so
-  the round-920 token gate does not apply. `docs/language-service.md` §§ 8, 13, 14 (gap
-  7 struck, the maturity row, the audit table, the status paragraph).
-- **§ 14's gap list: 10 → 9 live, and the *prove to offer* rule has no live violation
-  left.** Every remaining gap is a silence or a stated refusal.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
@@ -1949,6 +1987,72 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   **Measured: `privateNameDuplicateField` 3 ours-only rows -> 0; the 630-fixture pristine
   sweep 403 -> 397 ours-only rows with ZERO fixtures regressed; the 8-profile grid
   added=0 removed=0; suite 15,168 -> 15,193 with no baseline moved.**
+
+- [x] **(CHK.8) — THE 630-FIXTURE PRISTINE SWEEP, TRIAGED AND ITS INSTRUMENT REPAIRED;
+  TWO FALSE-POSITIVE FAMILIES CLOSED (round 941).** `scripts/pristine_sweep.py` supersedes
+  round 940's sweep and **121 of that round's 397 OURS-ONLY rows (30.5%) were the
+  instrument's own configuration**: the case-file fallback carried the `// @target:`
+  directives tsc STRIPS (a whole-file line shift, 27 fixtures); directives were read from
+  the EXTRACTED text, which the `.js` baseline echoes WITHOUT them; and a missing case file
+  left no target where the baseline's `(target=…)` suffix still records it. An ALIGNMENT
+  ORACLE (each reconstructed input compared line-for-line against pristine's `==== file ====`
+  annotation) now makes the first defect impossible to reintroduce silently. **The triage of
+  the remaining 334 rows is `docs/pristine-divergences.md` and its cause-class rules are
+  `scripts/pristine_triage.py`** — genuine FP 182 (48.8%) / cascade 90 / harness 59 /
+  deliberate convention 42. Closed this round: TS2376 (a `super` call need not be FIRST —
+  tsc walks the statement list to the first IMMEDIATE `this`/`super` reference, stopping at
+  arrows, function declarations/expressions, property declarations and method-like BODIES
+  but NOT at their computed NAMES) and TS18028 (the private-identifier gate reads the target
+  the user ASKED FOR, not the raw `ES3` default). Sweep **373 -> 334**, zero fixtures
+  regressed, pristine-only 777 -> 776 (a true positive GAINED); 8-profile grid added=0
+  removed=0 on all eight; suite 15,193 -> 15,214 with no baseline moved.
+
+- [ ] **(CHK.9) INDEX-SIGNATURE PARAMETER TYPES — 12 OURS-ONLY TS1268 ROWS IN ONE FIXTURE,
+  THE LARGEST REMAINING SINGLE-CODE FP FAMILY (`indexSignatures1`, ALIGNED, round 941).**
+  A parameter typed by a BRANDED string alias (`type TaggedString1 = string & { __brand }`),
+  or by a UNION or INTERSECTION of template-literal types, is legal in pristine and refused
+  by us: `interface I1 { [key: TaggedString1]: string }`, `{ [x: \`${string}xxx${string}\` &
+  \`${string}yyy${string}\`]: string }`, `type Rec1 = { [key: Id]: number }`. Two of the twelve
+  are a CODE divergence rather than an extra diagnostic — pristine says TS1337 at
+  `[key: T | number]` / `[key: T & string]` where we say TS1268. The predicate to build is
+  "does this parameter type REDUCE to string / number / symbol / a template-literal type",
+  through aliases, unions and intersections. This is (CHK.5)(e)'s axis with a fixture and a
+  count attached.
+
+- [ ] **(CHK.10) DEFINITE ASSIGNMENT THROUGH A LATE-BOUND ELEMENT ACCESS — 4 OURS-ONLY
+  TS2564 ROWS (`strictPropertyInitialization`, ALIGNED, round 941).** `class C12 { [a]: number;
+  [b]: number; ['c']: number; constructor() { this[a] = 1; this[b] = 1; this['c'] = 1 } }`
+  with `const a = 'a'; const b = Symbol()`: pristine sees the definite assignment through the
+  ELEMENT ACCESS and is silent, we report `Property '…' has no initializer`. Same fixture
+  reports `[E.A]` (an enum member key). Small, and squarely in the computed-key arc's own
+  family — note that the triage classifier exempts this fixture by name from the
+  strict-by-default bucket for exactly this reason.
+
+- [ ] **(CHK.11) ELEMENT-ACCESS DISCRIMINANT NARROWING — 11 OURS-ONLY ROWS
+  (`typeGuardNarrowsIndexedAccessOfKnownProperty1`, round 941).** `switch (s['kind'])` /
+  `s[0].sub.under["shape"]`: a discriminated union narrowed through an ELEMENT ACCESS with a
+  literal index. `getTypeOfElementAccess` applies no narrowing at all (CLAUDE.md records the
+  gap and its consumers; `getReferencePath` has handled the shape since round 461 and the
+  flow walk compares path STRINGS), so the receiver stays un-narrowed and every member read
+  is TS2339 / TS2322 / TS2366.
+
+- [ ] **(CHK.12) `Symbol.hasInstance` NARROWING — 11 OURS-ONLY ROWS OVER TWO FIXTURES
+  (`typeGuardsWithInstanceOfBySymbolHasInstance`, `controlFlowInstanceofWithSymbolHasInstance`,
+  round 941).** An `instanceof` whose RHS declares `static [Symbol.hasInstance](x): x is T`
+  narrows in pristine and not here, so every member read on the narrowed reference is
+  TS2339. Self-contained: one arm in the `instanceof` narrowing rule beside round 838's
+  `resolveInstanceOfRhsType`.
+
+- [ ] **(CHK.13) THE STRICT-BY-DEFAULT CONVENTION IS THE LARGEST *SYSTEMATIC* DIVERGENCE
+  LEFT — 42 OURS-ONLY ROWS OVER 23 GROUPS, AND IT IS AN OWNER DECISION, NOT A FIX (round
+  941).** TS2564 / TS2454 / TS7010 fire in this compiler unless `@strict: false` is
+  EXPLICITLY set (`Checker.kt`'s dispatch reads `!options.strictExplicitlyFalse`), where tsc
+  requires `strict` (or the individual flag) to be ON. A real project with no `strict` in
+  its tsconfig therefore gets `Property 'x' has no initializer and is not definitely
+  assigned in the constructor` from us and nothing from tsc — `keyofAndIndexedAccess` alone
+  is 17 rows for four plain `name: string;` class fields. Invisible to the corpus, whose
+  fixtures set the directive. **Do not "fix" it without the owner**: the convention is
+  load-bearing for the generated suite's expectations.
 
 - [ ] **(CHK.7)(ii) A COMPUTED KEY'S *EXPRESSION* IS NEVER CHECKED, SO AN UNRESOLVABLE
   `[Symbol.x]` BECOMES A REQUIRED MEMBER — RE-MEASURED round 940 AND IT IS A MODELLING

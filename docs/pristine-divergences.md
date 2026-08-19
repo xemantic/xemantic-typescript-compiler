@@ -181,6 +181,28 @@ positive an explicit `@target: es5` must keep.
 The corpus is structurally blind to both sides: `usesUnsupportedOption` skips every
 explicit es3/es5 config, so no ACTIVE baseline exercises this gate at all.
 
+### 3.3 The ablation — four arms, one mistake at a time
+
+`scripts/round941-ablate.py`, each arm applied to and restored from a sha256-verified
+snapshot (never `git checkout`), diffed against the SNAPSHOT rather than HEAD, each
+asserting `ran 21` so a dead build or an empty filter reads as a failure. **Two arms per
+fix by design**: one removes the fix, one removes its BOUND, because a "this is now
+silent" pin cannot tell a correct refusal from a disabled check.
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---|---|
+| A1 | TS2376: require `super()` to be the first non-prologue statement again | **8** | every nested-function-like shape, plus the `{ this: 1 }` member-name control |
+| A2 | TS2376's BOUND: skip EVERY member name, computed ones included | **2** | the two "a computed NAME using `this` is still TS2376" pins — the exact defect the first cut shipped and the sweep caught |
+| A3 | TS18028: read the raw `target` again | **1** | the unset-target pin |
+| A4 | TS18028's BOUND: use `effectiveTarget < ES2015` | **2** | the explicit es3/es5 positive controls |
+
+The four red sets are DISJOINT. **Eight of the 21 pins are green in all four arms and are
+recorded as regression guards rather than claimed as discriminators** (round 807): the
+parenthesized-`super()` pin and the prologue-directive pin (A1 keeps both mechanisms), the
+three TS2376 positive controls (`this`, `super.m()`, a parameter property), the
+no-initialized-property control, and the two "an explicit ES2015/ESNext target is silent"
+pins.
+
 ---
 
 ## 4. What to take next
