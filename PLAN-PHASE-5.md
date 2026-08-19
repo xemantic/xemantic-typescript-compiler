@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 943 (2026-08-19) — (CHK.8b): THE 89-ROW "FP — TYPE SYSTEM / INFERENCE" BUCKET,
+SUB-TRIAGED — AND THE HONEST HEADLINE IS THAT **68 OF ITS 83 GENUINE ROWS (82%) ARE FOUR
+MODELLING ITEMS, I.E. A FEATURE LIST, NOT A DEFECT LIST**. Six more rows are the
+strict-family CONVENTION wearing codes the classifier cannot see. What was tractable —
+(CHK.16), a declaration's own type parameters being invisible to the TS2344 walker — landed
+in BOTH directions, and its FALSE-NEGATIVE half is the larger one.**
+
+**THE SUB-FAMILY TABLE** (each row re-verified against pristine's own answer, or its
+ABSENCE; the rules are `scripts/pristine_triage.py`'s new `SUB_BUCKETS`, so the next round
+re-runs them against a fresh sweep instead of re-deriving 38 groups by hand):
+
+| # | sub-family | rows | mechanism | cause class | tractability |
+|---|---|---:|---|---|---|
+| S1 | variadic tuple types | 30 | `getTupleType` gives a `RestType` element the arm a PLAIN element gets, so **`[...T]` IS `[T]`** | genuine FP | **MODELLING** (CHK.20) |
+| S3 | contextual typing through a mapped / conditional type | 14 | a callback parameter gets no contextual type -> TS7006 / TS2345 | genuine FP | **MODELLING** |
+| S2 | recursive conditional / mapped types over tuples | 13 | the instantiation-depth bail (TS2589) plus a deferred conditional that never evaluates | genuine FP | **MODELLING** |
+| S10 | residue — one mechanism each | 11 | ten singletons | genuine FP | MODELLING |
+| S4 | the strict-family default in ANOTHER COSTUME | 6 | TS2683 (`noImplicitThis`), TS7019 (`noImplicitAny`), 3x TS2322 (`strictNullChecks`) | **deliberate convention** | (CHK.13) |
+| S6 | lib availability at the DEFAULT target | 5 | `libFeatureAvailable` reads the RAW `ES3` default; tsc defaults an unset target to the LATEST | genuine FP | **SMALL-MEDIUM** (CHK.17) |
+| S5 | `keyof` of an intersection / index signature / remapped mapped type | 4 | `keyof (X & T)` loses `keyof T` and the index signature's `string \| number` | genuine FP | MODELLING |
+| S7 | write through a generic indexed access | 3 | TS2862 where pristine says TS2322 — same position, both reject | **form** | MEDIUM (CHK.18) |
+| S8 | an alias/class/interface type parameter shadowed in the TS2344 walker | 2 | the walker resolved type ARGUMENTS with no type-parameter scope | genuine FP | **FIXED** (CHK.16) |
+| S9 | a function-body type ALIAS is not bound | 1 | B83.5 in type position — the lib's `Omit` beats a local one | genuine FP | MEDIUM (CHK.19) |
+
+**WHAT THE 31 `variadicTuples1` ROWS ACTUALLY ARE: ONE mechanism, and it is three lines
+deep.** `getTupleType` maps `is RestType -> getTypeFromTypeNode(elem.type)`, the same arm a
+plain element gets, so `[...T]` is BUILT as the one-element tuple `[T]` —
+`function f<T extends unknown[]>(t: T, m: [...T]) { t = m }` reports `Type '[T]' is not
+assignable to type 'T'`. That single absence explains the fixture's whole "Relations
+involving variadic tuple types" section (where pristine errors at `y = x` and we error at
+`x = y`, i.e. the rows are not merely extra, they are the MIRROR), its `keyof [...T]`, its
+spread-argument arity rows and the entire `curry` inference section. The 31st row is TS7019,
+a `noImplicitAny` row, i.e. S4. **This is TypeScript 4.0's variadic tuples: queue it as a
+feature (CHK.20), do not attempt it as a bounded rule.**
+
+**AND THE OTHER MEASUREMENT PRODUCT: A DIAGNOSTIC ARM FOR THE CONVENTION, PLUS THE GUARD IT
+NEEDED.** `pristine_sweep.py --tsc-strict-default` injects tsc's OWN `strict: false` default
+where a fixture names no strict-family directive: **318 -> 272, 47 rows removed, 1 added**.
+**Its first run was WRONG in the reassuring direction and it is round 941's defect (c) one
+directive over: an ABSENT directive is evidence only where the CASE FILE is present.**
+`strictPropertyInitialization` has no case file in this clone and **20 TS2564 in its own
+baseline** — pristine plainly had the flag ON — so the unguarded arm deleted four GENUINE
+false positives, exactly (CHK.10)'s, and would have reported that queue item as an artefact.
+Guarded on `po.case_index()`, and read together with a second control (*does pristine's own
+baseline carry that CODE anywhere in the fixture* — zero over seventeen uninitialised class
+fields is conclusive), the answer is: **the convention is 46 rows, not 42; (CHK.10) is
+CONFIRMED GENUINE; and 4 of my 89 belong to (CHK.13).**
+
+**(CHK.16), THE FIX, AND IT IS TWO DEFECTS IN ONE GATE.** `checkConstraintsInStatements`
+pushed a declaration's own type parameters into scope for a `FunctionDeclaration` (round 82 —
+whose comment names this very defect, "would see `I<T>` resolve T to the global `class T` if
+any … and emit FP TS2344"), for a type ALIAS only when the body was an `ImportType` (B98a's
+narrow gate), and for a class or an interface never. So a parameter SHADOWED by a same-named
+file-level type resolved to that OUTER type and was judged against the callee's constraint.
+`withDeclTypeParamScope` is now the one site and all three branches use it, heritage clauses
+included. **BOTH directions were wrong, so the fix ADDS diagnostics as well as removing
+them**: `type Loose<Q> = Box<Q>` with `interface Box<S extends string>` was silent and now
+reports TS2344 as pristine does — and over 611 pristine fixtures that gained NO ours-only row.
+The type RESOLUTION path never had the defect (`getTypeFromTypeReference` answers `Wrap<"x">`
+correctly with the same interface in scope), which is what bounds the change to the walker.
+
+**TWO METHOD NOTES WORTH MORE THAN THE TWO ROWS.** (i) **The shadowing declaration is 138
+LINES BELOW the alias in pristine's fixture, so every hand-written reduction is silent** —
+the bisection that found it deleted the file's TAIL (a `0:291` prefix is clean; `0:291` plus
+lines 300-310, which is where `interface A` lives, is the two rows). A "reduce it and probe"
+loop would have concluded there was nothing there. (ii) **The first cut fixed only the ALIAS
+branch and a pin written as a REGRESSION GUARD went RED** — "an interface declaration's own
+type parameter was never affected" — which is how the class/interface half was found. A
+regression guard that fails is a finding, not a nuisance.
+
+**ABLATION — 4 arms, one mistake at a time, from the sha256-verified snapshot
+`d1ae7270…`, diffed against the SNAPSHOT and never with `git checkout`, every arm asserting
+`ran 13`** (`scripts/round943-ablate.py`):
+
+| arm | the injected mistake | red | what it proves |
+|---|---|---:|---|
+| A1 | `withDeclTypeParamScope` becomes a no-op — the whole fix | **10** | every shadow pin and every gained true positive |
+| A2 | the BOUND: the parameters are pushed but their CONSTRAINTS are not resolved | **5** | includes the NEGATIVE CONTROL, which no other arm reddens — it separates "the parameter is in scope" from "its constraint is honoured", and a pin that only asserted silence could have been satisfied by the parameter resolving to anything at all |
+| A3 | the CLASS branch loses the scope again | **2** | the class pin and the heritage-clause pin, uniquely |
+| A4 | the INTERFACE branch loses the scope again | **2** | the two interface pins, uniquely |
+
+A3's and A4's red sets are disjoint from each other and are the state the first cut shipped.
+**Two of the 13 pins are green in all four arms and are recorded as REGRESSION GUARDS rather
+than claimed as discriminators** (round 807): the concrete-violating-argument pin and the
+function-declaration pin.
+
+**GATES.** Suite **15,235 -> 15,248 / 0 failures / 3 skipped** (+13 = exactly this round's
+pins), **NO corpus baseline moved**. **8-profile before/after grid**, profiles enumerated by
+`tsconfig.json` and refused below 8, the BEFORE arm reused from round 942 under a sha256
+IDENTITY assertion (`6eda7d97…` is both HEAD's `Checker.kt` and the source that produced
+those captures — a stronger provenance claim than a rebuild): **added=0 removed=0 on ALL
+EIGHT**. **630-fixture PRISTINE sweep: 318 -> 316 rows over 79 fixtures, ZERO regressed,
+pristine-only 775 -> 775** (no true positive lost). `cost_gate.py` moves one family —
+`mapped.keyed` **+0.14%**, `typeNode.bypassed` **+0.03%**, `typeNode.cacheable`/`cacheHits`
+**-0.01%**: the constraint resolutions the walker now performs INSIDE the pushed scope, a
+reached-ness proof, rebaselined in the same commit. `huge_methods.py --fail-over 0` green on
+**all six** module class dirs (751 / 48 / 20 / 14 / 7 / 2 classes scanned — the counts differ
+per module, which is the positive control that each census saw its own dir). No
+`spine*EnterNode` changed, so `spine_closure_audit.py` does not apply.
+
+**PROVENANCE, stated because this round's whole method is hash-verified arms**: the grid, the
+sweep and the ablation were all measured at `Checker.kt` sha256 `d1ae7270…`, and the
+COMMITTED source differs from that arm by exactly ONE COMMENT CHARACTER — a KDoc's "140
+lines below" corrected to "138" (309 − 171) — plus one test-method NAME carrying the same
+number. Reversing that single line reproduces `d1ae7270…` byte for byte, which is the check
+that says so rather than a claim that it is harmless.
+
+**NEXT.** The bucket's remaining tractable work is (CHK.17) the default-target lib set —
+5 rows here but a systematic real-world FP, and the same shape as round 941's TS18028 —
+then (CHK.18) and (CHK.19). (CHK.9) and (CHK.10) are unchanged and still the smallest
+genuine-FP items, with (CHK.10) now CONFIRMED. **The four MODELLING items (68 rows) are the
+honest answer to "what is left in the largest bucket": features, scheduled as such.**
+
 **Round 942 (2026-08-19) — (CHK.11) + (CHK.12): THE TWO NARROWING FALSE-POSITIVE FAMILIES,
 AND THEY SHARE ONE CAUSE ONE LEVEL DOWN — **tsc's `isMatchingReference` compares references
 by SYMBOL and ours compares the path STRINGS `getReferencePath` builds.** 16 of the
@@ -2141,7 +2254,11 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   ELEMENT ACCESS and is silent, we report `Property '…' has no initializer`. Same fixture
   reports `[E.A]` (an enum member key). Small, and squarely in the computed-key arc's own
   family — note that the triage classifier exempts this fixture by name from the
-  strict-by-default bucket for exactly this reason.
+  strict-by-default bucket for exactly this reason. **CONFIRMED GENUINE, round 943**: that
+  fixture's case file is not in this clone, so the sweep recovers no directives for it — but
+  its own baseline carries **20 TS2564**, i.e. pristine had `strictPropertyInitialization`
+  ON, so these four rows are not the convention. (The `--tsc-strict-default` arm deleted them
+  until it was guarded on case-file presence; see `docs/pristine-divergences.md` § 0b.)
 
 - [x] **(CHK.11) ELEMENT-ACCESS DISCRIMINANT NARROWING — 11 OURS-ONLY ROWS -> 0
   (`typeGuardNarrowsIndexedAccessOfKnownProperty1`, round 942).** The cause is one sentence:
@@ -2203,9 +2320,84 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
   `instanceof` in the program, so it needs the 8-profile grid and the 630-fixture sweep, not
   a pin alone.
 
+- [x] **(CHK.16) A DECLARATION'S OWN TYPE PARAMETERS WERE NOT IN SCOPE FOR THE TS2344
+  CONSTRAINT WALKER — LANDED, round 943, and it FIXES A FALSE NEGATIVE IN THE SAME MOVE.**
+  `checkConstraintsInStatements` pushed them for a `FunctionDeclaration` (round 82, whose
+  comment names this exact defect), for a type ALIAS only when the body was an `ImportType`
+  (B98a's narrow gate) and for a class or interface never — so a parameter SHADOWED by a
+  same-named file-level type was resolved to that type and judged against the callee's
+  constraint. `withDeclTypeParamScope` is now the one site, used by the alias, class and
+  interface branches, heritage clauses included. Pristine `conditionalTypes1` is two
+  ours-only TS2344 from `interface A` (line 309) against `type And<A extends boolean, B
+  extends boolean> = If<A, B, false>` (line 171) — **138 lines apart, which is why every
+  hand-written reduction was silent and the bisection had to delete the file's TAIL**. The
+  other direction was equally wrong, so the fix ADDS diagnostics: `type Loose<Q> = Box<Q>`
+  with `interface Box<S extends string>` was silent and now reports TS2344 as pristine does,
+  and over 611 fixtures that gained NO ours-only row. **The first cut fixed only the alias
+  branch and a "regression guard" pin went RED — that is how the class/interface half was
+  found.** Sweep **318 -> 316**, pristine-only 775 -> 775, zero fixtures regressed, 8-profile
+  grid added=0 removed=0, suite 15,235 -> 15,248 with no baseline moved.
+  `docs/pristine-divergences.md` § 3c.
+
+- [ ] **(CHK.17) LIB AVAILABILITY IS DECIDED FROM THE *RAW* `ES3` TARGET DEFAULT WHERE tsc
+  DEFAULTS AN UNSET TARGET TO THE LATEST — 5 OURS-ONLY ROWS, AND A SYSTEMATIC REAL-WORLD FP
+  (round 943).** `libFeatureAvailable` answers `options.lib.isEmpty() -> options.target >= intro`
+  and `RealLibResolver.resolve(libNames, options.target)` picks the lib SET from the same
+  field, both off `CompilerOptions.target`'s `ES3` default; tsc's `getEmitScriptTarget`
+  defaults an UNSET target to the latest standard, so its default lib is `lib.esnext.full`.
+  A project with no `target` in its tsconfig therefore gets **TS2583 `Cannot find name
+  'AsyncIterableIterator'. Do you need to change your target library?`** (pristine
+  `uniqueSymbols` line 221 / `uniqueSymbolsDeclarations` line 217, each with a cascaded
+  TS2322) and **TS2550 for `Array.from`** (`intersectionTypeInference3` line 12) where
+  pristine is silent. **This is round 941's TS18028 defect one family over and the same
+  shape of fix — `options.targetExplicitlySet` decides — but its blast radius is bigger:
+  the lib SET, not just a gate**, so it wants its own round with the 8-profile grid, the
+  sweep and a corpus run (the corpus uses the EMBEDDED lib, so the two halves must be
+  measured separately). Note the CLAUDE.md entry that records the current behaviour as
+  deliberate ("the CHECKER reads RAW `options.target` for lib-availability") — round 943's
+  evidence is that pristine disagrees, so that entry is the thing to re-judge first.
+
+- [ ] **(CHK.18) `t[k] = v` THROUGH A GENERIC INDEXED ACCESS IS TS2862 WHERE PRISTINE SAYS
+  TS2322 — 3 ROWS, A CODE DIVERGENCE RATHER THAN A FALSE POSITIVE
+  (`keyofAndIndexedAccessErrors` lines 140-142, round 943).**
+  `function test1<T extends Record<string, any>, K extends keyof T>(t: T, k: K) { t[k] = 42 }`:
+  we refuse the WRITE (`Type 'T' is generic and can only be indexed for reading`), pristine
+  permits it and rejects the VALUE (`Type 'number' is not assignable to type 'T[K]'`). tsc's
+  rule reads the receiver's CONSTRAINT for a writable index signature before refusing; ours
+  does not. Both compilers error at the same position, so this is FORM under
+  `docs/logical-parity.md` § 2 — but the form is a different diagnostic identity, and the
+  underlying gate is a real modelling gap that would show as a false POSITIVE the moment a
+  program writes through a constrained generic index legally.
+
+- [ ] **(CHK.19) A FUNCTION-BODY TYPE ALIAS IS NOT BOUND, SO A LIB NAME WINS — 1 OURS-ONLY
+  TS2314 (`conditionalTypes1` line 297, round 943).** `function f50() { type Omit<T extends
+  object> = …; type A = Omit<{ a: void; b: never }> }` reports **`Generic type 'Omit'
+  requires 2 type argument(s)`** because the block-scoped alias is invisible (CLAUDE.md's
+  B83.5) and the LIB's two-parameter `Omit` answers instead. Round 748 closed exactly this
+  for `enum` with `lexicalTypeSymbolForNode` reading the INV.2(c) scope space (`scope.symbols`
+  only, never `existing`); a type ALIAS is the same shape one declaration kind over. Note the
+  same fixture shows the SILENT variant of this family too — `keyRemappingKeyofResult`'s
+  `type Orig` inside `function f<T>()` resolves, so the gap is specifically about a
+  block-scoped name that SHADOWS an outer one.
+
+- [ ] **(CHK.20) VARIADIC TUPLE TYPES ARE UNMODELLED — 30 OURS-ONLY ROWS, THE SINGLE
+  LARGEST FAMILY LEFT, AND IT IS A FEATURE RATHER THAN A DEFECT (`variadicTuples1`, round
+  943).** `getTupleType` maps a `RestType` element through `is RestType ->
+  getTypeFromTypeNode(elem.type)` — the arm a PLAIN element gets — so **`[...T]` is built as
+  the one-element tuple `[T]`**. Three lines reproduce it:
+  `function f<T extends unknown[]>(t: T, m: [...T]) { t = m }` reports `Type '[T]' is not
+  assignable to type 'T'`. What is missing is TypeScript 4.0's variadic tuples in full: a
+  tuple type with a variadic/rest element, its normalisation, the three relation rules the
+  fixture's own section header states ("for a generic type `T`, `[...T]` is assignable to
+  `T`, `T` is assignable to `readonly [...T]`, and `T` is assignable to `[...T]` when `T` is
+  constrained to a mutable array or tuple type"), `keyof` over one, spread-argument arity,
+  and inference into a leading/trailing rest (the fixture's whole `curry` section). M3-scale;
+  do NOT attempt it as a bounded rule.
+
 - [ ] **(CHK.13) THE STRICT-BY-DEFAULT CONVENTION IS THE LARGEST *SYSTEMATIC* DIVERGENCE
-  LEFT — 42 OURS-ONLY ROWS OVER 23 GROUPS, AND IT IS AN OWNER DECISION, NOT A FIX (round
-  941).** TS2564 / TS2454 / TS7010 fire in this compiler unless `@strict: false` is
+  LEFT — 46 OURS-ONLY ROWS (42 by code, plus the four round 943 found wearing TS2683 /
+  TS7019 / a `strictNullChecks` TS2322), AND IT IS AN OWNER DECISION, NOT A FIX (round
+  941, re-sized round 943).** TS2564 / TS2454 / TS7010 fire in this compiler unless `@strict: false` is
   EXPLICITLY set (`Checker.kt`'s dispatch reads `!options.strictExplicitlyFalse`), where tsc
   requires `strict` (or the individual flag) to be ON. A real project with no `strict` in
   its tsconfig therefore gets `Property 'x' has no initializer and is not definitely

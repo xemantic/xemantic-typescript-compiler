@@ -55,6 +55,13 @@ DIRECTIVE_RE = re.compile(r"^[ \t]*//[ \t]*@([A-Za-z]+)[ \t]*:[ \t]*(.*?)[ \t]*$
 # else is passed through -- `applyDirective` ignores a key it does not model.
 NOT_AN_OPTION = {"filename", "symlink", "link", "currentdirectory"}
 
+# tsc's own default is `strict: false`; THIS compiler's is the inverse (every strict-family
+# check fires unless `strict: false` is EXPLICIT -- CHK.13).  A fixture naming any of these
+# has already said what it wants and must never be overridden.
+STRICT_FAMILY = {"strict", "strictnullchecks", "strictpropertyinitialization",
+                 "noimplicitany", "noimplicitthis", "strictfunctiontypes",
+                 "strictbindcallapply", "alwaysstrict", "usedefineforclassfields"}
+
 OURS_RE = re.compile(r"([^/\s]+\.[cm]?[jt]sx?):(\d+):(\d+) - error (TS\d+)")
 
 
@@ -166,6 +173,14 @@ def main() -> int:
     ap.add_argument("--work", default=str(REPO / "build" / "bench" / "pristine-sweep"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--only", default="", help="comma-separated stems (skips the grep)")
+    ap.add_argument("--tsc-strict-default", action="store_true",
+                    help="inject `strict: false` into every fixture that sets NO strict-family "
+                         "directive -- i.e. reproduce tsc's OWN default, which this compiler "
+                         "deliberately inverts (CHK.13).  A DIAGNOSTIC arm: differencing it "
+                         "against the canonical run says how many ours-only rows are the "
+                         "strict-by-default CONVENTION rather than a modelling gap.  Round 940 "
+                         "forced `strict: false` on EVERY fixture, which is different and wrong "
+                         "-- it overrides a fixture that asks for `@strict: true`.")
     args = ap.parse_args()
 
     deps = subprocess.run([str(REPO / "scripts" / "lib" / "dep-classpath.sh"), "--print"],
@@ -213,6 +228,15 @@ def main() -> int:
         # ours-only row, never add one, so the direction is safe.
         if "jsx" not in opts and any(n.endswith((".tsx", ".jsx")) for n in files):
             opts["jsx"] = "react"
+        # ONLY when the case file is in this clone: an ABSENT directive is evidence that
+        # pristine compiled without it, a MISSING CASE FILE is not.  Measured round 943 --
+        # `strictPropertyInitialization` has no case file here and its own baseline carries
+        # 20 TS2564, i.e. pristine had the flag ON and injecting `strict: false` would have
+        # deleted four GENUINE false positives from the count.  Same failure shape as round
+        # 941's defect (c), one directive over.
+        if (args.tsc_strict_default and not (STRICT_FAMILY & set(opts))
+                and po.case_index().get(stem) is not None):
+            opts["strict"] = False
         opts["noEmit"] = True
         (d / "tsconfig.json").write_text(json.dumps(
             {"compilerOptions": opts, "include": ["**/*"]}))

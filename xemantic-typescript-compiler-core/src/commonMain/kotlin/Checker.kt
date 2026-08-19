@@ -136784,6 +136784,52 @@ interface DataView {
         return e
     }
 
+    /**
+     * Round 943: run [body] with [tps] — a DECLARATION's own type parameters — pushed into
+     * the instantiation scope, so the TS2344 walker judges the PARAMETER and not whatever
+     * file-level type happens to share its name.
+     *
+     * `is FunctionDeclaration ->` has done this since round 82 and says why in its own
+     * comment ("would see `I<T>` resolve T to the global `class T` if any … and emit FP
+     * TS2344"); the alias branch did it only for an `ImportType` body (B98a's narrow gate)
+     * and the class/interface branches not at all. Pristine `conditionalTypes1` is two
+     * ours-only TS2344 from exactly that: its `interface A` (line 309) against
+     * `type And<A extends boolean, B extends boolean> = If<A, B, false>` (line 171).
+     *
+     * BOTH directions were wrong, which is why this ADDS diagnostics as well as removing
+     * them: an alias/class/interface parameter that genuinely violates its callee's
+     * constraint — an UNCONSTRAINED one included — was silent, because the walker was
+     * judging the shadow (or nothing at all).
+     *
+     * Scope only: the type RESOLUTION path never had this defect
+     * (`getTypeFromTypeReference` answers `Wrap<"x">` correctly with the same interface in
+     * scope), so no emitted type, display or narrowing can move.
+     */
+    private fun withDeclTypeParamScope(tps: List<TypeParameter>?, body: () -> Unit) {
+        if (tps.isNullOrEmpty()) {
+            body()
+            return
+        }
+        val savedTpDecls = currentTypeParamDecls
+        try {
+            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+            val decls = savedTpDecls.toMutableMap()
+            for (tp in tps) {
+                // B59.1: interned by TypeParameter AST position (+ the per-file salt).
+                val p = typeParamInternCache.getOrPut(internKey(tp)) {
+                    Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
+                }
+                tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+                scope[tp.name.text] = p
+                decls[tp.name.text] = tp  // for the TS2208 hint position
+            }
+            currentTypeParamDecls = decls
+            withInstantiationContext(scopeMapper(scope)) { body() }
+        } finally {
+            currentTypeParamDecls = savedTpDecls
+        }
+    }
+
     private fun checkConstraintsInStatements(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) {
             // Visit type nodes in declarations
@@ -136825,7 +136871,7 @@ interface DataView {
                         stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }
                     }
                 }
-                is ClassDeclaration -> {
+                is ClassDeclaration -> withDeclTypeParamScope(stmt.typeParameters) {
                     stmt.heritageClauses?.forEach { clause ->
                         clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
@@ -136853,7 +136899,7 @@ interface DataView {
                         }
                     }
                 }
-                is InterfaceDeclaration -> {
+                is InterfaceDeclaration -> withDeclTypeParamScope(stmt.typeParameters) {
                     stmt.heritageClauses?.forEach { clause ->
                         clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
@@ -136875,30 +136921,20 @@ interface DataView {
                     // (`type Bar<T> = import('./m').Foo<T>`), push Bar's OWN type params into
                     // scope so the args resolve to Bar's (unconstrained) TypeParams — only then
                     // does `checkConstraintsForTypeArgs` see argType = TypeParam (not errorType)
-                    // and fire TS2344 when Foo's constraint isn't satisfied. Narrow gate
-                    // (`stmt.type is ImportType`) → no impact on other type-alias constraint checks.
-                    val tps = stmt.typeParameters
-                    if (stmt.type is ImportType && !tps.isNullOrEmpty()) {
-                        val savedTpDecls = currentTypeParamDecls
-                        try {
-                            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                            val decls = savedTpDecls.toMutableMap()
-                            for (tp in tps) {
-                                val p = typeParamInternCache.getOrPut(internKey(tp)) {
-                                    Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
-                                }
-                                tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
-                                scope[tp.name.text] = p
-                                decls[tp.name.text] = tp  // for the TS2208 hint position
-                            }
-                            currentTypeParamDecls = decls
-                            withInstantiationContext(scopeMapper(scope)) {
-                                checkConstraintsInTypeNode(stmt.type, source, fileName)
-                            }
-                        } finally {
-                            currentTypeParamDecls = savedTpDecls
-                        }
-                    } else {
+                    // and fire TS2344 when Foo's constraint isn't satisfied.
+                    //
+                    // Round 943 WIDENED that gate from `stmt.type is ImportType` to EVERY
+                    // generic alias body, because the narrow form left the alias's own type
+                    // parameters INVISIBLE to this walker — so a parameter SHADOWED by a
+                    // same-named file-level type resolved to that OUTER type and was then
+                    // judged against the callee's constraint. `interface A { a: 'a' }` plus
+                    // `type And<A extends boolean, B extends boolean> = If<A, B, false>` is
+                    // two false TS2344 on pristine's own `conditionalTypes1` (its `interface A`
+                    // is 138 lines below the alias, which is why nothing smaller shows it).
+                    // The type RESOLUTION path was never affected — `getTypeFromTypeReference`
+                    // answers `Wrap<"x">` correctly with the same interface in scope — so this
+                    // is confined to which type the TS2344 walker judges.
+                    withDeclTypeParamScope(stmt.typeParameters) {
                         checkConstraintsInTypeNode(stmt.type, source, fileName)
                     }
                 }
