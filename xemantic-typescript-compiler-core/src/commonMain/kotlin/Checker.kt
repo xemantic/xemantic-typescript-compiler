@@ -94977,6 +94977,24 @@ interface DataView {
                 }
             }
         }
+        // (CHK.11) round 942: the ELEMENT-ACCESS spelling of the same discriminant —
+        // `switch (s["kind"])` / `switch (z[0])`. Same receiver, same reader; only the
+        // member name arrives as a literal index instead of an identifier, so an
+        // otherwise-exhaustive switch written that way kept its TS2366/TS7030
+        // (pristine `typeGuardNarrowsIndexedAccessOfKnownProperty1` lines 24 and 31).
+        // The round-477 AST fallback above is deliberately NOT mirrored: it matches a
+        // member by an Identifier/StringLiteral declaration NAME, which a computed key
+        // (`["dash-ok"]: "square"`) does not present.
+        if (expr is ElementAccessExpression && !expr.questionDotToken) {
+            val idxName = when (val arg = unwrapParensExpr(expr.argumentExpression)) {
+                is StringLiteralNode -> arg.text
+                is NumericLiteralNode -> arg.text
+                else -> null
+            }
+            if (!idxName.isNullOrEmpty()) {
+                requiredUnionDiscriminantKeys(expr.expression, idxName)?.let { return it }
+            }
+        }
         return enumSwitchKeysFromType(getTypeOfExpression(expr))
     }
 
@@ -95214,15 +95232,45 @@ interface DataView {
      * feeds the exhaustiveness proof, which only SUPPRESSES TS2366).
      */
     private fun paramMemberChainType(recv: Expression): Type? {
-        val pa = recv as? PropertyAccessExpression ?: return null
-        if (pa.questionDotToken) return null
-        val rootId = pa.expression as? Identifier ?: return null
+        // (CHK.11) round 942: the chain is walked SEGMENT BY SEGMENT and accepts a
+        // literal-indexed ELEMENT ACCESS beside a dotted one, because pristine's
+        // `typeGuardNarrowsIndexedAccessOfKnownProperty1` mixes the two inside one
+        // receiver (`s[0]["sub"].under["shape"]`). Round 470's single dotted segment is
+        // the one-segment case of this loop, unchanged. Still FP-safe by construction:
+        // the answer only ever feeds the exhaustiveness proof, which only SUPPRESSES.
+        val segs = ArrayList<String>()
+        var cur: Expression = recv
+        loop@ while (true) {
+            when (val c = cur) {
+                is PropertyAccessExpression -> {
+                    if (c.questionDotToken) return null
+                    segs.add(c.name.text); cur = c.expression
+                }
+                is ElementAccessExpression -> {
+                    if (c.questionDotToken) return null
+                    segs.add(
+                        when (val a = unwrapParensExpr(c.argumentExpression)) {
+                            is StringLiteralNode -> a.text
+                            is NumericLiteralNode -> a.text
+                            else -> return null
+                        }
+                    )
+                    cur = c.expression
+                }
+                else -> break@loop
+            }
+        }
+        if (segs.isEmpty()) return null
+        val rootId = cur as? Identifier ?: return null
         val p = currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == rootId.text }
             ?: return null
         val ann = p.type ?: return null
-        val rootType = getTypeFromTypeNode(ann)
-        if (rootType === anyType || rootType === errorType) return null
-        return resolveMemberPropertyType(rootType, pa.name.text)
+        var t = getTypeFromTypeNode(ann)
+        for (i in segs.indices.reversed()) {
+            if (t === anyType || t === errorType) return null
+            t = resolveMemberPropertyType(t, segs[i]) ?: return null
+        }
+        return t
     }
 
     /**
@@ -113232,6 +113280,19 @@ interface DataView {
         return narrowOperandByCondition(getTypeOfExpression(branch), branch, condition, conditionIsTrue)
     }
 
+    /** (CHK.11) round 942 — is [name] writable as a dotted property segment (`x.name`)?
+     *  ASCII identifier shape only; anything else keeps [getReferencePath]'s bracket form. */
+    private fun isIdentifierSpellableName(name: String): Boolean {
+        if (name.isEmpty()) return false
+        val c0 = name[0]
+        if (!(c0 in 'a'..'z' || c0 in 'A'..'Z' || c0 == '_' || c0 == '$')) return false
+        for (i in 1 until name.length) {
+            val c = name[i]
+            if (!(c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '_' || c == '$')) return false
+        }
+        return true
+    }
+
     private fun getReferencePath(expr: Expression): String? = when (expr) {
         is Identifier -> expr.text
         is PropertyAccessExpression -> {
@@ -113252,7 +113313,17 @@ interface DataView {
             }
             if (idx == null) null else {
                 val receiverPath = getReferencePath(expr.expression) ?: return null
-                "$receiverPath[$idx]"
+                // (CHK.11) round 942: a string index that is spellable as a DOTTED property
+                // normalises to the dotted segment, because tsc's `isMatchingReference`
+                // compares references by SYMBOL and `x["sub"]` and `x.sub` are one reference.
+                // Ours compares path STRINGS, so before this a guard written one way and a
+                // read written the other never matched — pristine's
+                // `typeGuardNarrowsIndexedAccessOfKnownProperty1` mixes the two spellings
+                // inside a single expression (`s[0]["sub"].under["shape"]`). A non-spellable
+                // index (`"dash-ok"`, `0`, `"0"`) keeps the bracket form, which is exactly
+                // the round-461 encoding and cannot collide with a dotted segment.
+                if (isIdentifierSpellableName(idx)) "$receiverPath.$idx"
+                else "$receiverPath[$idx]"
             }
         }
         // `(x)` and `(x).prop` should narrow identically to `x` / `x.prop` — the parens
@@ -115314,6 +115385,39 @@ interface DataView {
      * to members assignable from any of those literals. Returns null when the
      * switch subject doesn't match [name] or no usable case literals are found.
      */
+    /**
+     * (CHK.11) round 942 — the ONE segment a discriminant subject sits below the walked
+     * reference [name], for BOTH spellings tsc's `isMatchingReference` accepts: the dotted
+     * `name.kind` and the ELEMENT ACCESS `name["kind"]` / `name[0]`.
+     *
+     * [getReferencePath] has encoded a literal-indexed element access as `name[seg]` since
+     * round 461 — the `[` is a segment boundary exactly as `.` is — but every discriminant
+     * reader was written against the dotted spelling alone (`startsWith("$name.")` plus a
+     * "no further dot" test), so `switch (s["kind"])` narrowed NOTHING while `switch (s.kind)`
+     * narrowed correctly. That is the whole of pristine's
+     * `typeGuardNarrowsIndexedAccessOfKnownProperty1`, and the member NAME the two spellings
+     * name is the same string, so the segment feeds the existing name-keyed readers
+     * ([getPropertyOfType], [discriminantKeysOfMember], [filterUnionByEnumDiscriminant])
+     * unchanged.
+     *
+     * Returns null for anything that is not EXACTLY one segment below [name] — a deeper path
+     * (`name.a.b`, `name[0].b`, `name[0][1]`) and a bracket segment that itself contains a
+     * path separator (`name["a.b"]`, whose member name is genuinely dotted and which no
+     * name-keyed reader could tell from `name.a.b`). Conservative in the no-narrowing
+     * direction, which is what the dotted arm has always been.
+     */
+    private fun singleLevelDiscriminantSegment(subjectPath: String, name: String): String? {
+        if (subjectPath.length <= name.length + 1 || !subjectPath.startsWith(name)) return null
+        return when (subjectPath[name.length]) {
+            '.' -> if (subjectPath.indexOf('.', name.length + 1) < 0)
+                subjectPath.substring(name.length + 1) else null
+            '[' -> if (!subjectPath.endsWith("]")) null else
+                subjectPath.substring(name.length + 1, subjectPath.length - 1)
+                    .takeIf { it.isNotEmpty() && '.' !in it && '[' !in it && ']' !in it }
+            else -> null
+        }
+    }
+
     private fun narrowBySwitchClause(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
         val switchExpr = flowNode.switchStatement.expression
         // B411: `switch (true) { case <cond>: ... }` — each case expression is a
@@ -115375,10 +115479,10 @@ interface DataView {
         // assignable from the case literal.
         val (matchesDirectly, discriminantName) = when {
             subjectPath == name -> true to null
-            subjectPath.startsWith("$name.") && subjectPath.indexOf('.', name.length + 1) < 0 -> {
-                // single-level property access (e.g., "x.kind" when name == "x"); the
-                // discriminant property is the part after "name."
-                false to subjectPath.substring(name.length + 1)
+            singleLevelDiscriminantSegment(subjectPath, name) != null -> {
+                // single-level member access (`x.kind` — or, since (CHK.11), `x["kind"]` /
+                // `x[0]` — when name == "x"); the discriminant is that one segment.
+                false to singleLevelDiscriminantSegment(subjectPath, name)
             }
             else -> {
                 // Round 425 (tsc aliased discriminants): `const kind1 = m1.kind;
@@ -115393,10 +115497,9 @@ interface DataView {
                     ?.takeIf { it.text != name }
                     ?.let { aliasedConditionInitializer(it, name) }
                 val initPath = aliasInit?.let { getReferencePath(it) }
-                if (initPath != null && initPath.startsWith("$name.") &&
-                    initPath.indexOf('.', name.length + 1) < 0
-                ) {
-                    false to initPath.substring(name.length + 1)
+                val initSeg = initPath?.let { singleLevelDiscriminantSegment(it, name) }
+                if (initSeg != null) {
+                    false to initSeg
                 } else return null
             }
         }
@@ -117643,7 +117746,29 @@ interface DataView {
                 // SymbolTrackerImpl` where the class implements the interface — the old
                 // subtype-only filter dropped every member → `never`, tsc checker.ts's
                 // SymbolTrackerImpl constructor). Suppression-only: strictly more-keeping.
-                t.types.mapNotNull { m ->
+                // (CHK.12) round 942 — a UNION candidate (a `[Symbol.hasInstance]` predicate
+                // `value is C1 | C2`, or a construct signature returning a union) is
+                // DISTRIBUTED, and its narrow-down direction uses the NOMINAL test rather
+                // than assignability, because that is what tsc does here: an `instanceof`
+                // reaches `getNarrowedType(..., checkDerived = true)`, i.e. `isTypeDerivedFrom`
+                // — a base-chain walk — even when the candidate came from a predicate.
+                // Measured against pristine AND tsgo 7.0.2 on the fixture's own shapes:
+                // `C1 | A` narrowed by `C1 | C2` is **C1** (`A` is structurally a supertype of
+                // BOTH candidates, so the assignability form mapped it to the whole union and
+                // reported `bar1` missing on `C2`), while `B0 | string` narrowed by `D1 extends
+                // B0` is **D1** (a genuine base chain still narrows down).
+                // SCOPED to a union candidate: the single-candidate arm below is byte-identical
+                // to round 425's, whose `tracker instanceof SymbolTrackerImpl` case depends on
+                // the assignability form.
+                val candidates = (classType as? Type.Union)?.types
+                if (candidates != null) {
+                    val out = ArrayList<Type>(t.types.size)
+                    for (m in t.types) {
+                        if (isInstanceOfClass(m, classType)) { out.add(m); continue }
+                        for (c in candidates) if (isInstanceOfClass(c, m)) out.add(c)
+                    }
+                    out
+                } else t.types.mapNotNull { m ->
                     when {
                         isInstanceOfClass(m, classType) -> m
                         checkTypeRelatedTo(classType, m, assignableRelation) -> classType
@@ -117817,12 +117942,62 @@ interface DataView {
      * be a new, wrong type at every consumer; null keeps the pre-838 behaviour
      * for anything this cannot resolve.
      */
+    /**
+     * (CHK.12) round 942 — the type an `x instanceof C` narrows to when `C`'s type declares
+     * a `[Symbol.hasInstance]` method returning a TYPE PREDICATE over its own first
+     * parameter (tsc's `narrowTypeByInstanceof`: the predicate wins over `prototype` and
+     * over every construct signature). Before this, a constructor whose instance type is
+     * only expressible through such a predicate — a GENERIC construct signature
+     * (`new <T>(): B<T>` + `value is B<any>`), SEVERAL construct signatures
+     * (`value is C1 | C2`), or one returning a union — narrowed nothing at all, so every
+     * member read on the narrowed reference was TS2339.
+     *
+     * The member NAME is `[Symbol.hasInstance]`: round 723's [computedSymbolKey] names a
+     * well-known-symbol member by its bracketed dotted text, so this is the same string the
+     * declaration binds and the same one TS2739 prints.
+     *
+     * Deliberately BOUNDED, in the no-narrowing direction on every axis. Only an IDENTIFIER
+     * predicate over PARAMETER 0 (tsc requires `predicate.parameterIndex === 0`), never an
+     * `asserts` one; and only a method-shaped declaration. The wide-target rule lives at
+     * the CALL SITE, not here, precisely so that a usable predicate still DECIDES.
+     * A `static [Symbol.hasInstance]` on a CLASS declaration is
+     * out of scope — [resolveInstanceOfRhsType] answers a class from its declared type
+     * before reaching here — and is queued rather than guessed at.
+     */
+    private fun symbolHasInstancePredicateType(ctorType: Type): Type? {
+        val sym = getPropertyOfType(ctorType, "[Symbol.hasInstance]") ?: return null
+        val decl = sym.valueDeclaration ?: sym.declarations.firstOrNull() ?: return null
+        val method = decl as? MethodDeclaration ?: return null
+        val predicate = method.type as? TypePredicate ?: return null
+        if (predicate.assertsModifier) return null
+        // Parser quirk (the same one [narrowByCallPredicateWorker] documents): `value is T`
+        // parses `value` as a TypeReference, because the LHS is read by the type parser
+        // before `is` is recognised.
+        val predicateParam = when (val pn = predicate.parameterName) {
+            is Identifier -> pn.text
+            is TypeReference -> (pn.typeName as? Identifier)?.text
+            else -> null
+        } ?: return null
+        if ((method.parameters.firstOrNull()?.name as? Identifier)?.text != predicateParam) return null
+        return getTypeFromTypeNode(predicate.type ?: return null)
+    }
+
     private fun instanceTypeOfConstructorValue(symbol: Symbol): Type? {
         // Value-position only: a pure type symbol (interface/alias) has no
         // constructor value and must keep narrowing nothing.
         if (!symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Function or SymbolFlags.Property)) return null
         val ctorType = getTypeOfSymbol(symbol)
         if (ctorType !is Type.Object) return null
+        // (CHK.12) round 942 — tsc's `[Symbol.hasInstance]` leg. It is asked FIRST because
+        // tsc gives it priority over BOTH `prototype` and the construct signatures
+        // ("overrides priority", pristine `typeGuardsWithInstanceOfBySymbolHasInstance`
+        // lines 156/182), and a USABLE predicate DECIDES: a wide target answers "narrow
+        // nothing" rather than falling through, which is why pristine still reports
+        // `string | F` at lines 142/143 for a `value is any` predicate sitting beside a
+        // perfectly good `new (): any`.
+        symbolHasInstancePredicateType(ctorType)?.let { target ->
+            return target.takeIf { it !== anyType && it !== errorType && it !== unknownType }
+        }
         getPropertyOfType(ctorType, "prototype")?.let { proto ->
             val protoType = getTypeOfSymbol(proto)
             if (protoType is Type.Object && protoType !== ctorType) return protoType
@@ -123540,11 +123715,35 @@ interface DataView {
 
     /** Get the type of an element access expression (e.g., `obj["prop"]`, `arr[0]`). */
     private fun getTypeOfElementAccess(expr: ElementAccessExpression): Type {
-        val objectType = getTypeOfExpression(expr.expression)
+        val rawObjectType = getTypeOfExpression(expr.expression)
+        // (CHK.11) round 942 — flow-narrow a UNION receiver, the same gate
+        // [computeRawTypeOfPropertyAccess] has carried since B1.1 and the twin this
+        // function did not have: `switch (s["kind"]) { case "square": s["size"] }` typed
+        // `s["size"]` off the WHOLE union, where every constituent that lacks the member
+        // answers `anyType` and [elementAccessResultType]'s all-or-nothing union rule then
+        // washes the access to `anyType` (silent) — while the un-narrowed union is what
+        // reported `z[1]` as `string | number` against a `number` target in pristine's
+        // `typeGuardNarrowsIndexedAccessOfKnownProperty1`.
+        // Conservative and identical to the property-access gate: only a UNION receiver
+        // (a non-union cannot be refined here), only a pure reference path, and
+        // [getNarrowedTypeForReference] answers `raw` unchanged with no flow graph
+        // installed, so every symbol-type resolution path is unaffected.
+        val objectType: Type =
+            if (rawObjectType is Type.Union && getReferencePath(expr.expression) != null) {
+                getNarrowedTypeForReference(rawObjectType, expr.expression)
+            } else rawObjectType
         if (objectType === anyType || objectType === errorType) return anyType
         val rawIndexExpr = expr.argumentExpression
         // Unwrap parens: `obj[("prop")]` should resolve like `obj["prop"]`.
         val indexExpr = unwrapParensExpr(rawIndexExpr)
+        // (CHK.11) round 942 — NOT narrowed here. The 17.34d twin of this function narrows
+        // its own union RESULT, and the symmetric line was written, measured INERT and
+        // REMOVED: ablating it reddened NONE of the round's 21 pins, and no probe could be
+        // built where it fires (`if (typeof h[0] === "string") { … h[0] }` still reports the
+        // declared `string | number` with it in place, because the `typeof` guard does not
+        // reach an element-access reference in the first place). A flow walk on this path
+        // with no consultation that can observe it is the round-887 shape; the RECEIVER
+        // narrowing above is what the pristine fixture actually needed.
         return elementAccessResultType(objectType, indexExpr)
     }
 
