@@ -218,6 +218,89 @@ backwards: `any`-typed sources are **2,753** closed obligations onto object
 targets against the closure's own **220**, so the fallback half is an order of
 magnitude larger than the nominal half it was deferred behind.
 
+### 3.4 The mechanism, decided
+
+Two investigations ran against §3.3 — a measurement of what real TypeScript
+demands, and a survey of what shipped systems actually built. They look like
+they disagree. They do not, and separating the two questions is what settles the
+design.
+
+**"How big is the closure?" is answered, and the alarming number was the wrong
+one.** The naive count on tsc's own sources is 583 classes × 896 interfaces =
+522,368 pairs, and the literature's measurement of nominalizing inferred
+structural types is +313% interfaces on average, +1000% worst case. But the
+closure that is actually *needed* is over pairs the program forms, not pairs it
+could form: **158 edges, median fan-out 1, maximum 9**. Go's own binary is the
+same story from the other side — 695 itabs against 59,598 possible pairs, a
+**1.2% fill**. Real programs use a sparse corner of the cross product.
+
+So the size objection does not apply to this workload, and neither does
+HotSpot's cliff at 64 transitive interfaces — a maximum fan-out of 9 has two
+octaves of headroom.
+
+**But three objections survive, and they are not about size.**
+
+1. **Separate compilation is impossible by construction.** Every class used as
+   a structural type anywhere must implement the right interface, so a library's
+   compiled class cannot satisfy an interface an application declares later.
+   This is stated as a result in the literature, not a matter of degree.
+2. **Some of it is not expressible as a JVM interface at all.** Of the closure's
+   own targets, 17 of 117 are construct-signature types — a JVM interface cannot
+   say "has this constructor" — and 63 of 117 are anonymous inline type literals
+   the backend would have to mint names for. Index signatures ("a member of any
+   name") have no encoding either.
+3. **The load-bearing one: the closure answers a question TypeScript never
+   asks.** Enumerate every narrowing form in the language — `typeof` (a value tag
+   test), `instanceof` (nominal), `in` (a single-member test), a discriminant
+   compare (a field read), a user-defined `x is T` predicate (ordinary user code,
+   no shape check emitted), `Array.isArray`. **Not one of them requires the
+   runtime to decide structural conformance.** Structural assignability is a
+   purely static verdict — made by the checker this repository already has.
+
+That last point is what decides it. The closure's entire purchase is the ability
+to spell *one* operation, a member access on a structurally-typed receiver, as
+`invokeinterface`. It is a lowering choice for one operation, and it drags
+separate compilation and two inexpressible type forms along with it.
+
+Two mature compilers reached the same place from the opposite direction:
+Kotlin/JS makes `is` against an external interface a hard compile error, and
+Scala.js does not support `isInstanceOf` for a `js.Any` trait at all — both
+priced the runtime shape question and removed it from the language. Here it
+never needed pricing, because TypeScript does not pose it.
+
+**So: the mechanism is name-keyed, and the closure is demoted to an
+optimization.** Four pieces, the first three taken from Static TypeScript, which
+is the closest thing to this project that ever shipped:
+
+- **Intern every member name to a dense integer, program-wide.** This is the
+  only whole-program artifact, and it is O(distinct member names) — thousands —
+  rather than O(classes × interfaces). Dense ids, never a hash: at ~50k distinct
+  names a 31-bit hash space collides with about 44% probability.
+- **Give every class a member index** from that id to a field handle or a
+  method handle, materialized lazily per class (a `ClassValue`), so foreign and
+  separately-compiled classes work identically.
+- **Lower a structural member access to `invokedynamic`** whose bootstrap
+  installs a receiver-class-guarded inline cache. Monomorphic steady state is a
+  class compare plus an inlined `getfield`.
+- **Keep the dynamic record for `any` and index signatures only.**
+
+**And invert §3.3's priorities.** It defers `any` "until the nominal half runs";
+the measurement says `any`-sourced obligations outnumber object-sourced ones
+**2,753 to 220** — an order of magnitude. `any` is not the fallback, it is the
+common case.
+
+The nominal `implements` edge stays, as a *bounded fast path* where a class
+declares it in source or where a hot pair is worth pinning — cheap and safe at a
+measured fan-out of 9, and it degrades to the general path rather than to a
+cliff. That inverts the original plan: the closure becomes a cache, not a
+totality requirement.
+
+One number to design against, from Static TypeScript's own benchmarks: routing
+*methods* through a name-keyed table costs 0–13%, while routing *fields* through
+it costs about 2×, and a full dynamic property bag costs ~21× a direct field
+read. Fields are the hot case in TypeScript, which is exactly why the member
+index must resolve to a real field handle and not to a dictionary probe.
+
 ## 4. Where the type information comes from
 
 The backend needs the real `Type` object for every expression node. Today it
