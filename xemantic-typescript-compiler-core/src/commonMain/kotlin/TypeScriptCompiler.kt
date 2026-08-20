@@ -191,8 +191,26 @@ class TypeScriptCompiler {
          *  Null — the default — leaves the whole pipeline untouched; see
          *  [TypeCaptureRequest]. */
         typeCapture: TypeCaptureRequest? = null,
-    ): CompilationResult =
-        runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName, recheckOnly, typeCapture) }
+        /** (KIR): when non-null, the checker hands every checked expression and
+         *  declaration-shaped node to this sink AS IT WALKS PAST IT, under the
+         *  ambient in force there. Null — the default — leaves the whole pipeline
+         *  untouched; see [CheckedNodeSink] for why a backend is fed inwards rather
+         *  than allowed to query a retained checker afterwards.
+         *
+         *  A sink forces the SEQUENTIAL checker (see [cpcBindAndCheck]) and is
+         *  incompatible with [recheckOnly]: a partition checker walks a SUBSET of
+         *  the program, so the facts a backend collected would silently be a subset
+         *  too — which `Checker`'s own `require` refuses, here with a message that
+         *  names the caller's mistake. */
+        checkedSink: CheckedNodeSink? = null,
+    ): CompilationResult {
+        require(checkedSink == null || recheckOnly == null) {
+            "a CheckedNodeSink needs the whole program: recheckOnly walks a partition"
+        }
+        return runWithDeepStack {
+            compileParsedCore(parsed, baseOptions, fileName, recheckOnly, typeCapture, checkedSink)
+        }
+    }
 
     /**
      * The pipeline body of [compileParsed] — always entered through [runWithDeepStack],
@@ -205,6 +223,7 @@ class TypeScriptCompiler {
         fileName: String,
         recheckOnly: Set<String>? = null,
         typeCapture: TypeCaptureRequest? = null,
+        checkedSink: CheckedNodeSink? = null,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
@@ -261,6 +280,7 @@ class TypeScriptCompiler {
                 fileName = fileName,
                 diagnostics = diagnostics,
                 typeCapture = typeCapture,
+                checkedSink = checkedSink,
             )
         } else {
             return cpcCompileMultiFile(
@@ -270,6 +290,7 @@ class TypeScriptCompiler {
                 diagnostics = diagnostics,
                 recheckOnly = recheckOnly,
                 typeCapture = typeCapture,
+                checkedSink = checkedSink,
             )
         }
     }
@@ -1058,6 +1079,7 @@ class TypeScriptCompiler {
         fileName: String,
         diagnostics: MutableList<Diagnostic>,
         typeCapture: TypeCaptureRequest? = null,
+        checkedSink: CheckedNodeSink? = null,
     ): CompilationResult {
         // Single-file compilation
         val file = parsed.files[0]
@@ -1097,7 +1119,8 @@ class TypeScriptCompiler {
 
         val binder = Binder(options)
         val binderResult = binder.bind(sourceFile)
-        val checker = Checker(options, listOf(binderResult), typeCapture = typeCapture)
+        val checker =
+            Checker(options, listOf(binderResult), typeCapture = typeCapture, checkedSink = checkedSink)
         diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
         // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
         // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
@@ -1209,6 +1232,7 @@ class TypeScriptCompiler {
         diagnostics: MutableList<Diagnostic>,
         recheckOnly: Set<String>?,
         typeCapture: TypeCaptureRequest? = null,
+        checkedSink: CheckedNodeSink? = null,
     ): CompilationResult {
         // All source files including tsconfig.json (for error baselines)
         val allFiles = parsed.files.map { it.fileName to it.content }
@@ -1395,6 +1419,7 @@ class TypeScriptCompiler {
             parsedSourceFiles = parsedSourceFiles,
             diagnostics = diagnostics,
             typeCapture = typeCapture,
+            checkedSink = checkedSink,
         )
         val fePostT0 = FrontEnd.t()
         // (WARM.8) round 861 — the four blocks of [FrontEnd.POST] abut from here
@@ -2110,6 +2135,7 @@ class TypeScriptCompiler {
         parsedSourceFiles: Map<String, SourceFile>,
         diagnostics: MutableList<Diagnostic>,
         typeCapture: TypeCaptureRequest? = null,
+        checkedSink: CheckedNodeSink? = null,
     ): Checker {
         // Phase 2: Bind all files and create shared checker
         //
@@ -2124,7 +2150,16 @@ class TypeScriptCompiler {
         // (that branch still binds exactly as before) and the parallel path
         // byte-identical too (a worker's ids come from its own rebased slice, so
         // the caller's Symbol counter never reached them).
-        val parallelCheck = ParallelCheckMode.workers > 1
+        // (KIR) A sink FORCES the sequential branch. `ParallelCheckMode.workers` is a
+        // process-global mode, and (API.3)'s capture merely ASSUMES it is 1 because
+        // every embedding-API caller leaves it so — an assumption a sink cannot
+        // inherit, because under `--workers` each worker `Checker` is constructed
+        // with `assignedFileNames`, which `Checker.init` refuses beside a sink
+        // (a partition checker walks a SUBSET, so the facts would silently be a
+        // subset too). Overridden HERE, at the branch, rather than by writing the
+        // global ledger: a bare write to a mode object from a compile is the
+        // round-848 hazard — it survives the request and reconfigures the next one.
+        val parallelCheck = ParallelCheckMode.workers > 1 && checkedSink == null
         val feBindT0 = FrontEnd.t()
         val binderResults =
             if (parallelCheck) emptyList()
@@ -2219,7 +2254,10 @@ class TypeScriptCompiler {
                 // and would race on one shared result map for no benefit, so a
                 // capture build runs sequentially (`ParallelCheckMode.workers` is 1
                 // for every embedding-API caller).
-                typeCapture = typeCapture)
+                typeCapture = typeCapture,
+                // (KIR) and the sink, for which sequential is FORCED above rather
+                // than assumed.
+                checkedSink = checkedSink)
             if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
             if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(

@@ -113,6 +113,12 @@ class ProjectCompiler(private val vfs: Vfs) {
      *   Null — the default — leaves the whole pipeline
      *   untouched; see [TypeCaptureRequest] for why a capture is directed inwards
      *   rather than answered from a retained checker afterwards.
+     * @param checkedSink (KIR) when non-null, the checker hands every checked
+     *   expression and declaration-shaped node of every program file to this sink
+     *   AS IT WALKS PAST IT — the seam a backend consumes, and the only route by
+     *   which a whole PROJECT (imports resolved, cross-file symbols merged) can be
+     *   fed to one. Directed inwards for [TypeCaptureRequest]'s reason, and forcing
+     *   the sequential checker for its own; see [CheckedNodeSink].
      */
     fun build(
         projectPath: String,
@@ -120,6 +126,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         recheckOnly: Set<String>? = null,
         outDir: String? = null,
         typeCapture: TypeCaptureRequest? = null,
+        checkedSink: CheckedNodeSink? = null,
     ): Result {
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
@@ -221,6 +228,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         val result = TypeScriptCompiler().compileParsed(
             parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
             typeCapture = typeCapture,
+            checkedSink = checkedSink,
         )
         // INV.7(d2): top-level declaration names per file (from the crawl parses)
         // for the shared-name full-rebuild bail.
