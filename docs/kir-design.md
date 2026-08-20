@@ -202,6 +202,22 @@ Three candidate representations:
 of the closure: classes and interfaces declared in the program, object literals
 that have a contextual type. `any` is out of scope until the nominal half runs.
 
+**MEASURED — `docs/kir-structural-typing.md`.** The closure's size was the open
+question and it is answered: on tsc's own compiler sources the program forms
+**158** structural (class, interface) pairs, no generated class carries more
+than **9** `implements` edges, and the median is **1**; over eight corpora the
+worst case is 264 edges and a fan-out of 10. The N x M fear was unfounded
+because the closure only has to cover the pairs the program actually FORMS, and
+those are the pairs the checker forms while checking.
+
+Two things that measurement changes about the plan above. The 63-of-117 majority
+of closure targets are ANONYMOUS inline type literals, so the backend must MINT
+an interface per target rather than name a declared one — which is the concrete
+form of "fails on separate compilation". And the ordering of (3)'s two halves is
+backwards: `any`-typed sources are **2,753** closed obligations onto object
+targets against the closure's own **220**, so the fallback half is an order of
+magnitude larger than the nominal half it was deferred behind.
+
 ## 4. Where the type information comes from
 
 The backend needs the real `Type` object for every expression node. Today it
