@@ -82,9 +82,28 @@ let fromInstance: 'B' = new C().b   // TS2322, same
 ```
 
 tsgo: clean. xtsc: two errors. The literal-retention rule exists for `const`
-(that control passes) and is simply absent for `readonly` class properties. In
-`yaml` this single rule is behind roughly 37 of 66 false positives, because the
-library's enum-like constants are all `static readonly X = 'X'`.
+(that control passes) and is simply absent for `readonly` class properties.
+
+**FIXED and RE-MEASURED (WIDEN.1)(b).** The rule landed as tsc's
+`isDeclarationReadonly` half of `getWidenedLiteralTypeForInitializer`, and `yaml`
+went **71 -> 66** errors with none added.
+
+**The "roughly 37 of 66" estimate above was wrong for THIS rule and is corrected
+here — measured, it is worth 5.** The ~37 belongs to the broader literal-retention
+FAMILY, of which the readonly property is only one member; its dominant member is a
+different site entirely — **24** of the remaining rows are RETURN-POSITION literal-
+union retention in `parse/cst.ts`:
+
+```ts
+export function tokenType(source: string): TokenType | null {
+  switch (source) {
+    case BOM: return 'byte-order-mark'   // TS2322: 'string' not assignable to 'TokenType | null'
+```
+
+So the next unit of work in this family is return-position contextual literal
+retention, not anything further about properties. The lesson for this page: an
+error-count attributed to a family by inspection is a hypothesis until one member
+of it is fixed and the corpus re-run.
 
 ### Family 2 — `instanceof` does not narrow a class imported from another file
 
