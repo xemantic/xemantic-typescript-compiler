@@ -726,15 +726,19 @@ class Checker(
      *  interned literal types are never marked. Declared before [init] (init-order). */
     private val nonWideningLiteralTypeIds = mutableSetOf<Int>()
 
-    /** (WIDEN.1) Type ids of the literal types a `const` binding KEPT (tsc's
-     *  `getWidenedLiteralTypeForInitializer`) — see the recording site in
-     *  [checkVarDeclAssignabilityCore]. Consulted where a site must behave as it did
-     *  before (WIDEN.1): an ASSIGNMENT TARGET, because assigning to a `const` is already
-     *  TS2588 and tsc adds no assignability error there (`checkReferenceExpression`
+    /** (WIDEN.1) Type ids of the literal types an IMMUTABLE binding KEPT (tsc's
+     *  `getWidenedLiteralTypeForInitializer`) — both halves of its gate: a `const`
+     *  binding (recorded in [checkVarDeclAssignabilityCore]) and, since (WIDEN.1)(b), a
+     *  `readonly` class property (recorded in [propertyInitializerLiteralType]).
+     *  Consulted where a site must behave as it did before (WIDEN.1): an ASSIGNMENT
+     *  TARGET, because assigning to either is already an error of its own (TS2588 /
+     *  TS2540) and tsc adds no assignability error there (`checkReferenceExpression`
      *  returns false, so `checkTypeAssignableToAndOptionallyElaborate` never runs).
+     *  Without the widen-back a kept literal turns every legal re-assignment into a
+     *  spurious co-emitted TS2322 — `readonly s = 'X'` then rejects `g.s = 'X'`.
      *  Distinct from [nonWideningLiteralTypeIds], whose entries must NOT widen anywhere.
      *  Identity-keyed by [Type.id]; declared before [init] (init-order). */
-    private val widen1ConstLiteralTypeIds = mutableSetOf<Int>()
+    private val widen1ImmutableLiteralTypeIds = mutableSetOf<Int>()
 
     /** B185: the statement list of the scope currently being walked by
      *  [checkTypeAssignabilityInStatements] — lets per-decl checks resolve FUNCTION-LOCAL
@@ -44236,6 +44240,66 @@ class Checker(
      */
     private fun varDeclIsImmutableBinding(decl: VariableDeclaration): Boolean =
         (decl.parent as? VariableDeclarationList)?.flags == SyntaxKind.ConstKeyword
+
+    /**
+     * (WIDEN.1)(b) The PROPERTY sibling of [varDeclIsImmutableBinding] — tsc's
+     * `isDeclarationReadonly` half of the same `getWidenedLiteralTypeForInitializer`
+     * gate (checker.ts:41455). A `readonly` class property keeps the literal type its
+     * initializer produced; a mutable one widens it:
+     *
+     * ```ts
+     * class C { mutable = 'A'; readonly frozen = 'A' }
+     * // C.prototype.mutable : string      <- widened
+     * // C.prototype.frozen  : "A"         <- literal
+     * ```
+     *
+     * `static` is NOT part of the gate — `readonly` alone decides, so a
+     * `static readonly A = 'A'` (the enum-like constant every hand-rolled TypeScript
+     * library writes) keeps `"A"` for the same reason an instance one does.
+     *
+     * A PARAMETER PROPERTY is deliberately out of scope and needs no clause here: tsc's
+     * `isDeclarationReadonly` excludes one explicitly
+     * (`&& !isParameterPropertyDeclaration(...)`, so `constructor(readonly p = 'P')`
+     * widens to `string` — verified against tsgo 7.0.2), and in THIS parser such a
+     * declaration is a [Parameter] node, which reaches a different arm of
+     * [getTypeOfVariableOrProperty] entirely. Widening a clause into this predicate to
+     * "cover" it would therefore be both wrong and unreachable.
+     */
+    private fun propertyDeclIsImmutableBinding(decl: PropertyDeclaration): Boolean =
+        ModifierFlag.Readonly in decl.modifiers
+
+    /**
+     * (WIDEN.1)(b) The literal type a `readonly` property's initializer contributes, or
+     * `null` when this declaration widens (i.e. the caller must keep doing exactly what it
+     * did before this rule landed).
+     *
+     * THE SINGLE ENTRY POINT for the rule, deliberately: CLAUDE.md's standing warning is
+     * that this checker has more than one widener, and a property's inferred type is in
+     * fact computed at TWO independent sites ([getTypeOfVariableOrProperty]'s
+     * `PropertyDeclaration` arm and [getTypeOfMemberDecl]). Both consult this, so the two
+     * cannot drift into answering differently for one declaration.
+     *
+     * NARROW BY CONSTRUCTION: [literalTypeOfExpression] is the AST-based literal reader,
+     * and it answers `null` for everything that is not a string/number/bigint/boolean
+     * literal (or an `as const` / parenthesized / non-null-asserted one). An ENUM MEMBER
+     * initializer is among the things it does not answer for, so `readonly x = E.A` keeps
+     * its pre-existing behaviour and this rule cannot reach the enum-relation ecology.
+     */
+    private fun propertyInitializerLiteralType(decl: PropertyDeclaration, init: Expression): Type? {
+        if (!WIDEN1_READONLY_PROP_KEEPS_LITERAL) return null
+        if (!propertyDeclIsImmutableBinding(decl)) return null
+        val lit = literalTypeOfExpression(init) ?: return null
+        // Same exclusions [inferTypeFromInitializer] applies: a null/undefined/void
+        // initializer is the declare-then-assign pattern, never a literal to preserve.
+        if (lit === anyType || lit === errorType) return null
+        if (lit.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+        // Register for the ASSIGNMENT-TARGET widen-back — see
+        // [widen1ImmutableLiteralTypeIds]. `literalTypeOfExpression` mints a FRESH
+        // instance per call, so the registration has to happen here, at the mint, and
+        // not at either reader.
+        widen1ImmutableLiteralTypeIds.add(lit.id)
+        return lit
+    }
 
     /** Widen a literal type to its base type (e.g., true → boolean, "hello" → string). */
     private fun widenType(type: Type): Type {
@@ -101567,9 +101631,9 @@ interface DataView {
             val widened = if (inferred.id in nonWideningLiteralTypeIds) inferred
                 else if (keepsLiteral) {
                     if (R783_CONST_KEEPS_ENUM_MEMBER) inferred.also {
-                        widen1ConstLiteralTypeIds.add(it.id)
+                        widen1ImmutableLiteralTypeIds.add(it.id)
                     } else widenEnumMemberTypes(inferred).also {
-                        if (it === inferred) widen1ConstLiteralTypeIds.add(it.id)
+                        if (it === inferred) widen1ImmutableLiteralTypeIds.add(it.id)
                     }
                 }
                 else when (inferred) {
@@ -105029,7 +105093,7 @@ interface DataView {
                             // this site behaves exactly as it did before (WIDEN.1) —
                             // otherwise `const x = 0; x = 1` co-emits a spurious TS2322
                             // (constDeclarations-access2 pins that it must not).
-                            targetType = if (localType.id in widen1ConstLiteralTypeIds)
+                            targetType = if (localType.id in widen1ImmutableLiteralTypeIds)
                                 widenType(localType) else localType
                         }
                     }
@@ -107588,7 +107652,16 @@ interface DataView {
             if (resolved === anyType || resolved === errorType) return
             propType = resolved
         }
-        val pt = propType
+        // (WIDEN.1)(b): a `readonly` property KEEPS its initializer's literal type for
+        // READS, but writing to it is already TS2540 and tsc adds no assignability error
+        // at such a target (`checkReferenceExpression` returns false). Widen back so this
+        // site behaves exactly as it did before the rule — otherwise `readonly s = 'X'`
+        // makes even `g.s = 'X'` co-emit a spurious TS2322. Deliberately keyed on the
+        // registered TYPE id and not on the `readonly` MODIFIER: an ANNOTATED readonly
+        // member's pre-existing behaviour at this site (it does co-emit) is a separate,
+        // older divergence that this rule must neither fix nor disturb.
+        val ptRaw = propType
+        val pt = if (ptRaw.id in widen1ImmutableLiteralTypeIds) widenType(ptRaw) else ptRaw
         // Round 474 (project.ts `this.autoImportProviderHost = false`): a LITERAL
         // write whose literal the target's declared union annotation SYNTACTICALLY
         // contains is always legal — the engine widens the literal (false → boolean)
@@ -110934,6 +111007,12 @@ interface DataView {
                 }
                 // Infer from initializer
                 decl.initializer?.let { init ->
+                    // (WIDEN.1)(b): a `readonly` property KEEPS its initializer's literal
+                    // type. This has to be read off the AST for the same round-781 reason
+                    // the `const` half does — `getTypeOfExpression` answers the BASE
+                    // primitive for a literal node, so `inferTypeFromInitializer` below can
+                    // never produce a literal however it widens.
+                    propertyInitializerLiteralType(decl, init)?.let { return it }
                     val inferred = inferTypeFromInitializer(init)
                     if (inferred !== anyType && inferred !== errorType) return inferred
                 }
@@ -136488,8 +136567,13 @@ interface DataView {
                 decl.type?.let { return getTypeFromTypeNode(it) }
                 // Infer type from initializer if no annotation
                 decl.initializer?.let { init ->
-                    val t = getTypeOfExpression(init)
-                    if (t !== anyType) t else null
+                    // (WIDEN.1)(b): the SECOND reader of a property's inferred type — see
+                    // [propertyInitializerLiteralType]. Answering the base primitive here
+                    // while [getTypeOfVariableOrProperty] answers the literal is exactly the
+                    // "more than one widener" drift that makes such a fix pass its own repro
+                    // and fail on a neighbouring shape.
+                    propertyInitializerLiteralType(decl, init)
+                        ?: getTypeOfExpression(init).takeIf { it !== anyType }
                 }
             }
             is MethodDeclaration -> {
@@ -183841,6 +183925,15 @@ private val REL4_ELEM_UNION_GATE = true
  * rationale as the switches above. Never flip this in a commit.
  */
 private val WIDEN1_CONST_KEEPS_LITERAL = true
+
+/**
+ * (WIDEN.1)(b) ABLATION SWITCH — flip to `false` to restore the pre-(WIDEN.1)(b)
+ * behaviour in which a `readonly` class PROPERTY with a literal initializer and no type
+ * annotation widened that literal to the base primitive, so
+ * `ReadonlyPropertyLiteralTypeTest`'s pins can be shown to discriminate. Same top-level
+ * init-order rationale as the switches above. Never flip this in a commit.
+ */
+private val WIDEN1_READONLY_PROP_KEEPS_LITERAL = true
 
 /**
  * (REL.4)(a) round 782 ABLATION SWITCH — flip to `false` to restore the pre-782 behaviour in
