@@ -89,6 +89,11 @@ class CorpusTest {
         assertCorpusProgram("08-optional-union")
     }
 
+    @Test
+    fun `09 arrays`() {
+        assertCorpusProgram("09-arrays")
+    }
+
     /**
      * Compiles, runs and compares — failing with the whole story rather than
      * with a boolean.
