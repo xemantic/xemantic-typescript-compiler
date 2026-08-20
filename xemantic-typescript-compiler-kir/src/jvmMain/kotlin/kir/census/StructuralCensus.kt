@@ -49,6 +49,7 @@ import com.xemantic.typescript.compiler.ReturnStatement
 import com.xemantic.typescript.compiler.Signature
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
+import com.xemantic.typescript.compiler.SymbolFlags
 import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeFlags
@@ -111,6 +112,19 @@ public enum class TargetClass {
     TYPE_PARAMETER,
     ANY_OR_UNKNOWN,
     INTERSECTION,
+    /**
+     * An `enum`, or one of its members.
+     *
+     * Split out of [OBJECT_WITH_MEMBERS] because in this compiler an enum's type
+     * is a member-LESS `Type.Object` and an enum MEMBER's type is another one
+     * (interned on `"<enumSymbol>#<member>"`), so without this arm every
+     * `SyntaxKind.Identifier` reaching `SyntaxKind` counted as an object-to-object
+     * STRUCTURAL edge — which put `SyntaxKind` at the top of the fan-in table with
+     * one edge per member and inflated the design population by a third. An enum
+     * member reaching its own enum is not a structural-typing problem in any
+     * encoding; both sides lower to the same JVM shape.
+     */
+    ENUM,
     OTHER,
 }
 
@@ -283,6 +297,8 @@ public class StructuralCensus : CheckedNodeSink {
     private var targetUnavailable = 0L
     private val targetUnavailableByKind = LongArray(ObligationKind.entries.size)
     private var skippedRestOrMisalignedSignature = 0L
+    private var callWithNoSignature = 0L
+    private var argumentBeyondParameterList = 0L
     private var lensFailures = 0L
 
     private var nominalViaBaseTypes = 0L
@@ -480,7 +496,10 @@ public class StructuralCensus : CheckedNodeSink {
      * signature whose two lists disagree in length is REFUSED and counted.
      */
     private fun parameterTypeAt(signature: Signature?, index: Int, lens: CheckedLens): Type? {
-        if (signature == null) return null
+        if (signature == null) {
+            callWithNoSignature++
+            return null
+        }
         val declared = declarationParameters(signature.declaration)
         if (declared != null && declared.size != signature.parameters.size) {
             skippedRestOrMisalignedSignature++
@@ -492,7 +511,11 @@ public class StructuralCensus : CheckedNodeSink {
             skippedRestOrMisalignedSignature++
             return null
         }
-        val parameter = signature.parameters.getOrNull(index) ?: return null
+        val parameter = signature.parameters.getOrNull(index)
+        if (parameter == null) {
+            argumentBeyondParameterList++
+            return null
+        }
         return lens.typeOfSymbol(parameter)
     }
 
@@ -571,14 +594,41 @@ public class StructuralCensus : CheckedNodeSink {
             structuralPairs.add(pair)
             structuralFanIn.getOrPut(targetIndex) { HashSet() }.add(sourceIndex)
             structuralFanOut.getOrPut(sourceIndex) { HashSet() }.add(targetIndex)
-            if (!open && sourceType.isObjectish && targetType.isObjectish) {
-                designPairs.add(pair)
-                designFanIn.getOrPut(targetIndex) { HashSet() }.add(sourceIndex)
-                designFanOut.getOrPut(sourceIndex) { HashSet() }.add(targetIndex)
+            if (!open && targetType.isObjectish) {
+                // A UNION source is decomposed. `Cat | Dog` reaching `Shape` is not one
+                // `implements` edge, it is one per object constituent: at runtime the
+                // value IS a Cat or a Dog and it is that class which must carry the
+                // interface. Counting the union as a single source would under-count
+                // the closure, and skipping it (a union is not object-ish) would
+                // under-count it to zero — on tsc's own sources that is 1,268 closed
+                // obligations onto object targets, the second largest source class.
+                for (constituent in designSourcesOf(source, lens)) {
+                    val index = indexOf(constituent, lens)
+                    if (index == targetIndex) continue
+                    if (isNominalBase(index, constituent, targetIndex, lens)) continue
+                    designPairs.add(packPair(index, targetIndex))
+                    designFanIn.getOrPut(targetIndex) { HashSet() }.add(index)
+                    designFanOut.getOrPut(index) { HashSet() }.add(targetIndex)
+                }
             }
         }
         if (sourceNode is ObjectLiteralExpression) objectLiteralsWithTarget++
         rememberExample(kind, edge, targetType.targetClass, sourceIndex, targetIndex, sourceNode, file)
+    }
+
+    /**
+     * The object-ish RUNTIME shapes a source value can actually hold.
+     *
+     * An object type is itself; a union contributes each object-ish constituent
+     * (its nullish and primitive members hold no interface and erase away). An
+     * `any` source contributes NOTHING — it has no generated class to hang an
+     * `implements` on, and is the design's own separate problem (`kir-design.md`
+     * § 8.4's inline-cache call site), so folding it in here would report a
+     * closure the nominal encoding was never going to build.
+     */
+    private fun designSourcesOf(source: Type, lens: CheckedLens): List<Type> = when (source) {
+        is Type.Union -> source.types.filter { types[indexOf(it, lens)].isObjectish }
+        else -> if (types[indexOf(source, lens)].isObjectish) listOf(source) else emptyList()
     }
 
     private fun rememberExample(
@@ -729,9 +779,28 @@ public class StructuralCensus : CheckedNodeSink {
         return index
     }
 
+    /**
+     * True for an enum's own type and for an enum MEMBER's type.
+     *
+     * Both are plain `Type.Object`s here — the enum's is member-less and the
+     * member's carries `SymbolFlags.EnumMember` — so neither is distinguishable
+     * from an anonymous object type by shape alone. The symbol is.
+     */
+    private fun isEnumFlavoured(type: Type): Boolean {
+        if (type.flags.hasAny(TypeFlags.Enum or TypeFlags.EnumLiteral)) return true
+        val symbol = (type as? Type.Object)?.symbol ?: return false
+        return symbol.flags.hasAny(ENUM_SYMBOL_FLAGS)
+    }
+
     private fun declarationSymbolOf(type: Type): Symbol? = when (type) {
         is Type.Reference -> type.target.symbol
         is Type.Interface -> type.symbol
+        // An enum and an enum member are plain `Type.Object`s with real declaring
+        // symbols, so they key on the DECLARATION like an interface does. No other
+        // `Type.Object` may: an object literal's type also carries a symbol, but a
+        // per-occurrence one, and keying on it would make every literal its own
+        // "declaration".
+        is Type.Object -> type.symbol?.takeIf { it.flags.hasAny(ENUM_SYMBOL_FLAGS) }
         else -> null
     }
 
@@ -746,6 +815,7 @@ public class StructuralCensus : CheckedNodeSink {
 
     private fun targetClassOf(type: Type): TargetClass = when {
         type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) -> TargetClass.ANY_OR_UNKNOWN
+        isEnumFlavoured(type) -> TargetClass.ENUM
         type is Type.TypeParam -> TargetClass.TYPE_PARAMETER
         type is Type.Union -> TargetClass.UNION
         type is Type.Intersection -> TargetClass.INTERSECTION
@@ -868,6 +938,8 @@ public class StructuralCensus : CheckedNodeSink {
         targetUnavailable = targetUnavailable,
         targetUnavailableByKind = targetUnavailableByKind.copyOf(),
         skippedSignatures = skippedRestOrMisalignedSignature,
+        callWithNoSignature = callWithNoSignature,
+        argumentBeyondParameterList = argumentBeyondParameterList,
         lensFailures = lensFailures,
         nominalViaBaseTypes = nominalViaBaseTypes,
         nominalViaImplements = nominalViaImplements,
@@ -878,6 +950,8 @@ public class StructuralCensus : CheckedNodeSink {
 
     private companion object {
         val ARRAY_LIKE_NAMES = setOf("Array", "ReadonlyArray")
+        val ENUM_SYMBOL_FLAGS =
+            SymbolFlags.RegularEnum or SymbolFlags.ConstEnum or SymbolFlags.EnumMember
     }
 
 }

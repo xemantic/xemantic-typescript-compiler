@@ -69,7 +69,18 @@ class StructuralCensusTest {
                 readonly width: number = 2;
             }
 
+            export enum Kind { Alpha, Beta }
+
+            export function seeKind(kind: Kind): number { return kind; }
+
+            export const viaEnumMember: number = seeKind(Kind.Alpha);
+
             export function take(shape: Shape): number { return shape.width; }
+
+            export interface AlsoWide { readonly width: number; readonly extra?: number }
+            export class Left { readonly width: number = 4; }
+            export class Right { readonly width: number = 5; }
+            export function takeEither(v: Left | Right): number { return take(v); }
 
             export const viaImplements: number = take(new Declared());
             export const viaStructure: number = take(new Undeclared());
@@ -107,6 +118,45 @@ class StructuralCensusTest {
      * violated — it means the census derived the wrong TARGET somewhere, and the
      * STRUCTURAL population it reports is contaminated in an unknown direction.
      */
+    /**
+     * An enum member reaching its own enum must NOT count as a structural edge.
+     *
+     * In this compiler an enum's type is a member-LESS `Type.Object` and a
+     * member's is another one, so without a dedicated class every member read as
+     * an object-to-object STRUCTURAL edge onto the enum — which on tsc's own
+     * sources put `SyntaxKind` at the top of the fan-in table with one edge per
+     * member and inflated the design population by a third.
+     */
+    @Test
+    fun `an enum member reaching its own enum is not an object edge`() {
+        val report = census(fixture)
+        assert(report.countOf(targetClass = TargetClass.ENUM) > 0)
+        assert(
+            report.countOf(
+                edge = EdgeClass.STRUCTURAL,
+                targetClass = TargetClass.OBJECT_WITH_MEMBERS,
+                sourceClass = TargetClass.ENUM,
+            ) == 0L,
+        )
+    }
+
+    /**
+     * A UNION source contributes one closure edge PER OBJECT CONSTITUENT.
+     *
+     * `Left | Right` reaching `Shape` is not one `implements` edge: at runtime the
+     * value is a Left or a Right, and it is those two classes that must carry the
+     * interface. Counting the union as one source under-counts the closure;
+     * skipping it — a union is not object-ish — under-counts it to zero.
+     */
+    @Test
+    fun `a union source contributes one closure edge per object constituent`() {
+        val report = census(fixture)
+        val shape = report.designFanIn.entries
+            .firstOrNull { report.types[it.key].text == "Shape" }
+        assert(shape != null)
+        assert(shape.value >= 3)
+    }
+
     @Test
     fun `a clean program forms no unassignable obligation`() {
         val report = census(fixture)
