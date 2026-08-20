@@ -84,6 +84,18 @@ class Checker(
      * Nor is it a process-global mode — those go through the round-848 `ModeLedger`.
      */
     private val typeCapture: TypeCaptureRequest? = null,
+    /**
+     * (KIR) When non-null, the check spine hands every checked [Expression] to
+     * this sink AS IT WALKS PAST IT, under the same reconstructed ambient
+     * [typeCaptureVisit] installs for a capture. Threaded as a PARAMETER for
+     * [typeCapture]'s reason: it is DATA, not an option and not a process-global
+     * mode.
+     *
+     * Sequential path only. A partition worker rebases `Type`/`Symbol` ids into a
+     * disjoint slice, so ids minted under one worker are not comparable with
+     * another's — a sink that saw both would silently conflate them.
+     */
+    private val checkedSink: CheckedNodeSink? = null,
 ) {
     /**
      * INV.6(6d): the PARTITION VIEW of [binderResults] — per-file PASS loops
@@ -5068,6 +5080,68 @@ class Checker(
     private var typeCaptureSignatureArgsCurrentFile: Map<Long, Int>? = null
 
     /**
+     * (KIR) The ONE field [spineEnterNode]'s per-node hook reads: non-null when
+     * EITHER the capture or the sink is live for this file, so production stays at
+     * one null-valued field read and a perfectly-predicted branch.
+     *
+     * `Any?` because the two things it may hold are unrelated — the capture's key
+     * set for this file, or the sink itself. Nothing reads its VALUE; only its
+     * nullity is the signal, and [typeCaptureVisit] re-derives which of the two is
+     * live from the fields that actually carry them.
+     *
+     * Set beside the four `typeCapture*CurrentFile` installs in [checkSpine]'s
+     * per-file loop.
+     */
+    private var captureHookCurrentFile: Any? = null
+
+    /**
+     * (KIR) The forwarding lens handed to [checkedSink], allocated once and only
+     * when a sink was supplied.
+     *
+     * One instance for the whole check: a lens carries no per-node state — every
+     * answer it gives is a function of the AMBIENT in force when it is asked, which
+     * is why [CheckedLens] documents it as valid only for the duration of the
+     * callback that received it.
+     */
+    private val checkedLens: CheckedLens? =
+        if (checkedSink == null) null else object : CheckedLens {
+
+            override fun typeOf(node: Expression): Type = typeCaptureReportedType(node)
+
+            override fun render(type: Type): String = typeToString(type)
+
+            override fun membersOf(type: Type, name: String): List<Symbol> {
+                val out = mutableListOf<Symbol>()
+                typeCaptureCollectMembers(type, name, out, 0)
+                return out
+            }
+
+            override fun typeOfSymbol(symbol: Symbol): Type = getTypeOfSymbol(symbol)
+
+            override fun declaredTypeOfSymbol(symbol: Symbol): Type =
+                getDeclaredTypeOfSymbol(symbol)
+
+            override fun resolveName(name: String): Symbol? = spineScopeLookup(name)
+
+            override fun isAssignableTo(source: Type, target: Type): Boolean =
+                isTypeAssignableTo(source, target)
+
+            override fun callSignatures(callee: Expression): List<Signature> =
+                typeCaptureCallSignaturesOf(callee)
+
+            override fun constructSignatures(node: NewExpression): List<Signature> =
+                typeCaptureConstructSignaturesOf(node)
+
+            override fun selectOverload(
+                signatures: List<Signature>,
+                arguments: List<Expression>,
+            ): Signature? = resolveCallOverload(signatures, arguments)
+
+            override fun enumMemberValue(memberNode: Node): ConstantValue? =
+                getEnumMemberValue(memberNode)
+        }
+
+    /**
      * The captured type answers, keyed by the span asked about, FIRST WINS.
      *
      * See [typeCaptureRecord] for why first: the walk reaches a node under the
@@ -5205,14 +5279,26 @@ class Checker(
      * live BECAUSE this runs inside the walk, which is the whole point.
      */
     private fun typeCaptureVisit(node: Node) {
-        val keys = typeCaptureKeysCurrentFile ?: return
-        val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
-        if (key !in keys) return
-        val wantsScope = typeCaptureScopeKeysCurrentFile?.contains(key) == true
-        if (node !is Expression && !wantsScope) return
+        // (API.3) exactly the pre-(KIR) condition, unchanged: a requested span, and
+        // an [Expression] unless a scope enumeration was asked for at it.
+        val keys = typeCaptureKeysCurrentFile
+        val wantsCapture = keys != null && run {
+            val key = TypeCaptureRequest.packSpanKey(node.pos, node.end)
+            key in keys &&
+                (node is Expression || typeCaptureScopeKeysCurrentFile?.contains(key) == true)
+        }
+        // (KIR) the sink's population is every node a backend must LOWER, so it is
+        // span-free: expressions, plus the declaration-shaped nodes whose symbols a
+        // lowering needs. Independent of the capture's condition — the two may both
+        // be live, and neither narrows the other.
+        val wantsSink = checkedSink != null &&
+            (node is Expression || node is Declaration || node is ClassElement ||
+                node is Parameter)
+        if (!wantsCapture && !wantsSink) return
         val frame = ctaFrames.lastOrNull()
         if (frame == null) {
-            typeCaptureRecordAt(node, spineFileName)
+            if (wantsCapture) typeCaptureRecordAt(node, spineFileName)
+            if (wantsSink) checkedSinkEmit(node)
             return
         }
         // The ambient a statement anchor installs, reproduced VERBATIM from
@@ -5253,7 +5339,10 @@ class Checker(
             namespacesPushed++
         }
         try {
-            withCtaFrameLocals(frame) { typeCaptureRecordAt(node, spineFileName) }
+            withCtaFrameLocals(frame) {
+                if (wantsCapture) typeCaptureRecordAt(node, spineFileName)
+                if (wantsSink) checkedSinkEmit(node)
+            }
         } finally {
             repeat(namespacesPushed) { inferenceNamespaceStack.removeLast() }
             currentClassForThis = savedThis
@@ -5263,6 +5352,28 @@ class Checker(
             currentTypeParamDecls = savedTpDecls
             currentTypeParamScope = savedTpScope
             currentFlowGraph = savedFlowGraph
+        }
+    }
+
+    /**
+     * (KIR) Hands [node] to [checkedSink] under the ambient [typeCaptureVisit] has
+     * just reconstructed.
+     *
+     * `currentCheckFileName` is installed for [typeCaptureRecord]'s reason: it is
+     * the key into `fileLocalTypeMaps`, which [getTypeOfIdentifier] consults
+     * before any declaration table. Everything else the lens reads
+     * (`currentLocalTypes`, the frames, `currentFlowGraph`, the lexical chain) is
+     * already live because this runs inside the walk.
+     */
+    private fun checkedSinkEmit(node: Node) {
+        val sink = checkedSink ?: return
+        val lens = checkedLens ?: return
+        val saved = currentCheckFileName
+        currentCheckFileName = spineFileName
+        try {
+            if (node is Expression) sink.expression(node, lens) else sink.declaration(node, lens)
+        } finally {
+            currentCheckFileName = saved
         }
     }
 
@@ -9187,6 +9298,12 @@ class Checker(
 
     init {
         try {
+        // (KIR) a sink and a partition worker are mutually exclusive by
+        // construction: ids are rebased per worker, so a sink that saw two
+        // workers' nodes would silently conflate two different `Type`s.
+        require(checkedSink == null || assignedFileNames == null) {
+            "a CheckedNodeSink is sequential-path only: Type/Symbol ids are rebased per worker"
+        }
         // INV.0: opt-in pass-time instrumentation (see PassTiming.kt) — inert when
         // PassTiming.enabled is false (the default; only the --passTiming CLI turns it on).
         PassTiming.noteInitStart()
@@ -26257,6 +26374,9 @@ class Checker(
                 typeCaptureSignatureArgsCurrentFile =
                     if (typeCaptureSignatureArgsByFile.isEmpty()) null
                     else typeCaptureSignatureArgsByFile[sf.fileName]
+                // (KIR) the one field the per-node hook reads — see
+                // [captureHookCurrentFile].
+                captureHookCurrentFile = typeCaptureKeysCurrentFile ?: checkedSink
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
@@ -26600,13 +26720,15 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
-        // (API.3) the position-directed type capture. Placed ABOVE the dispatch
-        // probe's early return so a capture is unaffected by the probe mode, and
-        // costing — when nothing was requested, i.e. always in production — one
-        // null-valued field read and a perfectly-predicted branch. The argument is
-        // the node itself: round 900's law is that this guard could not protect a
-        // derived one.
-        if (typeCaptureKeysCurrentFile != null) typeCaptureVisit(node)
+        // (API.3)(KIR) the position-directed type capture AND the whole-program
+        // checked-node sink, which share one hook because they share the ambient
+        // reconstruction behind it. Placed ABOVE the dispatch probe's early return
+        // so neither is affected by the probe mode, and costing — when neither was
+        // requested, i.e. always in production — one null-valued field read and a
+        // perfectly-predicted branch ([captureHookCurrentFile] is non-null exactly
+        // when one of them is live for this file). The argument is the node itself:
+        // round 900's law is that this guard could not protect a derived one.
+        if (captureHookCurrentFile != null) typeCaptureVisit(node)
         // (DISPATCH.1)(a): the opt-in derivation harness. OFF in production, so
         // this is one static field read + a perfectly-predicted branch; the
         // straight-line prologue below is byte-identical to the pre-probe one.
