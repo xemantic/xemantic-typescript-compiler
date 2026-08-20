@@ -62,6 +62,10 @@ public class CensusReport internal constructor(
     public val targetUnavailable: Long,
     public val targetUnavailableByKind: LongArray,
     public val skippedSignatures: Long,
+    /** Call/`new` argument sites whose callee offered no signature at all. */
+    public val callWithNoSignature: Long,
+    /** Argument sites past the end of the selected signature's parameter list. */
+    public val argumentBeyondParameterList: Long,
     public val lensFailures: Long,
     public val nominalViaBaseTypes: Long,
     public val nominalViaImplements: Long,
@@ -135,6 +139,8 @@ public fun CensusReport.renderReport(title: String, elapsedMillis: Long): String
     appendLine("-- controls (an instrument that cannot see its own misses is not one) --")
     appendLine("obligation sites with no derivable target : $targetUnavailable")
     appendLine("  of which refused as unsound to index    : $skippedSignatures")
+    appendLine("  of which callee offered no signature    : $callWithNoSignature")
+    appendLine("  of which argument past the param list   : $argumentBeyondParameterList")
     for (kind in ObligationKind.entries) {
         val n = targetUnavailableByKind[kind.ordinal]
         if (n > 0) appendLine("  no target, ${kind.name.padEnd(22)} ${n.toString().padStart(8)}")
