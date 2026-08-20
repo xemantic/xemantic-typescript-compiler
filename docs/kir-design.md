@@ -242,3 +242,143 @@ $ xtsc-kir sample.ts -o out/
 $ java -cp out:kir-runtime.jar sample.MainKt
 hello 42 true
 ```
+
+## 6. Result
+
+The spike is **through**. All eight acceptance programs compile from TypeScript
+to Kotlin IR to JVM `.class` files and run, with stdout compared byte for byte.
+
+The bytecode is not a toy. `07-classes` yields `private double value` with
+`dadd` and `dreturn` — no boxing anywhere in the class. `05-control-flow`'s
+`for` loop is `dstore / dcmpg / dadd / goto`, boxing only at `consoleLog`'s
+vararg boundary. And the union decision is visible directly in the disassembly
+of `06`:
+
+```
+public static final java.lang.String describe(java.lang.Object);   // union ERASED
+    7: instanceof  class java/lang/String                          // the proven narrowing
+   17: invokedynamic makeConcatWithConstants                       // Kotlin's own concat lowering
+```
+
+That last line is worth dwelling on: nobody asked for it. Generated IR goes
+through every lowering and optimization kotlinc applies to its own output, which
+is the concrete form of the argument for stopping at IR rather than emitting
+bytecode directly.
+
+## 7. What the implementation contradicted
+
+These docs were written before the code. Seven claims did not survive contact,
+and they are recorded because each was reasoned and wrong:
+
+1. **`this` types as `any`**, so `this.value` does too and resolves to no member
+   at all. §1's `memberOf` is unusable for the `this` case; a class property's
+   type must be taken on the CLASS's own type instead.
+2. **A declaration's return type has no source but its `Signature`.** A
+   `TypeNode` is syntax, and the lens exposes no way to resolve one, so the
+   oracle's `declaredTypeOf(declaration)` does not exist as designed.
+3. **`+` disambiguation over TypeScript types does not fire where it matters.**
+   The checker answers `any` for `x + 1` in a narrowed union's else branch
+   (there is no subtractive narrow) and for `this.value + by`. The working rule
+   decides `+` on the **erased** operand types — a function of the same answers,
+   strictly more available, falling to `jsAdd` where they genuinely disagree.
+4. **A `let` in a `for` header types as `any`**, so a variable whose own type
+   carries no information falls back to its initializer's type — a *recovery*,
+   not a widening: a later assignment of another shape is still refused.
+5. **`true`, `false`, `null`, `undefined` and `this` are all `Identifier`
+   nodes** in this parser, discriminated by `text` rather than by node kind.
+6. **IR has no `goto`**, so `for` with `continue` needs a one-iteration
+   `do { } while (false)` trampoline whose `break` *is* the `continue`.
+7. Mechanics: `IrFactory.createBlockBody` takes no statements; `IrConstructorCall`
+   has a `source` property shadowing a field of that name; `irWhen` wants
+   `List<IrBranch>`, not `List<IrBranchImpl>`.
+
+What the docs got **right**, and what paid for itself, is the sink seam: overload
+selection is asked at the call site and nowhere else, and `console.log` is
+recognised by the checker's own `Console`/`log` resolution rather than by
+matching syntax.
+
+### Divergences not hidden
+
+- `06`'s then-branch emits `jsToString(x)` where a `CAST` to `String` would do —
+  correct output, one redundant call, a consequence of deciding `+` on erased types.
+- A non-null erased union parameter picks up Kotlin's `checkNotNullParameter`
+  intrinsic: sound under `strictNullChecks`, not JS-faithful for a hostile caller.
+- `var`, `==`/`!=`, `typeof x === "object"`/`"function"`, object literals,
+  `extends`, statics, generics and arrays are **refused with a position**, never
+  degraded. That is the rule that makes the eight passing programs mean something.
+## 8. IR- and bytecode-level levers
+
+Working at IR rather than at Kotlin source is not only a convenience; it makes
+several representations available that are unexpressible in Kotlin, and rules
+out one that looks attractive from source level. Recording the survey, because
+the temptation to reach for each of these recurs.
+
+### 8.1 Rejected: `@JvmInline value class` per union
+
+The obvious source-level trick for "a union with no runtime cost" is an inline
+value class over `Any` — it erases to `Any` in bytecode, so it allocates
+nothing, while giving a distinct static type per union.
+
+It buys nothing here. The static type safety it provides is safety we already
+have, from a conformant TypeScript checker, at a strictly higher fidelity than
+any JVM encoding could reproduce. What it *costs* is real: value classes get
+mangled method names, and they **box at every nullable and every generic
+position** — which is precisely where unions live (`T | undefined` is the
+commonest union in real TypeScript). So it would allocate exactly where erasure
+does not.
+
+### 8.2 Available and worth taking later: specialized overloads
+
+Erasure means `f(x: string | number)` compiles to `f(x: Any)`, and a call site
+that statically knows it holds a `string` still boxes nothing but does pass
+through `Any`. The JVM permits same-name/different-descriptor methods for free,
+so the backend can additionally emit `f(String)` and `f(Double)` bodies and bind
+each call site by its static type — which the checker knows at every one.
+
+This is purely additive to erasure and needs no representation change, which is
+why it is deferred rather than designed in: it is an optimization with a
+measurable before/after, and taking it early would mean measuring nothing.
+
+### 8.3 The real prize: whole-program monomorphization
+
+TypeScript erases generics and so does the JVM, so `Box<number>` and
+`Box<string>` would normally share one erased class with `Any?` fields — boxing
+every number.
+
+But this compiler sees the **whole program**, and the checker records every
+instantiation. So the backend can specialize: emit `Box$number` with a genuine
+`double` field beside `Box$string` with a `String` field. That is not available
+to `tsc` (which has no runtime types to specialize), and not available to a
+Kotlin *source* generator (Kotlin has no user-visible monomorphization). It is
+available at IR because IR is where the Kotlin compiler's own inliner and
+specializers operate.
+
+This is the strongest argument that the IR target is worth more than a
+"TypeScript to Kotlin source" transpiler would be, and it is worth stating as a
+hypothesis to test rather than a claim: it predicts that idiomatic generic
+TypeScript can run without boxing on the JVM.
+
+### 8.4 `any`, when it arrives: an inline-cache call site
+
+`any`-typed member access has no static target, so it needs dynamic dispatch.
+The JVM answer is `invokedynamic` with a bootstrap that installs a
+per-call-site inline cache keyed on the receiver's class — which is how every
+fast dynamic language on the JVM works, and roughly what a JS engine's inline
+caches do.
+
+Kotlin IR does not expose `invokedynamic` construction directly, so the
+practical shape is a runtime function holding a `MethodHandle` cache per call
+site, with the site identity passed as a constant. Slower than a true indy site,
+much faster than reflection, and it keeps `any` from contaminating the typed
+majority of the program.
+
+### 8.5 What IR does NOT give us
+
+Worth being explicit, because it bounds the ambition. IR-level generation
+produces declarations the **Kotlin resolver cannot see** from another module:
+a generated top-level class is written with `k=3` metadata and is invisible to
+Kotlin source in a downstream module, though Java and the JVM see it fine.
+Making generated declarations resolvable from Kotlin source requires generating
+them in the FRONTEND (a FIR extension) as well, which is what serialization and
+Compose do. That is a real constraint on any "call your compiled TypeScript from
+Kotlin" story, and it is a separate piece of work from this spike.
