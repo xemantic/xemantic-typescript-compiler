@@ -32,6 +32,11 @@ xemanticConventionsPlugin = "0.7.1"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+# SPIKE (branch `spike/ts-to-kotlin-ir`), consumed by `-kir` only: the Kotlin
+# compiler as a library. The `-kir` backend builds Kotlin IR and then drives
+# kotlinc's own JVM pipeline phases in-process to lower it to bytecode, so the
+# compiler is a RUNTIME dependency of that module, not a build-time one.
+kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
 xemantic-kotlin-test = { module = "com.xemantic.kotlin:xemantic-kotlin-test", version.ref = "xemanticKotlinTest" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
