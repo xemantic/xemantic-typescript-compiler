@@ -29,9 +29,15 @@ package com.xemantic.typescript.compiler.kir.lower
 
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import org.jetbrains.kotlin.ir.declarations.IrFile
+import org.jetbrains.kotlin.ir.declarations.IrParameterKind
+import org.jetbrains.kotlin.ir.declarations.IrProperty
+import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.util.defaultType
 
 /**
  * Every function outside the generated program that the lowering may call.
@@ -64,6 +70,53 @@ internal class KirIntrinsics(
     val jsAdd: IrSimpleFunctionSymbol by lazy { runtime("jsAdd") }
     val jsTruthy: IrSimpleFunctionSymbol by lazy { runtime("jsTruthy") }
     val jsStrictEquals: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEquals") }
+
+    /** The runtime's array class — what every `T[]`, `Array<T>` and tuple erases to. */
+    val jsArrayClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsArray")
+    }
+
+    val jsArrayType: IrType by lazy { jsArrayClass.owner.defaultType }
+
+    /** An array literal's constructor: `jsArrayOf(vararg Any?)`. */
+    val jsArrayOf: IrSimpleFunctionSymbol by lazy { runtime("jsArrayOf") }
+
+    /**
+     * The member [name] of a runtime class, selected by ARITY.
+     *
+     * This is how a TypeScript `a.push(x)` reaches `JsArray.push` — by the
+     * receiver's ERASED type rather than by the checker's rendering of its
+     * TypeScript one, because that rendering carries the element type
+     * (`string[]`, `number[]`, `Cover[]`) and would need one table row per
+     * element type in the program.
+     */
+    fun runtimeMember(
+        owner: IrClassSymbol,
+        name: String,
+        argumentCount: Int
+    ): IrSimpleFunctionSymbol? = owner.owner.declarations
+        .filterIsInstance<IrSimpleFunction>()
+        .firstOrNull { candidate ->
+            candidate.name.asString() == name &&
+                candidate.parameters.count { it.kind == IrParameterKind.Regular } ==
+                    argumentCount
+        }?.symbol
+
+    /**
+     * The GETTER of a runtime class's property, e.g. `JsArray.length`.
+     *
+     * A property is not among a class's functions — it is an `IrProperty` whose
+     * accessors hang off it — so a lookup that only searched functions would
+     * report `length` as absent, which reads as "the backend does not support
+     * it" rather than as "the lookup asked the wrong table".
+     */
+    fun runtimePropertyGetter(owner: IrClassSymbol, name: String): IrSimpleFunctionSymbol? =
+        owner.owner.declarations.filterIsInstance<IrProperty>()
+            .firstOrNull { it.name.asString() == name }?.getter?.symbol
+
+    /** The runtime class an erased [type] IS, or null when it is not one. */
+    fun runtimeClassOf(type: IrType): IrClassSymbol? =
+        if (type.classifierOrNull == jsArrayClass) jsArrayClass else null
 
     /** `String.plus(Any?)` — the only `plus` a `String` receiver has. */
     val stringPlus: IrSimpleFunctionSymbol by lazy {

@@ -52,6 +52,7 @@ import org.jetbrains.kotlin.ir.types.makeNullable
 internal class ErasedTypes(
     private val irBuiltIns: IrBuiltIns,
     private val classForDeclaration: (Node) -> IrClass?,
+    private val jsArrayType: () -> IrType,
 ) {
 
     /** `number`, and every numeric literal type — JS numbers are IEEE-754 doubles. */
@@ -126,15 +127,33 @@ internal class ErasedTypes(
     /**
      * A declared `class` becomes the JVM class generated for it.
      *
-     * Interfaces, object literals and every library type are out of the spike
-     * subset (design doc §3.3 takes the nominal half of the hybrid, starting
-     * from declared classes), so they answer null and the caller refuses.
+     * Interfaces, object literals and every library type OTHER than the array
+     * family are out of the spike subset (design doc §3.3 takes the nominal
+     * half of the hybrid, starting from declared classes), so they answer null
+     * and the caller refuses.
      */
     @OptIn(UnsafeDuringIrConstructionAPI::class)
     private fun mapObject(type: Type.Object): IrType? {
+        if (isArrayLike(type)) return jsArrayType()
         val symbol = type.symbol ?: return null
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
         return classForDeclaration(declaration)?.defaultType
+    }
+
+    /**
+     * `T[]`, `Array<T>`, `ReadonlyArray<T>` and every tuple — one JVM shape.
+     *
+     * A tuple is an ordinary [Type.Object] carrying `tupleElementTypes`, which
+     * is the only thing separating `[string, number]` from an anonymous object
+     * type; the element types are static and have no runtime witness, exactly
+     * as a literal type has none, so the erasure keeps none of them.
+     */
+    private fun isArrayLike(type: Type.Object): Boolean =
+        type.tupleElementTypes != null ||
+            (type is Type.Reference && type.target.symbol?.name in ARRAY_TARGETS)
+
+    private companion object {
+        val ARRAY_TARGETS = setOf("Array", "ReadonlyArray")
     }
 
 }

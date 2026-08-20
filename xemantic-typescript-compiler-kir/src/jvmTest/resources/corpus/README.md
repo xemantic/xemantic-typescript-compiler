@@ -15,6 +15,11 @@ debugger.
 | 06 | UNION ERASURE plus `typeof` narrowing: the parameter is `Any`, and both branches need a cast the checker proved |
 | 07 | classes: fields, `this`, constructor, methods, `new` |
 | 08 | `T \| undefined` erasing to `T?` rather than `Any`, and `=== undefined` |
+| 09 | ARRAYS: `T[]` erasing to the runtime `JsArray`, array literals, index read and write, an out-of-range read, and members reached by the receiver's ERASED type (`push`/`pop`/`join`/`indexOf`/`length`) |
+
+Note in 09 that an out-of-range read prints `null` where a JS engine prints
+`undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
+the one JVM `null`, and this is the first corpus program where that shows.
 
 Deliberately absent, and each is its own milestone: `any`, generics, closures,
-arrays and index access, `async`, modules/imports, getters/setters, `==`.
+`async`, modules/imports, getters/setters, `==`.

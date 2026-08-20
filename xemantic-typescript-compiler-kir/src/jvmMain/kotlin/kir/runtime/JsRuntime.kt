@@ -81,7 +81,7 @@ public fun jsToString(value: Any?): String = when (value) {
     is Double -> jsNumberToString(value)
     is String -> value
     is Boolean -> if (value) "true" else "false"
-    is JsArray<*> -> value.joinToJsString()
+    is JsArray -> value.joinToJsString()
     else -> value.toString()
 }
 
@@ -134,30 +134,50 @@ public fun jsStrictEquals(left: Any?, right: Any?): Boolean = when {
  * Not `ArrayList`, and the differences are exactly why this class exists: an
  * out-of-range read yields `undefined` rather than throwing, a write past the
  * end GROWS the array with holes, and `length` is assignable (truncating).
+ *
+ * **Not generic**, deliberately. The element type is erased by
+ * `docs/kir-design.md` §3 anyway, and a type parameter would force every
+ * generated call site to carry a type argument for a substitution that can
+ * only ever be `Any?` — complexity the emitted program never observes.
+ *
+ * Indices are `Double` because a JavaScript index IS a number, and the
+ * lowering has no honest place to insert a narrowing to `Int`: `a[i]` where
+ * `i` is `0.5` or `1e21` is legal TypeScript, and reads a hole.
  */
-public class JsArray<T> private constructor(
+public class JsArray private constructor(
     private val backing: ArrayList<Any?>
 ) {
 
     public constructor() : this(ArrayList())
 
-    public constructor(elements: List<T>) : this(ArrayList<Any?>(elements))
+    public constructor(elements: List<Any?>) : this(ArrayList(elements))
 
-    public var length: Int
-        get() = backing.size
+    /**
+     * A hole and an out-of-range read are both `null` here, not [Undefined].
+     *
+     * That follows the design's single decision to map `undefined` and `null`
+     * onto one JVM value: were an array to yield [Undefined], `a[9] === undefined`
+     * would compare an `Undefined` against the `null` the lowering emits for the
+     * literal `undefined`, and answer false — a divergence with no diagnostic.
+     */
+    public var length: Double
+        get() = backing.size.toDouble()
         set(newLength) {
-            while (backing.size > newLength) backing.removeAt(backing.size - 1)
-            while (backing.size < newLength) backing.add(Undefined)
+            val target = slotOf(newLength) ?: 0
+            while (backing.size > target) backing.removeAt(backing.size - 1)
+            while (backing.size < target) backing.add(null)
         }
 
     /** Out-of-range is `undefined`, never an exception — the whole point. */
-    public operator fun get(index: Int): Any? =
-        if (index < 0 || index >= backing.size) Undefined else backing[index]
+    public operator fun get(index: Double): Any? {
+        val i = slotOf(index) ?: return null
+        return if (i >= backing.size) null else backing[i]
+    }
 
-    public operator fun set(index: Int, value: Any?) {
-        if (index < 0) return
-        while (backing.size <= index) backing.add(Undefined)
-        backing[index] = value
+    public operator fun set(index: Double, value: Any?) {
+        val i = slotOf(index) ?: return
+        while (backing.size <= i) backing.add(null)
+        backing[i] = value
     }
 
     public fun push(value: Any?): Double {
@@ -166,7 +186,42 @@ public class JsArray<T> private constructor(
     }
 
     public fun pop(): Any? =
-        if (backing.isEmpty()) Undefined else backing.removeAt(backing.size - 1)
+        if (backing.isEmpty()) null else backing.removeAt(backing.size - 1)
+
+    public fun shift(): Any? =
+        if (backing.isEmpty()) null else backing.removeAt(0)
+
+    public fun unshift(value: Any?): Double {
+        backing.add(0, value)
+        return backing.size.toDouble()
+    }
+
+    /** `Array.prototype.indexOf`, comparing with `===` as the spec says. */
+    public fun indexOf(value: Any?): Double {
+        backing.forEachIndexed { index, element ->
+            if (jsStrictEquals(element, value)) return index.toDouble()
+        }
+        return -1.0
+    }
+
+    public fun includes(value: Any?): Boolean = indexOf(value) >= 0.0
+
+    /** `Array.prototype.slice()` — a shallow copy, whole-array form only. */
+    public fun slice(): JsArray = JsArray(ArrayList(backing))
+
+    public fun concat(other: JsArray): JsArray =
+        JsArray(ArrayList(backing).also { it.addAll(other.backing) })
+
+    /** `Array.prototype.splice(start, deleteCount)`, returning what it removed. */
+    public fun splice(start: Double, deleteCount: Double): JsArray {
+        val from = (slotOf(start) ?: 0).coerceIn(0, backing.size)
+        val count = (slotOf(deleteCount) ?: 0).coerceIn(0, backing.size - from)
+        val removed = ArrayList<Any?>(count)
+        repeat(count) { removed.add(backing.removeAt(from)) }
+        return JsArray(removed)
+    }
+
+    public fun join(separator: String): String = joinToJsString(separator)
 
     /** `Array.prototype.join` with the default separator, as `toString` uses it. */
     public fun joinToJsString(separator: String = ","): String =
@@ -176,7 +231,17 @@ public class JsArray<T> private constructor(
 
     override fun toString(): String = joinToJsString()
 
+    /** A JS index as a JVM one, or null when it names no slot at all. */
+    private fun slotOf(index: Double): Int? {
+        if (index.isNaN() || index < 0.0 || index > Int.MAX_VALUE.toDouble()) return null
+        val truncated = index.toInt()
+        return if (truncated.toDouble() == index) truncated else null
+    }
+
 }
+
+/** An array literal: `[a, b, c]`. */
+public fun jsArrayOf(vararg elements: Any?): JsArray = JsArray(elements.toList())
 
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
 public fun consoleLog(vararg values: Any?) {

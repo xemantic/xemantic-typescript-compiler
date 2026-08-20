@@ -30,6 +30,8 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
+import com.xemantic.typescript.compiler.ArrayLiteralExpression
+import com.xemantic.typescript.compiler.AsExpression
 import com.xemantic.typescript.compiler.BinaryExpression
 import com.xemantic.typescript.compiler.Block
 import com.xemantic.typescript.compiler.BreakStatement
@@ -38,6 +40,7 @@ import com.xemantic.typescript.compiler.ClassDeclaration
 import com.xemantic.typescript.compiler.ConditionalExpression
 import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.ContinueStatement
+import com.xemantic.typescript.compiler.ElementAccessExpression
 import com.xemantic.typescript.compiler.EmptyStatement
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.ExpressionStatement
@@ -50,6 +53,7 @@ import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.NonNullExpression
 import com.xemantic.typescript.compiler.NumericLiteralNode
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.ParenthesizedExpression
@@ -57,6 +61,7 @@ import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.ReturnStatement
+import com.xemantic.typescript.compiler.SpreadElement
 import com.xemantic.typescript.compiler.Statement
 import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SyntaxKind
@@ -106,6 +111,7 @@ import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
 import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrFunction
+import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrValueDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrValueParameter
@@ -120,6 +126,7 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrGetFieldImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrInstanceInitializerCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrSetFieldImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrWhileLoopImpl
+import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.util.constructors
@@ -169,9 +176,13 @@ internal class KirFileLowering(
     private val constructorsByDeclaration = IdentityHashMap<ClassDeclaration, IrConstructor>()
     private val fields = IdentityHashMap<PropertyDeclaration, IrField>()
 
-    private val types = ErasedTypes(irBuiltIns) { declaration ->
-        (declaration as? ClassDeclaration)?.let { classes[it] }
-    }
+    private val types = ErasedTypes(
+        irBuiltIns,
+        classForDeclaration = { declaration ->
+            (declaration as? ClassDeclaration)?.let { classes[it] }
+        },
+        jsArrayType = { intrinsics.jsArrayType },
+    )
 
     // ---- the define pass's walk state --------------------------------------
 
@@ -800,6 +811,14 @@ internal class KirFileLowering(
         is CallExpression -> lowerCall(node)
         is NewExpression -> lowerNew(node)
         is PropertyAccessExpression -> lowerPropertyRead(node)
+        is ArrayLiteralExpression -> lowerArrayLiteral(node)
+        is ElementAccessExpression -> lowerElementRead(node)
+        // `x!` and `x as T` are ERASURES: both leave the value alone and change
+        // only what the checker believes about it, and the checker has already
+        // believed it — so the coercion to this node's OWN recorded type is the
+        // whole of their runtime meaning.
+        is NonNullExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
+        is AsExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
         is TypeOfExpression -> refuse(
             tsFile, node,
             "`typeof` is lowered only as part of a `typeof x === \"…\"` comparison"
@@ -1011,6 +1030,19 @@ internal class KirFileLowering(
                     null
                 )
             }
+            is ElementAccessExpression -> {
+                val owner = runtimeClassOf(target.expression)
+                    ?: refuse(tsFile, target, elementAccessRefusal(target))
+                val set = intrinsics.runtimeMember(owner, "set", 2)
+                    ?: refuse(tsFile, target, "this backend cannot write an element of this receiver")
+                scope.irCall(set).apply {
+                    arguments[0] = lowerExpression(target.expression)
+                    arguments[1] = elementIndex(target)
+                    arguments[2] = coerce(
+                        node.right, lowerExpression(node.right), types.anyNullable
+                    )
+                }
+            }
             else -> refuse(tsFile, node, "cannot lower this assignment target")
         }
     }
@@ -1068,6 +1100,9 @@ internal class KirFileLowering(
             }
         }
         if (callee is PropertyAccessExpression) {
+            runtimeClassOf(callee.expression)?.let { owner ->
+                return lowerRuntimeMemberCall(node, callee, owner)
+            }
             intrinsics.libraryMember(fact.receiverTypeText, fact.memberName)?.let { intrinsic ->
                 return lowerIntrinsicCall(node, intrinsic)
             }
@@ -1133,10 +1168,121 @@ internal class KirFileLowering(
     }
 
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
+        runtimeClassOf(node.expression)?.let { owner ->
+            val getter = intrinsics.runtimePropertyGetter(owner, node.name.text)
+                ?: refuse(
+                    tsFile, node,
+                    "'${node.name.text}' is not a property this backend gives a " +
+                        "'${owner.owner.name.asString()}'"
+                )
+            return scope.irCall(getter).apply {
+                arguments[0] = lowerExpression(node.expression)
+            }
+        }
         val field = resolveField(node)
         return IrGetFieldImpl(
             UNDEFINED, UNDEFINED, field.symbol, field.type, receiverOf(node), null, null
         )
+    }
+
+    // ---- arrays and other runtime-backed receivers -------------------------
+
+    /**
+     * `[a, b, c]` — a call of the runtime's `jsArrayOf`.
+     *
+     * Every element is coerced to `Any?` and NOT to the array's element type:
+     * the erasure keeps no element type (`ErasedTypes.isArrayLike`), so an
+     * array of `number` and an array of `Cover` are one JVM shape, and the cast
+     * back is paid where an element is READ — which is the same trade union
+     * erasure makes, in the same place, for the same reason.
+     */
+    private fun lowerArrayLiteral(node: ArrayLiteralExpression): IrExpression {
+        val elements = node.elements.map { element ->
+            if (element is SpreadElement) {
+                refuse(tsFile, element, "a spread element is out of the spike subset")
+            }
+            coerce(element, lowerExpression(element), types.anyNullable)
+        }
+        return scope.irCall(intrinsics.jsArrayOf).apply {
+            arguments[0] = scope.irVararg(irBuiltIns.anyNType, elements)
+        }
+    }
+
+    /** `a[i]` — `JsArray.get`, which answers `undefined` out of range. */
+    private fun lowerElementRead(node: ElementAccessExpression): IrExpression {
+        if (node.questionDotToken) {
+            refuse(tsFile, node, "optional element access `?.[]` is out of the spike subset")
+        }
+        val owner = runtimeClassOf(node.expression)
+            ?: refuse(tsFile, node, elementAccessRefusal(node))
+        val get = intrinsics.runtimeMember(owner, "get", 1)
+            ?: refuse(tsFile, node, "this backend cannot read an element of this receiver")
+        return scope.irCall(get).apply {
+            arguments[0] = lowerExpression(node.expression)
+            arguments[1] = elementIndex(node)
+        }
+    }
+
+    /**
+     * An index, as the `Double` a JavaScript index IS.
+     *
+     * Not narrowed to `Int` here: `a[i]` with a fractional or huge `i` is legal
+     * TypeScript that reads a hole, so the narrowing is the runtime's decision
+     * and it answers `undefined` rather than throwing.
+     */
+    private fun elementIndex(node: ElementAccessExpression): IrExpression = coerce(
+        node.argumentExpression,
+        lowerExpression(node.argumentExpression),
+        types.double
+    )
+
+    private fun elementAccessRefusal(node: ElementAccessExpression): String {
+        val type = facts.typeOf(node.expression)
+        return "element access on '${type?.let { facts.render(it) } ?: "an untyped receiver"}'" +
+            " is out of the spike subset"
+    }
+
+    /**
+     * A call whose receiver is a runtime-backed value: `a.push(x)`, `a.slice()`.
+     *
+     * Selected by the receiver's ERASED type, never by the checker's rendering
+     * of its TypeScript one — that rendering carries the element type
+     * (`string[]`, `Cover[]`), so a table keyed by it would need one row per
+     * element type the program happens to contain.
+     */
+    private fun lowerRuntimeMemberCall(
+        node: CallExpression,
+        callee: PropertyAccessExpression,
+        owner: IrClassSymbol,
+    ): IrExpression {
+        val target = intrinsics.runtimeMember(owner, callee.name.text, node.arguments.size)
+            ?: refuse(
+                tsFile, node,
+                "'${callee.name.text}' with ${node.arguments.size} argument(s) is not a " +
+                    "member this backend gives a '${owner.owner.name.asString()}'"
+            )
+        val regular = target.owner.parameters.filter { it.kind == IrParameterKind.Regular }
+        return scope.irCall(target).apply {
+            arguments[0] = lowerExpression(callee.expression)
+            node.arguments.forEachIndexed { index, argument ->
+                arguments[index + 1] =
+                    coerce(argument, lowerExpression(argument), regular[index].type)
+            }
+        }
+    }
+
+    /** The runtime class this expression's checked type erases to, or null. */
+    private fun runtimeClassOf(receiver: Expression): IrClassSymbol? {
+        val type = facts.typeOf(receiver) ?: return null
+        val erased = types.map(type) ?: return null
+        return intrinsics.runtimeClassOf(erased)
+    }
+
+    /** The value with the type the checker recorded for THIS node — `!` and `as`. */
+    private fun coerceToRecordedType(node: Expression, value: IrExpression): IrExpression {
+        val type = facts.typeOf(node)
+            ?: refuse(tsFile, node, "the checker gave no type for this assertion")
+        return coerce(node, value, erase(node, type))
     }
 
     /**
