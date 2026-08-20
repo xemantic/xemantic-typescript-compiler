@@ -23,19 +23,28 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.compiler.kir
+
+/**
+ * Marks this module's build as wired: the Kotlin compiler must be reachable at
+ * RUNTIME here, not merely at compile time, because the backend drives kotlinc's
+ * own JVM pipeline phases in-process (see `KotlinIrEmitter`).
+ */
+public object KirBuild {
+
+    /** The Kotlin compiler version this backend constructs IR for. */
+    public const val KOTLIN_VERSION: String = "2.4.10"
+
+    /**
+     * Loads the IR extension point by name. Reflective on purpose: it answers
+     * "is the compiler on the RUNTIME classpath", which a direct reference —
+     * resolvable at compile time from a `compileOnly` dependency — would not.
+     */
+    public fun compilerOnRuntimeClasspath(): Boolean = try {
+        Class.forName("org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension")
+        true
+    } catch (_: ClassNotFoundException) {
+        false
+    }
+
 }
-
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir"
-)

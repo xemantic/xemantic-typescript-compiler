@@ -23,19 +23,23 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.compiler.kir
+
+import com.xemantic.kotlin.test.assert
+import kotlin.test.Test
+
+class KirBuildTest {
+
+    @Test
+    fun `should have the Kotlin compiler on the runtime classpath`() {
+        assert(KirBuild.compilerOnRuntimeClasspath())
+    }
+
+    @Test
+    fun `should have the TypeScript compiler core on the classpath`() {
+        val parser = com.xemantic.typescript.compiler.Parser("const a = 1;", "t.ts")
+        val sourceFile = parser.parse()
+        assert(sourceFile.statements.size == 1)
+    }
+
 }
-
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-cli",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client",
-    "xemantic-typescript-compiler-project",
-    // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir"
-)
