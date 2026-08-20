@@ -1,0 +1,1027 @@
+# structural-typing census — build/bench/tsc-project-637d5746 (78 program files, 46 errors)
+
+files contributing obligations : 74
+expressions handed to sink     : 598455
+obligations recorded           : 64305
+distinct types (declaration)   : 7063
+census wall time               : 24854 ms
+
+-- controls (an instrument that cannot see its own misses is not one) --
+obligation sites with no derivable target : 49019
+  of which refused as unsound to index    : 1678
+  of which callee offered no signature    : 34855
+  of which argument past the param list   : 294
+  no target, CALL_ARGUMENT             36794
+  no target, NEW_ARGUMENT                 33
+  no target, RETURN_VALUE              10952
+  no target, PROPERTY_ASSIGNMENT        1240
+lens calls that threw                     : 0
+declared base edges walked (extends)      : 1862
+declared base edges walked (implements)   : 0
+implements names that did not resolve     : 0
+
+-- 1. edge classes (all obligations) --
+  IDENTITY                 24015   37.35%   closed-only     22519
+  NOMINAL_SAME_DECL          836    1.30%   closed-only       528
+  NOMINAL_BASE              2529    3.93%   closed-only      2378
+  FRESH_LITERAL              507    0.79%   closed-only       403
+  STRUCTURAL               28226   43.89%   closed-only     20277
+  NOT_ASSIGNABLE            8192   12.74%   closed-only      2105
+
+-- 1b. target classes --
+  PRIMITIVE                17456   27.15%
+  UNION                    13735   21.36%
+  OBJECT_WITH_MEMBERS      15565   24.20%
+  FUNCTION_TYPE             4306    6.70%
+  ARRAY_OR_TUPLE            3193    4.97%
+  TYPE_PARAMETER            3160    4.91%
+  ANY_OR_UNKNOWN            1979    3.08%
+  INTERSECTION               618    0.96%
+  ENUM                      4293    6.68%
+  OTHER                        0    0.00%
+
+-- 1c. obligation kinds --
+  CALL_ARGUMENT              53240   82.79%
+  NEW_ARGUMENT                 243    0.38%
+  VARIABLE_INITIALIZER         789    1.23%
+  RETURN_VALUE                4196    6.53%
+  ASSIGNMENT                  4685    7.29%
+  PROPERTY_ASSIGNMENT         1045    1.63%
+  PARAMETER_DEFAULT            104    0.16%
+  PROPERTY_INITIALIZER           3    0.00%
+
+-- 1d. edge class x target class (all obligations) --
+  target                 IDENTITY  NOMINAL_S  NOMINAL_B  FRESH_LIT  STRUCTURA  NOT_ASSIG
+  PRIMITIVE                 13816          0          0         13       3208        419
+  UNION                      1716          0          0        166      10256       1597
+  OBJECT_WITH_MEMBERS        6459        298       2406        290       4592       1520
+  FUNCTION_TYPE               127          0          0          0       3052       1127
+  ARRAY_OR_TUPLE              390        538        123          0       1063       1079
+  TYPE_PARAMETER              142          0          0          0        618       2400
+  ANY_OR_UNKNOWN              415          0          0         28       1536          0
+  INTERSECTION                404          0          0         10        183         21
+  ENUM                        546          0          0          0       3718         29
+  OTHER                         0          0          0          0          0          0
+
+-- 1e. the same, restricted to CLOSED obligations (no open type parameter) --
+  target                 IDENTITY  NOMINAL_S  NOMINAL_B  FRESH_LIT  STRUCTURA  NOT_ASSIG
+  PRIMITIVE                 13170          0          0         13       3043        358
+  UNION                      1551          0          0         93       7506        408
+  OBJECT_WITH_MEMBERS        6181         61       2378        269       4347       1185
+  FUNCTION_TYPE               113          0          0          0        867         40
+  ARRAY_OR_TUPLE              241        467          0          0        100         72
+  TYPE_PARAMETER                0          0          0          0          0          0
+  ANY_OR_UNKNOWN              413          0          0         27        842          0
+  INTERSECTION                319          0          0          1        152         16
+  ENUM                        531          0          0          0       3420         26
+  OTHER                         0          0          0          0          0          0
+
+-- 1f. edge class x SOURCE class, closed obligations onto object targets --
+  source                 IDENTITY  NOMINAL_S  NOMINAL_B  FRESH_LIT  STRUCTURA  NOT_ASSIG
+  PRIMITIVE                     0          0          0          0         54        197
+  UNION                         0          0          0          0       1268        861
+  OBJECT_WITH_MEMBERS        6181         61       2378        269        220        123
+  FUNCTION_TYPE                 0          0          0          0          0          1
+  ARRAY_OR_TUPLE                0          0          0          0          0          3
+  TYPE_PARAMETER                0          0          0          0          0          0
+  ANY_OR_UNKNOWN                0          0          0          0       2753          0
+  INTERSECTION                  0          0          0          0         52          0
+  ENUM                          0          0          0          0          0          0
+  OTHER                         0          0          0          0          0          0
+
+-- 2. the dispatch problem --
+distinct (source,target) pairs, declaration-keyed : 10742
+distinct (source,target) pairs, raw Type.id-keyed : 12419
+distinct STRUCTURAL pairs, all shapes            : 6032
+distinct STRUCTURAL pairs, object->object, closed: 158
+  -> `implements` edges a whole-program closure adds: 158
+  -> obligations in that cell                       : 220
+
+-- 3. fan-in per target, object->object closed STRUCTURAL edges --
+  <=1            45
+  <=2            22
+  <=4             4
+  <=8             1
+  <=64            1
+  n=73 median=1 p95=3 max=51 mean=2.16
+  top 20:
+        51  TextRange
+         6  CompilerOptions
+         3  { fileName: string; impliedNodeFormat?: ModuleKind.ESNext | ModuleKind.CommonJS | undefi
+         3  { fileName: string; impliedNodeFormat?: ModuleKind.ESNext | ModuleKind.CommonJS | undefi
+         3  { getModifiedTime: NonNullable<(path: string) => Date | undefined>; }
+         3  { fileName: string; impliedNodeFormat?: ModuleKind.ESNext | ModuleKind.CommonJS | undefi
+         2  { getDefaultResolutionModeForFile(sourceFile: SourceFile): ModuleKind.ESNext | ModuleKin
+         2  OptionsBase
+         2  FileInfo
+         2  HostWithIsSourceOfProjectReferenceRedirect
+         2  { fileInfos: any; referencedMap?: any | undefined; useFileVersionAsSignature?: any | und
+         2  { useCaseSensitiveFileNames(): boolean; }
+         2  { getCurrentDirectory(): string; }
+         2  { config?: any | undefined; error?: Diagnostic | undefined; }
+         2  { useCaseSensitiveFileNames(): boolean; }
+         2  { errors?: Diagnostic[] | undefined; }
+         2  { errors?: Diagnostic[] | undefined; }
+         2  { errors?: Diagnostic[] | undefined; }
+         2  { errors?: Diagnostic[] | undefined; }
+         2  { packageName: string; rest: string; }
+
+-- 3b. fan-in per target, ALL structural edges (open ones included) --
+  <=1          1297
+  <=2           375
+  <=4           225
+  <=8            95
+  <=16           39
+  <=32           20
+  <=64            9
+  <=128           7
+  <=256           3
+  >256            1
+  n=2071 median=1 p95=7 max=298 mean=2.91
+  top 20:
+       298  Node
+       234  Node | undefined
+       151  SyntaxKind
+       129  any
+       102  (value: T) => boolean [open]
+        84  TextRange | undefined
+        81  (x: T) => boolean [open]
+        74  (element: T, index: number) => U | undefined [open]
+        73  ((node: NodeArray<Node>) => T | undefined) | undefined [open]
+        70  PunctuationOrKeywordSyntaxKind
+        70  (x: T, i: number) => U [open]
+        56  (element: Node) => boolean
+        52  Expression
+        48  unknown
+        48  any
+        45  number
+        44  (element: T, index: number) => boolean [open]
+        42  TextRange
+        38  string
+        33  (element: T, index: number) => boolean [open]
+
+-- 3c. fan-in per target over EVERY assignable edge --
+  <=1          1423
+  <=2           516
+  <=4           331
+  <=8           139
+  <=16           53
+  <=32           23
+  <=64           11
+  <=128           9
+  <=256           3
+  >256            1
+  n=2509 median=1 p95=7 max=404 mean=3.06
+  top 20:
+       404  Node
+       235  Node | undefined
+       152  SyntaxKind
+       151  any
+       102  (value: T) => boolean [open]
+        91  Expression
+        85  TextRange | undefined
+        81  (x: T) => boolean [open]
+        74  (element: T, index: number) => U | undefined [open]
+        74  { [s: string]: T; } | ArrayLike<T> [open]
+        73  ((node: NodeArray<Node>) => T | undefined) | undefined [open]
+        71  PunctuationOrKeywordSyntaxKind
+        70  (x: T, i: number) => U [open]
+        56  (element: Node) => boolean
+        54  any
+        51  unknown
+        49  TextRange
+        46  number
+        44  (element: T, index: number) => boolean [open]
+        41  Declaration
+
+-- 4. fan-out per source, object->object closed STRUCTURAL edges --
+  <=1           104
+  <=2             3
+  <=4            10
+  <=8             1
+  <=16            1
+  n=119 median=1 p95=4 max=9 mean=1.33
+  max fan-out: 9
+  top 20:
+         9  SourceFile
+         5  ModuleSpecifierResolutionHost
+         4  System
+         4  ErrorOutputContainer
+         4  CompilerHost
+         4  ModuleResolutionHost
+         3  EmitHost
+         3  new (kind: SyntaxKind.SourceFile, pos: number, end: number) => SourceFile
+         3  new (kind: SyntaxKind.Identifier, pos: number, end: number) => Identifier
+         3  new (kind: SyntaxKind.PrivateIdentifier, pos: number, end: number) => PrivateIdentifier
+         3  new <TKind extends SyntaxKind>(kind: TKind, pos: number, end: number) => Token<TKind>
+         3  new (kind: SyntaxKind, pos: number, end: number) => Node
+         2  Node
+         2  TypeCheckerHost
+         2  { fileName: string; impliedNodeFormat?: ModuleKind.ESNext | ModuleKind.CommonJS | undefi
+         1  { fileName: string; impliedNodeFormat?: ModuleKind.ESNext | ModuleKind.CommonJS | undefi
+         1  ThisExpression
+         1  { getDefaultResolutionModeForFile(sourceFile: SourceFile): ModuleKind.ESNext | ModuleKin
+         1  BaseParsedCommandLine
+         1  Statement
+
+-- 4b. fan-out per source, ALL structural edges --
+  <=1          2861
+  <=2           255
+  <=4           161
+  <=8            46
+  <=16           19
+  <=32            7
+  <=64            3
+  <=128           2
+  <=256           1
+  >256            1
+  n=3356 median=1 p95=3 max=917 mean=1.80
+  max fan-out: 917
+  top 20:
+       917  any
+       216  undefined
+       126  (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+        67  T | undefined [open]
+        53  never
+        45  number
+        36  Identifier
+        32  T | T | undefined [open]
+        28  string
+        26  Map<number, ModuleInstanceState | undefined>
+        25  NodeArray<CaseOrDefaultClause>
+        24  T | T | undefined [open]
+        17  readonly T[] [open]
+        17  T | undefined [open]
+        16  SourceFile
+        16  (x: SourceFile | Bundle) => SourceFile | Bundle
+        15  Set<any>
+        14  Expression
+        14  any
+        13  StringLiteral
+
+-- 5. object literals --
+object literals visited            : 1256
+of which in an obligation position : 573
+
+-- 6. constructs a nominal encoding cannot express --
+  [every target reached]  distinct target types: 2509
+      index signature      : 24
+      call signature       : 562
+      construct signature  : 20
+      optional property    : 298
+      union of object types: 825
+      generic instantiation: 49
+      mentions a type param: 698
+      anonymous (no decl)  : 1975
+  [STRUCTURAL targets  ]  distinct target types: 2071
+      index signature      : 17
+      call signature       : 556
+      construct signature  : 18
+      optional property    : 151
+      union of object types: 739
+      generic instantiation: 27
+      mentions a type param: 602
+      anonymous (no decl)  : 1777
+  [object->object close]  distinct target types: 73
+      index signature      : 2
+      call signature       : 0
+      construct signature  : 17
+      optional property    : 29
+      union of object types: 0
+      generic instantiation: 2
+      mentions a type param: 0
+      anonymous (no decl)  : 47
+
+-- worked examples, one per (kind, edge, target class) bucket --
+  IDENTITY           CALL_ARGUMENT         
+      source: Node
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@9083
+  IDENTITY           CALL_ARGUMENT         
+      source: Node | undefined
+      target: Node | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@13742
+  IDENTITY           CALL_ARGUMENT         
+      source: string
+      target: string
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@24312
+  IDENTITY           CALL_ARGUMENT         
+      source: T
+      target: T
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@68758
+  IDENTITY           CALL_ARGUMENT         
+      source: readonly T[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@16431
+  IDENTITY           CALL_ARGUMENT         
+      source: BuilderFileEmit
+      target: BuilderFileEmit
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@19691
+  IDENTITY           CALL_ARGUMENT         
+      source: string & { __pathBrand: any; }
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@20584
+  IDENTITY           CALL_ARGUMENT         
+      source: GetCanonicalFileName
+      target: GetCanonicalFileName
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@62653
+  IDENTITY           CALL_ARGUMENT         
+      source: any
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@112026
+  IDENTITY           NEW_ARGUMENT          
+      source: SymbolFlags
+      target: SymbolFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@22078
+  IDENTITY           NEW_ARGUMENT          
+      source: InternalSymbolName | string & { __escapedIdentifier: void; } | void & { __escapedIdentifier: void; }
+      target: InternalSymbolName | string & { __escapedIdentifier: void; } | void & { __escapedIdentifier: void; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@22085
+  IDENTITY           NEW_ARGUMENT          
+      source: TypeChecker
+      target: TypeChecker
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@278613
+  IDENTITY           NEW_ARGUMENT          
+      source: number
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1039583
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: FlowNode
+      target: FlowNode
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@82603
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: TypeChecker
+      target: TypeChecker
+      at    : build/bench/tsc-project-637d5746/src/compiler/builderState.ts@7752
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1441619
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: TypeFlags
+      target: TypeFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1622703
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: boolean
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2810120
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: any
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/debug.ts@43664
+  IDENTITY           VARIABLE_INITIALIZER  
+      source: (tracingMode: "project" | "build" | "server", traceDir: string, configFilePath?: string | undefined) => void
+      target: (tracingMode: "project" | "build" | "server", traceDir: string, configFilePath?: string | undefined) => void
+      at    : build/bench/tsc-project-637d5746/src/compiler/tracing.ts@14805
+  IDENTITY           RETURN_VALUE          
+      source: ModuleInstanceState
+      target: ModuleInstanceState
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@12515
+  IDENTITY           RETURN_VALUE          
+      source: FlowNode
+      target: FlowNode
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@16353
+  IDENTITY           RETURN_VALUE          
+      source: boolean
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@8406
+  IDENTITY           RETURN_VALUE          
+      source: BuilderProgramState
+      target: BuilderProgramState
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@20493
+  IDENTITY           RETURN_VALUE          
+      source: readonly T[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@22114
+  IDENTITY           RETURN_VALUE          
+      source: string & { __pathBrand: any; }
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/builderState.ts@6937
+  IDENTITY           RETURN_VALUE          
+      source: any
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@96091
+  IDENTITY           RETURN_VALUE          
+      source: U
+      target: U
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@2959
+  IDENTITY           RETURN_VALUE          
+      source: DiagnosticReporter
+      target: DiagnosticReporter
+      at    : build/bench/tsc-project-637d5746/src/compiler/executeCommandLine.ts@3944
+  IDENTITY           ASSIGNMENT            
+      source: SourceFile
+      target: SourceFile
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@19926
+  IDENTITY           ASSIGNMENT            
+      source: ScriptTarget
+      target: ScriptTarget
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@19981
+  IDENTITY           ASSIGNMENT            
+      source: number
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20128
+  IDENTITY           ASSIGNMENT            
+      source: Symbol | undefined
+      target: Symbol | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@30996
+  IDENTITY           ASSIGNMENT            
+      source: any
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@77340
+  IDENTITY           ASSIGNMENT            
+      source: readonly T[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@73107
+  IDENTITY           ASSIGNMENT            
+      source: U
+      target: U
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@2886
+  IDENTITY           ASSIGNMENT            
+      source: DiagnosticReporter
+      target: DiagnosticReporter
+      at    : build/bench/tsc-project-637d5746/src/compiler/executeCommandLine.ts@27675
+  IDENTITY           ASSIGNMENT            
+      source: string & { __pathBrand: any; }
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/moduleNameResolver.ts@55949
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: number
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20538
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: Symbol
+      target: Symbol
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@22264
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@22303
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: FlowNode
+      target: FlowNode
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@47948
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: string & { __pathBrand: any; }
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@131535
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: BuilderFileEmit
+      target: BuilderFileEmit
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@13564
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: (fileName: string) => boolean
+      target: (fileName: string) => boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/program.ts@258898
+  IDENTITY           PROPERTY_ASSIGNMENT   
+      source: any
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/tsbuildPublic.ts@92557
+  IDENTITY           PARAMETER_DEFAULT     
+      source: EmitTextWriter
+      target: EmitTextWriter
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@320665
+  IDENTITY           PARAMETER_DEFAULT     
+      source: (text: string, formatStyle: string) => string
+      target: (text: string, formatStyle: string) => string
+      at    : build/bench/tsc-project-637d5746/src/compiler/program.ts@28296
+  IDENTITY           PARAMETER_DEFAULT     
+      source: number
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/scanner.ts@75852
+  IDENTITY           PROPERTY_INITIALIZER  
+      source: Version
+      target: Version
+      at    : build/bench/tsc-project-637d5746/src/compiler/semver.ts@1979
+  NOMINAL_SAME_DECL  CALL_ARGUMENT         
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@79187
+  NOMINAL_SAME_DECL  CALL_ARGUMENT         
+      source: NodeArray<CaseOrDefaultClause>
+      target: NodeArray<CaseOrDefaultClause>
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2162147
+  NOMINAL_SAME_DECL  VARIABLE_INITIALIZER  
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@34989
+  NOMINAL_SAME_DECL  VARIABLE_INITIALIZER  
+      source: Map<number, ModuleInstanceState | undefined>
+      target: Map<number, ModuleInstanceState | undefined>
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@100882
+  NOMINAL_SAME_DECL  RETURN_VALUE          
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@10173
+  NOMINAL_SAME_DECL  RETURN_VALUE          
+      source: Map<number, ModuleInstanceState | undefined>
+      target: Map<number, ModuleInstanceState | undefined>
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@20434
+  NOMINAL_SAME_DECL  ASSIGNMENT            
+      source: Set<any>
+      target: Set<any>
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20094
+  NOMINAL_SAME_DECL  ASSIGNMENT            
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@150435
+  NOMINAL_SAME_DECL  PROPERTY_ASSIGNMENT   
+      source: Map<number, ModuleInstanceState | undefined>
+      target: Map<number, ModuleInstanceState | undefined>
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@164732
+  NOMINAL_SAME_DECL  PROPERTY_ASSIGNMENT   
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@284798
+  NOMINAL_SAME_DECL  PARAMETER_DEFAULT     
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@124396
+  NOMINAL_BASE       CALL_ARGUMENT         
+      source: Declaration
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@23692
+  NOMINAL_BASE       CALL_ARGUMENT         
+      source: NodeArray<CaseOrDefaultClause>
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@347793
+  NOMINAL_BASE       VARIABLE_INITIALIZER  
+      source: Identifier
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1867430
+  NOMINAL_BASE       VARIABLE_INITIALIZER  
+      source: NodeArray<CaseOrDefaultClause>
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/transformers/jsx.ts@5765
+  NOMINAL_BASE       RETURN_VALUE          
+      source: MissingList<T>
+      target: NodeArray<CaseOrDefaultClause>
+      at    : build/bench/tsc-project-637d5746/src/compiler/parser.ts@180848
+  NOMINAL_BASE       RETURN_VALUE          
+      source: NodeArray<CaseOrDefaultClause>
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/utilitiesPublic.ts@52987
+  NOMINAL_BASE       ASSIGNMENT            
+      source: Expression
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@67373
+  NOMINAL_BASE       ASSIGNMENT            
+      source: MissingList<T>
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/parser.ts@379585
+  NOMINAL_BASE       PROPERTY_ASSIGNMENT   
+      source: BuilderProgramState
+      target: ReusableBuilderProgramState
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@76872
+  NOMINAL_BASE       PARAMETER_DEFAULT     
+      source: Identifier
+      target: Expression
+      at    : build/bench/tsc-project-637d5746/src/compiler/factory/emitHelpers.ts@26373
+  FRESH_LITERAL      CALL_ARGUMENT         
+      source: { target: FlowLabel; antecedents: (FlowNode)[]; }
+      target: unknown
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@63655
+  FRESH_LITERAL      CALL_ARGUMENT         
+      source: { rootNames: readonly string[]; options: CompilerOptions; host: CompilerHost; oldProgram: Program | undefined;
+      target: CreateProgramOptions
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@72521
+  FRESH_LITERAL      CALL_ARGUMENT         
+      source: { string: TypeFacts.TypeofNEString; number: TypeFacts.TypeofNENumber; bigint: TypeFacts.TypeofNEBigInt; boolea
+      target: { [s: string]: T; } | ArrayLike<T>
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@39348
+  FRESH_LITERAL      CALL_ARGUMENT         
+      source: { enumerable: false; writable: false; value: TsConfigSourceFile; }
+      target: PropertyDescriptor & ThisType<any>
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@122957
+  FRESH_LITERAL      NEW_ARGUMENT          
+      source: { reportCyclicStructureError(): void; reportInaccessibleThisError(): void; reportInaccessibleUniqueSymbolError
+      target: SymbolTracker | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@445787
+  FRESH_LITERAL      VARIABLE_INITIALIZER  
+      source: { fileNames: string[]; fileInfos: any; root: (IncrementalBuildInfoRootStartEnd | number & { __incrementalBuild
+      target: IncrementalBundleEmitBuildInfo
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@56201
+  FRESH_LITERAL      VARIABLE_INITIALIZER  
+      source: {}
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@107015
+  FRESH_LITERAL      VARIABLE_INITIALIZER  
+      source: { resolvedModule: undefined; resolvedTypeReferenceDirective: undefined; }
+      target: ResolvedModuleWithFailedLookupLocations & ResolvedTypeReferenceDirectiveWithFailedLookupLocations
+      at    : build/bench/tsc-project-637d5746/src/compiler/program.ts@41529
+  FRESH_LITERAL      VARIABLE_INITIALIZER  
+      source: {}
+      target: object
+      at    : build/bench/tsc-project-637d5746/src/compiler/tracing.ts@9267
+  FRESH_LITERAL      VARIABLE_INITIALIZER  
+      source: { name: string; scoped: true; text: any; }
+      target: EmitHelper
+      at    : build/bench/tsc-project-637d5746/src/compiler/factory/emitHelpers.ts@68053
+  FRESH_LITERAL      RETURN_VALUE          
+      source: { messageText: string; category: DiagnosticCategory; code: number; next: DiagnosticMessageChain[] | undefined;
+      target: DiagnosticMessageChain
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@22916
+  FRESH_LITERAL      RETURN_VALUE          
+      source: {}
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@96227
+  FRESH_LITERAL      RETURN_VALUE          
+      source: { key: string & { __canonicalKey: never; }; path: string; flags: WatchDirectoryFlags.Recursive | WatchDirector
+      target: { key: string & { __canonicalKey: never; }; path: string; flags: WatchDirectoryFlags; } | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@178175
+  FRESH_LITERAL      ASSIGNMENT            
+      source: { next: ActiveLabel | undefined; name: InternalSymbolName | string & { __escapedIdentifier: void; } | void & {
+      target: ActiveLabel | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@84820
+  FRESH_LITERAL      ASSIGNMENT            
+      source: { stackIndex: number; skip: false; inStrictModeStack: undefined[]; parentStack: undefined[]; }
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@90848
+  FRESH_LITERAL      ASSIGNMENT            
+      source: { fileInfos: Map<string & { __pathBrand: any; }, FileInfo>; compilerOptions: CompilerOptions | {}; semanticDia
+      target: ReusableBuilderProgramState
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@106697
+  FRESH_LITERAL      ASSIGNMENT            
+      source: { indexedAccessObjectType: number; indexedAccessIndexType: number; }
+      target: object
+      at    : build/bench/tsc-project-637d5746/src/compiler/tracing.ts@9441
+  FRESH_LITERAL      PROPERTY_ASSIGNMENT   
+      source: {}
+      target: { inner?: Signature | undefined; outer?: Signature | undefined; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@820367
+  FRESH_LITERAL      PROPERTY_ASSIGNMENT   
+      source: { originalReadFile: any; originalFileExists: any; originalDirectoryExists: any; originalCreateDirectory: any; 
+      target: SolutionBuilderStateCache | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/tsbuildPublic.ts@32844
+  FRESH_LITERAL      PARAMETER_DEFAULT     
+      source: {}
+      target: CompilerOptions
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@124278
+  FRESH_LITERAL      PARAMETER_DEFAULT     
+      source: {}
+      target: ModuleSpecifierOptions | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/moduleSpecifiers.ts@16197
+  STRUCTURAL         CALL_ARGUMENT         
+      source: ModuleDeclaration
+      target: Node | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8747
+  STRUCTURAL         CALL_ARGUMENT         
+      source: false
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8809
+  STRUCTURAL         CALL_ARGUMENT         
+      source: ModuleBody
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8877
+  STRUCTURAL         CALL_ARGUMENT         
+      source: ModifierFlags.Export
+      target: ModifierFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@10210
+  STRUCTURAL         CALL_ARGUMENT         
+      source: (n: any) => any
+      target: (node: Node) => T | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@11504
+  STRUCTURAL         CALL_ARGUMENT         
+      source: any
+      target: T
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@13731
+  STRUCTURAL         CALL_ARGUMENT         
+      source: undefined
+      target: unknown
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@18935
+  STRUCTURAL         CALL_ARGUMENT         
+      source: any
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@79199
+  STRUCTURAL         CALL_ARGUMENT         
+      source: any
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@13294
+  STRUCTURAL         NEW_ARGUMENT          
+      source: ReadonlyMap<string & { __pathBrand: any; }, BuilderFileEmit>
+      target: Iterable<[K, V]> | null
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@13430
+  STRUCTURAL         NEW_ARGUMENT          
+      source: number
+      target: SymbolFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@107304
+  STRUCTURAL         NEW_ARGUMENT          
+      source: any
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@835436
+  STRUCTURAL         NEW_ARGUMENT          
+      source: (node: BinaryExpression, prev: TState | undefined, outerState: TOuterState) => TState
+      target: (node: BinaryExpression, prev: TState | undefined, outerState: TOuterState) => any
+      at    : build/bench/tsc-project-637d5746/src/compiler/factory/utilities.ts@63701
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: NamedExports
+      target: Node | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@13342
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: DiagnosticRelatedInformation
+      target: Diagnostic
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@24509
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: DiagnosticMessageChain[] | any[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@70412
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: number | BuilderFileEmit | BuilderFileEmit.DtsErrors
+      target: BuilderFileEmit
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@79654
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: Map<number, ModuleInstanceState | undefined>
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@264513
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: InferencePriority.MaxValue
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1589113
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: ((array: any, offset: any) => any) | ((array: any, offset: any) => any)
+      target: <T>(array: readonly T[] | undefined, offset: number) => T | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@37861
+  STRUCTURAL         VARIABLE_INITIALIZER  
+      source: any
+      target: T1 & T2
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@53124
+  STRUCTURAL         RETURN_VALUE          
+      source: any
+      target: ModuleInstanceState
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8836
+  STRUCTURAL         RETURN_VALUE          
+      source: any
+      target: (file: SourceFile, options: CompilerOptions) => void
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@19089
+  STRUCTURAL         RETURN_VALUE          
+      source: true
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@188610
+  STRUCTURAL         RETURN_VALUE          
+      source: any
+      target: Symbol | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@194143
+  STRUCTURAL         RETURN_VALUE          
+      source: DiagnosticMessageChain | { messageText: string; category: DiagnosticCategory; code: number; next: DiagnosticMe
+      target: DiagnosticMessageChain
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@23584
+  STRUCTURAL         RETURN_VALUE          
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@24368
+  STRUCTURAL         RETURN_VALUE          
+      source: {} | undefined
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@97198
+  STRUCTURAL         RETURN_VALUE          
+      source: any
+      target: T
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@38989
+  STRUCTURAL         ASSIGNMENT            
+      source: any
+      target: ModuleInstanceState
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@11056
+  STRUCTURAL         ASSIGNMENT            
+      source: any
+      target: ModuleInstanceState | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@14031
+  STRUCTURAL         ASSIGNMENT            
+      source: any
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20035
+  STRUCTURAL         ASSIGNMENT            
+      source: new (flags: SymbolFlags, name: InternalSymbolName | string & { __escapedIdentifier: void; } | void & { __escap
+      target: new (flags: SymbolFlags, name: InternalSymbolName | string & { __escapedIdentifier: void; } | void & { __escap
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20151
+  STRUCTURAL         ASSIGNMENT            
+      source: never
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@21011
+  STRUCTURAL         ASSIGNMENT            
+      source: Expression
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@176178
+  STRUCTURAL         ASSIGNMENT            
+      source: (cb: any) => any
+      target: (arg: () => void) => void
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2895620
+  STRUCTURAL         ASSIGNMENT            
+      source: any
+      target: T
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@24088
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: Set<any>
+      target: ReadonlySet<InternalSymbolName | string & { __escapedIdentifier: void; } | void & { __escapedIdentifier: void;
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@20589
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: false
+      target: boolean | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@23060
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: true
+      target: boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@31330
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: number | BuilderFileEmit
+      target: BuilderFileEmit
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@20063
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: any
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@24936
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: () => BuildInfo
+      target: () => BuildInfo
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@76490
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: (rootNames: any, options: any, host: any, oldProgram: any, configFileParsingDiagnostics: any, projectReference
+      target: any
+      at    : build/bench/tsc-project-637d5746/src/compiler/executeCommandLine.ts@40484
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: any
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/program.ts@118936
+  STRUCTURAL         PROPERTY_ASSIGNMENT   
+      source: TResult
+      target: TResult
+      at    : build/bench/tsc-project-637d5746/src/compiler/factory/utilities.ts@56160
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: any
+      target: (node: Node) => void
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@50568
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: ClassExpression | ClassDeclaration | EnumDeclaration | ObjectLiteralExpression | TypeLiteralNode | JSDocTypeLi
+      target: ClassExpression | ClassDeclaration | EnumDeclaration | ObjectLiteralExpression | TypeLiteralNode | JSDocTypeLi
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@177022
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: SymbolFormatFlags.AllowAnyNodeKind
+      target: SymbolFormatFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@316719
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@1037250
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: any
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2587264
+  STRUCTURAL         PARAMETER_DEFAULT     
+      source: any
+      target: Type
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2683546
+  STRUCTURAL         PROPERTY_INITIALIZER  
+      source: undefined
+      target: ModuleSpecifierResolutionHost & { getCommonSourceDirectory(): string; } | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@3147832
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: ModuleBody
+      target: T
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8736
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: Map<number, ModuleInstanceState | undefined> | undefined
+      target: Map<number, ModuleInstanceState | undefined>
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@8888
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: T[] | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@22318
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: (node: Node) => void
+      target: (element: T, index: number) => U | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@50676
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@111217
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: string | false | undefined
+      target: string
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@25921
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: NodeFlags.Const | NodeFlags.Let | undefined
+      target: NodeFlags
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@553601
+  NOT_ASSIGNABLE     CALL_ARGUMENT         
+      source: P
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/moduleNameResolver.ts@161758
+  NOT_ASSIGNABLE     NEW_ARGUMENT          
+      source: readonly IncrementalBuildInfoResolvedRoot[] | undefined
+      target: readonly [K, V][] | null
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@113289
+  NOT_ASSIGNABLE     NEW_ARGUMENT          
+      source: string | undefined
+      target: string
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@175168
+  NOT_ASSIGNABLE     NEW_ARGUMENT          
+      source: { usage: string; sensitivity: string; numeric: true; }
+      target: CollatorOptions
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@74676
+  NOT_ASSIGNABLE     VARIABLE_INITIALIZER  
+      source: { root: U[]; errors: true | undefined; checkPending: true; version: string; }
+      target: NonIncrementalBuildInfo
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@55146
+  NOT_ASSIGNABLE     VARIABLE_INITIALIZER  
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@95351
+  NOT_ASSIGNABLE     VARIABLE_INITIALIZER  
+      source: { name: string; type: string; defaultValueDescription: false; }
+      target: CommandLineOption
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@2856
+  NOT_ASSIGNABLE     VARIABLE_INITIALIZER  
+      source: { compilerOptions: { showConfig: undefined; configFile: undefined; configFilePath: undefined; help: undefined;
+      target: TSConfig & { watchOptions?: object | undefined; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@105777
+  NOT_ASSIGNABLE     VARIABLE_INITIALIZER  
+      source: () => T
+      target: () => Printer
+      at    : build/bench/tsc-project-637d5746/src/compiler/emitter.ts@47052
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: ReusableBuilderProgramState
+      target: BuilderProgramStateWithDefinedProgram
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@8644
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: string | [string] | string[]
+      target: string | [string]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@21696
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@22139
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: TOut
+      target: string
+      at    : build/bench/tsc-project-637d5746/src/compiler/commandLineParser.ts@85654
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: V | undefined
+      target: V
+      at    : build/bench/tsc-project-637d5746/src/compiler/core.ts@17486
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: T
+      target: Tristate
+      at    : build/bench/tsc-project-637d5746/src/compiler/parser.ts@257224
+  NOT_ASSIGNABLE     RETURN_VALUE          
+      source: string
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/path.ts@11640
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: Node | undefined
+      target: Node
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@133366
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: Node
+      target: EntityName
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@219678
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: (JSDocTypedefTag | JSDocCallbackTag | JSDocEnumTag)[]
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@401978
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: number | undefined
+      target: number
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@2111464
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: T
+      target: SyntaxKind
+      at    : build/bench/tsc-project-637d5746/src/compiler/parser.ts@358443
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: (moduleNames: any, containingFile: any, redirectedReference: any, options: any, containingSourceFile: any, reu
+      target: (moduleNames: readonly (StringLiteralLike)[], containingFile: string, redirectedReference: ResolvedProjectRefe
+      at    : build/bench/tsc-project-637d5746/src/compiler/program.ts@74228
+  NOT_ASSIGNABLE     ASSIGNMENT            
+      source: string & { __pathBrand: any; } | undefined
+      target: string & { __pathBrand: any; }
+      at    : build/bench/tsc-project-637d5746/src/compiler/resolutionCache.ts@71606
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: Symbol | undefined
+      target: Symbol
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@37065
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: FunctionExpression | ArrowFunction | MethodDeclaration | GetAccessorDeclaration | SetAccessorDeclaration
+      target: undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@46474
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: undefined
+      target: FlowNode
+      at    : build/bench/tsc-project-637d5746/src/compiler/binder.ts@51481
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: undefined
+      target: BuilderFileEmit
+      at    : build/bench/tsc-project-637d5746/src/compiler/builder.ts@21337
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: undefined
+      target: readonly T[]
+      at    : build/bench/tsc-project-637d5746/src/compiler/builderState.ts@13703
+  NOT_ASSIGNABLE     PROPERTY_ASSIGNMENT   
+      source: ((...args: A) => R) | undefined
+      target: () => Date
+      at    : build/bench/tsc-project-637d5746/src/compiler/tsbuildPublic.ts@10844
+  NOT_ASSIGNABLE     PARAMETER_DEFAULT     
+      source: T[] | undefined
+      target: Symbol[] | undefined
+      at    : build/bench/tsc-project-637d5746/src/compiler/checker.ts@970114
+  NOT_ASSIGNABLE     PARAMETER_DEFAULT     
+      source: (p: P) => boolean
+      target: (text: string) => boolean
+      at    : build/bench/tsc-project-637d5746/src/compiler/utilities.ts@401228
