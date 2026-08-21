@@ -1652,7 +1652,19 @@ resumes.**
   **AND IT COMPOUNDS ON NATIVE**, where `kotlin.text.Regex` is 5.2x `java.util.regex` and
   35x V8, i.e. ~30% of the native parse. `docs/perf/kir-backend-levers.md` § 5.
 
-- [ ] **(KIR.NATIVE.1) THE NATIVE BACKEND EXISTS AND IS 4-7x THE JVM — AND THE REASON IS
+- [x] **(KIR.NATIVE.1) ALL THREE SUB-ITEMS LANDED 2026-08-21** — (a) the nominal half's
+  first slice (see (KIR.PERF.1)), (b) the regex engine, carried to native verbatim and worth
+  **−22.5%** there, and (c) the native arm inside `kir-bench.sh`'s own equivalence gate.
+  **(a) WAS then verified on Native rather than assumed**: `mitt` compiles, links and runs
+  with the shape classes and the right sink — the plugin reports `checked 2 file(s)` and
+  konanc accepts the generated classes, so CLAUDE.md's "Native's IR validator REJECTS the
+  public fields the JVM backend accepts" does not bite this shape — and it measures **348
+  ns/emit against 354.75, i.e. FLAT**. That is the opposite of §6's expectation and the
+  mechanism says why: the JVM's −10.7% comes from C2 inlining the override at a monomorphic
+  call site and folding the constant name away, and Kotlin/Native has no JIT to do either,
+  so the shape's `get` stays a real virtual call. **The nominal half pays on Native only
+  once the property access is a direct field read** — the next slice — rather than a
+  virtual `get` over fields. ORIGINAL ENTRY: THE NATIVE BACKEND EXISTS AND IS 4-7x THE JVM — AND THE REASON IS
   BOXING, WHICH MAKES (KIR.PERF.1) A CORRECTNESS-OF-DIRECTION QUESTION RATHER THAN A JVM
   OPTIMISATION.** Both libraries now compile to `-opt` Kotlin/Native binaries through the
   same `KirProgramLowering` (`scripts/kir-native.sh`), agreeing with the other three arms

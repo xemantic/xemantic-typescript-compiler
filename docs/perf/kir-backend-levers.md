@@ -299,6 +299,19 @@ mitt's ranges are DISJOINT — `[209..219]` ms against `[243..249]` — and both
 Node arms are flat (tsgo 335 against 329/337, xtsc 338 against 334). This is the
 first measured win the nominal direction has produced.
 
+### On Kotlin/Native it is FLAT, and that refutes §6's expectation
+
+Verified rather than assumed, because CLAUDE.md records that Native's IR validator rejects
+public fields the JVM accepts: `mitt` compiles, links and RUNS there with the shape classes
+and the right sink, and measures **348 ns/emit against 354.75 — flat**.
+
+§6 predicted the nominal half would be worth MORE on Native, since every `Any?` position is
+a real allocation there. It is worth nothing yet, and the mechanism says why: the JVM's
+−10.7% is C2 inlining the override at a monomorphic call site and folding the constant name
+away, and Kotlin/Native has no JIT to do either — so the shape's `get` stays a real virtual
+call over fields. **The nominal half pays on Native only once the access is a direct field
+READ**, which is the next slice, not a virtual `get`.
+
 ### Why toml is flat, which is the honest half of the result
 
 The shapes fire there — ten classes across its seven files — so the mechanism is
