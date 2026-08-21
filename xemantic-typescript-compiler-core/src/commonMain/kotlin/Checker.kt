@@ -94640,7 +94640,16 @@ interface DataView {
         // against the declared return type independently, so each side gets
         // its own TS2322 diagnostic at its own position.
         if (checkConditionalReturnBranches(body, targetType, retTypeNode, source, fileName) != 0) return
-        val bodyType = getTypeOfExpression(body)
+        // (CHK.30) 17.70's contextual literal retention, which this path never
+        // had: `getTypeOfExpression` answers the BASE primitive for a literal
+        // NODE, so `(): T => 'a'` compared `string` against the literal union
+        // and FP'd — while the same arrow written with a BLOCK body went
+        // through `checkReturnAssignability`, which does retain it. The two
+        // spellings of one function must not disagree.
+        val bodyType = if (propTypeContainsLiteral(targetType)) {
+            literalTypeOfExpression(body, isArrayLikeReference(targetType))
+                ?: getTypeOfExpression(body)
+        } else getTypeOfExpression(body)
         if (bodyType === anyType || bodyType === errorType) return
         // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
         if (bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
@@ -104335,6 +104344,24 @@ interface DataView {
             // keeps the extra engine call off every other return.
             if (targetHasEmptyObjectMember(targetType) &&
                 checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                return
+            }
+            // (CHK.30) A returned LITERAL the engine ACCEPTS is decided here.
+            // The string fallback below re-renders the source as its BASE
+            // primitive — `'a'` becomes "string" — and then compares that text
+            // against the annotation's, so every function returning a literal
+            // into a literal-containing UNION target FP'd: `(): T | null` and
+            // `(): T | undefined` where `type T = 'a' | 'b'`. The bare-alias
+            // form `(): T` survived only because the string comparison happened
+            // to accept an unresolved alias NAME, which is not a rule.
+            // Precise-verdict early return, in the shape the gotcha allows: the
+            // source is a literal the CONTEXT retained (17.70 above), and the
+            // engine has both the literal and the resolved target in hand, so
+            // it is strictly better informed than the text comparison.
+            if (canUseForReturn && expr != null && isSimpleLiteral(expr) &&
+                propTypeContainsLiteral(targetType) &&
+                checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            ) {
                 return
             }
             CtaSections.atC(CtaSections.C_RELATION)
