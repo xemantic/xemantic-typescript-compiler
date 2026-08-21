@@ -66,6 +66,35 @@ internal class KirProgramTables(
     val fields = IdentityHashMap<PropertyDeclaration, IrField>()
 
     /**
+     * A class's ACCESSORS, by member name.
+     *
+     * A `get`/`set` pair is lowered as two ordinary methods rather than as an
+     * `IrProperty`, because what consumes them is a property ACCESS in the
+     * lowered TypeScript — never Kotlin's own property syntax — and a method
+     * pair is the shape both sides of that already speak.
+     */
+    val getters = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
+    val setters = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
+
+    /** The class a `class X extends Y` names, where this backend generated it. */
+    val superclasses = IdentityHashMap<ClassDeclaration, ClassDeclaration>()
+
+    /** Static fields and methods, by owner and member name. */
+    val staticFields = IdentityHashMap<ClassDeclaration, MutableMap<String, IrField>>()
+    val staticMethods = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
+
+    /** [owner] and every class it inherits from, innermost first. */
+    fun classChain(owner: ClassDeclaration): List<ClassDeclaration> {
+        val chain = mutableListOf(owner)
+        var current: ClassDeclaration? = superclasses[owner]
+        while (current != null && chain.none { it === current }) {
+            chain.add(current)
+            current = superclasses[current]
+        }
+        return chain
+    }
+
+    /**
      * The IR parameters a call site may leave out.
      *
      * Nothing on an `IrValueParameter` records that, and the erased type does
