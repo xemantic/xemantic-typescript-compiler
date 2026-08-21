@@ -400,6 +400,26 @@ below.
 Ranges were tight on every arm (native `[1404..1437]` and `[3237..3304]` ms), and
 all four arms produced identical sinks.
 
+**RE-TAKEN 2026-08-21 after § 5's regex engine, and the native arm is now part of
+`kir-bench.sh` rather than a run by hand** — `KIR_BENCH_NATIVE=1`, gated and
+timed like every other arm ((KIR.NATIVE.1)(c)):
+
+| | mitt | | toml | |
+|---|---:|---|---:|---|
+| tsgo -> JS -> node | 82.25 ns/emit | baseline | 22.20 us/parse | baseline |
+| xtsc -> JS -> node | 83.50 | 1.02x slower | 22.20 | 1.00x |
+| xtsc -> JVM -> java | **61.00** | 1.35x faster | **33.65** | 1.52x slower |
+| xtsc -> NATIVE -> kexe | **354.75** | 4.31x slower | **126.55** | 5.70x slower |
+
+Native toml is **163.30 -> 126.55 us/parse, −22.5%**, and 7.26x -> **5.70x**.
+Native mitt is flat at 354.75, which is the control saying this is the regex
+lever. **The prediction below was directionally right and quantitatively
+over**: it said native "should gain MORE than the JVM's −27.5%" and native
+gained **less** (−22.5% against −27.5%), because the ~50 us estimate of regex
+per native parse was itself high — 36.75 us came out, so the remaining share is
+boxing, which dominates everything on this backend and is what (KIR.PERF.1) is
+for.
+
 ### Why, priced primitive by primitive
 
 One source, both backends, every result consumed so neither may delete the work
@@ -432,10 +452,10 @@ Second, smaller, and now DONE on the JVM and CARRIED here: Kotlin/Native's
 `java.util.regex` and 35x V8** on INT_REGEX, so § 5's ~9.5 us of regex per parse
 becomes ~50 us there — ~30% of the native parse. § 5's matcher is pure Kotlin
 and `kir_native_runtime.py` copies it verbatim, so native gets it for free and
-should gain MORE than the JVM's −27.5%. **That is a prediction, not a
-measurement** — the native arm has not been re-run since, and the honest way to
-close it is (KIR.NATIVE.1)(c), a native arm inside `kir-bench.sh`'s own
-equivalence gate.
+should gain MORE than the JVM's −27.5%. **MEASURED, and the prediction was
+over**: −22.5%, not more than −27.5% — see the re-taken table above. The
+direction was right and the magnitude was not, which is what a prediction
+written before the run is for.
 
 ### What it cost to make work, because none of it is guessable
 
@@ -487,6 +507,18 @@ path exists, the plugin does not load — is caught by nothing else and fails wi
 
 ### What is NOT done
 
-No `.d.ts`-driven interop, and the dynamic-member fallback throws. The native arm
-is not in `kir-bench.sh`'s equivalence gate yet — it was verified by hand in this
-session's four-arm run.
+No `.d.ts`-driven interop, and the dynamic-member fallback throws.
+
+**The native arm IS in `kir-bench.sh`'s equivalence gate as of 2026-08-21**
+((KIR.NATIVE.1)(c)): `KIR_BENCH_NATIVE=1` builds both binaries through the same
+`kirNativeCompile` task, gates their `sink=` with the other three arms and times
+them in the same interleave. It is opt-in because the build is two konanc links
+on a box with ZERO swap — never because the evidence is optional — so the run
+prints the arms it ACTUALLY ran (`building 4 arms (tsgo xtsc kir nat)`) rather
+than a fixed count, and a native build that fails REFUSES the run.
+
+One trap it cost to find: **konanc appends `.kexe` to whatever `-o` names**, so
+a check on the path handed to `-PkirOutput` is a check on a file that never
+exists — and `kirNativeCompile` exits 0, since it verified the plugin's own
+announcement rather than the file. The task's closing line says `.kexe` and was
+the answer all along.

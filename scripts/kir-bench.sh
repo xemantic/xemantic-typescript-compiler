@@ -5,6 +5,13 @@
 #   arm 1  tsgo 7.0.2   -> JavaScript   -> node     (what these libraries run on)
 #   arm 2  xtsc -kir    -> JVM bytecode -> java     (the Kotlin-IR backend)
 #   arm 3  xtsc -core   -> JavaScript   -> node     (OUR JavaScript, same runtime)
+#   arm 4  xtsc -kir    -> Kotlin/Native -> kexe    (KIR_BENCH_NATIVE=1, opt-in)
+#
+# The NATIVE arm is opt-in because building it is two konanc links on a box with
+# ZERO swap (CLAUDE.md), not because it is optional evidence: when it is asked
+# for it is built, gated and timed like every other arm, and a failure REFUSES
+# the run. What must never happen is a run that quietly drops it, so the header
+# below prints the arms it actually ran rather than a fixed count.
 #
 # Arm 3 is the CONTROL, and it is the reason this file exists rather than a pair
 # of ad-hoc commands: arms 1 and 2 differ in BOTH the compiler and the target, so
@@ -24,12 +31,14 @@
 # wall-clock harness reads that as the fastest arm in the batch.
 #
 # USE:  scripts/kir-bench.sh [processes]      (default 5)
+#       KIR_BENCH_NATIVE=1 scripts/kir-bench.sh 3   (adds the Kotlin/Native arm)
 #
 set -uo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PROCESSES="${1:-5}"
 WORK="${KIR_BENCH_WORK:-$REPO/build/bench/kir-bench}"
+NATIVE="${KIR_BENCH_NATIVE:-0}"
 PROJECTS="$REPO/xemantic-typescript-compiler-kir/src/jvmTest/resources/projects"
 DRIVERS="$REPO/scripts/kir-bench/drivers"
 NODE="${KIR_BENCH_NODE:-$REPO/tools/node/bin/node}"
@@ -144,15 +153,20 @@ J
 
 # Node ESM resolves a specifier LITERALLY: `./mitt` and `./mitt.ts` are both
 # refused, and neither compiler is wrong about that — tsgo rewrites `.ts` -> `.js`
-# under `rewriteRelativeImportExtensions` and leaves the extensionless one alone,
-# while xtsc implements neither. This is emit POST-PROCESSING for the benchmark's
-# sake and is recorded as a finding, not a fix (see (BENCH.1) in PLAN-PHASE-5.md).
+# under `rewriteRelativeImportExtensions` and leaves the extensionless one alone.
+# xtsc now implements the FIRST half too ((KIR.EMIT.1), 2026-08-21), so the first
+# `sed` below is a no-op on both arms and is kept only as a belt: the second one,
+# which invents an extension mitt's sources never wrote, is still a benchmark
+# expedient and no compiler's job.
 runnable_esm() {                               # runnable_esm <out-dir>
     sed -i "s#\(from '\./[^']*\)\.ts'#\1.js'#g" "$1"/*.js
     sed -i "s#\(from '\./[a-zA-Z0-9_-]*\)'#\1.js'#g" "$1"/*.js
 }
 
-echo "kir-bench: building the three arms ..." >&2
+ARMS=(tsgo xtsc kir)
+[ "$NATIVE" = "1" ] && ARMS+=(nat)
+
+echo "kir-bench: building ${#ARMS[@]} arms (${ARMS[*]}) ..." >&2
 for lib in mitt toml; do
     for compiler in tsgo xtsc; do
         dir="$WORK/$compiler-$lib"
@@ -171,6 +185,21 @@ for lib in mitt toml; do
         > "$WORK/emit-kir-$lib.log" 2>&1
     grep -q '^KIR_SUCCESS=true' "$WORK/emit-kir-$lib.log" \
         || die "the KIR backend did not compile $lib — see $WORK/emit-kir-$lib.log"
+    # The NATIVE arm goes through the SAME lowering as the JVM one — the whole
+    # point of § 6's claim that a backend is a phase rather than a compiler — so
+    # it is built from the same assembled sources by the same Gradle task.
+    if [ "$NATIVE" = "1" ]; then
+        # konanc appends `.kexe` to whatever `-o` names, which the task's own
+        # closing line says and this had to learn the hard way.
+        rm -f "$WORK/native-$lib.kexe"
+        "$REPO/scripts/kir-native.sh" "$WORK/src-$lib" main.ts "$WORK/native-$lib" \
+            > "$WORK/emit-nat-$lib.log" 2>&1
+        # A konanc run that finds no plugin exits 0 having compiled the empty
+        # seed, so the binary EXISTING is not the check — the task's own
+        # positive control is, and a missing file is a second, cheaper one.
+        [ -x "$WORK/native-$lib.kexe" ] \
+            || die "no native binary for $lib — see $WORK/emit-nat-$lib.log"
+    fi
 done
 
 # ---- arms ------------------------------------------------------------------
@@ -179,15 +208,16 @@ run_arm() {                                    # run_arm <arm> <lib>
         tsgo) "$NODE" "$WORK/tsgo-$2/out/main.js" ;;
         xtsc) "$NODE" "$WORK/xtsc-$2/out/main.js" ;;
         kir)  java -cp "$WORK/jvm-$2:$RUN_CP_TAIL" program.MainKt ;;
+        nat)  "$WORK/native-$2.kexe" ;;
     esac
 }
 
-# EQUIVALENCE BEFORE TIMING. Three arms, one `sink=` each; disagreement means the
-# arms are not running the same program and no timing below would mean anything.
+# EQUIVALENCE BEFORE TIMING. One `sink=` per arm; a disagreement means the arms
+# are not running the same program and no timing below would mean anything.
 echo "kir-bench: equivalence gate ..." >&2
 for lib in mitt toml; do
     sinks=""
-    for arm in tsgo xtsc kir; do
+    for arm in "${ARMS[@]}"; do
         out="$(run_arm "$arm" "$lib")" || die "arm '$arm' failed to run $lib"
         s="$(grep -o 'sink=[-0-9]*' <<< "$out")"
         [ -n "$s" ] || die "arm '$arm' printed no sink for $lib: $out"
@@ -195,7 +225,7 @@ for lib in mitt toml; do
     done
     distinct="$(tr ' ' '\n' <<< "$sinks" | sed 's/.*sink=//' | sort -u | grep -c .)"
     [ "$distinct" = 1 ] || die "the arms disagree on $lib —$sinks"
-    echo "  $lib: all three arms agree ($(sed 's/.* //' <<< "$sinks"))" >&2
+    echo "  $lib: all ${#ARMS[@]} arms agree ($(sed 's/.* //' <<< "$sinks"))" >&2
 done
 
 # ---- steady-state throughput ----------------------------------------------
@@ -203,7 +233,7 @@ TSV="$WORK/throughput.tsv"; : > "$TSV"
 echo "kir-bench: $PROCESSES processes per arm, interleaved ..." >&2
 for i in $(seq 1 "$PROCESSES"); do
     for lib in mitt toml; do
-        for arm in tsgo xtsc kir; do
+        for arm in "${ARMS[@]}"; do
             printf '%s\t%s\t%s\n' "$arm" "$lib" \
                 "$(run_arm "$arm" "$lib" | grep -o 'best_ms=[0-9]*' | cut -d= -f2)" >> "$TSV"
         done
@@ -218,13 +248,14 @@ for line in open(sys.argv[1]):
     arm, lib, ms = line.split()
     rows[(lib, arm)].append(int(ms))
 UNIT = {"mitt": (4_000_000, 1e6, "ns/emit"), "toml": (20_000, 1e3, "us/parse")}
-NAME = {"tsgo": "tsgo  -> JS   -> node", "xtsc": "xtsc  -> JS   -> node",
-        "kir":  "xtsc  -> JVM  -> java"}
+NAME = {"tsgo": "tsgo  -> JS     -> node", "xtsc": "xtsc  -> JS     -> node",
+        "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe"}
+ORDER = [a for a in ("tsgo", "xtsc", "kir", "nat") if (("mitt", a) in rows)]
 for lib in ("mitt", "toml"):
     ops, scale, unit = UNIT[lib]
     base = statistics.median(rows[(lib, "tsgo")])
     print(f"\n{lib}  ({ops:,} ops/round, median of {len(rows[(lib,'tsgo')])} processes)")
-    for arm in ("tsgo", "xtsc", "kir"):
+    for arm in ORDER:
         v = sorted(rows[(lib, arm)])
         med = statistics.median(v)
         rel = med / base

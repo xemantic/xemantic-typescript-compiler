@@ -1546,8 +1546,17 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 **TOP OF QUEUE ON OWNER DIRECTIVE (2026-08-21): (BENCH.1) below runs before the (API.\*) arc
 resumes.**
 
-- [ ] **(KIR.PERF.2) THE REGULAR-EXPRESSION ENGINE — MEASURED AT −18% OF THE toml PARSE,
-  AND THE SECOND-LARGEST LEVER THE BACKEND HAS.** `java.util.regex` costs **9.5 us per
+- [x] **(KIR.PERF.2) THE REGULAR-EXPRESSION ENGINE — LANDED 2026-08-21, and it measured
+  **−27.5%** of the toml parse rather than the −18% predicted (47.05 -> 34.10 us/parse,
+  2.08x Node -> **1.52x**), with mitt flat at 61.25 and both Node arms flat. Per pattern
+  against `java.util.regex`: **16.7x / 13.0x / 3.0x / 3.2x**. It beat its own prediction
+  because two smaller members came with it — `replace(/_/g,'')` on a LITERAL path, and
+  `split` no longer building a fresh `Regex(source)` per call (which also silently ignored
+  the expression's flags). **It also found a divergence in the OTHER engine**: Java's `$`
+  matches before a final line terminator where JavaScript's does not, so
+  `/^\d+$/.test("12\n")` answered `true` here — `jsEndAnchorTranslated` closes it. Carried
+  verbatim to Kotlin/Native, where it measured **−22.5%**. `KirRegexEngineTest`, 20 pins.
+  ORIGINAL ENTRY:** `java.util.regex` costs **9.5 us per
   document** on `smol-toml` — 20% of the 47.05 us JVM parse, matching § 2's independent
   JFR reading, and **42% of Node's ENTIRE parse budget**. The engine gap alone (9.5 vs
   V8's 3.0 us) is **27% of the whole JVM-vs-Node difference**. It is the pattern SHAPE,
@@ -1580,7 +1589,15 @@ resumes.**
   has no escape analysis, so every `Any?` position is a real allocation.** The open work,
   in order: (a) the nominal half, which is worth far more here than on the JVM; (b) the
   regex engine, (KIR.PERF.2); (c) a native arm in `kir-bench.sh`'s equivalence gate, which
-  this round ran by hand. Gradle wiring is DONE (owner-approved):
+  this round ran by hand — **(b) and (c) are DONE as of 2026-08-21**: the regex engine
+  landed and is carried to native verbatim (**−22.5%**, 163.30 -> 126.55 us/parse, 7.26x
+  -> **5.70x** Node, with mitt flat at 354.75 as the control), and `kir-bench.sh` now
+  carries the native arm itself under `KIR_BENCH_NATIVE=1` — built by the same
+  `kirNativeCompile` task, gated on the same `sink=` and timed in the same interleave.
+  **(a), the nominal half, is what is left, and the native numbers are its case**:
+  §6's per-primitive table says every dynamic position is a real allocation here, and
+  the 36.75 us the regex engine removed leaves boxing as the whole remainder.
+  Gradle wiring is DONE (owner-approved):
   `:xemantic-typescript-compiler-kir:kirNativeCompile`, with `scripts/kir-native.sh`
   a wrapper over it.
   Traps that cost the session and are recorded so they are not re-derived:
@@ -1624,7 +1641,15 @@ resumes.**
   never incorrect. **Measure it with `scripts/kir-bench.sh` and refuse it on the same
   standard as the other two: ranges disjoint, both Node arms flat.**
 
-- [ ] **(KIR.EMIT.1) OUR ESM OUTPUT IS NOT RUNNABLE ON NODE AS EMITTED — a relative
+- [x] **(KIR.EMIT.1) LANDED 2026-08-21 — `rewriteRelativeImportExtensions` is implemented
+  in the emit, at all four specifier positions (ESM import/export declarations via a
+  post-pass over the FINAL statement list, every `require` this transformer builds via
+  `normalizeModuleSpecifier`, and a dynamic `import()` in the CallExpression arm). The
+  post-pass position is load-bearing: the specifier TEXT is also how the transformer ASKS
+  the checker about the target module, so rewriting earlier asks about a `.js` file the
+  program does not contain. mitt's EXTENSIONLESS `./mitt` stays a benchmark expedient —
+  tsgo leaves it alone too, so rewriting it would be a divergence, not a fix.
+  `RewriteRelativeImportExtensionsTest`, 10 pins. ORIGINAL ENTRY: OUR ESM OUTPUT IS NOT RUNNABLE ON NODE AS EMITTED — a relative
   specifier keeps the extension it was written with.** tsgo 7.0.2 rewrites `./parse.ts` ->
   `./parse.js` under `rewriteRelativeImportExtensions` and we emit `'./parse.ts'` verbatim;
   Node ESM resolves a specifier LITERALLY and refuses both that and mitt's extensionless
@@ -1632,7 +1657,13 @@ resumes.**
   a benchmark expedient and NOT a fix. **Invisible to every gate we own** — the corpus pins
   emitted BYTES against tsc baselines, and no baseline asks whether Node can load the result.
 
-- [ ] **(KIR.EMIT.2) `undefined` RENDERS AS `"null"` IN A STRING CONCATENATION.**
+- [x] **(KIR.EMIT.2) LANDED 2026-08-21.** The decision belongs to the LOWERING, which
+  still holds the TypeScript type: `asString` — the one funnel for `+` and for a template
+  span — asks whether every nullish member the operand's type admits is `undefined`, and
+  picks `jsToStringNullAsUndefined` if so. A type admitting BOTH, and `any`, keep `"null"`,
+  so the wrong answer is narrowed to the shapes the §3.1 collapse cannot separate at all
+  rather than swapped for the opposite wrong answer. `KirNullishStringTest`, 5 pins.
+  ORIGINAL ENTRY: `undefined` RENDERS AS `"null"` IN A STRING CONCATENATION.**
   `a + '|' + b` with `b` undefined prints `x|null` where JavaScript prints `x|undefined` —
   a `string | undefined` erases to `String?` and Kotlin's own `plus` renders the null. Found
   by `KirDynamicCallArityTest`, which was retargeted to avoid pinning it; the fix belongs in
