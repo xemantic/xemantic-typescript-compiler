@@ -38,6 +38,7 @@ import org.jetbrains.kotlin.ir.symbols.IrConstructorSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.platform.jvm.isJvm
 import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.util.defaultType
 
@@ -228,9 +229,20 @@ internal class KirIntrinsics(
 
     val jsRegExpType: IrType by lazy { jsRegExpClass.owner.defaultType }
 
-    /** `bigint` — `java.math.BigInteger`, per the design doc's type table. */
+    /**
+     * `bigint`, per the design doc's type table.
+     *
+     * `java.math.BigInteger` where there is one. Kotlin/Native has no such class
+     * and no arbitrary-precision integer in its standard library, so the runtime
+     * carries its own — the TYPE has to exist there, because a library offering
+     * "integers as BigInt" has the literal in its source whether or not the
+     * option is ever used, and refusing the type would refuse the library.
+     */
     val bigIntegerType: IrType by lazy {
-        builder.referenceClass(irFile, "java.math.BigInteger").owner.defaultType
+        val fqName =
+            if (builder.pluginContext.platform?.isJvm() == true) "java.math.BigInteger"
+            else "$runtimePackage.JsBigInt"
+        builder.referenceClass(irFile, fqName).owner.defaultType
     }
 
     val jsBigInt: IrSimpleFunctionSymbol by lazy { runtime("jsBigInt") }

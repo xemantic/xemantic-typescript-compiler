@@ -235,3 +235,152 @@ which is what licenses reading any of this as a backend number.
 The next lever is the one §2 argues for from both directions: the NOMINAL half,
 (KIR.PERF.1), whose entry now carries this census and a design the two
 refutations do not rule out.
+
+## 5. The regular expressions — MEASURED, and the largest thing left on toml
+
+`smol-toml` validates every scalar and every key part with a regular expression,
+and § 2's leaf profile puts `JsRegExp.test` at 20.3% of the JVM arm's samples.
+That is a location. This is the price.
+
+Driven the way `JsRegExp.test` drives them — `find()` on a reused matcher — over
+exactly the value and key strings the benchmark document contains:
+
+| call | per document | ns/call, `java.util.regex` | ns/call, V8 |
+|---|---:|---:|---:|
+| `INT_REGEX.test` x16 | 3.75 us | **241** | 39.3 |
+| `KEY_PART_RE.test` x41 | 3.69 us | 90 | 27.0 |
+| `FLOAT_REGEX.test` x5 | 0.79 us | 157 | 40.1 |
+| `replace(/_/g,'')` x16 | 0.85 us | 53 | 45.0 |
+| `LEADING_ZERO.test` x16 | 0.39 us | 24 | 18.9 |
+| **total** | **9.5 us** | | **3.0 us** |
+
+9.5 us is **20% of the 47.05 us parse**, which lands on § 2's independent JFR
+reading (20.3% + 2.2%) — two instruments, one answer. Put the other way, the JVM
+arm spends **42% of Node's ENTIRE parse budget** inside `java.util.regex`, and
+the engine gap alone is **6.5 us = 27% of the whole JVM-vs-Node difference**.
+
+### It is the pattern SHAPE, not the number of calls
+
+```
+^\d+$                    14.7 ns     Java's Curly fast path
+^\d(?:\d)*$              38.4 ns     repetition body is a group -> generic Loop node
+^\d(?:_?\d)*$            94.0 ns     body non-deterministic -> both branches per iteration
+^(?:0xZ|\d(?:_?\d)*)$   128.1 ns     + alternation
+the real INT_REGEX      283.4 ns
+```
+
+TOML's digit separators are literally `(_?\d)*`, so every numeric value walks
+Java's backtracking `Loop` machinery once per character. A hand-written scan of
+the same two patterns, gated to agree with the regex on the document population
+plus fourteen adversarial inputs, costs **9.4 ns** (INT) and **6.7 ns** (KEY) —
+**25x and 12x**.
+
+### Two cheap fixes are REFUSED before being built
+
+`test` cannot observe groups, so a group-free twin of the pattern is a legal
+substitution for it: measured, it buys **0.6%**. And `matches()` in place of
+`find()` on the anchored patterns buys nothing. The cost is the engine's loop
+node, not group bookkeeping and not the anchor scan.
+
+### What it is worth
+
+Replacing the engine for the regular subset these patterns live in takes the
+9.5 us to ~0.9 us: **-8.6 us = -18% of the toml parse**, 47.05 -> ~38.5 us, and
+`smol-toml` from 2.08x slower than Node to **~1.70x**. That is larger than every
+landed lever in §§ 1-3 combined and second only to (KIR.PERF.1).
+
+**And it compounds on Kotlin/Native**, where the same two patterns cost 1360 ns
+and 507 ns — see § 6.
+
+## 6. Kotlin/Native — the third backend, built and measured
+
+The design doc's claim is that "JS, Native and Wasm are a change of backend
+phase, not a new compiler". That is now tested rather than asserted: both
+libraries compile to `-opt` Kotlin/Native binaries through the SAME
+`KirProgramLowering`, and both agree with the other three arms on the sink.
+
+Build it with `scripts/kir-native.sh <project> <entry> <output>`.
+
+### The four-arm run, one assembly of each library, 5 processes interleaved
+
+| | mitt (4M emits) | | toml (20k parses) | |
+|---|---:|---|---:|---|
+| tsgo -> JS -> node | 82.50 ns/emit | baseline | 22.50 us/parse | baseline |
+| xtsc -> JS -> node | 83.25 | 1.01x slower | 22.30 | 1.01x faster |
+| xtsc -> JVM -> java | **60.75** | 1.36x faster | **45.50** | 2.02x slower |
+| xtsc -> NATIVE -> kexe | **353.25** | 4.28x slower | **163.30** | 7.26x slower |
+
+Ranges were tight on every arm (native `[1404..1437]` and `[3237..3304]` ms), and
+all four arms produced identical sinks.
+
+### Why, priced primitive by primitive
+
+One source, both backends, every result consumed so neither may delete the work
+(both arms compute the same 18-digit sink):
+
+| runtime primitive | JVM | Native | |
+|---|---:|---:|---:|
+| `jsAdd(Any?, Any?)` | 0.95 ns | 28.05 ns | 29x |
+| `jsStrictEquals(Any?, Any?)` | 0.63 | 10.41 | 17x |
+| `jsCall1` (a `Function1` callee) | 0.86 | 12.93 | 15x |
+| `jsTruthy(Any?)` | 0.77 | 9.76 | 13x |
+| box a `Double` into `Any?` | 0.86 | 8.61 | 10x |
+| `JsObject.get` (3-key bag) | 1.60 | 13.11 | 8x |
+| `JsObject.set`+`get` | 10.59 | 42.17 | 4x |
+| `JsArray` index get | 3.23 | 13.53 | 4x |
+| `JsRegExp.test` INT_REGEX | 259.7 | 1360.1 | 5x |
+| `JsRegExp.test` KEY_PART_RE | 93.6 | 506.6 | 5x |
+
+**The backend's cost model is BOXING, and Kotlin/Native has no escape analysis
+to erase it.** Every dynamic position in the generated program is an `Any?`; on
+the JVM C2 inlines and scalar-replaces most of those boxes away, so `jsAdd` of
+two numbers costs under a nanosecond, while on Native each one is a real heap
+allocation — 8.6 ns to box a single `Double`. That is the whole 4-7x, and it
+says something the JVM numbers could not: **(KIR.PERF.1), the nominal half, is
+not a JVM optimisation. It is the difference between Native being viable and
+not.**
+
+Second, smaller, and already actionable: Kotlin/Native's `kotlin.text.Regex` is
+a pure-Kotlin backtracking engine, **5.2x `java.util.regex` and 35x V8** on
+INT_REGEX. § 5's ~9.5 us of regex per parse becomes ~50 us there — ~30% of the
+native parse, and the same fix removes it.
+
+### What it cost to make work, because none of it is guessable
+
+1. **No phase API.** Kotlin 2.4 has `cli/pipeline/jvm`, `.../web`, `.../wasm` and
+   NO `.../native`; the native compiler still runs through `K2Native`/
+   `KonanDriver`. So the relationship inverts — konanc is the driver and the
+   backend rides in as an `IrGenerationExtension` loaded by `-Xplugin`.
+2. **A coroutines version fight.** 1.11.0 renamed `runBlocking`'s JVM entry
+   point to `runBlockingK` and the compiler bundles an older copy, which a
+   parent-first plugin classloader always prefers. 1.11.0 has BOTH names, so
+   putting it ahead of the compiler jar satisfies both callers.
+3. **Native's IR validator rejects public fields.** The JVM backend accepts the
+   public static fields the lowering emits for module-level variables.
+4. **KLIB SERIALIZATION SEES ONLY THE FRONTEND'S FILES.** This is the one that
+   fails silently and late: a file the plugin ADDS to the module fragment is
+   dropped whole, the binary still links, and it dies at run time with an
+   `IrLinkageError` naming a symbol the validator had just accepted. Every
+   generated declaration is re-parented into the seed's own file — which then
+   needs per-file name prefixes, because eight lowered TypeScript files
+   contribute eight `moduleInit`s to one package.
+5. **The entry point is resolved by the FRONTEND**, which never saw the generated
+   `main`, so `-e program.main` answers "could not find" however valid the IR is.
+   The seed declares the `main` konanc finds; the plugin gives it a body.
+
+### The runtime is GENERATED, not forked
+
+`scripts/kir_native_runtime.py` derives the native runtime from the JVM one on
+every build, replacing exactly what Kotlin/Native lacks — `java.math.BigInteger`
+(a runtime `JsBigInt`), `java.time` (days-from-civil arithmetic),
+`java.util.regex` (`kotlin.text.Regex`), a concurrent map, `String.format`,
+`Character.digit`, code-point handling — and REFUSING the `java.lang.reflect`
+member fallback rather than approximating it. Every replacement is anchored on
+text that must occur exactly once, so a drifting JVM runtime fails the
+derivation instead of silently forking it.
+
+### What is NOT done
+
+No Gradle wiring (the script is the interface), no `.d.ts`-driven interop, and
+the dynamic-member fallback throws. The native arm is not in `kir-bench.sh`'s
+equivalence gate yet — it was verified by hand in this session's four-arm run.

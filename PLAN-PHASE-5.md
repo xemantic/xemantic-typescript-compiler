@@ -1546,6 +1546,44 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 **TOP OF QUEUE ON OWNER DIRECTIVE (2026-08-21): (BENCH.1) below runs before the (API.\*) arc
 resumes.**
 
+- [ ] **(KIR.PERF.2) THE REGULAR-EXPRESSION ENGINE — MEASURED AT −18% OF THE toml PARSE,
+  AND THE SECOND-LARGEST LEVER THE BACKEND HAS.** `java.util.regex` costs **9.5 us per
+  document** on `smol-toml` — 20% of the 47.05 us JVM parse, matching § 2's independent
+  JFR reading, and **42% of Node's ENTIRE parse budget**. The engine gap alone (9.5 vs
+  V8's 3.0 us) is **27% of the whole JVM-vs-Node difference**. It is the pattern SHAPE,
+  not the call count: `^\d+$` is 14.7 ns and `^\d(?:_?\d)*$` is 94 ns, because a
+  repetition whose body is not a single deterministic character compiles to Java's
+  backtracking `Loop` node — and TOML's digit separators are literally `(_?\d)*`. A
+  hand-written scan of the same two patterns, gated to agree on the document population
+  plus fourteen adversarial inputs, is **9.4 ns and 6.7 ns — 25x and 12x**.
+
+  **TWO CHEAP FIXES ARE ALREADY REFUSED, measured, before being built**: rewriting the
+  groups as `(?: )` for `test` (legal, since `test` cannot observe groups) buys **0.6%**,
+  and `matches()` in place of `find()` buys nothing.
+
+  **WHAT TO BUILD:** not a per-pattern special case but a matcher for the REGULAR subset
+  these patterns live in — no backreferences, no lookaround — compiled once per
+  `(source, flags)` beside the existing `Pattern` cache, with `java.util.regex` kept LIVE
+  as the differential oracle (the round-792 shape: never a legality gate). Worth
+  **−8.6 us = −18%**, taking `smol-toml` from 2.08x Node to **~1.70x**.
+  **AND IT COMPOUNDS ON NATIVE**, where `kotlin.text.Regex` is 5.2x `java.util.regex` and
+  35x V8, i.e. ~30% of the native parse. `docs/perf/kir-backend-levers.md` § 5.
+
+- [ ] **(KIR.NATIVE.1) THE NATIVE BACKEND EXISTS AND IS 4-7x THE JVM — AND THE REASON IS
+  BOXING, WHICH MAKES (KIR.PERF.1) A CORRECTNESS-OF-DIRECTION QUESTION RATHER THAN A JVM
+  OPTIMISATION.** Both libraries now compile to `-opt` Kotlin/Native binaries through the
+  same `KirProgramLowering` (`scripts/kir-native.sh`), agreeing with the other three arms
+  on the sink: **mitt 353.25 ns/emit against the JVM's 60.75, toml 163.30 us/parse against
+  45.50**. Priced primitive by primitive from one source on both backends, every dynamic
+  operation is 4-29x: `jsAdd` **0.95 -> 28.05 ns**, `jsCall1` 0.86 -> 12.93, boxing one
+  `Double` 0.86 -> 8.61. **On the JVM C2 scalar-replaces most of those boxes; Kotlin/Native
+  has no escape analysis, so every `Any?` position is a real allocation.** The open work,
+  in order: (a) the nominal half, which is worth far more here than on the JVM; (b) the
+  regex engine, (KIR.PERF.2); (c) a native arm in `kir-bench.sh`'s equivalence gate, which
+  this round ran by hand; (d) Gradle wiring, which is owner-gated as a build change.
+  Traps that cost the session and are recorded so they are not re-derived:
+  `docs/perf/kir-backend-levers.md` § 6.
+
 - [ ] **(KIR.PERF.1) THE NOMINAL HALF — NOW THE *ONLY* DIRECTION LEFT FOR THE BAG, AND
   ITS CASE IS MADE BY TWO REFUTATIONS RATHER THAN BY THE DESIGN DOC.** A per-owner leaf
   census of the toml JVM arm (`scripts/kir-profile.sh`) charges **44.3%** to the property
