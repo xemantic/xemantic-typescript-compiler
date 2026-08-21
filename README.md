@@ -22,7 +22,7 @@ emitter — rewritten from scratch in Kotlin Multiplatform. No Node.js, anywhere
 ---
 
 `xtsc` is a **drop-in replacement for `tsc`** — point it at your `tsconfig.json`, get the
-same diagnostics and the same JavaScript, about **2.7× faster**:
+same diagnostics and the same JavaScript:
 
 ```shell
 xtsc --noEmit -p .          # type-check
@@ -30,8 +30,12 @@ xtsc -p . --outDir build    # type-check and emit
 xtsc --watch -p .           # stay up, rebuild on change
 ```
 
-But it is a **whole-program type checker running on the JVM**, not a transpiler, and that
-buys three things `tsc` cannot do.
+On speed, plainly: it is about **2.7× faster than TypeScript's JavaScript compiler**, and
+still **2.3× behind `tsgo`** — the Go rewrite, which since TypeScript 7 *is* the `tsc` you
+get from npm. Closing that gap is the current target and where most of the work goes.
+
+But speed is not why this exists. It is a **whole-program type checker running on the
+JVM**, not a transpiler, and that buys three things neither `tsc` does.
 
 ## 1. Embed it — the whole IDE surface is a function call
 
@@ -104,12 +108,14 @@ TypeScript's own compiler — 78 files, 194,702 LOC — on CI (`ubuntu-latest`, 
 |---|---:|---:|
 | **xtsc** (warm JVM) | **3.96 s** | **4.82 s** |
 | xtsc (GraalVM native image) | 6.00 s | 7.06 s |
-| `tsc` 6.0.3 | 10.73 s | 13.16 s |
-| `tsgo` 7.0.2 (the Go port) | 1.70 s | 2.44 s |
+| `tsc` 6.0.3 — TypeScript's JavaScript compiler | 10.73 s | 13.16 s |
+| `tsc` 7.0.2 — `tsgo`, the Go rewrite | 1.70 s | 2.44 s |
 
-So: 2.7× faster than `tsc`, and still 2.3× behind `tsgo` — which is the current target.
-Every push re-runs this; the whole series is in
-[bench-history/](bench-history/README.md).
+Both rows are called `tsc`, so read the comparison carefully: **2.7× faster than the
+JavaScript compiler, 2.3× slower than the Go one.** TypeScript 7 ships the Go compiler as
+the `typescript` package itself, so that second row is what `npm install typescript` puts
+on your machine today — it is the bar, and matching it is the open problem. Every push
+re-runs this; the whole series is in [bench-history/](bench-history/README.md).
 
 ## How correct
 
