@@ -155,6 +155,7 @@ public fun compileTypeScriptProjectToJvm(
         outputDirectory,
         packageName,
         classpath,
+        checked.importEdges,
     )
 }
 
@@ -166,11 +167,12 @@ private fun lowerAndEmit(
     outputDirectory: Path,
     packageName: String,
     classpath: List<Path>,
+    importEdges: List<Pair<String, String>> = emptyList(),
 ): KirCompilation {
     val refusals = mutableListOf<KirDiagnostic>()
     val emit = KotlinIrEmitter(outputDirectory, classpath).emit {
         try {
-            KirProgramLowering(this, facts, files, entry, packageName).lower()
+            KirProgramLowering(this, facts, files, entry, packageName, importEdges).lower()
         } catch (e: KirLoweringException) {
             refusals.add(e.diagnostic)
             throw e

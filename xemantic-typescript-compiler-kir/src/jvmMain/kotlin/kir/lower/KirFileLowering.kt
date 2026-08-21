@@ -92,6 +92,7 @@ import com.xemantic.typescript.compiler.ForOfStatement
 import com.xemantic.typescript.compiler.SwitchStatement
 import com.xemantic.typescript.compiler.ThrowStatement
 import com.xemantic.typescript.compiler.TryStatement
+import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.VariableDeclarationList
 import com.xemantic.typescript.compiler.WhileStatement
 import com.xemantic.typescript.compiler.forEachChild
@@ -110,6 +111,7 @@ import org.jetbrains.kotlin.ir.builders.declarations.addField
 import org.jetbrains.kotlin.ir.builders.declarations.addFunction
 import org.jetbrains.kotlin.ir.builders.declarations.addValueParameter
 import org.jetbrains.kotlin.ir.builders.declarations.buildClass
+import org.jetbrains.kotlin.ir.builders.declarations.buildField
 import org.jetbrains.kotlin.ir.builders.declarations.buildFun
 import org.jetbrains.kotlin.ir.builders.declarations.buildVariable
 import org.jetbrains.kotlin.ir.builders.irAs
@@ -320,9 +322,55 @@ internal class KirFileLowering(
         tsFile.statements.forEach { define(it) }
     }
 
-    /** The program's entry point, from THIS file's top-level statements. */
-    fun buildEntryPoint() {
-        buildMain()
+    /**
+     * This file's MODULE INIT: its top-level statements, in source order.
+     *
+     * One per file, called by the program's `main` in dependency order — which
+     * is what JavaScript does with a module body, and what makes
+     * `export const X = compute()` mean anything. Null for a file with nothing
+     * to run, so a program of pure declarations costs no call.
+     */
+    fun buildModuleInit(): IrSimpleFunction? {
+        val statements = executableStatements()
+        if (statements.isEmpty()) return null
+        val init = builder.irFactory.buildFun {
+            name = Name.identifier("moduleInit")
+            returnType = irBuiltIns.unitType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        init.parent = irFile
+        irFile.declarations.add(init)
+        builder.pluginContext.metadataDeclarationRegistrar
+            .registerFunctionAsMetadataVisible(init)
+        inFunction(init, irBuiltIns.unitType, null, null) {
+            init.body = blockBody(init, emptyList(), statements)
+        }
+        return init
+    }
+
+    /**
+     * The program's entry point: a `main` that runs every module's init.
+     *
+     * The order is the caller's ([KirProgramLowering] sorts it topologically);
+     * `main` only calls them, so the entry file is not special beyond being
+     * last.
+     */
+    fun buildEntryPoint(moduleInits: List<IrSimpleFunction>) {
+        val main = builder.irFactory.buildFun {
+            name = Name.identifier("main")
+            returnType = irBuiltIns.unitType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        main.parent = irFile
+        irFile.declarations.add(main)
+        builder.pluginContext.metadataDeclarationRegistrar.registerFunctionAsMetadataVisible(main)
+        inFunction(main, irBuiltIns.unitType, null, null) {
+            main.body = blockBodyOf(moduleInits.map { scope.irCall(it.symbol) })
+        }
     }
 
     /**
@@ -346,6 +394,7 @@ internal class KirFileLowering(
 
     private fun declare(statement: Statement) {
         when (statement) {
+            is VariableStatement -> declareModuleVariables(statement)
             is FunctionDeclaration -> declareFunction(statement)
             is ClassDeclaration -> declareClass(statement)
             // A type-only declaration contributes no runtime shape, so it is
@@ -353,6 +402,127 @@ internal class KirFileLowering(
             is InterfaceDeclaration, is TypeAliasDeclaration -> {}
             else -> {}
         }
+    }
+
+    /**
+     * A MODULE-level `const`/`let`, as a static field on this file's facade.
+     *
+     * Static because a module's variables outlive the statement that assigned
+     * them and are read from other files — `export const FOLD_QUOTED =
+     * 'quoted'` is the shape every library is made of. The INITIALIZER is not
+     * emitted here: it runs in this file's module init ([buildModuleInit]), in
+     * source order among the other top-level statements, because that is when
+     * JavaScript runs it and because it may call a function declared below it.
+     */
+    private fun declareModuleVariables(statement: VariableStatement) {
+        val list = statement.declarationList
+        if (list.flags == SyntaxKind.VarKeyword) {
+            refuse(
+                tsFile, statement,
+                "`var` is out of the spike subset — its function scoping is not modelled"
+            )
+        }
+        val mutable = list.flags != SyntaxKind.ConstKeyword
+        for (declaration in list.declarations) {
+            val name = declaration.name as? Identifier
+                ?: refuse(
+                    tsFile, declaration,
+                    "destructuring declarations are out of the spike subset"
+                )
+            val type = erase(
+                declaration,
+                variableType(declaration.name, declaration.initializer)
+            )
+            val field = builder.irFactory.buildField {
+                this.name = Name.identifier(kotlinName(name.text))
+                this.type = type
+                visibility = DescriptorVisibilities.PUBLIC
+                isStatic = true
+                // NOT final, whatever TypeScript said. A JVM `static final`
+                // field may only be assigned in `<clinit>`, and a module's
+                // variables are assigned by its module INIT — so a `const`
+                // marked final is an `IllegalAccessError` at run time, in a
+                // program that compiled. TypeScript's `const` is a rule the
+                // CHECKER has already enforced.
+                isFinal = false
+                origin = builder.generatedOrigin
+            }
+            field.parent = irFile
+            irFile.declarations.add(field)
+            val getter = moduleAccessor("${kotlinName(name.text)}\$get", type) { function ->
+                function.body = builder.pluginContext.irFactory.createBlockBody(
+                    UNDEFINED,
+                    UNDEFINED,
+                ).apply {
+                    statements.add(
+                        DeclarationIrBuilder(builder.pluginContext, function.symbol).irReturn(
+                            IrGetFieldImpl(
+                                UNDEFINED, UNDEFINED, field.symbol, type, null, null, null
+                            )
+                        )
+                    )
+                }
+            }
+            val setter = if (!mutable) null else moduleAccessor(
+                "${kotlinName(name.text)}\$set",
+                irBuiltIns.unitType,
+                parameter = "value" to type,
+            ) { function ->
+                val parameter = function.parameters.first { it.kind == IrParameterKind.Regular }
+                function.body = builder.pluginContext.irFactory.createBlockBody(
+                    UNDEFINED,
+                    UNDEFINED,
+                ).apply {
+                    statements.add(
+                        IrSetFieldImpl(
+                            UNDEFINED,
+                            UNDEFINED,
+                            field.symbol,
+                            null,
+                            DeclarationIrBuilder(builder.pluginContext, function.symbol)
+                                .irGet(parameter),
+                            irBuiltIns.unitType,
+                            null,
+                            null,
+                        )
+                    )
+                }
+            }
+            tables.moduleVariables[declaration] =
+                KirProgramTables.ModuleVariable(field, getter, setter, tsFile)
+        }
+    }
+
+    /**
+     * A top-level accessor function for a module variable.
+     *
+     * It exists because a top-level FIELD belongs to its file and Kotlin's IR
+     * verifier refuses a read of one from another file — which is precisely
+     * what an imported constant is. Within the declaring file the field is used
+     * directly, so the accessor costs nothing there.
+     */
+    private fun moduleAccessor(
+        name: String,
+        returnType: IrType,
+        parameter: Pair<String, IrType>? = null,
+        body: (IrSimpleFunction) -> Unit
+    ): IrSimpleFunction {
+        val function = builder.irFactory.buildFun {
+            this.name = Name.identifier(name)
+            this.returnType = returnType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        function.parent = irFile
+        parameter?.let { (parameterName, parameterType) ->
+            function.addValueParameter(parameterName, parameterType, builder.generatedOrigin)
+        }
+        body(function)
+        irFile.declarations.add(function)
+        builder.pluginContext.metadataDeclarationRegistrar
+            .registerFunctionAsMetadataVisible(function)
+        return function
     }
 
     private fun declareFunction(declaration: FunctionDeclaration) {
@@ -872,23 +1042,6 @@ internal class KirFileLowering(
      * is emitted even when there is nothing to run — an empty entry point is a
      * runnable program, an absent one is not.
      */
-    private fun buildMain() {
-        val statements = executableStatements()
-        val main = builder.irFactory.buildFun {
-            name = Name.identifier("main")
-            returnType = irBuiltIns.unitType
-            visibility = DescriptorVisibilities.PUBLIC
-            modality = Modality.FINAL
-            origin = builder.generatedOrigin
-        }
-        main.parent = irFile
-        irFile.declarations.add(main)
-        builder.pluginContext.metadataDeclarationRegistrar.registerFunctionAsMetadataVisible(main)
-        inFunction(main, irBuiltIns.unitType, null, null) {
-            main.body = blockBody(main, emptyList(), statements)
-        }
-    }
-
     private fun inFunction(
         function: IrFunction,
         returnType: IrType,
@@ -1082,6 +1235,32 @@ internal class KirFileLowering(
 
     private fun lowerVariables(statement: VariableStatement, out: MutableList<IrStatement>) {
         val list = statement.declarationList
+        // A MODULE-level declaration was already given a static field by the
+        // declare pass; here it is only ASSIGNED, in source order among the
+        // other top-level statements — which is when JavaScript evaluates it.
+        if (list.declarations.any { it in tables.moduleVariables }) {
+            for (declaration in list.declarations) {
+                val field = tables.moduleVariables[declaration]?.field ?: continue
+                val initializer = declaration.initializer
+                val value = if (initializer != null) {
+                    coerce(initializer, lowerExpression(initializer), field.type)
+                } else if (field.type == types.nothingNullable || field.type == irBuiltIns.anyNType) {
+                    scope.irNull()
+                } else {
+                    refuse(
+                        tsFile, declaration,
+                        "cannot lower a module variable declared without an initializer"
+                    )
+                }
+                out.add(
+                    IrSetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, null, value,
+                        irBuiltIns.unitType, null, null
+                    )
+                )
+            }
+            return
+        }
         if (list.flags == SyntaxKind.VarKeyword) {
             refuse(
                 tsFile, statement,
@@ -1571,7 +1750,31 @@ internal class KirFileLowering(
         "this" -> frame.thisReceiver?.let { scope.irGet(it) }
             ?: refuse(tsFile, node, "`this` outside a class member")
         else -> lookup(node.text)?.let { scope.irGet(it) }
+            ?: moduleFieldFor(node)?.let { variable ->
+                if (variable.owner === tsFile) {
+                    IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, variable.field.symbol, variable.field.type,
+                        null, null, null
+                    )
+                } else {
+                    scope.irCall(variable.getter.symbol, variable.field.type)
+                }
+            }
             ?: refuse(tsFile, node, "cannot lower the reference '${node.text}'")
+    }
+
+    /**
+     * The MODULE-level field a free name refers to, or null.
+     *
+     * Asked only after the lexical scopes have missed, and answered through the
+     * checker's own resolution of the name — so an IMPORTED constant reaches
+     * the field its declaring file created, with the import contributing
+     * nothing at runtime, exactly as a cross-file call does.
+     */
+    private fun moduleFieldFor(node: Identifier): KirProgramTables.ModuleVariable? {
+        val symbol = facts.nameAt(node) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        return (declaration as? VariableDeclaration)?.let { tables.moduleVariables[it] }
     }
 
     private fun lookup(name: String): IrValueDeclaration? {
@@ -1986,8 +2189,27 @@ internal class KirFileLowering(
         when (target) {
             is Identifier -> {
                 val variable = lookup(target.text)
-                    ?: refuse(tsFile, target, "cannot assign to '${target.text}'")
-                scope.irSet(variable, value(variable.type))
+                if (variable != null) {
+                    scope.irSet(variable, value(variable.type))
+                } else {
+                    val variable = moduleFieldFor(target)
+                        ?: refuse(tsFile, target, "cannot assign to '${target.text}'")
+                    if (variable.owner === tsFile) {
+                        IrSetFieldImpl(
+                            UNDEFINED, UNDEFINED, variable.field.symbol, null,
+                            value(variable.field.type), irBuiltIns.unitType, null, null
+                        )
+                    } else {
+                        val setter = variable.setter
+                            ?: refuse(
+                                tsFile, target,
+                                "cannot assign to the imported constant '${target.text}'"
+                            )
+                        scope.irCall(setter.symbol).apply {
+                            arguments[0] = value(variable.field.type)
+                        }
+                    }
+                }
             }
             is PropertyAccessExpression -> if (staticOwnerOf(target) != null) {
                 val owner = staticOwnerOf(target)!!
@@ -2101,7 +2323,7 @@ internal class KirFileLowering(
         if (selfReceiver != null &&
             (selfReceiver.text == "this" || selfReceiver.text == "super")
         ) {
-            val access = callee as PropertyAccessExpression
+            val access = callee
             val viaSuper = selfReceiver.text == "super"
             val owner = frame.ownerClass
                 ?: refuse(tsFile, node, "`${selfReceiver.text}` outside a class member")

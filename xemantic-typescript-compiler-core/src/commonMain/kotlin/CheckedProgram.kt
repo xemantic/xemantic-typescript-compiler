@@ -114,6 +114,17 @@ interface CheckedLens {
     fun resolveName(name: String): Symbol?
 
     /**
+     * What an IMPORT alias actually names, or null when [symbol] is not one.
+     *
+     * The one question a consumer of imported code cannot answer for itself: an
+     * `import { X } from './m'` binds an alias whose own declaration is the
+     * import specifier, and a backend needs the DECLARATION the name refers to
+     * — the class, the function, the variable — to reach what it generated for
+     * it. Re-deriving that would mean re-implementing module resolution.
+     */
+    fun aliasTarget(symbol: Symbol): Symbol?
+
+    /**
      * Is [source] assignable to [target]?
      *
      * The backend needs this for a reason unrelated to diagnostics: TypeScript

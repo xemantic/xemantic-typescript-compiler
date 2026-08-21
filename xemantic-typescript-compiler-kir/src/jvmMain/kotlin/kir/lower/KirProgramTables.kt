@@ -31,6 +31,7 @@ import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.VariableDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrField
@@ -64,6 +65,31 @@ internal class KirProgramTables(
     val methods = IdentityHashMap<MethodDeclaration, IrSimpleFunction>()
     val constructorsByDeclaration = IdentityHashMap<ClassDeclaration, IrConstructor>()
     val fields = IdentityHashMap<PropertyDeclaration, IrField>()
+
+    /**
+     * MODULE-level variables, as JVM statics on their file's facade.
+     *
+     * A library is made of these — `export const FOLD_QUOTED = 'quoted'` — and
+     * a cross-file read of one must reach the same slot the declaring file
+     * initialized, so the table is program-wide and keyed by the declaration.
+     */
+    val moduleVariables = IdentityHashMap<VariableDeclaration, ModuleVariable>()
+
+    /**
+     * One module-level variable: its slot, and the two functions that reach it.
+     *
+     * The accessors are not decoration. A top-level field belongs to its FILE,
+     * and Kotlin's IR verifier refuses a read of one from another file
+     * ("Access to a field declared in another file") — which is exactly what an
+     * imported constant is. So a cross-file read calls [getter] and a cross-file
+     * write calls [setter], while the declaring file uses the field directly.
+     */
+    class ModuleVariable(
+        val field: IrField,
+        val getter: IrSimpleFunction,
+        val setter: IrSimpleFunction?,
+        val owner: SourceFile,
+    )
 
     /**
      * A class's ACCESSORS, by member name.
