@@ -190,16 +190,28 @@ adds a `checkcast`), it is pinned, and it closes the one place where `+`
 disagreed with the rest of arithmetic about whom to ask. It is not counted as a
 win.
 
-## 4. Where it stands
+## 4. Where it stands, replicated
 
-| | tsgo -> node | xtsc -> JVM, before | xtsc -> JVM, now |
+The session's last three benchmark runs differ only in the neutral §3a change,
+so they are three draws of one number: **46.95, 48.00 and 47.75 us/parse**, the
+last on the committed tree. Against the session's opening **56.60**, that is
+**−15.6%** taking the committed run and −15.2% to −17.0% across the three.
+
+| | tsgo -> node | xtsc -> JVM, opening | xtsc -> JVM, committed |
 |---|---|---|---|
-| mitt | 85.00 ns/emit | 62.25 | **61.25** (1.39x FASTER) |
-| smol-toml | 22.55 us/parse | 56.60 | **46.95-48.00** (2.07-2.13x slower) |
+| mitt | 86.25 ns/emit | 62.25 | **62.25** (1.39x FASTER) |
+| smol-toml | 22.30 us/parse | 56.60 | **47.75** (2.14x slower) |
 
-−17.0% on the document parse across the session, and the two Node arms held
-flat across every pair, which is what licenses reading these as backend
-numbers.
+`smol-toml` goes from 2.49x slower than Node to **2.14x**. **`mitt` is flat**:
+its five readings across the session are 62.25 / 61.50 / 59.50 / 61.25 / 61.00 /
+62.25, so the −1.2% the first pair showed did not survive replication and is not
+claimed. That is the expected shape — an event emitter barely compares
+characters, barely reads properties and never matches a regular expression, so
+none of this session's levers has anything to do there.
+
+Both Node arms held flat across every pair (tsgo 452/455/453/451/446 ms on toml),
+which is what licenses reading any of this as a backend number.
 
 The next lever is the one §2 argues for from both directions: the NOMINAL half,
-(KIR.PERF.1).
+(KIR.PERF.1), whose entry now carries this census and a design the two
+refutations do not rule out.

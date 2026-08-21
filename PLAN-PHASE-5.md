@@ -20,6 +20,83 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(KIR.PERF) THE BACKEND, MEASURED FOUR TIMES AND MOVED −17% — AND THE ONE
+DIRECTION THAT LOOKS OBVIOUS IS NOW REFUTED TWICE (2026-08-21).**
+
+**THE RESULT.** `smol-toml` on the JVM goes **56.60 → 47.75 us/parse (−15.6%)**,
+i.e. 2.49x slower than the same library on Node down to **2.14x**. The last three
+runs differ only in the neutral lever below and read 46.95 / 48.00 / 47.75, so
+that is a replicated number and not a draw. **`mitt` is FLAT** — 62.25 both ends,
+still 1.39x faster than Node — which is the expected shape: an event emitter
+barely compares characters, barely reads properties and never matches a regular
+expression, so none of this session's levers has anything to do there. Every figure is a within-round paired delta on
+`scripts/kir-bench.sh` with 5 interleaved processes per arm, and **both Node
+arms held flat across every pair** (tsgo 452/455/453/451 ms, ours 448/445/447/453),
+which is what licenses reading these as backend numbers rather than as box
+weather. `docs/perf/kir-backend-levers.md` carries the table.
+
+**LEVER 1, THE WIN: an operand the lowering already typed no longer takes the
+boxed path (−13.6% on toml, ranges DISJOINT; nothing on mitt).** `===`, `!==`, `==`, `!=`, a `switch`
+clause, a condition and a string conversion all went through an `Any?` entry
+point, so `s.charCodeAt(p) === 0x20` — what a hand-written scanner's inner loop
+is made of — boxed BOTH operands and then walked an `instanceof` chain to
+rediscover what the lowering had proven. `+` has decided by the erased operand
+types since the beginning (`addValues`); this is that rule reaching the rest of
+the family and nothing else. The semantics are pinned rather than argued
+(`KirEqualitySemanticsTest`, `KirPrimitiveOperandTest`): `NaN !== NaN` and
+`0 === -0`, `-0`/`NaN` falsy but the STRING `'0'` truthy, `1 == true` and
+`null == undefined` true so no MIXED case may specialize, and the left operand
+evaluated first in both half-specialized directions.
+
+**LEVER 2, REFUTED, REVERTED, AND IT IS THE MOST USEFUL THING HERE.** A
+per-owner leaf census (`scripts/kir-profile.sh`, new) charges **44.3%** of the
+toml arm to the property bag — `JsObject.set` 25.6%, `get` 17.3% — so it is
+plainly the largest cost. Giving `JsObject` the shape its LITERAL declared,
+promoted at the first UNDECLARED key (chosen precisely to leave alone the
+dictionary half that killed the 2026-08-21 size-threshold attempt), measured
+**+31%, ranges disjoint**. The rule worked — `HashMap` fell from 38.3% of
+samples to **4.7%** — and the saving did not exist: counted in SAMPLES rather
+than shares, the bag cost **709 before and 771 after**, and the rest of the
+regression landed on `program.*` and regex frames that did not change.
+
+So: **two independent attempts at making the dynamic representation cheaper
+have now cost 21% and 31%. The bag is expensive in the NUMBER of operations,
+not in their unit cost**, and only the nominal half removes them. (KIR.PERF.1)'s
+case is now made by measurement from both directions.
+
+**LEVER 3: three rows the census named, two of them pure overhead (−4.0%).**
+`jsTruthy` decided its answer with an equality `when`, which Kotlin compiles to
+a chain of `Intrinsics.areEqual` — **5.0% of samples spent asking whether a
+value equals `false`**. `JsRegExp` allocated a `Matcher` per `test` and per
+`exec` (`Matcher.reset` was the largest regex leaf at 10.2%); the two now share
+one, which is safe because neither lets other code run between starting a match
+and reading its groups. And a regex LITERAL inside a function is a fresh object
+per call, so `value.replace(/_/g, '')` was re-parsing its source every time —
+every distinct `(source, flags)` now compiles once. `KirRegExpTest` uses ONE
+expression many ways at once, because both changes fail the same way.
+
+**LEVER 4: `+` asks the checker what the other arithmetic operators already
+ask — MEASURED NEUTRAL and kept, explicitly not counted as a win.** A bag read
+erases to `Any?` however precisely the checker typed it, so `ctx.p + 1` reached
+`jsAdd` with both sides boxed; asking whether the whole SUM is a `number`
+decides both coercions at once and is exact. 46.95 → 48.00 us/parse with the
+ranges OVERLAPPING. Kept because it is cost-monotone, pinned, and closes the one
+place where `+` disagreed with `-` about whom to ask.
+
+**GATES.** KIR module 58 → **83 tests, 0 failures** (+25 pins: 9 equality, 8
+primitive-operand, 5 regex, and `KirPropertyBagTest` rebuilt from 7 to 10 and
+made to cross BOTH construction routes — it had been building every fixture
+with `set`, so an entire representation was untested and read as covered).
+`KirPropertyBagTest`'s cases are representation-independent by construction:
+both refuted bag attempts passed all of them unchanged, which is exactly what
+makes it the grading harness for the next one.
+
+**THE SUCCESSOR, NAMED WITH ITS PRICE AND ITS INSTRUMENT** — see (KIR.PERF.1)
+below, which now carries the census, the ceiling (the bag is 44.3%, so a
+free property access is worth ~−44% at the limit) and the one design the two
+refutations do not rule out.
+
+
 **(BENCH.1) ANSWERED, AND ONE OF THE TWO PERFORMANCE LEVERS IT LICENSED IS A
 MEASURED REFUTATION (2026-08-21, same day).**
 
@@ -1461,24 +1538,43 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 **TOP OF QUEUE ON OWNER DIRECTIVE (2026-08-21): (BENCH.1) below runs before the (API.\*) arc
 resumes.**
 
-- [ ] **(KIR.PERF.1) THE NOMINAL HALF — THE ONLY LEVER LEFT FOR `smol-toml`'s 2.5x, AND
-  LEVER 3's REFUTATION IS EVIDENCE *FOR* IT.** `ErasedTypes.mapObject` sends a declared
-  `class` to a generated JVM class and sends an `interface`, a `type X = {…}` and every
-  object literal to the property bag; `docs/kir-structural-typing.md` §7 prices the nominal
-  half at **12x** the dynamic one, and the 2026-08-21 leaf profile charges **28.3%** of the
-  JVM arm's TOML samples to `HashMap`/`LinkedHashMap`. **What was already tried and FAILED
-  is making the dynamic representation cheaper** — a parallel-array small-bag scan measured
-  **+21%** because the population is bimodal (a 4-field `ParseContext` and an 18-key document
-  table, and the big half dominates). So the direction is to stop being dynamic where the
-  checker knows the shape, not to optimize the bag.
+- [ ] **(KIR.PERF.1) THE NOMINAL HALF — NOW THE *ONLY* DIRECTION LEFT FOR THE BAG, AND
+  ITS CASE IS MADE BY TWO REFUTATIONS RATHER THAN BY THE DESIGN DOC.** A per-owner leaf
+  census of the toml JVM arm (`scripts/kir-profile.sh`) charges **44.3%** to the property
+  bag — `JsObject.set` **25.6%**, `get` **17.3%**, `has` 1.4% — so a free property access
+  is worth roughly **−44% at the limit**, which would put `smol-toml` at ~1.2x Node
+  instead of 2.07x. Nothing else in the profile is above 20%.
 
-  **The obligation TypeScript imposes, and the reason this is an arc rather than a fix:**
-  assignability is STRUCTURAL, so a nominal encoding needs an interface per declared shape
-  plus generated implementations, with the checker deciding which shapes a literal satisfies
-  — and a bag must remain reachable for `any`, for an index signature, and for a shape the
-  closure cannot name. **Instrument it with `scripts/kir-bench.sh`, whose third arm now makes
-  a backend claim falsifiable**, and census the key-count distribution FIRST: it is what
-  round 3's refutation shows a share alone does not tell you.
+  **WHAT IS CLOSED.** Making the dynamic representation cheaper. Two independent attempts:
+  parallel arrays promoted by SIZE (**+21%**) and parallel arrays promoted at the first
+  UNDECLARED key (**+31%**, this round). The second is the informative one because its rule
+  worked — `HashMap` fell from 38.3% of samples to 4.7%, so the dictionary half really was
+  left alone — and the saving still did not exist: in SAMPLES rather than shares the bag
+  cost 709 before and 771 after. **A `LinkedHashMap` probe on an interned key is already
+  about as cheap as a three-element scan**, and the rest of that regression landed on
+  `program.*` and regex frames, which is what a bigger, two-shaped `get`/`set` does to the
+  callers it used to be inlined into. So the bag is expensive in the NUMBER of operations,
+  not their unit cost, and only removing operations helps.
+
+  **THE OBLIGATION TypeScript IMPOSES, unchanged:** assignability is STRUCTURAL, so a
+  nominal encoding needs a witness per declared shape plus generated implementations, with
+  a bag still reachable for `any`, for an index signature, and for a shape the closure
+  cannot name. `docs/kir-structural-typing.md` §7 prices the nominal half at 12x the
+  dynamic one.
+
+  **THE ONE INTERMEDIATE THE TWO REFUTATIONS DO NOT RULE OUT, worked out this round and
+  NOT built:** keep `JsObject` as the JVM type at every slot — so there is no static-type
+  risk at all and the fallback is always correct — and add a *guarded slot hint*:
+  `getAt(name, hint)` = `if (names[hint] === name) slots[hint] else get(name)`, five
+  bytecodes on the hot path, with the hint being the member's index in the RECEIVER's
+  declared type. It differs from the refuted attempt in exactly the two ways that attempt
+  failed: the fast path is O(1) rather than a scan, and it is small enough to inline. Its
+  cost is that it needs the shaped representation back (so it is graded by the same
+  `KirPropertyBagTest`) plus the declared MEMBER ORDER of an object type reaching the
+  lowering, which `CheckedFacts` does not expose today — and `Type.Object.members` is
+  LAZY, so a new reader must resolve it first (CLAUDE.md). A hint that is wrong is slow,
+  never incorrect. **Measure it with `scripts/kir-bench.sh` and refuse it on the same
+  standard as the other two: ranges disjoint, both Node arms flat.**
 
 - [ ] **(KIR.EMIT.1) OUR ESM OUTPUT IS NOT RUNNABLE ON NODE AS EMITTED — a relative
   specifier keeps the extension it was written with.** tsgo 7.0.2 rewrites `./parse.ts` ->
