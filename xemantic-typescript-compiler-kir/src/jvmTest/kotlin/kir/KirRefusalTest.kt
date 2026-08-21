@@ -89,10 +89,14 @@ class KirRefusalTest {
     }
 
     @Test
-    fun `a type with no mapping is refused rather than widened to Any`() {
-        // An object literal has no generated class, and design doc §3.3 takes
-        // only the nominal half of the hybrid for now.
-        val (compilation, _) = compile("const point = { x: 1 };\nconsole.log(point.x);")
+    fun `a LIBRARY type with no mapping is refused rather than erased to a property bag`() {
+        // The load-bearing half of the property-bag erasure. `Map` is declared
+        // in a lib `.d.ts` as an interface — structurally indistinguishable from
+        // one this program could have written — and it is NOT a bag of its own
+        // properties: erasing it to one would make `m.size` read `undefined`
+        // and every method call fail inside the runtime, silently, in a program
+        // that compiled. An own `interface` maps (corpus 11); this one must not.
+        val (compilation, _) = compile("const m = new Map();\nconsole.log(m.size);")
         assert(!compilation.successful)
         assert(compilation.refusals.isNotEmpty())
     }

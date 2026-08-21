@@ -54,6 +54,18 @@ internal class ErasedTypes(
     private val irBuiltIns: IrBuiltIns,
     private val classForDeclaration: (Node) -> IrClass?,
     private val jsArrayType: () -> IrType,
+    private val jsObjectType: () -> IrType,
+    /**
+     * Whether an object type's declaration is one THIS program wrote.
+     *
+     * The gate that keeps the property-bag erasure honest: an anonymous object
+     * type and an interface the program declares are property bags, and a
+     * LIBRARY type — `Map`, `Date`, `RegExp` — is not. Without it every lib
+     * type would erase to an empty bag whose members all read `undefined`,
+     * which is the one failure mode `docs/kir-lowering.md` §8 exists to
+     * prevent: silent, and shaped exactly like a working program.
+     */
+    private val isOwnStructuralDeclaration: (Node) -> Boolean,
 ) {
 
     /** `number`, and every numeric literal type — JS numbers are IEEE-754 doubles. */
@@ -136,10 +148,14 @@ internal class ErasedTypes(
     @OptIn(UnsafeDuringIrConstructionAPI::class)
     private fun mapObject(type: Type.Object): IrType? {
         if (isArrayLike(type)) return jsArrayType()
-        val symbol = type.symbol ?: return mapCallable(type)
+        // An anonymous object type — an object literal's own type, or a type
+        // literal written inline — has no symbol and is a property bag.
+        val symbol = type.symbol ?: return mapCallable(type) ?: jsObjectType()
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-            ?: return mapCallable(type)
-        return classForDeclaration(declaration)?.defaultType ?: mapCallable(type)
+            ?: return mapCallable(type) ?: jsObjectType()
+        classForDeclaration(declaration)?.let { return it.defaultType }
+        mapCallable(type)?.let { return it }
+        return if (isOwnStructuralDeclaration(declaration)) jsObjectType() else null
     }
 
     /**
