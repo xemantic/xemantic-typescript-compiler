@@ -19,6 +19,8 @@ debugger.
 | 10 | CLOSURES: an arrow as a value, a function-typed parameter, a captured parameter, a captured mutable local, and `Array.map` with a callback |
 | 11 | OBJECT LITERALS and interfaces: the property-bag erasure, shorthand and method properties, a member write |
 | 12 | **mitt 3.0.1, a real published library**, source unmodified plus a driver — see `CorpusTest` |
+| 13 | OPERATORS: compound assignment, `++`/`--` in both positions and both value meanings, the bitwise family with its `ToInt32`/`ToUint32` coercions, and `==` as ECMAScript ABSTRACT equality (`1 == "1"`, `null == undefined`) |
+| 14 | STRINGS: every `string` member goes through a runtime function, never Kotlin's same-named one — `length` is a NUMBER, `charAt` out of range is `""`, `slice` counts a negative index from the end and `substring` swaps a reversed pair — plus template literals |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto

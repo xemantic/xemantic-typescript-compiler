@@ -452,6 +452,63 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
 public class JsTypeError(message: String) : RuntimeException(message)
 
 /**
+ * `==` — ECMAScript ABSTRACT equality, over the values this backend produces.
+ *
+ * Not `===` with a shrug: `1 == "1"` is true, `null == undefined` is true, and
+ * `null == 0` is false. The one rule this cannot honour is the null/undefined
+ * distinction, which design §3.1 collapsed onto the JVM's single `null` — so
+ * `x == null` answers what BOTH spellings answer, which is what the vast
+ * majority of `== null` checks in real code mean anyway.
+ */
+public fun jsLooseEquals(left: Any?, right: Any?): Boolean {
+    val leftNullish = left == null || left === Undefined
+    val rightNullish = right == null || right === Undefined
+    if (leftNullish || rightNullish) return leftNullish && rightNullish
+    return when {
+        left is Double && right is Double -> left == right
+        left is String && right is String -> left == right
+        left is Boolean && right is Boolean -> left == right
+        // A boolean compares as its NUMBER, on either side, before anything else.
+        left is Boolean -> jsLooseEquals(jsToNumber(left), right)
+        right is Boolean -> jsLooseEquals(left, jsToNumber(right))
+        left is Double && right is String -> left == jsToNumber(right)
+        left is String && right is Double -> jsToNumber(left) == right
+        // An object compares by identity against another object, and by its
+        // primitive value against a primitive.
+        left is JsArray || left is JsObject || left is JsMap || left is JsSet ->
+            if (right is String || right is Double) jsLooseEquals(jsToString(left), right)
+            else left === right
+        right is JsArray || right is JsObject || right is JsMap || right is JsSet ->
+            jsLooseEquals(right, left)
+        else -> left == right
+    }
+}
+
+/** `&`, `|`, `^`, `<<`, `>>` — each `ToInt32` on both sides, then back. */
+public fun jsBitAnd(left: Any?, right: Any?): Double =
+    (toInt32(left) and toInt32(right)).toDouble()
+
+public fun jsBitOr(left: Any?, right: Any?): Double =
+    (toInt32(left) or toInt32(right)).toDouble()
+
+public fun jsBitXor(left: Any?, right: Any?): Double =
+    (toInt32(left) xor toInt32(right)).toDouble()
+
+public fun jsBitNot(value: Any?): Double = toInt32(value).inv().toDouble()
+
+public fun jsShiftLeft(left: Any?, right: Any?): Double =
+    (toInt32(left) shl (toUint32(right) % 32u).toInt()).toDouble()
+
+public fun jsShiftRight(left: Any?, right: Any?): Double =
+    (toInt32(left) shr (toUint32(right) % 32u).toInt()).toDouble()
+
+private fun toInt32(value: Any?): Int {
+    val number = jsToNumber(value)
+    if (number.isNaN() || number.isInfinite()) return 0
+    return number.toLong().toInt()
+}
+
+/**
  * `>>>` — the one operator whose whole meaning is a coercion.
  *
  * `ToUint32` on both operands, then an unsigned shift, then back to a `Double`.
@@ -468,6 +525,83 @@ private fun toUint32(value: Any?): UInt {
     val number = jsToNumber(value)
     if (number.isNaN() || number.isInfinite()) return 0u
     return number.toLong().toUInt()
+}
+
+// ---------------------------------------------------------------------------
+// String members
+//
+// A TypeScript `string` erases to a Kotlin `String`, and it is tempting to let
+// the generated code call Kotlin's own members. It must not: the two disagree
+// exactly where a program notices. `length` is a NUMBER in JavaScript and an
+// `Int` in Kotlin; `indexOf` answers -1 as a number; `charAt` out of range is
+// the empty string rather than an exception; `slice` accepts negative indices
+// counting from the end and clamps rather than throwing. So each member is a
+// runtime function taking the receiver, and the JavaScript semantics live here
+// where they can be read.
+// ---------------------------------------------------------------------------
+
+public fun jsStrLength(value: String): Double = value.length.toDouble()
+
+public fun jsStrCharAt(value: String, index: Double): String {
+    val i = index.toInt()
+    return if (i < 0 || i >= value.length) "" else value[i].toString()
+}
+
+public fun jsStrIndexOf(value: String, search: String): Double =
+    value.indexOf(search).toDouble()
+
+public fun jsStrLastIndexOf(value: String, search: String): Double =
+    value.lastIndexOf(search).toDouble()
+
+public fun jsStrIncludes(value: String, search: String): Boolean = value.contains(search)
+
+public fun jsStrStartsWith(value: String, search: String): Boolean = value.startsWith(search)
+
+public fun jsStrEndsWith(value: String, search: String): Boolean = value.endsWith(search)
+
+/** `String.prototype.slice`: negative indices count from the end, and it clamps. */
+public fun jsStrSlice(value: String, start: Double): String =
+    jsStrSlice(value, start, value.length.toDouble())
+
+public fun jsStrSlice(value: String, start: Double, end: Double): String {
+    val from = sliceIndex(start, value.length)
+    val to = sliceIndex(end, value.length)
+    return if (from >= to) "" else value.substring(from, to)
+}
+
+/** `String.prototype.substring`: clamps AND swaps a reversed pair, unlike slice. */
+public fun jsStrSubstring(value: String, start: Double): String =
+    jsStrSubstring(value, start, value.length.toDouble())
+
+public fun jsStrSubstring(value: String, start: Double, end: Double): String {
+    val from = start.toInt().coerceIn(0, value.length)
+    val to = end.toInt().coerceIn(0, value.length)
+    return value.substring(minOf(from, to), maxOf(from, to))
+}
+
+public fun jsStrToUpperCase(value: String): String = value.uppercase()
+
+public fun jsStrToLowerCase(value: String): String = value.lowercase()
+
+public fun jsStrTrim(value: String): String = value.trim()
+
+public fun jsStrRepeat(value: String, count: Double): String = value.repeat(count.toInt())
+
+/** `String.prototype.replace` with a STRING pattern: the FIRST match only. */
+public fun jsStrReplace(value: String, search: String, replacement: String): String =
+    value.replaceFirst(search, replacement)
+
+public fun jsStrReplaceAll(value: String, search: String, replacement: String): String =
+    value.replace(search, replacement)
+
+public fun jsStrSplit(value: String, separator: String): JsArray =
+    JsArray(if (separator.isEmpty()) value.map { it.toString() } else value.split(separator))
+
+public fun jsStrConcat(value: String, other: String): String = value + other
+
+private fun sliceIndex(raw: Double, length: Int): Int {
+    val index = raw.toInt()
+    return if (index < 0) (length + index).coerceAtLeast(0) else index.coerceAtMost(length)
 }
 
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
