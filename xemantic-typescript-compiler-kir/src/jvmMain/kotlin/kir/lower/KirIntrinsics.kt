@@ -207,6 +207,20 @@ internal class KirIntrinsics(
     /** A call of a value whose erasure did not say its arity — `jsCall(f, …)`. */
     val jsCall: IrSimpleFunctionSymbol by lazy { runtime("jsCall") }
 
+    /**
+     * The same call, specialized to a small argument COUNT — `jsCall2(f, a, b)`.
+     *
+     * Same semantics as [jsCall], which includes still adapting to the CALLEE's
+     * own arity; what it saves is the `vararg` array and all but one of the type
+     * tests. Null above [MAX_SPECIALIZED_CALL_ARITY], where the caller falls
+     * back to the general form.
+     */
+    fun jsCallSpecialized(argumentCount: Int): IrSimpleFunctionSymbol? =
+        if (argumentCount > MAX_SPECIALIZED_CALL_ARITY) null
+        else specializedCalls.getOrPut(argumentCount) { runtime("jsCall$argumentCount") }
+
+    private val specializedCalls = HashMap<Int, IrSimpleFunctionSymbol>()
+
     val jsUnsignedShiftRight: IrSimpleFunctionSymbol by lazy {
         runtime("jsUnsignedShiftRight")
     }
@@ -371,6 +385,9 @@ internal class KirIntrinsics(
     }
 
     private companion object {
+        /** How many arguments [jsCallSpecialized] has a fixed-arity entry point for. */
+        const val MAX_SPECIALIZED_CALL_ARITY: Int = 3
+
         /**
          * The `string` members this backend gives a runtime function.
          *

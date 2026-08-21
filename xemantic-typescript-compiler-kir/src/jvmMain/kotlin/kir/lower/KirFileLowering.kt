@@ -2718,13 +2718,7 @@ internal class KirFileLowering(
             // one argument. JavaScript pads the missing one with `undefined`,
             // and doing so here is the difference between running that library
             // and refusing it.
-            return scope.irCall(intrinsics.jsCall, types.anyNullable).apply {
-                arguments[0] = coerce(callee, lowerBagRead(callee), types.anyNullable)
-                arguments[1] = scope.irVararg(
-                    irBuiltIns.anyNType,
-                    node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
-                )
-            }
+            return adaptingCall(node) { coerce(callee, lowerBagRead(callee), types.anyNullable) }
         }
         // A NUMBER's members, for the same reason a string's are: Kotlin's
         // `Double.toString()` prints `6.0` where JavaScript prints `6`.
@@ -3097,15 +3091,43 @@ internal class KirFileLowering(
 
     /** `jsCall(callee, …)` — the arity-adapting call JavaScript performs. */
     private fun lowerDynamicCall(node: CallExpression): IrExpression =
-        scope.irCall(intrinsics.jsCall, types.anyNullable).apply {
-            arguments[0] = coerce(
-                node.expression, lowerExpression(node.expression), types.anyNullable
-            )
-            arguments[1] = scope.irVararg(
-                irBuiltIns.anyNType,
-                node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
-            )
+        adaptingCall(node) {
+            coerce(node.expression, lowerExpression(node.expression), types.anyNullable)
         }
+
+    /**
+     * `jsCall(callee, …)` — the arity-ADAPTING call, specialized where it can be.
+     *
+     * One shape for both dynamic-call sites, so the specialization decision is
+     * made once. Up to `MAX_SPECIALIZED_CALL_ARITY` arguments it emits the
+     * fixed-arity entry point, which passes them positionally and so allocates
+     * no `vararg` array; above that it emits the general form. The two are
+     * semantically identical — the callee's arity is still adapted to at run
+     * time, which `mitt` depends on — so this is a cost change and not a
+     * behaviour change, and `KirDynamicCallArityTest` is what says so.
+     */
+    private fun adaptingCall(
+        node: CallExpression,
+        callee: () -> IrExpression,
+    ): IrExpression {
+        // The CALLEE is lowered first, and that is not cosmetic: lowering an
+        // expression may emit statements (a temporary, a compound assignment),
+        // so building the arguments first would reorder those statements with
+        // respect to the callee's — a difference no argument POSITION restores.
+        val loweredCallee = callee()
+        val lowered = node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+        val specialized = intrinsics.jsCallSpecialized(lowered.size)
+        if (specialized != null) {
+            return scope.irCall(specialized, types.anyNullable).apply {
+                arguments[0] = loweredCallee
+                lowered.forEachIndexed { index, argument -> arguments[index + 1] = argument }
+            }
+        }
+        return scope.irCall(intrinsics.jsCall, types.anyNullable).apply {
+            arguments[0] = loweredCallee
+            arguments[1] = scope.irVararg(irBuiltIns.anyNType, lowered)
+        }
+    }
 
     // ---- function values ---------------------------------------------------
 

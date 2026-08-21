@@ -571,6 +571,65 @@ public class JsSet {
  * dropped — rather than refused, because refusing it would refuse the shape at
  * the centre of most event-emitter and callback code.
  */
+/*
+ * ARITY-SPECIALIZED entry points, and why they exist.
+ *
+ * [jsCall] is the general form and it costs two things at every call site: the
+ * `vararg` allocates an `Object[]`, and the `when` walks an `instanceof` chain
+ * whose first arm is rarely the answer. Measured on the `mitt` benchmark
+ * (2026-08-21), `jsCall` alone was ~60% of the JVM arm's leaf samples with
+ * `TypeIntrinsics.isFunctionOfArity` behind it — in the arm that WINS against
+ * Node.
+ *
+ * These take their arguments positionally, so there is no array, and each tests
+ * the arity it was called with FIRST, so the common case is one type test. What
+ * they must NOT do is assume that arity: JavaScript pads a missing argument with
+ * `undefined` and drops a surplus one, and that adaptivity is load-bearing here
+ * rather than defensive — `mitt` registers a one-parameter wildcard handler and
+ * `emit` calls it with two arguments. Dropping the fallbacks would compile and
+ * then fail on the library this backend exists to run.
+ */
+
+@Suppress("UNCHECKED_CAST")
+public fun jsCall0(callee: Any?): Any? = when (callee) {
+    is Function0<*> -> callee()
+    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(null)
+    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(null, null)
+    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(null, null, null)
+    null -> throw JsTypeError("undefined is not a function")
+    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+}
+
+@Suppress("UNCHECKED_CAST")
+public fun jsCall1(callee: Any?, a0: Any?): Any? = when (callee) {
+    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
+    is Function0<*> -> callee()
+    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, null)
+    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, null, null)
+    null -> throw JsTypeError("undefined is not a function")
+    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+}
+
+@Suppress("UNCHECKED_CAST")
+public fun jsCall2(callee: Any?, a0: Any?, a1: Any?): Any? = when (callee) {
+    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, a1)
+    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
+    is Function0<*> -> callee()
+    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, a1, null)
+    null -> throw JsTypeError("undefined is not a function")
+    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+}
+
+@Suppress("UNCHECKED_CAST")
+public fun jsCall3(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? = when (callee) {
+    is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, a1, a2)
+    is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, a1)
+    is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
+    is Function0<*> -> callee()
+    null -> throw JsTypeError("undefined is not a function")
+    else -> throw JsTypeError("${jsToString(callee)} is not a function")
+}
+
 public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
     fun argument(index: Int): Any? = if (index < arguments.size) arguments[index] else null
     return when (callee) {
@@ -586,6 +645,24 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
         is Function3<*, *, *, *> -> {
             @Suppress("UNCHECKED_CAST")
             (callee as Function3<Any?, Any?, Any?, Any?>)(argument(0), argument(1), argument(2))
+        }
+        // Arities 4 and 5 are here because their ABSENCE was a runtime
+        // `JsTypeError` on an ordinary program: a four-parameter method of an
+        // object literal is dynamic like any other bag member, and the chain
+        // that stopped at three reported it as "not a function". Nothing above
+        // five is claimed — a call that needs it still refuses loudly, which is
+        // the correct end of `docs/kir-lowering.md` §8.
+        is Function4<*, *, *, *, *> -> {
+            @Suppress("UNCHECKED_CAST")
+            (callee as Function4<Any?, Any?, Any?, Any?, Any?>)(
+                argument(0), argument(1), argument(2), argument(3)
+            )
+        }
+        is Function5<*, *, *, *, *, *> -> {
+            @Suppress("UNCHECKED_CAST")
+            (callee as Function5<Any?, Any?, Any?, Any?, Any?, Any?>)(
+                argument(0), argument(1), argument(2), argument(3), argument(4)
+            )
         }
         null -> throw JsTypeError("undefined is not a function")
         else -> throw JsTypeError("${jsToString(callee)} is not a function")
