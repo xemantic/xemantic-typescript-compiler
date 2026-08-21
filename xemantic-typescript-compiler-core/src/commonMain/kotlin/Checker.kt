@@ -111070,6 +111070,31 @@ interface DataView {
                 try {
                     // Type annotation takes priority
                     decl.type?.let { return getTypeFromTypeNode(it) }
+                    // (WIDEN.1)(a) the SYMBOL half of the const rule. Round 781
+                    // landed it where `currentLocalTypes` is recorded, which is
+                    // BODY-scoped — so `const MODE = 'quoted'` at MODULE level
+                    // still widened to `string` at every consumer, and passing
+                    // it where a literal union is expected was a false TS2345.
+                    // Measured on the `yaml` library, whose fold modes are
+                    // exactly that shape (`export const FOLD_QUOTED = 'quoted'`);
+                    // tsgo 7.0.2 is clean on it. The literal has to be read off
+                    // the AST — `getTypeOfExpression` answers the BASE primitive
+                    // for a literal node, there being no fresh-literal expression
+                    // type in this checker.
+                    if (WIDEN1_CONST_KEEPS_LITERAL) {
+                        decl.initializer?.let { init ->
+                            if (varDeclIsImmutableBinding(decl)) {
+                                literalTypeOfExpression(init)?.let { literal ->
+                                    // The mint is FRESH per call, so the id is
+                                    // registered here for the sites that must
+                                    // behave as they did before (WIDEN.1) — see
+                                    // [widen1ImmutableLiteralTypeIds].
+                                    widen1ImmutableLiteralTypeIds.add(literal.id)
+                                    return literal
+                                }
+                            }
+                        }
+                    }
                     // Infer from initializer (widened: literals → base types)
                     decl.initializer?.let { init ->
                         val inferred = inferTypeFromInitializer(init)
