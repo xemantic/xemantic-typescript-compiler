@@ -118,6 +118,19 @@ internal class KirIntrinsics(
     fun runtimeClassOf(type: IrType): IrClassSymbol? =
         if (type.classifierOrNull == jsArrayClass) jsArrayClass else null
 
+    /**
+     * `FunctionN.invoke` — how a call of a function VALUE reaches its target.
+     *
+     * Resolved off `IrBuiltIns` rather than through the declaration finder,
+     * because `kotlin.FunctionN` is a builtin the compiler synthesizes rather
+     * than a class on any classpath.
+     */
+    fun invoke(arity: Int): IrSimpleFunctionSymbol =
+        builder.irBuiltIns.functionN(arity).declarations
+            .filterIsInstance<IrSimpleFunction>()
+            .single { it.name.asString() == "invoke" }
+            .symbol
+
     /** `String.plus(Any?)` — the only `plus` a `String` receiver has. */
     val stringPlus: IrSimpleFunctionSymbol by lazy {
         builder.referenceMemberFunction(irFile, "kotlin.String", "plus")

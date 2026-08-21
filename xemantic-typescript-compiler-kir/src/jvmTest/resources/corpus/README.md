@@ -16,10 +16,17 @@ debugger.
 | 07 | classes: fields, `this`, constructor, methods, `new` |
 | 08 | `T \| undefined` erasing to `T?` rather than `Any`, and `=== undefined` |
 | 09 | ARRAYS: `T[]` erasing to the runtime `JsArray`, array literals, index read and write, an out-of-range read, and members reached by the receiver's ERASED type (`push`/`pop`/`join`/`indexOf`/`length`) |
+| 10 | CLOSURES: an arrow as a value, a function-typed parameter, a captured parameter, a captured mutable local, and `Array.map` with a callback |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
 the one JVM `null`, and this is the first corpus program where that shows.
 
-Deliberately absent, and each is its own milestone: `any`, generics, closures,
+Every function value erases to `kotlin.FunctionN<Any?, …, Any?>` — UNIFORMLY,
+whatever its TypeScript signature says. TypeScript's function assignability is
+bivariant and `Function1<in P, out R>` is not, so typing the parameters
+honestly would reject programs the checker accepted; the cast is paid at the
+use site instead, where union erasure already pays it.
+
+Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.

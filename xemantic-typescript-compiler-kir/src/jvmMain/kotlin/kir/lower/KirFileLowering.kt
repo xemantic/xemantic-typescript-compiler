@@ -31,6 +31,7 @@
 package com.xemantic.typescript.compiler.kir.lower
 
 import com.xemantic.typescript.compiler.ArrayLiteralExpression
+import com.xemantic.typescript.compiler.ArrowFunction
 import com.xemantic.typescript.compiler.AsExpression
 import com.xemantic.typescript.compiler.BinaryExpression
 import com.xemantic.typescript.compiler.Block
@@ -45,6 +46,7 @@ import com.xemantic.typescript.compiler.EmptyStatement
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.ExpressionStatement
 import com.xemantic.typescript.compiler.ForStatement
+import com.xemantic.typescript.compiler.FunctionExpression
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.IfStatement
@@ -111,13 +113,16 @@ import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
 import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrFunction
+import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrValueDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrValueParameter
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrFunctionExpressionImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrBreakImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstructorCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrContinueImpl
@@ -134,6 +139,7 @@ import org.jetbrains.kotlin.ir.util.createThisReceiverParameter
 import org.jetbrains.kotlin.ir.util.defaultType
 import org.jetbrains.kotlin.ir.util.render
 import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.name.SpecialNames
 import java.util.IdentityHashMap
 
 /**
@@ -812,6 +818,12 @@ internal class KirFileLowering(
         is NewExpression -> lowerNew(node)
         is PropertyAccessExpression -> lowerPropertyRead(node)
         is ArrayLiteralExpression -> lowerArrayLiteral(node)
+        is ArrowFunction -> lowerFunctionValue(node, node.parameters, node.body)
+        is FunctionExpression -> lowerFunctionValue(
+            node,
+            node.parameters,
+            node.body ?: refuse(tsFile, node, "a function expression with no body")
+        )
         is ElementAccessExpression -> lowerElementRead(node)
         // `x!` and `x as T` are ERASURES: both leave the value alone and change
         // only what the checker believes about it, and the checker has already
@@ -1107,6 +1119,15 @@ internal class KirFileLowering(
                 return lowerIntrinsicCall(node, intrinsic)
             }
         }
+        // LAST, and never for a property access. A callee is a function VALUE
+        // only once it has resolved to no declaration and to no member — and a
+        // MEMBER is of function type too, so a `x.y(…)` reaching here is an
+        // unknown library member (`Math.max`), which must keep saying so
+        // rather than be lowered as a call of the member's own value.
+        if (callee !is PropertyAccessExpression) {
+            facts.typeOf(callee)?.let { types.map(it) }?.let { types.functionArity(it) }
+                ?.let { arity -> return lowerFunctionValueCall(node, arity) }
+        }
         refuse(
             tsFile, node,
             "cannot lower this call — it resolves to no generated declaration " +
@@ -1183,6 +1204,126 @@ internal class KirFileLowering(
         return IrGetFieldImpl(
             UNDEFINED, UNDEFINED, field.symbol, field.type, receiverOf(node), null, null
         )
+    }
+
+    // ---- function values ---------------------------------------------------
+
+    /**
+     * An arrow or a function expression: a Kotlin lambda of the same arity.
+     *
+     * Three things about it are decisions rather than mechanics.
+     *
+     * **The parameters and the result are `Any?`** (`ErasedTypes.function`), so
+     * any function value fits any position of the same arity — which is what
+     * TypeScript's bivariant function assignability needs and what the JVM's
+     * variance would otherwise refuse.
+     *
+     * **`this` is inherited from the enclosing frame**, which IS arrow
+     * semantics: an arrow does not bind its own `this`, and neither does the
+     * lambda, because the frame it borrows is the enclosing method's.
+     *
+     * **Capture costs nothing to arrange**: the lowering's scope stack is not
+     * cleared at a function boundary, so an outer local is simply in scope and
+     * the reference to it is an ordinary `irGet` of the outer declaration.
+     * Kotlin's own closure lowering then does the capturing.
+     */
+    private fun lowerFunctionValue(
+        node: Expression,
+        parameters: List<Parameter>,
+        body: Node
+    ): IrExpression {
+        parameters.forEach { parameter ->
+            if (parameter.name !is Identifier) {
+                refuse(tsFile, parameter, "a destructuring parameter is out of the spike subset")
+            }
+            if (parameter.dotDotDotToken) {
+                refuse(tsFile, parameter, "a rest parameter is out of the spike subset")
+            }
+        }
+        val lambda = builder.irFactory.buildFun {
+            name = SpecialNames.ANONYMOUS
+            returnType = types.anyNullable
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+        }
+        lambda.parent = frame.irFunction
+        parameters.forEach { parameter ->
+            lambda.addValueParameter(
+                Name.identifier(kotlinName((parameter.name as Identifier).text)),
+                types.anyNullable,
+                builder.generatedOrigin
+            )
+        }
+        inFunction(lambda, types.anyNullable, frame.thisReceiver, frame.ownerClass) {
+            lambda.body = lambdaBody(lambda, parameters, body)
+        }
+        return IrFunctionExpressionImpl(
+            UNDEFINED,
+            UNDEFINED,
+            types.function(parameters.size),
+            lambda,
+            IrStatementOrigin.LAMBDA
+        )
+    }
+
+    /**
+     * A lambda's body, block-shaped or expression-shaped.
+     *
+     * A block body gets a trailing `return null` unless it already ends in a
+     * `return`: the lambda's erased result type is `Any?`, and a JVM method
+     * with a value result may not fall off its end — the failure would be
+     * invalid bytecode rather than a wrong answer, i.e. far from here.
+     */
+    private fun lambdaBody(
+        lambda: IrSimpleFunction,
+        parameters: List<Parameter>,
+        body: Node
+    ): org.jetbrains.kotlin.ir.expressions.IrBlockBody {
+        if (body is Block) {
+            val lowered = mutableListOf<IrStatement>()
+            scopes.addLast(HashMap())
+            bindParameters(lambda, parameters)
+            body.statements.forEach { lowerStatement(it, lowered) }
+            scopes.removeLast()
+            if (body.statements.lastOrNull() !is ReturnStatement) {
+                lowered.add(scope.irReturn(scope.irNull()))
+            }
+            return blockBodyOf(lowered)
+        }
+        val expression = body as? Expression
+            ?: refuse(tsFile, body, "cannot lower this function body")
+        scopes.addLast(HashMap())
+        bindParameters(lambda, parameters)
+        val value = coerce(expression, lowerExpression(expression), types.anyNullable)
+        scopes.removeLast()
+        return blockBodyOf(listOf(scope.irReturn(value)))
+    }
+
+    /**
+     * A call of a function VALUE — `handler(event)`, `callbacks[0](x)`.
+     *
+     * Reached only after the call resolved to no generated declaration, which
+     * is the honest order: a call of a declared function is a direct call and
+     * must stay one.
+     */
+    private fun lowerFunctionValueCall(node: CallExpression, arity: Int): IrExpression {
+        if (node.arguments.size != arity) {
+            refuse(
+                tsFile, node,
+                "a function value of arity $arity called with ${node.arguments.size} argument(s)"
+            )
+        }
+        val invoke = intrinsics.invoke(arity)
+        return scope.irCall(invoke, types.anyNullable).apply {
+            arguments[0] = coerce(
+                node.expression, lowerExpression(node.expression), types.function(arity)
+            )
+            node.arguments.forEachIndexed { index, argument ->
+                arguments[index + 1] =
+                    coerce(argument, lowerExpression(argument), types.anyNullable)
+            }
+        }
     }
 
     // ---- arrays and other runtime-backed receivers -------------------------
