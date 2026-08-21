@@ -68,6 +68,17 @@ internal class ErasedTypes(
      * prevent: silent, and shaped exactly like a working program.
      */
     private val isOwnStructuralDeclaration: (Node) -> Boolean,
+    /**
+     * What an ENUM (or one of its members) erases to: the type its VALUES have.
+     *
+     * An enum has no runtime object in this backend — a member access is
+     * replaced by its constant — so the type of an enum-typed slot is the type
+     * of those constants, `Double` or `String`. A mixed enum answers null and
+     * is refused, because there is no one JVM type its members share.
+     */
+    private val enumErasure: (Node) -> IrType?,
+    /** `bigint` — `java.math.BigInteger`, per the design doc's type table. */
+    private val bigIntegerType: () -> IrType,
 ) {
 
     /** `number`, and every numeric literal type — JS numbers are IEEE-754 doubles. */
@@ -105,11 +116,13 @@ internal class ErasedTypes(
             flags.hasAny(TypeFlags.NumberLike) -> double
             flags.hasAny(TypeFlags.StringLike) -> string
             flags.hasAny(TypeFlags.BooleanLike) -> boolean
+            flags.hasAny(TypeFlags.BigIntLike) -> bigIntegerType()
             flags.hasAny(TypeFlags.Void) -> unit
             flags.hasAny(TypeFlags.Never) -> irBuiltIns.nothingType
             flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) -> nothingNullable
             flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) -> anyNullable
             type is Type.Union -> mapUnion(type)
+            type is Type.Intersection -> mapIntersection(type)
             type is Type.Object -> mapObject(type)
             else -> null
         }
@@ -132,9 +145,18 @@ internal class ErasedTypes(
             it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
         }
         if (present.isEmpty()) return nothingNullable
-        val mapped = present.map { map(it) ?: return null }
-        val first = mapped.first()
-        val uniform = mapped.all { it.classifierOrNull == first.classifierOrNull }
+        val mapped = present.map { map(it) }
+        // A member this backend cannot map does NOT poison the union, as long as
+        // some member does: a heterogeneous union erases to `Any` anyway, so the
+        // unmappable member costs no information HERE. What it costs is a cast
+        // at the use site — and every operation on such a value (a `bigint`
+        // literal, a lib type with no runtime class) refuses on its own, which
+        // is where the refusal belongs. A union NOTHING maps still refuses.
+        if (mapped.all { it == null }) return null
+        val erasures = mapped.filterNotNull()
+        val first = erasures.first()
+        val uniform = erasures.size == mapped.size &&
+            erasures.all { it.classifierOrNull == first.classifierOrNull }
         val erased = if (uniform) first else irBuiltIns.anyType
         return if (nullable) erased.makeNullable() else erased
     }
@@ -156,12 +178,36 @@ internal class ErasedTypes(
         libraryName(type)?.let { name -> libraryType(name)?.let { return it } }
         val symbol = type.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
+        // An ENUM erases to the type its members' VALUES have — it has no
+        // runtime object here, so `Kind` and `Kind.A` are one JVM type.
+        declaration?.let { enumErasure(it) }?.let { return it }
         declaration?.let { classForDeclaration(it) }?.let { return it.defaultType }
         mapCallable(type)?.let { return it }
         // An anonymous object type — an object literal's own type, or a type
         // literal written inline — is a property bag by construction.
         if (declaration == null) return jsObjectType()
         return if (isOwnStructuralDeclaration(declaration)) jsObjectType() else null
+    }
+
+    /**
+     * An INTERSECTION of object shapes is a property bag, like each of them.
+     *
+     * `ErrorOptions & { toml: string; ptr: number }` — the branded-options shape
+     * every library writes — has no runtime witness of its own: what flows
+     * through it is one object carrying the union of the members' properties,
+     * which is what a bag is.
+     *
+     * Refused the moment a member erases to something NOMINAL — a `Date & {…}`
+     * is a `JsDate` at run time and calling its methods on a bag would fail
+     * inside the runtime. A member this backend cannot map at all is treated as
+     * a pure type-level constraint (`ErrorOptions` is one), which is the only
+     * reading that keeps branded types usable.
+     */
+    private fun mapIntersection(type: Type.Intersection): IrType? {
+        val bag = jsObjectType()
+        val mapped = type.types.map { map(it) }
+        if (mapped.any { it != null && it.classifierOrNull != bag.classifierOrNull }) return null
+        return bag
     }
 
     /**

@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler.kir.lower
 
 import com.xemantic.typescript.compiler.ClassDeclaration
+import com.xemantic.typescript.compiler.EnumDeclaration
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.Node
@@ -33,6 +34,7 @@ import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.VariableDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
@@ -102,8 +104,28 @@ internal class KirProgramTables(
     val getters = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
     val setters = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
 
+    /**
+     * ENUM member values, by declaration — the whole of an enum's lowering.
+     *
+     * An enum has no runtime object here: every member ACCESS is replaced by
+     * its constant, which is what a `const enum` means and what a plain one
+     * degrades to for every use except reflecting over the enum object itself
+     * (`Type[x]`), which is refused. A member's value is a `Double` or a
+     * `String`, mirroring TypeScript's two enum flavours.
+     */
+    val enumMembers = IdentityHashMap<EnumDeclaration, Map<String, Any>>()
+
     /** The class a `class X extends Y` names, where this backend generated it. */
     val superclasses = IdentityHashMap<ClassDeclaration, ClassDeclaration>()
+
+    /**
+     * The RUNTIME class a `class X extends Y` names — `class D extends Date`.
+     *
+     * Separate from [superclasses] because there is no `ClassDeclaration` to
+     * point at: the base is one of this backend's own runtime classes, and what
+     * the lowering needs from it is a JVM symbol rather than a TypeScript tree.
+     */
+    val runtimeSuperclasses = IdentityHashMap<ClassDeclaration, IrClassSymbol>()
 
     /** Static fields and methods, by owner and member name. */
     val staticFields = IdentityHashMap<ClassDeclaration, MutableMap<String, IrField>>()

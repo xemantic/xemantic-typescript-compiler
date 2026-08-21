@@ -73,6 +73,8 @@ internal class KirIntrinsics(
     val jsTruthy: IrSimpleFunctionSymbol by lazy { runtime("jsTruthy") }
     val jsStrictEquals: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEquals") }
 
+    val jsTypeOf: IrSimpleFunctionSymbol by lazy { runtime("jsTypeOf") }
+
     /** The runtime's array class — what every `T[]`, `Array<T>` and tuple erases to. */
     val jsArrayClass: IrClassSymbol by lazy {
         builder.referenceClass(irFile, "$runtimePackage.JsArray")
@@ -142,11 +144,40 @@ internal class KirIntrinsics(
      * roughly like it is exactly the failure `docs/kir-lowering.md` §8 forbids.
      */
     fun libraryClass(name: String): IrClassSymbol? = when (name) {
-        "Array", "ReadonlyArray" -> jsArrayClass
+        // A match result IS an array — with `index` and `input` properties this
+        // runtime does not carry, which a program reading them refuses on.
+        "Array", "ReadonlyArray", "RegExpMatchArray", "RegExpExecArray" -> jsArrayClass
         "Map", "ReadonlyMap", "WeakMap" -> jsMapClass
         "Set", "ReadonlySet", "WeakSet" -> jsSetClass
+        "RegExp" -> jsRegExpClass
+        "Date" -> jsDateClass
+        "Error" -> jsErrorClass
         else -> null
     }
+
+    val jsErrorClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsError")
+    }
+
+    val jsDateClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsDate")
+    }
+
+    val jsRegExpClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsRegExp")
+    }
+
+    /** A regular-expression LITERAL: `jsRegExp(source, flags)`. */
+    val jsRegExp: IrSimpleFunctionSymbol by lazy { runtime("jsRegExp") }
+
+    val jsRegExpType: IrType by lazy { jsRegExpClass.owner.defaultType }
+
+    /** `bigint` — `java.math.BigInteger`, per the design doc's type table. */
+    val bigIntegerType: IrType by lazy {
+        builder.referenceClass(irFile, "java.math.BigInteger").owner.defaultType
+    }
+
+    val jsBigInt: IrSimpleFunctionSymbol by lazy { runtime("jsBigInt") }
 
     val jsMapClass: IrClassSymbol by lazy {
         builder.referenceClass(irFile, "$runtimePackage.JsMap")
@@ -165,6 +196,17 @@ internal class KirIntrinsics(
 
     val jsLooseEquals: IrSimpleFunctionSymbol by lazy { runtime("jsLooseEquals") }
 
+    /** The DYNAMIC member operations, for a receiver the checker typed `any`. */
+    val jsGet: IrSimpleFunctionSymbol by lazy { runtime("jsGet") }
+
+    val jsSet: IrSimpleFunctionSymbol by lazy { runtime("jsSet") }
+
+    val jsInvoke: IrSimpleFunctionSymbol by lazy { runtime("jsInvoke") }
+
+    val jsIndexGet: IrSimpleFunctionSymbol by lazy { runtime("jsIndexGet") }
+
+    val jsIndexSet: IrSimpleFunctionSymbol by lazy { runtime("jsIndexSet") }
+
     /** `throw <any value>` — the JVM can only throw a `Throwable`, so it carries. */
     val jsThrow: IrSimpleFunctionSymbol by lazy { runtime("jsThrow") }
 
@@ -180,11 +222,22 @@ internal class KirIntrinsics(
      * from the end. Selected by arity, since `slice`/`substring` have a
      * one-argument and a two-argument form.
      */
-    fun stringMember(name: String, argumentCount: Int): IrSimpleFunctionSymbol? {
+    fun stringMember(
+        name: String,
+        argumentCount: Int,
+        firstArgumentIsRegExp: Boolean = false
+    ): IrSimpleFunctionSymbol? {
         val function = STRING_MEMBERS[name] ?: return null
         return try {
             builder.referenceFunction(irFile, runtimePackage, function) {
-                it.owner.parameters.size == argumentCount + 1
+                val parameters = it.owner.parameters
+                if (parameters.size != argumentCount + 1) return@referenceFunction false
+                // `match`, `replace` and `split` each have a STRING form and a
+                // REGEXP form of the same arity, so the argument's own erased
+                // type is what tells them apart.
+                val second = parameters.getOrNull(1)?.type?.classifierOrNull
+                if (argumentCount == 0) true
+                else (second == jsRegExpClass) == firstArgumentIsRegExp
             }
         } catch (_: IllegalStateException) {
             // The member exists at another arity — a `slice(a, b, c)` say. A
@@ -202,8 +255,26 @@ internal class KirIntrinsics(
         jsArrayClass -> jsArrayClass
         jsMapClass -> jsMapClass
         jsSetClass -> jsSetClass
+        jsRegExpClass -> jsRegExpClass
+        jsDateClass -> jsDateClass
+        jsErrorClass -> jsErrorClass
         else -> null
     }
+
+    /**
+     * The constructor of a runtime class taking [argumentCount] arguments.
+     *
+     * Distinct from [runtimeConstructor], which is the no-argument one: a
+     * generated class extending `JsDate` delegates to `JsDate(Any?)` with the
+     * value its own `super(…)` passed.
+     */
+    fun runtimeConstructorOfArity(
+        owner: IrClassSymbol,
+        argumentCount: Int
+    ): IrConstructorSymbol? = owner.owner.declarations.filterIsInstance<IrConstructor>()
+        .firstOrNull { constructor ->
+            constructor.parameters.count { it.kind == IrParameterKind.Regular } == argumentCount
+        }?.symbol
 
     /** The no-argument constructor of a runtime class — `new Map()`. */
     fun runtimeConstructor(owner: IrClassSymbol): IrConstructorSymbol? =
@@ -261,10 +332,26 @@ internal class KirIntrinsics(
      * [receiverTypeText], or null when it is not one this backend knows.
      */
     fun libraryMember(receiverTypeText: String?, memberName: String?): IrSimpleFunctionSymbol? =
-        when ("$receiverTypeText.$memberName") {
-            "Console.log" -> consoleLog
-            else -> null
+        GLOBAL_MEMBERS["$receiverTypeText.$memberName"]?.let { runtime(it) }
+
+    /**
+     * A GLOBAL free function — `isNaN`, `parseInt`, `String(x)` — by name and
+     * arity.
+     *
+     * Asked only once a call has resolved to a declaration this backend did NOT
+     * generate, i.e. a lib one, so a program's own `function parseInt` is
+     * unaffected.
+     */
+    fun globalFunction(name: String, argumentCount: Int): IrSimpleFunctionSymbol? {
+        val function = GLOBAL_FUNCTIONS[name] ?: return null
+        return try {
+            builder.referenceFunction(irFile, runtimePackage, function) {
+                it.owner.parameters.size == argumentCount
+            }
+        } catch (_: IllegalStateException) {
+            null
         }
+    }
 
     private companion object {
         /**
@@ -274,6 +361,53 @@ internal class KirIntrinsics(
          * than routed to Kotlin's same-named member, because "same name" is
          * exactly what makes the divergences invisible.
          */
+        /**
+         * The GLOBAL objects' members, by the checker's rendering of the
+         * receiver plus the member name.
+         *
+         * Keyed by the checker's own answer rather than by the syntax
+         * `Math.floor`, so a local variable called `Math` cannot be mistaken
+         * for the global one. Everything absent is refused at the call site.
+         */
+        val GLOBAL_MEMBERS = mapOf(
+            "Console.log" to "consoleLog",
+            "Console.error" to "consoleLog",
+            "Math.floor" to "jsMathFloor",
+            "Math.ceil" to "jsMathCeil",
+            "Math.round" to "jsMathRound",
+            "Math.trunc" to "jsMathTrunc",
+            "Math.abs" to "jsMathAbs",
+            "Math.sign" to "jsMathSign",
+            "Math.sqrt" to "jsMathSqrt",
+            "Math.log" to "jsMathLog",
+            "Math.log10" to "jsMathLog10",
+            "Math.log2" to "jsMathLog2",
+            "Math.pow" to "jsMathPow",
+            "Math.min" to "jsMathMin",
+            "Math.max" to "jsMathMax",
+            "NumberConstructor.isInteger" to "jsNumberIsInteger",
+            "NumberConstructor.isSafeInteger" to "jsNumberIsSafeInteger",
+            "NumberConstructor.isFinite" to "jsNumberIsFinite",
+            "NumberConstructor.isNaN" to "jsNumberIsNaN",
+            "NumberConstructor.parseFloat" to "jsParseFloat",
+            "ObjectConstructor.keys" to "jsObjectKeys",
+            "ObjectConstructor.hasOwn" to "jsObjectHasOwn",
+            "ObjectConstructor.defineProperty" to "jsObjectDefineProperty",
+            "JSON.stringify" to "jsJsonStringify",
+            "StringConstructor.fromCharCode" to "jsStrFromCharCode",
+            "StringConstructor.fromCodePoint" to "jsStrFromCodePoint",
+        )
+
+        val GLOBAL_FUNCTIONS = mapOf(
+            "isNaN" to "jsIsNaN",
+            "isFinite" to "jsIsFinite",
+            "parseInt" to "jsParseInt",
+            "parseFloat" to "jsParseFloat",
+            "String" to "jsStringOf",
+            "Number" to "jsNumberOf",
+            "BigInt" to "jsBigIntOf",
+        )
+
         val STRING_MEMBERS = mapOf(
             "length" to "jsStrLength",
             "charAt" to "jsStrCharAt",
@@ -287,11 +421,17 @@ internal class KirIntrinsics(
             "toUpperCase" to "jsStrToUpperCase",
             "toLowerCase" to "jsStrToLowerCase",
             "trim" to "jsStrTrim",
+            "trimStart" to "jsStrTrimStart",
+            "trimEnd" to "jsStrTrimEnd",
+            "padStart" to "jsStrPadStart",
             "repeat" to "jsStrRepeat",
             "replace" to "jsStrReplace",
             "replaceAll" to "jsStrReplaceAll",
             "split" to "jsStrSplit",
             "concat" to "jsStrConcat",
+            "match" to "jsStrMatch",
+            "charCodeAt" to "jsStrCharCodeAt",
+            "codePointAt" to "jsStrCodePointAt",
         )
     }
 

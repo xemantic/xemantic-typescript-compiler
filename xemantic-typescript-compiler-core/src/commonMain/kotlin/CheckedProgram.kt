@@ -110,6 +110,16 @@ interface CheckedLens {
     /** The declared type of a symbol: what an annotation on it denotes. */
     fun declaredTypeOfSymbol(symbol: Symbol): Type
 
+    /**
+     * What a written TYPE ANNOTATION denotes, resolved here and now.
+     *
+     * The route to a type that belongs to no symbol: a DESTRUCTURING parameter
+     * has no name to resolve and is deliberately absent from a `Signature`'s
+     * parameter list, so its annotation is the only statement of its type — and
+     * a `TypeNode` is syntax until something resolves it.
+     */
+    fun typeOfTypeNode(node: TypeNode): Type
+
     /** What a free name refers to at this position, through the lexical chain. */
     fun resolveName(name: String): Symbol?
 

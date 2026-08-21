@@ -56,6 +56,11 @@ internal class KirProgramLowering(
 ) {
 
     fun lower() {
+        // A DECLARATION file has no runtime content — it is types and ambient
+        // declarations only, which is what `.d.ts` means — so it is not lowered
+        // at all. Its declarations still reach the backend through the checker,
+        // which is the only way they were ever going to.
+        val files = files.filterNot { it.fileName.endsWith(".d.ts") }
         val tables = KirProgramTables(files)
         val facades = facadeNames()
         val lowerings = files.map { file ->
@@ -82,7 +87,7 @@ internal class KirProgramLowering(
         // before the file that imports it runs, which is the whole reason the
         // order is computed rather than taken as the crawl's.
         val byName = lowerings.associate { (file, lowering) -> file.fileName to lowering }
-        val inits = initializationOrder().mapNotNull { byName.getValue(it).buildModuleInit() }
+        val inits = initializationOrder().mapNotNull { byName[it]?.buildModuleInit() }
         lowerings.single { (file, _) -> file === entryFile }.second.buildEntryPoint(inits)
     }
 
@@ -100,7 +105,7 @@ internal class KirProgramLowering(
         importEdges.forEach { (importer, imported) ->
             dependencies.getOrPut(importer) { mutableListOf() }.add(imported)
         }
-        val known = files.map { it.fileName }.toSet()
+        val known = files.filterNot { it.fileName.endsWith(".d.ts") }.map { it.fileName }.toSet()
         val ordered = mutableListOf<String>()
         val visiting = mutableSetOf<String>()
         val done = mutableSetOf<String>()
@@ -111,7 +116,8 @@ internal class KirProgramLowering(
             done.add(name)
             ordered.add(name)
         }
-        files.filter { it !== entryFile }.forEach { visit(it.fileName) }
+        files.filter { it !== entryFile && !it.fileName.endsWith(".d.ts") }
+            .forEach { visit(it.fileName) }
         visit(entryFile.fileName)
         return ordered
     }
