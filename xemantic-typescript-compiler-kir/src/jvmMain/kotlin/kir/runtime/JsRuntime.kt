@@ -127,6 +127,23 @@ public fun jsToString(value: Any?): String = when (value) {
 }
 
 /**
+ * [jsToString] for a slot whose nullish member is `undefined` rather than `null`.
+ *
+ * §3.1 collapses the two onto the JVM's `null` in every erased slot, so
+ * `string | undefined` and `string | null` are both `String?` and the runtime
+ * alone cannot tell a value of one from a value of the other. The decision is
+ * therefore made by the LOWERING, which still holds the TypeScript type, and
+ * this is the arm it picks when that type admits `undefined` and not `null` —
+ * the overwhelmingly common case, since `undefined` is what an optional
+ * parameter, a missing argument and an unwritten property all hold.
+ *
+ * The same collapse and the same choice are already made by [jsTypeOf], for
+ * the same reason.
+ */
+public fun jsToStringNullAsUndefined(value: Any?): String =
+    if (value == null) "undefined" else jsToString(value)
+
+/**
  * The `+` operator, for the operands the checker could not resolve to a single
  * type. Where it could — both `number`, or either statically `string` — the
  * lowering emits a `Double` add or a `String.plus` directly and never calls this.

@@ -70,6 +70,15 @@ internal class KirIntrinsics(
     val consoleLog: IrSimpleFunctionSymbol by lazy { runtime("consoleLog") }
     val jsToString: IrSimpleFunctionSymbol by lazy { runtime("jsToString") }
 
+    /**
+     * `ToString` where the erased slot's `null` means `undefined` — see the
+     * runtime's own KDoc, and `KirFileLowering.nullRendersAsUndefined` for who
+     * decides between the two.
+     */
+    val jsToStringNullAsUndefined: IrSimpleFunctionSymbol by lazy {
+        runtime("jsToStringNullAsUndefined")
+    }
+
     /** `String(x)` where the lowering already proved `x` is a `number`. */
     val jsNumberToString: IrSimpleFunctionSymbol by lazy { runtime("jsNumberToString") }
     val jsToNumber: IrSimpleFunctionSymbol by lazy { runtime("jsToNumber") }

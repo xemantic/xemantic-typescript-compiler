@@ -2214,6 +2214,9 @@ internal class KirFileLowering(
      * Kotlin's `String.plus(Any?)` would call `toString()`, and `Double.toString`
      * is not `Number::toString` — it prints `1.0` where JavaScript prints `1`.
      * So everything that is not already a `String` goes through the runtime.
+     *
+     * It is also where the `undefined`/`null` collapse of §3.1 has to be undone:
+     * see [nullRendersAsUndefined].
      */
     private fun asString(node: Expression, value: IrExpression): IrExpression = when {
         value.type == types.string -> value
@@ -2221,9 +2224,40 @@ internal class KirFileLowering(
         // jsNumberToString(value)` is that function's own second line.
         value.type == types.double ->
             scope.irCall(intrinsics.jsNumberToString, types.string).apply { arguments[0] = value }
-        else -> scope.irCall(intrinsics.jsToString).apply {
+        else -> scope.irCall(
+            if (nullRendersAsUndefined(node)) intrinsics.jsToStringNullAsUndefined
+            else intrinsics.jsToString
+        ).apply {
             arguments[0] = coerce(node, value, types.anyNullable)
         }
+    }
+
+    /**
+     * Does a JVM `null` in this expression's slot mean JavaScript's `undefined`?
+     *
+     * §3.1 puts `undefined` and `null` on one JVM value, so `string | undefined`
+     * and `string | null` both erase to `String?` and the RUNTIME cannot tell a
+     * value of one from a value of the other — it answered `"null"` for both,
+     * where JavaScript prints `undefined` for the first. The lowering can tell,
+     * because it still holds the TypeScript type, and this is that question:
+     * the type admits a nullish member, and every nullish member it admits is
+     * `undefined` (or `void`).
+     *
+     * A type admitting BOTH keeps `"null"`. There is genuinely nothing left to
+     * decide it by once the two values have been collapsed, and `any` is the
+     * same case — so this narrows a wrong answer to the shapes that cannot be
+     * separated at all, rather than swapping which one is wrong. The mirror
+     * choice for `typeof`, made for the same reason, is in `jsTypeOf`.
+     */
+    private fun nullRendersAsUndefined(node: Expression): Boolean {
+        val type = facts.typeOf(node) ?: return false
+        val members = (type as? Type.Union)?.types ?: listOf(type)
+        var undefined = false
+        for (member in members) {
+            if (member.flags.hasAny(TypeFlags.Null)) return false
+            if (member.flags.hasAny(TypeFlags.Undefined or TypeFlags.Void)) undefined = true
+        }
+        return undefined
     }
 
     private fun arithmetic(node: BinaryExpression, operator: String): IrExpression =
