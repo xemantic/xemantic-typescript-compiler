@@ -20,6 +20,99 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**KIR SPIKE (2026-08-21, branch `spike/ts-to-kotlin-ir`) — TWO REAL PUBLISHED
+LIBRARIES COMPILE TO JVM BYTECODE AND RUN, AND SIX CHECKER DEFECTS FELL OUT OF
+GETTING THERE.**
+
+**THE RESULT.** `mitt` 3.0.1 (123 lines) compiles and runs twice — as a corpus
+program, and as a real MODULE that a second file imports. `smol-toml` (1,082
+lines over seven files, its own source unmodified) compiles and PARSES a 40-line
+TOML document; the expectation is produced by **Python's `tomllib`**, so the test
+checks the compiled library against a second, independent implementation rather
+than against itself. The checker reports **zero errors** on both, which is what
+tsgo 7.0.2 reports.
+
+**THE METHOD, WHICH IS THE PART THAT TRANSFERS.** Point the compiler at code
+nobody wrote for it, read the FIRST refusal — it names a file, a line, a column
+and a construct — fix exactly that, repeat. Roughly forty iterations produced
+the whole backend surface below, and every one of them was a real gap rather
+than a guess. Two instruments made it cheap: `LibraryProbe`
+(`KIR_PROBE_PROJECT` / `KIR_PROBE_FILE`, an env var because Gradle does not
+forward `-D` to the test JVM) and `tsgo --noEmit -p <dir>` as the front-end
+oracle.
+
+**`docs/kir-library-readiness.md` PREDICTED THE OPPOSITE AND NOW SAYS SO.** It
+concluded from `yaml` and `zod` that "the blocker is the FRONT END, not the
+backend"; measured on a third library, mitt reached zero checker errors
+untouched and every step between "type-checks" and "runs" was backend work. The
+rule is per-library, and the page now names the two commands that answer it
+before any planning.
+
+**THE SIX CHECKER DEFECTS**, each a false positive or a silent false negative
+that a corpus of ONE codebase's style could not contain, each landed with pins
+and an ablation:
+
+- an imported class's `instanceof` narrowed NOTHING — the alias has neither
+  `SymbolFlags.Class` nor the value flags the constructor-value leg needs;
+- an imported TYPE GUARD narrowed nothing — round 512's dir-relative resolver
+  lesson, one resolver over (`computeImportedFunctionLikeDecl`);
+- **a guard written `const isX = (n): n is X => …` narrowed nothing at all**,
+  local or imported, because it resolves to a VariableDeclaration with no
+  parameter list — the style `yaml` writes ALL of its guards in;
+- `export default function f` resolved to `any`, so every misuse of a
+  default-imported function went unreported;
+- a returned LITERAL widened against a literal-containing union (the string
+  fallback re-renders the source as its base primitive, and the arrow's concise
+  body never had 17.70 at all);
+- a MODULE-level `const` widened where a body-local one kept its literal; an
+  object literal typed its members in a vacuum in a var-decl where the RETURN
+  path has given it context since round 462; and assigning a computed primitive
+  dropped a narrow that assigning a CALL kept.
+
+Plus one in the type-of-a-binding family: a `for…of` binding was typed `any`
+everywhere except inside `checkPropertyAccessInStatement`, which carries its own
+B70.4 copy of the element-type rule.
+
+`yaml` — which nobody worked on — went **80 -> 24 errors** (4 environmental) on
+those alone, with TS2339-on-a-union going 21 -> 0.
+
+**ONE CANDIDATE FALSE POSITIVE WAS FOUND AND DESIGNED OUT RATHER THAN SHIPPED.**
+Installing the annotation as an object literal's contextual type UNCONDITIONALLY
+— which is what the return path does — turned `program.ts:1075` red on the
+compiler profile, where an object literal assigns a GENERIC function to a
+non-generic member and the relation cannot yet instantiate one against the
+other. The context is now installed only where the target's SHAPE asks for it (a
+member that is a tuple or contains literals), `output.errors` stayed at 46, and
+the relation gap is recorded rather than papered over.
+
+**GATES: 15,492 tests / 0 failures across all modules; `cost_gate.py`
+`output.errors` +0.00%, `typeOfExpr.calls` +0.18% (the `for…of` subject is now
+typed at the loop's enter); `huge_methods.py --fail-over 0` green.**
+
+**BACKEND SURFACE ADDED** (each with a corpus program that compiles to bytecode
+and runs, or with the library acceptance): arrays (`T[]` -> one `JsArray`,
+members found by the ERASED receiver), closures (every function type erases
+UNIFORMLY to `FunctionN<Any?, …, Any?>`, because TypeScript's assignability is
+bivariant and the JVM's is not), object literals and interfaces as property bags
+(the DYNAMIC half of the hybrid, which §7 of the structural-typing page measured
+as 12x the nominal half), `Map`/`Set`/`RegExp`/`Date`/`Error` runtime classes,
+enums as inlined constants, `bigint` literals, the operator families, strings
+and templates (never Kotlin's same-named members — `length` is a NUMBER and
+`Double.toString()` prints `6.0`), control flow (`switch` with fall-through as a
+one-iteration `do…while` plus a `matched` flag, `for…of` as an index walk,
+`try`/`catch`, `throw` of any value), classes 2 (`extends` a generated OR a
+runtime class, `super`, statics, accessors, `instanceof`), modules with a
+dependency-ordered `moduleInit` per file, destructuring with defaults at both
+levels, optional chaining, overloads, and the DYNAMIC member operations
+(`jsGet`/`jsSet`/`jsInvoke`/`jsIndexGet`/`jsIndexSet`) for an `any` receiver.
+
+**TWO HARNESS DEFECTS THE LIBRARIES EXPOSED.** The corpus runner's
+`waitFor(2, MINUTES)` sat one line BELOW a `readText()` of the child's stdout,
+which blocks until the child exits — so a generated program that looped without
+printing hung the whole suite at 100% CPU with the deadline unreached (it now
+redirects to files). And a `continue` inside a `for…of` skipped the increment,
+which is the same trampoline `for(;;)` already had.
+
 **Round 948 (2026-08-19) — (CHK.25): `using` / `await using` DECLARATIONS DID NOT PARSE AT
 ALL, AND THAT WAS THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION. LANDED
 PARSE + BIND + THE GRAMMAR RULES + THE DISPOSABILITY RULE + A VERBATIM EMIT — OURS-ONLY
