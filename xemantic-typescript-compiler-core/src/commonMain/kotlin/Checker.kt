@@ -117670,6 +117670,16 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                // Round 512's lesson, one resolver over: the bare specifier
+                // resolver knows flat corpus-style keys, so on a path-shaped
+                // project (`/proj/src/use.ts` importing `./nodes`) an IMPORTED
+                // type guard resolved to no declaration and narrowed NOTHING —
+                // while the identical guard declared in the same file narrowed
+                // correctly. Silent and the wrong way round: the reference keeps
+                // its whole declared union, so every member read on it is a
+                // false TS2339 (measured on the `yaml` library, whose guards —
+                // `isNode`, `isScalar`, `isMap` — are all imported).
+                ?: resolveModuleSpecifierRelative(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
@@ -118669,7 +118679,7 @@ interface DataView {
                 else -> break
             }
         }
-        val symbol = when (e) {
+        val resolved = when (e) {
             is Identifier -> currentFileLocals?.get(e.text) ?: globals[e.text]
             // INV.3(d)(v): a namespace-import-qualified class — `sys instanceof
             // vfs.FileSystem` (tsc fakesHosts.ts ctor) — the general resolveAlias
@@ -118679,6 +118689,17 @@ interface DataView {
             is PropertyAccessExpression -> resolveNamespaceQualifiedSymbol(e)
             else -> null
         } ?: return null
+        // (NARROW.2)(d): an IMPORTED class is an `Alias` symbol, and an alias has
+        // neither `SymbolFlags.Class` for the leg below nor the
+        // Variable/Function/Property flags [instanceTypeOfConstructorValue]
+        // requires — so `import { Doc } from './nodes'; x instanceof Doc`
+        // narrowed NOTHING while the identical code in one file narrowed
+        // correctly. Silent in the worst direction: the reference keeps its
+        // whole declared union and every member read on it is a false TS2339
+        // (measured on the `yaml` library, 21 of them; tsgo 7.0.2 clean).
+        val symbol = if (resolved.flags.hasAny(SymbolFlags.Alias)) {
+            resolveAliasTarget(resolved) ?: resolved
+        } else resolved
         if (!symbol.flags.hasAny(SymbolFlags.Class)) return instanceTypeOfConstructorValue(symbol)
         return getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType }
     }
