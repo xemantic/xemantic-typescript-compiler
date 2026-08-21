@@ -117099,8 +117099,30 @@ interface DataView {
                 resolvePropertyMethodDecl(callee) ?: resolveNamespaceMemberFnDecl(callee)
             else -> null
         }
-        if (useCache) narrowWalkDeclCache[key] = decl
-        return decl
+        val functionLike = flowCalleeFunctionLike(decl)
+        if (useCache) narrowWalkDeclCache[key] = functionLike
+        return functionLike
+    }
+
+    /**
+     * (CHK.31) The function-like a resolved callee declaration IS.
+     *
+     * A type guard written `const isScalar = (n: any): n is Scalar => …`
+     * resolves to a VariableDeclaration, which carries no parameter list and no
+     * return type — so every consumer of a resolved callee found nothing and the
+     * guard narrowed NOTHING, while the identical guard written as a
+     * `function` declaration worked. Silent and in the false-positive
+     * direction: the reference keeps its whole declared union and every member
+     * read on it is a TS2339. The style is not a corner — it is how the `yaml`
+     * library writes all of its guards, and it accounts for most of that
+     * library's remaining false positives.
+     */
+    private fun flowCalleeFunctionLike(decl: Node?): Node? {
+        if (decl !is VariableDeclaration) return decl
+        val initializer = decl.initializer?.let { unwrapParens(it) }
+        return if (initializer is ArrowFunction || initializer is FunctionExpression) {
+            initializer
+        } else decl
     }
 
     /** Round 471 (extracted round 507): the unique predicate-bearing nested decl in
@@ -117760,7 +117782,14 @@ interface DataView {
             val d = sym.valueDeclaration
                 ?: sym.declarations.firstOrNull { it is FunctionDeclaration || it is MethodDeclaration }
                 ?: sym.declarations.firstOrNull()
-            if (d is FunctionDeclaration || d is MethodDeclaration) return d
+            // (CHK.31) a `const isScalar = (n): n is S => …` guard is a VARIABLE
+            // whose initializer is the function-like — see [flowCalleeFunctionLike].
+            val functionLike = flowCalleeFunctionLike(d)
+            if (functionLike is FunctionDeclaration || functionLike is MethodDeclaration ||
+                functionLike is ArrowFunction || functionLike is FunctionExpression
+            ) {
+                return functionLike
+            }
             // The target may itself be a re-import + re-export alias — one more hop.
             if (sym.flags.hasAny(SymbolFlags.Alias)) {
                 resolveImportedFunctionLikeDecl(sym, visited)?.let { return it }
@@ -117963,6 +117992,9 @@ interface DataView {
         val (params, returnTypeNode, typeParams) = when {
             decl is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
             decl is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            // (CHK.31) the same triple, from a guard written as a const arrow.
+            decl is ArrowFunction -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            decl is FunctionExpression -> Triple(decl.parameters, decl.type, decl.typeParameters)
             paramGuardType != null ->
                 Triple(paramGuardType.parameters, paramGuardType.type, paramGuardType.typeParameters)
             else -> return t
