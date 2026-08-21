@@ -1580,7 +1580,9 @@ resumes.**
   has no escape analysis, so every `Any?` position is a real allocation.** The open work,
   in order: (a) the nominal half, which is worth far more here than on the JVM; (b) the
   regex engine, (KIR.PERF.2); (c) a native arm in `kir-bench.sh`'s equivalence gate, which
-  this round ran by hand; (d) Gradle wiring, which is owner-gated as a build change.
+  this round ran by hand. Gradle wiring is DONE (owner-approved):
+  `:xemantic-typescript-compiler-kir:kirNativeCompile`, with `scripts/kir-native.sh`
+  a wrapper over it.
   Traps that cost the session and are recorded so they are not re-derived:
   `docs/perf/kir-backend-levers.md` § 6.
 

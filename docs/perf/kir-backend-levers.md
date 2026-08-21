@@ -299,7 +299,18 @@ phase, not a new compiler". That is now tested rather than asserted: both
 libraries compile to `-opt` Kotlin/Native binaries through the SAME
 `KirProgramLowering`, and both agree with the other three arms on the sink.
 
-Build it with `scripts/kir-native.sh <project> <entry> <output>`.
+Build it with
+
+```
+./gradlew :xemantic-typescript-compiler-kir:kirNativeCompile \
+    -PkirProject=<dir> -PkirEntry=main.ts -PkirOutput=<path>
+```
+
+or through `scripts/kir-native.sh <project> <entry> <output>`, which is a wrapper
+over exactly that task. The Gradle task resolves its own plugin classpath from
+the build, so the cached-classpath staleness this repo keeps rediscovering
+(CLAUDE.md rounds 852/857/858) cannot arise, and it carries the positive control
+below.
 
 ### The four-arm run, one assembly of each library, 5 processes interleaved
 
@@ -379,8 +390,22 @@ member fallback rather than approximating it. Every replacement is anchored on
 text that must occur exactly once, so a drifting JVM runtime fails the
 derivation instead of silently forking it.
 
+### The one guard, and the ablation that shows it discriminates
+
+The plugin is found by `ServiceLoader`, and its `META-INF/services` file is a
+RESOURCE — which Gradle stages in `build/processedResources/jvm/main`, not in
+the classes directory. Omit it and **konanc exits 0 having compiled the empty
+seed**: no error, no warning, a binary the size of a hello-world. So the task
+requires the plugin's own stderr announcement and fails without it.
+
+Ablated both ways to check it discriminates rather than decorates: removing the
+resource DIRECTORY is caught by konanc itself (`plugin classpath entry points to
+a non-existent location`), and removing only the registrar DECLARATION — the
+path exists, the plugin does not load — is caught by nothing else and fails with
+`the KIR plugin did not run`.
+
 ### What is NOT done
 
-No Gradle wiring (the script is the interface), no `.d.ts`-driven interop, and
-the dynamic-member fallback throws. The native arm is not in `kir-bench.sh`'s
-equivalence gate yet — it was verified by hand in this session's four-arm run.
+No `.d.ts`-driven interop, and the dynamic-member fallback throws. The native arm
+is not in `kir-bench.sh`'s equivalence gate yet — it was verified by hand in this
+session's four-arm run.
