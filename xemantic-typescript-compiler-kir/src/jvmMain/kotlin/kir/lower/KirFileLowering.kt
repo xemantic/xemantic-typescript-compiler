@@ -215,6 +215,13 @@ internal class KirFileLowering(
     // cannot be per-file — see [KirProgramTables].
 
     private val functions get() = tables.functions
+    /** One generated class per distinct object-literal name LIST — [shapeClassFor]. */
+    private val shapeClasses = LinkedHashMap<List<String>, ShapeClass>()
+
+    /** What makes a generated shape class's name unique across FILES. */
+    private val shapeFilePrefix: String =
+        kotlinName(tsFile.fileName.substringAfterLast('/').substringBeforeLast('.'))
+
     private val classes get() = tables.classes
     private val methods get() = tables.methods
     private val constructorsByDeclaration get() = tables.constructorsByDeclaration
@@ -3422,9 +3429,11 @@ internal class KirFileLowering(
      */
     private fun lowerObjectLiteral(node: ObjectLiteralExpression): IrExpression {
         val entries = mutableListOf<IrExpression>()
+        val names = mutableListOf<String>()
         node.properties.forEach { property ->
             when (property) {
                 is PropertyAssignment -> {
+                    names.add(propertyKey(property.name, property))
                     entries.add(scope.irString(propertyKey(property.name, property)))
                     entries.add(
                         coerce(
@@ -3436,12 +3445,14 @@ internal class KirFileLowering(
                 }
                 is ShorthandPropertyAssignment -> {
                     val name = property.name.text
+                    names.add(name)
                     entries.add(scope.irString(name))
                     entries.add(
                         coerce(property.name, lowerExpression(property.name), types.anyNullable)
                     )
                 }
                 is MethodDeclaration -> {
+                    names.add(propertyKey(property.name, property))
                     entries.add(scope.irString(propertyKey(property.name, property)))
                     val body = property.body
                         ?: refuse(tsFile, property, "an object-literal method with no body")
@@ -3455,8 +3466,394 @@ internal class KirFileLowering(
                 )
             }
         }
+        // The NOMINAL half: a literal whose names are all statically known gets
+        // a generated class with one real field per name — see [shapeClassFor].
+        // Everything else keeps the bag, which is what makes this additive.
+        val shape = if (names.size * 2 == entries.size) shapeClassFor(names) else null
+        if (shape != null) {
+            return IrConstructorCallImpl(
+                UNDEFINED, UNDEFINED,
+                shape.irClass.defaultType, shape.constructor.symbol,
+                typeArgumentsCount = 0, constructorTypeArgumentsCount = 0,
+            ).apply {
+                entries.filterIndexed { index, _ -> index % 2 == 1 }
+                    .forEachIndexed { index, value -> arguments[index] = value }
+            }
+        }
         return scope.irCall(intrinsics.jsObjectOf).apply {
             arguments[0] = scope.irVararg(irBuiltIns.anyNType, entries)
+        }
+    }
+
+
+    // ---- the NOMINAL half: a generated class per object-literal shape -------
+
+    /**
+     * The generated class for an object literal whose names are [names].
+     *
+     * §3.3's hybrid, with the nominal half finally on: a JVM class holding one
+     * real field per declared property, extending the runtime's bag so that
+     * NOTHING about assignability changes — a shape instance is a `JsObject`,
+     * passes wherever one is expected, and answers a dynamic reader through the
+     * same virtual `get` as any other bag. That is what makes this affordable
+     * where changing what an object type ERASES to is not: TypeScript's
+     * assignability is structural and a generated class is not, so the erasure
+     * stays exactly as it was and only the RUNTIME class of the value changes.
+     *
+     * One class per distinct name LIST per file, keyed on the names in order —
+     * so `{ pos: 0, line: 1 }` and `{ pos: 2, line: 3 }` share one, and a
+     * different order is a different shape because `Object.keys` reports it.
+     *
+     * The prize is the census in `docs/perf/kir-backend-levers.md` §2a: 2,555
+     * property reads per benchmark parse, 93.6% of them on a bag of exactly
+     * three keys, at ~4.9 ns each where a `getfield` is under one.
+     */
+    private fun shapeClassFor(names: List<String>): ShapeClass? {
+        // A literal with more slots than this keeps the bag: the generated
+        // `get` is a chain, so a wide shape would trade a hash probe for a long
+        // walk. The censused population's largest LITERAL is far below it.
+        if (names.isEmpty() || names.size > 12) return null
+        if (names.toSet().size != names.size) return null
+        return shapeClasses.getOrPut(names) { buildShapeClass(names) }
+    }
+
+    /** A generated shape: its class, its constructor and its fields, in order. */
+    private class ShapeClass(
+        val irClass: IrClass,
+        val constructor: IrConstructor,
+        val fields: List<IrField>,
+    )
+
+    private fun buildShapeClass(names: List<String>): ShapeClass {
+        val irClass = builder.irFactory.buildClass {
+            // The name carries the FILE, because a shape class is a real class
+            // in one shared package while `shapeClasses` is per file: without
+            // it, two files both mint `JsShape0`, the second wins the package,
+            // and the first file's call site links to a constructor of the
+            // wrong arity — `NoSuchMethodError` at run time, with everything
+            // compiling. Same shape as the native backend's per-file
+            // `moduleInit` prefixes (CLAUDE.md, 2026-08-21).
+            this.name = Name.identifier("JsShape_${shapeFilePrefix}_${shapeClasses.size}")
+            visibility = DescriptorVisibilities.PUBLIC
+            // FINAL, unlike a lowered TypeScript class: nothing extends a shape,
+            // and a final override is what lets the JIT devirtualize `get` at a
+            // monomorphic call site — which is the entire point of the class.
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        irClass.parent = irFile
+        irClass.createThisReceiverParameter()
+        irClass.superTypes = listOf(intrinsics.jsObjectType)
+        irFile.declarations.add(irClass)
+
+        val fields = names.mapIndexed { index, _ ->
+            irClass.addField {
+                this.name = Name.identifier("slot$index")
+                type = types.anyNullable
+                visibility = DescriptorVisibilities.PUBLIC
+                isFinal = false
+                origin = builder.generatedOrigin
+            }
+        }
+        val constructor = buildShapeConstructor(irClass, names, fields)
+        buildShapeGet(irClass, names, fields)
+        buildShapeSet(irClass, names, fields)
+        buildShapeHas(irClass, names)
+        buildShapeDelete(irClass)
+        buildShapeKeys(irClass)
+        buildShapeSpill(irClass, names, fields)
+        return ShapeClass(irClass, constructor, fields)
+    }
+
+    /** `JsShape(v0, …, vn) : JsObject()` — delegate, initialize, assign. */
+    private fun buildShapeConstructor(
+        irClass: IrClass,
+        names: List<String>,
+        fields: List<IrField>,
+    ): IrConstructor {
+        val constructor = irClass.addConstructor {
+            isPrimary = true
+            returnType = irClass.defaultType
+            visibility = DescriptorVisibilities.PUBLIC
+            origin = builder.generatedOrigin
+        }
+        constructor.parameters = names.mapIndexed { index, _ ->
+            builder.irFactory.createValueParameter(
+                startOffset = UNDEFINED,
+                endOffset = UNDEFINED,
+                origin = builder.generatedOrigin,
+                kind = IrParameterKind.Regular,
+                name = Name.identifier("v$index"),
+                type = types.anyNullable,
+                isAssignable = false,
+                symbol = org.jetbrains.kotlin.ir.symbols.impl.IrValueParameterSymbolImpl(),
+                varargElementType = null,
+                isCrossinline = false,
+                isNoinline = false,
+                isHidden = false,
+            ).also { it.parent = constructor }
+        }
+        val statements = mutableListOf<IrStatement>()
+        statements.add(
+            IrDelegatingConstructorCallImpl(
+                UNDEFINED, UNDEFINED, irBuiltIns.unitType,
+                intrinsics.jsObjectConstructor, typeArgumentsCount = 0,
+            )
+        )
+        statements.add(
+            IrInstanceInitializerCallImpl(
+                UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
+            )
+        )
+        val self = irClass.thisReceiver!!
+        fields.forEachIndexed { index, field ->
+            statements.add(
+                IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol,
+                    org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol),
+                    org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(
+                        UNDEFINED, UNDEFINED,
+                        constructor.parameters[index].type,
+                        constructor.parameters[index].symbol
+                    ),
+                    irBuiltIns.unitType,
+                )
+            )
+        }
+        constructor.body = blockBodyOf(statements)
+        return constructor
+    }
+
+    /**
+     * `override fun get(name) = if (shapeActive()) { if (name == "a") return slot0; … }; bagGet(name)`
+     *
+     * The comparison is EQUALS and not identity, which is not a detail: a name
+     * that came from DATA rather than from an emitted literal — `o[key]` where
+     * the key was parsed — is equal without being the same reference, and an
+     * identity chain would fall through to the bag and answer `undefined` for a
+     * property the object plainly has. `String.equals` opens with the identity
+     * check anyway, so the constant-name case pays nothing for the correctness.
+     */
+    private fun buildShapeGet(irClass: IrClass, names: List<String>, fields: List<IrField>) {
+        val function = shapeOverride(irClass, "get", types.anyNullable, listOf("name" to types.string))
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val guarded = names.mapIndexed { index, declared ->
+            shapeIf(function, name, declared, shapeReturn(function, fieldRead(fields[index], self)))
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(function, shapeBagCall(function, "bagGet", self, listOf(name)))
+        )
+    }
+
+    /** `override fun set(name, value)` — the same chain, writing instead. */
+    private fun buildShapeSet(irClass: IrClass, names: List<String>, fields: List<IrField>) {
+        val function = shapeOverride(
+            irClass, "set", irBuiltIns.unitType,
+            listOf("name" to types.string, "value" to types.anyNullable)
+        )
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val value = function.parameters[2]
+        val guarded = names.mapIndexed { index, declared ->
+            shapeIf(
+                function, name, declared,
+                IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, listOf(
+                    IrSetFieldImpl(
+                        UNDEFINED, UNDEFINED, fields[index].symbol,
+                        org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol),
+                        org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, value.type, value.symbol),
+                        irBuiltIns.unitType,
+                    ),
+                    shapeReturn(function, unitValue()),
+                ))
+            )
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(function, shapeBagCall(function, "bagSet", self, listOf(name, value)))
+        )
+    }
+
+    /** `override fun has(name)` — true for a declared slot, else the bag's answer. */
+    private fun buildShapeHas(irClass: IrClass, names: List<String>) {
+        val function = shapeOverride(
+            irClass, "has", irBuiltIns.booleanType, listOf("name" to types.string)
+        )
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val guarded = names.map { declared ->
+            shapeIf(
+                function, name, declared,
+                shapeReturn(function, org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl.boolean(UNDEFINED, UNDEFINED, irBuiltIns.booleanType, true))
+            )
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(function, shapeBagCall(function, "bagHas", self, listOf(name)))
+        )
+    }
+
+    /**
+     * `override fun delete(name) { spillNow(); return bagDelete(name) }`
+     *
+     * SPILL FIRST, which is why no slot needs a presence bit: after a delete the
+     * object is an ordinary bag and the deletion is an ordinary removal. The
+     * censused population deletes nothing at all, so the cold path is allowed to
+     * be the simple one.
+     */
+    private fun buildShapeDelete(irClass: IrClass) {
+        val function = shapeOverride(
+            irClass, "delete", irBuiltIns.booleanType, listOf("name" to types.string)
+        )
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        function.body = blockBodyOf(listOf(
+            shapeBagCall(function, "spillNow", self, emptyList()),
+            shapeReturn(function, shapeBagCall(function, "bagDelete", self, listOf(name))),
+        ))
+    }
+
+    /** `override fun keys() { spillNow(); return bagKeys() }` — order via the spill. */
+    private fun buildShapeKeys(irClass: IrClass) {
+        val function = shapeOverride(irClass, "keys", intrinsics.jsArrayType, emptyList())
+        val self = function.parameters[0]
+        function.body = blockBodyOf(listOf(
+            shapeBagCall(function, "spillNow", self, emptyList()),
+            shapeReturn(function, shapeBagCall(function, "bagKeys", self, emptyList())),
+        ))
+    }
+
+    /** `override fun spill()` — one `spillSlot` per field, in declaration ORDER. */
+    private fun buildShapeSpill(irClass: IrClass, names: List<String>, fields: List<IrField>) {
+        val function = shapeOverride(irClass, "spill", irBuiltIns.unitType, emptyList())
+        val self = function.parameters[0]
+        function.body = blockBodyOf(
+            names.mapIndexed { index, declared ->
+                shapeBagCall(
+                    function, "spillSlot", self,
+                    emptyList(),
+                    listOf(
+                        org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl.string(UNDEFINED, UNDEFINED, types.string, declared),
+                        fieldRead(fields[index], self),
+                    )
+                )
+            }
+        )
+    }
+
+    /** An override of a `JsObject` member, with its dispatch receiver first. */
+    private fun shapeOverride(
+        irClass: IrClass,
+        name: String,
+        returnType: IrType,
+        valueParameters: List<Pair<String, IrType>>,
+    ): IrSimpleFunction {
+        val base = intrinsics.runtimeMember(intrinsics.jsObjectClass, name, valueParameters.size)
+            ?: error("JsObject.$name/${valueParameters.size} is missing")
+        val function = irClass.addFunction {
+            this.name = Name.identifier(name)
+            this.returnType = returnType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        function.parameters = listOf(dispatchReceiver(function, irClass)) +
+            valueParameters.map { (parameterName, parameterType) ->
+                builder.irFactory.createValueParameter(
+                    startOffset = UNDEFINED,
+                    endOffset = UNDEFINED,
+                    origin = builder.generatedOrigin,
+                    kind = IrParameterKind.Regular,
+                    name = Name.identifier(parameterName),
+                    type = parameterType,
+                    isAssignable = false,
+                    symbol = org.jetbrains.kotlin.ir.symbols.impl.IrValueParameterSymbolImpl(),
+                    varargElementType = null,
+                    isCrossinline = false,
+                    isNoinline = false,
+                    isHidden = false,
+                ).also { it.parent = function }
+            }
+        function.overriddenSymbols = listOf(base)
+        return function
+    }
+
+    /** `if (shapeActive()) { <branches> }` — the one test the fast path pays. */
+    private fun shapeActiveGuard(
+        function: IrSimpleFunction,
+        self: IrValueParameter,
+        branches: List<IrStatement>,
+    ): IrStatement = org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType).apply {
+        this.branches.add(
+            org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                UNDEFINED, UNDEFINED,
+                shapeBagCall(function, "shapeActive", self, emptyList()),
+                IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, branches),
+            )
+        )
+    }
+
+    /** `if (name == "<declared>") <then>`, by EQUALS — see [buildShapeGet]. */
+    private fun shapeIf(
+        function: IrSimpleFunction,
+        name: IrValueParameter,
+        declared: String,
+        then: IrStatement,
+    ): IrStatement = org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType).apply {
+        branches.add(
+            org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                UNDEFINED, UNDEFINED,
+                org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl(
+                    UNDEFINED, UNDEFINED, irBuiltIns.booleanType,
+                    intrinsics.jsStrictEqualsStrings, typeArgumentsCount = 0,
+                ).apply {
+                    arguments[0] = org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(
+                        UNDEFINED, UNDEFINED, name.type, name.symbol)
+                    arguments[1] = org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl.string(
+                        UNDEFINED, UNDEFINED, types.string, declared)
+                },
+                IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, listOf(then)),
+            )
+        )
+    }
+
+    private fun fieldRead(field: IrField, self: IrValueParameter): IrExpression =
+        IrGetFieldImpl(
+            UNDEFINED, UNDEFINED, field.symbol, field.type,
+            org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol),
+        )
+
+    private fun shapeReturn(function: IrSimpleFunction, value: IrExpression): IrStatement =
+        org.jetbrains.kotlin.ir.expressions.impl.IrReturnImpl(UNDEFINED, UNDEFINED, irBuiltIns.nothingType, function.symbol, value)
+
+    private fun unitValue(): IrExpression =
+        org.jetbrains.kotlin.ir.expressions.impl.IrGetObjectValueImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, irBuiltIns.unitClass)
+
+    /** A call to one of `JsObject`'s final helpers on `this`. */
+    private fun shapeBagCall(
+        function: IrSimpleFunction,
+        name: String,
+        self: IrValueParameter,
+        forwarded: List<IrValueParameter>,
+        literals: List<IrExpression> = emptyList(),
+    ): IrExpression {
+        val arity = forwarded.size + literals.size
+        val callee = intrinsics.runtimeMember(intrinsics.jsObjectClass, name, arity)
+            ?: error("JsObject.$name/$arity is missing")
+        return org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl(
+            UNDEFINED, UNDEFINED, callee.owner.returnType, callee,
+            typeArgumentsCount = 0,
+        ).apply {
+            arguments[0] = org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol)
+            forwarded.forEachIndexed { index, parameter ->
+                arguments[index + 1] =
+                    org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl(UNDEFINED, UNDEFINED, parameter.type, parameter.symbol)
+            }
+            literals.forEachIndexed { index, literal ->
+                arguments[forwarded.size + index + 1] = literal
+            }
         }
     }
 
@@ -3975,6 +4372,13 @@ internal class KirFileLowering(
             ClassRelation.NARROWS -> return scope.irAs(value, target)
             ClassRelation.UNRELATED -> {}
         }
+        // A generated SHAPE widening to the bag it extends, which is the whole
+        // reason the nominal half is expressible without touching the erasure:
+        // every object type still erases to `JsObject`, and a shape instance IS
+        // one. `coercionFor` decides on classifiers alone and cannot see it.
+        if (isShapeType(value.type) && target.classifierOrNull == intrinsics.jsObjectClass) {
+            return value
+        }
         return coerceErased(node, value, target)
     }
 
@@ -3992,6 +4396,12 @@ internal class KirFileLowering(
             return ClassRelation.NARROWS
         }
         return ClassRelation.UNRELATED
+    }
+
+    /** Is [type] one of this file's generated shape classes — see [shapeClassFor]? */
+    private fun isShapeType(type: IrType): Boolean {
+        val classifier = type.classifierOrNull ?: return false
+        return shapeClasses.values.any { it.irClass.symbol == classifier }
     }
 
     private fun generatedClassOf(type: IrType): ClassDeclaration? {

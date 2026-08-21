@@ -1664,8 +1664,21 @@ resumes.**
   Traps that cost the session and are recorded so they are not re-derived:
   `docs/perf/kir-backend-levers.md` § 6.
 
-- [ ] **(KIR.PERF.1) THE NOMINAL HALF — NOW THE ONLY DIRECTION LEFT, AND THE CONTAINER
-  FAMILY IS CLOSED BY *FOUR* REFUTATIONS RATHER THAN TWO (2026-08-21).** A per-owner leaf
+- [x] **(KIR.PERF.1) THE NOMINAL HALF — FIRST SLICE LANDED 2026-08-21, and `mitt` is
+  **−10.7%** (61.00 -> **54.50 ns/emit**, 1.35x -> **1.54x FASTER** than Node), with ranges
+  DISJOINT ([209..219] against [243..249]) and both Node arms flat. An object LITERAL whose
+  property names are statically known now becomes a generated JVM class with one real field
+  per property, EXTENDING `JsObject` — so the erasure is untouched, a shape instance IS a
+  bag, and structural assignability never enters into it. That is what made the slice
+  affordable where `docs/kir-structural-typing.md` §7's 12x price is for changing what an
+  object type erases to. `smol-toml` is FLAT: its ten shapes fire, but `JsObject.get` had to
+  become virtual and the parser builds its tables dynamically, so the gain on the scanner
+  context and the loss on the tables cancel. **What is left is one further slice and one
+  hard problem**: a local whose initializer IS a shape construction can keep the shape as
+  its IR type and read the field DIRECTLY (the lowering already emits that for a declared
+  class), and a shape arriving as a PARAMETER — which is how `smol-toml` passes its context
+  — needs the whole-program inference §7 describes. `docs/perf/kir-backend-levers.md` §2b.
+  ORIGINAL ENTRY, whose container half is closed by *four* refutations:** A per-owner leaf
   census of the toml JVM arm charges **47-52%** to the property bag — and, censused by
   OPERATION this round, that is **3,333 bag operations per parse** (2,555 `get`, 737 `set`
   of which **63.5% OVERWRITE**, 41 `has`, over 109 bags minted) at **~4.9 ns each**, which

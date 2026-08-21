@@ -259,6 +259,62 @@ is a property read that is a `getfield` rather than any kind of lookup, worth
 12x the dynamic one, and §6's per-primitive table is the reason it matters far
 more on Kotlin/Native than here.
 
+## 2b. The NOMINAL half, first slice — LANDED, and mitt is −10.7%
+
+§2a closed the container family and left one direction: stop making the lookup
+cheaper and stop doing a lookup. That is now built for the case a compiler can
+see without any analysis at all — an object LITERAL whose property names are
+statically known.
+
+### What it generates
+
+One JVM class per distinct name list per file, holding one real field per
+property, **extending `JsObject`**. `{ pos: 0, line: 1, col: 2 }` becomes
+`new JsShape_parse_0(0, 1, 2)` with three fields, and the class overrides `get`,
+`set`, `has`, `delete`, `keys` and a `spill` hook over those fields.
+
+**Extending the bag is the design decision that makes this affordable.**
+TypeScript's assignability is structural and a generated class is not, which is
+why `docs/kir-structural-typing.md` §7 prices the nominal half at 12x the
+dynamic one — but that price is for changing what an object type ERASES to.
+Here the erasure is untouched: every object type still erases to `JsObject`, a
+shape instance IS one, and it passes wherever a bag is expected with no witness,
+no coercion and no new refusal. A reader that does not know the shape — `o[k]`
+with a computed key, a value that reached a parameter typed `any` — calls the
+same virtual `get` and is answered by the same fields.
+
+The dynamic half stays total. A property the shape does not declare goes to the
+bag; the first `delete` or `Object.keys` SPILLS, moving the fields into the bag
+in declaration order and making every later access ordinary, which is why no
+slot needs a presence bit and why key order survives.
+
+### Measured, 5 processes interleaved, equivalence gate green on both libraries
+
+| | before | after | |
+|---|---:|---:|---|
+| mitt | 61.00 ns/emit | **54.50** | **−10.7%**, 1.35x → **1.54x** FASTER than Node |
+| smol-toml | 33.65 us/parse | 34.25 | flat |
+
+mitt's ranges are DISJOINT — `[209..219]` ms against `[243..249]` — and both
+Node arms are flat (tsgo 335 against 329/337, xtsc 338 against 334). This is the
+first measured win the nominal direction has produced.
+
+### Why toml is flat, which is the honest half of the result
+
+The shapes fire there — ten classes across its seven files — so the mechanism is
+not missing. What offsets it is that `JsObject.get` had to become VIRTUAL, and
+`smol-toml` builds its parsed tables dynamically (`{}` then `set`), so the reads
+that were a final call into a hash probe are now a virtual call into one. The
+gain on the scanner context and the loss on the tables cancel.
+
+That also names the next slice precisely, and it needs no new front-end
+information either: **where a local's initializer IS a shape construction, the
+local can keep the SHAPE as its IR type**, and the property access then compiles
+to the direct `IrGetField` the lowering already emits for a declared class —
+no dispatch at all. What that cannot reach is a shape arriving as a PARAMETER,
+which is how `smol-toml` passes its context, and that one does need the
+whole-program shape inference §7 describes.
+
 ## 3. Two rows the census named that were pure overhead — LANDED
 
 `jsTruthy` decided its answer with an equality `when` (`null, Undefined, false

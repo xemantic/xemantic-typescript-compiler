@@ -141,6 +141,11 @@ internal class KirIntrinsics(
 
     val jsObjectType: IrType by lazy { jsObjectClass.owner.defaultType }
 
+    /** `JsObject()` — what a generated SHAPE class delegates to. */
+    val jsObjectConstructor: IrConstructorSymbol by lazy {
+        runtimeConstructor(jsObjectClass) ?: error("JsObject has no no-argument constructor")
+    }
+
     /** An object literal's constructor: `jsObjectOf(vararg Any?)`, name/value flat. */
     val jsObjectOf: IrSimpleFunctionSymbol by lazy { runtime("jsObjectOf") }
 

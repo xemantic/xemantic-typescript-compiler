@@ -462,35 +462,123 @@ public class JsArray private constructor(
  * yields `undefined` rather than failing — so modelling one as a generated JVM
  * class with fields is the optimization, not the faithful thing.
  *
- * The price is stated rather than hidden: a property read is a hash lookup, and
- * a compiled library's surface is not idiomatically callable from Kotlin. Both
- * are what the nominal half buys back, later, for the targets a whole-program
- * closure can name (`docs/kir-structural-typing.md` §7).
+ * ## The NOMINAL half rides on top of this class rather than beside it
+ *
+ * An object LITERAL whose property names are all statically known gets a
+ * generated subclass with one real JVM field per name — see
+ * `KirFileLowering.shapeClassFor` — and that subclass overrides [get], [set]
+ * and [has] with a chain of name comparisons over its own fields. At a call
+ * site whose receiver is monomorphic and whose name is a constant, which is
+ * what `ctx.pos` in a scanner is, the JIT inlines the override and folds the
+ * comparison away: the read becomes a `getfield`.
+ *
+ * **The subclass is a `JsObject`, so nothing about assignability changes.**
+ * That is the whole reason this shape was chosen over changing what an object
+ * type ERASES to: TypeScript's assignability is structural, a generated class
+ * is not, and every value here still passes wherever a bag is expected. A
+ * reader that does not know the shape — `o[k]` with a computed key, a value
+ * that reached a parameter typed `any` — calls the same virtual [get] and is
+ * answered by the same fields.
+ *
+ * ## Spilling, which is what keeps the dynamic half total
+ *
+ * A property the shape does not declare goes straight into [properties], and
+ * so does everything once the object is SPILLED — which happens the first time
+ * something is deleted, or the keys are enumerated. [spillNow] moves the
+ * generated fields into the bag in declaration order and sets the flag that
+ * makes every later access take the ordinary path, so `Object.keys` order
+ * survives and `delete` needs no per-slot presence bit.
+ *
+ * The census that decided all of this is `docs/perf/kir-backend-levers.md` §2a:
+ * 3,333 bag operations per benchmark parse, **93.6% of the reads on a bag of
+ * exactly three keys**, and four attempts at making the bag itself cheaper that
+ * produced no win between them.
  */
-public class JsObject private constructor(
-    private val properties: LinkedHashMap<String, Any?>
-) {
+public open class JsObject {
 
-    public constructor() : this(LinkedHashMap())
+    private var properties: LinkedHashMap<String, Any?> = LinkedHashMap()
+
+    /** False while a generated subclass's FIELDS still hold its declared slots. */
+    private var spilled: Boolean = false
+
+    /**
+     * Whether a generated subclass may still answer from its own fields.
+     *
+     * Read once at the top of every generated [get] and [set], and `final`, so
+     * it is a field read the JIT folds into the caller.
+     */
+    public fun shapeActive(): Boolean = !spilled
 
     /** An absent property is `undefined`, i.e. `null` here — never an error. */
-    public fun get(name: String): Any? = properties[name]
+    public open fun get(name: String): Any? = properties[name]
 
-    public fun set(name: String, value: Any?) {
+    public open fun set(name: String, value: Any?) {
         properties[name] = value
     }
 
     /** `name in object`. */
-    public fun has(name: String): Boolean = properties.containsKey(name)
+    public open fun has(name: String): Boolean = properties.containsKey(name)
 
-    /** `delete object.name`, whose result is `true` for a configurable property. */
-    public fun delete(name: String): Boolean {
+    /**
+     * `delete object.name`, whose result is `true` for a configurable property.
+     *
+     * A generated subclass SPILLS first, which is why no slot needs a presence
+     * bit: after a delete the object is an ordinary bag and the deletion is an
+     * ordinary removal.
+     */
+    public open fun delete(name: String): Boolean {
         properties.remove(name)
         return true
     }
 
     /** `Object.keys(object)`, in insertion order as JavaScript specifies. */
-    public fun keys(): JsArray = JsArray(properties.keys.toList())
+    public open fun keys(): JsArray = JsArray(properties.keys.toList())
+
+    // ---- what a generated subclass calls, all of it final --------------------
+
+    /** [get] for a name the shape does not declare, or after a spill. */
+    public fun bagGet(name: String): Any? = properties[name]
+
+    /** [set] for a name the shape does not declare, or after a spill. */
+    public fun bagSet(name: String, value: Any?) {
+        properties[name] = value
+    }
+
+    /** [has] for a name the shape does not declare, or after a spill. */
+    public fun bagHas(name: String): Boolean = properties.containsKey(name)
+
+    /** [delete], which a generated subclass reaches only after spilling. */
+    public fun bagDelete(name: String): Boolean {
+        properties.remove(name)
+        return true
+    }
+
+    /** [keys], which a generated subclass reaches only after spilling. */
+    public fun bagKeys(): JsArray = JsArray(properties.keys.toList())
+
+    /**
+     * Moves a generated shape's fields into the bag, in DECLARATION order.
+     *
+     * The order is the reason the extras are set aside and put back rather than
+     * written into: a literal's own properties come first in `Object.keys`, and
+     * anything assigned afterwards follows them.
+     */
+    public fun spillNow() {
+        if (spilled) return
+        val extras = properties
+        properties = LinkedHashMap()
+        spilled = true
+        spill()
+        properties.putAll(extras)
+    }
+
+    /** Overridden by a generated shape to call [spillSlot] once per field. */
+    public open fun spill() {}
+
+    /** One declared slot, appended in order — see [spillNow]. */
+    public fun spillSlot(name: String, value: Any?) {
+        properties[name] = value
+    }
 
     override fun toString(): String = "[object Object]"
 
