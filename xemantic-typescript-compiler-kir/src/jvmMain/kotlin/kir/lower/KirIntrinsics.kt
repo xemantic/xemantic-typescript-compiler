@@ -125,6 +125,23 @@ internal class KirIntrinsics(
         }?.symbol
 
     /**
+     * A `number` member — `toString`, `toFixed` — as a runtime function.
+     *
+     * Kotlin's own are not usable for the reason the string ones are not:
+     * `Double.toString()` prints `6.0` where JavaScript prints `6`.
+     */
+    fun numberMember(name: String, argumentCount: Int): IrSimpleFunctionSymbol? {
+        val function = NUMBER_MEMBERS[name] ?: return null
+        return try {
+            builder.referenceFunction(irFile, runtimePackage, function) {
+                it.owner.parameters.size == argumentCount + 1
+            }
+        } catch (_: IllegalStateException) {
+            null
+        }
+    }
+
+    /**
      * The GETTER of a runtime class's property, e.g. `JsArray.length`.
      *
      * A property is not among a class's functions — it is an `IrProperty` whose
@@ -408,6 +425,11 @@ internal class KirIntrinsics(
             "BigInt" to "jsBigIntOf",
         )
 
+        val NUMBER_MEMBERS = mapOf(
+            "toString" to "jsNumToString",
+            "toFixed" to "jsNumToFixed",
+        )
+
         val STRING_MEMBERS = mapOf(
             "length" to "jsStrLength",
             "charAt" to "jsStrCharAt",
@@ -424,6 +446,7 @@ internal class KirIntrinsics(
             "trimStart" to "jsStrTrimStart",
             "trimEnd" to "jsStrTrimEnd",
             "padStart" to "jsStrPadStart",
+            "padEnd" to "jsStrPadEnd",
             "repeat" to "jsStrRepeat",
             "replace" to "jsStrReplace",
             "replaceAll" to "jsStrReplaceAll",
