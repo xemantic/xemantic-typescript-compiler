@@ -114814,6 +114814,38 @@ interface DataView {
             // `System` and post-if reads resolve its members. The blanket non-nullish
             // overwrite below would reset to the FULL declared union instead. An
             // empty kept set (unrelated class) keeps the conservative fallthrough.
+            // (CHK.33) The general form of every arm around this one, for a
+            // COMPUTED PRIMITIVE right-hand side: tsc's `getAssignmentReducedType`
+            // keeps the declared members the assigned type relates to, so
+            // `if (typeof x === 'string') { x = 'a' + x; x.toUpperCase() }`
+            // stays a `string`. Measured on the `smol-toml` parser, where a
+            // narrowed parameter is rebuilt from itself twice in one block and
+            // every later member read was a false TS2339 — and where a CALL
+            // right-hand side (`x = x.trim()`) already worked, so the two
+            // spellings of one idiom disagreed.
+            //
+            // Gated SYNTACTICALLY on the shapes that compute a primitive,
+            // because this helper runs at every `FlowAssignment` of every walk
+            // and typing an arbitrary right-hand side there is the cost the
+            // neighbouring arms are all shaped to avoid.
+            if (declaredType is Type.Union &&
+                (rhs is TemplateExpression || rhs is NoSubstitutionTemplateLiteralNode ||
+                    (rhs is BinaryExpression && rhs.operator != SyntaxKind.Equals))
+            ) {
+                val assigned = getTypeOfExpression(rhs)
+                if (assigned.flags.hasAny(
+                        TypeFlags.StringLike or TypeFlags.NumberLike or
+                            TypeFlags.BooleanLike or TypeFlags.BigIntLike
+                    )
+                ) {
+                    val kept = declaredType.types.filter { member ->
+                        checkTypeRelatedTo(assigned, member, assignableRelation)
+                    }
+                    if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                        return if (kept.size == 1) kept[0] else getUnionType(kept)
+                    }
+                }
+            }
             if (rhs is NewExpression && declaredType is Type.Union) {
                 // (An Interface/Reference result can never be the any/error
                 // Intrinsic singletons, so the kind check alone gates this.)
