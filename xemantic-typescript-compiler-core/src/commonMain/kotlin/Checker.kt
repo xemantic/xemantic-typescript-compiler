@@ -15288,6 +15288,29 @@ class Checker(
                                 setSymbolTarget(symbol, defaultSymbol)
                                 return resolveAlias(defaultSymbol, visited)
                             }
+                            // `export default function f() {}` / `export default class C {}`.
+                            // A DECLARATION carrying both modifiers is neither an
+                            // ExportAssignment nor bound under the name "default" — it is
+                            // bound under its OWN — so every leg around this one misses it
+                            // and the alias used to resolve to nothing, i.e. to `any`.
+                            // SILENTLY: `any` is assignable to everything, so a program
+                            // importing a default-exported function type-checked and every
+                            // misuse of it went unreported (measured against tsgo 7.0.2,
+                            // which reports TS2322 for the same two files).
+                            for (stmt in targetResult.sourceFile.statements) {
+                                val defaultName = when {
+                                    stmt is FunctionDeclaration &&
+                                        ModifierFlag.Export in stmt.modifiers &&
+                                        ModifierFlag.Default in stmt.modifiers -> stmt.name?.text
+                                    stmt is ClassDeclaration &&
+                                        ModifierFlag.Export in stmt.modifiers &&
+                                        ModifierFlag.Default in stmt.modifiers -> stmt.name?.text
+                                    else -> null
+                                } ?: continue
+                                val exported = targetResult.locals[defaultName] ?: continue
+                                setSymbolTarget(symbol, exported)
+                                return resolveAlias(exported, visited)
+                            }
                             // Scan for `export default X` (ExportAssignment without isExportEquals)
                             for (stmt in targetResult.sourceFile.statements) {
                                 if (stmt is ExportAssignment && !stmt.isExportEquals) {
@@ -26497,6 +26520,10 @@ class Checker(
                 spinePiActive = spinePiRunActive && !spineIsDts
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
+                    // (KIR) the sink's only route to the TREES a whole-program
+                    // check walked; null in every other configuration, so this
+                    // is one predicted null check per FILE.
+                    checkedSink?.file(sf)
                     spineWalkFile(sf)
                 } finally {
                     spineDupIdFinish(result)

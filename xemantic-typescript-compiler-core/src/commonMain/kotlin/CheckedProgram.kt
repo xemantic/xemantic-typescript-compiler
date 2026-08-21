@@ -50,6 +50,17 @@ package com.xemantic.typescript.compiler
  */
 interface CheckedNodeSink {
 
+    /**
+     * Called once per program file, immediately before its nodes are walked.
+     *
+     * The only route from a whole-PROGRAM check to the trees it checked: a
+     * `ProjectCompiler.Result` retains no AST, and a consumer that re-parsed
+     * the files would key its facts by nodes the checker never saw — silently,
+     * since two parses of one file are equal and not identical, and every fact
+     * here is keyed by node IDENTITY.
+     */
+    fun file(node: SourceFile) {}
+
     /** Called for every [Expression] the spine visits, in walk order. */
     fun expression(node: Expression, lens: CheckedLens)
 
