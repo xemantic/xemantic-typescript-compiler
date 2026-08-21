@@ -111,7 +111,8 @@ javac -nowarn -cp "$KIR_CP" -d "$WORK" "$REPO/scripts/kir-bench/KirBench.java" \
 # project with its driver swapped, so the benchmark can never drift from what the
 # acceptance test compiles.
 assemble() {                                   # assemble <lib> <acceptance-dir> <driver>
-    local lib="$1" src="$2" driver="$3" dir="$WORK/src-$lib"
+    local lib="$1" src="$2" driver="$3"
+    local dir="$WORK/src-$lib"
     rm -rf "$dir"; mkdir -p "$dir/src"
     cp "$src"/src/*.ts "$dir/src/"
     cp "$driver" "$dir/src/main.ts"
