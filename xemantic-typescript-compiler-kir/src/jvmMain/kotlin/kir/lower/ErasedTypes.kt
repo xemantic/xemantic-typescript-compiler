@@ -34,6 +34,7 @@ import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.types.typeWith
 import org.jetbrains.kotlin.ir.util.defaultType
 import org.jetbrains.kotlin.ir.util.isNullable
 import org.jetbrains.kotlin.ir.types.makeNullable
@@ -135,9 +136,39 @@ internal class ErasedTypes(
     @OptIn(UnsafeDuringIrConstructionAPI::class)
     private fun mapObject(type: Type.Object): IrType? {
         if (isArrayLike(type)) return jsArrayType()
-        val symbol = type.symbol ?: return null
-        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
-        return classForDeclaration(declaration)?.defaultType
+        val symbol = type.symbol ?: return mapCallable(type)
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+            ?: return mapCallable(type)
+        return classForDeclaration(declaration)?.defaultType ?: mapCallable(type)
+    }
+
+    /**
+     * A callable of [arity] parameters: `kotlin.FunctionN<Any?, …, Any?>`.
+     *
+     * UNIFORM in its type arguments, and that is the decision worth stating.
+     * Giving a lambda its parameters' own erased types would be more faithful
+     * to what the checker knows, and would then reject every place TypeScript's
+     * BIVARIANT function assignability accepts a handler whose parameter is
+     * narrower than the position wants — `Function1<in P, out R>` is not
+     * bivariant, so the JVM would refuse what the program's own type system
+     * allowed. All-`Any?` makes any function value fit any position of the same
+     * arity, and pays for it with the cast at the use site, which is where
+     * union erasure already pays.
+     */
+    fun function(arity: Int): IrType =
+        irBuiltIns.functionN(arity).symbol.typeWith(List(arity + 1) { anyNullable })
+
+    /** The arity of an erased function type, or null when [type] is not one. */
+    fun functionArity(type: IrType): Int? {
+        val classifier = type.classifierOrNull ?: return null
+        return functionClassifiers[classifier]
+    }
+
+    private val functionClassifiers: Map<Any, Int> by lazy {
+        (0..MAX_FUNCTION_ARITY).associateBy(
+            { irBuiltIns.functionN(it).symbol },
+            { it }
+        )
     }
 
     /**
@@ -152,8 +183,24 @@ internal class ErasedTypes(
         type.tupleElementTypes != null ||
             (type is Type.Reference && type.target.symbol?.name in ARRAY_TARGETS)
 
+    /**
+     * A TypeScript function type, by its call signature's arity.
+     *
+     * `callSignatures` is resolved LAZILY by the checker, so a null here means
+     * "nothing ever asked this type for its members", not "it has none" — which
+     * is why the answer is a refusal at the call site rather than a silent
+     * `Any?`.
+     */
+    private fun mapCallable(type: Type.Object): IrType? {
+        val signature = type.callSignatures?.firstOrNull() ?: return null
+        return function(signature.parameters.size)
+    }
+
     private companion object {
         val ARRAY_TARGETS = setOf("Array", "ReadonlyArray")
+
+        /** `kotlin.FunctionN` exists up to 22 parameters; nothing here needs more. */
+        const val MAX_FUNCTION_ARITY = 22
     }
 
 }

@@ -223,6 +223,47 @@ public class JsArray private constructor(
 
     public fun join(separator: String): String = joinToJsString(separator)
 
+    /**
+     * `Array.prototype.forEach` / `map` / `filter`, ONE-ARGUMENT callbacks only.
+     *
+     * JavaScript passes `(element, index, array)`; a callback that wants the
+     * index is a `Function2` where these declare a `Function1`, so the lowering
+     * refuses it at the argument's coercion rather than handing the runtime a
+     * lambda it would fail to cast — which is the difference between a
+     * diagnostic naming the position and a `ClassCastException` inside the
+     * runtime.
+     */
+    public fun forEach(callback: (Any?) -> Any?) {
+        // Indexed rather than iterator-based: a callback may push or splice,
+        // and JS visits the elements the array HAD when the walk reached them.
+        var index = 0
+        while (index < backing.size) {
+            callback(backing[index])
+            index++
+        }
+    }
+
+    public fun map(callback: (Any?) -> Any?): JsArray {
+        val result = ArrayList<Any?>(backing.size)
+        var index = 0
+        while (index < backing.size) {
+            result.add(callback(backing[index]))
+            index++
+        }
+        return JsArray(result)
+    }
+
+    public fun filter(callback: (Any?) -> Any?): JsArray {
+        val result = ArrayList<Any?>()
+        var index = 0
+        while (index < backing.size) {
+            val element = backing[index]
+            if (jsTruthy(callback(element))) result.add(element)
+            index++
+        }
+        return JsArray(result)
+    }
+
     /** `Array.prototype.join` with the default separator, as `toString` uses it. */
     public fun joinToJsString(separator: String = ","): String =
         backing.joinToString(separator) {
