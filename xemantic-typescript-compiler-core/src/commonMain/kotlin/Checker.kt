@@ -5170,6 +5170,8 @@ class Checker(
             override fun declaredTypeOfSymbol(symbol: Symbol): Type =
                 getDeclaredTypeOfSymbol(symbol)
 
+            override fun typeOfTypeNode(node: TypeNode): Type = getTypeFromTypeNode(node)
+
             override fun resolveName(name: String): Symbol? = spineScopeLookup(name)
 
             override fun aliasTarget(symbol: Symbol): Symbol? =

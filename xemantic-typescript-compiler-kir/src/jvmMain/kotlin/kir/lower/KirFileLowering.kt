@@ -32,7 +32,11 @@ package com.xemantic.typescript.compiler.kir.lower
 
 import com.xemantic.typescript.compiler.ArrayLiteralExpression
 import com.xemantic.typescript.compiler.ArrowFunction
+import com.xemantic.typescript.compiler.ArrayBindingPattern
+import com.xemantic.typescript.compiler.BindingElement
+import com.xemantic.typescript.compiler.ObjectBindingPattern
 import com.xemantic.typescript.compiler.AsExpression
+import com.xemantic.typescript.compiler.BigIntLiteralNode
 import com.xemantic.typescript.compiler.BinaryExpression
 import com.xemantic.typescript.compiler.Block
 import com.xemantic.typescript.compiler.BreakStatement
@@ -42,6 +46,8 @@ import com.xemantic.typescript.compiler.ConditionalExpression
 import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.ContinueStatement
 import com.xemantic.typescript.compiler.ElementAccessExpression
+import com.xemantic.typescript.compiler.EnumDeclaration
+import com.xemantic.typescript.compiler.EnumMember
 import com.xemantic.typescript.compiler.ExportDeclaration
 import com.xemantic.typescript.compiler.EmptyStatement
 import com.xemantic.typescript.compiler.Expression
@@ -63,6 +69,7 @@ import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NonNullExpression
 import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
 import com.xemantic.typescript.compiler.NodeBase
+import com.xemantic.typescript.compiler.NotEmittedStatement
 import com.xemantic.typescript.compiler.NumericLiteralNode
 import com.xemantic.typescript.compiler.ObjectLiteralExpression
 import com.xemantic.typescript.compiler.Parameter
@@ -72,6 +79,7 @@ import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyAssignment
 import com.xemantic.typescript.compiler.PropertyDeclaration
+import com.xemantic.typescript.compiler.RegularExpressionLiteralNode
 import com.xemantic.typescript.compiler.ReturnStatement
 import com.xemantic.typescript.compiler.ShorthandPropertyAssignment
 import com.xemantic.typescript.compiler.SpreadElement
@@ -94,6 +102,7 @@ import com.xemantic.typescript.compiler.ThrowStatement
 import com.xemantic.typescript.compiler.TryStatement
 import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.VariableDeclarationList
+import com.xemantic.typescript.compiler.VoidExpression
 import com.xemantic.typescript.compiler.WhileStatement
 import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
@@ -143,6 +152,7 @@ import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrValueDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrValueParameter
+import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.expressions.IrLoop
@@ -219,7 +229,29 @@ internal class KirFileLowering(
         jsObjectType = { intrinsics.jsObjectType },
         libraryType = { name -> intrinsics.libraryClass(name)?.owner?.defaultType },
         isOwnStructuralDeclaration = ::isOwnStructuralDeclaration,
+        enumErasure = ::enumErasure,
+        bigIntegerType = { intrinsics.bigIntegerType },
     )
+
+    /**
+     * The JVM type an enum's VALUES have, for the enum itself or for a member.
+     *
+     * A member's declaration is an `EnumMember` whose parent is the enum, so
+     * both arrive here and both answer the same thing — which is right: with no
+     * runtime object, `Type` and `Type.DOTTED` are the same JVM type.
+     */
+    private fun enumErasure(declaration: Node): IrType? {
+        val enum = declaration as? EnumDeclaration
+            ?: ((declaration as? EnumMember)?.parent as? EnumDeclaration)
+            ?: return null
+        val values = tables.enumMembers[enum]?.values ?: return null
+        if (values.isEmpty()) return null
+        return when {
+            values.all { it is Double } -> types.double
+            values.all { it is String } -> types.string
+            else -> null
+        }
+    }
 
     /**
      * Is this the declaration of a structural type THIS PROGRAM wrote?
@@ -383,6 +415,7 @@ internal class KirFileLowering(
      */
     fun executableStatements(): List<Statement> = tsFile.statements.filter { statement ->
         statement !is FunctionDeclaration && statement !is ClassDeclaration &&
+            statement !is EnumDeclaration &&
             statement !is InterfaceDeclaration && statement !is TypeAliasDeclaration &&
             statement !is ImportDeclaration && statement !is ExportDeclaration &&
             statement !is ImportEqualsDeclaration
@@ -394,6 +427,7 @@ internal class KirFileLowering(
 
     private fun declare(statement: Statement) {
         when (statement) {
+            is EnumDeclaration -> declareEnum(statement)
             is VariableStatement -> declareModuleVariables(statement)
             is FunctionDeclaration -> declareFunction(statement)
             is ClassDeclaration -> declareClass(statement)
@@ -525,11 +559,76 @@ internal class KirFileLowering(
         return function
     }
 
+    /**
+     * An `enum`, as its members' CONSTANTS and nothing else.
+     *
+     * There is no runtime object: a member access is replaced by its value,
+     * which is exactly what a `const enum` is and what a plain one degrades to
+     * for every use but reflecting over the enum itself. The values are read
+     * off the AST rather than from the checker, because the rule is small and
+     * syntactic — auto-increment from the last numeric value, or a literal
+     * initializer — and a computed one is refused rather than guessed.
+     */
+    private fun declareEnum(declaration: EnumDeclaration) {
+        val values = LinkedHashMap<String, Any>()
+        var next = 0.0
+        for (member in declaration.members) {
+            val name = (member.name as? Identifier)?.text
+                ?: (member.name as? StringLiteralNode)?.text
+                ?: refuse(tsFile, member, "cannot lower a computed enum member name")
+            when (val initializer = member.initializer) {
+                null -> {
+                    values[name] = next
+                    next += 1.0
+                }
+                is NumericLiteralNode -> {
+                    val value = numericValue(initializer)
+                    values[name] = value
+                    next = value + 1.0
+                }
+                is StringLiteralNode -> values[name] = initializer.text
+                is PrefixUnaryExpression ->
+                    if (initializer.operator == SyntaxKind.Minus &&
+                        initializer.operand is NumericLiteralNode
+                    ) {
+                        val value = -numericValue(initializer.operand as NumericLiteralNode)
+                        values[name] = value
+                        next = value + 1.0
+                    } else {
+                        refuse(tsFile, member, "cannot lower this enum member initializer")
+                    }
+                else -> refuse(tsFile, member, "cannot lower this enum member initializer")
+            }
+        }
+        tables.enumMembers[declaration] = values
+    }
+
+    /**
+     * OVERLOAD SIGNATURES seen so far in this file, by name.
+     *
+     * A bodyless `function f(a: string): void` is one of several SIGNATURES of a
+     * single implementation, and overload resolution may well pick it — so the
+     * call site's declaration is a node with no body to lower. Each is mapped to
+     * the implementation that follows, and the whole family then shares one IR
+     * function, which is what TypeScript means by an overload.
+     */
+    private val pendingOverloads = HashMap<String, MutableList<FunctionDeclaration>>()
+
+    /** The same, for a class's METHOD overloads. */
+    private val pendingMethodOverloads = HashMap<String, MutableList<MethodDeclaration>>()
+
     private fun declareFunction(declaration: FunctionDeclaration) {
         val name = declaration.name
             ?: refuse(tsFile, declaration, "cannot lower an anonymous top-level function")
         if (declaration.body == null) {
-            refuse(tsFile, declaration, "cannot lower a function with no body (an overload or `declare`)")
+            if (ModifierFlag.Declare in declaration.modifiers) {
+                refuse(
+                    tsFile, declaration,
+                    "an ambient `declare function` has no implementation to lower"
+                )
+            }
+            pendingOverloads.getOrPut(name.text) { mutableListOf() }.add(declaration)
+            return
         }
         if (declaration.asteriskToken || ModifierFlag.Async in declaration.modifiers) {
             refuse(tsFile, declaration, "generators and `async` are out of the spike subset")
@@ -547,6 +646,8 @@ internal class KirFileLowering(
         builder.pluginContext.metadataDeclarationRegistrar
             .registerFunctionAsMetadataVisible(function)
         functions[declaration] = function
+        // Every signature of this function names the same implementation.
+        pendingOverloads.remove(name.text)?.forEach { functions[it] = function }
     }
 
     private fun declareClassShell(declaration: ClassDeclaration) {
@@ -574,7 +675,9 @@ internal class KirFileLowering(
         val irClass = classes.getValue(declaration)
         val base = superclassOf(declaration)
         irClass.superTypes = listOf(
-            base?.let { classes.getValue(it).defaultType } ?: irBuiltIns.anyType
+            base?.let { classes.getValue(it).defaultType }
+                ?: tables.runtimeSuperclasses[declaration]?.owner?.defaultType
+                ?: irBuiltIns.anyType
         )
         base?.let { tables.superclasses[declaration] = it }
 
@@ -609,13 +712,42 @@ internal class KirFileLowering(
             if (clause.token != SyntaxKind.ExtendsKeyword) continue
             val type = clause.types.singleOrNull()
                 ?: refuse(tsFile, declaration, "a class extends exactly one class")
-            base = classDeclarationOf(type.expression)
+            val generated = classDeclarationOf(type.expression)
+            if (generated != null) {
+                base = generated
+                continue
+            }
+            // A RUNTIME base — `class TomlDate extends Date`. The runtime class
+            // is open for exactly this, and what the lowering needs from it is a
+            // JVM symbol rather than a TypeScript tree.
+            val runtime = runtimeBaseOf(type.expression)
                 ?: refuse(
                     tsFile, declaration,
-                    "`extends` is lowered for a class this backend generated only"
+                    "`extends` is lowered for a class this backend generated or provides"
                 )
+            tables.runtimeSuperclasses[declaration] = runtime
         }
         return base
+    }
+
+    /**
+     * The runtime class a heritage expression names — `Date`, today.
+     *
+     * By NAME, and checked against the program's own classes rather than
+     * against the checker's resolution: a heritage clause's expression is a
+     * type position the sink does not always visit as an expression, so
+     * `nameAt` is frequently null here. The name is safe to use because a
+     * program class of the same name would have been found by
+     * [classDeclarationOf] one line up.
+     */
+    private fun runtimeBaseOf(expression: Expression): IrClassSymbol? {
+        val name = (expression as? Identifier)?.text ?: return null
+        facts.nameAt(expression)?.let { symbol ->
+            val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+            if (declaration != null && tables.isProgramNode(declaration)) return null
+        }
+        if (classes.keys.any { it.name?.text == name }) return null
+        return intrinsics.libraryClass(name)
     }
 
     /**
@@ -711,7 +843,10 @@ internal class KirFileLowering(
         val name = member.name as? Identifier
             ?: refuse(tsFile, member, "cannot lower a computed method name")
         if (member.body == null) {
-            refuse(tsFile, member, "cannot lower a method with no body")
+            // An overload SIGNATURE — the implementation follows in the same
+            // class body and every signature shares its IR function.
+            pendingMethodOverloads.getOrPut(name.text) { mutableListOf() }.add(member)
+            return
         }
         val static = ModifierFlag.Static in member.modifiers
         val function = irClass.addFunction {
@@ -727,6 +862,7 @@ internal class KirFileLowering(
         if (!static) function.parameters = listOf(dispatchReceiver(function, irClass))
         addParameters(function, member.parameters)
         methods[member] = function
+        pendingMethodOverloads.remove(name.text)?.forEach { methods[it] = function }
         if (static) {
             tables.staticMethods.getOrPut(owner) { mutableMapOf() }[name.text] = function
         }
@@ -746,6 +882,20 @@ internal class KirFileLowering(
         parameterCount: Int
     ): IrSimpleFunction? = tables.superclasses[owner]
         ?.let { methodInChain(it, name, parameterCount) }
+
+    /**
+     * The RUNTIME class at the top of this class's chain, if it extends one.
+     *
+     * `class TomlDate extends Date` puts a `JsDate` above the whole chain, and
+     * a method call on `this` or `super` may land there — so the search that
+     * misses every generated class asks it before refusing.
+     */
+    private fun runtimeBaseAbove(owner: ClassDeclaration): IrClassSymbol? {
+        tables.classChain(owner).forEach { current ->
+            tables.runtimeSuperclasses[current]?.let { return it }
+        }
+        return null
+    }
 
     /** The method [name]/[parameterCount] names on [from] or above it. */
     private fun methodInChain(
@@ -822,12 +972,18 @@ internal class KirFileLowering(
      * the IR parameter says it may be left out.
      */
     private fun addParameters(function: IrFunction, parameters: List<Parameter>) {
-        for (parameter in parameters) {
-            val name = parameter.name as? Identifier
-                ?: refuse(tsFile, parameter, "destructuring parameters are out of the spike subset")
+        parameters.forEachIndexed { index, parameter ->
             if (parameter.dotDotDotToken) {
                 refuse(tsFile, parameter, "rest parameters are out of the spike subset")
             }
+            // A DESTRUCTURING parameter has no name of its own — the pattern is
+            // its own binding list — so the slot gets a synthetic one and the
+            // pattern is bound from it in the body's prologue ([bindParameters]).
+            val name = parameter.name as? Identifier ?: Identifier(
+                text = "\$destructured$index",
+                pos = parameter.pos,
+                end = parameter.pos,
+            )
             val type = facts.typeOf(parameter)
                 ?: refuse(tsFile, parameter, "the checker gave no type for parameter '${name.text}'")
             val optional = parameter.questionToken || parameter.initializer != null
@@ -984,10 +1140,50 @@ internal class KirFileLowering(
             // therefore consumed here rather than lowered as a call.
             val base = tables.superclasses[declaration]
             val bodyStatements = tsConstructor?.body?.statements ?: emptyList()
-            val superCall = bodyStatements.firstOrNull()
+            // `super(…)` need not be the FIRST statement — TypeScript only
+            // requires it before `this` is touched, and a constructor that
+            // massages its arguments first (the `smol-toml` date parser does)
+            // is ordinary. Everything before it is lowered before the
+            // delegation, which the JVM allows for as long as it does not use
+            // `this` — and nothing that runs before `super(…)` can.
+            val superIndex = bodyStatements.indexOfFirst { statement ->
+                ((statement as? ExpressionStatement)?.expression as? CallExpression)
+                    ?.let { (it.expression as? Identifier)?.text == "super" } == true
+            }
+            val superCall = bodyStatements.getOrNull(superIndex)
                 ?.let { (it as? ExpressionStatement)?.expression as? CallExpression }
-                ?.takeIf { (it.expression as? Identifier)?.text == "super" }
-            if (base != null) {
+            bodyStatements.take(maxOf(superIndex, 0)).forEach { statement ->
+                lowerStatement(statement, statements)
+            }
+            val runtimeBase = tables.runtimeSuperclasses[declaration]
+            if (base == null && runtimeBase != null) {
+                val arguments = superCall?.arguments ?: emptyList()
+                val baseConstructor =
+                    intrinsics.runtimeConstructorOfArity(runtimeBase, arguments.size)
+                        ?: refuse(
+                            tsFile,
+                            superCall ?: declaration,
+                            "no `${runtimeBase.owner.name.asString()}` constructor takes " +
+                                "${arguments.size} argument(s)"
+                        )
+                val regular = baseConstructor.owner.parameters.filter {
+                    it.kind == IrParameterKind.Regular
+                }
+                statements.add(
+                    IrDelegatingConstructorCallImpl(
+                        UNDEFINED,
+                        UNDEFINED,
+                        irBuiltIns.unitType,
+                        baseConstructor,
+                        typeArgumentsCount = 0,
+                    ).apply {
+                        arguments.forEachIndexed { index, argument ->
+                            this.arguments[index] =
+                                coerce(argument, lowerExpression(argument), regular[index].type)
+                        }
+                    }
+                )
+            } else if (base != null) {
                 val baseConstructor = constructorsByDeclaration.getValue(base)
                 statements.add(
                     IrDelegatingConstructorCallImpl(
@@ -1026,10 +1222,8 @@ internal class KirFileLowering(
                     UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
                 )
             )
-            bodyStatements.forEach { statement ->
-                if (statement === superCall?.let { bodyStatements.first() }) return@forEach
-                lowerStatement(statement, statements)
-            }
+            bodyStatements.drop(maxOf(superIndex, 0) + if (superCall != null) 1 else 0)
+                .forEach { statement -> lowerStatement(statement, statements) }
             scopes.removeLast()
             constructor.body = blockBodyOf(statements)
         }
@@ -1107,8 +1301,31 @@ internal class KirFileLowering(
     ) {
         val valueParameters = function.parameters.filter { it.kind == IrParameterKind.Regular }
         parameters.forEachIndexed { index, parameter ->
-            val name = parameter.name as? Identifier ?: return@forEachIndexed
             val irParameter = valueParameters[index]
+            val pattern = parameter.name
+            if (pattern is ObjectBindingPattern || pattern is ArrayBindingPattern) {
+                // The DEFAULT applies first, and it is not optional here: a
+                // destructuring parameter with one (`{ maxDepth = 1000 } = {}`)
+                // is called with nothing at all, so the pattern would otherwise
+                // be read off a null — which is a NullPointerException at run
+                // time in a program that compiled, and is exactly what the
+                // `smol-toml` parser did on its first run.
+                val subject = parameter.initializer?.let { fallback ->
+                    scope.irWhen(
+                        irParameter.type,
+                        listOf(
+                            scope.irBranch(
+                                scope.irEqualsNull(scope.irGet(irParameter)),
+                                coerce(fallback, lowerExpression(fallback), irParameter.type)
+                            ),
+                            scope.irElseBranch(scope.irGet(irParameter))
+                        )
+                    )
+                } ?: scope.irGet(irParameter)
+                bindPattern(pattern, subject, out)
+                return@forEachIndexed
+            }
+            val name = pattern as? Identifier ?: return@forEachIndexed
             val default = parameter.initializer
             if (default != null) {
                 // `function f(x = 5)`: the default is the body's first act, not
@@ -1225,11 +1442,18 @@ internal class KirFileLowering(
                     }
                 )
             }
-            is EmptyStatement -> {}
-            is FunctionDeclaration, is ClassDeclaration,
+            // A `NotEmittedStatement` carries comments the parser preserved and
+            // nothing else — it is the shape a stray `;` or a comment-only line
+            // takes, and it emits nothing here for the same reason the ordinary
+            // emitter emits nothing for it.
+            is EmptyStatement, is NotEmittedStatement -> {}
+            is FunctionDeclaration, is ClassDeclaration, is EnumDeclaration,
             is InterfaceDeclaration, is TypeAliasDeclaration,
             is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> {}
-            else -> refuse(tsFile, statement, "cannot lower this statement")
+            else -> refuse(
+                tsFile, statement,
+                "cannot lower this ${statement::class.simpleName}"
+            )
         }
     }
 
@@ -1269,9 +1493,25 @@ internal class KirFileLowering(
         }
         val mutable = list.flags != SyntaxKind.ConstKeyword
         for (declaration in list.declarations) {
-            val name = declaration.name as? Identifier
-                ?: refuse(tsFile, declaration, "destructuring declarations are out of the spike subset")
-            val type = erase(declaration, variableType(declaration.name, declaration.initializer))
+            val pattern = declaration.name
+            if (pattern is ObjectBindingPattern || pattern is ArrayBindingPattern) {
+                val initializer = declaration.initializer
+                    ?: refuse(tsFile, declaration, "a destructuring declaration needs a value")
+                bindPattern(pattern, lowerExpression(initializer), out)
+                continue
+            }
+            val name = pattern as? Identifier
+                ?: refuse(tsFile, declaration, "cannot lower this declaration name")
+            // `let k: string` with no initializer holds `undefined` until it is
+            // assigned — which is `null` here — so the SLOT is nullable whatever
+            // the annotation said. TypeScript's definite-assignment analysis is
+            // what makes reading it before the assignment an error, and that is
+            // the checker's job, not the slot's.
+            val declaredType =
+                erase(declaration, variableType(declaration.name, declaration.initializer))
+            val type = if (declaration.initializer == null) {
+                declaredType.makeNullable()
+            } else declaredType
             val variable = buildVariable(
                 frame.irFunction as IrDeclarationParent,
                 UNDEFINED,
@@ -1283,16 +1523,7 @@ internal class KirFileLowering(
             )
             variable.initializer = declaration.initializer
                 ?.let { coerce(it, lowerExpression(it), type) }
-                // `let x;` is `undefined`, which §3.1 maps to `null` — so the
-                // variable must be able to hold one.
-                ?: if (type == types.nothingNullable || type == irBuiltIns.anyNType) {
-                    scope.irNull()
-                } else {
-                    refuse(
-                        tsFile, declaration,
-                        "cannot lower '${name.text}' declared without an initializer"
-                    )
-                }
+                ?: scope.irNull()
             out.add(variable)
             scopes.last()[name.text] = variable
         }
@@ -1721,6 +1952,19 @@ internal class KirFileLowering(
         is ArrayLiteralExpression -> lowerArrayLiteral(node)
         is ObjectLiteralExpression -> lowerObjectLiteral(node)
         is NoSubstitutionTemplateLiteralNode -> scope.irString(node.text)
+        is RegularExpressionLiteralNode -> lowerRegularExpression(node)
+        is BigIntLiteralNode -> scope.irCall(intrinsics.jsBigInt, intrinsics.bigIntegerType).apply {
+            arguments[0] = scope.irString(node.text.removeSuffix("n"))
+        }
+        // `void e` evaluates `e` and yields `undefined` — `void 0` is how a
+        // program spells `undefined` where the name might be shadowed.
+        is VoidExpression -> IrBlockImpl(
+            UNDEFINED,
+            UNDEFINED,
+            types.nothingNullable,
+            null,
+            listOf(lowerExpression(node.expression), scope.irNull())
+        )
         is TemplateExpression -> lowerTemplate(node)
         is ArrowFunction -> lowerFunctionValue(node, node.parameters, node.body)
         is FunctionExpression -> lowerFunctionValue(node, node.parameters, node.body)
@@ -1731,11 +1975,15 @@ internal class KirFileLowering(
         // whole of their runtime meaning.
         is NonNullExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
         is AsExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
-        is TypeOfExpression -> refuse(
-            tsFile, node,
-            "`typeof` is lowered only as part of a `typeof x === \"…\"` comparison"
-        )
-        else -> refuse(tsFile, node, "cannot lower this expression")
+        // `typeof x` on its own: the runtime answers the STRING, which is what
+        // the operator is. The `typeof x === "…"` pattern below is an
+        // optimization of this, not a substitute for it.
+        is TypeOfExpression -> scope.irCall(intrinsics.jsTypeOf, types.string).apply {
+            arguments[0] = coerce(
+                node.expression, lowerExpression(node.expression), types.anyNullable
+            )
+        }
+        else -> refuse(tsFile, node, "cannot lower this ${node::class.simpleName}")
     }
 
     /**
@@ -1747,6 +1995,10 @@ internal class KirFileLowering(
         "true" -> scope.irBoolean(true)
         "false" -> scope.irBoolean(false)
         "null", "undefined" -> scope.irNull()
+        // The numeric globals are CONSTANTS, and a program that spells one is
+        // asking for the value rather than for a lookup.
+        "Infinity" -> scope.irDouble(Double.POSITIVE_INFINITY)
+        "NaN" -> scope.irDouble(Double.NaN)
         "this" -> frame.thisReceiver?.let { scope.irGet(it) }
             ?: refuse(tsFile, node, "`this` outside a class member")
         else -> lookup(node.text)?.let { scope.irGet(it) }
@@ -1864,6 +2116,13 @@ internal class KirFileLowering(
                 }
             // `==` is ECMAScript ABSTRACT equality and the runtime owns all of
             // it: `1 == "1"` is true and `null == 0` is false.
+            // The COMMA operator: evaluate both, yield the right — `j++, p++`
+            // in a `for` incrementor is what it is for.
+            SyntaxKind.Comma -> {
+                val left = lowerExpression(node.left)
+                val right = lowerExpression(node.right)
+                IrBlockImpl(UNDEFINED, UNDEFINED, right.type, null, listOf(left, right))
+            }
             SyntaxKind.EqualsEquals -> looseEquals(node, negated = false)
             SyntaxKind.ExclamationEquals -> looseEquals(node, negated = true)
             SyntaxKind.Ampersand -> bitwise(node, "jsBitAnd")
@@ -1995,9 +2254,20 @@ internal class KirFileLowering(
      * type and throw exactly where JavaScript takes the other branch.
      */
     private fun shortCircuit(node: BinaryExpression): IrExpression {
-        val type = erase(node, facts.typeOf(node)
+        val declared = erase(node, facts.typeOf(node)
             ?: refuse(tsFile, node, "the checker gave no type for this expression"))
         val leftValue = lowerExpression(node.left)
+        // The result of `a && b` is an OPERAND, so its type is what the two
+        // arms have in common — and the checker's answer for the whole
+        // expression is not always a type BOTH can become: `hasTime && (s =
+        // t)` types as `string` while its kept arm is a `boolean`. Where an arm
+        // cannot reach the declared type, the block is `Any?` and the
+        // information is recovered by the cast at the use site, as everywhere
+        // else union erasure loses one.
+        val rightType = facts.typeOf(node.right)?.let { types.map(it) }
+        val armsFit = coercionFor(leftValue.type, declared, irBuiltIns) != Coercion.IMPOSSIBLE &&
+            (rightType == null || coercionFor(rightType, declared, irBuiltIns) != Coercion.IMPOSSIBLE)
+        val type = if (armsFit) declared else types.anyNullable
         val temporary = buildVariable(
             frame.irFunction as IrDeclarationParent,
             UNDEFINED,
@@ -2185,7 +2455,32 @@ internal class KirFileLowering(
      * element want `Any?`, a local wants its own — and coercing afterwards would
      * mean lowering the value before knowing what it must become.
      */
-    private fun assignTo(target: Expression, value: (IrType) -> IrExpression): IrExpression =
+    /**
+     * An assignment EXPRESSION, which yields the value it assigned.
+     *
+     * JavaScript's `=` is an expression — `a && (b = c)` is ordinary code, and
+     * the `smol-toml` parser is written that way — while an `IrSetValue` or an
+     * `IrSetField` yields `Unit`. So the assignment becomes a block: compute
+     * once into a temporary, store it, yield it. In statement position the
+     * block's value is discarded and the JVM's own optimizer removes the
+     * temporary.
+     */
+    private fun assignTo(target: Expression, value: (IrType) -> IrExpression): IrExpression {
+        val statements = mutableListOf<IrStatement>()
+        var assigned: IrVariable? = null
+        val store = assignToTarget(target) { type ->
+            val temporary = temporary("assigned", type, value(type))
+            statements.add(temporary)
+            assigned = temporary
+            scope.irGet(temporary)
+        }
+        val slot = assigned ?: return store
+        statements.add(store)
+        statements.add(scope.irGet(slot))
+        return IrBlockImpl(UNDEFINED, UNDEFINED, slot.type, null, statements)
+    }
+
+    private fun assignToTarget(target: Expression, value: (IrType) -> IrExpression): IrExpression =
         when (target) {
             is Identifier -> {
                 val variable = lookup(target.text)
@@ -2242,6 +2537,14 @@ internal class KirFileLowering(
                     arguments[1] = scope.irString(target.name.text)
                     arguments[2] = value(types.anyNullable)
                 }
+            } else if (isDynamicReceiver(target.expression)) {
+                scope.irCall(intrinsics.jsSet).apply {
+                    arguments[0] = coerce(
+                        target.expression, lowerExpression(target.expression), types.anyNullable
+                    )
+                    arguments[1] = scope.irString(target.name.text)
+                    arguments[2] = value(types.anyNullable)
+                }
             } else {
                 val field = resolveField(target)
                 IrSetFieldImpl(
@@ -2255,7 +2558,21 @@ internal class KirFileLowering(
                     null
                 )
             }
-            is ElementAccessExpression -> {
+            is ElementAccessExpression -> if (
+                isDynamicReceiver(target.expression) || isPropertyBag(target.expression)
+            ) {
+                scope.irCall(intrinsics.jsIndexSet).apply {
+                    arguments[0] = coerce(
+                        target.expression, lowerExpression(target.expression), types.anyNullable
+                    )
+                    arguments[1] = coerce(
+                        target.argumentExpression,
+                        lowerExpression(target.argumentExpression),
+                        types.anyNullable
+                    )
+                    arguments[2] = value(types.anyNullable)
+                }
+            } else {
                 val owner = runtimeClassOf(target.expression)
                     ?: refuse(tsFile, target, elementAccessRefusal(target))
                 val set = intrinsics.runtimeMember(owner, "set", 2)
@@ -2293,10 +2610,15 @@ internal class KirFileLowering(
             "number" -> scope.irIs(operand, types.double)
             "boolean" -> scope.irIs(operand, types.boolean)
             "undefined" -> scope.irEqualsNull(coerce(typeOf.expression, operand, types.anyNullable))
-            else -> refuse(
-                tsFile, node,
-                "`typeof x === \"${literal.text}\"` is out of the spike subset"
-            )
+            // Everything else — "object", "function", "bigint", "symbol" — is
+            // decided by the runtime's own `typeof`, compared as a string. The
+            // arms above are the optimization: an `is` test where one is exact.
+            else -> scope.irCall(intrinsics.jsStrictEquals, types.boolean).apply {
+                arguments[0] = scope.irCall(intrinsics.jsTypeOf, types.string).apply {
+                    arguments[0] = coerce(typeOf.expression, operand, types.anyNullable)
+                }
+                arguments[1] = scope.irString(literal.text)
+            }
         }
         return if (negated) not(test) else test
     }
@@ -2327,23 +2649,39 @@ internal class KirFileLowering(
             val viaSuper = selfReceiver.text == "super"
             val owner = frame.ownerClass
                 ?: refuse(tsFile, node, "`${selfReceiver.text}` outside a class member")
-            val from = if (viaSuper) {
-                tables.superclasses[owner]
-                    ?: refuse(tsFile, node, "`super` in a class with no base")
-            } else owner
-            val target = methodInChain(from, access.name.text, node.arguments.size)
+            val from = if (viaSuper) tables.superclasses[owner] ?: owner else owner
+            val generated = methodInChain(from, access.name.text, node.arguments.size)
+            // The base may be one of this backend's RUNTIME classes — `class
+            // TomlDate extends Date` calls `super.toISOString()` — in which case
+            // the member is a JVM method of that class rather than a lowered
+            // TypeScript one.
+            val runtimeBase = runtimeBaseAbove(from)
+            val target = generated?.symbol
+                ?: runtimeBase?.let {
+                    intrinsics.runtimeMember(it, access.name.text, node.arguments.size)
+                }
                 ?: refuse(
                     tsFile, node,
                     "no method '${access.name.text}' with ${node.arguments.size} argument(s) " +
                         "on '${from.name?.text}' or above it"
                 )
-            return scope.irCall(target.symbol).apply {
+            return scope.irCall(target).apply {
                 // `super` is non-virtual, or an override calling its base
                 // through it recurses into itself forever. `this` is virtual,
                 // which is what an override is FOR.
-                if (viaSuper) superQualifierSymbol = classes.getValue(from).symbol
+                if (viaSuper) {
+                    superQualifierSymbol = if (generated != null) {
+                        classes.getValue(from).symbol
+                    } else {
+                        runtimeBase ?: refuse(tsFile, node, "`super` in a class with no base")
+                    }
+                }
                 arguments[0] = receiverOf(access)
-                bindArguments(node, target.parameters, offset = 1)
+                val regular = target.owner.parameters.filter { it.kind == IrParameterKind.Regular }
+                node.arguments.forEachIndexed { index, argument ->
+                    arguments[index + 1] =
+                        coerce(argument, lowerExpression(argument), regular[index].type)
+                }
             }
         }
         methods[declaration]?.let { target ->
@@ -2389,7 +2727,11 @@ internal class KirFileLowering(
             }
         }
         if (callee is PropertyAccessExpression && isStringReceiver(callee.expression)) {
-            val target = intrinsics.stringMember(callee.name.text, node.arguments.size)
+            val firstIsRegExp = node.arguments.firstOrNull()
+                ?.let { runtimeClassOf(it) } == intrinsics.jsRegExpClass
+            val target = intrinsics.stringMember(
+                callee.name.text, node.arguments.size, firstIsRegExp
+            )
                 ?: refuse(
                     tsFile, node,
                     "'String.${callee.name.text}' with ${node.arguments.size} argument(s) is " +
@@ -2410,6 +2752,76 @@ internal class KirFileLowering(
             }
             intrinsics.libraryMember(fact.receiverTypeText, fact.memberName)?.let { intrinsic ->
                 return lowerIntrinsicCall(node, intrinsic)
+            }
+        }
+        // A GLOBAL free function — `isNaN(x)`, `parseInt(s, 10)`, `String(x)` —
+        // reached only once the call has resolved to a declaration this backend
+        // did not generate, so a program's own `function parseInt` is untouched.
+        if (callee is Identifier && declaration != null && !tables.isProgramNode(declaration)) {
+            intrinsics.globalFunction(callee.text, node.arguments.size)?.let { target ->
+                return scope.irCall(target).apply {
+                    val regular = target.owner.parameters.filter {
+                        it.kind == IrParameterKind.Regular
+                    }
+                    node.arguments.forEachIndexed { index, argument ->
+                        arguments[index] =
+                            coerce(argument, lowerExpression(argument), regular[index].type)
+                    }
+                }
+            }
+        }
+        // `a?.b(…)` — the receiver evaluated once, `null` where it is nullish,
+        // and the member reached dynamically because a nullish-typed receiver
+        // has told the backend nothing else.
+        if (callee is PropertyAccessExpression && callee.questionDotToken) {
+            val receiver = temporary(
+                "optional",
+                types.anyNullable,
+                coerce(callee.expression, lowerExpression(callee.expression), types.anyNullable)
+            )
+            val invoke = scope.irCall(intrinsics.jsInvoke, types.anyNullable).apply {
+                arguments[0] = scope.irGet(receiver)
+                arguments[1] = scope.irString(callee.name.text)
+                arguments[2] = scope.irVararg(
+                    irBuiltIns.anyNType,
+                    node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+                )
+            }
+            return IrBlockImpl(
+                UNDEFINED,
+                UNDEFINED,
+                types.anyNullable,
+                null,
+                listOf(
+                    receiver,
+                    scope.irWhen(
+                        types.anyNullable,
+                        listOf(
+                            scope.irBranch(
+                                scope.irEqualsNull(scope.irGet(receiver)),
+                                scope.irNull()
+                            ),
+                            scope.irElseBranch(invoke)
+                        )
+                    )
+                )
+            )
+        }
+        // A member call on a receiver the checker typed `any` — the largest
+        // dynamic population in real TypeScript (`kir-structural-typing.md` §7)
+        // and the one place this backend dispatches on what a value IS rather
+        // than on what its type said. Refusing it would refuse most real code
+        // reached through an untyped boundary.
+        if (callee is PropertyAccessExpression && isDynamicReceiver(callee.expression)) {
+            return scope.irCall(intrinsics.jsInvoke, types.anyNullable).apply {
+                arguments[0] = coerce(
+                    callee.expression, lowerExpression(callee.expression), types.anyNullable
+                )
+                arguments[1] = scope.irString(callee.name.text)
+                arguments[2] = scope.irVararg(
+                    irBuiltIns.anyNType,
+                    node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+                )
             }
         }
         // LAST, and never for a property access. A callee is a function VALUE
@@ -2471,14 +2883,16 @@ internal class KirFileLowering(
         // `new Map()` — a library type this backend gives a runtime class.
         facts.typeOf(node)?.let { types.map(it) }?.let { intrinsics.runtimeClassOf(it) }
             ?.let { owner ->
-                if (node.arguments?.isNotEmpty() == true) {
-                    refuse(
+                val given = node.arguments ?: emptyList()
+                val constructor = intrinsics.runtimeConstructorOfArity(owner, given.size)
+                    ?: refuse(
                         tsFile, node,
-                        "`new ${owner.owner.name.asString()}` takes no arguments in this backend"
+                        "no `${owner.owner.name.asString()}` constructor takes " +
+                            "${given.size} argument(s) in this backend"
                     )
+                val regular = constructor.owner.parameters.filter {
+                    it.kind == IrParameterKind.Regular
                 }
-                val constructor = intrinsics.runtimeConstructor(owner)
-                    ?: refuse(tsFile, node, "this runtime class has no no-argument constructor")
                 return IrConstructorCallImpl(
                     UNDEFINED,
                     UNDEFINED,
@@ -2486,7 +2900,12 @@ internal class KirFileLowering(
                     constructor,
                     typeArgumentsCount = 0,
                     constructorTypeArgumentsCount = 0,
-                )
+                ).apply {
+                    given.forEachIndexed { index, argument ->
+                        arguments[index] =
+                            coerce(argument, lowerExpression(argument), regular[index].type)
+                    }
+                }
             }
         val signature = facts.constructionAt(node)
         val owner = (signature?.declaration as? Constructor)?.parent as? ClassDeclaration
@@ -2521,6 +2940,58 @@ internal class KirFileLowering(
         }
     }
 
+    /**
+     * `a?.b` — the receiver evaluated ONCE, and `null` where it is nullish.
+     *
+     * The whole point of `?.` is that the receiver is not evaluated twice, so
+     * it goes into a temporary; the member is then read off the VALUE rather
+     * than off the syntax, since the receiver node has already been consumed.
+     */
+    private fun lowerOptionalRead(node: PropertyAccessExpression): IrExpression {
+        val receiver = temporary(
+            "optional",
+            types.anyNullable,
+            coerce(node.expression, lowerExpression(node.expression), types.anyNullable)
+        )
+        val read = coerce(
+            node,
+            readMemberOfValue(node, scope.irGet(receiver), node.name.text),
+            types.anyNullable
+        )
+        val branches = listOf(
+            scope.irBranch(scope.irEqualsNull(scope.irGet(receiver)), scope.irNull()),
+            scope.irElseBranch(read)
+        )
+        return IrBlockImpl(
+            UNDEFINED,
+            UNDEFINED,
+            types.anyNullable,
+            null,
+            listOf(receiver, scope.irWhen(types.anyNullable, branches))
+        )
+    }
+
+    /**
+     * The CONSTANT an enum member access names — `Type.DOTTED` — or null.
+     *
+     * The receiver has to be an identifier naming an enum this program declared:
+     * the enum has no runtime object, so this is the only shape of it that can
+     * be lowered at all, and anything else about it (`Type[x]`, passing `Type`
+     * as a value) refuses where it stands.
+     */
+    private fun enumMemberValue(node: PropertyAccessExpression): IrExpression? {
+        val receiver = node.expression as? Identifier ?: return null
+        val symbol = facts.nameAt(receiver) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        val enum = declaration as? EnumDeclaration ?: return null
+        val value = tables.enumMembers[enum]?.get(node.name.text) ?: return null
+        return when (value) {
+            is Double -> scope.irDouble(value)
+            is String -> scope.irString(value)
+            else -> null
+        }
+    }
+
     /** The generated class a callee expression NAMES, or null. */
     private fun classDeclarationOf(callee: Expression): ClassDeclaration? {
         val name = callee as? Identifier ?: return null
@@ -2530,9 +3001,7 @@ internal class KirFileLowering(
     }
 
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
-        if (node.questionDotToken) {
-            refuse(tsFile, node, "optional chaining `?.` is out of the spike subset")
-        }
+        if (node.questionDotToken) return lowerOptionalRead(node)
         staticOwnerOf(node)?.let { owner ->
             tables.classChain(owner).forEach { current ->
                 tables.staticFields[current]?.get(node.name.text)?.let { field ->
@@ -2546,6 +3015,7 @@ internal class KirFileLowering(
                 "class '${owner.name?.text}' declares no static '${node.name.text}'"
             )
         }
+        enumMemberValue(node)?.let { return it }
         if (isStringReceiver(node.expression)) {
             val target = intrinsics.stringMember(node.name.text, 0)
                 ?: refuse(
@@ -2570,6 +3040,14 @@ internal class KirFileLowering(
                 )
             return scope.irCall(getter).apply {
                 arguments[0] = lowerExpression(node.expression)
+            }
+        }
+        if (isDynamicReceiver(node.expression)) {
+            return scope.irCall(intrinsics.jsGet, types.anyNullable).apply {
+                arguments[0] = coerce(
+                    node.expression, lowerExpression(node.expression), types.anyNullable
+                )
+                arguments[1] = scope.irString(node.name.text)
             }
         }
         val field = resolveField(node)
@@ -2829,6 +3307,40 @@ internal class KirFileLowering(
         return result
     }
 
+    /**
+     * `/pattern/flags` — a `JsRegExp` built from the literal's own text.
+     *
+     * The parser hands the whole lexeme through, delimiters and all, and the
+     * FLAGS are what follow the last `/`. Splitting on the last one rather than
+     * scanning for an unescaped delimiter is exact here because the parser has
+     * already decided where the literal ends — the ambiguity a regex literal has
+     * is a LEXING one, and it was resolved before this node existed.
+     */
+    private fun lowerRegularExpression(node: RegularExpressionLiteralNode): IrExpression {
+        val text = node.text
+        val closing = text.lastIndexOf('/')
+        if (!text.startsWith("/") || closing <= 0) {
+            refuse(tsFile, node, "cannot lower this regular-expression literal")
+        }
+        return scope.irCall(intrinsics.jsRegExp, intrinsics.jsRegExpType).apply {
+            arguments[0] = scope.irString(text.substring(1, closing))
+            arguments[1] = scope.irString(text.substring(closing + 1))
+        }
+    }
+
+    /**
+     * Did the checker decline to say what this receiver is?
+     *
+     * `any` and `unknown` erase to `Any?`, and so does a union whose members
+     * disagree — in all three the checker has told the backend nothing it can
+     * dispatch on, which is exactly when the runtime must dispatch instead.
+     */
+    private fun isDynamicReceiver(node: Expression): Boolean {
+        val type = facts.typeOf(node) ?: return false
+        val erased = types.map(type) ?: return false
+        return erased.isErasedAny(irBuiltIns)
+    }
+
     /** Does this expression's checked type erase to a `String`? */
     private fun isStringReceiver(node: Expression): Boolean {
         val type = facts.typeOf(node) ?: return false
@@ -2847,6 +3359,162 @@ internal class KirFileLowering(
             arguments[0] = lowerExpression(node.expression)
             arguments[1] = scope.irString(node.name.text)
         }
+
+    // ---- destructuring ------------------------------------------------------
+
+    /**
+     * Binds every name a destructuring PATTERN introduces, from one value.
+     *
+     * `const { a, b: c } = value` and `const [x, y] = value` are both a
+     * sequence of ordinary local declarations reading a member of a temporary —
+     * which is what they are in JavaScript too. The temporary is what keeps the
+     * value evaluated ONCE, and the nested case falls out for free: an element
+     * whose own name is a pattern recurses with the member as its value.
+     */
+    private fun bindPattern(pattern: Node, value: IrExpression, out: MutableList<IrStatement>) {
+        val subject = temporary("destructured", value.type, value)
+        out.add(subject)
+        when (pattern) {
+            is ObjectBindingPattern -> pattern.elements.forEachIndexed { _, element ->
+                if (element.dotDotDotToken) {
+                    refuse(tsFile, element, "a rest element in a pattern is out of the subset")
+                }
+                val propertyName = (element.propertyName as? Identifier)?.text
+                    ?: (element.name as? Identifier)?.text
+                    ?: refuse(tsFile, element, "cannot lower this binding element")
+                bindPatternElement(
+                    element,
+                    readMemberOfValue(element, scope.irGet(subject), propertyName),
+                    out
+                )
+            }
+            is ArrayBindingPattern -> pattern.elements.forEachIndexed { index, element ->
+                if (element !is BindingElement) return@forEachIndexed
+                if (element.dotDotDotToken) {
+                    refuse(tsFile, element, "a rest element in a pattern is out of the subset")
+                }
+                bindPatternElement(
+                    element,
+                    readElementOfValue(element, scope.irGet(subject), index.toDouble()),
+                    out
+                )
+            }
+            else -> refuse(tsFile, pattern, "cannot lower this binding pattern")
+        }
+    }
+
+    private fun bindPatternElement(
+        element: BindingElement,
+        value: IrExpression,
+        out: MutableList<IrStatement>
+    ) {
+        val nested = element.name
+        if (nested is ObjectBindingPattern || nested is ArrayBindingPattern) {
+            bindPattern(nested, value, out)
+            return
+        }
+        val name = nested as? Identifier
+            ?: refuse(tsFile, element, "cannot lower this binding element")
+        val declaredType = facts.typeOf(nested)?.let { erase(element, it) } ?: value.type
+        // A per-element DEFAULT — `{ maxDepth = 1000 }` — applies where the
+        // member is absent, which in this runtime is where it reads null. Its
+        // omission is not a diagnostic anywhere: the program simply runs with a
+        // null where it expected a number, and fails at the first arithmetic.
+        val withDefault = element.initializer?.let { fallback ->
+            val slot = temporary("element", types.anyNullable, coerce(element, value, types.anyNullable))
+            IrBlockImpl(
+                UNDEFINED,
+                UNDEFINED,
+                types.anyNullable,
+                null,
+                listOf(
+                    slot,
+                    scope.irWhen(
+                        types.anyNullable,
+                        listOf(
+                            scope.irBranch(
+                                scope.irEqualsNull(scope.irGet(slot)),
+                                coerce(fallback, lowerExpression(fallback), types.anyNullable)
+                            ),
+                            scope.irElseBranch(scope.irGet(slot))
+                        )
+                    )
+                )
+            )
+        } ?: value
+        val local = temporary(
+            kotlinName(name.text),
+            declaredType,
+            coerce(element, withDefault, declaredType)
+        )
+        out.add(local)
+        scopes.last()[name.text] = local
+    }
+
+    /**
+     * One named member of an already-lowered VALUE.
+     *
+     * The AST-based reads all start from a `PropertyAccessExpression`; a
+     * destructuring pattern has no such node, so the mechanism is selected by
+     * the value's ERASED type instead — a bag, or a class this backend
+     * generated. Anything else refuses, which is the same answer the AST path
+     * would give.
+     */
+    private fun readMemberOfValue(at: Node, value: IrExpression, name: String): IrExpression {
+        if (value.type.isErasedAny(irBuiltIns)) {
+            return scope.irCall(intrinsics.jsGet, types.anyNullable).apply {
+                arguments[0] = value
+                arguments[1] = scope.irString(name)
+            }
+        }
+        if (value.type.classifierOrNull == types.string.classifierOrNull) {
+            val member = intrinsics.stringMember(name, 0)
+                ?: refuse(at, "'String.$name' is not a property this backend provides")
+            return scope.irCall(member).apply { arguments[0] = value }
+        }
+        intrinsics.runtimeClassOf(value.type)?.let { owner ->
+            val getter = intrinsics.runtimePropertyGetter(owner, name)
+                ?: refuse(
+                    at,
+                    "'$name' is not a property this backend gives a " +
+                        "'${owner.owner.name.asString()}'"
+                )
+            return scope.irCall(getter).apply { arguments[0] = value }
+        }
+        if (value.type.classifierOrNull == intrinsics.jsObjectClass) {
+            return scope.irCall(intrinsics.jsObjectGet, types.anyNullable).apply {
+                arguments[0] = value
+                arguments[1] = scope.irString(name)
+            }
+        }
+        generatedClassOf(value.type)?.let { owner ->
+            tables.classChain(owner).forEach { current ->
+                current.members.filterIsInstance<PropertyDeclaration>()
+                    .firstOrNull { (it.name as? Identifier)?.text == name }
+                    ?.let { property ->
+                        val field = fields.getValue(property)
+                        return IrGetFieldImpl(
+                            UNDEFINED, UNDEFINED, field.symbol, field.type, value, null, null
+                        )
+                    }
+            }
+        }
+        refuse(at, "cannot destructure '$name' out of this value")
+    }
+
+    private fun readElementOfValue(at: Node, value: IrExpression, index: Double): IrExpression {
+        if (value.type.classifierOrNull != intrinsics.jsArrayClass) {
+            refuse(at, "cannot destructure an element out of this value")
+        }
+        val get = intrinsics.runtimeMember(intrinsics.jsArrayClass, "get", 1)
+            ?: refuse(at, "JsArray.get is missing")
+        return scope.irCall(get).apply {
+            arguments[0] = value
+            arguments[1] = scope.irDouble(index)
+        }
+    }
+
+    private fun refuse(at: Node, message: String): Nothing = refuse(tsFile, at, message)
 
     // ---- arrays and other runtime-backed receivers -------------------------
 
@@ -2875,6 +3543,31 @@ internal class KirFileLowering(
     private fun lowerElementRead(node: ElementAccessExpression): IrExpression {
         if (node.questionDotToken) {
             refuse(tsFile, node, "optional element access `?.[]` is out of the spike subset")
+        }
+        // A STRING indexes to a one-character string — `date[10] === ' '` is the
+        // idiom — and out of range is `undefined`, which is why it goes through
+        // the runtime rather than through `String.get`.
+        if (isStringReceiver(node.expression)) {
+            val charAt = intrinsics.stringMember("charAt", 1)
+                ?: refuse(tsFile, node, "String.charAt is missing from the runtime")
+            return scope.irCall(charAt).apply {
+                arguments[0] = lowerExpression(node.expression)
+                arguments[1] = elementIndex(node)
+            }
+        }
+        // A dynamic receiver indexes through the runtime, which decides on what
+        // the value IS — `a[0]` and `o["k"]` are one syntax over two containers.
+        if (isDynamicReceiver(node.expression) || isPropertyBag(node.expression)) {
+            return scope.irCall(intrinsics.jsIndexGet, types.anyNullable).apply {
+                arguments[0] = coerce(
+                    node.expression, lowerExpression(node.expression), types.anyNullable
+                )
+                arguments[1] = coerce(
+                    node.argumentExpression,
+                    lowerExpression(node.argumentExpression),
+                    types.anyNullable
+                )
+            }
         }
         val owner = runtimeClassOf(node.expression)
             ?: refuse(tsFile, node, elementAccessRefusal(node))
@@ -3132,7 +3825,15 @@ internal class KirFileLowering(
         scope.irCall(irBuiltIns.booleanNotSymbol).apply { arguments[0] = value }
 
     private fun erase(node: Node, type: Type): IrType = types.map(type)
-        ?: refuse(tsFile, node, "cannot map the type '${facts.render(type)}'")
+        ?: refuse(
+            tsFile, node,
+            "cannot map the type '${facts.render(type)}' (${type::class.simpleName}" +
+                ((type as? Type.Object)?.symbol?.let { symbol ->
+                    ", symbol ${symbol.name}, declared by " +
+                        (symbol.valueDeclaration ?: symbol.declarations.firstOrNull())
+                            ?.let { it::class.simpleName }
+                } ?: "") + ")"
+        )
 
     /**
      * A TypeScript name as a Kotlin one.

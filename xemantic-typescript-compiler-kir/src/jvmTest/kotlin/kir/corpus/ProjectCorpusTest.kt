@@ -81,6 +81,38 @@ class ProjectCorpusTest {
         )
     }
 
+    /**
+     * A REAL PARSER: `smol-toml`'s own source, unmodified, compiled and RUN.
+     *
+     * 1,082 lines across seven files — a class extending `Date`, another
+     * extending `Error`, a `const enum`, regular expressions, destructuring
+     * with defaults, optional chaining, `bigint` literals, `void 0` — parsing a
+     * TOML document and printing it as JSON. Provenance and licence are in the
+     * project's own README; the only files that are ours are the driver and an
+     * ambient shim for the `Temporal` types the library mentions.
+     *
+     * The checker reports ZERO errors on it, which tsgo 7.0.2 also does.
+     */
+    @Test
+    fun `smol-toml - a real parser, compiled and run`() {
+        assertProject(
+            name = "toml",
+            files = listOf(
+                "tsconfig.json",
+                "src/util.ts",
+                "src/error.ts",
+                "src/date.ts",
+                "src/primitive.ts",
+                "src/struct.ts",
+                "src/extract.ts",
+                "src/parse.ts",
+                "src/temporal-shim.d.ts",
+                "src/main.ts",
+            ),
+            entry = "main.ts",
+        )
+    }
+
     private fun assertProject(name: String, files: List<String>, entry: String) {
         val project = Files.createTempDirectory("xtsc-kir-project-$name")
         files.forEach { relative ->

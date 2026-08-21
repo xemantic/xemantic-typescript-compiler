@@ -208,7 +208,13 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
 
     private fun recordParameter(node: Parameter, lens: CheckedLens) {
         if (node in parameterTypes) return
-        val name = node.name as? Identifier ?: return
+        val name = node.name as? Identifier ?: run {
+            // A DESTRUCTURING parameter has no name to resolve, and a
+            // `Signature` deliberately drops it — so its ANNOTATION is the only
+            // statement of its type, and resolving one is what the lens is for.
+            node.type?.let { parameterTypes[node] = remember(lens.typeOfTypeNode(it), lens) }
+            return
+        }
         // A parameter is deliberately absent from the binder's `nodeToSymbol` —
         // `declareLexical` records into the SEPARATE scope-symbol id space — so the
         // position's own lexical chain is what names it. And `declaredTypeOfSymbol`

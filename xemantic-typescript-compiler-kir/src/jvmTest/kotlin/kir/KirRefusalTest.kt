@@ -80,25 +80,28 @@ class KirRefusalTest {
 
     @Test
     fun `a library member this backend does not know is refused and names it`() {
-        val (compilation, _) = compile("console.log(Math.max(1, 2));")
+        // `Math.atan2` is not in the intrinsic table (`Math.max` is, and used to
+        // stand here until it landed) — so the refusal must NAME it, by the
+        // checker's own rendering of the receiver plus the member, which is what
+        // that table is keyed by.
+        val (compilation, _) = compile("console.log(Math.atan2(1, 2));")
         assert(!compilation.successful)
         val refusal = compilation.refusals.single()
-        // Named by the checker's own rendering of the receiver plus the member,
-        // which is what the intrinsic table is keyed by.
-        assert("Math.max" in refusal.message)
+        assert("Math.atan2" in refusal.message)
     }
 
     @Test
     fun `a LIBRARY type with no mapping is refused rather than erased to a property bag`() {
-        // The load-bearing half of the property-bag erasure. `Date` is declared
-        // in a lib `.d.ts` as an interface — structurally indistinguishable from
-        // one this program could have written — and it is NOT a bag of its own
-        // properties: erasing it to one would make `d.getTime()` read
-        // `undefined` and fail inside the runtime, silently, in a program that
-        // compiled. An own `interface` erases to a bag (corpus 11) and a lib
-        // type this backend HAS a runtime class for erases to that class
-        // (`Map`, corpus 12); everything else must refuse.
-        val (compilation, _) = compile("const d = new Date();\nconsole.log(d.getTime());")
+        // The load-bearing half of the property-bag erasure. `ArrayBuffer` is
+        // declared in a lib `.d.ts` as an interface — structurally
+        // indistinguishable from one this program could have written — and it is
+        // NOT a bag of its own properties: erasing it to one would make
+        // `b.byteLength` read `undefined`, silently, in a program that compiled.
+        // An own `interface` erases to a bag (corpus 11) and a lib type this
+        // backend HAS a runtime class for erases to that class (`Map` in corpus
+        // 12, `Date` since the library work); everything else must refuse.
+        val (compilation, _) =
+            compile("const b = new ArrayBuffer(8);\nconsole.log(b.byteLength);")
         assert(!compilation.successful)
         assert(compilation.refusals.isNotEmpty())
     }

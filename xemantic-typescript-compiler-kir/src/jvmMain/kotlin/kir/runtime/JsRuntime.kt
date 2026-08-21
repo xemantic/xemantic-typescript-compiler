@@ -26,7 +26,9 @@
 package com.xemantic.typescript.compiler.kir.runtime
 
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.pow
 
 /**
  * The JS-semantics runtime the generated Kotlin IR links against.
@@ -74,6 +76,43 @@ public fun jsNumberToString(value: Double): String = when {
     }
 }
 
+/**
+ * A `bigint` literal — `0n` — as a `java.math.BigInteger`.
+ *
+ * The design doc's mapping, arrived at because a library that offers "integers
+ * as BigInt" has the literal in its source whether or not the option is used:
+ * refusing the TYPE would refuse the library. Arithmetic ON a bigint is not
+ * lowered, so a program that computes with one refuses where it does so.
+ */
+public fun jsBigInt(digits: String): java.math.BigInteger = java.math.BigInteger(digits)
+
+/** `BigInt(x)`. */
+public fun jsBigIntOf(value: Any?): java.math.BigInteger = when (value) {
+    is java.math.BigInteger -> value
+    is Double -> java.math.BigInteger.valueOf(value.toLong())
+    else -> java.math.BigInteger(jsToString(value))
+}
+
+/**
+ * The `typeof` operator.
+ *
+ * One deliberate divergence, and it follows from design §3.1's collapse of
+ * `undefined` and `null` onto one JVM value: `typeof null` answers
+ * **"undefined"** where a JavaScript engine says "object". The collapse forces
+ * a choice between the two guards, and `typeof x === 'undefined'` is the one
+ * real code writes — while the `typeof x === 'object'` idiom is almost always
+ * written as `x !== null && typeof x === 'object'`, which still works.
+ */
+public fun jsTypeOf(value: Any?): String = when (value) {
+    null, Undefined -> "undefined"
+    is Boolean -> "boolean"
+    is Double -> "number"
+    is String -> "string"
+    is java.math.BigInteger -> "bigint"
+    is Function<*> -> "function"
+    else -> "object"
+}
+
 /** ECMAScript `ToString`, for the operand positions that coerce. */
 public fun jsToString(value: Any?): String = when (value) {
     null -> "null"
@@ -83,6 +122,7 @@ public fun jsToString(value: Any?): String = when (value) {
     is Boolean -> if (value) "true" else "false"
     is JsArray -> value.joinToJsString()
     is JsObject -> "[object Object]"
+    is java.math.BigInteger -> value.toString()
     else -> value.toString()
 }
 
@@ -390,6 +430,76 @@ public class JsMap {
 
 }
 
+/**
+ * A JavaScript `Date`, over `java.time`.
+ *
+ * OPEN, because a TypeScript program may extend it — `class TomlDate extends
+ * Date` is how the `smol-toml` library models a TOML datetime — and a JVM class
+ * a generated one extends has to be extensible.
+ *
+ * An INVALID date is `NaN` time rather than an exception, which is what
+ * JavaScript does: `new Date('nonsense').getTime()` is `NaN`, and every
+ * consumer tests for it with `isNaN`.
+ */
+public open class JsDate {
+
+    private val millis: Double
+
+    public constructor(value: Any?) {
+        millis = when (value) {
+            is Double -> value
+            is String -> parseIso(value)
+            is JsDate -> value.millis
+            null -> Double.NaN
+            else -> jsToNumber(value)
+        }
+    }
+
+    public constructor() : this(System.currentTimeMillis().toDouble())
+
+    public fun getTime(): Double = millis
+
+    public fun valueOf(): Double = millis
+
+    /** `toISOString`, which JavaScript spells with milliseconds and a `Z`. */
+    public open fun toISOString(): String {
+        if (millis.isNaN()) throw JsTypeError("Invalid time value")
+        val instant = java.time.Instant.ofEpochMilli(millis.toLong())
+        return java.time.format.DateTimeFormatter
+            .ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            .withZone(java.time.ZoneOffset.UTC)
+            .format(instant)
+    }
+
+    override fun toString(): String = if (millis.isNaN()) "Invalid Date" else toISOString()
+
+    private companion object {
+        /**
+         * The subset of date strings JavaScript's `Date` accepts that this
+         * runtime does: ISO-8601, with or without a time, with or without an
+         * offset. Anything else is `NaN`, which is a value a program can test —
+         * where an exception would be one it cannot.
+         */
+        fun parseIso(text: String): Double = try {
+            when {
+                text.isEmpty() -> Double.NaN
+                text.endsWith("Z") || Regex("[+-]\\d\\d:?\\d\\d$").containsMatchIn(text) ->
+                    java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli().toDouble()
+                text.contains('T') ->
+                    java.time.LocalDateTime.parse(text)
+                        .toInstant(java.time.ZoneOffset.UTC).toEpochMilli().toDouble()
+                else ->
+                    java.time.LocalDate.parse(text)
+                        .atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
+                        .toEpochMilli().toDouble()
+            }
+        } catch (_: java.time.format.DateTimeParseException) {
+            Double.NaN
+        }
+    }
+
+}
+
 /** A JavaScript `Set`, insertion-ordered as the specification requires. */
 public class JsSet {
 
@@ -446,6 +556,32 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
         null -> throw JsTypeError("undefined is not a function")
         else -> throw JsTypeError("${jsToString(callee)} is not a function")
     }
+}
+
+/**
+ * A JavaScript `Error`, which a program may extend.
+ *
+ * A `RuntimeException` so that `throw new TomlError(…)` needs no wrapper and an
+ * ordinary JVM `catch` sees it — the two languages agree here, and matching
+ * them costs nothing. OPEN because extending `Error` is how every library
+ * declares its own error type.
+ *
+ * The second constructor parameter is JavaScript's `ErrorOptions` bag, whose
+ * only standard member is `cause`; it is accepted and ignored rather than
+ * refused, because a call site passing one is otherwise ordinary.
+ */
+public open class JsError : RuntimeException {
+
+    public var name: String = "Error"
+
+    public constructor(message: Any?) : super(jsToString(message))
+
+    public constructor(message: Any?, options: Any?) : super(jsToString(message))
+
+    public constructor() : super("")
+
+    override fun toString(): String = "$name: $message"
+
 }
 
 /** What a JavaScript engine throws where a value is used as something it is not. */
@@ -546,6 +682,74 @@ private fun toUint32(value: Any?): UInt {
     return number.toLong().toUInt()
 }
 
+/**
+ * A JavaScript regular expression, over `java.util.regex`.
+ *
+ * The two engines agree on the syntax this compiler has met — character
+ * classes, groups, alternation, the usual escapes — and they disagree on things
+ * a program notices only when it uses them (named groups' syntax, lookbehind
+ * semantics, `\d` under Unicode). The pattern is therefore passed through
+ * UNTRANSLATED and a pattern Java rejects fails loudly at construction, rather
+ * than being silently rewritten into something that matches almost the same
+ * strings.
+ *
+ * `lastIndex` is deliberately absent: it is only observable through `/g/y` with
+ * `exec` in a loop, and a `JsRegExp` that silently ignored it would give a
+ * program that shape an infinite loop rather than a wrong answer.
+ */
+public class JsRegExp(public val source: String, public val flags: String) {
+
+    private val pattern: java.util.regex.Pattern = java.util.regex.Pattern.compile(
+        source,
+        (if ('i' in flags) java.util.regex.Pattern.CASE_INSENSITIVE else 0) or
+            (if ('m' in flags) java.util.regex.Pattern.MULTILINE else 0) or
+            (if ('s' in flags) java.util.regex.Pattern.DOTALL else 0)
+    )
+
+    public val global: Boolean = 'g' in flags
+
+    public fun test(input: String): Boolean = pattern.matcher(input).find()
+
+    /**
+     * `RegExp.prototype.exec`: the whole match then each group, or null.
+     *
+     * An unmatched optional group is `undefined` in JavaScript, i.e. `null`
+     * here — which is what a program testing `match[2]` is asking about.
+     */
+    public fun exec(input: String): JsArray? {
+        val matcher = pattern.matcher(input)
+        if (!matcher.find()) return null
+        val groups = ArrayList<Any?>(matcher.groupCount() + 1)
+        for (index in 0..matcher.groupCount()) groups.add(matcher.group(index))
+        return JsArray(groups)
+    }
+
+    internal fun matcherFor(input: String): java.util.regex.Matcher = pattern.matcher(input)
+
+    override fun toString(): String = "/$source/$flags"
+
+}
+
+/** A regular-expression literal: `/pattern/flags`. */
+public fun jsRegExp(source: String, flags: String): JsRegExp = JsRegExp(source, flags)
+
+/** `String.prototype.match` with a regular expression — `exec`, or null. */
+public fun jsStrMatch(value: String, expression: JsRegExp): JsArray? = expression.exec(value)
+
+/** `String.prototype.replace` with a regular expression. */
+public fun jsStrReplace(value: String, expression: JsRegExp, replacement: String): String {
+    // `Matcher.quoteReplacement`, because JavaScript's replacement string has
+    // its own escape language (`$1`, `$&`) and Java's is a DIFFERENT one — so a
+    // replacement containing `$` or `\` would otherwise mean something else.
+    val quoted = java.util.regex.Matcher.quoteReplacement(replacement)
+    val matcher = expression.matcherFor(value)
+    return if (expression.global) matcher.replaceAll(quoted) else matcher.replaceFirst(quoted)
+}
+
+/** `String.prototype.split` with a regular expression. */
+public fun jsStrSplit(value: String, expression: JsRegExp): JsArray =
+    JsArray(value.split(Regex(expression.source)).toList())
+
 // ---------------------------------------------------------------------------
 // String members
 //
@@ -568,6 +772,10 @@ public fun jsStrCharAt(value: String, index: Double): String {
 
 public fun jsStrIndexOf(value: String, search: String): Double =
     value.indexOf(search).toDouble()
+
+/** `indexOf` from a starting position, which clamps rather than throwing. */
+public fun jsStrIndexOf(value: String, search: String, from: Double): Double =
+    value.indexOf(search, from.toInt().coerceIn(0, value.length)).toDouble()
 
 public fun jsStrLastIndexOf(value: String, search: String): Double =
     value.lastIndexOf(search).toDouble()
@@ -604,6 +812,18 @@ public fun jsStrToLowerCase(value: String): String = value.lowercase()
 
 public fun jsStrTrim(value: String): String = value.trim()
 
+public fun jsStrTrimStart(value: String): String = value.trimStart()
+
+public fun jsStrTrimEnd(value: String): String = value.trimEnd()
+
+public fun jsStrPadStart(value: String, length: Double, filler: String): String =
+    if (value.length >= length.toInt()) value
+    else buildString {
+        while (this.length < length.toInt() - value.length) append(filler)
+        setLength((length.toInt() - value.length).coerceAtLeast(0))
+        append(value)
+    }
+
 public fun jsStrRepeat(value: String, count: Double): String = value.repeat(count.toInt())
 
 /** `String.prototype.replace` with a STRING pattern: the FIRST match only. */
@@ -621,6 +841,365 @@ public fun jsStrConcat(value: String, other: String): String = value + other
 private fun sliceIndex(raw: Double, length: Int): Int {
     val index = raw.toInt()
     return if (index < 0) (length + index).coerceAtLeast(0) else index.coerceAtMost(length)
+}
+
+// ---------------------------------------------------------------------------
+// The global objects: `Math`, `Number`, `Object`, `JSON`, and the free
+// functions. Each is a runtime function taking its arguments positionally, and
+// each is reached through the intrinsic table by the checker's own rendering of
+// the receiver plus the member name — so a local variable called `Math` cannot
+// be mistaken for the global one.
+// ---------------------------------------------------------------------------
+
+public fun jsMathFloor(value: Any?): Double = floor(jsToNumber(value))
+
+public fun jsMathCeil(value: Any?): Double = ceil(jsToNumber(value))
+
+public fun jsMathRound(value: Any?): Double {
+    // JavaScript rounds HALF UP, including for negatives (`Math.round(-0.5)` is
+    // `-0`), where Kotlin's `round` rounds half away from zero.
+    val number = jsToNumber(value)
+    if (number.isNaN() || number.isInfinite()) return number
+    return floor(number + 0.5)
+}
+
+public fun jsMathTrunc(value: Any?): Double {
+    val number = jsToNumber(value)
+    return if (number < 0) ceil(number) else floor(number)
+}
+
+public fun jsMathAbs(value: Any?): Double = abs(jsToNumber(value))
+
+public fun jsMathSign(value: Any?): Double {
+    val number = jsToNumber(value)
+    return when {
+        number.isNaN() -> Double.NaN
+        number > 0 -> 1.0
+        number < 0 -> -1.0
+        else -> number
+    }
+}
+
+public fun jsMathSqrt(value: Any?): Double = kotlin.math.sqrt(jsToNumber(value))
+
+public fun jsMathLog(value: Any?): Double = kotlin.math.ln(jsToNumber(value))
+
+public fun jsMathLog10(value: Any?): Double = kotlin.math.log10(jsToNumber(value))
+
+public fun jsMathLog2(value: Any?): Double = kotlin.math.log2(jsToNumber(value))
+
+public fun jsMathPow(base: Any?, exponent: Any?): Double =
+    jsToNumber(base).pow(jsToNumber(exponent))
+
+public fun jsMathMin(left: Any?, right: Any?): Double =
+    minOf(jsToNumber(left), jsToNumber(right))
+
+public fun jsMathMax(left: Any?, right: Any?): Double =
+    maxOf(jsToNumber(left), jsToNumber(right))
+
+/** `Number.isInteger` — false for anything that is not a number at all. */
+public fun jsNumberIsInteger(value: Any?): Boolean =
+    value is Double && !value.isNaN() && !value.isInfinite() && value == floor(value)
+
+/** `Number.isSafeInteger`: an integer within ±(2^53 − 1). */
+public fun jsNumberIsSafeInteger(value: Any?): Boolean =
+    jsNumberIsInteger(value) && abs(value as Double) <= 9007199254740991.0
+
+public fun jsNumberIsFinite(value: Any?): Boolean =
+    value is Double && !value.isNaN() && !value.isInfinite()
+
+public fun jsNumberIsNaN(value: Any?): Boolean = value is Double && value.isNaN()
+
+/** The GLOBAL `isNaN`, which COERCES first — unlike `Number.isNaN`. */
+public fun jsIsNaN(value: Any?): Boolean = jsToNumber(value).isNaN()
+
+public fun jsIsFinite(value: Any?): Boolean {
+    val number = jsToNumber(value)
+    return !number.isNaN() && !number.isInfinite()
+}
+
+/** `parseInt` with no radix — decimal, as JavaScript's default is. */
+public fun jsParseInt(value: Any?): Double = jsParseInt(value, 10.0)
+
+/** `parseInt` with an explicit radix. */
+public fun jsParseInt(value: Any?, radix: Any?): Double {
+    val text = jsToString(value).trim()
+    val base = jsToNumber(radix).let { if (it.isNaN() || it == 0.0) 10 else it.toInt() }
+    var end = 0
+    val start = if (text.startsWith("+") || text.startsWith("-")) 1 else 0
+    var index = start
+    while (index < text.length && Character.digit(text[index], base) >= 0) {
+        index++
+        end = index
+    }
+    if (end <= start) return Double.NaN
+    return text.substring(0, end).toLong(base).toDouble()
+}
+
+public fun jsParseFloat(value: Any?): Double {
+    val text = jsToString(value).trim()
+    val match = Regex("^[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?").find(text)
+        ?: return Double.NaN
+    return match.value.toDouble()
+}
+
+/** `String(x)` and `Number(x)` used as CONVERSIONS rather than constructors. */
+public fun jsStringOf(value: Any?): String = jsToString(value)
+
+public fun jsNumberOf(value: Any?): Double = jsToNumber(value)
+
+public fun jsStrFromCharCode(code: Any?): String = jsToNumber(code).toInt().toChar().toString()
+
+public fun jsStrFromCodePoint(code: Any?): String {
+    val builder = StringBuilder()
+    builder.appendCodePoint(jsToNumber(code).toInt())
+    return builder.toString()
+}
+
+public fun jsStrCharCodeAt(value: String, index: Double): Double {
+    val i = index.toInt()
+    return if (i < 0 || i >= value.length) Double.NaN else value[i].code.toDouble()
+}
+
+public fun jsStrCodePointAt(value: String, index: Double): Any? {
+    val i = index.toInt()
+    return if (i < 0 || i >= value.length) null else value.codePointAt(i).toDouble()
+}
+
+/** `Object.keys` — insertion order, as JavaScript specifies for string keys. */
+public fun jsObjectKeys(value: Any?): JsArray = when (value) {
+    is JsObject -> value.keys()
+    is JsArray -> JsArray((0 until value.length.toInt()).map { it.toString() })
+    else -> JsArray()
+}
+
+/**
+ * `Object.defineProperty`, over a property BAG.
+ *
+ * The attributes are accepted and ignored: this runtime's objects have no
+ * property descriptors, so every property is already enumerable, configurable
+ * and writable. What the call still does — and what the one real use of it in
+ * library code needs — is CREATE the property, which is how a program defends
+ * a `__proto__` key against a prototype chain this runtime does not have.
+ */
+public fun jsObjectDefineProperty(target: Any?, name: Any?, descriptor: Any?): Any? {
+    val key = jsToString(name)
+    val value = (descriptor as? JsObject)?.get("value")
+    when (target) {
+        is JsObject -> if (value != null || !target.has(key)) target.set(key, value)
+        else -> jsSet(target, key, value)
+    }
+    return target
+}
+
+public fun jsObjectHasOwn(value: Any?, name: Any?): Boolean = when (value) {
+    is JsObject -> value.has(jsToString(name))
+    is JsArray -> jsToNumber(name).let { it >= 0 && it < value.length }
+    else -> false
+}
+
+/** `JSON.stringify`, over the values this backend produces. */
+public fun jsJsonStringify(value: Any?): Any? = when (value) {
+    // A function or `undefined` STRINGIFIES TO NOTHING at the top level, which
+    // JavaScript reports as `undefined` rather than as the string "undefined".
+    null -> null
+    else -> jsonText(value)
+}
+
+private fun jsonText(value: Any?): String = when (value) {
+    null -> "null"
+    Undefined -> "null"
+    is Boolean -> if (value) "true" else "false"
+    is Double -> if (value.isNaN() || value.isInfinite()) "null" else jsNumberToString(value)
+    is String -> jsonQuote(value)
+    is JsArray -> (0 until value.length.toInt())
+        .joinToString(",", "[", "]") { jsonText(value[it.toDouble()]) }
+    is JsObject -> value.keys().let { keys ->
+        (0 until keys.length.toInt()).joinToString(",", "{", "}") { index ->
+            val key = jsToString(keys[index.toDouble()])
+            jsonQuote(key) + ":" + jsonText(value.get(key))
+        }
+    }
+    else -> jsonQuote(jsToString(value))
+}
+
+private fun jsonQuote(value: String): String {
+    val out = StringBuilder("\"")
+    for (ch in value) {
+        when (ch) {
+            '"' -> out.append("\\\"")
+            '\\' -> out.append("\\\\")
+            '\n' -> out.append("\\n")
+            '\r' -> out.append("\\r")
+            '\t' -> out.append("\\t")
+            else -> if (ch < ' ') out.append("\\u%04x".format(ch.code)) else out.append(ch)
+        }
+    }
+    return out.append('"').toString()
+}
+
+// ---------------------------------------------------------------------------
+// The DYNAMIC member operations.
+//
+// `docs/kir-structural-typing.md` §7 measured `any`-typed sources as the
+// largest dynamic population in real TypeScript — an order of magnitude larger
+// than the nominal closure — and this is their mechanism. A member read, write
+// or call whose receiver's erased type is `Any?` is dispatched HERE, on what
+// the value turns out to be, which is what a JavaScript engine does with it.
+//
+// The cost is a name lookup per operation, and it is paid only where the
+// checker itself knew nothing. Everything the checker DID type reaches its
+// member directly.
+// ---------------------------------------------------------------------------
+
+/** A property READ on a receiver whose type was not known. */
+public fun jsGet(receiver: Any?, name: String): Any? = when (receiver) {
+    null -> throw JsTypeError("cannot read '$name' of null")
+    is JsObject -> receiver.get(name)
+    is JsArray -> if (name == "length") receiver.length else jsMemberOfArray(receiver, name)
+    is String -> if (name == "length") jsStrLength(receiver) else null
+    is JsMap -> if (name == "size") receiver.size else null
+    is JsSet -> if (name == "size") receiver.size else null
+    else -> reflectiveGet(receiver, name)
+}
+
+/**
+ * `a[i]` where the receiver's type was not known.
+ *
+ * The index decides nothing on its own: JavaScript's `a[0]` and `o["k"]` are
+ * the same syntax over different containers, so the RECEIVER selects the
+ * meaning and the index is coerced to what that container is keyed by.
+ */
+public fun jsIndexGet(receiver: Any?, index: Any?): Any? = when (receiver) {
+    null -> throw JsTypeError("cannot read an index of null")
+    is JsArray -> receiver[jsToNumber(index)]
+    is JsObject -> receiver.get(jsToString(index))
+    is JsMap -> receiver.get(index)
+    is String -> jsStrCharAt(receiver, jsToNumber(index)).ifEmpty { null }
+    else -> jsGet(receiver, jsToString(index))
+}
+
+public fun jsIndexSet(receiver: Any?, index: Any?, value: Any?) {
+    when (receiver) {
+        null -> throw JsTypeError("cannot write an index of null")
+        is JsArray -> receiver[jsToNumber(index)] = value
+        is JsObject -> receiver.set(jsToString(index), value)
+        is JsMap -> receiver.set(index, value)
+        else -> jsSet(receiver, jsToString(index), value)
+    }
+}
+
+/** A property WRITE on a receiver whose type was not known. */
+public fun jsSet(receiver: Any?, name: String, value: Any?) {
+    when (receiver) {
+        null -> throw JsTypeError("cannot set '$name' of null")
+        is JsObject -> receiver.set(name, value)
+        else -> reflectiveSet(receiver, name, value)
+    }
+}
+
+/**
+ * A member CALL on a receiver whose type was not known.
+ *
+ * Ordered by what the receiver IS, because that is the only thing there is to
+ * go on: a string's members are the runtime's string functions, a bag's member
+ * is a PROPERTY holding a function (so it is read and then called), and a
+ * generated class's is a JVM method found by name and arity.
+ */
+public fun jsInvoke(receiver: Any?, name: String, vararg arguments: Any?): Any? =
+    when (receiver) {
+        null -> throw JsTypeError("cannot call '$name' of null")
+        is String -> jsInvokeOnString(receiver, name, arguments)
+        is JsArray -> jsInvokeOnArray(receiver, name, arguments)
+        is JsObject -> jsCall(receiver.get(name), *arguments)
+        else -> reflectiveInvoke(receiver, name, arguments)
+    }
+
+private fun jsInvokeOnString(receiver: String, name: String, arguments: Array<out Any?>): Any? {
+    fun argument(index: Int): Any? = arguments.getOrNull(index)
+    return when (name) {
+        "charAt" -> jsStrCharAt(receiver, jsToNumber(argument(0)))
+        "charCodeAt" -> jsStrCharCodeAt(receiver, jsToNumber(argument(0)))
+        "codePointAt" -> jsStrCodePointAt(receiver, jsToNumber(argument(0)))
+        "indexOf" -> if (arguments.size < 2) jsStrIndexOf(receiver, jsToString(argument(0)))
+        else jsStrIndexOf(receiver, jsToString(argument(0)), jsToNumber(argument(1)))
+        "lastIndexOf" -> jsStrLastIndexOf(receiver, jsToString(argument(0)))
+        "includes" -> jsStrIncludes(receiver, jsToString(argument(0)))
+        "startsWith" -> jsStrStartsWith(receiver, jsToString(argument(0)))
+        "endsWith" -> jsStrEndsWith(receiver, jsToString(argument(0)))
+        "toUpperCase" -> jsStrToUpperCase(receiver)
+        "toLowerCase" -> jsStrToLowerCase(receiver)
+        "trim" -> jsStrTrim(receiver)
+        "trimStart" -> jsStrTrimStart(receiver)
+        "trimEnd" -> jsStrTrimEnd(receiver)
+        "padStart" -> jsStrPadStart(receiver, jsToNumber(argument(0)), jsToString(argument(1)))
+        "repeat" -> jsStrRepeat(receiver, jsToNumber(argument(0)))
+        "concat" -> jsStrConcat(receiver, jsToString(argument(0)))
+        "slice" -> if (arguments.size < 2) jsStrSlice(receiver, jsToNumber(argument(0)))
+        else jsStrSlice(receiver, jsToNumber(argument(0)), jsToNumber(argument(1)))
+        "substring" -> if (arguments.size < 2) jsStrSubstring(receiver, jsToNumber(argument(0)))
+        else jsStrSubstring(receiver, jsToNumber(argument(0)), jsToNumber(argument(1)))
+        "split" -> when (val separator = argument(0)) {
+            is JsRegExp -> jsStrSplit(receiver, separator)
+            else -> jsStrSplit(receiver, jsToString(separator))
+        }
+        "replace" -> when (val pattern = argument(0)) {
+            is JsRegExp -> jsStrReplace(receiver, pattern, jsToString(argument(1)))
+            else -> jsStrReplace(receiver, jsToString(pattern), jsToString(argument(1)))
+        }
+        "replaceAll" -> jsStrReplaceAll(receiver, jsToString(argument(0)), jsToString(argument(1)))
+        "match" -> (argument(0) as? JsRegExp)?.let { jsStrMatch(receiver, it) }
+            ?: throw JsTypeError("String.match needs a regular expression")
+        else -> throw JsTypeError("'$name' is not a String member this runtime provides")
+    }
+}
+
+private fun jsInvokeOnArray(receiver: JsArray, name: String, arguments: Array<out Any?>): Any? {
+    fun argument(index: Int): Any? = arguments.getOrNull(index)
+    @Suppress("UNCHECKED_CAST")
+    fun callback(index: Int): (Any?) -> Any? = { value -> jsCall(argument(index), value) }
+    return when (name) {
+        "push" -> receiver.push(argument(0))
+        "pop" -> receiver.pop()
+        "shift" -> receiver.shift()
+        "unshift" -> receiver.unshift(argument(0))
+        "indexOf" -> receiver.indexOf(argument(0))
+        "includes" -> receiver.includes(argument(0))
+        "slice" -> receiver.slice()
+        "concat" -> receiver.concat(argument(0) as JsArray)
+        "join" -> receiver.join(jsToString(argument(0)))
+        "splice" -> receiver.splice(jsToNumber(argument(0)), jsToNumber(argument(1)))
+        "forEach" -> receiver.forEach(callback(0))
+        "map" -> receiver.map(callback(0))
+        "filter" -> receiver.filter(callback(0))
+        else -> throw JsTypeError("'$name' is not an Array member this runtime provides")
+    }
+}
+
+private fun jsMemberOfArray(receiver: JsArray, name: String): Any? =
+    // An index written as a property (`a["0"]`) is still an index.
+    name.toDoubleOrNull()?.let { receiver[it] }
+
+private fun reflectiveGet(receiver: Any, name: String): Any? {
+    receiver.javaClass.fields.firstOrNull { it.name == name }?.let { return it.get(receiver) }
+    receiver.javaClass.methods.firstOrNull { it.name == name && it.parameterCount == 0 }
+        ?.let { return it.invoke(receiver) }
+    throw JsTypeError("'$name' is not a member of ${receiver.javaClass.simpleName}")
+}
+
+private fun reflectiveSet(receiver: Any, name: String, value: Any?) {
+    receiver.javaClass.fields.firstOrNull { it.name == name }?.let {
+        it.set(receiver, value)
+        return
+    }
+    throw JsTypeError("'$name' is not a settable member of ${receiver.javaClass.simpleName}")
+}
+
+private fun reflectiveInvoke(receiver: Any, name: String, arguments: Array<out Any?>): Any? {
+    val method = receiver.javaClass.methods.firstOrNull {
+        it.name == name && it.parameterCount == arguments.size
+    } ?: throw JsTypeError("'$name' is not a member of ${receiver.javaClass.simpleName}")
+    return method.invoke(receiver, *arguments)
 }
 
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
