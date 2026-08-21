@@ -183,6 +183,10 @@ private fun parseIsoCivil(text: String): Double {
 # ---- (3) RegExp: java.util.regex -> kotlin.text.Regex -----------------------
 sub('''    private val pattern: java.util.regex.Pattern = compiledPattern(source, flags)''',
     '''    private val regex: Regex = compiledRegex(source, flags)''')
+# `test` itself is platform-neutral -- it drives the DFA matcher, which is pure
+# Kotlin and is copied verbatim. Only the ORACLE underneath it is replaced, and
+# it is worth more here than on the JVM: `kotlin.text.Regex` is 5.2x
+# `java.util.regex` on the same pattern (levers doc, section 6).
 sub('''    private var reusable: java.util.regex.Matcher? = null
 
     private fun matcher(input: String): java.util.regex.Matcher {
@@ -193,8 +197,10 @@ sub('''    private var reusable: java.util.regex.Matcher? = null
         return fresh
     }
 
-    public fun test(input: String): Boolean = matcher(input).find()''',
-    '''    public fun test(input: String): Boolean = regex.containsMatchIn(input)''')
+    /** The REFERENCE engine's answer, and the differential oracle's. */
+    private fun oracleTest(input: String): Boolean = matcher(input).find()''',
+    '''    /** The REFERENCE engine's answer, and the differential oracle's. */
+    private fun oracleTest(input: String): Boolean = regex.containsMatchIn(input)''')
 sub('''    public fun exec(input: String): JsArray? {
         val matcher = matcher(input)
         if (!matcher.find()) return null
@@ -220,13 +226,22 @@ sub('''    public fun exec(input: String): JsArray? {
             else input.substring(0, match.range.first) + replacement +
                 input.substring(match.range.last + 1)
         }''')
+# The fast matcher's own cache: pure Kotlin apart from the concurrent map.
+sub('''private val compiledRegexPrograms =
+    java.util.concurrent.ConcurrentHashMap<String, Any>()''',
+    '''private val compiledRegexPrograms = HashMap<String, Any>()''')
+
 sub('''private val compiledPatterns =
     java.util.concurrent.ConcurrentHashMap<String, java.util.regex.Pattern>()''',
     '''private val compiledPatterns = HashMap<String, Regex>()''')
+# The `$`-anchor translation is deliberately NOT carried over: it is a fix to
+# the JVM ORACLE's `$`, and Kotlin/Native's own regex engine is not known here
+# to accept `\z`. Native's fallback therefore keeps the pre-existing meaning,
+# while its fast matcher -- which handles `$` structurally -- is already right.
 sub('''private fun compiledPattern(source: String, flags: String): java.util.regex.Pattern =
     compiledPatterns.computeIfAbsent("$flags\\u0000$source") {
         java.util.regex.Pattern.compile(
-            source,
+            jsEndAnchorTranslated(source, flags),
             (if ('i' in flags) java.util.regex.Pattern.CASE_INSENSITIVE else 0) or
                 (if ('m' in flags) java.util.regex.Pattern.MULTILINE else 0) or
                 (if ('s' in flags) java.util.regex.Pattern.DOTALL else 0)
@@ -240,6 +255,13 @@ sub('''private fun compiledPattern(source: String, flags: String): java.util.reg
         if ('s' in flags) options.add(RegexOption.DOT_MATCHES_ALL)
         Regex(source, options)
     }''')
+# `splitOf` is the one member the exec replacement above does not carry, and it
+# is the same limit either way: Kotlin's `Regex.split` keeps a trailing empty
+# field, which is Java's `split(input, -1)` and JavaScript's own answer.
+sub('''    internal fun splitOf(input: String): List<Any?> =
+        pattern.split(input, -1).toList()''',
+    '''    internal fun splitOf(input: String): List<Any?> = regex.split(input)''')
+
 sub('''    // `Matcher.quoteReplacement`, because JavaScript's replacement string has
     // its own escape language (`$1`, `$&`) and Java's is a DIFFERENT one — so a
     // replacement containing `$` or `\\` would otherwise mean something else.

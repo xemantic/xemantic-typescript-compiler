@@ -909,6 +909,12 @@ public class JsRegExp(public val source: String, public val flags: String) {
 
     private val pattern: java.util.regex.Pattern = compiledPattern(source, flags)
 
+    /**
+     * The fast matcher for this pattern, or null when the pattern is outside
+     * the regular subset it covers — see [JsRegexProgram].
+     */
+    private val program: JsRegexProgram? = compiledRegexProgram(source, flags)
+
     public val global: Boolean = 'g' in flags
 
     /**
@@ -931,7 +937,32 @@ public class JsRegExp(public val source: String, public val flags: String) {
         return fresh
     }
 
-    public fun test(input: String): Boolean = matcher(input).find()
+    /** The REFERENCE engine's answer, and the differential oracle's. */
+    private fun oracleTest(input: String): Boolean = matcher(input).find()
+
+    /**
+     * `RegExp.prototype.test`, from the fast matcher where there is one.
+     *
+     * (KIR.PERF.2). `java.util.regex` is 20% of a `smol-toml` parse and
+     * `kotlin.text.Regex` a further 5.2x, so this one call is worth an engine.
+     * [JsRegexProgram] answers the regular subset from a DFA and REFUSES
+     * everything else, and the reference engine stays live underneath — both
+     * as that fallback and, under [jsRegexVerify], as the oracle every answer
+     * is checked against.
+     */
+    public fun test(input: String): Boolean {
+        val fast = program ?: return oracleTest(input)
+        val answer = fast.test(input)
+        if (answer == JsRegexProgram.UNKNOWN) return oracleTest(input)
+        val fastAnswer = answer == JsRegexProgram.MATCH
+        if (jsRegexVerify && fastAnswer != oracleTest(input)) {
+            throw IllegalStateException(
+                "regex engines disagree on /$source/$flags for <$input>: " +
+                    "fast=$fastAnswer reference=${!fastAnswer}"
+            )
+        }
+        return fastAnswer
+    }
 
     /**
      * `RegExp.prototype.exec`: the whole match then each group, or null.
@@ -948,6 +979,20 @@ public class JsRegExp(public val source: String, public val flags: String) {
     }
 
     internal fun matcherFor(input: String): java.util.regex.Matcher = pattern.matcher(input)
+
+    /**
+     * The plain string this expression matches, when it is one — see
+     * [JsRegexProgram.literal].
+     *
+     * `value.replace(/_/g, '')` is 16 calls per `smol-toml` document and the
+     * pattern is one character, so the whole regex machinery is asked to do
+     * what `String.replace` does directly.
+     */
+    internal val literal: String? get() = program?.literal
+
+    /** `String.prototype.split`'s fields — see [jsStrSplit]. */
+    internal fun splitOf(input: String): List<Any?> =
+        pattern.split(input, -1).toList()
 
     override fun toString(): String = "/$source/$flags"
 
@@ -969,12 +1014,49 @@ private val compiledPatterns =
 private fun compiledPattern(source: String, flags: String): java.util.regex.Pattern =
     compiledPatterns.computeIfAbsent("$flags\u0000$source") {
         java.util.regex.Pattern.compile(
-            source,
+            jsEndAnchorTranslated(source, flags),
             (if ('i' in flags) java.util.regex.Pattern.CASE_INSENSITIVE else 0) or
                 (if ('m' in flags) java.util.regex.Pattern.MULTILINE else 0) or
                 (if ('s' in flags) java.util.regex.Pattern.DOTALL else 0)
         )
     }
+
+/**
+ * The reference engine's pattern text, because JavaScript's `$` is not Java's.
+ *
+ * Without `m`, JavaScript's `$` matches ONLY at the end of the input while
+ * `java.util.regex`'s also matches before a final line terminator — so
+ * `/^\d+$/.test("12\n")` is `false` in a JavaScript engine and was `true`
+ * here. `\z` is Java's spelling of the JavaScript meaning.
+ *
+ * This is the ONE place the pattern is not passed through verbatim, and it is
+ * a divergence being CLOSED rather than a rewrite being risked: it fires only
+ * on a trailing anchor, and the fast matcher — which handles `$` structurally
+ * and always meant the JavaScript thing — is what made the disagreement
+ * visible. It also makes [jsRegexVerify] a plain equality, which it could not
+ * otherwise be.
+ */
+internal fun jsEndAnchorTranslated(source: String, flags: String): String {
+    if ('m' in flags) return source
+    if (!source.endsWith("$") || jsRegexEndsWithEscapedDollar(source)) return source
+    return source.dropLast(1) + "\\z"
+}
+
+/**
+ * Is the final `$` of [source] escaped?
+ *
+ * The PARITY of the run of backslashes before it decides: `\$` is a literal
+ * dollar and `\\$` is an escaped backslash followed by the anchor.
+ */
+internal fun jsRegexEndsWithEscapedDollar(source: String): Boolean {
+    var backslashes = 0
+    var index = source.length - 2
+    while (index >= 0 && source[index] == '\\') {
+        backslashes++
+        index--
+    }
+    return backslashes % 2 == 1
+}
 
 /** A regular-expression literal: `/pattern/flags`. */
 public fun jsRegExp(source: String, flags: String): JsRegExp = JsRegExp(source, flags)
@@ -984,6 +1066,17 @@ public fun jsStrMatch(value: String, expression: JsRegExp): JsArray? = expressio
 
 /** `String.prototype.replace` with a regular expression. */
 public fun jsStrReplace(value: String, expression: JsRegExp, replacement: String): String {
+    // A LITERAL pattern's match set is the occurrences of that string,
+    // leftmost-first and non-overlapping, which is what `String.replace` walks
+    // — and the replacement is taken literally by both, so the two agree by
+    // construction. `value.replace(/_/g, '')` is the shape this exists for.
+    val literal = expression.literal
+    if (literal != null) {
+        if (expression.global) return value.replace(literal, replacement)
+        val at = value.indexOf(literal)
+        return if (at < 0) value else
+            value.substring(0, at) + replacement + value.substring(at + literal.length)
+    }
     // `Matcher.quoteReplacement`, because JavaScript's replacement string has
     // its own escape language (`$1`, `$&`) and Java's is a DIFFERENT one — so a
     // replacement containing `$` or `\` would otherwise mean something else.
@@ -992,9 +1085,16 @@ public fun jsStrReplace(value: String, expression: JsRegExp, replacement: String
     return if (expression.global) matcher.replaceAll(quoted) else matcher.replaceFirst(quoted)
 }
 
-/** `String.prototype.split` with a regular expression. */
+/**
+ * `String.prototype.split` with a regular expression.
+ *
+ * The limit is `-1` because JavaScript keeps a trailing empty field and Java's
+ * own default drops it, and the pattern comes from the CACHE rather than from a
+ * fresh `Regex(source)` — which recompiled on every call and, being built from
+ * the source alone, silently ignored the expression's own flags.
+ */
 public fun jsStrSplit(value: String, expression: JsRegExp): JsArray =
-    JsArray(value.split(Regex(expression.source)).toList())
+    JsArray(expression.splitOf(value))
 
 // ---------------------------------------------------------------------------
 // String members
@@ -1492,4 +1592,755 @@ private fun reflectiveInvoke(receiver: Any, name: String, arguments: Array<out A
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
 public fun consoleLog(vararg values: Any?) {
     println(values.joinToString(" ") { jsToString(it) })
+}
+
+// ---------------------------------------------------------------------------
+// The regular-subset matcher — (KIR.PERF.2)
+// ---------------------------------------------------------------------------
+
+/*
+ * `java.util.regex` costs 9.5 us per `smol-toml` document — 20% of the whole
+ * JVM parse, and 42% of Node's ENTIRE parse budget — and it is the pattern
+ * SHAPE that costs, not the number of calls: `^\d+$` is 14.7 ns while
+ * `^\d(?:_?\d)*$` is 94 ns, because a repetition whose body is not a single
+ * deterministic character compiles to a backtracking `Loop` node. TOML's digit
+ * separators are literally `(_?\d)*`, so every numeric value walks that
+ * machinery once per character. `kotlin.text.Regex` on Kotlin/Native is a
+ * further 5.2x. `docs/perf/kir-backend-levers.md` §5.
+ *
+ * So: a matcher for the REGULAR subset those patterns live in — no
+ * backreferences, no lookaround, no `\b` — compiled once per (source, flags)
+ * beside the `Pattern` cache, and answering `test` from a LAZY DFA, which is
+ * one array read per character with no backtracking at all.
+ *
+ * Three properties make this an optimisation rather than a second, divergent
+ * semantics:
+ *
+ * - it answers `test` and NOTHING else. Existence of a match is the one
+ *   question on which leftmost-longest — what a DFA over a state SET decides —
+ *   and JavaScript's leftmost-first agree by construction, so alternation
+ *   order and greedy-versus-lazy, the two things a DFA cannot represent,
+ *   cannot be observed. `exec`, `replace` and `split` keep the reference
+ *   engine.
+ * - anything outside the subset is REFUSED at compile time and falls back to
+ *   the reference engine. A refusal is a performance outcome and never a
+ *   behavioural one, which is what lets the subset stay small and honest.
+ * - the reference engine stays LIVE as a differential oracle: with
+ *   [jsRegexVerify] on, every `test` runs BOTH and a disagreement throws. The
+ *   round-792 shape — the specification is kept runnable and is never demoted
+ *   to a legality gate.
+ */
+
+/**
+ * Run the reference engine beside the fast one and throw on a disagreement.
+ *
+ * Off in production, on in the gate. A `var` rather than a build flag because
+ * the population that matters is the one a real library presents, and that is
+ * reached by compiling and running the library.
+ */
+public var jsRegexVerify: Boolean = false
+
+/** A set of code units, as ranges plus a negation. */
+internal class JsCharSet(private val ranges: IntArray, private val negated: Boolean) {
+
+    /** True iff [ranges] cannot separate one code unit at or above 256 from another. */
+    val wideUniform: Boolean = run {
+        var index = 1
+        var uniform = true
+        while (index < ranges.size) {
+            if (ranges[index] >= 256) { uniform = false; break }
+            index += 2
+        }
+        uniform
+    }
+
+    /** The one code unit this set holds, or null if it is not exactly one. */
+    val singleCode: Int?
+        get() = if (!negated && ranges.size == 2 && ranges[0] == ranges[1]) ranges[0] else null
+
+    fun contains(ch: Int): Boolean {
+        var index = 0
+        while (index < ranges.size) {
+            if (ch >= ranges[index] && ch <= ranges[index + 1]) return !negated
+            index += 2
+        }
+        return negated
+    }
+}
+
+/** Raised while compiling a pattern this matcher does not cover. */
+internal class JsRegexUnsupported : RuntimeException()
+
+/** A parsed pattern: the regular operators and nothing else. */
+internal sealed class JsRegexNode {
+
+    internal object Empty : JsRegexNode()
+
+    internal class Chars(val set: JsCharSet) : JsRegexNode()
+
+    internal class Cat(val left: JsRegexNode, val right: JsRegexNode) : JsRegexNode()
+
+    internal class Alt(val left: JsRegexNode, val right: JsRegexNode) : JsRegexNode()
+
+    /**
+     * [max] below zero is unbounded.
+     *
+     * Greedy and lazy compile identically: the LANGUAGE is the same, and
+     * existence of a match is all [JsRegexProgram] is ever asked.
+     */
+    internal class Repeat(val body: JsRegexNode, val min: Int, val max: Int) : JsRegexNode()
+}
+
+/**
+ * The pattern parser, which REFUSES rather than approximates.
+ *
+ * Every construct outside the regular subset — a backreference, a lookaround, a
+ * named group, `\b`, a `\u`/`\x` escape, a `^`/`$` anywhere but the pattern's
+ * own edges — throws [JsRegexUnsupported] and the caller falls back to the
+ * reference engine. That is the property that makes the matcher safe to add at
+ * all: an unrecognised pattern costs a compile-time refusal, never a wrong
+ * answer at run time.
+ */
+internal class JsRegexParser(private val src: String, private val dotAll: Boolean) {
+
+    private var pos = 0
+
+    fun parse(): JsRegexNode {
+        val node = parseAlternation()
+        if (pos != src.length) throw JsRegexUnsupported()
+        return node
+    }
+
+    private fun parseAlternation(): JsRegexNode {
+        var node = parseConcat()
+        while (pos < src.length && src[pos] == '|') {
+            pos++
+            node = JsRegexNode.Alt(node, parseConcat())
+        }
+        return node
+    }
+
+    private fun parseConcat(): JsRegexNode {
+        var node: JsRegexNode = JsRegexNode.Empty
+        while (pos < src.length && src[pos] != '|' && src[pos] != ')') {
+            val term = parseTerm()
+            node = if (node === JsRegexNode.Empty) term else JsRegexNode.Cat(node, term)
+        }
+        return node
+    }
+
+    private fun parseTerm(): JsRegexNode = quantify(parseAtom())
+
+    private fun parseAtom(): JsRegexNode = when (val ch = src[pos]) {
+        '(' -> {
+            pos++
+            if (pos < src.length && src[pos] == '?') {
+                // `(?:` is a group; `(?=` `(?!` `(?<` are the lookarounds and
+                // the named group, none of which is in the subset.
+                if (pos + 1 >= src.length || src[pos + 1] != ':') throw JsRegexUnsupported()
+                pos += 2
+            }
+            val inner = parseAlternation()
+            if (pos >= src.length || src[pos] != ')') throw JsRegexUnsupported()
+            pos++
+            inner
+        }
+        '[' -> parseCharClass()
+        '.' -> {
+            pos++
+            JsRegexNode.Chars(if (dotAll) ANY_CHAR else ANY_CHAR_BUT_LINE_TERMINATOR)
+        }
+        '\\' -> {
+            pos++
+            JsRegexNode.Chars(parseEscape())
+        }
+        // A quantifier with nothing to quantify, and the two anchors in a
+        // position this matcher handles structurally rather than as an
+        // assertion.
+        '*', '+', '?', '{', '^', '$' -> throw JsRegexUnsupported()
+        else -> {
+            pos++
+            JsRegexNode.Chars(singleChar(ch.code))
+        }
+    }
+
+    private fun quantify(atom: JsRegexNode): JsRegexNode {
+        if (pos >= src.length) return atom
+        val node = when (src[pos]) {
+            '*' -> { pos++; JsRegexNode.Repeat(atom, 0, -1) }
+            '+' -> { pos++; JsRegexNode.Repeat(atom, 1, -1) }
+            '?' -> { pos++; JsRegexNode.Repeat(atom, 0, 1) }
+            '{' -> parseCountedRepeat(atom)
+            else -> return atom
+        }
+        // A trailing `?` is the LAZY spelling, which is the same language.
+        if (pos < src.length && src[pos] == '?') pos++
+        // `a**` is a syntax error in JavaScript, so refusing it narrows nothing.
+        if (pos < src.length && (src[pos] == '*' || src[pos] == '+' || src[pos] == '{')) {
+            throw JsRegexUnsupported()
+        }
+        return node
+    }
+
+    /** `{n}` / `{n,}` / `{n,m}`. A brace that is not one of those is refused. */
+    private fun parseCountedRepeat(atom: JsRegexNode): JsRegexNode {
+        val close = src.indexOf('}', pos)
+        if (close < 0) throw JsRegexUnsupported()
+        val text = src.substring(pos + 1, close)
+        val comma = text.indexOf(',')
+        val minText = if (comma < 0) text else text.substring(0, comma)
+        val maxText = if (comma < 0) text else text.substring(comma + 1)
+        val min = minText.toIntOrNull() ?: throw JsRegexUnsupported()
+        val max = when {
+            comma < 0 -> min
+            maxText.isEmpty() -> -1
+            else -> maxText.toIntOrNull() ?: throw JsRegexUnsupported()
+        }
+        if (min > REPEAT_LIMIT || max > REPEAT_LIMIT) throw JsRegexUnsupported()
+        if (max >= 0 && max < min) throw JsRegexUnsupported()
+        pos = close + 1
+        return JsRegexNode.Repeat(atom, min, max)
+    }
+
+    private fun parseCharClass(): JsRegexNode {
+        pos++
+        val negated = pos < src.length && src[pos] == '^'
+        if (negated) pos++
+        val ranges = ArrayList<Int>()
+        while (true) {
+            if (pos >= src.length) throw JsRegexUnsupported()
+            if (src[pos] == ']') { pos++; break }
+            val low = parseClassAtom(ranges) ?: continue
+            if (pos + 1 < src.length && src[pos] == '-' && src[pos + 1] != ']') {
+                pos++
+                val before = ranges.size
+                val high = parseClassAtom(ranges)
+                // `[\d-x]` — a class ESCAPE as a range endpoint. JavaScript's
+                // legacy reading of that is not the subset's, so it is refused.
+                if (high == null || ranges.size != before) throw JsRegexUnsupported()
+                if (high < low) throw JsRegexUnsupported()
+                ranges.add(low)
+                ranges.add(high)
+            } else {
+                ranges.add(low)
+                ranges.add(low)
+            }
+        }
+        return JsRegexNode.Chars(JsCharSet(ranges.toIntArray(), negated))
+    }
+
+    /**
+     * One class member: a code unit, or — for `\d`/`\w`/`\s` — a set appended
+     * to [ranges] directly, which is what the null return means.
+     */
+    private fun parseClassAtom(ranges: ArrayList<Int>): Int? {
+        val ch = src[pos]
+        if (ch != '\\') {
+            pos++
+            return ch.code
+        }
+        pos++
+        if (pos >= src.length) throw JsRegexUnsupported()
+        val escape = src[pos]
+        // A NEGATED class escape inside a class is a set complement this
+        // representation cannot union, so it is refused rather than widened.
+        if (escape == 'D' || escape == 'W' || escape == 'S') throw JsRegexUnsupported()
+        if (escape == 'd' || escape == 'w' || escape == 's') {
+            pos++
+            appendClassEscape(escape, ranges)
+            return null
+        }
+        // `\b` is a BACKSPACE inside a class, where outside it is an assertion.
+        if (escape == 'b') {
+            pos++
+            return 0x08
+        }
+        return simpleEscape()
+    }
+
+    private fun parseEscape(): JsCharSet {
+        if (pos >= src.length) throw JsRegexUnsupported()
+        val escape = src[pos]
+        if (escape == 'd' || escape == 'w' || escape == 's' ||
+            escape == 'D' || escape == 'W' || escape == 'S'
+        ) {
+            pos++
+            val ranges = ArrayList<Int>()
+            appendClassEscape(escape.lowercaseChar(), ranges)
+            return JsCharSet(ranges.toIntArray(), escape.isUpperCase())
+        }
+        return singleChar(simpleEscape())
+    }
+
+    /** The escapes that denote ONE code unit, and only those. */
+    private fun simpleEscape(): Int {
+        val escape = src[pos]
+        pos++
+        return when (escape) {
+            'n' -> 0x0A
+            'r' -> 0x0D
+            't' -> 0x09
+            'f' -> 0x0C
+            'v' -> 0x0B
+            // `\0` is NUL only when no digit follows; otherwise it is a legacy
+            // octal escape, which is not in the subset.
+            '0' -> if (pos < src.length && src[pos] in '0'..'9') throw JsRegexUnsupported() else 0
+            // A backreference, a word boundary, a named backreference, a
+            // unicode property, a control escape, and the two hex escapes,
+            // which mean different things with and without the `u` flag.
+            in '1'..'9', 'b', 'B', 'k', 'p', 'P', 'c', 'x', 'u' -> throw JsRegexUnsupported()
+            // JavaScript allows an identity escape only of a punctuator, and a
+            // letter escape it does not know is a syntax error under `u` — so
+            // an unknown LETTER is refused and a punctuator is taken literally.
+            else -> if (escape.isLetterOrDigit()) throw JsRegexUnsupported() else escape.code
+        }
+    }
+
+    private fun appendClassEscape(escape: Char, ranges: ArrayList<Int>) {
+        when (escape) {
+            'd' -> { ranges.add('0'.code); ranges.add('9'.code) }
+            'w' -> {
+                ranges.add('0'.code); ranges.add('9'.code)
+                ranges.add('A'.code); ranges.add('Z'.code)
+                ranges.add('_'.code); ranges.add('_'.code)
+                ranges.add('a'.code); ranges.add('z'.code)
+            }
+            's' -> for (value in WHITESPACE) ranges.add(value)
+            else -> throw JsRegexUnsupported()
+        }
+    }
+
+    private fun singleChar(code: Int): JsCharSet =
+        JsCharSet(intArrayOf(code, code), negated = false)
+
+    internal companion object {
+
+        /** The bound that keeps `{n,m}` expansion from exploding the NFA. */
+        const val REPEAT_LIMIT: Int = 64
+
+        /** ECMAScript `WhiteSpace` together with `LineTerminator`, i.e. `\s`. */
+        private val WHITESPACE = intArrayOf(
+            0x09, 0x0D, 0x20, 0x20, 0xA0, 0xA0, 0x1680, 0x1680,
+            0x2000, 0x200A, 0x2028, 0x2029, 0x202F, 0x202F,
+            0x205F, 0x205F, 0x3000, 0x3000, 0xFEFF, 0xFEFF,
+        )
+
+        /** `.` under the `s` flag: every code unit. */
+        private val ANY_CHAR = JsCharSet(IntArray(0), negated = true)
+
+        /** `.` without `s`: every code unit but the four line terminators. */
+        private val ANY_CHAR_BUT_LINE_TERMINATOR = JsCharSet(
+            intArrayOf(0x0A, 0x0A, 0x0D, 0x0D, 0x2028, 0x2029), negated = true
+        )
+    }
+}
+
+/**
+ * Thompson's construction, in three growable parallel arrays.
+ *
+ * A state is a CHAR state when [charSets] holds a set for it — one transition,
+ * to [next1] — and an EPSILON state otherwise, with up to two targets and `-1`
+ * for an absent one. That is the whole representation; Thompson's construction
+ * never needs more.
+ *
+ * A fragment is a start state plus the OUTS it has not connected yet, each
+ * encoded as `state * 2 + which`, so patching is an index write rather than a
+ * graph walk.
+ */
+internal class JsRegexNfaBuilder {
+
+    val charSets: ArrayList<JsCharSet?> = ArrayList()
+    val next1: ArrayList<Int> = ArrayList()
+    val next2: ArrayList<Int> = ArrayList()
+
+    class Fragment(val start: Int, val outs: IntArray)
+
+    fun build(node: JsRegexNode): Fragment = when (node) {
+        is JsRegexNode.Empty -> {
+            val state = newSplit()
+            Fragment(state, intArrayOf(state * 2))
+        }
+        is JsRegexNode.Chars -> {
+            val state = newState(node.set)
+            Fragment(state, intArrayOf(state * 2))
+        }
+        is JsRegexNode.Cat -> {
+            val left = build(node.left)
+            val right = build(node.right)
+            patch(left.outs, right.start)
+            Fragment(left.start, right.outs)
+        }
+        is JsRegexNode.Alt -> {
+            val left = build(node.left)
+            val right = build(node.right)
+            val split = newSplit()
+            next1[split] = left.start
+            next2[split] = right.start
+            Fragment(split, left.outs + right.outs)
+        }
+        is JsRegexNode.Repeat -> buildRepeat(node)
+    }
+
+    /**
+     * `{n,m}` is EXPANDED — `a{2,4}` becomes `aa a? a?`.
+     *
+     * The same language, which is all that is asked, and it keeps the NFA free
+     * of counters. The expansion is what [JsRegexParser.REPEAT_LIMIT] exists to
+     * stop from exploding.
+     */
+    private fun buildRepeat(node: JsRegexNode.Repeat): Fragment {
+        val min = node.min
+        val max = node.max
+        if (min == 0 && max < 0) return buildStar(node.body)
+        if (min == 1 && max < 0) return buildPlus(node.body)
+        if (min == 0 && max == 1) return buildOptional(node.body)
+        var head: Fragment? = null
+        for (index in 0 until min) {
+            val part = build(node.body)
+            head = concat(head, part)
+        }
+        var tail: Fragment? = null
+        if (max < 0) {
+            tail = buildStar(node.body)
+        } else {
+            for (index in min until max) tail = concat(tail, buildOptional(node.body))
+        }
+        val whole = concat(head, tail)
+        // `a{0}` and `a{0,0}` match the empty string and nothing else.
+        return whole ?: build(JsRegexNode.Empty)
+    }
+
+    private fun concat(left: Fragment?, right: Fragment?): Fragment? {
+        if (left == null) return right
+        if (right == null) return left
+        patch(left.outs, right.start)
+        return Fragment(left.start, right.outs)
+    }
+
+    private fun buildStar(body: JsRegexNode): Fragment {
+        val split = newSplit()
+        val inner = build(body)
+        next1[split] = inner.start
+        patch(inner.outs, split)
+        return Fragment(split, intArrayOf(split * 2 + 1))
+    }
+
+    private fun buildPlus(body: JsRegexNode): Fragment {
+        val inner = build(body)
+        val split = newSplit()
+        next1[split] = inner.start
+        patch(inner.outs, split)
+        return Fragment(inner.start, intArrayOf(split * 2 + 1))
+    }
+
+    private fun buildOptional(body: JsRegexNode): Fragment {
+        val split = newSplit()
+        val inner = build(body)
+        next1[split] = inner.start
+        return Fragment(split, inner.outs + intArrayOf(split * 2 + 1))
+    }
+
+    fun patch(outs: IntArray, target: Int) {
+        for (out in outs) {
+            val state = out / 2
+            if (out % 2 == 0) next1[state] = target else next2[state] = target
+        }
+    }
+
+    /** The accept state: an epsilon state with no target, so nothing leaves it. */
+    fun newAccept(): Int = newSplit()
+
+    private fun newSplit(): Int = newState(null)
+
+    private fun newState(set: JsCharSet?): Int {
+        if (charSets.size >= NFA_LIMIT) throw JsRegexUnsupported()
+        charSets.add(set)
+        next1.add(-1)
+        next2.add(-1)
+        return charSets.size - 1
+    }
+
+    internal companion object {
+        /** The NFA size past which a pattern is refused rather than compiled. */
+        const val NFA_LIMIT: Int = 400
+    }
+}
+
+/**
+ * A pattern compiled to a Thompson NFA plus a LAZY DFA over it.
+ *
+ * The DFA's states are sets of NFA states, discovered on demand and capped at
+ * [MAX_DFA_STATES]; past the cap [test] answers [UNKNOWN] and the caller asks
+ * the reference engine. Its per-state row is one slot per code unit below 256
+ * plus one for every code unit at or above it, which is exact whenever no
+ * character set in the pattern separates two such units — and when one does,
+ * [wideUniform] is false and a wide code unit simply takes the uncached path.
+ *
+ * `^` and `$` are handled STRUCTURALLY rather than as assertions, which is what
+ * keeps a DFA state independent of the position it was reached at: `^` means
+ * "do not union the start closure back in at each step" and `$` means "test
+ * acceptance only at the end of the input". The price is that either anchor
+ * anywhere but the pattern's own edge, and either under the `m` flag, is
+ * outside the subset — which the parser refuses.
+ *
+ * The row cache is written without synchronization, which is sound because
+ * every write is IDEMPOTENT: a racing reader either sees the computed target or
+ * sees the `-1` the row was filled with before publication, and recomputes the
+ * same value. Nothing is resized, so there is no array to publish unsafely.
+ */
+internal class JsRegexProgram private constructor(
+    private val charSets: Array<JsCharSet?>,
+    private val next1: IntArray,
+    private val next2: IntArray,
+    nfaStart: Int,
+    private val nfaAccept: Int,
+    private val startAnchored: Boolean,
+    private val endAnchored: Boolean,
+    private val wideUniform: Boolean,
+) {
+
+    private val stateSets = arrayOfNulls<IntArray>(MAX_DFA_STATES)
+    private val stateRows = arrayOfNulls<IntArray>(MAX_DFA_STATES)
+    private val stateAccepting = BooleanArray(MAX_DFA_STATES)
+    private val stateIndex = HashMap<String, Int>()
+    private var stateCount = 1
+
+    /**
+     * The plain string this pattern matches, when it is one.
+     *
+     * Null for every pattern with an operator or an anchor in it. A caller that
+     * has one can do the whole job with `String.indexOf`, because a literal
+     * pattern's match set IS the occurrences of that string, leftmost-first and
+     * non-overlapping — which is exactly what `String.replace` walks.
+     */
+    var literal: String? = null
+        private set
+
+    /** The set an unanchored step unions in, so a match may start anywhere. */
+    private val startClosure: IntArray = closureOf(intArrayOf(nfaStart), 1)
+
+    private val startState: Int = internState(startClosure)
+
+    /**
+     * [MATCH], [NO_MATCH] or [UNKNOWN].
+     *
+     * An `Int` rather than a `Boolean?` because this is the hot path and a
+     * boxed answer would allocate once per call.
+     */
+    fun test(input: String): Int {
+        var state = startState
+        if (state == UNKNOWN) return UNKNOWN
+        if (!endAnchored && stateAccepting[state]) return MATCH
+        var index = 0
+        val length = input.length
+        while (index < length) {
+            val ch = input[index].code
+            var next = -1
+            val row = stateRows[state]
+            if (row != null) {
+                val slot = if (ch < 256) ch else if (wideUniform) WIDE_SLOT else -1
+                if (slot >= 0) next = row[slot]
+            }
+            if (next < 0) {
+                next = step(state, ch)
+                if (next == UNKNOWN) return UNKNOWN
+            }
+            // Nothing leaves the empty set, so an ANCHORED pattern that has
+            // fallen out of every alternative is finished. An unanchored one
+            // unions the start closure back in at every step and can never be
+            // here, so this is a branch it never takes.
+            if (next == DEAD_STATE) return NO_MATCH
+            state = next
+            index++
+            if (!endAnchored && stateAccepting[state]) return MATCH
+        }
+        return if (stateAccepting[state]) MATCH else NO_MATCH
+    }
+
+    /** The uncached transition, which also fills the row it was missing from. */
+    private fun step(state: Int, ch: Int): Int {
+        val set = stateSets[state] ?: return DEAD_STATE
+        var targets = IntArray(8)
+        var count = 0
+        for (nfaState in set) {
+            val charSet = charSets[nfaState] ?: continue
+            if (!charSet.contains(ch)) continue
+            if (count == targets.size) targets = targets.copyOf(count * 2)
+            targets[count++] = next1[nfaState]
+        }
+        var reached = closureOf(targets, count)
+        if (!startAnchored) reached = union(reached, startClosure)
+        val next = internState(reached)
+        if (next == UNKNOWN) return UNKNOWN
+        val slot = if (ch < 256) ch else if (wideUniform) WIDE_SLOT else -1
+        if (slot >= 0) {
+            var row = stateRows[state]
+            if (row == null) {
+                row = IntArray(WIDE_SLOT + 1) { -1 }
+                stateRows[state] = row
+            }
+            row[slot] = next
+        }
+        return next
+    }
+
+    /**
+     * The epsilon closure of the first [count] entries of [states], SORTED —
+     * which is what lets the set be used as a DFA state key.
+     */
+    private fun closureOf(states: IntArray, count: Int): IntArray {
+        if (count == 0) return EMPTY
+        val seen = HashSet<Int>()
+        val stack = ArrayList<Int>(count)
+        for (index in 0 until count) if (seen.add(states[index])) stack.add(states[index])
+        val result = ArrayList<Int>(count)
+        while (stack.isNotEmpty()) {
+            val state = stack.removeAt(stack.size - 1)
+            if (charSets[state] != null || state == nfaAccept) {
+                result.add(state)
+                continue
+            }
+            val first = next1[state]
+            if (first >= 0 && seen.add(first)) stack.add(first)
+            val second = next2[state]
+            if (second >= 0 && seen.add(second)) stack.add(second)
+        }
+        val sorted = result.toIntArray()
+        sorted.sort()
+        return sorted
+    }
+
+    private fun union(left: IntArray, right: IntArray): IntArray {
+        if (left.isEmpty()) return right
+        if (right.isEmpty()) return left
+        val merged = HashSet<Int>(left.size + right.size)
+        for (state in left) merged.add(state)
+        for (state in right) merged.add(state)
+        val result = merged.toIntArray()
+        result.sort()
+        return result
+    }
+
+    /** The DFA state for [set], minting it if this is its first sighting. */
+    private fun internState(set: IntArray): Int {
+        if (set.isEmpty()) return DEAD_STATE
+        val key = set.joinToString(",")
+        val existing = stateIndex[key]
+        if (existing != null) return existing
+        if (stateCount >= MAX_DFA_STATES) return UNKNOWN
+        val index = stateCount++
+        stateSets[index] = set
+        stateAccepting[index] = set.contains(nfaAccept)
+        stateIndex[key] = index
+        return index
+    }
+
+    internal companion object {
+
+        const val NO_MATCH: Int = 0
+        const val MATCH: Int = 1
+        const val UNKNOWN: Int = -1
+
+        /**
+         * The empty state set, which an ANCHORED pattern can reach and stay in.
+         *
+         * An unanchored one unions the start closure back in at every step, so
+         * its set is never empty and this state is unreachable for it.
+         */
+        private const val DEAD_STATE = 0
+
+        private const val WIDE_SLOT = 256
+        private const val MAX_DFA_STATES = 512
+
+        private val EMPTY = IntArray(0)
+
+        /** The compiled program for [source]/[flags], or null if outside the subset. */
+        fun compile(source: String, flags: String): JsRegexProgram? = try {
+            build(source, flags)
+        } catch (_: JsRegexUnsupported) {
+            null
+        }
+
+        private fun build(source: String, flags: String): JsRegexProgram {
+            for (flag in flags) if (flag != 'g' && flag != 'm' && flag != 's' && flag != 'd') {
+                throw JsRegexUnsupported()
+            }
+            var body = source
+            var startAnchored = false
+            var endAnchored = false
+            if (body.startsWith("^")) {
+                startAnchored = true
+                body = body.substring(1)
+            }
+            if (body.endsWith("$") && !jsRegexEndsWithEscapedDollar(body)) {
+                endAnchored = true
+                body = body.substring(0, body.length - 1)
+            }
+            // The two anchors are structural here, so their MULTILINE meaning —
+            // which is a property of the position rather than of the pattern —
+            // is outside the subset.
+            if ('m' in flags && (startAnchored || endAnchored)) throw JsRegexUnsupported()
+            val tree = JsRegexParser(body, dotAll = 's' in flags).parse()
+            val builder = JsRegexNfaBuilder()
+            val fragment = builder.build(tree)
+            val accept = builder.newAccept()
+            builder.patch(fragment.outs, accept)
+            val program = JsRegexProgram(
+                charSets = builder.charSets.toTypedArray(),
+                next1 = builder.next1.toIntArray(),
+                next2 = builder.next2.toIntArray(),
+                nfaStart = fragment.start,
+                nfaAccept = accept,
+                startAnchored = startAnchored,
+                endAnchored = endAnchored,
+                wideUniform = builder.charSets.all { it == null || it.wideUniform },
+            )
+            if (!startAnchored && !endAnchored) program.literal = literalOf(tree)
+            return program
+        }
+
+        /**
+         * The plain string [node] matches, or null if it is not just a string.
+         *
+         * A left-leaning `Cat` chain of one-code-unit sets and nothing else —
+         * which is what `/_/` and `/, /` are, and what the concatenation cannot
+         * be once any quantifier, class, alternation or negation appears.
+         */
+        private fun literalOf(node: JsRegexNode): String? {
+            val text = StringBuilder()
+            var pending: JsRegexNode? = node
+            val stack = ArrayList<JsRegexNode>()
+            while (pending != null || stack.isNotEmpty()) {
+                val current = pending ?: stack.removeAt(stack.size - 1)
+                pending = null
+                when (current) {
+                    is JsRegexNode.Cat -> {
+                        stack.add(current.right)
+                        pending = current.left
+                    }
+                    is JsRegexNode.Chars -> {
+                        val code = current.set.singleCode ?: return null
+                        text.append(code.toChar())
+                    }
+                    else -> return null
+                }
+            }
+            return if (text.isEmpty()) null else text.toString()
+        }
+
+    }
+}
+
+/** Every distinct `(source, flags)` a program uses, compiled once — or refused once. */
+private val compiledRegexPrograms =
+    java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+/** Cached like a program, so a pattern outside the subset is not re-parsed either. */
+private val REGEX_REFUSED = Any()
+
+internal fun compiledRegexProgram(source: String, flags: String): JsRegexProgram? {
+    val cached = compiledRegexPrograms.getOrPut("$flags $source") {
+        JsRegexProgram.compile(source, flags) ?: REGEX_REFUSED
+    }
+    return cached as? JsRegexProgram
 }

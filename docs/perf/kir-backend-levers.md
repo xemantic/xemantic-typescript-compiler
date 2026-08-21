@@ -222,6 +222,23 @@ across the four.
 | mitt | 86.00 ns/emit | 62.25 | **61.00** (1.41x FASTER) |
 | smol-toml | 22.60 us/parse | 56.60 | **47.05** (2.08x slower) |
 
+**AMENDED — the regex engine landed and took another quarter of the toml parse.**
+The three-arm run on the committed tree, 5 processes interleaved:
+
+| | tsgo -> node | xtsc -> node | xtsc -> JVM |
+|---|---|---|---|
+| mitt | 82.75 ns/emit | 83.75 | **61.25** (1.35x FASTER) |
+| smol-toml | 22.50 us/parse | 22.60 | **34.10** (1.52x slower) |
+
+`smol-toml` is **47.05 -> 34.10 us/parse, −27.5%**, and 2.08x -> **1.52x** Node.
+Ranges are disjoint ([663..757] ms against a pre-change 910 ms round) and BOTH
+Node arms are flat (22.50 and 22.60 against 22.50 and 22.30), which is what
+licenses reading it as a backend number. **`mitt` is flat again** at 61.25 —
+the expected shape, since an event emitter matches no regular expression, and
+the control that says this lever is the regex one rather than a drift.
+
+Against the session's opening 56.60, the arc is now **−39.8%**.
+
 `smol-toml` goes from 2.49x slower than Node to **2.08x**. **`mitt` is flat**:
 its five readings across the session are 62.25 / 61.50 / 59.50 / 61.25 / 61.00 /
 62.25, so the −1.2% the first pair showed did not survive replication and is not
@@ -236,7 +253,7 @@ The next lever is the one §2 argues for from both directions: the NOMINAL half,
 (KIR.PERF.1), whose entry now carries this census and a design the two
 refutations do not rule out.
 
-## 5. The regular expressions — MEASURED, and the largest thing left on toml
+## 5. The regular expressions — LANDED 2026-08-21, worth −27.5% of the toml parse
 
 `smol-toml` validates every scalar and every key part with a regular expression,
 and § 2's leaf profile puts `JsRegExp.test` at 20.3% of the JVM arm's samples.
@@ -282,15 +299,74 @@ substitution for it: measured, it buys **0.6%**. And `matches()` in place of
 `find()` on the anchored patterns buys nothing. The cost is the engine's loop
 node, not group bookkeeping and not the anchor scan.
 
-### What it is worth
+### What was built, and what it measured
 
-Replacing the engine for the regular subset these patterns live in takes the
-9.5 us to ~0.9 us: **-8.6 us = -18% of the toml parse**, 47.05 -> ~38.5 us, and
-`smol-toml` from 2.08x slower than Node to **~1.70x**. That is larger than every
-landed lever in §§ 1-3 combined and second only to (KIR.PERF.1).
+A matcher for the REGULAR subset those patterns live in — no backreferences, no
+lookaround, no `\b` — compiled once per `(source, flags)` beside the `Pattern`
+cache and answering `test` from a **lazy DFA**: one array read per character,
+no backtracking at all. `JsRegexProgram` in the runtime; the parser, Thompson
+construction and DFA are ~500 lines of pure Kotlin, so `kir_native_runtime.py`
+copies the whole thing to Kotlin/Native verbatim.
+
+Measured on the four patterns, one process, best of eight rounds:
+
+| pattern | fast | `java.util.regex` | |
+|---|---:|---:|---:|
+| INT_REGEX | **12.69 ns** | 211.67 | 16.7x |
+| FLOAT_REGEX | **12.95** | 168.38 | 13.0x |
+| LEADING_ZERO | **8.39** | 25.60 | 3.0x |
+| KEY_PART_RE | **26.37** | 85.32 | 3.2x |
+
+Whole-program, three arms, 5 processes interleaved: `smol-toml` **47.05 ->
+34.10 us/parse, −27.5%**, 2.08x Node -> **1.52x**, with `mitt` flat at 61.25 and
+both Node arms flat. That beats the −18% predicted above, because two smaller
+members came with it: `value.replace(/_/g, '')` now takes a LITERAL path
+(`String.replace`, since a literal pattern's match set IS the occurrences of
+that string), and `split` stopped building a fresh `Regex(source)` per call —
+which also silently ignored the expression's own flags.
+
+### Three design decisions, each of which is what makes it safe
+
+**It answers `test` and nothing else.** Existence of a match is the one question
+on which leftmost-longest — what a DFA over a state SET decides — and
+JavaScript's leftmost-first agree by construction, so alternation order and
+greedy-versus-lazy, the two things a DFA cannot represent, are unobservable.
+`exec`, `replace` and `split` keep the reference engine.
+
+**Anything outside the subset is REFUSED at compile time**, and the refusal is
+cached like a program. So the subset can stay small and honest: `i`/`u`/`y`, a
+lookaround, a backreference, `\b`, a `\u` escape, an anchor anywhere but the
+pattern's own edge, `m` together with an anchor, and a `{n,m}` past the
+expansion bound all fall back. A refusal is a performance outcome and never a
+behavioural one.
+
+**The reference engine stays LIVE as the differential oracle** (the round-792
+shape — the specification is kept runnable and is never demoted to a legality
+gate). `jsRegexVerify` runs both and throws on a disagreement, and
+`KirRegexEngineTest` sweeps the document population plus the adversarial inputs
+against it. The pin a differential CANNOT provide is the one that file states
+separately: a matcher that refused everything would agree with the oracle on
+every input, so the acceptance of the four benchmark patterns is asserted
+directly.
+
+### It found a real divergence on the way, in the OTHER engine
+
+`java.util.regex`'s `$` also matches BEFORE a final line terminator where
+JavaScript's matches only at the end, so `/^\d+$/.test("12\n")` answered `true`
+here and is `false` in every JavaScript engine. The fast matcher handles `$`
+structurally and always meant the JavaScript thing, which is what made the
+disagreement visible — three of its first differential runs failed on exactly
+that shape. `jsEndAnchorTranslated` now spells the same meaning `\z` for the
+reference engine. It is the ONE place a pattern is not passed through verbatim,
+and it is a divergence being closed rather than a rewrite being risked: it fires
+only on a trailing anchor, and it is also what lets `jsRegexVerify` be a plain
+equality.
 
 **And it compounds on Kotlin/Native**, where the same two patterns cost 1360 ns
-and 507 ns — see § 6.
+and 507 ns under `kotlin.text.Regex` — see § 6. The engine is carried there
+verbatim; only the ORACLE underneath it is platform-specific, and the `$`
+translation is deliberately NOT carried, since Kotlin/Native's own regex engine
+is not known here to accept `\z`.
 
 ## 6. Kotlin/Native — the third backend, built and measured
 
@@ -351,10 +427,15 @@ says something the JVM numbers could not: **(KIR.PERF.1), the nominal half, is
 not a JVM optimisation. It is the difference between Native being viable and
 not.**
 
-Second, smaller, and already actionable: Kotlin/Native's `kotlin.text.Regex` is
-a pure-Kotlin backtracking engine, **5.2x `java.util.regex` and 35x V8** on
-INT_REGEX. § 5's ~9.5 us of regex per parse becomes ~50 us there — ~30% of the
-native parse, and the same fix removes it.
+Second, smaller, and now DONE on the JVM and CARRIED here: Kotlin/Native's
+`kotlin.text.Regex` is a pure-Kotlin backtracking engine, **5.2x
+`java.util.regex` and 35x V8** on INT_REGEX, so § 5's ~9.5 us of regex per parse
+becomes ~50 us there — ~30% of the native parse. § 5's matcher is pure Kotlin
+and `kir_native_runtime.py` copies it verbatim, so native gets it for free and
+should gain MORE than the JVM's −27.5%. **That is a prediction, not a
+measurement** — the native arm has not been re-run since, and the honest way to
+close it is (KIR.NATIVE.1)(c), a native arm inside `kir-bench.sh`'s own
+equivalence gate.
 
 ### What it cost to make work, because none of it is guessable
 
