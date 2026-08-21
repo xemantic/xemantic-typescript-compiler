@@ -76,3 +76,108 @@ pair (mitt 335 -> 330 ms, toml 455 -> 452 ms):
 toml goes 2.49x slower than Node to **2.16x**; mitt stays 1.34x faster. The
 split is what the two workloads are: a scanner compares characters once per
 character, an event emitter barely compares at all.
+
+## 2. The property bag, censused — and the second refutation of the same idea
+
+After the operand specialization above, the leaf profile of the toml JVM arm
+attributes, per owner rather than per stdlib row (`scripts/kir-profile.sh`,
+round 2 of 2):
+
+| owner | share |
+|---|---|
+| `JsObject.set` | **22.4%** |
+| `JsObject.get` | **14.9%** |
+| `JsObject.has` | 0.9% |
+| `JsRegExp.test` | 20.3% |
+| `jsTruthy` (its own `when`, in `Intrinsics.areEqual`) | 5.0% |
+| `JsRegExp.<init>` | 2.2% |
+
+Every one of the bag rows was inside `HashMap`. So the bag is the backend's
+largest single cost on this workload, and `set` — the WRITE path — is bigger
+than the read: `ctx.p++` in a scanner is a read plus a write per character.
+
+### The attempt, and what it measured
+
+`JsObject` was given the shape its literal declared — names and values in two
+parallel arrays, found by a scan, promoted to a `LinkedHashMap` at the first
+property the literal did not declare. That rule was chosen precisely to avoid
+the size threshold that had already been refused: dictionaries built out of
+parsed data promote at their first key and stay exactly where they were, and
+only records whose names are constant-pool strings take the scan.
+
+**Measured: toml 48.90 -> 64.25 us/parse, +31%, ranges disjoint
+`[954..988]` -> `[1273..1309]`, both Node arms flat.** mitt improved
+61.50 -> 59.50 ns/emit, which is the tell that the change did what it said and
+still lost.
+
+### Why, from the profile rather than from a theory
+
+The rule worked: `HashMap` fell from 38.3% of samples to **4.7%**, so the
+dictionary half really was left alone and the record half really did leave the
+hash map. What did NOT happen is the saving. Counting SAMPLES rather than
+shares — the run got longer, so shares alone would have hidden this — the bag
+cost **709 samples before and 771 after**, and construction alone (`JsObject.
+of`) appeared as a new 7.1% row. The scan replaced the hash lookup at
+approximately its own price.
+
+The rest of the regression is not in the bag at all: the program's own code
+went 343 -> 489 samples and the regex family 476 -> 642, for work that did not
+change. A cost that lands on unrelated frames is what a bigger, two-shaped
+method does to the callers it used to be inlined into.
+
+### The conclusion, which is what makes this a result rather than a loss
+
+Two independent attempts at making the dynamic representation cheaper — by
+size threshold and by declared shape — have now regressed a document parse by
+21% and 31%. The bag is expensive because of the NUMBER of operations, not
+their unit cost: a `LinkedHashMap` probe on an interned key is already about as
+cheap as a three-element scan, and no arrangement of the same operations
+removes them.
+
+**Only the nominal half removes them** — `ctx.p` becoming a field of a
+generated class rather than a property of a bag. That is (KIR.PERF.1), and its
+case is now made by measurement from both directions rather than by the design
+document alone.
+
+What survives from both attempts is `KirPropertyBagTest`: its cases are
+representation-independent by construction, both attempts passed all of them
+unchanged, and they are what the next attempt will be graded by.
+
+## 3. Two rows the census named that were pure overhead — LANDED
+
+`jsTruthy` decided its answer with an equality `when` (`null, Undefined, false
+-> false`), which Kotlin compiles to a chain of `Intrinsics.areEqual` calls —
+**5.0% of the toml arm's samples, spent asking whether a value equals `false`.**
+It is now a type-test chain deciding the same five cases in the same order.
+
+`JsRegExp` allocated a `Matcher` per `test` and per `exec` — two `int` arrays
+sized by the pattern's groups and locals, filled on every call, and
+`Matcher.reset` was the single largest regex leaf at 10.2%. The two methods now
+share one matcher, which is safe because neither lets any other code run
+between starting a match and reading its groups out; `matcherFor` still
+allocates, because its callers keep the matcher ACROSS iterations.
+
+And a regular-expression LITERAL inside a function evaluates to a fresh object
+per call — `value.replace(/_/g, '')` is that shape, and it was re-parsing its
+source every time (`JsRegExp.<init>`, 2.2%). Every distinct `(source, flags)`
+now compiles once and the `Pattern` is shared, which is invisible because a
+`Pattern` holds no match state.
+
+**Measured together: toml 48.90 -> 46.95 us/parse (−4.0%)**, Node arms flat
+(452 -> 453 ms); mitt unchanged at 61.25 ns/emit. `KirRegExpTest` is the pin,
+and it uses ONE expression many ways at once, because both changes fail the
+same way — a second use reading state the first left behind.
+
+## 4. Where it stands
+
+| | tsgo -> node | xtsc -> JVM, before | xtsc -> JVM, now |
+|---|---|---|---|
+| mitt | 85.00 ns/emit | 62.25 | **61.25** (1.39x FASTER) |
+| smol-toml | 22.65 us/parse | 56.60 | **46.95** (2.07x slower) |
+
+−17.0% on the document parse across the session, and the two Node arms held
+flat across every pair, which is what licenses reading these as backend
+numbers.
+
+The next lever is the one §2 argues for from both directions: the NOMINAL half,
+(KIR.PERF.1).

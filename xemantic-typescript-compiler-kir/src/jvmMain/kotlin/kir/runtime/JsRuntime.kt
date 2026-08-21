@@ -183,11 +183,12 @@ private fun stringToNumber(value: String): Double {
  * ECMAScript `ToBoolean`. Needed wherever a non-boolean reaches a condition:
  * `if (s)` on a string is legal TypeScript and is false for `""`.
  */
-public fun jsTruthy(value: Any?): Boolean = when (value) {
-    null, Undefined, false -> false
-    true -> true
-    is Double -> value != 0.0 && !value.isNaN()
-    is String -> value.isNotEmpty()
+public fun jsTruthy(value: Any?): Boolean = when {
+    value == null -> false
+    value is Boolean -> value
+    value is Double -> value != 0.0 && !value.isNaN()
+    value is String -> value.isNotEmpty()
+    value === Undefined -> false
     else -> true
 }
 
@@ -871,16 +872,31 @@ private fun toUint32(value: Any?): UInt {
  */
 public class JsRegExp(public val source: String, public val flags: String) {
 
-    private val pattern: java.util.regex.Pattern = java.util.regex.Pattern.compile(
-        source,
-        (if ('i' in flags) java.util.regex.Pattern.CASE_INSENSITIVE else 0) or
-            (if ('m' in flags) java.util.regex.Pattern.MULTILINE else 0) or
-            (if ('s' in flags) java.util.regex.Pattern.DOTALL else 0)
-    )
+    private val pattern: java.util.regex.Pattern = compiledPattern(source, flags)
 
     public val global: Boolean = 'g' in flags
 
-    public fun test(input: String): Boolean = pattern.matcher(input).find()
+    /**
+     * The matcher [test] and [exec] reuse, or null until the first of them runs.
+     *
+     * A `Matcher` is a scratch buffer — two `int` arrays sized by the pattern's
+     * groups and locals — and `Pattern.matcher` allocates a fresh one per call.
+     * Neither of the two methods that reuse this one lets any other code run
+     * between starting a match and reading its groups out, so there is nothing
+     * that could observe the sharing. [matcherFor] deliberately does NOT reuse:
+     * its callers keep the matcher ACROSS iterations.
+     */
+    private var reusable: java.util.regex.Matcher? = null
+
+    private fun matcher(input: String): java.util.regex.Matcher {
+        val existing = reusable
+        if (existing != null) return existing.reset(input)
+        val fresh = pattern.matcher(input)
+        reusable = fresh
+        return fresh
+    }
+
+    public fun test(input: String): Boolean = matcher(input).find()
 
     /**
      * `RegExp.prototype.exec`: the whole match then each group, or null.
@@ -889,7 +905,7 @@ public class JsRegExp(public val source: String, public val flags: String) {
      * here — which is what a program testing `match[2]` is asking about.
      */
     public fun exec(input: String): JsArray? {
-        val matcher = pattern.matcher(input)
+        val matcher = matcher(input)
         if (!matcher.find()) return null
         val groups = ArrayList<Any?>(matcher.groupCount() + 1)
         for (index in 0..matcher.groupCount()) groups.add(matcher.group(index))
@@ -901,6 +917,29 @@ public class JsRegExp(public val source: String, public val flags: String) {
     override fun toString(): String = "/$source/$flags"
 
 }
+
+/**
+ * Every distinct `(source, flags)` a program uses, compiled once.
+ *
+ * A regular-expression LITERAL evaluates to a fresh object every time control
+ * reaches it — `value.replace(/_/g, '')` inside a function makes one per call —
+ * and `Pattern.compile` re-parses the source each time, which a JavaScript
+ * engine does not. A `Pattern` is immutable and carries no match state, so
+ * sharing one between two `JsRegExp` objects is invisible: the mutable half is
+ * the `Matcher`, and each object still has its own.
+ */
+private val compiledPatterns =
+    java.util.concurrent.ConcurrentHashMap<String, java.util.regex.Pattern>()
+
+private fun compiledPattern(source: String, flags: String): java.util.regex.Pattern =
+    compiledPatterns.computeIfAbsent("$flags\u0000$source") {
+        java.util.regex.Pattern.compile(
+            source,
+            (if ('i' in flags) java.util.regex.Pattern.CASE_INSENSITIVE else 0) or
+                (if ('m' in flags) java.util.regex.Pattern.MULTILINE else 0) or
+                (if ('s' in flags) java.util.regex.Pattern.DOTALL else 0)
+        )
+    }
 
 /** A regular-expression literal: `/pattern/flags`. */
 public fun jsRegExp(source: String, flags: String): JsRegExp = JsRegExp(source, flags)
