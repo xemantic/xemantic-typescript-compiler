@@ -83,6 +83,14 @@ import com.xemantic.typescript.compiler.TypeFlags
 import com.xemantic.typescript.compiler.TypeLiteral
 import com.xemantic.typescript.compiler.TypeOfExpression
 import com.xemantic.typescript.compiler.VariableStatement
+import com.xemantic.typescript.compiler.CaseClause
+import com.xemantic.typescript.compiler.DefaultClause
+import com.xemantic.typescript.compiler.DoStatement
+import com.xemantic.typescript.compiler.ForOfStatement
+import com.xemantic.typescript.compiler.SwitchStatement
+import com.xemantic.typescript.compiler.ThrowStatement
+import com.xemantic.typescript.compiler.TryStatement
+import com.xemantic.typescript.compiler.VariableDeclarationList
 import com.xemantic.typescript.compiler.WhileStatement
 import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
@@ -118,6 +126,7 @@ import org.jetbrains.kotlin.ir.builders.irSet
 import org.jetbrains.kotlin.ir.builders.irString
 import org.jetbrains.kotlin.ir.builders.irUnit
 import org.jetbrains.kotlin.ir.builders.irVararg
+import org.jetbrains.kotlin.ir.builders.irIfThen
 import org.jetbrains.kotlin.ir.builders.irWhen
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
@@ -750,6 +759,11 @@ internal class KirFileLowering(
             is IfStatement -> out.add(lowerIf(statement))
             is WhileStatement -> out.add(lowerWhile(statement))
             is ForStatement -> out.add(lowerFor(statement))
+            is ForOfStatement -> out.add(lowerForOf(statement))
+            is DoStatement -> out.add(lowerDoWhile(statement))
+            is SwitchStatement -> out.add(lowerSwitch(statement))
+            is ThrowStatement -> out.add(lowerThrow(statement))
+            is TryStatement -> out.add(lowerTry(statement))
             is Block -> {
                 scopes.addLast(HashMap())
                 val inner = mutableListOf<IrStatement>()
@@ -945,6 +959,287 @@ internal class KirFileLowering(
         visit(node)
         return found
     }
+
+    /**
+     * `for (const x of xs) body` over an ARRAY, as an index walk.
+     *
+     * Not an iterator: `JsArray` has none, and the semantics wanted here are
+     * JavaScript's own — the loop reads `length` on every iteration, so a body
+     * that pushes extends the walk and one that pops shortens it, which an
+     * iterator would forbid by throwing. Only an array-erased subject is
+     * accepted; a `Map`, a `Set` and a string need their own iteration and are
+     * refused rather than guessed at.
+     */
+    private fun lowerForOf(statement: ForOfStatement): IrExpression {
+        if (statement.awaitModifier) {
+            refuse(tsFile, statement, "`for await` is out of the spike subset")
+        }
+        val subject = statement.expression
+        val owner = runtimeClassOf(subject)
+        if (owner == null || owner != intrinsics.jsArrayClass) {
+            refuse(
+                tsFile, statement,
+                "`for…of` is lowered for an ARRAY subject only; this one is " +
+                    (facts.typeOf(subject)?.let { facts.render(it) } ?: "untyped")
+            )
+        }
+        val list = statement.initializer as? VariableDeclarationList
+            ?: refuse(tsFile, statement, "`for…of` needs a `const`/`let` binding")
+        val declaration = list.declarations.singleOrNull()
+            ?: refuse(tsFile, statement, "`for…of` needs exactly one binding")
+        val name = declaration.name as? Identifier
+            ?: refuse(tsFile, declaration, "destructuring in `for…of` is out of the spike subset")
+
+        val outer = mutableListOf<IrStatement>()
+        scopes.addLast(HashMap())
+        val array = temporary("array", intrinsics.jsArrayType, lowerExpression(subject))
+        val index = temporary("index", types.double, scope.irDouble(0.0), mutable = true)
+        outer.add(array)
+        outer.add(index)
+        val length = intrinsics.runtimePropertyGetter(intrinsics.jsArrayClass, "length")
+            ?: refuse(tsFile, statement, "JsArray.length is missing")
+        val get = intrinsics.runtimeMember(intrinsics.jsArrayClass, "get", 1)
+            ?: refuse(tsFile, statement, "JsArray.get is missing")
+        val loop = IrWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null)
+        loop.condition = scope.irCall(
+            irBuiltIns.lessFunByOperandType[irBuiltIns.doubleClass]
+                ?: refuse(tsFile, statement, "no `Double` comparison intrinsic")
+        ).apply {
+            arguments[0] = scope.irGet(index)
+            arguments[1] = scope.irCall(length).apply { arguments[0] = scope.irGet(array) }
+        }
+        // §4's trampoline, for the same reason `for(;;)` needs it and with the
+        // same cost when it is not needed: the INCREMENT runs after the body, so
+        // a `continue` that jumped to the loop head would skip it and spin
+        // forever. Inside a one-iteration `do { … } while (false)`, `continue`
+        // is a BREAK of that inner loop, which lands exactly on the increment.
+        val trampoline = if (hasOwnContinue(statement.statement)) {
+            IrDoWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null).also {
+                it.condition = scope.irBoolean(false)
+            }
+        } else null
+        loops.addLast(LoopFrame(loop, trampoline ?: loop))
+        val body = mutableListOf<IrStatement>()
+        scopes.addLast(HashMap())
+        val elementType = facts.typeOf(declaration.name)?.let { erase(declaration, it) }
+            ?: types.anyNullable
+        val element = temporary(
+            kotlinName(name.text),
+            elementType,
+            coerce(
+                declaration,
+                scope.irCall(get).apply {
+                    arguments[0] = scope.irGet(array)
+                    arguments[1] = scope.irGet(index)
+                },
+                elementType
+            )
+        )
+        body.add(element)
+        scopes.last()[name.text] = element
+        lowerStatement(statement.statement, body)
+        body.add(
+            scope.irSet(
+                index,
+                arithmeticValues("plus", scope.irGet(index), scope.irDouble(1.0))
+            )
+        )
+        scopes.removeLast()
+        loops.removeLast()
+        loop.body = if (trampoline == null) {
+            IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, body)
+        } else {
+            val increment = body.removeAt(body.size - 1)
+            trampoline.body = IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, body)
+            IrBlockImpl(
+                UNDEFINED,
+                UNDEFINED,
+                irBuiltIns.unitType,
+                null,
+                listOf(trampoline, increment)
+            )
+        }
+        outer.add(loop)
+        scopes.removeLast()
+        return IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, outer)
+    }
+
+    private fun lowerDoWhile(statement: DoStatement): IrExpression {
+        val loop = IrDoWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null)
+        loops.addLast(LoopFrame(loop, loop))
+        loop.body = statementExpression(statement.statement)
+        loops.removeLast()
+        loop.condition = condition(statement.expression)
+        return loop
+    }
+
+    /**
+     * `switch`, with FALL-THROUGH, and without a `goto` to build it from.
+     *
+     * The encoding is a one-iteration `do { … } while (false)` — so `break`
+     * inside a clause is an ordinary loop break and needs no special case — plus
+     * a `matched` flag: a clause runs when the subject matched IT or when an
+     * earlier clause already matched, which is exactly what falling through
+     * means. Comparison is `===`, as the specification says.
+     *
+     * `default` is accepted only as the LAST clause. In the middle its meaning
+     * is "run if nothing else matched, then fall through from here", which this
+     * encoding cannot express without a second pass, and guessing is worse than
+     * refusing.
+     */
+    private fun lowerSwitch(statement: SwitchStatement): IrExpression {
+        val clauses = statement.caseBlock
+        clauses.forEachIndexed { index, clause ->
+            if (clause is DefaultClause && index != clauses.lastIndex) {
+                refuse(
+                    tsFile, clause,
+                    "a `default` clause before the last one is out of the spike subset"
+                )
+            }
+            if (clause !is CaseClause && clause !is DefaultClause) {
+                refuse(tsFile, clause, "cannot lower this switch clause")
+            }
+        }
+        val outer = mutableListOf<IrStatement>()
+        scopes.addLast(HashMap())
+        val subject = temporary(
+            "subject",
+            types.anyNullable,
+            coerce(statement.expression, lowerExpression(statement.expression), types.anyNullable)
+        )
+        val matched = temporary("matched", types.boolean, scope.irBoolean(false), mutable = true)
+        outer.add(subject)
+        outer.add(matched)
+        val loop = IrDoWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null)
+        loops.addLast(LoopFrame(loop, loop))
+        val body = mutableListOf<IrStatement>()
+        clauses.forEach { clause ->
+            val statements = mutableListOf<IrStatement>()
+            scopes.addLast(HashMap())
+            when (clause) {
+                is CaseClause -> {
+                    body.add(
+                        scope.irIfThen(
+                            irBuiltIns.unitType,
+                            scope.irCall(intrinsics.jsStrictEquals, types.boolean).apply {
+                                arguments[0] = scope.irGet(subject)
+                                arguments[1] = coerce(
+                                    clause.expression,
+                                    lowerExpression(clause.expression),
+                                    types.anyNullable
+                                )
+                            },
+                            scope.irSet(matched, scope.irBoolean(true))
+                        )
+                    )
+                    clause.statements.forEach { lowerStatement(it, statements) }
+                }
+                // The last clause: it runs when nothing matched, and anything
+                // that fell through to here runs it too.
+                is DefaultClause -> {
+                    body.add(scope.irSet(matched, scope.irBoolean(true)))
+                    clause.statements.forEach { lowerStatement(it, statements) }
+                }
+                // Refused above, before anything was built.
+                else -> refuse(tsFile, clause, "cannot lower this switch clause")
+            }
+            scopes.removeLast()
+            body.add(
+                scope.irIfThen(
+                    irBuiltIns.unitType,
+                    scope.irGet(matched),
+                    IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, statements)
+                )
+            )
+        }
+        loops.removeLast()
+        loop.body = IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, body)
+        loop.condition = scope.irBoolean(false)
+        outer.add(loop)
+        scopes.removeLast()
+        return IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, outer)
+    }
+
+    /**
+     * `throw e`, where `e` is any VALUE — which the JVM cannot throw.
+     *
+     * The runtime wraps a non-`Throwable` in a carrier, and [lowerTry] unwraps
+     * it on the way out, so a program that throws a string and catches it sees
+     * the string. Throwing an `Error` subclass would be more idiomatic on the
+     * JVM and would lose exactly that.
+     */
+    private fun lowerThrow(statement: ThrowStatement): IrExpression {
+        val thrown = statement.expression
+            ?: refuse(tsFile, statement, "`throw` with no operand")
+        return scope.irCall(intrinsics.jsThrow, irBuiltIns.nothingType).apply {
+            arguments[0] = coerce(thrown, lowerExpression(thrown), types.anyNullable)
+        }
+    }
+
+    private fun lowerTry(statement: TryStatement): IrExpression {
+        val tryBody = statementExpression(statement.tryBlock)
+        val catches = mutableListOf<org.jetbrains.kotlin.ir.expressions.IrCatch>()
+        statement.catchClause?.let { clause ->
+            val caught = buildVariable(
+                frame.irFunction as IrDeclarationParent,
+                UNDEFINED,
+                UNDEFINED,
+                builder.generatedOrigin,
+                Name.identifier("tmp\$thrown"),
+                irBuiltIns.throwableType,
+                isVar = false,
+            )
+            val statements = mutableListOf<IrStatement>()
+            scopes.addLast(HashMap())
+            (clause.variableDeclaration?.name as? Identifier)?.let { name ->
+                // The VALUE thrown, not the JVM exception carrying it.
+                val value = temporary(
+                    kotlinName(name.text),
+                    types.anyNullable,
+                    scope.irCall(intrinsics.jsCaught, types.anyNullable).apply {
+                        arguments[0] = scope.irGet(caught)
+                    }
+                )
+                statements.add(value)
+                scopes.last()[name.text] = value
+            }
+            clause.block.statements.forEach { lowerStatement(it, statements) }
+            scopes.removeLast()
+            catches.add(
+                org.jetbrains.kotlin.ir.expressions.impl.IrCatchImpl(
+                    UNDEFINED,
+                    UNDEFINED,
+                    caught,
+                    IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, statements)
+                )
+            )
+        }
+        val finallyBody = statement.finallyBlock?.let { statementExpression(it) }
+        return org.jetbrains.kotlin.ir.expressions.impl.IrTryImpl(
+            UNDEFINED,
+            UNDEFINED,
+            irBuiltIns.unitType,
+            tryBody,
+            catches,
+            finallyBody
+        )
+    }
+
+    /** A local the lowering introduces for itself, bound to nothing in TypeScript. */
+    private fun temporary(
+        name: String,
+        type: IrType,
+        initializer: IrExpression,
+        mutable: Boolean = false
+    ) = buildVariable(
+        frame.irFunction as IrDeclarationParent,
+        UNDEFINED,
+        UNDEFINED,
+        builder.generatedOrigin,
+        Name.identifier(name),
+        type,
+        isVar = mutable,
+    ).apply { this.initializer = initializer }
 
     private fun statementExpression(statement: Statement): IrExpression {
         val inner = mutableListOf<IrStatement>()

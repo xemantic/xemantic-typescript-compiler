@@ -56,14 +56,33 @@ internal fun runGeneratedProgram(
 ): ProgramRun {
     val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
     val entries = (listOf(outputDirectory) + classpath).joinToString(File.pathSeparator)
+    // Redirect to FILES rather than reading the pipes, and that is not a
+    // simplification — it is the only shape in which the deadline below is
+    // reachable. Reading `process.inputStream` to EOF blocks until the process
+    // EXITS, so a generated program that loops without printing hung the whole
+    // suite at 100% CPU with a `waitFor(2, MINUTES)` sitting unreached one line
+    // further down. Measured, on the first `continue` inside a `for…of`.
+    val out = File.createTempFile("xtsc-kir-run", ".out")
+    val err = File.createTempFile("xtsc-kir-run", ".err")
     val process = ProcessBuilder(java, "-cp", entries, mainClass)
-        .redirectErrorStream(false)
+        .redirectOutput(out)
+        .redirectError(err)
         .start()
-    val stdout = process.inputStream.bufferedReader().readText()
-    val stderr = process.errorStream.bufferedReader().readText()
-    check(process.waitFor(2, TimeUnit.MINUTES)) {
+    val finished = process.waitFor(2, TimeUnit.MINUTES)
+    if (!finished) {
         process.destroyForcibly()
-        "the generated program did not terminate"
+        process.waitFor(10, TimeUnit.SECONDS)
     }
-    return ProgramRun(process.exitValue(), stdout, stderr)
+    val run = ProgramRun(
+        exitCode = if (finished) process.exitValue() else TIMED_OUT,
+        stdout = out.readText(),
+        stderr = err.readText() +
+            if (finished) "" else "the generated program did not terminate within 2 minutes\n",
+    )
+    out.delete()
+    err.delete()
+    return run
 }
+
+/** The exit code a program that had to be killed reports. */
+internal const val TIMED_OUT: Int = -1

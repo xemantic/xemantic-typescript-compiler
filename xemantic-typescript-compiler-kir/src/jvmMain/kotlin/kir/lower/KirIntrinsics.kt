@@ -165,6 +165,12 @@ internal class KirIntrinsics(
 
     val jsLooseEquals: IrSimpleFunctionSymbol by lazy { runtime("jsLooseEquals") }
 
+    /** `throw <any value>` — the JVM can only throw a `Throwable`, so it carries. */
+    val jsThrow: IrSimpleFunctionSymbol by lazy { runtime("jsThrow") }
+
+    /** The VALUE a caught JVM exception carries, unwrapped. */
+    val jsCaught: IrSimpleFunctionSymbol by lazy { runtime("jsCaught") }
+
     /**
      * A `string` member, as a runtime function taking the receiver first.
      *
