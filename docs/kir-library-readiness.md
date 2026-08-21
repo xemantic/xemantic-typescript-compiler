@@ -130,11 +130,87 @@ A cosmetic sibling shows up in the same output: with `type N = Alias` in scope,
 the union `Alias | Doc` *renders* as `N | Doc`, so the alias display table is
 naming a constituent after an alias that was not written at that position.
 
+## UPDATE 2026-08-21 — a complete library now compiles AND RUNS on the JVM
+
+**mitt 3.0.1 — a real, published, dependency-free TypeScript library — compiles
+to JVM bytecode through this backend and its event emitter works.** Twice over,
+and the second is the one that counts:
+
+| | what it proves |
+|---|---|
+| corpus `12-mitt.ts` | the library's own `src/index.ts`, unmodified, plus a driver appended — compiles, runs, stdout matches byte for byte |
+| `ProjectCorpusTest` | the same library as a MODULE: `tsconfig.json`, `src/mitt.ts`, and a `src/main.ts` that says `import mitt from './mitt'` — one program, nothing concatenated |
+
+The checker reported **zero errors** on mitt. For this library the front end was
+never the obstacle; the backend was, and the ordering below is what closed it.
+
+### The capability ladder, in the order the library forced it
+
+Each rung was found the same way — point `LibraryProbe` at the source, read the
+first refusal, which names a file, a line and a column — and each is a corpus
+program that compiles to bytecode and runs:
+
+| # | capability |
+|---|---|
+| 09 | **arrays**: `T[]`, `Array<T>`, `ReadonlyArray<T>` and every tuple erase to one runtime `JsArray`; members are found by the receiver's ERASED type, not by the checker's rendering of its TypeScript one |
+| 10 | **closures**: an arrow is a Kotlin lambda; every function type erases UNIFORMLY to `FunctionN<Any?, …, Any?>`, because TypeScript's function assignability is bivariant and the JVM's is not |
+| 11 | **object literals and interfaces**: the property-bag erasure — the DYNAMIC half of the hybrid, taken first because §7 of `kir-structural-typing.md` measured it as 12× the nominal half |
+| 12 | **mitt**: `Map`/`Set` as runtime classes, `jsCall`'s arity adaptation, optional parameters and defaults, parameter assignment, `>>>` |
+| — | **modules**: a project directory compiled as one program |
+
+Two decisions inside that are worth carrying forward.
+
+**A lib type never erases to a property bag.** `Map` is declared in a lib
+`.d.ts` as an interface structurally indistinguishable from one the program
+could have written, and erasing it to a bag would make `m.size` read `undefined`
+and every method call fail inside the runtime — silently, in a program that
+compiled. Only a declaration whose root file is one of the PROGRAM's own may
+become a bag; a lib type reaches a runtime class through a short explicit table
+or is refused.
+
+**A union of function types has no single erasure.** mitt's own
+`Handler | WildcardHandler` is a `Function1` on one side and a `Function2` on
+the other, and JavaScript calls either with whatever the site supplies. So a
+call whose callee is a union of callables, an `any`, or a property-bag member
+goes through the runtime's `jsCall`, which pads missing arguments with
+`undefined` and drops extra ones. This is a deliberate widening of the
+"refuse rather than pretend" rule, and it is confined to calls the checker
+itself treats dynamically.
+
+### And it found a checker defect of the silent kind
+
+`export default function f() {}` is neither an `ExportAssignment` nor bound
+under the name `default` — it is bound under its OWN — so the default-import
+alias resolved to nothing, i.e. to `any`, and every misuse of a default-imported
+function went unreported. Measured against tsgo 7.0.2 on two files:
+
+```ts
+// d.ts
+export default function twice(x: number): number { return x * 2 }
+// main.ts
+import twice from './d'
+const probe: string = twice(1)   // tsgo: TS2322.  xtsc, before: SILENT.
+```
+
+Fixed, with the whole suite green (15,448 tests). Named imports were never
+affected, which is what makes it a property of the default import rather than of
+imports — and it is exactly the shape this page predicted: a corpus that drove
+conformance is one codebase's style, and `export default` is not tsc's.
+
 ## What this changes about the plan
 
-The ordering was wrong. Extending the lowering (object literals, arrays, `var`,
-`==`, generics) buys nothing while the checker cannot get a real library to
-zero. The sequence that works is:
+**Amended by the update above, and the amendment is a correction of THIS
+section.** The ordering below was derived from `yaml` and `zod` alone, and it
+generalized one library's obstacle into a rule: it says extending the lowering
+"buys nothing while the checker cannot get a real library to zero". Measured on
+a third library, that is false in both halves — mitt reached zero checker errors
+untouched, and every step between "type-checks" and "runs" was backend work. So
+the rule is really per-library, and the cheap way to know which obstacle a
+candidate has is to ask both compilers before planning anything:
+`tsgo --noEmit -p <dir>` for the front-end half, `LibraryProbe` for the backend
+half.
+
+For `yaml` and `zod` specifically, the ordering below still holds:
 
 1. **Pick one library as a second conformance corpus** — `yaml` is the right
    size: 76 files, no dependencies, a real parser/serializer, and only two FP
