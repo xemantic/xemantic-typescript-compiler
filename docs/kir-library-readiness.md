@@ -1,4 +1,25 @@
-# Compiling a bigger library: what actually blocks it
+# Compiling a real library: what it took
+
+**Two real libraries now compile to JVM bytecode through this backend and RUN**
+(2026-08-21). The page below is kept in the order it was written, because the
+first half is a prediction that the second half corrects.
+
+| library | what it is | result |
+|---|---|---|
+| `mitt` 3.0.1 | the event emitter, 123 lines, one file | compiles and runs — twice: as a concatenated corpus program, and as a real MODULE a second file imports |
+| `smol-toml` | a hand-written TOML parser, 1,082 lines across seven files | compiles and PARSES a 40-line TOML document, checked against **Python's `tomllib`** |
+
+Both are their own published source, unmodified. The TOML acceptance is
+differential — the expectation comes from a second, independent TOML
+implementation — so it checks the compiled library against another parser
+rather than against itself.
+
+The checker reports **zero errors** on both, which is what tsgo 7.0.2 reports.
+Getting there closed six checker defects, every one of them a false positive or
+a silent false negative that a corpus of one codebase's style could not have
+shown (see § "What this changes about the plan" and the round notes).
+
+---
 
 Measured 2026-08-20 on branch `spike/ts-to-kotlin-ir`. Two real, dependency-free
 TypeScript libraries fetched from source and checked with xtsc, with **tsgo
@@ -144,7 +165,7 @@ and the second is the one that counts:
 The checker reported **zero errors** on mitt. For this library the front end was
 never the obstacle; the backend was, and the ordering below is what closed it.
 
-### The capability ladder, in the order the library forced it
+### The capability ladder, in the order the libraries forced it
 
 Each rung was found the same way — point `LibraryProbe` at the source, read the
 first refusal, which names a file, a line and a column — and each is a corpus
@@ -157,6 +178,10 @@ program that compiles to bytecode and runs:
 | 11 | **object literals and interfaces**: the property-bag erasure — the DYNAMIC half of the hybrid, taken first because §7 of `kir-structural-typing.md` measured it as 12× the nominal half |
 | 12 | **mitt**: `Map`/`Set` as runtime classes, `jsCall`'s arity adaptation, optional parameters and defaults, parameter assignment, `>>>` |
 | — | **modules**: a project directory compiled as one program |
+| — | **module bodies that RUN**: a `moduleInit` per file, called in dependency order, and module variables as JVM statics reached across files through accessors |
+| — | **classes 2**: `extends` (a generated class OR a runtime one), `super(…)` and `super.m()`, overrides through a base-typed reference, statics, accessors, `instanceof` |
+| — | **the dynamic operations**: `jsGet`/`jsSet`/`jsInvoke`/`jsIndexGet`/`jsIndexSet`, for a receiver the checker typed `any` |
+| — | **the rest smol-toml needed**: `RegExp`, `Date`, `Error`, `enum` (inlined constants), `bigint` literals, destructuring with defaults at both levels, optional chaining, overloads, `typeof` as an operator, the comma operator, `void`, statements before `super(…)`, and `Math`/`Number`/`Object`/`JSON`/`String` globals |
 
 Two decisions inside that are worth carrying forward.
 
@@ -209,6 +234,14 @@ the rule is really per-library, and the cheap way to know which obstacle a
 candidate has is to ask both compilers before planning anything:
 `tsgo --noEmit -p <dir>` for the front-end half, `LibraryProbe` for the backend
 half.
+
+The `yaml` measurement moved a long way under that method, without anyone
+working on `yaml`: **80 -> 24 errors** (4 of them the absent `@types/node`, i.e.
+environmental) purely from the defects the other libraries exposed —
+cross-module `instanceof`, imported type guards, const-arrow guards, the
+default import, return-position literals, module-level `const` literals, object
+literals typed under their target's shape, and assignment narrowing over a
+computed primitive. TS2339 on a union, 21 rows at the start, is now zero.
 
 For `yaml` and `zod` specifically, the ordering below still holds:
 
