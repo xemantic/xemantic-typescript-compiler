@@ -55,6 +55,8 @@ internal class ErasedTypes(
     private val classForDeclaration: (Node) -> IrClass?,
     private val jsArrayType: () -> IrType,
     private val jsObjectType: () -> IrType,
+    /** The runtime class a LIBRARY type of this name erases to, if any. */
+    private val libraryType: (String) -> IrType?,
     /**
      * Whether an object type's declaration is one THIS program wrote.
      *
@@ -148,13 +150,17 @@ internal class ErasedTypes(
     @OptIn(UnsafeDuringIrConstructionAPI::class)
     private fun mapObject(type: Type.Object): IrType? {
         if (isArrayLike(type)) return jsArrayType()
-        // An anonymous object type — an object literal's own type, or a type
-        // literal written inline — has no symbol and is a property bag.
-        val symbol = type.symbol ?: return mapCallable(type) ?: jsObjectType()
-        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-            ?: return mapCallable(type) ?: jsObjectType()
-        classForDeclaration(declaration)?.let { return it.defaultType }
+        // A LIBRARY type first, and by NAME: `Map` reaches a runtime class or
+        // nothing at all, and must never fall through to the property bag —
+        // see [isOwnStructuralDeclaration].
+        libraryName(type)?.let { name -> libraryType(name)?.let { return it } }
+        val symbol = type.symbol
+        val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
+        declaration?.let { classForDeclaration(it) }?.let { return it.defaultType }
         mapCallable(type)?.let { return it }
+        // An anonymous object type — an object literal's own type, or a type
+        // literal written inline — is a property bag by construction.
+        if (declaration == null) return jsObjectType()
         return if (isOwnStructuralDeclaration(declaration)) jsObjectType() else null
     }
 
@@ -198,6 +204,17 @@ internal class ErasedTypes(
     private fun isArrayLike(type: Type.Object): Boolean =
         type.tupleElementTypes != null ||
             (type is Type.Reference && type.target.symbol?.name in ARRAY_TARGETS)
+
+    /**
+     * A generic library instantiation — `Map<K, V>` — is named by its TARGET.
+     *
+     * A [Type.Reference]'s own symbol is the target's, so this and the plain
+     * `symbol.name` route agree; it is spelled out because a reference's
+     * `resolvedTypeArguments` are the part the erasure DROPS, and dropping them
+     * silently is the thing worth being explicit about.
+     */
+    private fun libraryName(type: Type.Object): String? =
+        (type as? Type.Reference)?.target?.symbol?.name ?: type.symbol?.name
 
     /**
      * A TypeScript function type, by its call signature's arity.

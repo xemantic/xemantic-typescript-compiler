@@ -346,6 +346,130 @@ public fun jsObjectOf(vararg entries: Any?): JsObject {
 /** An array literal: `[a, b, c]`. */
 public fun jsArrayOf(vararg elements: Any?): JsArray = JsArray(elements.toList())
 
+/**
+ * A JavaScript `Map`.
+ *
+ * Key equality is the JVM's `equals`, which coincides with SameValueZero for
+ * every value this backend produces: `Double` and `String` compare by value,
+ * and a [JsObject] has no `equals` of its own, so it compares by identity —
+ * which is what JavaScript does with an object key.
+ */
+public class JsMap {
+
+    private val entries = LinkedHashMap<Any?, Any?>()
+
+    public val size: Double get() = entries.size.toDouble()
+
+    /** An absent key is `undefined`, i.e. `null` here. */
+    public fun get(key: Any?): Any? = entries[key]
+
+    /** Returns the map, as JavaScript does, so `m.set(a, 1).set(b, 2)` chains. */
+    public fun set(key: Any?, value: Any?): JsMap {
+        entries[key] = value
+        return this
+    }
+
+    public fun has(key: Any?): Boolean = entries.containsKey(key)
+
+    public fun delete(key: Any?): Boolean {
+        val had = entries.containsKey(key)
+        entries.remove(key)
+        return had
+    }
+
+    public fun clear() {
+        entries.clear()
+    }
+
+    /** An ARRAY where JavaScript answers an iterator — see the runtime's note. */
+    public fun keys(): JsArray = JsArray(entries.keys.toList())
+
+    public fun values(): JsArray = JsArray(entries.values.toList())
+
+    override fun toString(): String = "[object Map]"
+
+}
+
+/** A JavaScript `Set`, insertion-ordered as the specification requires. */
+public class JsSet {
+
+    private val elements = LinkedHashSet<Any?>()
+
+    public val size: Double get() = elements.size.toDouble()
+
+    public fun add(value: Any?): JsSet {
+        elements.add(value)
+        return this
+    }
+
+    public fun has(value: Any?): Boolean = elements.contains(value)
+
+    public fun delete(value: Any?): Boolean = elements.remove(value)
+
+    public fun clear() {
+        elements.clear()
+    }
+
+    public fun values(): JsArray = JsArray(elements.toList())
+
+    override fun toString(): String = "[object Set]"
+
+}
+
+/**
+ * Calling a value whose static type did not say how many parameters it takes.
+ *
+ * The dynamic arm of the call lowering, and it exists because a UNION of
+ * function types has no single erasure: mitt's own `Handler | WildcardHandler`
+ * is `Function1` on one side and `Function2` on the other, and JavaScript calls
+ * either with whatever arguments the site supplies. So the adaptation JavaScript
+ * performs is performed here — missing arguments are `undefined`, extra ones are
+ * dropped — rather than refused, because refusing it would refuse the shape at
+ * the centre of most event-emitter and callback code.
+ */
+public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
+    fun argument(index: Int): Any? = if (index < arguments.size) arguments[index] else null
+    return when (callee) {
+        is Function0<*> -> callee()
+        is Function1<*, *> -> {
+            @Suppress("UNCHECKED_CAST")
+            (callee as Function1<Any?, Any?>)(argument(0))
+        }
+        is Function2<*, *, *> -> {
+            @Suppress("UNCHECKED_CAST")
+            (callee as Function2<Any?, Any?, Any?>)(argument(0), argument(1))
+        }
+        is Function3<*, *, *, *> -> {
+            @Suppress("UNCHECKED_CAST")
+            (callee as Function3<Any?, Any?, Any?, Any?>)(argument(0), argument(1), argument(2))
+        }
+        null -> throw JsTypeError("undefined is not a function")
+        else -> throw JsTypeError("${jsToString(callee)} is not a function")
+    }
+}
+
+/** What a JavaScript engine throws where a value is used as something it is not. */
+public class JsTypeError(message: String) : RuntimeException(message)
+
+/**
+ * `>>>` — the one operator whose whole meaning is a coercion.
+ *
+ * `ToUint32` on both operands, then an unsigned shift, then back to a `Double`.
+ * `a.indexOf(x) >>> 0` is the idiom it exists for: `-1 >>> 0` is 4294967295,
+ * which is how JavaScript code turns "not found" into "past the end".
+ */
+public fun jsUnsignedShiftRight(left: Any?, right: Any?): Double {
+    val value = toUint32(left)
+    val shift = (toUint32(right) % 32u).toInt()
+    return (value shr shift).toDouble()
+}
+
+private fun toUint32(value: Any?): UInt {
+    val number = jsToNumber(value)
+    if (number.isNaN() || number.isInfinite()) return 0u
+    return number.toLong().toUInt()
+}
+
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
 public fun consoleLog(vararg values: Any?) {
     println(values.joinToString(" ") { jsToString(it) })

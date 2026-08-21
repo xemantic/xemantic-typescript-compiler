@@ -105,6 +105,22 @@ class CorpusTest {
     }
 
     /**
+     * A REAL LIBRARY: mitt 3.0.1, its published source unmodified, plus a
+     * driver appended below a comment banner.
+     *
+     * Everything above the banner is what `npm i mitt` ships as `src/index.ts`
+     * — generics with a `Record` constraint, `keyof` indexed access, an
+     * interface with overloads, a `Map`, an object literal with methods that
+     * close over the factory's parameter, an `as` cast, `!`, `>>>`, an optional
+     * parameter, `Array.slice/map/push/splice/indexOf`. It compiles to bytecode
+     * and its event emitter works.
+     */
+    @Test
+    fun `12 mitt - a real published library`() {
+        assertCorpusProgram("12-mitt")
+    }
+
+    /**
      * Compiles, runs and compares — failing with the whole story rather than
      * with a boolean.
      *

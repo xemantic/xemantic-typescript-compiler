@@ -90,13 +90,15 @@ class KirRefusalTest {
 
     @Test
     fun `a LIBRARY type with no mapping is refused rather than erased to a property bag`() {
-        // The load-bearing half of the property-bag erasure. `Map` is declared
+        // The load-bearing half of the property-bag erasure. `Date` is declared
         // in a lib `.d.ts` as an interface — structurally indistinguishable from
         // one this program could have written — and it is NOT a bag of its own
-        // properties: erasing it to one would make `m.size` read `undefined`
-        // and every method call fail inside the runtime, silently, in a program
-        // that compiled. An own `interface` maps (corpus 11); this one must not.
-        val (compilation, _) = compile("const m = new Map();\nconsole.log(m.size);")
+        // properties: erasing it to one would make `d.getTime()` read
+        // `undefined` and fail inside the runtime, silently, in a program that
+        // compiled. An own `interface` erases to a bag (corpus 11) and a lib
+        // type this backend HAS a runtime class for erases to that class
+        // (`Map`, corpus 12); everything else must refuse.
+        val (compilation, _) = compile("const d = new Date();\nconsole.log(d.getTime());")
         assert(!compilation.successful)
         assert(compilation.refusals.isNotEmpty())
     }
