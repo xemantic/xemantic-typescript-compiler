@@ -20,6 +20,65 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(BENCH.1) ANSWERED, AND ONE OF THE TWO PERFORMANCE LEVERS IT LICENSED IS A
+MEASURED REFUTATION (2026-08-21, same day).**
+
+**THE THIRD ARM SAYS THE FRONT END IS NOT THE PROBLEM.** `-core`'s own emitted
+JavaScript, on the same Node, against tsgo's: **mitt 83.75 vs 84.50 ns/emit
+(1.01x), toml 22.35 vs 22.75 us/parse (1.02x)** — i.e. INDISTINGUISHABLE, which
+is the prediction the queue entry recorded before the run. So the 2.5x on
+`smol-toml` belongs to the KIR BACKEND in its entirety, confirming the leaf
+profile by a second instrument rather than by inference, and the arm is now the
+standing control: any future backend claim can be read against a JavaScript
+number produced by our own front end.
+
+**LEVER 1 LANDED — `jsCall` no longer allocates an array to make one call.**
+`jsCall0`..`jsCall3` pass arguments positionally and test the arity they were
+called with FIRST. Measured, medians of 5 interleaved processes with both Node
+arms flat: **mitt 65.75 -> 61.50 ns/emit (-6.5%, ranges DISJOINT [261..287] ->
+[242..250])**, toml 57.25 -> 55.75 us/parse (-2.6%, ranges overlap). mitt is now
+**1.35x FASTER** than the same library on Node. The specialization deliberately
+keeps ADAPTING the callee's arity — mitt registers a one-parameter wildcard
+handler that `emit` calls with two arguments, so an implementation that trusted
+the declared arity would compile and fail on the library this backend exists to
+run.
+
+**AND THE PIN EXPOSED A DEFECT THAT WAS ALREADY THERE: the chain stopped at
+`Function3`, so a FOUR-parameter method of an object literal was a runtime
+`JsTypeError: … is not a function`.** Arities 4 and 5 now work. Nothing in the
+corpus reached it because no corpus program has a four-parameter bag member.
+
+**LEVER 3 IS REFUTED, BY MEASUREMENT, AND IS REVERTED.** Holding a small bag in
+parallel arrays with a linear identity-first scan — aimed at the 28.3% the
+profile charges to `HashMap`/`LinkedHashMap` — made `smol-toml` **21% SLOWER**
+(55.75 -> **67.35 us/parse**), while mitt moved only 61.50 -> 59.50. **The
+mechanism is that the bag population is BIMODAL and the profile's single number
+hid it**: `ParseContext` is a four-field scanner state, which the scan suits,
+but the parsed document's tables are the OTHER half — the root table alone has
+18 keys — and every bag that outgrows the inline capacity pays the arrays AND
+the promotion AND the map. The half that dominates the samples is the half the
+change taxes. Two corollaries worth carrying: a hash-family share is not
+evidence about ANY particular container until the container's key-count
+DISTRIBUTION is censused (round 902's law, one runtime over), and an
+identity-first compare is a pure loss where keys come from DATA rather than from
+emitted literals — a TOML key is never the interned string the scan hopes for.
+
+**WHAT SURVIVES THE REFUTATION: `KirPropertyBagTest`.** Its seven pins are
+REPRESENTATION-INDEPENDENT — insertion order across the promotion boundary,
+`delete` closing the gap, a deleted-then-reinserted key moving to the end, an
+EQUAL-but-not-identical key resolving, `has` distinguishing absent from
+`undefined` — so they were written against the array form, pass unchanged
+against the map form, and are what the next attempt at this will be graded by.
+That is the cheap half of a refuted round and it is worth keeping.
+
+**STILL OPEN, AND NOW THE ONLY NAMED LEVER FOR THE 2.5x:** the NOMINAL half of
+`docs/kir-design.md` §3.3's hybrid — `ErasedTypes.mapObject` sends a declared
+`class` to a generated JVM class and sends an `interface`, a `type X = {…}` and
+every object literal to the bag. `docs/kir-structural-typing.md` §7 prices the
+nominal half at 12x. Lever 3's refutation is evidence FOR that direction rather
+than against it: what failed was making the dynamic representation cheaper, not
+removing the dynamic representation.
+
 **KIR RUNTIME BENCHMARK (2026-08-21) — THE COMPILED LIBRARIES, TIMED AGAINST THE
 JavaScript THEY WERE WRITTEN FOR. THE ANSWER DISAGREES BY LIBRARY AND BY *SIGN*,
 AND THE LEAF PROFILE SAYS WHY.**
@@ -1402,7 +1461,43 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 **TOP OF QUEUE ON OWNER DIRECTIVE (2026-08-21): (BENCH.1) below runs before the (API.\*) arc
 resumes.**
 
-- [ ] **(BENCH.1) THE THIRD JS ARM — OUR OWN EMITTED JavaScript, ON THE SAME NODE, AS THE CONTROL
+- [ ] **(KIR.PERF.1) THE NOMINAL HALF — THE ONLY LEVER LEFT FOR `smol-toml`'s 2.5x, AND
+  LEVER 3's REFUTATION IS EVIDENCE *FOR* IT.** `ErasedTypes.mapObject` sends a declared
+  `class` to a generated JVM class and sends an `interface`, a `type X = {…}` and every
+  object literal to the property bag; `docs/kir-structural-typing.md` §7 prices the nominal
+  half at **12x** the dynamic one, and the 2026-08-21 leaf profile charges **28.3%** of the
+  JVM arm's TOML samples to `HashMap`/`LinkedHashMap`. **What was already tried and FAILED
+  is making the dynamic representation cheaper** — a parallel-array small-bag scan measured
+  **+21%** because the population is bimodal (a 4-field `ParseContext` and an 18-key document
+  table, and the big half dominates). So the direction is to stop being dynamic where the
+  checker knows the shape, not to optimize the bag.
+
+  **The obligation TypeScript imposes, and the reason this is an arc rather than a fix:**
+  assignability is STRUCTURAL, so a nominal encoding needs an interface per declared shape
+  plus generated implementations, with the checker deciding which shapes a literal satisfies
+  — and a bag must remain reachable for `any`, for an index signature, and for a shape the
+  closure cannot name. **Instrument it with `scripts/kir-bench.sh`, whose third arm now makes
+  a backend claim falsifiable**, and census the key-count distribution FIRST: it is what
+  round 3's refutation shows a share alone does not tell you.
+
+- [ ] **(KIR.EMIT.1) OUR ESM OUTPUT IS NOT RUNNABLE ON NODE AS EMITTED — a relative
+  specifier keeps the extension it was written with.** tsgo 7.0.2 rewrites `./parse.ts` ->
+  `./parse.js` under `rewriteRelativeImportExtensions` and we emit `'./parse.ts'` verbatim;
+  Node ESM resolves a specifier LITERALLY and refuses both that and mitt's extensionless
+  `'./mitt'`. `scripts/kir-bench.sh` post-processes the emit to run the arm at all, which is
+  a benchmark expedient and NOT a fix. **Invisible to every gate we own** — the corpus pins
+  emitted BYTES against tsc baselines, and no baseline asks whether Node can load the result.
+
+- [ ] **(KIR.EMIT.2) `undefined` RENDERS AS `"null"` IN A STRING CONCATENATION.**
+  `a + '|' + b` with `b` undefined prints `x|null` where JavaScript prints `x|undefined` —
+  a `string | undefined` erases to `String?` and Kotlin's own `plus` renders the null. Found
+  by `KirDynamicCallArityTest`, which was retargeted to avoid pinning it; the fix belongs in
+  the concatenation lowering, not in the call path.
+
+- [x] **(BENCH.1) THE THIRD JS ARM — ANSWERED 2026-08-21: the arm lands ON tsgo's (1.01x /
+  1.02x), so the front end is performance-neutral and the whole 2.5x is the BACKEND. The
+  harness is `scripts/kir-bench.sh` and the arm is now the standing control.** ORIGINAL ENTRY:
+  THE THIRD JS ARM — OUR OWN EMITTED JavaScript, ON THE SAME NODE, AS THE CONTROL
   THAT SEPARATES "OUR COMPILER" FROM "OUR BACKEND".** The 2026-08-21 KIR runtime benchmark measured
   two arms — tsgo -> JS -> Node against xtsc `-kir` -> JVM bytecode -> java — and they disagree by
   library and by SIGN: **mitt 86.0 -> 66.5 ns/emit (JVM 1.29x FASTER), smol-toml 22.6 -> 56.4
