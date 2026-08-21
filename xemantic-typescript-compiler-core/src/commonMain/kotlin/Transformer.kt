@@ -703,7 +703,7 @@ class Transformer(
                 listOf(tslibStmt) + jsxRuntimeStmts + withHelpers
             } else jsxRuntimeStmts + withHelpers
             val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
-            return sourceFile.copy(statements = cjsStatements)
+            return sourceFile.copy(statements = tfRewriteRelativeImportExtensions(cjsStatements))
         }
 
         // For module:preserve, .cts/.cjs files use CJS semantics — inject tslib require() if needed.
@@ -718,7 +718,9 @@ class Transformer(
                 needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
             if (needsInlineHelperForPreserveCjs) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
-                return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
+                return sourceFile.copy(
+                    statements = tfRewriteRelativeImportExtensions(listOf(tslibStmt) + withHelpers)
+                )
             }
         }
 
@@ -761,7 +763,7 @@ class Transformer(
             noLibWrapped = noLibWrapped,
         )
 
-        return sourceFile.copy(statements = withCreateRequire)
+        return sourceFile.copy(statements = tfRewriteRelativeImportExtensions(withCreateRequire))
     }
 
     /**
@@ -5520,8 +5522,107 @@ class Transformer(
         )
 
     // TypeScript normalizes module specifier paths to double quotes in require() calls.
-    private fun normalizeModuleSpecifier(spec: Expression): Expression =
-        if (spec is StringLiteralNode) spec.copy(singleQuote = false) else spec
+    private fun normalizeModuleSpecifier(spec: Expression): Expression {
+        val rewritten = rewriteRelativeImportExtension(spec)
+        return if (rewritten is StringLiteralNode) rewritten.copy(singleQuote = false) else rewritten
+    }
+
+    /**
+     * `rewriteRelativeImportExtensions`: `./parse.ts` -> `./parse.js`.
+     *
+     * TypeScript 5.7's option, and the reason our ESM output was not runnable on
+     * Node as emitted — Node resolves a specifier LITERALLY, so a `.ts` one is
+     * refused however well it type-checked. Nothing we own could see it: the
+     * corpus pins emitted BYTES against tsc's baselines, and no baseline asks
+     * whether Node can load the result.
+     *
+     * The population is exactly tsc's `shouldRewriteModuleSpecifier` — a
+     * RELATIVE specifier, not a declaration file name, carrying a TypeScript
+     * extension — and the replacement is its `getOutputExtension`. Both halves
+     * matter: an absolute or bare specifier names a module whose own build
+     * decides its extension, and a `.d.ts` names a declaration file that has no
+     * JavaScript counterpart to point at.
+     *
+     * Returns [spec] itself, by identity, wherever nothing applies — which is
+     * every program that does not set the option.
+     */
+    private fun rewriteRelativeImportExtension(spec: Expression): Expression {
+        if (!options.rewriteRelativeImportExtensions) return spec
+        val literal = spec as? StringLiteralNode ?: return spec
+        val rewritten = rewrittenRelativeSpecifier(literal.text) ?: return spec
+        // rawText wins over `text` at emit time and still spells the OLD
+        // extension, so it has to go with the rewrite; `singleQuote` stays, which
+        // is what keeps the quote style the source chose.
+        return literal.copy(text = rewritten, rawText = null)
+    }
+
+    /** The rewritten text of [text], or null when [text] is not in the population. */
+    private fun rewrittenRelativeSpecifier(text: String): String? {
+        // tsc `pathIsRelative`: /^\.\.?($|[\\/])/
+        val relative = text == "." || text == ".." ||
+            text.startsWith("./") || text.startsWith(".\\") ||
+            text.startsWith("../") || text.startsWith("..\\")
+        if (!relative) return null
+        if (isDeclarationSpecifier(text)) return null
+        // tsc `getOutputExtension`: `.mts`/`.cts` keep their module-format letter,
+        // and a `.tsx` becomes `.jsx` only where the JSX itself is preserved.
+        return when {
+            text.endsWith(".mts") -> text.dropLast(4) + ".mjs"
+            text.endsWith(".cts") -> text.dropLast(4) + ".cjs"
+            text.endsWith(".tsx") ->
+                text.dropLast(4) + (if (options.jsx == "preserve") ".jsx" else ".js")
+            text.endsWith(".ts") -> text.dropLast(3) + ".js"
+            else -> null
+        }
+    }
+
+    /**
+     * tsc `isDeclarationFileName`, over a specifier rather than a path.
+     *
+     * The second clause is not decoration: tsc treats `foo.d.anything.ts` as a
+     * declaration file too, and it looks at the BASE NAME, so a directory called
+     * `x.d.y` on the way to an ordinary `./x.d.y/m.ts` does not make one.
+     */
+    private fun isDeclarationSpecifier(text: String): Boolean {
+        if (text.endsWith(".d.ts") || text.endsWith(".d.mts") || text.endsWith(".d.cts")) return true
+        if (!text.endsWith(".ts")) return false
+        val base = text.substringAfterLast('/').substringAfterLast('\\')
+        return base.contains(".d.")
+    }
+
+    /**
+     * [rewriteRelativeImportExtension] over the FINAL statement list — the ESM
+     * half, where an import or export declaration survives to the output and the
+     * emitter prints its specifier node verbatim.
+     *
+     * A post-pass rather than a rewrite at the parse or transform entry, because
+     * the specifier TEXT is also how this file asks the checker about the target
+     * module (`isValueExport`, const-enum inlining, import elision): rewriting it
+     * any earlier would ask those questions about a `.js` file that the program
+     * does not contain. The CommonJS half needs no pass at all — every `require`
+     * this transformer builds goes through [normalizeModuleSpecifier].
+     */
+    private fun tfRewriteRelativeImportExtensions(
+        statements: List<Statement>
+    ): List<Statement> {
+        if (!options.rewriteRelativeImportExtensions) return statements
+        return statements.map { stmt ->
+            when (stmt) {
+                is ImportDeclaration -> {
+                    val spec = rewriteRelativeImportExtension(stmt.moduleSpecifier)
+                    if (spec === stmt.moduleSpecifier) stmt else stmt.copy(moduleSpecifier = spec)
+                }
+                is ExportDeclaration -> {
+                    val original = stmt.moduleSpecifier
+                    if (original == null) stmt else {
+                        val spec = rewriteRelativeImportExtension(original)
+                        if (spec === original) stmt else stmt.copy(moduleSpecifier = spec)
+                    }
+                }
+                else -> stmt
+            }
+        }
+    }
 
     private fun makeRequireConst(
         name: String,
@@ -7579,6 +7680,18 @@ class Transformer(
 
             // Call: strip type arguments, recurse
             is CallExpression -> {
+                // A dynamic `import('./x.ts')` is the one module specifier that
+                // is an EXPRESSION, so it is the one `rewriteRelativeImportExtensions`
+                // position the statement-level post-pass cannot reach. Guarded on
+                // the option, so a program that does not set it pays a field read;
+                // the recursive call terminates because the rewritten specifier no
+                // longer carries a TypeScript extension.
+                if (options.rewriteRelativeImportExtensions && isDynamicImportCall(expr)) {
+                    val specifier = rewriteRelativeImportExtension(expr.arguments[0])
+                    if (specifier !== expr.arguments[0]) {
+                        return transformExpression(expr.copy(arguments = listOf(specifier)))
+                    }
+                }
                 // B341: private METHOD call — `recv.#m(args)` →
                 // `__classPrivateFieldGet(recv, _brand, "m", _m).call(recv, args)`.
                 // this/identifier receivers only (the receiver is duplicated into .call).
