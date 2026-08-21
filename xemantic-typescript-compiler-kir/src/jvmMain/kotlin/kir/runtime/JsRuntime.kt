@@ -452,6 +452,25 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
 public class JsTypeError(message: String) : RuntimeException(message)
 
 /**
+ * The carrier for a thrown VALUE that is not a `Throwable`.
+ *
+ * JavaScript throws anything — a string, a number, an object literal — and the
+ * JVM throws only `Throwable`s. Wrapping preserves the value exactly, so a
+ * program that throws a string and catches it sees the string; throwing some
+ * `Error` subclass instead would be more idiomatic on the JVM and would lose
+ * precisely that.
+ */
+public class JsThrown(public val value: Any?) : RuntimeException(jsToString(value))
+
+/** `throw e` for any value. */
+public fun jsThrow(value: Any?): Nothing =
+    if (value is Throwable) throw value else throw JsThrown(value)
+
+/** The value a caught exception carries — the inverse of [jsThrow]. */
+public fun jsCaught(thrown: Throwable): Any? =
+    if (thrown is JsThrown) thrown.value else thrown
+
+/**
  * `==` — ECMAScript ABSTRACT equality, over the values this backend produces.
  *
  * Not `===` with a shrug: `1 == "1"` is true, `null == undefined` is true, and

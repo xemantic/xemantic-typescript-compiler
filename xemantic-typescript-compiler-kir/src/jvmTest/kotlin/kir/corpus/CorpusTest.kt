@@ -139,6 +139,11 @@ class CorpusTest {
         assertCorpusProgram("14-strings")
     }
 
+    @Test
+    fun `15 control flow`() {
+        assertCorpusProgram("15-control")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

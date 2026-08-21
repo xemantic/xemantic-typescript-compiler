@@ -3218,6 +3218,39 @@ class Checker(
         return frame
     }
 
+    /**
+     * (CHK.29) The `for…of` loop variable's name and ELEMENT type, or null.
+     *
+     * Deliberately the same conservative shape B70.4 already used one walker
+     * over — an array, a readonly array, a tuple, or a string — because those
+     * are the iterables whose element type is a function of the subject's type
+     * alone. An `Iterable<T>`, a generator and a `Map` reach their element type
+     * through `[Symbol.iterator]`'s return, which is (CHK.23)'s question; until
+     * it is answered they keep the pre-existing `any`, which is a false NEGATIVE
+     * and not a false positive.
+     */
+    private fun ctaForOfBinding(node: ForOfStatement): Pair<String, Type>? {
+        val list = node.initializer as? VariableDeclarationList ?: return null
+        val name = (list.declarations.singleOrNull()?.name as? Identifier)?.text ?: return null
+        var element: Type? = null
+        withCtaFrameLocals(ctaFrames.last()) {
+            val iterable = getTypeOfExpression(node.expression)
+            element = when {
+                iterable === stringType -> stringType
+                iterable is Type.Object && iterable.tupleElementTypes != null ->
+                    getUnionType(iterable.tupleElementTypes!!)
+                iterable is Type.Reference &&
+                    (iterable.target.symbol?.name == "Array" ||
+                        iterable.target.symbol?.name == "ReadonlyArray") ->
+                    iterable.resolvedTypeArguments?.firstOrNull()
+                else -> null
+            }
+        }
+        val elementType = element ?: return null
+        if (elementType === anyType || elementType === errorType) return null
+        return name to elementType
+    }
+
     private fun ctaSpineEnter(node: Node) {
         // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
         // the If's enter under the frame maps (exact, incl. nested ifs).
@@ -3230,6 +3263,18 @@ class Checker(
                 }
                 narrowed?.let { ctaM3NarrowThen[thenId] = it }
             }
+        }
+        // (CHK.29) a `for…of` BINDING's element type, scoped to the loop body by
+        // exactly the mechanism a narrowing `if` uses one arm up: register
+        // (name, type) against the body's nodeId and let the frame push below
+        // scope it. Before this the binding was typed `any` EVERYWHERE except
+        // inside `checkPropertyAccessInStatement`, which carries its own B70.4
+        // copy of the rule — so `for (const w of words) { const n: number = w }`
+        // was silent where tsc reports TS2322, and a member call on the binding
+        // resolved on `any`, i.e. not at all.
+        if (node is ForOfStatement && !spineIsDts) {
+            val bodyId = (node.statement as NodeBase).nodeId
+            if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = it }
         }
         // (cta-m3i): a registered then node gets the NARROWING frame — the
         // legacy wrapper's localTypes copy + write + narrowedDeclared entry.
