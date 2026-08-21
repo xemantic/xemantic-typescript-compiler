@@ -190,19 +190,39 @@ adds a `checkcast`), it is pinned, and it closes the one place where `+`
 disagreed with the rest of arithmetic about whom to ask. It is not counted as a
 win.
 
+## 3b. Kotlin's null assertions are an invariant JavaScript does not have
+
+Every generated function opened with an `Intrinsics.checkNotNullParameter` per
+non-null reference parameter — a call a recursive-descent parser crosses once
+per token. It is wrong here twice over: a JavaScript function handed `undefined`
+for a declared parameter does not throw at ENTRY, it throws (or does not) at the
+dereference, so the assertion converted a JavaScript non-event into a failure at
+the boundary carrying a Kotlin message about a Kotlin type.
+
+`noParamAssertions` / `noCallAssertions` are now set on the generated program
+only. **The runtime's own contract is untouched** — `JsRuntime` is compiled by
+this repo's build with its assertions intact, so a lowering that hands `null` to
+`jsStrCharCodeAt` still fails where it always did, and so do the `as Double`
+casts the lowering emits at every numeric use of a bag read.
+
+**Measured: toml 47.75 -> 47.05 us/parse and mitt 62.25 -> 61.00 ns/emit, both
+ranges overlapping.** Counted as a fidelity fix that measures favourably, not as
+a win.
+
 ## 4. Where it stands, replicated
 
-The session's last three benchmark runs differ only in the neutral §3a change,
-so they are three draws of one number: **46.95, 48.00 and 47.75 us/parse**, the
-last on the committed tree. Against the session's opening **56.60**, that is
-**−15.6%** taking the committed run and −15.2% to −17.0% across the three.
+The session's last four benchmark runs cover changes that measured inside the
+band, so they are four draws of one number: **46.95, 48.00, 47.75 and 47.05
+us/parse**, the last on the committed tree. Against the session's opening
+**56.60**, that is **−16.9%** taking the committed run, and −15.2% to −17.0%
+across the four.
 
 | | tsgo -> node | xtsc -> JVM, opening | xtsc -> JVM, committed |
 |---|---|---|---|
-| mitt | 86.25 ns/emit | 62.25 | **62.25** (1.39x FASTER) |
-| smol-toml | 22.30 us/parse | 56.60 | **47.75** (2.14x slower) |
+| mitt | 86.00 ns/emit | 62.25 | **61.00** (1.41x FASTER) |
+| smol-toml | 22.60 us/parse | 56.60 | **47.05** (2.08x slower) |
 
-`smol-toml` goes from 2.49x slower than Node to **2.14x**. **`mitt` is flat**:
+`smol-toml` goes from 2.49x slower than Node to **2.08x**. **`mitt` is flat**:
 its five readings across the session are 62.25 / 61.50 / 59.50 / 61.25 / 61.00 /
 62.25, so the −1.2% the first pair showed did not survive replication and is not
 claimed. That is the expected shape — an event emitter barely compares

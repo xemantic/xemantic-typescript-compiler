@@ -128,6 +128,22 @@ public class KotlinIrEmitter(
                 noStdlib = true
                 noReflect = true
                 verifyIr = "error"
+                // Kotlin's runtime null assertions are an invariant JAVASCRIPT
+                // DOES NOT HAVE, so they are wrong here twice over. A JS
+                // function handed `undefined` for a declared parameter does not
+                // throw at entry — it throws, or does not, at the dereference —
+                // and `Intrinsics.checkNotNullParameter` would have turned that
+                // into a failure at the boundary, with a Kotlin message naming a
+                // Kotlin type. They also cost: every generated function opens
+                // with one per non-null reference parameter, on a call path a
+                // recursive-descent parser crosses once per token.
+                //
+                // What is NOT affected is the runtime's own contract: `JsRuntime`
+                // is compiled by this repo's build with its assertions intact, so
+                // a lowering that hands `null` to `jsStrCharCodeAt` still fails
+                // where it always did.
+                noParamAssertions = true
+                noCallAssertions = true
             }
             val extension = object : IrGenerationExtension {
                 override fun generate(

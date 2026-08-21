@@ -23,10 +23,10 @@ material for the M3 items below; do not work its queue.
 **(KIR.PERF) THE BACKEND, MEASURED FOUR TIMES AND MOVED −17% — AND THE ONE
 DIRECTION THAT LOOKS OBVIOUS IS NOW REFUTED TWICE (2026-08-21).**
 
-**THE RESULT.** `smol-toml` on the JVM goes **56.60 → 47.75 us/parse (−15.6%)**,
-i.e. 2.49x slower than the same library on Node down to **2.14x**. The last three
-runs differ only in the neutral lever below and read 46.95 / 48.00 / 47.75, so
-that is a replicated number and not a draw. **`mitt` is FLAT** — 62.25 both ends,
+**THE RESULT.** `smol-toml` on the JVM goes **56.60 → 47.05 us/parse (−16.9%)**,
+i.e. 2.49x slower than the same library on Node down to **2.08x**. The last four
+runs cover only changes that measured inside the band and read 46.95 / 48.00 /
+47.75 / 47.05, so that is a replicated number and not a draw. **`mitt` moves only at the end** — 62.25 -> 61.00,
 still 1.39x faster than Node — which is the expected shape: an event emitter
 barely compares characters, barely reads properties and never matches a regular
 expression, so none of this session's levers has anything to do there. Every figure is a within-round paired delta on
@@ -82,6 +82,14 @@ erases to `Any?` however precisely the checker typed it, so `ctx.p + 1` reached
 decides both coercions at once and is exact. 46.95 → 48.00 us/parse with the
 ranges OVERLAPPING. Kept because it is cost-monotone, pinned, and closes the one
 place where `+` disagreed with `-` about whom to ask.
+
+**LEVER 5: Kotlin's null assertions leave the GENERATED program — a fidelity fix
+that also measures favourably.** Every generated function opened with an
+`Intrinsics.checkNotNullParameter` per non-null reference parameter, which is an
+invariant JavaScript does not have: a JS function handed `undefined` for a
+declared parameter does not throw at ENTRY. The runtime's own assertions and the
+lowering's `as Double` casts are untouched. 47.75 → 47.05 us/parse and mitt
+62.25 → 61.00 ns/emit, both ranges overlapping.
 
 **GATES.** KIR module 58 → **83 tests, 0 failures** (+25 pins: 9 equality, 8
 primitive-operand, 5 regex, and `KirPropertyBagTest` rebuilt from 7 to 10 and

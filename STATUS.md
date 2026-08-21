@@ -2,9 +2,9 @@
 
 **KIR BACKEND PERFORMANCE — `smol-toml` on the JVM is −15.6% and the property bag's
 unit cost is now REFUTED TWICE (2026-08-21).** `scripts/kir-bench.sh` (three arms,
-equivalence gate before any timing) reads **56.60 → 47.75 us/parse**, i.e. 2.49x slower
-than the same library on Node down to **2.14x**, replicated over three runs (46.95 /
-48.00 / 47.75) with both Node arms flat; `mitt` is flat at 62.25 ns/emit, **1.39x FASTER**
+equivalence gate before any timing) reads **56.60 → 47.05 us/parse**, i.e. 2.49x slower
+than the same library on Node down to **2.08x**, replicated over four runs (46.95 /
+48.00 / 47.75 / 47.05) with both Node arms flat; `mitt` is 61.00 ns/emit, **1.41x FASTER**
 than Node. The win is that an operand the lowering already typed no longer takes the boxed
 path — `s.charCodeAt(p) === 0x20` boxed BOTH sides and then walked an `instanceof` chain
 (−13.6%, ranges disjoint) — plus three rows a new per-owner leaf census named
