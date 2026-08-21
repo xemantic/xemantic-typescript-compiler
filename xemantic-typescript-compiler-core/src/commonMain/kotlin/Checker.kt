@@ -101270,7 +101270,19 @@ interface DataView {
             decl, init, typeAnnotation, targetType, name, source, fileName) ?: return
         CtaSections.atB(CtaSections.B_SRCTYPE)
         val savedContextual = contextualType
-        if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
+        // (CHK.32) an OBJECT LITERAL initializer gets the annotation as its
+        // context too, as the RETURN path has given it one since round 462.
+        // Without it `const t: Token = { kind: 'A', range: [1, 2] }` typed its
+        // own members in a vacuum — `kind` widened to `string` and `range` to
+        // `number[]` — and then failed against a literal-and-tuple target, while
+        // the identical object RETURNED from a function was fine. The two
+        // positions must not disagree about one object, and a retry is not an
+        // option: an object literal's type is MEMOISED per node, so whichever
+        // typing happens first is the one every later consumer sees.
+        if (targetType is Type.Object &&
+            (init is ArrowFunction || init is FunctionExpression ||
+                (init is ObjectLiteralExpression && objLitTargetNeedsContext(targetType)))
+        ) {
             contextualType = targetType
         }
         // 17.66: contextual literal preservation. When the target type contains
@@ -120267,6 +120279,65 @@ interface DataView {
         return false
     }
 
+    /**
+     * (CHK.32) Does this target's SHAPE require the object literal to be typed
+     * under it?
+     *
+     * The context is installed only where the target asks for something an
+     * un-contextual typing throws away — a LITERAL type or a TUPLE at some
+     * member — because installing it unconditionally is measurably wrong: on
+     * the compiler profile it turned `program.ts:1075` into a false TS2322,
+     * where an object literal assigns a GENERIC function to a non-generic
+     * member and the relation cannot yet instantiate one against the other.
+     * That gap is real and unrelated to contextual typing; this predicate keeps
+     * it out of the way rather than papering over it.
+     */
+    private fun objLitTargetNeedsContext(target: Type.Object): Boolean {
+        resolveStructuredTypeMembers(target)
+        val members = target.members ?: return false
+        for ((_, member) in members) {
+            val memberType = getTypeOfSymbol(member)
+            if (propTypeContainsLiteral(memberType)) return true
+            if ((memberType as? Type.Object)?.tupleElementTypes != null) return true
+            if (memberType is Type.Union &&
+                memberType.types.any { (it as? Type.Object)?.tupleElementTypes != null }
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * (CHK.32) The TUPLE an array-literal property value satisfies, or null.
+     *
+     * Suppression-only and monotone, in the shape the neighbouring array/narrow
+     * arms already use: it is asked ONLY where the raw `T[]` type has already
+     * failed the contextual property, it answers the contextual type itself (so
+     * the acceptance test below is trivially satisfied and nothing wider is
+     * ever adopted), and it declines the moment anything does not line up — a
+     * spread element, a different element count, an element the tuple's slot
+     * does not accept.
+     *
+     * The element type is read through `literalTypeOfExpression` first, because
+     * a tuple slot is frequently a literal type and `getTypeOfExpression`
+     * answers the BASE primitive for a literal node.
+     */
+    private fun tupleTypeForArrayLiteralValue(
+        literal: ArrayLiteralExpression,
+        target: Type?
+    ): Type? {
+        val slots = (target as? Type.Object)?.tupleElementTypes ?: return null
+        if (literal.elements.size != slots.size) return null
+        literal.elements.forEachIndexed { index, element ->
+            if (element is SpreadElement) return null
+            val elementType = literalTypeOfExpression(element) ?: getTypeOfExpression(element)
+            if (elementType === errorType) return null
+            if (!checkTypeRelatedTo(elementType, slots[index], assignableRelation)) return null
+        }
+        return target
+    }
+
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
         val members = symbolTable()
         val properties = mutableListOf<Symbol>()
@@ -120320,7 +120391,20 @@ interface DataView {
                     // required for the union-discriminant selection + guard-narrowed-value
                     // acceptance to reach `invocation: { kind: InvocationKind.Call,
                     // node: parent }` (signatureHelp.ts:379).
+                    // (CHK.32) a GENERIC arrow member is immune to the context.
+                    // Its own type parameters ARE its signature, and typing it
+                    // against a contextual member instantiates them away —
+                    // measured on the compiler profile at `program.ts:1075`,
+                    // where `getName: <T extends string | FileReference>(entry: T)
+                    // => any` acquired a type that then failed the very target
+                    // that supplied the context. tsc does not contextually type a
+                    // generic arrow's parameters either.
+                    val genericValue = (prop.initializer as? ArrowFunction)
+                        ?.typeParameters?.isNotEmpty() == true ||
+                        (prop.initializer as? FunctionExpression)
+                            ?.typeParameters?.isNotEmpty() == true
                     val useCtx = propCtx != null && propCtx !== anyType && propCtx !== errorType &&
+                        !genericValue &&
                         (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression ||
                             prop.initializer is ObjectLiteralExpression)
                     if (useCtx) contextualType = propCtx
@@ -120370,7 +120454,16 @@ interface DataView {
                                 prop.initializer is ArrayLiteralExpression && ctxUsable &&
                                     raw !== anyType && raw !== errorType &&
                                     !checkTypeRelatedTo(raw, propCtx, assignableRelation) ->
-                                    narrowedArrayLiteralType(prop.initializer) ?: raw
+                                    // (CHK.32) an array literal whose contextual
+                                    // property type is a TUPLE **is** that tuple —
+                                    // `getTypeOfArrayLiteral` answers `number[]`
+                                    // for `[1, 2]`, and an array is not a tuple, so
+                                    // `range: [offset, offset]` against a
+                                    // `Range = [number, number]` was a false
+                                    // TS2322. Measured on the `yaml` library,
+                                    // where every CST token carries one.
+                                    tupleTypeForArrayLiteralValue(prop.initializer, propCtx)
+                                        ?: narrowedArrayLiteralType(prop.initializer) ?: raw
                                 else -> raw
                             }
                             val ctxAcceptsNarrow = narrowed !== raw && narrowed !== neverType &&
@@ -159725,6 +159818,18 @@ interface DataView {
             if (propTypeContainsLiteral(targetPropType)) {
                 val lit = literalTypeOfExpression(unwrapToObjLitValue(propNode.initializer))
                 if (lit != null && checkTypeRelatedTo(lit, targetPropType, assignableRelation)) continue
+            }
+            // (CHK.32) a fresh ARRAY literal vs a TUPLE target member — the same
+            // retry one shape over: `getTypeOfArrayLiteral` answers `number[]`
+            // for `[a, b]`, and an array is not a tuple, so `range: [start, end]`
+            // against a `Range = [number, number]` was a false TS2322 at the
+            // property. Measured on the `yaml` library, where every CST token
+            // carries one.
+            val arrayValue = unwrapToObjLitValue(propNode.initializer) as? ArrayLiteralExpression
+            if (arrayValue != null &&
+                tupleTypeForArrayLiteralValue(arrayValue, targetPropType) != null
+            ) {
+                continue
             }
             // Deep-leaf descent (excessPropertyChecksWithNestedIntersections): when the
             // property VALUE is itself a FRESH object literal and the target prop type is an
