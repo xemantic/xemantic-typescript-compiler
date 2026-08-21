@@ -49,6 +49,8 @@ import com.xemantic.typescript.compiler.ExpressionStatement
 import com.xemantic.typescript.compiler.ForStatement
 import com.xemantic.typescript.compiler.FunctionExpression
 import com.xemantic.typescript.compiler.FunctionDeclaration
+import com.xemantic.typescript.compiler.GetAccessor
+import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.IfStatement
 import com.xemantic.typescript.compiler.ImportDeclaration
@@ -146,6 +148,7 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrFunctionExpressionImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrBreakImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstructorCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrDelegatingConstructorCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrContinueImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrDoWhileLoopImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrGetFieldImpl
@@ -272,8 +275,44 @@ internal class KirFileLowering(
      * either direction — module dependency order is then irrelevant, exactly as
      * declaration order within a file is.
      */
+    /**
+     * Pass 0: the class SHELLS, program-wide, before any member is declared.
+     *
+     * `class B extends A` needs `A`'s `IrClass` to exist when `B`'s supertype is
+     * set, and TypeScript puts no ordering requirement on the two — nor on which
+     * FILE each lives in. Creating every shell first makes the order irrelevant,
+     * which is the same reason the declare/define split exists one level up.
+     */
+    fun declareShells() {
+        tsFile.statements.forEach { statement ->
+            if (statement is ClassDeclaration) declareClassShell(statement)
+        }
+    }
+
     fun declareAll() {
         tsFile.statements.forEach { declare(it) }
+    }
+
+    /**
+     * Pass 1b: wire each method to the one it OVERRIDES.
+     *
+     * Its own phase because a base class may be declared LATER than the class
+     * extending it — in this file or in another — so the base's methods do not
+     * exist while the derived class's are being declared. An override that goes
+     * unwired is not a compile error: the JVM simply sees two unrelated methods,
+     * and a base-typed receiver keeps calling the base's.
+     */
+    fun linkOverrides() {
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
+            declaration.members.filterIsInstance<MethodDeclaration>().forEach { member ->
+                if (ModifierFlag.Static in member.modifiers) return@forEach
+                val name = (member.name as? Identifier)?.text ?: return@forEach
+                val function = methods[member] ?: return@forEach
+                overriddenIn(declaration, name, member.parameters.size)?.let {
+                    function.overriddenSymbols = listOf(it.symbol)
+                }
+            }
+        }
     }
 
     /** Pass 2 for this file: fills the bodies declared by pass 1. */
@@ -340,37 +379,130 @@ internal class KirFileLowering(
         functions[declaration] = function
     }
 
-    private fun declareClass(declaration: ClassDeclaration) {
+    private fun declareClassShell(declaration: ClassDeclaration) {
         val name = declaration.name
             ?: refuse(tsFile, declaration, "cannot lower an anonymous class")
-        if (declaration.heritageClauses?.isNotEmpty() == true) {
-            refuse(tsFile, declaration, "`extends`/`implements` is out of the spike subset")
-        }
         val irClass = builder.irFactory.buildClass {
             this.name = Name.identifier(kotlinName(name.text))
             visibility = DescriptorVisibilities.PUBLIC
-            modality = Modality.FINAL
+            // OPEN unconditionally: a class this program extends must be, and
+            // deciding per class would mean knowing the whole program's
+            // heritage before any shell exists. `final` is an optimization, and
+            // the JVM's own is a devirtualizing JIT.
+            modality = Modality.OPEN
             origin = builder.generatedOrigin
         }
         irClass.parent = irFile
-        irClass.superTypes = listOf(irBuiltIns.anyType)
         // Without a `this` receiver the class has no way to express a member's
         // dispatch receiver, and every method body would be unbuildable.
         irClass.createThisReceiverParameter()
         irFile.declarations.add(irClass)
         classes[declaration] = irClass
+    }
+
+    private fun declareClass(declaration: ClassDeclaration) {
+        val irClass = classes.getValue(declaration)
+        val base = superclassOf(declaration)
+        irClass.superTypes = listOf(
+            base?.let { classes.getValue(it).defaultType } ?: irBuiltIns.anyType
+        )
+        base?.let { tables.superclasses[declaration] = it }
 
         for (member in declaration.members) {
             when (member) {
                 is PropertyDeclaration -> declareField(declaration, irClass, member)
                 is MethodDeclaration -> declareMethod(declaration, irClass, member)
                 is Constructor -> declareConstructor(declaration, irClass, member)
+                is GetAccessor -> declareAccessor(declaration, irClass, member)
+                is SetAccessor -> declareAccessor(declaration, irClass, member)
                 else -> refuse(tsFile, member, "cannot lower this class member")
             }
         }
         if (declaration.members.none { it is Constructor }) {
             defaultConstructor(declaration, irClass)
         }
+    }
+
+    /**
+     * The class a heritage clause EXTENDS, or null for a class with no base.
+     *
+     * `implements` is erased — a generated class is not asked to satisfy a JVM
+     * interface, because an interface type erases to the runtime's property bag
+     * and nothing dispatches through it — while an `extends` of anything this
+     * backend did not generate is refused rather than dropped: silently losing
+     * a base class loses its members with it.
+     */
+    private fun superclassOf(declaration: ClassDeclaration): ClassDeclaration? {
+        val clauses = declaration.heritageClauses ?: return null
+        var base: ClassDeclaration? = null
+        for (clause in clauses) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) continue
+            val type = clause.types.singleOrNull()
+                ?: refuse(tsFile, declaration, "a class extends exactly one class")
+            base = classDeclarationOf(type.expression)
+                ?: refuse(
+                    tsFile, declaration,
+                    "`extends` is lowered for a class this backend generated only"
+                )
+        }
+        return base
+    }
+
+    /**
+     * A `get`/`set` accessor, as an ordinary method.
+     *
+     * Named `get$x` / `set$x` so it cannot collide with a TypeScript member
+     * called `x`, and reached only through a property ACCESS — see
+     * [accessorFor]. `$` is legal in both languages' identifiers, and this is
+     * the one place the backend invents a name.
+     */
+    private fun declareAccessor(
+        owner: ClassDeclaration,
+        irClass: IrClass,
+        member: Node
+    ) {
+        val (name, parameters, body, isGetter) = when (member) {
+            is GetAccessor -> AccessorShape(member.name, emptyList(), member.body, true)
+            is SetAccessor -> AccessorShape(member.name, member.parameters, member.body, false)
+            else -> refuse(tsFile, member, "cannot lower this accessor")
+        }
+        val memberName = (name as? Identifier)?.text
+            ?: refuse(tsFile, member, "cannot lower a computed accessor name")
+        if (body == null) refuse(tsFile, member, "cannot lower an accessor with no body")
+        if (ModifierFlag.Static in accessorModifiers(member)) {
+            refuse(tsFile, member, "a static accessor is out of the spike subset")
+        }
+        val function = irClass.addFunction {
+            this.name = Name.identifier((if (isGetter) "get$" else "set$") + kotlinName(memberName))
+            returnType = if (isGetter) accessorType(member, memberName) else irBuiltIns.unitType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.OPEN
+            origin = builder.generatedOrigin
+        }
+        function.parameters = listOf(dispatchReceiver(function, irClass))
+        addParameters(function, parameters)
+        val table = if (isGetter) tables.getters else tables.setters
+        table.getOrPut(owner) { mutableMapOf() }[memberName] = function
+    }
+
+    private data class AccessorShape(
+        val name: Node,
+        val parameters: List<Parameter>,
+        val body: Block?,
+        val isGetter: Boolean,
+    )
+
+    private fun accessorModifiers(member: Node): Set<ModifierFlag> = when (member) {
+        is GetAccessor -> member.modifiers
+        is SetAccessor -> member.modifiers
+        else -> emptySet()
+    }
+
+    /** A getter's result type, taken on the CLASS's own type as a member. */
+    private fun accessorType(member: Node, name: String): IrType {
+        val declared = facts.memberTypeOf(member)
+            ?: refuse(tsFile, member, "the checker gave no type for accessor '$name'")
+        return erase(member, declared)
     }
 
     private fun declareField(
@@ -380,18 +512,25 @@ internal class KirFileLowering(
     ) {
         val name = member.name as? Identifier
             ?: refuse(tsFile, member, "cannot lower a computed property name")
-        if (ModifierFlag.Static in member.modifiers) {
-            refuse(tsFile, member, "static members are out of the spike subset")
-        }
         // The property's type comes from the CLASS's type, not from the access
         // expression: `this` types as `any` here, so `this.x` does too.
         val declaredType = facts.memberTypeOf(member)
             ?: refuse(tsFile, member, "the checker gave no type for property '${name.text}'")
-        fields[member] = irClass.addField(
-            kotlinName(name.text),
-            erase(member, declaredType),
-            DescriptorVisibilities.PRIVATE
-        )
+        val field = irClass.addField {
+            this.name = Name.identifier(kotlinName(name.text))
+            type = erase(member, declaredType)
+            // PUBLIC, not private: a subclass's method reads its base's field
+            // directly (there is no accessor to go through), and a JVM private
+            // field is invisible one class down.
+            visibility = DescriptorVisibilities.PUBLIC
+            isStatic = ModifierFlag.Static in member.modifiers
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        fields[member] = field
+        if (field.isStatic) {
+            tables.staticFields.getOrPut(owner) { mutableMapOf() }[name.text] = field
+        }
     }
 
     private fun declareMethod(
@@ -401,24 +540,57 @@ internal class KirFileLowering(
     ) {
         val name = member.name as? Identifier
             ?: refuse(tsFile, member, "cannot lower a computed method name")
-        if (ModifierFlag.Static in member.modifiers) {
-            refuse(tsFile, member, "static members are out of the spike subset")
-        }
         if (member.body == null) {
             refuse(tsFile, member, "cannot lower a method with no body")
         }
+        val static = ModifierFlag.Static in member.modifiers
         val function = irClass.addFunction {
             this.name = Name.identifier(kotlinName(name.text))
             returnType = declaredReturnType(member)
             visibility = DescriptorVisibilities.PUBLIC
-            modality = Modality.FINAL
+            // OPEN so a subclass may override it — see [declareClassShell].
+            modality = if (static) Modality.FINAL else Modality.OPEN
             origin = builder.generatedOrigin
         }
         // Before the value parameters: `IrFunction.parameters` is one flat list
         // discriminated by kind, and the dispatch receiver has to come first.
-        function.parameters = listOf(dispatchReceiver(function, irClass))
+        if (!static) function.parameters = listOf(dispatchReceiver(function, irClass))
         addParameters(function, member.parameters)
         methods[member] = function
+        if (static) {
+            tables.staticMethods.getOrPut(owner) { mutableMapOf() }[name.text] = function
+        }
+    }
+
+    /**
+     * The method a subclass member OVERRIDES, searched up the base chain.
+     *
+     * Matched by name and by parameter COUNT, which is what TypeScript's own
+     * override relation reduces to once every parameter has been erased to
+     * `Any?`. A base method of a different arity is a different JVM method and
+     * the two coexist, exactly as they would in Kotlin.
+     */
+    private fun overriddenIn(
+        owner: ClassDeclaration,
+        name: String,
+        parameterCount: Int
+    ): IrSimpleFunction? = tables.superclasses[owner]
+        ?.let { methodInChain(it, name, parameterCount) }
+
+    /** The method [name]/[parameterCount] names on [from] or above it. */
+    private fun methodInChain(
+        from: ClassDeclaration,
+        name: String,
+        parameterCount: Int
+    ): IrSimpleFunction? {
+        tables.classChain(from).forEach { current ->
+            current.members.filterIsInstance<MethodDeclaration>().firstOrNull { candidate ->
+                (candidate.name as? Identifier)?.text == name &&
+                    candidate.parameters.size == parameterCount &&
+                    ModifierFlag.Static !in candidate.modifiers
+            }?.let { return methods[it] }
+        }
+        return null
     }
 
     private fun declareConstructor(
@@ -537,24 +709,78 @@ internal class KirFileLowering(
 
     private fun defineClass(declaration: ClassDeclaration) {
         val irClass = classes.getValue(declaration)
+        defineFieldInitializers(declaration, irClass)
         for (member in declaration.members) {
             when (member) {
                 is MethodDeclaration -> {
                     val function = methods.getValue(member)
                     val body = member.body ?: continue
+                    val static = ModifierFlag.Static in member.modifiers
                     inFunction(
                         function,
                         function.returnType,
-                        function.parameters.first(),
-                        declaration
+                        if (static) null else function.parameters.first(),
+                        if (static) null else declaration
                     ) {
                         function.body = blockBody(function, member.parameters, body.statements, body)
                     }
                 }
+                is GetAccessor -> defineAccessor(
+                    declaration, tables.getters, member.name, emptyList(), member.body
+                )
+                is SetAccessor -> defineAccessor(
+                    declaration, tables.setters, member.name, member.parameters, member.body
+                )
                 else -> {}
             }
         }
         defineConstructor(declaration, irClass)
+    }
+
+    private fun defineAccessor(
+        declaration: ClassDeclaration,
+        table: java.util.IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>,
+        name: Node,
+        parameters: List<Parameter>,
+        body: Block?
+    ) {
+        val memberName = (name as? Identifier)?.text ?: return
+        val function = table[declaration]?.get(memberName) ?: return
+        val statements = body?.statements ?: return
+        inFunction(function, function.returnType, function.parameters.first(), declaration) {
+            function.body = blockBody(function, parameters, statements, body)
+        }
+    }
+
+    /**
+     * `class C { value = 1 }` — the initializer a field DECLARES.
+     *
+     * Set on the field rather than prepended to the constructor, because that
+     * is where the JVM backend expects it: `IrInstanceInitializerCall` in the
+     * constructor is the point it moves every one of these to, in declaration
+     * order, before the constructor's own statements — which is TypeScript's
+     * order too.
+     *
+     * Built under the CLASS's own `this` receiver: an initializer may read
+     * another field (`b = this.a + 1`), and the constructor's receiver does not
+     * exist yet at the point the backend places these.
+     */
+    private fun defineFieldInitializers(declaration: ClassDeclaration, irClass: IrClass) {
+        val constructor = constructorsByDeclaration.getValue(declaration)
+        for (member in declaration.members) {
+            if (member !is PropertyDeclaration) continue
+            val initializer = member.initializer ?: continue
+            val field = fields.getValue(member)
+            inFunction(constructor, field.type, irClass.thisReceiver, declaration) {
+                scopes.addLast(HashMap())
+                field.initializer = builder.irFactory.createExpressionBody(
+                    UNDEFINED,
+                    UNDEFINED,
+                    coerce(initializer, lowerExpression(initializer), field.type)
+                )
+                scopes.removeLast()
+            }
+        }
     }
 
     /**
@@ -579,15 +805,61 @@ internal class KirFileLowering(
                 irClass.thisReceiver,
                 declaration
             )
-            val statements = mutableListOf<IrStatement>(
-                scope.irDelegatingConstructorCall(anyConstructor),
+            val statements = mutableListOf<IrStatement>()
+            scopes.addLast(HashMap())
+            tsConstructor?.let { bindParameters(constructor, it.parameters, it.body, statements) }
+            // The DELEGATION comes first, and where there is a base class its
+            // arguments are the ones the TypeScript body passes to `super(…)` —
+            // which TypeScript requires to be the first statement, and which is
+            // therefore consumed here rather than lowered as a call.
+            val base = tables.superclasses[declaration]
+            val bodyStatements = tsConstructor?.body?.statements ?: emptyList()
+            val superCall = bodyStatements.firstOrNull()
+                ?.let { (it as? ExpressionStatement)?.expression as? CallExpression }
+                ?.takeIf { (it.expression as? Identifier)?.text == "super" }
+            if (base != null) {
+                val baseConstructor = constructorsByDeclaration.getValue(base)
+                statements.add(
+                    IrDelegatingConstructorCallImpl(
+                        UNDEFINED,
+                        UNDEFINED,
+                        irBuiltIns.unitType,
+                        baseConstructor.symbol,
+                        typeArgumentsCount = 0,
+                    ).apply {
+                        val arguments = superCall?.arguments ?: emptyList()
+                        val regular = baseConstructor.parameters.filter {
+                            it.kind == IrParameterKind.Regular
+                        }
+                        regular.forEachIndexed { index, parameter ->
+                            val argument = arguments.getOrNull(index)
+                            this.arguments[index] = if (argument != null) {
+                                coerce(argument, lowerExpression(argument), parameter.type)
+                            } else if (parameter in optionalParameters) {
+                                scope.irNull()
+                            } else {
+                                refuse(
+                                    tsFile,
+                                    superCall ?: declaration,
+                                    "`super(…)` passes ${arguments.size} argument(s) where the " +
+                                        "base constructor takes ${regular.size}"
+                                )
+                            }
+                        }
+                    }
+                )
+            } else {
+                statements.add(scope.irDelegatingConstructorCall(anyConstructor))
+            }
+            statements.add(
                 IrInstanceInitializerCallImpl(
                     UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
                 )
             )
-            scopes.addLast(HashMap())
-            tsConstructor?.let { bindParameters(constructor, it.parameters, it.body, statements) }
-            tsConstructor?.body?.statements?.forEach { lowerStatement(it, statements) }
+            bodyStatements.forEach { statement ->
+                if (statement === superCall?.let { bodyStatements.first() }) return@forEach
+                lowerStatement(statement, statements)
+            }
             scopes.removeLast()
             constructor.body = blockBodyOf(statements)
         }
@@ -1361,6 +1633,20 @@ internal class KirFileLowering(
             SyntaxKind.GreaterThan -> comparison(node, irBuiltIns.greaterFunByOperandType)
             SyntaxKind.GreaterThanEquals ->
                 comparison(node, irBuiltIns.greaterOrEqualFunByOperandType)
+            // `x instanceof C` is a JVM type test, and it is only that because
+            // a generated class IS a JVM class — the nominal half of the design's
+            // hybrid, arriving where it always had to.
+            SyntaxKind.InstanceOfKeyword -> {
+                val target = classDeclarationOf(node.right)
+                    ?: refuse(
+                        tsFile, node,
+                        "`instanceof` is lowered for a class this backend generated only"
+                    )
+                scope.irIs(
+                    coerce(node.left, lowerExpression(node.left), types.anyNullable),
+                    classes.getValue(target).defaultType
+                )
+            }
             SyntaxKind.EqualsEqualsEquals -> strictEquals(node, negated = false)
             SyntaxKind.ExclamationEqualsEquals -> strictEquals(node, negated = true)
             SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar -> shortCircuit(node)
@@ -1703,7 +1989,32 @@ internal class KirFileLowering(
                     ?: refuse(tsFile, target, "cannot assign to '${target.text}'")
                 scope.irSet(variable, value(variable.type))
             }
-            is PropertyAccessExpression -> if (isPropertyBag(target.expression)) {
+            is PropertyAccessExpression -> if (staticOwnerOf(target) != null) {
+                val owner = staticOwnerOf(target)!!
+                val field = tables.classChain(owner)
+                    .firstNotNullOfOrNull { tables.staticFields[it]?.get(target.name.text) }
+                    ?: refuse(
+                        tsFile, target,
+                        "class '${owner.name?.text}' declares no static '${target.name.text}'"
+                    )
+                IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, null, value(field.type),
+                    irBuiltIns.unitType, null, null
+                )
+            } else if (
+                instanceOwnerOf(target)?.let { accessorFor(it, target.name.text, write = true) }
+                != null
+            ) {
+                val setter = accessorFor(
+                    instanceOwnerOf(target)!!, target.name.text, write = true
+                )!!
+                scope.irCall(setter).apply {
+                    arguments[0] = receiverOf(target)
+                    arguments[1] = value(
+                        setter.parameters.first { it.kind == IrParameterKind.Regular }.type
+                    )
+                }
+            } else if (isPropertyBag(target.expression)) {
                 scope.irCall(intrinsics.jsObjectSet).apply {
                     arguments[0] = lowerExpression(target.expression)
                     arguments[1] = scope.irString(target.name.text)
@@ -1780,10 +2091,58 @@ internal class KirFileLowering(
                 bindArguments(node, target.parameters, offset = 0)
             }
         }
+        // `this.m(…)` and `super.m(…)` are resolved from the enclosing class's
+        // CHAIN by name, not from the checker's signature: measured, both
+        // receivers type as `any` here, so the callee offers no signatures at
+        // all and every such call would be refused for a reason that says
+        // nothing about the program. (`this.x` FIELD reads have gone through
+        // the owner class for the same reason since the first classes landed.)
+        val selfReceiver = (callee as? PropertyAccessExpression)?.expression as? Identifier
+        if (selfReceiver != null &&
+            (selfReceiver.text == "this" || selfReceiver.text == "super")
+        ) {
+            val access = callee as PropertyAccessExpression
+            val viaSuper = selfReceiver.text == "super"
+            val owner = frame.ownerClass
+                ?: refuse(tsFile, node, "`${selfReceiver.text}` outside a class member")
+            val from = if (viaSuper) {
+                tables.superclasses[owner]
+                    ?: refuse(tsFile, node, "`super` in a class with no base")
+            } else owner
+            val target = methodInChain(from, access.name.text, node.arguments.size)
+                ?: refuse(
+                    tsFile, node,
+                    "no method '${access.name.text}' with ${node.arguments.size} argument(s) " +
+                        "on '${from.name?.text}' or above it"
+                )
+            return scope.irCall(target.symbol).apply {
+                // `super` is non-virtual, or an override calling its base
+                // through it recurses into itself forever. `this` is virtual,
+                // which is what an override is FOR.
+                if (viaSuper) superQualifierSymbol = classes.getValue(from).symbol
+                arguments[0] = receiverOf(access)
+                bindArguments(node, target.parameters, offset = 1)
+            }
+        }
         methods[declaration]?.let { target ->
+            // A STATIC method has no receiver at all — it is a JVM static.
+            if (target.parameters.none { it.kind == IrParameterKind.DispatchReceiver }) {
+                return scope.irCall(target.symbol).apply {
+                    bindArguments(node, target.parameters, offset = 0)
+                }
+            }
             val receiver = callee as? PropertyAccessExpression
                 ?: refuse(tsFile, node, "a method call needs a receiver")
+            val viaSuper = (receiver.expression as? Identifier)?.text == "super"
             return scope.irCall(target.symbol).apply {
+                // `super.m()` must NOT dispatch virtually, or an override calling
+                // its base through `super` recurses into itself forever.
+                if (viaSuper) {
+                    superQualifierSymbol = frame.ownerClass
+                        ?.let { tables.superclasses[it] }
+                        ?.let { classes.getValue(it).symbol }
+                        ?: refuse(tsFile, node, "`super` outside a class with a base")
+                }
                 arguments[0] = receiverOf(receiver)
                 bindArguments(node, target.parameters, offset = 1)
             }
@@ -1908,10 +2267,17 @@ internal class KirFileLowering(
                 )
             }
         val signature = facts.constructionAt(node)
-            ?: refuse(tsFile, node, "the checker resolved no constructor for this `new`")
-        val owner = (signature.declaration as? Constructor)?.parent as? ClassDeclaration
-            ?: (signature.declaration as? ClassDeclaration)
-            ?: refuse(tsFile, node, "cannot lower `new` on a non-class")
+        val owner = (signature?.declaration as? Constructor)?.parent as? ClassDeclaration
+            ?: (signature?.declaration as? ClassDeclaration)
+            // A class that declares NO constructor offers no construct signature
+            // here, so the callee's own symbol is asked instead: the implicit
+            // constructor is a property of the class, not of the signature list.
+            ?: classDeclarationOf(node.expression)
+            ?: refuse(
+                tsFile, node,
+                if (signature == null) "the checker resolved no constructor for this `new`"
+                else "cannot lower `new` on a non-class"
+            )
         val constructor = constructorsByDeclaration[owner]
             ?: refuse(tsFile, node, "cannot lower `new` on a class this backend did not generate")
         val irClass = classes.getValue(owner)
@@ -1933,9 +2299,30 @@ internal class KirFileLowering(
         }
     }
 
+    /** The generated class a callee expression NAMES, or null. */
+    private fun classDeclarationOf(callee: Expression): ClassDeclaration? {
+        val name = callee as? Identifier ?: return null
+        val symbol = facts.nameAt(name) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        return (declaration as? ClassDeclaration)?.takeIf { it in classes }
+    }
+
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
         if (node.questionDotToken) {
             refuse(tsFile, node, "optional chaining `?.` is out of the spike subset")
+        }
+        staticOwnerOf(node)?.let { owner ->
+            tables.classChain(owner).forEach { current ->
+                tables.staticFields[current]?.get(node.name.text)?.let { field ->
+                    return IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, field.type, null, null, null
+                    )
+                }
+            }
+            refuse(
+                tsFile, node,
+                "class '${owner.name?.text}' declares no static '${node.name.text}'"
+            )
         }
         if (isStringReceiver(node.expression)) {
             val target = intrinsics.stringMember(node.name.text, 0)
@@ -1947,6 +2334,11 @@ internal class KirFileLowering(
             return scope.irCall(target).apply { arguments[0] = lowerExpression(node.expression) }
         }
         if (isPropertyBag(node.expression)) return lowerBagRead(node)
+        instanceOwnerOf(node)?.let { owner ->
+            accessorFor(owner, node.name.text, write = false)?.let { getter ->
+                return scope.irCall(getter).apply { arguments[0] = receiverOf(node) }
+            }
+        }
         runtimeClassOf(node.expression)?.let { owner ->
             val getter = intrinsics.runtimePropertyGetter(owner, node.name.text)
                 ?: refuse(
@@ -2345,13 +2737,47 @@ internal class KirFileLowering(
      */
     private fun resolveField(node: PropertyAccessExpression): IrField {
         val owner = ownerClassOf(node)
-        val declaration = owner.members.filterIsInstance<PropertyDeclaration>()
-            .firstOrNull { (it.name as? Identifier)?.text == node.name.text }
-            ?: refuse(
-                tsFile, node,
-                "class '${owner.name?.text}' declares no property '${node.name.text}'"
-            )
-        return fields.getValue(declaration)
+        // Up the BASE CHAIN: a subclass's method reads a field its base
+        // declares, and looking only at the receiver's own class would report a
+        // property the program plainly has as absent.
+        tables.classChain(owner).forEach { current ->
+            current.members.filterIsInstance<PropertyDeclaration>()
+                .firstOrNull { (it.name as? Identifier)?.text == node.name.text }
+                ?.let { return fields.getValue(it) }
+        }
+        refuse(
+            tsFile, node,
+            "class '${owner.name?.text}' declares no property '${node.name.text}'"
+        )
+    }
+
+    /** The getter or setter [name] resolves to on [owner]'s chain, or null. */
+    private fun accessorFor(
+        owner: ClassDeclaration,
+        name: String,
+        write: Boolean
+    ): IrSimpleFunction? {
+        val table = if (write) tables.setters else tables.getters
+        tables.classChain(owner).forEach { current ->
+            table[current]?.get(name)?.let { return it }
+        }
+        return null
+    }
+
+    /** The class a STATIC member access names — `Counter.total` — or null. */
+    private fun staticOwnerOf(node: PropertyAccessExpression): ClassDeclaration? =
+        classDeclarationOf(node.expression)
+
+    /** [ownerClassOf], but answering null instead of refusing. */
+    private fun instanceOwnerOf(node: PropertyAccessExpression): ClassDeclaration? {
+        val receiver = node.expression
+        if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
+            return frame.ownerClass
+        }
+        val type = facts.typeOf(receiver) ?: return null
+        val symbol = (type as? Type.Object)?.symbol
+        val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
+        return (declaration as? ClassDeclaration)?.takeIf { it in classes }
     }
 
     private fun ownerClassOf(node: PropertyAccessExpression): ClassDeclaration {
@@ -2373,7 +2799,9 @@ internal class KirFileLowering(
 
     private fun receiverOf(node: PropertyAccessExpression): IrExpression {
         val receiver = node.expression
-        if (receiver is Identifier && receiver.text == "this") {
+        // `super.x` reads THIS object; what `super` changes is which member is
+        // selected, and that is the call's `superQualifierSymbol`, not the value.
+        if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
             return frame.thisReceiver?.let { scope.irGet(it) }
                 ?: refuse(tsFile, node, "`this` outside a class member")
         }
@@ -2418,7 +2846,41 @@ internal class KirFileLowering(
      * The one place the decision is taken (§6). Everything else in this class
      * calls it; nothing else inserts a cast.
      */
-    private fun coerce(node: Node, value: IrExpression, target: IrType): IrExpression =
+    private fun coerce(node: Node, value: IrExpression, target: IrType): IrExpression {
+        // A generated class's own hierarchy, which `coercionFor` cannot see: it
+        // decides on classifiers and builtins alone, so `Square` reaching a
+        // `Shape` slot read as two unrelated types. Widening is free; narrowing
+        // is the cast the checker's own narrowing already justified.
+        when (generatedRelation(value.type, target)) {
+            ClassRelation.WIDENS -> return value
+            ClassRelation.NARROWS -> return scope.irAs(value, target)
+            ClassRelation.UNRELATED -> {}
+        }
+        return coerceErased(node, value, target)
+    }
+
+    private enum class ClassRelation { WIDENS, NARROWS, UNRELATED }
+
+    /** How two GENERATED class types relate, if they are both generated. */
+    private fun generatedRelation(from: IrType, target: IrType): ClassRelation {
+        val fromDeclaration = generatedClassOf(from) ?: return ClassRelation.UNRELATED
+        val targetDeclaration = generatedClassOf(target) ?: return ClassRelation.UNRELATED
+        if (fromDeclaration === targetDeclaration) return ClassRelation.UNRELATED
+        if (tables.classChain(fromDeclaration).any { it === targetDeclaration }) {
+            return ClassRelation.WIDENS
+        }
+        if (tables.classChain(targetDeclaration).any { it === fromDeclaration }) {
+            return ClassRelation.NARROWS
+        }
+        return ClassRelation.UNRELATED
+    }
+
+    private fun generatedClassOf(type: IrType): ClassDeclaration? {
+        val classifier = type.classifierOrNull ?: return null
+        return classes.entries.firstOrNull { it.value.symbol == classifier }?.key
+    }
+
+    private fun coerceErased(node: Node, value: IrExpression, target: IrType): IrExpression =
         when (coercionOf(value, target, irBuiltIns)) {
             Coercion.NONE -> value
             Coercion.CAST -> scope.irAs(value, target)

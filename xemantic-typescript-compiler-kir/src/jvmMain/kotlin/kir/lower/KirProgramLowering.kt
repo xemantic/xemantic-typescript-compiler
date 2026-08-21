@@ -71,7 +71,9 @@ internal class KirProgramLowering(
                 if (file === entryFile) "Main.kt" else facades.getValue(file),
             )
         }
+        lowerings.forEach { (_, lowering) -> lowering.declareShells() }
         lowerings.forEach { (_, lowering) -> lowering.declareAll() }
+        lowerings.forEach { (_, lowering) -> lowering.linkOverrides() }
         lowerings.forEach { (file, lowering) ->
             lowering.defineAll()
             if (file !== entryFile) {

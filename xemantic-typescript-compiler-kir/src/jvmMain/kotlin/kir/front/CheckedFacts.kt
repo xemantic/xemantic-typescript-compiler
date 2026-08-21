@@ -31,6 +31,7 @@ import com.xemantic.typescript.compiler.CheckedNodeSink
 import com.xemantic.typescript.compiler.ClassDeclaration
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.FunctionDeclaration
+import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.NewExpression
@@ -38,6 +39,7 @@ import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
+import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Signature
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
@@ -184,6 +186,11 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
             is FunctionDeclaration -> recordSignature(node, node.name, lens)
             is MethodDeclaration -> recordMethodSignature(node, lens)
             is PropertyDeclaration -> recordPropertyType(node, lens)
+            // An accessor pair presents as ONE member on the class's type, and
+            // its type is the getter's result — which is the type the backend
+            // needs and the one place it is stated.
+            is GetAccessor -> recordAccessorType(node, node.name, node.parent, lens)
+            is SetAccessor -> recordAccessorType(node, node.name, node.parent, lens)
             else -> {}
         }
     }
@@ -274,6 +281,13 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
         if (node in declaredMemberTypes) return
         val name = node.name as? Identifier ?: return
         val member = classMember(node.parent, name.text, lens) ?: return
+        declaredMemberTypes[node] = remember(lens.typeOfSymbol(member), lens)
+    }
+
+    private fun recordAccessorType(node: Node, name: Node, container: Node?, lens: CheckedLens) {
+        if (node in declaredMemberTypes) return
+        val memberName = (name as? Identifier)?.text ?: return
+        val member = classMember(container, memberName, lens) ?: return
         declaredMemberTypes[node] = remember(lens.typeOfSymbol(member), lens)
     }
 
