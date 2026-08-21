@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**THE KIR QUEUE — FOUR ITEMS CLOSED, THE FIFTH REDUCED TO ONE DIRECTION (2026-08-21).**
+Five open (KIR.\*) items at the start; four are now checked off and the fifth is
+better specified than it was.
+
+**(KIR.EMIT.2), the smallest and the one that says where a decision belongs.**
+`a + '|' + b` with `b` undefined printed `x|null`. §3.1 puts `undefined` and `null` on one
+JVM value, so `string | undefined` and `string | null` are both `String?` and the RUNTIME
+cannot tell them apart — but the LOWERING still holds the TypeScript type. `asString`, the
+single funnel for `+` and for a template span, now asks whether every nullish member the
+operand admits is `undefined`, and a type admitting BOTH keeps `"null"`: the wrong answer
+is narrowed to the shapes the collapse cannot separate, not swapped for the opposite wrong
+answer. 5 pins.
+
+**(KIR.EMIT.1) — `rewriteRelativeImportExtensions`, at four specifier positions.** The
+post-pass position is the load-bearing decision: the specifier TEXT is also how the
+transformer ASKS the checker about the target module (`isValueExport`, const-enum inlining,
+import elision), so rewriting any earlier asks about a `.js` file the program does not
+contain. mitt's EXTENSIONLESS `./mitt` stays a benchmark expedient because tsgo leaves it
+alone too — rewriting it would be a divergence, not a fix. 10 pins, each condition of the
+population with its own negative control, and the option-OFF control is what shows the
+positives discriminate.
+
+**(KIR.PERF.2) — the regex engine, and it beat its own prediction.** −27.5% against the
+−18% predicted (47.05 → 34.10 us/parse, 2.08x Node → **1.52x**), because two smaller
+members came along: `replace(/_/g,'')` on a literal path and `split` no longer building a
+fresh `Regex(source)` per call (which also silently ignored the expression's flags). The
+design is three decisions, each of which is what makes it an optimisation rather than a
+second semantics: it answers `test` and NOTHING else (the one question on which a DFA's
+leftmost-longest and JavaScript's leftmost-first agree by construction); everything outside
+the subset is REFUSED at compile time and cached as a refusal; and `java.util.regex` stays
+LIVE as the differential oracle. **It found a defect in the oracle rather than in itself** —
+Java's `$` matches before a final line terminator where JavaScript's matches only at the
+end, so `/^\d+$/.test("12\n")` answered `true` here; three of the matcher's first
+differential runs failed on exactly that shape and were right to. 20 pins.
+
+**(KIR.NATIVE.1)(b)+(c) — the native arm, in the gate.** `KIR_BENCH_NATIVE=1` builds both
+libraries through the same `kirNativeCompile`, gates their `sink=` with the other three arms
+and times them in the same interleave; the run prints the arms it ACTUALLY ran rather than a
+fixed count. The regex engine is carried to native verbatim and is worth **−22.5%** there
+(163.30 → 126.55 us/parse, 7.26x → **5.70x**) with mitt flat as the control. **The
+prediction was directionally right and quantitatively over** — it said native should gain
+MORE than the JVM's −27.5% and it gained less — which is what writing a prediction down
+before the run is for. One trap that exits 0: konanc appends `.kexe` to whatever `-o` names.
+
+**(KIR.PERF.1) — not closed, but reduced from three directions to one, by measurement.**
+Censused by OPERATION the bag is 3,333 ops/parse (2,555 `get`, 737 `set` of which 63.5%
+OVERWRITE) at ~4.9 ns each — a row that SURVIVES round 896's division, where its neighbour
+`jsTruthyBooleanOrNull` implied 8.2 ns for `value != null && value` and was refused without
+a build. The new fact is that **the READ side is unimodal**: 93.6% of reads land on a
+three-key bag with interned names, where §2's census (of ALLOCATION) had said bimodal. So
+the most favourable possible scan was built — no promotion, single-shaped `get`, everything
+else cold — and it measured NO EFFECT, as did a `LinkedHashMap` sized to the census.
+**Both looked like small regressions until the baseline was replicated and moved 692 → 735
+ms on the same bytes**; that correction is the round's methodological result and is now in
+`scripts/kir-screen.sh`'s own header. Four designs, no win — which also refuses the guarded
+slot hint the entry used to propose, since its claim was that an indexed compare beats a
+scan that turns out to be LEVEL with a hash probe. Only the nominal half remains.
+
+**GATES.** Suite **15,563 / 0 failures** (KIR module 83 → 108). Both KIR benchmark runs
+passed their equivalence gate before any timing, on all three and then all four arms.
+
 **(KIR.PERF) THE BACKEND, MEASURED FOUR TIMES AND MOVED −17% — AND THE ONE
 DIRECTION THAT LOOKS OBVIOUS IS NOW REFUTED TWICE (2026-08-21).**
 

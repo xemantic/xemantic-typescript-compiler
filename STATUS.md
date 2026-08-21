@@ -1,5 +1,24 @@
 # Status
 
+**THE KIR QUEUE, FOUR OF FIVE ITEMS CLOSED AND THE FIFTH REDUCED TO ONE DIRECTION
+(2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x
+slower than Node down to **1.52x**; on Kotlin/Native **163.30 → 126.55, −22.5%** and 7.26x
+→ **5.70x**. `mitt` is flat on both (61.25 ns/emit, 1.35x FASTER than Node; native 354.75),
+which is the control that says the lever is the one claimed. **(KIR.PERF.2)** is a matcher
+for the REGULAR subset — parse, Thompson NFA, lazy DFA — answering `test` and nothing else,
+REFUSING everything outside the subset, with `java.util.regex` kept live as the differential
+oracle: 16.7x / 13.0x / 3.0x / 3.2x on the four patterns. It found a divergence in the OTHER
+engine on the way (Java's `$` matches before a final line terminator, JavaScript's does not).
+**(KIR.EMIT.1)** implements `rewriteRelativeImportExtensions`, so our ESM output loads on
+Node as emitted; **(KIR.EMIT.2)** renders `undefined` as itself in a string position, decided
+by the LOWERING because the runtime cannot tell §3.1's two collapsed values apart.
+**(KIR.NATIVE.1)(c)** puts the native arm inside `kir-bench.sh`'s own equivalence gate.
+**(KIR.PERF.1)** is the one left, and it is now one direction rather than three: censused by
+OPERATION the bag is 3,333 ops/parse at ~4.9 ns, **93.6% of reads land on a THREE-key bag**,
+and the cleanest scan that population could ask for measured NO EFFECT — a fourth design, no
+win — so the guarded slot hint is refused with it and only the NOMINAL half remains. Suite
+**15,563 / 0 failures**; the KIR module 83 → 108 pins.
+
 **KIR BACKEND PERFORMANCE — `smol-toml` on the JVM is −15.6% and the property bag's
 unit cost is now REFUTED TWICE (2026-08-21).** `scripts/kir-bench.sh` (three arms,
 equivalence gate before any timing) reads **56.60 → 47.05 us/parse**, i.e. 2.49x slower
