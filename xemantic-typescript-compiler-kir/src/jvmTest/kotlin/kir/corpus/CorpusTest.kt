@@ -99,6 +99,11 @@ class CorpusTest {
         assertCorpusProgram("10-closures")
     }
 
+    @Test
+    fun `11 objects`() {
+        assertCorpusProgram("11-objects")
+    }
+
     /**
      * Compiles, runs and compares — failing with the whole story rather than
      * with a boolean.

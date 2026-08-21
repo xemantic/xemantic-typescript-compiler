@@ -81,6 +81,24 @@ internal class KirIntrinsics(
     /** An array literal's constructor: `jsArrayOf(vararg Any?)`. */
     val jsArrayOf: IrSimpleFunctionSymbol by lazy { runtime("jsArrayOf") }
 
+    /** The runtime's property bag — what an interface or object type erases to. */
+    val jsObjectClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsObject")
+    }
+
+    val jsObjectType: IrType by lazy { jsObjectClass.owner.defaultType }
+
+    /** An object literal's constructor: `jsObjectOf(vararg Any?)`, name/value flat. */
+    val jsObjectOf: IrSimpleFunctionSymbol by lazy { runtime("jsObjectOf") }
+
+    val jsObjectGet: IrSimpleFunctionSymbol by lazy {
+        runtimeMember(jsObjectClass, "get", 1) ?: error("JsObject.get is missing")
+    }
+
+    val jsObjectSet: IrSimpleFunctionSymbol by lazy {
+        runtimeMember(jsObjectClass, "set", 2) ?: error("JsObject.set is missing")
+    }
+
     /**
      * The member [name] of a runtime class, selected by ARITY.
      *

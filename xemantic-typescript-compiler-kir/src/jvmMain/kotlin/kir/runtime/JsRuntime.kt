@@ -82,6 +82,7 @@ public fun jsToString(value: Any?): String = when (value) {
     is String -> value
     is Boolean -> if (value) "true" else "false"
     is JsArray -> value.joinToJsString()
+    is JsObject -> "[object Object]"
     else -> value.toString()
 }
 
@@ -279,6 +280,67 @@ public class JsArray private constructor(
         return if (truncated.toDouble() == index) truncated else null
     }
 
+}
+
+/**
+ * A JavaScript object: an ordered bag of named properties.
+ *
+ * This is the DYNAMIC half of `docs/kir-design.md` §3.3's hybrid, and it is
+ * what an interface type, an anonymous object type and an object literal all
+ * erase to. A JavaScript object IS a property bag — reading an absent property
+ * yields `undefined` rather than failing — so modelling one as a generated JVM
+ * class with fields is the optimization, not the faithful thing.
+ *
+ * The price is stated rather than hidden: a property read is a hash lookup, and
+ * a compiled library's surface is not idiomatically callable from Kotlin. Both
+ * are what the nominal half buys back, later, for the targets a whole-program
+ * closure can name (`docs/kir-structural-typing.md` §7).
+ */
+public class JsObject private constructor(
+    private val properties: LinkedHashMap<String, Any?>
+) {
+
+    public constructor() : this(LinkedHashMap())
+
+    /** An absent property is `undefined`, i.e. `null` here — never an error. */
+    public fun get(name: String): Any? = properties[name]
+
+    public fun set(name: String, value: Any?) {
+        properties[name] = value
+    }
+
+    /** `name in object`. */
+    public fun has(name: String): Boolean = properties.containsKey(name)
+
+    /** `delete object.name`, whose result is `true` for a configurable property. */
+    public fun delete(name: String): Boolean {
+        properties.remove(name)
+        return true
+    }
+
+    /** `Object.keys(object)`, in insertion order as JavaScript specifies. */
+    public fun keys(): JsArray = JsArray(properties.keys.toList())
+
+    override fun toString(): String = "[object Object]"
+
+}
+
+/**
+ * An object literal: `{ a: 1, b: "x" }`, as a FLAT name/value sequence.
+ *
+ * Flat rather than a list of pairs because the generated IR would otherwise
+ * have to construct a `kotlin.Pair` per property — a second allocation and a
+ * second symbol to resolve, for a call the lowering makes at every literal.
+ */
+public fun jsObjectOf(vararg entries: Any?): JsObject {
+    require(entries.size % 2 == 0) { "an object literal needs one value per name" }
+    val result = JsObject()
+    var index = 0
+    while (index < entries.size) {
+        result.set(entries[index] as String, entries[index + 1])
+        index += 2
+    }
+    return result
 }
 
 /** An array literal: `[a, b, c]`. */

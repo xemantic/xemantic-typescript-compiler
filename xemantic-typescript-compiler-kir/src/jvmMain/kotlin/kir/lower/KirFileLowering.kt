@@ -56,13 +56,17 @@ import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NonNullExpression
+import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NumericLiteralNode
+import com.xemantic.typescript.compiler.ObjectLiteralExpression
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.ParenthesizedExpression
 import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyAccessExpression
+import com.xemantic.typescript.compiler.PropertyAssignment
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.ReturnStatement
+import com.xemantic.typescript.compiler.ShorthandPropertyAssignment
 import com.xemantic.typescript.compiler.SpreadElement
 import com.xemantic.typescript.compiler.Statement
 import com.xemantic.typescript.compiler.StringLiteralNode
@@ -70,6 +74,7 @@ import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.TypeLiteral
 import com.xemantic.typescript.compiler.TypeOfExpression
 import com.xemantic.typescript.compiler.VariableStatement
 import com.xemantic.typescript.compiler.WhileStatement
@@ -134,6 +139,7 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrWhileLoopImpl
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.createThisReceiverParameter
 import org.jetbrains.kotlin.ir.util.defaultType
@@ -188,7 +194,32 @@ internal class KirFileLowering(
             (declaration as? ClassDeclaration)?.let { classes[it] }
         },
         jsArrayType = { intrinsics.jsArrayType },
+        jsObjectType = { intrinsics.jsObjectType },
+        isOwnStructuralDeclaration = ::isOwnStructuralDeclaration,
     )
+
+    /**
+     * Is this the declaration of a structural type THIS file wrote?
+     *
+     * An `interface`, a `type` alias and a type literal of our own are property
+     * bags; the identically-shaped declarations in a lib `.d.ts` are not, and
+     * telling them apart is what stops `Map` from erasing to an empty bag whose
+     * every member reads `undefined`. The test is the declaration's own root
+     * file, walked through the parents `indexSourceFile` stamped (INV.2(a)).
+     */
+    private fun isOwnStructuralDeclaration(declaration: Node): Boolean {
+        val structural = declaration is InterfaceDeclaration ||
+            declaration is TypeAliasDeclaration ||
+            declaration is TypeLiteral ||
+            declaration is ObjectLiteralExpression
+        if (!structural) return false
+        var node: Node? = declaration
+        while (node != null) {
+            if (node === tsFile) return true
+            node = (node as? NodeBase)?.parent
+        }
+        return false
+    }
 
     // ---- the define pass's walk state --------------------------------------
 
@@ -818,6 +849,7 @@ internal class KirFileLowering(
         is NewExpression -> lowerNew(node)
         is PropertyAccessExpression -> lowerPropertyRead(node)
         is ArrayLiteralExpression -> lowerArrayLiteral(node)
+        is ObjectLiteralExpression -> lowerObjectLiteral(node)
         is ArrowFunction -> lowerFunctionValue(node, node.parameters, node.body)
         is FunctionExpression -> lowerFunctionValue(
             node,
@@ -1029,7 +1061,15 @@ internal class KirFileLowering(
                     coerce(node.right, lowerExpression(node.right), variable.type)
                 )
             }
-            is PropertyAccessExpression -> {
+            is PropertyAccessExpression -> if (isPropertyBag(target.expression)) {
+                scope.irCall(intrinsics.jsObjectSet).apply {
+                    arguments[0] = lowerExpression(target.expression)
+                    arguments[1] = scope.irString(target.name.text)
+                    arguments[2] = coerce(
+                        node.right, lowerExpression(node.right), types.anyNullable
+                    )
+                }
+            } else {
                 val field = resolveField(target)
                 IrSetFieldImpl(
                     UNDEFINED,
@@ -1111,6 +1151,18 @@ internal class KirFileLowering(
                 bindArguments(node, target.parameters, offset = 1)
             }
         }
+        if (callee is PropertyAccessExpression && isPropertyBag(callee.expression)) {
+            // A method of a property bag is a PROPERTY whose value is a
+            // function — read it, then invoke it, exactly as JavaScript does.
+            val arity = node.arguments.size
+            return scope.irCall(intrinsics.invoke(arity), types.anyNullable).apply {
+                arguments[0] = coerce(callee, lowerBagRead(callee), types.function(arity))
+                node.arguments.forEachIndexed { index, argument ->
+                    arguments[index + 1] =
+                        coerce(argument, lowerExpression(argument), types.anyNullable)
+                }
+            }
+        }
         if (callee is PropertyAccessExpression) {
             runtimeClassOf(callee.expression)?.let { owner ->
                 return lowerRuntimeMemberCall(node, callee, owner)
@@ -1189,6 +1241,10 @@ internal class KirFileLowering(
     }
 
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
+        if (node.questionDotToken) {
+            refuse(tsFile, node, "optional chaining `?.` is out of the spike subset")
+        }
+        if (isPropertyBag(node.expression)) return lowerBagRead(node)
         runtimeClassOf(node.expression)?.let { owner ->
             val getter = intrinsics.runtimePropertyGetter(owner, node.name.text)
                 ?: refuse(
@@ -1228,9 +1284,10 @@ internal class KirFileLowering(
      * Kotlin's own closure lowering then does the capturing.
      */
     private fun lowerFunctionValue(
-        node: Expression,
+        node: Node,
         parameters: List<Parameter>,
-        body: Node
+        body: Node,
+        inheritThis: Boolean = true
     ): IrExpression {
         parameters.forEach { parameter ->
             if (parameter.name !is Identifier) {
@@ -1255,7 +1312,9 @@ internal class KirFileLowering(
                 builder.generatedOrigin
             )
         }
-        inFunction(lambda, types.anyNullable, frame.thisReceiver, frame.ownerClass) {
+        val thisReceiver = if (inheritThis) frame.thisReceiver else null
+        val ownerClass = if (inheritThis) frame.ownerClass else null
+        inFunction(lambda, types.anyNullable, thisReceiver, ownerClass) {
             lambda.body = lambdaBody(lambda, parameters, body)
         }
         return IrFunctionExpressionImpl(
@@ -1325,6 +1384,88 @@ internal class KirFileLowering(
             }
         }
     }
+
+    // ---- object literals and property bags ---------------------------------
+
+    /**
+     * `{ a: 1, m() { … } }` — a `jsObjectOf` call, name and value flat.
+     *
+     * A method in an object literal is a PROPERTY whose value is a function,
+     * which is what it is in JavaScript too — so it lowers through the same
+     * path as an arrow, with `this` withheld: JavaScript binds a method's
+     * `this` at the CALL, and inheriting the enclosing frame's receiver would
+     * silently bind the wrong object rather than refuse.
+     */
+    private fun lowerObjectLiteral(node: ObjectLiteralExpression): IrExpression {
+        val entries = mutableListOf<IrExpression>()
+        node.properties.forEach { property ->
+            when (property) {
+                is PropertyAssignment -> {
+                    entries.add(scope.irString(propertyKey(property.name, property)))
+                    entries.add(
+                        coerce(
+                            property.initializer,
+                            lowerExpression(property.initializer),
+                            types.anyNullable
+                        )
+                    )
+                }
+                is ShorthandPropertyAssignment -> {
+                    val name = property.name.text
+                    entries.add(scope.irString(name))
+                    entries.add(
+                        coerce(property.name, lowerExpression(property.name), types.anyNullable)
+                    )
+                }
+                is MethodDeclaration -> {
+                    entries.add(scope.irString(propertyKey(property.name, property)))
+                    val body = property.body
+                        ?: refuse(tsFile, property, "an object-literal method with no body")
+                    entries.add(
+                        lowerFunctionValue(property, property.parameters, body, inheritThis = false)
+                    )
+                }
+                else -> refuse(
+                    tsFile, property,
+                    "this object-literal member is out of the spike subset"
+                )
+            }
+        }
+        return scope.irCall(intrinsics.jsObjectOf).apply {
+            arguments[0] = scope.irVararg(irBuiltIns.anyNType, entries)
+        }
+    }
+
+    private fun propertyKey(name: Node, owner: Node): String = when (name) {
+        is Identifier -> name.text
+        is StringLiteralNode -> name.text
+        is NumericLiteralNode -> numericKey(numericValue(name))
+        else -> refuse(tsFile, owner, "a computed property name is out of the spike subset")
+    }
+
+    /**
+     * A numeric property name, spelled as JavaScript spells it.
+     *
+     * `{ 1: "a" }` has the property `"1"`, not `"1.0"` — every JavaScript key
+     * is a string, and a number reaches that form through `ToString`.
+     */
+    private fun numericKey(value: Double): String =
+        if (value == kotlin.math.floor(value) && !value.isInfinite()) {
+            value.toLong().toString()
+        } else value.toString()
+
+    /** Does this expression's checked type erase to the runtime's property bag? */
+    private fun isPropertyBag(node: Expression): Boolean {
+        val type = facts.typeOf(node) ?: return false
+        val erased = types.map(type) ?: return false
+        return erased.classifierOrNull == intrinsics.jsObjectClass
+    }
+
+    private fun lowerBagRead(node: PropertyAccessExpression): IrExpression =
+        scope.irCall(intrinsics.jsObjectGet, types.anyNullable).apply {
+            arguments[0] = lowerExpression(node.expression)
+            arguments[1] = scope.irString(node.name.text)
+        }
 
     // ---- arrays and other runtime-backed receivers -------------------------
 
