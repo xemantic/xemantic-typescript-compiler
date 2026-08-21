@@ -64,6 +64,23 @@ class ProjectCorpusTest {
         )
     }
 
+    /**
+     * MODULE STATE: three files whose bodies RUN, in dependency order.
+     *
+     * `config.ts` computes a constant by calling a function declared BELOW it,
+     * `report.ts` builds one from `config`'s, and `main.ts` reads both and
+     * mutates a `let` across the module boundary. Every one of those is a fact
+     * about WHEN a module body runs, which is the whole of what this pins.
+     */
+    @Test
+    fun `module state initializes in dependency order`() {
+        assertProject(
+            name = "module-state",
+            files = listOf("tsconfig.json", "src/config.ts", "src/report.ts", "src/main.ts"),
+            entry = "main.ts",
+        )
+    }
+
     private fun assertProject(name: String, files: List<String>, entry: String) {
         val project = Files.createTempDirectory("xtsc-kir-project-$name")
         files.forEach { relative ->

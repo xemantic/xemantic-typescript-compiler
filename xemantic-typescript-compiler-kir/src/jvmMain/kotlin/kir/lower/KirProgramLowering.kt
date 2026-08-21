@@ -28,7 +28,6 @@ package com.xemantic.typescript.compiler.kir.lower
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
-import com.xemantic.typescript.compiler.kir.refuse
 
 /**
  * Lowers a whole checked PROGRAM: every file, then one entry point.
@@ -52,6 +51,8 @@ internal class KirProgramLowering(
     private val files: List<SourceFile>,
     private val entryFile: SourceFile,
     private val packageName: String,
+    /** Resolved (importer, imported) edges — the module INIT order comes from them. */
+    private val importEdges: List<Pair<String, String>> = emptyList(),
 ) {
 
     fun lower() {
@@ -74,19 +75,45 @@ internal class KirProgramLowering(
         lowerings.forEach { (_, lowering) -> lowering.declareShells() }
         lowerings.forEach { (_, lowering) -> lowering.declareAll() }
         lowerings.forEach { (_, lowering) -> lowering.linkOverrides() }
-        lowerings.forEach { (file, lowering) ->
-            lowering.defineAll()
-            if (file !== entryFile) {
-                lowering.executableStatements().firstOrNull()?.let { statement ->
-                    refuse(
-                        file, statement,
-                        "a module body that RUNS is out of the spike subset — only the " +
-                            "entry file's top-level statements are executed"
-                    )
-                }
-            }
+        lowerings.forEach { (_, lowering) -> lowering.defineAll() }
+        // Every file's module init, in DEPENDENCY order, called by one `main`.
+        // JavaScript runs a module's body once, on first import, dependencies
+        // first — so `export const X = compute()` in one file is evaluated
+        // before the file that imports it runs, which is the whole reason the
+        // order is computed rather than taken as the crawl's.
+        val byName = lowerings.associate { (file, lowering) -> file.fileName to lowering }
+        val inits = initializationOrder().mapNotNull { byName.getValue(it).buildModuleInit() }
+        lowerings.single { (file, _) -> file === entryFile }.second.buildEntryPoint(inits)
+    }
+
+    /**
+     * The file names in module-INITIALIZATION order: imports before importers.
+     *
+     * A depth-first post-order over the import graph, with the ENTRY file last.
+     * A cycle is broken at the point it is detected — which is what a JavaScript
+     * engine does too, since one of the two bodies has to run first — rather
+     * than refused, because a module cycle is ordinary in real libraries and
+     * refusing it would refuse the libraries.
+     */
+    private fun initializationOrder(): List<String> {
+        val dependencies = mutableMapOf<String, MutableList<String>>()
+        importEdges.forEach { (importer, imported) ->
+            dependencies.getOrPut(importer) { mutableListOf() }.add(imported)
         }
-        lowerings.single { (file, _) -> file === entryFile }.second.buildEntryPoint()
+        val known = files.map { it.fileName }.toSet()
+        val ordered = mutableListOf<String>()
+        val visiting = mutableSetOf<String>()
+        val done = mutableSetOf<String>()
+        fun visit(name: String) {
+            if (name in done || name !in known || !visiting.add(name)) return
+            dependencies[name]?.forEach { visit(it) }
+            visiting.remove(name)
+            done.add(name)
+            ordered.add(name)
+        }
+        files.filter { it !== entryFile }.forEach { visit(it.fileName) }
+        visit(entryFile.fileName)
+        return ordered
     }
 
     /**

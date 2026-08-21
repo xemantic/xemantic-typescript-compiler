@@ -174,7 +174,13 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
                     ?.let { members[node] = it }
             }
             is Identifier -> if (node !in names) {
-                lens.resolveName(node.text)?.let { names[node] = it }
+                lens.resolveName(node.text)?.let { symbol ->
+                    // An IMPORTED name is recorded as what it NAMES, not as the
+                    // alias: the backend reaches its generated declaration
+                    // through this symbol, and an alias's own declaration is the
+                    // import specifier, which it generated nothing for.
+                    names[node] = lens.aliasTarget(symbol) ?: symbol
+                }
             }
             else -> {}
         }

@@ -44,6 +44,16 @@ public class CheckedProject internal constructor(
     public val files: List<SourceFile>,
     public val facts: CheckedFacts,
     public val diagnostics: List<Diagnostic>,
+    /**
+     * Resolved import edges as (importer, imported), in crawl order.
+     *
+     * The backend needs them for ONE decision the checker never has to take:
+     * the order module bodies run in. JavaScript runs a module's body once, on
+     * first import, dependencies first — so a program whose modules have side
+     * effects (and `export const X = compute()` is one) needs a topological
+     * order, and the crawl already computed the graph it comes from.
+     */
+    public val importEdges: List<Pair<String, String>>,
 ) {
 
     public val errors: List<Diagnostic>
@@ -74,5 +84,5 @@ public fun checkTypeScriptProject(projectPath: String): CheckedProject {
     // check order is an implementation detail.
     val byName = facts.files.associateBy { it.fileName }
     val files = result.programFiles.mapNotNull { byName[it] }
-    return CheckedProject(files, facts, result.diagnostics)
+    return CheckedProject(files, facts, result.diagnostics, result.importEdges)
 }
