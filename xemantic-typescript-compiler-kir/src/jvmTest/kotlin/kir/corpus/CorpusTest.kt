@@ -129,6 +129,16 @@ class CorpusTest {
      * diagnosis. An assertion that only said `false` would send the reader back
      * to a debugger for something the backend already knows.
      */
+    @Test
+    fun `13 operators`() {
+        assertCorpusProgram("13-operators")
+    }
+
+    @Test
+    fun `14 strings`() {
+        assertCorpusProgram("14-strings")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

@@ -163,6 +163,34 @@ internal class KirIntrinsics(
         runtime("jsUnsignedShiftRight")
     }
 
+    val jsLooseEquals: IrSimpleFunctionSymbol by lazy { runtime("jsLooseEquals") }
+
+    /**
+     * A `string` member, as a runtime function taking the receiver first.
+     *
+     * Kotlin's own `String` members are deliberately NOT used: `length` is an
+     * `Int` where JavaScript has a number, `charAt` throws where JavaScript
+     * answers `""`, and `slice` rejects the negative indices JavaScript counts
+     * from the end. Selected by arity, since `slice`/`substring` have a
+     * one-argument and a two-argument form.
+     */
+    fun stringMember(name: String, argumentCount: Int): IrSimpleFunctionSymbol? {
+        val function = STRING_MEMBERS[name] ?: return null
+        return try {
+            builder.referenceFunction(irFile, runtimePackage, function) {
+                it.owner.parameters.size == argumentCount + 1
+            }
+        } catch (_: IllegalStateException) {
+            // The member exists at another arity — a `slice(a, b, c)` say. A
+            // refusal naming the member is the honest answer, and the caller
+            // makes it from the null.
+            null
+        }
+    }
+
+    /** The bitwise operators, each `ToInt32` on both sides and back to a number. */
+    fun bitwise(name: String): IrSimpleFunctionSymbol = runtime(name)
+
     /** The runtime class an erased [type] IS, or null when it is not one. */
     fun runtimeClassOf(type: IrType): IrClassSymbol? = when (type.classifierOrNull) {
         jsArrayClass -> jsArrayClass
@@ -204,6 +232,19 @@ internal class KirIntrinsics(
      * type — a failure that surfaces at class-load time, far from here. Hence
      * the explicit predicate rather than `single()`.
      */
+    /**
+     * A UNARY `Double` operator — one parameter, the dispatch receiver.
+     *
+     * Separate from [doubleOperator] because that one selects by "two
+     * parameters, the second a `Double`", which no unary operator satisfies: it
+     * matched nothing and failed with a candidate list of one, at the first
+     * `-x` the corpus ever contained.
+     */
+    fun doubleUnaryOperator(name: String): IrSimpleFunctionSymbol =
+        builder.referenceMemberFunction(irFile, "kotlin.Double", name) {
+            it.owner.parameters.size == 1
+        }
+
     fun doubleOperator(name: String, doubleType: IrType): IrSimpleFunctionSymbol =
         builder.referenceMemberFunction(irFile, "kotlin.Double", name) {
             it.owner.parameters.size == 2 && it.owner.parameters.last().type == doubleType
@@ -218,6 +259,35 @@ internal class KirIntrinsics(
             "Console.log" -> consoleLog
             else -> null
         }
+
+    private companion object {
+        /**
+         * The `string` members this backend gives a runtime function.
+         *
+         * Everything absent from this table is REFUSED at the call site rather
+         * than routed to Kotlin's same-named member, because "same name" is
+         * exactly what makes the divergences invisible.
+         */
+        val STRING_MEMBERS = mapOf(
+            "length" to "jsStrLength",
+            "charAt" to "jsStrCharAt",
+            "indexOf" to "jsStrIndexOf",
+            "lastIndexOf" to "jsStrLastIndexOf",
+            "includes" to "jsStrIncludes",
+            "startsWith" to "jsStrStartsWith",
+            "endsWith" to "jsStrEndsWith",
+            "slice" to "jsStrSlice",
+            "substring" to "jsStrSubstring",
+            "toUpperCase" to "jsStrToUpperCase",
+            "toLowerCase" to "jsStrToLowerCase",
+            "trim" to "jsStrTrim",
+            "repeat" to "jsStrRepeat",
+            "replace" to "jsStrReplace",
+            "replaceAll" to "jsStrReplaceAll",
+            "split" to "jsStrSplit",
+            "concat" to "jsStrConcat",
+        )
+    }
 
     private fun runtime(name: String): IrSimpleFunctionSymbol =
         builder.referenceFunction(irFile, runtimePackage, name)

@@ -59,11 +59,13 @@ import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NewExpression
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NonNullExpression
+import com.xemantic.typescript.compiler.NoSubstitutionTemplateLiteralNode
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NumericLiteralNode
 import com.xemantic.typescript.compiler.ObjectLiteralExpression
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.ParenthesizedExpression
+import com.xemantic.typescript.compiler.PostfixUnaryExpression
 import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyAssignment
@@ -74,6 +76,7 @@ import com.xemantic.typescript.compiler.SpreadElement
 import com.xemantic.typescript.compiler.Statement
 import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SyntaxKind
+import com.xemantic.typescript.compiler.TemplateExpression
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeFlags
@@ -731,7 +734,7 @@ internal class KirFileLowering(
                 found = true
                 return
             }
-            forEachChild(current) { child -> visit(child); null }
+            forEachChild(current) { child -> visit(child) }
         }
         visit(node)
         return found
@@ -960,18 +963,21 @@ internal class KirFileLowering(
         is Identifier -> lowerIdentifier(node)
         is BinaryExpression -> lowerBinary(node)
         is PrefixUnaryExpression -> lowerPrefix(node)
+        is PostfixUnaryExpression -> when (node.operator) {
+            SyntaxKind.PlusPlus -> lowerIncrement(node, node.operand, 1.0, prefix = false)
+            SyntaxKind.MinusMinus -> lowerIncrement(node, node.operand, -1.0, prefix = false)
+            else -> refuse(tsFile, node, "cannot lower this postfix operator")
+        }
         is ConditionalExpression -> lowerConditional(node)
         is CallExpression -> lowerCall(node)
         is NewExpression -> lowerNew(node)
         is PropertyAccessExpression -> lowerPropertyRead(node)
         is ArrayLiteralExpression -> lowerArrayLiteral(node)
         is ObjectLiteralExpression -> lowerObjectLiteral(node)
+        is NoSubstitutionTemplateLiteralNode -> scope.irString(node.text)
+        is TemplateExpression -> lowerTemplate(node)
         is ArrowFunction -> lowerFunctionValue(node, node.parameters, node.body)
-        is FunctionExpression -> lowerFunctionValue(
-            node,
-            node.parameters,
-            node.body ?: refuse(tsFile, node, "a function expression with no body")
-        )
+        is FunctionExpression -> lowerFunctionValue(node, node.parameters, node.body)
         is ElementAccessExpression -> lowerElementRead(node)
         // `x!` and `x as T` are ERASURES: both leave the value alone and change
         // only what the checker believes about it, and the checker has already
@@ -1011,7 +1017,7 @@ internal class KirFileLowering(
     private fun lowerPrefix(node: PrefixUnaryExpression): IrExpression = when (node.operator) {
         SyntaxKind.Minus -> {
             val operand = coerce(node.operand, lowerExpression(node.operand), types.double)
-            scope.irCall(intrinsics.doubleOperator("unaryMinus", types.double)).apply {
+            scope.irCall(intrinsics.doubleUnaryOperator("unaryMinus")).apply {
                 arguments[0] = operand
             }
         }
@@ -1019,6 +1025,11 @@ internal class KirFileLowering(
             arguments[0] = coerce(node.operand, lowerExpression(node.operand), types.anyNullable)
         }
         SyntaxKind.Exclamation -> not(condition(node.operand))
+        SyntaxKind.Tilde -> scope.irCall(intrinsics.bitwise("jsBitNot"), types.double).apply {
+            arguments[0] = coerce(node.operand, lowerExpression(node.operand), types.anyNullable)
+        }
+        SyntaxKind.PlusPlus -> lowerIncrement(node, node.operand, 1.0, prefix = true)
+        SyntaxKind.MinusMinus -> lowerIncrement(node, node.operand, -1.0, prefix = true)
         else -> refuse(tsFile, node, "cannot lower this unary operator")
     }
 
@@ -1067,10 +1078,21 @@ internal class KirFileLowering(
                         node.right, lowerExpression(node.right), types.anyNullable
                     )
                 }
-            SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals -> refuse(
-                tsFile, node,
-                "`==` / `!=` are out of the spike subset — their coercion is not modelled"
-            )
+            // `==` is ECMAScript ABSTRACT equality and the runtime owns all of
+            // it: `1 == "1"` is true and `null == 0` is false.
+            SyntaxKind.EqualsEquals -> looseEquals(node, negated = false)
+            SyntaxKind.ExclamationEquals -> looseEquals(node, negated = true)
+            SyntaxKind.Ampersand -> bitwise(node, "jsBitAnd")
+            SyntaxKind.Bar -> bitwise(node, "jsBitOr")
+            SyntaxKind.Caret -> bitwise(node, "jsBitXor")
+            SyntaxKind.LessThanLessThan -> bitwise(node, "jsShiftLeft")
+            SyntaxKind.GreaterThanGreaterThan -> bitwise(node, "jsShiftRight")
+            SyntaxKind.PlusEquals, SyntaxKind.MinusEquals, SyntaxKind.AsteriskEquals,
+            SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+            SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
+            SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
+            SyntaxKind.GreaterThanGreaterThanGreaterThanEquals ->
+                lowerCompoundAssignment(node)
             else -> refuse(tsFile, node, "cannot lower this binary operator")
         }
     }
@@ -1086,9 +1108,16 @@ internal class KirFileLowering(
      * and where they genuinely disagree it falls to `jsAdd`, which is §5's own
      * third arm rather than a widening.
      */
-    private fun lowerAddition(node: BinaryExpression): IrExpression {
-        val left = lowerExpression(node.left)
-        val right = lowerExpression(node.right)
+    private fun lowerAddition(node: BinaryExpression): IrExpression =
+        addValues(node.left, lowerExpression(node.left), node.right, lowerExpression(node.right))
+
+    /** `+` over operands that are already lowered — see [lowerAddition]. */
+    private fun addValues(
+        leftNode: Expression,
+        left: IrExpression,
+        rightNode: Expression,
+        right: IrExpression
+    ): IrExpression {
         return when {
             left.type == types.double && right.type == types.double ->
                 scope.irCall(intrinsics.doubleOperator("plus", types.double)).apply {
@@ -1097,12 +1126,12 @@ internal class KirFileLowering(
                 }
             left.type == types.string || right.type == types.string ->
                 scope.irCall(intrinsics.stringPlus).apply {
-                    arguments[0] = asString(node.left, left)
-                    arguments[1] = asString(node.right, right)
+                    arguments[0] = asString(leftNode, left)
+                    arguments[1] = asString(rightNode, right)
                 }
             else -> scope.irCall(intrinsics.jsAdd).apply {
-                arguments[0] = coerce(node.left, left, types.anyNullable)
-                arguments[1] = coerce(node.right, right, types.anyNullable)
+                arguments[0] = coerce(leftNode, left, types.anyNullable)
+                arguments[1] = coerce(rightNode, right, types.anyNullable)
             }
         }
     }
@@ -1121,10 +1150,21 @@ internal class KirFileLowering(
         }
 
     private fun arithmetic(node: BinaryExpression, operator: String): IrExpression =
-        scope.irCall(intrinsics.doubleOperator(operator, types.double)).apply {
-            arguments[0] = coerce(node.left, lowerExpression(node.left), types.double)
-            arguments[1] = coerce(node.right, lowerExpression(node.right), types.double)
-        }
+        arithmeticValues(
+            operator,
+            coerce(node.left, lowerExpression(node.left), types.double),
+            coerce(node.right, lowerExpression(node.right), types.double)
+        )
+
+    /** `-` `*` `/` `%` over operands already lowered AND already `Double`. */
+    private fun arithmeticValues(
+        operator: String,
+        left: IrExpression,
+        right: IrExpression
+    ): IrExpression = scope.irCall(intrinsics.doubleOperator(operator, types.double)).apply {
+        arguments[0] = left
+        arguments[1] = right
+    }
 
     private fun comparison(
         node: BinaryExpression,
@@ -1201,23 +1241,178 @@ internal class KirFileLowering(
         )
     }
 
-    private fun lowerAssignment(node: BinaryExpression): IrExpression {
-        return when (val target = node.left) {
+    /** `==` / `!=` — the runtime's abstract equality, negated in place. */
+    private fun looseEquals(node: BinaryExpression, negated: Boolean): IrExpression {
+        val test = scope.irCall(intrinsics.jsLooseEquals, types.boolean).apply {
+            arguments[0] = coerce(node.left, lowerExpression(node.left), types.anyNullable)
+            arguments[1] = coerce(node.right, lowerExpression(node.right), types.anyNullable)
+        }
+        return if (negated) not(test) else test
+    }
+
+    private fun bitwise(node: BinaryExpression, name: String): IrExpression =
+        scope.irCall(intrinsics.bitwise(name), types.double).apply {
+            arguments[0] = coerce(node.left, lowerExpression(node.left), types.anyNullable)
+            arguments[1] = coerce(node.right, lowerExpression(node.right), types.anyNullable)
+        }
+
+    /**
+     * `a += b` and its family: READ the target, combine, store back.
+     *
+     * The target is read by lowering it a SECOND time, which is only sound
+     * while re-reading it has no side effects of its own — so a target whose
+     * receiver or index is anything but a name, a `this`, or a literal is
+     * refused ([isRepeatableTarget]) rather than evaluated twice. `a[i++] += 1`
+     * is the shape that costs, and it is rare enough to refuse loudly and
+     * common enough to be a genuine bug if it were not.
+     */
+    private fun lowerCompoundAssignment(node: BinaryExpression): IrExpression {
+        val target = node.left
+        if (!isRepeatableTarget(target)) {
+            refuse(
+                tsFile, node,
+                "a compound assignment needs a target that can be read twice — " +
+                    "this one would evaluate its receiver or index a second time"
+            )
+        }
+        return assignTo(target) { type ->
+            val current = lowerExpression(target)
+            val right = lowerExpression(node.right)
+            val combined = when (node.operator) {
+                SyntaxKind.PlusEquals -> addValues(target, current, node.right, right)
+                SyntaxKind.MinusEquals -> numericCombine(node, "minus", current, right)
+                SyntaxKind.AsteriskEquals -> numericCombine(node, "times", current, right)
+                SyntaxKind.SlashEquals -> numericCombine(node, "div", current, right)
+                SyntaxKind.PercentEquals -> numericCombine(node, "rem", current, right)
+                SyntaxKind.AmpersandEquals -> bitwiseCombine(node, "jsBitAnd", current, right)
+                SyntaxKind.BarEquals -> bitwiseCombine(node, "jsBitOr", current, right)
+                SyntaxKind.CaretEquals -> bitwiseCombine(node, "jsBitXor", current, right)
+                SyntaxKind.LessThanLessThanEquals ->
+                    bitwiseCombine(node, "jsShiftLeft", current, right)
+                SyntaxKind.GreaterThanGreaterThanEquals ->
+                    bitwiseCombine(node, "jsShiftRight", current, right)
+                SyntaxKind.GreaterThanGreaterThanGreaterThanEquals ->
+                    bitwiseCombine(node, "jsUnsignedShiftRight", current, right)
+                else -> refuse(tsFile, node, "cannot lower this compound assignment")
+            }
+            coerce(node, combined, type)
+        }
+    }
+
+    private fun numericCombine(
+        node: BinaryExpression,
+        operator: String,
+        left: IrExpression,
+        right: IrExpression
+    ): IrExpression = arithmeticValues(
+        operator,
+        coerce(node.left, left, types.double),
+        coerce(node.right, right, types.double)
+    )
+
+    private fun bitwiseCombine(
+        node: BinaryExpression,
+        name: String,
+        left: IrExpression,
+        right: IrExpression
+    ): IrExpression = scope.irCall(intrinsics.bitwise(name), types.double).apply {
+        arguments[0] = coerce(node.left, left, types.anyNullable)
+        arguments[1] = coerce(node.right, right, types.anyNullable)
+    }
+
+    /**
+     * May this target be lowered twice — once as a read, once as a store?
+     *
+     * A name, a `this`, a chain of those, and an index that is itself one of
+     * them or a literal. Anything else is refused, because "evaluate it twice"
+     * and "evaluate it once" differ exactly where a program would notice.
+     */
+    private fun isRepeatableTarget(target: Expression): Boolean = when (target) {
+        is Identifier -> true
+        is PropertyAccessExpression -> isRepeatableTarget(target.expression)
+        is ElementAccessExpression -> isRepeatableTarget(target.expression) &&
+            (target.argumentExpression is Identifier ||
+                target.argumentExpression is NumericLiteralNode ||
+                target.argumentExpression is StringLiteralNode)
+        else -> false
+    }
+
+    /**
+     * `++x` / `x++` / `--x` / `x--`, as a BLOCK that yields the right value.
+     *
+     * A block rather than an assignment because the two forms differ in what
+     * they EVALUATE TO — the new value and the old one — and because an
+     * `IrSetValue` yields `Unit`, so neither form could be used as an
+     * expression without one. In statement position the block costs a
+     * temporary the JVM's own optimizer removes.
+     */
+    private fun lowerIncrement(
+        node: Expression,
+        target: Expression,
+        increment: Double,
+        prefix: Boolean
+    ): IrExpression {
+        if (!isRepeatableTarget(target)) {
+            refuse(tsFile, node, "`++`/`--` needs a target that can be read twice")
+        }
+        val old = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier("tmp\$operand"),
+            types.double,
+            isVar = false,
+        )
+        old.initializer = coerce(target, lowerExpression(target), types.double)
+        val updated = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier("tmp\$updated"),
+            types.double,
+            isVar = false,
+        )
+        updated.initializer = arithmeticValues(
+            "plus",
+            scope.irGet(old),
+            scope.irDouble(increment)
+        )
+        val store = assignTo(target) { type -> coerce(node, scope.irGet(updated), type) }
+        return IrBlockImpl(
+            UNDEFINED,
+            UNDEFINED,
+            types.double,
+            null,
+            listOf(old, updated, store, scope.irGet(if (prefix) updated else old))
+        )
+    }
+
+    private fun lowerAssignment(node: BinaryExpression): IrExpression =
+        assignTo(node.left) { type -> coerce(node.right, lowerExpression(node.right), type) }
+
+    /**
+     * Stores into an assignment TARGET, whatever shape it has.
+     *
+     * The value is a function of the target's erased type rather than an
+     * expression, because that type is only known once the target has been
+     * classified — a field wants the field's type, a property bag and an array
+     * element want `Any?`, a local wants its own — and coercing afterwards would
+     * mean lowering the value before knowing what it must become.
+     */
+    private fun assignTo(target: Expression, value: (IrType) -> IrExpression): IrExpression =
+        when (target) {
             is Identifier -> {
                 val variable = lookup(target.text)
                     ?: refuse(tsFile, target, "cannot assign to '${target.text}'")
-                scope.irSet(
-                    variable,
-                    coerce(node.right, lowerExpression(node.right), variable.type)
-                )
+                scope.irSet(variable, value(variable.type))
             }
             is PropertyAccessExpression -> if (isPropertyBag(target.expression)) {
                 scope.irCall(intrinsics.jsObjectSet).apply {
                     arguments[0] = lowerExpression(target.expression)
                     arguments[1] = scope.irString(target.name.text)
-                    arguments[2] = coerce(
-                        node.right, lowerExpression(node.right), types.anyNullable
-                    )
+                    arguments[2] = value(types.anyNullable)
                 }
             } else {
                 val field = resolveField(target)
@@ -1226,7 +1421,7 @@ internal class KirFileLowering(
                     UNDEFINED,
                     field.symbol,
                     receiverOf(target),
-                    coerce(node.right, lowerExpression(node.right), field.type),
+                    value(field.type),
                     irBuiltIns.unitType,
                     null,
                     null
@@ -1240,14 +1435,11 @@ internal class KirFileLowering(
                 scope.irCall(set).apply {
                     arguments[0] = lowerExpression(target.expression)
                     arguments[1] = elementIndex(target)
-                    arguments[2] = coerce(
-                        node.right, lowerExpression(node.right), types.anyNullable
-                    )
+                    arguments[2] = value(types.anyNullable)
                 }
             }
-            else -> refuse(tsFile, node, "cannot lower this assignment target")
+            else -> refuse(tsFile, target, "cannot lower this assignment target")
         }
-    }
 
     /**
      * `typeof x === "…"`, recognized as a PATTERN on the whole comparison and
@@ -1318,6 +1510,22 @@ internal class KirFileLowering(
                     irBuiltIns.anyNType,
                     node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
                 )
+            }
+        }
+        if (callee is PropertyAccessExpression && isStringReceiver(callee.expression)) {
+            val target = intrinsics.stringMember(callee.name.text, node.arguments.size)
+                ?: refuse(
+                    tsFile, node,
+                    "'String.${callee.name.text}' with ${node.arguments.size} argument(s) is " +
+                        "not a member this backend gives a runtime function"
+                )
+            return scope.irCall(target).apply {
+                arguments[0] = lowerExpression(callee.expression)
+                val regular = target.owner.parameters.filter { it.kind == IrParameterKind.Regular }
+                node.arguments.forEachIndexed { index, argument ->
+                    arguments[index + 1] =
+                        coerce(argument, lowerExpression(argument), regular[index + 1].type)
+                }
             }
         }
         if (callee is PropertyAccessExpression) {
@@ -1433,6 +1641,15 @@ internal class KirFileLowering(
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
         if (node.questionDotToken) {
             refuse(tsFile, node, "optional chaining `?.` is out of the spike subset")
+        }
+        if (isStringReceiver(node.expression)) {
+            val target = intrinsics.stringMember(node.name.text, 0)
+                ?: refuse(
+                    tsFile, node,
+                    "'String.${node.name.text}' is not a property this backend gives a " +
+                        "runtime function"
+                )
+            return scope.irCall(target).apply { arguments[0] = lowerExpression(node.expression) }
         }
         if (isPropertyBag(node.expression)) return lowerBagRead(node)
         runtimeClassOf(node.expression)?.let { owner ->
@@ -1675,6 +1892,39 @@ internal class KirFileLowering(
         if (value == kotlin.math.floor(value) && !value.isInfinite()) {
             value.toLong().toString()
         } else value.toString()
+
+    /**
+     * `` `a${b}c` `` — a left-to-right fold of `String.plus`.
+     *
+     * Each substitution goes through the runtime's `ToString` for the same
+     * reason `+` does: `Double.toString` prints `1.0` where JavaScript prints
+     * `1`, and a template is the one place a program's output is MADE of that
+     * conversion.
+     */
+    private fun lowerTemplate(node: TemplateExpression): IrExpression {
+        var result: IrExpression = scope.irString(node.head.text)
+        for (span in node.templateSpans) {
+            result = scope.irCall(intrinsics.stringPlus).apply {
+                arguments[0] = result
+                arguments[1] = asString(span.expression, lowerExpression(span.expression))
+            }
+            val literal = (span.literal as? StringLiteralNode)?.text
+                ?: refuse(tsFile, span, "cannot lower this template span")
+            if (literal.isNotEmpty()) {
+                result = scope.irCall(intrinsics.stringPlus).apply {
+                    arguments[0] = result
+                    arguments[1] = scope.irString(literal)
+                }
+            }
+        }
+        return result
+    }
+
+    /** Does this expression's checked type erase to a `String`? */
+    private fun isStringReceiver(node: Expression): Boolean {
+        val type = facts.typeOf(node) ?: return false
+        return types.map(type) == types.string
+    }
 
     /** Does this expression's checked type erase to the runtime's property bag? */
     private fun isPropertyBag(node: Expression): Boolean {
