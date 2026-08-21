@@ -140,6 +140,7 @@ import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.types.makeNullable
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.createThisReceiverParameter
 import org.jetbrains.kotlin.ir.util.defaultType
@@ -188,6 +189,17 @@ internal class KirFileLowering(
     private val constructorsByDeclaration = IdentityHashMap<ClassDeclaration, IrConstructor>()
     private val fields = IdentityHashMap<PropertyDeclaration, IrField>()
 
+    /**
+     * The IR parameters a call site may leave out.
+     *
+     * Nothing on an `IrValueParameter` records that, and the erased type does
+     * not imply it either, so it is remembered at declaration and consulted at
+     * every call.
+     */
+    private val optionalParameters = java.util.Collections.newSetFromMap(
+        IdentityHashMap<IrValueParameter, Boolean>()
+    )
+
     private val types = ErasedTypes(
         irBuiltIns,
         classForDeclaration = { declaration ->
@@ -195,6 +207,7 @@ internal class KirFileLowering(
         },
         jsArrayType = { intrinsics.jsArrayType },
         jsObjectType = { intrinsics.jsObjectType },
+        libraryType = { name -> intrinsics.libraryClass(name)?.owner?.defaultType },
         isOwnStructuralDeclaration = ::isOwnStructuralDeclaration,
     )
 
@@ -428,6 +441,17 @@ internal class KirFileLowering(
             isHidden = false,
         ).also { it.parent = function }
 
+    /**
+     * Declares the IR parameters, remembering which ones are OPTIONAL.
+     *
+     * An optional parameter's erased type is forced NULLABLE, whatever the
+     * checker made of it — measured, an `all?: EventHandlerMap<Events>` types
+     * as the `Map` alone, so trusting the erasure would produce a non-null slot
+     * that a call site omitting the argument must then fill with null. The
+     * omission itself is legal and is filled at the call site ([bindArguments]),
+     * which is why the set is remembered rather than re-derived: nothing about
+     * the IR parameter says it may be left out.
+     */
     private fun addParameters(function: IrFunction, parameters: List<Parameter>) {
         for (parameter in parameters) {
             val name = parameter.name as? Identifier
@@ -435,16 +459,16 @@ internal class KirFileLowering(
             if (parameter.dotDotDotToken) {
                 refuse(tsFile, parameter, "rest parameters are out of the spike subset")
             }
-            if (parameter.initializer != null) {
-                refuse(tsFile, parameter, "default parameter values are out of the spike subset")
-            }
             val type = facts.typeOf(parameter)
                 ?: refuse(tsFile, parameter, "the checker gave no type for parameter '${name.text}'")
-            function.addValueParameter(
+            val optional = parameter.questionToken || parameter.initializer != null
+            val erased = erase(parameter, type).let { if (optional) it.makeNullable() else it }
+            val irParameter = function.addValueParameter(
                 kotlinName(name.text),
-                erase(parameter, type),
+                erased,
                 builder.generatedOrigin
             )
+            if (optional) optionalParameters.add(irParameter)
         }
     }
 
@@ -480,7 +504,7 @@ internal class KirFileLowering(
         val function = functions.getValue(declaration)
         val body = declaration.body ?: return
         inFunction(function, function.returnType, null, null) {
-            function.body = blockBody(function, declaration.parameters, body.statements)
+            function.body = blockBody(function, declaration.parameters, body.statements, body)
         }
     }
 
@@ -497,7 +521,7 @@ internal class KirFileLowering(
                         function.parameters.first(),
                         declaration
                     ) {
-                        function.body = blockBody(function, member.parameters, body.statements)
+                        function.body = blockBody(function, member.parameters, body.statements, body)
                     }
                 }
                 else -> {}
@@ -535,7 +559,7 @@ internal class KirFileLowering(
                 )
             )
             scopes.addLast(HashMap())
-            tsConstructor?.let { bindParameters(constructor, it.parameters) }
+            tsConstructor?.let { bindParameters(constructor, it.parameters, it.body, statements) }
             tsConstructor?.body?.statements?.forEach { lowerStatement(it, statements) }
             scopes.removeLast()
             constructor.body = blockBodyOf(statements)
@@ -594,11 +618,12 @@ internal class KirFileLowering(
     private fun blockBody(
         function: IrFunction,
         parameters: List<Parameter>,
-        statements: List<Statement>
+        statements: List<Statement>,
+        body: Node? = null
     ): org.jetbrains.kotlin.ir.expressions.IrBlockBody {
         val lowered = mutableListOf<IrStatement>()
         scopes.addLast(HashMap())
-        bindParameters(function, parameters)
+        bindParameters(function, parameters, body, lowered)
         statements.forEach { lowerStatement(it, lowered) }
         scopes.removeLast()
         return blockBodyOf(lowered)
@@ -612,14 +637,92 @@ internal class KirFileLowering(
             this.statements.addAll(statements)
         }
 
-    private fun bindParameters(function: IrFunction, parameters: List<Parameter>) {
-        val valueParameters = function.parameters.filter {
-            it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular
-        }
+    /**
+     * Binds each parameter's name, aliasing the ASSIGNED ones to a local.
+     *
+     * TypeScript lets a function assign to its own parameter — `all = all ||
+     * new Map()` is the first line of mitt — and a JVM parameter is not a
+     * variable an `IrSetValue` may target. So a parameter the body writes to
+     * gets a mutable local initialized from it, and the name binds to that; one
+     * the body only reads binds to the parameter itself and costs nothing.
+     *
+     * The scan is deliberately conservative: a same-named assignment in a
+     * nested shadowing scope makes an alias nothing writes to, which is one
+     * dead local, where missing an assignment would be invalid IR.
+     */
+    private fun bindParameters(
+        function: IrFunction,
+        parameters: List<Parameter>,
+        body: Node?,
+        out: MutableList<IrStatement>
+    ) {
+        val valueParameters = function.parameters.filter { it.kind == IrParameterKind.Regular }
         parameters.forEachIndexed { index, parameter ->
             val name = parameter.name as? Identifier ?: return@forEachIndexed
-            scopes.last()[name.text] = valueParameters[index]
+            val irParameter = valueParameters[index]
+            val default = parameter.initializer
+            if (default != null) {
+                // `function f(x = 5)`: the default is the body's first act, not
+                // the caller's — an omitted argument arrives as null and is
+                // replaced here, which is where JavaScript replaces it too.
+                val local = buildVariable(
+                    frame.irFunction as IrDeclarationParent,
+                    UNDEFINED,
+                    UNDEFINED,
+                    builder.generatedOrigin,
+                    Name.identifier(kotlinName(name.text)),
+                    irParameter.type,
+                    isVar = true,
+                )
+                local.initializer = scope.irWhen(
+                    irParameter.type,
+                    listOf(
+                        scope.irBranch(
+                            scope.irEqualsNull(scope.irGet(irParameter)),
+                            coerce(default, lowerExpression(default), irParameter.type)
+                        ),
+                        scope.irElseBranch(scope.irGet(irParameter))
+                    )
+                )
+                out.add(local)
+                scopes.last()[name.text] = local
+                return@forEachIndexed
+            }
+            if (body == null || !assignsTo(body, name.text)) {
+                scopes.last()[name.text] = irParameter
+                return@forEachIndexed
+            }
+            val local = buildVariable(
+                frame.irFunction as IrDeclarationParent,
+                UNDEFINED,
+                UNDEFINED,
+                builder.generatedOrigin,
+                Name.identifier(kotlinName(name.text)),
+                irParameter.type,
+                isVar = true,
+            )
+            local.initializer = scope.irGet(irParameter)
+            out.add(local)
+            scopes.last()[name.text] = local
         }
+    }
+
+    /** Does [node]'s subtree assign to the free name [name]? */
+    private fun assignsTo(node: Node, name: String): Boolean {
+        var found = false
+        fun visit(current: Node) {
+            if (found) return
+            if (current is BinaryExpression &&
+                current.operator == SyntaxKind.Equals &&
+                (current.left as? Identifier)?.text == name
+            ) {
+                found = true
+                return
+            }
+            forEachChild(current) { child -> visit(child); null }
+        }
+        visit(node)
+        return found
     }
 
     // ---- statements --------------------------------------------------------
@@ -942,6 +1045,15 @@ internal class KirFileLowering(
             SyntaxKind.EqualsEqualsEquals -> strictEquals(node, negated = false)
             SyntaxKind.ExclamationEqualsEquals -> strictEquals(node, negated = true)
             SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar -> shortCircuit(node)
+            SyntaxKind.GreaterThanGreaterThanGreaterThan ->
+                scope.irCall(intrinsics.jsUnsignedShiftRight, types.double).apply {
+                    arguments[0] = coerce(
+                        node.left, lowerExpression(node.left), types.anyNullable
+                    )
+                    arguments[1] = coerce(
+                        node.right, lowerExpression(node.right), types.anyNullable
+                    )
+                }
             SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals -> refuse(
                 tsFile, node,
                 "`==` / `!=` are out of the spike subset — their coercion is not modelled"
@@ -1031,24 +1143,49 @@ internal class KirFileLowering(
      * rather than a boolean — so the branches keep their own values and the
      * result is typed at the erasure of the whole expression.
      */
+    /**
+     * `a && b` / `a || b`, whose result is an OPERAND and not a boolean.
+     *
+     * The left operand is evaluated ONCE into a temporary, because it is both
+     * the test and a possible result. Reusing one lowered expression node in
+     * two places is invalid IR — "Duplicate IR node" — which nothing catches
+     * without `-Xverify-ir`, so the temporary is not a style choice.
+     *
+     * The temporary keeps the LEFT's own erased type rather than the result's,
+     * and the coercion to the result type happens INSIDE the branch that
+     * returns it. `all || new Map()` is why: `all` is `JsMap?` and the result
+     * is `JsMap`, so coercing before the test would cast a null to a non-null
+     * type and throw exactly where JavaScript takes the other branch.
+     */
     private fun shortCircuit(node: BinaryExpression): IrExpression {
         val type = erase(node, facts.typeOf(node)
             ?: refuse(tsFile, node, "the checker gave no type for this expression"))
-        val left = lowerExpression(node.left)
+        val leftValue = lowerExpression(node.left)
+        val temporary = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier("tmp\$operand"),
+            leftValue.type,
+            isVar = false,
+        )
+        temporary.initializer = leftValue
+        val kept = { coerce(node.left, scope.irGet(temporary), type) }
         val right = coerce(node.right, lowerExpression(node.right), type)
-        val leftValue = coerce(node.left, left, type)
-        val test = truthy(leftValue)
-        return if (node.operator == SyntaxKind.AmpersandAmpersand) {
-            scope.irWhen(
-                type,
-                listOf(scope.irBranch(test, right), scope.irElseBranch(coerce(node.left, left, type)))
-            )
+        val test = truthy(scope.irGet(temporary))
+        val branches = if (node.operator == SyntaxKind.AmpersandAmpersand) {
+            listOf(scope.irBranch(test, right), scope.irElseBranch(kept()))
         } else {
-            scope.irWhen(
-                type,
-                listOf(scope.irBranch(test, coerce(node.left, left, type)), scope.irElseBranch(right))
-            )
+            listOf(scope.irBranch(test, kept()), scope.irElseBranch(right))
         }
+        return IrBlockImpl(
+            UNDEFINED,
+            UNDEFINED,
+            type,
+            null,
+            listOf(temporary, scope.irWhen(type, branches))
+        )
     }
 
     private fun lowerAssignment(node: BinaryExpression): IrExpression {
@@ -1153,14 +1290,21 @@ internal class KirFileLowering(
         }
         if (callee is PropertyAccessExpression && isPropertyBag(callee.expression)) {
             // A method of a property bag is a PROPERTY whose value is a
-            // function — read it, then invoke it, exactly as JavaScript does.
-            val arity = node.arguments.size
-            return scope.irCall(intrinsics.invoke(arity), types.anyNullable).apply {
-                arguments[0] = coerce(callee, lowerBagRead(callee), types.function(arity))
-                node.arguments.forEachIndexed { index, argument ->
-                    arguments[index + 1] =
-                        coerce(argument, lowerExpression(argument), types.anyNullable)
-                }
+            // function — read it, then call it, exactly as JavaScript does.
+            //
+            // Through `jsCall` rather than a direct `invoke`, because the
+            // property's value has whatever arity its DECLARATION had while the
+            // call site supplies whatever TypeScript's optional parameters
+            // allow: mitt's `off(type, handler?)` is a `Function2` called with
+            // one argument. JavaScript pads the missing one with `undefined`,
+            // and doing so here is the difference between running that library
+            // and refusing it.
+            return scope.irCall(intrinsics.jsCall, types.anyNullable).apply {
+                arguments[0] = coerce(callee, lowerBagRead(callee), types.anyNullable)
+                arguments[1] = scope.irVararg(
+                    irBuiltIns.anyNType,
+                    node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+                )
             }
         }
         if (callee is PropertyAccessExpression) {
@@ -1179,6 +1323,15 @@ internal class KirFileLowering(
         if (callee !is PropertyAccessExpression) {
             facts.typeOf(callee)?.let { types.map(it) }?.let { types.functionArity(it) }
                 ?.let { arity -> return lowerFunctionValueCall(node, arity) }
+            // A callee whose erasure did not say its arity, but which the
+            // checker says IS callable: a union of function types, whose two
+            // sides are a `Function1` and a `Function2` and have no single
+            // erasure. JavaScript calls either with whatever the site supplies,
+            // so the runtime performs that adaptation rather than the lowering
+            // refusing the shape at the centre of most callback code.
+            facts.typeOf(callee)?.takeIf { isCallableType(it) }?.let {
+                return lowerDynamicCall(node)
+            }
         }
         refuse(
             tsFile, node,
@@ -1214,6 +1367,26 @@ internal class KirFileLowering(
     }
 
     private fun lowerNew(node: NewExpression): IrExpression {
+        // `new Map()` — a library type this backend gives a runtime class.
+        facts.typeOf(node)?.let { types.map(it) }?.let { intrinsics.runtimeClassOf(it) }
+            ?.let { owner ->
+                if (node.arguments?.isNotEmpty() == true) {
+                    refuse(
+                        tsFile, node,
+                        "`new ${owner.owner.name.asString()}` takes no arguments in this backend"
+                    )
+                }
+                val constructor = intrinsics.runtimeConstructor(owner)
+                    ?: refuse(tsFile, node, "this runtime class has no no-argument constructor")
+                return IrConstructorCallImpl(
+                    UNDEFINED,
+                    UNDEFINED,
+                    owner.owner.defaultType,
+                    constructor,
+                    typeArgumentsCount = 0,
+                    constructorTypeArgumentsCount = 0,
+                )
+            }
         val signature = facts.constructionAt(node)
             ?: refuse(tsFile, node, "the checker resolved no constructor for this `new`")
         val owner = (signature.declaration as? Constructor)?.parent as? ClassDeclaration
@@ -1261,6 +1434,37 @@ internal class KirFileLowering(
             UNDEFINED, UNDEFINED, field.symbol, field.type, receiverOf(node), null, null
         )
     }
+
+    /**
+     * Is this a type the checker would let a program CALL?
+     *
+     * A union counts only when every member is callable — anything less is a
+     * call the checker itself rejects, so the question never arises. `any` and
+     * `unknown` count too, and that is a deliberate widening of §8's "refuse
+     * rather than pretend": a call on `any` is dynamic in TypeScript as well,
+     * and `jsCall` reproduces what a JS engine does with it, including throwing
+     * a TypeError when the value turns out not to be a function. Refusing here
+     * would refuse what `docs/kir-structural-typing.md` §7 measured as the
+     * LARGEST dynamic population in real TypeScript.
+     */
+    private fun isCallableType(type: Type): Boolean = when {
+        type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) -> true
+        type is Type.Union -> type.types.isNotEmpty() && type.types.all { isCallableType(it) }
+        type is Type.Object -> type.callSignatures?.isNotEmpty() == true
+        else -> false
+    }
+
+    /** `jsCall(callee, …)` — the arity-adapting call JavaScript performs. */
+    private fun lowerDynamicCall(node: CallExpression): IrExpression =
+        scope.irCall(intrinsics.jsCall, types.anyNullable).apply {
+            arguments[0] = coerce(
+                node.expression, lowerExpression(node.expression), types.anyNullable
+            )
+            arguments[1] = scope.irVararg(
+                irBuiltIns.anyNType,
+                node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+            )
+        }
 
     // ---- function values ---------------------------------------------------
 
@@ -1342,7 +1546,7 @@ internal class KirFileLowering(
         if (body is Block) {
             val lowered = mutableListOf<IrStatement>()
             scopes.addLast(HashMap())
-            bindParameters(lambda, parameters)
+            bindParameters(lambda, parameters, body, lowered)
             body.statements.forEach { lowerStatement(it, lowered) }
             scopes.removeLast()
             if (body.statements.lastOrNull() !is ReturnStatement) {
@@ -1353,10 +1557,11 @@ internal class KirFileLowering(
         val expression = body as? Expression
             ?: refuse(tsFile, body, "cannot lower this function body")
         scopes.addLast(HashMap())
-        bindParameters(lambda, parameters)
+        val prologue = mutableListOf<IrStatement>()
+        bindParameters(lambda, parameters, expression, prologue)
         val value = coerce(expression, lowerExpression(expression), types.anyNullable)
         scopes.removeLast()
-        return blockBodyOf(listOf(scope.irReturn(value)))
+        return blockBodyOf(prologue + scope.irReturn(value))
     }
 
     /**
@@ -1618,18 +1823,28 @@ internal class KirFileLowering(
         parameters: List<IrValueParameter>,
         offset: Int
     ) {
-        val regular = parameters.filter {
-            it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular
-        }
-        if (node.arguments.size != regular.size) {
+        val regular = parameters.filter { it.kind == IrParameterKind.Regular }
+        if (node.arguments.size > regular.size) {
             refuse(
                 tsFile, node,
                 "expected ${regular.size} argument(s) but found ${node.arguments.size}"
             )
         }
-        node.arguments.forEachIndexed { index, argument ->
-            arguments[offset + index] =
-                coerce(argument, lowerExpression(argument), regular[index].type)
+        regular.forEachIndexed { index, parameter ->
+            val argument = node.arguments.getOrNull(index)
+            arguments[offset + index] = if (argument != null) {
+                coerce(argument, lowerExpression(argument), parameter.type)
+            } else if (parameter in optionalParameters) {
+                // An omitted optional argument is `undefined`, which §3.1 maps
+                // to `null` — and the parameter's type was made nullable to
+                // hold one.
+                scope.irNull()
+            } else {
+                refuse(
+                    tsFile, node,
+                    "expected ${regular.size} argument(s) but found ${node.arguments.size}"
+                )
+            }
         }
     }
 

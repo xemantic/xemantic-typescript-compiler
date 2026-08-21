@@ -28,11 +28,13 @@
 package com.xemantic.typescript.compiler.kir.lower
 
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
+import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrProperty
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
+import org.jetbrains.kotlin.ir.symbols.IrConstructorSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
@@ -132,9 +134,49 @@ internal class KirIntrinsics(
         owner.owner.declarations.filterIsInstance<IrProperty>()
             .firstOrNull { it.name.asString() == name }?.getter?.symbol
 
+    /**
+     * The runtime classes a LIBRARY type erases to, by the library type's name.
+     *
+     * Deliberately a short, explicit table. Every other lib type answers null
+     * and is refused, because a lib type silently erased to something shaped
+     * roughly like it is exactly the failure `docs/kir-lowering.md` §8 forbids.
+     */
+    fun libraryClass(name: String): IrClassSymbol? = when (name) {
+        "Array", "ReadonlyArray" -> jsArrayClass
+        "Map", "ReadonlyMap", "WeakMap" -> jsMapClass
+        "Set", "ReadonlySet", "WeakSet" -> jsSetClass
+        else -> null
+    }
+
+    val jsMapClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsMap")
+    }
+
+    val jsSetClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsSet")
+    }
+
+    /** A call of a value whose erasure did not say its arity — `jsCall(f, …)`. */
+    val jsCall: IrSimpleFunctionSymbol by lazy { runtime("jsCall") }
+
+    val jsUnsignedShiftRight: IrSimpleFunctionSymbol by lazy {
+        runtime("jsUnsignedShiftRight")
+    }
+
     /** The runtime class an erased [type] IS, or null when it is not one. */
-    fun runtimeClassOf(type: IrType): IrClassSymbol? =
-        if (type.classifierOrNull == jsArrayClass) jsArrayClass else null
+    fun runtimeClassOf(type: IrType): IrClassSymbol? = when (type.classifierOrNull) {
+        jsArrayClass -> jsArrayClass
+        jsMapClass -> jsMapClass
+        jsSetClass -> jsSetClass
+        else -> null
+    }
+
+    /** The no-argument constructor of a runtime class — `new Map()`. */
+    fun runtimeConstructor(owner: IrClassSymbol): IrConstructorSymbol? =
+        owner.owner.declarations.filterIsInstance<IrConstructor>()
+            .firstOrNull { constructor ->
+                constructor.parameters.none { it.kind == IrParameterKind.Regular }
+            }?.symbol
 
     /**
      * `FunctionN.invoke` — how a call of a function VALUE reaches its target.

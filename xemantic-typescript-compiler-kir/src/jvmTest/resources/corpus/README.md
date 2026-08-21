@@ -17,6 +17,8 @@ debugger.
 | 08 | `T \| undefined` erasing to `T?` rather than `Any`, and `=== undefined` |
 | 09 | ARRAYS: `T[]` erasing to the runtime `JsArray`, array literals, index read and write, an out-of-range read, and members reached by the receiver's ERASED type (`push`/`pop`/`join`/`indexOf`/`length`) |
 | 10 | CLOSURES: an arrow as a value, a function-typed parameter, a captured parameter, a captured mutable local, and `Array.map` with a callback |
+| 11 | OBJECT LITERALS and interfaces: the property-bag erasure, shorthand and method properties, a member write |
+| 12 | **mitt 3.0.1, a real published library**, source unmodified plus a driver — see `CorpusTest` |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
