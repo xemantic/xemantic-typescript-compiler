@@ -76,6 +76,15 @@ internal class KirIntrinsics(
     val jsTruthy: IrSimpleFunctionSymbol by lazy { runtime("jsTruthy") }
     val jsTruthyNumber: IrSimpleFunctionSymbol by lazy { runtime("jsTruthyNumber") }
     val jsTruthyString: IrSimpleFunctionSymbol by lazy { runtime("jsTruthyString") }
+    val jsTruthyNumberOrNull: IrSimpleFunctionSymbol by lazy {
+        runtime("jsTruthyNumberOrNull")
+    }
+    val jsTruthyStringOrNull: IrSimpleFunctionSymbol by lazy {
+        runtime("jsTruthyStringOrNull")
+    }
+    val jsTruthyBooleanOrNull: IrSimpleFunctionSymbol by lazy {
+        runtime("jsTruthyBooleanOrNull")
+    }
     val jsStrictEquals: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEquals") }
 
     /**

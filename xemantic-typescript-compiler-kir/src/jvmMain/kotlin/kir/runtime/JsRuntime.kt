@@ -207,6 +207,24 @@ public fun jsTruthyNumber(value: Double): Boolean = value != 0.0 && !value.isNaN
 public fun jsTruthyString(value: String): Boolean = value.isNotEmpty()
 
 /**
+ * Truthiness of an OPTIONAL primitive — `number | undefined` and its siblings.
+ *
+ * A missing value is falsy, which is the arm [jsTruthy] reaches through `null`.
+ * These exist for the same reason as the non-null forms and one step further
+ * out: an optional parameter tested once per character (`!banNewLines` in a
+ * scanner) is a `Boolean?` at the JVM level, so the general form walked its
+ * whole chain to answer a null check.
+ */
+public fun jsTruthyNumberOrNull(value: Double?): Boolean =
+    value != null && jsTruthyNumber(value)
+
+/** See [jsTruthyNumberOrNull]. */
+public fun jsTruthyStringOrNull(value: String?): Boolean = !value.isNullOrEmpty()
+
+/** See [jsTruthyNumberOrNull]. */
+public fun jsTruthyBooleanOrNull(value: Boolean?): Boolean = value != null && value
+
+/**
  * The `===` operator. Distinct from Kotlin's `===`: JS strict equality compares
  * strings and numbers BY VALUE, and `NaN !== NaN`. Reference types compare by
  * identity, which is the one part Kotlin's `===` would have given us.

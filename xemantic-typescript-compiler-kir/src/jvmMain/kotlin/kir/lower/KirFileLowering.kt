@@ -2149,8 +2149,39 @@ internal class KirFileLowering(
      * and where they genuinely disagree it falls to `jsAdd`, which is §5's own
      * third arm rather than a widening.
      */
-    private fun lowerAddition(node: BinaryExpression): IrExpression =
-        addValues(node.left, lowerExpression(node.left), node.right, lowerExpression(node.right))
+    private fun lowerAddition(node: BinaryExpression): IrExpression {
+        val left = lowerExpression(node.left)
+        val right = lowerExpression(node.right)
+        if (isNumericSum(node)) {
+            return arithmeticValues(
+                "plus",
+                coerce(node.left, left, types.double),
+                coerce(node.right, right, types.double)
+            )
+        }
+        return addValues(node.left, left, node.right, right)
+    }
+
+    /**
+     * Does the CHECKER call this whole `+` a `number`?
+     *
+     * The question the erased operand types cannot answer any more, because a
+     * property read out of a property bag erases to `Any?` however precisely
+     * the checker typed it. `ctx.p + 1` — a scanner advancing its own cursor —
+     * therefore reached `jsAdd` with BOTH sides boxed and an `instanceof` chain
+     * to sort out, for an addition the checker had already called numeric.
+     *
+     * Asking about the SUM rather than about the operands is what makes this
+     * exact: `+` yields `number` only when both operands are numeric, so the
+     * one answer decides both coercions. Every other arithmetic operator has
+     * coerced its operands to `Double` from the beginning — `x - 1` casts an
+     * `any` today — so this is that same rule reaching the one operator that
+     * could not have it, and not a new licence.
+     */
+    private fun isNumericSum(node: Node): Boolean {
+        val type = facts.typeOf(node as? Expression ?: return false) ?: return false
+        return types.map(type) == types.double
+    }
 
     /** `+` over operands that are already lowered — see [lowerAddition]. */
     private fun addValues(
@@ -2418,7 +2449,13 @@ internal class KirFileLowering(
             val current = lowerExpression(target)
             val right = lowerExpression(node.right)
             val combined = when (node.operator) {
-                SyntaxKind.PlusEquals -> addValues(target, current, node.right, right)
+                SyntaxKind.PlusEquals ->
+                    if (isNumericSum(node)) arithmeticValues(
+                        "plus",
+                        coerce(target, current, types.double),
+                        coerce(node.right, right, types.double)
+                    )
+                    else addValues(target, current, node.right, right)
                 SyntaxKind.MinusEquals -> numericCombine(node, "minus", current, right)
                 SyntaxKind.AsteriskEquals -> numericCombine(node, "times", current, right)
                 SyntaxKind.SlashEquals -> numericCombine(node, "div", current, right)
@@ -3958,6 +3995,20 @@ internal class KirFileLowering(
         types.string -> scope.irCall(intrinsics.jsTruthyString, types.boolean).apply {
             arguments[0] = value
         }
+        // An OPTIONAL primitive is the shape an optional parameter has, and it
+        // is asked once per character in a scanner: `!banNewLines`.
+        types.double.makeNullable() ->
+            scope.irCall(intrinsics.jsTruthyNumberOrNull, types.boolean).apply {
+                arguments[0] = value
+            }
+        types.string.makeNullable() ->
+            scope.irCall(intrinsics.jsTruthyStringOrNull, types.boolean).apply {
+                arguments[0] = value
+            }
+        types.boolean.makeNullable() ->
+            scope.irCall(intrinsics.jsTruthyBooleanOrNull, types.boolean).apply {
+                arguments[0] = value
+            }
         else -> scope.irCall(intrinsics.jsTruthy).apply {
             arguments[0] = if (value.type == types.anyNullable) value
             else scope.irAs(value, types.anyNullable)

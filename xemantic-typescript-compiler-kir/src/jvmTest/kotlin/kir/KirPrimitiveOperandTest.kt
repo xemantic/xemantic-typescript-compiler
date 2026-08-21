@@ -140,4 +140,56 @@ class KirPrimitiveOperandTest {
         assert(stdout == "[1]\n[0]\n[1.5]\n[NaN]\n[Infinity]\n[-Infinity]\n[1000000]\n")
     }
 
+    @Test
+    fun `an OPTIONAL primitive is falsy when it is missing and otherwise itself`() {
+        val stdout = compileAndRun(
+            """
+            function flag(value?: boolean): string { return value ? 'y' : 'n' }
+            function count(value?: number): string { return value ? 'y' : 'n' }
+            function text(value?: string): string { return value ? 'y' : 'n' }
+            console.log(flag() + flag(true) + flag(false))
+            console.log(count() + count(1) + count(0) + count(0 / 0))
+            console.log(text() + text('a') + text(''))
+            """.trimIndent()
+        )
+        assert(stdout == "nyn\nnynn\nnyn\n")
+    }
+
+    @Test
+    fun `a sum the checker calls numeric adds, through a property bag`() {
+        // `ctx.p + 1` in a scanner: the bag read erases to `Any?`, so only the
+        // checker still knows the sum is a number.
+        val stdout = compileAndRun(
+            """
+            type Ctx = { p: number; s: string }
+            const ctx: Ctx = { p: 1, s: 'ab' }
+            console.log(String(ctx.p + 1))
+            console.log(String(ctx.p + ctx.p))
+            console.log(ctx.s + ctx.p)
+            let total: number = ctx.p
+            total += ctx.p
+            console.log(String(total))
+            let joined: string = ctx.s
+            joined += ctx.p
+            console.log(joined)
+            """.trimIndent()
+        )
+        assert(stdout == "2\n2\nab1\n2\nab1\n")
+    }
+
+    @Test
+    fun `a sum the checker does NOT call numeric keeps JavaScript's own rule`() {
+        val stdout = compileAndRun(
+            """
+            const dynamic: any = '1'
+            const nothing: any = null
+            console.log(String(dynamic + 1))
+            console.log(String(1 + dynamic))
+            console.log(String(nothing + 1))
+            console.log(String('a' + 1))
+            """.trimIndent()
+        )
+        assert(stdout == "11\n11\n1\na1\n")
+    }
+
 }

@@ -168,12 +168,34 @@ now compiles once and the `Pattern` is shared, which is invisible because a
 and it uses ONE expression many ways at once, because both changes fail the
 same way — a second use reading state the first left behind.
 
+## 3a. The checker's type reaching `+` — LANDED, and it measured NEUTRAL
+
+The bytecode of `smol-toml`'s `skipVoid` shows `ctx.s.charCodeAt(ctx.p + 1)`
+reaching `jsAdd(Object, Object)` with a `Double.valueOf` on the literal `1`,
+because a property read out of a bag erases to `Any?` however precisely the
+checker typed it — and `+` decides by the ERASED operand types, since it is two
+operators. Asking the checker whether the whole SUM is a `number` decides both
+coercions at once, and every other arithmetic operator has coerced its operands
+to `Double` from the beginning (`x - 1` casts an `any` today).
+
+The same read gave optional primitives their own truthiness entry points:
+`!banNewLines` is a `Boolean?` at the JVM level and was walking the general
+chain to answer a null check.
+
+**Measured: toml 46.95 -> 48.00 us/parse with the ranges overlapping
+(`[918..975]` -> `[921..970]`) and both Node arms flat — i.e. NOTHING, inside
+the band.** It is kept anyway and the reason is stated rather than assumed: the
+change is cost-monotone (it removes a call, an `instanceof` chain and a box and
+adds a `checkcast`), it is pinned, and it closes the one place where `+`
+disagreed with the rest of arithmetic about whom to ask. It is not counted as a
+win.
+
 ## 4. Where it stands
 
 | | tsgo -> node | xtsc -> JVM, before | xtsc -> JVM, now |
 |---|---|---|---|
 | mitt | 85.00 ns/emit | 62.25 | **61.25** (1.39x FASTER) |
-| smol-toml | 22.65 us/parse | 56.60 | **46.95** (2.07x slower) |
+| smol-toml | 22.55 us/parse | 56.60 | **46.95-48.00** (2.07-2.13x slower) |
 
 −17.0% on the document parse across the session, and the two Node arms held
 flat across every pair, which is what licenses reading these as backend
