@@ -27,7 +27,7 @@ DIRECTION THAT LOOKS OBVIOUS IS NOW REFUTED TWICE (2026-08-21).**
 i.e. 2.49x slower than the same library on Node down to **2.08x**. The last four
 runs cover only changes that measured inside the band and read 46.95 / 48.00 /
 47.75 / 47.05, so that is a replicated number and not a draw. **`mitt` moves only at the end** — 62.25 -> 61.00,
-still 1.39x faster than Node — which is the expected shape: an event emitter
+still 1.41x faster than Node — which is the expected shape: an event emitter
 barely compares characters, barely reads properties and never matches a regular
 expression, so none of this session's levers has anything to do there. Every figure is a within-round paired delta on
 `scripts/kir-bench.sh` with 5 interleaved processes per arm, and **both Node
