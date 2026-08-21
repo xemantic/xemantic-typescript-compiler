@@ -1603,43 +1603,61 @@ resumes.**
   Traps that cost the session and are recorded so they are not re-derived:
   `docs/perf/kir-backend-levers.md` § 6.
 
-- [ ] **(KIR.PERF.1) THE NOMINAL HALF — NOW THE *ONLY* DIRECTION LEFT FOR THE BAG, AND
-  ITS CASE IS MADE BY TWO REFUTATIONS RATHER THAN BY THE DESIGN DOC.** A per-owner leaf
-  census of the toml JVM arm (`scripts/kir-profile.sh`) charges **44.3%** to the property
-  bag — `JsObject.set` **25.6%**, `get` **17.3%**, `has` 1.4% — so a free property access
-  is worth roughly **−44% at the limit**, which would put `smol-toml` at ~1.2x Node
-  instead of 2.07x. Nothing else in the profile is above 20%.
+- [ ] **(KIR.PERF.1) THE NOMINAL HALF — NOW THE ONLY DIRECTION LEFT, AND THE CONTAINER
+  FAMILY IS CLOSED BY *FOUR* REFUTATIONS RATHER THAN TWO (2026-08-21).** A per-owner leaf
+  census of the toml JVM arm charges **47-52%** to the property bag — and, censused by
+  OPERATION this round, that is **3,333 bag operations per parse** (2,555 `get`, 737 `set`
+  of which **63.5% OVERWRITE**, 41 `has`, over 109 bags minted) at **~4.9 ns each**, which
+  is exactly what a `String`-keyed `LinkedHashMap` probe on a cached hash costs. The row
+  SURVIVES round 896's division test; its neighbour did not — `jsTruthyBooleanOrNull`
+  reads 7.2-7.4% of samples over 298 calls per parse, i.e. **8.2 ns for
+  `value != null && value`**, impossible by ~20x, so it was refused without a build.
 
-  **WHAT IS CLOSED.** Making the dynamic representation cheaper. Two independent attempts:
-  parallel arrays promoted by SIZE (**+21%**) and parallel arrays promoted at the first
-  UNDECLARED key (**+31%**, this round). The second is the informative one because its rule
-  worked — `HashMap` fell from 38.3% of samples to 4.7%, so the dictionary half really was
-  left alone — and the saving still did not exist: in SAMPLES rather than shares the bag
-  cost 709 before and 771 after. **A `LinkedHashMap` probe on an interned key is already
-  about as cheap as a three-element scan**, and the rest of that regression landed on
-  `program.*` and regex frames, which is what a bigger, two-shaped `get`/`set` does to the
-  callers it used to be inlined into. So the bag is expensive in the NUMBER of operations,
-  not their unit cost, and only removing operations helps.
+  **THE READ SIDE IS UNIMODAL, WHICH IS WHAT DECIDED IT.** §2 measured the population as
+  bimodal; that is true of ALLOCATION and false of READS, and a lookup cost is weighted by
+  reads. **93.6% of every property read lands on a bag of exactly THREE keys** (99.1% on
+  four or fewer; the 5-18 tail is 0.9%), and the names are the emitted string LITERALS,
+  i.e. interned. That is the most favourable population an identity-compared scan could be
+  handed — so the cleanest possible scan was built and MEASURED:
 
-  **THE OBLIGATION TypeScript IMPOSES, unchanged:** assignability is STRUCTURAL, so a
-  nominal encoding needs a witness per declared shape plus generated implementations, with
-  a bag still reachable for `any`, for an index signature, and for a shape the closure
-  cannot name. `docs/kir-structural-typing.md` §7 prices the nominal half at 12x the
-  dynamic one.
+  | design | result |
+  |---|---|
+  | parallel arrays, promoted by SIZE | +21%, refused |
+  | parallel arrays, promoted at the first UNDECLARED key | +31%, refused |
+  | **identity scan, NO promotion, single-shaped `get`, everything else cold** | **no effect** |
+  | **`LinkedHashMap` sized to the censused mean** | **no effect** |
 
-  **THE ONE INTERMEDIATE THE TWO REFUTATIONS DO NOT RULE OUT, worked out this round and
-  NOT built:** keep `JsObject` as the JVM type at every slot — so there is no static-type
-  risk at all and the fallback is always correct — and add a *guarded slot hint*:
-  `getAt(name, hint)` = `if (names[hint] === name) slots[hint] else get(name)`, five
-  bytecodes on the hot path, with the hint being the member's index in the RECEIVER's
-  declared type. It differs from the refuted attempt in exactly the two ways that attempt
-  failed: the fast path is O(1) rather than a scan, and it is small enough to inline. Its
-  cost is that it needs the shaped representation back (so it is graded by the same
-  `KirPropertyBagTest`) plus the declared MEMBER ORDER of an object type reaching the
-  lowering, which `CheckedFacts` does not expose today — and `Type.Object.members` is
-  LAZY, so a new reader must resolve it first (CLAUDE.md). A hint that is wrong is slow,
-  never incorrect. **Measure it with `scripts/kir-bench.sh` and refuse it on the same
-  standard as the other two: ranges disjoint, both Node arms flat.**
+  **THE LAST TWO ARE "NO EFFECT" AND NOT "A REGRESSION", AND THAT DISTINCTION COST A
+  REPLICATION TO GET RIGHT**: the array bag read 738 ms against a baseline batch of 692,
+  which looked like +6.6% — and a second baseline batch on the SAME BYTES read **735**.
+  The baseline drifts 6.2% between batches, so the screen cannot resolve an effect this
+  size, and round 858's law arrived on a fourth instrument. What the screen CAN say is
+  that neither candidate is a win, which against a **−44%** premise is a refusal whatever
+  the sign. `docs/perf/kir-backend-levers.md` §2a.
+
+  **SO THE GUARDED SLOT HINT IS REFUSED TOO, WITHOUT BUILDING IT** — the design this entry
+  used to propose. Its whole claim was that an O(1) indexed compare beats the scan the
+  first refutation used; measured, that scan is LEVEL with a hash probe on the population
+  that matters, so the hint is competing for the difference between level and level. Its
+  cost is real — the shaped representation plus the declared member order reaching the
+  lowering, which `CheckedFacts` does not expose. And landing that producer with no
+  consumer would be round 887's shape exactly, so it is not a half-step worth taking
+  either.
+
+  **WHAT IS LEFT IS THE NOMINAL HALF, AND IT IS NOT A CONTAINER CHANGE**: a property read
+  that is a `getfield` rather than any kind of lookup, worth **~16.3 us of a 33.65 us
+  parse (~48%)**. **THE OBLIGATION TypeScript IMPOSES, unchanged:** assignability is
+  STRUCTURAL, so a nominal encoding needs a witness per declared shape plus generated
+  implementations, with a bag still reachable for `any`, for an index signature, and for a
+  shape the closure cannot name. `docs/kir-structural-typing.md` §7 prices it at 12x the
+  dynamic one. It is worth far more on Kotlin/Native, where §6's per-primitive table shows
+  every `Any?` position is a real allocation — see (KIR.NATIVE.1)(a).
+
+  **Measure it with `scripts/kir-bench.sh` and refuse it on the same standard as the other
+  four: ranges disjoint, both Node arms flat.** The screening harness for a runtime-only
+  candidate is five processes of the compiled program with the classes held fixed; its
+  band is ~±5%, which is why the +2.3% arm is reported as "not a win" rather than as a
+  regression.
 
 - [x] **(KIR.EMIT.1) LANDED 2026-08-21 — `rewriteRelativeImportExtensions` is implemented
   in the emit, at all four specifier positions (ESM import/export declarations via a

@@ -143,6 +143,122 @@ What survives from both attempts is `KirPropertyBagTest`: its cases are
 representation-independent by construction, both attempts passed all of them
 unchanged, and they are what the next attempt will be graded by.
 
+## 2a. The bag, censused by OPERATION — and the third refutation, which closes the family
+
+§2 refused two shaped representations and concluded the bag is expensive in the
+NUMBER of its operations rather than in their unit cost. That conclusion is now
+measured rather than inferred, and the family is closed.
+
+### The census, per parse
+
+Counters on `JsObject`, run over the benchmark document (16 rounds x 20,000
+parses = 320,000 parses):
+
+| | per run | per parse |
+|---|---:|---:|
+| bags minted | 34,880,000 | **109** |
+| `get` | 817,600,000 | **2,555** |
+| `set` | 235,840,000 | **737** |
+| ... of which OVERWRITE an existing key | 149,760,000 | 468 (**63.5%**) |
+| `has` | 13,120,000 | 41 |
+| **total bag operations** | | **3,333** |
+
+Mean bag size **3.13** read-weighted, **2.75** write-weighted; largest bag in
+the whole document **18** keys.
+
+Dividing the profile's 47-52% hash-container share of a 33.65 us parse by that
+population gives **~4.9 ns per bag operation**, which is exactly what a
+`String`-keyed `LinkedHashMap` probe on a cached hash costs. The row SURVIVES
+round 896's division test, unlike its neighbour: `jsTruthyBooleanOrNull` reads
+7.2-7.4% of samples over **298 calls per parse**, i.e. **8.2 ns** for
+`value != null && value` — impossible by ~20x, so that row is a location and
+not a price, and it was refused without building anything.
+
+### The read side is UNIMODAL, which §2 could not see
+
+§2 measured the population as bimodal. That is true of ALLOCATION and false of
+READS, and the read distribution is the one a lookup cost is weighted by:
+
+| bag size at the read | share |
+|---|---:|
+| 3 | **93.6%** |
+| 4 | 4.8% |
+| 1, 2 | 0.7% |
+| 5-18 | **0.9%** |
+
+93.6% of every property read in the benchmark lands on a three-key bag — the
+`ParseContext` scanner state — and the names it is asked with are the emitted
+string LITERALS, which are interned. That is the most favourable population an
+identity-compared scan could possibly be handed.
+
+### So the cleanest possible scan was built, and it LOST
+
+Neither of §2's two refused designs: **no promotion at all** on the fast path,
+so `get` has ONE shape and stays inlinable — which is what the second attempt's
+profile blamed — an identity-first compare, arrays sized to the censused modal
+size, and every other case (an equal-but-not-identical key, a bag past the scan
+limit, an absent key) handed to a cold method. `KirPropertyBagTest` and the
+whole KIR module stayed green at 108/108, which is what that suite being
+representation-independent is for.
+
+| arm | median | range | n |
+|---|---:|---|---|
+| `LinkedHashMap` (committed), batch 1 | 692 ms | [657..752] | 5 |
+| identity-scan array bag | 738 | [732..750] | 5 |
+| `LinkedHashMap` pre-sized to the census | 708 | [699..754] | 5 |
+| **`LinkedHashMap` (committed), batch 2** | **735** | [670..758] | 5 |
+
+**READ THE LAST ROW BEFORE THE OTHERS.** The baseline moved **692 -> 735, +6.2%,
+between its own two batches with the bytes unchanged** — so the array bag's 738
+is indistinguishable from the baseline, and the +6.6% it looked like against
+batch 1 was DRIFT. This is round 858's law arriving on a fourth instrument, and
+it is recorded here because the first write-up of this section claimed the 6.6%
+before the replication was run.
+
+What the screen can therefore say is bounded, and it is enough: **neither
+candidate is a win.** Not "a regression" — the harness cannot resolve one at
+this size. The two earlier designs' +21% and +31% are large enough to survive
+this band; today's two are not, and are recorded as no effect.
+
+### What that closes, and why "no effect" is the argument
+
+Four independent attempts at making a property access cheaper, none of which
+produced a win:
+
+| design | result |
+|---|---|
+| parallel arrays, promoted by SIZE | +21%, refused |
+| parallel arrays, promoted at the first UNDECLARED key | +31%, refused |
+| **identity scan, no promotion, single-shaped** | **no effect** |
+| **`LinkedHashMap` sized to the census** | **no effect** |
+
+The third design was handed the most favourable population a scan can have —
+93.6% of reads on three interned keys — removed both earlier failure modes, and
+still could not be told from a hash probe. **A hash probe on an interned key
+with a cached hash is about two memory reads, and a bounds-checked
+one-to-three-iteration loop is not fewer.** The pre-sizing arm says the same
+from the other side: a smaller table costs more read collisions than it saves
+in allocation, and reads outnumber writes 3.47 to 1.
+
+The item's premise is a **−44%** prize at the limit. A candidate that cannot be
+distinguished from the baseline is refused by that standard whatever its sign.
+
+**The consequence for (KIR.PERF.1)'s guarded slot hint is that it is refused
+too, without building it.** The hint's whole claim was that an O(1) indexed
+compare beats the scan the first refutation used. But the scan is not behind a
+hash probe — it is level with one — on a population where 93.6% of reads
+already hit a three-key bag that a scan answers in at most three compares, and
+that leaves the hint competing for the difference between "level" and "level".
+Its cost, meanwhile, is real: the shaped representation plus the declared member
+order reaching the lowering, which `CheckedFacts` does not expose. There is
+nothing left for a slot index to remove.
+
+**Only the NOMINAL half remains, and it is not a container change**: the ceiling
+is a property read that is a `getfield` rather than any kind of lookup, worth
+~16.3 us of a 33.65 us parse. `docs/kir-structural-typing.md` §7 prices it at
+12x the dynamic one, and §6's per-primitive table is the reason it matters far
+more on Kotlin/Native than here.
+
 ## 3. Two rows the census named that were pure overhead — LANDED
 
 `jsTruthy` decided its answer with an equality `when` (`null, Undefined, false
