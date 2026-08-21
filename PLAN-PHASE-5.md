@@ -20,9 +20,8 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**THE KIR QUEUE — FOUR ITEMS CLOSED, THE FIFTH REDUCED TO ONE DIRECTION (2026-08-21).**
-Five open (KIR.\*) items at the start; four are now checked off and the fifth is
-better specified than it was.
+**THE KIR QUEUE — ALL FIVE ITEMS CLOSED (2026-08-21).** Five open (KIR.\*) items
+at the start, five checked off.
 
 **(KIR.EMIT.2), the smallest and the one that says where a decision belongs.**
 `a + '|' + b` with `b` undefined printed `x|null`. §3.1 puts `undefined` and `null` on one
@@ -64,7 +63,7 @@ prediction was directionally right and quantitatively over** — it said native 
 MORE than the JVM's −27.5% and it gained less — which is what writing a prediction down
 before the run is for. One trap that exits 0: konanc appends `.kexe` to whatever `-o` names.
 
-**(KIR.PERF.1) — not closed, but reduced from three directions to one, by measurement.**
+**(KIR.PERF.1) — the container half REFUTED four times, and the nominal half BUILT.**
 Censused by OPERATION the bag is 3,333 ops/parse (2,555 `get`, 737 `set` of which 63.5%
 OVERWRITE) at ~4.9 ns each — a row that SURVIVES round 896's division, where its neighbour
 `jsTruthyBooleanOrNull` implied 8.2 ns for `value != null && value` and was refused without
@@ -76,7 +75,21 @@ else cold — and it measured NO EFFECT, as did a `LinkedHashMap` sized to the c
 ms on the same bytes**; that correction is the round's methodological result and is now in
 `scripts/kir-screen.sh`'s own header. Four designs, no win — which also refuses the guarded
 slot hint the entry used to propose, since its claim was that an indexed compare beats a
-scan that turns out to be LEVEL with a hash probe. Only the nominal half remains.
+scan that turns out to be LEVEL with a hash probe.
+
+**So the NOMINAL half was built instead, and its first slice landed: `mitt` −10.7%**
+(61.00 → 54.50 ns/emit, ranges disjoint, both Node arms flat, 1.35x → **1.54x FASTER** than
+Node). An object literal whose names are statically known becomes a generated JVM class
+with one real field per property, EXTENDING `JsObject` — which is the decision that made it
+affordable: §7's 12x price is for changing what an object type ERASES to, and here the
+erasure is untouched, so structural assignability never enters into it and the dynamic half
+stays total (an undeclared property goes to the bag; the first `delete` or `Object.keys`
+spills the fields into it in declaration order). `smol-toml` is FLAT and that is the honest
+half — its ten shapes fire, but `get` had to become virtual and the parser builds its tables
+dynamically, so the gain on the context and the loss on the tables cancel. Two traps that
+compile and fail at RUN time: a shape class is per FILE in one shared package (two files
+both mint `JsShape0` → `NoSuchMethodError`), and `coerce` decides on classifiers alone, so
+a shape widening to the bag it extends has to be told.
 
 **GATES.** Suite **15,563 / 0 failures** (KIR module 83 → 108). Both KIR benchmark runs
 passed their equivalence gate before any timing, on all three and then all four arms.

@@ -1,7 +1,6 @@
 # Status
 
-**THE KIR QUEUE, FOUR OF FIVE ITEMS CLOSED AND THE FIFTH REDUCED TO ONE DIRECTION
-(2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x
+**THE KIR QUEUE, ALL FIVE ITEMS CLOSED (2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x
 slower than Node down to **1.52x**; on Kotlin/Native **163.30 → 126.55, −22.5%** and 7.26x
 → **5.70x**. `mitt` is flat on both (61.25 ns/emit, 1.35x FASTER than Node; native 354.75),
 which is the control that says the lever is the one claimed. **(KIR.PERF.2)** is a matcher
@@ -13,11 +12,16 @@ engine on the way (Java's `$` matches before a final line terminator, JavaScript
 Node as emitted; **(KIR.EMIT.2)** renders `undefined` as itself in a string position, decided
 by the LOWERING because the runtime cannot tell §3.1's two collapsed values apart.
 **(KIR.NATIVE.1)(c)** puts the native arm inside `kir-bench.sh`'s own equivalence gate.
-**(KIR.PERF.1)** is the one left, and it is now one direction rather than three: censused by
-OPERATION the bag is 3,333 ops/parse at ~4.9 ns, **93.6% of reads land on a THREE-key bag**,
-and the cleanest scan that population could ask for measured NO EFFECT — a fourth design, no
-win — so the guarded slot hint is refused with it and only the NOMINAL half remains. Suite
-**15,563 / 0 failures**; the KIR module 83 → 108 pins.
+**(KIR.PERF.1)** took both halves: censused by OPERATION the bag is 3,333 ops/parse at
+~4.9 ns with **93.6% of reads on a THREE-key bag**, and the cleanest scan that population
+could ask for measured NO EFFECT — a fourth design, no win — which closes the container
+family and refuses the guarded slot hint with it. So the NOMINAL half was built instead,
+and its first slice LANDED: an object literal whose names are statically known becomes a
+generated class with one real field per property, **extending `JsObject`** so the erasure
+is untouched and structural assignability never enters into it. **`mitt` −10.7%** (61.00 →
+**54.50 ns/emit**, ranges disjoint, both Node arms flat, 1.35x → **1.54x FASTER** than
+Node); `smol-toml` flat, because its shapes fire but `get` became virtual and its tables
+are built dynamically. Suite **15,563 / 0 failures**; the KIR module 83 → 108 pins.
 
 **KIR BACKEND PERFORMANCE — `smol-toml` on the JVM is −15.6% and the property bag's
 unit cost is now REFUTED TWICE (2026-08-21).** `scripts/kir-bench.sh` (three arms,
