@@ -1,0 +1,44 @@
+title = "TOML Example"
+enabled = true
+ratio = 0.5
+negative = -17
+exponent = 1e3
+underscored = 1_000_000
+hex = 0xDEADBEEF
+octal = 0o755
+binary = 0b1010
+empty_string = ""
+escaped = "line\nbreak\ttab \"quoted\" back\\slash"
+literal = 'C:\Users\nobody'
+multiline = """
+first
+second"""
+
+[owner]
+name = "Tom Preston-Werner"
+dob = 1979
+
+[database]
+ports = [ 8000, 8001, 8002 ]
+data = [ ["delta", "phi"], [3.14] ]
+temp_targets = { cpu = 79.5, case = 72.0 }
+
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
+
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"
+
+[[products]]
+name = "Hammer"
+sku = 738594937
+
+[[products]]
+name = "Nail"
+sku = 284758393
+color = "gray"
+
+[deep.nested.table]
+value = "reached"

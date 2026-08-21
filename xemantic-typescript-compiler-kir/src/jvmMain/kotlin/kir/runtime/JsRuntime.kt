@@ -141,8 +141,42 @@ public fun jsToNumber(value: Any?): Double = when (value) {
     Undefined -> Double.NaN
     is Double -> value
     is Boolean -> if (value) 1.0 else 0.0
-    is String -> value.trim().let { if (it.isEmpty()) 0.0 else it.toDoubleOrNull() ?: Double.NaN }
+    is String -> stringToNumber(value)
+    is java.math.BigInteger -> value.toDouble()
     else -> Double.NaN
+}
+
+/**
+ * ECMAScript `StringToNumber`, which is NOT `String.toDouble`.
+ *
+ * The three differences that bite: an empty or blank string is `0`, the
+ * RADIX PREFIXES `0x` / `0o` / `0b` are understood (`+"0xDEADBEEF"` is
+ * 3735928559 — the shape a TOML parser converts its integers with), and
+ * `Infinity` is spelled out. Kotlin's `toDoubleOrNull` accepts none of the
+ * three and additionally accepts things JavaScript rejects, such as a trailing
+ * `d` or `f` suffix.
+ */
+private fun stringToNumber(value: String): Double {
+    val text = value.trim()
+    if (text.isEmpty()) return 0.0
+    val negative = text.startsWith("-")
+    val body = text.removePrefix("+").removePrefix("-")
+    if (body == "Infinity") return if (negative) Double.NEGATIVE_INFINITY
+    else Double.POSITIVE_INFINITY
+    val radix = when {
+        body.startsWith("0x") || body.startsWith("0X") -> 16
+        body.startsWith("0o") || body.startsWith("0O") -> 8
+        body.startsWith("0b") || body.startsWith("0B") -> 2
+        else -> 10
+    }
+    if (radix != 10) {
+        // A radix literal may not carry a sign in JavaScript, so a signed one
+        // is `NaN` rather than a negated value.
+        if (negative || text.startsWith("+")) return Double.NaN
+        return body.drop(2).toLongOrNull(radix)?.toDouble() ?: Double.NaN
+    }
+    if (body.any { it == 'd' || it == 'D' || it == 'f' || it == 'F' }) return Double.NaN
+    return text.toDoubleOrNull() ?: Double.NaN
 }
 
 /**
@@ -763,6 +797,26 @@ public fun jsStrSplit(value: String, expression: JsRegExp): JsArray =
 // where they can be read.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Number members. Kotlin's own are NOT usable for the same reason the string
+// ones are not: `Double.toString()` prints `6.0` where JavaScript prints `6`,
+// and a program that builds a line number out of one notices immediately.
+// ---------------------------------------------------------------------------
+
+public fun jsNumToString(value: Double): String = jsNumberToString(value)
+
+/** `Number.prototype.toString(radix)`, for the integral values a radix means. */
+public fun jsNumToString(value: Double, radix: Double): String {
+    val base = radix.toInt()
+    if (base == 10) return jsNumberToString(value)
+    if (value.isNaN() || value.isInfinite()) return jsNumberToString(value)
+    return value.toLong().toString(base)
+}
+
+public fun jsNumToFixed(value: Double, digits: Double): String =
+    if (value.isNaN() || value.isInfinite()) jsNumberToString(value)
+    else String.format("%.${digits.toInt()}f", value)
+
 public fun jsStrLength(value: String): Double = value.length.toDouble()
 
 public fun jsStrCharAt(value: String, index: Double): String {
@@ -815,6 +869,14 @@ public fun jsStrTrim(value: String): String = value.trim()
 public fun jsStrTrimStart(value: String): String = value.trimStart()
 
 public fun jsStrTrimEnd(value: String): String = value.trimEnd()
+
+public fun jsStrPadEnd(value: String, length: Double, filler: String): String {
+    if (value.length >= length.toInt()) return value
+    val out = StringBuilder(value)
+    while (out.length < length.toInt() && filler.isNotEmpty()) out.append(filler)
+    out.setLength(maxOf(length.toInt(), value.length))
+    return out.toString()
+}
 
 public fun jsStrPadStart(value: String, length: Double, filler: String): String =
     if (value.length >= length.toInt()) value
@@ -1110,9 +1172,21 @@ public fun jsInvoke(receiver: Any?, name: String, vararg arguments: Any?): Any? 
     when (receiver) {
         null -> throw JsTypeError("cannot call '$name' of null")
         is String -> jsInvokeOnString(receiver, name, arguments)
+        is Double -> jsInvokeOnNumber(receiver, name, arguments)
+        is Boolean -> if (name == "toString") jsToString(receiver)
+        else throw JsTypeError("'$name' is not a Boolean member this runtime provides")
         is JsArray -> jsInvokeOnArray(receiver, name, arguments)
         is JsObject -> jsCall(receiver.get(name), *arguments)
         else -> reflectiveInvoke(receiver, name, arguments)
+    }
+
+private fun jsInvokeOnNumber(receiver: Double, name: String, arguments: Array<out Any?>): Any? =
+    when (name) {
+        "toString" -> if (arguments.isEmpty()) jsNumToString(receiver)
+        else jsNumToString(receiver, jsToNumber(arguments[0]))
+        "toFixed" -> jsNumToFixed(receiver, jsToNumber(arguments.getOrNull(0)))
+        "valueOf" -> receiver
+        else -> throw JsTypeError("'$name' is not a Number member this runtime provides")
     }
 
 private fun jsInvokeOnString(receiver: String, name: String, arguments: Array<out Any?>): Any? {
@@ -1133,6 +1207,7 @@ private fun jsInvokeOnString(receiver: String, name: String, arguments: Array<ou
         "trimStart" -> jsStrTrimStart(receiver)
         "trimEnd" -> jsStrTrimEnd(receiver)
         "padStart" -> jsStrPadStart(receiver, jsToNumber(argument(0)), jsToString(argument(1)))
+        "padEnd" -> jsStrPadEnd(receiver, jsToNumber(argument(0)), jsToString(argument(1)))
         "repeat" -> jsStrRepeat(receiver, jsToNumber(argument(0)))
         "concat" -> jsStrConcat(receiver, jsToString(argument(0)))
         "slice" -> if (arguments.size < 2) jsStrSlice(receiver, jsToNumber(argument(0)))

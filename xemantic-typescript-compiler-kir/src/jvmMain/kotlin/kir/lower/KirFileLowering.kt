@@ -2726,6 +2726,26 @@ internal class KirFileLowering(
                 )
             }
         }
+        // A NUMBER's members, for the same reason a string's are: Kotlin's
+        // `Double.toString()` prints `6.0` where JavaScript prints `6`.
+        if (callee is PropertyAccessExpression && isNumberReceiver(callee.expression)) {
+            val target = intrinsics.numberMember(callee.name.text, node.arguments.size)
+                ?: refuse(
+                    tsFile, node,
+                    "'Number.${callee.name.text}' with ${node.arguments.size} argument(s) is " +
+                        "not a member this backend gives a runtime function"
+                )
+            return scope.irCall(target).apply {
+                arguments[0] = coerce(
+                    callee.expression, lowerExpression(callee.expression), types.double
+                )
+                val regular = target.owner.parameters.filter { it.kind == IrParameterKind.Regular }
+                node.arguments.forEachIndexed { index, argument ->
+                    arguments[index + 1] =
+                        coerce(argument, lowerExpression(argument), regular[index + 1].type)
+                }
+            }
+        }
         if (callee is PropertyAccessExpression && isStringReceiver(callee.expression)) {
             val firstIsRegExp = node.arguments.firstOrNull()
                 ?.let { runtimeClassOf(it) } == intrinsics.jsRegExpClass
@@ -3339,6 +3359,12 @@ internal class KirFileLowering(
         val type = facts.typeOf(node) ?: return false
         val erased = types.map(type) ?: return false
         return erased.isErasedAny(irBuiltIns)
+    }
+
+    /** Does this expression's checked type erase to a `Double`? */
+    private fun isNumberReceiver(node: Expression): Boolean {
+        val type = facts.typeOf(node) ?: return false
+        return types.map(type) == types.double
     }
 
     /** Does this expression's checked type erase to a `String`? */
