@@ -20,6 +20,85 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**KIR RUNTIME BENCHMARK (2026-08-21) — THE COMPILED LIBRARIES, TIMED AGAINST THE
+JavaScript THEY WERE WRITTEN FOR. THE ANSWER DISAGREES BY LIBRARY AND BY *SIGN*,
+AND THE LEAF PROFILE SAYS WHY.**
+
+**THE MEASUREMENT.** Same TypeScript source through two toolchains — tsgo 7.0.2 ->
+JavaScript -> Node 22.20.0, against xtsc `-kir` -> Kotlin IR -> JVM bytecode -> java
+(Zulu 26.0.2) — drivers ours and identical for both arms, 5 interleaved processes per
+arm, best-of-10 rounds inside each process, box otherwise idle.
+
+| workload | Node (tsgo) | JVM (xtsc/KIR) | |
+|---|---|---|---|
+| mitt, 4M `emit`/round | 344 ms · **86.0 ns/emit** | 266 ms · **66.5 ns/emit** | **JVM 1.29x FASTER** |
+| smol-toml, 20k parses/round | 452 ms · **22.6 us/parse** | 1128 ms · **56.4 us/parse** | **JVM 2.50x SLOWER** |
+
+One-shot wall clock including startup (10 runs, the acceptance programs as shipped):
+mitt **35 -> 92 ms**, toml **39 -> 115 ms**, i.e. the JVM pays ~2.6-2.9x and it is
+startup, not work. Compile side: tsgo emits either project in ~0.35 s against the KIR
+backend's 4.5 s (mitt) / 5.6 s (toml) in-process, which is mostly kotlinc pipeline
+setup rather than lowering.
+
+**THE CONTROL THAT MAKES IT A MEASUREMENT.** Both arms produced IDENTICAL `sink`
+accumulators (128,000,000 and -5,440,000) and byte-identical acceptance output against
+the `tomllib`-derived expectation — so the two compilations compute the same thing, and
+a divergence would have read as a timing result rather than as the bug it is.
+
+**WHY THE TWO LIBRARIES SPLIT — PROFILED, NOT INFERRED** (JFR, `settings=profile`,
+leaf frames). **smol-toml on the JVM, 2,159 samples: ~60% is JS-semantics emulation
+rather than the library's logic** — `HashMap` get/put/resize + `LinkedHashMap.newNode`
+**28.3%**, `java.util.regex` **17.5%**, `Intrinsics.areEqual`/`String.equals`
+**11.1%**, `Double.valueOf` **3.4%**; the lowered library code (`program.*`) is
+**17.7%**. **mitt on the JVM, 567 samples: `JsRuntimeKt.jsCall` ALONE is ~60% of
+leaves**, with `TypeIntrinsics.isFunctionOfArity` behind it — so even the arm that WINS
+spends most of its time in the dynamic-call shim.
+
+**THE FOUR LEVERS THE PROFILE NAMES, and their prices, read out of the source rather
+than guessed.** (i) `jsCall(callee, vararg)` allocates an `Object[]` per call and walks
+an `instanceof` chain; ARITY-SPECIALIZED entry points remove both, and the adaptivity
+must SURVIVE — mitt registers a `Function1` wildcard handler that `emit` calls with two
+arguments, which is exactly why `lowerFunctionValueCall`'s direct `invoke` is not used
+for a bag member (`KirFileLowering.kt:2714`'s comment is the record). (ii) `ErasedTypes.
+mapObject` sends a declared `class` to a generated JVM class and sends an `interface`,
+a `type X = {…}` and every object literal to the **property bag** — so smol-toml's
+`export type ParseContext = {…}` scanner state is a `LinkedHashMap` probe per `ctx.p`,
+which IS the 28.3%. The design page's own §7 prices the nominal half at **12x** the
+dynamic half. (iii) The bag's keys are literals at the lowering, so INTERNING them and
+comparing by identity attacks the 11.1%; a small-object linear-scan representation
+attacks the hashing, and neither touches the lowering. (iv) `Double.valueOf` is
+BOUNDARY boxing, not the erasure — `ErasedTypes` already maps `number` to a primitive
+`double`, and the boxes are minted at bag get/set, `JsArray` elements and
+`FunctionN<Any?,…>` edges.
+
+**WHAT IS NOT A LEVER: the regex family.** `JsRegExp` compiles its `Pattern` once per
+instance and the profile shows no `Pattern.compile`, so the 17.5% is genuine matching
+cost — `java.util.regex` is a backtracking interpreter where V8's Irregexp emits native
+code. It caps how close this backend can get on a regex-heavy library, and swapping
+engines would change the semantics rather than the speed.
+
+**KOTLIN/NATIVE WAS ASKED FOR AND IS NOT RUNNABLE — a structural answer, not a missing
+tool.** `KotlinIrEmitter` drives kotlinc's **JVM** phases and `JsRuntime.kt` is
+`jvmMain` with 26 `java.*` references (`java.time` for `JsDate`, `System.
+currentTimeMillis`, `java.util.regex`); a native leg needs a K/N pipeline driver AND a
+multiplatform runtime, which is the module's own "JVM today, JS/Native/Wasm for free
+later" roadmap. The K/N toolchain itself IS on this box
+(`~/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.10/bin/konanc`), so what is missing
+is ours. Compiling hand-written Kotlin and reporting it as a native number would have
+measured Kotlin, not this compiler.
+
+**THE HARNESS.** Node 22.20.0 under `tools/` (gitignored, downloaded — no JS runtime
+was installed on this box); bench projects, drivers and the interleaved runner in the
+session scratchpad; a `KirBench` java main over `compileTypeScriptProjectToJvm` that
+leaves the classes on disk so the generated program runs as an ordinary `java` process
+with the compiler out of the picture. **NOT COMMITTED YET** — (BENCH.1) is where it
+lands if the third arm proceeds. Two protocol notes it earned: a `nohup … &` gradle run
+ended with NO `BUILD SUCCESSFUL` line and had to be re-run in the foreground (the
+round-851 shape, caught by grepping for the verdict rather than trusting exit status),
+and the emitted-JS arms need their import specifiers checked rather than assumed —
+tsgo rewrites `./parse.ts` -> `./parse.js` under `rewriteRelativeImportExtensions` but
+leaves mitt's extensionless `./mitt` alone, which Node ESM refuses.
+
 **KIR SPIKE (2026-08-21, branch `spike/ts-to-kotlin-ir`) — TWO REAL PUBLISHED
 LIBRARIES COMPILE TO JVM BYTECODE AND RUN, AND SIX CHECKER DEFECTS FELL OUT OF
 GETTING THERE.**
@@ -1319,6 +1398,37 @@ which round 908 closed out anyway — the checker-side pool is empty. Shape deci
 **Kotlin embedding API first** (LSP / tsserver protocol layered later, not now), in the new
 `xemantic-typescript-compiler-project` module. The perf items stay below as the record; (ART.1) /
 (ART.2) remain the only open perf work and (ART.1) has been corrected.
+
+**TOP OF QUEUE ON OWNER DIRECTIVE (2026-08-21): (BENCH.1) below runs before the (API.\*) arc
+resumes.**
+
+- [ ] **(BENCH.1) THE THIRD JS ARM — OUR OWN EMITTED JavaScript, ON THE SAME NODE, AS THE CONTROL
+  THAT SEPARATES "OUR COMPILER" FROM "OUR BACKEND".** The 2026-08-21 KIR runtime benchmark measured
+  two arms — tsgo -> JS -> Node against xtsc `-kir` -> JVM bytecode -> java — and they disagree by
+  library and by SIGN: **mitt 86.0 -> 66.5 ns/emit (JVM 1.29x FASTER), smol-toml 22.6 -> 56.4
+  us/parse (JVM 2.50x SLOWER)**, medians of 5 interleaved processes, both arms producing identical
+  `sink` accumulators and byte-identical acceptance output. **Two candidate causes are tangled in
+  that 2.50x and no arm separates them**: the code our FRONT END produces, and the KIR backend's
+  object model. The third arm holds the runtime fixed (Node) and varies only the compiler —
+  `-core`'s Transformer/Emitter to JavaScript text, against tsgo's JavaScript, same sources, same
+  drivers.
+
+  **What each outcome MEANS, stated before the run (a prediction is what makes a refutation
+  legible).** Arm 3 landing on arm 1 says the front end is performance-neutral and the whole 2.50x
+  belongs to the backend, confirming the leaf profile by a second instrument rather than by
+  inference. Arm 3 landing SLOWER than arm 1 is a genuinely new finding about our JS emitter and
+  invisible to every gate we own — **the corpus pins emitted BYTES against tsc's baselines, and byte
+  parity says nothing about how fast the resulting program runs on a modern JIT.**
+
+  **The harness exists and is reusable** — drivers, projects, timing shape and the interleaved
+  5-process protocol are in the 2026-08-21 session note; the only new piece is emitting the two
+  bench projects with `-core` instead of tsgo. **Two traps it must carry.** (i) Node ESM needs a
+  real extension: tsgo rewrites `./parse.ts` -> `./parse.js` under
+  `rewriteRelativeImportExtensions` and leaves mitt's extensionless `./mitt` alone, so whatever our
+  emitter does with a specifier has to be checked rather than assumed. (ii) **An arm that fails to
+  RUN must fail loudly** — a JS file that throws on import prints nothing and a wall-clock harness
+  reads that as a fast arm; assert the acceptance output byte-for-byte in every arm before timing
+  anything, which is what caught nothing this round only because it was done first.
 
 - [x] **(API.1) `Project`: open, diagnostics, in-memory edits — LANDED, round 909.** New module
   `xemantic-typescript-compiler-project` (jvm(), `explicitApi()`, `api(project(":…-core"))`);
