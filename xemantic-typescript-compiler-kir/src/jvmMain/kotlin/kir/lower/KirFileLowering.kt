@@ -42,6 +42,7 @@ import com.xemantic.typescript.compiler.ConditionalExpression
 import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.ContinueStatement
 import com.xemantic.typescript.compiler.ElementAccessExpression
+import com.xemantic.typescript.compiler.ExportDeclaration
 import com.xemantic.typescript.compiler.EmptyStatement
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.ExpressionStatement
@@ -50,6 +51,8 @@ import com.xemantic.typescript.compiler.FunctionExpression
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.IfStatement
+import com.xemantic.typescript.compiler.ImportDeclaration
+import com.xemantic.typescript.compiler.ImportEqualsDeclaration
 import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
@@ -81,7 +84,8 @@ import com.xemantic.typescript.compiler.WhileStatement
 import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.emit.irDouble
-import com.xemantic.typescript.compiler.kir.front.CheckedTypeScript
+import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.refuse
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
@@ -167,38 +171,27 @@ import java.util.IdentityHashMap
  */
 internal class KirFileLowering(
     private val builder: IrProgramBuilder,
-    private val checked: CheckedTypeScript,
+    private val facts: CheckedFacts,
+    private val tsFile: SourceFile,
+    private val tables: KirProgramTables,
     packageName: String,
     kotlinFileName: String,
 ) {
 
-    private val tsFile = checked.sourceFile
-    private val facts = checked.facts
     private val irBuiltIns = builder.irBuiltIns
     private val irFile: IrFile = builder.file(packageName, kotlinFileName)
     private val intrinsics = KirIntrinsics(builder, irFile)
 
-    // ---- the declare pass's tables, keyed by AST node IDENTITY -------------
-    // Never by `nodeId` (it restarts at 0 in every SourceFile) and never by a
-    // plain HashMap (an AST node is a data class whose hashCode deep-recurses
-    // its whole subtree).
+    // ---- the declare pass's tables, shared with every OTHER file -----------
+    // A cross-file call resolves to a declaration in another tree, so these
+    // cannot be per-file — see [KirProgramTables].
 
-    private val functions = IdentityHashMap<FunctionDeclaration, IrSimpleFunction>()
-    private val classes = IdentityHashMap<ClassDeclaration, IrClass>()
-    private val methods = IdentityHashMap<MethodDeclaration, IrSimpleFunction>()
-    private val constructorsByDeclaration = IdentityHashMap<ClassDeclaration, IrConstructor>()
-    private val fields = IdentityHashMap<PropertyDeclaration, IrField>()
-
-    /**
-     * The IR parameters a call site may leave out.
-     *
-     * Nothing on an `IrValueParameter` records that, and the erased type does
-     * not imply it either, so it is remembered at declaration and consulted at
-     * every call.
-     */
-    private val optionalParameters = java.util.Collections.newSetFromMap(
-        IdentityHashMap<IrValueParameter, Boolean>()
-    )
+    private val functions get() = tables.functions
+    private val classes get() = tables.classes
+    private val methods get() = tables.methods
+    private val constructorsByDeclaration get() = tables.constructorsByDeclaration
+    private val fields get() = tables.fields
+    private val optionalParameters get() = tables.optionalParameters
 
     private val types = ErasedTypes(
         irBuiltIns,
@@ -212,26 +205,21 @@ internal class KirFileLowering(
     )
 
     /**
-     * Is this the declaration of a structural type THIS file wrote?
+     * Is this the declaration of a structural type THIS PROGRAM wrote?
      *
-     * An `interface`, a `type` alias and a type literal of our own are property
-     * bags; the identically-shaped declarations in a lib `.d.ts` are not, and
-     * telling them apart is what stops `Map` from erasing to an empty bag whose
-     * every member reads `undefined`. The test is the declaration's own root
-     * file, walked through the parents `indexSourceFile` stamped (INV.2(a)).
+     * An `interface`, a `type` alias and a type literal of the program's own
+     * are property bags; the identically-shaped declarations in a lib `.d.ts`
+     * are not, and telling them apart is what stops `Map` from erasing to an
+     * empty bag whose every member reads `undefined`. The population is the
+     * whole program rather than this one file, because an interface imported
+     * from a sibling module is as much ours as one declared here.
      */
     private fun isOwnStructuralDeclaration(declaration: Node): Boolean {
         val structural = declaration is InterfaceDeclaration ||
             declaration is TypeAliasDeclaration ||
             declaration is TypeLiteral ||
             declaration is ObjectLiteralExpression
-        if (!structural) return false
-        var node: Node? = declaration
-        while (node != null) {
-            if (node === tsFile) return true
-            node = (node as? NodeBase)?.parent
-        }
-        return false
+        return structural && tables.isProgramNode(declaration)
     }
 
     // ---- the define pass's walk state --------------------------------------
@@ -266,12 +254,39 @@ internal class KirFileLowering(
 
     private val scope: IrBuilderWithScope get() = frame.scope
 
-    /** Runs both passes and returns the file the program's entry point is in. */
-    fun lower(): IrFile {
+    /**
+     * Pass 1 for this file. Every file's declare pass runs before ANY file's
+     * define pass, which is what makes a cross-file reference resolvable in
+     * either direction — module dependency order is then irrelevant, exactly as
+     * declaration order within a file is.
+     */
+    fun declareAll() {
         tsFile.statements.forEach { declare(it) }
+    }
+
+    /** Pass 2 for this file: fills the bodies declared by pass 1. */
+    fun defineAll() {
         tsFile.statements.forEach { define(it) }
+    }
+
+    /** The program's entry point, from THIS file's top-level statements. */
+    fun buildEntryPoint() {
         buildMain()
-        return irFile
+    }
+
+    /**
+     * Statements this file executes when it is loaded.
+     *
+     * Everything a pass has already emitted is excluded — the declarations —
+     * and so is every module statement, which is ERASED: the checker has
+     * already turned each imported name into the declaration it names, so an
+     * `import` has nothing left to contribute at runtime.
+     */
+    fun executableStatements(): List<Statement> = tsFile.statements.filter { statement ->
+        statement !is FunctionDeclaration && statement !is ClassDeclaration &&
+            statement !is InterfaceDeclaration && statement !is TypeAliasDeclaration &&
+            statement !is ImportDeclaration && statement !is ExportDeclaration &&
+            statement !is ImportEqualsDeclaration
     }
 
     // =======================================================================
@@ -574,10 +589,7 @@ internal class KirFileLowering(
      * runnable program, an absent one is not.
      */
     private fun buildMain() {
-        val statements = tsFile.statements.filter {
-            it !is FunctionDeclaration && it !is ClassDeclaration &&
-                it !is InterfaceDeclaration && it !is TypeAliasDeclaration
-        }
+        val statements = executableStatements()
         val main = builder.irFactory.buildFun {
             name = Name.identifier("main")
             returnType = irBuiltIns.unitType
@@ -773,7 +785,8 @@ internal class KirFileLowering(
             }
             is EmptyStatement -> {}
             is FunctionDeclaration, is ClassDeclaration,
-            is InterfaceDeclaration, is TypeAliasDeclaration -> {}
+            is InterfaceDeclaration, is TypeAliasDeclaration,
+            is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> {}
             else -> refuse(tsFile, statement, "cannot lower this statement")
         }
     }
@@ -1335,9 +1348,13 @@ internal class KirFileLowering(
         }
         refuse(
             tsFile, node,
-            "cannot lower this call — it resolves to no generated declaration " +
-                "and to no known library member" +
-                (fact.receiverTypeText?.let { " ($it.${fact.memberName})" } ?: "")
+            "cannot lower this call — " + when {
+                fact.signatureCount == 0 -> "the checker found nothing callable here"
+                declaration == null -> "the ${fact.signatureCount} signature(s) on offer " +
+                    "carry no declaration (a library or synthesized signature)"
+                else -> "its declaration is a ${declaration::class.simpleName} this " +
+                    "backend did not generate"
+            } + (fact.receiverTypeText?.let { " ($it.${fact.memberName})" } ?: "")
         )
     }
 

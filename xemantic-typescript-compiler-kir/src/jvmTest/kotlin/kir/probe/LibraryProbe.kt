@@ -52,8 +52,37 @@ import kotlin.test.Test
 class LibraryProbe {
 
     @Test
+    fun probeProject() {
+        val project = System.getenv("KIR_PROBE_PROJECT") ?: return
+        val entry = System.getenv("KIR_PROBE_ENTRY") ?: "main.ts"
+        val output = java.nio.file.Files.createTempDirectory("kir-probe-project")
+        val compilation = com.xemantic.typescript.compiler.kir
+            .compileTypeScriptProjectToJvm(project, entry, output)
+        println("=== PROBE PROJECT $project ===")
+        println("successful=${compilation.successful}, typeErrors=${compilation.typeErrors.size}")
+        compilation.typeErrors.take(60).forEach {
+            println("TS${it.code} ${it.fileName}:${it.line}:${it.character} ${it.message}")
+        }
+        compilation.refusals.forEach { println("refused: $it") }
+        compilation.emit?.takeIf { !it.successful }?.messages?.take(5)?.forEach {
+            println("emit: $it")
+        }
+        if (!compilation.successful) return
+        val run = runGeneratedProgram(
+            output,
+            compilation.mainClass,
+            GeneratedProgramClasspath.minimal()
+        )
+        println("exit=${run.exitCode}")
+        println("--- stdout ---")
+        print(run.stdout)
+        println("--- stderr ---")
+        print(run.stderr)
+    }
+
+    @Test
     fun probe() {
-        val file = System.getProperty("kir.probe.file") ?: return
+        val file = System.getenv("KIR_PROBE_FILE") ?: System.getProperty("kir.probe.file") ?: return
         val source = Files.readString(Path.of(file))
         val output = Files.createTempDirectory("kir-probe")
         val compilation = compileTypeScriptToJvm(file.substringAfterLast('/'), source, output)

@@ -39,6 +39,7 @@ import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.Signature
+import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
 import com.xemantic.typescript.compiler.Type
 import java.util.IdentityHashMap
@@ -86,6 +87,7 @@ public class CallFact internal constructor(
  */
 public class CheckedFacts internal constructor() : CheckedNodeSink {
 
+    private val checkedFiles = mutableListOf<SourceFile>()
     private val expressionTypes = IdentityHashMap<Expression, Type>()
     private val calls = IdentityHashMap<CallExpression, CallFact>()
     private val constructions = IdentityHashMap<NewExpression, Signature?>()
@@ -97,6 +99,18 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
 
     /** The checker's own rendering of a type, keyed by `Type.id`. */
     private val renderings = HashMap<Int, String>()
+
+    /**
+     * Every program file the check walked, in check order.
+     *
+     * DEDUPED by identity: a `declarationOnly` pre-pass walks the same trees,
+     * and a file lowered twice would declare every symbol twice.
+     */
+    public val files: List<SourceFile> get() = checkedFiles
+
+    override fun file(node: SourceFile) {
+        if (checkedFiles.none { it === node }) checkedFiles.add(node)
+    }
 
     /** The type of [node] at its own position — narrowed, body-local-correct. */
     public fun typeOf(node: Expression): Type? = expressionTypes[node]
@@ -215,6 +229,28 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
     }
 
     /**
+     * The call signatures of an IMPORTED name.
+     *
+     * `getCalleeType` — which the lens's `callSignatures` asks — answers nothing
+     * for an import alias, so a call of a function imported from another module
+     * arrives with ZERO signatures and no declaration, and the backend then has
+     * nothing to lower it to. Measured: the identical call resolves normally
+     * when the two files are concatenated, which is what makes this a property
+     * of the import rather than of the callee.
+     *
+     * The symbol's own type is the honest second question: an alias resolves to
+     * the symbol it aliases, and that symbol's type carries the call signature —
+     * including the DECLARATION, which is the node the declare pass keyed the
+     * generated IR function by.
+     */
+    private fun importedCallSignatures(callee: Expression, lens: CheckedLens): List<Signature> {
+        val name = callee as? Identifier ?: return emptyList()
+        val symbol = lens.resolveName(name.text) ?: return emptyList()
+        val type = remember(lens.typeOfSymbol(symbol), lens)
+        return (type as? Type.Object)?.callSignatures ?: emptyList()
+    }
+
+    /**
      * The symbol a class member's name resolves to on the enclosing class's own
      * type — the one question about a member that has an honest answer here.
      */
@@ -257,7 +293,7 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
      */
     private fun callFact(node: CallExpression, lens: CheckedLens): CallFact {
         val callee = node.expression
-        val signatures = lens.callSignatures(callee)
+        val signatures = lens.callSignatures(callee).ifEmpty { importedCallSignatures(callee, lens) }
         val selected = lens.selectOverload(signatures, node.arguments)
             ?: signatures.singleOrNull()
         var receiverTypeText: String? = null

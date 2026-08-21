@@ -30,8 +30,11 @@ import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.kir.emit.EmitResult
 import com.xemantic.typescript.compiler.kir.emit.GeneratedProgramClasspath
 import com.xemantic.typescript.compiler.kir.emit.KotlinIrEmitter
+import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.front.checkTypeScript
-import com.xemantic.typescript.compiler.kir.lower.KirFileLowering
+import com.xemantic.typescript.compiler.kir.front.checkTypeScriptProject
+import com.xemantic.typescript.compiler.kir.lower.KirProgramLowering
 import java.nio.file.Path
 
 /** What [compileTypeScriptToJvm] produced. */
@@ -90,10 +93,84 @@ public fun compileTypeScriptToJvm(
     if (checked.errors.isNotEmpty()) {
         return KirCompilation(false, mainClass, checked.errors, emptyList(), null)
     }
+    return lowerAndEmit(
+        mainClass,
+        listOf(checked.sourceFile),
+        checked.sourceFile,
+        checked.facts,
+        outputDirectory,
+        packageName,
+        classpath,
+    )
+}
+
+/**
+ * Compiles a whole TypeScript PROJECT — a directory with a `tsconfig.json` — to
+ * JVM `.class` files.
+ *
+ * The multi-file form of [compileTypeScriptToJvm], and the one a library needs:
+ * a module's exported function is called from another module, and nothing about
+ * the `import` statement is consulted to make that work. The checker has
+ * already turned each imported name into the DECLARATION it names, and the
+ * declare pass records an IR symbol per declaration for the whole program, so a
+ * cross-file call is an ordinary direct call.
+ *
+ * @param entryFileName the file whose top-level statements become `main`; the
+ *   only file allowed to have any, since running the others would need module
+ *   initialization order, which is a design question and not a default.
+ */
+public fun compileTypeScriptProjectToJvm(
+    projectPath: String,
+    entryFileName: String,
+    outputDirectory: Path,
+    packageName: String = "program",
+    classpath: List<Path> = GeneratedProgramClasspath.minimal(),
+): KirCompilation {
+    val mainClass = "$packageName.MainKt"
+    val checked = checkTypeScriptProject(projectPath)
+    if (checked.errors.isNotEmpty()) {
+        return KirCompilation(false, mainClass, checked.errors, emptyList(), null)
+    }
+    val entry = checked.files.firstOrNull { it.fileName.endsWith(entryFileName) }
+        ?: return KirCompilation(
+            successful = false,
+            mainClass = mainClass,
+            typeErrors = emptyList(),
+            refusals = listOf(
+                KirDiagnostic(
+                    "no program file named '$entryFileName'; the program has " +
+                        checked.files.joinToString { it.fileName },
+                    entryFileName,
+                    1,
+                    1,
+                )
+            ),
+            emit = null,
+        )
+    return lowerAndEmit(
+        mainClass,
+        checked.files,
+        entry,
+        checked.facts,
+        outputDirectory,
+        packageName,
+        classpath,
+    )
+}
+
+private fun lowerAndEmit(
+    mainClass: String,
+    files: List<SourceFile>,
+    entry: SourceFile,
+    facts: CheckedFacts,
+    outputDirectory: Path,
+    packageName: String,
+    classpath: List<Path>,
+): KirCompilation {
     val refusals = mutableListOf<KirDiagnostic>()
     val emit = KotlinIrEmitter(outputDirectory, classpath).emit {
         try {
-            KirFileLowering(this, checked, packageName, "Main.kt").lower()
+            KirProgramLowering(this, facts, files, entry, packageName).lower()
         } catch (e: KirLoweringException) {
             refusals.add(e.diagnostic)
             throw e
