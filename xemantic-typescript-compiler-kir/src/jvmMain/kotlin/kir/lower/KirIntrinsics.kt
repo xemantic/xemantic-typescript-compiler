@@ -68,10 +68,40 @@ internal class KirIntrinsics(
 
     val consoleLog: IrSimpleFunctionSymbol by lazy { runtime("consoleLog") }
     val jsToString: IrSimpleFunctionSymbol by lazy { runtime("jsToString") }
+
+    /** `String(x)` where the lowering already proved `x` is a `number`. */
+    val jsNumberToString: IrSimpleFunctionSymbol by lazy { runtime("jsNumberToString") }
     val jsToNumber: IrSimpleFunctionSymbol by lazy { runtime("jsToNumber") }
     val jsAdd: IrSimpleFunctionSymbol by lazy { runtime("jsAdd") }
     val jsTruthy: IrSimpleFunctionSymbol by lazy { runtime("jsTruthy") }
+    val jsTruthyNumber: IrSimpleFunctionSymbol by lazy { runtime("jsTruthyNumber") }
+    val jsTruthyString: IrSimpleFunctionSymbol by lazy { runtime("jsTruthyString") }
     val jsStrictEquals: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEquals") }
+
+    /**
+     * `===` specialized by the ERASED operand types — see `jsStrictEqualsNumbers`.
+     *
+     * Named individually rather than resolved as overloads because
+     * [referenceFunction] selects a top-level function by NAME, and a name that
+     * resolves to more than one declaration has no answer.
+     */
+    val jsStrictEqualsNumbers: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEqualsNumbers") }
+    val jsStrictEqualsStrings: IrSimpleFunctionSymbol by lazy { runtime("jsStrictEqualsStrings") }
+    val jsStrictEqualsBooleans: IrSimpleFunctionSymbol by lazy {
+        runtime("jsStrictEqualsBooleans")
+    }
+    val jsStrictEqualsAnyNumber: IrSimpleFunctionSymbol by lazy {
+        runtime("jsStrictEqualsAnyNumber")
+    }
+    val jsStrictEqualsNumberAny: IrSimpleFunctionSymbol by lazy {
+        runtime("jsStrictEqualsNumberAny")
+    }
+    val jsStrictEqualsAnyString: IrSimpleFunctionSymbol by lazy {
+        runtime("jsStrictEqualsAnyString")
+    }
+    val jsStrictEqualsStringAny: IrSimpleFunctionSymbol by lazy {
+        runtime("jsStrictEqualsStringAny")
+    }
 
     val jsTypeOf: IrSimpleFunctionSymbol by lazy { runtime("jsTypeOf") }
 

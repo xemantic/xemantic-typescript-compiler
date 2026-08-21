@@ -192,6 +192,20 @@ public fun jsTruthy(value: Any?): Boolean = when (value) {
 }
 
 /**
+ * Truthiness of a value the lowering already PROVED is a `number`.
+ *
+ * The arm [jsTruthy] would have reached, without the box and without the walk
+ * that finds it: `if (!state)` in a scanner asks this of a local the lowering
+ * typed, once per character. `-0` is falsy and `NaN` is falsy, which is what
+ * the two tests are; they are spelled exactly as the general form spells them,
+ * because two copies of one rule diverge silently.
+ */
+public fun jsTruthyNumber(value: Double): Boolean = value != 0.0 && !value.isNaN()
+
+/** Truthiness of a value the lowering already proved is a `string` — see [jsTruthyNumber]. */
+public fun jsTruthyString(value: String): Boolean = value.isNotEmpty()
+
+/**
  * The `===` operator. Distinct from Kotlin's `===`: JS strict equality compares
  * strings and numbers BY VALUE, and `NaN !== NaN`. Reference types compare by
  * identity, which is the one part Kotlin's `===` would have given us.
@@ -202,6 +216,53 @@ public fun jsStrictEquals(left: Any?, right: Any?): Boolean = when {
     left is Boolean && right is Boolean -> left == right
     else -> left === right
 }
+
+/**
+ * `===` and `==` where the lowering PROVED both operands are `number`.
+ *
+ * The general [jsStrictEquals] takes `Any?`, so a comparison between two
+ * statically-numeric operands — `str.charCodeAt(p) === 0x20`, the shape every
+ * hand-written scanner is made of — boxes BOTH sides and then walks an
+ * `instanceof` chain to discover what the lowering already knew. These
+ * specializations exist so it does not: `docs/kir-lowering.md` §5 already
+ * decides `+` by the erased operand types, and this is the same rule one
+ * operator over.
+ *
+ * `==` on two statically-primitive `Double`s is IEEE-754 in Kotlin — `NaN`
+ * is unequal to itself and `0.0 == -0.0` — which is exactly what JavaScript's
+ * `===` specifies for numbers. Written as a function rather than emitted as an
+ * IR `EQEQ` so that the semantics are the ones Kotlin's own source rules give,
+ * and not a property of how a particular backend lowers a node.
+ */
+public fun jsStrictEqualsNumbers(left: Double, right: Double): Boolean = left == right
+
+/** `===` where both operands are statically `string` — see [jsStrictEqualsNumbers]. */
+public fun jsStrictEqualsStrings(left: String, right: String): Boolean = left == right
+
+/** `===` where both operands are statically `boolean` — see [jsStrictEqualsNumbers]. */
+public fun jsStrictEqualsBooleans(left: Boolean, right: Boolean): Boolean = left == right
+
+/**
+ * `===` where the RIGHT operand is statically `number` and the left is not.
+ *
+ * Both directions exist because `===` evaluates its LEFT operand first and the
+ * lowering hands the operands over already lowered: swapping them to reach one
+ * function would reorder two expressions that may both have effects.
+ */
+public fun jsStrictEqualsAnyNumber(left: Any?, right: Double): Boolean =
+    left is Double && jsStrictEqualsNumbers(left, right)
+
+/** `===` where the LEFT operand is statically `number` — see [jsStrictEqualsAnyNumber]. */
+public fun jsStrictEqualsNumberAny(left: Double, right: Any?): Boolean =
+    right is Double && jsStrictEqualsNumbers(left, right)
+
+/** `===` where the RIGHT operand is statically `string` — see [jsStrictEqualsAnyNumber]. */
+public fun jsStrictEqualsAnyString(left: Any?, right: String): Boolean =
+    left is String && left == right
+
+/** `===` where the LEFT operand is statically `string` — see [jsStrictEqualsAnyNumber]. */
+public fun jsStrictEqualsStringAny(left: String, right: Any?): Boolean =
+    right is String && left == right
 
 /**
  * A JavaScript array.

@@ -169,6 +169,7 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrSetFieldImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrWhileLoopImpl
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
+import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.types.makeNullable
@@ -1803,14 +1804,11 @@ internal class KirFileLowering(
                     body.add(
                         scope.irIfThen(
                             irBuiltIns.unitType,
-                            scope.irCall(intrinsics.jsStrictEquals, types.boolean).apply {
-                                arguments[0] = scope.irGet(subject)
-                                arguments[1] = coerce(
-                                    clause.expression,
-                                    lowerExpression(clause.expression),
-                                    types.anyNullable
-                                )
-                            },
+                            strictEqualsValues(
+                                clause.expression,
+                                scope.irGet(subject),
+                                lowerExpression(clause.expression)
+                            ),
                             scope.irSet(matched, scope.irBoolean(true))
                         )
                     )
@@ -2186,11 +2184,16 @@ internal class KirFileLowering(
      * is not `Number::toString` — it prints `1.0` where JavaScript prints `1`.
      * So everything that is not already a `String` goes through the runtime.
      */
-    private fun asString(node: Expression, value: IrExpression): IrExpression =
-        if (value.type == types.string) value
-        else scope.irCall(intrinsics.jsToString).apply {
+    private fun asString(node: Expression, value: IrExpression): IrExpression = when {
+        value.type == types.string -> value
+        // The arm `jsToString` would have taken, without the box: `is Double ->
+        // jsNumberToString(value)` is that function's own second line.
+        value.type == types.double ->
+            scope.irCall(intrinsics.jsNumberToString, types.string).apply { arguments[0] = value }
+        else -> scope.irCall(intrinsics.jsToString).apply {
             arguments[0] = coerce(node, value, types.anyNullable)
         }
+    }
 
     private fun arithmetic(node: BinaryExpression, operator: String): IrExpression =
         arithmeticValues(
@@ -2227,11 +2230,83 @@ internal class KirFileLowering(
      * numbers by VALUE and holds `NaN !== NaN`, so the runtime owns it.
      */
     private fun strictEquals(node: BinaryExpression, negated: Boolean): IrExpression {
-        val call = scope.irCall(intrinsics.jsStrictEquals).apply {
-            arguments[0] = coerce(node.left, lowerExpression(node.left), types.anyNullable)
-            arguments[1] = coerce(node.right, lowerExpression(node.right), types.anyNullable)
-        }
+        // Lowered BEFORE the specialization is chosen, and in source order: the
+        // decision reads the operands' erased types, and `===` evaluates its
+        // left operand first whichever runtime entry point it reaches.
+        val left = lowerExpression(node.left)
+        val right = lowerExpression(node.right)
+        val call = strictEqualsValues(node, left, right)
         return if (negated) not(call) else call
+    }
+
+    /**
+     * `===` over operands already lowered, decided by their ERASED types.
+     *
+     * The same shape [addValues] uses for `+`, and for the same reason: the
+     * general entry point takes `Any?`, so a comparison the lowering has
+     * already PROVEN to be between two numbers would box both sides and then
+     * re-discover their types with an `instanceof` chain. `str.charCodeAt(p)
+     * === 0x20` is that shape, and it is what a hand-written scanner's inner
+     * loop is made of.
+     *
+     * Both half-specialized directions exist rather than one canonical order,
+     * because reaching a single entry point would mean swapping two operands
+     * that may both have effects.
+     *
+     * The fallback is unchanged and is what every mixed case still reaches —
+     * an erasure this does not name is a correctness question for
+     * [jsStrictEquals], never for the caller.
+     */
+    private fun strictEqualsValues(
+        at: Node,
+        left: IrExpression,
+        right: IrExpression
+    ): IrExpression {
+        val l = left.type
+        val r = right.type
+        uniformStrictEquals(l, r)?.let { symbol ->
+            return scope.irCall(symbol, types.boolean).apply {
+                arguments[0] = left
+                arguments[1] = right
+            }
+        }
+        halfStrictEquals(r)?.let { symbol ->
+            return scope.irCall(symbol.first, types.boolean).apply {
+                arguments[0] = coerce(at, left, types.anyNullable)
+                arguments[1] = right
+            }
+        }
+        halfStrictEquals(l)?.let { symbol ->
+            return scope.irCall(symbol.second, types.boolean).apply {
+                arguments[0] = left
+                arguments[1] = coerce(at, right, types.anyNullable)
+            }
+        }
+        return scope.irCall(intrinsics.jsStrictEquals, types.boolean).apply {
+            arguments[0] = coerce(at, left, types.anyNullable)
+            arguments[1] = coerce(at, right, types.anyNullable)
+        }
+    }
+
+    /** The entry point for two operands that erase to the SAME primitive. */
+    private fun uniformStrictEquals(left: IrType, right: IrType): IrSimpleFunctionSymbol? =
+        if (left != right) null else when (left) {
+            types.double -> intrinsics.jsStrictEqualsNumbers
+            types.string -> intrinsics.jsStrictEqualsStrings
+            types.boolean -> intrinsics.jsStrictEqualsBooleans
+            else -> null
+        }
+
+    /**
+     * The (any-on-the-left, any-on-the-right) entry points for ONE primitive
+     * operand, or null where this type is not one the runtime specializes.
+     */
+    private fun halfStrictEquals(
+        type: IrType
+    ): Pair<IrSimpleFunctionSymbol, IrSimpleFunctionSymbol>? = when (type) {
+        types.double -> intrinsics.jsStrictEqualsAnyNumber to intrinsics.jsStrictEqualsNumberAny
+        types.string -> intrinsics.jsStrictEqualsAnyString to intrinsics.jsStrictEqualsStringAny
+        else -> null
     }
 
     /**
@@ -2297,9 +2372,19 @@ internal class KirFileLowering(
 
     /** `==` / `!=` — the runtime's abstract equality, negated in place. */
     private fun looseEquals(node: BinaryExpression, negated: Boolean): IrExpression {
-        val test = scope.irCall(intrinsics.jsLooseEquals, types.boolean).apply {
-            arguments[0] = coerce(node.left, lowerExpression(node.left), types.anyNullable)
-            arguments[1] = coerce(node.right, lowerExpression(node.right), types.anyNullable)
+        val left = lowerExpression(node.left)
+        val right = lowerExpression(node.right)
+        // ABSTRACT equality coincides with strict equality exactly when both
+        // operands are the same primitive; every MIXED case must stay on the
+        // runtime, because `1 == true` and `null == undefined` are true there.
+        val test = uniformStrictEquals(left.type, right.type)?.let { symbol ->
+            scope.irCall(symbol, types.boolean).apply {
+                arguments[0] = left
+                arguments[1] = right
+            }
+        } ?: scope.irCall(intrinsics.jsLooseEquals, types.boolean).apply {
+            arguments[0] = coerce(node.left, left, types.anyNullable)
+            arguments[1] = coerce(node.right, right, types.anyNullable)
         }
         return if (negated) not(test) else test
     }
@@ -3862,12 +3947,22 @@ internal class KirFileLowering(
      */
     private fun condition(node: Expression): IrExpression = truthy(lowerExpression(node))
 
-    private fun truthy(value: IrExpression): IrExpression =
-        if (value.type == types.boolean) value
-        else scope.irCall(intrinsics.jsTruthy).apply {
+    private fun truthy(value: IrExpression): IrExpression = when (value.type) {
+        // A `boolean` IS the condition; a `number` and a `string` each have one
+        // arm of `jsTruthy` and reach it without the box. `if (!state)` in a
+        // hand-written scanner is the numeric case, once per character.
+        types.boolean -> value
+        types.double -> scope.irCall(intrinsics.jsTruthyNumber, types.boolean).apply {
+            arguments[0] = value
+        }
+        types.string -> scope.irCall(intrinsics.jsTruthyString, types.boolean).apply {
+            arguments[0] = value
+        }
+        else -> scope.irCall(intrinsics.jsTruthy).apply {
             arguments[0] = if (value.type == types.anyNullable) value
             else scope.irAs(value, types.anyNullable)
         }
+    }
 
     private fun not(value: IrExpression): IrExpression =
         scope.irCall(irBuiltIns.booleanNotSymbol).apply { arguments[0] = value }
