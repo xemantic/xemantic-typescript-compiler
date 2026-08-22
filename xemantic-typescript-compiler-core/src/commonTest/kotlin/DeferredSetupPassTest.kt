@@ -51,32 +51,46 @@ import kotlin.test.Test
  *    Dropping the `ensureImportReferencesTracked()` call from the ask reddens
  *    this half and nothing else.
  *
- * The elision fixture is deliberately a PAIR — one value-referenced import that
- * must survive and one type-only import that must not — because a build that
- * keeps every import passes a "the used one is still there" assertion by
- * accident, and that is the shape a broken deferral produces in the OTHER
- * direction if the set were ever over-filled.
+ * The elision fixture had to be found rather than chosen. `referencedAliases`
+ * has ONE consumer and it is narrow: a single line of `Transformer` reached only
+ * by `import x = require(…)` under `module: preserve` without
+ * `verbatimModuleSyntax`. An ordinary ESM `import { a } from "./x"` fixture does
+ * not reach it at all — measured, ESM elision answers correctly with the set
+ * empty, so the first draft of these pins passed against a deliberately broken
+ * deferral. It is kept below as a CONTROL, because that fact is also what bounds
+ * the blast radius of this change.
  */
 class DeferredSetupPassTest {
-
-    private val twoFiles = """
-        // @Filename: dep.ts
-        export function used(n: number): number { return n; }
-        export interface Shape { readonly n: number }
-        // @Filename: main.ts
-        import { used } from "./dep";
-        import { Shape } from "./dep";
-        export const out: number = used(1);
-        export const shaped: Shape = { n: 2 };
-    """.trimIndent()
-
-    private fun compile() = TypeScriptCompiler().compile(twoFiles, "input.ts")
 
     private fun checkerOver(source: String, fileName: String): Pair<Checker, List<BinderResult>> {
         val options = CompilerOptions()
         val results = listOf(Binder(options).bind(Parser(source, fileName).parse()))
         return Checker(options, results, isMultiFileSource = true) to results
     }
+
+    /**
+     * The ONE consumer, spelled exactly. `isReferencedAliasDeclaration` is
+     * reached from a single line of `Transformer` — an `import x = require(…)`
+     * under `module: preserve` without `verbatimModuleSyntax` — so this is the
+     * only shape in the language whose emitted JavaScript is a function of
+     * [referencedAliases]. A fixture that merely imports and uses a name in ESM
+     * does NOT reach it: measured, the ESM elision path answers correctly with
+     * the set EMPTY, so such a fixture passes on a broken deferral. That draft
+     * was written, ablated, found vacuous, and replaced by this one.
+     */
+    private val requirePreserve = """
+        // @module: preserve
+        // @Filename: dep.ts
+        export const v: number = 1;
+        // @Filename: main.ts
+        import used = require("./dep");
+        import unused = require("./dep");
+        export const out: number = used.v;
+    """.trimIndent()
+
+    private fun mainJs(source: String) =
+        TypeScriptCompiler().compile(source, "input.ts")
+            .jsOutputs.first { it.first.endsWith("main.js") }.second
 
     @Test
     fun `a fresh checker has not walked alias references`() {
@@ -109,39 +123,61 @@ class DeferredSetupPassTest {
         val importDecl = results[0].sourceFile.statements.first { it is ImportDeclaration }
         val first = checker.isReferencedAliasDeclaration(importDecl)
         val second = checker.isReferencedAliasDeclaration(importDecl)
-        // CONTROL, not a pin: an eager build satisfies it too. It says the
-        // memo is a memo — that the deferred walk is idempotent in its ANSWER,
-        // which is what makes "runs once" a performance claim and not a
-        // correctness one.
+        // The ANSWER half is a control — an eager build satisfies it too. It says
+        // the memo is a memo, i.e. that "runs once" is a performance claim and
+        // not a correctness one.
         assert(second == first)
         assert(checker.importReferencesTracked)
     }
 
     @Test
-    fun `a value-referenced import survives elision through the deferred walk`() {
-        val js = compile().jsOutputs.first { it.first.endsWith("main.js") }.second
-        // The whole point of the set: `used` is called, so its import must stay.
-        assert(js.contains("dep"))
+    fun `a referenced import-require survives elision through the deferred walk`() {
+        val js = mainJs(requirePreserve)
+        // DISCRIMINATING: with the walk never run, [referencedAliases] is empty,
+        // this alias reads as unreferenced and the whole statement is elided.
         assert(js.contains("used"))
+        assert(js.contains("require(\"./dep\")"))
     }
 
     @Test
-    fun `a type-only import is still elided through the deferred walk`() {
-        val js = compile().jsOutputs.first { it.first.endsWith("main.js") }.second
-        // `Shape` is referenced only in a TYPE position, so nothing marks it and
-        // the import must not reach the JavaScript. Without this half, a walk
-        // that marked EVERYTHING would pass the assertion above.
-        assert(!js.contains("Shape"))
+    fun `an unreferenced import-require is still elided through the deferred walk`() {
+        val js = mainJs(requirePreserve)
+        // The other direction, and the reason the fixture declares TWO imports of
+        // one module: a walk that marked everything would satisfy the assertion
+        // above by accident.
+        assert(!js.contains("unused"))
     }
 
     @Test
     fun `negative control - the emitted program is not empty`() {
-        val r = compile()
-        val js = r.jsOutputs.first { it.first.endsWith("main.js") }.second
         // Round 790's law: a "the name is absent" assertion reads the same on a
         // correct build and on one that emitted nothing at all.
+        val js = mainJs(requirePreserve)
         assert(js.isNotEmpty())
-        assert(r.jsOutputs.any { it.first.endsWith("dep.js") })
+        assert(js.contains("out"))
+    }
+
+    @Test
+    fun `control - ESM elision does not go through this set at all`() {
+        // Recorded because it is what makes the fixture above the only usable
+        // one, and because it bounds the blast radius of the deferral: the ESM
+        // import path elides a type-only import on its own evidence, so the
+        // whole of [referencedAliases] answers for `import x = require(…)` under
+        // `module: preserve` and nothing else.
+        val js = mainJs(
+            """
+            // @Filename: dep.ts
+            export function used(n: number): number { return n; }
+            export interface Shape { readonly n: number }
+            // @Filename: main.ts
+            import { used } from "./dep";
+            import { Shape } from "./dep";
+            export const out: number = used(1);
+            export const shaped: Shape = { n: 2 };
+            """.trimIndent()
+        )
+        assert(js.contains("used"))
+        assert(!js.contains("Shape"))
     }
 
     @Test
