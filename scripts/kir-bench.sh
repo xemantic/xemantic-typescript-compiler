@@ -6,6 +6,13 @@
 #   arm 2  xtsc -kir    -> JVM bytecode -> java     (the Kotlin-IR backend)
 #   arm 3  xtsc -core   -> JavaScript   -> node     (OUR JavaScript, same runtime)
 #   arm 4  xtsc -kir    -> Kotlin/Native -> kexe    (KIR_BENCH_NATIVE=1, opt-in)
+#   arm 5  tsgo 7.0.2   -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
+#   arm 6  xtsc -core   -> JavaScript   -> bun      (KIR_BENCH_BUN=1, opt-in)
+#
+# The BUN arms re-run arms 1 and 3's OWN emitted files on a second JavaScript
+# engine, so the pair (1,5) and the pair (3,6) each hold the compiler AND the
+# emitted bytes fixed and vary only the runtime -- which is the only way a
+# node-vs-bun gap here can be attributed to the engine rather than to a compiler.
 #
 # The NATIVE arm is opt-in because building it is two konanc links on a box with
 # ZERO swap (CLAUDE.md), not because it is optional evidence: when it is asked
@@ -42,6 +49,8 @@ NATIVE="${KIR_BENCH_NATIVE:-0}"
 PROJECTS="$REPO/xemantic-typescript-compiler-kir/src/jvmTest/resources/projects"
 DRIVERS="$REPO/scripts/kir-bench/drivers"
 NODE="${KIR_BENCH_NODE:-$REPO/tools/node/bin/node}"
+BUN_ARM="${KIR_BENCH_BUN:-0}"
+BUN="${KIR_BENCH_BUN_BIN:-$REPO/tools/bun/bin/bun}"
 TSGO="${KIR_BENCH_TSGO:-$REPO/tools/tsgo-7.0.2/lib/tsc}"
 
 die() { echo "kir-bench: $*" >&2; exit 2; }
@@ -54,6 +63,14 @@ die() { echo "kir-bench: $*" >&2; exit 2; }
   curl -sL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz | tar xJ -C tools
   mv tools/node-v22.20.0-linux-x64 tools/node"
 [ -x "$TSGO" ] || die "no tsgo at '$TSGO' — set KIR_BENCH_TSGO"
+# Opt-in, and then REFUSED rather than skipped: an asked-for arm that quietly
+# vanishes reports a four-arm run as a six-arm one.
+if [ "$BUN_ARM" = "1" ]; then
+    [ -x "$BUN" ] || die "no bun at '$BUN' — set KIR_BENCH_BUN_BIN. It is NOT in the repo:
+  curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip
+  python3 -c \"import zipfile; zipfile.ZipFile('/tmp/bun.zip').extractall('tools/bun-dl')\"
+  mkdir -p tools/bun/bin && mv tools/bun-dl/bun-linux-x64/bun tools/bun/bin/bun && chmod +x tools/bun/bin/bun"
+fi
 [ -d "$PROJECTS/toml" ] || die "no acceptance projects at '$PROJECTS'"
 
 # ---- classpaths ------------------------------------------------------------
@@ -165,6 +182,8 @@ runnable_esm() {                               # runnable_esm <out-dir>
 
 ARMS=(tsgo xtsc kir)
 [ "$NATIVE" = "1" ] && ARMS+=(nat)
+# The bun arms need NO build of their own: they run the files arms 1 and 3 emit.
+[ "$BUN_ARM" = "1" ] && ARMS+=(tbun xbun)
 
 echo "kir-bench: building ${#ARMS[@]} arms (${ARMS[*]}) ..." >&2
 for lib in mitt toml; do
@@ -207,6 +226,8 @@ run_arm() {                                    # run_arm <arm> <lib>
     case "$1" in
         tsgo) "$NODE" "$WORK/tsgo-$2/out/main.js" ;;
         xtsc) "$NODE" "$WORK/xtsc-$2/out/main.js" ;;
+        tbun) "$BUN"  "$WORK/tsgo-$2/out/main.js" ;;
+        xbun) "$BUN"  "$WORK/xtsc-$2/out/main.js" ;;
         kir)  java -cp "$WORK/jvm-$2:$RUN_CP_TAIL" program.MainKt ;;
         nat)  "$WORK/native-$2.kexe" ;;
     esac
@@ -249,8 +270,10 @@ for line in open(sys.argv[1]):
     rows[(lib, arm)].append(int(ms))
 UNIT = {"mitt": (4_000_000, 1e6, "ns/emit"), "toml": (20_000, 1e3, "us/parse")}
 NAME = {"tsgo": "tsgo  -> JS     -> node", "xtsc": "xtsc  -> JS     -> node",
-        "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe"}
-ORDER = [a for a in ("tsgo", "xtsc", "kir", "nat") if (("mitt", a) in rows)]
+        "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe",
+        "tbun": "tsgo  -> JS     -> bun ", "xbun": "xtsc  -> JS     -> bun "}
+ORDER = [a for a in ("tsgo", "tbun", "xtsc", "xbun", "kir", "nat")
+         if (("mitt", a) in rows)]
 for lib in ("mitt", "toml"):
     ops, scale, unit = UNIT[lib]
     base = statistics.median(rows[(lib, "tsgo")])
