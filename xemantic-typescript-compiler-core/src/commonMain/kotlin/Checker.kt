@@ -63924,7 +63924,7 @@ interface DataView {
      * sibling `a`) is excluded by the all-object-literal requirement.
      */
     private fun checkArrayLiteralUnionTooComplex() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -77643,7 +77643,7 @@ interface DataView {
     }
 
     private fun checkTernaryUnionReadonlyWrites() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -80070,7 +80070,7 @@ interface DataView {
      */
     private fun checkWeakMapWeakSetCollision() {
         if (options.defaultedTarget < ScriptTarget.ES2015 || options.defaultedTarget >= ScriptTarget.ES2022) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             walkWeakMapCollisionInList(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
         }
@@ -85880,7 +85880,7 @@ interface DataView {
     // Companion: checkOuterScopeVarShadowing suppresses its TS2481 for this shape.
     // -----------------------------------------------------------------------
     private fun checkVarHoistRedeclaration() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -90593,7 +90593,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkDerivedConstructorReturnNull() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -94156,7 +94156,7 @@ interface DataView {
     }
 
     private fun checkTypePredicateNullableRecovery() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -96475,7 +96475,7 @@ interface DataView {
      * within the same function.
      */
     private fun checkOuterScopeVarShadowing() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -125812,7 +125812,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkOverloadSignatureCompatibility() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -129195,7 +129195,7 @@ interface DataView {
     // legal (TypeScript treats them as Array<X> where X is the alias's own
     // parameter), so we limit the descent to non-generic argument positions.
     private fun checkCircularTypeAlias() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -134251,7 +134251,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkInterfaceExtendsInterface() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -151418,7 +151418,7 @@ interface DataView {
      * no iterator. FP-safe by exact shape (exhaustive cases + sibling-binding destructure).
      */
     private fun checkExhaustiveSwitchDefaultDestructure() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             scanExhaustiveSwitchDefault(result.sourceFile.statements, result.sourceFile.text, fileName, emptyMap())
@@ -151631,7 +151631,7 @@ interface DataView {
         // TS2488 uses the Symbol.iterator protocol; under ES3/ES5 without downlevelIteration
         // array-destructuring uses array-likeness (no iterator) → tsc emits NOTHING there.
         if (options.defaultedTarget < ScriptTarget.ES2015 && !options.downlevelIteration) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -174168,7 +174168,7 @@ interface DataView {
      *  else excludes the array → no error → NOT matched, because we require a `&&` BinaryExpression). */
     private fun checkArrayIsArrayCompoundElseIndex() {
         if (!options.noImplicitAny && !options.strict) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -177471,7 +177471,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkNamespaceUsedAsType() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -179548,7 +179548,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkIndexedAccessPrivateMembers() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text

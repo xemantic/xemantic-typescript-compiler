@@ -55,6 +55,9 @@ import kotlin.test.Test
  * Each test states what the whole-program build reports FIRST — the lesson of
  * `ProjectNarrowFalseNegativeTest`, whose first fixture was vacuous because both arms
  * agreed on an empty list.
+ *
+ * Batch 2 (fifteen more walkers) adds TS2456 / `checkCircularTypeAlias` on the same
+ * terms — ownership established by the lab, then the same two controls.
  */
 class ProjectGatedTailWalkerTest {
 
@@ -64,6 +67,7 @@ class ProjectGatedTailWalkerTest {
 
     private val computedFile = "/proj/src/computed.ts"
     private val typeArgsFile = "/proj/src/typeargs.ts"
+    private val cyclicFile = "/proj/src/cyclic.ts"
     private val bystanderFile = "/proj/src/bystander.ts"
 
     /**
@@ -77,6 +81,18 @@ class ProjectGatedTailWalkerTest {
             static KEY = KEY;
         }
         export { C };
+    """.trimIndent() + "\n"
+
+    /**
+     * TS2456, owned by `checkCircularTypeAlias` — batch 2's walker. Ownership is
+     * established the same way batch 1 established its two: with
+     * `disable checkCircularTypeAlias` in `build/pass-lab.txt` this row disappears
+     * and no other row changes, so the diagnostic is that walker's and a partition
+     * that loses it has lost it to the gate.
+     */
+    private val cyclicText = """
+        type Cyc = Cyc;
+        export type Alias = Cyc;
     """.trimIndent() + "\n"
 
     /** TS2558, owned by `checkCallTypeArgCount`. */
@@ -103,6 +119,7 @@ class ProjectGatedTailWalkerTest {
             "/proj/tsconfig.json" to config,
             computedFile to computedText,
             typeArgsFile to typeArgsText,
+            cyclicFile to cyclicText,
             bystanderFile to bystanderText,
         ),
     )
@@ -149,6 +166,37 @@ class ProjectGatedTailWalkerTest {
         val narrowed = ProjectCompiler(vfs())
             .build("/proj", noEmit = true, recheckOnly = setOf(bystanderFile))
         assert(rowsIn(narrowed.diagnostics, bystanderFile).isEmpty())
+    }
+
+    /**
+     * BATCH 2's control. `checkCircularTypeAlias` is one of the fifteen walkers batch
+     * 2 moved onto `checkedResults`; this states what the whole-program build reports
+     * before any partition is taken, so the pin below cannot pass by both arms being
+     * empty.
+     */
+    @Test
+    fun `the whole-program build reports the circular-alias row`() {
+        val whole = ProjectCompiler(vfs()).build("/proj", noEmit = true)
+        assert(whole.diagnostics.any { it.fileName == cyclicFile && it.code == 2456 })
+    }
+
+    @Test
+    fun `a partition of the circular-alias file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(cyclicFile))
+        assert(rowsIn(whole.diagnostics, cyclicFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, cyclicFile) == rowsIn(whole.diagnostics, cyclicFile))
+    }
+
+    @Test
+    fun `the narrowed query through the public API keeps the circular-alias row`() {
+        val project = Project.open("/proj", vfs())
+        val whole = project.diagnostics(cyclicFile).map { it.code }.sorted()
+        assert(whole.contains(2456))
+        project.updateFile(cyclicFile, cyclicText)
+        assert(project.diagnosticsOf(listOf(cyclicFile)).map { it.code }.sorted() == whole)
     }
 
     @Test
