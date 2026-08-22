@@ -160,12 +160,12 @@ has a second consumer the way `buildFileLocalTypeMaps`' turned out to have.
 ITEM THIS ROUND PRODUCED.** The refusal above is a statement about
 `aliasDisplayMap`, not about `buildFileLocalTypeMaps`: an alias name is attached
 to an interned type at its FIRST mint, so the 65 ms is being spent to make that
-first mint happen in a program-wide order. **Make alias display a function of the
-ALIAS DECLARATION rather than of who minted first — attach it when the
-`TypeAliasDeclaration` is resolved, or resolve it on demand at render time — and
-the eager pass stops buying anything the capture channel needs, at which point
-this round's already-built deferral banks 66 ms (query median 402 -> 349, ratio
-12.61x -> 14.17x) with no divergence at all.** Two things make it attemptable:
+first mint happen in a program-wide order. **83% of the divergence is plainly
+`aliasDisplayMap` and costs 6.81 ms to keep eager; the residual 462 spans are
+UNDIAGNOSED, run the other way round, and are what the other 58 ms buys.** So the
+item splits: close the alias-display half properly, then classify the residual
+before assuming it is the same thing — its rows look more like two different
+`Type` instances than two renderings of one.** Two things make it attemptable:
 the divergence census is a ready-made differential oracle that costs one
 `scripts/capture-equivalence.sh` run and needs no baseline, and the three-point
 table above says exactly how much of the divergence each phase owns. Two things
@@ -1569,13 +1569,25 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   (`ModuleName` vs `ModuleExportName`; full `Extract<ClassDeclaration |
   ClassExpression, Pick<T, "kind">>` vs narrow `ClassLikeDeclaration`). The 65 ms
   is therefore not buying any of the map's entries — it is buying a program-wide
-  FIRST-TOUCH ORDER for `aliasDisplayMap`. Attach the alias name when the
-  `TypeAliasDeclaration` is resolved (or resolve it at render time) and the eager
-  pass stops being load-bearing. **The oracle is free** — the full-vs-narrow arms
-  must agree, so no baseline is needed — and (INC.10)'s three-point table says
-  which phase owns which share (fully deferred 0.01 ms / 2,722 spans; `TypeAlias`
-  eager 6.81 / 462; whole DECLARATION branch eager 64.94 / 5). **Two hazards, both
-  recorded**: round 754 excludes `Type.Reference` from `aliasDisplayMap`
+  FIRST-TOUCH ORDER. **Two sub-problems, and only the first has its mechanism
+  established.** (a) **83% of the divergence (2,722 -> 462) is recovered by
+  resolving every file's TYPE ALIASES, and that costs 6.81 ms** — those rows are
+  plainly `aliasDisplayMap` (an alias name attaches to an interned type at its
+  first mint: `ModuleName` vs `ModuleExportName`, `AssignmentPattern` vs its
+  expansion), so attaching the name at the `TypeAliasDeclaration` — or resolving
+  it at render time — should close them, and 6.81 ms is small enough that keeping
+  that phase eager is an acceptable answer on its own. (b) **The residual 462 is
+  UNDIAGNOSED and is what the other 58 ms buys.** Its rows run the OTHER way
+  (full `Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` vs narrow
+  `ClassLikeDeclaration`) and are recovered only by keeping the whole DECLARATION
+  branch — `Function|Class|Interface|Enum|TypeAlias|Alias` — eager, so they may
+  not be a display question at all but two genuinely different `Type` instances
+  (a conditional type evaluated in one arm and not the other). **Start by
+  classifying (b); do not assume it is (a).** **The oracle is free** — the
+  full-vs-narrow arms must agree, so no baseline is needed — and (INC.10)'s
+  three-point table says which phase owns which share (fully deferred 0.01 ms /
+  2,722 spans; `TypeAlias` eager 6.81 / 462; whole DECLARATION branch eager
+  64.94 / 5). **Two hazards, both recorded**: round 754 excludes `Type.Reference` from `aliasDisplayMap`
   DELIBERATELY (a bare defaulted generic displaying as its alias moved eight
   `typeVariableConstraintedToAliasNotAssignableToUnion` baseline lines), and union
   display order is pinned byte-for-byte across the corpus — so this is a

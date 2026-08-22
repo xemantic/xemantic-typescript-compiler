@@ -31,9 +31,10 @@ the pass's second product is the ORDER. Suite **15,674 / 0 / 3** (+8 pins), `cos
 FLAT and worth saying so**: 416 rows, eleven over 5 ms, forty-six over 1 ms, and the remaining
 **370 rows sum to 11.9 ms between them**. **And the 66 ms is not lost, it is BLOCKED ON ONE
 THING** — the deferral is already built and its only casualty is `aliasDisplayMap`'s
-first-mint ordering, so making alias display a function of the alias DECLARATION rather than
-of who minted first banks the whole 66 ms (query median 402 -> 349, ratio 14.17x) against a
-free differential oracle. Queued as (INC.11).
+first-mint ordering, and 83% of that ordering (2,722 -> 462 spans) is
+recovered for **6.81 ms** by keeping the TYPE ALIASES eager. The residual 462 is undiagnosed
+and runs the other way round, so it may not be a display question at all. Queued as (INC.11),
+against a free differential oracle: the full and narrow capture arms must agree.
 
 **A NARROWED ERROR QUERY IS DOWN TO 422 ms AND ITS FLOOR TO 378 — A FILE'S FLOW GRAPH IS
 NOW BUILT ONLY WHEN SOMEBODY ASKS FOR IT (2026-08-22, (INC.9)).** The floor was re-decomposed
