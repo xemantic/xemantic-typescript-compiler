@@ -102,6 +102,13 @@ class ProjectCompiler(private val vfs: Vfs) {
     /**
      * @param projectPath a directory containing `tsconfig.json`, or a path to a tsconfig file.
      * @param noEmit when true, type-check only — do not write outputs.
+     * @param recheckOnly (INC.1) when non-null, narrows the CHECKER to these files
+     *   (the INV.6 partition view) while the program itself stays whole — everything
+     *   is crawled, parsed and bound, and the diagnostics reported for a named file
+     *   are the ones a whole-program build reports for it (the gate is
+     *   `scripts/partition-equivalence.sh`; captured types and definitions are
+     *   `scripts/capture-equivalence.sh`). REQUIRES [noEmit]: see the `require` in
+     *   the body for why a partition may not emit.
      * @param outDir when non-null, OVERRIDES the config's `outDir` (resolved against the
      *   process CWD, like tsc's `--outDir`), so a caller can send the emitted tree
      *   somewhere throwaway without touching the project. (AOT.4)(c), round 840(c): the
@@ -128,6 +135,21 @@ class ProjectCompiler(private val vfs: Vfs) {
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
     ): Result {
+        // (INC.4) A partition may not EMIT. The Transformer queries the checker it is
+        // handed (`isReferencedAliasDeclaration` and friends decide import elision),
+        // so under `recheckOnly` it would ask a checker that walked a SUBSET of the
+        // program and elide an import some unwalked file's use keeps alive — wrong
+        // JavaScript, silently, with every diagnostic still agreeing. Every driver in
+        // this repo gates incremental work on `--noEmit` and `Project` always passes
+        // `noEmit = true`, so nothing today is wrong; the parameter is public and the
+        // next caller will not know. Refused here rather than deeper for
+        // `compileParsed`'s reason: a message that names the caller's mistake.
+        require(noEmit || recheckOnly == null) {
+            "recheckOnly walks a partition and emit needs the whole program: " +
+                "the Transformer asks the checker which imports are referenced, and a " +
+                "partition checker has not seen the files that reference them — " +
+                "pass noEmit = true, or drop recheckOnly"
+        }
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
         // never match the absolute paths the Vfs walk yields).
