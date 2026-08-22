@@ -1,32 +1,34 @@
 # Status
 
-**AND THE REFUSAL FOUND A REAL DEFECT (2026-08-22).** Narrowing the CAPTURE queries —
-hover, completion, go-to-definition, signature help — was measured at **3.68x** and
-**refused**: `scripts/capture-equivalence.sh` compares every captured span whole-program
-against narrowed, and 45 of **381,666** disagreed. The rows named the cause themselves (one
-lost a KEYWORD type, one a mapped-type `-?` modifier — names cannot fail that way, a lazy
-member table can), and in 5 of the 45 it was the WHOLE-PROGRAM arm rendering `any`, so
-neither arm was right: both were draws from an order-dependent cache. **(INC.5) fixed it at
-the five capture render sites — never inside `typeToString`, which is the diagnostic
-renderer and would have put ~13k baselines in play — taking 45 divergent spans to 9 and the
-wrong-direction rows from 40 to 4.** The pin was verified to FAIL on the un-fixed binary.
-What remains is `Readonly<...>`'s fresh copy symbols, named as (INC.6). Suite 15,626 / 0.
+**THE LANGUAGE SERVICE ANSWERS AN EDITOR'S ERROR QUERY AS A PARTITION, AND IT IS NOW ~4.9x
+(2026-08-22, owner directive: make it incremental enough to carry an IntelliJ plugin's error
+reporting).** `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
+CHECK PARTITION instead of filtering a whole-program build: on tsc's own 78 sources
+(9,977,097 chars) a whole-program build is **4,818 ms** and a narrowed query is now
+**989 ms**, with every one of those 78 files reporting exactly the rows the full build
+reports for it. The seam (`recheckOnly` -> `Checker(assignedFileNames)`, the INV.6 view
+`--workers` uses) already existed and this module was passing null to it, because narrowing
+was understood to need `--watch`'s reverse-dependency closure. **An editor's question does
+not: it asks what is wrong in ONE buffer and claims nothing about the others.**
 
-**THE LANGUAGE SERVICE ANSWERS AN EDITOR'S ERROR QUERY AS A PARTITION (2026-08-22, owner
-directive).** `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
-CHECK PARTITION instead of filtering a whole-program build: **4,818 ms -> 1,107 ms warm** on
-tsc's own 78 sources (9,977,097 characters), and every one of those 78 files reports exactly
-the diagnostic rows the full build reports for it — 5 of them carrying the program's 46
-diagnostics, so the agreement is not the vacuous kind. The seam (`recheckOnly` ->
-`Checker(assignedFileNames)`, the INV.6 view `--workers` uses) already existed and this module
-was passing null to it, because narrowing was understood to require `--watch`'s
-reverse-dependency closure. **An editor's question does not: it asks what is wrong in ONE
-buffer and claims nothing about the others.** The gate is a whole-project sweep
-(`scripts/partition-equivalence.sh`) rather than the suite, which structurally cannot see this
-— a corpus fixture is one or two files, where a partition of one is nearly the whole program.
-**AND THE SAME MEASUREMENT CLOSES THE DIRECTION: a median file's OWN checking is 15 ms against
-a 1,092 ms floor**, so narrowing the check is finished and everything left in the incremental
-arc is the floor — crawl, parse, bind and the program-wide passes ((INC.3)). Suite 15,615 / 0.
+**THE MEASUREMENTS MATTERED MORE THAN THE FEATURES, AND TWO OF THEM CLOSED DIRECTIONS.**
+A median file's OWN checking is **15 ms**, so narrowing the CHECK is finished — what remains
+is a floor (crawl + parse + bind + program-wide passes), decomposed at **1,219 ms** into tail
+walkers 66%, `init:*` 9%, bind 20%, crawl 2%. That **inverted the queue's own lever order**
+and retired four inherited figures, including round 880's "bind 515 ms" (a per-WORKER
+CONTENDED term) and the crawl's "138 ms" (parses are fully content-cached). **(INC.7) batch 1**
+then gated 8 pure-emitter tail walkers onto the partition — a strict no-op on every full build,
+so no corpus baseline moved — for 1,207 -> 1,029 ms of floor, and measured that such a gate
+banks only **~79%** of its row because the work relocates onto whoever asks next.
+
+**AND A REFUSAL FOUND A REAL DEFECT.** Narrowing the CAPTURE queries (hover, completion,
+go-to-definition, signature help) was measured at **3.7x** and **refused**: 45 of **381,666**
+captured spans rendered a different type. The rows named the cause themselves — one lost a
+KEYWORD type, one a mapped-type `-?` modifier, which names cannot do and a lazy member table
+can — and in 5 of the 45 it was the WHOLE-PROGRAM arm rendering `any`, so both arms were draws
+from an order-dependent cache. **(INC.5)** fixed it at the five capture render sites (never
+inside `typeToString`, the diagnostic renderer, which would have put ~13k baselines in play),
+taking 45 divergent spans to **9**. Suite 15,631 / 0 / 3.
 
 **A TYPESCRIPT LIBRARY'S PUBLIC API NOW EXPORTS AS A KOTLIN METADATA KLIB (2026-08-22, owner
 directive).** `exportTypeScriptProjectApi(project, entry, out.klib)` writes the artifact a Kotlin
