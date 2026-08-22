@@ -109360,6 +109360,36 @@ interface DataView {
             copy.valueDeclaration = p.valueDeclaration
             copy.parent = p.parent
             mappedReadonlyMemberIds.add(copy.id)
+            // (INC.6) POPULATE THE COPY'S TYPE AT MINT TIME — the idiom
+            // [resolveReferenceMembers] and the expando branch of
+            // [resolveDeclaredMembers] already use for a symbol they mint
+            // themselves, and the reason the display of a `Readonly<T>` member
+            // used to depend on program order.
+            //
+            // A reader of an anonymous object type's member — `typeToString`, and
+            // through it every hover — reads `symbolTypes[id]` RAW and prints `any`
+            // when the entry is absent. Nothing wrote one for these copies: they
+            // carry the source's declarations, so their type is resolvable, but the
+            // only writer is [getTypeOfSymbol], whose write is gated on round 778's
+            // EMPTY instantiation context. Every use of `Readonly<T>` inside a
+            // `namespace` body resolves with a namespace on `inferenceNamespaceStack`,
+            // so the write was refused and the member printed `any` — unless some
+            // OTHER file's check had happened to ask about that same copy from an
+            // empty context first. Measured on tsc's own sources: the four surviving
+            // capture divergences of (INC.5) were all `Readonly<BuilderState>`, and
+            // the trace showed `getTypeOfSymbol` returning the right type every time
+            // and simply never being allowed to record it.
+            //
+            // Writing here is UNGATED and sound where [getTypeOfSymbol]'s is not,
+            // because the id is one this materialization just minted: the copy is
+            // reachable only from `result`, so the value can never be read as some
+            // other symbol's frozen type, and it is the resolution taken in the very
+            // context that produced `result` (a context-BEARING materialization is
+            // not cached by [getTypeFromTypeNodeCore] either, so the pair stays
+            // consistent). `errorType` is left unwritten so an unresolvable member
+            // keeps degrading exactly as it did.
+            val copyType = getTypeOfSymbol(p)
+            if (copyType !== errorType) symbolTypes[copy.id] = copyType
             members[copy.name] = copy
             newProps.add(copy)
         }
