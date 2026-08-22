@@ -38,20 +38,74 @@ class BinderResult(
     /** Module instance states for namespace/module declarations. */
     val moduleInstanceStates: MutableMap<Long, ModuleInstanceState>,
     /**
-     * Control-flow graph for narrowing. Maps reference-position node keys to
-     * the [FlowNode] representing the program point just before that
-     * reference is evaluated. Built by [FlowGraphBuilder]. NOT YET CONSUMED
-     * by the checker — Phase 17 step 1 is infrastructure only.
-     */
-    val flowGraph: FlowGraph,
-    /**
      * INV.2(c): per-node lexical scopes, keyed by the scope-owner node's
      * `nodeId` (the SourceFile root is key 0). Built by the ADDITIVE
      * lexical-binding pass after conventional binding; empty for unindexed
-     * (hand-constructed) trees. NOT YET CONSUMED — infrastructure for INV.4.
+     * (hand-constructed) trees.
      */
     val lexicalScopes: Map<Int, LexicalScope>,
-)
+) {
+
+    /**
+     * (INC.9) The control-flow graph, built on FIRST ASK and never before.
+     *
+     * Maps reference-position node keys to the [FlowNode] representing the
+     * program point just before that reference is evaluated.
+     *
+     * **Why it is deferred and not omitted.** Round 865 measured that 52.3% of
+     * the flow nodes this compiler mints are never read by any consumer, and
+     * recorded the asymmetry that governs every change here: a missing side
+     * table degrades to a correct fallback, but a missing FLOW NODE makes
+     * `flowAt` answer null, nothing narrows, and the compiler emits a FALSE
+     * POSITIVE. So laziness here must DEFER-AND-BUILD, never omit — which is
+     * exactly what this property does: the first reader gets the same graph the
+     * eager build produced, and every later reader gets that same instance.
+     *
+     * **Why deferring is sound.** [FlowGraphBuilder] is a pure function of the
+     * [SourceFile]: a fresh builder per file, every cache it consults is one of
+     * its own instance fields, and its `FlowNode` ids restart at 0 per file
+     * (round 865), so nothing about the graph depends on WHEN it is built or on
+     * which other files were built first. It mints no `Symbol` and no `Type`,
+     * so the INV.6(6c0) id sequences cannot move either.
+     *
+     * **What it buys.** Under a `recheckOnly` partition — the language service's
+     * per-file diagnostics query, and every caret-scoped capture query — the
+     * checker walks ONE file, so only that file's graph is asked for. The other
+     * 77 program files and the ~45 real-lib files (whose `.d.ts` graphs no
+     * consumer has ever read) are never built. Measured on tsc's own 78 sources:
+     * `FlowGraphBuilder` is 126 ms of a 523 ms floor, i.e. 24% of everything a
+     * narrowed query costs.
+     *
+     * **Publication.** `lazy` (SYNCHRONIZED by default on every target here) is
+     * load-bearing, not decoration: `--shareBind` (round 883) hands ONE set of
+     * [BinderResult]s to N worker threads, so two workers can ask the same file
+     * for its graph at the same moment. A plain nullable field would publish a
+     * partially-constructed [FlowGraph] there, and the failure would be a wrong
+     * narrowing rather than a crash.
+     */
+    val flowGraph: FlowGraph get() = lazyFlowGraph.value
+
+    /**
+     * Whether [flowGraph] has been asked for yet. Exists so laziness can be
+     * pinned as a FACT about this object rather than through a process-global
+     * counter (round 900: a probe-gated census is a poor instrument for
+     * "did this work happen at all", because the probe's own argument can be
+     * what performs it).
+     */
+    val flowGraphBuilt: Boolean get() = lazyFlowGraph.isInitialized()
+
+    private val lazyFlowGraph = lazy {
+        // The span stays [FrontEnd.BIND_FLOW] wherever the build lands, so a
+        // cross-round comparison of flow-graph construction still compares the
+        // same quantity; what MOVES is the phase it is charged to — a deferred
+        // build is charged to [FrontEnd.CHECK], and [FrontEnd.BIND]'s residue
+        // against its three sub-rows is what says so.
+        val fe = FrontEnd.t()
+        val graph = FlowGraphBuilder().build(sourceFile)
+        FrontEnd.close(FrontEnd.BIND_FLOW, fe)
+        graph
+    }
+}
 
 /**
  * Walks a [SourceFile] AST and creates [Symbol]s for all declarations,
@@ -89,10 +143,11 @@ class Binder(private val options: CompilerOptions) {
         // N worker threads at once, so the sound construction is here — and then
         // it is paid for EVERY scope, not only the ones a query reaches.
         if (MapCensus.on) MapCensus.lexBound(lexicalScopes)
-        val feF = FrontEnd.t()
-        val flowGraph = FlowGraphBuilder().build(sourceFile)
-        FrontEnd.close(FrontEnd.BIND_FLOW, feF)
-        return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates, flowGraph, lexicalScopes)
+        // (INC.9) The flow graph is NOT built here — [BinderResult.flowGraph]
+        // builds it on first ask. A `recheckOnly` partition asks for one file's,
+        // a full build asks for every checked file's, and nothing has ever asked
+        // for a real-lib `.d.ts` file's.
+        return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates, lexicalScopes)
     }
 
     private fun bindStatements(statements: List<Statement>) {
