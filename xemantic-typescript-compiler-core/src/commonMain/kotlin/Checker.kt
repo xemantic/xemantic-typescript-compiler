@@ -11869,7 +11869,7 @@ class Checker(
      */
     private fun checkInvalidParameterDecorators() {
         if (options.experimentalDecorators) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -24605,7 +24605,7 @@ class Checker(
      * - That outer `T` resolves to an Interface/TypeAlias (NOT the class type parameter)
      */
     private fun checkIdenticallyNamedTypeAssignment() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -63576,7 +63576,7 @@ interface DataView {
      * This check is suppressed when @strict: false is explicitly set (like TS2454/TS2564).
      */
     private fun checkBodylessFunctionReturnTypesMissing() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             // .d.ts files are checked only when noImplicitAny is on — TS7010 requires
             // noImplicitAny/strict for implicit-any diagnostics in ambient contexts.
@@ -64209,7 +64209,7 @@ interface DataView {
      * empty array literal in a for-head, so firing is never a false positive.
      */
     private fun checkForLoopEmptyArrayDestructure() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -66336,7 +66336,7 @@ interface DataView {
      * member of the resolved class. Skips JS-like / .d.ts files.
      */
     private fun checkPrivateThisAccessInThisParamFunctions() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             ptpScanStmts(result.sourceFile.statements, result.sourceFile.text, fileName, result.locals)
@@ -74465,7 +74465,7 @@ interface DataView {
     // need tuple-type inference which is out of scope here.
 
     private fun checkTupleDestructuringBounds() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -85786,7 +85786,7 @@ interface DataView {
     // This walker is ADDITIVE (disjoint from the binder pipeline's scopes).
     // -----------------------------------------------------------------------
     private fun checkBlockScopedRedeclarations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -87111,7 +87111,7 @@ interface DataView {
      * `<T extends U, U extends T>` (not yet handled — direct only for now).
      */
     private fun checkTypeParamCircularConstraint() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -91620,7 +91620,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkCircularImportAlias() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -92375,7 +92375,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkDuplicateLabels() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -96790,7 +96790,7 @@ interface DataView {
      * body of `if`/`else`/`while`/`do`/`for`/`for-in`/`for-of`.
      */
     private fun checkBlockScopedDeclarationsInSingleBody() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -128011,7 +128011,7 @@ interface DataView {
      * a file and the bodies of other namespace declarations are allowed.
      */
     private fun checkNamespaceTopLevelOnly() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -129108,7 +129108,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkCircularInterfaceBases() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -135159,7 +135159,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkPropertyUseBeforeInit() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -165993,7 +165993,7 @@ interface DataView {
      * unrenderable in-key prop displays all bail.
      */
     private fun checkReverseMappedExcessProps() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
