@@ -1978,7 +1978,27 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   whole-program regex passes are already gone (0.44 ms). **What it leaves is (INC.7), a
   bigger lever than either of the two this entry used to rank first.**
 
-- [ ] **(INC.7) BATCH 2 — 368 WALKERS LEFT, RE-PRICED. Batch 1 LANDED 2026-08-22: 8 pure
+- [ ] **(INC.7) BATCH 3 — ~350 WALKERS AND ~470 ms LEFT, AND IT IS THE LAST BATCH WHERE
+  READING BEATS SWEEPING (mean 1.3 ms per walker).** Batches 1 and 2 LANDED: 23 walkers
+  gated, floor 1,207 -> ~790-910 ms, narrowed query 1,077 -> **824 ms**, suite unmoved,
+  sweep EQUIVALENT throughout. **The discount is measured twice and is shrinking as
+  predicted — 79.0% then 85.5%, leaking the same absolute ~32 ms from a 36% bigger batch.**
+  **START BY READING `checkBaseClassImprovedMismatch` (0.07 -> 17.89 ms)**: it is batch 2's
+  relocation victim, exactly as `checkArrayIsArrayCompoundElseIndex` was batch 1's — and
+  that one, gated in batch 2, went to 0.00. The victim is always the next candidate.
+  **THE HEAD OF THE RANKING IS NOW DOMINATED BY WALKERS THAT NEED A DIFFERENT ARGUMENT than
+  "it only emits"**: `checkTypeArgumentConstraints` (22.6, refused — fields 108 and 106 other
+  passes read, plus a possible first touch into `typeParamInternCache`), `checkPropertyOverride`
+  (11.5), `checkInterfaceMultiBaseConflicts` (11.4), `checkSubsequentVarTypes` (10.8), all
+  refused on ambient installs. For those the question is whether the install is
+  WALKER-PRIVATE — which is how `checkNamespaceUsedAsType` was cleared in batch 2, by
+  counting mentions of each field across the whole file and confirming the reset sits
+  outside the loop. Seven analyzer-clean rows are staged but NOT cleared (bodies unread):
+  `checkPrivateThisAccessInThisParamFunctions`, `checkTupleDestructuringBounds`,
+  `checkCircularInterfaceBases`, `checkInvalidParameterDecorators`,
+  `checkForLoopEmptyArrayDestructure`, `checkBlockScopedRedeclarations`,
+  `checkReverseMappedExcessProps`.
+  ORIGINAL ENTRY (batch 2): 368 WALKERS LEFT, RE-PRICED. Batch 1 LANDED 2026-08-22: 8 pure
   emitters gated, floor 1,207 -> 1,029 ms, narrowed query 1,077 -> 989, suite unmoved and
   the sweep still EQUIVALENT.** **Re-price before believing any total: the batch banked
   ~79% of the naive sum of its rows** (162.6 shed, floor fell 128.4, +34.2 reappeared
