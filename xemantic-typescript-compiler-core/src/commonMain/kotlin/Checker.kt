@@ -13877,7 +13877,7 @@ class Checker(
      * class-finding ([findClassesForComputed]) to reach nested classes.
      */
     private fun checkClassNameInOwnComputedMemberNames() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             findClassesForComputed(result.sourceFile.statements, result.sourceFile.text, fileName)
@@ -65823,7 +65823,7 @@ interface DataView {
      *  SUBJECT `this is X`, which is the OK polymorphic-this form). Class/interface members are
      *  never visited, so valid `this` types there are untouched. */
     private fun checkThisTypeInObjectLiterals() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -78962,7 +78962,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkIllegalSuperCallsInNestedFunctions() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -120836,7 +120836,7 @@ interface DataView {
      * walk (FN-safe: missing a position only drops a diagnostic, never adds a wrong one).
      */
     private fun checkSpreadPropertyOverrides() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -168518,7 +168518,7 @@ interface DataView {
      * matched shape, so a passing test with it already carries the diagnostic).
      */
     private fun checkDestructuringDefaultTypeMismatches() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -173990,7 +173990,7 @@ interface DataView {
      *  param is `any` → emit nothing → purely ADDITIVE. Corpus-unique gate: only this test has a
      *  `.createMachine(` call (and the `setup`/`assign`/`spawn` shape). */
     private fun checkSetupCreateMachineSpawnKeys() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -174655,7 +174655,7 @@ interface DataView {
      *     implementation signature." + related TS2750 at the impl signature.
      */
     private fun checkEnumNominalClassMismatches() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -181528,7 +181528,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkCallTypeArgCount() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
