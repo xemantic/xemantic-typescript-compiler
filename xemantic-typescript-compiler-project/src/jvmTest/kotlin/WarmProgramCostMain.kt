@@ -98,6 +98,16 @@ fun main(args: Array<String>) {
     // of a no-op. Deliberately NOT asserted per-file — a query's cost does not depend
     // on whether its own answer is empty, and on this profile 78 files carry 46 rows
     // between them, so a per-file assertion would only be picking a file.
+    val textB = File(fileB).readText()
+    val caretB1 = textB.indexOf(needle)
+    val caretB2 = textB.lastIndexOf(needle)
+    require(caretB1 >= 0 && caretB2 > caretB1) { "needle '$needle' not twice in $fileB" }
+    require(project.quickInfoAt(fileB, caretB1) != null) {
+        "REFUSED: caretB1 answers null, so the B arms would measure an index lookup"
+    }
+    require(project.documentHighlightsAt(fileB, caretB2).isNotEmpty()) {
+        "REFUSED: caretB2 highlights nothing, so the highlight arms measure an empty answer"
+    }
     require(project.diagnostics().isNotEmpty()) {
         "REFUSED: the whole program reports nothing, so every row below is a no-op"
     }
@@ -124,6 +134,12 @@ fun main(args: Array<String>) {
         val hover1 = ms { project.quickInfoAt(fileA, caret1) }
         val hover2 = ms { project.quickInfoAt(fileA, caret2) }
         val hover1Again = ms { project.quickInfoAt(fileA, caret1) }
+        // (INC.12) the two sequences the memo exists for, on the SMALLER file so the
+        // file-wide highlight request stays affordable to draw three times.
+        val hoverB = ms { project.quickInfoAt(fileB, caretB1) }
+        val defB = ms { project.definitionsAt(fileB, caretB1) }
+        val highlightsB1 = ms { project.documentHighlightsAt(fileB, caretB1) }
+        val highlightsB2 = ms { project.documentHighlightsAt(fileB, caretB2) }
         // (P2) exactly one buffer changed, and the query is about THAT buffer.
         project.updateFile(fileA, textA)
         val afterEdit = ms { project.diagnosticsOf(listOf(fileA)) }
@@ -135,10 +151,14 @@ fun main(args: Array<String>) {
         record("diagB.sameState", diagB); record("diagA.repeat2", diagARepeat2)
         record("hover1", hover1); record("hover2.sameState", hover2)
         record("hover1.again", hover1Again)
+        record("hoverB", hoverB); record("defB.afterHoverB", defB)
+        record("highlightsB1", highlightsB1)
+        record("highlightsB2.otherCaret", highlightsB2)
         record("diagA.afterEditA", afterEdit)
         record("diagB.afterEditA", afterEditOther)
         println("rotation=$rotation diagA=$diagA repeat=$diagARepeat diagB=$diagB " +
             "hover1=$hover1 hover2=$hover2 hoverAgain=$hover1Again " +
+            "hoverB=$hoverB defB=$defB hlB1=$highlightsB1 hlB2=$highlightsB2 " +
             "afterEditA=$afterEdit afterEditA_askB=$afterEditOther")
     }
     project.close()
