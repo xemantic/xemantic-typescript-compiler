@@ -274,8 +274,12 @@ public class EmitResult internal constructor(
  *
  * `PrintingMessageCollector` — the collector every kotlinc example uses — writes
  * to a stream, which is the one thing an embedded compiler must not do.
+ *
+ * `internal` rather than file-private because the METADATA compilation
+ * (`…kir.api.compileMetadataKlib`) drives a different kotlinc entry point and
+ * needs the same sink; two collectors would be two renderings of one thing.
  */
-private class RecordingMessageCollector : MessageCollector {
+internal class RecordingMessageCollector : MessageCollector {
 
     private val recorded = mutableListOf<String>()
     private val recordedErrors = mutableListOf<String>()

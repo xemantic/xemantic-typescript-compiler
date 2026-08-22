@@ -1,5 +1,26 @@
 # Status
 
+**A TYPESCRIPT LIBRARY'S PUBLIC API NOW EXPORTS AS A KOTLIN METADATA KLIB (2026-08-22, owner
+directive).** `exportTypeScriptProjectApi(project, entry, out.klib)` writes the artifact a Kotlin
+Multiplatform `commonMain` compiles against: the library's exported declarations, typed by the
+TypeScript checker's own answers. The route is generated Kotlin SOURCE through kotlinc's own
+metadata compiler — Kotlin metadata is a versioned protobuf whose only writer lives in the
+compiler, so the artifact is by construction what kotlinc would have written, and
+`KotlinMetadataExport.source` is a readable intermediate. The surface is the ENTRY MODULE's
+exports followed through `export {x} from` / `export *` / `export default`, not the union of
+everything every file marks `export`. **Verification is by a CONSUMER and only by a consumer** —
+each end-to-end pin compiles Kotlin against the artifact through the same metadata compiler, with
+four negative controls, because a round trip that passes because the consumer compiles whatever it
+is given would pass for an empty klib: a non-exported name must not resolve, the erased parameter
+types must be ENFORCED, a non-re-exported module must not be reachable, and a program the checker
+rejects must produce no artifact. Measured on the two real libraries this backend already compiles:
+`mitt` exports `mitt(all: Any?): Any?`, `smol-toml` exports `parse(toml: String, options: Any?):
+Any?` — primitives, unions, optionality, classes, enums and callbacks reach the surface typed,
+while arrays and object types are `Any?` because `JsArray`/`JsObject` are JVM classes with no
+common metadata artifact yet ((KAPI.3)). Refusals are PER DECLARATION, not per program: an absent
+declaration is a compile error at the consumer's use site, a wrongly-typed one is silent. Suite
+**15,585 / 0 failures**; the KIR module 108 → 130 pins. `docs/kir-kotlin-metadata.md`.
+
 **THE KIR QUEUE, ALL FIVE ITEMS CLOSED (2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x
 slower than Node down to **1.52x**; on Kotlin/Native **163.30 → 126.55, −22.5%** and 7.26x
 → **5.70x**. `mitt` is flat on both (61.25 ns/emit, 1.35x FASTER than Node; native 354.75),

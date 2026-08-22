@@ -20,6 +20,66 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(KAPI.1) A TYPESCRIPT LIBRARY'S PUBLIC API, AS A KOTLIN METADATA KLIB — LANDED 2026-08-22,
+owner directive.** A checked TypeScript library now exports as the artifact a Kotlin
+Multiplatform `commonMain` compiles against: `exportTypeScriptProjectApi(project, entry,
+out.klib)` writes a metadata klib holding the library's exported declarations as Kotlin
+declarations. 22 pins, `docs/kir-kotlin-metadata.md`.
+
+**The route is generated Kotlin SOURCE through kotlinc's own metadata compiler, and that is
+the decision the rest follows from.** Kotlin metadata is a versioned protobuf whose only
+writer lives in the compiler, so writing it directly would be a second implementation of a
+format that moves every release; going through `KotlinMetadataCompiler` — the THIRD kotlinc
+entry point this module drives, beside the JVM pipeline and the native
+`IrGenerationExtension` — makes the artifact by construction what kotlinc would have
+written, and leaves `KotlinMetadataExport.source` as a readable intermediate. No classpath
+is needed, because the exported surface names only Kotlin BUILT-INS: the artifact is
+self-contained, and the standard library's common metadata (a separate `-all` artifact this
+project does not ship) never enters into it.
+
+**The surface is the ENTRY MODULE's exports, followed through re-exports — not the union of
+everything every file marks `export`.** A package's `index.ts` is its statement of what it
+offers, and the union publishes names a library deliberately keeps internal; the pin asserts
+both directions, including that a module the entry does not re-export is unreachable from
+the artifact.
+
+**REFUSALS ARE PER DECLARATION here, where the IR lowering refuses the whole program, and the
+asymmetry is the point: an absent declaration is a compile error at the consumer's use site,
+a wrongly-typed one is silent.** A rest parameter, an anonymous export, an unresolvable
+specifier, an enum whose member values disagree — each is omitted and reported with file,
+line and column, rather than guessed.
+
+**VERIFICATION IS BY A CONSUMER AND ONLY BY A CONSUMER.** A metadata klib is a binary nobody
+reads by eye and every failure mode it has is silent, so each end-to-end pin compiles Kotlin
+against the artifact through the same metadata compiler — with four negative controls,
+because a round trip that passes because the consumer compiles whatever it is given would
+pass for an EMPTY klib: a non-exported name must not resolve, the erased parameter types must
+be ENFORCED (`greet(1)` against a `Double` parameter must fail), a non-re-exported module must
+not be reachable, and a program the checker rejects must produce no artifact at all.
+
+**Four traps, each silent, recorded so they are not re-found.** (i) `metadataKlib = true` is
+load-bearing: left false the compiler writes the LEGACY layout under the same `.klib` name,
+with no diagnostic, and a multiplatform consumer resolves nothing — hence a pin on the layout
+itself. (ii) `K2MetadataCompiler` is deprecated in 2.4 and the deprecation is an ERROR in this
+build; `KotlinMetadataCompiler` is the live class. (iii) a klib is accepted on a consumer's
+classpath both as a DIRECTORY (what the compiler writes) and as a ZIP (what a build publishes),
+measured both ways. (iv) a path glob written into a KDoc opens a nested block comment —
+CLAUDE.md's own entry, met in the first file that documented the legacy layout.
+
+**What it is worth today, measured on the two real libraries this module already compiles:**
+`mitt` exports `mitt(all: Any?): Any?` and `smol-toml` exports `parse(toml: String, options:
+Any?): Any?`. Primitives, unions, optionality, classes, enums and callbacks reach the surface
+typed; ARRAYS and OBJECT TYPES do not, because they are `JsArray`/`JsObject` at run time and
+those are JVM classes with no common metadata artifact. That is a stage, not a verdict — it is
+§6's item 2 and the pins are written where it will show.
+
+**NAMED SUCCESSORS (both queued): (KAPI.2)** the platform half — nothing yet pins that the JVM
+classes the KIR backend emits match the signatures this metadata declares, and until something
+does, the artifact types a consumer's common code without linking its platform code; **(KAPI.3)**
+a runtime metadata klib, which is what turns those `Any?` positions into `JsObject`/`JsArray`
+with members.
+
+
 **THE KIR QUEUE — ALL FIVE ITEMS CLOSED (2026-08-21).** Five open (KIR.\*) items
 at the start, five checked off.
 
@@ -1601,6 +1661,30 @@ one divergence is a message FORM the round that landed it had already recorded a
   divergences with a fixture apiece.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+- [ ] **(KAPI.2) THE PLATFORM HALF: pin that the emitted JVM classes match the exported
+  metadata.** `(KAPI.1)` declares a library's API as Kotlin metadata for `commonMain`; a
+  `jvmMain` compilation links against the CLASSES the KIR backend emits, and nothing asserts
+  the two agree on package, name and erased JVM signature. The failure is the worst-shaped
+  one available — the consumer's common code type-checks and its platform code does not link
+  — so the instrument is a pin that compiles a JVM consumer against the emitted classes and a
+  common consumer against the klib FROM ONE EXPORT, and fails when either resolves something
+  the other does not. Expect real divergences to fall out: the JVM lowering names a file's
+  facade after the file (`MittKt`) where the metadata puts every declaration in one package,
+  and module variables are reached through generated `name$get` accessors rather than as
+  properties. `docs/kir-kotlin-metadata.md` §6 item 1.
+
+- [ ] **(KAPI.3) A RUNTIME METADATA KLIB, so an object type is `JsObject` rather than `Any?`.**
+  Measured today: `smol-toml` exports `parse(toml: String, options: Any?): Any?`, which is the
+  difference between "a TOML parser returns something" and "a TOML parser returns something you
+  can read". Arrays and object types erase to `Any?` for one reason only — `JsArray`/`JsObject`
+  are JVM Kotlin with no COMMON metadata artifact — so the work is to produce one for the
+  runtime's public surface and put it on the export's classpath (the parameter already exists,
+  `compileMetadataKlib(..., classpath)`). The trap to design against is drift: a hand-written
+  common facade of a JVM class is a second copy, so whatever produces it needs a pin that
+  reflects over the real class and fails when a member disagrees — `scripts/kir_native_runtime.py`
+  is the precedent for deriving one runtime from the other rather than forking it.
+
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file
 during a trim, and nothing noticed for ~15 rounds because rounds 886-902 were self-directing: each
