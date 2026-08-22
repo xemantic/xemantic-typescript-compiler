@@ -97,6 +97,67 @@ measurement is meaningless (`ps -o etimes=` said 5 minutes where the transcript 
 line matches ITSELF — once reporting a finished sweep as RUNNING, once killing the
 compound command that contained it (exit 144).
 
+**(LIB.3) SIX CLI LIBRARIES SCREENED, 126 FALSE POSITIVES ROOT-CAUSED INTO FIVE FAMILIES —
+2026-08-22, NO CODE LANDED. The largest is not a type-system defect at all: `// @ts-ignore`
+suppresses NOTHING, in a compiler whose grep says the feature exists.**
+Owner asked for a TS CLI library to drive a KIR performance comparison, knip having been
+disqualified by (LIB.1). Six candidates fetched and put through (LIB.2)'s screen; the import
+census alone disqualified `sql-formatter` (`nearley` imported inside `src`) before a compiler ran.
+
+**THE SCREEN'S OWN LESSON CONTRADICTS THE ENTRY THAT COMMISSIONED IT.** (LIB.2) said to pick by
+imports; that is necessary and it is not sufficient, because **the library closest to compiling
+and the library best for benchmarking are different libraries**. `cronstrue` is the only
+candidate the checker already passes — `typeErrors=0` over 52 files and 8,812 lines, agreeing
+with tsgo exactly — and the only one whose lowering runs; but its per-call work is small, so it
+benchmarks as a loop rather than as one heavy invocation. `marked` is the workload worth
+publishing (markdown -> HTML over a big document) and is 15 checker errors plus a 76%-of-files
+backend gap away. `fflate` would be the best number of all and is structurally blocked: **183
+typed-array uses against a runtime with none.**
+
+**THE ERROR ANALYSIS IS THE ROUND'S PRODUCT.** With `@types/node` present on both sides and each
+library's own tsconfig, diffed against tsgo per `(file, line, code)`: marked 0/15, jsonrepair
+1/16, fflate 2/17, yaml 0/78, cronstrue 0/0 — **126 ours-only rows, and tsgo at ZERO on two of
+the four.** Five families carry 67 of them and each was reduced to a repro or an exact
+correspondence, not to an inspection:
+
+**(CHK.31) `@ts-ignore` / `@ts-expect-error` suppress nothing — and we are wrong in BOTH
+directions.** A four-file repro: the directive above a TS2322 leaves it emitted, and an
+`@ts-expect-error` above a clean line fails to produce tsgo's TS2578 `Unused directive`. On
+`fflate` this is all 9 TS2391 rows, and the correspondence is exact — the file contains exactly
+9 `@ts-ignore` comments. **It looks already done**, which is the trap: `CompilerOptions.kt:562`
+parses both spellings and `Checker.kt:16167` consults one for a narrow commonjs suppression, so a
+grep finds the feature. There is no general filter.
+
+**(CHK.32) a primitive is not related to a structural object target through its apparent type.**
+`jsonrepair` types its whole scanner against `interface Text { length; charAt; charCodeAt;
+substring }` and passes a `string`; all 7 of its TS2345 rows are that call. The repro shows it is
+not about `string` — `number` against `{ toFixed(d?): string }` fails identically — and the
+object-source control in the same file passes, so it is the primitive side failing to reach
+`getApparentType`.
+
+**(CHK.33) a destructuring parameter breaks arity, and the message says so out loud: `Expected
+1-0 arguments, but got 1`, 8 rows in `marked`.** This is round 921's documented hazard reaching a
+diagnostic for the first time — `getParameterSymbols` drops binding-pattern parameters, so
+`parameters` is empty while `minArgumentCount` still counts the pattern. **An inverted range is a
+free assertion**: no correct signature has `minArgumentCount > parameters.size`, and requiring
+that at signature construction would have caught this before a library did.
+
+**(CHK.34) `isolatedDeclarations` over-reports 32 rows on `yaml`, which ships with the flag ON and
+is clean under tsgo** — one member identified as an overload IMPLEMENTATION signature, which the
+flag exempts. Deliberately sequenced LAST of the five: biggest row count, narrowest trigger, and
+the 8 profiles do not set the flag, so every profile instrument is blind and `yaml` is the gate.
+
+**(CHK.35) a function expression assigned through an index signature gets no contextual
+signature** — TS7019 + TS2683×4 in `marked`. Filed with the instruction to check whether it and
+(CHK.30) are one path before either is written.
+
+**WHAT IS DELIBERATELY NOT CLAIMED: ~59 rows are NOT root-caused**, led by TS2322×14 (six of them
+one shape — an excess `undefined` in `yaml/compose/resolve-props.ts`) and TS2339×7. The captures
+regenerate in ~10 s per library and the entry says so rather than implying the tail is understood.
+
+**GATES: none, and deliberately** — three markdown files changed and no Kotlin. The KIR module was
+built only because the probe needs it.
+
 **(LIB.1) knip MEASURED 2026-08-22 — NO CODE LANDED, AND THE MEASUREMENT IS THE
 DELIVERABLE. 2,634 xtsc errors against tsgo 7.0.2's 23, of which 94.1% are ONE absent
 lookup; and the backend is blocked by knip's DEPENDENCIES rather than by its TypeScript.**
@@ -1240,7 +1301,10 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   change is inert — make the parameter's contextual type wrong-typed at a use site and
   require the error to appear.
 
-- [ ] **(LIB.2) THE NEXT LIBRARY MUST BE PICKED BY WHAT IT *IMPORTS*, NOT BY ITS SIZE —
+- [x] **(LIB.2) ANSWERED 2026-08-22 BY (LIB.3)'s SCREEN — and the screen added a second
+  criterion the entry did not predict: the library closest to COMPILING and the library best
+  for BENCHMARKING are different ones. ORIGINAL ENTRY: THE NEXT LIBRARY MUST BE PICKED BY
+  WHAT IT *IMPORTS*, NOT BY ITS SIZE —
   knip cost a session to learn that.** (LIB.1)'s method is right and cheap (two commands,
   ~10 s) but it was pointed at a library the backend can never reach, because the
   disqualifier is not a language construct: **native N-API dependencies and `node:` builtins
@@ -1252,6 +1316,139 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   defects other libraries exposed. For the BACKEND ladder the candidate wants to be pure
   computation over data — a parser, a formatter, a codec — which is exactly why `mitt` and
   `smol-toml` worked.
+
+- [x] **(LIB.3) SIX CANDIDATE CLI LIBRARIES SCREENED AND THEIR ERRORS ROOT-CAUSED —
+  2026-08-22. 126 false positives over four libraries, and FIVE families carry 67 of them.**
+  This is (LIB.2)'s screen, executed. All six are TS-source with a CLI; the import census
+  disqualified `sql-formatter` (imports `nearley` inside `src`) before any compiler ran.
+  Measured with `@types/node` present on both sides, each library's OWN tsconfig (marked's
+  minus `verbatimModuleSyntax`, since (CHK.29) already owns that), diffed against tsgo 7.0.2
+  per `(file, line, code)`:
+
+  | library | files | lines | deps | tsgo | xtsc | ours-only | refused-construct files |
+  |---|---|---|---|---|---|---|---|
+  | **cronstrue** | 52 | 8,812 | none | **0** | **0** | **0** | **2 (3%)** |
+  | marked | 13 | 3,706 | none | 0 | 15 | 15 | 10 (76%) |
+  | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
+  | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
+  | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
+
+  **THE OURS-ONLY HISTOGRAM (126): TS9008×19, TS2322×14, TS2345×13, TS9023×11, TS2391×9,
+  TS2554×8, TS2339×7, TS2591×6, TS2683×4, TS6196×2, TS2366×2, then twelve codes at 1.**
+  The five root-caused families are (CHK.31)-(CHK.35) below, in the order their blast radius
+  justifies. **THE TAIL IS NOT ROOT-CAUSED AND MUST NOT BE QUOTED AS IF IT WERE**: ~59 rows
+  remain, led by TS2322×14 (of which SIX are one shape, `SourceToken | undefined` against
+  `SourceToken | null` in `yaml/compose/resolve-props.ts` — an excess `undefined` we add and
+  tsgo does not) and TS2339×7. Captures for every row are reproducible in ~10 s per library
+  by the (LIB.1) commands.
+  **THE RANKING LESSON, WHICH IS NOT THE ONE (LIB.2) PREDICTED: the library closest to
+  COMPILING and the library best for BENCHMARKING are different libraries.** `cronstrue` is
+  the only one the checker already passes and the only one whose lowering runs — but each of
+  its calls is small work, so it benchmarks as a loop over many expressions rather than as one
+  heavy invocation. `marked` (markdown -> HTML over a large document) is the workload worth
+  publishing a number for, and is 15 checker errors plus a 76%-of-files backend gap away.
+  `fflate` would be the best number of all — DEFLATE is tight numeric loops, where a JVM
+  should beat Node outright — and is **structurally blocked**: 183 typed-array uses
+  (`Uint8Array`×167) against a runtime with none, plus 14 `Worker` references. Do not start
+  there; revisit after typed arrays exist.
+
+- [ ] **(LIB.4) `cronstrue` IS THE NEXT BACKEND DRIVER — 0 CHECKER ERRORS ON 8,812 LINES AND
+  FIVE NAMED RUNGS TO A RUNNING PROGRAM.** The probe reads `typeErrors=0` over all 52 files
+  (it AGREES with tsgo exactly, the only library in the screen that does) and the lowering then
+  runs to a first refusal. Walking it by patching a throwaway copy and re-probing gives the
+  whole ladder, in order:
+  1. `rest parameters are out of the spike subset` — `stringUtilities.ts:10`, **2 sites**
+  2. `destructuring in for…of` — `expressionDescriptor.ts:734`, **1 site**
+  3. `` `var` is out of the spike subset — its function scoping is not modelled `` — **18 sites in 4 files**
+  4. `cannot lower this binary operator` (`??`) — **2 sites**
+  5. `cannot coerce Function1 to String` — `String.replace(re, fn)`, i.e. the replacer-CALLBACK
+     overload, a RUNTIME gap rather than a language one
+  **The count stayed flat as the rungs were peeled — it is not opening into a tail**, which is
+  what makes this a bounded piece of work rather than an open-ended one. It is 8x `smol-toml`,
+  zero dependencies, zero non-relative imports, and a real CLI (`cronstrue "*/5 * * * *"`), so
+  landing it extends `scripts/kir-bench.sh` with a third library and a third workload shape.
+  **Rung 3 is the one to price first**: `var`'s function scoping is a real semantic difference,
+  not a syntax rewrite, and 18 sites is enough that refusing it keeps blocking libraries.
+
+- [ ] **(CHK.31) `// @ts-ignore` AND `// @ts-expect-error` DO NOT SUPPRESS ANYTHING — MEASURED
+  IN BOTH DIRECTIONS, AND THIS IS THE HIGHEST-BLAST-RADIUS ITEM IN THE SCREEN.** A four-file
+  repro settles it: `// @ts-ignore` above a TS2322 leaves the TS2322 emitted, `// @ts-expect-error`
+  likewise, and an `@ts-expect-error` above a line with NO error fails to produce tsgo's
+  **TS2578 `Unused '@ts-expect-error' directive`** — so we are wrong in both directions at once.
+  On `fflate` this is **all 9 TS2391 rows** (`Function implementation is missing`), and the
+  correspondence is exact: `src/index.ts` contains exactly 9 `@ts-ignore` comments, one above
+  each declaration-only class member the library deliberately suppresses.
+  **THE TRAP IS THAT IT LOOKS ALREADY DONE**: `CompilerOptions.kt:562` parses both spellings as
+  comment directives, and `Checker.kt:16167` consults one for a narrow node/commonjs
+  suppression, so a grep says the feature exists. It is not a general diagnostic filter.
+  **What the fix needs, beyond the filter itself:** the directive attaches to the NEXT line, so
+  it wants the leading-comment channel the parser already records (`NodeBase.leadingComments`)
+  rather than a source scan; `@ts-expect-error` must additionally RECORD whether it suppressed
+  anything and emit TS2578 when it did not; and a file-level `// @ts-nocheck` is a third
+  spelling with **zero** hits in `commonMain` today. **Corpus risk is real and must be measured
+  before landing**: any baseline whose fixture carries one of these directives currently records
+  the UNSUPPRESSED diagnostics, so run the 8-profile grid and the corpus, and expect the
+  `logicalParityDivergence` mechanism to be the wrong tool — a suppressed diagnostic is a
+  MEANING change, not a form one.
+
+- [ ] **(CHK.32) A PRIMITIVE SOURCE IS NOT RELATED TO A STRUCTURAL OBJECT TARGET THROUGH ITS
+  APPARENT TYPE — 13 TS2345 ROWS, AND IT GENERALISES BEYOND `string`.** `jsonrepair` types its
+  whole scanner against `interface Text { length: number; charAt(i): string; charCodeAt(i): number;
+  substring(s, e?): string }` and passes a `string` to it; every one of its 7 TS2345 rows is that
+  call. Minimal repro, both halves failing where tsgo is silent:
+  ```ts
+  declare function isWhitespace(text: Text, index: number): boolean
+  export function viaString(s: string) { return isWhitespace(s, 0) }        // TS2345, tsgo silent
+  declare function wantsToFixed(x: { toFixed(d?: number): string }): string
+  export function viaNumber(n: number) { return wantsToFixed(n) }           // TS2345, tsgo silent
+  ```
+  The control in the same file — an object source against `{ length: number }` — passes, so the
+  defect is specifically the PRIMITIVE side: relating `string`/`number` to an object type must
+  go through `getApparentType` (the `String`/`Number` wrapper interface), which the relation is
+  not consulting on this path. `getApparentType` already exists and CLAUDE.md records it as the
+  way to reach a primitive's members, so this is a missing consult rather than missing
+  machinery. Check the mirror direction while you are there (an apparent-typed source in a
+  RETURN position, and `boolean`/`symbol`/`bigint`), and note the fix is in the RELATION, so
+  the corpus is the gate.
+
+- [ ] **(CHK.33) A DESTRUCTURING PARAMETER BREAKS ARITY, AND THE MESSAGE PROVES IT: `Expected
+  1-0 arguments, but got 1` — 8 ROWS IN `marked`, ON A LIBRARY tsgo REPORTS ZERO ERRORS FOR.**
+  `marked`'s renderer methods are all written `html({ text }: Tokens.HTML | Tokens.Tag):
+  RendererOutput`, and every call `renderer.html(token)` is rejected. **This is round 921's
+  documented hazard reaching a diagnostic for the first time**: CLAUDE.md already records that
+  `getParameterSymbols` DROPS every binding-pattern parameter, so `Signature.parameters` is
+  EMPTY while `minArgumentCount` still counts the pattern — which is exactly an inverted range
+  of min 1, max 0, printed verbatim. **The inverted range is a free assertion**: no correct
+  signature can have `minArgumentCount > parameters.size`, so `require` it where signatures are
+  built and this class of defect stops being silent. Fixing arity may not be the whole item —
+  the same drop shifts the positional zip of type annotations onto the surviving parameters
+  (CLAUDE.md's `f({a}: O, b: string)` example types `b` as `O`), so pin BOTH the arity and the
+  parameter TYPES, and prefer `sig.declaration`'s own list as the reference the way
+  `typeCaptureSignatureParameters` already does.
+
+- [ ] **(CHK.34) `isolatedDeclarations` OVER-REPORTS — 32 ROWS ON A LIBRARY THAT SHIPS WITH THE
+  FLAG ON AND IS CLEAN UNDER tsgo.** `yaml` sets `"isolatedDeclarations": true` and tsgo finds
+  **0** errors; we emit TS9008×19, TS9023×11, TS9007×1, TS9009×1. One member is identified:
+  `nodes/YAMLMap.ts:232` is the IMPLEMENTATION signature of an overload set, which needs no
+  return annotation under `isolatedDeclarations` because the overload signatures above it carry
+  one — so the rule is being applied to a signature the flag exempts. TS9023
+  (`Assigning properties to functions without declaring them`) fires 11 times at
+  `visit.ts:108-109` and is unexamined. **Sequence this AFTER (CHK.31)-(CHK.33)**: it is the
+  biggest row count in the screen and the narrowest trigger — it costs nothing on a project that
+  does not set the flag, where the other four families cost every project. The 8 profiles do not
+  set it either, so `cost_gate.py` and the grid are structurally blind here and `yaml` is the gate.
+
+- [ ] **(CHK.35) A FUNCTION EXPRESSION ASSIGNED THROUGH AN INDEX SIGNATURE GETS NO CONTEXTUAL
+  SIGNATURE — 5 ROWS, AND IT IS (CHK.30)'s SIBLING.** In `marked/Instance.ts:118`,
+  `extensions.renderers[ext.name] = function(...args) { … ext.renderer.apply(this, args) … }`
+  gives **TS7019** for `args` (rest parameter implicitly `any[]`) and **TS2683**×4 for `this`
+  (implicitly `any`), where tsgo is silent — because the index signature's value type supplies
+  both the parameter list and the `this` type, and we are not reaching it. (CHK.30) is the same
+  failure one container over (an object-literal shorthand METHOD's parameters), so **check
+  whether one contextual-signature path serves both before writing either** — if it does, the
+  two items are one. Same standing trap applies: a contextual parameter type that does not reach
+  `populateParameterLocalTypes` is invisible to the body walkers, so a probe must FAIL if the
+  change is inert.
 
 - [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
   finding.** `ErasedTypes.mapObject` ends `if (declaration == null) return jsObjectType()`, which

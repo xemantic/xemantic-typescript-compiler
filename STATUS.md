@@ -61,6 +61,26 @@ single row is the whole user-visible cost. `narrowRendersMoreAny = 168` is repor
 from a type, and a round that read the flag without the census would have refused this on a
 false reading. Suite 15,648 / 0 / 3.
 
+**SIX CLI LIBRARIES SCREENED AND THEIR 126 FALSE POSITIVES ROOT-CAUSED INTO FIVE FAMILIES
+(2026-08-22).** With `@types/node` present and each library's own tsconfig, diffed against tsgo
+7.0.2 per (file, line, code): **cronstrue 0/0** — the first library outside the corpus where this
+checker agrees with tsgo exactly, 8,812 lines — marked 0/15, jsonrepair 1/16, fflate 2/17,
+yaml 0/78. **The largest family is not a type-system defect at all: `// @ts-ignore` and
+`// @ts-expect-error` suppress NOTHING**, in both directions (an unused `@ts-expect-error` also
+fails to produce TS2578), and the feature *looks* implemented — both spellings are parsed as
+directives and one is consulted for a narrow commonjs case. It is all 9 of fflate's TS2391 rows,
+matching its 9 `@ts-ignore` comments exactly. The others: a primitive is not related to a
+structural object target through its apparent type (`string` vs `interface Text`, 13 rows); a
+destructuring parameter breaks arity and prints the inverted `Expected 1-0 arguments, but got 1`
+(8 rows — round 921's recorded `getParameterSymbols` hazard reaching a diagnostic at last);
+`isolatedDeclarations` over-reports 32 rows on a library that ships with the flag on and is clean
+under tsgo; and a function expression assigned through an index signature gets no contextual
+signature. ~59 rows remain untriaged and the entries say so. **cronstrue is queued as the next
+backend driver** — its lowering runs to a first refusal and five named rungs separate it from a
+running program — while **marked is the benchmark goal** and **fflate is structurally blocked**
+by 183 typed-array uses against a runtime with none. Queued (LIB.3)/(LIB.4)/(CHK.31)-(CHK.35);
+no code landed.
+
 **POINTING THE COMPILER AT `knip` FOUND A 2,478-ERROR DEFECT THE CORPUS CANNOT SEE
 (2026-08-22, owner question: can we compile it to JVM bytecode — answer: not today).**
 `webpro-nl/knip` is 498 files / 35,663 lines; xtsc reports **2,634** errors where tsgo 7.0.2

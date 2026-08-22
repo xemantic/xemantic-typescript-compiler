@@ -305,3 +305,52 @@ a second, and it disqualifies knip as a backend driver before any compiler is ru
 remains an excellent FRONT-END corpus for exactly the reason this page gives: it is a
 different codebase's style, and it found a 2,478-error defect that tsc's own sources — not
 `"type": "module"` — structurally cannot show.
+
+## UPDATE 2026-08-22 (b) — six CLI candidates screened, and the errors named
+
+Following knip, six TypeScript libraries with a CLI were fetched and put through the loop.
+The import census disqualified `sql-formatter` (`nearley` imported inside `src`) with no
+compiler run. Measured with `@types/node` present on both sides, each library's own
+tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
+
+| library | files | lines | deps | tsgo | xtsc | ours-only | files w/ a refused construct |
+|---|---|---|---|---|---|---|---|
+| **cronstrue** | 52 | 8,812 | none | **0** | **0** | **0** | **2 (3%)** |
+| marked | 13 | 3,706 | none | 0 | 15 | 15 | 10 (76%) |
+| jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
+| fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
+| yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
+
+**`cronstrue` is the first library outside the corpus on which this checker agrees with tsgo
+exactly**, and its lowering runs to a first refusal rather than being blocked at the front
+end. Five rungs separate it from a running program — rest parameters, `for…of` array
+destructuring, `var`, `??`, and `String.replace(re, fn)` — and the count stayed flat as they
+were peeled.
+
+**The screen adds a criterion this page did not have: the library closest to COMPILING and
+the library best for BENCHMARKING are different libraries.** `cronstrue` is the former;
+`marked` (markdown → HTML) is the workload worth publishing a number for; `fflate` would be
+the best number of all — DEFLATE is tight numeric loops — and is structurally blocked by 183
+typed-array uses against a runtime that has none.
+
+**126 false positives, five families, 67 rows.** Each was reduced to a repro or an exact
+correspondence rather than to an inspection, and they are queued as (CHK.31)-(CHK.35):
+
+1. **`// @ts-ignore` and `// @ts-expect-error` suppress nothing**, in both directions — the
+   directive does not filter, and an unused `@ts-expect-error` does not produce TS2578. All
+   9 of `fflate`'s TS2391 rows, matching its 9 `@ts-ignore` comments exactly. The feature
+   *appears* implemented: both spellings are parsed as directives and one is consulted for a
+   narrow commonjs suppression.
+2. **A primitive is not related to a structural object target through its apparent type** —
+   `string` against `interface Text {…}` (all 7 of `jsonrepair`'s TS2345 rows), and equally
+   `number` against `{ toFixed(d?): string }`.
+3. **A destructuring parameter breaks arity**, printing the inverted `Expected 1-0 arguments,
+   but got 1` — 8 rows in `marked`, and round 921's recorded `getParameterSymbols` hazard
+   reaching a diagnostic for the first time.
+4. **`isolatedDeclarations` over-reports** — 32 rows on `yaml`, which ships with the flag on
+   and is clean under tsgo.
+5. **A function expression assigned through an index signature gets no contextual signature**
+   — TS7019 + TS2683×4 in `marked`; possibly one path with the object-literal-method case.
+
+~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
+this page's own history is that a family attributed by inspection is a hypothesis.
