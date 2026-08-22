@@ -259,18 +259,8 @@ class KotlinMetadataKlibTest {
      */
     @Test
     fun `a real library - mitt - is exported and consumed`() {
-        val project = Files.createTempDirectory("xtsc-kir-api-mitt")
-        listOf("tsconfig.json", "src/mitt.ts", "src/main.ts").forEach { relative ->
-            val target = project.resolve(relative)
-            target.parent.createDirectories()
-            target.writeText(resource("mitt-consumer/$relative"))
-        }
-        val klib = Files.createTempDirectory("xtsc-kir-api-mitt-out").resolve("mitt.klib")
-        val export = exportTypeScriptProjectApi(
-            projectPath = project.toString(),
-            entryFileName = "mitt.ts",
-            outputKlib = klib,
-        )
+        val export = exportMitt(runtime = false)
+        val klib = export.klib!!
         assert(export.successful)
         assert(export.refusals.isEmpty())
         assert(export.api.declarations.map { it.name } == listOf("mitt"))
@@ -284,14 +274,169 @@ class KotlinMetadataKlibTest {
         assert(consumed.successful)
     }
 
+    /**
+     * The same library WITH the runtime surface: `mitt` becomes
+     * `mitt(all: JsObject?): JsObject`.
+     *
+     * `Emitter<Events>` is an interface `mitt.ts` declares, so it is a shape
+     * this program writes and the gate lets it be a bag; its type parameters
+     * erase, as they do in TypeScript and on the JVM.
+     */
+    @Test
+    fun `a real library exports its object types when the runtime is on`() {
+        val export = exportMitt(runtime = true)
+        assert(export.successful)
+        val mitt = export.api.declarations.filterIsInstance<KotlinFunction>().single()
+        assert(mitt.returnType == KirRuntimeApi.jsObject)
+        assert(mitt.parameters.single().type == KirRuntimeApi.jsObject.asNullable())
+    }
+
+    /**
+     * `smol-toml`'s own source: 1,082 lines, seven modules, and the signature a
+     * Kotlin caller would actually use — `parse(toml: String, options: JsObject?):
+     * JsObject`.
+     *
+     * Its `options` is `ParseOptions & { integersAsBigInt: … }`, the branded
+     * shape §3's intersection rule exists for; without that rule this reads
+     * `Any?`, which is what it read when the rule was written.
+     */
+    @Test
+    fun `a real parser exports a usable signature`() {
+        val project = Files.createTempDirectory("xtsc-kir-api-toml")
+        listOf(
+            "tsconfig.json", "src/util.ts", "src/error.ts", "src/date.ts",
+            "src/primitive.ts", "src/struct.ts", "src/extract.ts", "src/parse.ts",
+            "src/temporal-shim.d.ts", "src/main.ts",
+        ).forEach { relative ->
+            val target = project.resolve(relative)
+            target.parent.createDirectories()
+            target.writeText(resource("toml/$relative"))
+        }
+        val out = Files.createTempDirectory("xtsc-kir-api-toml-out")
+        val export = exportTypeScriptProjectApi(
+            projectPath = project.toString(),
+            entryFileName = "parse.ts",
+            outputKlib = out.resolve("toml.klib"),
+            runtimeKlib = out.resolve("runtime.klib"),
+        )
+        assert(export.successful)
+        val parse = export.api.declarations.filterIsInstance<KotlinFunction>()
+            .single { it.name == "parse" }
+        assert(parse.parameters.map { it.type } ==
+            listOf(KotlinType.STRING, KirRuntimeApi.jsObject.asNullable()))
+        assert(parse.returnType == KirRuntimeApi.jsObject)
+        val consumed = consume(
+            listOf(export.klib!!, export.runtimeKlib!!),
+            """
+            package consumer
+            import com.xemantic.typescript.compiler.kir.runtime.JsObject
+            public fun title(): Any? {
+                val document: JsObject = ts.parse("title = 'x'", null)
+                return document.get("title")
+            }
+            """
+        )
+        assert(consumed.successful)
+    }
+
+    private fun exportMitt(runtime: Boolean): KotlinMetadataExport {
+        val project = Files.createTempDirectory("xtsc-kir-api-mitt")
+        listOf("tsconfig.json", "src/mitt.ts", "src/main.ts").forEach { relative ->
+            val target = project.resolve(relative)
+            target.parent.createDirectories()
+            target.writeText(resource("mitt-consumer/$relative"))
+        }
+        val out = Files.createTempDirectory("xtsc-kir-api-mitt-out")
+        return exportTypeScriptProjectApi(
+            projectPath = project.toString(),
+            entryFileName = "mitt.ts",
+            outputKlib = out.resolve("mitt.klib"),
+            runtimeKlib = if (runtime) out.resolve("runtime.klib") else null,
+        )
+    }
+
     private fun resource(name: String): String {
         val url = javaClass.getResource("/projects/$name") ?: error("no resource '$name'")
         return url.openStream().use { it.readBytes().decodeToString() }
     }
 
-    private fun exportOf(source: String): KotlinMetadataExport {
-        val klib = Files.createTempDirectory("xtsc-kir-api-out").resolve("lib.klib")
-        return exportTypeScriptApi("api.ts", source.trimIndent(), klib)
+    /**
+     * (KAPI.3): with the runtime's own metadata klib, an exported object type is
+     * a `JsObject` a consumer can READ, and an array is a `JsArray` it can index.
+     *
+     * The pin is the difference between "a parser returns something" and "a
+     * parser returns something you can read", and the negative control below is
+     * what says the runtime klib is doing the work rather than the consumer
+     * being lenient.
+     */
+    @Test
+    fun `with the runtime klib a consumer reads an object and indexes an array`() {
+        val export = exportOf(RUNTIME_LIBRARY, runtime = true)
+        assert(export.successful)
+        val consumed = consume(
+            listOf(export.klib!!, export.runtimeKlib!!),
+            """
+            package consumer
+
+            import com.xemantic.typescript.compiler.kir.runtime.JsArray
+            import com.xemantic.typescript.compiler.kir.runtime.JsObject
+
+            public fun use(): Any? {
+                val config: JsObject = ts.parseConfig("title")
+                val names: JsArray = ts.names()
+                names.push("x")
+                return config.get("title") ?: names[0.0]
+            }
+            """
+        )
+        assert(consumed.successful)
+    }
+
+    /**
+     * NEGATIVE CONTROL for the pin above: WITHOUT the runtime klib the same
+     * library exports those positions as `Any?`, so the same consumer must not
+     * compile.
+     */
+    @Test
+    fun `without the runtime klib the same consumer does not compile`() {
+        val export = exportOf(RUNTIME_LIBRARY, runtime = false)
+        assert(export.successful)
+        assert(export.runtimeKlib == null)
+        val consumed = consume(
+            export.klib!!,
+            """
+            package consumer
+            import com.xemantic.typescript.compiler.kir.runtime.JsObject
+            public fun use(): Any? {
+                val config: JsObject = ts.parseConfig("title")
+                return config.get("title")
+            }
+            """
+        )
+        assert(!consumed.successful)
+    }
+
+    private fun exportOf(source: String, runtime: Boolean = false): KotlinMetadataExport {
+        val directory = Files.createTempDirectory("xtsc-kir-api-out")
+        return exportTypeScriptApi(
+            "api.ts",
+            source.trimIndent(),
+            directory.resolve("lib.klib"),
+            runtimeKlib = if (runtime) directory.resolve("runtime.klib") else null,
+        )
+    }
+
+    private companion object {
+        /** One library, exported twice — with the runtime surface and without. */
+        val RUNTIME_LIBRARY = """
+            export interface Config { title: string }
+
+            export function parseConfig(text: string): Config {
+                return { title: text }
+            }
+
+            export function names(): string[] { return [] }
+        """
     }
 
     /**
@@ -301,14 +446,12 @@ class KotlinMetadataKlibTest {
      * a consumer of a metadata klib IS a metadata compilation, so nothing about
      * the round trip is simulated.
      */
-    private fun consume(klib: Path, source: String): MetadataKlibResult {
+    private fun consume(klib: Path, source: String): MetadataKlibResult =
+        consume(listOf(klib), source)
+
+    private fun consume(classpath: List<Path>, source: String): MetadataKlibResult {
         val output = Files.createTempDirectory("xtsc-kir-api-consumer").resolve("consumer.klib")
-        return compileMetadataKlib(
-            source.trimIndent(),
-            output,
-            "consumer",
-            classpath = listOf(klib),
-        )
+        return compileMetadataKlib(source.trimIndent(), output, "consumer", classpath = classpath)
     }
 
 }

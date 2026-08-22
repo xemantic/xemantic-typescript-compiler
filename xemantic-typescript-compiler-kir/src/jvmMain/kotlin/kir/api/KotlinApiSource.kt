@@ -72,11 +72,12 @@ private fun StringBuilder.renderDeclaration(declaration: KotlinDeclaration, inde
                 "${it.name}: ${it.type.render()}"
             }
             val returns = declaration.returnType.render()
+            val modifiers = if (declaration.isOperator) "public operator fun" else "public fun"
             if (returns == "kotlin.Unit") {
-                appendLine("${indent}public fun ${declaration.name}($parameters) {}")
+                appendLine("$indent$modifiers ${declaration.name}($parameters) {}")
             } else {
                 appendLine(
-                    "${indent}public fun ${declaration.name}($parameters): $returns = " +
+                    "$indent$modifiers ${declaration.name}($parameters): $returns = " +
                         initializerFor(declaration.returnType)
                 )
             }

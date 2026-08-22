@@ -32,6 +32,7 @@ import com.xemantic.typescript.compiler.kir.api.KotlinApiModule
 import com.xemantic.typescript.compiler.kir.api.TypeScriptApiExtractor
 import com.xemantic.typescript.compiler.kir.api.compileMetadataKlib
 import com.xemantic.typescript.compiler.kir.api.render
+import com.xemantic.typescript.compiler.kir.api.writeRuntimeMetadataKlib
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.front.checkTypeScript
 import com.xemantic.typescript.compiler.kir.front.checkTypeScriptProject
@@ -43,6 +44,14 @@ public class KotlinMetadataExport internal constructor(
     public val successful: Boolean,
     /** The written metadata klib, or null when nothing was written. */
     public val klib: Path?,
+    /**
+     * The RUNTIME metadata klib this export was compiled against, if any.
+     *
+     * A consumer needs it on its classpath beside [klib] — it is what makes an
+     * object type a `JsObject` rather than an `Any?` — and null means the
+     * artifact is self-contained because no position needed one.
+     */
+    public val runtimeKlib: Path?,
     /** The exported surface, before it was rendered — for inspection and pins. */
     public val api: KotlinApiModule,
     /** The generated Kotlin source, which is the artifact's readable form. */
@@ -89,6 +98,7 @@ public fun exportTypeScriptApi(
     packageName: String = "ts",
     moduleName: String = defaultModuleName(outputKlib),
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    runtimeKlib: Path? = null,
 ): KotlinMetadataExport {
     val checked = checkTypeScript(fileName, source, options)
     if (checked.errors.isNotEmpty()) {
@@ -101,6 +111,7 @@ public fun exportTypeScriptApi(
         outputKlib,
         packageName,
         moduleName,
+        runtimeKlib,
     )
 }
 
@@ -119,6 +130,7 @@ public fun exportTypeScriptProjectApi(
     outputKlib: Path,
     packageName: String = "ts",
     moduleName: String = defaultModuleName(outputKlib),
+    runtimeKlib: Path? = null,
 ): KotlinMetadataExport {
     val checked = checkTypeScriptProject(projectPath)
     if (checked.errors.isNotEmpty()) {
@@ -128,6 +140,7 @@ public fun exportTypeScriptProjectApi(
         ?: return KotlinMetadataExport(
             successful = false,
             klib = null,
+            runtimeKlib = null,
             api = KotlinApiModule(packageName, emptyList()),
             source = "",
             typeErrors = emptyList(),
@@ -149,6 +162,7 @@ public fun exportTypeScriptProjectApi(
         outputKlib,
         packageName,
         moduleName,
+        runtimeKlib,
     )
 }
 
@@ -159,13 +173,43 @@ private fun export(
     outputKlib: Path,
     packageName: String,
     moduleName: String,
+    runtimeKlib: Path?,
 ): KotlinMetadataExport {
-    val extracted = TypeScriptApiExtractor(files, facts, packageName).extract(entry)
+    // The runtime's own surface first, because the library's declarations name
+    // its types and a metadata compilation resolves names against artifacts,
+    // not against intentions.
+    if (runtimeKlib != null) {
+        val runtime = writeRuntimeMetadataKlib(runtimeKlib)
+        if (!runtime.successful) {
+            return KotlinMetadataExport(
+                successful = false,
+                klib = null,
+                runtimeKlib = null,
+                api = KotlinApiModule(packageName, emptyList()),
+                source = "",
+                typeErrors = emptyList(),
+                refusals = emptyList(),
+                messages = runtime.messages,
+            )
+        }
+    }
+    val extracted = TypeScriptApiExtractor(
+        files,
+        facts,
+        packageName,
+        runtimeTypes = runtimeKlib != null,
+    ).extract(entry)
     val source = extracted.module.render()
-    val compiled = compileMetadataKlib(source, outputKlib, moduleName)
+    val compiled = compileMetadataKlib(
+        source,
+        outputKlib,
+        moduleName,
+        classpath = listOfNotNull(runtimeKlib),
+    )
     return KotlinMetadataExport(
         successful = compiled.successful,
         klib = if (compiled.successful) outputKlib else null,
+        runtimeKlib = if (compiled.successful) runtimeKlib else null,
         api = extracted.module,
         source = source,
         typeErrors = emptyList(),
@@ -180,6 +224,7 @@ private fun failed(
 ): KotlinMetadataExport = KotlinMetadataExport(
     successful = false,
     klib = null,
+    runtimeKlib = null,
     api = KotlinApiModule(packageName, emptyList()),
     source = "",
     typeErrors = errors,

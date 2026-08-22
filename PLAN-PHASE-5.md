@@ -73,6 +73,17 @@ typed; ARRAYS and OBJECT TYPES do not, because they are `JsArray`/`JsObject` at 
 those are JVM classes with no common metadata artifact. That is a stage, not a verdict — it is
 §6's item 2 and the pins are written where it will show.
 
+**(KAPI.3) LANDED IN THE SAME SESSION, and it is what makes an exported library usable.** With
+`runtimeKlib =` the export writes a second metadata klib declaring `JsObject`/`JsArray` under
+their real fully qualified names and compiles the library against it, so `smol-toml` exports
+**`parse(toml: String, options: JsObject?): JsObject`** and a Kotlin consumer reads
+`document.get("title")` — measured on the library's own 1,082 lines, pinned end to end. Three
+decisions carry it: a bag needs POSITIVE evidence (the lowering's own gate, because a `Date` is
+a `JsDate` and a bag-typed one offers members the value lacks); an intersection is a bag only
+when EVERY member is one, stricter than `ErasedTypes` and forced by having no library-type
+table; and the hand-stated facade is kept honest by a REFLECTION pin over the real classes
+rather than by a promise, with two negative controls proving the pin can fail.
+
 **NAMED SUCCESSORS (both queued): (KAPI.2)** the platform half — nothing yet pins that the JVM
 classes the KIR backend emits match the signatures this metadata declares, and until something
 does, the artifact types a consumer's common code without linking its platform code; **(KAPI.3)**
@@ -1674,7 +1685,24 @@ one divergence is a message FORM the round that landed it had already recorded a
   and module variables are reached through generated `name$get` accessors rather than as
   properties. `docs/kir-kotlin-metadata.md` §6 item 1.
 
-- [ ] **(KAPI.3) A RUNTIME METADATA KLIB, so an object type is `JsObject` rather than `Any?`.**
+- [x] **(KAPI.3) A RUNTIME METADATA KLIB — LANDED 2026-08-22, same session.** A SECOND metadata
+  klib declares `JsObject` and `JsArray` under their real fully qualified names, is written by
+  the same machinery and goes on the exported library's compile classpath — opt-in through
+  `runtimeKlib =`, so the self-contained artifact stays available. Measured on the two real
+  libraries: `mitt(all: JsObject?): JsObject` and **`parse(toml: String, options: JsObject?):
+  JsObject`**, both pinned, and a consumer that reads `document.get("title")` compiles against
+  the pair. **The gate is the load-bearing part**: a bag needs POSITIVE evidence — the
+  lowering's own `isOwnStructuralDeclaration` (a structural kind declared in a program file
+  that is not a `.d.ts`), an anonymous object type by construction, and nothing else — because
+  a `Date` is a `JsDate` at run time and typing one as a bag offers members the value does not
+  have. An INTERSECTION is one bag only when EVERY member is positively one, which is stricter
+  than `ErasedTypes.mapIntersection` and forced: with no library-type table, `Date` and an
+  unmappable constraint give the same answer, so the permissive reading types `Date & Tag` as a
+  bag (a pin holds both directions). The facade is stated by hand — Java reflection cannot see
+  nullability and `kotlin-reflect` here is older than the runtime's metadata — so the drift is
+  CAUGHT rather than prevented: `KirRuntimeApiTest` reflects over the real classes, with two
+  negative controls proving the check can fail. What is left is the library-type table (`Map`,
+  `Set`, `Date`, `RegExp`), now (KAPI.4). ORIGINAL ENTRY:**
   Measured today: `smol-toml` exports `parse(toml: String, options: Any?): Any?`, which is the
   difference between "a TOML parser returns something" and "a TOML parser returns something you
   can read". Arrays and object types erase to `Any?` for one reason only — `JsArray`/`JsObject`
@@ -1684,6 +1712,13 @@ one divergence is a message FORM the round that landed it had already recorded a
   common facade of a JVM class is a second copy, so whatever produces it needs a pin that
   reflects over the real class and fails when a member disagrees — `scripts/kir_native_runtime.py`
   is the precedent for deriving one runtime from the other rather than forking it.
+
+- [ ] **(KAPI.4) A LIBRARY-TYPE TABLE for the exported surface.** `Map`, `Set`, `Date`, `RegExp`
+  and `Promise` are runtime classes with no entry on the exported API, so they are `Any?` where
+  `JsObject`/`JsArray` are now real — and, worse, they are what makes (KAPI.3)'s intersection
+  rule demand positive evidence rather than reading an unmappable member as a constraint.
+  `ErasedTypes` already keys such a table BY NAME (`libraryType`), which is the shape to copy;
+  the declarations go in `KirRuntimeApi`, where the drift pin already covers whatever is added.
 
 
 **WORK ORDER NOTE (restored 2026-08-14, round 903).** This section had been ARCHIVED out of the file

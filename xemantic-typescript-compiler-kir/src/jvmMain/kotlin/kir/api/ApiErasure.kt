@@ -62,6 +62,26 @@ internal class ApiErasure(
     private val classNameOf: (Node) -> String?,
     /** What an `enum` declaration's members' VALUES are typed as. */
     private val enumValueTypeOf: (Node) -> KotlinType?,
+    /**
+     * Whether a declaration is a structural shape THIS program wrote.
+     *
+     * `ErasedTypes`' gate of the same name, and load-bearing for the same
+     * reason: an interface the program declares is a property bag at run time,
+     * and a LIBRARY type — `Map`, `Date`, `RegExp` — is NOT, so letting a
+     * library type fall through to the bag would type a consumer's calls
+     * against members the value does not have. Silent, and shaped exactly like
+     * a working API.
+     */
+    private val isOwnStructuralDeclaration: (Node) -> Boolean = { false },
+    /**
+     * Whether the runtime's own metadata klib is on the export's classpath.
+     *
+     * False — the default — is the self-contained artifact: an object or an
+     * array has no common type to name, so it is `Any?`. True names
+     * `JsObject`/`JsArray`, and the consumer then needs both klibs, which is
+     * what any library dependency is.
+     */
+    private val runtimeTypes: Boolean = false,
 ) {
 
     /**
@@ -87,7 +107,7 @@ internal class ApiErasure(
             // value of unknown type is a lowering it cannot write.
             type is Type.TypeParam -> KotlinType.ANY
             type is Type.Union -> mapUnion(type)
-            type is Type.Intersection -> KotlinType.ANY
+            type is Type.Intersection -> mapIntersection(type)
             type is Type.Object -> mapObject(type)
             else -> KotlinType.ANY
         }
@@ -106,16 +126,43 @@ internal class ApiErasure(
         val present = type.types.filterNot(nullish)
         if (present.isEmpty()) return KotlinType.NULL
         val erasures = present.map { map(it) }
-        val first = erasures.first()
-        val uniform = erasures.all { it.render().removeSuffix("?") == first.render().removeSuffix("?") }
+        val first = erasures.first().asNonNullable()
+        val uniform = erasures.all { it.asNonNullable() == first }
         val erased = if (uniform) first else KotlinType.ANY_NON_NULL
         return if (nullable) erased.asNullable() else erased
     }
 
+    /**
+     * An INTERSECTION of object shapes is a property bag, like each of them.
+     *
+     * `ParseOptions & { integersAsBigInt: … }` — the branded-options shape every
+     * library writes — has no runtime witness of its own: what flows through it
+     * is one object carrying the union of the members' properties, which is what
+     * a bag is.
+     *
+     * EVERY member must be POSITIVELY a bag, which is stricter than
+     * `ErasedTypes.mapIntersection`, and the difference is forced. There, a
+     * member it cannot map is read as a pure type-level constraint, because a
+     * NOMINAL member would have mapped to a runtime class and been refused.
+     * Here there is no library-type table, so `Date` maps to `Any?` — the same
+     * answer an unmappable constraint gives — and treating that as a constraint
+     * would type `Date & Tag` as a bag whose members the value does not have.
+     * A pin holds both directions.
+     */
+    private fun mapIntersection(type: Type.Intersection): KotlinType {
+        if (!runtimeTypes) return KotlinType.ANY
+        val mapped = type.types.map { map(it) }
+        return if (mapped.all { it == KirRuntimeApi.jsObject }) {
+            KirRuntimeApi.jsObject
+        } else {
+            KotlinType.ANY
+        }
+    }
+
     private fun mapObject(type: Type.Object): KotlinType {
-        // An array or a tuple is a `JsArray` at run time, and no COMMON type
-        // names one yet — see `docs/kir-kotlin-metadata.md` §3.1.
-        if (isArrayLike(type)) return KotlinType.ANY
+        // An array or a tuple is a `JsArray` at run time — nameable only when
+        // the runtime's own metadata is on the classpath (§3.1).
+        if (isArrayLike(type)) return if (runtimeTypes) KirRuntimeApi.jsArray else KotlinType.ANY
         val symbol = type.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
         declaration?.let { enumValueTypeOf(it) }?.let { return it }
@@ -124,9 +171,18 @@ internal class ApiErasure(
         type.callSignatures?.firstOrNull()?.let {
             return KotlinType.Function(it.parameters.size)
         }
-        // Everything else is a property bag at run time: an interface this
-        // program declares, an anonymous object type, an unmapped library type.
-        return KotlinType.ANY
+        if (!runtimeTypes) return KotlinType.ANY
+        // A bag, but only where the shape is one this program wrote: an
+        // anonymous object type has no declaration at all and is one by
+        // construction, and a declared one has to pass the gate — a `Date` is a
+        // `JsDate` at run time and calling a bag's members on it would fail
+        // inside the runtime.
+        if (declaration == null) return KirRuntimeApi.jsObject
+        return if (isOwnStructuralDeclaration(declaration)) {
+            KirRuntimeApi.jsObject
+        } else {
+            KotlinType.ANY
+        }
     }
 
     private fun isArrayLike(type: Type.Object): Boolean =

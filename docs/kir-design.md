@@ -481,3 +481,19 @@ Making generated declarations resolvable from Kotlin source requires generating
 them in the FRONTEND (a FIR extension) as well, which is what serialization and
 Compose do. That is a real constraint on any "call your compiled TypeScript from
 Kotlin" story, and it is a separate piece of work from this spike.
+
+## 9. The other direction: exporting an API rather than a program
+
+Everything above lowers a TypeScript program to code that RUNS. A library has a
+second question — can a Kotlin developer *call* it — and that one is answered by
+declarations rather than by bytecode: `docs/kir-kotlin-metadata.md` describes
+the export of a checked library's public API as a **Kotlin metadata klib**, the
+artifact a Kotlin Multiplatform `commonMain` compiles against.
+
+It shares this pipeline's front end (the checked program and its facts) and
+none of its back end: the surface is rendered as Kotlin source and handed to
+kotlinc's METADATA compiler, because metadata is a versioned protobuf whose only
+writer lives in the compiler. §8.5's constraint is exactly why the two halves
+are still separate — IR-generated declarations are invisible to Kotlin source
+downstream, so a metadata artifact is how a Kotlin consumer learns what a
+compiled TypeScript library offers.

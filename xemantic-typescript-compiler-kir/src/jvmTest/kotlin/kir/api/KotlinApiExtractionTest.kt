@@ -258,15 +258,128 @@ class KotlinApiExtractionTest {
         assert(refusal.line == 2)
     }
 
-    private fun apiOf(source: String): KotlinApiModule = extractionOf(source).module
+    /**
+     * A TypeScript name that is a Kotlin KEYWORD is quoted, not refused.
+     *
+     * `is`, `in`, `object`, `when` and `val` are ordinary TypeScript names, and
+     * the alternative to quoting is a generated source that does not parse —
+     * i.e. a whole library refused for one member.
+     */
+    @Test
+    fun `a name that is a Kotlin keyword is backtick quoted`() {
+        val api = apiOf(
+            """
+            export function is(value: string): boolean { return value === "" }
+            export const object: number = 1
+            export class When { in(value: string): string { return value } }
+            """
+        )
+        assert(api.declarations.map { it.name } == listOf("`is`", "`object`", "When"))
+        val whenClass = api.declarations.filterIsInstance<KotlinClass>().single()
+        assert(whenClass.members.single().name == "`in`")
+    }
 
-    private fun extractionOf(source: String): ExtractedApi {
+    // -----------------------------------------------------------------------
+    // With the runtime's own metadata on the classpath (KAPI.3)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The whole point of the runtime klib: an object type stops being `Any?`.
+     */
+    @Test
+    fun `with the runtime, an object type is a JsObject`() {
+        val api = apiOf(
+            """
+            export interface Options { verbose: boolean }
+            export function run(options: Options): Options { return options }
+            """,
+            runtimeTypes = true,
+        )
+        val run = api.function("run")
+        assert(run.parameters.single().type == KirRuntimeApi.jsObject)
+        assert(run.returnType == KirRuntimeApi.jsObject)
+    }
+
+    @Test
+    fun `with the runtime, an array is a JsArray`() {
+        val api = apiOf(
+            "export function names(): string[] { return [] }",
+            runtimeTypes = true,
+        )
+        assert(api.function("names").returnType == KirRuntimeApi.jsArray)
+    }
+
+    /** An anonymous object type is a bag by construction — it has no declaration. */
+    @Test
+    fun `with the runtime, an inline object type is a JsObject`() {
+        val api = apiOf(
+            """
+            export function make(): { a: number } { return { a: 1 } }
+            """,
+            runtimeTypes = true,
+        )
+        assert(api.function("make").returnType == KirRuntimeApi.jsObject)
+    }
+
+    /**
+     * A BRANDED options type — an intersection of shapes — is one bag.
+     *
+     * The shape every real library's options parameter has, and the one that
+     * made `smol-toml` export `options: Any?` until the intersection rule
+     * landed. A member that is NOMINAL still refuses: an intersection with a
+     * `Date` is not a bag.
+     */
+    @Test
+    fun `with the runtime, an intersection of shapes is a JsObject`() {
+        val api = apiOf(
+            """
+            export interface Options { maxDepth?: number }
+            export function parse(options?: Options & { strict: boolean }): void {}
+            """,
+            runtimeTypes = true,
+        )
+        assert(api.function("parse").parameters.single().type ==
+            KirRuntimeApi.jsObject.asNullable())
+    }
+
+    @Test
+    fun `with the runtime, an intersection with a library type is not a JsObject`() {
+        val api = apiOf(
+            """
+            export interface Tag { tag: string }
+            export function stamp(value: Date & Tag): void {}
+            """,
+            runtimeTypes = true,
+        )
+        assert(api.function("stamp").parameters.single().type == KotlinType.ANY)
+    }
+
+    /**
+     * NEGATIVE CONTROL for the gate, and the reason it exists: a LIBRARY type is
+     * not a property bag at run time — a `Date` is a `JsDate` — so typing one as
+     * `JsObject` would offer a consumer members the value does not have. It
+     * stays `Any?` until a library-type table names it.
+     */
+    @Test
+    fun `with the runtime, a library type is still Any`() {
+        val api = apiOf(
+            "export function now(): Date { return new Date() }",
+            runtimeTypes = true,
+        )
+        assert(api.function("now").returnType == KotlinType.ANY)
+    }
+
+    private fun apiOf(source: String, runtimeTypes: Boolean = false): KotlinApiModule =
+        extractionOf(source, runtimeTypes).module
+
+    private fun extractionOf(source: String, runtimeTypes: Boolean = false): ExtractedApi {
         val checked = checkTypeScript("api.ts", source.trimIndent())
         assert(checked.errors.isEmpty())
         return TypeScriptApiExtractor(
             listOf(checked.sourceFile),
             checked.facts,
             "ts",
+            runtimeTypes = runtimeTypes,
         ).extract(checked.sourceFile)
     }
 

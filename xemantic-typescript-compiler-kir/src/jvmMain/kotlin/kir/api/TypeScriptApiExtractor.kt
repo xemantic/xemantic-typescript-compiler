@@ -34,12 +34,15 @@ import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.ImportDeclaration
+import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.NamedImports
+import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NumericLiteralNode
+import com.xemantic.typescript.compiler.ObjectLiteralExpression
 import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
@@ -47,6 +50,8 @@ import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.SyntaxKind
+import com.xemantic.typescript.compiler.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.TypeLiteral
 import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.VariableDeclarationList
 import com.xemantic.typescript.compiler.VariableStatement
@@ -80,6 +85,12 @@ internal class TypeScriptApiExtractor(
     private val files: List<SourceFile>,
     private val facts: CheckedFacts,
     private val packageName: String,
+    /**
+     * Whether the runtime's metadata klib is on the export's classpath, which
+     * is what decides between `JsObject`/`JsArray` and `Any?` — see
+     * [ApiErasure].
+     */
+    private val runtimeTypes: Boolean = false,
 ) {
 
     private val refusals = mutableListOf<KirDiagnostic>()
@@ -92,7 +103,37 @@ internal class TypeScriptApiExtractor(
     private val erasure = ApiErasure(
         classNameOf = { node -> exportedClasses[node] },
         enumValueTypeOf = { node -> enumValueTypes[node] },
+        isOwnStructuralDeclaration = ::isOwnStructuralDeclaration,
+        runtimeTypes = runtimeTypes,
     )
+
+    /**
+     * `KirFileLowering`'s gate of the same name, over the same population.
+     *
+     * The kinds are the structural ones — an interface, a type alias, a type
+     * literal, an object literal — and the file test is the lowering's
+     * `isProgramNode`, minus the declaration files: `KirProgramLowering` drops
+     * every `.d.ts` before it builds its tables, so a type declared in one is
+     * not a shape this program builds and must not be typed as a bag.
+     */
+    private fun isOwnStructuralDeclaration(declaration: Node): Boolean {
+        val structural = declaration is InterfaceDeclaration ||
+            declaration is TypeAliasDeclaration ||
+            declaration is TypeLiteral ||
+            declaration is ObjectLiteralExpression
+        return structural && isProgramNode(declaration)
+    }
+
+    private fun isProgramNode(node: Node): Boolean {
+        var current: Node? = node
+        while (current != null) {
+            if (current is SourceFile) {
+                return files.any { it === current && !it.fileName.endsWith(".d.ts") }
+            }
+            current = (current as? NodeBase)?.parent
+        }
+        return false
+    }
 
     fun extract(entry: SourceFile): ExtractedApi {
         val surface = surfaceOf(entry, mutableSetOf())
@@ -101,7 +142,8 @@ internal class TypeScriptApiExtractor(
         // name, and a mapper cannot ask a table that is still being filled.
         surface.forEach { (name, export) ->
             when (val declaration = export.declaration) {
-                is ClassDeclaration -> exportedClasses[declaration] = "$packageName.$name"
+                is ClassDeclaration ->
+                    exportedClasses[declaration] = "$packageName.${kotlinName(name)}"
                 is EnumDeclaration -> enumValueType(declaration)?.let {
                     enumValueTypes[declaration] = it
                 }
@@ -356,7 +398,12 @@ internal class TypeScriptApiExtractor(
             return null
         }
         val parameters = parameters(declaration.parameters, file) ?: return null
-        return KotlinFunction(name, parameters, erasure.map(returnType), origin(file, declaration))
+        return KotlinFunction(
+            kotlinName(name),
+            parameters,
+            erasure.map(returnType),
+            origin(file, declaration),
+        )
     }
 
     private fun variable(
@@ -374,7 +421,7 @@ internal class TypeScriptApiExtractor(
         }
         val list = declaration.parent as? VariableDeclarationList
         val mutable = list != null && list.flags != SyntaxKind.ConstKeyword
-        return KotlinProperty(name, erasure.map(type), mutable, origin(file, declaration))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, declaration))
     }
 
     private fun classDeclaration(
@@ -396,7 +443,7 @@ internal class TypeScriptApiExtractor(
                 else -> null
             }
         }
-        return KotlinClass(name, constructorParameters, members, origin(file, declaration))
+        return KotlinClass(kotlinName(name), constructorParameters, members, origin(file, declaration))
     }
 
     private fun method(member: MethodDeclaration, file: SourceFile): KotlinFunction? {
@@ -407,7 +454,12 @@ internal class TypeScriptApiExtractor(
             return null
         }
         val parameters = parameters(member.parameters, file) ?: return null
-        return KotlinFunction(name, parameters, erasure.map(returnType), origin(file, member))
+        return KotlinFunction(
+            kotlinName(name),
+            parameters,
+            erasure.map(returnType),
+            origin(file, member),
+        )
     }
 
     private fun property(member: PropertyDeclaration, file: SourceFile): KotlinProperty? {
@@ -418,7 +470,7 @@ internal class TypeScriptApiExtractor(
             return null
         }
         val mutable = ModifierFlag.Readonly !in member.modifiers
-        return KotlinProperty(name, erasure.map(type), mutable, origin(file, member))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member))
     }
 
     private fun accessor(
@@ -437,7 +489,7 @@ internal class TypeScriptApiExtractor(
         val mutable = owner.members.any {
             it is SetAccessor && (it.name as? Identifier)?.text == name
         }
-        return KotlinProperty(name, erasure.map(type), mutable, origin(file, member))
+        return KotlinProperty(kotlinName(name), erasure.map(type), mutable, origin(file, member))
     }
 
     private fun isPublicInstanceMember(modifiers: Set<ModifierFlag>): Boolean =
@@ -483,10 +535,10 @@ internal class TypeScriptApiExtractor(
         }
         val members = declaration.members.mapNotNull { member ->
             (member.name as? Identifier)?.text?.let {
-                KotlinProperty(it, valueType, mutable = false, origin(file, member))
+                KotlinProperty(kotlinName(it), valueType, mutable = false, origin(file, member))
             }
         }
-        return KotlinConstantObject(name, members, origin(file, declaration))
+        return KotlinConstantObject(kotlinName(name), members, origin(file, declaration))
     }
 
     /**
@@ -521,7 +573,11 @@ internal class TypeScriptApiExtractor(
      * A TypeScript name that Kotlin cannot spell, made spellable.
      *
      * Only the keyword collision is handled, with a backtick quotation, because
-     * a TypeScript identifier is otherwise a legal Kotlin one.
+     * a TypeScript identifier is otherwise a legal Kotlin one — and `is`, `in`,
+     * `object`, `when` and `val` are all ordinary TypeScript names, so this is
+     * not a hypothetical. Applied to every name that becomes Kotlin, because
+     * the alternative is a generated source that does not parse, i.e. a whole
+     * library refused for one member.
      */
     private fun kotlinName(name: String): String =
         if (name in KOTLIN_KEYWORDS) "`$name`" else name

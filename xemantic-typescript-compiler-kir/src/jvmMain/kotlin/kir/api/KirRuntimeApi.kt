@@ -1,0 +1,154 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler.kir.api
+
+import java.nio.file.Path
+
+/**
+ * The JS value types an exported API mentions, as a COMMON Kotlin surface.
+ *
+ * ## The problem this solves
+ *
+ * A TypeScript object type is a property bag at run time and an array is a
+ * `JsArray`, and both of those are classes in `…kir.runtime` — **JVM** Kotlin,
+ * compiled by this module's own build. A metadata klib is common code: it
+ * cannot see a JVM class. So without this, every object and array position on
+ * an exported API erases to `Any?`, and a TOML parser exports as "returns
+ * something" rather than "returns something you can read".
+ *
+ * ## The shape of the answer
+ *
+ * A SECOND metadata klib, declaring those types under their real fully
+ * qualified names, produced by the same machinery and put on the exported
+ * library's compile classpath. That is exactly the pairing a Kotlin
+ * Multiplatform library already is — common metadata for `commonMain`, a
+ * platform artifact for the platform compilation — and naming the JVM classes'
+ * own package is what makes the platform half possible later rather than
+ * something to retrofit.
+ *
+ * ## Why the declarations are written here rather than derived
+ *
+ * A second copy of a public API drifts, which CLAUDE.md says at length. Two
+ * mechanical alternatives were available and both are worse: Java reflection
+ * loses nullability, which is the one thing this surface must state; and
+ * `kotlin.reflect` would read metadata written by a NEWER compiler than the
+ * `kotlin-reflect` on this module's classpath.
+ *
+ * So the surface is stated, and the drift is caught by a pin instead:
+ * `KirRuntimeApiTest` reflects over the REAL classes and fails when a declared
+ * member is absent or its JVM signature disagrees. A declaration that does not
+ * exist on the runtime is the failure that matters — it would type a consumer's
+ * call against a method nothing implements.
+ *
+ * The surface is deliberately a SUBSET: `JsObject` and `JsArray`, which is
+ * where the whole prize is. `JsMap`, `JsDate`, `JsSet`, `JsRegExp` and `JsError`
+ * are still `Any?` on an exported API, because a library type must be mapped BY
+ * NAME (as `ErasedTypes` does) rather than caught by the object fallback, and
+ * that table is its own decision.
+ */
+internal object KirRuntimeApi {
+
+    const val PACKAGE: String = "com.xemantic.typescript.compiler.kir.runtime"
+
+    val jsObject: KotlinType = KotlinType.Named("$PACKAGE.JsObject")
+
+    val jsArray: KotlinType = KotlinType.Named("$PACKAGE.JsArray")
+
+    private const val ORIGIN = "kir/runtime/JsRuntime.kt"
+
+    private val any = KotlinType.ANY
+    private val double = KotlinType.DOUBLE
+    private val string = KotlinType.STRING
+    private val boolean = KotlinType.BOOLEAN
+    private val unit = KotlinType.UNIT
+    private val callback = KotlinType.Function(1)
+
+    /** The declarations, as the same model an exported TypeScript API uses. */
+    val module: KotlinApiModule = KotlinApiModule(
+        PACKAGE,
+        listOf(
+            KotlinClass(
+                name = "JsObject",
+                constructorParameters = emptyList(),
+                members = listOf(
+                    function("get", listOf("name" to string), any),
+                    function("set", listOf("name" to string, "value" to any), unit),
+                    function("has", listOf("name" to string), boolean),
+                    function("delete", listOf("name" to string), boolean),
+                    function("keys", emptyList(), jsArray),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsArray",
+                constructorParameters = emptyList(),
+                members = listOf(
+                    KotlinProperty("length", double, mutable = true, origin = ORIGIN),
+                    // `get`/`set` are INDEXING operators, so common code writes
+                    // `a[0.0]` — the spelling a JavaScript array has.
+                    function("get", listOf("index" to double), any, isOperator = true),
+                    function("set", listOf("index" to double, "value" to any), unit, isOperator = true),
+                    function("push", listOf("value" to any), double),
+                    function("pop", emptyList(), any),
+                    function("shift", emptyList(), any),
+                    function("unshift", listOf("value" to any), double),
+                    function("indexOf", listOf("value" to any), double),
+                    function("includes", listOf("value" to any), boolean),
+                    function("slice", emptyList(), jsArray),
+                    function("concat", listOf("other" to jsArray), jsArray),
+                    function("join", listOf("separator" to string), string),
+                    function("forEach", listOf("callback" to callback), unit),
+                    function("map", listOf("callback" to callback), jsArray),
+                    function("filter", listOf("callback" to callback), jsArray),
+                ),
+                origin = ORIGIN,
+            ),
+        ),
+    )
+
+    private fun function(
+        name: String,
+        parameters: List<Pair<String, KotlinType>>,
+        returnType: KotlinType,
+        isOperator: Boolean = false,
+    ) = KotlinFunction(
+        name,
+        parameters.map { (parameterName, type) -> KotlinParameter(parameterName, type) },
+        returnType,
+        ORIGIN,
+        isOperator,
+    )
+
+}
+
+/**
+ * Writes the runtime's common surface as a metadata klib at [output].
+ *
+ * An exported library klib is compiled AGAINST this one and a consumer needs
+ * both on its classpath, which is what any library dependency is.
+ */
+internal fun writeRuntimeMetadataKlib(output: Path): MetadataKlibResult =
+    compileMetadataKlib(KirRuntimeApi.module.render(), output, "xtsc-kir-runtime")

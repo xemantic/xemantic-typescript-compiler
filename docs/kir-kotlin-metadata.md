@@ -28,6 +28,33 @@ and Native backends already produce for whole programs; making the two agree is
                                                      library.klib
 ```
 
+### 0.1 Running it
+
+From Kotlin:
+
+```kotlin
+exportTypeScriptProjectApi(
+    projectPath = "…/my-library",
+    entryFileName = "index.ts",
+    outputKlib = out / "my-library.klib",
+    runtimeKlib = out / "xtsc-runtime.klib",   // optional — see §3.1
+)
+```
+
+From a command line, off this module's classpath — the same shape as
+`…kir.census.StructuralCensusMain`, and for the same reason it is not in the
+shipped CLI: that one is a GraalVM native image and this pipeline embeds the
+Kotlin compiler.
+
+```
+java -Xmx4g -cp <kir + core + deps> \
+  com.xemantic.typescript.compiler.kir.api.KirApiExportMainKt \
+  <project-dir> <entry-file> <out.klib> [package] [runtime.klib]
+```
+
+It writes the generated Kotlin source beside the klib as a `.kt` file, which is
+the reviewable form of what the artifact contains.
+
 ## 1. Why it goes through generated source
 
 Kotlin's metadata is a versioned protobuf whose only writer lives in the
@@ -76,6 +103,12 @@ the entry module and re-exported from it. Re-export cycles terminate; on a
 duplicate name the first wins, which is what a local export shadowing an
 `export *` means.
 
+An OVERLOADED function reaches the surface as its FIRST declaration — the one
+its own sources state first — because the erasure collapses the differences
+between overloads anyway (`smol-toml`'s two `parse` overloads erase to the same
+Kotlin signature). The implementation signature, which TypeScript deliberately
+makes uncallable, is not the one exported.
+
 Module specifiers are resolved RELATIVELY, against the program's own file list,
 and a bare specifier (a `node_modules` package) is refused. That is deliberately
 not a second copy of `-core`'s `ModuleResolver`: the file is already in the
@@ -101,25 +134,54 @@ The codomain is small on purpose, and every position outside it erases to `Any?`
 | an `enum` | an `object` of `val`s typed as the members' VALUES |
 | a type parameter | `Any?` |
 | `bigint` | `Any?` — see §3.1 |
-| an array, a tuple, an object type, an interface | `Any?` — see §3.1 |
+| an array, a tuple | `JsArray`, or `Any?` — see §3.1 |
+| an object type, an interface, an intersection of them | `JsObject`, or `Any?` — see §3.1 |
 
 Function types are UNIFORM in `Any?` for the reason `ErasedTypes.function` gives:
 TypeScript's function assignability is bivariant and Kotlin's `FunctionN` is not,
 so giving the parameters their own erased types would reject handlers the
 library's own type system accepts.
 
-### 3.1 What erases to `Any?`, and why that is a stage rather than a decision
+### 3.1 The runtime surface, and what still erases to `Any?`
 
 An array is a `JsArray` at run time and an object type is a `JsObject` — classes
-in this module's runtime, which exist as **JVM** Kotlin and have no common
-metadata artifact. A metadata klib naming them would only resolve for a consumer
-who also had that artifact, and there is none yet, so today those positions are
-`Any?`. `bigint` is the same story with `java.math.BigInteger`.
+in this module's runtime, which exist as **JVM** Kotlin. A metadata klib is
+common code and cannot see a JVM class, so naming them takes a SECOND metadata
+klib declaring those types under their real fully qualified names, produced by
+the same machinery and put on the exported library's compile classpath. That is
+the pairing a Kotlin Multiplatform library already is, and it is opt-in:
 
-The consequence is visible and is stated rather than hidden: `mitt` exports as
-`mitt(all: Any?): Any?` and `smol-toml` as `parse(toml: String, options: Any?):
-Any?`. Both are pinned, so the day a runtime metadata artifact lands, the pins
-say so.
+```kotlin
+exportTypeScriptProjectApi(project, "index.ts", out / "lib.klib",
+                           runtimeKlib = out / "xtsc-runtime.klib")
+```
+
+With it, `mitt` exports as `mitt(all: JsObject?): JsObject` and `smol-toml` as
+`parse(toml: String, options: JsObject?): JsObject` — a signature a Kotlin caller
+can use, `document.get("title")` and all. Without it the artifact is
+self-contained and those positions are `Any?`. Both are pinned, in both
+directions.
+
+**What is a bag needs POSITIVE evidence, and that gate is the load-bearing part.**
+An interface the program declares is a property bag; a LIBRARY type is not — a
+`Date` is a `JsDate` at run time, and typing one as `JsObject` would offer a
+consumer members the value does not have, silently. So the mapping asks
+`KirFileLowering`'s own question (`isOwnStructuralDeclaration`: a structural kind,
+declared in a program file that is not a `.d.ts`), an anonymous object type is a
+bag by construction, and everything else stays `Any?`.
+
+An INTERSECTION — `ParseOptions & { integersAsBigInt: … }`, the branded-options
+shape every library writes — is one bag, but only when EVERY member is positively
+a bag. That is stricter than `ErasedTypes.mapIntersection`, and the difference is
+forced: there, an unmappable member can be read as a pure type-level constraint
+because a nominal one would have mapped to a runtime class and been refused;
+here there is no library-type table, so `Date` maps to `Any?` — the same answer a
+constraint gives — and the permissive reading would type `Date & Tag` as a bag.
+
+Still `Any?`, and each for its own reason: `bigint` (`java.math.BigInteger` is a
+JVM class), and every other library type — `Map`, `Set`, `Date`, `RegExp`,
+`Promise` — because mapping one takes a table keyed BY NAME, as `ErasedTypes`
+has, rather than an object fallback.
 
 ### 3.2 Why this is a second mapper
 
@@ -175,6 +237,22 @@ the consumer compiles whatever it is given would pass for an empty klib too:
 - a module the entry does not re-export must not be reachable;
 - a program the checker rejects must produce no artifact at all.
 
+### 5.1 The runtime facade, and how it is kept honest
+
+`KirRuntimeApi` states `JsObject`'s and `JsArray`'s common surface BY HAND, and
+that is a second copy of a public API — the thing this repository's CLAUDE.md
+warns about at length. Both mechanical alternatives are worse: Java reflection
+cannot see nullability, which is the one thing this surface must state, and
+`kotlin-reflect` on this module's classpath is older than the metadata the
+runtime is compiled with.
+
+So the drift is caught rather than prevented: `KirRuntimeApiTest` reflects over
+the REAL classes and fails when a declared member is absent or its JVM signature
+disagrees, with two negative controls proving the check can fail. The direction
+that matters is "declared here, absent there" — that one types a consumer's call
+against a method nothing implements, and the consumer's compiler cannot see it,
+because the consumer compiles against the metadata.
+
 ## 6. What is not done yet
 
 In rough order of what a user would miss first.
@@ -184,9 +262,11 @@ In rough order of what a user would miss first.
    `jvmMain` compilation to link. Nothing pins that agreement yet, and until it
    does this artifact types a consumer's common code without linking its
    platform code. That is the next slice.
-2. **A runtime metadata klib**, which is what turns §3.1's `Any?` positions into
-   `JsObject` / `JsArray` with members — the difference between "a TOML parser
-   returns something" and "a TOML parser returns something you can read".
+2. **A library-type table.** `Map`, `Set`, `Date`, `RegExp` and `Promise` are
+   runtime classes with no entry on the exported surface, so they are `Any?`
+   where `JsObject`/`JsArray` are now real. The runtime facade
+   (`KirRuntimeApi`) is where they would be declared, and the drift pin already
+   covers whatever is added to it.
 3. **Interfaces as shapes.** An interface is a property bag at run time, so a
    Kotlin `interface` would be a claim about a representation that does not
    exist; `docs/kir-structural-typing.md` §7 is where the nominal encoding that

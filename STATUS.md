@@ -15,11 +15,21 @@ is given would pass for an empty klib: a non-exported name must not resolve, the
 types must be ENFORCED, a non-re-exported module must not be reachable, and a program the checker
 rejects must produce no artifact. Measured on the two real libraries this backend already compiles:
 `mitt` exports `mitt(all: Any?): Any?`, `smol-toml` exports `parse(toml: String, options: Any?):
-Any?` — primitives, unions, optionality, classes, enums and callbacks reach the surface typed,
-while arrays and object types are `Any?` because `JsArray`/`JsObject` are JVM classes with no
-common metadata artifact yet ((KAPI.3)). Refusals are PER DECLARATION, not per program: an absent
-declaration is a compile error at the consumer's use site, a wrongly-typed one is silent. Suite
-**15,585 / 0 failures**; the KIR module 108 → 130 pins. `docs/kir-kotlin-metadata.md`.
+Any?` — primitives, unions, optionality, classes, enums and callbacks reach the surface typed.
+**(KAPI.3) LANDED IN THE SAME SESSION and is what makes an exported library usable**: with
+`runtimeKlib =` the export writes a SECOND metadata klib declaring `JsObject`/`JsArray` under
+their real fully qualified names and compiles the library against it, so the same two libraries
+export **`mitt(all: JsObject?): JsObject`** and **`parse(toml: String, options: JsObject?):
+JsObject`** — measured on `smol-toml`'s own 1,082 lines — and a Kotlin consumer reads
+`document.get("title")`. A bag needs POSITIVE evidence (the lowering's own gate: a structural
+kind declared in a program file, or an anonymous object type), because a `Date` is a `JsDate` at
+run time and a bag-typed one would offer members the value does not have; an intersection is a
+bag only when EVERY member is one, stricter than `ErasedTypes` and forced by having no
+library-type table. The hand-stated runtime facade is kept honest by a REFLECTION pin over the
+real classes, with two negative controls proving it can fail. Refusals are PER DECLARATION, not
+per program: an absent declaration is a compile error at the consumer's use site, a wrongly-typed
+one is silent. Suite **15,599 / 0 failures**; the KIR module 108 → 144 pins.
+`docs/kir-kotlin-metadata.md`.
 
 **THE KIR QUEUE, ALL FIVE ITEMS CLOSED (2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x
 slower than Node down to **1.52x**; on Kotlin/Native **163.30 → 126.55, −22.5%** and 7.26x

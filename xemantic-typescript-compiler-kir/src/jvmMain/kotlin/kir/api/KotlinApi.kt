@@ -49,6 +49,16 @@ public sealed class KotlinType {
     /** The same type, admitting `null` — what a `T | undefined` member gives. */
     public abstract fun asNullable(): KotlinType
 
+    /**
+     * The same type, not admitting `null`.
+     *
+     * Used to ask whether two erasures are the SAME SHAPE, which is the
+     * question union erasure asks of its members (§3.2) and which must not be
+     * answered by string surgery on a rendering — `((Any?) -> Any?)?` does not
+     * become a function type by dropping its last character.
+     */
+    public abstract fun asNonNullable(): KotlinType
+
     override fun toString(): String = render()
 
     override fun equals(other: Any?): Boolean =
@@ -74,6 +84,9 @@ public sealed class KotlinType {
         override fun asNullable(): KotlinType =
             if (nullable) this else Named(fqName, arguments, nullable = true)
 
+        override fun asNonNullable(): KotlinType =
+            if (!nullable) this else Named(fqName, arguments, nullable = false)
+
     }
 
     /**
@@ -97,6 +110,9 @@ public sealed class KotlinType {
 
         override fun asNullable(): KotlinType =
             if (nullable) this else Function(arity, nullable = true)
+
+        override fun asNonNullable(): KotlinType =
+            if (!nullable) this else Function(arity, nullable = false)
 
     }
 
@@ -138,6 +154,14 @@ public class KotlinFunction(
     public val parameters: List<KotlinParameter>,
     public val returnType: KotlinType,
     override val origin: String,
+    /**
+     * Rendered as `operator fun`, so `a[0]` reaches it.
+     *
+     * Never set from TypeScript — an exported TypeScript function is an
+     * ordinary one — and set for the RUNTIME surface, whose `get`/`set` are
+     * indexing operators in the Kotlin the runtime is written in.
+     */
+    public val isOperator: Boolean = false,
 ) : KotlinDeclaration()
 
 public class KotlinProperty(
