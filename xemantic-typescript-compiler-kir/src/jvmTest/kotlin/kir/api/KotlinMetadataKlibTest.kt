@@ -276,11 +276,15 @@ class KotlinMetadataKlibTest {
 
     /**
      * The same library WITH the runtime surface: `mitt` becomes
-     * `mitt(all: JsObject?): JsObject`.
+     * `mitt(all: JsMap?): JsObject`.
      *
-     * `Emitter<Events>` is an interface `mitt.ts` declares, so it is a shape
-     * this program writes and the gate lets it be a bag; its type parameters
-     * erase, as they do in TypeScript and on the JVM.
+     * Both halves are decided by a different rule and both are worth pinning.
+     * The RETURN, `Emitter<Events>`, is an interface `mitt.ts` declares, so the
+     * structural gate lets it be a bag — and it reaches that verdict through the
+     * instantiation's TARGET, since a `Type.Reference`'s own symbol carries no
+     * declaration. The PARAMETER is `EventHandlerMap<Events>`, an alias of a
+     * `Map`, so the library table names it — more precisely than a bag would,
+     * and exactly what the compiled program holds there.
      */
     @Test
     fun `a real library exports its object types when the runtime is on`() {
@@ -288,7 +292,8 @@ class KotlinMetadataKlibTest {
         assert(export.successful)
         val mitt = export.api.declarations.filterIsInstance<KotlinFunction>().single()
         assert(mitt.returnType == KirRuntimeApi.jsObject)
-        assert(mitt.parameters.single().type == KirRuntimeApi.jsObject.asNullable())
+        assert(mitt.parameters.single().type.render() ==
+            "com.xemantic.typescript.compiler.kir.runtime.JsMap?")
     }
 
     /**

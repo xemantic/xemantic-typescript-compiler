@@ -57,10 +57,16 @@ class KirRuntimeApiTest {
                 problems += "no runtime class ${KirRuntimeApi.PACKAGE}.${declared.name}"
                 return@forEach
             }
-            if (declared.constructorParameters?.isEmpty() == true &&
-                real.constructors.none { it.parameterCount == 0 }
-            ) {
-                problems += "${declared.name} has no public no-argument constructor"
+            declared.constructorParameters?.let { parameters ->
+                val expected = parameters.map { jvmClassOf(it.type) }
+                if (expected.none { it == null } &&
+                    real.constructors.none {
+                        it.parameterTypes.toList() == expected.map { parameter -> parameter!! }
+                    }
+                ) {
+                    problems += "${declared.name} has no public constructor(" +
+                        parameters.joinToString { it.type.render() } + ")"
+                }
             }
             declared.members.forEach { member ->
                 when (member) {
@@ -71,6 +77,29 @@ class KirRuntimeApiTest {
             }
         }
         assert(problems.isEmpty())
+    }
+
+    /**
+     * A NEGATIVE CONTROL on the CONSTRUCTOR half, which the pin above would
+     * otherwise exercise only in the passing direction.
+     */
+    @Test
+    fun `a constructor the runtime does not have is reported`() {
+        val real = Class.forName("${KirRuntimeApi.PACKAGE}.JsObject")
+        val problems = mutableListOf<String>()
+        val declared = KotlinClass(
+            "JsObject",
+            listOf(KotlinParameter("nothingTakesThis", KotlinType.STRING)),
+            emptyList(),
+            "test",
+        )
+        declared.constructorParameters?.let { parameters ->
+            val expected = parameters.map { jvmClassOf(it.type) }
+            if (real.constructors.none { it.parameterTypes.toList() == expected }) {
+                problems += "reported"
+            }
+        }
+        assert(problems.isNotEmpty())
     }
 
     /** A NEGATIVE CONTROL: the check above can fail. */
@@ -161,9 +190,11 @@ class KirRuntimeApiTest {
         "kotlin.Unit" -> java.lang.Void.TYPE
         "kotlin.Any?" -> Any::class.java
         "(Any?) -> Any?" -> Class.forName("kotlin.jvm.functions.Function1")
-        "${KirRuntimeApi.PACKAGE}.JsArray" -> Class.forName("${KirRuntimeApi.PACKAGE}.JsArray")
-        "${KirRuntimeApi.PACKAGE}.JsObject" -> Class.forName("${KirRuntimeApi.PACKAGE}.JsObject")
-        else -> null
+        // Every runtime class the surface names, by its own rendering — so a
+        // member added to the facade is covered without editing this table.
+        else -> type.render()
+            .takeIf { it.startsWith("${KirRuntimeApi.PACKAGE}.") && !it.endsWith("?") }
+            ?.let { runCatching { Class.forName(it) }.getOrNull() }
     }
 
 }

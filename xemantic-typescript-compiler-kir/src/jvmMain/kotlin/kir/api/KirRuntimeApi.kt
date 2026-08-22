@@ -77,6 +77,36 @@ internal object KirRuntimeApi {
 
     val jsArray: KotlinType = KotlinType.Named("$PACKAGE.JsArray")
 
+    private val jsMap: KotlinType = KotlinType.Named("$PACKAGE.JsMap")
+
+    private val jsSet: KotlinType = KotlinType.Named("$PACKAGE.JsSet")
+
+    private val jsDate: KotlinType = KotlinType.Named("$PACKAGE.JsDate")
+
+    private val jsRegExp: KotlinType = KotlinType.Named("$PACKAGE.JsRegExp")
+
+    private val jsError: KotlinType = KotlinType.Named("$PACKAGE.JsError")
+
+    /**
+     * The runtime type a LIBRARY type of this name erases to, if any.
+     *
+     * `KirIntrinsics.libraryClass`'s table, mirrored — and it must stay
+     * mirrored, because the two answer the same question for the two halves of
+     * one artifact pair: this one types the declaration a Kotlin consumer
+     * compiles against, that one types the value the compiled program actually
+     * holds. `RegExpMatchArray` is an ARRAY there and here, which is the entry
+     * a reader is most likely to get wrong.
+     */
+    fun libraryType(name: String): KotlinType? = when (name) {
+        "Array", "ReadonlyArray", "RegExpMatchArray", "RegExpExecArray" -> jsArray
+        "Map", "ReadonlyMap", "WeakMap" -> jsMap
+        "Set", "ReadonlySet", "WeakSet" -> jsSet
+        "RegExp" -> jsRegExp
+        "Date" -> jsDate
+        "Error" -> jsError
+        else -> null
+    }
+
     private const val ORIGIN = "kir/runtime/JsRuntime.kt"
 
     private val any = KotlinType.ANY
@@ -123,6 +153,68 @@ internal object KirRuntimeApi {
                     function("forEach", listOf("callback" to callback), unit),
                     function("map", listOf("callback" to callback), jsArray),
                     function("filter", listOf("callback" to callback), jsArray),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsMap",
+                constructorParameters = emptyList(),
+                members = listOf(
+                    KotlinProperty("size", double, mutable = false, origin = ORIGIN),
+                    function("get", listOf("key" to any), any),
+                    function("set", listOf("key" to any, "value" to any), jsMap),
+                    function("has", listOf("key" to any), boolean),
+                    function("delete", listOf("key" to any), boolean),
+                    function("clear", emptyList(), unit),
+                    function("keys", emptyList(), jsArray),
+                    function("values", emptyList(), jsArray),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsSet",
+                constructorParameters = emptyList(),
+                members = listOf(
+                    KotlinProperty("size", double, mutable = false, origin = ORIGIN),
+                    function("add", listOf("value" to any), jsSet),
+                    function("has", listOf("value" to any), boolean),
+                    function("delete", listOf("value" to any), boolean),
+                    function("clear", emptyList(), unit),
+                    function("values", emptyList(), jsArray),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsDate",
+                constructorParameters = listOf(KotlinParameter("value", any)),
+                members = listOf(
+                    function("getTime", emptyList(), double),
+                    function("valueOf", emptyList(), double),
+                    function("toISOString", emptyList(), string),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsRegExp",
+                constructorParameters = listOf(
+                    KotlinParameter("source", string),
+                    KotlinParameter("flags", string),
+                ),
+                members = listOf(
+                    KotlinProperty("global", boolean, mutable = false, origin = ORIGIN),
+                    function("test", listOf("input" to string), boolean),
+                    // A `null` result is how JavaScript says "no match", and it
+                    // is the one place on this surface where the nullability is
+                    // the whole meaning.
+                    function("exec", listOf("input" to string), jsArray.asNullable()),
+                ),
+                origin = ORIGIN,
+            ),
+            KotlinClass(
+                name = "JsError",
+                constructorParameters = listOf(KotlinParameter("message", any)),
+                members = listOf(
+                    KotlinProperty("name", string, mutable = true, origin = ORIGIN),
                 ),
                 origin = ORIGIN,
             ),

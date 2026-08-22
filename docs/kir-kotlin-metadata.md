@@ -136,6 +136,7 @@ The codomain is small on purpose, and every position outside it erases to `Any?`
 | `bigint` | `Any?` — see §3.1 |
 | an array, a tuple | `JsArray`, or `Any?` — see §3.1 |
 | an object type, an interface, an intersection of them | `JsObject`, or `Any?` — see §3.1 |
+| `Map`, `Set`, `RegExp`, `Date`, `Error` | their runtime class, or `Any?` — see §3.1 |
 
 Function types are UNIFORM in `Any?` for the reason `ErasedTypes.function` gives:
 TypeScript's function assignability is bivariant and Kotlin's `FunctionN` is not,
@@ -156,9 +157,11 @@ exportTypeScriptProjectApi(project, "index.ts", out / "lib.klib",
                            runtimeKlib = out / "xtsc-runtime.klib")
 ```
 
-With it, `mitt` exports as `mitt(all: JsObject?): JsObject` and `smol-toml` as
-`parse(toml: String, options: JsObject?): JsObject` — a signature a Kotlin caller
-can use, `document.get("title")` and all. Without it the artifact is
+With it, `mitt` exports as `mitt(all: JsMap?): JsObject` and `smol-toml` as
+`parse(toml: String, options: JsObject?): JsObject` — signatures a Kotlin caller
+can use, `document.get("title")` and all. A LIBRARY type is named by the table
+`KirIntrinsics.libraryClass` mirrors, so `mitt`'s `EventHandlerMap` — an alias of
+a `Map` — arrives as the `JsMap` the compiled program actually holds there. Without it the artifact is
 self-contained and those positions are `Any?`. Both are pinned, in both
 directions.
 
@@ -178,10 +181,17 @@ because a nominal one would have mapped to a runtime class and been refused;
 here there is no library-type table, so `Date` maps to `Any?` — the same answer a
 constraint gives — and the permissive reading would type `Date & Tag` as a bag.
 
+**An absent declaration is not evidence of an anonymous shape**, and that is the
+trap this gate was measured falling into: a `Promise<string>` reaches the object
+mapping with no declaration to walk and reads as a bag. Two things separate the
+cases — the instantiation's TARGET carries the declaration where the reference's
+own symbol does not (which is how `Emitter<Events>` is recognised as the
+program's own interface), and a type with a NAME but no reachable declaration is
+a library type this backend does not know, so it stays `Any?`.
+
 Still `Any?`, and each for its own reason: `bigint` (`java.math.BigInteger` is a
-JVM class), and every other library type — `Map`, `Set`, `Date`, `RegExp`,
-`Promise` — because mapping one takes a table keyed BY NAME, as `ErasedTypes`
-has, rather than an object fallback.
+JVM class), and every library type outside both tables — `Promise`, `Symbol`,
+`WeakRef` — because a runtime class is what an entry names, and there is none.
 
 ### 3.2 Why this is a second mapper
 
@@ -247,8 +257,9 @@ cannot see nullability, which is the one thing this surface must state, and
 runtime is compiled with.
 
 So the drift is caught rather than prevented: `KirRuntimeApiTest` reflects over
-the REAL classes and fails when a declared member is absent or its JVM signature
-disagrees, with two negative controls proving the check can fail. The direction
+the REAL classes — `JsObject`, `JsArray`, `JsMap`, `JsSet`, `JsDate`, `JsRegExp`,
+`JsError` — and fails when a declared member or constructor is absent or its JVM
+signature disagrees, with three negative controls proving the check can fail. The direction
 that matters is "declared here, absent there" — that one types a consumer's call
 against a method nothing implements, and the consumer's compiler cannot see it,
 because the consumer compiles against the metadata.
@@ -262,21 +273,16 @@ In rough order of what a user would miss first.
    `jvmMain` compilation to link. Nothing pins that agreement yet, and until it
    does this artifact types a consumer's common code without linking its
    platform code. That is the next slice.
-2. **A library-type table.** `Map`, `Set`, `Date`, `RegExp` and `Promise` are
-   runtime classes with no entry on the exported surface, so they are `Any?`
-   where `JsObject`/`JsArray` are now real. The runtime facade
-   (`KirRuntimeApi`) is where they would be declared, and the drift pin already
-   covers whatever is added to it.
-3. **Interfaces as shapes.** An interface is a property bag at run time, so a
+2. **Interfaces as shapes.** An interface is a property bag at run time, so a
    Kotlin `interface` would be a claim about a representation that does not
    exist; `docs/kir-structural-typing.md` §7 is where the nominal encoding that
    would change this is priced.
-4. **Generics.** Type parameters erase, as they do in TypeScript and on the JVM.
+3. **Generics.** Type parameters erase, as they do in TypeScript and on the JVM.
    A generic library therefore loses its relationships (`Emitter<Events>` is
    `Emitter`), which is sound and lossy.
-5. **Rest parameters, optional-parameter defaults, static members, overloads.**
+4. **Rest parameters, optional-parameter defaults, static members, overloads.**
    Each is refused or skipped rather than guessed; each needs a decision about
    what the platform artifact does, which is why none is a mapper change alone.
-6. **Publication.** Producing the artifact is not publishing it: a KMP consumer
+5. **Publication.** Producing the artifact is not publishing it: a KMP consumer
    resolves it through Gradle module metadata, which is build-system work and
    owner-gated by this repository's Guardrails.

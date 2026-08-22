@@ -25,10 +25,16 @@ JsObject`** — measured on `smol-toml`'s own 1,082 lines — and a Kotlin consu
 kind declared in a program file, or an anonymous object type), because a `Date` is a `JsDate` at
 run time and a bag-typed one would offer members the value does not have; an intersection is a
 bag only when EVERY member is one, stricter than `ErasedTypes` and forced by having no
-library-type table. The hand-stated runtime facade is kept honest by a REFLECTION pin over the
-real classes, with two negative controls proving it can fail. Refusals are PER DECLARATION, not
+library-type table. **(KAPI.4)** then made the erasure precise rather than merely non-`Any?`: `KirRuntimeApi.libraryType`
+mirrors `KirIntrinsics.libraryClass`, so `Map`/`Set`/`RegExp`/`Date`/`Error` name the same runtime
+class on an exported signature as in the compiled program — `mitt`'s parameter is **`JsMap?`** — and
+it found the gate's own defect on the way: **an absent declaration is not evidence of an anonymous
+shape** (a `Type.Reference`'s own symbol carries none, its TARGET's does), which had read
+`Promise<string>` as a property bag. The hand-stated runtime facade is kept honest by a REFLECTION
+pin over the real classes — members and constructors — with three negative controls proving it can
+fail. Refusals are PER DECLARATION, not
 per program: an absent declaration is a compile error at the consumer's use site, a wrongly-typed
-one is silent. Suite **15,599 / 0 failures**; the KIR module 108 → 144 pins.
+one is silent. Suite **15,601 / 0 failures**; the KIR module 108 → 146 pins.
 `docs/kir-kotlin-metadata.md`.
 
 **THE KIR QUEUE, ALL FIVE ITEMS CLOSED (2026-08-21).** `smol-toml` on the JVM is **47.05 → 34.10 us/parse, −27.5%**, and 2.08x

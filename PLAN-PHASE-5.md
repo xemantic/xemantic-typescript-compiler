@@ -84,6 +84,17 @@ when EVERY member is one, stricter than `ErasedTypes` and forced by having no li
 table; and the hand-stated facade is kept honest by a REFLECTION pin over the real classes
 rather than by a promise, with two negative controls proving the pin can fail.
 
+**(KAPI.4) LANDED TOO, and it is what makes the erasure PRECISE rather than merely non-`Any?`.**
+The facade declares `JsMap`, `JsSet`, `JsDate`, `JsRegExp` and `JsError` beside the first two, and
+`KirRuntimeApi.libraryType` mirrors `KirIntrinsics.libraryClass` entry for entry — so `mitt`'s
+parameter is **`JsMap?`** (its `EventHandlerMap` is an alias of a `Map`), which is what the compiled
+program holds there and is strictly better than a bag. **The round's real finding is a defect in the
+gate it was extending: an absent declaration is not evidence of an anonymous shape.** A
+`Promise<string>` arrives with no declaration to walk — a `Type.Reference`'s own symbol carries none,
+its TARGET's does — and read as a bag it would have offered a Kotlin consumer `get`/`set` on a
+promise. Both halves are now pins, and the same shape is queued as a LEAD against `ErasedTypes`
+itself ((KIR.LOWER.2)), where the consequence is wrong CODE rather than a wrong declaration.
+
 **NAMED SUCCESSORS (both queued): (KAPI.2)** the platform half — nothing yet pins that the JVM
 classes the KIR backend emits match the signatures this metadata declares, and until something
 does, the artifact types a consumer's common code without linking its platform code; **(KAPI.3)**
@@ -1673,6 +1684,16 @@ one divergence is a message FORM the round that landed it had already recorded a
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
+- [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
+  finding.** `ErasedTypes.mapObject` ends `if (declaration == null) return jsObjectType()`, which
+  (KAPI.4) measured to be reached by a `Promise<string>` on the API side: a `Type.Reference`'s own
+  symbol carries no declaration, so a named library type outside `libraryClass`'s table erases to a
+  property BAG rather than being refused. On the lowering that is not a wrong TYPE but wrong CODE —
+  a `.then` on it would read a bag slot — and it is untested because neither corpus library uses a
+  Promise. Check whether the target-symbol fallback changes any erasure on the two libraries
+  (`scripts/kir-bench.sh`'s equivalence gate is the instrument), and if it does not, add the
+  refusal: a named type with no reachable declaration is one this backend does not know.
+
 - [ ] **(KAPI.2) THE PLATFORM HALF: pin that the emitted JVM classes match the exported
   metadata.** `(KAPI.1)` declares a library's API as Kotlin metadata for `commonMain`; a
   `jvmMain` compilation links against the CLASSES the KIR backend emits, and nothing asserts
@@ -1713,7 +1734,19 @@ one divergence is a message FORM the round that landed it had already recorded a
   reflects over the real class and fails when a member disagrees — `scripts/kir_native_runtime.py`
   is the precedent for deriving one runtime from the other rather than forking it.
 
-- [ ] **(KAPI.4) A LIBRARY-TYPE TABLE for the exported surface.** `Map`, `Set`, `Date`, `RegExp`
+- [x] **(KAPI.4) A LIBRARY-TYPE TABLE — LANDED 2026-08-22, same session.** `KirRuntimeApi.libraryType`
+  mirrors `KirIntrinsics.libraryClass` entry for entry, so `Map`/`ReadonlyMap`/`WeakMap`,
+  `Set`/`ReadonlySet`/`WeakSet`, `RegExp`, `Date` and `Error` name the same runtime class on an
+  exported signature as in the compiled program, and the facade declares all five beside
+  `JsObject`/`JsArray` (the drift pin covers them, and now checks CONSTRUCTORS as well as members,
+  with a third negative control). Measured: `mitt`'s parameter is `JsMap?` — its `EventHandlerMap`
+  is an alias of a `Map` — where a bag would have been less precise than what the program holds.
+  **It also found the gate's own defect: an ABSENT DECLARATION IS NOT EVIDENCE OF AN ANONYMOUS
+  SHAPE.** A `Promise<string>` reached the object mapping with no declaration to walk and read as a
+  property bag; two rules fix it and both are pins now — a `Type.Reference`'s own symbol carries no
+  declaration where its TARGET's does (which is how `Emitter<Events>` is recognised as the
+  program's own interface), and a type with a NAME but no reachable declaration is a library type
+  this backend does not know. ORIGINAL ENTRY: `Map`, `Set`, `Date`, `RegExp`
   and `Promise` are runtime classes with no entry on the exported API, so they are `Any?` where
   `JsObject`/`JsArray` are now real — and, worse, they are what makes (KAPI.3)'s intersection
   rule demand positive evidence rather than reading an unmappable member as a constraint.

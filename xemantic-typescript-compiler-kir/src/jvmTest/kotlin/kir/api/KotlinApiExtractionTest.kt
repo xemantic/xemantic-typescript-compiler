@@ -355,18 +355,41 @@ class KotlinApiExtractionTest {
     }
 
     /**
-     * NEGATIVE CONTROL for the gate, and the reason it exists: a LIBRARY type is
-     * not a property bag at run time — a `Date` is a `JsDate` — so typing one as
-     * `JsObject` would offer a consumer members the value does not have. It
-     * stays `Any?` until a library-type table names it.
+     * A LIBRARY type is named by the table `KirIntrinsics.libraryClass` mirrors,
+     * so a `Date` on an exported signature and a `Date` in the compiled program
+     * are the same runtime class.
      */
     @Test
-    fun `with the runtime, a library type is still Any`() {
+    fun `with the runtime, a library type is its runtime class`() {
         val api = apiOf(
-            "export function now(): Date { return new Date() }",
+            """
+            export function now(): Date { return new Date() }
+            export function counts(): Map<string, number> { return new Map() }
+            export function pattern(): RegExp { return /x/ }
+            """,
             runtimeTypes = true,
         )
-        assert(api.function("now").returnType == KotlinType.ANY)
+        assert(api.function("now").returnType ==
+            KotlinType.Named("${KirRuntimeApi.PACKAGE}.JsDate"))
+        assert(api.function("counts").returnType ==
+            KotlinType.Named("${KirRuntimeApi.PACKAGE}.JsMap"))
+        assert(api.function("pattern").returnType ==
+            KotlinType.Named("${KirRuntimeApi.PACKAGE}.JsRegExp"))
+    }
+
+    /**
+     * NEGATIVE CONTROL for the gate, and the reason it exists: a library type
+     * the table does NOT name is not a property bag either — typing one as
+     * `JsObject` would offer a consumer members the value does not have — so it
+     * stays `Any?` rather than falling through to the bag.
+     */
+    @Test
+    fun `with the runtime, an unmapped library type is still Any`() {
+        val api = apiOf(
+            "export function later(): Promise<string> { return Promise.resolve(\"\") }",
+            runtimeTypes = true,
+        )
+        assert(api.function("later").returnType == KotlinType.ANY)
     }
 
     private fun apiOf(source: String, runtimeTypes: Boolean = false): KotlinApiModule =

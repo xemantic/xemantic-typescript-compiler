@@ -163,7 +163,17 @@ internal class ApiErasure(
         // An array or a tuple is a `JsArray` at run time — nameable only when
         // the runtime's own metadata is on the classpath (§3.1).
         if (isArrayLike(type)) return if (runtimeTypes) KirRuntimeApi.jsArray else KotlinType.ANY
-        val symbol = type.symbol
+        // A LIBRARY type, BY NAME and before anything structural — `ErasedTypes`'
+        // order exactly, and for its reason: a `Map` is a `JsMap` at run time and
+        // must never fall through to the property bag, whose members it lacks.
+        if (runtimeTypes) {
+            libraryName(type)?.let { name -> KirRuntimeApi.libraryType(name)?.let { return it } }
+        }
+        // A generic instantiation's own symbol may be unset while its TARGET's
+        // carries the declaration — `Emitter<Events>` reaches here that way —
+        // and the declaration is what the structural gate reads, so the target
+        // is consulted rather than left to the name fallback below.
+        val symbol = type.symbol ?: (type as? Type.Reference)?.target?.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
         declaration?.let { enumValueTypeOf(it) }?.let { return it }
         declaration?.let { classNameOf(it) }?.let { return KotlinType.Named(it) }
@@ -172,18 +182,35 @@ internal class ApiErasure(
             return KotlinType.Function(it.parameters.size)
         }
         if (!runtimeTypes) return KotlinType.ANY
-        // A bag, but only where the shape is one this program wrote: an
-        // anonymous object type has no declaration at all and is one by
-        // construction, and a declared one has to pass the gate — a `Date` is a
-        // `JsDate` at run time and calling a bag's members on it would fail
-        // inside the runtime.
-        if (declaration == null) return KirRuntimeApi.jsObject
+        // A bag, but only where the shape is one this program wrote — a declared
+        // one has to pass the gate, because calling a bag's members on a value
+        // that is not one fails inside the runtime.
+        //
+        // An absent declaration is NOT evidence of an anonymous shape, which is
+        // the trap this arm was written into and measured falling for: a
+        // `Promise<string>` reaches here with no declaration to walk and read as
+        // a bag. What separates the two is a NAME — an anonymous object type has
+        // none, and a named type whose declaration cannot be reached is a
+        // library type this backend does not know.
+        if (declaration == null) {
+            return if (libraryName(type) == null) KirRuntimeApi.jsObject else KotlinType.ANY
+        }
         return if (isOwnStructuralDeclaration(declaration)) {
             KirRuntimeApi.jsObject
         } else {
             KotlinType.ANY
         }
     }
+
+    /**
+     * A generic library instantiation — `Map<K, V>` — is named by its TARGET.
+     *
+     * `ErasedTypes.libraryName` verbatim: a [Type.Reference]'s own symbol is the
+     * target's, so this and the plain `symbol.name` route agree, and the type
+     * ARGUMENTS are what the erasure drops.
+     */
+    private fun libraryName(type: Type.Object): String? =
+        (type as? Type.Reference)?.target?.symbol?.name ?: type.symbol?.name
 
     private fun isArrayLike(type: Type.Object): Boolean =
         type.tupleElementTypes != null ||
