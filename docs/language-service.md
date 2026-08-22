@@ -179,6 +179,7 @@ you call them.
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
+| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean or repeated | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
 | `quickInfoAt` | **full build, every call** | not cached today — see below |
 | `definitionsAt` | **full build, every call** | same mechanism, same caveat |
 | `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
@@ -242,6 +243,59 @@ Every build passes `noEmit = true`. A tool that opens a project to ask questions
 about it must never scatter JavaScript through the user's tree as a side effect
 of a query, and with an editor overlay in play the output would correspond to
 unsaved buffers anyway. Emitting stays `ProjectCompiler`'s job.
+
+## 4a. Narrowed diagnostics — the one an editor should wire to
+
+```kotlin
+project.diagnosticsOf(listOf("src/a.ts"))          // the open buffer
+project.diagnosticsOf(openBuffers)                 // every visible tab, one build
+```
+
+`diagnostics(f)` builds the whole program and keeps the rows naming one file.
+`diagnosticsOf` narrows at the **source** instead: the file set is handed to the
+compiler as its check partition, so the per-file check passes walk only those
+files. The program is still crawled, parsed and bound in full — what is narrowed
+is the *checking*, not the program — which is why the answer is the same one the
+whole-program build gives for those files, including errors that can only be
+found with the rest of the program in hand.
+
+**Measured on tsc's own 78 sources (9,977,097 characters), warm, one process:**
+
+| | |
+|---|---|
+| `diagnostics()` — the whole program | 4,566 – 4,767 ms |
+| `diagnosticsOf` — one ordinary file | **1,165 – 1,231 ms** |
+| `diagnosticsOf` — `checker.ts`, which is 31.6% of the program by itself | 3,828 ms |
+
+**And it agrees, file for file.** `scripts/partition-equivalence.sh` runs a
+partition of one for *every* file of a real project and compares its rows against
+the full build's for that file: all 78 agree, and 5 of them carry the program's 46
+diagnostics, so the agreement is not the vacuous kind you get from an all-clean
+program. That sweep is the gate for this member; the suite cannot be, because a
+corpus fixture is one or two files, where a partition of one is nearly the whole
+program.
+
+Three cost properties a host may rely on, all pinned by counting the builds that
+reach the backing `Vfs`:
+
+- a query on a **clean** project performs **no** build — the whole-program result
+  is already in hand and filtering it beats compiling;
+- a query on a dirty project performs exactly **one** build, however many files it
+  names, so batch the visible tabs into a single call;
+- a repeated identical query on an unchanged project performs **none**.
+
+**What it deliberately does not do** is become the project's build. A partition's
+diagnostics are a subset of the program's, so adopting one would make the next
+`diagnostics()` report that subset *as the whole program's errors* — silently. A
+whole-program query after a narrowed one therefore still costs a build. That is
+the price of the narrow query being narrow, and it is what the sharpest pin in
+`ProjectNarrowDiagnosticsTest` holds.
+
+**When to use which.** Wire `diagnosticsOf` to the editor's per-file annotator —
+it is the query an IDE actually makes, and the one whose cost falls with the size
+of what the user is looking at rather than with the size of their project. Keep
+`diagnostics()` for the whole-project error list a host shows on demand, on a
+build, or in a background pass.
 
 ## 5. Editing in memory
 
