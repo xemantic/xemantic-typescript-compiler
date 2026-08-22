@@ -61,8 +61,15 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * its first screenful, and a stated limitation rather than a silent one. The count
  * actually compared is printed.
  *
+ * ## Diagnosing a divergence
+ *
+ * A fourth argument is a file-name SUFFIX: only that file is swept, and rows are
+ * printed in full rather than truncated, with the first differing ELEMENT of the two
+ * lists called out. A summary row cut at 160 characters names the span and hides the
+ * difference, which is the one thing a divergence report must not do.
+ *
  * ```
- * scripts/capture-channel-equivalence.sh [<projectDir> [maxFiles [perChannel]]]
+ * scripts/capture-channel-equivalence.sh [<projectDir> [maxFiles [perChannel [fileSuffix]]]]
  * ```
  *
  * Exit 1 on any divergence, exit 2 on a refusal.
@@ -70,9 +77,10 @@ import com.xemantic.typescript.compiler.computeParserFlags
 private const val PER_CHANNEL = 150
 
 fun main(args: Array<String>) {
-    require(args.isNotEmpty()) { "usage: <projectDir> [maxFiles [perChannel]]" }
+    require(args.isNotEmpty()) { "usage: <projectDir> [maxFiles [perChannel [fileSuffix]]]" }
     val limit = if (args.size > 1) args[1].toInt() else Int.MAX_VALUE
     val perChannel = if (args.size > 2) args[2].toInt() else PER_CHANNEL
+    val only = if (args.size > 3 && args[3].isNotEmpty()) args[3] else null
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])
@@ -140,13 +148,19 @@ fun main(args: Array<String>) {
     var signatureDivergences = 0
     var absentInNarrow = 0
     var absentInFull = 0
+    var widenedToAny = 0
     var otherShape = 0
+    // The MECHANISM census. A row here is a LIST, so one display mechanism reaches as
+    // many rows as the program has carets on that receiver — 285 member rows turned out
+    // to be a handful of causes. Counting the rows answers "how many", which is not the
+    // question; counting the distinct first DIFFERING ELEMENT answers "which".
+    val mechanisms = LinkedHashMap<String, Int>()
     var memberCaptures = 0L
     var scopeCaptures = 0L
     var signatureCaptures = 0L
     var filesCompared = 0
 
-    for (file in programFiles.take(limit)) {
+    for (file in programFiles.filter { only == null || it.endsWith(only) }.take(limit)) {
         val text = vfs.readText(file) ?: continue
         val index = SourceIndex.of(text, file, computeParserFlags(file, text, options))
 
@@ -200,17 +214,27 @@ fun main(args: Array<String>) {
                     "SCOPE" -> scopeDivergences++
                     else -> signatureDivergences++
                 }
+                // The CLASSIFICATION is the finding, not the count — `CaptureEquivalenceMain`'s
+                // rule. A row here is a LIST (a type's members, a scope's names, an
+                // overload set), so one display mechanism reaches as many rows as the
+                // program has carets on that receiver; only the class says which it is.
                 when {
                     right == null -> absentInNarrow++
                     left == null -> absentInFull++
+                    right.split("any").size > left.split("any").size -> widenedToAny++
                     else -> otherShape++
+                }
+                if (left != null && right != null) {
+                    val mechanism = "$label ${firstDifference(left, right)}"
+                    mechanisms[mechanism] = (mechanisms[mechanism] ?: 0) + 1
                 }
                 if (printed < 40) {
                     printed++
+                    val width = if (only == null) 160 else Int.MAX_VALUE
                     println(
                         "$label ${file.substringAfterLast('/')} " +
-                            "full=${left?.take(160) ?: "<absent>"}  " +
-                            "narrow=${right?.take(160) ?: "<absent>"}",
+                            "full=${left?.take(width) ?: "<absent>"}  " +
+                            "narrow=${right?.take(width) ?: "<absent>"}",
                     )
                 }
             }
@@ -241,6 +265,12 @@ fun main(args: Array<String>) {
             "vacuously — members=$memberCaptures scopes=$scopeCaptures " +
             "signatures=$signatureCaptures"
     }
+    if (mechanisms.isNotEmpty()) {
+        println("mechanisms (distinct first differing element), most frequent first:")
+        for ((mechanism, count) in mechanisms.entries.sortedByDescending { it.value }.take(20)) {
+            println("  x$count  ${mechanism.take(400)}")
+        }
+    }
     println(
         if (divergences == 0) {
             "EQUIVALENT: all $memberCaptures member, $scopeCaptures scope and " +
@@ -248,11 +278,27 @@ fun main(args: Array<String>) {
         } else {
             "DIVERGED: $divergences span(s) in $divergingFiles of $filesCompared file(s) — " +
                 "members=$memberDivergences scopes=$scopeDivergences " +
-                "signatures=$signatureDivergences; absentInNarrow=$absentInNarrow " +
-                "absentInFull=$absentInFull other=$otherShape"
+                "signatures=$signatureDivergences; narrowRendersMoreAny=$widenedToAny " +
+                "absentInNarrow=$absentInNarrow absentInFull=$absentInFull other=$otherShape"
         },
     )
     if (divergences != 0) kotlin.system.exitProcess(1)
+}
+
+/**
+ * The first ELEMENT of two rows that differs, named rather than left to be found in
+ * two 4,000-character strings. Rows are built as `,`/`;`-separated element lists, so
+ * splitting on both recovers the members, the names and the signatures.
+ */
+private fun firstDifference(left: String, right: String): String {
+    val a = left.split(',', ';')
+    val b = right.split(',', ';')
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrNull(i)
+        val y = b.getOrNull(i)
+        if (x != y) return "first difference at element $i: full=${x ?: "<none>"} narrow=${y ?: "<none>"}"
+    }
+    return "no element differs (the rows differ only in separators)"
 }
 
 /** `(start, end)` as one key, finalized for round 889's reason — see `CaptureEquivalenceMain`. */

@@ -10,7 +10,13 @@
 # The caret populations are SAMPLED at an even stride per file — see the runner.
 # REFUSES rather than skips when its inputs are absent.
 #
-# Usage: scripts/capture-channel-equivalence.sh [<projectDir> [maxFiles [perChannel]]]
+# THE VERDICT IS THE CENSUS, NOT THE EXIT CODE. Like `capture-equivalence.sh`, this
+# exits 1 while any known divergence stands, and known divergences stand: as of
+# 2026-08-22, 286 rows of 21,507 captures in 49 of 76 files, which the run's own
+# "mechanisms" table resolves into FIVE causes — see (INC.2b)'s session note. Read
+# that table, not the status.
+#
+# Usage: scripts/capture-channel-equivalence.sh [<projectDir> [maxFiles [perChannel [fileSuffix]]]]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -40,4 +46,4 @@ CP="$CP:$ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$D
 echo "project: $PROJECT"
 exec java -Xmx6g -cp "$CP" \
   com.xemantic.typescript.compiler.project.CaptureChannelEquivalenceMainKt \
-  "$PROJECT" "${2:-2147483647}" "${3:-150}"
+  "$PROJECT" "${2:-2147483647}" "${3:-150}" "${4:-}"
