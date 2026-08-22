@@ -66,29 +66,17 @@ fun main(args: Array<String>) {
     // divided into would compare a COLD number against warm ones, which is the error
     // CLAUDE.md names for every cross-regime comparison here.
     compiler.build(args[0], noEmit = true)
-    val at = System.nanoTime()
     val full = compiler.build(args[0], noEmit = true)
-    val fullMs = (System.nanoTime() - at) / 1_000_000
     val fullRows = rowsOf(full.diagnostics)
     val filesWithDiagnostics = full.programFiles.count { !fullRows[it].isNullOrEmpty() }
     println(
-        "full build: ${fullMs}ms  files=${full.programFiles.size}  " +
-            "diagnostics=${full.diagnostics.size}  filesCarryingThem=$filesWithDiagnostics",
+        "program: files=${full.programFiles.size}  diagnostics=${full.diagnostics.size}  " +
+            "filesCarryingThem=$filesWithDiagnostics",
     )
     require(filesWithDiagnostics > 0) {
         "REFUSED: the full build reports no per-file diagnostics, so every comparison " +
             "below would agree vacuously. Point this at a project that has some."
     }
-
-    // THE FLOOR, free and needing no probe: a partition naming a file the program does
-    // not contain checks NOTHING per-file, so what it costs is exactly the part no
-    // narrowing can remove — the crawl, the parse, the bind and the program-wide
-    // passes. Every partition time below is that floor plus one file's own checking,
-    // which is what says whether the next lever is per-file work or program-wide work.
-    val floorAt = System.nanoTime()
-    compiler.build(args[0], noEmit = true, recheckOnly = setOf("/no/such/file.ts"))
-    val floorMs = (System.nanoTime() - floorAt) / 1_000_000
-    println("floor (partition of nothing: crawl + parse + bind + program-wide passes): ${floorMs}ms")
 
     var disagreed = 0
     var partitionTotal = 0L
@@ -119,14 +107,43 @@ fun main(args: Array<String>) {
             "mean=${partitionTotal / targets.size}ms  slowest=${slowest}ms " +
             "(${slowestFile.substringAfterLast('/')})",
     )
+    // THE TIMING ARMS RUN LAST, AND ROTATED, because position in the process is worth
+    // more than the effect: taken at slots 2 and 3 the full build read 9,421 ms and the
+    // "floor" read 1,632 ms — LARGER than the median partition it is a strict subset
+    // of, which is a warm-up ramp and not a measurement. By here the JVM has performed
+    // one full and 78 narrowed builds.
+    //
+    // The FLOOR is free and needs no probe: a partition naming a file the program does
+    // not contain checks NOTHING per file, so it costs exactly the part no narrowing
+    // can remove — crawl, parse, bind, and the program-wide passes. Every partition
+    // time above is that floor plus one file's own checking, which is what says whether
+    // the next lever is per-file work or program-wide work.
+    fun timed(block: () -> Unit): Long {
+        val t0 = System.nanoTime()
+        block()
+        return (System.nanoTime() - t0) / 1_000_000
+    }
+    val fulls = ArrayList<Long>()
+    val floors = ArrayList<Long>()
+    repeat(2) {
+        fulls.add(timed { compiler.build(args[0], noEmit = true) })
+        floors.add(timed { compiler.build(args[0], noEmit = true, recheckOnly = setOf("/no/such.ts")) })
+    }
+    repeat(2) {
+        floors.add(timed { compiler.build(args[0], noEmit = true, recheckOnly = setOf("/no/such.ts")) })
+        fulls.add(timed { compiler.build(args[0], noEmit = true) })
+    }
+    val fullMs = fulls.sorted()[fulls.size / 2]
+    val floorMs = floors.sorted()[floors.size / 2]
+    println("warm full build=${fullMs}ms $fulls   floor=${floorMs}ms $floors")
     println(
         "median file's OWN checking = median - floor = ${median - floorMs}ms  " +
-            "(floor is ${"%.0f".format(100.0 * floorMs / median)}% of a median narrowed query)",
+            "(the floor is ${"%.0f".format(100.0 * floorMs / median)}% of a median narrowed query)",
     )
     println(
-        "warm full build=${fullMs}ms  ratio at the median file=" +
-            "${"%.2f".format(fullMs.toDouble() / median)}x  " +
-            "at the slowest=${"%.2f".format(fullMs.toDouble() / slowest)}x",
+        "ratio at the median file=${"%.2f".format(fullMs.toDouble() / median)}x  " +
+            "at the slowest=${"%.2f".format(fullMs.toDouble() / slowest)}x  " +
+            "ceiling if the floor went to zero=${"%.2f".format(fullMs.toDouble() / (median - floorMs).coerceAtLeast(1))}x",
     )
     println(if (disagreed == 0) "EQUIVALENT: all ${targets.size} files agree" else "DIVERGED: $disagreed file(s)")
     if (disagreed != 0) kotlin.system.exitProcess(1)
