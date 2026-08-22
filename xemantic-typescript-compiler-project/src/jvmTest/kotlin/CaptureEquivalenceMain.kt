@@ -174,7 +174,7 @@ fun main(args: Array<String>) {
             when {
                 b == null -> absentInNarrow++
                 a == null -> absentInFull++
-                b.split("any").size > a!!.split("any").size -> widenedToAny++
+                b.split("any").size > a.split("any").size -> widenedToAny++
                 else -> otherShape++
             }
             if (printed < 40) {
