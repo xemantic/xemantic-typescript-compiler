@@ -1,5 +1,35 @@
 # Status
 
+**A REPEATED LANGUAGE-SERVICE QUESTION NOW COSTS NOTHING, AND THE REST OF THE WARM PROGRAM IS
+PRICED (2026-08-22, (INC.12)).** Measured first: **(P1) — a second query with the program
+UNCHANGED — is worth the WHOLE ~345 ms floor** (config+crawl+imports ~12 ms, BIND 73-88, the
+~190 program-wide `init` passes 252-254), against a queried file's own checking of **40 ms at
+the median file**. **(P2) — a query after ONE buffer changed — measured IDENTICAL to (P1)**
+(`diagnosticsOf` after editing the queried file 2,001 ms against 1,999 unedited; about another
+file 498 against 505), because outside the content-keyed parse cache and `diagnosticsOf`'s
+exact-question memo there was NO cross-query reuse at all — re-asking one hover cost a full
+build. **LANDED: `Project.captures`**, a capture build memoized on its REQUEST, two entries,
+access-ordered, dropped by every edit alongside the diagnostics cache. Two of the editor's
+commonest sequences turn out to BE the same question asked twice, and neither is
+special-cased: **hover then go-to-definition at one caret build an IDENTICAL
+`TypeCaptureRequest`** (506 ms -> **0**), and **`documentHighlightsAt`'s request is derived
+from the FILE's occurrence nodes and not from the caret at all**, so highlights at every later
+caret in an unchanged buffer is free (592 -> **19**, the residue being the per-caret grouping,
+not a build). A repeated hover is **1,933 -> 0**. Three ablations, each reddening a different
+pin set; the staleness obligation is pinned in both directions, including the one where a
+mis-keyed hit is a MISSING FILE — an edit that ADDS A FILE to the program. **REFUSED with the
+measurement:** reusing the BIND (73-88 ms = 20% of a median query; not refused by (INC.9)'s
+per-file argument, but it needs a program-SHAPE gate reusing the checker's own merge predicate
+and a full-vs-reused differential — (INC.13)); and reusing the CHECKER (**252-254 ms = 63%,
+the largest thing left**), which would make WHICH QUERY RAN FIRST observable for every later
+query, against `symbolTypes`' first-resolution persistence that (INC.2)/(INC.5)/(INC.6) spent
+three rounds on — (INC.14), and its first step is the differential, not the refactor. Suite
+**15,681 / 0 / 3** (+7 pins), `partition-equivalence` **EQUIVALENT on all 78** (median query
+382 ms, floor 342, ratio **13.15x**), `cost_gate.py` PASS (+1.02% `mapped.hits`, the same
+pre-existing drift), `huge_methods.py --fail-over 0` green on core and `-project`, both
+capture censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0
+signatures=1).
+
 **THE SECOND-LARGEST ROW IN THE INCREMENTAL FLOOR WAS EMIT-ONLY WORK AND NOW RUNS ONLY WHEN
 THE EMITTER ASKS; THE LARGEST IS REFUSED WITH A THREE-POINT MEASUREMENT (2026-08-22,
 (INC.10)).** `init:trackAllImportReferences` was **29.44 ms of a 305.3 ms floor pass table**,
@@ -93,25 +123,3 @@ an inherited lazy `SourceScanFilter` build — it was the first walker to ASK, n
 that COSTS. Suite **15,655 / 0 / 3**, no corpus baseline moved,
 `scripts/partition-equivalence.sh` EQUIVALENT on all 78 files after every one of the three
 sub-batches, with a baseline sweep taken at HEAD first so the after-runs are attributable.
-
-**THE LANGUAGE SERVICE ANSWERS *EVERY* EDITOR QUERY AS A PARTITION NOW — THE ERROR QUERY AT
-~5.8x AND THE CARET QUERIES AT ~4.7-4.9x (2026-08-22, owner directive: make it incremental
-enough to carry an IntelliJ plugin).** **(INC.2b)** wired hover, go-to-definition,
-completion, signature help, the semantic sweep and document highlights to the same seam:
-end to end through the API, `quickInfoAt` is **5,004 -> 1,015 ms**, `fileSemantics`
-5,178 -> 1,185 and `documentHighlightsAt` 5,050 -> 1,159, while `referencesAt`,
-`renameAt` and a plain rebuild do NOT move — they are the queries left whole-program,
-because their claim is about every file, and they are the controls that say the deltas are
-the change rather than drift. The partition is DERIVED from the capture request's own
-spans, which is what makes the pins discriminate at all: narrowing's failure mode is an
-ABSENT answer, not a wrong one, so a call site that never states the file set cannot
-forget a file it asked about. **Nothing was ever absent, in 402,000 captured spans across
-both gates.** ORIGINAL HEADLINE: `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
-CHECK PARTITION instead of filtering a whole-program build: on tsc's own 78 sources
-(9,977,097 chars) a whole-program build is **4,818 ms** and a narrowed query is now
-**824 ms**, with every one of those 78 files reporting exactly the rows the full build
-reports for it. The seam (`recheckOnly` -> `Checker(assignedFileNames)`, the INV.6 view
-`--workers` uses) already existed and this module was passing null to it, because narrowing
-was understood to need `--watch`'s reverse-dependency closure. **An editor's question does
-not: it asks what is wrong in ONE buffer and claims nothing about the others.**
-

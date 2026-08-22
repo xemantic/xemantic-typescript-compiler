@@ -20,6 +20,160 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.12) — the warm program PRICED, and the one part of it that needed no compiler change LANDED
+
+**(P1) IS THE WHOLE FLOOR — ~345 ms A QUERY — AND (P2) IS WORTH ESSENTIALLY
+NOTHING TODAY. BOTH ARE MEASUREMENTS, AND THE SECOND ONE IS THE MORE USEFUL
+FINDING.**
+
+Measured before anything was built (`scripts/warm-program-cost.sh`, the compiler
+profile, warm, three rotations, two vacuity controls):
+
+    diagnosticsOf(checker.ts)                    1,999 ms
+    the same question again (already memoized)       0
+    diagnosticsOf(binder.ts), NOTHING changed      505
+    quickInfoAt(checker.ts, caret1)              2,205
+    quickInfoAt(checker.ts, caret2), unchanged   1,901
+    quickInfoAt(checker.ts, caret1) AGAIN        1,933
+    diagnosticsOf(checker.ts) after editing it   2,001
+    diagnosticsOf(binder.ts) after editing A       498
+
+**(P1) and (P2) cost the SAME, which is the finding**: outside the content-keyed
+parse cache and `diagnosticsOf`'s exact-question memo there was NO cross-query
+reuse of any kind — re-asking one hover cost a full build. The FrontEnd phase
+table of a floor build says what that build is:
+
+| | ms | reusable when NOTHING changed? |
+|---|---:|---|
+| config + crawl + imports | ~12 | yes, and parses are already content-cached |
+| BIND, all program files | **73-88** | wholesale yes for an all-module program; NOT per file |
+| CHECK, the ~190 program-wide `init` passes | **252-254** | only by reusing the `Checker` |
+| the queried file's own checking | 47 median, 150 `binder.ts`, ~1,650 `checker.ts` | never |
+
+**LANDED — STAGE 1: A CAPTURE BUILD IS MEMOIZED ON ITS REQUEST (`767f4d5f`).**
+`Project.captures`, two entries, access-ordered, dropped wherever `cached` and
+`narrowed` are. It collects the part of (P1) that needs no compiler change — the
+case where the QUESTION repeats — and two of the editor's commonest sequences
+turn out to be exactly that:
+
+    quickInfoAt(caret) then definitionsAt(caret)     506 ms -> 0
+    documentHighlightsAt(caret1) then (caret2)       592    -> 19
+    quickInfoAt(caret) twice                       1,933    -> 0
+
+Neither is special-cased, and that is the design: **hover and go-to-definition at
+one caret build an IDENTICAL `TypeCaptureRequest`** (both name the caret's node as
+a single span and read different channels of the one answer), and
+**`documentHighlightsAt`'s request is derived from the FILE's occurrence nodes and
+not from the caret at all** — the caret only picks the seed afterwards. Keying on
+the REQUEST rather than on the caret is what makes both fall out. The 19 rather
+than 0 is the honest figure: the build is gone, the per-caret grouping over the
+file's occurrences is not. A third hit appeared unlooked-for and is real —
+`fileSemantics(f)` and `documentHighlightsAt(f, ·)` can ask the same question,
+because a file's identifiers and its occurrence nodes can coincide.
+
+**BOUNDED AT TWO, AND THE BOUND IS THE DESIGN.** A `ProjectCompiler.Result` holds
+values only (no AST, no `Symbol`, no `Type`) but a file-wide capture holds one
+answer per identifier, which is tens of MB on a file the size of `checker.ts`.
+Two covers the editor's actual pair — one caret-scoped request plus one file-wide
+one — and the LRU is ACCESS-ordered, which is what keeps the file-wide entry
+resident while the caret-scoped one is replaced on every caret move.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION SAYS WHICH DO NOT.** Three arms, one
+mistake each, each diffed against the ablation's OWN snapshot (round 922: a
+`git diff --shortstat` on a tree carrying the round's work is vacuous).
+
+    A1  `updateFile` no longer drops the memo   -> RED: all three staleness pins
+                                                   + the cost-table row
+    A2  the memo never HITS                     -> RED: both reuse pins, the
+                                                   "an edit drops the memo" pin
+                                                   and the cost-table row
+    A3  the bound raised 2 -> 4                 -> RED: the bound pin, alone
+
+`a DIFFERENT caret's hover still builds` is green under all three and is recorded
+as a CONTROL, not claimed as a pin: it asserts that a build HAPPENS, which every
+arm satisfies. What it buys is the statement the two reuse pins need — the memo
+answers the question it was asked and no other one.
+
+**THE STALENESS OBLIGATION IS PINNED IN BOTH DIRECTIONS, INCLUDING THE ONE
+CLAUDE.md CALLS THE DANGEROUS ONE.** A memo can only ever serve a stale answer
+when the REQUEST is byte-identical across a change, so both pins keep the caret's
+own file untouched and edit something else: one changes another file's content
+(the answer must move `1` -> `"s"`), and one **ADDS A FILE TO THE PROGRAM** — the
+direction where a mis-keyed hit is a MISSING FILE and not a wrong type, and the
+only shape that sees it is an edit that changes what the program CONTAINS.
+
+**REFUSED FOR THIS ROUND, WITH THE MEASUREMENT: STAGE 3, REUSING THE BIND.** It
+is **73-88 ms of a ~402 ms median query, i.e. 20%**, and (INC.9) refused its
+per-file form. The WHOLESALE form for an unchanged program is a different
+question and is not refused by that argument — `--shareBind` (round 883) already
+hands one bind to N concurrent checkers, and round 882 measured the checker
+mutating ZERO binder-owned `Symbol`s on an all-module program. What stands
+between it and landing is a SHAPE GATE that must reuse the checker's own merge
+predicate rather than re-derive it, plus one mutation site this round found by
+reading: `mergeModuleAugmentations` writes `targetResult.locals[exportName] =
+augSymbol` and mutates `localSymbol.declarations`/`.exports`/`.flags` — every
+write idempotent by construction (`if (decl !in ...)`, a same-value put, an `or`
+of the same bits), which is WHY round 882's fingerprint reads zero, and which is
+an argument that has to be checked rather than assumed for a program that is not
+tsc's own sources. 20% is not worth a silent-failure-shaped change in the same
+round that landed one; it is the next round's, with a full-vs-reused differential
+sweep as its gate.
+
+**REFUSED, WITH THE MEASUREMENT: STAGE 4, REUSING THE CHECKER.** It is the
+remaining **252-254 ms, 63% of a query's floor and the largest single thing left**
+— and it is the whole of the ~190 program-wide `init` passes, which run inside
+`Checker`'s constructor. Reusing them across queries means giving `Checker` a
+re-entrant "now check THIS partition" entry point, which means deciding, for 416
+pass rows, which are per-file and which are program-wide, resetting the
+diagnostics list to the program-wide prefix, and resetting every side table a
+per-file pass writes. **And the caches it would carry across queries are the
+order-dependent ones this whole session has been fighting**: `symbolTypes`
+persists the first resolution (round 778), (INC.2)/(INC.5)/(INC.6) spent three
+rounds on hovers rendering `any` because a different file resolved a type first,
+and (INC.10) refused a 66 ms deferral because it moved capture divergence from 5
+spans to 2,722. A reused checker makes WHICH QUERY RAN FIRST observable, on
+purpose, for every query afterwards. The instrument exists
+(`scripts/capture-equivalence.sh` as a warm-vs-cold differential) and the price is
+worth a round; it is not worth one without that differential built first.
+
+**(P2) IS THE ONE TO STATE PLAINLY, BECAUSE IT IS WHAT "INCREMENTAL" USUALLY
+MEANS AND IT IS WORTH ~NOTHING WITH TODAY'S STRUCTURES.** The crawl is already 9
+ms; the bind cannot be redone per file (every `BinderResult` from one `Binder`
+shares that binder's `(pos, end)`-keyed maps, whose keys collide across files and
+are last-wins in bind order — (INC.9)); and the ~190 program-wide passes are
+program-wide by construction, which round 609 priced at 1,174 false positives for
+one starved collector. So (P2) is not a caching problem at all: it is
+"make ~190 program-wide products per-file decomposable", one at a time, and each
+one is its own round. **Do not open it as a cache.**
+
+**GATES.** Suite **15,681 / 0 failed / 3 skipped** (15,674 + this round's 7 pins), no corpus baseline moved.
+`scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files** (median narrowed query 382 ms,
+floor 342, own checking 40, ratio at the median file **13.15x**).
+`scripts/capture-equivalence.sh` **5 divergent spans in 3 of 76 files,
+`narrowRendersMoreAny = 0`** and
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files, members=285 scopes=0
+signatures=1** — both unmoved, and
+both exit non-zero BY DESIGN. `cost_gate.py` PASS, largest delta **+1.02% `mapped.hits`** — the same row and
+figure the last three rounds recorded, i.e. pre-existing drift and not this change
+(`spine.nodes` +0.00%, `output.errors` 46).
+`huge_methods.py --fail-over 0` green on core (largest 5,204) AND on `-project`
+(largest 246).
+
+**NEXT LEVER, PRICED — AND IT IS STAGE 2, NOT STAGE 3.** The memo hits when the
+QUESTION repeats; the next thing is to make more questions repeat. **Ask
+`quickInfoAt`/`definitionsAt` the FILE's whole span set instead of the caret's
+one span**, exactly as `documentHighlightsAt` already asks, and every caret in an
+unchanged buffer becomes free after the first — the same 506 -> 0 the definition
+arm just measured, but for a caret the user has not visited yet. Its price is one
+build that is bigger than a single-caret build (`fileSemantics` measured 1,185 ms
+against `quickInfoAt`'s 1,015 in round (INC.2b)'s battery) and its RISK is
+named and testable: requesting more spans means more `typeToString` calls, which
+FORCE resolutions earlier, which is exactly the first-touch mechanism (INC.10)
+refused 66 ms over. **The oracle is free** — per-caret answers and whole-file
+answers must agree span for span, no baseline needed — so build that differential
+first and let it decide, the way (INC.10)'s three-point table decided
+`buildFileLocalTypeMaps`.
+
 ### Round (INC.10) — the alias walk moved onto the ask, and the 66 ms row is REFUSED with a three-point measurement
 
 **THE TWO ROWS WERE 95.5 ms OF A 305.3 ms FLOOR PASS TABLE. ONE OF THEM WAS
@@ -1559,6 +1713,63 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   DECLARATION branch eager and it is **64.94 ms / 5 spans** — i.e. the deferrable
   part is **1.13 ms of 66**. Do NOT re-open it from round 829's read-count
   census: read-ness of the ENTRY is the wrong question.
+
+- [x] **(INC.12) THE WARM PROGRAM IS PRICED, AND STAGE 1 LANDED 2026-08-22.**
+  **(P1) — a second query with the program UNCHANGED — is worth the WHOLE ~345 ms
+  floor** (config+crawl+imports ~12, BIND 73-88, the ~190 program-wide `init` passes
+  252-254), against a queried file's own checking of 47 ms at the median file.
+  **(P2) — a query after ONE buffer changed — measured IDENTICAL to (P1)**
+  (`diagnosticsOf` after editing the queried file 2,001 ms against 1,999 unedited),
+  because outside the content-keyed parse cache there was no cross-query reuse at all.
+  **LANDED: `Project.captures`** — a capture build memoized on its REQUEST, two entries,
+  dropped by every edit: `quickInfoAt` then `definitionsAt` at one caret is ONE build
+  (506 -> 0), `documentHighlightsAt` at every later caret in an unchanged buffer is zero
+  builds (592 -> 19, the residue being the per-caret grouping), a repeated hover
+  1,933 -> 0. Three ablations, each reddening a different pin set.
+  `scripts/warm-program-cost.sh` is the instrument; `docs/language-service.md` §§ 13-14
+  carry the table. **REFUSED with the measurement**: reusing the BIND (73-88 ms = 20% of
+  a median query — not refused by (INC.9)'s per-file argument, but it needs a shape gate
+  reusing the checker's own merge predicate plus a full-vs-reused differential sweep,
+  see (INC.13)); and reusing the CHECKER (252-254 ms = 63%, the largest thing left, and
+  the one that makes WHICH QUERY RAN FIRST observable — see (INC.14)).
+
+- [ ] **(INC.13) STAGE 2 — MAKE MORE QUESTIONS REPEAT, AND LET A FREE DIFFERENTIAL
+  DECIDE IT.** (INC.12)'s memo hits when the REQUEST repeats; every caret-scoped query
+  except `documentHighlightsAt` asks about ONE span, so a caret the user has not visited
+  is still a full build. **Ask `quickInfoAt`/`definitionsAt` the FILE's whole span set
+  instead** — the shape `documentHighlightsAt` already uses — and every caret in an
+  unchanged buffer is free after the first, i.e. the 506 -> 0 the definition arm
+  measured, for carets nobody has asked about yet. **Price**: one build that is bigger
+  than a single-caret build (`fileSemantics` 1,185 ms against `quickInfoAt`'s 1,015 in
+  (INC.2b)'s battery), then zero. **Risk, named**: more spans means more `typeToString`
+  calls, which force resolutions EARLIER — the first-touch mechanism (INC.10) refused 66
+  ms over, and (INC.6)/(INC.8) spent two rounds inside. **The oracle is free and must be
+  built first**: per-caret answers and whole-file answers must agree span for span over
+  a real file, no baseline needed. Build the differential, then decide — the way
+  (INC.10)'s three-point table decided `buildFileLocalTypeMaps`. **Then, if it holds,
+  the bind:** 73-88 ms (20%) wholesale for an unchanged program, which `--shareBind`
+  (round 883) and round 882's zero-mutation census make attemptable, gated on program
+  SHAPE using the checker's own merge predicate — and note the site this round found by
+  reading, `mergeModuleAugmentations`, whose writes into `targetResult.locals` and into
+  a target symbol's `declarations`/`exports`/`flags` are idempotent by construction and
+  are WHY that census reads zero.
+
+- [ ] **(INC.14) THE LAST 63% IS THE CHECKER, AND ITS PRICE IS AN ORDER-DEPENDENCE
+  DIFFERENTIAL.** 252-254 ms of every query's floor is the ~190 program-wide `init`
+  passes, which run inside `Checker`'s constructor, so reusing them across queries means
+  a re-entrant "now check THIS partition" entry point: deciding for 416 pass rows which
+  are per-file and which program-wide, resetting the diagnostics list to the
+  program-wide prefix, and resetting every side table a per-file pass writes. **The
+  soundness question is not the refactor, it is the caches it would carry**:
+  `symbolTypes` persists the FIRST resolution (round 778), and (INC.2)/(INC.5)/(INC.6)
+  are three rounds of hovers rendering `any` because another file resolved a type first.
+  A reused checker makes WHICH QUERY RAN FIRST observable for every later query, on
+  purpose. **Do not start the refactor. Start with the differential**: a warm-reused arm
+  against a cold arm in `scripts/capture-equivalence.sh`'s shape, which needs no baseline
+  because the two arms must agree — and which can be built and run BEFORE any checker
+  surgery by simply running two queries in one process and comparing the second against
+  a fresh-process first. If the divergence census is large, this item is refused with a
+  number, exactly as (INC.10) refused 66 ms.
 
 - [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
   DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and

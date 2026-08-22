@@ -177,19 +177,38 @@ class ProjectSemanticsTest {
     }
 
     @Test
-    fun `describing one caret BOTH ways costs one build batched and two unbatched`() {
-        // The other half of the saving, and the one an editor pays on every hover:
-        // quick info and go-to-definition are one walk's answers, so asking for them
-        // separately doubles the compiles for a single caret.
+    fun `describing one caret BOTH ways costs ONE build either way since the memo`() {
+        // (INC.12) INVERTED IN PLACE, and the inversion is the finding rather than an
+        // accounting change. This used to read `== 2` and the comment said asking for
+        // quick info and go-to-definition separately "doubles the compiles for a single
+        // caret" — which was true and is exactly what `Project.captures` closed: the two
+        // members build an IDENTICAL `TypeCaptureRequest` and read different channels of
+        // the one answer, so the second is served without building.
+        //
+        // What batching still buys is the pin above: SIX carets are one build batched
+        // and six unbatched, because six carets are six different requests. The saving
+        // for ONE caret is now automatic.
         val (project, counting) = countedProject()
         val at = offsetOf("useLocal = collide") + "useLocal = ".length + 1
 
         assert(buildsIn(counting) { project.semanticsAt(mainFile, listOf(at)) } == 1)
+        // ZERO, and for a third reason worth naming: a ONE-CARET batch asks exactly the
+        // question hover asks, so these two do not merely share a request with each
+        // other — they repeat the batched one.
         assert(
             buildsIn(counting) {
                 project.quickInfoAt(mainFile, at)
                 project.definitionsAt(mainFile, at)
-            } == 2,
+            } == 0,
+        )
+        // From a FRESH state the pair is ONE build, which is the claim this test was
+        // written for, now with the opposite answer.
+        project.updateFile(mainFile, main)
+        assert(
+            buildsIn(counting) {
+                project.quickInfoAt(mainFile, at)
+                project.definitionsAt(mainFile, at)
+            } == 1,
         )
     }
 

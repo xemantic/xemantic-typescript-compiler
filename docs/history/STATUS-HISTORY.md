@@ -1,3 +1,24 @@
+**THE LANGUAGE SERVICE ANSWERS *EVERY* EDITOR QUERY AS A PARTITION NOW — THE ERROR QUERY AT
+~5.8x AND THE CARET QUERIES AT ~4.7-4.9x (2026-08-22, owner directive: make it incremental
+enough to carry an IntelliJ plugin).** **(INC.2b)** wired hover, go-to-definition,
+completion, signature help, the semantic sweep and document highlights to the same seam:
+end to end through the API, `quickInfoAt` is **5,004 -> 1,015 ms**, `fileSemantics`
+5,178 -> 1,185 and `documentHighlightsAt` 5,050 -> 1,159, while `referencesAt`,
+`renameAt` and a plain rebuild do NOT move — they are the queries left whole-program,
+because their claim is about every file, and they are the controls that say the deltas are
+the change rather than drift. The partition is DERIVED from the capture request's own
+spans, which is what makes the pins discriminate at all: narrowing's failure mode is an
+ABSENT answer, not a wrong one, so a call site that never states the file set cannot
+forget a file it asked about. **Nothing was ever absent, in 402,000 captured spans across
+both gates.** ORIGINAL HEADLINE: `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
+CHECK PARTITION instead of filtering a whole-program build: on tsc's own 78 sources
+(9,977,097 chars) a whole-program build is **4,818 ms** and a narrowed query is now
+**824 ms**, with every one of those 78 files reporting exactly the rows the full build
+reports for it. The seam (`recheckOnly` -> `Checker(assignedFileNames)`, the INV.6 view
+`--workers` uses) already existed and this module was passing null to it, because narrowing
+was understood to need `--watch`'s reverse-dependency closure. **An editor's question does
+not: it asks what is wrong in ONE buffer and claims nothing about the others.**
+
 **THE MEASUREMENTS MATTERED MORE THAN THE FEATURES, AND TWO OF THEM CLOSED DIRECTIONS.**
 A median file's OWN checking is **15 ms**, so narrowing the CHECK is finished — what remains
 is a floor (crawl + parse + bind + program-wide passes), decomposed at **1,219 ms** into tail

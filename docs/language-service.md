@@ -1555,6 +1555,34 @@ public surface here is deliberately value-typed — no AST, no `Symbol`, no `Typ
 crosses it — precisely so that change can happen underneath you without breaking
 your host.
 
+### (INC.12) What a query still redoes, priced
+
+Measured on the compiler profile, warm, one process (`scripts/warm-program-cost.sh`).
+A narrowed build decomposes into a FLOOR that is the same for every query and the
+queried file's own checking:
+
+| | ms | reusable when NOTHING changed? |
+|---|---:|---|
+| config + crawl + imports | ~12 | yes — parses are already content-cached |
+| BIND, all program files | **73 – 88** | wholesale yes for an all-module program; NOT per file |
+| CHECK, the ~190 program-wide `init` passes | **252 – 254** | only by reusing the `Checker` |
+| the queried file's own checking | 47 at the median file, 150 on `binder.ts`, ~1,650 on `checker.ts` | never |
+
+So **(P1) — a second query with the program unchanged — is worth the whole ~345 ms
+floor**, and (INC.12) stage 1 collects the part of it that needs no compiler change:
+the case where the *question* repeats. The rest needs the checker to become
+re-partitionable, which is the inversion above.
+
+**(P2) — a query after ONE buffer changed — is worth essentially nothing today, and
+that is a statement about structure rather than about effort.** Measured, it costs the
+same as (P1) (`diagnosticsOf` after editing the queried file: 2,001 ms against 1,999
+unedited; about another file: 498 against 505). The crawl is already 9 ms, so there is
+nothing there to save; the bind cannot be redone per file (every `BinderResult` from one
+`Binder` shares that binder's `(pos, end)`-keyed maps, whose keys collide across files
+and are last-wins in bind order); and the ~190 program-wide passes are program-wide by
+construction — round 609 measured a starved collector at 1,174 false positives. Making
+(P2) cheap means making those products per-file decomposable, one at a time.
+
 ---
 
 ## 14. State of the API — the two-minute version
@@ -1648,11 +1676,33 @@ real libs, warm, one process per battery, three rotations):
 | a plain rebuild, for reference | 1 | 5.0 – 5.5 s | — |
 | `diagnosticsOf(files)` — the narrowed one | 1 narrowed | **1.1 – 1.2 s** (2.7 s for `checker.ts`) | § 4a |
 | `quickInfoAt` / `definitionsAt` / `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
+| …but a REPEATED capture request | **0** | microseconds | (INC.12), below |
 | `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk: 5.0 s on `types.ts`, 6.2 s on `checker.ts` | — |
 | `documentHighlightsAt` | 1 | 5.0 – 5.5 s on `types.ts`, **6.3 s on `checker.ts`** | it sweeps one FILE, so the file is the cost |
 | `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 s clean, 13.2 – 14.8 s dirty | whole program either way |
 | `renameAt` | 2, 3 dirty | 14.3 s (`createTypeChecker`, 3 edits) – 21.0 s (`SyntaxKind`, 9,827 edits); 19.6 – 26.7 s dirty | the plan's size shows |
 | a refusal decided on syntax alone | **0** | microseconds | — |
+
+**(INC.12) A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
+entries, dropped by every edit alongside the diagnostics cache), which changes the
+`builds` column in two places a host will actually hit:
+
+* **hover then go-to-definition at ONE caret is ONE build.** Both name the caret's node
+  as a single span and read different channels of the one answer, so the requests are
+  equal.
+* **document highlights at every later caret in an unchanged buffer is ZERO builds.**
+  Its request is derived from the FILE's occurrence nodes and not from the caret — the
+  caret only picks the seed afterwards.
+
+Measured in one process on the compiler profile (warm, three rotations): re-asking one
+hover **1,933 ms → 0**; `definitionsAt` after `quickInfoAt` at one caret in `binder.ts`
+**506 → 0**; `documentHighlightsAt` at a second caret in `binder.ts` **592 → 19** — 19
+and not 0 because the BUILD is gone while the per-caret grouping over the file's
+occurrences remains. `scripts/warm-program-cost.sh` re-takes it.
+
+**What it does NOT do**: a different caret's hover, or a query about a different file,
+is a different request and still builds. That is (P1) proper, and § 13 carries its
+price.
 
 **The `builds` column is pinned** (`LanguageServiceStateTest`, counted at the backing
 `Vfs`) and **the `wall` column is not pinnable** — it is a property of one box on one
