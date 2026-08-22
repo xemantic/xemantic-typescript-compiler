@@ -48395,7 +48395,7 @@ class Checker(
      * Also checks catch clause destructuring patterns for duplicate names (TS2451).
      */
     private fun checkCatchClauseRedeclarations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -54415,7 +54415,7 @@ class Checker(
      */
     private fun checkClassStrictModeIdentifiers() {
         val restricted = setOf("arguments", "eval")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -74781,7 +74781,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkSuperBeforeThis() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -78136,7 +78136,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkParameterProperties() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -80968,7 +80968,7 @@ interface DataView {
      * passing test matching the full gate would already carry the diagnostic.
      */
     private fun checkForIncrementorReachingAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             friScanStatements(result.sourceFile.statements, result.sourceFile.text, fileName)
@@ -97143,7 +97143,7 @@ interface DataView {
      */
     private fun checkGeneratorBareYieldTypes() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -126893,7 +126893,7 @@ interface DataView {
      *  named props and no index sig). The `{ [x: string]: unknown; }` source display is hardcoded
      *  (exactly what tsc produces for this shape; already used verbatim elsewhere in the checker). */
     private fun checkComputedKeyObjectLiteralArg() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -129918,7 +129918,7 @@ interface DataView {
     }
 
     private fun checkNonConstructorExtends() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -130238,7 +130238,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkStaticMembersReferenceTypeParams() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -151576,7 +151576,7 @@ interface DataView {
      */
     private fun checkNeverArrayDestructureFromNullElse() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             scanNeverDestructure(result.sourceFile.statements, result.sourceFile.text, fileName, emptySet())
@@ -151768,7 +151768,7 @@ interface DataView {
      */
     private fun checkUnknownTypeofObjectPossiblyNull() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
@@ -151863,7 +151863,7 @@ interface DataView {
      * the param's annotation.) Always an error by shape, so FP-safe.
      */
     private fun checkSwitchParamDiscriminantComparable() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             scanSwitchParamDiscriminant(
                 result.sourceFile.statements, result.sourceFile.text,
@@ -152030,7 +152030,7 @@ interface DataView {
      * discriminant check. Top-level calls are skipped (the integrated arg path owns them).
      */
     private fun checkLocalCallDiscriminantArgs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -177274,7 +177274,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkForInLhsTypes() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
@@ -177556,7 +177556,7 @@ interface DataView {
      * never double-emits with the existing top-level TS2702 path in checkTypeNameResolved.
      */
     private fun checkTypeUsedAsNamespaceRefs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
