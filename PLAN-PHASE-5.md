@@ -20,6 +20,136 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.7) batch 3 — 45 tail walkers gated, floor 789 -> 514 ms, and the discount reached 92.9%
+
+**LANDED**: 45 walkers moved from `binderResults` to `checkedResults` in three
+gated sub-batches (`e7ccd21f` 15, `d2c0cb36` 15, `2fb81e83` 15), plus four pins
+(`68635ffc`). Every sub-batch was swept with `scripts/partition-equivalence.sh`
+before the next was applied, and every sweep read **EQUIVALENT over all 78
+files** — with a baseline sweep taken at HEAD first, so the after-runs are
+attributable rather than merely green.
+
+    floor (sweep harness)         789 ms -> 621 (3a) -> 533 (3b) -> 514 (3c)
+    narrowed query, median of 78  818    -> 681    -> 584    -> 542
+    ratio at the median file      6.17x  -> 7.37x  -> 8.57x  -> 9.70x
+    floor as a share of a query   96%    -> 91%    -> 91%    -> 95%
+
+**THE DISCOUNT KEPT SHRINKING, WHICH WAS THE ROUND'S LIVE PREDICTION.**
+
+                       batch 1    batch 2    batch 3
+    naive sum          162.6 ms   221.3 ms   295.9 ms
+    actually banked    128.4      189.1      275
+    ratio              79.0%      85.5%      92.9%
+
+The mechanism is the one batch 1 stated: relocation lands on ungated tail
+walkers, so the more of them are gated, the more of the moved work is never
+asked for at all. **Do not read the PER-SUB-BATCH split as three more data
+points** — it reads 137%, 81%, 30%, and the >100% is real but is batch 2's
+relocation being collected at the same time (see below), while each sub-batch's
+floor is a single four-sample draw against a 19-168 ms effect. The batch-level
+92.9% is over a 275 ms delta and is the number to quote.
+
+**THE VICTIM HEURISTIC MISFIRED, AND THAT IS WHY 3a BANKED MORE THAN ITS ROWS.**
+The queue said to start by reading `checkBaseClassImprovedMismatch` (0.07 ->
+17.89 ms), batch 2's relocation victim, on the rule that the victim is always
+the next candidate. It is a REWRITER (`for (i in diagnostics.indices) { …
+diagnostics[i] = d.copy(messageChain = …) }`) and can never qualify. Its 17.89
+ms was not relocated type work at all but an inherited lazy per-file
+`SourceScanFilter` build (`SrcScanCache.filterFor`) — so it was the first
+walker to ASK, not the walker that COSTS. Gating batch 3a moved that asking to
+walkers that are themselves now gated, which is why 3a shed 168 ms against a
+122 ms row sum. **A relocation victim is a lead about WHERE the next ask lands,
+not a candidate**; check what kind of work moved before treating it as one. 34
+ungated walkers still reach `srcScan`, and that family only banks when gated
+together.
+
+**WHAT DID NOT WORK, AND WHAT IT TAUGHT.**
+
+1. **The pin written for the batch's biggest privacy clearance measured
+   nothing.** `checkMixinClassConstructor` (9.71 ms) emits TS2545, and the
+   fixture written for it produced ZERO rows in either arm — the two equality
+   assertions compared empty lists. What failed was the CONTROL, and it failed
+   in the way that names the cause: a whole-program build cannot be moved by
+   this change at all, so a red control is a statement about the fixture and
+   never about the gate. `emitTs2545IfBrokenMixin` needs a type parameter whose
+   constraint is a constructor type with an OPTIONAL REST PARAMETER
+   (`dotDotDotToken && questionToken`), a corpus-unique B72.1 shape.
+   `checkMissingImplementations`/TS2391 carries the privacy-clearance pin
+   instead, and the test records why TS2545 is unpinned rather than leaving a
+   plausible dead assertion behind.
+
+2. **Two walkers were REFUSED on a rule that turns out to be the wrong way
+   round.** `checkImportTypeUsedAsType` and
+   `checkBareAtTypesExportEqualsMissingNamedImport` pass every body-level test
+   but have a PRIVATE HELPER that itself scans `binderResults`. That looked like
+   a cross-file lookup wearing a per-file loop, so both were refused — and then
+   `checkMixinClassConstructor`, which was GATED, turned out to have two of
+   them (`findTypeParamDeclByName`, `findTypeAliasByName`). Reading them
+   settles it: such a helper is **not a pass, so it is never gated**, and it
+   keeps resolving against the whole program while the walker's own loop
+   narrows — which is exactly the behaviour wanted.
+   `visitBareImportType`'s scan is `binderResults.any { … declare module "fs" … }`,
+   a whole-program ambient-module RESOLUTION. **The count is how you find the
+   sites; the direction is how you judge them.** Both are batch-4 candidates
+   (3.3 ms), cleared by reading rather than refused.
+
+3. **33 of the 252 ungated `binderResults` loops are not passes at all** —
+   `resolveIdentifierInFile`, `findTypeParamDeclByName`, `getEnumMemberValue`,
+   `isReferencedAliasDeclaration`, `computeTypeParamInfo`, … Gating one breaks
+   NAME RESOLUTION rather than dropping a diagnostic, they are all 0.00 ms, and
+   a mechanical `sed` over the loop header hits every one. This is the single
+   most important guard in the round and it is now in CLAUDE.md.
+
+**THE FINAL GATE SET, AND THE FLOOR DECOMPOSED BEFORE AND AFTER.**
+
+    the 45 gated rows          295.86 ms -> 0.00   (they no longer run at the floor)
+    pass-table total           581.2     -> 268.8  (shed 312.4)
+    floor, sweep harness       789       -> 514
+    floor, PLAIN early median  883       -> 548
+    floor, PLAIN late median   808       -> 506
+    narrowed capture, median   n/a       -> 556 ms; binder.ts warm rotated 7.51x
+
+    suite            15,655 / 0 failed / 3 skipped  (15,648 + the 7 new pins)
+    cost_gate.py     PASS, largest counter delta +1.02% (`mapped.hits`)
+    huge_methods.py  PASS at --fail-over 0, core AND the -project module
+    capture-equivalence      5 spans, narrowRendersMoreAny=0  -- UNMOVED
+    capture-channel          286 rows, members=285 scopes=0   -- UNMOVED
+
+**RELOCATION IS ESSENTIALLY GONE, WHICH IS THE STRONGEST FORM OF THE PREDICTION.** The
+pass table shed **312.4 ms** against a naive row sum of 295.86, and the single biggest
+riser in the whole table is `checkProtectedAssignmentMismatch` at **+4.74 ms** (0.11 ->
+4.85) — against batch 2's +17.82. So two of the three floor instruments read a banked
+amount ABOVE the naive sum (PLAIN early 335 ms, PLAIN late 302 ms; the sweep harness, the
+instrument used for every sub-batch, reads 275 ms = 92.9%), which is what it looks like
+when a batch banks all of its own rows PLUS ambient work its walkers were the first to
+ask for. **Both capture gates are censuses of the known (INC.2)/(INC.5)/(INC.6)
+order-dependence and exit non-zero by design — what matters is that both counts are
+unmoved, and they are.**
+
+**METHOD.** The static classification inherited from the prior session was
+re-derived rather than trusted: its snapshot (md5 `cdeafb06`) was no longer the
+working tree (`bc815431`). The rebuilt analyzer agrees with it on 128 of 130
+CLEAN walkers, and its stripper carries the control CLAUDE.md demands — 4,509
+`fun` declarations in raw source, 4,509 in stripped, i.e. ZERO blanked, which is
+the batch-2 failure mode that reported a confident "no hazard" over an EMPTY
+closure. Every one of the 45 bodies was read.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION ALSO SAYS WHICH ONES DO NOT.** One
+deliberate mistake — the partition filter at `Checker.kt:112` inverted to
+`!in assignedFileNames`, i.e. the gate drops exactly the file it was asked
+about — turns **10 of the 15** red: every "a partition of X keeps its own
+walker's row" and every narrowed-query-through-the-public-API pin. The five
+that stay green are green for a reason worth recording rather than for none:
+the three whole-program CONTROLS cannot move (a full build has
+`assignedFileNames == null`, so the inverted filter never executes — which is
+the same property that makes this whole change a no-op for the corpus), and the
+two "invents nothing" pins are filtered downstream by
+`diagnostics.filter { it.fileName in assignedFileNames }` (`Checker.kt:12047`),
+so a row invented for ANOTHER file cannot reach them. **They guard the round-609
+direction — an invented row for the ASKED file — which this ablation does not
+inject, and `scripts/partition-equivalence.sh` over 78 real files is their real
+instrument.** Recorded as guards, not claimed as discriminating pins.
+
 **(INC.2b) THE INTERACTIVE CAPTURE QUERIES ARE NARROWED — LANDED 2026-08-22, owner
 directive. Hover, go-to-definition, completion, signature help, the semantic sweep and
 document highlights each hand the compiler the queried BUFFER as its check partition.
@@ -1100,71 +1230,49 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   whole-program regex passes are already gone (0.44 ms). **What it leaves is (INC.7), a
   bigger lever than either of the two this entry used to rank first.**
 
-- [ ] **(INC.7) BATCH 3 — ~350 WALKERS AND ~470 ms LEFT, AND IT IS THE LAST BATCH WHERE
-  READING BEATS SWEEPING (mean 1.3 ms per walker).** Batches 1 and 2 LANDED: 23 walkers
-  gated, floor 1,207 -> ~790-910 ms, narrowed query 1,077 -> **824 ms**, suite unmoved,
-  sweep EQUIVALENT throughout. **The discount is measured twice and is shrinking as
-  predicted — 79.0% then 85.5%, leaking the same absolute ~32 ms from a 36% bigger batch.**
-  **START BY READING `checkBaseClassImprovedMismatch` (0.07 -> 17.89 ms)**: it is batch 2's
-  relocation victim, exactly as `checkArrayIsArrayCompoundElseIndex` was batch 1's — and
-  that one, gated in batch 2, went to 0.00. The victim is always the next candidate.
-  **THE HEAD OF THE RANKING IS NOW DOMINATED BY WALKERS THAT NEED A DIFFERENT ARGUMENT than
-  "it only emits"**: `checkTypeArgumentConstraints` (22.6, refused — fields 108 and 106 other
-  passes read, plus a possible first touch into `typeParamInternCache`), `checkPropertyOverride`
-  (11.5), `checkInterfaceMultiBaseConflicts` (11.4), `checkSubsequentVarTypes` (10.8), all
-  refused on ambient installs. For those the question is whether the install is
-  WALKER-PRIVATE — which is how `checkNamespaceUsedAsType` was cleared in batch 2, by
-  counting mentions of each field across the whole file and confirming the reset sits
-  outside the loop. Seven analyzer-clean rows are staged but NOT cleared (bodies unread):
-  `checkPrivateThisAccessInThisParamFunctions`, `checkTupleDestructuringBounds`,
-  `checkCircularInterfaceBases`, `checkInvalidParameterDecorators`,
-  `checkForLoopEmptyArrayDestructure`, `checkBlockScopedRedeclarations`,
-  `checkReverseMappedExcessProps`.
-  ORIGINAL ENTRY (batch 2): 368 WALKERS LEFT, RE-PRICED. Batch 1 LANDED 2026-08-22: 8 pure
-  emitters gated, floor 1,207 -> 1,029 ms, narrowed query 1,077 -> 989, suite unmoved and
-  the sweep still EQUIVALENT.** **Re-price before believing any total: the batch banked
-  ~79% of the naive sum of its rows** (162.6 shed, floor fell 128.4, +34.2 reappeared
-  elsewhere — round 788's law, since the gated walkers were driving MEMOIZED resolutions
-  the first later asker now pays for). The discount should shrink as the batch grows,
-  because today's relocation targets are themselves ungated tail walkers; measure whether
-  it does, at batch 2, before extrapolating to 368.
-  **START WITH `checkNamespaceUsedAsType`** — batch 1 disqualified it only by the letter of
-  the rule (it installs `currentCheckLocals`/`currentTypeProvidingNames`) and then measured
-  that **no other pass mentions either field** and both are restored at pass end, i.e. the
-  ambient is walker-private. The evidence is already gathered. `checkTypeArgumentConstraints`
-  stays OUT: it installs fields 108 and 106 other passes read, and can be a first touch into
-  `typeParamInternCache`.
-  **Method that worked and should be reused**: a call-graph analyzer computing each
-  walker's PRIVATE closure (functions no other registered `pass(...)` reaches, which cuts
-  the shared type engine away), reporting every checker-field write and every `diagnostics`
-  read-back — but note its own trap in CLAUDE.md: a comment/string stripper that handles
-  `'x'` still desynchronises on `'\''`, blanking ~2,500 declarations and reporting a
-  confident "no hazard" over an EMPTY closure. Pin the stripper with a positive control.
-  ORIGINAL ENTRY: 376 OF THE 400 TAIL WALKERS ITERATE `binderResults`, SO THEY COST THE SAME
-  WHETHER THE CHECKER CHECKS 78 FILES OR NONE — 806.7 ms, 66% OF THE FLOOR, AND THE FIX MAY
-  BE A LOOP RECEIVER PER WALKER.** `checkedResults` is `binderResults` EXACTLY when
-  `assignedFileNames == null` (`Checker.kt:110`), so moving a walker's loop onto it is a
-  **strict no-op for every full build and therefore for the whole corpus** — it can only
-  change what a PARTITION does. And a partition reports nothing about the files it was not
-  asked about, so a pure EMITTER skipping them loses nothing observable.
-  **THE HAZARD IS ROUND 609's AND IT IS THE WHOLE JOB: a COLLECTOR gated that way starves
-  the partition of program-wide suppression context and INVENTS diagnostics** — 1,174
-  TS2339 false positives, measured. So the classification is per walker and conservative: a
-  walker qualifies only if its loop body does nothing but `diagnostics.add` (no side-set
-  write, no `removeAll`/retraction, no ambient install, no read-back of `diagnostics`), and
-  one whose emission for file A depends on having walked file B in the same pass — the
-  cross-file duplicate detectors are the obvious family — never qualifies.
-  **THE DETECTOR ALREADY EXISTS, WHICH IS WHY THIS IS ATTEMPTABLE**:
-  `scripts/partition-equivalence.sh` compares every file's rows partition-vs-full over a
-  real program, and a starved partition ADDS rows — exactly what round 609's failure looks
-  like. Run it after every batch, not at the end. The corpus is the second gate and must
-  stay byte-identical BY CONSTRUCTION; a moved baseline means the change reached a full
-  build and the no-op reasoning is wrong somewhere.
-  **Batch it, biggest first**: the top 10 rows are 25% of the tail and the top 50 are 74%,
-  so ten walkers can be priced honestly before committing to 376. Expected: the floor
-  toward ~400 ms, i.e. a narrowed error query under half a second on a 10 MB project.
-  **Price the batch before believing the total** — the tail is flat (100 passes at a mean
-  7.9 ms carry 98%), and a count of sites is not a count of calls.
+- [ ] **(INC.7) BATCH 4 — 174 UNGATED PASSES LEFT AND A 268.8 ms PASS TABLE, AND THE
+  READING-BEATS-SWEEPING WINDOW IS CLOSING (mean ~1.6 ms per walker).** Batches 1-3 LANDED:
+  **68 walkers gated, floor 1,207 -> 514 ms, narrowed query 1,077 -> 542 ms, ratio at the
+  median file 9.70x**, suite unmoved, `partition-equivalence.sh` EQUIVALENT on all 78 files
+  after every one of the six sub-batches. **The discount is now measured three times and
+  behaved exactly as predicted — 79.0%, 85.5%, 92.9%** (batch 3: 295.9 ms of rows for 275 ms
+  of floor). Do NOT read batch 3's per-sub-batch split (137% / 81% / 30%) as three more
+  points: each is one four-sample floor draw against a 19-168 ms effect, and 3a's >100% is
+  batch 2's relocation being collected at the same time.
+  **START WITH THE TWO WALKERS BATCH 3 REFUSED AND THEN CLEARED BY READING** (3.3 ms, and
+  the reasoning is already done): `checkImportTypeUsedAsType` and
+  `checkBareAtTypesExportEqualsMissingNamedImport` were refused because a PRIVATE HELPER
+  scans `binderResults` itself. That is not a hazard — the helper is not a pass, so it is
+  never gated, and it keeps resolving against the whole program while the walker's loop
+  narrows. `checkMixinClassConstructor`, which batch 3 DID gate, has two such helpers
+  (`findTypeParamDeclByName`, `findTypeAliasByName`) and swept EQUIVALENT.
+  **THE VICTIM HEURISTIC IS RETIRED — do not open batch 4 by reading the relocation
+  victim.** Batch 2's victim `checkBaseClassImprovedMismatch` (0.07 -> 17.89 ms) is a
+  REWRITER and can never qualify, and its 17.89 ms was not relocated type work but an
+  inherited lazy per-file `SourceScanFilter` build (`SrcScanCache.filterFor`) — it was the
+  first walker to ASK, not the walker that COSTS. **34 ungated walkers still reach
+  `srcScan`; that family only banks when gated TOGETHER, and it is the best-shaped batch-4
+  cluster.**
+  **THE ANALYZER IS REUSABLE AND ITS CONTROLS ARE NOT OPTIONAL.** Rebuild it against the
+  CURRENT file (batch 3's inherited snapshot was already stale) and keep the stripper's
+  positive control — 4,509 `fun` declarations raw, 4,509 stripped, ZERO blanked. Its four
+  verdicts per walker: no checker-field write in the private closure, no `diagnostics`
+  read-back, no pre-loop accumulator, and **exactly one `binderResults` reference in the
+  walker body** (the closure-wide count is a lead to READ, not a refusal).
+  **REFUSED AND DECIDED — do not re-litigate**: `checkTypeArgumentConstraints` (fields 120+
+  passes read), `checkPropertyOverride`, `checkInterfaceMultiBaseConflicts`,
+  `checkSubsequentVarTypes`, `checkDerivedConstructorSuper`, `checkClassImplementsInterface`,
+  `populateAmbientCyclicBaseClasses`, `checkSpreadNonIterableIntoFixedArity` (a
+  producer/consumer side set `spineArgCallEnter` reads), the 49 that read or rewrite
+  `diagnostics`, the 12 cross-file accumulators, and **`trackAllImportReferences`** — which
+  is analyzer-clean and is a COLLECTOR, caught only by its name and its `init:` pass slot.
+  **THE STANDING TRAP, now in CLAUDE.md: 33 of the 252 ungated loops are NOT PASSES** but
+  lookup helpers (`resolveIdentifierInFile`, `getEnumMemberValue`, `computeTypeParamInfo`,
+  …). All are 0.00 ms; gating one breaks name resolution rather than dropping a diagnostic;
+  a mechanical `sed` over the loop header hits every one.
+  **Expected**: the tail is flat from here (the remaining 174 passes average ~1.6 ms), so
+  batch 4 is a bigger batch for a smaller prize — and the floor is now 95% of a median
+  narrowed query, so the (INC.3) decomposition, not this arc, is what bounds the rest.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
