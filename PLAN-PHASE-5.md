@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.3) THE FLOOR IS DECOMPOSED, AND IT INVERTED ITS OWN LEVER ORDER — 2026-08-22. Of a
+1,219 ms floor: tail walkers 806.7 ms (66.2%), `init:*` setup 112.2 (9.2%), BIND 240.6
+(19.7%), crawl 27.4 (2.2%), `checkSpine` 0.1 ms, residue 3.1. The queue had ranked bind
+first, the passes second and the crawl third; measured, it is passes 75%, bind 20%,
+crawl 2%.**
+
+**FOUR INHERITED FIGURES REFUTED, EACH FOR A DIFFERENT REASON WORTH KEEPING.**
+(i) **Bind is 241 ms, not ~515** — round 880's number is the bind component of a per-WORKER
+fixed term under `--workers 4`, where four whole-program binds run concurrently beside the
+JIT threads; the same fit measured +37% contention and round 883's `--shareBind` −5% is
+that contention being collected. What DID transfer from round 880, almost exactly, is its
+other half: "~930 ms of program-wide checker work" against 943.1 measured.
+(ii) **The crawl is 27 ms, not ~138** — the parse half is gone and the instrument says so
+directly rather than by inference (`78 reused / 0 fresh`, PARSE row zero calls).
+(iii) `init:buildFileLocalTypeMaps` is **1.4%** of a warm compile, not 3.56% — rounds
+829/859/861 landed levers in it and the queue's figure predated them.
+(iv) The "two whole-program regex passes that never warm, 98 ms, matching zero times" are
+**already gone**: 0.44 ms between them, gated by rounds 859/862.
+A queue entry's numbers decay, and all four decayed in the direction that would have sent a
+round at the wrong target.
+
+**THE 20.3% TAIL FIGURE IS CONFIRMED AND MISREAD, WHICH IS THE ACTUAL FINDING.** The same
+400 rows are 951 ms on a full build (19.0%) — but **85% of that survives narrowing**. Only
+**24 of the 400** narrow (the ones iterating `checkedResults`); the other **376** iterate
+`binderResults` and drive their own whole-tree walk, so they cost the same whether the
+checker checks 78 files or none. `checkSpine` reading **0.1 ms** on the floor is the receipt
+that `recheckOnly` removes per-file checking completely — which is exactly why nothing but
+program-wide work is left to explain.
+
+**AND THE TAIL IS FLAT, WHICH KILLS THE OBVIOUS FIX**: the largest single pass on the floor
+is 26.3 ms, the top 10 are 25%, and 100 passes at a mean of **7.9 ms** carry 98%. A
+consistency check (not a measurement) puts that at ~9.3 ns per node visit, i.e. what a
+`forEachChild`-driven `when` dispatch costs. So (INC.3)(b)'s stated form — "make one
+cheaper" — has no one to make cheaper. The lever has to be structural, and (INC.7) is the
+cheapest structural form available: a loop RECEIVER per walker, `binderResults` ->
+`checkedResults`, which is a strict no-op on every full build and only changes a partition.
+
+**METHOD NOTE, because the ms are soft and the shares are not.** The floor drifted **−9.6%**
+across one process with nothing changed (two plain batches bracketing the instrumented
+ones), and the first instrumented build read 1,373 ms with its bind and text-scan rows 2-4x
+every other draw. Quote the SHARES, which are computed inside one build; treat the ms as
+±10%. The phase partition closes at 99.7% and the pass table over `init` at 99.8%, so
+nothing above ~25 ms is unattributed.
+
+
 **(INC.5) A CAPTURED TYPE'S DISPLAY NO LONGER DEPENDS ON WALK ORDER — LANDED 2026-08-22,
 and it is a defect (INC.2)'s REFUSAL found rather than one anybody reported. 45 divergent
 spans -> 9; the 40 wrong-direction rows -> 4. Suite 15,626 / 0, no corpus baseline moved,
@@ -1923,31 +1968,41 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   which is the owner's call.** Everything needed to execute either way is committed — the
   gate, the census and the call sites are named in (INC.2).
 
-- [ ] **(INC.3) DECOMPOSE THE FLOOR — IT IS 99% OF A NARROWED QUERY AND NOTHING ELSE IS
-  LEFT.** 1,092 ms warm on the compiler profile, measured free by a partition naming a
-  file the program does not contain. Known composition to CONFIRM rather than assume, with
-  `--frontEnd` / `--passTiming` rows on a floor build: bind ~515 ms (round 880's per-worker
-  fixed term), the ~14 program-wide setup passes, the ~416 tail passes (20.3% of a warm
-  compile; `init:buildFileLocalTypeMaps` alone 3.56%, and two whole-program regex passes
-  that do not warm at all are 98 ms between them and match ZERO times on this profile),
-  and the crawl (~138 ms wall, its parses already cached by content).
-  **The levers, in the order the numbers put them:**
-  (a) **cross-build BIND reuse** — nearly half the floor. `--shareBind` exists and round
-  882 measured `binder Symbols checked 15580, changed 0` on an all-module program, so
-  program-file binder output is already immutable with respect to the checker. **The
-  caveat is the whole design**: that zero holds because INV.3(d) keeps a module's locals
-  out of `globals`; a program with global SCRIPT files DOES mutate binder output, and a
-  bind is CONSUMED by a checker (adoption aliases binder `Symbol`s into `globals`), so
-  reuse needs a shape gate that REUSES the checker's own merge predicate rather than
-  re-deriving it, plus `Binder`'s program-wide `nodeToSymbol`/`moduleInstanceStates`
-  instance fields split per file first.
-  (b) the program-wide passes, which are program-wide by an explicit correctness rule
-  (a collector gated on `checkedResults` cost 1,174 false positives in round 609) — so
-  the lever there is making one CHEAPER, never gating it.
-  (c) the crawl, if no import edge changed.
-  **Ceiling if the floor went to zero: a query becomes the 15 ms of one file's checking.**
-  That is the same end state `docs/ARCHITECTURE-RETHINK.md` calls the inversion, reached
-  one measured lever at a time instead of in one jump.
+- [x] **(INC.3) THE FLOOR IS DECOMPOSED — step 1 DONE 2026-08-22, and it inverted its own
+  lever order.** 1,219 ms on the compiler profile: **tail walkers 806.7 (66.2%)**, `init:*`
+  setup 112.2 (9.2%), **BIND 240.6 (19.7%)**, crawl 27.4 (2.2%), `checkSpine` **0.1 ms**,
+  residue 3.1 (the partition closes at 99.7%). `scripts/floor-decomposition.sh` is the
+  instrument; the session note carries the four refuted beliefs — bind is not 515 ms (that
+  is a per-WORKER contended term), the crawl is not 138 ms (parses are fully cached),
+  `init:buildFileLocalTypeMaps` is not 3.56% (1.4%), and the two never-warming
+  whole-program regex passes are already gone (0.44 ms). **What it leaves is (INC.7), a
+  bigger lever than either of the two this entry used to rank first.**
+
+- [ ] **(INC.7) 376 OF THE 400 TAIL WALKERS ITERATE `binderResults`, SO THEY COST THE SAME
+  WHETHER THE CHECKER CHECKS 78 FILES OR NONE — 806.7 ms, 66% OF THE FLOOR, AND THE FIX MAY
+  BE A LOOP RECEIVER PER WALKER.** `checkedResults` is `binderResults` EXACTLY when
+  `assignedFileNames == null` (`Checker.kt:110`), so moving a walker's loop onto it is a
+  **strict no-op for every full build and therefore for the whole corpus** — it can only
+  change what a PARTITION does. And a partition reports nothing about the files it was not
+  asked about, so a pure EMITTER skipping them loses nothing observable.
+  **THE HAZARD IS ROUND 609's AND IT IS THE WHOLE JOB: a COLLECTOR gated that way starves
+  the partition of program-wide suppression context and INVENTS diagnostics** — 1,174
+  TS2339 false positives, measured. So the classification is per walker and conservative: a
+  walker qualifies only if its loop body does nothing but `diagnostics.add` (no side-set
+  write, no `removeAll`/retraction, no ambient install, no read-back of `diagnostics`), and
+  one whose emission for file A depends on having walked file B in the same pass — the
+  cross-file duplicate detectors are the obvious family — never qualifies.
+  **THE DETECTOR ALREADY EXISTS, WHICH IS WHY THIS IS ATTEMPTABLE**:
+  `scripts/partition-equivalence.sh` compares every file's rows partition-vs-full over a
+  real program, and a starved partition ADDS rows — exactly what round 609's failure looks
+  like. Run it after every batch, not at the end. The corpus is the second gate and must
+  stay byte-identical BY CONSTRUCTION; a moved baseline means the change reached a full
+  build and the no-op reasoning is wrong somewhere.
+  **Batch it, biggest first**: the top 10 rows are 25% of the tail and the top 50 are 74%,
+  so ten walkers can be priced honestly before committing to 376. Expected: the floor
+  toward ~400 ms, i.e. a narrowed error query under half a second on a 10 MB project.
+  **Price the batch before believing the total** — the tail is flat (100 passes at a mean
+  7.9 ms carry 98%), and a count of sites is not a count of calls.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
