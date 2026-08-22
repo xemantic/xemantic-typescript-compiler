@@ -20,6 +20,83 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.2b) THE INTERACTIVE CAPTURE QUERIES ARE NARROWED — LANDED 2026-08-22, owner
+directive. Hover, go-to-definition, completion, signature help, the semantic sweep and
+document highlights each hand the compiler the queried BUFFER as its check partition.
+Measured end to end through the API, two processes with three FLAT CONTROLS in each:
+`quickInfoAt` 5,004 -> 1,015 ms, `fileSemantics` 5,178 -> 1,185, `documentHighlightsAt`
+5,050 -> 1,159 — while `referencesAt` (8,846 -> 8,788), `renameAt` (20,597 -> 20,170) and
+a plain rebuild (5,272 -> 4,835) do not move, because they are the two queries left
+whole-program plus the build itself. Within ONE process, warm and rotated, the same claim
+on `binder.ts`'s 7,787 spans is 4,581 -> 979 ms = 4.68x.**
+
+**THE PARTITION IS DERIVED FROM THE REQUEST'S OWN SPANS, AND THAT IS THE WHOLE SAFETY
+ARGUMENT.** Narrowing's failure mode is silent: a span in a file the checker never walks
+is never walked PAST, so the answer is ABSENT rather than wrong — an empty tooltip, an
+empty completion, no error anywhere. So `Project.captureIn` computes the file set from
+the request instead of taking one beside it, and a call site cannot forget a file it asked
+about because it never states the set. That is also what makes the pins DISCRIMINATE,
+which an equivalence pin cannot: dropping any one of the four span lists from
+`captureFiles` reddens exactly the queries that use it (`spans` -> hover, definition and
+the semantic sweep; `memberSpans` -> member completion; `scopeSpans` -> free-name
+completion; `signatureSpans` -> signature help). All four ablations were run.
+
+**`referencesAt` AND THE RENAME SWEEP STAY WHOLE-PROGRAM, AND THE REASON IS THE CLAIM,
+NOT THE MACHINERY.** They sweep every file, so a derived partition would name every file
+anyway — no win, a different code path, and both additionally read the build's
+DIAGNOSTICS, which a partition filters to its own files by design. **The flag that says so
+is UNDISCRIMINATED and it is recorded rather than claimed** (round 807): flipping
+`referencesAt`'s own `narrow = false` leaves all eight pins green, and must.
+
+**THE EXISTING GATE COVERED TWO OF THE FIVE CAPTURE CHANNELS, WHICH IS A CONTROL AND NOT
+A GATE.** `scripts/capture-equivalence.sh` sweeps captured TYPES and DEFINITIONS — what
+hover, go-to-definition and the semantic sweep read. It says nothing about
+`capturedMembers`, `capturedScopes` or `capturedSignatures`, and two of those three render
+TYPE TEXT, i.e. carry exactly the first-touch identity risk the sweep exists to measure.
+`scripts/capture-channel-equivalence.sh` is the second gate, deliberately SEPARATE:
+adding spans to a request changes what the checker types and therefore the first-touch
+order, so a merged runner's numbers would no longer be comparable to the ones every
+(INC.2)/(INC.5)/(INC.6) round quoted. The old gate re-ran unchanged at **5 divergent
+spans of 381,666 in 3 of 76 files, `narrowRendersMoreAny = 0`**.
+
+**AND IT FOUND 286 DIVERGENT ROWS, WHICH ARE FIVE MECHANISMS — THE CENSUS IS THE FINDING
+AND THE COUNT IS NOT.** A row in that channel is a LIST (a type's members, a scope's
+names, an overload set), so ONE display mechanism reaches as many rows as the program has
+carets on that receiver. The runner therefore aggregates the first DIFFERING ELEMENT and
+prints a census of distinct causes; over 21,507 captures in 76 files:
+
+- **x167** a member's own type parameter — `<K>` (full) against `<K extends any>`
+  (narrow). NEITHER renders the declared constraint (`keyof typeof assertionCache`), so
+  both arms are wrong alike and differ only in whether the unresolved one is spelled or
+  omitted. Cosmetic, in a signature LABEL, and the narrow arm is the noisier of the two.
+- **x116** `Intl.LocalesArgument` (narrow) against its expanded body with `| undefined`
+  DOUBLED (full). tsc renders the alias, so the narrow arm is the better answer — the
+  same `aliasDisplayMap` first-touch mechanism (INC.6) diagnosed in `watch.ts`.
+- **x2** a generic member's `TData` (narrow) against `any` (full) — round 778's shape,
+  narrow better.
+- **x1** a signature parameter rendering `any` under the narrowed arm. **This is the only
+  row in either channel where a narrowed answer is worse in the way a user would call
+  wrong**, and it is 1 of 5,516 signature captures.
+- SCOPES diverge NOWHERE (0 of 8,986), so free-name completion is equivalent outright.
+
+`absentInNarrow` and `absentInFull` are both **0** in both channels: no partition ever
+LOST an answer, in 402,000 captured spans. **`narrowRendersMoreAny = 168` is reported and
+is not 168 wrong types** — 167 of them are the `extends any` spelling, which a substring
+classifier cannot tell from a type; the census is what separates them, and a round that
+read the flag without the census would have refused this on a false reading.
+
+**WHAT DID NOT WORK.** (a) The mirror pin — "find references still answers about the whole
+program" — passed against a sweep cut down to the queried file, i.e. for a reason it did
+not name: `referencesOf` adds the SEED's own declaration locations as hits
+unconditionally, so a declaration in the other file is reported whatever was swept. Only
+a NON-declaration occurrence there discriminates, and the pin now asserts one. (b) Two
+harness traps cost real time and both are CLAUDE.md's own, re-learned: a backgrounded
+`sleep` is preempted by the next command, so an elapsed-time reading of a running
+measurement is meaningless (`ps -o etimes=` said 5 minutes where the transcript implied
+50); and `pgrep -f`/`pkill -f` with a pattern that appears in the poller's own command
+line matches ITSELF — once reporting a finished sweep as RUNNING, once killing the
+compound command that contained it (exit 144).
+
 **(LIB.1) knip MEASURED 2026-08-22 — NO CODE LANDED, AND THE MEASUREMENT IS THE
 DELIVERABLE. 2,634 xtsc errors against tsgo 7.0.2's 23, of which 94.1% are ONE absent
 lookup; and the backend is blocked by knip's DEPENDENCIES rather than by its TypeScript.**
@@ -867,7 +944,12 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   (`use({ program: 1 })`) this compiler does not report at all, so both arms agreed on an
   empty list and the pin passed while measuring nothing. Its own control caught that,
   which is the reason to write one.
-  **SO: hover, completion, go-to-definition and signature help stay whole-program builds.**
+  **SUPERSEDED BY (INC.2b), WHICH LANDED THE NARROWING ON 2026-08-22 AFTER (INC.5) AND
+  (INC.6) TOOK THE 45 DIVERGENT SPANS TO 5 WITH THE WRONG-DIRECTION COUNT AT ZERO.** The
+  refusal below stands as the reasoning it was, and its premise — 45 spans where a
+  narrowed hover renders a worse type — no longer holds. What the refusal bought is the
+  two defects it found on the way, and the two gates that now watch the whole thing.
+  ORIGINAL VERDICT: **hover, completion, go-to-definition and signature help stay whole-program builds.**
   A tooltip that says `any` where the type is `Program` is a worse defect than a slow
   tooltip, and 45 wrong spans is 45 too many for a query whose only job is to tell the
   truth about a type. Re-run the sweep after (INC.5) and this lands for free — the harness
@@ -902,7 +984,16 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `watchPublic.ts` rendering a signature twice. None is a lost member resolution. Diagnose
   them before assuming they are one.
 
-- [ ] **(INC.2b) OWNER DECISION: LAND THE CAPTURE NARROWING NOW, OR AFTER (INC.6)?** The
+- [x] **(INC.2b) LANDED 2026-08-22, owner directive — the caret-scoped capture queries
+  are narrowed.** Hover, go-to-definition, completion, signature help, the semantic sweep
+  and document highlights hand the compiler the queried BUFFER as its check partition;
+  `referencesAt` and the rename sweep do not, because their claim is program-wide.
+  Measured `quickInfoAt` **5,004 -> 1,015 ms** end to end with three flat controls, and
+  **4,581 -> 979 ms (4.68x)** within one process on `binder.ts`. The partition is DERIVED
+  from the request's spans, which is what makes the pins discriminate. See the session
+  note for the second gate this needed (`scripts/capture-channel-equivalence.sh`, for the
+  three channels the old one never covered) and for the five display mechanisms it found.
+  ORIGINAL ENTRY: **OWNER DECISION: LAND THE CAPTURE NARROWING NOW, OR AFTER (INC.6)?** The
   refusal recorded above was written against 45 divergent spans; after (INC.6) it is
   **ZERO** in the user-visible direction — `narrowRendersMoreAny = 0` over 381,666 spans —
   against **5.26x** measured this round on every hover, completion, go-to-definition and
@@ -917,6 +1008,26 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   autonomously: it trades a measured correctness regression against a measured latency win,
   which is the owner's call.** Everything needed to execute either way is committed — the
   gate, the census and the call sites are named in (INC.2).
+
+- [ ] **(INC.8) THE TWO DISPLAY MECHANISMS (INC.2b)'s SECOND GATE FOUND, AND NEITHER IS A
+  PARTITION DEFECT.** `scripts/capture-channel-equivalence.sh` reads 286 divergent rows of
+  21,507 in five mechanisms; three are worth closing and none can be closed on the capture
+  path, because the renderer is shared with the diagnostics (the (INC.5) rule: never
+  `typeToString`, ~13k baselines).
+  (a) **x167 — a member's own type parameter renders `<K>` under one arm and
+  `<K extends any>` under the other, and NEITHER renders the declared constraint**
+  (`shouldAssertFunction<K extends keyof typeof assertionCache>`). That is a defect in BOTH
+  arms, like (INC.6)'s `Readonly<T>`: the sweep only made it visible. Start by asking why a
+  member's signature loses its type parameter's constraint at all.
+  (b) **x116 — an alias's expansion carries `| undefined` TWICE**
+  (`string | Locale | readonly (string | Locale)[] | undefined | undefined`). Two defects in
+  one row: the duplication, and the fact that a first-touch `aliasDisplayMap` registration
+  decides whether the alias name or its body is printed. tsc prints the alias.
+  (c) **x1 — a signature parameter renders `any` under the narrowed arm.** The ONLY row in
+  either channel where narrowing produces the answer a user would call wrong. Same family
+  as (b); worth a trace before (a) or (b), because it is the one with a cost today.
+  Not worth a round on its own; fold into whichever round next touches the display of a
+  signature or an alias.
 
 - [x] **(INC.3) THE FLOOR IS DECOMPOSED — step 1 DONE 2026-08-22, and it inverted its own
   lever order.** 1,219 ms on the compiler profile: **tail walkers 806.7 (66.2%)**, `init:*`

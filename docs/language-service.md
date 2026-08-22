@@ -180,18 +180,30 @@ you call them.
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
 | `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean or repeated | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
-| `quickInfoAt` | **full build, every call** | not cached today — see below |
-| `definitionsAt` | **full build, every call** | same mechanism, same caveat |
-| `semanticsAt(f, offsets)` | **ONE full build**, whatever the offset count | both answers, per span |
-| `fileSemantics(f)` | **ONE full build** | every identifier in the file |
-| `completionsAt(f, o)` | **full build, every call** | free at a caret that admits no completion — those do not build; keywords cost nothing extra |
-| `documentHighlightsAt(f, o)` | **ONE full build** | sweeps this file's identifiers |
-| `referencesAt(f, o)` | **ONE build clean, TWO dirty** | sweeps the whole program's; § 10b has the measured figures |
-| `signatureHelpAt(f, o)` | **full build, every call** | free at a caret in no argument list — those do not build |
+| `quickInfoAt` | **one NARROWED build, every call** | checks only the queried file — 4.7x on tsc's own sources; not cached today, see below |
+| `definitionsAt` | **one NARROWED build, every call** | same mechanism, same caveat |
+| `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span |
+| `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file |
+| `completionsAt(f, o)` | **one NARROWED build, every call** | free at a caret that admits no completion — those do not build; keywords cost nothing extra |
+| `documentHighlightsAt(f, o)` | **ONE NARROWED build** | sweeps this file's identifiers |
+| `referencesAt(f, o)` | **ONE FULL build clean, TWO dirty** | sweeps the whole program's, so it is not narrowed; § 10b has the measured figures |
+| `signatureHelpAt(f, o)` | **one NARROWED build, every call** | free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
-**A query on a dirty project is a full rebuild.** That is a property of the
+**A NARROWED build still crawls, parses and binds the whole program** — what
+narrows is the per-file CHECKING, which the compiler takes as a partition
+(`recheckOnly`, the INV.6 view `--workers` uses). Every caret-scoped query above
+hands it the buffer the caret is in, because an editor's question about one buffer
+claims nothing about the other files; `referencesAt` and `renameAt` do not, because
+their claim IS about every file. Measured warm and rotated in one process on tsc's
+own 78 compiler sources, a capture build of `binder.ts` (7,787 spans) falls
+**4,581 ms -> 979 ms, 4.7x**, and across all 76 files the medians are 4,636 -> 819 ms.
+That the narrowed answer is the whole-program answer is swept span for span rather
+than argued: `scripts/capture-equivalence.sh` for types and definitions,
+`scripts/capture-channel-equivalence.sh` for members, scopes and signatures.
+
+**A query on a dirty project is still a rebuild.** That is a property of the
 compiler, not a shortcut taken here: `ProjectCompiler.Result` is a flat value
 (paths, diagnostics, an import graph) that retains no AST, no binder output and
 no checker, because the checker's construction *is* the compilation. What makes
@@ -1671,14 +1683,36 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    parse, the bind and the program-wide passes, which run whatever is narrowed. So the
    architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) is still what removes the
    floor, but it was never the prerequisite for narrowing the check. **The interactive
-   queries — hover, completion, go-to-definition, signature help — are deliberately NOT
-   narrowed**: it was tried, measured at 3.73x, and refused because 45 of 381,666 captured
-   spans render a different type under a partition, a type reference inside a foreign
-   file's anonymous object type literal collapsing to `any`. That is a pre-existing
-   order-dependence in the checker rather than a property of narrowing — in 5 of the 45 it
-   is the WHOLE-PROGRAM build that shows `any` — and a tooltip that lies about a type is
-   worse than a slow tooltip. `scripts/capture-equivalence.sh` is both the gate that
-   refused it and the instrument for fixing it.
+   queries are narrowed too since 2026-08-22 (INC.2b)** — hover, go-to-definition,
+   completion, signature help, the semantic sweep and document highlights each hand the
+   compiler the queried buffer, and a capture build of `binder.ts` falls **4,581 -> 979 ms
+   (4.7x)** warm and rotated in one process. End to end through this API, and with
+   `referencesAt`, `renameAt` and a plain rebuild flat across the two arms as controls:
+   `quickInfoAt` **5,004 -> 1,015 ms**, `fileSemantics` 5,178 -> 1,185, and
+   `documentHighlightsAt` 5,050 -> 1,159.
+
+   It was REFUSED when first measured, at 45 divergent spans of 381,666, and the refusal
+   is what found the defect: a type reference inside a foreign file's anonymous object
+   type literal collapsed to `any`, which is a pre-existing first-touch order-dependence
+   in the checker rather than a property of narrowing — in 5 of the 45 it was the
+   WHOLE-PROGRAM build showing `any`. `(INC.5)` and `(INC.6)` closed it; the sweep now
+   reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
+   the narrowed arm is the better answer.
+
+   **`referencesAt` and `renameAt` are NOT narrowed and will not be**: their claim is
+   about every file, so there is nothing to narrow to.
+
+   **What the other three capture channels cost, stated rather than left to be found.**
+   `scripts/capture-channel-equivalence.sh` sweeps members, scopes and signatures, which
+   the types-and-definitions gate does not cover. Scopes agree everywhere (0 of 8,986).
+   Members and signatures diverge in **286 rows of 21,507**, in five display mechanisms,
+   with nothing ever ABSENT in either arm: 116 rows where the narrowed arm renders the
+   ALIAS tsc renders (`Intl.LocalesArgument`) against the full arm's expanded body with
+   `| undefined` doubled, 2 where the narrowed arm renders a generic member's `TData`
+   against the full arm's `any`, 167 where a member's own type parameter prints
+   `<K extends any>` under the narrow arm and `<K>` under the full one (neither renders
+   the declared constraint, so both are wrong alike), and **one** signature parameter
+   rendering `any` under the narrowed arm. That last row is the whole user-visible cost.
 2. ~~A computed object-literal key `{ ["p"]: v }` is outside the swept population.~~
    **CLOSED round 932**, `(API.17)` — and it was the last SILENT shape anywhere in this
    API. Round 930 measured it as reported in two of its three shapes

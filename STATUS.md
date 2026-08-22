@@ -1,8 +1,18 @@
 # Status
 
-**THE LANGUAGE SERVICE ANSWERS AN EDITOR'S ERROR QUERY AS A PARTITION, AND IT IS NOW ~5.8x
-(2026-08-22, owner directive: make it incremental enough to carry an IntelliJ plugin's error
-reporting).** `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
+**THE LANGUAGE SERVICE ANSWERS *EVERY* EDITOR QUERY AS A PARTITION NOW — THE ERROR QUERY AT
+~5.8x AND THE CARET QUERIES AT ~4.7-4.9x (2026-08-22, owner directive: make it incremental
+enough to carry an IntelliJ plugin).** **(INC.2b)** wired hover, go-to-definition,
+completion, signature help, the semantic sweep and document highlights to the same seam:
+end to end through the API, `quickInfoAt` is **5,004 -> 1,015 ms**, `fileSemantics`
+5,178 -> 1,185 and `documentHighlightsAt` 5,050 -> 1,159, while `referencesAt`,
+`renameAt` and a plain rebuild do NOT move — they are the queries left whole-program,
+because their claim is about every file, and they are the controls that say the deltas are
+the change rather than drift. The partition is DERIVED from the capture request's own
+spans, which is what makes the pins discriminate at all: narrowing's failure mode is an
+ABSENT answer, not a wrong one, so a call site that never states the file set cannot
+forget a file it asked about. **Nothing was ever absent, in 402,000 captured spans across
+both gates.** ORIGINAL HEADLINE: `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
 CHECK PARTITION instead of filtering a whole-program build: on tsc's own 78 sources
 (9,977,097 chars) a whole-program build is **4,818 ms** and a narrowed query is now
 **824 ms**, with every one of those 78 files reporting exactly the rows the full build
@@ -37,7 +47,19 @@ refuses inside every `namespace` body, throwing a successful resolution away and
 **9 -> 5 divergent spans, and the class where a narrowed hover renders more `any` than the full
 build is now ZERO.** The 5 that remain are display-only and in 4 of them the NARROWED arm is the
 better answer (an alias name vs its expanded body; a generic member's `T` the full build froze as
-`any`). Suite 15,640 / 0 / 3.
+`any`). **THAT IS WHAT LET (INC.2b) LAND — and landing it needed a SECOND gate, because the
+first covered two of the five capture channels.** `scripts/capture-channel-equivalence.sh`
+sweeps members, scopes and signatures; scopes agree everywhere (0 of 8,986) and the other two
+diverge in **286 rows of 21,507**, which the runner's own census resolves into FIVE display
+mechanisms rather than 286 findings — a row there is a LIST, so one mechanism reaches every
+caret on that receiver. 116 rows are the narrowed arm rendering the alias tsc renders against
+the full arm's expanded body with `| undefined` DOUBLED; 167 are a member's type parameter
+printing `<K extends any>` against `<K>`, where NEITHER arm renders the declared constraint and
+both are wrong alike; **one** signature parameter renders `any` under the narrowed arm, and that
+single row is the whole user-visible cost. `narrowRendersMoreAny = 168` is reported and is not
+168 wrong types — 167 are that `extends any` spelling, which a substring classifier cannot tell
+from a type, and a round that read the flag without the census would have refused this on a
+false reading. Suite 15,648 / 0 / 3.
 
 **POINTING THE COMPILER AT `knip` FOUND A 2,478-ERROR DEFECT THE CORPUS CANNOT SEE
 (2026-08-22, owner question: can we compile it to JVM bytecode — answer: not today).**
