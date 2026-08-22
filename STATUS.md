@@ -1,5 +1,17 @@
 # Status
 
+**AND THE REFUSAL FOUND A REAL DEFECT (2026-08-22).** Narrowing the CAPTURE queries —
+hover, completion, go-to-definition, signature help — was measured at **3.68x** and
+**refused**: `scripts/capture-equivalence.sh` compares every captured span whole-program
+against narrowed, and 45 of **381,666** disagreed. The rows named the cause themselves (one
+lost a KEYWORD type, one a mapped-type `-?` modifier — names cannot fail that way, a lazy
+member table can), and in 5 of the 45 it was the WHOLE-PROGRAM arm rendering `any`, so
+neither arm was right: both were draws from an order-dependent cache. **(INC.5) fixed it at
+the five capture render sites — never inside `typeToString`, which is the diagnostic
+renderer and would have put ~13k baselines in play — taking 45 divergent spans to 9 and the
+wrong-direction rows from 40 to 4.** The pin was verified to FAIL on the un-fixed binary.
+What remains is `Readonly<...>`'s fresh copy symbols, named as (INC.6). Suite 15,626 / 0.
+
 **THE LANGUAGE SERVICE ANSWERS AN EDITOR'S ERROR QUERY AS A PARTITION (2026-08-22, owner
 directive).** `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
 CHECK PARTITION instead of filtering a whole-program build: **4,818 ms -> 1,107 ms warm** on

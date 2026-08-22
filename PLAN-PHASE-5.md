@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.5) A CAPTURED TYPE'S DISPLAY NO LONGER DEPENDS ON WALK ORDER — LANDED 2026-08-22,
+and it is a defect (INC.2)'s REFUSAL found rather than one anybody reported. 45 divergent
+spans -> 9; the 40 wrong-direction rows -> 4. Suite 15,626 / 0, no corpus baseline moved,
+cost gate a strict no-op.**
+
+**THE CAUSE, and the rows are what named it.** `typeToString`'s anonymous-object branch
+renders a property as `symbolTypes[p.id]` — a RAW CACHE READ — and prints `any` when the
+entry is absent. The two utility materializers never populate it:
+`materializeMemberSetUtility` (`Pick`/`Omit`) hands back the SOURCE interface's own member
+symbols and `materializeModifierUtility` (`Readonly`) hands back fresh copies carrying the
+source declarations, so the member's type is resolvable from its declaration and has
+simply never been asked for. Which file asks first decided the display. **Two probes were
+spent ruling out the mapped-type path first** (`getIndexedAccessType` never called,
+`TRACE size=0` in `getTypeFromMappedType`) — the dedicated materializers are reached
+BEFORE `substitutionResultCache`, which is why the obvious suspect was innocent.
+
+**WHY IT IS FORCED AT THE CAPTURE SITES AND NOT IN `typeToString`** — the constraint that
+made it a one-round change. `typeToString` is the DIAGNOSTIC renderer: forcing there would
+put ~13k corpus baselines in play, and pay for the walk on every compile, for a defect only
+a language service can see. Five capture render sites now call `typeCaptureRenderType`;
+an ordinary compile executes none of it. The walk follows `typeToString`'s OWN shape rather
+than the type graph (an interface and a reference render as a NAME, so neither is walked),
+carries a `Type.id` seen-set plus the existing depth horizon, and asks plain
+`getTypeOfSymbol` — which writes `symbolTypes` only under round 778's empty-context gate,
+so it cannot freeze a context-dependent resolution an ordinary check would have refused.
+
+**THE PIN WAS SHOWN TO FAIL ON THE UN-FIXED BINARY** (4 of 4, with `any` in the rendered
+string, reproducing the arm asymmetry), which is the only thing that separates a fix from
+an inert one. Its fixture carries a FOURTH file whose only job is to keep the whole-program
+control from collapsing as well — without it both arms agree on the wrong answer and the
+comparison passes vacuously, which is the same trap that made (INC.2)'s first
+false-negative fixture worthless.
+
+**THE COST GATE WAS NOT `+0.00%` AND THE CONTROL IS WHAT SETTLED IT.** Small drift showed
+on `typeOfExpr.calls` / `mapped.hits`; running the gate on the UN-FIXED binary printed
+byte-identical counters, so the drift is **pre-existing staleness in
+`docs/perf/cost-counters.txt` at HEAD**, not this change. Worth knowing before the next
+round reads that gate and blames itself: it passes, but its baseline has drifted.
+
+**WHAT IS LEFT IS NAMED AND SMALL.** The 4 surviving wrong-direction spans are all
+`Readonly<BuilderState>` in one file: `materializeModifierUtility` mints FRESH copies per
+materialization, so warming one dies with the instance, where `Pick`/`Omit` cleared because
+their symbols are the source's and their ids are stable. Populating `symbolTypes[copy.id]`
+at MINT time is the fix and it is **not capture-scoped** — it would move diagnostic
+messages — so it is (INC.6) with the corpus as its gate. The 5 REVERSED rows are a
+different family and may not be defects at all.
+
+
 **(INC.2) REFUSED AND (INC.4) LANDED — 2026-08-22, same session as (INC.1). The refusal is
 the product: narrowing the CAPTURE queries would have been 3.73x and it renders a WRONG
 TYPE in 45 of 381,666 spans, so hover/completion/definition/signature help stay
@@ -1845,6 +1893,36 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   truth about a type. Re-run the sweep after (INC.5) and this lands for free — the harness
   and the script are committed, so the re-test is one command.
 
+- [ ] **(INC.6) THE LAST 4 DIVERGENT SPANS, AND THEY ARE WHAT STANDS BETWEEN (INC.2) AND
+  A 3.68x LANGUAGE SERVICE.** After (INC.5) the capture sweep reads **9 divergent spans in
+  4 of 76 files — 4 wrong-direction and 5 reversed**, out of 381,666. All 4 of the
+  wrong-direction rows are `Readonly<BuilderState>` in `builderState.ts`, and the cause is
+  named: `materializeModifierUtility` mints FRESH copy symbols on every materialization,
+  so warming one dies with the instance, where `Pick`/`Omit` cleared precisely because
+  `materializeMemberSetUtility` reuses the SOURCE symbols and their ids are stable. The fix
+  is to populate `symbolTypes[copy.id]` AT MINT TIME in the materializer — which
+  `getTypeFromTypeLiteral` and `getTypeFromMappedType` already do — and that is **not
+  capture-scoped**: it would put diagnostic messages in play, so it needs the corpus as its
+  gate rather than the sweep alone. (INC.5) deliberately stopped short of it.
+  **The 5 REVERSED rows are a different family and may not be a defect at all**: 2 in
+  `tsbuildPublic.ts` where the WHOLE-PROGRAM arm renders `(key: K, valueInNewMap: U) => any`
+  and the narrowed one the better `=> T`, 2 in `watch.ts` (overload-set content), 1 in
+  `watchPublic.ts` rendering a signature twice. None is a lost member resolution. Diagnose
+  them before assuming they are one.
+
+- [ ] **(INC.2b) OWNER DECISION: LAND THE CAPTURE NARROWING NOW, OR AFTER (INC.6)?** The
+  refusal recorded above was written against 45 divergent spans; it is now **4** in the
+  user-visible direction (1 in 95,000 captured spans, all in one file's
+  `Readonly<BuilderState>`), against **3.68x** on every hover, completion, go-to-definition
+  and signature help — the queries an editor fires most. The argument for waiting is that a
+  language service should not knowingly render a wrong type. The argument for landing is
+  that the whole-program arm ALREADY renders a wrong type in 5 other places (the reversed
+  family), so "whole-program is correct" is not the status quo it appears to be, and the
+  wiring is a one-line change per call site that (INC.6) then makes moot. **Not decided
+  autonomously: it trades a measured correctness regression against a measured latency win,
+  which is the owner's call.** Everything needed to execute either way is committed — the
+  gate, the census and the call sites are named in (INC.2).
+
 - [ ] **(INC.3) DECOMPOSE THE FLOOR — IT IS 99% OF A NARROWED QUERY AND NOTHING ELSE IS
   LEFT.** 1,092 ms warm on the compiler profile, measured free by a partition naming a
   file the program does not contain. Known composition to CONFIRM rather than assume, with
@@ -1871,15 +1949,17 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   That is the same end state `docs/ARCHITECTURE-RETHINK.md` calls the inversion, reached
   one measured lever at a time instead of in one jump.
 
-- [ ] **(INC.4) `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT
-  REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`
+- [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
+  including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
+  `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`
   and friends), so under a partition it asks a checker that walked a SUBSET and elision
   goes wrong. Every driver gates incremental on `--noEmit` and `Project` always passes
   `noEmit = true`, so nothing today is wrong — but the parameter is public and the next
   caller will not know. `require(noEmit || recheckOnly == null)`, with the message naming
   the caller's mistake, exactly as `compileParsed` already does for `checkedSink`.
 
-- [ ] **(INC.5) WHAT A HOVER REPORTS DEPENDS ON PROGRAM ORDER — A PRE-EXISTING DEFECT
+- [x] **(INC.5) LANDED 2026-08-22 — 45 divergent spans -> 9, and the 40 wrong-direction
+  rows -> 4. See the session note; what is left is (INC.6). ORIGINAL ENTRY: WHAT A HOVER REPORTS DEPENDS ON PROGRAM ORDER — A PRE-EXISTING DEFECT
   (INC.2) MADE VISIBLE, AND IT IS NOT ABOUT PARTITIONS.** `symbolTypes` persists the first
   resolution of a symbol's type, and resolving a type reference inside an anonymous object
   type literal answers differently depending on which file asks first: in the same program,
