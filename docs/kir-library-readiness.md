@@ -31,6 +31,7 @@ TypeScript libraries fetched from source and checked with xtsc, with **tsgo
 |---|---|---|---|---|
 | `yaml` 2.7.0 (library proper) | 76 | 5 | 71 | **~66** |
 | `zod` 3.24.1 | 84 | 19 | 146 | **~127** |
+| `knip` (2026-08-22) | 498 | 23 | 2,634 | **~2,611** — 94.1% one defect, see the 2026-08-22 update |
 
 The remaining tsgo errors are environmental in both cases — `@types/node` is
 absent offline (TS2591/TS2307), which is a known local condition, not a defect.
@@ -255,3 +256,52 @@ For `yaml` and `zod` specifically, the ordering below still holds:
 Note the differential itself is cheap and repeatable — `tsgo --noEmit -p <dir>`
 against the same directory — so "is library X ready" is a question with a
 one-command answer, and a second corpus can be adopted without guessing.
+
+## UPDATE 2026-08-22 — knip: the front end is one defect, the backend is the wrong question
+
+`webpro-nl/knip` at `main` (`packages/knip`: **498 files, 35,663 lines**) was put through
+the two-command loop this page prescribes. It does **not** compile, and the two halves fail
+for unrelated reasons — which is exactly why the loop exists.
+
+| | xtsc | tsgo 7.0.2 |
+|---|---|---|
+| errors, knip's own tsconfig | **2,634** (7,131 ms) | **23**, all environmental |
+| errors, same tsconfig minus `verbatimModuleSyntax` | **156** | 23 |
+
+**94.1% of the front-end count is one absent lookup.** TS1295×1,959 + TS1287×519 = 2,478,
+every one saying "this is a CommonJS file" about a package whose `package.json` says
+`"type": "module"`. Under `moduleResolution: nodenext` tsc derives a file's module format
+from the nearest `package.json`; we do not, so the format defaults to CommonJS and
+`verbatimModuleSyntax` rejects every import and export in the program. Deleting that one
+option reads 2,634 -> 156, which is what turns the attribution from a hypothesis into a
+measurement — and this page's own § "Family 1" is the standing warning that an error count
+attributed to a family by inspection is a hypothesis until one member of it is fixed.
+
+**The residual is 0.31 FP/file — better than `yaml`'s 0.9 when this page was written — and
+it is this page's two families.** TS7006×89 (57%) is the METHOD-member half of family 1:
+an object-literal shorthand method's parameters are not contextually typed from the
+annotated return type. TS2339×23 is family 2. **The overlap with tsgo's set is zero in both
+directions**, so the honest figure is 156 false positives *and* 23 false negatives —
+including two real TS2322 and a TS2722 in `util/glob-core.ts` that tsgo reports and we do
+not. A residual FP count is not a conformance number until the misses are counted too.
+
+**Module resolution passed, on a shape nothing here was written for.** All **1,921**
+relative specifiers carry an explicit `.ts` extension (`allowImportingTsExtensions` +
+`rewriteRelativeImportExtensions`) and every one resolved.
+
+**The backend never gets a turn, and its ladder is the wrong thing to cost.** Probing one
+self-contained file (`src/util/graph-sequencer.ts`, 131 lines, no imports, `typeErrors=0`)
+refuses at `a spread element is out of the spike subset`; censused against the 17 refusal
+messages, the refused constructs touch **237 of 498 files (48%)** — destructuring parameter
+51%, spread 33%, destructuring declaration 24%, `async`/generators 22%. But knip imports
+**two native Rust N-API binaries** (`oxc-parser`, 32 sites; `oxc-resolver`) and **10 `node:`
+builtins** (`fs`×21, `fs/promises`×5, `util`, `path`, `module`, `crypto`, `url`, `process`,
+`perf_hooks`, `child_process`) against a `libraryClass` table of **six** entries. Those have
+nothing to lower *to*; closing every refusal on the list would not move them.
+
+**So the screening question this page should have asked first is what a candidate
+IMPORTS, not how big it is.** One `grep -rhoE "from '[^.'][^']*'"` over `src` answers it in
+a second, and it disqualifies knip as a backend driver before any compiler is run. knip
+remains an excellent FRONT-END corpus for exactly the reason this page gives: it is a
+different codebase's style, and it found a 2,478-error defect that tsc's own sources — not
+`"type": "module"` — structurally cannot show.

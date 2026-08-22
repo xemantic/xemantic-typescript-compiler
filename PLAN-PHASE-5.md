@@ -20,6 +20,60 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(LIB.1) knip MEASURED 2026-08-22 — NO CODE LANDED, AND THE MEASUREMENT IS THE
+DELIVERABLE. 2,634 xtsc errors against tsgo 7.0.2's 23, of which 94.1% are ONE absent
+lookup; and the backend is blocked by knip's DEPENDENCIES rather than by its TypeScript.**
+Owner question: can we compile `webpro-nl/knip` to JVM bytecode. Answer: not today, and the
+two halves fail for unrelated reasons — which is the whole value of running
+`docs/kir-library-readiness.md`'s two-command loop instead of arguing about it.
+
+**THE FRONT END IS ONE DEFECT WEARING A LARGE NUMBER.** 498 files / 35,663 lines, 7,131 ms
+cold. TS1295×1,959 + TS1287×519 = **2,478 of 2,634**, every one of them saying "this is a
+CommonJS file" about a package whose `package.json` says `"type": "module"`. We never read
+that field, so under `moduleResolution: nodenext` the format defaults to CommonJS and
+`verbatimModuleSyntax` rejects every import and export in the program. **The attribution was
+confirmed rather than asserted** — deleting `verbatimModuleSyntax` from the tsconfig reads
+**2,634 -> 156**, and tsgo re-run on the SAME config still reads 23, so the option is not
+doing anything to the oracle. Queued (CHK.29).
+
+**THE RESIDUAL IS 0.31 FP/file — BETTER THAN `yaml`'s 0.9 — AND IT IS ENTIRELY THE TWO
+FAMILIES THE READINESS PAGE ALREADY NAMES.** TS7006×89 is 57% of it and is one shape: an
+object-literal shorthand METHOD's parameters are not contextually typed from the annotated
+return type ((CHK.30)). TS2339×23 is union member access after a narrow. **The overlap with
+tsgo's 23 is ZERO IN BOTH DIRECTIONS**, so the honest figure is 156 false positives AND 23
+false negatives — including two real TS2322 and a TS2722 in `util/glob-core.ts` that tsgo
+reports and we do not. *A residual FP count is not a conformance number until the misses are
+counted too*; the first draft of this note quoted 156 alone and was wrong to.
+
+**WHAT PASSED, AND IT IS NOT NOTHING:** all **1,921** relative specifiers carry an explicit
+`.ts` extension and every one resolved. (KIR.EMIT.1)'s `rewriteRelativeImportExtensions` work
+holds on a codebase nobody wrote it for.
+
+**THE BACKEND NEVER GOT A TURN, SO IT WAS MEASURED ON ONE FILE.** The project probe refuses
+to lower a program the checker rejected, so `KIR_PROBE_FILE` was pointed at
+`src/util/graph-sequencer.ts` — 131 lines, no imports, `typeErrors=0` — and the first refusal
+is `a spread element is out of the spike subset`. Censusing knip against the 17 refusal
+messages in `lower/`: destructuring parameter **51%** of files, spread 33%, destructuring
+declaration 24%, `async`/generators 22%, computed property name 12%; the union is **237 of
+498 files (48%)**. `async` alone is decisive — knip's entry point IS an `async` arrow.
+
+**BUT THE LADDER IS THE WRONG THING TO COST, AND THAT IS THE ROUND'S REAL LESSON.** knip
+imports **two native Rust N-API binaries** (`oxc-parser`, 32 sites; `oxc-resolver`) and **10
+`node:` builtins** (`fs`×21, `fs/promises`×5, `util`, `path`, `module`, `crypto`, `url`,
+`process`, `perf_hooks`, `child_process`), against a `KirIntrinsics.libraryClass` table of
+**six** entries. Those have nothing to lower TO — no amount of language coverage reaches them.
+So a candidate library must be screened by **what it imports**, not by its size or its error
+count, and the screen is one `grep` over `src` ((LIB.2)). Both refusals to extrapolate here
+are the same one the readiness page already made once, from the other side: it generalized
+`yaml`'s front-end obstacle into a rule and `mitt` falsified it. **A library's obstacle is a
+property of that library.**
+
+**GATES: none run, and deliberately.** This round changed three markdown files and no Kotlin;
+the suite, `cost_gate.py` and `huge_methods.py` have nothing to say about it. The KIR module
+was built (`:xemantic-typescript-compiler-kir:compileTestKotlinJvm`, BUILD SUCCESSFUL) only
+because the probe needed it. Scratch tree with the clone, the deps and both captures is under
+the session scratchpad and is not committed.
+
 **(INC.6) THE LAST WRONG-DIRECTION CAPTURE DIVERGENCES ARE GONE — LANDED 2026-08-22. The
 sweep reads 9 -> 5 divergent spans of 381,666, and the class a user would call WRONG —
 the narrowed build rendering `any` where the type is known — is at ZERO. Suite 15,640 / 0 / 3
@@ -985,6 +1039,108 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   diagnosis — they are the same order-dependence seen from the other side.
   Closing it also unblocks (INC.2)'s 3.73x.
 
+
+- [x] **(LIB.1) knip MEASURED 2026-08-22 — 2,634 xtsc errors against tsgo's 23, and 94.1%
+  of them are ONE missing feature.** `webpro-nl/knip` at `main`, `packages/knip`: **498
+  files, 35,663 lines**, `moduleResolution: nodenext`, `"type": "module"`,
+  `verbatimModuleSyntax`, every relative import written with an explicit `.ts` extension.
+  Front end: xtsc `--noEmit --listAll` reports **2,634 in 7,131 ms**; tsgo 7.0.2 reports
+  **23, all environmental** (no `@types/picomatch`, `webpack`, `@jest/types`,
+  `codeclimate-types`) — knip itself is clean under the oracle.
+  **TWO CODES ARE 2,478 OF THE 2,634 (94.1%): TS1295×1,959 and TS1287×519**, both saying
+  the file is CommonJS. **xtsc does not derive a file's module format from the nearest
+  `package.json` `"type"`,** so under nodenext every knip file is classified CommonJS and
+  every import and export trips the `verbatimModuleSyntax` guard. The attribution was
+  CONFIRMED, not inferred: deleting that one option from the tsconfig reads
+  **2,634 -> 156**, and tsgo re-run on the same config still reads 23. Queued as (CHK.29).
+  **THE RESIDUAL IS 156 = 0.31 FP/file, BETTER THAN THE 0.9/file `docs/kir-library-readiness.md`
+  RECORDS FOR `yaml`, AND IT IS THAT PAGE'S TWO KNOWN FAMILIES**: TS7006×89 (57% — an
+  object-literal METHOD's parameters are not contextually typed from the annotated return
+  type; (CHK.30)), TS2339×23 (union member access where narrowing did not apply), then
+  TS2322×16, TS2552×9, TS18048×7, TS2353×3, TS2769/TS2349/TS2304×2, TS2591/TS2345/TS18047×1.
+  **THE OVERLAP WITH tsgo's SET IS ZERO IN BOTH DIRECTIONS — so there are also 23 FALSE
+  NEGATIVES**, including two genuine TS2322 and a TS2722 in `src/util/glob-core.ts` that
+  tsgo reports and we do not. A residual FP count is not a conformance number until the
+  misses are counted too.
+  **WHAT WORKED AND IS WORTH RECORDING: module resolution.** All **1,921** relative
+  specifiers carry an explicit `.ts` extension (`allowImportingTsExtensions` +
+  `rewriteRelativeImportExtensions`) and every one resolved — the type errors name real
+  imported types (`Configuration`, `TsConfigJson`, `Plugin`), so (KIR.EMIT.1)'s work holds
+  on an unfamiliar codebase.
+  **BACKEND: the project probe never reaches the lowering** (it will not emit a program the
+  checker rejected), so it was measured on ONE self-contained file —
+  `src/util/graph-sequencer.ts`, 131 lines, no imports: `typeErrors=0`, then
+  `refused: graph-sequencer.ts:22:74 a spread element is out of the spike subset`.
+  Censused against the 17 refusal messages in `lower/`: **destructuring parameter 255 files
+  (51%), spread 163 (33%), destructuring declaration 121 (24%), `async`/generators 112
+  (22%), computed property name 63 (12%), optional element access 29 (5%)** — the union is
+  **237 of 498 files (48%)** before counting anything downstream. `async` is decisive on its
+  own: knip's entry point IS `export const main = async (options) => …`.
+  **BUT knip IS UNREACHABLE FOR REASONS THAT ARE NOT THE LOWERING, AND THAT IS THE FINDING
+  THAT MATTERS FOR PLANNING.** It depends on **two native Rust N-API binaries** —
+  `oxc-parser` (32 import sites) and `oxc-resolver` — which are not TypeScript and cannot be
+  lowered from; on **10 `node:` builtins** (`fs`×21, `fs/promises`×5, `util`, `path`,
+  `module`, `crypto`, `url`, `process`, `perf_hooks`, `child_process`) against a
+  `KirIntrinsics.libraryClass` table of exactly **six** entries (`Array`, `Map`, `Set`,
+  `RegExp`, `Date`, `Error`); and on `createRequire`×9 plus `jiti`, i.e. evaluating config
+  files at run time. **A program whose job is to read the filesystem and parse source with a
+  native parser needs a Node-API layer on the JVM, which is a bigger project than the
+  lowering.** So knip is the right instrument for the FRONT END and the wrong driver for the
+  backend ladder — see (LIB.2).
+  **REPRODUCTION** (both halves, ~10 s):
+  `java -cp <core-classes>:$(bash scripts/lib/dep-classpath.sh --print) com.xemantic.typescript.compiler.MainKt --noEmit --listAll <knip>/packages/knip`
+  and `KIR_PROBE_FILE=<knip>/packages/knip/src/util/graph-sequencer.ts ./gradlew :xemantic-typescript-compiler-kir:jvmTest --tests '*LibraryProbe*' --rerun -i`.
+  Oracle: `npm i typescript@7` in a side root, then `tsc --noEmit -p <knip>/packages/knip`.
+
+- [ ] **(CHK.29) A FILE'S MODULE FORMAT IS NOT DERIVED FROM THE NEAREST `package.json`
+  `"type"` — 2,478 FALSE POSITIVES ON ONE LIBRARY, AND NOTHING IN THE CORPUS CAN SEE IT.**
+  Under `module`/`moduleResolution: nodenext` (and `node16`), tsc decides whether a `.ts`
+  file is an ES module or CommonJS by walking up to the nearest `package.json` and reading
+  its `"type"` field. We do not, so a `"type": "module"` package is classified CommonJS and
+  every ESM import/export in it trips `verbatimModuleSyntax`: **TS1295×1,959 + TS1287×519**
+  on knip, measured, i.e. 94.1% of that library's error count from one absent lookup
+  ((LIB.1)). **THE CORPUS IS STRUCTURALLY BLIND**: tsc's own sources are not
+  `"type": "module"`, `usesUnsupportedOption` never skipped these fixtures because the
+  option is not in the removed list, and the 8 dashboard profiles all inherit tsc's layout —
+  so a green corpus, a green `cost_gate.py` and an `added=0 removed=0` grid are the EXPECTED
+  answers here and none of them is evidence. **The pin has to be a project fixture with a
+  `package.json` beside the sources** (`-project`'s `ProjectCompiler` path, not `diagnose()`,
+  which has no package.json and no directory), asserting both directions: `"type": "module"`
+  is silent, and its ABSENCE under nodenext still reports TS1295. Check what else reads the
+  format while you are there — `impliedNodeFormat` also decides `esModuleInterop` behaviour,
+  the `.mts`/`.cts` extension overrides, and whether a `require()` of an ES module is an
+  error, so the fix is one lookup with several consumers.
+
+- [ ] **(CHK.30) AN OBJECT-LITERAL METHOD'S PARAMETERS ARE NOT CONTEXTUALLY TYPED — 89
+  TS7006, 57% OF THE RESIDUAL ON knip.** The shape is a shorthand method in a literal
+  returned at an annotated type:
+  ```ts
+  export function createExecaVisitor(ctx: PluginVisitorContext): PluginVisitorObject {
+    return { TaggedTemplateExpression(node) { … } }   // TS7006: 'node' implicitly has an 'any' type
+  }
+  ```
+  tsgo is silent. This is the METHOD-member half of the family
+  `docs/kir-library-readiness.md` calls "contextual typing does not reach into literal
+  members" — the property half of which (a `readonly` literal initializer) landed as
+  (WIDEN.1)(b). Expect it to share machinery with `applyContextualParameterTypes`, and note
+  CLAUDE.md's standing trap: an un-annotated parameter is invisible to the body walkers
+  unless the type reaches `populateParameterLocalTypes`, so a fix written at
+  `getTypeOfArrowFunction` measures nothing. The probe that discriminates must FAIL if the
+  change is inert — make the parameter's contextual type wrong-typed at a use site and
+  require the error to appear.
+
+- [ ] **(LIB.2) THE NEXT LIBRARY MUST BE PICKED BY WHAT IT *IMPORTS*, NOT BY ITS SIZE —
+  knip cost a session to learn that.** (LIB.1)'s method is right and cheap (two commands,
+  ~10 s) but it was pointed at a library the backend can never reach, because the
+  disqualifier is not a language construct: **native N-API dependencies and `node:` builtins
+  have nothing to lower TO.** Before adopting a candidate, census its non-relative imports
+  first — `grep -rhoE "from '[^.'][^']*'"` over `src` answers in one second — and refuse
+  anything importing a `.node` binary or a `node:` builtin outside a table we intend to
+  write. `yaml` (76 files, no dependencies) is still the right second conformance corpus for
+  the FRONT end, and `docs/kir-library-readiness.md` records it moving 80 -> 24 purely from
+  defects other libraries exposed. For the BACKEND ladder the candidate wants to be pure
+  computation over data — a parser, a formatter, a codec — which is exactly why `mitt` and
+  `smol-toml` worked.
 
 - [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
   finding.** `ErasedTypes.mapObject` ends `if (declaration == null) return jsObjectType()`, which
