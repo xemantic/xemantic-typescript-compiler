@@ -168,6 +168,8 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * driven synchronously on the calling thread (the compiler runs its pipeline on
  * its own deep-stack thread internally and joins it before returning).
  */
+private const val CAPTURE_MEMO_ENTRIES = 2
+
 public class Project private constructor(
     /** The project path as given to [open], normalized and absolute. */
     private val projectPath: String,
@@ -237,6 +239,49 @@ public class Project private constructor(
      * project state.
      */
     private val narrowed = HashMap<String, List<Diagnostic>>()
+
+    /**
+     * (INC.12) The capture builds [captureIn] has already performed for this project
+     * STATE, keyed by the REQUEST that produced them.
+     *
+     * ## What it is for, and why the key is the request
+     *
+     * Every caret-scoped query — hover, go-to-definition, completion, signature help,
+     * document highlights — is one capture build, and until this existed there was no
+     * reuse of any kind between them: measured on tsc's own 78 sources, asking for
+     * the SAME hover twice in a row cost 2,205 ms and then 1,933 ms. Two of the
+     * editor's commonest sequences are literally the same question asked twice:
+     *
+     * * [quickInfoAt] and [definitionsAt] at ONE caret build an IDENTICAL request
+     *   (both name the caret's node as a single span, and read different channels of
+     *   the one answer), so hovering and then navigating is now one build;
+     * * [documentHighlightsAt]'s request is derived from the FILE's occurrence nodes
+     *   and not from the caret at all — the caret only picks the seed AFTERWARDS —
+     *   so highlights at every later caret in an unchanged buffer is now free.
+     *
+     * Keying on the request rather than on the caret is what makes both of those fall
+     * out instead of being special-cased, and it cannot serve a wrong answer to a
+     * question it was not asked: a different request is a different key.
+     *
+     * ## Why serving one is sound
+     *
+     * A build is a function of (project state, request). This map holds answers for
+     * ONE project state — it is dropped wherever [cached] and [narrowed] are, and by
+     * the same edit-driven invalidation, which is the whole of this class's staleness
+     * contract (a host tells this project about its edits; nothing here watches the
+     * disk, exactly as [cached] has always assumed). So an entry can only ever be
+     * returned to the identical question about the identical state.
+     *
+     * ## Why it is BOUNDED, and at two
+     *
+     * A [ProjectCompiler.Result] holds values only — no AST, no `Symbol`, no `Type` —
+     * but a file-wide capture over a large file holds one answer per identifier in it,
+     * which is tens of MB on a file the size of tsc's own `checker.ts`. Two entries is
+     * the smallest bound that covers the editor's actual pair (one caret-scoped
+     * request plus one file-wide one) and it is a bound rather than a heuristic: a
+     * long-lived project cannot grow this map, whatever a host asks.
+     */
+    private val captures = LinkedHashMap<TypeCaptureRequest, ProjectCompiler.Result>()
 
     private var closed: Boolean = false
 
@@ -2091,6 +2136,7 @@ public class Project private constructor(
         overlay.put(key, text)
         cached = null
         narrowed.clear()
+        captures.clear()
         invalidate(key)
     }
 
@@ -2107,6 +2153,7 @@ public class Project private constructor(
         overlay.remove(key)
         cached = null
         narrowed.clear()
+        captures.clear()
         invalidate(key)
     }
 
@@ -2130,6 +2177,7 @@ public class Project private constructor(
         overlay.clear()
         cached = null
         narrowed.clear()
+        captures.clear()
         lineMaps.clear()
         sourceIndexes.clear()
         parseOptions = null
@@ -2169,14 +2217,34 @@ public class Project private constructor(
      * is swept span for span over a real project by `scripts/capture-equivalence.sh`
      * (types and definitions) and `scripts/capture-channel-equivalence.sh` (members,
      * scopes and signatures).
+     *
+     * ## (INC.12) The build is MEMOIZED on the request
+     *
+     * See [captures]. An identical request against an unchanged project is answered
+     * without building — which is not a micro-optimization but the whole of the
+     * repeat-query case: hover-then-navigate at one caret is one request asked twice,
+     * and document highlights ask the same file-wide request at every caret.
      */
-    private fun captureIn(request: TypeCaptureRequest): ProjectCompiler.Result =
-        ProjectCompiler(overlay).build(
+    private fun captureIn(request: TypeCaptureRequest): ProjectCompiler.Result {
+        captures.remove(request)?.let {
+            // Re-inserted so the LRU order below is ACCESS order, not insertion order.
+            // With two entries that is not a detail: it is what keeps the file-wide
+            // request resident while the caret-scoped one is replaced on every move.
+            captures[request] = it
+            return it
+        }
+        val result = ProjectCompiler(overlay).build(
             projectPath,
             noEmit = true,
             recheckOnly = captureFiles(request),
             typeCapture = request,
         )
+        while (captures.size >= CAPTURE_MEMO_ENTRIES) {
+            captures.remove(captures.keys.first())
+        }
+        captures[request] = result
+        return result
+    }
 
     /**
      * Every file [request] names — see [captureIn] for why this is derived and not

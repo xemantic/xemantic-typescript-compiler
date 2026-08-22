@@ -420,12 +420,25 @@ class LanguageServiceStateTest {
         val member = offsetOf(costSource, "o.p", plus = 2)
         assert(buildsIn(counting) { project.diagnostics() } == 1)
         assert(buildsIn(counting) { project.diagnostics() } == 0)
-        assert(buildsIn(counting) { project.quickInfoAt(file, member) } == 1)
-        assert(buildsIn(counting) { project.definitionsAt(file, member) } == 1)
-        assert(buildsIn(counting) { project.completionsAt(file, member) } == 1)
+        // (INC.12) Each row is measured from a FRESH project state, because the claim
+        // is "one query is one build" and the capture memo now makes a query that
+        // repeats an earlier REQUEST cost zero — which is a different (and separately
+        // pinned) property. Re-dirtying between rows is what keeps this row measuring
+        // the compile count rather than the memo's hit rate.
+        fun fresh() = project.updateFile(file, costSource)
+        fresh(); assert(buildsIn(counting) { project.quickInfoAt(file, member) } == 1)
+        fresh(); assert(buildsIn(counting) { project.definitionsAt(file, member) } == 1)
+        fresh(); assert(buildsIn(counting) { project.completionsAt(file, member) } == 1)
+        fresh()
         assert(buildsIn(counting) { project.signatureHelpAt(file, offsetOf(costSource, "o.q(1)", plus = 5)) } == 1)
-        assert(buildsIn(counting) { project.fileSemantics(file) } == 1)
-        assert(buildsIn(counting) { project.documentHighlightsAt(file, member) } == 1)
+        fresh(); assert(buildsIn(counting) { project.fileSemantics(file) } == 1)
+        fresh(); assert(buildsIn(counting) { project.documentHighlightsAt(file, member) } == 1)
+        // ...and the memo's own row, kept HERE rather than only in
+        // `ProjectCaptureMemoTest`, because the cost table is what a host author reads:
+        // hover then navigate at one caret is ONE build, not two.
+        fresh()
+        assert(buildsIn(counting) { project.quickInfoAt(file, member) } == 1)
+        assert(buildsIn(counting) { project.definitionsAt(file, member) } == 0)
     }
 
     @Test
