@@ -20,6 +20,77 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.1) THE LANGUAGE SERVICE'S ERROR REPORTING IS NOW A PARTITION — LANDED 2026-08-22,
+owner directive ("make the LanguageService truly incremental, as if it were providing
+perfect support for an IntelliJ TypeScript plugin"). `Project.diagnosticsOf(fileNames)`
+answers the diagnostics of a file set by handing that set to the compiler as its CHECK
+PARTITION: 4,818 ms -> 1,107 ms warm on tsc's own 78 sources, with all 78 files agreeing
+row for row with the full build.**
+
+**THE SEAM ALREADY EXISTED AND THIS MODULE WAS PASSING NULL TO IT.**
+`ProjectCompiler.build` has taken `recheckOnly` all along — it threads to
+`Checker(assignedFileNames)`, the INV.6 partition view `--workers` uses — and
+`Project.build()`'s KDoc argued it stays null because narrowing "is only sound with a
+dependency closure this class does not maintain", while `docs/language-service.md` § 14
+listed *no incrementality* as gap 1 and said closing it was "the architectural inversion,
+not an API item". **Both are true of the question `--watch` asks and false of the question
+an editor asks.** `--watch` must keep EVERY file's diagnostics valid, so it needs the
+reverse-dependency closure — which CLAUDE.md already prices at nothing on a
+barrel-exporting codebase (touching the leaf `semver.ts` still rechecks 77 of 78). An
+editor's annotator asks *what are the errors in THIS buffer*, claims nothing about the
+other files, and therefore needs no closure at all. The inversion is still the end state;
+it was not the prerequisite for this.
+
+**THE NUMBER THAT REDIRECTS THE ARC: A MEDIAN FILE'S OWN CHECKING IS 15 ms.** The floor —
+a partition naming a file the program does not contain, so no file is checked and what
+remains is the crawl, the parse, the bind and the program-wide passes — is **1,092 ms,
+99% of a narrowed query**. It is free to measure and needs no probe, which is why it is
+now an arm of the sweep. Consequences, both worth more than the fix:
+
+- **Narrowing the CHECK is DONE.** (INC.1) collects essentially all of it (4.35x at the
+  median file, 1.76x at `checker.ts`, which is 31.6% of that program by itself). Another
+  round spent partitioning the checker is chasing 15 ms. Do not spend it.
+- **Everything left is the floor**, and its ceiling is the whole remaining query. Bind is
+  a known ~515 ms of it; the ~14 program-wide setup passes and the ~416 tail passes
+  (20.3% of a warm compile, `buildFileLocalTypeMaps` alone 3.56%) are most of the rest,
+  and every one of them iterates `binderResults` by an explicit correctness rule
+  (CLAUDE.md: a gated collector cost 1,174 false positives in round 609). That is (INC.3).
+
+**THE GATE IS NOT THE SUITE AND CANNOT BE.** A corpus fixture is one or two files, where
+a partition of one is nearly the whole program, so the round-609 failure class is
+invisible to it. `scripts/partition-equivalence.sh` runs a partition of one for EVERY
+file of a real project and compares that file's rows against the full build's: all 78
+agree, 5 of them carrying the program's 46 diagnostics, and the runner REFUSES a verdict
+when no file carries any — a green sweep over an all-clean program tests nothing.
+
+**WHAT NOTHING PINS, MEASURED RATHER THAN ASSUMED.** No test in the suite fails if
+`diagnosticsOf` stops passing `recheckOnly` and builds the whole program: the answer is
+filtered afterwards either way, and the two differ only in wall time, which a timed
+assertion over a compile cannot hold. **Ablated it and confirmed — 14/14 green with the
+wiring removed** (fresh XML checked by mtime; a stale one reads exactly like a green
+ablation). So the narrowing is pinned at the SEAM — the compiler's own partition build
+reports the assigned file's rows and not another file's, which fails uniquely — and that
+it is REACHED is held by the two harnesses. Recorded rather than papered over (round 807).
+
+**FOUR TRAPS PAID FOR IN THIS ROUND.**
+1. **A timing arm's POSITION IN THE PROCESS outweighed the effect it measured.** The
+   first floor reading was 1,632 ms — larger than the 1,107 ms median partition it is a
+   strict subset of — because it sat at slot 3 while the partitions ran at slots 4-81,
+   and the same process read the full build at 9,421 ms against a warm 4,818. Timing arms
+   now run last and rotated; four full draws then span 0.7%. An impossible ORDERING
+   (a subset costing more than its superset) is the cheapest tell that a ramp is being
+   measured — cheaper than any spread statistic.
+2. **A real keystroke costs the same as a byte-identical dirty** (4.7-4.9 s), because
+   `LanguageServiceCostMain` dirties a file by writing its own bytes back and the
+   content-keyed parse cache hits either way. So parse reuse was already complete and
+   "cache the parses harder" is retired without building it.
+3. **`grep` without `-a` returns NOTHING on `Project.kt` too**, not only `Checker.kt` —
+   an anchor-count guard read zero for a string plainly present, which would have aborted
+   an ablation as "anchor not found".
+4. **The probe's own edit site assumed LF** and the bench profile's tsc sources are CRLF,
+   so the first run died before measuring anything.
+
+
 **(KAPI.1) A TYPESCRIPT LIBRARY'S PUBLIC API, AS A KOTLIN METADATA KLIB — LANDED 2026-08-22,
 owner directive.** A checked TypeScript library now exports as the artifact a Kotlin
 Multiplatform `commonMain` compiles against: `exportTypeScriptProjectApi(project, entry,
@@ -1683,6 +1754,71 @@ one divergence is a message FORM the round that landed it had already recorded a
   divergences with a fixture apiece.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+**OWNER DIRECTIVE 2026-08-22, TOP OF QUEUE: make the language service incremental enough
+to carry an IntelliJ-style plugin's error reporting.** (INC.1) landed and MEASURED the
+rest of the arc: narrowing the CHECK is finished (a median file's own checking is 15 ms),
+so (INC.2) and (INC.3) below are what is left, in that order.
+
+- [x] **(INC.1) A NARROWED DIAGNOSTICS QUERY — LANDED 2026-08-22.**
+  `Project.diagnosticsOf(fileNames)`, 4,818 -> 1,107 ms warm, all 78 files of the compiler
+  profile agreeing row for row. See the session note; the gate is
+  `scripts/partition-equivalence.sh` and the prize was measured first by
+  `scripts/incremental-cost.sh`.
+
+- [ ] **(INC.2) THE INTERACTIVE QUERIES ARE STILL WHOLE-PROGRAM BUILDS, AND THEY ARE THE
+  ONES AN EDITOR FIRES MOST.** `quickInfoAt`, `definitionsAt`, `completionsAt`,
+  `signatureHelpAt`, `semanticsAt`/`fileSemantics` and `documentHighlightsAt` each cost a
+  full build (4.7-6.2 s, `docs/language-service.md` § 14) — and every one of them captures
+  spans in **one file**, which is exactly the shape `recheckOnly` narrows. The checker
+  records a capture while it walks past the span, so a walk narrowed to that file still
+  walks those spans: expect ~1.1 s, the same 4.35x. **`referencesAt` and `renameAt` are
+  OUT by construction** — their capture spans the whole program's identifiers, so the
+  partition would be everything.
+  **IT NEEDS ITS OWN SWEEP AND MUST NOT INHERIT (INC.1)'s.** (INC.1) compared
+  DIAGNOSTICS; this compares CAPTURED TYPES, which is a claim about first-touch type
+  identity — interning order, `aliasDisplayMap`, the alias a union displays under — and
+  those are order-dependent by construction in this compiler. The instrument is the same
+  shape: for every file, `fileSemantics(f)` captured full vs narrowed, span for span,
+  kind + display string + definitions. If it diverges, STOP: a hover that renders a
+  different type name under a narrowed build is a worse defect than a slow hover.
+  Sequence: harness first (it can drive `ProjectCompiler` directly with and without
+  `recheckOnly`, so it gates the seam before a line of `Project` changes), then the wiring.
+
+- [ ] **(INC.3) DECOMPOSE THE FLOOR — IT IS 99% OF A NARROWED QUERY AND NOTHING ELSE IS
+  LEFT.** 1,092 ms warm on the compiler profile, measured free by a partition naming a
+  file the program does not contain. Known composition to CONFIRM rather than assume, with
+  `--frontEnd` / `--passTiming` rows on a floor build: bind ~515 ms (round 880's per-worker
+  fixed term), the ~14 program-wide setup passes, the ~416 tail passes (20.3% of a warm
+  compile; `init:buildFileLocalTypeMaps` alone 3.56%, and two whole-program regex passes
+  that do not warm at all are 98 ms between them and match ZERO times on this profile),
+  and the crawl (~138 ms wall, its parses already cached by content).
+  **The levers, in the order the numbers put them:**
+  (a) **cross-build BIND reuse** — nearly half the floor. `--shareBind` exists and round
+  882 measured `binder Symbols checked 15580, changed 0` on an all-module program, so
+  program-file binder output is already immutable with respect to the checker. **The
+  caveat is the whole design**: that zero holds because INV.3(d) keeps a module's locals
+  out of `globals`; a program with global SCRIPT files DOES mutate binder output, and a
+  bind is CONSUMED by a checker (adoption aliases binder `Symbol`s into `globals`), so
+  reuse needs a shape gate that REUSES the checker's own merge predicate rather than
+  re-deriving it, plus `Binder`'s program-wide `nodeToSymbol`/`moduleInstanceStates`
+  instance fields split per file first.
+  (b) the program-wide passes, which are program-wide by an explicit correctness rule
+  (a collector gated on `checkedResults` cost 1,174 false positives in round 609) — so
+  the lever there is making one CHEAPER, never gating it.
+  (c) the crawl, if no import edge changed.
+  **Ceiling if the floor went to zero: a query becomes the 15 ms of one file's checking.**
+  That is the same end state `docs/ARCHITECTURE-RETHINK.md` calls the inversion, reached
+  one measured lever at a time instead of in one jump.
+
+- [ ] **(INC.4) `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT
+  REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`
+  and friends), so under a partition it asks a checker that walked a SUBSET and elision
+  goes wrong. Every driver gates incremental on `--noEmit` and `Project` always passes
+  `noEmit = true`, so nothing today is wrong — but the parameter is public and the next
+  caller will not know. `require(noEmit || recheckOnly == null)`, with the message naming
+  the caller's mistake, exactly as `compileParsed` already does for `checkedSink`.
+
 
 - [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
   finding.** `ErasedTypes.mapObject` ends `if (declaration == null) return jsObjectType()`, which

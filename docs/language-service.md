@@ -1624,6 +1624,7 @@ real libs, warm, one process per battery, three rotations):
 | query | builds | wall | caret |
 |---|---|---|---|
 | a plain rebuild, for reference | 1 | 5.0 – 5.5 s | — |
+| `diagnosticsOf(files)` — the narrowed one | 1 narrowed | **1.1 – 1.2 s** (2.7 s for `checker.ts`) | § 4a |
 | `quickInfoAt` / `definitionsAt` / `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
 | `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk: 5.0 s on `types.ts`, 6.2 s on `checker.ts` | — |
 | `documentHighlightsAt` | 1 | 5.0 – 5.5 s on `types.ts`, **6.3 s on `checker.ts`** | it sweeps one FILE, so the file is the cost |
@@ -1651,9 +1652,16 @@ caret movement.**
 kept so the round notes keep pointing at the same thing. **None of the seven is a
 silence**: each is a stated refusal, a deliberate divergence, or the architecture.
 
-1. **No incrementality.** Every query rebuilds; a rename builds twice. This is the one
-   thing that changes the cost table, and it is the architectural inversion
-   (`docs/ARCHITECTURE-RETHINK.md`), not an API item.
+1. **No incrementality — HALF TRUE since 2026-08-22, and the half that is left is now
+   measured.** Every query still *builds*; what changed is how much of the program a build
+   CHECKS. `diagnosticsOf` (§ 4a) hands its file set to the compiler as a check partition
+   and costs **1.2 s against 4.6 s** on tsc's own sources, with every one of those 78 files
+   agreeing row for row with the full build. The gap that remains is not the checking:
+   **a median file's own checking is 15 ms, against a 1,092 ms floor** — the crawl, the
+   parse, the bind and the program-wide passes, which run whatever is narrowed. So the
+   architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) is still what removes the
+   floor, but it was never the prerequisite for narrowing the check, and the interactive
+   queries below have not been narrowed yet.
 2. ~~A computed object-literal key `{ ["p"]: v }` is outside the swept population.~~
    **CLOSED round 932**, `(API.17)` — and it was the last SILENT shape anywhere in this
    API. Round 930 measured it as reported in two of its three shapes

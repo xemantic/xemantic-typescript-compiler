@@ -1,5 +1,21 @@
 # Status
 
+**THE LANGUAGE SERVICE ANSWERS AN EDITOR'S ERROR QUERY AS A PARTITION (2026-08-22, owner
+directive).** `Project.diagnosticsOf(fileNames)` hands the file set to the compiler as its
+CHECK PARTITION instead of filtering a whole-program build: **4,818 ms -> 1,107 ms warm** on
+tsc's own 78 sources (9,977,097 characters), and every one of those 78 files reports exactly
+the diagnostic rows the full build reports for it — 5 of them carrying the program's 46
+diagnostics, so the agreement is not the vacuous kind. The seam (`recheckOnly` ->
+`Checker(assignedFileNames)`, the INV.6 view `--workers` uses) already existed and this module
+was passing null to it, because narrowing was understood to require `--watch`'s
+reverse-dependency closure. **An editor's question does not: it asks what is wrong in ONE
+buffer and claims nothing about the others.** The gate is a whole-project sweep
+(`scripts/partition-equivalence.sh`) rather than the suite, which structurally cannot see this
+— a corpus fixture is one or two files, where a partition of one is nearly the whole program.
+**AND THE SAME MEASUREMENT CLOSES THE DIRECTION: a median file's OWN checking is 15 ms against
+a 1,092 ms floor**, so narrowing the check is finished and everything left in the incremental
+arc is the floor — crawl, parse, bind and the program-wide passes ((INC.3)). Suite 15,615 / 0.
+
 **A TYPESCRIPT LIBRARY'S PUBLIC API NOW EXPORTS AS A KOTLIN METADATA KLIB (2026-08-22, owner
 directive).** `exportTypeScriptProjectApi(project, entry, out.klib)` writes the artifact a Kotlin
 Multiplatform `commonMain` compiles against: the library's exported declarations, typed by the
