@@ -56,8 +56,17 @@ import kotlin.test.Test
  * pin, the free-name-completion pin and the signature-help pin respectively. All
  * four ablations were run.
  *
- * The last pin is the mirror: [Project.referencesAt] is deliberately NOT narrowed,
- * because its claim is about every file, and it goes red if it ever is.
+ * The last pin is the mirror: [Project.referencesAt] sweeps the whole program, and
+ * it goes red when that sweep is cut down to the queried file.
+ *
+ * **AND ONE GUARD HERE IS UNDISCRIMINATED, WHICH IS RECORDED RATHER THAN CLAIMED**
+ * (CLAUDE.md, round 807). Flipping [Project.referencesAt]'s own `narrow = false` to
+ * `true` leaves all eight pins green — and must, because the partition is DERIVED
+ * from the request's spans and that member sweeps every file, so the derived
+ * partition would name every file anyway. The flag buys a code path, not an answer:
+ * it is why a program-wide query does not enter the partition branch at all, and no
+ * pin can see the difference. The ablation was run; this is its result, not an
+ * omission.
  *
  * ## The fixture is cross-file on purpose, and the control says so
  *
@@ -198,15 +207,20 @@ class ProjectCaptureNarrowingTest {
     }
 
     @Test
-    fun `find references still answers about the whole program`() {
+    fun `find references still sweeps the whole program`() {
         // The mirror pin: [Project.referencesAt] is the one capture query that is NOT
-        // narrowed, because its CLAIM is program-wide. Narrowing it to the queried
-        // file would silently drop every occurrence in `b.ts` — which is exactly what
-        // this asserts is present.
+        // narrowed, because its CLAIM is program-wide.
+        //
+        // The load-bearing assertion is the NON-declaration one. `Shape`'s DECLARATION
+        // in `b.ts` is reported whatever the sweep covered — the seed's own locations
+        // are added as hits unconditionally — so `any { it.fileName == otherFile }`
+        // holds even for a sweep restricted to the queried file, which is a pin that
+        // passes for a reason it does not name. What only a whole-program sweep can
+        // produce is the USE of `Shape` in `b.ts`'s own return type.
         val project = project()
         val references = project.referencesAt(mainFile, caretAfter("export const shape: "))
-        assert(references.any { it.fileName == otherFile })
         assert(references.any { it.fileName == mainFile })
         assert(references.any { it.fileName == otherFile && it.isDeclaration })
+        assert(references.any { it.fileName == otherFile && !it.isDeclaration })
     }
 }
