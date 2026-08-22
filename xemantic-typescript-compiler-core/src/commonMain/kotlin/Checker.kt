@@ -936,6 +936,13 @@ class Checker(
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
     private val fileLocalTypeMaps = HashMap<String, Map<String, Type>>()
+    /**
+     * Whether [ensureImportReferencesTracked] has run. Per-`Checker`, like
+     * [referencedAliases] itself; exposed so the deferral can be pinned as a
+     * FACT about this checker rather than through a process-global counter.
+     */
+    internal var importReferencesTracked: Boolean = false
+        private set
 
     /** Contextual type for function expressions — set when evaluating an initializer whose
      *  target has call signatures (e.g., `var f: (x: number) => void = (x) => { ... }`).
@@ -9669,8 +9676,10 @@ class Checker(
         // (1d moved to 0d — before the step-1 merge — for the INV.3(d) keep-predicate.)
         // 2. Compute all enum member values
         pass("init:computeAllEnumValues") { computeAllEnumValues() }
-        // 3. Track import references across all files
-        pass("init:trackAllImportReferences") { trackAllImportReferences() }
+        // 3. (INC.10) `trackAllImportReferences` USED to run here. It does not
+        // any more: its whole product is [referencedAliases], whose only reader
+        // is [isReferencedAliasDeclaration] — an emit-path query — so the walk
+        // now runs on that first ask. See [ensureImportReferencesTracked].
         // 3b. Build per-file type maps for file-level declarations
         pass("init:buildFileLocalTypeMaps") { buildFileLocalTypeMaps() }
     }
@@ -12056,6 +12065,9 @@ class Checker(
      * If not referenced, the import can be elided from JS output.
      */
     fun isReferencedAliasDeclaration(node: Node): Boolean {
+        // (INC.10) THE ASK. The whole-program alias walk runs here, once per
+        // checker that is ever questioned, instead of in every checker's `init`.
+        ensureImportReferencesTracked()
         val key = nodeKey(node)
         for (result in binderResults) {
             val symbol = result.nodeToSymbol[key]
@@ -14343,7 +14355,45 @@ class Checker(
     // Import reference tracking
     // -----------------------------------------------------------------------
 
-    private fun trackAllImportReferences() {
+    /**
+     * (INC.10) THE WHOLE-PROGRAM ALIAS-REFERENCE WALK, RUN ON THE FIRST ASK.
+     *
+     * This was `init:trackAllImportReferences`, the second-largest row in the
+     * incremental floor at **29.4 ms of 393** on tsc's own 78 sources — and it
+     * is EMIT-ONLY work. Everything it writes is one set, [referencedAliases]
+     * (`markAliasReferenced` is the family's only mutation — the four
+     * `trackReferences*` functions and `markJsxFactoryReferenced` add nothing
+     * else, emit no diagnostic and touch no cache), and that set has exactly ONE
+     * reader in the program: [isReferencedAliasDeclaration], which decides
+     * import elision and which only `Transformer` calls. Round 738's
+     * `skipEmitOutputs` gate makes a `--noEmit` build skip the transformer
+     * entirely, so on every language-service query — and on every `--noEmit`
+     * compile — this walk produced a set that nothing could read.
+     *
+     * **Deferring, not skipping, is what makes it safe.** The alternative, a
+     * static `if (options.skipEmitOutputs) return`, would be correct today and
+     * would silently answer "nothing is referenced" the day a second consumer
+     * appears; worse, it would leave the deferred path untested, because the
+     * corpus emits. Building on the ask instead means the ~13k-baseline corpus —
+     * thousands of whose `.js` baselines pin exactly which imports survive
+     * elision — exercises this code path end to end on every suite run.
+     *
+     * **Why the answer cannot depend on when it runs.** The walk reads the
+     * frozen AST, `result.locals[name]` and `symbol.flags`, and asks one
+     * question: does this file-local name carry [SymbolFlags.Alias]. Nothing
+     * between `init` and the transformer's first question clears a symbol flag
+     * (`mergeSingleSymbol` only ever ORs bits in, and it runs at init step 1b,
+     * before this pass ever stood), and the walk itself is idempotent — it adds
+     * symbol ids to a set.
+     *
+     * **It also deletes N-1 copies of itself.** [CheckerPool] builds N checkers
+     * over one bind and each ran this walk in its own `init`; only the primary
+     * is ever questioned, so only the primary now pays.
+     */
+    private fun ensureImportReferencesTracked() {
+        if (importReferencesTracked) return
+        importReferencesTracked = true
+        FrontEnd.aliasTrackBuilds++
         for (result in binderResults) {
             trackReferencesInStatements(result.sourceFile.statements, result)
         }

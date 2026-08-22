@@ -4673,6 +4673,27 @@ object FrontEnd {
     var flowGraphsBuilt: Long = 0
 
     /**
+     * (INC.10) census — the two program-wide SETUP passes that were 32% of the
+     * incremental floor, now built ON THE ASK. Counts, not milliseconds, for
+     * round 876's reason: the saving is smaller than a floor arm's run-to-run
+     * spread, while a count is deterministic and says whether the deferral was
+     * REACHED at all.
+     *
+     *  - `aliasTrackBuilds` — how many times the whole-program alias-reference
+     *    walk ran. Was one per `Checker` (so N under [CheckerPool]); it is now
+     *    one per checker that the Transformer actually questions, i.e. ZERO for
+     *    any `--noEmit` build and for every language-service query.
+     *  - `fltmEagerFiles` / `fltmOnDemandFiles` — the per-file type maps built by
+     *    the setup pass over the CHECKED partition versus those a foreign read
+     *    forced afterwards. Their SUM is what the eager pass used to build
+     *    unconditionally (one per program file), and `fltmOnDemandFiles` is the
+     *    number that says whether the on-demand path is a live cost or a net.
+     */
+    var aliasTrackBuilds: Long = 0
+    var fltmEagerFiles: Long = 0
+    var fltmOnDemandFiles: Long = 0
+
+    /**
      * (FRONT.2) level-2 census — the B464 closure-start block. `reassignNames` is
      * the SUM of the returned set sizes: it is what separates "called often" from
      * "each call is huge", which per-call nanos alone cannot do. `reassignChars`
@@ -5128,6 +5149,7 @@ object FrontEnd {
         workerNanos = LongArray(0); workerFiles = LongArray(0); workerChars = LongArray(0)
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
+        aliasTrackBuilds = 0; fltmEagerFiles = 0; fltmOnDemandFiles = 0
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
         scanWords = 0; scanRecorded = 0
         orphanFiles = 0; orphanChars = 0; orphanDeclReqHits = 0
@@ -5407,6 +5429,11 @@ object FrontEnd {
                     "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${c.toString().padStart(6)} calls"
             )
         }
+        appendLine(
+            "  (INC.10) deferred setup: alias-reference walks $aliasTrackBuilds, " +
+                "file-local type maps ${fltmEagerFiles + fltmOnDemandFiles} " +
+                "(eager $fltmEagerFiles, on demand $fltmOnDemandFiles)"
+        )
         if (calls[BIND_FLOW] > 0) {
             val sub = nanos[BIND_DECL] + nanos[BIND_LEX] + nanos[BIND_FLOW]
             appendLine(

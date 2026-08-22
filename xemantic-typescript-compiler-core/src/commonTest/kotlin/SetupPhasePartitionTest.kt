@@ -77,7 +77,10 @@ class SetupPhasePartitionTest {
         "init:computePerFileVisibility",
         "init:buildPerFileScopes",
         "init:computeAllEnumValues",
-        "init:trackAllImportReferences",
+        // (INC.10) `init:trackAllImportReferences` USED to stand here and no
+        // longer exists: its product is read only by the emit path, so it runs
+        // on `isReferencedAliasDeclaration`'s first ask. Its ABSENCE is pinned
+        // by `DeferredSetupPassTest`, which is where the row belongs now.
         "init:buildFileLocalTypeMaps",
         "init:evolvingArrayUseSiteWalks",
         "init:flowDisabledTs2454Retraction",
@@ -157,7 +160,6 @@ class SetupPhasePartitionTest {
             "init:moduleTypeNameIndex",
             "init:snapshotPreAugGlobalKeys",
             "init:buildPerFileScopes",
-            "init:trackAllImportReferences",
         )
         val typing = PassTiming.getTypeOfExpressionByPass
         val offenders = structural.filter { (typing[it] ?: 0L) > 0L }
