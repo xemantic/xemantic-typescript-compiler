@@ -20,6 +20,142 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.10) — the alias walk moved onto the ask, and the 66 ms row is REFUSED with a three-point measurement
+
+**THE TWO ROWS WERE 95.5 ms OF A 305.3 ms FLOOR PASS TABLE. ONE OF THEM WAS
+EMIT-ONLY WORK AND IS GONE; THE OTHER IS NOT A COLLECTOR OF ENTRIES AT ALL, IT
+IS THE PROGRAM'S FIRST-TOUCH ORDER, AND ITS PRICE IS WHAT THE CAPTURE CHANNEL
+RENDERS.**
+
+Baseline re-taken on this binary before anything was touched
+(`scripts/floor-decomposition.sh`, floor arm, mean of four instrumented draws):
+**417 rows summing 305.3 ms**, `init:buildFileLocalTypeMaps` **66.07 ms**,
+`init:trackAllImportReferences` **29.44 ms**, plain floor arms 443 early / 393
+late.
+
+**LANDED — `trackAllImportReferences` RUNS ON `isReferencedAliasDeclaration`'s
+FIRST ASK (`c3add44a`).** The whole `trackReferences*` family's only mutation is
+`referencedAliases.add`; that set's only reader is
+`Checker.isReferencedAliasDeclaration`; and that method has exactly ONE caller —
+one line of `Transformer`, reached only by `import x = require(…)` under
+`module: preserve` without `verbatimModuleSyntax`. Round 738's `skipEmitOutputs`
+gate means a `--noEmit` build never constructs a transformer at all, so on every
+language-service query the walk filled a set nothing could read.
+
+    pass table, floor arm      305.3 ms over 417 rows -> 274.8 over 416   (-30.5)
+    init:trackAllImportReferences   29.44 ms          -> the row does not exist
+    alias-reference walks, floor    78 (one per file, per checker) -> 0
+    alias-reference walks, full     78                             -> 0   (--noEmit)
+    narrowed query, median of 78    422 ms -> 402      ratio 12.43x -> 12.61x
+
+**The banked ms EXCEEDS the row (30.5 against 29.44), which is the first time in
+this arc that the (INC.7) discount has not applied** — and the reason is
+structural rather than lucky: batches 1-3 banked 79-93% because a gated walker
+was driving MEMOIZED type resolutions that the first later asker then paid for.
+This walk resolves nothing. It reads the frozen AST, `result.locals` and one
+symbol flag, so there is no relocation for a discount to describe.
+
+**Deferring rather than gating on `skipEmitOutputs` is the point.** A static
+`if (options.skipEmitOutputs) return` would be correct today, silent the day a
+second consumer appears, and — because the corpus EMITS — would leave the
+deferred path untested. Built on the ask, the ~13k-baseline corpus, thousands of
+whose `.js` baselines pin exactly which imports survive elision, exercises this
+path on every suite run. It also deletes N-1 copies of itself: `CheckerPool`
+builds N checkers over one bind and each ran the walk in its own `init`, while
+only the primary is ever questioned.
+
+**AND THE FIXTURE THAT MEASURED NOTHING — AGAIN, AND CAUGHT BY THE ABLATION AND
+NOTHING ELSE.** The first draft's elision pins used an ordinary ESM
+`import { a } from "./x"`; both stayed GREEN against a binary with the ask
+deleted, because ESM elision decides on its own evidence and never consults this
+set. That is round 806's law in a new costume: a shape that looks like it
+exercises a mechanism is not a pin until the ablation says so. The fixture is now
+the ONE shape that reaches the consumer, as a pair (a referenced alias that must
+survive, an unreferenced one that must not), and the ESM case is kept as the
+CONTROL that records why — it also bounds the blast radius of the whole change.
+
+    ablation A1, restore the eager pass  -> RED: `a fresh checker has not walked
+                                            alias references`, `the pass table no
+                                            longer carries an init row for the walk`
+    ablation A2, delete the ask          -> RED: `asking … performs the walk`,
+                                            `a second ask does not walk again`,
+                                            `a referenced import-require survives
+                                            elision through the deferred walk`
+
+**REFUSED, WITH A THREE-POINT MEASUREMENT: `buildFileLocalTypeMaps`.** It was
+built, measured, and reverted. The design was the one (INC.9) used for the flow
+graph and the one the queue asked for — eager over `checkedResults` (a strict
+no-op for full builds, since `checkedResults` IS `binderResults` when
+`assignedFileNames == null`) plus an on-demand per-file build behind the pass's
+ONE reader, which is keyed on `currentCheckFileName`. It works, and the receipt
+is excellent: **file-local type maps built go 78 -> 3 on the floor arm and stay
+78 -> 78 on a full build**, the row falls **66.07 -> 0.01 ms**, the pass table
+falls to 232.1, the narrowed query median to 349 and the ratio to **14.17x**,
+`partition-equivalence.sh` says EQUIVALENT on all 78 files, `cost_gate.py` is
+unmoved, and the suite does not move a baseline.
+
+**`scripts/capture-equivalence.sh` is what refused it, and no other gate could
+have.** (INC.2) recorded that the check path and the capture path are DIFFERENT
+RESOLVERS and that a green diagnostics sweep says nothing about captures; this
+is that warning being collected.
+
+| phase kept EAGER over all 78 files | `init:buildFileLocalTypeMaps` | capture divergence |
+|---|---:|---|
+| nothing — fully deferred | **0.01 ms** | **2,722** spans in 46 of 76 files |
+| the `TypeAlias` symbols only | **6.81 ms** | **462** spans in 18 of 76 files |
+| the whole DECLARATION branch | **64.94 ms** | **5** spans in 3 files — the baseline |
+| (unchanged, for reference) | 66.07 ms | 5 spans in 3 files |
+
+**So the deferrable part is 1.13 ms of 66, and the other 65 is buying the
+RENDERING of 2,722 spans.** Every divergence is a display one and they run in
+both directions — full `ModuleName` vs narrow `ModuleExportName`, full
+`AssignmentPattern` vs narrow `ObjectLiteralExpression | ArrayLiteralExpression`,
+and the residual 462 the other way round (full
+`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` vs narrow
+`ClassLikeDeclaration`). The mechanism is `aliasDisplayMap`: an alias name is
+attached to an interned type at its FIRST mint, so resolving every file's
+declarations up front is what makes the program's type display a function of the
+program rather than of who walked first.
+
+**THE GENERAL LESSON, AND IT RETIRES A QUESTION ROUND 829 ASKED.** That round
+censused this pass as *"12,738 direct resolves producing 4,161 entries of which
+1,499 are ever read, 278,355 misses"* and priced the deletable part at 47.1%.
+Read-ness of the ENTRY was the wrong question. The pass has a second product it
+was never censused for — the whole-program first-touch ORDER — and that product
+has a consumer, at 2,722 spans in 46 of 76 files. Round 861 already warned that
+any deletable-ms from that census is an UPPER bound because the MOVE test is
+keyed on symbols; this is the same warning with a name and a number.
+
+**GATES, on the landed tree.** Suite **15,674 / 0 failed / 3 skipped** (15,666 +
+this round's 8 pins), no corpus baseline moved.
+`scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files**; sweep median
+**402 ms**, floor 355, ratio at the median file **12.61x**. `cost_gate.py` PASS,
+largest delta **+1.02% `mapped.hits`** — the same row and the same figure the last
+two rounds recorded, i.e. pre-existing drift and not this change (`output.errors`
+46, `spine.nodes` +0.00%). `huge_methods.py --fail-over 0` green on core (755
+classes, 0 over) AND on `-project`. `scripts/capture-equivalence.sh` **5 spans in
+3 of 76 files, `narrowRendersMoreAny = 0`** and
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files,
+members=285 scopes=0 signatures=1, `narrowRendersMoreAny = 168`** — both censuses
+identical to baseline.
+
+**NEXT LEVER, PRICED — AND THE TAIL IS NOW FLAT ENOUGH TO SAY SO.** The floor's
+pass table is **274.8 ms over 416 rows**, of which `init:buildFileLocalTypeMaps`
+is **69.1 ms and is now REFUSED**, eleven rows are over 5 ms, forty-six are over
+1 ms, and the remaining **370 rows sum to 11.9 ms between them**. So the
+"gate one more walker" arc has run out of population: (INC.7) batch 4's whole
+remaining prize is the 46 rows between 1 and 5 ms, and its best-shaped cluster
+(the 34 ungated walkers reaching `srcScan`) only banks when gated TOGETHER. The
+honest ranking of what is left, largest first: `checkTypeArgumentConstraints`
+22.9 (REFUSED — 120+ passes read its fields), `checkBaseClassImprovedMismatch`
+18.3 (REFUSED — a rewriter), `checkInterfaceMultiBaseConflicts` 13.3 and
+`checkPropertyOverride` 10.7 (both REFUSED by batch 3), `checkSubsequentVarTypes`
+12.0 (REFUSED), `checkDerivedConstructorSuper` 9.8 (REFUSED),
+`init:computeAllEnumValues` 9.3 — **which is the one large row nobody has looked
+at, and the only unrefused member of the top eight.** Its instrument is this
+round's: give it a produced-vs-consumed count first, then ask whether its product
+has a second consumer the way `buildFileLocalTypeMaps`' turned out to have.
+
 ### Round (INC.9) — the floor re-decomposed, and the flow graph moved onto the ask: 514 -> 378 ms
 
 **MEASURED FIRST, AND THE RANKING HAD MOVED.** (INC.3)'s decomposition was taken
@@ -1382,20 +1518,27 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   while `mergeSingleSymbol` adopts binder-owned symbols and `declarations.addAll` is not
   idempotent. Large, silent-failure-shaped, for 72 ms.
 
-- [ ] **(INC.10) THE TWO PROGRAM-WIDE SETUP PASSES ARE NOW 32% OF THE FLOOR — 96 ms OF
-  THE 304 ms PASS TABLE, IN TWO ROWS.** `init:buildFileLocalTypeMaps` **66 ms** and
-  `init:trackAllImportReferences` **30 ms** are worth more between them than every
-  remaining ungated tail walker put together (the other ~188 rows average ~1.1 ms), and
-  neither is gateable onto the partition the way (INC.7) gates an emitter — both are
-  COLLECTORS, and round 609 priced a starved collector at 1,174 false positives. The
-  question (INC.9) answers for the flow graph is the one to ask here: can either be made
-  LAZY PER FILE, i.e. built on the first ask for a file's entry rather than for all 78 up
-  front? `buildFileLocalTypeMaps` already carries round 829's census — **12,738 direct
-  resolves producing 4,161 entries of which 1,499 are ever read, 278,355 misses** — so the
-  read population is known and the shape of a per-file key is known. Note round 829's trap
-  before pricing anything from that census: part of what looks deletable there is a
-  DETECTOR (the `typealias` branch's resolutions exist to trip `deepInstantiationBailed`),
-  and laziness must therefore defer, never omit — the same constraint (INC.9) satisfied.
+- [x] **(INC.10) ONE OF THE TWO PROGRAM-WIDE SETUP PASSES IS GONE; THE OTHER IS
+  REFUSED WITH A THREE-POINT MEASUREMENT.** `init:trackAllImportReferences`
+  (**29.44 ms**) is EMIT-ONLY work — its product `referencedAliases` has one
+  reader, `isReferencedAliasDeclaration`, which has one caller, one line of
+  `Transformer` reached only by `import x = require(…)` under `module: preserve`
+  — so it now runs on that first ask and a `--noEmit` build performs it **0**
+  times (was one per file per checker, i.e. N under `CheckerPool`). Floor pass
+  table **305.3 -> 274.8 ms**, narrowed query median **422 -> 402**, ratio
+  **12.43x -> 12.61x**, and the banked ms EXCEEDS the row (30.5 vs 29.44) because
+  this walk resolves nothing, so the (INC.7) relocation discount has nothing to
+  describe. **`init:buildFileLocalTypeMaps` (66 ms) IS REFUSED, and it was built
+  before it was refused**: the deferral works and is cheap (78 -> 3 maps built on
+  the floor arm, row 66.07 -> 0.01, query median 349, ratio **14.17x**,
+  `partition-equivalence` EQUIVALENT, cost gate and corpus unmoved) and it moves
+  the CAPTURE channel from **5 divergent spans to 2,722 in 46 of 76 files**. The
+  pass's real product is not the 4,161 entries round 829 censused but the
+  whole-program FIRST-TOUCH ORDER for type interning and `aliasDisplayMap`; keep
+  the `TypeAlias` symbols eager and it is 6.81 ms / 462 spans, keep the whole
+  DECLARATION branch eager and it is **64.94 ms / 5 spans** — i.e. the deferrable
+  part is **1.13 ms of 66**. Do NOT re-open it from round 829's read-count
+  census: read-ness of the ENTRY is the wrong question.
 
 - [ ] **(INC.7) BATCH 4 — 174 UNGATED PASSES LEFT AND A 268.8 ms PASS TABLE, AND THE
   READING-BEATS-SWEEPING WINDOW IS CLOSING (mean ~1.6 ms per walker).** Batches 1-3 LANDED:
