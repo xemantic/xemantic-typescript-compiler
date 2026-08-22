@@ -543,8 +543,7 @@ public class Project private constructor(
         // flags the same parse. The REAL end, snapped back to the token stream, is
         // what the caller is told.
         val span = TypeCaptureSpan(key, node.pos, node.end)
-        val captured = ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(listOf(span)))
+        val captured = captureIn(TypeCaptureRequest(listOf(span)))
             .capturedTypes
             .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
             ?: return null
@@ -619,8 +618,7 @@ public class Project private constructor(
         val key = keyOf(fileName)
         // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
         val span = TypeCaptureSpan(key, node.pos, node.end)
-        return ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(listOf(span)))
+        return captureIn(TypeCaptureRequest(listOf(span)))
             .capturedDefinitions
             .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
             // (API.10) …PLUS what a SHORTHAND's one token also names. `{ p }` under a
@@ -769,15 +767,9 @@ public class Project private constructor(
                     null,
                 )
             val span = TypeCaptureSpan(key, node.pos, node.end)
-            val captured = ProjectCompiler(overlay)
-                .build(
-                    projectPath,
-                    noEmit = true,
-                    typeCapture = TypeCaptureRequest(
-                        spans = emptyList(),
-                        scopeSpans = listOf(span),
-                    ),
-                )
+            val captured = captureIn(
+                TypeCaptureRequest(spans = emptyList(), scopeSpans = listOf(span)),
+            )
                 .capturedScopes
                 .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
             return CompletionList(
@@ -821,12 +813,9 @@ public class Project private constructor(
         }
         // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
         val span = TypeCaptureSpan(key, receiver.pos, receiver.end)
-        val captured = ProjectCompiler(overlay)
-            .build(
-                projectPath,
-                noEmit = true,
-                typeCapture = TypeCaptureRequest(spans = emptyList(), memberSpans = listOf(span)),
-            )
+        val captured = captureIn(
+            TypeCaptureRequest(spans = emptyList(), memberSpans = listOf(span)),
+        )
             .capturedMembers
             .firstOrNull {
                 it.fileName == key && it.start == receiver.pos && it.end == receiver.end
@@ -945,17 +934,14 @@ public class Project private constructor(
         val key = keyOf(fileName)
         val call = anchor.call
         // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
-        val captured = ProjectCompiler(overlay)
-            .build(
-                projectPath,
-                noEmit = true,
-                typeCapture = TypeCaptureRequest(
-                    spans = emptyList(),
-                    signatureSpans = listOf(
-                        SignatureCaptureSpan(key, call.pos, call.end, anchor.activeArgument),
-                    ),
+        val captured = captureIn(
+            TypeCaptureRequest(
+                spans = emptyList(),
+                signatureSpans = listOf(
+                    SignatureCaptureSpan(key, call.pos, call.end, anchor.activeArgument),
                 ),
-            )
+            ),
+        )
             .capturedSignatures
             .firstOrNull { it.fileName == key && it.start == call.pos && it.end == call.end }
         return SignatureHelp(
@@ -1164,7 +1150,11 @@ public class Project private constructor(
         // The program's files are what a build computes, so this asks for them the
         // only way there is; `build()` is cached whenever nothing has been edited.
         val swept = build().programFiles.map { keyOf(it) }
-        return referencesOf(keyOf(fileName), caret, swept, restrictToQueryFile = false)
+        // Whole-program, and deliberately so: see [captureIn]. This member's CLAIM is
+        // about every file, so there is nothing to narrow to.
+        return referencesOf(
+            keyOf(fileName), caret, swept, restrictToQueryFile = false, narrow = false,
+        )
     }
 
     /**
@@ -1195,7 +1185,12 @@ public class Project private constructor(
         val index = sourceIndexOf(fileName) ?: return emptyList()
         val caret = occurrenceCaret(index, offset) ?: return emptyList()
         val key = keyOf(fileName)
-        return referencesOf(key, caret, listOf(key), restrictToQueryFile = true)
+        // (INC.2b) One file swept, one file checked — the narrowing [captureIn]
+        // describes, and the reason this member's cost differs from [referencesAt]'s
+        // by more than the sweep's size.
+        return referencesOf(
+            key, caret, listOf(key), restrictToQueryFile = true, narrow = true,
+        )
     }
 
     /**
@@ -1205,7 +1200,8 @@ public class Project private constructor(
      * whole program for [referencesAt], the one queried file for
      * [documentHighlightsAt] — and [restrictToQueryFile] additionally drops answers
      * outside [queryFile], which matters only for a DECLARATION the caret resolves to
-     * in a file that was never swept.
+     * in a file that was never swept. [narrow] hands [sweptFiles] to the compiler as
+     * its check partition; see [captureIn] for why only the one-file caller sets it.
      *
      * Note what is not done: no `Symbol` is asked for and none crosses the boundary.
      * The grouping key is a set of declaration SPANS, which is a value, which is what
@@ -1216,6 +1212,7 @@ public class Project private constructor(
         caret: Node,
         sweptFiles: List<String>,
         restrictToQueryFile: Boolean,
+        narrow: Boolean,
     ): List<ReferenceLocation> {
         val spans = ArrayList<TypeCaptureSpan>()
         // Every swept occurrence's REAL span and syntactic ROLE, by (file, pos). The
@@ -1237,8 +1234,17 @@ public class Project private constructor(
             extents[file] = found
         }
         if (spans.isEmpty()) return emptyList()
-        val definitions = ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(spans))
+        val request = TypeCaptureRequest(spans)
+        // (INC.2b) [narrow] is the caller's statement about its own CLAIM, not about
+        // this sweep: both callers ask only about files they swept, so a derived
+        // partition would be correct for either — but for [referencesAt] it would
+        // name every file in the program, which buys nothing and takes a different
+        // code path to do it.
+        val definitions = (
+            if (narrow) captureIn(request)
+            else ProjectCompiler(overlay)
+                .build(projectPath, noEmit = true, typeCapture = request)
+            )
             .capturedDefinitions
         val seed = referenceSeed(definitions, queryFile, caret) ?: return emptyList()
         val hits = LinkedHashMap<Pair<String, Int>, ReferenceLocation>()
@@ -1994,12 +2000,8 @@ public class Project private constructor(
         for (node in nodes) distinct.getOrPut(spanKeyOf(node)) { node }
         if (distinct.isEmpty()) return emptyList()
         val key = keyOf(fileName)
-        val result = ProjectCompiler(overlay).build(
-            projectPath,
-            noEmit = true,
-            typeCapture = TypeCaptureRequest(
-                distinct.values.map { TypeCaptureSpan(key, it.pos, it.end) },
-            ),
+        val result = captureIn(
+            TypeCaptureRequest(distinct.values.map { TypeCaptureSpan(key, it.pos, it.end) }),
         )
         val types = HashMap<Long, String>(result.capturedTypes.size)
         for (captured in result.capturedTypes) {
@@ -2131,6 +2133,63 @@ public class Project private constructor(
         lineMaps.clear()
         sourceIndexes.clear()
         parseOptions = null
+    }
+
+    /**
+     * (INC.2b) ONE capture build, with the CHECK narrowed to the files the request
+     * asks about — `diagnosticsOf`'s partition (INV.6), pointed at a capture.
+     *
+     * The whole program is still crawled, parsed and bound; what narrows is the
+     * per-file CHECKING, so a query about one buffer stops paying for the other 77
+     * files' statements to be walked. Measured on tsc's own 78 compiler sources,
+     * a capture build falls from ~4.6 s to ~1.1 s — the reason every caret-scoped
+     * member here routes through this.
+     *
+     * ## The partition is DERIVED, and that is the whole safety argument
+     *
+     * A span in a file the checker never walks is never walked PAST, so its answer
+     * is not wrong — it is simply ABSENT, and a hover would render nothing with no
+     * error anywhere. That failure is silent by construction, so the partition is
+     * computed HERE from the request's own spans rather than passed in beside them:
+     * a call site cannot forget a file it asked about, because it never states the
+     * set at all. Adding a fifth span list to [TypeCaptureRequest] means adding it
+     * to [captureFiles] in the same commit; `ProjectCaptureNarrowingTest` is what
+     * notices if it is not.
+     *
+     * ## What may NOT come through here
+     *
+     * A query whose CLAIM is program-wide — [referencesAt], and the rename sweep and
+     * its verification — builds whole-program instead. Not because the capture would
+     * be lost (those sweep every file, so a derived partition would name every file
+     * anyway) but because a partition equal to the program is a different code path
+     * for no win, and because those two additionally read the build's DIAGNOSTICS,
+     * which a partition filters to its own files by design.
+     *
+     * Equivalence of the narrowed answer to the whole-program one is not assumed: it
+     * is swept span for span over a real project by `scripts/capture-equivalence.sh`
+     * (types and definitions) and `scripts/capture-channel-equivalence.sh` (members,
+     * scopes and signatures).
+     */
+    private fun captureIn(request: TypeCaptureRequest): ProjectCompiler.Result =
+        ProjectCompiler(overlay).build(
+            projectPath,
+            noEmit = true,
+            recheckOnly = captureFiles(request),
+            typeCapture = request,
+        )
+
+    /**
+     * Every file [request] names — see [captureIn] for why this is derived and not
+     * given. All four span lists, because a member the checker never reached is as
+     * absent as a type it never reached.
+     */
+    private fun captureFiles(request: TypeCaptureRequest): Set<String> {
+        val files = LinkedHashSet<String>()
+        for (span in request.spans) files.add(span.fileName)
+        for (span in request.memberSpans) files.add(span.fileName)
+        for (span in request.scopeSpans) files.add(span.fileName)
+        for (span in request.signatureSpans) files.add(span.fileName)
+        return files
     }
 
     /**
