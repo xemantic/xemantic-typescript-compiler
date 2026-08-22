@@ -70,6 +70,12 @@ class ProjectGatedTailWalkerTest {
     private val cyclicFile = "/proj/src/cyclic.ts"
     private val bystanderFile = "/proj/src/bystander.ts"
 
+    private val labelFile = "/proj/src/labels.ts"
+    private val baseFile = "/proj/src/bases.ts"
+    private val ctorFile = "/proj/src/ctor.ts"
+    private val implFile = "/proj/src/impl.ts"
+
+
     /**
      * TS2449, owned by `checkClassNameInOwnComputedMemberNames`: a class's own name in
      * one of its own computed member names is a temporal-dead-zone use.
@@ -114,6 +120,58 @@ class ProjectGatedTailWalkerTest {
         }
     """.trimIndent() + "\n"
 
+
+    /**
+     * TS1114, owned by `checkDuplicateLabels` — batch 3a. A label may not be
+     * redeclared inside the statement it already labels.
+     */
+    private val labelText = """
+        export function dup(): void {
+            lbl: for (let i = 0; i < 1; i++) {
+                lbl: for (let j = 0; j < 1; j++) {
+                    break lbl;
+                }
+            }
+        }
+    """.trimIndent() + "\n"
+
+    /** TS2310, owned by `checkCircularInterfaceBases` — batch 3a. */
+    private val baseText = """
+        export interface Circ extends Circ {
+            member: string;
+        }
+    """.trimIndent() + "\n"
+
+    /** TS2507, owned by `checkNonConstructorExtends` — batch 3b. */
+    private val ctorText = """
+        declare const notACtor: number;
+        export class Bad extends notACtor {
+        }
+    """.trimIndent() + "\n"
+
+    /**
+     * TS2391, owned by `checkMissingImplementations` — batch 3c, and the pin for a
+     * walker cleared on a PRIVACY argument rather than on "it does nothing but
+     * emit". That walker WRITES a checker field (`currentMissingImplUniqueSymNames`),
+     * so the letter of the rule refuses it; it qualifies because the field is
+     * mentioned by exactly two functions in the whole file, both inside the walker's
+     * own private closure, no other registered pass reaches either, and the reset
+     * sits AFTER the loop so gating the loop cannot leave it armed. This pin is what
+     * notices if that stops being true.
+     *
+     * `checkMixinClassConstructor` (the batch's other privacy clearance, and its
+     * biggest row at 9.71 ms) is deliberately NOT pinned here: its TS2545 needs a
+     * type parameter whose constraint is a constructor type with an OPTIONAL rest
+     * parameter (`emitTs2545IfBrokenMixin` tests `dotDotDotToken && questionToken`),
+     * which is a corpus-unique B72.1 shape rather than something a fixture states
+     * naturally. A fixture written for it produced NOTHING in either arm, and the
+     * whole-program control below is what caught that.
+     */
+    private val implText = """
+        export function missingImpl(x: string): void;
+        export const other: number = 1;
+    """.trimIndent() + "\n"
+
     private fun vfs() = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to config,
@@ -121,6 +179,10 @@ class ProjectGatedTailWalkerTest {
             typeArgsFile to typeArgsText,
             cyclicFile to cyclicText,
             bystanderFile to bystanderText,
+            labelFile to labelText,
+            baseFile to baseText,
+            ctorFile to ctorText,
+            implFile to implText,
         ),
     )
 
@@ -210,5 +272,101 @@ class ProjectGatedTailWalkerTest {
         assert(project.diagnosticsOf(listOf(computedFile)).map { it.code }.sorted() == wholeComputed)
         project.updateFile(typeArgsFile, typeArgsText)
         assert(project.diagnosticsOf(listOf(typeArgsFile)).map { it.code }.sorted() == wholeTypeArgs)
+    }
+
+    // -----------------------------------------------------------------------
+    // BATCH 3 — 45 more walkers. Four pins, one per sub-batch plus the privacy
+    // clearance, each with the control that makes it non-vacuous: the
+    // whole-program build is asserted to report the row FIRST, so the pin cannot
+    // pass by both arms agreeing on an empty list (the lesson of
+    // `ProjectNarrowFalseNegativeTest`).
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `the whole-program build reports all four batch-3 rows - the control`() {
+        val whole = ProjectCompiler(vfs()).build("/proj", noEmit = true)
+        assert(whole.diagnostics.any { it.fileName == labelFile && it.code == 1114 })
+        assert(whole.diagnostics.any { it.fileName == baseFile && it.code == 2310 })
+        assert(whole.diagnostics.any { it.fileName == ctorFile && it.code == 2507 })
+        assert(whole.diagnostics.any { it.fileName == implFile && it.code == 2391 })
+    }
+
+    /** batch 3a — `checkDuplicateLabels`. */
+    @Test
+    fun `a partition of the label file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(labelFile))
+        assert(rowsIn(whole.diagnostics, labelFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, labelFile) == rowsIn(whole.diagnostics, labelFile))
+    }
+
+    /** batch 3a — `checkCircularInterfaceBases`. */
+    @Test
+    fun `a partition of the circular-base file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(baseFile))
+        assert(rowsIn(whole.diagnostics, baseFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, baseFile) == rowsIn(whole.diagnostics, baseFile))
+    }
+
+    /** batch 3b — `checkNonConstructorExtends`. */
+    @Test
+    fun `a partition of the non-constructor-extends file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(ctorFile))
+        assert(rowsIn(whole.diagnostics, ctorFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, ctorFile) == rowsIn(whole.diagnostics, ctorFile))
+    }
+
+    /**
+     * batch 3c — `checkMissingImplementations`, the privacy clearance. Its field
+     * write is walker-private and its reset sits after the loop, so gating the loop
+     * leaves the install intact for every file the partition DOES walk.
+     */
+    @Test
+    fun `a partition of the missing-implementation file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(implFile))
+        assert(rowsIn(whole.diagnostics, implFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, implFile) == rowsIn(whole.diagnostics, implFile))
+    }
+
+    /**
+     * The round-609 direction for batch 3: a partition asked about ONE of the four
+     * new fixtures must not acquire the OTHER three's rows because a gated walker
+     * lost the program-wide context it used to suppress with. An invented row is an
+     * ADDED row, which is what the 78-file sweep watches for at scale.
+     */
+    @Test
+    fun `a partition of one batch-3 file invents nothing for the others`() {
+        val narrowed = ProjectCompiler(vfs())
+            .build("/proj", noEmit = true, recheckOnly = setOf(labelFile))
+        assert(rowsIn(narrowed.diagnostics, baseFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, ctorFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, implFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, bystanderFile).isEmpty())
+    }
+
+    /** The public narrowed-query path, which is what an editor actually drives. */
+    @Test
+    fun `the narrowed query through the public API keeps all four batch-3 rows`() {
+        val project = Project.open("/proj", vfs())
+        for ((file, text) in listOf(
+            labelFile to labelText, baseFile to baseText,
+            ctorFile to ctorText, implFile to implText,
+        )) {
+            val whole = project.diagnostics(file).map { it.code }.sorted()
+            assert(whole.isNotEmpty())
+            project.updateFile(file, text)
+            assert(project.diagnosticsOf(listOf(file)).map { it.code }.sorted() == whole)
+        }
     }
 }
