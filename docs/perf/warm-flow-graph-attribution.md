@@ -521,6 +521,108 @@ this for enum and argument-position fixtures (round 796); the flow-node census i
 its third consumer, and the fixture needs an **early return** (or a ternary /
 `&&`) before any flow node is consulted.
 
+## 11. (INC.9) — the same candidate § 9.3 refused, in the regime where it is worth 26%
+
+*2026-08-22. § 9.3 priced "skip a FILE whose graph is never read" at **52 of 123
+files, 885 nodes, 0.3% of the mints** and stopped. That number is correct and it
+is a number about a FULL BUILD. Under a `recheckOnly` partition — which is what
+every language-service query has been since (INC.1)/(INC.2b) — the population is
+**122 of 123 files**, and the same candidate is the largest single item in the
+incremental floor.*
+
+> **HEADLINE.** `BinderResult.flowGraph` is now built on FIRST ASK.
+> **Floor 514 -> 378 ms (-26%), median narrowed query 542 -> 422 (-22%), ratio
+> at the median file 9.70x -> 12.43x.** `partition-equivalence.sh` EQUIVALENT on
+> all 78 files; the corpus and every whole-program measurement are untouched by
+> construction, because a full build asks for every checked file's graph anyway.
+
+### 11.1 Why the same row prices differently
+
+A share is a share of a POPULATION, and a partition changes the population
+without touching the mechanism. The floor decomposition (`floor-decomposition.sh`,
+`both.floor` arm, wall 523 ms) reads:
+
+| | floor ms | share |
+|---|---:|---:|
+| BIND (78 program files) | 197.8 | 37.8% |
+| — of which `FlowGraphBuilder.build` (123 files incl. libs) | **126.1** | **24.1%** |
+| — of which `bindLexicalScopes` | 66.7 | 12.8% |
+| — of which `bindStatements` | 6.8 | 1.3% |
+| CHECK (the ~190 surviving `init` passes) | 304.2 | 58.2% |
+| crawl WALL + config + imports + post | 18.4 | 3.5% |
+
+The flow graph is the biggest single MECHANISM in that table — bigger than any
+pass in the 280 ms pass table, whose largest row is `init:buildFileLocalTypeMaps`
+at 66 ms — and at the floor its product is read by nothing at all: the seven
+`.flowGraph` readers are five per-CHECKED-FILE spine setups, one
+`checkedResults` loop, and one `binderResults` loop
+(`init:evolvingArrayUseSiteWalks`) that reads it only after
+`if (autoArrayNames.isEmpty()) continue`.
+
+### 11.2 Defer, never omit — and why deferring is sound here
+
+§ 9.3's inverted failure direction is the constraint: a missing flow node makes
+`flowAt` answer null, nothing narrows, and the compiler emits a FALSE POSITIVE.
+Laziness satisfies it exactly — the first reader gets the graph the eager build
+would have produced.
+
+Deferring is sound because `FlowGraphBuilder` is a pure function of the
+`SourceFile`: a fresh builder per file, every cache (`reassignScanCache`,
+`narrowingNodes`, `recordedNodes`) an instance field, `FlowNode` ids that restart
+at 0 per file (§ 9), no `Symbol` and no `Type` minted, and every global it
+touches a probe (`FlowCensus`, `FrontEnd`, `MapCensus`). So nothing about the
+graph depends on WHEN it is built.
+
+`lazy` (SYNCHRONIZED on every target here) is load-bearing rather than
+decorative: `CheckerPool` and `--shareBind` (round 883) each hand ONE
+`BinderResult` set to several threads, so two of them can ask the same file for
+its graph at the same moment. A plain nullable field would publish a
+partially-constructed `FlowGraph` there, and the failure would be a wrong
+narrowing rather than a crash.
+
+### 11.3 What it does NOT do
+
+* **Nothing on a full build.** Every checked file's graph is asked for by its
+  spine setup, so the whole-program arm of every measurement here is unchanged —
+  which is also why no corpus baseline can move.
+* **It does not make § 9.3's container-level candidate any better.** That one is
+  still 22.0% of the minting walk under a perfect oracle, still 0.63% warm, and
+  still refused.
+* **It does not touch `bindLexicalScopes`**, the other half of bind, and that
+  one is NOT a candidate for the same treatment: `init:computeAllEnumValues`
+  iterates `result.lexicalScopes` for every `binderResults` entry, so a lazy
+  version would be forced program-wide anyway.
+
+### 11.4 The receipt is a COUNT, and it reaches the full build too
+
+`FrontEnd`'s per-file flow-graph census, the same instrument on both binaries:
+
+| arm | before | after |
+|---|---:|---:|
+| FLOOR (`recheckOnly` naming a file the program lacks) | 123 | **0** |
+| FULL build | 123 | **78** |
+
+The 45 that vanish from the FULL build are the real-lib `.d.ts` files. They were
+bound — flow graph included — on every compile this repo has ever run, and no
+consumer has ever read one; `bindLibFiles` is per-program by design (see
+`RealLibSnapshots`' KDoc), so the cost was paid per compile. They are cheap
+enough that no wall moves, which is exactly why the COUNT is the evidence and
+the ms is not.
+
+Floor rows after the change (`both.floor`, plain floor arms 480 early / 384 late):
+
+    BIND    197.8 -> 78.8 ms    = bindStatements 7.1 + bindLexicalScopes 73.4, and no flow row at all
+    CHECK   304.2 -> 341.2      drift, not relocation: the same arm's wall fell 506/541 -> 420/468
+                                and the flow row is ABSENT from the floor, so nothing moved into CHECK
+
+### 11.5 The instrument, and the row that moves house
+
+`FrontEnd.BIND_FLOW` still brackets flow-graph construction wherever it happens,
+so the quantity stays comparable across rounds — but it is now charged to
+whichever phase forces it, i.e. usually `FrontEnd.CHECK`. The tell is
+`FrontEnd.BIND`'s residue against its three sub-rows: before this change they
+summed to it, now `BIND_DECL + BIND_LEX` alone do.
+
 ## 10. Reproducing
 
 ```bash
@@ -541,4 +643,14 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 scripts/round865-grid.sh <before-cls> <after-cls>      # 8 profiles, two class dirs
 scripts/round865-probe-cost.sh <before-cls> <after-cls>  # what the probe costs
 scripts/round865-ablate.sh                             # M1..M5, one at a time
+```
+
+```bash
+# (INC.9) — the floor, the sweep, and the two ablation arms
+scripts/floor-decomposition.sh                         # the per-phase + per-pass floor tables
+scripts/partition-equivalence.sh                       # equivalence AND the floor/median arms
+# arm 1: restore the eager build in `Binder.bind` (`result.flowGraph` before the return)
+# arm 2: build the deferred graph from an EMPTY SourceFile
+./gradlew :xemantic-typescript-compiler-core:jvmTest --tests '*LazyFlowGraph*' \
+          :xemantic-typescript-compiler-project:jvmTest --tests '*ProjectLazyFlowGraph*'
 ```

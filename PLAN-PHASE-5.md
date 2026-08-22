@@ -20,6 +20,138 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.9) — the floor re-decomposed, and the flow graph moved onto the ask: 514 -> 378 ms
+
+**MEASURED FIRST, AND THE RANKING HAD MOVED.** (INC.3)'s decomposition was taken
+at a 1,219 ms floor; after (INC.7) gated 68 tail walkers it is a different table,
+and it was re-taken rather than scaled (`scripts/floor-decomposition.sh`, one
+process, palindrome-drawn, `both.floor` arm, wall 523 ms — plain floor arms 601
+early / 498 late in the same process, so read the ms at +-10% and the shares as
+the measurement):
+
+|  | (INC.3), 1,219 ms floor | today, ~523 ms floor |
+|---|---:|---:|
+| the ~400 tail walkers + `init:*` setup (CHECK) | 918.9 (75.4%) | **304.2 (58.2%)** |
+| BIND | 240.6 (19.7%) | **197.8 (37.8%)** |
+| — of which `FlowGraphBuilder.build` | — | **126.1 (24.1%)** |
+| — of which `bindLexicalScopes` | — | 66.7 (12.8%) |
+| — of which `bindStatements` | — | 6.8 (1.3%) |
+| crawl WALL + config + imports + post | 30.8 (2.5%) | 18.4 (3.5%) |
+| `checkSpine` | 0.1 | ~0 |
+
+**So the live hypothesis in the queue — "bind is very likely now the largest
+single component" — is HALF right, and the half that is wrong is the half that
+matters.** BIND is 37.8% against CHECK's 58.2%, so it is not the largest
+COMPONENT; but CHECK is ~190 passes whose largest row is 66 ms, while bind
+contains ONE mechanism at **126 ms**, which is the largest single thing a
+narrowed query pays for. `FlowGraphBuilder` it is.
+
+**LANDED: `BinderResult.flowGraph` IS BUILT ON FIRST ASK (`a0a6d46b`).**
+
+    floor, sweep harness          514 ms -> 378   (-136, -26%)
+    narrowed query, median of 78  542    -> 422   (-120, -22%)
+    ratio at the median file      9.70x  -> 12.43x
+    the floor as a share of it    95%    -> 90%
+    a median file's OWN checking  28 ms  -> 44    (its graph is now charged here)
+
+**THIS IS THE CANDIDATE ROUND 865 PRICED AND REFUSED, IN THE REGIME THAT CHANGES
+ITS POPULATION BY 130x.** `docs/perf/warm-flow-graph-attribution.md` § 9.3 rows
+"skip a FILE whose graph is never read" at **52 of 123 files, 885 nodes, 0.3% of
+the mints** and stops there. That number is right, and it is a number about a
+FULL BUILD, where every checked file's spine setup asks for its graph. Under a
+partition the same rule reaches **122 of 123 files**. A cost prior does not
+transfer across regimes any more than it transfers across families (CLAUDE.md,
+round 789) — and the refusal is still correct for the regime it was written in,
+which is why this is an amendment and not a reversal.
+
+**DEFER, NEVER OMIT — and the soundness argument is that the builder is PURE.**
+Round 865's inverted failure direction is the whole constraint here: a missing
+side table degrades to a correct fallback, but a missing FLOW NODE makes `flowAt`
+answer null, nothing narrows, and the compiler emits a FALSE POSITIVE. Laziness
+satisfies that exactly. It is sound because `FlowGraphBuilder` is a pure function
+of the `SourceFile` — fresh builder per file, every cache an instance field, ids
+that restart per file, no `Symbol` and no `Type` minted, and every global it
+touches is a probe — so nothing about the graph depends on when it is built.
+`lazy` (SYNCHRONIZED) rather than a nullable field is load-bearing: `CheckerPool`
+and `--shareBind` both hand ONE `BinderResult` set to several threads, and an
+unsynchronised field would publish a half-built graph there.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION SAYS WHICH ONES DO NOT.** Two arms,
+one mistake each, on a committed tree. Restoring the EAGER build reddens exactly
+two: `binding a file does not build its flow graph` and `a partition builds
+strictly fewer flow graphs than the whole-program build`. The other laziness
+assertions — same-instance-on-second-ask, and the asked file's own graph being
+built — stay green and are recorded as CONTROLS, because an eager build satisfies
+both. Emptying the deferred graph reddens the narrowing half and leaves the
+block-shaped guard green, which is the asymmetry that says the fixture is about
+the FLOW GRAPH and not about narrowing in general.
+
+**AND THE FIXTURE THAT MEASURED NOTHING, AGAIN.** The core class's first draft
+probed narrowing with a property READ (`x.length` on `string | number`) and was
+VACUOUS IN BOTH DIRECTIONS: this checker reports nothing there un-narrowed, so
+the positive assertion and the ablation would both have passed forever. Its own
+NEGATIVE CONTROL is what caught it — the third time in this arc that a control,
+not a pin, is what earned its place. The probe is now an assignment to an
+incompatible type (CLAUDE.md's standing rule for narrowing probes), and the
+block-shaped guard sits beside it as the control that separates the two
+narrowing mechanisms.
+
+**REFUSED, WITH THE MEASUREMENT: REUSING BINDER OUTPUT ACROSS QUERIES.** The
+queue's step 2 asked for a bind cache keyed on content — whole-program (a) or
+per-file (b). After this round the whole of bind is **72 ms** (decls 7 + lexical
+scopes 67) of a 378 ms floor, so the ceiling on (a) is 19% and on (b) rather
+less. Against that: every `BinderResult` from one `Binder` SHARES its
+`nodeToSymbol` and `moduleInstanceStates` maps — they are the binder's own
+fields, accumulated across files and keyed by `(pos, end)`, which COLLIDES across
+files — so reusing 77 results and re-binding one does not reproduce today's
+tables; and `Checker.mergeSingleSymbol` ADOPTS binder-owned symbols into
+`globals` while `declarations.addAll` is not idempotent (round 881: adopts 406,
+mutates 175), so a second consumer over reused tables appends duplicates. That is
+a large, silent-failure-shaped change for at most 72 ms, when the same 72 ms sits
+beside a 304 ms pass table nobody has narrowed yet. **Not attempted; priced.**
+
+**THE RECEIPT IS A COUNT, NOT A ms — AND IT SAYS THE CHANGE ALSO REACHES FULL
+BUILDS.** `FrontEnd`'s per-file flow-graph census, same instrument before and
+after:
+
+    flow graphs built, FLOOR arm     123 -> 0
+    flow graphs built, FULL arm      123 -> 78
+
+The 45 that vanish from the FULL build are the real-lib `.d.ts` files: they were
+bound — flow graph included — on every compile this repo has ever run, and no
+consumer has ever read one. They are cheap (bind's three sub-rows summed to its
+own row before, so the lib binds were ~2 ms between them), which is why no wall
+moves and why only the count says it happened. The floor's own decomposition
+after the change:
+
+    BIND      197.8 -> 78.8 ms   (decls 7.1 + lexical scopes 73.4, and NO flow row)
+    CHECK     304.2 -> 341.2     (drift: the same arm's wall fell 506/541 -> 420/468)
+    PLAIN floor arms  601/498 -> 480/384
+
+**GATES.** Suite **15,666 / 0 failed / 3 skipped** (15,655 + this round's 11 pins), no
+corpus baseline moved. `scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files**.
+`cost_gate.py` PASS — largest delta **+1.02% `mapped.hits`**, which is the SAME row and the
+same figure batch 3 recorded, i.e. pre-existing drift and not this change (`spine.nodes`
++0.00%, `output.errors` 46). `huge_methods.py --fail-over 0` green on the core module AND on
+`-project`. `scripts/capture-equivalence.sh` **5 divergent spans in 3 of 76 files,
+`narrowRendersMoreAny = 0`** — unmoved, and its own timing arms improved with everything else
+(narrowed capture median **556 -> 420 ms**; `binder.ts` warm rotated **7.51x -> 8.31x**).
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files, members=285 scopes=0
+signatures=1, `narrowRendersMoreAny = 168`** — every count identical to the baseline, and the
+168 is still the 167 `<K extends any>` spellings plus the one real row, not 168 wrong types.
+Both capture runners exit non-zero BY DESIGN; what matters is that their censuses are
+unmoved, and they are.
+
+**NEXT LEVER, PRICED.** The floor is now CHECK-dominated again: 304 ms over ~190
+passes, of which `init:buildFileLocalTypeMaps` is **66 ms** and
+`init:trackAllImportReferences` **30 ms** — two program-wide SETUP passes that
+are 32% of the whole remaining floor between them, i.e. worth more than every
+remaining tail walker put together. Neither is gateable onto the partition as
+(INC.7) gates an emitter (both are collectors, and round 609 priced a starved
+collector at 1,174 false positives), so the question is whether either can be
+made LAZY per file the way the flow graph just was — `buildFileLocalTypeMaps`
+already has a census (round 829) saying 1,499 of its 4,161 entries are ever read.
+
 ### Round (INC.7) batch 3 — 45 tail walkers gated, floor 789 -> 514 ms, and the discount reached 92.9%
 
 **LANDED**: 45 walkers moved from `binderResults` to `checkedResults` in three
@@ -1229,6 +1361,41 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `init:buildFileLocalTypeMaps` is not 3.56% (1.4%), and the two never-warming
   whole-program regex passes are already gone (0.44 ms). **What it leaves is (INC.7), a
   bigger lever than either of the two this entry used to rank first.**
+
+- [x] **(INC.9) THE FLOOR RE-DECOMPOSED AND ITS LARGEST MECHANISM DEFERRED — LANDED
+  2026-08-22.** Re-measured rather than scaled (the (INC.3) table was taken at a 1,219 ms
+  floor; 68 gated walkers later it is a different table): of a ~523 ms floor, CHECK — the
+  ~190 surviving `init` passes — is **304.2 ms (58.2%)**, BIND **197.8 (37.8%)**, crawl +
+  config + imports + post 18.4 (3.5%). Bind is NOT the largest component, but it holds the
+  largest single MECHANISM: `FlowGraphBuilder.build` at **126.1 ms = 24.1% of everything a
+  narrowed query costs**, against a pass table whose biggest row is 66 ms.
+  **`BinderResult.flowGraph` now builds on first ask** — floor **514 -> 378 ms**, narrowed
+  query median **542 -> 422**, ratio at the median file **9.70x -> 12.43x**, and
+  `partition-equivalence.sh` EQUIVALENT on all 78 files. This is exactly the candidate
+  `docs/perf/warm-flow-graph-attribution.md` § 9.3 priced at **0.3%** and refused — a
+  correct number about a FULL build, where every checked file's spine setup asks for its
+  graph; under a partition the same rule reaches 122 of 123 files. **REFUSED in the same
+  round, with the measurement: a cross-query BIND CACHE.** All of bind is now 72 ms of a
+  378 ms floor, so the ceiling is 19%, and against it every `BinderResult` from one
+  `Binder` SHARES its `(pos, end)`-keyed `nodeToSymbol`/`moduleInstanceStates` maps (they
+  are the binder's fields, accumulated across files, and those keys collide across files),
+  while `mergeSingleSymbol` adopts binder-owned symbols and `declarations.addAll` is not
+  idempotent. Large, silent-failure-shaped, for 72 ms.
+
+- [ ] **(INC.10) THE TWO PROGRAM-WIDE SETUP PASSES ARE NOW 32% OF THE FLOOR — 96 ms OF
+  THE 304 ms PASS TABLE, IN TWO ROWS.** `init:buildFileLocalTypeMaps` **66 ms** and
+  `init:trackAllImportReferences` **30 ms** are worth more between them than every
+  remaining ungated tail walker put together (the other ~188 rows average ~1.1 ms), and
+  neither is gateable onto the partition the way (INC.7) gates an emitter — both are
+  COLLECTORS, and round 609 priced a starved collector at 1,174 false positives. The
+  question (INC.9) answers for the flow graph is the one to ask here: can either be made
+  LAZY PER FILE, i.e. built on the first ask for a file's entry rather than for all 78 up
+  front? `buildFileLocalTypeMaps` already carries round 829's census — **12,738 direct
+  resolves producing 4,161 entries of which 1,499 are ever read, 278,355 misses** — so the
+  read population is known and the shape of a per-file key is known. Note round 829's trap
+  before pricing anything from that census: part of what looks deletable there is a
+  DETECTOR (the `typealias` branch's resolutions exist to trip `deepInstantiationBailed`),
+  and laziness must therefore defer, never omit — the same constraint (INC.9) satisfied.
 
 - [ ] **(INC.7) BATCH 4 — 174 UNGATED PASSES LEFT AND A 268.8 ms PASS TABLE, AND THE
   READING-BEATS-SWEEPING WINDOW IS CLOSING (mean ~1.6 ms per walker).** Batches 1-3 LANDED:
