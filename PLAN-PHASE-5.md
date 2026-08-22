@@ -156,6 +156,26 @@ at, and the only unrefused member of the top eight.** Its instrument is this
 round's: give it a produced-vs-consumed count first, then ask whether its product
 has a second consumer the way `buildFileLocalTypeMaps`' turned out to have.
 
+**AND THE 66 ms IS NOT LOST — IT IS BLOCKED ON ONE THING, WHICH IS THE BEST-VALUE
+ITEM THIS ROUND PRODUCED.** The refusal above is a statement about
+`aliasDisplayMap`, not about `buildFileLocalTypeMaps`: an alias name is attached
+to an interned type at its FIRST mint, so the 65 ms is being spent to make that
+first mint happen in a program-wide order. **Make alias display a function of the
+ALIAS DECLARATION rather than of who minted first — attach it when the
+`TypeAliasDeclaration` is resolved, or resolve it on demand at render time — and
+the eager pass stops buying anything the capture channel needs, at which point
+this round's already-built deferral banks 66 ms (query median 402 -> 349, ratio
+12.61x -> 14.17x) with no divergence at all.** Two things make it attemptable:
+the divergence census is a ready-made differential oracle that costs one
+`scripts/capture-equivalence.sh` run and needs no baseline, and the three-point
+table above says exactly how much of the divergence each phase owns. Two things
+make it dangerous: round 754 already recorded that `aliasDisplayMap` excludes
+`Type.Reference` DELIBERATELY (making a bare defaulted generic display as its
+alias broke eight baselines of
+`typeVariableConstraintedToAliasNotAssignableToUnion`), and display order is
+pinned byte-for-byte by ~13k corpus baselines — so this is a logical-parity
+conversation (`docs/logical-parity.md` § 2), not a refactor.
+
 ### Round (INC.9) — the floor re-decomposed, and the flow graph moved onto the ask: 514 -> 378 ms
 
 **MEASURED FIRST, AND THE RANKING HAD MOVED.** (INC.3)'s decomposition was taken
@@ -1539,6 +1559,27 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   DECLARATION branch eager and it is **64.94 ms / 5 spans** — i.e. the deferrable
   part is **1.13 ms of 66**. Do NOT re-open it from round 829's read-count
   census: read-ness of the ENTRY is the wrong question.
+
+- [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
+  DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and
+  reverted the `init:buildFileLocalTypeMaps` deferral: it is worth **66 ms — query
+  median 402 -> 349, ratio 12.61x -> 14.17x** — and the ONLY thing it breaks is
+  `scripts/capture-equivalence.sh`, which goes from 5 divergent spans to 2,722 in
+  46 of 76 files, every one of them a DISPLAY difference in both directions
+  (`ModuleName` vs `ModuleExportName`; full `Extract<ClassDeclaration |
+  ClassExpression, Pick<T, "kind">>` vs narrow `ClassLikeDeclaration`). The 65 ms
+  is therefore not buying any of the map's entries — it is buying a program-wide
+  FIRST-TOUCH ORDER for `aliasDisplayMap`. Attach the alias name when the
+  `TypeAliasDeclaration` is resolved (or resolve it at render time) and the eager
+  pass stops being load-bearing. **The oracle is free** — the full-vs-narrow arms
+  must agree, so no baseline is needed — and (INC.10)'s three-point table says
+  which phase owns which share (fully deferred 0.01 ms / 2,722 spans; `TypeAlias`
+  eager 6.81 / 462; whole DECLARATION branch eager 64.94 / 5). **Two hazards, both
+  recorded**: round 754 excludes `Type.Reference` from `aliasDisplayMap`
+  DELIBERATELY (a bare defaulted generic displaying as its alias moved eight
+  `typeVariableConstraintedToAliasNotAssignableToUnion` baseline lines), and union
+  display order is pinned byte-for-byte across the corpus — so this is a
+  logical-parity conversation (`docs/logical-parity.md` § 2), not a refactor.
 
 - [ ] **(INC.7) BATCH 4 — 174 UNGATED PASSES LEFT AND A 268.8 ms PASS TABLE, AND THE
   READING-BEATS-SWEEPING WINDOW IS CLOSING (mean ~1.6 ms per walker).** Batches 1-3 LANDED:
