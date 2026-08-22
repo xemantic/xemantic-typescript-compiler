@@ -30,7 +30,14 @@ KEYWORD type, one a mapped-type `-?` modifier, which names cannot do and a lazy 
 can — and in 5 of the 45 it was the WHOLE-PROGRAM arm rendering `any`, so both arms were draws
 from an order-dependent cache. **(INC.5)** fixed it at the five capture render sites (never
 inside `typeToString`, the diagnostic renderer, which would have put ~13k baselines in play),
-taking 45 divergent spans to **9**. Suite 15,634 / 0 / 3.
+taking 45 divergent spans to **9**. **(INC.6)** then closed the user-visible remainder: a
+`Readonly<T>` member's copy Symbol now has its type written AT MINT TIME, because the only
+other writer — `getTypeOfSymbol` — is gated on round 778's EMPTY instantiation context and so
+refuses inside every `namespace` body, throwing a successful resolution away and printing `any`.
+**9 -> 5 divergent spans, and the class where a narrowed hover renders more `any` than the full
+build is now ZERO.** The 5 that remain are display-only and in 4 of them the NARROWED arm is the
+better answer (an alias name vs its expanded body; a generic member's `T` the full build froze as
+`any`). Suite 15,640 / 0 / 3.
 
 **A TYPESCRIPT LIBRARY'S PUBLIC API NOW EXPORTS AS A KOTLIN METADATA KLIB (2026-08-22, owner
 directive).** `exportTypeScriptProjectApi(project, entry, out.klib)` writes the artifact a Kotlin

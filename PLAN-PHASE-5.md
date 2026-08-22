@@ -20,6 +20,77 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.6) THE LAST WRONG-DIRECTION CAPTURE DIVERGENCES ARE GONE — LANDED 2026-08-22. The
+sweep reads 9 -> 5 divergent spans of 381,666, and the class a user would call WRONG —
+the narrowed build rendering `any` where the type is known — is at ZERO. Suite 15,640 / 0 / 3
+(+6, this round's pin), no corpus baseline moved, cost gate a measured no-op, partition
+sweep EQUIVALENT on all 78 files.**
+
+**THE DIAGNOSIS HELD, AND THE TRACE SHARPENED IT INTO THE PART THAT EXPLAINS THE PREVIOUS
+ROUND'S BLIND SPOT.** The queue said `materializeModifierUtility` mints FRESH copy symbols
+per materialization, so a warmed `symbolTypes` entry dies with the instance. True, and not
+what was failing: an instrumented run over `builderState.ts` showed `getTypeOfSymbol`
+answering `Map<string & { __pathBrand: any; }, FileInfo>` on **every** ask and
+`symbolTypes` holding **none** of the eight members — because the only writer of that entry
+is `getTypeOfSymbol` itself and **round 778's write gate refuses whenever the ambient
+instantiation context is non-empty**, which inside a `namespace` body it always is
+(`inferenceNamespaceStack`). So (INC.5)'s capture-time force — ask `getTypeOfSymbol`, then
+let `typeToString`'s RAW `symbolTypes[id]` read pick the answer up — is a no-op exactly
+there, and is why its own pin was green: **that fixture captures at FILE level, where the
+context is empty and the write lands.** The fix is `resolveReferenceMembers`' idiom, one
+line: write the copy's type at MINT time, ungated, which is sound where `getTypeOfSymbol`'s
+write is not because the id was minted by that materialization and is reachable only from
+the type just built.
+
+**WHAT DID NOT WORK, AND IT COST TWO BUILDS: TWO FIXTURES FAILED TO REPRODUCE BEFORE THE
+THIRD DID, AND BOTH FAILED BECAUSE THEY VARIED THE WRONG END.** A `Readonly<I>` parameter
+on a function inside `export namespace NS`, captured from another file — green. An
+interface MERGED with a namespace whose body takes `Readonly<State>` — still green. What
+discriminates is where the **CAPTURE** is, not where the `Readonly<>` is: move the capture
+inside a namespace body and both arms render `fileInfos: any`. **So the defect is not a
+partition defect at all** — the whole-program arm renders it too, and only the
+full-vs-narrow sweep on a real project made it visible, because on tsc's sources some other
+file's check happened to warm one arm. The pin therefore asserts BOTH arms, and its
+whole-program assertion is one of the three that were measured RED on the un-fixed binary.
+
+**THE COST GATE'S DRIFT IS PRE-EXISTING AND THE CONTROL IS WHAT SAYS SO** — (INC.5) recorded
+the suspicion, this round measured it. The un-fixed binary prints the same
+`typeOfExpr.calls +0.18%` and a *larger* `mapped.hits +1.14%` than the fixed one (6,465
+against 6,457); `typeNode.bypassed` likewise moves the other way (111,017 -> 110,988). So
+`docs/perf/cost-counters.txt` is stale at HEAD, this change is a no-op on all 20 counters,
+and it is deliberately NOT rebaselined here — a rebaseline would silently adopt someone
+else's drift.
+
+**THE 5 REVERSED ROWS ARE THREE DISTINCT DISPLAY-ONLY MECHANISMS, NONE A LOST MEMBER
+RESOLUTION, AND IN FOUR OF THE FIVE THE NARROWED ARM IS THE BETTER ANSWER.** Diagnosed by
+dumping both arms' FULL strings (the sweep truncates at 140 chars, which is why the entry
+could only call them "overload-set content"):
+
+- **`watch.ts` x2, `toLocaleTimeString`** — identical overload sets; the third overload's
+  parameter renders as the alias `Intl.LocalesArgument` under the narrow arm and as its
+  expanded body `string | Locale | readonly (string | Locale)[] | undefined | undefined`
+  under the full one. `aliasDisplayMap` registration is first-touch. tsc renders the alias,
+  so the narrow arm is right — and the full arm additionally doubles `| undefined`.
+- **`tsbuildPublic.ts` x2, `createNewValue`** — `interface MutateMapOptions<K, T, U>`
+  declares `createNewValue(key: K, valueInNewMap: U): T` and the FULL arm renders `=> any`
+  where the narrow renders `=> T`. This is round 778's shape verbatim, one member over: the
+  un-instantiated member type resolved with no type-parameter scope installed answers `any`
+  AND is the cacheable one, so the first toucher outside a scope freezes it. Fixing it means
+  installing a generic interface's own type parameters before resolving its members — a
+  checker-wide change with diagnostic blast radius, not a capture fix.
+- **`watchPublic.ts` x1, `compilerHost.fileExists`** — the receiver is
+  `CompilerHost & ResolutionCacheHost`, both constituents declare `fileExists`, and the
+  narrow arm renders the member as `(fileName: string) => boolean & (fileName: string) =>
+  boolean`. Redundant, not wrong: the two constituents' member types are equal in shape and
+  distinct in identity under that arm's interning order. A structural dedupe in
+  `getIntersectionType` would touch every intersection in the compiler (CLAUDE.md: identity
+  and display there are load-bearing), and a display-level dedupe on the capture path would
+  MASK an identity difference rather than fix it. Recorded, not attempted.
+
+**SO (INC.2b)'s TRADEOFF HAS INVERTED AND THE ENTRY IS UPDATED WITH THE MEASUREMENT, NOT A
+DECISION.** Zero spans where a narrowed hover renders more `any`; the remaining asymmetry
+now runs the other way in 4 of 5 rows. The decision stays the owner's.
+
 **(INC.3) THE FLOOR IS DECOMPOSED, AND IT INVERTED ITS OWN LEVER ORDER — 2026-08-22. Of a
 1,219 ms floor: tail walkers 806.7 ms (66.2%), `init:*` setup 112.2 (9.2%), BIND 240.6
 (19.7%), crawl 27.4 (2.2%), `checkSpine` 0.1 ms, residue 3.1. The queue had ranked bind
@@ -1938,8 +2009,20 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   truth about a type. Re-run the sweep after (INC.5) and this lands for free — the harness
   and the script are committed, so the re-test is one command.
 
-- [ ] **(INC.6) THE LAST 4 DIVERGENT SPANS, AND THEY ARE WHAT STANDS BETWEEN (INC.2) AND
-  A 3.68x LANGUAGE SERVICE.** After (INC.5) the capture sweep reads **9 divergent spans in
+- [x] **(INC.6) THE LAST 4 WRONG-DIRECTION SPANS ARE GONE — LANDED 2026-08-22.** The
+  capture sweep reads **5 divergent spans in 3 of 76 files** out of 381,666, and
+  `narrowRendersMoreAny = 0`: the whole user-visible class is closed. The fix is one line
+  plus its KDoc in `materializeModifierUtility` — the member copy's type is populated AT
+  MINT TIME, ungated. **The diagnosis in the entry below HELD and was sharpened by the
+  trace**: the copies being fresh is only half of it, and the half that explains why
+  (INC.5)'s pin was green is that `getTypeOfSymbol` RESOLVES the member correctly every
+  time and round 778's write gate refuses to RECORD it whenever the ambient context is
+  non-empty — which inside a `namespace` body it always is. So (INC.5)'s force-then-read-
+  the-cache is a no-op exactly there. Suite 15,640 / 0 / 3, no corpus baseline moved, cost
+  gate's drift measured PRE-EXISTING against the un-fixed binary. The 5 REVERSED rows are
+  diagnosed in the session note and are three separate display-only mechanisms, in four of
+  which the NARROW arm is the better answer. ORIGINAL ENTRY: **THE LAST 4 DIVERGENT SPANS,
+  AND THEY ARE WHAT STANDS BETWEEN (INC.2) AND A 3.68x LANGUAGE SERVICE.** After (INC.5) the capture sweep reads **9 divergent spans in
   4 of 76 files — 4 wrong-direction and 5 reversed**, out of 381,666. All 4 of the
   wrong-direction rows are `Readonly<BuilderState>` in `builderState.ts`, and the cause is
   named: `materializeModifierUtility` mints FRESH copy symbols on every materialization,
@@ -1956,14 +2039,17 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   them before assuming they are one.
 
 - [ ] **(INC.2b) OWNER DECISION: LAND THE CAPTURE NARROWING NOW, OR AFTER (INC.6)?** The
-  refusal recorded above was written against 45 divergent spans; it is now **4** in the
-  user-visible direction (1 in 95,000 captured spans, all in one file's
-  `Readonly<BuilderState>`), against **3.68x** on every hover, completion, go-to-definition
-  and signature help — the queries an editor fires most. The argument for waiting is that a
-  language service should not knowingly render a wrong type. The argument for landing is
-  that the whole-program arm ALREADY renders a wrong type in 5 other places (the reversed
-  family), so "whole-program is correct" is not the status quo it appears to be, and the
-  wiring is a one-line change per call site that (INC.6) then makes moot. **Not decided
+  refusal recorded above was written against 45 divergent spans; after (INC.6) it is
+  **ZERO** in the user-visible direction — `narrowRendersMoreAny = 0` over 381,666 spans —
+  against **5.26x** measured this round on every hover, completion, go-to-definition and
+  signature help. **What is left is 5 spans in 3 files, all display-only and all diagnosed in
+  (INC.6)'s session note: 2 where the narrow arm renders the ALIAS name (`Intl.LocalesArgument`)
+  and the full arm its expanded body, 2 where the FULL arm renders a generic interface
+  member's return as `any` where the narrow renders the declared `T`, and 1 where the narrow
+  arm renders an intersection member as the redundant `X & X`. In 4 of the 5 the narrow arm
+  is the better answer.** So the correctness argument for waiting has inverted: the
+  whole-program arm is now the one rendering a worse type more often, and the wiring is a
+  one-line change per call site. **Not decided
   autonomously: it trades a measured correctness regression against a measured latency win,
   which is the owner's call.** Everything needed to execute either way is committed — the
   gate, the census and the call sites are named in (INC.2).
