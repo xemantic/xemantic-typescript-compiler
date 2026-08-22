@@ -1978,7 +1978,27 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   whole-program regex passes are already gone (0.44 ms). **What it leaves is (INC.7), a
   bigger lever than either of the two this entry used to rank first.**
 
-- [ ] **(INC.7) 376 OF THE 400 TAIL WALKERS ITERATE `binderResults`, SO THEY COST THE SAME
+- [ ] **(INC.7) BATCH 2 — 368 WALKERS LEFT, RE-PRICED. Batch 1 LANDED 2026-08-22: 8 pure
+  emitters gated, floor 1,207 -> 1,029 ms, narrowed query 1,077 -> 989, suite unmoved and
+  the sweep still EQUIVALENT.** **Re-price before believing any total: the batch banked
+  ~79% of the naive sum of its rows** (162.6 shed, floor fell 128.4, +34.2 reappeared
+  elsewhere — round 788's law, since the gated walkers were driving MEMOIZED resolutions
+  the first later asker now pays for). The discount should shrink as the batch grows,
+  because today's relocation targets are themselves ungated tail walkers; measure whether
+  it does, at batch 2, before extrapolating to 368.
+  **START WITH `checkNamespaceUsedAsType`** — batch 1 disqualified it only by the letter of
+  the rule (it installs `currentCheckLocals`/`currentTypeProvidingNames`) and then measured
+  that **no other pass mentions either field** and both are restored at pass end, i.e. the
+  ambient is walker-private. The evidence is already gathered. `checkTypeArgumentConstraints`
+  stays OUT: it installs fields 108 and 106 other passes read, and can be a first touch into
+  `typeParamInternCache`.
+  **Method that worked and should be reused**: a call-graph analyzer computing each
+  walker's PRIVATE closure (functions no other registered `pass(...)` reaches, which cuts
+  the shared type engine away), reporting every checker-field write and every `diagnostics`
+  read-back — but note its own trap in CLAUDE.md: a comment/string stripper that handles
+  `'x'` still desynchronises on `'\''`, blanking ~2,500 declarations and reporting a
+  confident "no hazard" over an EMPTY closure. Pin the stripper with a positive control.
+  ORIGINAL ENTRY: 376 OF THE 400 TAIL WALKERS ITERATE `binderResults`, SO THEY COST THE SAME
   WHETHER THE CHECKER CHECKS 78 FILES OR NONE — 806.7 ms, 66% OF THE FLOOR, AND THE FIX MAY
   BE A LOOP RECEIVER PER WALKER.** `checkedResults` is `binderResults` EXACTLY when
   `assignedFileNames == null` (`Checker.kt:110`), so moving a walker's loop onto it is a
