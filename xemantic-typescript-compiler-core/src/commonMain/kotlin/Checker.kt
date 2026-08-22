@@ -23025,7 +23025,7 @@ class Checker(
      * at the first control-flow statement; `typeof x` and write-targets exempt.
      */
     private fun checkTryCatchOnlyAssignedVarReads() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             tcvProcessScope(result.sourceFile.statements, result.sourceFile.text, fileName, emptySet())
@@ -33161,7 +33161,7 @@ class Checker(
      * classPos)` clamped to the heritage clause start.
      */
     private fun checkMixinClassConstructor() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -62644,7 +62644,7 @@ interface DataView {
      * not immediately following the declaration."
      */
     private fun checkMissingImplementations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             // Skip JS files — TS8017 handles bodiless functions in JS
@@ -62851,7 +62851,7 @@ interface DataView {
     // method-chain analogue of the bare-identifier B460/B461 walker.
     // -----------------------------------------------------------------------
     private fun checkGenericThenChainConstraints() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
@@ -80852,7 +80852,7 @@ interface DataView {
      * different sibling scopes.
      */
     private fun checkCrossNamespaceClassHeritageUBD() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -81430,7 +81430,7 @@ interface DataView {
      */
     private fun checkUninitializedLetCapturedReads() {
         if (!(options.noImplicitAny || options.strict) || options.noImplicitAnyExplicitlyFalse) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -81871,7 +81871,7 @@ interface DataView {
     // shapes bail.
     // ------------------------------------------------------------------
     private fun checkObjectRestUnspreadableAccess() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -90741,7 +90741,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkConstructorReturnTypeParam() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -90868,7 +90868,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkConstructorReturnPrimitiveLiteral() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -131107,7 +131107,7 @@ interface DataView {
      * misses). Flips `propertiesAndIndexers`.
      */
     private fun checkFullIndexConstraints() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -131546,7 +131546,7 @@ interface DataView {
      * assignment is ALWAYS a tsc error). `new T(<number>)` always yields `T<ArrayBuffer>`.
      */
     private fun checkTypedArrayCrossAssignment() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -134928,7 +134928,7 @@ interface DataView {
      * property type (only removes a diagnostic for a genuinely-incompatible default).
      */
     private fun checkTupleDestructuringDefaultTypes() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             walkStmtsForTupleDestructDefaults(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
         }
     }
@@ -151384,7 +151384,7 @@ interface DataView {
      * slice of the value-type node. `new v2(args)` (NewExpression) is correctly NOT flagged.
      */
     private fun checkConstructSigOnlyCalls() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             scanConstructSigOnlyCalls(result.sourceFile.statements, result.sourceFile.text, fileName)
@@ -168404,7 +168404,7 @@ interface DataView {
      */
     private fun checkOptionalParamNullishArithmetic() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -172877,7 +172877,7 @@ interface DataView {
      *    so two bare TPs whose constraint chain doesn't connect → TS2322 + "Type 'U' is not
      *    assignable to type 'T'." + could-be-instantiated chain + related TS2208 at U's decl. */
     private fun checkIndexSigRecordAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             // A user-declared `Record` shadows the built-in utility type — bail for the file.
