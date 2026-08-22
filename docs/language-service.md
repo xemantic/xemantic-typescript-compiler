@@ -291,6 +291,16 @@ whole-program query after a narrowed one therefore still costs a build. That is
 the price of the narrow query being narrow, and it is what the sharpest pin in
 `ProjectNarrowDiagnosticsTest` holds.
 
+**It only pays on a large program, and that is worth knowing before you wire it.** The
+saving is the *checking* of the other files; what remains — the crawl, the parse, the bind
+and the program-wide passes — is a floor a narrow query pays in full. On tsc's own 78
+sources that floor is 1,092 ms of a 1,107 ms query, i.e. a median file's own checking is
+**15 ms**. On a three-file project the floor is 90% of a query that is already under
+100 ms, and the narrow form measured **0.87x** — slightly *slower* than the whole build,
+because there was nothing worth not doing. Neither case hurts a host that follows the rule
+above (a clean project answers from the cached build and does not compile at all), but do
+not expect a ratio on a small project.
+
 **When to use which.** Wire `diagnosticsOf` to the editor's per-file annotator —
 it is the query an IDE actually makes, and the one whose cost falls with the size
 of what the user is looking at rather than with the size of their project. Keep
@@ -1660,8 +1670,15 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    **a median file's own checking is 15 ms, against a 1,092 ms floor** — the crawl, the
    parse, the bind and the program-wide passes, which run whatever is narrowed. So the
    architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) is still what removes the
-   floor, but it was never the prerequisite for narrowing the check, and the interactive
-   queries below have not been narrowed yet.
+   floor, but it was never the prerequisite for narrowing the check. **The interactive
+   queries — hover, completion, go-to-definition, signature help — are deliberately NOT
+   narrowed**: it was tried, measured at 3.73x, and refused because 45 of 381,666 captured
+   spans render a different type under a partition, a type reference inside a foreign
+   file's anonymous object type literal collapsing to `any`. That is a pre-existing
+   order-dependence in the checker rather than a property of narrowing — in 5 of the 45 it
+   is the WHOLE-PROGRAM build that shows `any` — and a tooltip that lies about a type is
+   worse than a slow tooltip. `scripts/capture-equivalence.sh` is both the gate that
+   refused it and the instrument for fixing it.
 2. ~~A computed object-literal key `{ ["p"]: v }` is outside the swept population.~~
    **CLOSED round 932**, `(API.17)` — and it was the last SILENT shape anywhere in this
    API. Round 930 measured it as reported in two of its three shapes

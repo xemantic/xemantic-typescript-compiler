@@ -20,6 +20,53 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**(INC.2) REFUSED AND (INC.4) LANDED — 2026-08-22, same session as (INC.1). The refusal is
+the product: narrowing the CAPTURE queries would have been 3.73x and it renders a WRONG
+TYPE in 45 of 381,666 spans, so hover/completion/definition/signature help stay
+whole-program builds.**
+
+**WHAT WAS MEASURED.** `scripts/capture-equivalence.sh` (new, committed) asks every
+identifier of every file for its captured type and definition, twice — once whole-program,
+once with `recheckOnly = {thatFile}` — and compares span for span: **381,666 spans, 76
+files, 45 divergent spans in 11 files, types 45, definitions 0**, of which 40 render MORE
+`any` under the partition. Timings, warm and rotated on `binder.ts` (7,787 spans): full
+4,719 ms, narrowed 1,264 ms.
+
+**THE MECHANISM IS FIRST-TOUCH CACHE ORDER, AND THE CENSUS PROVES IT RATHER THAN ASSUMING
+IT.** The collapsing shape is a type reference INSIDE a foreign file's ANONYMOUS OBJECT
+TYPE LITERAL — `{ program?: any }` for `{ program?: Program }` — with the outer signature
+intact. **In 5 of the 45 the FULL build is the one rendering `any`** where the narrowed
+build renders `T`, which rules out "narrow is simply worse": `symbolTypes` persists the
+first resolution (round 778) and the two arms differ in which file asks first. So the
+sweep is a DETECTOR for a pre-existing order-dependence in what a hover reports, now
+queued as **(INC.5)** with the full-vs-narrow pair as its differential oracle — no
+baseline needed, because the two arms must agree.
+
+**AND IT DOES NOT REACH DIAGNOSTICS, WHICH IS THE QUESTION (INC.1) RESTS ON, SO IT WAS
+MEASURED AND NOT ARGUED.** The check path is keyed by the node's OWNING file
+(`lookupPerFileForNode`, rounds 508/509); the capture path is not. A fixture whose error
+exists only while the literal's member keeps its declared type
+(`const n: number = make().program`, the literal in a second file, `Program` in a third)
+is reported identically by the partition, by the public API and by the whole-project sweep.
+**THE FIRST FIXTURE FOR IT WAS VACUOUS AND ITS OWN CONTROL CAUGHT THAT**: an
+argument-position error (`use({ program: 1 })`) is not reported by this compiler at all, so
+both arms agreed on an empty list and the pin passed having measured nothing. Any
+equivalence pin over two arms needs a control asserting the reference arm is NON-EMPTY.
+
+**(INC.4) LANDED**: `ProjectCompiler.build` now REFUSES `recheckOnly` together with emit.
+The Transformer queries the checker it is handed, so a partition would decide import
+elision from a checker that never walked the files whose uses keep an import alive —
+wrong JavaScript, silently, with every diagnostic still agreeing. Nothing in the repo does
+it today; the parameter is public and the next caller would have had no way to know.
+4 pins including both negative controls.
+
+**A SECOND CAVEAT FOR HOSTS, MEASURED WHILE PROBING: NARROWING ONLY PAYS ON A LARGE
+PROGRAM.** On a three-file project the narrow query is **0.87x** — slower than the whole
+build — because the floor is 90% of it and there was nothing worth not doing. Recorded in
+`docs/language-service.md` § 4a beside the 4.35x, because a host that reads only the ratio
+would wire it the wrong way round for small projects.
+
+
 **(INC.1) THE LANGUAGE SERVICE'S ERROR REPORTING IS NOW A PARTITION — LANDED 2026-08-22,
 owner directive ("make the LanguageService truly incremental, as if it were providing
 perfect support for an IntelliJ TypeScript plugin"). `Project.diagnosticsOf(fileNames)`
@@ -1766,24 +1813,37 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `scripts/partition-equivalence.sh` and the prize was measured first by
   `scripts/incremental-cost.sh`.
 
-- [ ] **(INC.2) THE INTERACTIVE QUERIES ARE STILL WHOLE-PROGRAM BUILDS, AND THEY ARE THE
-  ONES AN EDITOR FIRES MOST.** `quickInfoAt`, `definitionsAt`, `completionsAt`,
-  `signatureHelpAt`, `semanticsAt`/`fileSemantics` and `documentHighlightsAt` each cost a
-  full build (4.7-6.2 s, `docs/language-service.md` § 14) — and every one of them captures
-  spans in **one file**, which is exactly the shape `recheckOnly` narrows. The checker
-  records a capture while it walks past the span, so a walk narrowed to that file still
-  walks those spans: expect ~1.1 s, the same 4.35x. **`referencesAt` and `renameAt` are
-  OUT by construction** — their capture spans the whole program's identifiers, so the
-  partition would be everything.
-  **IT NEEDS ITS OWN SWEEP AND MUST NOT INHERIT (INC.1)'s.** (INC.1) compared
-  DIAGNOSTICS; this compares CAPTURED TYPES, which is a claim about first-touch type
-  identity — interning order, `aliasDisplayMap`, the alias a union displays under — and
-  those are order-dependent by construction in this compiler. The instrument is the same
-  shape: for every file, `fileSemantics(f)` captured full vs narrowed, span for span,
-  kind + display string + definitions. If it diverges, STOP: a hover that renders a
-  different type name under a narrowed build is a worse defect than a slow hover.
-  Sequence: harness first (it can drive `ProjectCompiler` directly with and without
-  `recheckOnly`, so it gates the seam before a line of `Project` changes), then the wiring.
+- [x] **(INC.2) NARROWING THE INTERACTIVE CAPTURE QUERIES — REFUSED 2026-08-22, AND THE
+  REFUSAL IS A MEASUREMENT.** It would have been **3.73x** (full capture median 4,614 ms
+  against a narrowed 1,110; warm rotated on `binder.ts`, 7,787 spans: 4,719 vs 1,264).
+  `scripts/capture-equivalence.sh` compared **381,666 spans over 76 files**, both arms,
+  span for span: **45 spans in 11 files diverge — types 45, definitions 0.**
+  **THE SHAPE:** a type reference INSIDE a foreign file's ANONYMOUS OBJECT TYPE LITERAL
+  renders `any` under the partition where the whole-program build renders the declared
+  type — `(state: { program?: any | undefined; compilerOptions: any })` for
+  `{ program?: Program | undefined; compilerOptions: CompilerOptions }`. The outer
+  signature survives; it is the literal's MEMBERS that collapse.
+  **THE MECHANISM IS FIRST-TOUCH CACHE ORDER, NOT THE PARTITION, AND THE CENSUS PROVES IT
+  RATHER THAN ASSUMING IT: in 5 of the 45 the FULL build is the one rendering `any` where
+  the narrowed one renders `T`** (`(key: K, valueInNewMap: U) => any` against `=> T`).
+  `symbolTypes` persists the first resolution (round 778's order-dependence), and which
+  file touches a foreign type first differs between the arms. So the diff is a DETECTOR
+  for a defect that is already there — see (INC.5) — and narrowing merely makes it
+  observable.
+  **IT DOES NOT REACH DIAGNOSTICS, AND THAT WAS MEASURED TOO, BECAUSE IT IS THE QUESTION
+  (INC.1) RESTS ON.** A fixture whose error exists only while the literal's member keeps
+  its declared type (`const n: number = make().program`, where `make(): { program: Program }`
+  lives in a second file and `Program` in a third) is reported IDENTICALLY by the
+  partition — `ProjectNarrowFalseNegativeTest`, and the whole-project sweep on the same
+  fixture agrees. **Its FIRST shape was vacuous** — an argument-position error
+  (`use({ program: 1 })`) this compiler does not report at all, so both arms agreed on an
+  empty list and the pin passed while measuring nothing. Its own control caught that,
+  which is the reason to write one.
+  **SO: hover, completion, go-to-definition and signature help stay whole-program builds.**
+  A tooltip that says `any` where the type is `Program` is a worse defect than a slow
+  tooltip, and 45 wrong spans is 45 too many for a query whose only job is to tell the
+  truth about a type. Re-run the sweep after (INC.5) and this lands for free — the harness
+  and the script are committed, so the re-test is one command.
 
 - [ ] **(INC.3) DECOMPOSE THE FLOOR — IT IS 99% OF A NARROWED QUERY AND NOTHING ELSE IS
   LEFT.** 1,092 ms warm on the compiler profile, measured free by a partition naming a
@@ -1818,6 +1878,41 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `noEmit = true`, so nothing today is wrong — but the parameter is public and the next
   caller will not know. `require(noEmit || recheckOnly == null)`, with the message naming
   the caller's mistake, exactly as `compileParsed` already does for `checkedSink`.
+
+- [ ] **(INC.5) WHAT A HOVER REPORTS DEPENDS ON PROGRAM ORDER — A PRE-EXISTING DEFECT
+  (INC.2) MADE VISIBLE, AND IT IS NOT ABOUT PARTITIONS.** `symbolTypes` persists the first
+  resolution of a symbol's type, and resolving a type reference inside an anonymous object
+  type literal answers differently depending on which file asks first: in the same program,
+  the whole-program build renders `(key: K, valueInNewMap: U) => any` for a span where a
+  narrowed build renders `=> T`, and elsewhere the reverse. **Neither arm is canonically
+  right; they are two draws from an order-dependent cache.** Today the order is fixed by
+  the crawl (`ProjectCompiler.walk` sorts, and CLAUDE.md records that three orders of the
+  same 78 files move `typeNode.bypassed` ~1% with every diagnostic bit-identical), so a
+  user sees ONE answer consistently — which is why this has never been reported. It is
+  still a wrong answer where the collapse is to `any`.
+  **THE INSTRUMENT ALREADY EXISTS**: `scripts/capture-equivalence.sh` reads 45 divergent
+  spans out of 381,666 in one run, and the full-vs-narrow pair is a differential ORACLE
+  for it — no baseline needed, because the two arms must agree. Start there rather than by
+  reading the resolver: the census names the 11 files and the exact spans.
+  **THE SEAM IS NAMED BY THE DIVERGENT ROWS THEMSELVES, AND IT IS NOT NAME RESOLUTION.**
+  One row loses a KEYWORD type (`{ fileName: string }` -> `{ fileName: any }`) and another
+  a mapped-type modifier (`Required<{ reportInferenceFallback(node: Node): void }>` ->
+  `Required<{ reportInferenceFallback?: any | undefined }>`). A name resolving in the wrong
+  file's scope cannot lose `string` or `-?`; an UNRESOLVED MEMBER TABLE can. So this is
+  round 833's hazard one layer up — *a target type's member table is LAZY, so a verdict
+  depends on whether an earlier line in the file happened to resolve that type* — with
+  `typeToString` as the reader and A DIFFERENT FILE'S CHECK as the "earlier line" that a
+  whole-program build always happens to perform.
+  **THE FIX IS THEREFORE SMALL AND SURGICAL, AND IT BELONGS IN THE CAPTURE PATH ONLY:**
+  force `resolveStructuredTypeMembers` on the type about to be rendered (and on the member
+  types it recurses into) before `typeToString`. Doing it inside `typeToString` itself
+  would change DIAGNOSTIC MESSAGES program-wide and put ~13k corpus baselines in play for
+  a language-service defect; doing it where the capture records its display string cannot
+  move a single diagnostic, which is what makes it landable in one round.
+  Then re-run `scripts/capture-equivalence.sh`: expect the 40 `any` rows to clear and the
+  5 REVERSED rows (where the full build is the one showing `any`) to need their own
+  diagnosis — they are the same order-dependence seen from the other side.
+  Closing it also unblocks (INC.2)'s 3.73x.
 
 
 - [ ] **(KIR.LOWER.2) THE SAME ABSENT-DECLARATION TRAP MAY BE LIVE IN `ErasedTypes` — a LEAD, not a
