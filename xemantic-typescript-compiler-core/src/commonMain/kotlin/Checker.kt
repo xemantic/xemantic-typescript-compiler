@@ -5751,7 +5751,7 @@ class Checker(
             )
         }
         label.append(')')
-        val returnTypeText = sig.resolvedReturnType?.let { typeToString(it) } ?: "any"
+        val returnTypeText = sig.resolvedReturnType?.let { typeCaptureRenderType(it) } ?: "any"
         label.append(": ").append(returnTypeText)
         return CapturedSignature(
             label = label.toString(),
@@ -5801,7 +5801,7 @@ class Checker(
                         formatBindingPatternFromAst(n as Node)
                     else -> symbol.name
                 },
-                typeText = typeToString(getTypeOfSymbol(symbol)),
+                typeText = typeCaptureRenderType(getTypeOfSymbol(symbol)),
                 // `minArgumentCount` is the DECLARATION's required count, so this one
                 // test covers `p?`, a defaulted parameter and everything after a rest.
                 optional = !isRest && index >= sig.minArgumentCount,
@@ -5839,7 +5839,7 @@ class Checker(
         if (resolved === errorType || resolved === unresolvedType) {
             return formatTypeForDisplay(typeNode) ?: "any"
         }
-        return typeToString(resolved)
+        return typeCaptureRenderType(resolved)
     }
 
     /**
@@ -6185,7 +6185,7 @@ class Checker(
         // A LinkedHashSet: a union whose constituents give the member the SAME type
         // must render that type once, and the order is constituent order.
         val types = LinkedHashSet<String>()
-        for (symbol in symbols) types.add(typeToString(getTypeOfSymbol(symbol)))
+        for (symbol in symbols) types.add(typeCaptureRenderType(getTypeOfSymbol(symbol)))
         val first = symbols[0]
         val declaration = first.valueDeclaration ?: first.declarations.firstOrNull()
         val modifiers = typeCaptureMemberModifiers(first)
@@ -7614,6 +7614,119 @@ class Checker(
     }
 
     /**
+     * (INC.5) Render [type] for a CAPTURE, having first forced every member table
+     * and member TYPE the rendering is about to read.
+     *
+     * ## The defect this exists for, and why it is a DISPLAY defect and not a typing one
+     *
+     * [typeToString]'s anonymous-object branch renders a property as
+     * `symbolTypes[p.id]` — a RAW CACHE READ — and prints `any` when that entry is
+     * absent. Nothing populates it for the two utility materializers:
+     * `materializeMemberSetUtility` (`Pick`/`Omit`) hands back the SOURCE interface's
+     * own member symbols, and `materializeModifierUtility` (`Readonly`) hands back
+     * fresh copies carrying the source declarations — in both cases the member's type
+     * is resolvable from its declaration and simply has not been asked for yet. So
+     * whether a hover reads `{ fileName: string }` or `{ fileName: any }` depends on
+     * whether some OTHER file's check happened to ask [getTypeOfSymbol] about that
+     * member first, which a whole-program build usually does and a build narrowed by
+     * `recheckOnly` does not.
+     *
+     * Measured by `scripts/capture-equivalence.sh` over tsc's own sources before this
+     * landed: of 381,666 captured spans, **45 in 11 files rendered differently**
+     * whole-program vs narrowed — types 45, definitions 0 — and in 5 of the 45 it was
+     * the WHOLE-PROGRAM arm showing `any`. Neither arm is canonically right; they are
+     * two draws from an order-dependent cache, which is (INC.5)'s whole point.
+     *
+     * ## Why it is forced HERE and not inside [typeToString]
+     *
+     * [typeToString] is the DIAGNOSTIC renderer. Forcing there would put ~13k corpus
+     * baselines in play — and pay for the walk on every compile — for what is a
+     * language-service defect. This runs only on the capture path, which is off unless
+     * a caller supplied a `TypeCaptureRequest`, so an ordinary compile executes none of
+     * it and not one diagnostic can move.
+     *
+     * ## The two hazards, and what bounds them
+     *
+     * A member's type can reach back to the type it was reached from, so the walk
+     * carries a `seen` set keyed by `Type.id` plus a depth horizon — the same pair
+     * [typeCaptureCollectMembers] uses, and for the same reason: a real hover subject
+     * nests a couple of levels, so the horizon is a fail-safe rather than a policy.
+     * The member tables carry their own re-entrancy guard
+     * ([resolveStructuredTypeMembers]), so this adds no new cycle risk of its own.
+     *
+     * And the ASKING is plain [getTypeOfSymbol]: it writes `symbolTypes` only under
+     * round 778's own empty-context gate, so this can never freeze a context-dependent
+     * resolution that an ordinary check would have refused to cache. Where the ambient
+     * is not empty nothing is cached and the display degrades to exactly what it was.
+     */
+    private fun typeCaptureRenderType(type: Type): String {
+        typeCaptureResolveForDisplay(type, HashSet(), 0)
+        return typeToString(type)
+    }
+
+    /**
+     * (INC.5) Force what [typeToString] will READ out of [type], recursively.
+     *
+     * Follows [typeToString]'s own shape rather than every edge of the type graph: a
+     * [Type.Interface] and a [Type.Reference] render as a NAME (plus, for the
+     * reference, its type arguments), so neither one's member table is ever printed
+     * and neither is walked here. Only a plain [Type.Object] can render a member body,
+     * which is exactly the population the utility materializers produce.
+     *
+     * `aliasDisplayMap` is consulted first because it SHORT-CIRCUITS the rendering:
+     * a type registered there prints as `Alias<args>`, so the args are what needs
+     * forcing — `Required<Pick<SymbolTracker, "reportInferenceFallback">>` is one of
+     * the 45 divergent rows and its whole content is an alias argument.
+     */
+    private fun typeCaptureResolveForDisplay(type: Type, seen: MutableSet<Int>, depth: Int) {
+        if (depth > TYPE_CAPTURE_MEMBER_MAX_DEPTH) return
+        if (!seen.add(type.id)) return
+        aliasDisplayMap[type.id]?.let { (_, aliasArgs) ->
+            for (arg in aliasArgs) typeCaptureResolveForDisplay(arg, seen, depth + 1)
+        }
+        when (type) {
+            is Type.Union -> for (member in type.types) {
+                typeCaptureResolveForDisplay(member, seen, depth + 1)
+            }
+            is Type.Intersection -> for (member in type.types) {
+                typeCaptureResolveForDisplay(member, seen, depth + 1)
+            }
+            is Type.Interface -> {} // renders as its own name
+            is Type.Reference -> type.resolvedTypeArguments?.let { args ->
+                for (arg in args) typeCaptureResolveForDisplay(arg, seen, depth + 1)
+            }
+            is Type.Object -> {
+                resolveStructuredTypeMembers(type)
+                type.tupleElementTypes?.let { elements ->
+                    for (element in elements) typeCaptureResolveForDisplay(element, seen, depth + 1)
+                }
+                type.properties?.let { properties ->
+                    for (property in properties) {
+                        typeCaptureResolveForDisplay(getTypeOfSymbol(property), seen, depth + 1)
+                    }
+                }
+                type.callSignatures?.let { signatures ->
+                    for (signature in signatures) typeCaptureResolveSignature(signature, seen, depth)
+                }
+                type.constructSignatures?.let { signatures ->
+                    for (signature in signatures) typeCaptureResolveSignature(signature, seen, depth)
+                }
+                type.stringIndexInfo?.let { typeCaptureResolveForDisplay(it.type, seen, depth + 1) }
+                type.numberIndexInfo?.let { typeCaptureResolveForDisplay(it.type, seen, depth + 1) }
+            }
+            else -> {}
+        }
+    }
+
+    /** (INC.5) The parameter and return types a rendered signature will print. */
+    private fun typeCaptureResolveSignature(sig: Signature, seen: MutableSet<Int>, depth: Int) {
+        for (parameter in sig.parameters) {
+            typeCaptureResolveForDisplay(getTypeOfSymbol(parameter), seen, depth + 1)
+        }
+        sig.resolvedReturnType?.let { typeCaptureResolveForDisplay(it, seen, depth + 1) }
+    }
+
+    /**
      * (API.3) Records [node]'s type under [fileName], FIRST WINS.
      *
      * First wins because the two hooks are ordered innermost-ambient-first: a
@@ -7635,7 +7748,7 @@ class Checker(
         val savedCheckFileName = currentCheckFileName
         currentCheckFileName = fileName
         try {
-            val text = typeToString(typeCaptureReportedType(node))
+            val text = typeCaptureRenderType(typeCaptureReportedType(node))
             typeCaptureResults[span] = CapturedType(
                 fileName = fileName,
                 start = node.pos,
