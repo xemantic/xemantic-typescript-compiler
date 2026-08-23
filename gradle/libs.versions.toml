@@ -9,7 +9,7 @@ kotlinTarget = "2.4"
 # native-image cannot read a class file its own JVM rejects. So targeting 26
 # would cost the `nativeImage` task and both CI native workflows — i.e. the
 # fastest artifact this project ships. Re-test the ceiling when GraalVM 26 lands.
-javaTarget = "25"
+javaTarget = "21"
 
 kotlin = "2.4.10"
 asm = "9.10.1"
