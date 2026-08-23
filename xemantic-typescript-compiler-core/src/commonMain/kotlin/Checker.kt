@@ -130267,7 +130267,7 @@ interface DataView {
             collectTopLevelClassDeclarations(result.sourceFile.statements, classDecls)
         }
         if (classDecls.isEmpty()) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -132738,7 +132738,7 @@ interface DataView {
             collectGenericCallbackFns(result.sourceFile.statements, genericCallbackParams)
         }
         if (genericCallbackParams.isEmpty()) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -142525,7 +142525,7 @@ interface DataView {
      * Corpus-unique content gates; pre/post counts pinned from the baselines.
      */
     private fun checkPreEmitCountMismatchPins() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val src = result.sourceFile.text
             // (code, 1-based line, 1-based col) of each post-emit-only diagnostic, plus
@@ -142552,7 +142552,7 @@ interface DataView {
         // constructorWithIncompleteTypeAnnotation: the post-emit excess is a diagnostic we
         // never emit pre-emit (tsc's emit-resolver this-capture re-check of the top-level
         // `return 2 * this.method1(2);` adds TS7017) — SYNTHESIZE the related directly.
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!result.sourceFile.text.contains("retValue != 0 ^=")) continue
             emitPreEmitCountMismatch(93, 94, listOf(Diagnostic(
@@ -172198,7 +172198,7 @@ interface DataView {
      *    internally-inconsistent union order — fix it verbatim here, not in the relation engine).
      */
     private fun checkBaseClassImprovedMismatch() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
