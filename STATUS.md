@@ -28,8 +28,15 @@ files each case adds **exactly one** new pass — the tail walkers are ONE-SHAPE
 is why no real codebase can arm this gate and a hand-written fixture is the only instrument.
 Two `commonTest` pins, each verified RED by its own arm and GREEN under the other's
 (`PartitionSensitivityTest` a1/a5; `PassDiagNetSignTest` a6, the clamped accumulator).
-**NO COMPILER CHANGE** — `cost_gate.py` and both `huge_methods.py` censuses are controls this
-round. `docs/partition-gate-sensitivity.md`.
+**NO COMPILER CHANGE**, so `cost_gate.py` and both `huge_methods.py` censuses are CONTROLS this
+round rather than gates — any movement would have meant the change escaped its module. Suite
+**15,714 / 0 / 3** (+5 pins), `cost_gate.py` PASS (largest **+1.02% `mapped.hits`**, the standing
+drift), `huge_methods.py --fail-over 0` green on core (755 classes) and `-project` (50),
+`partition-gate.sh` **EQUIVALENT on BOTH arms** (78 and 76 files), `capture-equivalence` **5 spans
+/ 3 files, `narrowRendersMoreAny=0`**, `capture-channel` **286 rows / 49 files, members=285
+scopes=0 signatures=1**, `caret-vs-file` **EQUIVALENT, 904 spans**, and
+`checker-reuse-differential` in BOTH orders — program order the known single `watchPublic.ts`
+row, editor order EQUIVALENT over 550,480 types. `docs/partition-gate-sensitivity.md`.
 
 **THE RE-ENTRANT CHECKER'S PRIZE IS 95.7% OF THE FLOOR AND ITS REPLAY COSTS 0.69 ms — AND
 THE GATE THAT WOULD HAVE TO SEE IT IS VACUOUS (2026-08-23, (INC.17) step 1, the census).**
