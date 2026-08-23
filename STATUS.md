@@ -1,5 +1,36 @@
 # Status
 
+**THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS, AND IT IS NOW ARMED AND
+PROVEN ABLE TO FAIL (2026-08-23, (INC.18)).** `scripts/partition-equivalence.sh` — the
+detector (INC.7)'s 68 gated walkers, (INC.9)'s deferral and (INC.17)'s replay would all be
+graded by — is a DIFFERENTIAL, so its resolution is bounded by how many of the checker's 416
+`init` passes contribute a row. On tsc's own 78 sources that bound is **ONE**: the full
+build's 46 diagnostics are netted by `checkSpine` alone and only **5 of 78 files carry any
+row**, so 73 comparisons are empty against empty — and all eight dashboard profiles are that
+same codebase. `test-fixtures/partition-gate` is the sensitivity arm: **76 files, 72 carrying
+rows, 182 diagnostics, 78 DISTINCT netting passes**, read off `PassTiming.diagNetByPass` (the
+SIGNED accumulator — `diagsByPass` clamps to `d1 > d0`, so a retracting pass is absent from
+it, and `Checker.kt` has 73 `removeAll` + 5 `removeAt` + 2 `clear` sites).
+`scripts/partition-gate.sh` runs both arms and the sensitivity one REFUSES below its floors
+rather than printing green. **THE PROOF IT CAN FAIL, five arms one mistake at a time:** a
+partition-dependent walker made silent when narrowed reddens the sensitivity arm and NOT the
+realism arm (a1 `checkMissingImplementations`, a2 `checkConflictMarkers`); a pass netting on
+neither project reddens neither (a4, control); and **a5 — ablating the one pass that nets
+every row tsc reports — reddens EXACTLY 5 of 78 files, which is the realism arm's entire
+resolution, measured.** Arm a3 (round 609's collector starvation on
+`init:buildFileLocalTypeMaps`) is an honest NEGATIVE recorded as a control: both arms green
+even after the fixture gained cross-file structure, because that map's product feeds type
+DISPLAY and not diagnostics ((INC.10): deferring it moved 2,722 capture spans and zero
+diagnostics) — so a diagnostic-producing collector's starvation is still unpinned, and that is
+the round's honest limit. **The finding underneath the finding:** mining all 6,451 conformance
+cases for per-pass attribution found **241 distinct netting passes**, and past ~24 selected
+files each case adds **exactly one** new pass — the tail walkers are ONE-SHAPE walkers, which
+is why no real codebase can arm this gate and a hand-written fixture is the only instrument.
+Two `commonTest` pins, each verified RED by its own arm and GREEN under the other's
+(`PartitionSensitivityTest` a1/a5; `PassDiagNetSignTest` a6, the clamped accumulator).
+**NO COMPILER CHANGE** — `cost_gate.py` and both `huge_methods.py` censuses are controls this
+round. `docs/partition-gate-sensitivity.md`.
+
 **THE RE-ENTRANT CHECKER'S PRIZE IS 95.7% OF THE FLOOR AND ITS REPLAY COSTS 0.69 ms — AND
 THE GATE THAT WOULD HAVE TO SEE IT IS VACUOUS (2026-08-23, (INC.17) step 1, the census).**
 Of the checker's 416 `init` pass rows on tsc's own 78 sources: **211 are partition-INVARIANT
@@ -30,9 +61,9 @@ added and reddens it. Suite **15,709 / 0 / 3** (+8), `cost_gate.py` PASS (larges
 `-project`, and all four equivalence sweeps at their baselines (`partition-equivalence`
 EQUIVALENT on 78 files; `capture-equivalence` 5 spans / 3 files, `narrowRendersMoreAny = 0`;
 `capture-channel` 286 rows / 49 files; `caret-vs-file` EQUIVALENT, 904 spans). Successor
-**(INC.18)**: build the partition fixture whose diagnostics come from MANY passes — its
-receipt is a COUNT of distinct emitting passes, and it must be in the tens before any
-partition-narrowing or replay claim may be believed.
+**(INC.18) DONE the same day** — the fixture is `test-fixtures/partition-gate` at
+**78 netting passes**, and the gate is proven able to fail; the replay's two remaining
+obligations are recorded on the queue item.
 
 **AN EDITOR'S WHOLE WORKING SET IS NOW ONE `Checker`: 18 SEMANTIC QUERIES IN SIX BUFFERS
 WENT 5,230 ms -> 737, AND SIX PER-BUFFER ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0
@@ -131,34 +162,3 @@ hosts, which is GONE** — batching a buffer is a convenience now, not a cost de
 **15,683 / 0 / 3**, `cost_gate.py` PASS (+1.02% `mapped.hits`, the same pre-existing drift and
 the expected answer for a round that changed no compiler code), `huge_methods.py --fail-over 0`
 green on core (755 classes) and `-project` (49), `partition-equivalence` **EQUIVALENT on all 78 files** (median narrowed query 385 ms, floor 365, ratio 12.60x — a redraw of the same compiler, which this round did not touch), and both capture censuses **unmoved at their baselines** (5 spans / 3 files, `narrowRendersMoreAny=0`; 286 rows / 49 files, members=285 scopes=0 signatures=1).
-
-**A REPEATED LANGUAGE-SERVICE QUESTION NOW COSTS NOTHING, AND THE REST OF THE WARM PROGRAM IS
-PRICED (2026-08-22, (INC.12)).** Measured first: **(P1) — a second query with the program
-UNCHANGED — is worth the WHOLE ~345 ms floor** (config+crawl+imports ~12 ms, BIND 73-88, the
-~190 program-wide `init` passes 252-254), against a queried file's own checking of **40 ms at
-the median file**. **(P2) — a query after ONE buffer changed — measured IDENTICAL to (P1)**
-(`diagnosticsOf` after editing the queried file 2,001 ms against 1,999 unedited; about another
-file 498 against 505), because outside the content-keyed parse cache and `diagnosticsOf`'s
-exact-question memo there was NO cross-query reuse at all — re-asking one hover cost a full
-build. **LANDED: `Project.captures`**, a capture build memoized on its REQUEST, two entries,
-access-ordered, dropped by every edit alongside the diagnostics cache. Two of the editor's
-commonest sequences turn out to BE the same question asked twice, and neither is
-special-cased: **hover then go-to-definition at one caret build an IDENTICAL
-`TypeCaptureRequest`** (506 ms -> **0**), and **`documentHighlightsAt`'s request is derived
-from the FILE's occurrence nodes and not from the caret at all**, so highlights at every later
-caret in an unchanged buffer is free (592 -> **19**, the residue being the per-caret grouping,
-not a build). A repeated hover is **1,933 -> 0**. Three ablations, each reddening a different
-pin set; the staleness obligation is pinned in both directions, including the one where a
-mis-keyed hit is a MISSING FILE — an edit that ADDS A FILE to the program. **REFUSED with the
-measurement:** reusing the BIND (73-88 ms = 20% of a median query; not refused by (INC.9)'s
-per-file argument, but it needs a program-SHAPE gate reusing the checker's own merge predicate
-and a full-vs-reused differential — (INC.13)); and reusing the CHECKER (**252-254 ms = 63%,
-the largest thing left**), which would make WHICH QUERY RAN FIRST observable for every later
-query, against `symbolTypes`' first-resolution persistence that (INC.2)/(INC.5)/(INC.6) spent
-three rounds on — (INC.14), and its first step is the differential, not the refactor. Suite
-**15,681 / 0 / 3** (+7 pins), `partition-equivalence` **EQUIVALENT on all 78** (median query
-382 ms, floor 342, ratio **13.15x**), `cost_gate.py` PASS (+1.02% `mapped.hits`, the same
-pre-existing drift), `huge_methods.py --fail-over 0` green on core and `-project`, both
-capture censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0
-signatures=1).
-

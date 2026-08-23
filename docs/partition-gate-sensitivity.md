@@ -70,19 +70,55 @@ A gate nobody has shown can fail has not been re-armed, only re-run.
 `scripts/partition-gate-ablate.sh` injects, one at a time, the mistakes (INC.17)
 refuses to land on, and reports each arm's split across BOTH gate arms.
 
-See the session note in `PLAN-PHASE-5.md` for the measured table.
+### The gate arms (`scripts/partition-gate-ablate.sh`)
 
-* **a1 / a2** — a partition-DEPENDENT tail walker (`checkMissingImplementations`,
-  `checkConflictMarkers`) made to produce nothing once `assignedFileNames != null`.
-  This IS (INC.17)'s fear: a replay that skipped a pass it had misclassified.
-* **a3** — round 609's shape: a program-wide COLLECTOR
-  (`buildFileLocalTypeMaps`) gated on the partition instead of on `binderResults`.
-* **a4** — the CONTROL: a pass that nets a row on NEITHER project
-  (`checkCloduleTest2`). Both arms must stay GREEN, or redness elsewhere is not
-  attributable to the pass that was ablated.
-* **a5** — the other control: `checkSpine`, the one pass that nets every row tsc's
-  own sources report. BOTH arms must redden, which is what shows the realism arm is
-  not permanently green.
+| arm | injected mistake | realism (78 files) | sensitivity (76 files) |
+|---|---|---|---|
+| a1 | `checkMissingImplementations` produces nothing when narrowed | GREEN | **RED** — 1 file, loses TS2389 |
+| a2 | `checkConflictMarkers` produces nothing when narrowed | GREEN | **RED** — 1 file, loses 3x TS1185 |
+| a3 | round 609: `buildFileLocalTypeMaps` gated on the partition | GREEN | GREEN — **non-discriminating** |
+| a4 | `checkCloduleTest2` (nets on NEITHER project) — CONTROL | GREEN | GREEN — as designed |
+| a5 | `checkSpine` (nets EVERY row tsc reports) — CONTROL | **RED** — 5 files | **RED** — 36 files |
+
+**a1 and a2 are the split the round exists to produce**: (INC.17)'s exact fear —
+a partition-dependent pass a replay skipped — is invisible on the arm that has
+always run and loud on the new one.
+
+**a5 is the sharpest single number here.** Ablating the one pass that nets every
+row tsc's own sources report reddens **exactly 5 of 78 files** — because 5 is how
+many carry a row. That is the realism arm's ENTIRE resolution, measured: it cannot
+be made to fail on more than 5 files by any defect whatsoever, and only through one
+pass.
+
+**a3 is an honest negative and it is recorded as a control, not as coverage.**
+Starving `buildFileLocalTypeMaps` onto the partition changes NOTHING observable on
+either project, and adding cross-file structure to the fixture (a shared
+base/interface/enum/alias module and its dependents, a cross-file circular pair, a
+cross-file overload set) did not change that — it was re-run against them. The arm
+is REACHED (the loop iterates 1 file instead of 76 under a narrowed partition), so
+this is a fact about the collector, not a dead arm: consistent with (INC.10), which
+measured that this map's product is consumed by type DISPLAY and not by diagnostics
+— deferring it entirely moved **2,722 capture spans and zero diagnostics**. The
+instrument that owns that failure is `scripts/capture-equivalence.sh`, not this one.
+**A round-609 starvation of a DIAGNOSTIC-producing collector remains unpinned by any
+arm here**, and that is the honest limit of this round.
+
+### The pin arms (`scripts/partition-gate-ablate-pins.sh`)
+
+The same mistakes, graded by the two `commonTest` pins, so a pin recorded as
+discriminating has been SEEN to fail:
+
+| arm | `PartitionSensitivityTest` | `PassDiagNetSignTest` |
+|---|---|---|
+| a1 | **RED** (1/3) | GREEN |
+| a3 | GREEN | GREEN |
+| a4 | GREEN | GREEN |
+| a5 | **RED** (1/3) | GREEN |
+| a6 — `diagNetByPass` clamped to `d1 > d0` | GREEN | **RED** (1/2) |
+
+Each pin reddens under its own mistake and stays green under the other's, which is
+what separates them: `PartitionSensitivityTest` is about the partition and
+`PassDiagNetSignTest` is about the accumulator the receipt is read from.
 
 ## Running it
 

@@ -20,6 +20,107 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.18) — the partition gate was VACUOUS on every profile this repo has, and it is now armed and PROVEN able to fail
+
+**THE MEASUREMENT THAT IS THE ROUND.** `scripts/partition-equivalence.sh` is the
+detector (INC.7)'s 68 walker gatings were graded by, (INC.9)'s deferral was graded
+by, and the one (INC.17)'s re-entrant replay would be graded by. It is a
+DIFFERENTIAL (full build versus `recheckOnly = {file}`), so its resolution is
+bounded by how many of the checker's 416 `init` passes contribute a row to the
+comparison:
+
+| project | files | diagnostics | files carrying a row | **distinct passes netting one** |
+|---|---:|---:|---:|---:|
+| `build/bench/tsc-project-*` — the arm that has always run | 78 | 46 | **5** | **1** (`checkSpine`) |
+| `test-fixtures/partition-gate` — this round | 71 | 175 | **70** | **78** |
+
+**73 of 78 per-file comparisons on the realism arm are empty against empty**, and
+every row that does exist is netted by ONE pass. All eight dashboard profiles are
+that same codebase. So a green run there is evidence about ~1 of 416 passes, and
+(INC.17)'s refusal was right on its own numbers.
+
+**THE FINDING UNDERNEATH THE FINDING, AND IT EXPLAINS *WHY* NO REAL PROJECT CAN ARM
+THIS GATE.** `PassDiagMineMain` compiled every single-file conformance case under
+one fixed option set — the case's own `// @directive` header DROPPED, because a
+fixture is one tsconfig — and recorded `PassTiming.diagNetByPass`: **6,451 cases
+walked, 2,802 netting, 241 DISTINCT passes**. Greedy-covering that record,
+`scripts/partition_fixture_compose.py` reaches 44 passes at 20 files and then adds
+**exactly ONE new pass per additional file** out to 200. **The tail walkers are
+one-shape walkers**; coverage is bought one hand-written shape at a time and a real
+codebase reaches one.
+
+**THE FIXTURE IS HAND-WRITTEN, DELIBERATELY.** The miner says WHICH shapes to write;
+the files were written from scratch against that map. This repo does not vendor
+TypeScript source — `typescript-repo/` is gitignored and even the real lib sources
+are GENERATED into `build/` — and a fixture generated at gate time from a clone is a
+fixture that drifts. 71 files, every one a module so nothing collides.
+
+**THE RECEIPT IS `diagNetByPass`, NOT `diagsByPass`.** The latter records
+`if (d1 > d0)`, so a pass whose net effect is a RETRACTION is absent from it
+entirely (73 `removeAll` + 5 `removeAt` + 2 `clear` sites in `Checker.kt`; round
+749 already records that such a pass is invisible to a count-based ablation). The
+receipt prints `netTotal` beside `diagnostics` as its own positive control — 167
+against 175 on the fixture, the eight-row gap being SYNTAX errors, which the Parser
+emits through no `pass(...)` wrapper at all; 46 against 46 on the profile.
+
+**THE PROOF THAT IT CAN FAIL — `scripts/partition-gate-ablate.sh`, one mistake at a
+time, both arms per arm.**
+
+**GATE ARMS.** Fixture 76 files / 182 diagnostics / 72 carrying / 78 netting passes;
+profile 78 / 46 / 5 / 1.
+
+| arm | injected mistake | realism | sensitivity |
+|---|---|---|---|
+| a1 | `checkMissingImplementations` silent when narrowed | GREEN | **RED** (1 file, TS2389) |
+| a2 | `checkConflictMarkers` silent when narrowed | GREEN | **RED** (1 file, 3x TS1185) |
+| a3 | round 609: `buildFileLocalTypeMaps` gated on the partition | GREEN | GREEN — **control** |
+| a4 | `checkCloduleTest2`, nets on NEITHER — CONTROL | GREEN | GREEN |
+| a5 | `checkSpine`, nets EVERY row tsc reports — CONTROL | **RED** (5) | **RED** (36) |
+
+**a5 IS THE SHARPEST NUMBER IN THE ROUND: ABLATING THE ONE PASS THAT NETS EVERY ROW
+tsc's OWN SOURCES REPORT REDDENS EXACTLY *5 OF 78* FILES — WHICH IS HOW MANY CARRY A
+ROW.** That is the realism arm's entire resolution, measured rather than argued: no
+defect whatsoever can make it fail on more than 5 files, and only through one pass.
+
+**a3 IS AN HONEST NEGATIVE, RECORDED AS A CONTROL AND NOT AS COVERAGE.** Starving
+that collector onto the partition changes nothing observable on either project, and
+the arm was RE-RUN after the fixture gained cross-file structure (a shared
+base/interface/enum/alias module and its dependents, a cross-file circular pair, a
+cross-file overload set) — still both-green. The arm is REACHED (its loop iterates 1
+file instead of 76 when narrowed), so this is a fact about the collector: consistent
+with (INC.10), which measured that this map's product is consumed by type DISPLAY,
+not diagnostics — deferring it entirely moved **2,722 capture spans and ZERO
+diagnostics**. The instrument that owns it is `capture-equivalence.sh`. **A
+round-609 starvation of a DIAGNOSTIC-producing collector is still unpinned by any
+arm here, and that is this round's honest limit.**
+
+**PIN ARMS**, the same mistakes graded by the two `commonTest` pins, so a pin
+recorded as discriminating has been SEEN to fail:
+
+| arm | `PartitionSensitivityTest` | `PassDiagNetSignTest` |
+|---|---|---|
+| a1 | **RED** (1/3) | GREEN |
+| a3 | GREEN | GREEN |
+| a4 | GREEN | GREEN |
+| a5 | **RED** (1/3) | GREEN |
+| a6 — `diagNetByPass` clamped to `d1 > d0` | GREEN | **RED** (1/2) |
+
+Each pin reddens under its OWN mistake and stays green under the other's, which is
+what separates the two claims: one is about the partition, the other about the
+accumulator the receipt is read from.
+
+**WHAT THIS RETRO-PRICES.** (INC.7)'s 68 gated walkers and (INC.9)'s deferral were
+profile-GREEN for a reason that says nothing about them; only the CORPUS, which has
+no partition, stood behind them. They are not thereby wrong — they are unmeasured on
+this axis and re-runnable now.
+
+**NO COMPILER CHANGE.** Everything here is fixtures, jvmTest runners, scripts and
+two `commonTest` pins; `cost_gate.py` and both `huge_methods.py` censuses are
+CONTROLS this round rather than gates, and any movement in them would have meant the
+change escaped its module.
+
+`docs/partition-gate-sensitivity.md`.
+
 ### Round (INC.17) step 1 — the three-bucket census: the prize is 95.7% of the floor, the replay's own cost is 0.69 ms, and the gate that would have to see it is VACUOUS
 
 **MEASURED, tsc's own 78 sources, six draws in a palindrome over three partition
@@ -2328,28 +2429,45 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   produced nothing from 204 of the 205 passes would be invisible to every gate here.
   **And the classification is not yet the one soundness needs**: it measures *reads the
   partition*, where the replay needs *its OUTPUT depends on the partition*, and the two
-  come apart at every spine-produces / program-wide-pass-consumes pair. Blocked on
-  (INC.18).
+  come apart at every spine-produces / program-wide-pass-consumes pair.
+  **UNBLOCKED 2026-08-23 by (INC.18)**, which re-armed the gate — 78 netting passes and
+  72 of 76 files carrying a row, against the profile's 1 and 5 — and PROVED it can
+  fail: a partition-dependent walker made silent under a narrow partition reddens the
+  sensitivity arm while the realism arm stays green (arms a1/a2). **Two obligations
+  survive.** The classification still measures *reads the partition* where soundness
+  needs *its OUTPUT depends on the partition*; and (INC.18)'s arm a3 shows the one
+  round-609 collector it tried is invisible to a DIAGNOSTICS gate in BOTH arms (it is
+  `capture-equivalence.sh`'s to own), so a replay must be graded on both sweeps.
 
-- [ ] **(INC.18) THE PARTITION GATE IS VACUOUS ON EVERY PROFILE THIS REPO HAS —
-  BUILD THE FIXTURE THAT RE-ARMS IT.** Measured 2026-08-23 while censusing (INC.17):
-  on tsc's own 78 sources the full build's **46 diagnostics are netted by exactly ONE
-  pass**, `checkSpine`, and every one of the other 415 rows moves the count by zero.
-  All eight dashboard profiles are that same codebase. So
-  `scripts/partition-equivalence.sh` — the detector (INC.7) gated 68 walkers with and
-  the one (INC.17)'s replay would be graded by — compares an essentially empty
-  population per file, and the thing that actually carried (INC.7) was the
-  13k-baseline CORPUS, which has no partition at all. **There is no instrument here
-  that exercises many EMITTING passes and a PARTITION at once.**
-  **The deliverable is a small multi-file fixture project** — each file carrying a
-  shape a different dedicated walker owns — driven through
-  `partition-equivalence.sh`'s existing comparison, plus a per-file `--workers` /
-  `recheckOnly` sweep. **Its receipt is a COUNT, not a ms: how many distinct passes
-  net a diagnostic on it**, read straight off `PassTiming.diagNetByPass`, and it must
-  be in the TENS before any partition-narrowing or replay claim may be believed.
-  It costs no compiler change. It also retro-prices work already landed: (INC.7)'s 68
-  gated walkers and (INC.9)'s deferral were profile-green for a reason that says
-  nothing, and only the corpus stood behind them.
+- [x] **(INC.18) THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS —
+  THE FIXTURE THAT RE-ARMS IT LANDED 2026-08-23, AND IT IS PROVEN ABLE TO FAIL.**
+  The receipt is a COUNT — how many DISTINCT passes net a diagnostic, off
+  `PassTiming.diagNetByPass` — and the contrast is the finding:
+
+  | project | files | diagnostics | files carrying a row | passes netting one |
+  |---|---:|---:|---:|---:|
+  | `build/bench/tsc-project-*` | 78 | 46 | **5** | **1** (`checkSpine`) |
+  | `test-fixtures/partition-gate` | 71 | 175 | **70** | **78** |
+
+  So 73 of 78 per-file comparisons on the arm that has always run are empty against
+  empty, and all eight dashboard profiles are that same codebase.
+  **`scripts/partition-gate.sh` runs BOTH arms** — realism unchanged, sensitivity
+  added — and the sensitivity arm REFUSES below its floors (40 netting passes, 40
+  files carrying a row) rather than printing green.
+  **`scripts/partition-gate-ablate.sh` is the proof it can fail**, one injected
+  mistake at a time, with a both-GREEN control (`checkCloduleTest2`, a pass netting
+  on neither project) and a both-RED control (`checkSpine`) that make the other arms
+  attributable. See the session note for the table.
+  **WHY IT IS HAND-WRITTEN.** `PassDiagMineMain` mined all 6,451 conformance cases
+  for per-pass attribution (2,802 netting, **241 distinct passes**) and
+  `scripts/partition_fixture_compose.py` greedy-covers that record — but past ~24
+  files each case adds **exactly one** new pass, i.e. the tail walkers are one-shape
+  walkers, and this repo does not vendor TypeScript source. The miner says WHICH
+  shapes to write; the files are written from scratch.
+  **IT RETRO-PRICES LANDED WORK**: (INC.7)'s 68 gated walkers and (INC.9)'s deferral
+  were profile-green for a reason that says nothing — only the corpus, which has no
+  partition, stood behind them. Unmeasured on this axis, not wrong, and re-runnable.
+  `docs/partition-gate-sensitivity.md`.
 
 - [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
   DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and

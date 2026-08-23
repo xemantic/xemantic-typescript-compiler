@@ -1,3 +1,33 @@
+**A REPEATED LANGUAGE-SERVICE QUESTION NOW COSTS NOTHING, AND THE REST OF THE WARM PROGRAM IS
+PRICED (2026-08-22, (INC.12)).** Measured first: **(P1) — a second query with the program
+UNCHANGED — is worth the WHOLE ~345 ms floor** (config+crawl+imports ~12 ms, BIND 73-88, the
+~190 program-wide `init` passes 252-254), against a queried file's own checking of **40 ms at
+the median file**. **(P2) — a query after ONE buffer changed — measured IDENTICAL to (P1)**
+(`diagnosticsOf` after editing the queried file 2,001 ms against 1,999 unedited; about another
+file 498 against 505), because outside the content-keyed parse cache and `diagnosticsOf`'s
+exact-question memo there was NO cross-query reuse at all — re-asking one hover cost a full
+build. **LANDED: `Project.captures`**, a capture build memoized on its REQUEST, two entries,
+access-ordered, dropped by every edit alongside the diagnostics cache. Two of the editor's
+commonest sequences turn out to BE the same question asked twice, and neither is
+special-cased: **hover then go-to-definition at one caret build an IDENTICAL
+`TypeCaptureRequest`** (506 ms -> **0**), and **`documentHighlightsAt`'s request is derived
+from the FILE's occurrence nodes and not from the caret at all**, so highlights at every later
+caret in an unchanged buffer is free (592 -> **19**, the residue being the per-caret grouping,
+not a build). A repeated hover is **1,933 -> 0**. Three ablations, each reddening a different
+pin set; the staleness obligation is pinned in both directions, including the one where a
+mis-keyed hit is a MISSING FILE — an edit that ADDS A FILE to the program. **REFUSED with the
+measurement:** reusing the BIND (73-88 ms = 20% of a median query; not refused by (INC.9)'s
+per-file argument, but it needs a program-SHAPE gate reusing the checker's own merge predicate
+and a full-vs-reused differential — (INC.13)); and reusing the CHECKER (**252-254 ms = 63%,
+the largest thing left**), which would make WHICH QUERY RAN FIRST observable for every later
+query, against `symbolTypes`' first-resolution persistence that (INC.2)/(INC.5)/(INC.6) spent
+three rounds on — (INC.14), and its first step is the differential, not the refactor. Suite
+**15,681 / 0 / 3** (+7 pins), `partition-equivalence` **EQUIVALENT on all 78** (median query
+382 ms, floor 342, ratio **13.15x**), `cost_gate.py` PASS (+1.02% `mapped.hits`, the same
+pre-existing drift), `huge_methods.py --fail-over 0` green on core and `-project`, both
+capture censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0
+signatures=1).
+
 **THE SECOND-LARGEST ROW IN THE INCREMENTAL FLOOR WAS EMIT-ONLY WORK AND NOW RUNS ONLY WHEN
 THE EMITTER ASKS; THE LARGEST IS REFUSED WITH A THREE-POINT MEASUREMENT (2026-08-22,
 (INC.10)).** `init:trackAllImportReferences` was **29.44 ms of a 305.3 ms floor pass table**,
