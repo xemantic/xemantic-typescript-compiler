@@ -138230,16 +138230,24 @@ interface DataView {
         // Build the TP scope so default/constraint TypeNodes resolve to the sibling TPs.
         val savedScope = currentTypeParamScope
         val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
+        val interned = ArrayList<Pair<TypeParameter, Type.TypeParam>>(tps.size)
         for (tp in tps) {
             val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                 val p = Type.TypeParam()
                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                 p
             }
-            tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it) }
+            interned.add(tp to typeParam)
             scope[tp.name.text] = typeParam
         }
         withInstantiationContext(scopeMapper(if (scope.isEmpty()) null else scope)) {
+            // (INC.19) INSIDE the install, for the reason the comment above states:
+            // a sibling reference (`<T, U extends T>`) resolves to `errorType` in the
+            // outer scope and `Type.TypeParam.constraint` is write-once, so the wrong
+            // answer freezes wherever this walker is the first toucher.
+            for ((tp, typeParam) in interned) {
+                tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it) }
+            }
             for (tp in tps) {
                 val defNode = tp.default ?: continue
                 // TS2716: circular default. NOTE tsc does NOT flag a DIRECT self-ref
@@ -138394,7 +138402,23 @@ interface DataView {
                 val p = typeParamInternCache.getOrPut(internKey(tp)) {
                     Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
                 }
-                tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+                // (INC.19) WRITE-ONCE, like every other writer of this field. The
+                // write used to be unconditional, so this walker CLOBBERED a correct
+                // constraint an earlier pass had already written — measured on
+                // `class C<T extends Nd, U extends T>`: `U.constraint` went from `T`
+                // to `any` here.
+                //
+                // The resolution deliberately stays OUTSIDE the scope install, unlike
+                // its two siblings in this region: a type alias may constrain a
+                // parameter BY ITSELF (`type Shared<I, D extends Shared<I, D>>`, the
+                // react-redux shape two corpus baselines pin), and resolving that with
+                // the parameters in scope recurses until the `init` boundary guard
+                // catches a StackOverflowError and reports TS2589. Sibling references
+                // in a class/interface/alias head therefore still answer `errorType`
+                // here — and now at least cannot overwrite a better answer.
+                if (p.constraint == null) {
+                    tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+                }
                 scope[tp.name.text] = p
                 decls[tp.name.text] = tp  // for the TS2208 hint position
             }
@@ -138425,6 +138449,7 @@ interface DataView {
                     // number>(t: T): I<T>` would see `I<T>` resolve T to the global
                     // `class T` if any (or errorType) and emit FP TS2344.
                     val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                    val interned = ArrayList<Pair<TypeParameter, Type.TypeParam>>()
                     stmt.typeParameters?.forEach { tp ->
                         val name = tp.name.text
                         val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
@@ -138432,15 +138457,25 @@ interface DataView {
                             p.symbol = Symbol(SymbolFlags.TypeParameter, name)
                             p
                         }
-                        tp.constraint?.let {
-                            if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it)
-                        }
-                        tp.default?.let {
-                            if (typeParam.default == null) typeParam.default = getTypeFromTypeNode(it)
-                        }
+                        interned.add(tp to typeParam)
                         scope[name] = typeParam
                     }
                     withInstantiationContext(scopeMapper(if (scope.isEmpty()) null else scope)) {
+                        // (INC.19) The constraint/default resolution belongs INSIDE the
+                        // install: `<T extends Node, U extends T>` resolved `T` against
+                        // the OUTER scope, answered `errorType`, and `Type.TypeParam` is
+                        // interned per node with a write-once constraint — so wherever
+                        // this pass is the first toucher (a file the check partition did
+                        // not walk, i.e. every replayed query) the wrong answer FROZE and
+                        // the type parameter rendered as a bare `U` ever after.
+                        for ((tp, typeParam) in interned) {
+                            tp.constraint?.let {
+                                if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it)
+                            }
+                            tp.default?.let {
+                                if (typeParam.default == null) typeParam.default = getTypeFromTypeNode(it)
+                            }
+                        }
                         stmt.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
                         stmt.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                         stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }

@@ -50,7 +50,10 @@ import kotlin.test.Test
  * it into `Project`**, because `scripts/replay-differential.sh` found the CAPTURE
  * channel diverging in **8 of 75 files** — a lost type-parameter constraint,
  * `<T extends Node, U>` where a fresh build renders `<T extends Node, U extends
- * T>`. See (INC.19).
+ * T>`. (INC.19) closed THAT class — the differential now reads **5 of 75 files,
+ * 23 spans**, all of them lost generic inference — and pinned it in
+ * [ProjectRecheckConstraintTest], which is the fixture this class says below it
+ * cannot host. The channel is still not equivalent, so the refusal stands.
  *
  * ## What these pins do and do NOT assert
  *
@@ -289,13 +292,14 @@ class ProjectRecheckTest {
      * THE CAPTURE CHANNEL IS WIRED, AND IS DELIBERATELY **NOT** PINNED EQUIVALENT.
      *
      * `scripts/replay-differential.sh` grades it against a fresh narrowed build
-     * over 373,879 spans and finds it DIVERGING in 8 of 75 files of the compiler
-     * profile — a lost type-parameter constraint. A fixture this size cannot
-     * reproduce that (it has no generic with a constraint referring to a sibling
-     * parameter), so an equality assertion here would pass and would mean
-     * "soundness", which is false. What is honest to assert is that the re-entry
-     * installs the request and produces rows at all — i.e. that (INC.19) has a
-     * live channel to fix rather than a dead one.
+     * over 373,879 spans and finds it DIVERGING in 5 of 75 files of the compiler
+     * profile — lost generic inference, since (INC.19) closed the lost
+     * type-parameter constraint. THIS fixture cannot reproduce either (it has no
+     * generic with a constraint referring to a sibling parameter — that shape is
+     * [ProjectRecheckConstraintTest]'s, and it IS pinned equivalent there), so an
+     * equality assertion here would pass and would mean "soundness", which is
+     * false. What is honest to assert is that the re-entry installs the request
+     * and produces rows at all — i.e. that the channel is live rather than dead.
      */
     @Test
     fun `the capture channel is wired for a re-entered file - equivalence is NOT asserted here`() {

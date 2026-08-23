@@ -49,18 +49,25 @@ package com.xemantic.typescript.compiler
  * ```
  * compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
  *           typeSpans=373879 definitionSpans=352713
- * DIVERGED: 8 of 75 file(s)
+ * DIVERGED: 5 of 75 file(s)
  * ```
  *
  * * **the DIAGNOSTIC channel is UNTOUCHED** — every row agrees, on both arms;
- * * **the CAPTURE channel DIVERGES in 8 of 75 files** — a lost TYPE-PARAMETER
- *   CONSTRAINT: the replay renders `<T extends Node, U>` where a fresh build
- *   renders `<T extends Node, U extends T>`.
+ * * **the CAPTURE channel DIVERGES in 5 of 75 files, 23 spans of 373,879.**
  *
- * So this **MUST NOT** serve hover, quick-info, go-to-definition, completions or
- * signature help until (INC.19) closes. It is silent in the dangerous direction:
- * a lost constraint is a plausible-looking type, never an error, and the
- * diagnostics sweep is completely blind to it.
+ * (INC.19) closed the LOST TYPE-PARAMETER CONSTRAINT — the replay used to render
+ * `<T extends Node, U>` where a fresh build renders `<T extends Node, U extends
+ * T>`, because three walkers in the constraints/defaults region resolved a
+ * constraint BEFORE installing the type-parameter scope and `Type.TypeParam`
+ * freezes that answer. The remaining 23 spans are a DIFFERENT class and none of
+ * them is a constraint: they are lost generic INFERENCE (`Connection[][]` read as
+ * `any[][]`, `Map<string, SeenPackageName>` as `Map<any, any>`, a `(key: K,
+ * valueInNewMap: U) => T` return read as `any`).
+ *
+ * So this **STILL MUST NOT** serve hover, quick-info, go-to-definition,
+ * completions or signature help. It is silent in the dangerous direction: a lost
+ * inference is a plausible-looking type, never an error, and the diagnostics
+ * sweep is completely blind to it.
  *
  * ## Why the divergence is not simply a starved pass
  *
@@ -125,9 +132,10 @@ interface ProgramRecheck {
      * what it has asked about.
      *
      * **The DIAGNOSTICS in the answer are graded equivalent to a fresh narrowed
-     * build's; the CAPTURES are NOT — they diverge in 8 of 75 files of the compiler
-     * profile (a lost type-parameter constraint). Do not serve a hover from them
-     * until (INC.19) closes.** See [ProgramRecheck].
+     * build's; the CAPTURES are NOT — they diverge in 5 of 75 files of the compiler
+     * profile (lost generic inference; the lost type-parameter constraint that used
+     * to dominate is closed). Do not serve a hover from them.** See
+     * [ProgramRecheck].
      *
      * @param capture (API.3) a capture request whose spans the re-entry records as
      *   it walks. Only spans in the FRESH files are visited: the spine walks the
