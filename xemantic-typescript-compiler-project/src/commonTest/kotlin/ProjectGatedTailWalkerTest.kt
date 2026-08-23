@@ -75,6 +75,16 @@ class ProjectGatedTailWalkerTest {
     private val ctorFile = "/proj/src/ctor.ts"
     private val implFile = "/proj/src/impl.ts"
 
+    private val circBaseFile = "/proj/src/circbase.ts"
+    private val circDerivedFile = "/proj/src/circderived.ts"
+    private val cbFnFile = "/proj/src/cbfn.ts"
+    private val cbUseFile = "/proj/src/cbuse.ts"
+
+    private val tacFile = "/proj/src/tac.ts"
+    private val multiBaseFile = "/proj/src/multibase.ts"
+    private val implementsFile = "/proj/src/implements.ts"
+    private val derivedSuperFile = "/proj/src/dsuper.ts"
+
     private val nsThisFile = "/proj/src/nsthis.ts"
     private val superFile = "/proj/src/sup.ts"
     private val indexFile = "/proj/src/idx.ts"
@@ -231,6 +241,97 @@ class ProjectGatedTailWalkerTest {
         export type Bad = import("./bystander");
     """.trimIndent() + "\n"
 
+
+    /**
+     * BATCH 5 — (INC.20)'s first sub-batch: the nine tail walkers whose ONLY
+     * checker-field write is a per-FILE ambient install-and-restore
+     * (`currentFileLocals` / `currentCheckFileName`, set at the top of each
+     * iteration and reset after the loop). (INC.7) refused all nine on the letter
+     * of "writes a checker field"; the write is a property of the FILE, so the
+     * loop narrows.
+     *
+     * Ownership was established in `build/pass-lab.txt` exactly as batches 1-4
+     * established theirs — with each pass disabled ALONE its row disappears from
+     * this four-file program and no other row moves.
+     *
+     * TS2344, owned by `checkTypeArgumentConstraints` (22.62 ms of the floor, the
+     * largest row (INC.20) takes).
+     */
+    private val tacText = """
+        export interface Con { a: number }
+        export class Holder<T extends Con> { constructor(public v: T) {} }
+        export type Wrong = Holder<string>;
+    """.trimIndent() + "\n"
+
+    /** TS2320, owned by `checkInterfaceMultiBaseConflicts` (16.23 ms). */
+    private val multiBaseText = """
+        export interface A1 { p: string }
+        export interface B1 { p: number }
+        export interface C1 extends A1, B1 {}
+    """.trimIndent() + "\n"
+
+    /** TS2420, owned by `checkClassImplementsInterface` (8.31 ms). */
+    private val implementsText = """
+        export interface Shape { area(): number }
+        export class Sq implements Shape {}
+    """.trimIndent() + "\n"
+
+    /** TS2377, owned by `checkDerivedConstructorSuper` (10.48 ms). */
+    private val derivedSuperText = """
+        export class BaseD { constructor(public x: number) {} }
+        export class DerivedD extends BaseD {
+            constructor() {
+            }
+        }
+    """.trimIndent() + "\n"
+
+
+    /**
+     * BATCH 6 — (INC.20) sub-batch B: the MIXED passes, whose two loops have
+     * OPPOSITE partition behaviour and only the SECOND of which moved.
+     *
+     *     for (result in binderResults) collectTopLevelClassDeclarations(...)  // STAYS
+     *     if (classDecls.isEmpty()) return
+     *     for (result in checkedResults) ...emit for THIS file...              // NARROWS
+     *
+     * These two fixtures put the COLLECTED declaration in a file the partition does
+     * NOT contain, which is the only shape that can see the mistake: gate the
+     * collection loop too and the index loses the base declaration, the lookup
+     * misses, and the row disappears with no other symptom.
+     *
+     * TS2310, owned by `checkCircularClassBaseViaDefaultTypeArg` (7.06 ms of the
+     * floor) — `class Base<C, T = C["x"]>` in one file, `class Derived extends
+     * Base<Derived>` in another. Ownership established in `build/pass-lab.txt`:
+     * with that pass disabled alone the row disappears and no other row moves.
+     */
+    private val circBaseText = """
+        export class CircBase<C, T = C["someProp"]> {
+            v?: T;
+        }
+    """.trimIndent() + "\n"
+
+    private val circDerivedText = """
+        import { CircBase } from "./circbase.js";
+        export class CircDerived extends CircBase<CircDerived> {
+            someProp = 1;
+        }
+    """.trimIndent() + "\n"
+
+    /**
+     * TS7022 + TS7024, owned by `checkCircularGenericCallbackVariables` (2.92 ms) —
+     * the generic `() => T` callback function lives in one file and the circular
+     * variable that calls it in another, so the pass's `genericCallbackParams` index
+     * must still be built over the WHOLE program while its emission narrows.
+     */
+    private val cbFnText = """
+        export function makeIt<T>(cb: () => T): T { return cb(); }
+    """.trimIndent() + "\n"
+
+    private val cbUseText = """
+        import { makeIt } from "./cbfn.js";
+        export const looped = makeIt(() => looped);
+    """.trimIndent() + "\n"
+
     private fun vfs() = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to config,
@@ -246,6 +347,14 @@ class ProjectGatedTailWalkerTest {
             superFile to superText,
             indexFile to indexText,
             importTypeFile to importTypeText,
+            tacFile to tacText,
+            multiBaseFile to multiBaseText,
+            implementsFile to implementsText,
+            derivedSuperFile to derivedSuperText,
+            circBaseFile to circBaseText,
+            circDerivedFile to circDerivedText,
+            cbFnFile to cbFnText,
+            cbUseFile to cbUseText,
         ),
     )
 
@@ -519,6 +628,174 @@ class ProjectGatedTailWalkerTest {
         for ((file, text) in listOf(
             nsThisFile to nsThisText, superFile to superText,
             indexFile to indexText, importTypeFile to importTypeText,
+        )) {
+            val whole = project.diagnostics(file).map { it.code }.sorted()
+            assert(whole.isNotEmpty())
+            project.updateFile(file, text)
+            assert(project.diagnosticsOf(listOf(file)).map { it.code }.sorted() == whole)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BATCH 5 — (INC.20) sub-batch A: nine per-file-ambient walkers. Four arms
+    // plus the control and the round-609 direction, on the same terms as
+    // batches 1-4.
+    // -----------------------------------------------------------------------
+
+    /**
+     * The control every batch-5 arm rests on. Without it a "the narrowed build
+     * still reports the row" assertion passes by both arms agreeing on an empty
+     * list, which is how `ProjectNarrowFalseNegativeTest`'s first fixture measured
+     * nothing.
+     */
+    @Test
+    fun `the whole-program build reports all four batch-5 rows - the control`() {
+        val whole = ProjectCompiler(vfs()).build("/proj", noEmit = true)
+        assert(whole.diagnostics.any { it.fileName == tacFile && it.code == 2344 })
+        assert(whole.diagnostics.any { it.fileName == multiBaseFile && it.code == 2320 })
+        assert(whole.diagnostics.any { it.fileName == implementsFile && it.code == 2420 })
+        assert(whole.diagnostics.any { it.fileName == derivedSuperFile && it.code == 2377 })
+    }
+
+    /** batch 5 — `checkTypeArgumentConstraints`, the largest row (INC.20) takes. */
+    @Test
+    fun `a partition of the type-argument-constraint file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(tacFile))
+        assert(rowsIn(whole.diagnostics, tacFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, tacFile) == rowsIn(whole.diagnostics, tacFile))
+    }
+
+    /** batch 5 — `checkInterfaceMultiBaseConflicts`. */
+    @Test
+    fun `a partition of the multi-base file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(multiBaseFile))
+        assert(rowsIn(whole.diagnostics, multiBaseFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, multiBaseFile) == rowsIn(whole.diagnostics, multiBaseFile))
+    }
+
+    /**
+     * batch 5 — `checkClassImplementsInterface`. The one arm whose walker resolves
+     * a type declared in ANOTHER file would be a cross-file dependency; here the
+     * interface is in the same file deliberately, because the partition is allowed
+     * to skip walking the other file, never to stop RESOLVING through it.
+     */
+    @Test
+    fun `a partition of the implements file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(implementsFile))
+        assert(rowsIn(whole.diagnostics, implementsFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, implementsFile) == rowsIn(whole.diagnostics, implementsFile))
+    }
+
+    /** batch 5 — `checkDerivedConstructorSuper`. */
+    @Test
+    fun `a partition of the derived-constructor file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(derivedSuperFile))
+        assert(rowsIn(whole.diagnostics, derivedSuperFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, derivedSuperFile) == rowsIn(whole.diagnostics, derivedSuperFile))
+    }
+
+    /**
+     * The round-609 direction for batch 5: a partition asked about ONE of the four
+     * new fixtures must not acquire the OTHER three's rows because a gated walker
+     * lost the program-wide context it used to suppress with.
+     */
+    @Test
+    fun `a partition of one batch-5 file invents nothing for the others`() {
+        val narrowed = ProjectCompiler(vfs())
+            .build("/proj", noEmit = true, recheckOnly = setOf(tacFile))
+        assert(rowsIn(narrowed.diagnostics, multiBaseFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, implementsFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, derivedSuperFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, bystanderFile).isEmpty())
+    }
+
+    /** The public narrowed-query path, which is what an editor actually drives. */
+    @Test
+    fun `the narrowed query through the public API keeps all four batch-5 rows`() {
+        val project = Project.open("/proj", vfs())
+        for ((file, text) in listOf(
+            tacFile to tacText, multiBaseFile to multiBaseText,
+            implementsFile to implementsText, derivedSuperFile to derivedSuperText,
+        )) {
+            val whole = project.diagnostics(file).map { it.code }.sorted()
+            assert(whole.isNotEmpty())
+            project.updateFile(file, text)
+            assert(project.diagnosticsOf(listOf(file)).map { it.code }.sorted() == whole)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BATCH 6 — (INC.20) sub-batch B: the MIXED passes. The collection loop
+    // stayed program-wide and only the emitting loop narrowed, so these arms
+    // deliberately put the COLLECTED declaration outside the partition.
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `the whole-program build reports both batch-6 rows - the control`() {
+        val whole = ProjectCompiler(vfs()).build("/proj", noEmit = true)
+        assert(whole.diagnostics.any { it.fileName == circDerivedFile && it.code == 2310 })
+        assert(whole.diagnostics.any { it.fileName == cbUseFile && it.code == 7022 })
+    }
+
+    /**
+     * `checkCircularClassBaseViaDefaultTypeArg`. The base class is in
+     * `circbase.ts`, which this partition does NOT contain — so the row survives
+     * only while the pass's first loop keeps iterating `binderResults`.
+     */
+    @Test
+    fun `a partition of the derived file alone keeps a row whose base is outside the partition`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(circDerivedFile))
+        assert(rowsIn(whole.diagnostics, circDerivedFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, circDerivedFile) == rowsIn(whole.diagnostics, circDerivedFile))
+    }
+
+    /**
+     * `checkCircularGenericCallbackVariables`. The generic callback function is in
+     * `cbfn.ts`, outside the partition; its index must still be built over the whole
+     * program for the emission in `cbuse.ts` to fire.
+     */
+    @Test
+    fun `a partition of the callback-use file alone keeps a row whose generic fn is outside the partition`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(cbUseFile))
+        assert(rowsIn(whole.diagnostics, cbUseFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, cbUseFile) == rowsIn(whole.diagnostics, cbUseFile))
+    }
+
+    /** The round-609 direction for batch 6. */
+    @Test
+    fun `a partition of one batch-6 file invents nothing for the others`() {
+        val narrowed = ProjectCompiler(vfs())
+            .build("/proj", noEmit = true, recheckOnly = setOf(circDerivedFile))
+        assert(rowsIn(narrowed.diagnostics, cbUseFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, cbFnFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, circBaseFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, bystanderFile).isEmpty())
+    }
+
+    /** The public narrowed-query path, which is what an editor actually drives. */
+    @Test
+    fun `the narrowed query through the public API keeps both batch-6 rows`() {
+        val project = Project.open("/proj", vfs())
+        for ((file, text) in listOf(
+            circDerivedFile to circDerivedText, cbUseFile to cbUseText,
         )) {
             val whole = project.diagnostics(file).map { it.code }.sorted()
             assert(whole.isNotEmpty())
