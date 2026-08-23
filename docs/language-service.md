@@ -1605,6 +1605,41 @@ and are last-wins in bind order); and the ~190 program-wide passes are program-w
 construction — round 609 measured a starved collector at 1,174 false positives. Making
 (P2) cheap means making those products per-file decomposable, one at a time.
 
+
+### (INC.14) Can one compiler answer many queries? Measured, and the answer is yes
+
+The item above says the remaining 63% needs "the checker to become re-partitionable".
+The question that gates that work is not the refactor but whether a `Checker` REUSED
+across queries still tells the truth: `symbolTypes` persists the FIRST resolution, so
+a surviving checker makes WHICH QUERY RAN FIRST observable — the mechanism that cost
+three rounds in `(INC.2)`/`(INC.5)`/`(INC.6)`.
+
+It is answerable today, with no checker surgery, because **a checker that has already
+answered `k − 1` queries and is asked a `k`-th IS a checker whose partition is those
+`k` files** — `recheckOnly` is a set and the spine walks it in program order either
+way. `scripts/checker-reuse-differential.sh` runs the two arms and compares captured
+types, captured definitions AND diagnostics, per file:
+
+| queries per checker | one build per query | shared | ratio | rows that differ |
+|---:|---:|---:|---:|---:|
+| 2 | 39,173 ms / 76 builds | 21,918 ms / 38 builds | **1.79x** | 1 |
+| 8 | 38,404 / 76 | 12,035 / 10 | **3.19x** | 1 |
+| 26 | 39,508 / 76 | 10,347 / 3 | **3.82x** | 1 |
+
+**One row of 741,864**, the same row in all three, and in it the SHARED arm is the
+better answer — the per-query arm renders a redundant self-intersection
+(`(fileName: string) => boolean & (fileName: string) => boolean`) that any sharing
+removes. It is already one of the five spans `scripts/capture-equivalence.sh` gates,
+so sharing introduces nothing new. No definition and no diagnostic moved.
+
+So the cost table's bottom row is a REFACTOR question, not a correctness one. Nothing
+in this document changes yet: it still describes one build per question.
+
+**And reusing only the BIND is refused, with its number.** Bind is 66–74 ms of a
+359–407 ms floor — 10.7% of a first hover in a mid-size buffer, 3.1% of one in
+`checker.ts`, and **0** on the first query after an edit, because the program changed.
+A reused checker carries its own bind, so it subsumes this entirely.
+
 ---
 
 ## 14. State of the API — the two-minute version

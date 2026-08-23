@@ -1,5 +1,37 @@
 # Status
 
+**A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH CHECKERS DO —
+ONE DIVERGENT ROW IN 741,864, AND IN IT THE SHARED ARM IS THE ONE THAT IS RIGHT (2026-08-23,
+(INC.14) census).** (INC.14) is 63% of every query's floor and its blocker was never the
+refactor but the caches a surviving checker carries — `symbolTypes` persists the FIRST
+resolution, so reuse makes WHICH QUERY RAN FIRST observable, the mechanism that cost three
+rounds in (INC.2)/(INC.5)/(INC.6). **It is answerable with no checker surgery, and that is the
+part worth copying: a checker that has already answered k-1 queries and is asked a k-th IS a
+checker whose partition is those k files**, because `recheckOnly` is a SET the spine walks in
+program order either way. `scripts/checker-reuse-differential.sh` runs one build per query
+against one build per GROUP and compares captured types, captured definitions AND diagnostics,
+per file: **381,666 types + 360,152 definitions + 46 diagnostics over 76 of tsc's own sources,
+1 row differs** — `definitions=0 diagnostics=0 sharedRendersMoreAny=0 absentInShared=0` — and
+that row is the per-query arm inventing a redundant `X & X` for a function type, already one of
+the 5 spans `capture-equivalence.sh` gates. **Replicated at k = 2, 8 and 26, which re-groups
+every file: the SAME row each time**, with the prize measured in the same runs — **1.79x /
+3.19x / 3.82x** (cold 38.4-39.5 s over 76 builds, replicating to +-1.4%). So what is left of
+(INC.14) is the refactor alone. **(INC.15) — reusing only the BIND — is REFUSED with its
+number**: the mechanism is sound (`--bindMutationCheck` reads `checked 15580, changed 0` beside
+`mergeSingleSymbol: adopts 406, mutates 175`, all 175 on LIB symbols), but bind is 66-74 ms of
+a 359-407 ms floor = 10.7% of a first hover, 3.1% of one in `checker.ts`, **2.75% of the whole
+15-query editor sequence and 0 on the first query after an edit** — and a reused checker
+carries its own bind, so (INC.14) subsumes it. The refusal's successor is (INC.16):
+**`bindLexicalScopes` is 69 of the bind's 74 ms**, and one line blocks (INC.9)'s deferral
+template — a program-wide block-scoped enum/alias collector that reads every file's scopes.
+Suite **15,688 / 0 / 3** (+5 pins), `cost_gate.py` PASS (largest +1.02% `mapped.hits`, the same
+pre-existing drift and the expected answer for a round that changed no compiler code),
+`huge_methods.py --fail-over 0` green on core and `-project`, and all four equivalence sweeps
+at their baselines. **Three ablations, all recorded as CONTROLS rather than claimed** — one
+demonstrably a dead arm, two not provably reached — with the fixture's own structural
+half-blindness stated: a capture is recorded DURING the walk, so a later-walked file cannot
+influence an earlier one's answers in either arm.
+
 **HOVERING AROUND A FILE IS NOW FREE AFTER THE FIRST HOVER — A SECOND CARET IN `checker.ts`
 WENT 2,142 ms -> 73, ONE IN `binder.ts` 481 -> 2, AND `fileSemantics` AFTER A HOVER 575 -> 17
 (2026-08-23, (INC.13)).** (INC.12) memoized a capture on its REQUEST, so a repeated question
@@ -128,30 +160,3 @@ recorded), `huge_methods.py --fail-over 0` green on core AND the `-project` modu
 censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0) while
 their own timing arms improved with everything else — the narrowed capture median is
 **556 -> 420 ms** and `binder.ts` warm rotated **7.51x -> 8.31x**.
-
-**THE INCREMENTAL FLOOR IS DOWN TO 514 ms AND A NARROWED ERROR QUERY TO 542 — 68 TAIL
-WALKERS NOW RUN ONLY OVER THE FILES THEY WERE ASKED ABOUT (2026-08-22, (INC.7) batches
-1-3).** 376 of the ~400 program-wide tail walkers iterated `binderResults`, so they cost the
-same whether the checker checks 78 files or none — 66% of the floor. Moving a walker's loop
-onto `checkedResults` is a **strict no-op for every full build and therefore for the whole
-corpus** (`checkedResults` IS `binderResults` when `assignedFileNames == null`), so it can
-only change what a PARTITION does; and a partition reports nothing about files it was not
-asked about, so a pure EMITTER skipping them loses nothing observable. Batch 3 gated **45**
-more: floor **789 -> 514 ms** (PLAIN arms 883 -> 548 and 808 -> 506), narrowed query median over tsc's own 78 sources
-**818 -> 542 ms**, ratio at the median file **6.17x -> 9.70x**. Whole arc: floor
-1,207 -> 514, query 1,077 -> 542. **THE DISCOUNT IS NOW MEASURED THREE TIMES AND SHRANK
-EXACTLY AS PREDICTED — 79.0%, 85.5%, 92.9%** of each batch's naive row sum, because
-relocation lands on ungated tail walkers and the more of them are gated, the more of the
-moved work is never asked for at all.
-
-**THE ROUND'S TWO NEGATIVE RESULTS ARE WORTH MORE THAN THE ms.** 33 of the 252 ungated
-`binderResults` loops are **not passes at all** but lookup helpers that scan the program to
-find a declaration (`resolveIdentifierInFile`, `findTypeParamDeclByName`, …) — all 0.00 ms,
-and gating one breaks NAME RESOLUTION rather than dropping a diagnostic, which is exactly
-what a mechanical `sed` over the loop header would have done. And the victim heuristic
-(batch 2's relocation victim is batch 3's candidate) MISFIRED:
-`checkBaseClassImprovedMismatch` is a REWRITER that can never qualify, and its 17.89 ms was
-an inherited lazy `SourceScanFilter` build — it was the first walker to ASK, not the walker
-that COSTS. Suite **15,655 / 0 / 3**, no corpus baseline moved,
-`scripts/partition-equivalence.sh` EQUIVALENT on all 78 files after every one of the three
-sub-batches, with a baseline sweep taken at HEAD first so the after-runs are attributable.

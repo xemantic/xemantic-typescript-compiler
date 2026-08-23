@@ -20,6 +20,117 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.14/INC.15) — the checker CAN be reused: 1 divergent row in 741,864, and it is the shared arm that is right
+
+**A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH
+CHECKERS DO — 381,666 captured types, 360,152 captured definitions and 46
+diagnostics over 76 of tsc's own compiler sources, and ONE row differs. In that
+row the shared arm renders `(fileName: string) => boolean` where the cold arm
+renders `(fileName: string) => boolean & (fileName: string) => boolean`, so the
+divergence is a redundant self-intersection the PARTITION-OF-ONE invents and
+sharing removes.** And the same run prices it: **cold 38,404 ms over 76 builds
+against shared 12,035 ms over 10 — 3.19x.**
+
+**THE MODEL IS WHAT MADE THIS COST ONE AFTERNOON INSTEAD OF A REFACTOR.** (INC.14)
+says "do not start the refactor, start with the differential", and the differential
+needs no re-entrant entry point at all: **a checker that has already answered k−1
+queries and is asked a k-th IS a checker whose partition is those k files**, because
+`recheckOnly` is a SET and the spine walks it in program order either way. So the
+arms are `recheckOnly = {file}` per query (today's language service) against
+`recheckOnly = group` once (one checker, k queries), and they must agree file for
+file. No baseline is recorded and none is needed — both arms claim to answer the
+same question.
+
+**REPLICATED AT THREE GROUP SIZES, WHICH RE-GROUPS EVERY FILE.** Changing k changes
+which files share a checker with which, so this is not one draw three times:
+
+| k | cold | shared | ratio | divergent rows |
+|---:|---:|---:|---:|---:|
+| 2 | 39,173 ms / 76 builds | 21,918 ms / 38 builds | **1.79x** | 1 |
+| 8 | 38,404 / 76 | 12,035 / 10 | **3.19x** | 1 |
+| 26 | 39,508 / 76 | 10,347 / 3 | **3.82x** | 1 |
+
+Every run: `types=1 definitions=0 diagnostics=0`, `sharedRendersMoreAny=0`,
+`absentInShared=0`, `absentInCold=0` — and byte for byte THE SAME ROW, at
+`watchPublic.ts@24148..24160`. The cold arm's own wall replicates to ±1.4% across
+the three, which is the self-consistency check that says the ladder is one binary.
+
+**THE CENSUS CLASSIFIED, IN (INC.2b)'s FIVE-MECHANISM STYLE — and it is one
+mechanism, already catalogued.** The row is (INC.6)'s fifth reversed row, the one
+its session note recorded as "1 in `watchPublic.ts` rendering a signature twice": it
+is inside the **5-span baseline `scripts/capture-equivalence.sh` already gates**, so
+checker sharing introduces NOTHING the full-vs-narrow sweep had not already found,
+and reproduces only 1 of those 5. **Nothing in the other four mechanism classes: no
+lost member resolution, no widening to `any`, no definition changed, no diagnostic
+changed.** It fires at k=2 as well as k=26, so it takes ONE companion file, not many
+— which is the tell that it is a first-touch display artefact of checking a file
+ALONE, not an accumulation effect.
+
+**SO (INC.14) IS NOT REFUSED. Its soundness question is answered with a number, and
+what is left is the refactor** — a re-entrant "now check THIS partition" entry point,
+deciding for 416 pass rows which are per-file and which program-wide, resetting the
+diagnostics list to the program-wide prefix, and resetting every side table a
+per-file pass writes. The census says the caches it would carry cost 1 display row.
+
+**(INC.15) IS REFUSED, AND THE REFUSAL IS A RE-PRICING RATHER THAN A SOUNDNESS
+FINDING.** The mechanism checks out on today's binary: `--bindMutationCheck` reads
+**`binder Symbols checked 15580, changed 0`** over a population reaching
+transitively through `locals` + `nodeToSymbol` + every `members`/`exports` table, in
+the SAME run as `mergeSingleSymbol: adopts 406, mutates 175 (164 reaching an adopted
+symbol)` — all 175 land on LIB symbols, which are in no program `BinderResult`.
+`mergeModuleAugmentations` was read as the queue entry asked: three of its four
+writes are idempotent by construction and the fourth (`mergeSymbolTable` into an
+`exports` table) is NOT, because `mergeSingleSymbol` does a bare
+`declarations.addAll` — it simply never reaches binder-owned state here, which is
+what the zero says. **What refuses it is the population.** Bind is **66–74 ms of a
+359–407 ms floor**, i.e. 12.8% of `diagnosticsOf(binder.ts)`, **10.7%** of a first
+hover in that buffer, **3.1%** of a query about `checker.ts`, and **2.75% of the
+whole 15-query editor sequence** — and it is worth **0** on the first query after an
+edit, which is the error-reporting query the owner directive names. **And it is the
+wrong order: a reused `Checker` carries its own bind, so (INC.14) subsumes (INC.15)
+by construction** and would throw away its four layers of plumbing.
+
+**A THIRD FACT THAT ONLY READING FOUND: the shape gate (INC.15) demands cannot be
+evaluated before a build.** The checker's own merge predicate is
+`moduleLocalContributesGlobally`, which reads `umdGlobalNames` and
+`mergeSharedKeepNames` — both computed INSIDE `Checker`'s init — so the design is
+necessarily "build once fresh, reuse only if that build reported clean", and the
+first query of a session never benefits either.
+
+**THE SUCCESSOR THE REFUSAL FOUND, WITH ITS BLOCKER ALREADY NAMED — (INC.16).**
+The floor table says `bind` is 74 ms of which **`bindLexicalScopes` is 69** and
+`bindStatements` 5: the INV.2(c) tables ARE the bind, and (INC.9)'s deferral
+template is the obvious shape. It does not apply as-is, and one line says why:
+`Checker.kt:13536` is `for (result in binderResults) for ((_, scope) in
+result.lexicalScopes)` — a program-wide block-scoped enum/type-alias collector that
+would force every file's table anyway. The question is therefore whether that
+collector can be served by a PROJECTION of the pass rather than by all of it.
+
+**THREE ABLATIONS, AND ALL THREE ARE RECORDED AS CONTROLS RATHER THAN CLAIMED.**
+`ProjectCheckerSharingTest` (5 tests, one of them the non-vacuity control) stayed
+green under every arm, and round 902's rule says that is as often a DEAD ARM as a
+blind pin — so each is diagnosed rather than filed as "the guard is redundant":
+
+    A1  (INC.6)'s mint-time `symbolTypes[copy.id] = copyType` removed   -> 0 RED
+        NOT provably reached: no cheap positive control says the fixture's
+        `Readonly<Program>` enters `materializeModifierUtility` at all.
+    A2  `SYMBOL_TYPE_ORDER_GATE = false` — round 778's write gate off,   -> 0 RED
+        i.e. `symbolTypes` persists a resolution taken under a non-empty
+        instantiation context. Reached on every `getTypeOfSymbol`, but the
+        fixture may present no context-bypassed resolution at all.
+    A3  `buildFileLocalTypeMaps` starved onto `checkedResults` — round   -> 0 RED
+        609's collector mistake, and DEMONSTRABLY DEAD here: that pass
+        resolves only Function/Class/Interface/Enum/TypeAlias/Alias
+        symbols, and the only such local either checked file holds is the
+        import alias `make`, which BOTH arms resolve.
+
+**AND THE FIXTURE HAS A STRUCTURAL HALF-BLINDNESS WORTH RECORDING, because it is a
+property of captures and not of this fixture: a capture is recorded DURING the walk,
+so a file walked LATER cannot influence an earlier file's captured answers in either
+arm.** Only the second-walked file's rows are sensitive, which halves what any such
+pin can see and is the reason the sweep — 741,864 rows over 76 files in every walk
+position — is the discriminating instrument here and the pin is a regression fence.
+
 ### Round (INC.13) — the question a hover asks is now the BUFFER's, and a free differential said it was safe
 
 **HOVERING AROUND A FILE IS FREE AFTER THE FIRST HOVER. A SECOND CARET IN
@@ -1875,44 +1986,96 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `docs/language-service.md` advertised to hosts is GONE** — batching a buffer is now
   a convenience, not a cost decision.
 
-- [ ] **(INC.15) STAGE 3 — REUSE THE BIND FOR AN UNCHANGED PROGRAM: 73-88 ms, 20% of
-  a median query, and it is the (INC.13) entry's unspent second half.** Not refused by
-  (INC.9)'s per-file argument, which is about redoing a bind ONE FILE at a time; this
-  is the WHOLESALE form. `--shareBind` (round 883) already hands one bind to N
-  concurrent checkers and round 882 measured the checker mutating **zero**
-  binder-owned `Symbol`s on an all-module program — so what stands between it and
-  landing is not the mechanism but the SHAPE GATE, which must REUSE the checker's own
-  merge predicate rather than re-derive it (a re-derivation wrong in the permissive
-  direction corrupts silently, and INV.3(d) is what makes the zero true). One site to
-  check first, found by reading in (INC.12): `mergeModuleAugmentations` writes
-  `targetResult.locals[exportName] = augSymbol` and mutates a local symbol's
-  `declarations`/`exports`/`flags` — every write idempotent BY CONSTRUCTION
-  (`if (decl !in ...)`, a same-value put, an `or` of the same bits), which is WHY that
-  census reads zero and which has to be checked rather than assumed for a program that
-  is not tsc's own sources. **The instrument is a full-vs-reused differential in
-  `scripts/caret-vs-file-capture.sh`'s shape** — two arms that must agree, no baseline
-  — over BOTH diagnostics and captures, because a reused bind is exactly the kind of
-  change whose failure is a missing declaration rather than an error. **Price it
-  against (INC.13)'s new floor before starting**: a buffer's second caret is now 2 ms,
-  so the 73-88 ms is only paid on the FIRST query in a buffer and on the first query
-  after an edit, which is a smaller population than it was this morning.
+- [x] **(INC.15) REUSING THE BIND FOR AN UNCHANGED PROGRAM — REFUSED 2026-08-23,
+  AND THE REFUSAL IS A RE-PRICING, NOT A SOUNDNESS FINDING.** The mechanism checks
+  out: on today's binary `--bindMutationCheck` reads **`binder Symbols checked
+  15580, changed 0`** over a population that reaches transitively through
+  `locals` + `nodeToSymbol` + every `members`/`exports` table, in the SAME run as
+  `mergeSingleSymbol: adopts 406, mutates 175 (164 reaching an adopted symbol)` —
+  every one of those 175 mutating merges lands on a LIB symbol, which is in no
+  program `BinderResult`. `mergeModuleAugmentations` was read line by line as the
+  queue entry asked: its four writes are `globals[name] = augSymbol` (a same-value
+  put), `flags or …` (idempotent), `declarations.add` guarded by `if (decl !in …)`,
+  and `mergeSymbolTable` into an `exports` table — and only the LAST of those is
+  non-idempotent, because `mergeSingleSymbol`'s existing-name branch does a bare
+  `merged.declarations.addAll(symbol.declarations)`. On this program it never fires
+  against binder-owned state, which is what the zero says.
+  **WHAT REFUSES IT IS THE POPULATION, RE-PRICED AGAINST (INC.13)'s FLOOR.** Bind is
+  **66–74 ms of a 359–407 ms floor (18.4%)**, and of that **69 of 74 ms is
+  `bindLexicalScopes`**. Against a QUERY it is 12.8% of `diagnosticsOf(binder.ts)`
+  (547 ms), **10.7%** of a first hover in that buffer (655 ms), **3.1%** of a query
+  about `checker.ts` (2,232 ms), and **2.75% of the whole 15-query editor sequence
+  `warm-program-cost.sh` drives** (~10.2 s). And the eligible population is
+  "the program is UNCHANGED since the previous build", which **excludes the first
+  query after an edit — the error-reporting query the owner directive names — where
+  it is worth exactly 0**.
+  **AND IT IS THE WRONG ORDER: (INC.14) SUBSUMES IT BY CONSTRUCTION.** A reused
+  `Checker` carries its own bind, so bind reuse is 20% of a floor that checker reuse
+  removes 100% of, and the plumbing (a content-keyed cache threaded `Project` ->
+  `ProjectCompiler` -> `compileParsed` -> `compileParsedCore` -> `cpcBindAndCheck`)
+  would be thrown away by it. A third fact against doing it first: the checker's own
+  merge predicate is `moduleLocalContributesGlobally`, which reads `umdGlobalNames`
+  and `mergeSharedKeepNames` — both computed INSIDE `Checker`'s init — so the shape
+  gate the queue entry demands can only be evaluated AFTER a build. The design is
+  therefore necessarily "build once fresh, reuse only if that build reported clean",
+  and the first query of a session never benefits either.
+  **WHAT SURVIVES AS A LEAD, and it is bigger and better shaped**: `bindLexicalScopes`
+  is **93% of the bind** and the INV.2(c) tables it builds are read per-FILE, so
+  (INC.9)'s exact deferral template applies — see (INC.16).
 
-- [ ] **(INC.14) THE LAST 63% IS THE CHECKER, AND ITS PRICE IS AN ORDER-DEPENDENCE
-  DIFFERENTIAL.** 252-254 ms of every query's floor is the ~190 program-wide `init`
-  passes, which run inside `Checker`'s constructor, so reusing them across queries means
-  a re-entrant "now check THIS partition" entry point: deciding for 416 pass rows which
-  are per-file and which program-wide, resetting the diagnostics list to the
-  program-wide prefix, and resetting every side table a per-file pass writes. **The
-  soundness question is not the refactor, it is the caches it would carry**:
-  `symbolTypes` persists the FIRST resolution (round 778), and (INC.2)/(INC.5)/(INC.6)
-  are three rounds of hovers rendering `any` because another file resolved a type first.
-  A reused checker makes WHICH QUERY RAN FIRST observable for every later query, on
-  purpose. **Do not start the refactor. Start with the differential**: a warm-reused arm
-  against a cold arm in `scripts/capture-equivalence.sh`'s shape, which needs no baseline
-  because the two arms must agree — and which can be built and run BEFORE any checker
-  surgery by simply running two queries in one process and comparing the second against
-  a fresh-process first. If the divergence census is large, this item is refused with a
-  number, exactly as (INC.10) refused 66 ms.
+- [ ] **(INC.16) THE BIND IS 93% ONE PASS, AND IT HAS A PROGRAM-WIDE READER — the
+  successor (INC.15) left behind.** Measured this round on the floor arm:
+  `bind (all program files)` **74 ms**, of which `bindStatements` **5 ms** and
+  **`bindLexicalScopes` 69 ms**. So the INV.2(c) lexical-scope tables ARE the bind,
+  and (INC.9)'s template — the one that moved `FlowGraphBuilder` onto the first ask
+  for 136 ms — is the obvious shape: under a `recheckOnly` partition the spine walks
+  ONE file, so 122 of 123 files' scope tables should never be asked for.
+  **THEY ARE ASKED FOR, AND BY ONE LINE**: `Checker.kt:13536`, the block-scoped
+  enum/type-alias census, is `for (result in binderResults) for ((_, scope) in
+  result.lexicalScopes)` — a program-wide COLLECTOR, which round 609 says must
+  iterate `binderResults` and (INC.7) therefore refuses to gate. A `lazy` field would
+  be forced by it for every file and the deferral would bank nothing. **So the
+  question is not "can the build be deferred" but "can that collector be served by a
+  PROJECTION"** — it wants only the scope-space symbols carrying `SymbolFlags.Enum`
+  or `SymbolFlags.TypeAlias`, which is a tiny slice of what the pass builds.
+  **Two hazards, both established by reading and neither yet measured.** (a)
+  `moduleLexicalScope` reads the BINDER's accumulated `nodeToSymbol`, whose
+  `(pos, end)` keys collide across files, so a scope built at first-ask sees a
+  FULLER map than one built mid-bind — the (INC.9) refusal's mechanism, one pass
+  over. (b) `declareLexical` mints through `Symbol.scopeSymbol`, a SEPARATE
+  descending-negative sequence — so deferring cannot perturb the positive symbol-id
+  order (the ~350-boundary-test hazard does NOT apply), but it does reorder the
+  negative ids among themselves, and those are keys in id-keyed checker maps.
+  Gate with `partition-equivalence.sh`, both capture censuses and the corpus.
+
+- [ ] **(INC.14) THE LAST 63% IS THE CHECKER — ITS ORDER-DEPENDENCE IS NOW
+  MEASURED AND IT IS **1 ROW IN 741,864**, SO WHAT IS LEFT IS THE REFACTOR ALONE
+  (census 2026-08-23).** 252-254 ms of every query's floor is the ~190 program-wide
+  `init` passes, which run inside `Checker`'s constructor, so reusing them across
+  queries means a re-entrant "now check THIS partition" entry point: deciding for
+  416 pass rows which are per-file and which program-wide, resetting the diagnostics
+  list to the program-wide prefix, and resetting every side table a per-file pass
+  writes.
+  **THE SOUNDNESS QUESTION IS ANSWERED.** `scripts/checker-reuse-differential.sh`
+  runs a COLD arm (one build per query, `recheckOnly = {file}`) against a SHARED arm
+  (one build per group of k, `recheckOnly = group`) — which needs no re-entrant entry
+  point because **a checker that has already answered k-1 queries and is asked a k-th
+  IS a checker whose partition is those k files**, `recheckOnly` being a SET the spine
+  walks in program order either way. Over 381,666 captured types, 360,152 captured
+  definitions and 46 diagnostics in 76 of tsc's own sources: **1 divergent row**, the
+  SAME row at k = 2, 8 and 26 (three re-groupings), `definitions=0 diagnostics=0
+  sharedRendersMoreAny=0 absentInShared=0 absentInCold=0` — and in it the SHARED arm
+  is the better answer (the cold arm invents `X & X` for a function type). That row is
+  already one of the 5 spans `capture-equivalence.sh` gates, so sharing introduces
+  nothing the full-vs-narrow sweep had not found.
+  **AND THE PRIZE IS MEASURED DIRECTLY IN THE SAME RUN — 1.79x at k=2, 3.19x at k=8,
+  3.82x at k=26** (cold 38.4-39.5 s over 76 builds, replicating to +-1.4%).
+  **WHAT IS LEFT IS THE REFACTOR, AND ITS OWN RISK IS NO LONGER THE CACHES.** Start
+  from `cpcBindAndCheck`; the differential is the gate and `ProjectCheckerSharingTest`
+  the fixture-scale pin. One property the census does NOT establish: it models a
+  checker shared across a SET of queries walked in PROGRAM order, where a real reuse
+  answers in the editor's order — so a file whose answers a LATER-walked file could
+  poison is not exercised by it.
 
 - [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
   DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and
