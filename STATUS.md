@@ -1,5 +1,39 @@
 # Status
 
+**AN EDITOR'S WHOLE WORKING SET IS NOW ONE `Checker`: 18 SEMANTIC QUERIES IN SIX BUFFERS
+WENT 5,230 ms -> 737, AND SIX PER-BUFFER ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0
+(2026-08-23, (INC.14) LANDED).** 252-254 ms of every query's floor is the ~190 program-wide
+`init` passes, and the census had already said a `Checker` shared by k queries answers all k
+exactly as k fresh ones do. **The refactor the queue called for was not needed, and the
+census's own model is why**: a checker asked a k-th query IS a checker whose partition is
+those k files, so the arrangement is expressible with no checker surgery — hand `recheckOnly`
+the working set once and capture all of it in the one walk. `Project.prepare(files)` is that,
+made public; beside it and independent of it, `diagnosticsOf`'s memo is now keyed by the
+PARTITION the build walked, so a question about any SUBSET is answered by filtering — which is
+the error-reporting case whole, N builds for N buffers becoming ONE. **THE ORDER GAP THE
+CENSUS LEFT IS CLOSED FIRST, AND IT CLOSED CLEANER THAN PROGRAM ORDER**: the differential's new
+`editor` arm is a deterministic shuffled query SEQUENCE with REVISITS, compared position by
+position, with the COLD arm run over the same sequence so the reference's own order-dependence
+is a control that REFUSES the run rather than an assumption — **101 queries over 76 files, 25
+revisits, 1,070,012 compared rows per run, and 0 divergent rows at k=3 (2.16x) and k=8
+(3.88x)**, 1 at k=26 (5.18x) which is byte for byte the row program order already found and
+already inside `capture-equivalence.sh`'s 5-span baseline; `coldSelfDiverged =
+sharedSelfDiverged = 0` in all three, i.e. a revisited file is answered identically by a fresh
+checker AND by a reused one. Replicated in a second warm run (4,997 -> 704 and 2,376 -> 539),
+with the existing 15-query block unmoved as a CONTROL. **What a held prepared check costs has
+a control rather than being an absolute — heap 163 -> 167 MB, identical to the MB in all six
+rotations, ~4 MB for a 415 KB working set**, bounded at ONE and dropped by any edit.
+**Seven ablations, seven discriminating, each with its own RED set** — the first round in this
+arc with no arm recorded as a control. **REFUSED with its arithmetic**: making the working set
+AUTOMATIC costs `k·floor + k(k+1)/2·perFile` against a cold `k·floor + k·perFile`, a loss at
+every k with the floor at 365 ms and a median file at 31 — a host knows its open buffers and
+this layer does not. Suite **15,701 / 0 / 3** (+13), `cost_gate.py` PASS (largest +1.02%
+`mapped.hits`, the standing drift and the expected answer for a round that changed no compiler
+code), `huge_methods.py --fail-over 0` green on core and `-project`, and all four equivalence
+sweeps exactly at their baselines. Successor **(INC.17)**: the re-entrant checker buys exactly
+what `prepare` cannot — a query about a file the host did not name — and its first step is a
+count, not a rewrite.
+
 **A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH CHECKERS DO —
 ONE DIVERGENT ROW IN 741,864, AND IN IT THE SHARED ARM IS THE ONE THAT IS RIGHT (2026-08-23,
 (INC.14) census).** (INC.14) is 63% of every query's floor and its blocker was never the
@@ -129,34 +163,3 @@ first-mint ordering, and 83% of that ordering (2,722 -> 462 spans) is
 recovered for **6.81 ms** by keeping the TYPE ALIASES eager. The residual 462 is undiagnosed
 and runs the other way round, so it may not be a display question at all. Queued as (INC.11),
 against a free differential oracle: the full and narrow capture arms must agree.
-
-**A NARROWED ERROR QUERY IS DOWN TO 422 ms AND ITS FLOOR TO 378 — A FILE'S FLOW GRAPH IS
-NOW BUILT ONLY WHEN SOMEBODY ASKS FOR IT (2026-08-22, (INC.9)).** The floor was re-decomposed
-rather than scaled, and the ranking had moved: of ~523 ms, the ~190 surviving `init` passes are
-**304 ms (58%)** and BIND **198 (38%)** — so bind is not the largest COMPONENT, but it holds
-the largest single MECHANISM, `FlowGraphBuilder.build` at **126 ms = 24% of everything a
-narrowed query costs**, against a pass table whose biggest row is 66 ms. At the floor nothing
-reads those graphs at all. `BinderResult.flowGraph` now builds on FIRST ASK: **floor 514 -> 378
-ms, median narrowed query over tsc's own 78 sources 542 -> 422, ratio at the median file
-9.70x -> 12.43x**, `scripts/partition-equivalence.sh` EQUIVALENT on all 78 files, and no
-whole-program measurement moves by construction — a full build asks for every checked file's
-graph anyway, which is why no corpus baseline can move. **THIS IS THE CANDIDATE ROUND 865
-PRICED AND REFUSED**, at *52 of 123 files, 0.3% of the mints*: a correct number about a FULL
-build, where the same rule reaches 122 of 123 files under a partition. A cost prior does not
-transfer across REGIMES any more than across families. Laziness had to be defer-and-build and
-never omit (a missing flow node is a false positive, not a slow answer), and it is sound
-because `FlowGraphBuilder` is a pure function of the `SourceFile`; `lazy` rather than a
-nullable field is load-bearing, since `CheckerPool` and `--shareBind` hand one `BinderResult`
-set to several threads. **REFUSED with the measurement in the same round: a cross-query BIND
-CACHE.** All of bind is now 72 ms of a 378 ms floor, and against that ceiling every
-`BinderResult` from one `Binder` shares its `(pos,end)`-keyed `nodeToSymbol` map — keys that
-collide across files — while `mergeSingleSymbol` adopts binder-owned symbols and
-`declarations.addAll` is not idempotent. **The receipt is a COUNT and it reaches full builds
-too**: flow graphs built go **123 -> 0** on the floor arm and **123 -> 78** on a full build —
-the 45 that vanish are the real-lib `.d.ts` files, bound with a flow graph on every compile
-this repo has ever run and read by no consumer, ever. Suite **15,666 / 0 / 3** (+11 pins),
-`cost_gate.py` PASS (largest delta +1.02% `mapped.hits`, the same pre-existing drift batch 3
-recorded), `huge_methods.py --fail-over 0` green on core AND the `-project` module, and BOTH capture
-censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0) while
-their own timing arms improved with everything else — the narrowed capture median is
-**556 -> 420 ms** and `binder.ts` warm rotated **7.51x -> 8.31x**.

@@ -180,13 +180,14 @@ you call them.
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
-| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean or repeated | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
-| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — 4.7x on tsc's own sources; the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`) |
-| `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays |
-| `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span; the same build the three neighbours use |
-| `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again |
+| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean, repeated, or a SUBSET of a set already asked about | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
+| `prepare(files)` | **ONE NARROWED build**, whatever the file count | checks and captures a whole working set at once, so every later semantic query about any of them is free — see § 3a |
+| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — 4.7x on tsc's own sources; the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
+| `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays; free in a `prepare`d file |
+| `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span; the same build the three neighbours use; free in a `prepare`d file |
+| `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again; free in a `prepare`d file |
 | `completionsAt(f, o)` | **one NARROWED build, every call** | a DIFFERENT question (a receiver's members, or a scope chain), so it does not share; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
-| `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share |
+| `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share; free in a `prepare`d file |
 | `referencesAt(f, o)` | **ONE FULL build clean, TWO dirty** | sweeps the whole program's, so it is not narrowed; § 10b has the measured figures |
 | `signatureHelpAt(f, o)` | **one NARROWED build, every call** | free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
@@ -241,6 +242,86 @@ Two consequences for a host:
   same file-wide question. `completionsAt` and `signatureHelpAt` are not: they ask
   about a receiver's members, a scope chain or a callee's signatures, which are
   different questions and therefore different builds.
+- **And since 2026-08-23 those four are ONE build across a whole WORKING SET**, if
+  you ask for it: `prepare(files)` checks and captures the set in one build, after
+  which every one of them is free in any of those buffers. `diagnosticsOf` needs no
+  new call for the same effect — its memo is keyed by the partition the build
+  walked, so a question about a subset of a set already asked about is answered by
+  filtering. § 3a has both, with what invalidates them.
+
+## 3a. Preparing a working set — the one call that changes the cost model
+
+`prepare(files)` checks a set of buffers NOW, in one build, and every later
+**semantic** query about any of them is answered without compiling.
+
+```kotlin
+// on idle, after the user stops typing
+project.prepare(editor.openBuffers)          // ONE build
+
+// afterwards, and until the next edit — no build at all
+project.quickInfoAt(a, caret)                // 0
+project.definitionsAt(b, caret)              // 0
+project.fileSemantics(c)                     // 0
+project.documentHighlightsAt(a, caret)       // 0
+```
+
+Before this, a query about a buffer cost one narrowed build, and a narrowed build
+is mostly FLOOR: crawl, bind and the program-wide checker passes come to ~345 ms on
+tsc's own 78 sources whatever file you ask about, against 47 ms for a median file's
+own checking. `N` buffers therefore paid that floor `N` times. One `prepare` pays it
+once.
+
+Measured on those sources, one build answering `k` queries against `k` builds
+answering one each:
+
+| queries per build | one build per query | shared | ratio |
+|---:|---:|---:|---:|
+| 2 | 39,173 ms / 76 builds | 21,918 / 38 | **1.79x** |
+| 8 | 38,404 / 76 | 12,035 / 10 | **3.19x** |
+| 26 | 39,508 / 76 | 10,347 / 3 | **3.82x** |
+
+### That the shared answer is the per-query answer is SWEPT, not argued
+
+A `Checker` carries caches that record which question reached a type FIRST, so
+sharing one across queries could in principle make the ORDER of your queries
+observable. `scripts/checker-reuse-differential.sh` compares the two arrangements
+row for row. In an **editor-ordered** query sequence — a deterministic shuffle with
+revisits, 101 queries over 76 files, 25 of them asked again later by a different
+checker, 1,070,012 compared rows per run — **no row differs** at k = 3 and k = 8,
+and a file asked twice is answered identically both times by a fresh checker AND by
+a reused one. At k = 26 one row differs, and it is one the program-order sweep
+already found: a redundant self-intersection that the shared arm renders correctly
+and the per-query arm does not.
+
+### What it does not do
+
+* **It does not answer `diagnostics` or `diagnosticsOf`.** A capture build types
+  nodes the checker had no reason to type, so its diagnostics are not
+  interchangeable with a plain build's — the rule this page has always stated. For
+  errors, call `diagnosticsOf(theSameFiles)`, which is itself one build for the whole
+  set, and since 2026-08-23 is reused by every per-file question about a file in it
+  (below).
+* **It does not survive an edit**, and nothing here does. Prepare again on idle after
+  each edit — the same rhythm you already debounce `diagnostics()` with.
+* **It is not free.** It is a real build, and the first query is made dearer so that
+  every later one is free. The work is proportional to the identifiers in the
+  prepared files and the ANSWERS are retained until the next edit — one type and one
+  definition per identifier per file, the largest value a `Project` ever holds.
+  Prepare the buffers a user is looking at, not the program.
+
+### Error reporting is the same shape, with no new call
+
+`diagnosticsOf`'s memo is keyed by the PARTITION the build walked, so a query about
+any SUBSET of a set already asked about is answered by filtering:
+
+```kotlin
+project.diagnosticsOf(editor.openBuffers)    // ONE build
+project.diagnosticsOf(listOf(a))             // 0
+project.diagnosticsOf(listOf(b))             // 0
+```
+
+which is what lets a per-buffer annotator run at editor speed: ask about the whole
+open set once on idle, then answer each buffer from it.
 
 ## 4. Diagnostics
 
@@ -1606,7 +1687,7 @@ construction — round 609 measured a starved collector at 1,174 false positives
 (P2) cheap means making those products per-file decomposable, one at a time.
 
 
-### (INC.14) Can one compiler answer many queries? Measured, and the answer is yes
+### (INC.14) Can one compiler answer many queries? Measured, then SHIPPED
 
 The item above says the remaining 63% needs "the checker to become re-partitionable".
 The question that gates that work is not the refactor but whether a `Checker` REUSED
@@ -1632,8 +1713,29 @@ better answer — the per-query arm renders a redundant self-intersection
 removes. It is already one of the five spans `scripts/capture-equivalence.sh` gates,
 so sharing introduces nothing new. No definition and no diagnostic moved.
 
-So the cost table's bottom row is a REFACTOR question, not a correctness one. Nothing
-in this document changes yet: it still describes one build per question.
+**The one thing that census did not model was ORDER** — it walked a set of queries in
+program order, where a host asks in whatever order the user touches buffers and comes
+BACK to a buffer some other checker already answered. The `editor` arm closes that: a
+deterministic shuffled query SEQUENCE with revisits, compared position by position,
+with the COLD arm run over the same sequence so that "is the reference arm itself
+order-dependent?" is a measured control rather than an assumption.
+
+| queries per build | one build per query | shared | ratio | rows that differ |
+|---:|---:|---:|---:|---:|
+| 3 | 51,996 ms / 101 builds | 24,088 / 34 | **2.16x** | 0 |
+| 8 | 50,771 / 101 | 13,080 / 13 | **3.88x** | 0 |
+| 26 | 51,728 / 101 | 9,992 / 4 | **5.18x** | 1 |
+
+101 queries over 76 files with 25 revisits, **1,070,012 compared rows per run**, and
+`coldSelfDiverged = sharedSelfDiverged = 0` in all three — a revisited file is
+answered identically by a fresh checker and by a reused one. The single k = 26 row is
+byte for byte the one program order already found. So editor order introduces nothing,
+and at two of three group sizes it is cleaner than program order.
+
+**That is what `prepare` (§ 3a) turns into an API**, and it is the one place this
+document's cost model changed as a result: the four caret-scoped semantic members are
+now ONE build across a declared working set, not one per buffer. The `diagnosticsOf`
+half needs no new call — its memo is keyed by the partition.
 
 **And reusing only the BIND is refused, with its number.** Bind is 66–74 ms of a
 359–407 ms floor — 10.7% of a first hover in a mid-size buffer, 3.1% of one in
@@ -1688,6 +1790,7 @@ read instead.
 | find references, document highlights, read-vs-write | § 10b | complete — the population is every identifier plus every literal in a member-NAME position (`(API.17)`) |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
 | rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the gaps below |
+| checking a whole working set once, so every semantic query about it is free | § 3a | complete — `prepare(files)`, swept against one-build-per-query over 1.07 M rows in editor order |
 
 Everything crossing the surface is a **value** — no AST, no `Symbol`, no `Type` — which
 is what lets the compiler underneath change without breaking a host.
@@ -1782,6 +1885,24 @@ of that whole program — so break-even is at **the second caret**, and everythi
 is free. The reason it is not worse is that a narrowed build is mostly FLOOR (§ 13's
 ~345 ms), and the extra spans are cheap beside it: swept over all 78 files, a whole-file
 capture is **+9 to +17 ms at the median file** (372 → 381 and 373 → 390, the two draws).
+
+**(INC.14) …AND SINCE 2026-08-23 THE UNIT IS THE WORKING SET, IF A HOST ASKS FOR IT.**
+`prepare(files)` performs ONE narrowed build over a declared set of buffers and captures
+every one of them in that walk, so those four members answer about ANY of them without
+building. Measured on the compiler profile, three rotations, replicated in a second run,
+over six mid-sized sources (55–83 KB, 415 KB together — deliberately not `checker.ts`,
+whose 1.65 s of own checking would bury the floor the arm exists to show):
+
+| sequence, six buffers | one build per buffer | prepared |
+|---|---:|---:|
+| a hover in each | 2,581 / 2,484 ms | **698 / 674 to prepare, then 12 / 7** |
+| go-to-definition + highlights in each (12 more) | 2,649 / 2,513 ms | **27 / 23** |
+| all 18 semantic queries | 5,230 / 4,997 ms | **737 / 704 ms — 7.1x** |
+| `diagnosticsOf` per buffer (6) | 2,338 / 2,376 ms | **526 / 539 for the set, then 0** |
+
+The memory it holds has a control rather than an absolute: a reading taken right after
+the edit that dropped every cached answer and one taken after the prepared queries are
+**163 → 167 MB**, identical to the MB in all six rotations — ~4 MB for that working set.
 
 **That the two answers AGREE is measured, not assumed.** A capture types nodes the
 checker had no reason to type, and typing populates order-dependent caches, so a

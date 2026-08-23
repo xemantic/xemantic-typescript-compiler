@@ -20,6 +20,114 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.14) — a `Checker` now answers a whole WORKING SET, and editor order was the last thing it could have gone wrong on
+
+**EIGHTEEN SEMANTIC QUERIES IN SIX BUFFERS WENT 5,230 ms -> 737, AND SIX PER-BUFFER
+ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0 — because `Project.prepare(files)`
+performs ONE narrowed build over a declared working set and `diagnosticsOf`'s memo is
+now keyed by the PARTITION rather than by the question.** Replicated in a second run
+(4,997 -> 704 and 2,376 -> 539); the 15-query block `warm-program-cost.sh` already
+drove is a CONTROL and did not move (diagA 2,032, hover1 3,921, hoverB 609, defB 3,
+hoverB2 3, semB 20, hlB1 7, hlB2 8 — (INC.13)'s numbers to the ms).
+
+**THE ORDER GAP THE CENSUS LEFT IS CLOSED, AND IT CLOSED CLEANER THAN PROGRAM ORDER.**
+The (INC.14) census modelled a SET of queries walked in program order; a host asks in
+whatever order a user touches buffers and COMES BACK to a buffer another checker
+already answered. The differential's new `editor` arm builds a deterministic shuffled
+query SEQUENCE with revisits, chunks THAT into groups and compares POSITION BY
+POSITION, and runs the COLD arm over the same sequence so the reference's own
+order-dependence is a measured control (`coldSelfDiverged`, which REFUSES the run if
+non-zero) rather than an assumption:
+
+| k | cold | shared | ratio | rows that differ |
+|---:|---:|---:|---:|---:|
+| 3 | 51,996 ms / 101 builds | 24,088 / 34 | **2.16x** | 0 |
+| 8 | 50,771 / 101 | 13,080 / 13 | **3.88x** | 0 |
+| 26 | 51,728 / 101 | 9,992 / 4 | **5.18x** | 1 |
+
+101 queries over 76 files, 25 revisits, **1,070,012 compared rows per run**, and
+`coldSelfDiverged = sharedSelfDiverged = 0` in all three — a revisited file is
+answered identically by a fresh checker AND by a reused one, which is the property no
+file-keyed census could have tested. The one k=26 row is byte for byte the row program
+order already found (`watchPublic.ts@24148`, the COLD arm inventing `X & X`), already
+inside `capture-equivalence.sh`'s 5-span baseline.
+
+**WHAT LANDED IS NOT THE RE-ENTRANT CHECKER, AND THE REASON IS THE CENSUS'S OWN
+MODEL.** (INC.14) says "what is left is the refactor" — 416 pass rows classified
+per-file vs program-wide, a diagnostics prefix to reset, every per-file side table to
+reset. But the census's whole trick is that **a checker asked a k-th query IS a checker
+whose partition is those k files**, and that arrangement is expressible with NO checker
+surgery: hand `recheckOnly` the working set once and capture all of it. So `prepare` is
+the census's SHARED arm made public. The refactor buys one thing this does not — a
+working set the host did not have to name — and it is now the successor, (INC.17),
+priced below.
+
+**THREE RULES, EACH CARRYING ITS PIN, EACH ONE A PLACE THIS COULD HAVE FAILED
+SILENTLY.** (a) The prepared slot is SEPARATE from the two-entry capture LRU, so an
+ordinary hover in an unprepared buffer cannot evict what a prepare earned. (b) Serving
+is decided by CONTAINMENT of the asked spans against the prepared REQUEST's own spans,
+never by "is this file prepared" — an answer never asked for is ABSENT rather than
+wrong, and a hover served from a check that did not carry its span renders NOTHING with
+no error anywhere. (c) A prepared check may not answer `diagnostics`/`diagnosticsOf`:
+§ 3's standing rule is that a capture build types nodes the checker had no reason to
+type, so its diagnostics are not interchangeable with a plain build's.
+
+**SEVEN ABLATIONS, SEVEN DISCRIMINATING, EACH WITH ITS OWN RED SET** — the first round
+this session where no arm had to be recorded as a control:
+
+    A1  `prepared = null` dropped from the 3 invalidation sites   -> 2 RED
+    A2  `preparedAnswerFor` always null                           -> 3 RED
+    A3  `diagnosticsOf` served only on an EXACT partition match   -> 2 RED
+    A4  a subset answered with the SUPERSET's rows                -> 1 RED
+    A5  `prepare` rebuilds what is already prepared               -> 1 RED
+    A6  document highlights bypass the prepared check             -> 1 RED
+    A7  containment weakened to file MEMBERSHIP                   -> 1 RED
+
+A7 is the one worth keeping: it reddens only `a caret on a NON-occurrence in a prepared
+file is still answered`, a pin that exists solely for it. The staleness pins edit
+`t.ts` and query `a.ts` — (INC.12)'s gotcha is that a pin editing the file it queries is
+vacuous, because the edit moves the request key rather than exposing a stale answer.
+
+**WHAT A HELD PREPARED CHECK COSTS, WITH A CONTROL AND NOT AS AN ABSOLUTE.** A heap
+reading taken right after the edit that dropped every cached answer and one taken after
+the prepared queries are **163 -> 167 MB**, identical to the MB in all six rotations:
+**~4 MB for a 415 KB working set of six files**. The bound is ONE prepared check,
+replaced wholesale by the next `prepare` and dropped by any edit — a host cannot grow
+it however it calls.
+
+**WHAT WAS CONSIDERED AND REFUSED, WITH ITS ARITHMETIC.** Making the working set
+AUTOMATIC — grow the partition to `{queried} ∪ {recently queried}` on every miss — was
+refused before it was built: at k distinct files it costs `k·floor + k(k+1)/2·perFile`
+against a cold `k·floor + k·perFile`, so with the floor at 342 ms and a median file at
+47 ms it is a LOSS at every k, and bounding the growth at B files makes every miss
+`(B−1)·perFile` dearer (+42% at B=4 on a median file, catastrophic on `checker.ts`).
+A host knows its open buffers; this layer does not, and guessing is the one thing the
+whole API refuses to do.
+
+**GATES.** Suite **15,701 / 0 / 3** (+13, exactly this round's pins, summed with a
+real XML parser over all six modules). `cost_gate.py` **PASS**, largest **+1.02%
+`mapped.hits`** — the same pre-existing drift the last six rounds recorded, and the
+EXPECTED answer for a round that changed no compiler code, i.e. a control rather than a
+green light. `huge_methods.py --fail-over 0` green on core (755 classes, 16,170 methods,
+0 over, largest 7,702) and on `-project` (50 classes, 478 methods, 0 over, largest
+2,480). **All four equivalence sweeps exactly at their baselines**:
+`partition-equivalence.sh` **EQUIVALENT on all 78 files** (median narrowed query 396 ms,
+floor 365, ratio **13.37x**); `capture-equivalence.sh` **5 spans / 3 files,
+`narrowRendersMoreAny = 0`**; `capture-channel-equivalence.sh` **286 rows / 49 files,
+members=285 scopes=0 signatures=1**; `caret-vs-file-capture.sh` **EQUIVALENT, 904
+spans**. And `checker-reuse-differential.sh` in BOTH orders, six runs between them.
+
+**SUCCESSOR — (INC.17), and its price is already known.** The re-entrant checker buys
+exactly the case `prepare` cannot: a query about a file the host did not name. Its
+prize is the same 342 ms floor, its instrument is the differential (which needs no new
+work — it already models the arrangement), and its cost is the 416-row classification
+plus a diagnostics prefix and every per-file side table. The one thing to measure
+FIRST, and it is cheap: how many of the 479 `pass(...)` rows ever touch
+`checkedResults` at all. (INC.7) says 376 of 400 tail walkers iterate `binderResults`
+and are partition-INVARIANT by construction — if that ratio holds for the whole init,
+the replayable set is small and the refactor is a classification, not a rewrite.
+
+
 ### Round (INC.14/INC.15) — the checker CAN be reused: 1 divergent row in 741,864, and it is the shared arm that is right
 
 **A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH
@@ -2062,34 +2170,75 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   negative ids among themselves, and those are keys in id-keyed checker maps.
   Gate with `partition-equivalence.sh`, both capture censuses and the corpus.
 
-- [ ] **(INC.14) THE LAST 63% IS THE CHECKER — ITS ORDER-DEPENDENCE IS NOW
-  MEASURED AND IT IS **1 ROW IN 741,864**, SO WHAT IS LEFT IS THE REFACTOR ALONE
-  (census 2026-08-23).** 252-254 ms of every query's floor is the ~190 program-wide
-  `init` passes, which run inside `Checker`'s constructor, so reusing them across
-  queries means a re-entrant "now check THIS partition" entry point: deciding for
-  416 pass rows which are per-file and which program-wide, resetting the diagnostics
-  list to the program-wide prefix, and resetting every side table a per-file pass
-  writes.
-  **THE SOUNDNESS QUESTION IS ANSWERED.** `scripts/checker-reuse-differential.sh`
-  runs a COLD arm (one build per query, `recheckOnly = {file}`) against a SHARED arm
-  (one build per group of k, `recheckOnly = group`) — which needs no re-entrant entry
-  point because **a checker that has already answered k-1 queries and is asked a k-th
-  IS a checker whose partition is those k files**, `recheckOnly` being a SET the spine
-  walks in program order either way. Over 381,666 captured types, 360,152 captured
-  definitions and 46 diagnostics in 76 of tsc's own sources: **1 divergent row**, the
-  SAME row at k = 2, 8 and 26 (three re-groupings), `definitions=0 diagnostics=0
-  sharedRendersMoreAny=0 absentInShared=0 absentInCold=0` — and in it the SHARED arm
-  is the better answer (the cold arm invents `X & X` for a function type). That row is
-  already one of the 5 spans `capture-equivalence.sh` gates, so sharing introduces
-  nothing the full-vs-narrow sweep had not found.
-  **AND THE PRIZE IS MEASURED DIRECTLY IN THE SAME RUN — 1.79x at k=2, 3.19x at k=8,
-  3.82x at k=26** (cold 38.4-39.5 s over 76 builds, replicating to +-1.4%).
-  **WHAT IS LEFT IS THE REFACTOR, AND ITS OWN RISK IS NO LONGER THE CACHES.** Start
-  from `cpcBindAndCheck`; the differential is the gate and `ProjectCheckerSharingTest`
-  the fixture-scale pin. One property the census does NOT establish: it models a
-  checker shared across a SET of queries walked in PROGRAM order, where a real reuse
-  answers in the editor's order — so a file whose answers a LATER-walked file could
-  poison is not exercised by it.
+- [x] **(INC.14) A `Checker` NOW ANSWERS A WHOLE WORKING SET — LANDED 2026-08-23 as
+  `Project.prepare(files)`, plus a partition-keyed `diagnosticsOf` memo beside it.**
+  252-254 ms of every query's floor is the ~190 program-wide `init` passes, and the
+  census said a checker shared by k queries answers all k exactly as k fresh ones do.
+  **The refactor the entry called for was not needed, and the census's own model is
+  why**: a checker asked a k-th query IS a checker whose partition is those k files,
+  and that arrangement is expressible with no checker surgery — hand `recheckOnly` the
+  working set once and capture all of it in the one walk. `prepare` is the census's
+  SHARED arm made public.
+  **THE ORDER GAP THE ENTRY NAMED IS CLOSED FIRST, AND IT CLOSED CLEANER THAN PROGRAM
+  ORDER.** `checker-reuse-differential.sh` grew an `editor` arm — a deterministic
+  shuffled query SEQUENCE with revisits, chunked into groups, compared POSITION BY
+  POSITION, with the COLD arm run over the same sequence so "is the reference itself
+  order-dependent?" is a control (`coldSelfDiverged`, which REFUSES the run) and not an
+  assumption. 101 queries over 76 files, 25 revisits, **1,070,012 compared rows per
+  run**: **0 divergent rows at k=3 (2.16x) and k=8 (3.88x)**, **1 at k=26 (5.18x)** and
+  that one is byte for byte the row program order already found (`watchPublic.ts@24148`,
+  the COLD arm inventing `X & X`), already inside `capture-equivalence.sh`'s 5-span
+  baseline. `coldSelfDiverged = sharedSelfDiverged = 0` in all three — a revisited file
+  is answered identically by a fresh checker AND by a reused one.
+  **MEASURED, six mid-sized buffers (55-83 KB, 415 KB together; deliberately not
+  `checker.ts`, whose 1.65 s of own checking would bury the floor), three rotations,
+  replicated in a second run**: 18 semantic queries **5,230 -> 737 ms and 4,997 -> 704
+  (7.1x both)**; six per-buffer `diagnosticsOf` **2,338 -> 526 and 2,376 -> 539**, with
+  every re-ask **0**. The existing 15-query block is a CONTROL and did not move.
+  **What a held prepared check costs, with a control rather than as an absolute: heap
+  163 -> 167 MB, identical to the MB in all six rotations — ~4 MB for that working set.**
+  Bound: ONE prepared check, replaced by the next `prepare`, dropped by any edit.
+  **Three rules, each with its pin**: the prepared slot is SEPARATE from the two-entry
+  capture LRU (an ordinary hover cannot evict what a prepare earned); serving is decided
+  by CONTAINMENT of the asked spans against the prepared REQUEST's own spans, never by
+  file membership (an answer never asked for is ABSENT, and a hover served from a check
+  that did not carry its span renders nothing, silently); and a prepared check may NOT
+  answer `diagnostics`/`diagnosticsOf`, because a capture build types nodes the checker
+  had no reason to type. **Seven ablations, seven discriminating, each with its own RED
+  set** — the first round this session with no arm recorded as a control.
+  **REFUSED with its arithmetic: making the working set AUTOMATIC.** Growing the
+  partition to `{queried} ∪ {recently queried}` on every miss costs `k·floor +
+  k(k+1)/2·perFile` against a cold `k·floor + k·perFile`, i.e. a LOSS at every k with
+  the floor at 342-365 ms and a median file at 31-47 ms; bounding the growth at B makes
+  every miss `(B−1)·perFile` dearer (+42% at B=4 on a median file, far worse on
+  `checker.ts`). A host knows its open buffers and this layer does not.
+  `docs/language-service.md` §§ 3, 3a, 13, 14.
+
+- [ ] **(INC.17) THE RE-ENTRANT CHECKER — what `prepare` cannot buy, and the one number
+  that decides whether it is a classification or a rewrite.** `prepare` collects the
+  floor for files a HOST NAMED; a query about a file it did not name still pays the
+  whole 342-365 ms. The re-entrant entry point (INC.14) originally described buys
+  exactly that case, and its prize is the same floor. **Its instrument needs no new
+  work** — `checker-reuse-differential.sh` already models the arrangement in both
+  orders, and `ProjectPreparedCheckTest` is the fixture-scale fence.
+  **MEASURE THIS FIRST, and it costs a grep plus one run: how many of `Checker.kt`'s
+  479 `pass(...)` rows ever touch `checkedResults`.** A pass iterating `binderResults`
+  is partition-INVARIANT by construction — its diagnostics are the same for any
+  partition — so it need not re-run at all on a replay; (INC.7) measured 376 of 400
+  tail walkers in that class. If the ratio holds for the whole init, the replayable set
+  is small and this is a CLASSIFICATION rather than a rewrite.
+  **Three hazards, all established by reading and none measured.** (a) The diagnostics
+  list interleaves partition-invariant and partition-dependent rows, so a replay must
+  reset to a recorded prefix — and run 8 ends with two RETRACTIONS that only work after
+  run 1 emitted (CLAUDE.md, (JIT.1)(d)). (b) A per-file pass that writes a SIDE SET
+  leaves the previous partition's entries behind; the replay must reset each one, and
+  nothing in the types says which. (c) Skipping a program-wide pass on replay is only
+  sound if it is a pure emitter — round 609 measured a starved collector at 1,174 false
+  positives, which is exactly (INC.7)'s classification problem one layer up.
+  **A self-classifying design exists and is worth pricing before hand-classifying**:
+  have `pass()` record whether its body reached `checkedResults` in the FIRST run and
+  replay only those. It fails for a pass that reads `assignedFileNames` directly, so it
+  needs that grep as a guard.
 
 - [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
   DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and

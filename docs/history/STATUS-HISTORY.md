@@ -1,3 +1,34 @@
+**A NARROWED ERROR QUERY IS DOWN TO 422 ms AND ITS FLOOR TO 378 — A FILE'S FLOW GRAPH IS
+NOW BUILT ONLY WHEN SOMEBODY ASKS FOR IT (2026-08-22, (INC.9)).** The floor was re-decomposed
+rather than scaled, and the ranking had moved: of ~523 ms, the ~190 surviving `init` passes are
+**304 ms (58%)** and BIND **198 (38%)** — so bind is not the largest COMPONENT, but it holds
+the largest single MECHANISM, `FlowGraphBuilder.build` at **126 ms = 24% of everything a
+narrowed query costs**, against a pass table whose biggest row is 66 ms. At the floor nothing
+reads those graphs at all. `BinderResult.flowGraph` now builds on FIRST ASK: **floor 514 -> 378
+ms, median narrowed query over tsc's own 78 sources 542 -> 422, ratio at the median file
+9.70x -> 12.43x**, `scripts/partition-equivalence.sh` EQUIVALENT on all 78 files, and no
+whole-program measurement moves by construction — a full build asks for every checked file's
+graph anyway, which is why no corpus baseline can move. **THIS IS THE CANDIDATE ROUND 865
+PRICED AND REFUSED**, at *52 of 123 files, 0.3% of the mints*: a correct number about a FULL
+build, where the same rule reaches 122 of 123 files under a partition. A cost prior does not
+transfer across REGIMES any more than across families. Laziness had to be defer-and-build and
+never omit (a missing flow node is a false positive, not a slow answer), and it is sound
+because `FlowGraphBuilder` is a pure function of the `SourceFile`; `lazy` rather than a
+nullable field is load-bearing, since `CheckerPool` and `--shareBind` hand one `BinderResult`
+set to several threads. **REFUSED with the measurement in the same round: a cross-query BIND
+CACHE.** All of bind is now 72 ms of a 378 ms floor, and against that ceiling every
+`BinderResult` from one `Binder` shares its `(pos,end)`-keyed `nodeToSymbol` map — keys that
+collide across files — while `mergeSingleSymbol` adopts binder-owned symbols and
+`declarations.addAll` is not idempotent. **The receipt is a COUNT and it reaches full builds
+too**: flow graphs built go **123 -> 0** on the floor arm and **123 -> 78** on a full build —
+the 45 that vanish are the real-lib `.d.ts` files, bound with a flow graph on every compile
+this repo has ever run and read by no consumer, ever. Suite **15,666 / 0 / 3** (+11 pins),
+`cost_gate.py` PASS (largest delta +1.02% `mapped.hits`, the same pre-existing drift batch 3
+recorded), `huge_methods.py --fail-over 0` green on core AND the `-project` module, and BOTH capture
+censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0) while
+their own timing arms improved with everything else — the narrowed capture median is
+**556 -> 420 ms** and `binder.ts` warm rotated **7.51x -> 8.31x**.
+
 **THE LANGUAGE SERVICE ANSWERS *EVERY* EDITOR QUERY AS A PARTITION NOW — THE ERROR QUERY AT
 ~5.8x AND THE CARET QUERIES AT ~4.7-4.9x (2026-08-22, owner directive: make it incremental
 enough to carry an IntelliJ plugin).** **(INC.2b)** wired hover, go-to-definition,
