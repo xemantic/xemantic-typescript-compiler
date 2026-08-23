@@ -25,7 +25,9 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.AliasDisplayCensus
 import com.xemantic.typescript.compiler.CapturedDeclaration
+import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
@@ -71,6 +73,13 @@ import com.xemantic.typescript.compiler.computeParserFlags
 fun main(args: Array<String>) {
     require(args.isNotEmpty()) { "usage: <projectDir> [maxFiles]" }
     val limit = if (args.size > 1) args[1].toInt() else Int.MAX_VALUE
+    // (INC.11) arms for `init:buildFileLocalTypeMaps`. Unset means the shipped
+    // behaviour, so an unset sweep is the baseline and needs no separate binary.
+    FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
+    if (FltmDefer.eager != FltmDefer.Phases.ALL) {
+        println("FLTM eager phases: ${FltmDefer.eager}")
+    }
+    AliasDisplayCensus.on = System.getenv("XTSC_ALIAS_CENSUS") == "1"
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])
@@ -211,6 +220,7 @@ fun main(args: Array<String>) {
         }
     }
 
+    if (AliasDisplayCensus.on) println(AliasDisplayCensus.report())
     println(
         "captures: spansAsked=$spansAsked  types=$capturedTypes  definitions=$capturedDefinitions " +
             "over ${fullMs.size} file(s)",

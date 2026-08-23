@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
@@ -81,6 +82,9 @@ fun main(args: Array<String>) {
     require(args.isNotEmpty()) { "usage: <projectDir> [warmups]" }
     val project = args[0]
     val warmups = if (args.size > 1) args[1].toInt() else 3
+    // (INC.11) the eager-phase arm; unset means the shipped behaviour.
+    FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
+    println("FLTM eager phases: ${FltmDefer.eager}")
     val compiler = ProjectCompiler(SystemVfs)
 
     fun full() = compiler.build(project, noEmit = true)
@@ -95,6 +99,9 @@ fun main(args: Array<String>) {
     // ---- sanity: the floor really is a floor, and the full build really checks.
     val probeFull = full()
     val probeFloor = floor()
+    println(
+        "FLTM builds after a floor probe: eager=${FltmDefer.eagerBuilds} lazy=${FltmDefer.lazyBuilds}",
+    )
     println(
         "program: files=${probeFull.programFiles.size}  " +
             "fullDiagnostics=${probeFull.diagnostics.size}  " +

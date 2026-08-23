@@ -1042,6 +1042,10 @@ class Checker(
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
     private val fileLocalTypeMaps = HashMap<String, Map<String, Type>>()
+    /** (INC.11) which of [FltmDefer.Phase] each file's map already carries. */
+    private val fileLocalTypeMapPhases = HashMap<String, MutableSet<FltmDefer.Phase>>()
+    /** (INC.11) re-entrancy guard for the lazy per-file build. */
+    private val fltmBuildInProgress = HashSet<String>()
     /**
      * Whether [ensureImportReferencesTracked] has run. Per-`Checker`, like
      * [referencedAliases] itself; exposed so the deferral can be pinned as a
@@ -15107,17 +15111,75 @@ class Checker(
      * checker passes, not just during the TS2322 walk.
      */
     private fun buildFileLocalTypeMaps() {
+        FltmDefer.resetCounters()
         if (FltmCensus.on) FltmCensus.beginSetup()
-        for (result in binderResults) {
+        val eager = FltmDefer.eager
+        if (eager.isNotEmpty()) {
+            for (result in binderResults) {
+                buildFileLocalTypeMapPhases(result, eager)
+                FltmDefer.eagerBuilds++
+            }
+        }
+        if (FltmCensus.on) FltmCensus.endSetup()
+    }
+
+    /**
+     * (INC.11) The map's ONE reader goes through here, so a phase the `init` pass
+     * did not run is built the first time this file's names are asked about.
+     *
+     * When [FltmDefer.armed] is false — the shipped default — this is a static
+     * boolean read and the map behaves exactly as the eager pass left it.
+     */
+    private fun fileLocalTypeMapFor(fileName: String): Map<String, Type>? {
+        if (FltmDefer.armed) ensureFileLocalTypeMap(fileName)
+        return fileLocalTypeMaps[fileName]
+    }
+
+    /**
+     * Builds whatever phases this file is still missing. Re-entrant by
+     * construction: the build calls `getTypeOfSymbol`, which reaches
+     * [getTypeOfIdentifier], which reaches this — so a file already under
+     * construction answers with the partial map rather than recursing.
+     */
+    private fun ensureFileLocalTypeMap(fileName: String) {
+        val done = fileLocalTypeMapPhases[fileName]
+        if (done != null && done.size == 3) return
+        if (fileName in fltmBuildInProgress) return
+        val result = fileResults[fileName] ?: return
+        fltmBuildInProgress.add(fileName)
+        try {
+            buildFileLocalTypeMapPhases(result, FltmDefer.Phases.ALL)
+            FltmDefer.lazyBuilds++
+        } finally {
+            fltmBuildInProgress.remove(fileName)
+        }
+    }
+
+    /**
+     * One file's map, restricted to the phases in [want] that it does not already
+     * carry. Merges into whatever an earlier phase left, so an eager `DECL` pass
+     * and a lazy `VAR` build compose into the map the un-phased pass produced.
+     */
+    private fun buildFileLocalTypeMapPhases(result: BinderResult, want: Set<FltmDefer.Phase>) {
             val fileName = result.sourceFile.fileName
+            val done = fileLocalTypeMapPhases.getOrPut(fileName) { HashSet() }
+            val todo = want - done
+            if (todo.isEmpty()) return
             val source = result.sourceFile.text
-            val typeMap = mutableMapOf<String, Type>()
+            val carried = fileLocalTypeMaps[fileName]
+            val typeMap: MutableMap<String, Type> =
+                if (carried == null) mutableMapOf() else HashMap(carried)
             for ((name, symbol) in result.locals) {
                 // Only resolve types for symbols that are NOT simple variables
                 // (variable inference via getTypeOfExpression can be expensive on stress tests)
                 if (symbol.flags.hasAny(SymbolFlags.Function or SymbolFlags.Class or
                         SymbolFlags.Interface or SymbolFlags.Enum or SymbolFlags.TypeAlias or
                         SymbolFlags.Alias)) {
+                    // (INC.11) phase split — a `TypeAlias` symbol belongs to the
+                    // TYPEALIAS phase, everything else in this branch to DECL.
+                    if ((if (symbol.flags.hasAny(SymbolFlags.TypeAlias))
+                            FltmDefer.Phase.TYPEALIAS else FltmDefer.Phase.DECL) !in todo
+                    ) continue
                     // B57.2 reverted: emitting TS2589 at type-alias body declaration
                     // produces FPs for recursive aliases that are USED safely later
                     // (e.g. inferFromNestedSameShapeTuple_ts's `type T1<T> = [number, T1<{x:T}>]`
@@ -15163,6 +15225,7 @@ class Checker(
                         if (FltmCensus.on) FltmCensus.noteStored(fileName, name, symbol.id)
                     }
                 } else if (symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
+                    if (FltmDefer.Phase.VAR !in todo) continue
                     // For variables, only resolve if they have a type annotation (cheap)
                     val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
                     val annotation: TypeNode? = when (decl) {
@@ -15204,11 +15267,10 @@ class Checker(
                     }
                 }
             }
+            done.addAll(todo)
             if (typeMap.isNotEmpty()) {
                 fileLocalTypeMaps[fileName] = typeMap
             }
-        }
-        if (FltmCensus.on) FltmCensus.endSetup()
     }
 
     private fun trackReferencesInStatements(statements: List<Statement>, result: BinderResult) {
@@ -110046,10 +110108,41 @@ interface DataView {
                                     result.properties.isNullOrEmpty() &&
                                     result.members.isNullOrEmpty() &&
                                     result.constructSignatures.isNullOrEmpty()
+                                //  - (INC.11): skip an instantiation that returned one of its
+                                //    own ARGUMENTS unchanged. `Extract<T, U> = T extends U ? T :
+                                //    never` whose condition cannot be decided (a free type
+                                //    parameter in `U`) answers the CHECK type itself, so the
+                                //    alias contributed nothing and its name is not a name for
+                                //    that type — registering it here STEALS the display of
+                                //    whatever the argument's own alias is, program-wide and for
+                                //    every later reference, because `typeToString` consults
+                                //    `aliasDisplayMap` before the structural union-alias table.
+                                //    Measured on tsc's own sources: a caret on the type
+                                //    reference `ClassLikeDeclaration` rendered
+                                //    `Extract<ClassDeclaration | ClassExpression, Pick<T,
+                                //    "kind">>` — an unbound `T` in a hover — because
+                                //    `classThis.ts` and `namedEvaluation.ts` declare overloads
+                                //    returning `Extract<ClassLikeDeclaration, Pick<T, "kind">>`.
+                                val returnsArgumentUnchanged = resolvedArgs.any { it === result }
+                                if (AliasDisplayCensus.on && returnsArgumentUnchanged) {
+                                    AliasDisplayCensus.noteArgIdentity(symbol.name)
+                                }
                                 if (result !== errorType && result !is Type.Intrinsic &&
                                     result !is Type.StringLiteral && result !is Type.NumberLiteral &&
-                                    result !is Type.BigIntLiteral && !isPureFunctionType
+                                    result !is Type.BigIntLiteral && !isPureFunctionType &&
+                                    !returnsArgumentUnchanged
                                 ) {
+                                    // (INC.11) classifier hook: this site is LAST-WINS, so a
+                                    // clobber here proves the two names denote ONE `Type`.
+                                    if (AliasDisplayCensus.on) {
+                                        AliasDisplayCensus.noteGeneric(
+                                            aliasDisplayMap[result.id]?.let { (n, a) ->
+                                                if (a.isEmpty()) n else "$n<${a.size}>"
+                                            },
+                                            if (resolvedArgs.isEmpty()) symbol.name
+                                            else "${symbol.name}<${resolvedArgs.size}>",
+                                        )
+                                    }
                                     aliasDisplayMap[result.id] = symbol.name to resolvedArgs
                                     // B58.3: cache for future calls with same (symbol, args).
                                     substitutionResultCache[cacheKey] = result
@@ -110243,6 +110336,17 @@ interface DataView {
                         resolved.types.any { it is Type.Union } ||
                         resolved.types.all { c -> c is Type.Object && c !is Type.Reference && c.symbol == null }
                     ))
+                if (AliasDisplayCensus.on && decl != null && decl.typeParameters.isNullOrEmpty() &&
+                    shouldRegister
+                ) {
+                    AliasDisplayCensus.notePlain(
+                        aliasDisplayMap.containsKey(resolved.id),
+                        aliasDisplayMap[resolved.id]?.let { (n, a) ->
+                            if (a.isEmpty()) n else "$n<${a.size}>"
+                        },
+                        symbol.name,
+                    )
+                }
                 if (decl != null && decl.typeParameters.isNullOrEmpty() &&
                     shouldRegister && !aliasDisplayMap.containsKey(resolved.id)
                 ) {
@@ -114036,7 +114140,7 @@ interface DataView {
                 if (id.text in currentParamBindingNames) return anyType
                 // Check pre-built file-level type map (covers annotated file-level declarations)
                 currentCheckFileName?.let { fn ->
-                    val fltm = fileLocalTypeMaps[fn]?.get(id.text)
+                    val fltm = fileLocalTypeMapFor(fn)?.get(id.text)
                     // (SETUP.2) the ONLY read of fileLocalTypeMaps — census hook.
                     if (FltmCensus.on) FltmCensus.noteRead(fn, id.text, fltm != null)
                     if (fltm != null) return fltm
