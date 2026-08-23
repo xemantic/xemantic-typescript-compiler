@@ -9736,7 +9736,9 @@ class Checker(
         // The classification this run re-enters. Snapshotted BEFORE the re-entry:
         // the replay's own partition reads add to [partitionReadingPasses], and a
         // set being iterated by `pass`'s filter must not grow underneath it.
-        val replay = recheckReplayedPasses
+        // (INC.19) [PassTiming.replayExtraPasses] is the bisection handle — empty on
+        // every path but an attribution run, so the union is the classified set.
+        val replay = recheckReplayedPasses + PassTiming.replayExtraPasses
         assignedFiles = fresh
         walkedFiles = walked + fresh
         checkedResultsAll = binderResults.filter { it.sourceFile.fileName in fresh }

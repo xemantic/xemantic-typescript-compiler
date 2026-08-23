@@ -185,6 +185,42 @@ object PassTiming {
      */
     var replayAllPasses: Boolean = false
 
+    /**
+     * (INC.19) ATTRIBUTION-ONLY LEVER — extra `init` pass names UNIONED into the
+     * set `Checker.recheckAdditionalFiles` re-enters.
+     *
+     * (INC.17)'s replay classifies a pass as partition-DEPENDENT by whether it
+     * READ the partition, where soundness wants "its OUTPUT depends on the
+     * partition"; the two come apart at every producer/consumer pair, and the
+     * measured residue is 8 of 75 files rendering a type parameter without its
+     * constraint. This is the bisection handle for finding WHICH pass closes that
+     * gap: add candidates, re-run `scripts/replay-differential.sh`, see which
+     * addition repairs the divergence.
+     *
+     * MUST default empty, and empty is behaviour-free by construction: the union
+     * with an empty set is the classified set, so no shipped path can observe it
+     * (INV.0's rule — a probe that is off must not change what the compiler does).
+     * Like [disabledPasses] and [replayAllPasses], any run with it non-empty is an
+     * experiment, never a gate.
+     */
+    var replayExtraPasses: Set<String> = emptySet()
+
+    /**
+     * (INC.19) When true, [pass] records EVERY registration name it is handed into
+     * [registeredPasses], filters included — so a driver can print the candidate
+     * universe (`all - replayed`) instead of guessing it from a source grep, which
+     * over-counts (a `pass("...")` inside a KDoc, and registrations behind option
+     * branches that never run).
+     *
+     * Off by default; on it is one `LinkedHashSet.add` per registration and it
+     * changes nothing the compiler decides.
+     */
+    var recordRegistrations: Boolean = false
+
+    /** (INC.19) Every pass name [pass] was handed while [recordRegistrations] was
+     *  on, in first-registration order (= the `init` dispatch order). */
+    val registeredPasses = LinkedHashSet<String>()
+
     /** [censusMode]'s accumulator: per-pass emitted-diagnostic counts summed
      *  across EVERY compile in the process. Deliberately NOT cleared by
      *  [reset] — process-lifetime, so mid-suite tests that reset the regular
@@ -1364,6 +1400,9 @@ object PassTiming {
  * constructor toward the JVM's 64 KB method limit.
  */
 internal fun pass(name: String, body: () -> Unit) {
+    // (INC.19) the candidate universe for the replay bisection. Off by default and
+    // recorded ABOVE every filter, so a replay's own run still names every row.
+    if (PassTiming.recordRegistrations) PassTiming.registeredPasses.add(name)
     // M0.1 tail-triage lab: batch-disable (experiment-only; empty by default).
     if (PassTiming.disabledPasses.isNotEmpty() && name in PassTiming.disabledPasses) return
     // (INC.17) the re-entrant replay re-enters the whole dispatch SEQUENCE and

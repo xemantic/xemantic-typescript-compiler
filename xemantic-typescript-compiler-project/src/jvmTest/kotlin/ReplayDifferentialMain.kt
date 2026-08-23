@@ -79,7 +79,15 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * ```
  */
 fun main(args: Array<String>) {
-    require(args.isNotEmpty()) { "usage: <projectDir> [maxFiles] [all]" }
+    require(args.isNotEmpty()) {
+        "usage: <projectDir> [maxFiles] [all] [onlySuffixes] [extraPasses]\n" +
+            "   or: --dump-passes <projectDir>"
+    }
+    if (args[0] == "--dump-passes") {
+        require(args.size > 1) { "usage: --dump-passes <projectDir>" }
+        dumpPasses(args[1])
+        return
+    }
     val limit = if (args.size > 1 && args[1].toInt() > 0) args[1].toInt() else Int.MAX_VALUE
     // (INC.17) the ATTRIBUTION arm: re-enter EVERY pass, not only the classified
     // ones. A divergence that survives it is not a classification defect — it is the
@@ -90,7 +98,13 @@ fun main(args: Array<String>) {
     // a previous run reported diverging instead of re-entering every pass for all of
     // them. It narrows what is COMPARED, never what the seed build walked.
     val only = if (args.size > 3 && args[3].isNotEmpty()) args[3].split(',') else emptyList()
+    // (INC.19) THE BISECTION HANDLE — extra pass names UNIONED into the replay set,
+    // either a comma-separated list or `@<path>` naming a file with one per line
+    // (`#` comments and blank lines ignored, so a driver can write a group out).
+    val extra = if (args.size > 4) parsePassList(args[4]) else emptySet()
+    PassTiming.replayExtraPasses = extra
     PassTiming.replayAllPasses = replayAll
+    if (extra.isNotEmpty()) println("replayExtraPasses=${extra.size}: ${extra.joinToString(",")}")
     println("mode: ${if (replayAll) "replay ALL passes (attribution arm)" else "replay the classified passes"}")
 
     val vfs = SystemVfs
@@ -214,6 +228,7 @@ fun main(args: Array<String>) {
     var defRowCount = 0
     var filesCarryingDiagnostics = 0
     var freshNanos = 0L
+    val divergent = ArrayList<String>()
     for (file in targets) {
         val at = System.nanoTime()
         val fresh = compiler.build(
@@ -262,8 +277,13 @@ fun main(args: Array<String>) {
                 println("   fresh=${expectedDefs[k]?.take(90)}  replay=${actualDefs[k]?.take(90)}")
             }
         }
-        if (bad) divergedFiles++
+        if (bad) {
+            divergedFiles++
+            divergent.add(short)
+        }
     }
+    // Machine-readable, for `scripts/replay-bisect.sh` to narrow a repairing group.
+    println("divergentFiles=${divergent.joinToString(",")}")
 
     // THE CONTROLS. A differential over an empty population agrees vacuously.
     println(
@@ -288,6 +308,67 @@ fun main(args: Array<String>) {
         else "DIVERGED: $divergedFiles of ${targets.size} file(s)",
     )
     if (divergedFiles != 0) kotlin.system.exitProcess(1)
+}
+
+/**
+ * (INC.19) `a,b,c` or `@<path>` (one name per line, `#` comments and blanks
+ * dropped) — the bisection driver writes a group to a file rather than building a
+ * multi-kilobyte argv.
+ */
+private fun parsePassList(spec: String): Set<String> {
+    if (spec.isEmpty()) return emptySet()
+    val text =
+        if (spec.startsWith("@")) {
+            requireNotNull(SystemVfs.readText(SystemVfs.resolveAbsolute(spec.substring(1)))) {
+                "REFUSED: no pass-list file at ${spec.substring(1)}"
+            }
+        } else {
+            spec
+        }
+    return text.split(',', '\n')
+        .map { it.substringBefore('#').trim() }
+        .filter { it.isNotEmpty() }
+        .toCollection(LinkedHashSet())
+}
+
+/**
+ * (INC.19) Print the CANDIDATE UNIVERSE for the bisection: every `init` pass name
+ * the checker registers, and the subset a replay already re-enters. A driver
+ * derives `candidates = all - replayed` from these two lines.
+ *
+ * The universe is recorded at RUN TIME ([PassTiming.recordRegistrations]) and not
+ * by a source grep, for CLAUDE.md's reason: a `pass("...")` inside a KDoc parses
+ * as a registration, and registrations behind option branches that never run are
+ * not rows this dispatch has.
+ */
+private fun dumpPasses(projectDir: String) {
+    val vfs = SystemVfs
+    val compiler = ProjectCompiler(vfs)
+    val project = vfs.resolveAbsolute(projectDir)
+    PassTiming.recordRegistrations = true
+    val build = compiler.build(project, noEmit = true)
+    val all = PassTiming.registeredPasses.toList()
+    require(all.size > 300) {
+        "REFUSED: only ${all.size} pass registrations recorded — the universe is " +
+            "incomplete, so `all - replayed` would name a bisection that cannot close"
+    }
+    val holder = RecheckHolder()
+    val files = build.programFiles
+    require(files.size >= 2) { "REFUSED: a one-file program has nothing to recheck" }
+    compiler.build(
+        project,
+        noEmit = true,
+        recheckOnly = setOf(files.first()),
+        recheckHolder = holder,
+    )
+    val replayed = requireNotNull(holder.recheck) { "REFUSED: no ProgramRecheck" }.replayedPasses
+    println("ALL=${all.size}")
+    for (n in all) println("all\t$n")
+    println("REPLAYED=${replayed.size}")
+    for (n in replayed) println("replayed\t$n")
+    val candidates = all.filter { it !in replayed }
+    println("CANDIDATES=${candidates.size}")
+    for (n in candidates) println("candidate\t$n")
 }
 
 /** A span as one key — file-scoped, exactly as the sibling differentials do it. */
