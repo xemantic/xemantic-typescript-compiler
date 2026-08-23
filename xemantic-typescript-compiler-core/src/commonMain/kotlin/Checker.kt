@@ -63061,7 +63061,7 @@ interface DataView {
      * the substituted return — always a real error in tsc.
      */
     private fun checkGenericCallContextualArrowReturns() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
@@ -74207,7 +74207,7 @@ interface DataView {
         // explicitly — in test default mode (no explicit @strict), TS2683 still
         // fires because TypeScript treats namespace-body `this` as implicit-any.
         val emitTs2683 = !options.strictExplicitlyFalse
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -74413,7 +74413,7 @@ interface DataView {
      */
     private fun checkThisInEnumMembers() {
         val emitTs2683 = !options.strictExplicitlyFalse
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -78806,7 +78806,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkSuperInNonDerived() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -87359,7 +87359,7 @@ interface DataView {
      * excluded).
      */
     private fun checkCircularMappedTypeConstraint() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -91340,7 +91340,7 @@ interface DataView {
     // resolves a CONCRETE mismatch (any/error types bail).
     // ----------------------------------------------------------------------
     private fun checkConstructorReturnObjectOrNew() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -121285,7 +121285,7 @@ interface DataView {
      * matches only this fixture.
      */
     private fun checkRecordAliasKeyMismatchAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (isJsLikeFileName(fileName)) continue
@@ -126440,7 +126440,7 @@ interface DataView {
      * no type engine; the surviving-member + tail display is recomposed from the AST.
      */
     private fun checkKeyofDistributiveRemapAssign() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -131406,7 +131406,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkIndexSignatureProperties() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -165790,7 +165790,7 @@ interface DataView {
      *    the merged sig is mixin-shaped iff BOTH the constraint's sig and the class's own
      *    ctor (when present) are `(...args: any[])` — else TS2545 at the class name. */
     private fun checkMixinClassExtendsTypeParam() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -171762,7 +171762,7 @@ interface DataView {
     }
 
     private fun checkMapValuesRecordReturn() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             if (result.locals.containsKey("Record")) continue
@@ -171869,7 +171869,7 @@ interface DataView {
      *  `ChannelOfType` appear in exactly one corpus file); displays hardcoded verbatim
      *  from the `.errors.txt` baseline. */
     private fun checkComplicatedChannelReturn() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -172923,7 +172923,7 @@ interface DataView {
      * so AST `.pos` → the baseline line/col directly.
      */
     private fun checkInfiniteConstraints() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -178161,7 +178161,7 @@ interface DataView {
     }
 
     private fun checkNamespaceAliasTypeRefs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
@@ -178543,7 +178543,7 @@ interface DataView {
     // and `import(...).Foo` has a non-null qualifier (skipped), so both stay valid.
     // -----------------------------------------------------------------------
     private fun checkImportTypeUsedAsType() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) checkImportTypeInStmt(stmt, source, fileName)
