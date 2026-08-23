@@ -439,6 +439,14 @@ class LanguageServiceStateTest {
         fresh()
         assert(buildsIn(counting) { project.quickInfoAt(file, member) } == 1)
         assert(buildsIn(counting) { project.definitionsAt(file, member) } == 0)
+        // (INC.13) …and the row that changed the table: the question is the FILE's, so
+        // a caret NOBODY has visited is free after the first hover, and the two
+        // file-wide members join the same build rather than each starting one.
+        fresh()
+        assert(buildsIn(counting) { project.quickInfoAt(file, member) } == 1)
+        assert(buildsIn(counting) { project.quickInfoAt(file, offsetOf(costSource, "o.q", plus = 2)) } == 0)
+        assert(buildsIn(counting) { project.documentHighlightsAt(file, member) } == 0)
+        assert(buildsIn(counting) { project.fileSemantics(file) } == 0)
     }
 
     @Test

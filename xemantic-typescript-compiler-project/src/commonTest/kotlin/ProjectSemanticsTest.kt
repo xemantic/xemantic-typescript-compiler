@@ -161,7 +161,14 @@ class ProjectSemanticsTest {
     }
 
     @Test
-    fun `a batched query over six spans costs ONE build where six single queries cost six`() {
+    fun `six carets in one buffer are ONE build, batched or not`() {
+        // (INC.13) INVERTED IN PLACE, and the inversion is the finding rather than an
+        // accounting change. This used to read `loopBuilds == offsets.size` and was
+        // named "a batched query over six spans costs ONE build where six single
+        // queries cost six": a caret-scoped request named ONE span, so six carets were
+        // six compiles and BATCHING was the whole saving. The question put to the
+        // compiler is now the FILE's (`Project.captureAround`), so the batch and the
+        // loop ask the same thing and a host gets the ratio without batching for it.
         val (project, counting) = countedProject()
         val offsets = sixOffsets()
 
@@ -173,7 +180,16 @@ class ProjectSemanticsTest {
 
         assert(batched.size == offsets.size)
         assert(batchBuilds == 1)
-        assert(loopBuilds == offsets.size)
+        assert(loopBuilds == 0)
+
+        // …and from a FRESH state, where nothing is memoized, the unbatched loop is
+        // still ONE build and not six. That is the sharp form of the claim: the compile
+        // count does not scale with the number of carets in a buffer, whoever asks.
+        project.updateFile(mainFile, main)
+        val loopFresh = buildsIn(counting) {
+            for (offset in offsets) project.quickInfoAt(mainFile, offset)
+        }
+        assert(loopFresh == 1)
     }
 
     @Test

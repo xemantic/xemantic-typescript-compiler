@@ -59,12 +59,19 @@ class ProjectCaptureMemoTest {
 
     private val a = "/proj/src/a.ts"
     private val b = "/proj/src/b.ts"
+    private val c = "/proj/src/c.ts"
 
     private val source = """
         interface Shape { readonly p: string; }
         const o: Shape = { p: "x" };
         const first = o.p;
         const second = o.p;
+    """.trimIndent()
+
+    /** A buffer whose interesting caret lands on something that is NO occurrence. */
+    private val arithmetic = """
+        const sum = 41 + 1;
+        const twice = sum + sum;
     """.trimIndent()
 
     private fun projectWith(files: Map<String, String>): Pair<Project, CountingVfs> {
@@ -129,13 +136,76 @@ class ProjectCaptureMemoTest {
     }
 
     @Test
-    fun `a DIFFERENT caret's hover still builds`() {
+    fun `a DIFFERENT caret in the same buffer builds NOTHING`() {
+        // (INC.13) THE HEADLINE. Before it, this read `== 1`: a caret-scoped request
+        // named one span, so the caret next door was a full build. The question put to
+        // the compiler is now the FILE's occurrence set, so the first hover in a buffer
+        // pays for every later caret in it.
         val (project, counting) = projectWith(mapOf(a to source))
-        assert(buildsIn(counting) { project.quickInfoAt(a, offsetOf(source, "o.p", plus = 2)) } == 1)
-        // The negative control the two pins above need: the memo answers the question
-        // it was asked and no other one. `first` is a different node, so a different
-        // request, so a build.
-        assert(buildsIn(counting) { project.quickInfoAt(a, offsetOf(source, "first")) } == 1)
+        var receiver: QuickInfo? = null
+        var member: QuickInfo? = null
+        assert(
+            buildsIn(counting) {
+                receiver = project.quickInfoAt(a, offsetOf(source, "o.p", plus = 0))
+            } == 1,
+        )
+        assert(
+            buildsIn(counting) {
+                member = project.quickInfoAt(a, offsetOf(source, "o.p", plus = 2))
+            } == 0,
+        )
+        // The two answers DIFFER, which is what makes this a pin and not a count: a
+        // memo returning one span's answer for every caret would satisfy the counts.
+        assert(receiver?.displayString == "Shape")
+        assert(member?.displayString == "string")
+    }
+
+    @Test
+    fun `a caret on a node that is NO occurrence is asked about alone`() {
+        // The negative control the pin above needs, and the boundary of the widening.
+        // A file-wide request carries the file's identifiers and member-name literals
+        // and nothing else, so a caret on a numeric literal is not in it — and an
+        // absent capture renders NOTHING with no error anywhere, which is the silent
+        // failure `captureAround` declines to risk. It falls back to naming the one
+        // span, which is a different request, which is a build.
+        val (project, counting) = projectWith(mapOf(a to arithmetic))
+        var use: QuickInfo? = null
+        assert(
+            buildsIn(counting) {
+                use = project.quickInfoAt(a, offsetOf(arithmetic, "sum", occurrence = 1))
+            } == 1,
+        )
+        assert(use != null)
+        var literal: QuickInfo? = null
+        assert(
+            buildsIn(counting) {
+                literal = project.quickInfoAt(a, offsetOf(arithmetic, "41 + 1"))
+            } == 1,
+        )
+        // …and it ANSWERED, so the fallback is a fallback and not a refusal.
+        assert(literal != null)
+    }
+
+    @Test
+    fun `hover, navigate, highlight and fileSemantics are ONE build between them`() {
+        // (INC.13) All four ask the same file-wide question, which is why they share an
+        // entry. That sharing is a property of two pieces of code agreeing element for
+        // element (`captureAround` and `referencesOf` both go through
+        // `occurrenceSpansOf`), and a build count is its only symptom.
+        val (project, counting) = projectWith(mapOf(a to source))
+        val caret = offsetOf(source, "o.p", plus = 2)
+        val other = offsetOf(source, "o.p", occurrence = 1, plus = 2)
+        assert(buildsIn(counting) { project.quickInfoAt(a, caret) } == 1)
+        var definitions: List<DefinitionLocation> = emptyList()
+        var highlights: List<ReferenceLocation> = emptyList()
+        var semantics: List<SemanticInfo> = emptyList()
+        assert(buildsIn(counting) { definitions = project.definitionsAt(a, other) } == 0)
+        assert(buildsIn(counting) { highlights = project.documentHighlightsAt(a, other) } == 0)
+        assert(buildsIn(counting) { semantics = project.fileSemantics(a) } == 0)
+        // Every one of them ANSWERED — a shared empty result would pass the counts.
+        assert(definitions.size == 1)
+        assert(highlights.any { it.start == other })
+        assert(semantics.any { it.quickInfo?.displayString == "string" })
     }
 
     @Test
@@ -197,16 +267,24 @@ class ProjectCaptureMemoTest {
 
     @Test
     fun `the memo is BOUNDED, so a long-lived project cannot grow it`() {
-        val (project, counting) = projectWith(mapOf(a to source))
+        // (INC.13) THREE BUFFERS, not three carets: since the request is the file's,
+        // two carets in one file are one question and could not fill two entries. The
+        // bound is therefore about how many FILES stay warm, which is also what a host
+        // with a split editor actually asks.
+        val (project, counting) = projectWith(
+            mapOf(a to source, b to source, c to source),
+        )
         val caret = offsetOf(source, "o.p", plus = 2)
-        val other = offsetOf(source, "first")
-        val third = offsetOf(source, "second")
         assert(buildsIn(counting) { project.quickInfoAt(a, caret) } == 1)
-        assert(buildsIn(counting) { project.quickInfoAt(a, other) } == 1)
-        // Two entries is the bound. Asking a third distinct question evicts the oldest,
-        // so the first question builds again — which is what makes this a BOUND rather
-        // than a claim about a map that happens to be small today.
-        assert(buildsIn(counting) { project.quickInfoAt(a, third) } == 1)
+        assert(buildsIn(counting) { project.quickInfoAt(b, caret) } == 1)
+        // Two entries is the bound. Asking about a third file evicts the oldest, so the
+        // first question builds again — which is what makes this a BOUND rather than a
+        // claim about a map that happens to be small today.
+        assert(buildsIn(counting) { project.quickInfoAt(c, caret) } == 1)
         assert(buildsIn(counting) { project.quickInfoAt(a, caret) } == 1)
+        // …and `c` is still resident while `b` is not, because the LRU is ACCESS-ordered:
+        // the eviction just above took the LEAST RECENTLY USED entry (`b`), not the
+        // oldest inserted one (`c`).
+        assert(buildsIn(counting) { project.quickInfoAt(c, caret) } == 0)
     }
 }

@@ -276,10 +276,17 @@ public class Project private constructor(
      *
      * A [ProjectCompiler.Result] holds values only — no AST, no `Symbol`, no `Type` —
      * but a file-wide capture over a large file holds one answer per identifier in it,
-     * which is tens of MB on a file the size of tsc's own `checker.ts`. Two entries is
-     * the smallest bound that covers the editor's actual pair (one caret-scoped
-     * request plus one file-wide one) and it is a bound rather than a heuristic: a
-     * long-lived project cannot grow this map, whatever a host asks.
+     * which is tens of MB on a file the size of tsc's own `checker.ts`. It is a bound
+     * rather than a heuristic: a long-lived project cannot grow this map, whatever a
+     * host asks.
+     *
+     * **(INC.13) sharpened what two entries BUY, and made the worst case dearer.**
+     * Before it, the pair was "one caret-scoped request plus one file-wide one"; now
+     * hover, go-to-definition, document highlights and [fileSemantics] all ask ONE
+     * file-wide question per file (see [captureAround]), so the pair is TWO BUFFERS —
+     * which is what a host with a split editor holds, and the reason the number did
+     * not go down to one. The cost of that is honest and worth stating: two file-wide
+     * captures of two large files, where it used to be one plus a single span.
      */
     private val captures = LinkedHashMap<TypeCaptureRequest, ProjectCompiler.Result>()
 
@@ -578,6 +585,15 @@ public class Project private constructor(
      * not an expression (a caret on the `=` of `const a = 1` is inside no child of
      * the declaration — the `=` belongs to no node at all), or the checker never
      * typed it.
+     *
+     * ## (INC.13) The build it performs is the FILE's, and it is shared
+     *
+     * The caret's node is resolved here, but the question put to the compiler is the
+     * whole file's — so the FIRST hover in a buffer is a whole-file capture and every
+     * later caret in it, [definitionsAt] at any of them, [documentHighlightsAt] and
+     * [fileSemantics] are answered from it without building. A caret that lands on a
+     * node which is no occurrence — a call expression, a literal, a `this` — is asked
+     * about alone instead; [captureAround] states the rule and the cost.
      */
     public fun quickInfoAt(fileName: String, offset: Int): QuickInfo? {
         val index = sourceIndexOf(fileName) ?: return null
@@ -587,8 +603,7 @@ public class Project private constructor(
         // nodes on the same pair, and INV.1(e) makes its parse of this text with these
         // flags the same parse. The REAL end, snapped back to the token stream, is
         // what the caller is told.
-        val span = TypeCaptureSpan(key, node.pos, node.end)
-        val captured = captureIn(TypeCaptureRequest(listOf(span)))
+        val captured = captureAround(key, index, node)
             .capturedTypes
             .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
             ?: return null
@@ -607,7 +622,9 @@ public class Project private constructor(
      * The caret is resolved to a node exactly as [quickInfoAt] resolves it, and the
      * compiler is then asked to resolve the SYMBOL at that node while it walks. It
      * BUILDS, with the same caveats [quickInfoAt] documents: a separate build that
-     * neither reads nor fills the [diagnostics] cache.
+     * neither reads nor fills the [diagnostics] cache — and, since (INC.13), the same
+     * FILE-WIDE build that member performs, so navigating after hovering anywhere in
+     * the buffer builds nothing at all.
      *
      * ## More than one location is normal
      *
@@ -662,8 +679,7 @@ public class Project private constructor(
         val node = index.pathAt(offset).lastOrNull() ?: return emptyList()
         val key = keyOf(fileName)
         // The RAW `Node.end` is the capture's IDENTITY, exactly as in `quickInfoAt`.
-        val span = TypeCaptureSpan(key, node.pos, node.end)
-        return captureIn(TypeCaptureRequest(listOf(span)))
+        return captureAround(key, index, node)
             .capturedDefinitions
             .firstOrNull { it.fileName == key && it.start == node.pos && it.end == node.end }
             // (API.10) …PLUS what a SHORTHAND's one token also names. `{ p }` under a
@@ -1078,6 +1094,13 @@ public class Project private constructor(
      * is opened or saved, not the one to call per keystroke. The compile itself
      * dominates, and it is the compile this API cannot avoid ([Project]'s own KDoc
      * says why there is no incremental reuse to lean on).
+     *
+     * (INC.13) …and it is the SAME compile [quickInfoAt], [definitionsAt] and
+     * [documentHighlightsAt] perform, so whichever of them a host asks first pays for
+     * all of them until the buffer changes. The build types a few spans this member
+     * does not report — the member-NAME literals [documentHighlightsAt] sweeps — which
+     * is what makes the four one question; the ANSWER is still every `Identifier` and
+     * nothing else.
      */
     public fun fileSemantics(fileName: String): List<SemanticInfo> {
         val index = sourceIndexOf(fileName) ?: return emptyList()
@@ -1271,8 +1294,13 @@ public class Project private constructor(
         for (file in sweptFiles) {
             val index = sourceIndexOf(file) ?: continue
             val found = HashMap<Int, SweptSpan>()
-            for (id in index.occurrenceNodes()) {
-                spans.add(TypeCaptureSpan(file, id.pos, id.end))
+            // (INC.13) The span list comes from [occurrenceSpansOf] rather than being
+            // rebuilt here, because a one-file sweep's request must be EQUAL — as a
+            // value, element for element — to the one [captureAround] builds, or the
+            // hover that preceded this highlight does not share its build.
+            val occurrences = index.occurrenceNodes()
+            spans.addAll(occurrenceSpansOf(file, occurrences))
+            for (id in occurrences) {
                 val span = index.occurrenceSpanOf(id)
                 found[id.pos] = SweptSpan(span[0], span[1], SyntaxRoles.referenceUse(id))
             }
@@ -2045,9 +2073,7 @@ public class Project private constructor(
         for (node in nodes) distinct.getOrPut(spanKeyOf(node)) { node }
         if (distinct.isEmpty()) return emptyList()
         val key = keyOf(fileName)
-        val result = captureIn(
-            TypeCaptureRequest(distinct.values.map { TypeCaptureSpan(key, it.pos, it.end) }),
-        )
+        val result = captureAround(key, index, distinct.values)
         val types = HashMap<Long, String>(result.capturedTypes.size)
         for (captured in result.capturedTypes) {
             if (captured.fileName == key) types[packSpan(captured.start, captured.end)] = captured.typeText
@@ -2184,6 +2210,84 @@ public class Project private constructor(
     }
 
     /**
+     * (INC.13) The capture that answers about [nodes] — asking about the WHOLE FILE
+     * whenever the whole file's answer contains theirs.
+     *
+     * ## What this changes, and why it is the shape an editor wants
+     *
+     * A caret-scoped request names ONE span, so the memo [captureIn] keeps hits only
+     * when the user asks the identical question again: hover-then-navigate at one
+     * caret was free from (INC.12), and the caret NEXT DOOR was a full build. Since
+     * every one of those queries is about a name, and a file's names are known
+     * without asking the compiler anything, the question can be widened to the file
+     * — and then the first hover in a buffer pays for every later caret in it.
+     *
+     * The population is [SourceIndex.occurrenceNodes] — every identifier plus every
+     * literal in a member-NAME position — which is *deliberately* the population
+     * [documentHighlightsAt] sweeps, so those two members and [fileSemantics] all ask
+     * ONE question per file and share ONE memo entry. That is not a coincidence to be
+     * preserved by accident: [referencesOf] builds its spans through
+     * [occurrenceSpansOf] for exactly this reason, and a change to either side that
+     * does not change the other silently un-shares them (the only symptom is a build
+     * count, which is what `ProjectCaptureMemoTest` pins).
+     *
+     * ## When it does NOT widen
+     *
+     * A caret can land on a node that is no occurrence at all — a call expression, a
+     * numeric literal, a `this`, a parenthesized expression — and a file-wide request
+     * would simply not carry it, which is the silent failure ([captureIn]'s partition
+     * argument, one level up: an absent answer renders nothing and reports no error).
+     * So the widening is conditional on every asked node being IN the file's set, and
+     * anything else falls back to naming exactly what was asked. [nodes] is EMPTY only
+     * for a caller that asked about nothing, which cannot happen here.
+     *
+     * ## The cost, stated
+     *
+     * The first query in a buffer becomes a whole-file capture — more spans typed, so
+     * more work — and every later caret in it becomes free. `scripts/warm-program-cost.sh`
+     * carries both halves. That the two answers AGREE is not assumed: it is swept span
+     * for span over a real project by `scripts/caret-vs-file-capture.sh`, which needs
+     * no baseline because a caret-scoped and a file-wide build answer the same
+     * question.
+     */
+    private fun captureAround(
+        key: String,
+        index: SourceIndex,
+        node: Node,
+    ): ProjectCompiler.Result = captureAround(key, index, listOf(node))
+
+    private fun captureAround(
+        key: String,
+        index: SourceIndex,
+        nodes: Collection<Node>,
+    ): ProjectCompiler.Result {
+        val fileWide = occurrenceSpansOf(key, index)
+        if (fileWide.isNotEmpty()) {
+            val covered = HashSet<Long>(fileWide.size * 2)
+            for (span in fileWide) covered.add(packSpan(span.start, span.end))
+            if (nodes.all { packSpan(it.pos, it.end) in covered }) {
+                return captureIn(TypeCaptureRequest(fileWide))
+            }
+        }
+        return captureIn(
+            TypeCaptureRequest(nodes.map { TypeCaptureSpan(key, it.pos, it.end) }.distinct()),
+        )
+    }
+
+    /**
+     * [fileName]'s whole occurrence span set, in [SourceIndex.occurrenceNodes]' own
+     * (sorted, total) order — the ONE file-wide capture request this class asks.
+     *
+     * Its callers are [captureAround] and [referencesOf], and they must agree element
+     * for element or the memo stops being shared; see [captureAround].
+     */
+    private fun occurrenceSpansOf(fileName: String, index: SourceIndex): List<TypeCaptureSpan> =
+        occurrenceSpansOf(fileName, index.occurrenceNodes())
+
+    private fun occurrenceSpansOf(fileName: String, nodes: List<Node>): List<TypeCaptureSpan> =
+        nodes.map { TypeCaptureSpan(fileName, it.pos, it.end) }
+
+    /**
      * (INC.2b) ONE capture build, with the CHECK narrowed to the files the request
      * asks about — `diagnosticsOf`'s partition (INV.6), pointed at a capture.
      *
@@ -2224,6 +2328,11 @@ public class Project private constructor(
      * without building — which is not a micro-optimization but the whole of the
      * repeat-query case: hover-then-navigate at one caret is one request asked twice,
      * and document highlights ask the same file-wide request at every caret.
+     *
+     * ## (INC.13) …and the request is the FILE's, not the caret's
+     *
+     * Which is what makes the memo hit for a caret nobody has visited yet. The rule,
+     * and the case it deliberately declines to widen, are [captureAround]'s.
      */
     private fun captureIn(request: TypeCaptureRequest): ProjectCompiler.Result {
         captures.remove(request)?.let {

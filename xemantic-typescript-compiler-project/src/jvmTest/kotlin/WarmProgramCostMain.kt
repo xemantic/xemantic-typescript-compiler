@@ -138,6 +138,10 @@ fun main(args: Array<String>) {
         // file-wide highlight request stays affordable to draw three times.
         val hoverB = ms { project.quickInfoAt(fileB, caretB1) }
         val defB = ms { project.definitionsAt(fileB, caretB1) }
+        // (INC.13) the arm stage 2 exists for: a caret NOBODY has visited, in a buffer
+        // that has already been hovered once.
+        val hoverB2 = ms { project.quickInfoAt(fileB, caretB2) }
+        val semanticsB = ms { project.fileSemantics(fileB) }
         val highlightsB1 = ms { project.documentHighlightsAt(fileB, caretB1) }
         val highlightsB2 = ms { project.documentHighlightsAt(fileB, caretB2) }
         // (P2) exactly one buffer changed, and the query is about THAT buffer.
@@ -152,13 +156,16 @@ fun main(args: Array<String>) {
         record("hover1", hover1); record("hover2.sameState", hover2)
         record("hover1.again", hover1Again)
         record("hoverB", hoverB); record("defB.afterHoverB", defB)
+        record("hoverB2.otherCaret", hoverB2)
+        record("fileSemanticsB.afterHoverB", semanticsB)
         record("highlightsB1", highlightsB1)
         record("highlightsB2.otherCaret", highlightsB2)
         record("diagA.afterEditA", afterEdit)
         record("diagB.afterEditA", afterEditOther)
         println("rotation=$rotation diagA=$diagA repeat=$diagARepeat diagB=$diagB " +
             "hover1=$hover1 hover2=$hover2 hoverAgain=$hover1Again " +
-            "hoverB=$hoverB defB=$defB hlB1=$highlightsB1 hlB2=$highlightsB2 " +
+            "hoverB=$hoverB defB=$defB hoverB2=$hoverB2 semB=$semanticsB " +
+            "hlB1=$highlightsB1 hlB2=$highlightsB2 " +
             "afterEditA=$afterEdit afterEditA_askB=$afterEditOther")
     }
     project.close()
