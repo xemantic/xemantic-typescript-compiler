@@ -74,6 +74,12 @@ class AliasDisplayIdentityTest {
             declare const s: Shape;
             const bad: number = s;
             """,
+            // `Pick` is a LIB utility type, and the embedded lib declares NONE of
+            // them — an undeclared name degrades to `any`, which decides the
+            // conditional and takes the fixture off the mechanism entirely. The
+            // first draft of this pin was silent for exactly that reason and only
+            // the ablation said so (CLAUDE.md's round-725/806 pair).
+            directives = "// @strict: true\n// @useRealLibs: true",
         )
         val ts2322 = diagnostics.filter { it.code == 2322 }
         assert(ts2322.size == 1)
@@ -98,6 +104,7 @@ class AliasDisplayIdentityTest {
             declare const b: Boxed<Shape>;
             const bad: number = b;
             """,
+            directives = "// @strict: true\n// @useRealLibs: true",
         )
         val ts2322 = diagnostics.filter { it.code == 2322 }
         assert(ts2322.size == 1)
