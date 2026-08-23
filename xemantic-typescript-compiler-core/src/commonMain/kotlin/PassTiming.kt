@@ -166,6 +166,49 @@ object PassTiming {
      *  inside a loop or runs for several option branches). */
     val passCalls = HashMap<String, Int>()
 
+    /**
+     * (INC.17) PARTITION CENSUS — which `init` passes ever READ the partition.
+     *
+     * A pass whose loops iterate [Checker.binderResults] is partition-INVARIANT
+     * by construction: its work is a function of the PROGRAM, so a checker that
+     * has already run it once need not replay it to answer a question about a
+     * file it did not originally check. A pass that reaches `checkedResults` (or
+     * `assignedFileNames` directly) is partition-DEPENDENT and must replay.
+     *
+     * The classification is taken at RUN TIME rather than by a source analyzer,
+     * for two reasons CLAUDE.md records the hard way: a Kotlin comment/string
+     * stripper over `Checker.kt` desynchronises on `'\''` and on `${'$'}{…}`
+     * templates and then reports a confident "no hazard" over an EMPTY closure,
+     * and the `pass("name") { … }` sample in a KDoc parses as a real
+     * registration. A getter on the property itself cannot be wrong about who
+     * read it.
+     *
+     * Attribution is to [currentPass], i.e. the INNERMOST enclosing wrapped
+     * pass — reads made outside any pass land in [partitionReadsOutsidePass].
+     * Recorded only while [enabled]; off it is one static boolean read.
+     */
+    val partitionReadsByPass = LinkedHashMap<String, Long>()
+
+    /** (INC.17) partition reads made with no wrapped pass on the stack. */
+    var partitionReadsOutsidePass: Long = 0
+
+    /**
+     * (INC.17) SIGNED diagnostics delta per pass — [diagsByPass] clamps to
+     * positive deltas, so a pass that RETRACTS (`diagnostics.removeAll { … }`)
+     * is invisible there and looks exactly like a silent one. A negative net
+     * here names a retractor, which is hazard (a) of the re-entrant replay: the
+     * `init` run-8 retractions only work after run 1 emitted, so a replay may
+     * not reset the diagnostics list to an arbitrary prefix.
+     */
+    val diagNetByPass = LinkedHashMap<String, Int>()
+
+    /** (INC.17) record one read of the partition view. See [partitionReadsByPass]. */
+    fun notePartitionRead() {
+        val name = currentPass
+        if (name == null) partitionReadsOutsidePass++
+        else partitionReadsByPass[name] = (partitionReadsByPass[name] ?: 0L) + 1L
+    }
+
     var getTypeOfExpressionCalls: Long = 0
 
     /** Approximate distinct expression nodes touched by `getTypeOfExpression`,
@@ -425,6 +468,9 @@ object PassTiming {
         globalsUnscopedByPass.clear()
         checkerInitNanos = 0
         initMark = null
+        partitionReadsByPass.clear()
+        partitionReadsOutsidePass = 0
+        diagNetByPass.clear()
     }
 
     fun notePass(name: String, nanos: Long) {
@@ -1310,6 +1356,11 @@ internal fun pass(name: String, body: () -> Unit) {
         val d1 = PassTiming.diagnosticsSize?.invoke() ?: 0
         if (d1 > d0) {
             PassTiming.diagsByPass[name] = (PassTiming.diagsByPass[name] ?: 0) + (d1 - d0)
+        }
+        // (INC.17): the SIGNED net, so a RETRACTING pass is not clamped away.
+        if (d1 != d0) {
+            PassTiming.diagNetByPass[name] =
+                (PassTiming.diagNetByPass[name] ?: 0) + (d1 - d0)
         }
         PassTiming.currentPass = saved
     }

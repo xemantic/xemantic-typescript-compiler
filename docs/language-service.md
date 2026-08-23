@@ -1737,6 +1737,40 @@ document's cost model changed as a result: the four caret-scoped semantic member
 now ONE build across a declared working set, not one per buffer. The `diagnosticsOf`
 half needs no new call — its memo is keyed by the partition.
 
+### (INC.17) What a re-entrant checker would buy, and the count that decides it
+
+`prepare` (§ 3a) collects the floor for a working set the host NAMED. A query about a
+file it did not name still pays the whole floor. Closing that means a checker that can
+be asked about a new file without replaying its whole `init`, and the census that
+decides whether that is a classification or a rewrite has been taken
+(`scripts/partition-census.sh`, tsc's own 78 sources, six draws over three partition
+shapes). A pass whose loops iterate `binderResults` is partition-INVARIANT by
+construction; one that reaches the partition is partition-DEPENDENT and must replay:
+
+| bucket | rows | floor ms | one-file ms |
+|---|---:|---:|---:|
+| partition-INVARIANT | **211** | **350.89** | 375.44 |
+| partition-DEPENDENT | **205** | **15.59** | 55.05 |
+| total | 416 | 366.47 | 430.49 |
+
+**95.7% of the floor never looks at the partition**, and the replay's own fixed cost is
+smaller still: 204 of the 205 dependent passes cost **0.69 ms between them**, because
+201 of them read the partition exactly once — they are a single `for (result in
+checkedResults)` loop. (The 205th, `checkSubsequentVarTypes`, is 14.90 ms with an EMPTY
+partition, so it is a mixed pass doing program-wide work outside its loop.)
+
+The model this produced is smaller than the one § 13's (INC.14) entry priced: nothing
+has to be reset, because a program-wide pass already emitted the newly asked file's
+rows during the first build — `diagnostics` is filtered to the assigned files only at
+the very end.
+
+**It is nevertheless not landed, and the reason is the instrument rather than the
+design.** On tsc's own sources the full build's 46 diagnostics are netted by exactly
+ONE pass, and all eight dashboard profiles are that same codebase — so the partition
+detector this repo grades such work with compares an essentially empty population, and
+a replay that produced nothing from 204 of those 205 passes would be invisible to it.
+Re-arming that gate is the prerequisite, not the checker surgery.
+
 **And reusing only the BIND is refused, with its number.** Bind is 66–74 ms of a
 359–407 ms floor — 10.7% of a first hover in a mid-size buffer, 3.1% of one in
 `checker.ts`, and **0** on the first query after an edit, because the program changed.

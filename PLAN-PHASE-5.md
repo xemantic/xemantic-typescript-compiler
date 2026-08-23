@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.17) step 1 — the three-bucket census: the prize is 95.7% of the floor, the replay's own cost is 0.69 ms, and the gate that would have to see it is VACUOUS
+
+**MEASURED, tsc's own 78 sources, six draws in a palindrome over three partition
+shapes (`scripts/partition-census.sh`):**
+
+| bucket | rows | floor ms | one-file ms |
+|---|---:|---:|---:|
+| partition-**INVARIANT** (never reads the partition) | **211** | **350.89** | 375.44 |
+| partition-**DEPENDENT** (reads `checkedResults` or `assignedFileNames`) | **205** | **15.59** | 55.05 |
+| total | 416 | 366.47 | 430.49 |
+
+So **95.7% of the floor's pass time is partition-INVARIANT** — that is (INC.17)'s
+prize, and it is the whole 350 ms. And the replay's own fixed cost is smaller than
+the bucket suggests: **204 of the 205 dependent passes cost 0.69 ms BETWEEN THEM at
+the floor**, because **201 of them read the partition exactly ONCE per build** — they
+are `for (result in checkedResults) { … }` and nothing else, the (INC.7) shape. The
+205th, `checkSubsequentVarTypes`, is **14.90 ms** with an EMPTY partition, i.e. it is a
+MIXED pass doing program-wide work (`…InGlobals`, `…AcrossScriptFiles`) outside its
+partition loop; splitting it would take the replay's fixed cost to ~0.7 ms.
+
+**THE MODEL THE CENSUS PRODUCED IS SMALLER THAN THE ONE (INC.14) PRICED, AND THAT IS
+THE FINDING.** (INC.14) budgeted "416 pass rows classified, a diagnostics prefix to
+reset, every per-file side table to reset". The census says the prefix is not needed:
+a program-wide pass iterates `binderResults`, so **it already emitted the newly asked
+file's rows during the FIRST build** — `getDiagnostics()` merely filtered them out,
+at the very end, because that file was not assigned. A replay therefore does not reset
+anything: it re-runs the 205 dependent passes with the new partition (which appends
+only the new file's rows, since that file contributed none before) and re-filters.
+
+**WHAT THIS ROUND REFUSES TO LAND, AND THE REFUSAL IS ABOUT THE INSTRUMENT, NOT THE
+DESIGN.** A replay that silently produced NOTHING from 204 of those 205 passes would
+be **invisible to every gate this repo has for partition work**, and that is measured
+rather than argued: on the tsc profile the full build's **46 diagnostics are netted by
+exactly ONE pass — `checkSpine`** (the new signed-delta census reads 46 against the
+build's own `fullDiagnostics=46`, its positive control). Every one of the other 415
+rows moves the diagnostics count by zero. So `scripts/partition-equivalence.sh` —
+the designated detector, and the one (INC.7) leaned on — is comparing an essentially
+EMPTY population on this profile, and the same is true of the other seven, which are
+the same codebase. What carried (INC.7) was the 13k-baseline CORPUS, which has no
+partition; there is no instrument here that exercises *many emitting passes* and *a
+partition* at once. Landing a re-entrant checker behind a gate that cannot see a
+starved replay is rounds 853/873/895 again — a green run that tested nothing.
+
+**AND THE CLASSIFICATION THE HOOK PRODUCES IS NOT YET THE ONE THE REPLAY NEEDS.** It
+measures *reads the partition*; soundness needs *its OUTPUT depends on the partition*,
+and the two come apart wherever a program-wide pass CONSUMES a side set the spine
+fills — the producer/consumer pattern CLAUDE.md names three times
+(`spineCollectObjLitVar` → `spineResolveDeferredIterationChecks`,
+`spreadNonIterableHandledCalls`, `populateAmbientCyclicBaseClasses`). Such a pass is
+recorded INVARIANT and would be skipped. Nothing measured here bounds that class,
+because on this profile those passes emit nothing.
+
+**THE INSTRUMENT IS A RUNTIME ONE ON PURPOSE, AND ITS CONTROLS ARE PRINTED.**
+`Checker.checkedResults` is now a getter that records `PassTiming.currentPass`, so the
+census cannot be wrong about who read it — where a source analyzer over `Checker.kt`
+fails silently and in the reassuring direction (CLAUDE.md: a stripper handling `'x'`
+desynchronises on `'\''`; a `pass("name") { … }` sample inside a KDoc parses as a real
+registration). The two partition reads that BYPASS the property — `checkSpine`'s file
+loop and `checkUnresolvedNames`, both testing `assignedFileNames` directly — are hooked
+explicitly, and `checkSpine` is asserted present in every arm. Controls, all printed by
+the runner: 416 rows and 205 read-sites in **all six draws and all three partition
+shapes**, `outside = 0` in every one (so the per-pass sums partition the reads rather
+than sampling them), and the diagnostics hook reading exactly the build's own count.
+
+**WHAT WAS CONSIDERED AND REJECTED AS AN EXPERIMENT.** Simulating the replay with
+`PassTiming.disabledPasses` (disable the 211 invariant rows, compare) is PESSIMISTIC
+and therefore cannot exonerate: a real replay retains those passes' *results* in the
+live checker, where the simulation deletes them — `init:buildFileLocalTypeMaps` alone
+is 76 ms of invariant work that `checkSpine` consumes. And on this profile it would
+also be vacuous in the other direction, comparing 0 diagnostics to 0.
+
+**GATES.** Suite, `cost_gate.py`, `huge_methods.py` on core and `-project`, and the
+four equivalence sweeps — all at their baselines; the hook is behind
+`PassTiming.enabled`, so every sweep is unchanged by construction and is a control.
+
+**SUCCESSOR — (INC.18), and it is the blocker rather than the feature.** Build a
+partition fixture whose diagnostics come from MANY passes: a small multi-file project,
+each file carrying a shape a different dedicated walker owns, driven through
+`partition-equivalence.sh`'s own comparison. Its receipt is a COUNT — *how many
+distinct passes net a diagnostic on it* — and it must be in the tens before any
+re-entrant replay may be believed. It costs no compiler change, it re-arms the gate
+(INC.7) and (INC.9) were graded by, and only then is (INC.17)'s 350 ms landable.
+
 ### Round (INC.14) — a `Checker` now answers a whole WORKING SET, and editor order was the last thing it could have gone wrong on
 
 **EIGHTEEN SEMANTIC QUERIES IN SIX BUFFERS WENT 5,230 ms -> 737, AND SIX PER-BUFFER
@@ -2214,31 +2297,59 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `checker.ts`). A host knows its open buffers and this layer does not.
   `docs/language-service.md` §§ 3, 3a, 13, 14.
 
-- [ ] **(INC.17) THE RE-ENTRANT CHECKER — what `prepare` cannot buy, and the one number
-  that decides whether it is a classification or a rewrite.** `prepare` collects the
-  floor for files a HOST NAMED; a query about a file it did not name still pays the
-  whole 342-365 ms. The re-entrant entry point (INC.14) originally described buys
-  exactly that case, and its prize is the same floor. **Its instrument needs no new
-  work** — `checker-reuse-differential.sh` already models the arrangement in both
-  orders, and `ProjectPreparedCheckTest` is the fixture-scale fence.
-  **MEASURE THIS FIRST, and it costs a grep plus one run: how many of `Checker.kt`'s
-  479 `pass(...)` rows ever touch `checkedResults`.** A pass iterating `binderResults`
-  is partition-INVARIANT by construction — its diagnostics are the same for any
-  partition — so it need not re-run at all on a replay; (INC.7) measured 376 of 400
-  tail walkers in that class. If the ratio holds for the whole init, the replayable set
-  is small and this is a CLASSIFICATION rather than a rewrite.
-  **Three hazards, all established by reading and none measured.** (a) The diagnostics
-  list interleaves partition-invariant and partition-dependent rows, so a replay must
-  reset to a recorded prefix — and run 8 ends with two RETRACTIONS that only work after
-  run 1 emitted (CLAUDE.md, (JIT.1)(d)). (b) A per-file pass that writes a SIDE SET
-  leaves the previous partition's entries behind; the replay must reset each one, and
-  nothing in the types says which. (c) Skipping a program-wide pass on replay is only
-  sound if it is a pure emitter — round 609 measured a starved collector at 1,174 false
-  positives, which is exactly (INC.7)'s classification problem one layer up.
-  **A self-classifying design exists and is worth pricing before hand-classifying**:
-  have `pass()` record whether its body reached `checkedResults` in the FIRST run and
-  replay only those. It fails for a pass that reads `assignedFileNames` directly, so it
-  needs that grep as a guard.
+- [ ] **(INC.17) THE RE-ENTRANT CHECKER — STEP 1 (THE CENSUS) IS DONE 2026-08-23, AND
+  IT SAYS *GO* ON THE PRIZE AND *STOP* ON THE GATE.** `prepare` collects the floor for
+  files a HOST NAMED; a query about a file it did not name still pays the whole
+  342-365 ms. Measured with `scripts/partition-census.sh` (a RUNTIME classification —
+  `checkedResults` is a getter recording `PassTiming.currentPass`, so it cannot be
+  wrong about who read it — six draws, three partition shapes, tsc's own 78 sources):
+
+  | bucket | rows | floor ms | one-file ms |
+  |---|---:|---:|---:|
+  | partition-INVARIANT | **211** | **350.89** | 375.44 |
+  | partition-DEPENDENT | **205** | **15.59** | 55.05 |
+  | total | 416 | 366.47 | 430.49 |
+
+  **The prize is 95.7% of the floor and the replay's own fixed cost is 0.69 ms** —
+  204 of the 205 dependent passes cost that BETWEEN them, because 201 read the
+  partition exactly once (`for (result in checkedResults)` and nothing else). The
+  205th, `checkSubsequentVarTypes`, is 14.90 ms with an EMPTY partition: a MIXED pass
+  doing program-wide work outside its partition loop, and splitting it is the whole
+  difference between 15.6 and 0.7.
+  **The model is SMALLER than (INC.14) priced.** No diagnostics prefix has to be
+  reset: a program-wide pass iterates `binderResults`, so it ALREADY emitted the newly
+  asked file's rows in the first build and `getDiagnostics()` merely filtered them out
+  at the end. A replay re-runs the 205 with the new partition and re-filters.
+  **WHAT BLOCKS IT IS THE INSTRUMENT.** On the tsc profile the full build's 46
+  diagnostics are netted by exactly ONE pass (`checkSpine`; the new signed-delta
+  census reads 46 against the build's own 46, its positive control), so
+  `partition-equivalence.sh` — the designated detector — compares an essentially EMPTY
+  population, and the other seven profiles are the same codebase. A replay that
+  produced nothing from 204 of the 205 passes would be invisible to every gate here.
+  **And the classification is not yet the one soundness needs**: it measures *reads the
+  partition*, where the replay needs *its OUTPUT depends on the partition*, and the two
+  come apart at every spine-produces / program-wide-pass-consumes pair. Blocked on
+  (INC.18).
+
+- [ ] **(INC.18) THE PARTITION GATE IS VACUOUS ON EVERY PROFILE THIS REPO HAS —
+  BUILD THE FIXTURE THAT RE-ARMS IT.** Measured 2026-08-23 while censusing (INC.17):
+  on tsc's own 78 sources the full build's **46 diagnostics are netted by exactly ONE
+  pass**, `checkSpine`, and every one of the other 415 rows moves the count by zero.
+  All eight dashboard profiles are that same codebase. So
+  `scripts/partition-equivalence.sh` — the detector (INC.7) gated 68 walkers with and
+  the one (INC.17)'s replay would be graded by — compares an essentially empty
+  population per file, and the thing that actually carried (INC.7) was the
+  13k-baseline CORPUS, which has no partition at all. **There is no instrument here
+  that exercises many EMITTING passes and a PARTITION at once.**
+  **The deliverable is a small multi-file fixture project** — each file carrying a
+  shape a different dedicated walker owns — driven through
+  `partition-equivalence.sh`'s existing comparison, plus a per-file `--workers` /
+  `recheckOnly` sweep. **Its receipt is a COUNT, not a ms: how many distinct passes
+  net a diagnostic on it**, read straight off `PassTiming.diagNetByPass`, and it must
+  be in the TENS before any partition-narrowing or replay claim may be believed.
+  It costs no compiler change. It also retro-prices work already landed: (INC.7)'s 68
+  gated walkers and (INC.9)'s deferral were profile-green for a reason that says
+  nothing, and only the corpus stood behind them.
 
 - [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
   DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and

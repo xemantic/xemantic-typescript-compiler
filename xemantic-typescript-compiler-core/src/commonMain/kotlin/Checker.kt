@@ -107,9 +107,21 @@ class Checker(
      * wrongly-gated loop shows up as a `--partitionCheck` divergence, never
      * as a sequential regression.
      */
-    private val checkedResults: List<BinderResult> =
+    private val checkedResultsAll: List<BinderResult> =
         if (assignedFileNames == null) binderResults
         else binderResults.filter { it.sourceFile.fileName in assignedFileNames }
+
+    /**
+     * (INC.17): every read of the partition view goes through this getter so
+     * [PassTiming.partitionReadsByPass] can classify each `init` pass as
+     * partition-INVARIANT (never reaches here) or partition-DEPENDENT. Off the
+     * census this is one static boolean read and a field load.
+     */
+    private val checkedResults: List<BinderResult>
+        get() {
+            if (PassTiming.enabled) PassTiming.notePartitionRead()
+            return checkedResultsAll
+        }
 
     /** Merged symbol tables from all files (global scope).
      *
@@ -26594,6 +26606,9 @@ class Checker(
                 // INV.6(6a): a partition worker walks only its assigned files —
                 // the spine is per-file self-contained (per-file resets below),
                 // so skipping a foreign file skips exactly that file's emissions.
+                // (INC.17): a DIRECT partition read — not routed through
+                // [checkedResults], so the census must be told explicitly.
+                if (PassTiming.enabled) PassTiming.notePartitionRead()
                 if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
                 spineFileName = sf.fileName
                 // (API.3): null for every file unless a caller asked for a span in
@@ -38139,6 +38154,8 @@ class Checker(
         try {
             for (result in binderResults) {
                 val sf = result.sourceFile
+                // (INC.17): a DIRECT partition read — see [checkedResults].
+                if (PassTiming.enabled) PassTiming.notePartitionRead()
                 if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
                 spineFileName = sf.fileName
                 spineSource = sf.text
