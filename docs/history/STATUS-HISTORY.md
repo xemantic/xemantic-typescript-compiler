@@ -1,3 +1,38 @@
+**THE RE-ENTRANT CHECKER'S PRIZE IS 95.7% OF THE FLOOR AND ITS REPLAY COSTS 0.69 ms — AND
+THE GATE THAT WOULD HAVE TO SEE IT IS VACUOUS (2026-08-23, (INC.17) step 1, the census).**
+Of the checker's 416 `init` pass rows on tsc's own 78 sources: **211 are partition-INVARIANT
+and carry 350.89 ms of the 366.47 ms floor**, 205 are partition-DEPENDENT and carry **15.59**.
+And 204 of those 205 cost **0.69 ms between them** — **201 read the partition exactly once**,
+being a single `for (result in checkedResults)` loop — while the 205th,
+`checkSubsequentVarTypes`, is 14.90 ms with an EMPTY partition, i.e. a MIXED pass doing
+program-wide work outside its loop. **The model is SMALLER than (INC.14) priced**: no
+diagnostics prefix needs resetting, because a program-wide pass already emitted the newly
+asked file's rows in the first build and `getDiagnostics()` merely filtered them out at the
+end — a replay re-runs the 205 and re-filters. **What is REFUSED is landing it, and the
+refusal is about the instrument.** On the tsc profile the full build's 46 diagnostics are
+netted by exactly ONE pass (`checkSpine`; the new signed-delta census reads 46 against the
+build's own 46, its positive control) and `partition-equivalence.sh` prints
+`diagnostics=46 filesCarryingThem=5` — so 73 of 78 files compare empty to empty, all eight
+profiles are that same codebase, and a replay that silently produced nothing from 204 of the
+205 passes would be invisible. **The classification is also not yet the one soundness needs**:
+it measures *reads the partition* where the replay needs *its OUTPUT depends on the
+partition*, and the two part company at every spine-produces / program-wide-pass-consumes
+pair. The instrument is a RUNTIME one on purpose — `checkedResults` is a getter recording
+`PassTiming.currentPass`, so it cannot be wrong about who read it — with **416 rows and 205
+read-sites identical in all six draws and all three partition shapes, `outside = 0` in every
+one**. **Six ablations, six discriminating, and the seventh pin exists because one was not**:
+removing the getter's hook left all seven original pins GREEN, because none asserted the
+getter-routed population as opposed to `checkSpine`'s own explicit hook — the missing pin was
+added and reddens it. Suite **15,709 / 0 / 3** (+8), `cost_gate.py` PASS (largest **+1.02%
+`mapped.hits`**, the standing drift), `huge_methods.py --fail-over 0` green on core and
+`-project`, and all four equivalence sweeps at their baselines (`partition-equivalence`
+EQUIVALENT on 78 files; `capture-equivalence` 5 spans / 3 files, `narrowRendersMoreAny = 0`;
+`capture-channel` 286 rows / 49 files; `caret-vs-file` EQUIVALENT, 904 spans). Successor
+**(INC.18) DONE the same day** — the fixture is `test-fixtures/partition-gate` at
+**78 netting passes**, and the gate is proven able to fail; the replay's two remaining
+obligations are recorded on the queue item.
+
+
 **AN EDITOR'S WHOLE WORKING SET IS NOW ONE `Checker`: 18 SEMANTIC QUERIES IN SIX BUFFERS
 WENT 5,230 ms -> 737, AND SIX PER-BUFFER ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0
 (2026-08-23, (INC.14) LANDED).** 252-254 ms of every query's floor is the ~190 program-wide

@@ -20,6 +20,86 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.11) — the residual IS a display question, the 66 ms is REFUSED anyway, and the round's product is a shipped hover defect: an unbound `T` in a tooltip
+
+**WHAT THIS ROUND DID.** Classified (INC.10)'s undiagnosed residual, **refuted the
+queue's own hypothesis about it**, refused the 66 ms with a sharper table than the
+one that motivated the item, and landed the display defect the classification
+exposed — which turned out to be **program-wide on the SHIPPED whole-program build**,
+not a partition artifact at all.
+
+**(b) IS A DISPLAY QUESTION. The queue said the residual 462 spans "may be two
+genuinely different `Type` instances"; they are ONE instance carrying TWO COMPETING
+NAMES.** The span is the type reference `ClassLikeDeclaration` in `es2015.ts`'s
+`isPartOfClassBody(declaration: ClassLikeDeclaration, …)`. `ClassLikeDeclaration` is
+a UNION alias, so it registers through `unionAliasStructural`, while `typeToString`
+consults `aliasDisplayMap` FIRST. Two overloads (`classThis.ts:103`,
+`namedEvaluation.ts:178`) return `Extract<ClassLikeDeclaration, Pick<T, "kind">>`;
+the conditional **cannot decide** (a free `T` in the second argument), so it answers
+its own CHECK TYPE — the interned union — and the generic site then writes
+`aliasDisplayMap[thatUnion.id] = ("Extract", args)` **unconditionally**.
+
+**THE CENSUS HAD TO BE WITHIN-ARM, AND THE FIRST HOOK WATCHED THE WRONG SITE.** A
+cross-arm comparison is impossible here because `Type.id` is minted in resolution
+order, so `AliasDisplayCensus` classifies inside ONE arm. The first hook watched
+CLOBBERS at the last-wins site and read **0** — and **reading that as "not a display
+question" would have been exactly wrong.** The sharpened census reads **86**
+instantiations answering an argument unchanged (24x `Partial`, 18x `Extract`) with a
+positive control that the instrument is not dead: **6** different-name refusals at
+the first-wins site (`IncrementalBuildInfoDiagnosticOfFile` beating
+`IncrementalBuildInfoEmitDiagnostic`). Round 849's law again — a zero from an
+un-instrumented site reads exactly like a real negative.
+
+**WHAT LANDED IS A CORRECTNESS FIX, NOT A PERF CHANGE.** A generic instantiation that
+returns one of its own arguments UNCHANGED no longer registers an alias name for it.
+Before it, a caret on `ClassLikeDeclaration` reported
+`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` — **an unbound `T` in a
+hover** — on the ordinary shipped build, for every user. Verified against the ablated
+binary through the CLI: `Type 'Pass<Shape, Pick<T, "a">>' is not assignable to type
+'number'`.
+
+**THE PIN WAS BLIND ON ITS FIRST DRAFT AND ONLY THE ABLATION SAID SO.** The embedded
+lib declares no `Pick`, so the shape degraded to `any` and the pin passed against the
+ablated binary. With `@useRealLibs` it goes **RED against the unfixed binary with its
+negative control still green.** CLAUDE.md already carries "a repro for this family
+MUST set `@useRealLibs`" (round 725); this is a second consumer of that rule.
+
+**THE 66 ms IS REFUSED, AND THE NEW TABLE IS 3.4x / 1.6x BETTER THAN (INC.10)'s AND
+STILL REFUSES.** `FltmDefer` splits the pass into three phases so the table is
+re-measurable in ONE binary (`XTSC_FLTM_EAGER`, default = shipped, pinned inert by
+`FltmDeferArmTest`):
+
+| eager phases | capture divergence | (INC.10)'s |
+|---|---|---|
+| all (shipped) | **5** spans / 3 of 76 files, `narrowRendersMoreAny=0` | 5 |
+| `TYPEALIAS` only | **137** / 10 files, `narrowRendersMoreAny=0` | 462 / 18 |
+| none | **1,665** / 47 files, **`narrowRendersMoreAny=321`** | 2,722 / 46 |
+
+The ask-triggered whole-file build beats (INC.10)'s because in a full build every
+file's map is still built in check order. **It refuses anyway: the fully-deferred arm
+LOSES 321 RESOLUTIONS TO `any`, which is not a naming question at all.** So the 66 ms
+is not reachable by fixing display, and the item's premise — that the 65 ms buys only
+a first-touch ORDER — is now measured false: part of it buys RESOLUTIONS.
+
+**FLOOR NUMBERS ARE DRAW-TO-DRAW, NOT A SAVING — SAY SO.** The landed tree reads
+floor **324 ms**, sweep median **357**, ratio **14.06x** against the round's stated
+340 / 367 / 13.30x. **The landed change moves no work**; these are two draws of the
+same quantity, and quoting them as an improvement would be exactly the error batch 4's
+note warned about one round earlier.
+
+**FOR THE NEXT ROUND.** The remaining (a) half — **302 spans in `checker.ts` alone**
+under full deferral — is a DIFFERENT mechanism: two synonymous non-generic aliases
+resolving to one interned type, decided first-wins. That one is genuinely ambiguous,
+because **tsc picks by the REFERENCE's declaration site, which an id-keyed global map
+cannot express** — so closing it is a change of key, not a change of policy.
+
+**GATES.** Suite **15,741 / 0 / 3** (+6 pins), `capture-equivalence` **5 spans / 3 of
+76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49, moreAny=168** — both
+IDENTICAL, `partition-equivalence` EQUIVALENT on all 78, `partition-gate` EQUIVALENT
+on both arms (78 netting passes), `cost_gate.py` PASS (`output.errors` 46,
+`spine.nodes` +0.00%, largest `mapped.hits` **+1.02%**, the standing drift), and
+`huge_methods.py --fail-over 0` clean on core AND `-project`.
+
 ### Round (INC.7) batch 4 — 89 walkers gated, the floor is 340 ms, and the one-line technique is now CLOSED: 65% of what is left is refused shapes
 
 **WHAT THIS ROUND DID.** Gated **89** program-wide tail walkers onto the check
@@ -2873,39 +2953,33 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   partition, stood behind them. Unmeasured on this axis, not wrong, and re-runnable.
   `docs/partition-gate-sensitivity.md`.
 
-- [ ] **(INC.11) UNBLOCK THE 66 ms: MAKE ALIAS DISPLAY A FUNCTION OF THE ALIAS
-  DECLARATION, NOT OF WHO MINTED THE TYPE FIRST.** (INC.10) built, measured and
-  reverted the `init:buildFileLocalTypeMaps` deferral: it is worth **66 ms — query
-  median 402 -> 349, ratio 12.61x -> 14.17x** — and the ONLY thing it breaks is
-  `scripts/capture-equivalence.sh`, which goes from 5 divergent spans to 2,722 in
-  46 of 76 files, every one of them a DISPLAY difference in both directions
-  (`ModuleName` vs `ModuleExportName`; full `Extract<ClassDeclaration |
-  ClassExpression, Pick<T, "kind">>` vs narrow `ClassLikeDeclaration`). The 65 ms
-  is therefore not buying any of the map's entries — it is buying a program-wide
-  FIRST-TOUCH ORDER. **Two sub-problems, and only the first has its mechanism
-  established.** (a) **83% of the divergence (2,722 -> 462) is recovered by
-  resolving every file's TYPE ALIASES, and that costs 6.81 ms** — those rows are
-  plainly `aliasDisplayMap` (an alias name attaches to an interned type at its
-  first mint: `ModuleName` vs `ModuleExportName`, `AssignmentPattern` vs its
-  expansion), so attaching the name at the `TypeAliasDeclaration` — or resolving
-  it at render time — should close them, and 6.81 ms is small enough that keeping
-  that phase eager is an acceptable answer on its own. (b) **The residual 462 is
-  UNDIAGNOSED and is what the other 58 ms buys.** Its rows run the OTHER way
-  (full `Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` vs narrow
-  `ClassLikeDeclaration`) and are recovered only by keeping the whole DECLARATION
-  branch — `Function|Class|Interface|Enum|TypeAlias|Alias` — eager, so they may
-  not be a display question at all but two genuinely different `Type` instances
-  (a conditional type evaluated in one arm and not the other). **Start by
-  classifying (b); do not assume it is (a).** **The oracle is free** — the
-  full-vs-narrow arms must agree, so no baseline is needed — and (INC.10)'s
-  three-point table says which phase owns which share (fully deferred 0.01 ms /
-  2,722 spans; `TypeAlias` eager 6.81 / 462; whole DECLARATION branch eager
-  64.94 / 5). **Two hazards, both recorded**: round 754 excludes `Type.Reference` from `aliasDisplayMap`
-  DELIBERATELY (a bare defaulted generic displaying as its alias moved eight
-  `typeVariableConstraintedToAliasNotAssignableToUnion` baseline lines), and union
-  display order is pinned byte-for-byte across the corpus — so this is a
-  logical-parity conversation (`docs/logical-parity.md` § 2), not a refactor.
-
+- [x] **(INC.11) THE 66 ms IS REFUSED 2026-08-23, AND ITS PREMISE IS MEASURED FALSE —
+  PART OF THAT COST BUYS *RESOLUTIONS*, NOT A FIRST-TOUCH ORDER.** The item said the
+  65 ms buys only a program-wide first-touch ORDER for interning and `aliasDisplayMap`.
+  A three-phase re-measurable arm (`FltmDefer` / `XTSC_FLTM_EAGER`, default = shipped,
+  pinned inert) says otherwise: fully deferred is **1,665 divergent capture spans in 47
+  files with `narrowRendersMoreAny = 321`** — 321 resolutions LOST TO `any`, which is
+  not a naming question and cannot be fixed by any display change. (Its numbers beat
+  (INC.10)'s 2,722 / 46 by 1.6x, and `TYPEALIAS`-only is 137 / 10 against 462 / 18,
+  because an ask-triggered whole-file build still builds every file's map in check
+  order on a FULL build.) **Do not re-open this as a display problem.**
+  **SUB-PROBLEM (b) IS CLASSIFIED AND THE ITEM'S HYPOTHESIS ABOUT IT IS REFUTED**: the
+  residual rows are NOT two `Type` instances but **ONE instance carrying two competing
+  names**. A `Extract<ClassLikeDeclaration, Pick<T, "kind">>` whose conditional cannot
+  decide (free `T`) answers its own CHECK TYPE — the interned union — and the generic
+  site then wrote `aliasDisplayMap[union.id] = ("Extract", args)` unconditionally.
+  **That was a SHIPPED, whole-program hover defect** (an unbound `T` in a tooltip) and
+  is FIXED — an instantiation that returns one of its own arguments unchanged no longer
+  registers a name for it. `AliasDisplayIdentityTest` pins it and needs `@useRealLibs`
+  to reach the mechanism at all.
+  **WHAT REMAINS, AND IT IS A CHANGE OF KEY, NOT OF POLICY**: the (a) half — 302 spans
+  in `checker.ts` alone under full deferral — is two SYNONYMOUS non-generic aliases
+  resolving to one interned type, decided first-wins. **tsc picks by the REFERENCE's
+  declaration site, which an id-keyed global map cannot express**, so closing it means
+  re-keying alias display, against round 754's deliberate `Type.Reference` exclusion and
+  a union display order pinned byte-for-byte across ~13k baselines. That is a
+  logical-parity conversation (`docs/logical-parity.md` § 2) and is NOT worth opening
+  for a 66 ms the table above has already refused.
 - [x] **(INC.7) DONE 2026-08-23 — 157 WALKERS GATED ACROSS FOUR BATCHES, AND BATCH 4
   CLOSED THE TECHNIQUE RATHER THAN THE FAMILY.** Batches 1-3 gated 68; batch 4 gated
   **89** more in two independently swept sub-batches. **Floor 1,207 -> 340 ms,
