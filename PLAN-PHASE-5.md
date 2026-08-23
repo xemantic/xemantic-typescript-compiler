@@ -131,6 +131,20 @@ arm.** Only the second-walked file's rows are sensitive, which halves what any s
 pin can see and is the reason the sweep — 741,864 rows over 76 files in every walk
 position — is the discriminating instrument here and the pin is a regression fence.
 
+**GATES.** Suite **15,688 / 0 / 3** (+5 pins, summed with a real XML parser over all
+four modules). `cost_gate.py` **PASS**, largest **+1.02% `mapped.hits`** — the same
+pre-existing drift the last five rounds recorded, and the EXPECTED answer for a round
+that changed no compiler code, i.e. a control rather than a green light.
+`huge_methods.py --fail-over 0` green on core (largest 5,204) and on `-project`
+(largest 275). `scripts/partition-equivalence.sh` **EQUIVALENT on all 78 files**
+(median narrowed query 421 ms, floor 335, ratio **11.92x** — a redraw of the same
+binary, which this round did not touch). `scripts/capture-equivalence.sh` **5 spans /
+3 files, `narrowRendersMoreAny = 0`**; `scripts/capture-channel-equivalence.sh`
+**286 rows / 49 files, members=285 scopes=0 signatures=1**;
+`scripts/caret-vs-file-capture.sh` **EQUIVALENT, 904 spans over 76 files** — all three
+exactly at their baselines.
+
+
 ### Round (INC.13) — the question a hover asks is now the BUFFER's, and a free differential said it was safe
 
 **HOVERING AROUND A FILE IS FREE AFTER THE FIRST HOVER. A SECOND CARET IN
