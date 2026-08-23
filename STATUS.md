@@ -1,5 +1,46 @@
 # Status
 
+**THE FLOOR PASS TABLE NEARLY HALVES — 219.98 -> 119.74 ms — AND A NARROWED QUERY IS NOW 24.16x
+FASTER THAN A FULL BUILD (2026-08-23, (INC.20)).** (INC.7) batch 4 closed the loop-header technique
+and left 83 passes refused by SHAPE, 53 of them on "writes a checker field inside the private
+closure". **That verdict was true and the inference from it was wrong**: for nine of them the write
+is a per-FILE AMBIENT install (`currentFileLocals` / `currentCheckFileName`), reset after the loop or
+save-and-restored per iteration — gone before the next file is walked, with the same resting value
+whether the loop ran 78 times or none. Sub-batch B then used (INC.17)'s split template as intended:
+two MIXED passes that build a program-wide INDEX and then emit per file (**only the second loop
+moved**) and two per-file retractors — one of which, `checkPreEmitCountMismatchPins`, is **IMPROVED
+rather than narrowed**, because its TS-1 marker carries `fileName = null` and therefore SURVIVED the
+partition filter, so the ungated loop could emit a global marker about a file nobody asked about.
+**Banked 100.23 ms of a 116.08 ms row removal = 86.3%, a fifth discount point** (79.0 / 85.5 / 92.9
+/ 78.2 / 86.3), and the whole production diff across both perf commits collapses to exactly TWO
+distinct lines. `partition-equivalence.sh`: floor **248 -> 162 ms**, narrowed-query median **313 ->
+207 ms**, ratio at the median file **15.66x -> 24.16x**.
+**THE RELOCATION VICTIM FINALLY HAS A MECHANISM AND A NAME RATHER THAN BEING A RESIDUE.**
+`checkReverseMappedIntersectionConstraint` went **0.067 -> 19.431 ms** and is the ONLY row outside
+the batch that moved more than 0.2 ms: round 895's `srcHas` builds its per-file n-gram filter
+**LAZILY**, so the FIRST such caller in pass order pays it for all 78 files, and gating
+`checkBaseClassImprovedMismatch` simply handed the bill to the next scanner. The same shape was
+mis-read in batch 2 as a walker that "got slower". **19 registered passes still iterate
+`binderResults` AND scan whole source, so that ~19.4 ms cannot be BANKED until all 19 are gated
+together** — queued as (INC.21), now the second-largest row in the floor after the refused
+`init:buildFileLocalTypeMaps`.
+**THE ANALYZER CAUGHT A FIFTH DEFECT IN ITSELF BEFORE PRODUCING A VERDICT** — a Kotlin `${…}`
+template containing a nested string desynchronised the stripper at `Checker.kt:64608`, hiding
+**2,523 of the file's 4,520 `fun` declarations**, i.e. failing in the reassuring direction exactly as
+CLAUDE.md warns. Controls held: length preservation, 4,520 `fun` lines raw and stripped, five named
+functions found, every KDoc `pass("name")` sample refused. **PINS: 19**, and the discriminating ones
+assert on (INC.17)'s partition CENSUS hook — a COUNT, not a time (round 868). Reverting all 14 loop
+headers reddens **5 of 7** census assertions (the two that stay green assert ABSENCE and must hold
+in both arms); gating the two COLLECTION loops reddens **exactly the three cross-file arms and
+nothing else**, which is the evidence the MIXED split is load-bearing. Ownership of every pinned
+diagnostic was established in `build/pass-lab.txt`, not assumed. **GATES, run on EACH sub-batch**:
+suite **15,771 / 0 / 3** (+19), `partition-equivalence` EQUIVALENT all 78, `partition-gate` realism
+78/78 and sensitivity 76/76 with **78 netting passes** (seven of sub-batch A's nine walkers sit in
+its own netting list — the sensitivity arm carried this round too), `capture-equivalence` **5 spans
+/ 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** both at BASELINE,
+`cost_gate.py` PASS (largest `mapped.hits` +1.02%, the standing drift), `huge_methods.py
+--fail-over 0` clean on core AND `-project`.
+
 **THE BIND IS 70 ms -> 6 ms AND A NARROWED QUERY IS 20.5% FASTER: THE INV.2(c) TABLES NOW BUILD ON
 FIRST ASK, AND THEIR ONE PROGRAM-WIDE READER IS SERVED BY A PROJECTION (2026-08-23, (INC.16)).**
 `bindLexicalScopes` was 93% of the bind and — after (INC.7) batch 4 closed the gating technique and
@@ -163,48 +204,4 @@ resumable; 19 of 210 candidates swept. Suite **15,728 / 0 / 3** (+3), `cost_gate
 `capture-channel` **286 / 49**, both unchanged. Three sites still resolve a constraint outside its
 siblings' scope and are reported not fixed, the hardest being `Checker.kt:137404` — **inside
 `typeParamInternCache.getOrPut`**, a first-touch freeze by construction.
-
-**THE RE-ENTRANT REPLAY IS 3.06x, IT LOSES A TYPE-PARAMETER CONSTRAINT ON 8 OF 75 FILES, AND
-THE DIAGNOSTICS SWEEP NEVER NOTICED (2026-08-23, (INC.17) step 2 — BUILT, MEASURED, AND
-REFUSED AS A DEFAULT PATH).** Answering a semantic query about a file the checker was never
-asked about, by re-entering only the partition-DEPENDENT `init` passes instead of rebuilding,
-measures **3.06x** on tsc's own 78 sources — `replay=12572 ms` against `freshBuilds=38498 ms`
-over 75 questions — exactly the shape step 1's census predicted (211 partition-INVARIANT rows
-carrying **350.89 ms of the 366.47 ms floor**; the 205 dependent ones **15.59 ms**, 204 of them
-**0.69 ms** between them). **WHAT REFUSES IT IS THE SECOND SWEEP**, precisely as (INC.18)'s arm
-a3 predicted: `scripts/replay-differential.sh` reads `compared: files=75 diagnosticRows=46
-filesCarryingDiagnostics=5 typeSpans=373879 definitionSpans=352713` and then **`DIVERGED: 8 of
-75 file(s)`** — with the **diagnostics half completely untouched**. The shape is a **lost
-type-parameter constraint**: the replay renders `<T extends Node, U>` where a fresh build
-renders `<T extends Node, U extends T>`. A wrong hover is worse than a slow one, and (INC.2)
-set the precedent by refusing capture narrowing over 45 divergent SPANS; 8 divergent FILES is
-far past it. **THE TRANSFERABLE OUTPUT, now a CLAUDE.md entry: a partition or replay change is
-graded on the CAPTURE sweep, not only the diagnostics sweep** — a lost collector or a lost
-type-parameter scope surfaces as a wrong TYPE, never as a missing error, i.e. it fails in the
-reassuring direction. **WHAT LANDED** is the mechanism marked EXPERIMENTAL at every entry point
-(`ProgramRecheck`, `RecheckHolder`, both `recheckHolder` parameters,
-`Checker.recheckAdditionalFiles`), each carrying the divergence and a "do not serve hover from
-this" instruction; the oracle (`scripts/replay-differential.sh` + `ReplayDifferentialMain`), so
-(INC.19) starts from it rather than rebuilding it; and the `checkSubsequentVarTypes` SPLIT the
-census demanded — one MIXED pass whose two halves have OPPOSITE partition behaviour and whose
-SUM the census read as 14.90 ms, now 0.69, pinned on both sides by `PartitionCensusHookTest`.
-**THE OPT-IN IS THE LOAD-BEARING CHECK AND IT IS PINNED, NOT ARGUED**: every parameter defaults
-to null, `retainForRecheck = recheckHolder != null`, `recheckAdditionalFiles` `require`s it,
-`Project` does not reference the type, and a new pin asserts arming a holder does not change
-the build's own diagnostics (narrowed or whole-program) **with a control that the arming
-actually happened** — two unarmed builds would agree and prove nothing. `ProjectRecheckTest`
-pins what the replay ACTUALLY does, including its defect: the capture channel is asserted to
-EXIST and deliberately **not** asserted equivalent, because a soundness pin there would be
-false. **WHAT DID NOT WORK:** two attribution arms, both killed — the first died silently
-(probable daemon starvation, BUILD.1), the second (`replayAllPasses`) ran **~100x over budget**
-at 53 minutes of CPU over **7** targets without finishing, against ~50 s for the 205-pass
-replay over **75**; that ratio is itself evidence of a pass that appends or re-emits per replay.
-(INC.19)'s instrument is a BISECTION over the replay set, not that arm. Suite **15,725 / 0 / 3**
-(+11), `cost_gate.py` PASS (largest **+1.02% `mapped.hits`**, the standing pre-existing drift;
-next is +0.18%), `huge_methods.py --fail-over 0` green on core (763 classes) and `-project`
-(50), `partition-gate.sh` **EQUIVALENT on BOTH arms** (78 and 76 files), `capture-equivalence`
-**5 spans / 3 files, `narrowRendersMoreAny=0`**, `capture-channel` **286 rows / 49 files,
-members=285 scopes=0 signatures=1**, `caret-vs-file` **EQUIVALENT, 904 spans**, and
-`checker-reuse-differential` in BOTH orders — program order the known single `watchPublic.ts`
-row, editor order **EQUIVALENT over 550,480 types** (101 queries, 25 revisits). `docs/language-service.md`, `Recheck.kt`.
 

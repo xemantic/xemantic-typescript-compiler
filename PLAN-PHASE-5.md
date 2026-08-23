@@ -20,6 +20,94 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.20) — the floor pass table nearly HALVES: 13 passes whose "field write" was a per-file ambient, two MIXED splits, and the relocation victim finally has a NAME
+
+**WHAT THIS ROUND DID.** (INC.7) batch 4 closed the loop-header technique and left 83
+passes refused by SHAPE, 53 of them on "writes a checker field inside the private
+closure". **That verdict was true and the inference from it was wrong**: for nine of
+them the write is a per-FILE ambient install (`currentFileLocals = result.locals` /
+`currentCheckFileName = fileName`, reset after the loop or save-and-restored per
+iteration through a `try`/`finally`). It is gone before the next file is walked and the
+resting value after the pass is identical whether the loop ran 78 times or none — which
+is exactly (INC.20)'s question ("is the write a property of the PROGRAM or of the
+FILE?") answered in the file's favour.
+
+| | before (`d6516785`) | after |
+|---|---:|---:|
+| **`PT.total both.floor`** | **219.98 ms** | **119.74 ms** |
+| the 13 gated rows | 116.57 ms | **0.50 ms** |
+| `partition-equivalence.sh` floor | 248 ms | **162 ms** |
+| narrowed-query median, all 78 | 313 ms | **207 ms** |
+| ratio at the median file | 15.66x | **24.16x** |
+
+**Banked 100.23 ms of a 116.08 ms row removal = 86.3% — a FIFTH discount point**
+(79.0 / 85.5 / 92.9 / 78.2 / **86.3**). The whole production diff across both perf
+commits collapses to exactly TWO distinct lines.
+
+**SUB-BATCH B IS THE (INC.17) TEMPLATE USED AS INTENDED.**
+`checkCircularClassBaseViaDefaultTypeArg` and `checkCircularGenericCallbackVariables`
+each build a program-wide INDEX and then emit per file — **only the second loop moved.**
+`checkBaseClassImprovedMismatch` (rewrites under `d.fileName != fileName`) and
+`checkPreEmitCountMismatchPins` (retracts under `it.fileName == fileName`) are per-file
+operations, and `getDiagnostics` drops out-of-partition rows anyway.
+**`checkPreEmitCountMismatchPins` is IMPROVED, not merely narrowed**: its TS-1 marker
+carries `fileName = null` and so SURVIVES the partition filter, meaning the ungated loop
+could emit a global marker about a file nobody asked about.
+
+**THE RELOCATION VICTIM FINALLY HAS A MECHANISM AND A NAME, NOT A RESIDUE.**
+`checkReverseMappedIntersectionConstraint` went **0.067 -> 19.431 ms** and is the ONLY
+row outside the batch that moved more than 0.2 ms. Cause: round 895's `srcHas` builds
+its per-file n-gram filter LAZILY, so the FIRST `srcHas` caller in pass order pays it
+for all 78 files. `checkBaseClassImprovedMismatch`'s 19.06 ms was essentially that
+build, and gating it handed the bill to the next scanner. Round 788's law with a named
+beneficiary — and the same shape batch 2 misread as a walker that "got slower".
+
+**THE ONE PRE-ANALYSED TARGET THIS HANDS THE NEXT ROUND.** **19 registered passes still
+iterate `binderResults` AND scan whole source** (`checkReverseMappedIntersection-
+Constraint`, `checkShebangError`, `checkMapUpsert`, `checkUnicodeIdentifierName2`, …).
+Until ALL 19 are gated that ~19.4 ms filter build cannot be BANKED, only passed along —
+it is now the **second-largest row in the floor** after `init:buildFileLocalTypeMaps`.
+**Gating them piecemeal is worthless**; it wants one deliberate batch.
+
+**PINS AND BOTH ABLATIONS.** 19 pins, and the discriminating ones assert on (INC.17)'s
+partition CENSUS hook — a COUNT, not a time (round 868's law). **Reverting all 14 loop
+headers turns 5 of the 7 census assertions RED**; the two that stay green are negative
+controls asserting ABSENCE, which must hold in both arms. **Gating the two COLLECTION
+loops turns exactly the three cross-file arms RED and nothing else** — that is the
+evidence the MIXED split is load-bearing, each fixture putting the collected declaration
+in a file the partition does not contain. Batch 5's `-project` arms cannot discriminate
+and are NOT claimed to; they guard the other direction (a gated walker that stops
+walking the ASKED file loses its row silently). Ownership of every pinned diagnostic was
+established in `build/pass-lab.txt`, not assumed.
+
+**REFUSED, WITH REASONS.** `init:buildFileLocalTypeMaps` 65.06 ms — (INC.11)'s, and
+forbidden here. `init:computeAllEnumValues` 7.27 / `init:computePerFileVisibility` 1.36
+/ `init:buildPerFileScopes` 0.94 — genuine cross-file accumulators. Four more
+(`checkReexportedSymlinkReference3Pin` 2.46, `checkSubclassThisTypeAssignable01` 2.06,
+`checkModulePreserve4Pin` 1.67, `checkModuleAugmentationReexportDuplicates`) are
+gateable in shape and were deferred to keep the batch tight.
+**AND ONE ESCALATED RATHER THAN DECIDED**: `checkSubsequentVarTypesPerFile` **11.44 ms**
+is a clean per-file emitter and gateable, but (INC.17) DELIBERATELY left it on
+`binderResults` so a re-entrant replay never re-enters it, and `PartitionCensusHookTest`
+pins that absence. Reversing a landed design decision is not a sub-agent's call. See
+(INC.21).
+
+**THE ANALYZER CAUGHT A DEFECT IN ITSELF BEFORE IT PRODUCED A VERDICT** — a Kotlin
+`${…}` template containing a nested string desynchronised the stripper at
+`Checker.kt:64608`, hiding **2,523 of the file's 4,520 `fun` declarations**, i.e.
+failing in the reassuring direction exactly as CLAUDE.md warns. This is the FIFTH
+distinct defect in that family. Controls held: length preservation, 4,520 `fun` lines
+raw and stripped, five named functions found, every KDoc `pass("name")` sample refused.
+
+**GATES, RUN ON EACH SUB-BATCH.** Suite **15,752 -> 15,771 / 0 / 3** (+19 pins),
+`partition-equivalence` EQUIVALENT all 78, `partition-gate` realism 78/78 and
+sensitivity 76/76 with **78 netting passes** (seven of sub-batch A's nine walkers are in
+its own netting list — the sensitivity arm is again what carried the round),
+`capture-equivalence` **5 spans / 3 of 76, `narrowRendersMoreAny=0`** and
+`capture-channel` **286 / 49, members=285 scopes=0 signatures=1** — both at BASELINE,
+`cost_gate.py` PASS (largest `mapped.hits` +1.02%, the standing drift),
+`huge_methods.py --fail-over 0` clean on core AND `-project`.
+
 ### Round (INC.16) — the INV.2(c) tables build on first ask, its one program-wide reader is served by a projection, and a narrowed query is 20.5% faster
 
 **WHAT THIS ROUND DID.** `BinderResult.lexicalScopes` — **93% of the bind and, after
@@ -3089,32 +3177,48 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `pass("…")`-REGISTERING helper is not a caller, so without excluding the 12
   `initCheckPasses*` registrars the clean set is **0**.
 
-- [ ] **(INC.20) (INC.7)'s SUCCESSOR — SPLIT THE MIXED PASSES, BECAUSE THE LOOP
-  HEADER IS EXHAUSTED AND 65% OF THE REMAINING FLOOR IS REFUSED BY SHAPE.** After
-  batch 4 the floor's pass table is **212.16 ms** over 172 ungated passes, and the top
-  ten rows are **165 ms** of it with every one refused: 53 write a checker field or
-  retract inside the private closure, 43 retract via `diagnostics.removeAll`, 4 carry
-  more than one `binderResults` reference, 4 hold a cross-file pre-loop accumulator.
-  **THE TEMPLATE ALREADY EXISTS AND IS MEASURED**: (INC.17) split
-  `checkSubsequentVarTypes` — one MIXED pass whose two halves have OPPOSITE partition
-  behaviour and whose SUM a census had read as 14.90 ms — into a program-wide half and
-  a per-file half, taking the replay's fixed cost **15.59 -> 0.69 ms**, pinned on both
-  sides by `PartitionCensusHookTest`. The question for each candidate is the same one:
-  **is the field write / retraction a property of the PROGRAM or of the FILE?** A
-  program-wide COLLECTION half stays ungated and a per-file EMITTING half narrows.
-  **START WITH THE RETRACTORS, NOT THE FIELD WRITERS — they are the bigger and the
-  better-shaped group (43 passes).** A retraction removes rows another pass emitted, and
-  under a partition the rows for unassigned files are filtered out at the end anyway
-  (that is (INC.17)'s own model), so a retractor whose target is WITHIN-FILE may be
-  gateable unchanged. Read the `removeAll` predicate: one keyed on `fileName` is a
-  per-file retraction; one keyed on code+position alone may reach another file's row.
-  **DO NOT re-open `init:buildFileLocalTypeMaps` (62.06 ms, the single biggest row)
-  here — it is (INC.11)'s**, and its deferral is refused for a first-touch-ORDER reason
-  that a split does not address.
-  **GATES ARE (INC.7) BATCH 4's, INCLUDING BOTH CAPTURE SWEEPS** — a shape change to a
-  pass that writes checker state is far more likely than a loop header to fire
-  (INC.19)'s write-once-race hazard, which no diagnostics gate can see.
+- [x] **(INC.20) LANDED 2026-08-23 — 13 PASSES, AND THE FLOOR PASS TABLE NEARLY HALVES:
+  `PT.total both.floor` 219.98 -> 119.74 ms.** (INC.7) batch 4 refused 53 passes on
+  "writes a checker field inside the private closure"; **the verdict was true and the
+  inference from it was wrong** — for nine of them the write is a per-FILE AMBIENT
+  install (`currentFileLocals` / `currentCheckFileName`), gone before the next file is
+  walked, with the same resting value whether the loop ran 78 times or none. Sub-batch B
+  used the (INC.17) template properly: two MIXED passes that build a program-wide INDEX
+  then emit per file (**only the second loop moved**) and two per-file retractors — one
+  of which, `checkPreEmitCountMismatchPins`, is IMPROVED rather than narrowed, since its
+  TS-1 marker carries `fileName = null` and so survived the partition filter.
+  **Banked 100.23 ms of 116.08 = 86.3%, the fifth discount point.** Floor 248 -> 162 ms,
+  narrowed-query median 313 -> 207, ratio **15.66x -> 24.16x**. 19 pins; reverting the
+  14 loop headers reddens 5 of 7 census assertions, and gating the two COLLECTION loops
+  reddens exactly the three cross-file arms — the evidence the split is load-bearing.
+  **THE VICTIM HAS A MECHANISM NOW, NOT A RESIDUE**: `checkReverseMappedIntersection-
+  Constraint` 0.067 -> 19.431 ms, the only row outside the batch to move >0.2 ms, because
+  round 895's `srcHas` builds its per-file n-gram filter LAZILY and the FIRST caller in
+  pass order pays it for all 78 files. See (INC.21).
 
+- [ ] **(INC.21) THE 19 `srcScan` PASSES, AND THEY MUST BE ONE BATCH — GATING THEM
+  PIECEMEAL BANKS NOTHING.** 19 registered passes still iterate `binderResults` AND scan
+  whole source (`checkReverseMappedIntersectionConstraint`, `checkShebangError`,
+  `checkMapUpsert`, `checkUnicodeIdentifierName2`, … — the full list is in (INC.20)'s
+  census). Round 895's `srcHas` builds its per-file n-gram filter LAZILY, so the FIRST
+  such caller in pass order pays it for all 78 files: **~19.4 ms that gating one walker
+  merely HANDS TO THE NEXT SCANNER** — measured twice now, as batch 2's mis-read
+  "victim" and as (INC.20)'s named one. It is the **second-largest row in the floor**
+  after `init:buildFileLocalTypeMaps` (refused). Gate all 19 together or not at all, and
+  expect the discount to be ~100% for once, since the relocation has nowhere left to go.
+  **ALSO IN THIS BATCH, the four (INC.20) deferred purely to keep it tight**:
+  `checkReexportedSymlinkReference3Pin` 2.46, `checkSubclassThisTypeAssignable01` 2.06,
+  `checkModulePreserve4Pin` 1.67, `checkModuleAugmentationReexportDuplicates`.
+  **AND ONE ORCHESTRATOR DECISION (INC.20) CORRECTLY REFUSED TO MAKE ALONE**:
+  `checkSubsequentVarTypesPerFile` **11.44 ms** is a clean per-file emitter and
+  gateable, but (INC.17) DELIBERATELY left it on `binderResults` so a re-entrant replay
+  never re-enters it, and `PartitionCensusHookTest` pins that absence. **The replay is
+  EXPERIMENTAL, refused as a default path by (INC.19), and reached by nothing shipped —
+  while this row is paid by every real query.** Gate it, re-point that pin at the new
+  design, and MEASURE the replay's own fixed cost afterwards (it was 0.69 ms over 204
+  passes, so one more re-entered pass should be free — but (INC.19) measured that a
+  replay set is a PER-PASS question and one pass replayed did not even terminate, so
+  measure rather than assume).
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
   `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`

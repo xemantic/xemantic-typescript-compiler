@@ -1,3 +1,48 @@
+**THE RE-ENTRANT REPLAY IS 3.06x, IT LOSES A TYPE-PARAMETER CONSTRAINT ON 8 OF 75 FILES, AND
+THE DIAGNOSTICS SWEEP NEVER NOTICED (2026-08-23, (INC.17) step 2 — BUILT, MEASURED, AND
+REFUSED AS A DEFAULT PATH).** Answering a semantic query about a file the checker was never
+asked about, by re-entering only the partition-DEPENDENT `init` passes instead of rebuilding,
+measures **3.06x** on tsc's own 78 sources — `replay=12572 ms` against `freshBuilds=38498 ms`
+over 75 questions — exactly the shape step 1's census predicted (211 partition-INVARIANT rows
+carrying **350.89 ms of the 366.47 ms floor**; the 205 dependent ones **15.59 ms**, 204 of them
+**0.69 ms** between them). **WHAT REFUSES IT IS THE SECOND SWEEP**, precisely as (INC.18)'s arm
+a3 predicted: `scripts/replay-differential.sh` reads `compared: files=75 diagnosticRows=46
+filesCarryingDiagnostics=5 typeSpans=373879 definitionSpans=352713` and then **`DIVERGED: 8 of
+75 file(s)`** — with the **diagnostics half completely untouched**. The shape is a **lost
+type-parameter constraint**: the replay renders `<T extends Node, U>` where a fresh build
+renders `<T extends Node, U extends T>`. A wrong hover is worse than a slow one, and (INC.2)
+set the precedent by refusing capture narrowing over 45 divergent SPANS; 8 divergent FILES is
+far past it. **THE TRANSFERABLE OUTPUT, now a CLAUDE.md entry: a partition or replay change is
+graded on the CAPTURE sweep, not only the diagnostics sweep** — a lost collector or a lost
+type-parameter scope surfaces as a wrong TYPE, never as a missing error, i.e. it fails in the
+reassuring direction. **WHAT LANDED** is the mechanism marked EXPERIMENTAL at every entry point
+(`ProgramRecheck`, `RecheckHolder`, both `recheckHolder` parameters,
+`Checker.recheckAdditionalFiles`), each carrying the divergence and a "do not serve hover from
+this" instruction; the oracle (`scripts/replay-differential.sh` + `ReplayDifferentialMain`), so
+(INC.19) starts from it rather than rebuilding it; and the `checkSubsequentVarTypes` SPLIT the
+census demanded — one MIXED pass whose two halves have OPPOSITE partition behaviour and whose
+SUM the census read as 14.90 ms, now 0.69, pinned on both sides by `PartitionCensusHookTest`.
+**THE OPT-IN IS THE LOAD-BEARING CHECK AND IT IS PINNED, NOT ARGUED**: every parameter defaults
+to null, `retainForRecheck = recheckHolder != null`, `recheckAdditionalFiles` `require`s it,
+`Project` does not reference the type, and a new pin asserts arming a holder does not change
+the build's own diagnostics (narrowed or whole-program) **with a control that the arming
+actually happened** — two unarmed builds would agree and prove nothing. `ProjectRecheckTest`
+pins what the replay ACTUALLY does, including its defect: the capture channel is asserted to
+EXIST and deliberately **not** asserted equivalent, because a soundness pin there would be
+false. **WHAT DID NOT WORK:** two attribution arms, both killed — the first died silently
+(probable daemon starvation, BUILD.1), the second (`replayAllPasses`) ran **~100x over budget**
+at 53 minutes of CPU over **7** targets without finishing, against ~50 s for the 205-pass
+replay over **75**; that ratio is itself evidence of a pass that appends or re-emits per replay.
+(INC.19)'s instrument is a BISECTION over the replay set, not that arm. Suite **15,725 / 0 / 3**
+(+11), `cost_gate.py` PASS (largest **+1.02% `mapped.hits`**, the standing pre-existing drift;
+next is +0.18%), `huge_methods.py --fail-over 0` green on core (763 classes) and `-project`
+(50), `partition-gate.sh` **EQUIVALENT on BOTH arms** (78 and 76 files), `capture-equivalence`
+**5 spans / 3 files, `narrowRendersMoreAny=0`**, `capture-channel` **286 rows / 49 files,
+members=285 scopes=0 signatures=1**, `caret-vs-file` **EQUIVALENT, 904 spans**, and
+`checker-reuse-differential` in BOTH orders — program order the known single `watchPublic.ts`
+row, editor order **EQUIVALENT over 550,480 types** (101 queries, 25 revisits). `docs/language-service.md`, `Recheck.kt`.
+
+
 **THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS, AND IT IS NOW ARMED AND
 PROVEN ABLE TO FAIL (2026-08-23, (INC.18)).** `scripts/partition-equivalence.sh` — the
 detector (INC.7)'s 68 gated walkers, (INC.9)'s deferral and (INC.17)'s replay would all be
