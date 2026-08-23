@@ -1,5 +1,39 @@
 # Status
 
+**THE RE-ENTRANT CHECKER'S PRIZE IS 95.7% OF THE FLOOR AND ITS REPLAY COSTS 0.69 ms — AND
+THE GATE THAT WOULD HAVE TO SEE IT IS VACUOUS (2026-08-23, (INC.17) step 1, the census).**
+Of the checker's 416 `init` pass rows on tsc's own 78 sources: **211 are partition-INVARIANT
+and carry 350.89 ms of the 366.47 ms floor**, 205 are partition-DEPENDENT and carry **15.59**.
+And 204 of those 205 cost **0.69 ms between them** — **201 read the partition exactly once**,
+being a single `for (result in checkedResults)` loop — while the 205th,
+`checkSubsequentVarTypes`, is 14.90 ms with an EMPTY partition, i.e. a MIXED pass doing
+program-wide work outside its loop. **The model is SMALLER than (INC.14) priced**: no
+diagnostics prefix needs resetting, because a program-wide pass already emitted the newly
+asked file's rows in the first build and `getDiagnostics()` merely filtered them out at the
+end — a replay re-runs the 205 and re-filters. **What is REFUSED is landing it, and the
+refusal is about the instrument.** On the tsc profile the full build's 46 diagnostics are
+netted by exactly ONE pass (`checkSpine`; the new signed-delta census reads 46 against the
+build's own 46, its positive control) and `partition-equivalence.sh` prints
+`diagnostics=46 filesCarryingThem=5` — so 73 of 78 files compare empty to empty, all eight
+profiles are that same codebase, and a replay that silently produced nothing from 204 of the
+205 passes would be invisible. **The classification is also not yet the one soundness needs**:
+it measures *reads the partition* where the replay needs *its OUTPUT depends on the
+partition*, and the two part company at every spine-produces / program-wide-pass-consumes
+pair. The instrument is a RUNTIME one on purpose — `checkedResults` is a getter recording
+`PassTiming.currentPass`, so it cannot be wrong about who read it — with **416 rows and 205
+read-sites identical in all six draws and all three partition shapes, `outside = 0` in every
+one**. **Six ablations, six discriminating, and the seventh pin exists because one was not**:
+removing the getter's hook left all seven original pins GREEN, because none asserted the
+getter-routed population as opposed to `checkSpine`'s own explicit hook — the missing pin was
+added and reddens it. Suite **15,709 / 0 / 3** (+8), `cost_gate.py` PASS (largest **+1.02%
+`mapped.hits`**, the standing drift), `huge_methods.py --fail-over 0` green on core and
+`-project`, and all four equivalence sweeps at their baselines (`partition-equivalence`
+EQUIVALENT on 78 files; `capture-equivalence` 5 spans / 3 files, `narrowRendersMoreAny = 0`;
+`capture-channel` 286 rows / 49 files; `caret-vs-file` EQUIVALENT, 904 spans). Successor
+**(INC.18)**: build the partition fixture whose diagnostics come from MANY passes — its
+receipt is a COUNT of distinct emitting passes, and it must be in the tens before any
+partition-narrowing or replay claim may be believed.
+
 **AN EDITOR'S WHOLE WORKING SET IS NOW ONE `Checker`: 18 SEMANTIC QUERIES IN SIX BUFFERS
 WENT 5,230 ms -> 737, AND SIX PER-BUFFER ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0
 (2026-08-23, (INC.14) LANDED).** 252-254 ms of every query's floor is the ~190 program-wide
@@ -128,38 +162,3 @@ pre-existing drift), `huge_methods.py --fail-over 0` green on core and `-project
 capture censuses unmoved (5 spans / `narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0
 signatures=1).
 
-**THE SECOND-LARGEST ROW IN THE INCREMENTAL FLOOR WAS EMIT-ONLY WORK AND NOW RUNS ONLY WHEN
-THE EMITTER ASKS; THE LARGEST IS REFUSED WITH A THREE-POINT MEASUREMENT (2026-08-22,
-(INC.10)).** `init:trackAllImportReferences` was **29.44 ms of a 305.3 ms floor pass table**,
-and its whole product — `referencedAliases` — has ONE reader, `isReferencedAliasDeclaration`,
-which has ONE caller: a single line of `Transformer` reached only by `import x = require(…)`
-under `module: preserve`. Round 738's `skipEmitOutputs` gate means a `--noEmit` build never
-constructs a transformer, so every language-service query filled a set nothing could read. It
-now runs on the first ask: **pass table 305.3 -> 274.8 ms, narrowed query median 422 -> 402,
-ratio at the median file 12.43x -> 12.61x**, and the walk count goes **78 -> 0** on both the
-floor and a full `--noEmit` build. Deferring beat gating on `skipEmitOutputs` for a testing
-reason: the corpus EMITS, so thousands of `.js` baselines now exercise the deferred path on
-every suite run. **The banked ms EXCEEDS the row (30.5 vs 29.44) — the first time the (INC.7)
-relocation discount has not applied, because this walk resolves nothing and there is no
-memoized work to relocate.** **`init:buildFileLocalTypeMaps` (66 ms) IS REFUSED, and it was
-BUILT before it was refused.** The deferral works and is cheap — 78 -> 3 maps on the floor arm,
-row **66.07 -> 0.01 ms**, query median **349**, ratio **14.17x**, `partition-equivalence`
-EQUIVALENT on all 78 files, cost gate and corpus unmoved — and it moves the CAPTURE channel
-from **5 divergent spans to 2,722 in 46 of 76 files**. Every divergence is a DISPLAY one, in
-both directions, and the mechanism is `aliasDisplayMap`: an alias name attaches to an interned
-type at its FIRST mint, so resolving every file's declarations up front is what makes type
-display a function of the program rather than of who walked first. Keep the `TypeAlias`
-symbols eager and it is 6.81 ms / 462 spans; keep the whole DECLARATION branch eager and it is
-**64.94 ms / 5 spans** — **the deferrable part is 1.13 ms of 66**. Round 829 censused this pass
-as *1,499 of 4,161 entries ever read*; read-ness of the ENTRY was the wrong question, because
-the pass's second product is the ORDER. Suite **15,674 / 0 / 3** (+8 pins), `cost_gate.py` PASS
-(largest delta +1.02% `mapped.hits`, the same pre-existing drift), `huge_methods.py
---fail-over 0` green on core and `-project`, both capture censuses unmoved (5 spans /
-`narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0 signatures=1). **The tail is now
-FLAT and worth saying so**: 416 rows, eleven over 5 ms, forty-six over 1 ms, and the remaining
-**370 rows sum to 11.9 ms between them**. **And the 66 ms is not lost, it is BLOCKED ON ONE
-THING** — the deferral is already built and its only casualty is `aliasDisplayMap`'s
-first-mint ordering, and 83% of that ordering (2,722 -> 462 spans) is
-recovered for **6.81 ms** by keeping the TYPE ALIASES eager. The residual 462 is undiagnosed
-and runs the other way round, so it may not be a display question at all. Queued as (INC.11),
-against a free differential oracle: the full and narrow capture arms must agree.

@@ -1,3 +1,39 @@
+**THE SECOND-LARGEST ROW IN THE INCREMENTAL FLOOR WAS EMIT-ONLY WORK AND NOW RUNS ONLY WHEN
+THE EMITTER ASKS; THE LARGEST IS REFUSED WITH A THREE-POINT MEASUREMENT (2026-08-22,
+(INC.10)).** `init:trackAllImportReferences` was **29.44 ms of a 305.3 ms floor pass table**,
+and its whole product — `referencedAliases` — has ONE reader, `isReferencedAliasDeclaration`,
+which has ONE caller: a single line of `Transformer` reached only by `import x = require(…)`
+under `module: preserve`. Round 738's `skipEmitOutputs` gate means a `--noEmit` build never
+constructs a transformer, so every language-service query filled a set nothing could read. It
+now runs on the first ask: **pass table 305.3 -> 274.8 ms, narrowed query median 422 -> 402,
+ratio at the median file 12.43x -> 12.61x**, and the walk count goes **78 -> 0** on both the
+floor and a full `--noEmit` build. Deferring beat gating on `skipEmitOutputs` for a testing
+reason: the corpus EMITS, so thousands of `.js` baselines now exercise the deferred path on
+every suite run. **The banked ms EXCEEDS the row (30.5 vs 29.44) — the first time the (INC.7)
+relocation discount has not applied, because this walk resolves nothing and there is no
+memoized work to relocate.** **`init:buildFileLocalTypeMaps` (66 ms) IS REFUSED, and it was
+BUILT before it was refused.** The deferral works and is cheap — 78 -> 3 maps on the floor arm,
+row **66.07 -> 0.01 ms**, query median **349**, ratio **14.17x**, `partition-equivalence`
+EQUIVALENT on all 78 files, cost gate and corpus unmoved — and it moves the CAPTURE channel
+from **5 divergent spans to 2,722 in 46 of 76 files**. Every divergence is a DISPLAY one, in
+both directions, and the mechanism is `aliasDisplayMap`: an alias name attaches to an interned
+type at its FIRST mint, so resolving every file's declarations up front is what makes type
+display a function of the program rather than of who walked first. Keep the `TypeAlias`
+symbols eager and it is 6.81 ms / 462 spans; keep the whole DECLARATION branch eager and it is
+**64.94 ms / 5 spans** — **the deferrable part is 1.13 ms of 66**. Round 829 censused this pass
+as *1,499 of 4,161 entries ever read*; read-ness of the ENTRY was the wrong question, because
+the pass's second product is the ORDER. Suite **15,674 / 0 / 3** (+8 pins), `cost_gate.py` PASS
+(largest delta +1.02% `mapped.hits`, the same pre-existing drift), `huge_methods.py
+--fail-over 0` green on core and `-project`, both capture censuses unmoved (5 spans /
+`narrowRendersMoreAny=0`; 286 rows / members=285 scopes=0 signatures=1). **The tail is now
+FLAT and worth saying so**: 416 rows, eleven over 5 ms, forty-six over 1 ms, and the remaining
+**370 rows sum to 11.9 ms between them**. **And the 66 ms is not lost, it is BLOCKED ON ONE
+THING** — the deferral is already built and its only casualty is `aliasDisplayMap`'s
+first-mint ordering, and 83% of that ordering (2,722 -> 462 spans) is
+recovered for **6.81 ms** by keeping the TYPE ALIASES eager. The residual 462 is undiagnosed
+and runs the other way round, so it may not be a display question at all. Queued as (INC.11),
+against a free differential oracle: the full and narrow capture arms must agree.
+
 **A NARROWED ERROR QUERY IS DOWN TO 422 ms AND ITS FLOOR TO 378 — A FILE'S FLOW GRAPH IS
 NOW BUILT ONLY WHEN SOMEBODY ASKS FOR IT (2026-08-22, (INC.9)).** The floor was re-decomposed
 rather than scaled, and the ranking had moved: of ~523 ms, the ~190 surviving `init` passes are

@@ -116,6 +116,18 @@ class PartitionCensusHookTest {
     }
 
     @Test
+    fun `the population is the GETTER's, not checkSpine's explicit hook alone`() {
+        // The ablation that removes `notePartitionRead()` from the `checkedResults`
+        // getter leaves `checkSpine`'s own direct `assignedFileNames` hook firing, so
+        // every other pin here still passes and the census silently shrinks to ONE
+        // row. This is the pin that sees it: the recorded set must be the ~200-row
+        // population of `for (result in checkedResults)` passes.
+        val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
+        assert(reads.size >= 50)
+        assert("checkSubsequentVarTypes" in reads)
+    }
+
+    @Test
     fun `a program-wide pass that iterates binderResults is NOT recorded`() {
         val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
         // These three run on every build and every one of them is a
