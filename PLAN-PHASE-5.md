@@ -20,7 +20,141 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-### Round (INC.19) — the re-entrant replay is 3.06x, it loses a type-parameter constraint on 8 of 75 files, and the DIAGNOSTICS sweep never noticed
+### Round (INC.19) — the replay's lost constraint was never a replay defect: a write-once interned field, resolved before its own scope, frozen in the SEED build
+
+**WHAT THIS ROUND DID.** (INC.17) landed the re-entrant replay at **3.06x** and
+refused it, because `scripts/replay-differential.sh` read `DIVERGED: 8 of 75
+file(s)` on the capture channel with the diagnostics channel untouched. This round
+built the instrument the queue asked for, used it to refute the queue's own
+diagnosis, and fixed the real defect. **The replay is now `DIVERGED: 5 of 75`, 23
+spans of 373,879, and NOT ONE of the survivors is a lost constraint.**
+
+**THE QUEUE'S CHARACTERISATION WAS WRONG, AND THE INSTRUMENT IS WHAT SHOWED IT.**
+(INC.19) was written as "the replay SET is too small — bisect it". Three causes
+were measured and the dominant one is reachable by NO replay-set change:
+
+* **(a) real but small.** `init:computeAllEnumValues` — classified partition-
+  INVARIANT, never reads `checkedResults` — repairs `program.ts` when added to the
+  replay set (6 -> 5 files, replicated in two draws against a same-session control).
+  Its row is `Map<string, SeenPackageName>` and `SeenPackageName` is a **block-scoped
+  `const enum`**, i.e. exactly the B83.5-unbound population that pass's
+  `result.lexicalScopes` sweep exists for.
+* **(b) real.** Replaying is non-idempotent for some passes:
+  `init:wireGlobalArrayTypes` **does not terminate** (TIMEOUT at 200 s against a
+  ~48 s healthy draw; the 14-pass `init` group holding it timed out at 600 s), and
+  `init:mergeLibGlobals` makes the answer **strictly worse** (+1 diverging file) —
+  `mergeSingleSymbol`'s `merged.declarations.addAll(...)` is not idempotent. This is
+  the all-passes arm's 100x blow-up reproduced in miniature and ATTRIBUTED.
+* **(c) DOMINATES, and it is neither.** `Type.TypeParam` is interned per
+  TypeParameter node and its `constraint` is **write-once** (`if (constraint ==
+  null)`, 24 writers). Two passes race for it: `checkSpine` (dispatch row 28, walks
+  only the PARTITION) and `checkTypeArgumentConstraints` (row 261, walks
+  `binderResults`, so it reaches every file in every build). A probe on the setter
+  (built, measured, reverted) reads, for seed `binder.ts` -> target `debug.ts`:
+  `seedWrites=526 replayWrites=6 freshWrites=532`, with the replay writing **ZERO**
+  `U` constraints. **The damage happened in the SEED build, before any recheck**;
+  exactly 6 constraints move from `checkTypeArgumentConstraints|error` to
+  `checkSpine|T` between the arms, and exactly 6 renders differ.
+
+**THE DEFECT, AND IT IS AN ORDINARY BUG.** At `checkConstraintsInStatements`'
+`FunctionDeclaration` arm the type-parameter `scope` is built and each
+`tp.constraint` resolved **in the same loop**, with `withInstantiationContext`
+installed only afterwards — so for `<T extends Node, U extends T>` the sibling `T`
+resolves against the OUTER scope, answers `errorType`, and is frozen for the
+checker's life. In an UNPARTITIONED build `checkSpine` always wins the race and
+writes the right answer, **which is why all ~13k corpus baselines are structurally
+blind to it.**
+
+**THE CANDIDATE PATCH WAS NOT SAFE AS DIAGNOSED, AND THE COUNTER-EXAMPLE IS THE
+ROUND'S BEST FIND.** Hoisting the resolution inside the scope install at all three
+sites of the family reddens two corpus baselines with a REAL meaning regression: a
+spurious TS2589 at `(0,0)`, i.e. `reportCheckerStackOverflow` — a genuine
+`StackOverflowError` caught by the `init` boundary guard. `withDeclTypeParamScope`
+serves the **type-alias** arm, and a type alias may constrain a parameter **by
+itself** — `type Shared<I, D extends Shared<I, D>>`, the react-redux shape that
+`reactReduxLikeDeferredInferenceAllowsAssignment` and
+`circularlyConstrainedMappedTypeContainingConditionalNoInfiniteInstantiationDepth`
+pin by name. **Resolving that constraint with the parameters in scope recurses
+without bound: the outer-scope resolution was accidentally load-bearing there.**
+
+**WHAT LANDED**, three sites, two treatments:
+
+| site | change |
+|---|---|
+| `checkConstraintsInStatements` (`FunctionDeclaration` arm) | resolution **hoisted** inside `withInstantiationContext` |
+| `checkTpListDefaults` | **hoisted** — its own comment already said the scope exists "so default/constraint TypeNodes resolve to the sibling TPs" |
+| `withDeclTypeParamScope` | **NOT hoisted.** Given the `if (p.constraint == null)` guard every other writer has: its write was **unconditional**, so it CLOBBERED a correct constraint an earlier pass had written (measured: `class C<T extends Nd, U extends T>`, `U.constraint` went `T` -> `any`). Sibling refs in a class/interface/alias head still answer `errorType` there; they can no longer overwrite a better answer. |
+
+**THE PIN, VERIFIED IN BOTH DIRECTIONS.** `ProjectRecheckConstraintTest` (3 tests,
+`-project` commonTest) seeds a build over `a.ts`, replays onto `b.ts`, and asserts
+the replayed captures equal a fresh `recheckOnly={b.ts}` build's. **Against HEAD:
+2 of 3 FAIL** on the exact row `@158 <T extends Nd, U extends T>… != <T extends
+Nd, U>…`, with the CONTROL passing (the reference arm really does render the
+constraint), so the failure is not vacuity. **Against the fix: 0 fail.**
+**The shape had to be a NAMESPACE-nested generic function** — an earlier attempt
+spent its budget on top-level `declare function` and overload-set shapes that are
+all vacuous, because `init:buildFileLocalTypeMaps` (row 13) resolves every
+FILE-LEVEL `Function` symbol of every file, partition or not, and writes the
+constraint correctly before either racer. The KDoc records this.
+
+**(INC.8)(a) IS **NOT** FOLDED IN, AND THE NEGATIVE IS WORTH MORE THAN THE GUESS.**
+The round's hypothesis was that (INC.8)(a)'s 167 `<K>` / `<K extends any>` rows are
+this same bug's shipped-path face. They are not: `capture-channel-equivalence.sh`
+reads **286 spans in 49 of 76 files, byte-identical** before and after. A probe on
+the shape shows the constraint is **already `any` before `checkTypeArgumentConstraints`
+runs** (`TPWRITE name=K was=any now=any`) — a **namespace-local type alias failing
+to resolve as a constraint**, i.e. a NAME-RESOLUTION defect, not a first-touch
+freeze. Same symptom, different mechanism; (INC.8) stays open and its (a) is now
+diagnosed one level deeper than the queue entry had it.
+
+**THE FAMILY SWEEP — all 24 `.constraint =` writers read.** Thirteen are correct
+(they resolve inside the scope install), and `checkConstraintsForTypeArgs`' own
+comment states the law verbatim: *"this is WHY the resolution is a separate loop
+and not folded into the intern factory (which runs before the scope is set)."*
+**Three sites had drifted from a rule the codebase already knew.** Reported and
+deliberately NOT fixed, each resolving a constraint outside the scope its siblings
+live in: `Checker.kt:111069` (`getDeclaredTypeOfSymbol`'s class/interface branch —
+no scope at all, but it mints FRESH non-interned params so it cannot corrupt the
+cache), `Checker.kt:137404` (resolves **inside `typeParamInternCache.getOrPut { }`**,
+i.e. a first-touch freeze BY CONSTRUCTION, and the hardest to fix since the factory
+runs before any scope exists), `Checker.kt:139240` (`getTypeParametersOfSymbol`),
+and `withDeclTypeParamScope` itself for the self-referential-alias hazard above.
+
+**THE INSTRUMENT** (`aca8a60f`, committed BEFORE any ablation per round 789):
+`PassTiming.replayExtraPasses` (default empty, union-ed into the replayed set, so
+empty is behaviour-free by construction); `PassTiming.recordRegistrations` /
+`registeredPasses`, the candidate universe recorded AT RUN TIME — **a source grep of
+`pass("…"` reads 480 names against the dispatch's 417, so a grep-derived bisection
+could never have closed**; `ReplayDifferentialMain`'s 5th argument plus a
+`--dump-passes` mode and a machine-readable `divergentFiles=` line; and
+`scripts/replay-bisect.sh` (`dump` / `sweep` / `try` / `narrow`), which compares
+ONLY the diverging files (~48 s a draw against ~4 min for all 75) under a
+wall-clock cap so a non-terminating pass kills one draw rather than the sweep. It
+REFUSES (exit 2) on missing inputs. Positive control: `--dump-passes` answers
+`all=417 replayed=207 candidates=210`, the 417 matching the differential's
+independently printed row count.
+
+**WHAT THE REPLAY'S SURVIVING 23 SPANS ARE — a different class, and (INC.19) is not
+closed.** No lost constraint remains. What is left is lost generic INFERENCE:
+`Connection[][]` -> `any[][]`, `Map<string, SeenPackageName>` -> `Map<any, any>`,
+`(key: K, valueInNewMap: U) => T` -> `… => any`. 19 of 210 candidate passes were
+swept per-pass before the probe showed pass additions cannot reach the dominant
+family; `build/bench/replay-bisect/{passes,cand,rest}.txt` hold the universe and the
+191-pass remainder, so looping `scripts/replay-bisect.sh try` over `rest.txt`
+resumes it.
+
+**GATES.** Suite **15,728 / 0 / 3** (+3, the new pin), `cost_gate.py` all in band
+(largest `mapped.hits` **+1.02%**, the standing pre-existing drift; then
+`mapped.keyed` +0.32%, `typeOfExpr.calls` +0.18%), `huge_methods.py --fail-over 0`
+clean (763 classes), `partition-gate.sh` **EQUIVALENT on BOTH arms** (realism 78
+files; sensitivity 76 files, 78 netting passes, floors cleared),
+`capture-equivalence.sh` **5 spans / 3 files unchanged**,
+`capture-channel-equivalence.sh` **286 / 49 unchanged**, and
+`replay-differential.sh realism` **8 -> 5 diverging files**. `Recheck.kt`'s banner
+and `ProjectRecheckTest`'s KDoc were corrected in the same commit — both still
+carried the now-stale "8 of 75 files — a lost type-parameter constraint".
+
+### Round (INC.17) step 2 — the re-entrant replay is 3.06x, it loses a type-parameter constraint on 8 of 75 files, and the DIAGNOSTICS sweep never noticed
 
 **WHAT THIS ROUND DID.** Closed out (INC.17) step 2, which a previous session left
 uncommitted mid-flight. The re-entrant replay — answer a semantic query about a
@@ -2169,6 +2303,24 @@ to carry an IntelliJ-style plugin's error reporting.** (INC.1) landed and MEASUR
 rest of the arc: narrowing the CHECK is finished (a median file's own checking is 15 ms),
 so (INC.2) and (INC.3) below are what is left, in that order.
 
+- [ ] **(DOC.1) `CLAUDE.md` HAS SILENTLY REGROWN 91 KB -> 409 KB, WHICH IS THE THIRD
+  TIME AND THE LARGEST (measured 2026-08-23).** Its own header records the ladder —
+  284 -> 170 KB (2026-06-10), 594 -> ~280 KB (2026-07-06, "after it silently regrew
+  — do not regrow it"), 425 -> ~91 KB (2026-07-26, the owner's "less is more"
+  context-engineering directive that moved every per-diagnostic and per-walker
+  section WHOLESALE to `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`). It is now **4.5x
+  that target** and every session pays it on every request.
+  **This is not a judgement call about which entries are good** — the file states
+  the residency rule itself: what stays is cross-cutting architecture of LIVE
+  subsystems, process/build traps, measured negative knowledge, test conventions,
+  Kotlin idioms and the mission; per-walker, per-TS-code, per-round and per-fix
+  narrative goes to the archive, which is PROGRESSIVE DISCLOSURE, not deletion.
+  So the trim is mechanical against a written rule, and the round that does it must
+  (a) move rather than delete, (b) keep the "GREP THE ARCHIVE FIRST" pointer
+  accurate, and (c) record the new size in the header ladder so the next regrowth
+  is visible. Also worth checking the same axis on `PLAN-PHASE-5.md` (4,903 lines)
+  against the ~10-round trim-on-write rule.
+
 - [x] **(INC.1) A NARROWED DIAGNOSTICS QUERY — LANDED 2026-08-22.**
   `Project.diagnosticsOf(fileNames)`, 4,818 -> 1,107 ms warm, all 78 files of the compiler
   profile agreeing row for row. See the session note; the gate is
@@ -2274,8 +2426,15 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   (a) **x167 — a member's own type parameter renders `<K>` under one arm and
   `<K extends any>` under the other, and NEITHER renders the declared constraint**
   (`shouldAssertFunction<K extends keyof typeof assertionCache>`). That is a defect in BOTH
-  arms, like (INC.6)'s `Readonly<T>`: the sweep only made it visible. Start by asking why a
-  member's signature loses its type parameter's constraint at all.
+  arms, like (INC.6)'s `Readonly<T>`: the sweep only made it visible.
+  **DIAGNOSED ONE LEVEL DEEPER 2026-08-23 by (INC.19), which also REFUTED the obvious
+  guess.** It is NOT (INC.19)'s first-touch freeze: the fix that took the replay's lost
+  constraints from 8 files to 5 left these 167 rows **byte-identical** (the whole
+  channel unchanged at 286 spans / 49 files). A probe on the shape reads `TPWRITE
+  name=K was=any now=any` — the constraint is **already `any` before
+  `checkTypeArgumentConstraints` runs**, so nothing downstream can be blamed. It is a
+  **namespace-local type alias failing to resolve in constraint position** — a NAME
+  RESOLUTION defect, not an ordering one. Start there, not at the renderer.
   (b) **x116 — an alias's expansion carries `| undefined` TWICE**
   (`string | Locale | readonly (string | Locale)[] | undefined | undefined`). Two defects in
   one row: the duplication, and the fact that a first-touch `aliasDisplayMap` registration
@@ -2548,29 +2707,45 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   signature of a pass that appends to a side table or re-emits per replay. Killed,
   not completed. (INC.19)'s instrument is a BISECTION, not that arm.
 
-- [ ] **(INC.19) THE REPLAY DIVERGES ON 8 OF 75 FILES AND THE NEXT INSTRUMENT IS A
-  BISECTION, NOT ANOTHER ALL-PASSES ARM.** (INC.17)'s successor. Three numbers it
-  starts from: the prize is **3.06x** (12,572 ms vs 38,498 ms over 75 questions);
-  the floor's **211 partition-invariant passes carry 350.89 ms** while the 205
-  dependent ones cost **15.59 ms** (204 of them 0.69 ms between them); and the
-  differential reads **`DIVERGED: 8 of 75 file(s)`**, captures only, diagnostics
-  clean.
-  **TWO LIVE HYPOTHESES, and they call for opposite work.** (a) *The replay SET is
-  too small* — a partition-DEPENDENT pass is classified invariant, because the
-  classification measures *reads the partition* where soundness needs *its OUTPUT
-  depends on the partition*, and the two come apart at every spine-produces /
-  program-wide-pass-consumes pair. (b) *Replaying at all is non-idempotent* — a
-  replayed pass appends to a side table or re-emits, which is what the 100x CPU
-  blow-up of the all-passes arm points at.
-  **THE INSTRUMENT: bisect the replay set.** Which passes, ADDED to the 205, repair
-  the 8 files? That is O(log n) builds over a set of 211 candidates against the
-  all-passes arm's unbounded cost, and it separates (a) from (b) directly — under
-  (a) some addition repairs them, under (b) additions make it worse. Point it at
-  the 8 named files with `scripts/replay-differential.sh realism 0 '' <suffixes>`,
-  which narrows what is COMPARED without narrowing what the seed walked.
-  **THE SHAPE TO LOOK AT FIRST** is whatever writes a type parameter's constraint
-  into a scope the renderer reads — a lost constraint is a *scope* that was filled
-  by a pass the replay skipped, not a wrong type.
+- [ ] **(INC.19) THE LOST CONSTRAINT IS FIXED AND IT WAS NEVER A REPLAY DEFECT —
+  8 -> 5 DIVERGING FILES, AND THE SURVIVORS ARE A DIFFERENT CLASS (2026-08-23).**
+  The queue entry this replaces said "the replay SET is too small — bisect it".
+  The instrument was built (`aca8a60f`) and REFUTED that: three causes were
+  measured, and the dominant one is reachable by no replay-set change at all.
+  **(c), THE DOMINANT ONE — FIXED (`7b1cc323`).** `Type.TypeParam.constraint` is
+  interned per node and WRITE-ONCE, and `checkConstraintsInStatements` resolved it
+  BEFORE installing the type-parameter scope, so `U extends T` resolved its sibling
+  against the outer scope, answered `errorType`, and froze. `checkSpine` (row 28,
+  partition-scoped) races `checkTypeArgumentConstraints` (row 261, program-wide) for
+  the field; unpartitioned, `checkSpine` always wins, which is why all ~13k corpus
+  baselines are blind. Two sites hoisted, and the third — `withDeclTypeParamScope` —
+  **must NOT be hoisted**: a self-referential alias (`type Shared<I, D extends
+  Shared<I, D>>`) then recurses without bound and the `init` guard reports a
+  spurious TS2589. It got the write-once guard instead, which it lacked, so it can
+  no longer CLOBBER a correct constraint. Pinned by `ProjectRecheckConstraintTest`,
+  verified 2-of-3 RED against HEAD with its control green.
+  **(a) REAL BUT SMALL, NOT LANDED.** `init:computeAllEnumValues` is classified
+  partition-INVARIANT and yet repairs `program.ts` when added to the replay set
+  (replicated) — its row is a block-scoped `const enum`, the B83.5 population. Worth
+  landing only once the replay ships.
+  **(b) REAL, AND IT BOUNDS THE WHOLE DIRECTION.** `init:wireGlobalArrayTypes` does
+  not TERMINATE when replayed; `init:mergeLibGlobals` makes the answer strictly
+  WORSE (+1 file). So the replay set is a PER-PASS question, never a superset or
+  subset one, and each addition must be measured.
+  **WHAT IS LEFT: 5 files, 23 spans of 373,879, and no lost constraint among them.**
+  They are lost generic INFERENCE — `Connection[][]` -> `any[][]`, `Map<string,
+  SeenPackageName>` -> `Map<any, any>`, `(key: K, valueInNewMap: U) => T` ->
+  `… => any`. Diagnose that class before touching the replay set again.
+  **THE INSTRUMENT IS COMMITTED AND RESUMABLE**: `scripts/replay-bisect.sh`
+  (`dump`/`sweep`/`try`/`narrow`), `PassTiming.replayExtraPasses`, and a RUN-TIME
+  pass universe — a source grep of `pass("…"` reads **480** names against the
+  dispatch's **417**, so a grep-derived bisection could never have closed. 19 of 210
+  candidates are swept; `build/bench/replay-bisect/rest.txt` holds the other 191.
+  **THREE SITES STILL RESOLVE A CONSTRAINT OUTSIDE ITS SIBLINGS' SCOPE** and are
+  reported, not fixed: `Checker.kt:111069` (fresh non-interned params, so it cannot
+  corrupt the cache), `Checker.kt:137404` (**inside `typeParamInternCache.getOrPut`**,
+  i.e. a first-touch freeze BY CONSTRUCTION — the hardest, since the factory runs
+  before any scope exists), and `Checker.kt:139240`.
   **DO NOT** wire the recheck into `Project` before this closes; `Recheck.kt`'s
   banner says so and `ProjectRecheckTest` pins that nothing reaches it by default.
 

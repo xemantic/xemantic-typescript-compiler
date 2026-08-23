@@ -1,5 +1,50 @@
 # Status
 
+**THE REPLAY'S LOST TYPE-PARAMETER CONSTRAINT WAS NEVER A REPLAY DEFECT — IT IS A WRITE-ONCE
+INTERNED FIELD RESOLVED BEFORE ITS OWN SCOPE, FROZEN IN THE SEED BUILD, AND THE CORPUS IS
+STRUCTURALLY BLIND TO IT (2026-08-23, (INC.19)).** The re-entrant replay diverged on **8 of 75
+files**, and the queue's diagnosis was "the replay SET is too small — bisect it". The instrument
+was built and **refuted that**: `Type.TypeParam.constraint` is interned per node and **write-once**
+(24 guarded writers), and `checkConstraintsInStatements` resolved it BEFORE installing the
+type-parameter scope — so `U extends T` resolved its sibling against the OUTER scope, answered
+`errorType`, and froze. Two passes race for the field: `checkSpine` (dispatch row **28**,
+partition-scoped) and `checkTypeArgumentConstraints` (row **261**, program-wide). **Unpartitioned,
+`checkSpine` always wins, which is why all ~13k corpus baselines never saw it.** A setter probe
+settles the direction: seed `binder.ts` -> target `debug.ts` reads `seedWrites=526 replayWrites=6
+freshWrites=532` with the replay writing **ZERO** `U` constraints — **the damage happened in the
+SEED, before any recheck**, so no replay-set change could ever have reached it. Exactly 6
+constraints move from `checkTypeArgumentConstraints|error` to `checkSpine|T` between arms, and
+exactly 6 renders differ. **THE FIX IS TWO SITES HOISTED AND A THIRD DELIBERATELY NOT** — and the
+third is the round's best find: `withDeclTypeParamScope` serves the TYPE-ALIAS arm, where an alias
+may constrain a parameter **by itself** (`type Shared<I, D extends Shared<I, D>>`, the react-redux
+shape pinned by name), so hoisting there recurses without bound and the `init` guard reports a
+spurious **TS2589 at (0,0)**. **The outer-scope resolution was accidentally load-bearing.** That
+site took the missing write-once GUARD instead — its write was unconditional, i.e. it CLOBBERED a
+correct constraint (measured: `U.constraint` going `T` -> `any`). **`replay-differential.sh`
+realism 8 -> 5 diverging files, 23 spans of 373,879, and NOT ONE survivor is a lost constraint** —
+they are lost generic INFERENCE (`Map<string, SeenPackageName>` -> `Map<any, any>`).
+**THE PIN DISCRIMINATES IN BOTH DIRECTIONS**: `ProjectRecheckConstraintTest` is **2-of-3 RED
+against HEAD** on the exact row `<T extends Nd, U extends T> != <T extends Nd, U>` **with its
+control green**, and 0-of-3 against the fix. It had to be a **namespace-nested** generic function —
+`init:buildFileLocalTypeMaps` (row 13) resolves every FILE-LEVEL `Function` symbol of every file,
+partition or not, so the obvious top-level shapes are vacuous and cost an earlier attempt its
+budget. **TWO NEGATIVES WORTH MORE THAN THE FIX.** (INC.8)(a)'s 167 `<K>` / `<K extends any>` rows
+are **NOT** this bug — the channel is byte-identical after the fix (286 spans / 49 files), and a
+probe reads `TPWRITE name=K was=any now=any`, i.e. the constraint is `any` *before*
+`checkTypeArgumentConstraints` runs: a namespace-local type alias failing to resolve in constraint
+position, a NAME-RESOLUTION defect. And **a replay set is a PER-PASS question, never a
+superset/subset one**: `init:computeAllEnumValues` is classified partition-INVARIANT yet repairs a
+file, `init:mergeLibGlobals` replayed is strictly WORSE, `init:wireGlobalArrayTypes` replayed **does
+not terminate** — so a bisection may not assume monotonicity. Instrument (`scripts/replay-bisect.sh`,
+`PassTiming.replayExtraPasses`, a RUN-TIME pass universe — a source grep of `pass("…"` reads **480**
+names against the dispatch's **417**, so a grep-derived bisection cannot close) is committed and
+resumable; 19 of 210 candidates swept. Suite **15,728 / 0 / 3** (+3), `cost_gate.py` PASS (largest
+**+1.02% `mapped.hits`**, the standing drift), `huge_methods.py --fail-over 0` clean (763 classes),
+`partition-gate.sh` **EQUIVALENT on BOTH arms**, `capture-equivalence` **5 spans / 3 files** and
+`capture-channel` **286 / 49**, both unchanged. Three sites still resolve a constraint outside its
+siblings' scope and are reported not fixed, the hardest being `Checker.kt:137404` — **inside
+`typeParamInternCache.getOrPut`**, a first-touch freeze by construction.
+
 **THE RE-ENTRANT REPLAY IS 3.06x, IT LOSES A TYPE-PARAMETER CONSTRAINT ON 8 OF 75 FILES, AND
 THE DIAGNOSTICS SWEEP NEVER NOTICED (2026-08-23, (INC.17) step 2 — BUILT, MEASURED, AND
 REFUSED AS A DEFAULT PATH).** Answering a semantic query about a file the checker was never
@@ -150,34 +195,3 @@ sweeps exactly at their baselines. Successor **(INC.17)**: the re-entrant checke
 what `prepare` cannot — a query about a file the host did not name — and its first step is a
 count, not a rewrite.
 
-**A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH CHECKERS DO —
-ONE DIVERGENT ROW IN 741,864, AND IN IT THE SHARED ARM IS THE ONE THAT IS RIGHT (2026-08-23,
-(INC.14) census).** (INC.14) is 63% of every query's floor and its blocker was never the
-refactor but the caches a surviving checker carries — `symbolTypes` persists the FIRST
-resolution, so reuse makes WHICH QUERY RAN FIRST observable, the mechanism that cost three
-rounds in (INC.2)/(INC.5)/(INC.6). **It is answerable with no checker surgery, and that is the
-part worth copying: a checker that has already answered k-1 queries and is asked a k-th IS a
-checker whose partition is those k files**, because `recheckOnly` is a SET the spine walks in
-program order either way. `scripts/checker-reuse-differential.sh` runs one build per query
-against one build per GROUP and compares captured types, captured definitions AND diagnostics,
-per file: **381,666 types + 360,152 definitions + 46 diagnostics over 76 of tsc's own sources,
-1 row differs** — `definitions=0 diagnostics=0 sharedRendersMoreAny=0 absentInShared=0` — and
-that row is the per-query arm inventing a redundant `X & X` for a function type, already one of
-the 5 spans `capture-equivalence.sh` gates. **Replicated at k = 2, 8 and 26, which re-groups
-every file: the SAME row each time**, with the prize measured in the same runs — **1.79x /
-3.19x / 3.82x** (cold 38.4-39.5 s over 76 builds, replicating to +-1.4%). So what is left of
-(INC.14) is the refactor alone. **(INC.15) — reusing only the BIND — is REFUSED with its
-number**: the mechanism is sound (`--bindMutationCheck` reads `checked 15580, changed 0` beside
-`mergeSingleSymbol: adopts 406, mutates 175`, all 175 on LIB symbols), but bind is 66-74 ms of
-a 359-407 ms floor = 10.7% of a first hover, 3.1% of one in `checker.ts`, **2.75% of the whole
-15-query editor sequence and 0 on the first query after an edit** — and a reused checker
-carries its own bind, so (INC.14) subsumes it. The refusal's successor is (INC.16):
-**`bindLexicalScopes` is 69 of the bind's 74 ms**, and one line blocks (INC.9)'s deferral
-template — a program-wide block-scoped enum/alias collector that reads every file's scopes.
-Suite **15,688 / 0 / 3** (+5 pins), `cost_gate.py` PASS (largest +1.02% `mapped.hits`, the same
-pre-existing drift and the expected answer for a round that changed no compiler code),
-`huge_methods.py --fail-over 0` green on core and `-project`, and all four equivalence sweeps
-at their baselines. **Three ablations, all recorded as CONTROLS rather than claimed** — one
-demonstrably a dead arm, two not provably reached — with the fixture's own structural
-half-blindness stated: a capture is recorded DURING the walk, so a later-walked file cannot
-influence an earlier one's answers in either arm.
