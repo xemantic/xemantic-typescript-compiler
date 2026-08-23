@@ -100,6 +100,35 @@ class LexicalScopeDeferralTest {
     }
 
     @Test
+    fun `the shipped configuration is the deferred one`() {
+        // Pins the DEFAULT, not the mechanism: every other test here installs the mode
+        // it wants and restores it, so flipping `LexDefer.deferred` back would leave
+        // them all green while every query paid the whole scope walk again.
+        val result = Binder(CompilerOptions()).bind(parse(source))
+        assert(!result.lexicalScopesBuilt)
+    }
+
+    @Test
+    fun `a namespace scope aliases its OWN file's exports when two files collide on a node key`() {
+        // Hazard (a). `nodeToSymbol` is shared by every `BinderResult` from one `Binder`
+        // and its `(pos, end)` keys COLLIDE ACROSS FILES, last-wins in bind order — so a
+        // scope built at FIRST ASK, i.e. after every file is bound, would alias whichever
+        // file wrote that key last. The two sources below are the same LENGTH and declare
+        // their namespace at the same offsets, so their ModuleDeclarations share a key.
+        val binder = Binder(CompilerOptions())
+        val a = binder.bind(Parser("namespace N { export type Alpha = number; }", "a.ts").parse())
+        val b = binder.bind(Parser("namespace N { export type Bravo = number; }", "b.ts").parse())
+        // Asked AFTER both binds — which is exactly what the deferral does.
+        fun aliasedNames(r: BinderResult): Set<String> {
+            val decl = r.sourceFile.statements.first() as ModuleDeclaration
+            val scope = r.lexicalScopes[(decl as NodeBase).nodeId]
+            return scope?.existing?.keys?.toSet() ?: emptySet()
+        }
+        assert(aliasedNames(a) == setOf("Alpha"))
+        assert(aliasedNames(b) == setOf("Bravo"))
+    }
+
+    @Test
     fun `the eager bind builds them inside bind itself`() {
         withDeferral(deferred = false) {
             val result = Binder(CompilerOptions()).bind(parse(source))
