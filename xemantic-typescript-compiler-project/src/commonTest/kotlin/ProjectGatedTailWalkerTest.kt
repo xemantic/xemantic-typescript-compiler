@@ -75,6 +75,11 @@ class ProjectGatedTailWalkerTest {
     private val ctorFile = "/proj/src/ctor.ts"
     private val implFile = "/proj/src/impl.ts"
 
+    private val nsThisFile = "/proj/src/nsthis.ts"
+    private val superFile = "/proj/src/sup.ts"
+    private val indexFile = "/proj/src/idx.ts"
+    private val importTypeFile = "/proj/src/imptype.ts"
+
 
     /**
      * TS2449, owned by `checkClassNameInOwnComputedMemberNames`: a class's own name in
@@ -172,6 +177,60 @@ class ProjectGatedTailWalkerTest {
         export const other: number = 1;
     """.trimIndent() + "\n"
 
+
+    /**
+     * BATCH 4 — the four biggest walkers of batch 4a that carry a diagnostic a
+     * fixture can state naturally, each owned in the pass lab exactly as batches
+     * 1-3 established theirs: with the named pass in `build/pass-lab.txt` the row
+     * disappears and no other row moves.
+     *
+     * TS2331 + TS2683, owned by `checkThisInNamespaceBodies` (4.46 ms of the floor).
+     * BOTH rows are that walker's — its `emitTs2683` flag is what decides whether
+     * the second one is emitted beside the first — which is why the earlier draft of
+     * this fixture was VACUOUS: a `this` inside a FUNCTION in a namespace body still
+     * reports TS2683, from a different pass, and disabling this walker did not move
+     * it. The `this` has to be directly in the namespace body.
+     */
+    private val nsThisText = """
+        export namespace Outer {
+            export const self = this;
+        }
+    """.trimIndent() + "\n"
+
+    /** TS2335, owned by `checkSuperInNonDerived` (2.16 ms). */
+    private val superText = """
+        export class Plain {
+            m(): void {
+                super.toString();
+            }
+        }
+    """.trimIndent() + "\n"
+
+    /** TS2411, owned by `checkIndexSignatureProperties` (5.91 ms, the batch's largest row). */
+    private val indexText = """
+        export interface Bag {
+            [key: string]: number;
+            label: string;
+        }
+    """.trimIndent() + "\n"
+
+    /**
+     * TS1340, owned by `checkImportTypeUsedAsType` (2.64 ms) — and the pin for the
+     * first of the two walkers the queue cleared BY READING rather than by the
+     * analyzer's letter. Its `visitBareImportType` helper scans `binderResults`
+     * itself, which reads as a disqualifier and is not one: the scan is a
+     * whole-program RESOLUTION (`binderResults.any { … declare module "<spec>" … }`
+     * answering a Boolean), not an enumeration that emits per file. A helper is not
+     * a registered pass, so gating the walker's own loop never gates the helper, and
+     * it keeps answering about the whole program.
+     *
+     * The import target must be a real file of the program, so this fixture is the
+     * one arm that depends on the bystander existing.
+     */
+    private val importTypeText = """
+        export type Bad = import("./bystander");
+    """.trimIndent() + "\n"
+
     private fun vfs() = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to config,
@@ -183,6 +242,10 @@ class ProjectGatedTailWalkerTest {
             baseFile to baseText,
             ctorFile to ctorText,
             implFile to implText,
+            nsThisFile to nsThisText,
+            superFile to superText,
+            indexFile to indexText,
+            importTypeFile to importTypeText,
         ),
     )
 
@@ -362,6 +425,100 @@ class ProjectGatedTailWalkerTest {
         for ((file, text) in listOf(
             labelFile to labelText, baseFile to baseText,
             ctorFile to ctorText, implFile to implText,
+        )) {
+            val whole = project.diagnostics(file).map { it.code }.sorted()
+            assert(whole.isNotEmpty())
+            project.updateFile(file, text)
+            assert(project.diagnosticsOf(listOf(file)).map { it.code }.sorted() == whole)
+        }
+    }
+
+    /**
+     * BATCH 4's control, and it is the assertion that stops every arm below from
+     * passing vacuously: the whole-program build must report each of the four rows.
+     * `ProjectNarrowFalseNegativeTest`'s first fixture agreed on an EMPTY list in
+     * both arms and measured nothing; so did this class's own `checkMixinClassConstructor`
+     * attempt one batch earlier.
+     */
+    @Test
+    fun `the whole-program build reports all four batch-4 rows - the control`() {
+        val whole = ProjectCompiler(vfs()).build("/proj", noEmit = true)
+        assert(rowsIn(whole.diagnostics, nsThisFile).isNotEmpty())
+        assert(rowsIn(whole.diagnostics, superFile).isNotEmpty())
+        assert(rowsIn(whole.diagnostics, indexFile).isNotEmpty())
+        assert(rowsIn(whole.diagnostics, importTypeFile).isNotEmpty())
+    }
+
+    /** batch 4a — `checkThisInNamespaceBodies`. */
+    @Test
+    fun `a partition of the namespace-this file alone keeps its own walker's rows`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(nsThisFile))
+        assert(rowsIn(whole.diagnostics, nsThisFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, nsThisFile) == rowsIn(whole.diagnostics, nsThisFile))
+    }
+
+    /** batch 4a — `checkSuperInNonDerived`. */
+    @Test
+    fun `a partition of the super file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(superFile))
+        assert(rowsIn(whole.diagnostics, superFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, superFile) == rowsIn(whole.diagnostics, superFile))
+    }
+
+    /** batch 4a — `checkIndexSignatureProperties`, the batch's largest row. */
+    @Test
+    fun `a partition of the index-signature file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(indexFile))
+        assert(rowsIn(whole.diagnostics, indexFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, indexFile) == rowsIn(whole.diagnostics, indexFile))
+    }
+
+    /**
+     * batch 4a — `checkImportTypeUsedAsType`, the HELPER-SCANS-THE-PROGRAM clearance.
+     * This is the arm that would redden if gating the walker's loop had also starved
+     * its whole-program helper: the helper decides whether the specifier is ambient,
+     * and it must keep seeing every file while the walker's loop sees one.
+     */
+    @Test
+    fun `a partition of the import-type file alone keeps its own walker's row`() {
+        val vfs = vfs()
+        val whole = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        val narrowed = ProjectCompiler(vfs)
+            .build("/proj", noEmit = true, recheckOnly = setOf(importTypeFile))
+        assert(rowsIn(whole.diagnostics, importTypeFile).isNotEmpty())
+        assert(rowsIn(narrowed.diagnostics, importTypeFile) == rowsIn(whole.diagnostics, importTypeFile))
+    }
+
+    /**
+     * The round-609 direction for batch 4: a partition asked about ONE of the four
+     * new fixtures must not acquire the OTHER three's rows.
+     */
+    @Test
+    fun `a partition of one batch-4 file invents nothing for the others`() {
+        val narrowed = ProjectCompiler(vfs())
+            .build("/proj", noEmit = true, recheckOnly = setOf(nsThisFile))
+        assert(rowsIn(narrowed.diagnostics, superFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, indexFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, importTypeFile).isEmpty())
+        assert(rowsIn(narrowed.diagnostics, bystanderFile).isEmpty())
+    }
+
+    /** The public narrowed-query path, which is what an editor actually drives. */
+    @Test
+    fun `the narrowed query through the public API keeps all four batch-4 rows`() {
+        val project = Project.open("/proj", vfs())
+        for ((file, text) in listOf(
+            nsThisFile to nsThisText, superFile to superText,
+            indexFile to indexText, importTypeFile to importTypeText,
         )) {
             val whole = project.diagnostics(file).map { it.code }.sorted()
             assert(whole.isNotEmpty())
