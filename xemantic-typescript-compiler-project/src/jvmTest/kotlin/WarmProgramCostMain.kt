@@ -168,6 +168,109 @@ fun main(args: Array<String>) {
             "hlB1=$highlightsB1 hlB2=$highlightsB2 " +
             "afterEditA=$afterEdit afterEditA_askB=$afterEditOther")
     }
+
+    // ---- (INC.14) THE PREPARED RHYTHM -----------------------------------------
+    //
+    // The block above is now a CONTROL: `prepare` is opt-in, so nothing in it may
+    // move. This is the arrangement (INC.14) adds — a host declares its open buffers
+    // once per edit and then queries them — measured against the same queries with no
+    // `prepare` in front of them, in the same process, rotated.
+    //
+    // The working set is six MID-SIZED program files, chosen by size rather than by
+    // name so the row is not a statement about one file, and deliberately excluding
+    // the giant (`checker.ts` alone is ~1.65 s of per-file checking and would bury
+    // the floor the arm exists to measure).
+    val needle2 = needle
+    val candidates = project.files
+        .filter { it != fileA }
+        .mapNotNull { file ->
+            val text = runCatching { File(file).readText() }.getOrNull() ?: return@mapNotNull null
+            val first = text.indexOf(needle2)
+            val last = text.lastIndexOf(needle2)
+            if (first < 0 || last <= first) null else Triple(file, first, text.length)
+        }
+        .sortedBy { it.third }
+    require(candidates.size >= 12) {
+        "REFUSED: only ${candidates.size} file(s) carry the needle twice — the working-set " +
+            "arm would be a statement about whichever few they are"
+    }
+    val working = candidates.drop(candidates.size / 2).take(6)
+    val workingFiles = working.map { it.first }
+    val workingCaret = working.associate { it.first to it.second }
+    println(
+        "workingSet=" + workingFiles.joinToString(", ") {
+            it.substringAfterLast('/') + "(" + (working.first { w -> w.first == it }.third / 1024) + "k)"
+        },
+    )
+    for (file in workingFiles) {
+        require(project.quickInfoAt(file, workingCaret.getValue(file)) != null) {
+            "REFUSED: $file's caret answers null, so the working-set arms measure an index lookup"
+        }
+    }
+
+    repeat(rotations) { wsRotation ->
+        // OFF — today's behaviour: one narrowed build per buffer, each paying the
+        // whole floor.
+        project.updateFile(fileA, textA)
+        val hoverOff = ms { for (f in workingFiles) project.quickInfoAt(f, workingCaret.getValue(f)) }
+        // The SAME second pass, unprepared — partly free already, because the
+        // two-entry capture LRU still holds the last two buffers hovered.
+        val secondOff = ms {
+            for (f in workingFiles) {
+                project.definitionsAt(f, workingCaret.getValue(f))
+                project.documentHighlightsAt(f, workingCaret.getValue(f))
+            }
+        }
+        // ON — one build for the working set, then six free queries.
+        project.updateFile(fileA, textA)
+        // The heap CONTROL, read here: the edit has just dropped every cached answer,
+        // so what stands between this reading and the one below is the prepared check
+        // and the queries served from it. A JVM heap reading is not an RSS reading and
+        // `gc()` is a request, so the pair is quoted as a magnitude, never gated on.
+        val runtimeBefore = Runtime.getRuntime()
+        repeat(3) { runtimeBefore.gc() }
+        val heldBeforeMb = (runtimeBefore.totalMemory() - runtimeBefore.freeMemory()) / (1024 * 1024)
+        val prepareMs = ms { project.prepare(workingFiles) }
+        val hoverOn = ms { for (f in workingFiles) project.quickInfoAt(f, workingCaret.getValue(f)) }
+        // …and the queries a host asks NEXT in the same buffers, which are the ones
+        // the prepared check exists for.
+        val secondPass = ms {
+            for (f in workingFiles) {
+                project.definitionsAt(f, workingCaret.getValue(f))
+                project.documentHighlightsAt(f, workingCaret.getValue(f))
+            }
+        }
+        // What a prepared check COSTS to hold. Crude by construction — a JVM heap
+        // reading is not an RSS reading and `gc()` is a request — so it is quoted as
+        // an order of magnitude and never as a number to gate on.
+        val runtime = Runtime.getRuntime()
+        repeat(3) { runtime.gc() }
+        val heldMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+
+        // The error-reporting rhythm, the same two ways.
+        project.updateFile(fileA, textA)
+        val diagOff = ms { for (f in workingFiles) project.diagnosticsOf(listOf(f)) }
+        project.updateFile(fileA, textA)
+        val diagWide = ms { project.diagnosticsOf(workingFiles) }
+        val diagEach = ms { for (f in workingFiles) project.diagnosticsOf(listOf(f)) }
+
+        record("ws.hover6.noPrepare", hoverOff)
+        record("ws.defs+highlights12.noPrepare", secondOff)
+        record("ws.heldMb.beforePrepare", heldBeforeMb)
+        record("ws.heldMb.withPrepared", heldMb)
+        record("ws.prepare", prepareMs)
+        record("ws.hover6.prepared", hoverOn)
+        record("ws.defs+highlights12.prepared", secondPass)
+        record("ws.diag6.perFile", diagOff)
+        record("ws.diag1.wholeSet", diagWide)
+        record("ws.diag6.afterWholeSet", diagEach)
+        println(
+            "ws rotation=$wsRotation hover6off=$hoverOff second12off=$secondOff " +
+                "prepare=$prepareMs hover6on=$hoverOn second12=$secondPass heldMb=$heldBeforeMb->$heldMb " +
+                "diag6off=$diagOff diagWide=$diagWide diag6after=$diagEach",
+        )
+    }
+
     project.close()
 
     println("== medians (ms) ==")
