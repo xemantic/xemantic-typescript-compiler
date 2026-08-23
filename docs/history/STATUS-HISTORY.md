@@ -1,3 +1,42 @@
+**THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS, AND IT IS NOW ARMED AND
+PROVEN ABLE TO FAIL (2026-08-23, (INC.18)).** `scripts/partition-equivalence.sh` — the
+detector (INC.7)'s 68 gated walkers, (INC.9)'s deferral and (INC.17)'s replay would all be
+graded by — is a DIFFERENTIAL, so its resolution is bounded by how many of the checker's 416
+`init` passes contribute a row. On tsc's own 78 sources that bound is **ONE**: the full
+build's 46 diagnostics are netted by `checkSpine` alone and only **5 of 78 files carry any
+row**, so 73 comparisons are empty against empty — and all eight dashboard profiles are that
+same codebase. `test-fixtures/partition-gate` is the sensitivity arm: **76 files, 72 carrying
+rows, 182 diagnostics, 78 DISTINCT netting passes**, read off `PassTiming.diagNetByPass` (the
+SIGNED accumulator — `diagsByPass` clamps to `d1 > d0`, so a retracting pass is absent from
+it, and `Checker.kt` has 73 `removeAll` + 5 `removeAt` + 2 `clear` sites).
+`scripts/partition-gate.sh` runs both arms and the sensitivity one REFUSES below its floors
+rather than printing green. **THE PROOF IT CAN FAIL, five arms one mistake at a time:** a
+partition-dependent walker made silent when narrowed reddens the sensitivity arm and NOT the
+realism arm (a1 `checkMissingImplementations`, a2 `checkConflictMarkers`); a pass netting on
+neither project reddens neither (a4, control); and **a5 — ablating the one pass that nets
+every row tsc reports — reddens EXACTLY 5 of 78 files, which is the realism arm's entire
+resolution, measured.** Arm a3 (round 609's collector starvation on
+`init:buildFileLocalTypeMaps`) is an honest NEGATIVE recorded as a control: both arms green
+even after the fixture gained cross-file structure, because that map's product feeds type
+DISPLAY and not diagnostics ((INC.10): deferring it moved 2,722 capture spans and zero
+diagnostics) — so a diagnostic-producing collector's starvation is still unpinned, and that is
+the round's honest limit. **The finding underneath the finding:** mining all 6,451 conformance
+cases for per-pass attribution found **241 distinct netting passes**, and past ~24 selected
+files each case adds **exactly one** new pass — the tail walkers are ONE-SHAPE walkers, which
+is why no real codebase can arm this gate and a hand-written fixture is the only instrument.
+Two `commonTest` pins, each verified RED by its own arm and GREEN under the other's
+(`PartitionSensitivityTest` a1/a5; `PassDiagNetSignTest` a6, the clamped accumulator).
+**NO COMPILER CHANGE**, so `cost_gate.py` and both `huge_methods.py` censuses are CONTROLS this
+round rather than gates — any movement would have meant the change escaped its module. Suite
+**15,714 / 0 / 3** (+5 pins), `cost_gate.py` PASS (largest **+1.02% `mapped.hits`**, the standing
+drift), `huge_methods.py --fail-over 0` green on core (755 classes) and `-project` (50),
+`partition-gate.sh` **EQUIVALENT on BOTH arms** (78 and 76 files), `capture-equivalence` **5 spans
+/ 3 files, `narrowRendersMoreAny=0`**, `capture-channel` **286 rows / 49 files, members=285
+scopes=0 signatures=1**, `caret-vs-file` **EQUIVALENT, 904 spans**, and
+`checker-reuse-differential` in BOTH orders — program order the known single `watchPublic.ts`
+row, editor order EQUIVALENT over 550,480 types. `docs/partition-gate-sensitivity.md`.
+
+
 **THE RE-ENTRANT CHECKER'S PRIZE IS 95.7% OF THE FLOOR AND ITS REPLAY COSTS 0.69 ms — AND
 THE GATE THAT WOULD HAVE TO SEE IT IS VACUOUS (2026-08-23, (INC.17) step 1, the census).**
 Of the checker's 416 `init` pass rows on tsc's own 78 sources: **211 are partition-INVARIANT

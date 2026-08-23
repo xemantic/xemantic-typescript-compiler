@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.16) — the INV.2(c) tables build on first ask, its one program-wide reader is served by a projection, and a narrowed query is 20.5% faster
+
+**WHAT THIS ROUND DID.** `BinderResult.lexicalScopes` — **93% of the bind and, after
+(INC.7) batch 4 and (INC.11), the largest single remaining mechanism in the floor** —
+now builds on FIRST ASK, and `init:computeAllEnumValues`, the one program-wide reader
+that forced every file, is served by a PROJECTION instead of by the tables.
+
+| | eager (pre-round) | deferred (shipped) |
+|---|---:|---:|
+| scope tables built, FLOOR build | 123 | **3** |
+| floor median | 333 ms | **286 ms** |
+| **narrowed-query median, all 78 files** | 346 ms | **275 ms (−20.5%)** |
+| narrowed-query SUM over 78 | 29,378 ms | **23,909 ms** |
+| `FrontEnd` "bind (all program files)" | 70 ms | **6 ms** |
+| `bindLexicalScopes` row | 64.5 ms / 123 calls | **~20 ms / 3 calls** |
+| full build median | 4,896 ms | 4,993 (inside the 4,575-5,053 spread) |
+
+`partition-equivalence.sh`'s own arms read the same direction on its own recipe:
+**floor 248 ms, query median 313 ms, ratio 15.66x** — quote paired numbers from ONE
+instrument, since the two recipes differ (batch 4 read 340/367/13.30x on that one).
+
+**HAZARD (a) DOES NOT FIRE — AND WAS THEN REMOVED STRUCTURALLY ANYWAY.** The queue
+named it as most likely to kill the round: `moduleLexicalScope` reads the BINDER's
+accumulated `nodeToSymbol`, whose `(pos,end)` keys collide across files, so a scope
+built at first-ask would see a FULLER map than one built mid-bind — the (INC.9)
+refusal's mechanism, one pass over. The instrument is an **ID-FREE FINGERPRINT** of
+every file's INV.2(c) tables (scope keys, owner/parent nodeIds, per-scope symbol
+names+flags, and the aliased `existing` table's key set) taken at one fixed point and
+diffed between arms: **IDENTICAL on all 78 files, three independent runs**
+(`scripts/lex-defer.sh`). **That bounds its FREQUENCY, not its existence**, so the
+dependence was removed by construction: `Binder.lexOwnerSymbols`, a per-file
+`nodeId -> Symbol` table filled by `bindModuleDeclaration`/`bindEnumDeclaration`,
+replaces both reads of the shared map. Order-independence is now a property of the
+construction rather than a measurement — and arm **a4** (put the shared map back)
+reddens exactly one pin, built from two same-length sources whose namespaces share a
+node key.
+
+**THE CENSUS CONFIRMED THE QUEUE'S ONE-LINE DIAGNOSIS EXACTLY.** A `forcedBy` census
+(recording `PassTiming.currentPass` at each first ask) reads
+**`init:computeAllEnumValues` as the SOLE forcer of all 78 program files**, floor and
+full build alike. The 45 real-lib `.d.ts` binds are forced by NOBODY — but they are
+worth **~2 ms**, so the lib half alone was never the prize.
+
+**THE PROJECTION, AND WHY IT IS NOT A SECOND WALK.** `declareLexical` mints a
+`TypeAlias`/`Enum`-flagged scope symbol at exactly two sites, both gated on
+`scope.existing == null`. **The two halves are NOT symmetric**: the alias half wants a
+NAME, which the binder can hand over directly; the enum half wants the scope-space
+SYMBOL itself, because `computeEnumSymbolValues` is id-keyed and that symbol exists
+only inside the tables. **So only an `enum` in a fresh scope forces a build.** The
+projection costs **two int compares per node on `indexSourceFile`** — a walk that
+already runs and is content-cached across compiles — plus a parent-chain ascent per
+candidate declaration in `Binder.bind`. Its refinement is measured, not guessed:
+parent-is-not-`SourceFile` alone skips 67 of 78, adding the namespace rule 69,
+splitting off the alias half **75**.
+
+**AND IT SHIPS WITH ITS OWN POSITIVE CONTROL**, per round 790: `LexDefer.verifySkip`
+keeps walking every file and counts what the skip passed over — **75 skipped, 0
+violations** on the profile, pinned on a fixture, because a zero is evidence only
+beside a NON-EMPTY skipped population.
+
+**THE ABLATION'S FIRST ARM READ 0 RED, AND THAT WAS A REAL FINDING.** a1 (restore the
+eager build) reddened NOTHING, because **every other pin installs the mode it wants
+and restores it — so the shipped DEFAULT was pinned by nothing at all.** A pin for the
+default was added and a1 then discriminates. Four arms, each with a uniquely-its-own
+red set: a1 restore-eager **1**; a2 never force for a fresh-scope enum **5** (3x
+`FunctionScopedEnumTypePositionTest` + the `verifySkip` control); a3 hand over no alias
+names **4** (2x `BlockScopedTypeAliasArityTest` + 2 new); a4 read the shared map again
+**1**.
+
+**GATES.** Suite **15,741 -> 15,752 / 0 / 3** (+11 pins), `cost_gate.py` all within
+±0.32% except the standing `mapped.hits` +1.02% (`output.errors` 46, `spine.nodes`
+unchanged, re-run on the restored tree identical), `huge_methods.py --fail-over 0`
+clean on core (775 classes) AND `-project`, `capture-equivalence` **5 spans / 3 of 76,
+`narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** — both at BASELINE, which
+is what says hazard (b)'s negative-id reordering did not bite — `partition-equivalence`
+**EQUIVALENT on all 78**, `partition-gate` realism **78/78** and sensitivity **76/76,
+78 netting passes**.
+
+**LEFT OPEN, ~20 ms**: 3 files still force on the floor — the ones with a genuinely
+block-scoped `enum`, where the census needs the scope-space SYMBOL rather than a name.
+Serving those means minting that symbol outside the scope walk, which is a larger
+change than this round's.
+
 ### Round (INC.11) — the residual IS a display question, the 66 ms is REFUSED anyway, and the round's product is a shipped hover defect: an unbound `T` in a tooltip
 
 **WHAT THIS ROUND DID.** Classified (INC.10)'s undiagnosed residual, **refuted the
@@ -2744,31 +2827,30 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   is **93% of the bind** and the INV.2(c) tables it builds are read per-FILE, so
   (INC.9)'s exact deferral template applies — see (INC.16).
 
-- [ ] **(INC.16) THE BIND IS 93% ONE PASS, AND IT HAS A PROGRAM-WIDE READER — the
-  successor (INC.15) left behind.** Measured this round on the floor arm:
-  `bind (all program files)` **74 ms**, of which `bindStatements` **5 ms** and
-  **`bindLexicalScopes` 69 ms**. So the INV.2(c) lexical-scope tables ARE the bind,
-  and (INC.9)'s template — the one that moved `FlowGraphBuilder` onto the first ask
-  for 136 ms — is the obvious shape: under a `recheckOnly` partition the spine walks
-  ONE file, so 122 of 123 files' scope tables should never be asked for.
-  **THEY ARE ASKED FOR, AND BY ONE LINE**: `Checker.kt:13536`, the block-scoped
-  enum/type-alias census, is `for (result in binderResults) for ((_, scope) in
-  result.lexicalScopes)` — a program-wide COLLECTOR, which round 609 says must
-  iterate `binderResults` and (INC.7) therefore refuses to gate. A `lazy` field would
-  be forced by it for every file and the deferral would bank nothing. **So the
-  question is not "can the build be deferred" but "can that collector be served by a
-  PROJECTION"** — it wants only the scope-space symbols carrying `SymbolFlags.Enum`
-  or `SymbolFlags.TypeAlias`, which is a tiny slice of what the pass builds.
-  **Two hazards, both established by reading and neither yet measured.** (a)
-  `moduleLexicalScope` reads the BINDER's accumulated `nodeToSymbol`, whose
-  `(pos, end)` keys collide across files, so a scope built at first-ask sees a
-  FULLER map than one built mid-bind — the (INC.9) refusal's mechanism, one pass
-  over. (b) `declareLexical` mints through `Symbol.scopeSymbol`, a SEPARATE
-  descending-negative sequence — so deferring cannot perturb the positive symbol-id
-  order (the ~350-boundary-test hazard does NOT apply), but it does reorder the
-  negative ids among themselves, and those are keys in id-keyed checker maps.
-  Gate with `partition-equivalence.sh`, both capture censuses and the corpus.
-
+- [x] **(INC.16) LANDED 2026-08-23 — THE INV.2(c) TABLES BUILD ON FIRST ASK AND A
+  NARROWED QUERY IS 20.5% FASTER.** `bindLexicalScopes` was 93% of the bind and, after
+  (INC.7) batch 4 and (INC.11), the largest single remaining mechanism in the floor.
+  **Scope tables built on a floor build 123 -> 3; `FrontEnd` bind 70 -> 6 ms; floor
+  median 333 -> 286 ms; narrowed-query median over all 78 files 346 -> 275 ms
+  (−20.5%), the SUM 29,378 -> 23,909 ms.** `partition-equivalence.sh`'s own recipe
+  reads floor 248 / median 313 / ratio **15.66x**.
+  **THE BLOCKER WAS SERVED BY A PROJECTION, NOT BY GATING.** A `forcedBy` census
+  confirms `init:computeAllEnumValues` was the SOLE forcer of all 78 program files.
+  `declareLexical`'s two mint sites are NOT symmetric — the alias half wants a NAME
+  (the binder hands it over), the enum half wants the scope-space SYMBOL (`compute-
+  EnumSymbolValues` is id-keyed) — so only an `enum` in a fresh scope forces a build,
+  and the projection costs two int compares per node on a walk that already runs and
+  is content-cached. Refinement measured: 67 of 78 skipped, then 69, then **75**.
+  **HAZARD (a) DID NOT FIRE AND WAS REMOVED ANYWAY.** An ID-FREE FINGERPRINT of every
+  file's tables is IDENTICAL on all 78 across three runs — but that bounds frequency,
+  not existence, so `Binder.lexOwnerSymbols` (a per-file `nodeId -> Symbol` table)
+  replaces both reads of the shared `(pos,end)`-keyed `nodeToSymbol`. Order-independence
+  is now structural; arm a4 reddens a pin built from two same-length sources whose
+  namespaces collide on a node key.
+  **LEFT OPEN (~20 ms)**: 3 files still force on the floor — those with a genuinely
+  block-scoped `enum`, where the census needs the SYMBOL and not a name. Serving them
+  means minting that symbol outside the scope walk, a larger change than this round's.
+  The 45 real-lib `.d.ts` binds are forced by nobody and are worth only ~2 ms.
 - [x] **(INC.14) A `Checker` NOW ANSWERS A WHOLE WORKING SET — LANDED 2026-08-23 as
   `Project.prepare(files)`, plus a partition-keyed `diagnosticsOf` memo beside it.**
   252-254 ms of every query's floor is the ~190 program-wide `init` passes, and the
