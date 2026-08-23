@@ -147,11 +147,12 @@ project.updateFile("/path/to/my-app/src/a.ts", editorBuffer)
 
 project.diagnostics("/path/to/my-app/src/a.ts")          // just this file
 
-// one caret, one question — one compile each
+// one caret, either question — ONE compile for the whole BUFFER, then free
 project.quickInfoAt("/path/to/my-app/src/a.ts", 142)     // hover
 project.definitionsAt("/path/to/my-app/src/a.ts", 142)   // go to definition
+project.quickInfoAt("/path/to/my-app/src/a.ts", 190)     // …and this one builds nothing
 
-// many carets, both questions — ONE compile (§ 10; this is the one to reach for)
+// many carets, both questions — the SAME compile (§ 10; the convenient shape)
 project.semanticsAt("/path/to/my-app/src/a.ts", listOf(142, 190, 240))
 project.fileSemantics("/path/to/my-app/src/a.ts")
 
@@ -180,12 +181,12 @@ you call them.
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
 | `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean or repeated | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
-| `quickInfoAt` | **one NARROWED build, every call** | checks only the queried file — 4.7x on tsc's own sources; not cached today, see below |
-| `definitionsAt` | **one NARROWED build, every call** | same mechanism, same caveat |
-| `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span |
-| `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file |
-| `completionsAt(f, o)` | **one NARROWED build, every call** | free at a caret that admits no completion — those do not build; keywords cost nothing extra |
-| `documentHighlightsAt(f, o)` | **ONE NARROWED build** | sweeps this file's identifiers |
+| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — 4.7x on tsc's own sources; the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`) |
+| `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays |
+| `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span; the same build the three neighbours use |
+| `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again |
+| `completionsAt(f, o)` | **one NARROWED build, every call** | a DIFFERENT question (a receiver's members, or a scope chain), so it does not share; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
+| `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share |
 | `referencesAt(f, o)` | **ONE FULL build clean, TWO dirty** | sweeps the whole program's, so it is not narrowed; § 10b has the measured figures |
 | `signatureHelpAt(f, o)` | **one NARROWED build, every call** | free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
@@ -218,20 +219,28 @@ Two consequences for a host:
 
 - **Debounce, do not poll.** Re-asking `diagnostics()` per keystroke costs a
   compile per keystroke. Ask on idle.
-- **`quickInfoAt` and `definitionsAt` build every call and do not reuse the
-  build** — so asking both about one caret is two compiles. That is deliberate
-  rather than an oversight: a capture build types nodes the checker had no reason
-  to type, so its diagnostics are not interchangeable with a plain build's and
-  reusing it would quietly change what `diagnostics()` reports.
-- **So batch.** `semanticsAt` takes many offsets and `fileSemantics` takes a
-  whole file, and each is **one** compile — the positions go in as a set and the
-  checker records at all of them during the single walk it was going to perform
-  anyway. Measured on a 34-identifier fixture: **one sweep 100 ms, the same 34
-  carets one at a time 3,373 ms (34x), and 6,209 ms (62x) when each is asked both
-  ways.** The ratio is the point, not the milliseconds — it is the number of
-  compiles, so it holds at any project size. Reach for the batch by default and
-  keep the single-caret pair for when you genuinely have one caret and one
-  question.
+- **A capture build is not the `diagnostics()` build and never becomes one.** That
+  is deliberate rather than an oversight: a capture build types nodes the checker
+  had no reason to type, so its diagnostics are not interchangeable with a plain
+  build's and reusing it would quietly change what `diagnostics()` reports.
+- **You no longer have to batch a buffer, and this advice is inverted from what it
+  said before 2026-08-23.** It used to read "asking both about one caret is two
+  compiles, so batch", with a measured 34x. Both halves are now closed:
+  hover-then-navigate at one caret is ONE compile (`(INC.12)` — the two members ask
+  an identical question and read different channels of the one answer), and every
+  caret in a buffer is one compile between them (`(INC.13)` — the question put to
+  the compiler is the FILE's occurrence set, not the caret's). Measured, the six
+  carets that used to be six compiles are one, batched or not.
+- **`semanticsAt` and `fileSemantics` are still the members to reach for**, for a
+  reason that survived the inversion: they hand you every answer at once instead of
+  making you ask for them one at a time, and `fileSemantics` is what a semantic
+  highlighter wants. What changed is that reaching for the single-caret pair is no
+  longer a *cost* mistake.
+- **`quickInfoAt`, `definitionsAt`, `documentHighlightsAt` and `fileSemantics` are
+  ONE build between them**, per buffer, until that buffer changes — they ask the
+  same file-wide question. `completionsAt` and `signatureHelpAt` are not: they ask
+  about a receiver's members, a scope chain or a callee's signatures, which are
+  different questions and therefore different builds.
 
 ## 4. Diagnostics
 
@@ -673,20 +682,24 @@ val whole: List<SemanticInfo> = project.fileSemantics(path)
 Both are **one compile**, whatever the number of positions. The reason is that a
 capture was always a *set*: the compiler is handed the spans before the build and
 records the type and the definition at each of them during the single walk it was
-going to perform anyway. `quickInfoAt` and `definitionsAt` are the degenerate
-one-span case, and paying a compile per caret is the thing this replaces.
+going to perform anyway.
 
-Measured on a 34-identifier fixture, warm:
+**Since `(INC.13)`, so is asking one caret at a time**, which is an inversion of what
+this section used to say and is worth reading as such. It measured a 34-identifier
+fixture at *one compile batched against 34 unbatched (34x), and 68 when each caret was
+asked both ways (62x)*, and told hosts to batch for that reason. `quickInfoAt` now names
+the whole BUFFER's span set rather than the caret's, so those 34 carets are **one
+compile** however they are asked, and asking both ways is **still one** (`(INC.12)`).
 
-| what | compiles | wall |
+| what | compiles, before | compiles, now |
 |---|---|---|
-| `fileSemantics` — all 34 spans | 1 | **100 ms** |
-| `quickInfoAt` x 34 | 34 | 3,373 ms |
-| `quickInfoAt` + `definitionsAt` x 34 | 68 | 6,209 ms |
+| `fileSemantics` — all 34 spans | 1 | 1 |
+| `quickInfoAt` x 34 in one buffer | 34 | **1** |
+| `quickInfoAt` + `definitionsAt` x 34 | 68 | **1** |
 
-The ratios (**34x** and **62x**) are what transfers to your project; the
-milliseconds are a property of a tiny fixture. It is a count of compiles, so the
-saving does not shrink as the project grows.
+It is a count of compiles, so this holds at any project size. What the batch still buys
+is convenience — every answer at once, in one value — and what it costs is that the
+FIRST query in a buffer now types the whole buffer; § 14 prices both halves.
 
 **What comes back.** One `SemanticInfo` per **distinct span**, sorted by
 `(start, end)` ascending — not one per offset. Several carets inside one
@@ -1466,6 +1479,12 @@ The shape that matters: **one compile per idle, not one per caret.** The host
 sweeps a file when it settles and answers every hover, and every go-to-definition,
 out of that one build's answers.
 
+Since `(INC.13)` the API does this for you — `quickInfoAt` asks the buffer's whole
+span set, so a host that just calls it per caret gets the same compile count. This
+class is still worth having for the reason it was written: it keeps the ANSWERS in
+the host's own map, so a hover is a lookup rather than a call across the API, and it
+makes the invalidation explicit where a host can see it.
+
 ```kotlin
 class HoverHost(projectPath: String) {
     private val project = Project.open(projectPath)
@@ -1570,8 +1589,11 @@ queried file's own checking:
 
 So **(P1) — a second query with the program unchanged — is worth the whole ~345 ms
 floor**, and (INC.12) stage 1 collects the part of it that needs no compiler change:
-the case where the *question* repeats. The rest needs the checker to become
-re-partitionable, which is the inversion above.
+the case where the *question* repeats. **(INC.13) then made far more questions repeat,
+by asking about the BUFFER rather than the caret** — so within one buffer (P1) is
+collected for hover, go-to-definition, semantics and highlights alike, and what is left
+of it is a query about a DIFFERENT file, or the first query after an edit. The rest
+needs the checker to become re-partitionable, which is the inversion above.
 
 **(P2) — a query after ONE buffer changed — is worth essentially nothing today, and
 that is a statement about structure rather than about effort.** Measured, it costs the
@@ -1626,7 +1648,7 @@ read instead.
 | what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (re-run round 930, 1,327 files, zero violations) |
 | hover | § 8 | complete for values, members, member declarations and object-literal KEYS — an enum member's since `(API.15)`, a key's own since `(API.17)` |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
-| the two above for many carets, or a whole file, in ONE compile | § 10 | complete — **this is the one an editor should use** |
+| the two above for many carets, or a whole file, in ONE compile | § 10 | complete — and since `(INC.13)` the single-caret members cost the same, so this is now the convenient shape rather than the cheap one |
 | completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` and `` o[` `` included |
 | find references, document highlights, read-vs-write | § 10b | complete — the population is every identifier plus every literal in a member-NAME position (`(API.17)`) |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
@@ -1675,8 +1697,9 @@ real libs, warm, one process per battery, three rotations):
 |---|---|---|---|
 | a plain rebuild, for reference | 1 | 5.0 – 5.5 s | — |
 | `diagnosticsOf(files)` — the narrowed one | 1 narrowed | **1.1 – 1.2 s** (2.7 s for `checker.ts`) | § 4a |
-| `quickInfoAt` / `definitionsAt` / `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
-| …but a REPEATED capture request | **0** | microseconds | (INC.12), below |
+| `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
+| `quickInfoAt` / `definitionsAt` | 1 per **BUFFER**, not per caret | a whole-file capture; **0** for every later caret in it | any |
+| …and a REPEATED capture request | **0** | microseconds | (INC.12), below |
 | `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk: 5.0 s on `types.ts`, 6.2 s on `checker.ts` | — |
 | `documentHighlightsAt` | 1 | 5.0 – 5.5 s on `types.ts`, **6.3 s on `checker.ts`** | it sweeps one FILE, so the file is the cost |
 | `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 s clean, 13.2 – 14.8 s dirty | whole program either way |
@@ -1700,9 +1723,46 @@ hover **1,933 ms → 0**; `definitionsAt` after `quickInfoAt` at one caret in `b
 and not 0 because the BUILD is gone while the per-caret grouping over the file's
 occurrences remains. `scripts/warm-program-cost.sh` re-takes it.
 
-**What it does NOT do**: a different caret's hover, or a query about a different file,
-is a different request and still builds. That is (P1) proper, and § 13 carries its
-price.
+**(INC.13) …AND THE QUESTION ASKED IS THE FILE'S, NOT THE CARET'S**, which is what makes
+that memo hit for a caret nobody has visited yet. `quickInfoAt`, `definitionsAt`,
+`semanticsAt` and `fileSemantics` name the buffer's whole occurrence set —
+`SourceIndex.occurrenceNodes()`, deliberately the population `documentHighlightsAt`
+already sweeps — so **all four are ONE build per buffer, between them**, until that
+buffer changes. Measured on the compiler profile, three rotations, the same binary with
+the widening off and on (blocked arms, not interleaved — one arm's whole point is that
+some code does not run):
+
+| sequence | before | after |
+|---|---:|---:|
+| first hover in `checker.ts` (3.15 MB, 125,289 spans) | 2,307 ms | **3,796 ms** |
+| a SECOND caret in `checker.ts` | 2,142 ms | **73 ms** |
+| first hover in `binder.ts` (7,787 spans) | 481 ms | **610 ms** |
+| a SECOND caret in `binder.ts` | 481 ms | **2 ms** |
+| `fileSemantics(binder.ts)` after that hover | 575 ms | **17 ms** |
+| `diagnosticsOf`, and the build floor itself | unchanged | unchanged |
+
+**The trade is stated rather than hidden: the FIRST query in a buffer gets dearer.** It
+is +27% on `binder.ts` and +65% on `checker.ts`, which is tsc's largest source and 31.6%
+of that whole program — so break-even is at **the second caret**, and everything after it
+is free. The reason it is not worse is that a narrowed build is mostly FLOOR (§ 13's
+~345 ms), and the extra spans are cheap beside it: swept over all 78 files, a whole-file
+capture is **+17 ms at the median file** (373 → 390).
+
+**That the two answers AGREE is measured, not assumed.** A capture types nodes the
+checker had no reason to type, and typing populates order-dependent caches, so a
+file-wide request could plausibly render a different type for the same span — which is
+the mechanism `(INC.10)` refused a 66 ms saving over. `scripts/caret-vs-file-capture.sh`
+is the differential and needs no baseline, because a span asked alone and the same span
+asked as part of its file are the same question: **904 sampled spans in 76 files, zero
+divergence in either channel.**
+
+**What it does NOT do**: a query about a DIFFERENT file is a different request and still
+builds, and so is a caret on a node that is no occurrence at all — a call expression, a
+numeric literal, a `this`. Those fall back to naming the one span, deliberately: a
+file-wide request would not carry them, and an absent capture renders nothing with no
+error anywhere. `completionsAt` and `signatureHelpAt` ask different questions
+(a receiver's members, a scope chain, a callee's signatures) and share nothing. That is
+(P1) proper, and § 13 carries its price.
 
 **The `builds` column is pinned** (`LanguageServiceStateTest`, counted at the backing
 `Vfs`) and **the `wall` column is not pinnable** — it is a property of one box on one
@@ -1712,11 +1772,13 @@ quoting a number from another round beside a fresh one. Memory is the other budg
 whole-program sweep holds a resolution per identifier and the default 512 MB of a plain
 JVM is nowhere near enough (§ 10b).
 
-A normal application project is far smaller, and the ratios are what transfer: batching
-34 carets is **34 compiles cheaper** than asking one at a time (§ 10) — a ratio of
-BUILDS, which is why it holds at any project size and why it is the half that is pinned.
-So: **debounce, batch, and wire `documentHighlightsAt` rather than `referencesAt` to
-caret movement.**
+A normal application project is far smaller, and the ratios are what transfer — but the
+ratio this paragraph used to quote is GONE, and its disappearance is the point. It read
+"batching 34 carets is **34 compiles cheaper** than asking one at a time"; since
+`(INC.13)` asking one at a time is **one compile too**, because the question put to the
+compiler is the buffer's and not the caret's. What is left, and is what a host should
+still do: **debounce, and wire `documentHighlightsAt` rather than `referencesAt` to
+caret movement.** Batching is now a convenience rather than a cost decision.
 
 ### The known gaps, all of them
 

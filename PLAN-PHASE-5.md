@@ -20,6 +20,123 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.13) — the question a hover asks is now the BUFFER's, and a free differential said it was safe
+
+**HOVERING AROUND A FILE IS FREE AFTER THE FIRST HOVER. A SECOND CARET IN
+`checker.ts` WENT 2,142 ms -> 73, ONE IN `binder.ts` 481 -> 2, AND
+`fileSemantics` AFTER A HOVER 575 -> 17 — AND THE ONLY THING THAT PAID FOR IT IS
+THE FIRST QUERY IN A BUFFER, +27% ON `binder.ts` AND +65% ON `checker.ts`.**
+
+(INC.12) memoized a capture build on its REQUEST, so a question asked twice was
+free. Every caret-scoped query except `documentHighlightsAt` asked about ONE
+span, so the caret NEXT DOOR was still a full build — the whole ~345 ms floor for
+a question about a buffer the compiler had just walked. `Project.captureAround`
+now widens the question to the file: the population is
+`SourceIndex.occurrenceNodes()`, which is DELIBERATELY the population
+`documentHighlightsAt` already sweeps, so hover, go-to-definition,
+`semanticsAt`/`fileSemantics` and highlights ask ONE question per buffer and
+share ONE memo entry.
+
+**THE ORACLE WAS BUILT FIRST AND IT COST NO BASELINE — WHICH IS THE PART WORTH
+COPYING.** At a fixed partition, a span asked ALONE and the same span asked as
+part of its file's whole set are the same question, so any divergence is a defect
+in one arm and nothing has to be recorded to compare against.
+`scripts/caret-vs-file-capture.sh` (12 evenly spaced carets per file, one build
+each, against one whole-file build) reads:
+
+    compared: spans=904 over 76 file(s)
+    caret-arm type answers=904  definition answers=848
+    file-wide request sizes min=4 median=1,559 max=125,289
+    one-caret capture : median 373 ms  mean 412  slowest 2,161
+    whole-file capture: median 390 ms  mean 483  slowest 3,949
+    EQUIVALENT
+
+**Zero divergences**, and the second finding is the price: a whole-file capture is
+**+17 ms at the median file**, because a narrowed build is mostly FLOOR and the
+extra spans are cheap beside it. The risk this was built for is real and named —
+a capture types nodes the checker had no reason to type, typing populates
+`symbolTypes`/`aliasDisplayMap`/lazy member tables, and (INC.10) refused a 66 ms
+saving because that mechanism moved capture divergence from 5 spans to 2,722. It
+simply does not fire here, and the reason is worth stating: (INC.10) changed WHEN
+the compiler resolves a file's declarations, where this only changes how many
+spans a walk RECORDS at.
+
+**MEASURED, BLOCKED ARMS, SAME BINARY WITH THE WIDENING OFF AND ON**
+(`scripts/warm-program-cost.sh`, compiler profile, warm, three rotations; blocked
+rather than interleaved because one arm's whole point is that some code does not
+run — round 871):
+
+| | before | after |
+|---|---:|---:|
+| first hover, `checker.ts` (3.15 MB, 125,289 spans) | 2,307 | **3,796** |
+| a SECOND caret, `checker.ts` | 2,142 | **73** |
+| first hover, `binder.ts` (7,787 spans) | 481 | **610** |
+| a SECOND caret, `binder.ts` | 481 | **2** |
+| `fileSemantics(binder.ts)` after that hover | 575 | **17** |
+| `definitionsAt` after that hover | 2 | 2 |
+| `diagnosticsOf` rows, and the FrontEnd floor | 2,070 / 557 / 356+332 | 2,325 / 546 / 339+343 |
+
+**Break-even is the SECOND caret**, and the controls say the change is confined
+to the API: the floor table and every `diagnosticsOf` row are flat, because
+nothing in the compiler was touched.
+
+**THE RECEIPT IS A COUNT, NOT A ms: N carets in one buffer is ONE build.** Pinned
+from a FRESH state (`six carets in one buffer are ONE build, batched or not`), so
+it is not a statement about the memo's hit rate.
+
+**IT DOES NOT WIDEN UNCONDITIONALLY, AND THAT IS THE ONE PLACE A SILENT WRONG
+ANSWER COULD HAVE COME FROM.** A caret can land on a node that is no occurrence —
+a call expression, a numeric literal, a `this` — and a file-wide request would
+simply not carry it, which renders NOTHING with no error anywhere. So the
+widening is conditional on every asked node being in the file's set, and anything
+else is asked about alone.
+
+**THREE ABLATIONS, AND ONE OF THEM CAUGHT A BLIND PIN.**
+
+    A1  never widens (the coverage test off by one)  -> 4 RED: the headline pin,
+                                                       the four-member sharing pin,
+                                                       the six-carets pin, and the
+                                                       cost table's build column
+    A2  widens unconditionally                       -> 2 RED: the fallback control
+                                                       (uniquely its own) and an
+                                                       independent hover negative
+                                                       control
+    A3  the two sides of the shared population drift -> 1 RED, alone... but only
+        apart by one method name                        after the fixture was fixed
+
+**A3 read 0 RED on the first pass and the pin was BLIND, not the invariant
+redundant**: the fixture declared its member with an identifier key and read it
+with a dot, so that file's identifiers and its occurrence nodes were the SAME
+set and either population satisfied the pin. One line (`const third = o["p"];`)
+puts a member-name LITERAL in the file — the exact element the two populations
+differ by — and the arm then reddens exactly one test. The memo's BOUND pin is
+reddened by no arm and is recorded as what it is: it tests the bound, which
+(INC.12)'s own A3 already discriminated.
+
+**THREE PUBLIC CLAIMS CHANGED AND ALL THREE ARE INVERTED IN PLACE.** `a DIFFERENT
+caret's hover still builds` -> `builds NOTHING` (with both answers asserted, so a
+memo returning one span's answer for every caret could not satisfy it); `a batched
+query over six spans costs ONE build where six single queries cost six` -> six
+carets are one build either way; and the memo's BOUND is now about how many
+BUFFERS stay warm rather than one caret-scoped entry plus one file-wide one, so it
+is pinned with three files and with the LRU's ACCESS order asserted (the third
+file is still resident after the eviction). `docs/language-service.md` carried a
+34x batching ratio as its headline advice to hosts; that ratio is GONE, and its
+disappearance is the finding — batching is now a convenience, not a cost decision.
+
+**WHAT DID NOT WORK / WAS NOT DONE.** The bind is still not reused: (INC.13)'s
+queue entry carried a second half ("then, if it holds, the bind", 73-88 ms = 20%)
+and it is left whole as **(INC.15)** — it is a soundness change (a program-SHAPE
+gate reusing the checker's own merge predicate) and does not belong in the same
+round as a change to what every hover asks. The first-query regression was NOT
+gated on file size: a size heuristic would be a guess where the differential is a
+measurement, and break-even at two carets does not justify one.
+
+Suite **15,683 / 0 / 3**. `cost_gate.py` PASS (largest +1.02% `mapped.hits`, the
+same pre-existing drift, and the expected answer for a round that changed no
+compiler code — a control, not a green light). `huge_methods.py --fail-over 0`
+green on core (755 classes) and `-project` (49). `partition-equivalence` **EQUIVALENT on all 78 files** (median narrowed query 385 ms, floor 365, ratio 12.60x — a redraw of the same compiler, which this round did not touch), and both capture censuses **unmoved at their baselines** (5 spans / 3 files, `narrowRendersMoreAny=0`; 286 rows / 49 files, members=285 scopes=0 signatures=1).
+
 ### Round (INC.12) — the warm program PRICED, and the one part of it that needed no compiler change LANDED
 
 **(P1) IS THE WHOLE FLOOR — ~345 ms A QUERY — AND (P2) IS WORTH ESSENTIALLY
@@ -1733,26 +1850,44 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   see (INC.13)); and reusing the CHECKER (252-254 ms = 63%, the largest thing left, and
   the one that makes WHICH QUERY RAN FIRST observable — see (INC.14)).
 
-- [ ] **(INC.13) STAGE 2 — MAKE MORE QUESTIONS REPEAT, AND LET A FREE DIFFERENTIAL
-  DECIDE IT.** (INC.12)'s memo hits when the REQUEST repeats; every caret-scoped query
-  except `documentHighlightsAt` asks about ONE span, so a caret the user has not visited
-  is still a full build. **Ask `quickInfoAt`/`definitionsAt` the FILE's whole span set
-  instead** — the shape `documentHighlightsAt` already uses — and every caret in an
-  unchanged buffer is free after the first, i.e. the 506 -> 0 the definition arm
-  measured, for carets nobody has asked about yet. **Price**: one build that is bigger
-  than a single-caret build (`fileSemantics` 1,185 ms against `quickInfoAt`'s 1,015 in
-  (INC.2b)'s battery), then zero. **Risk, named**: more spans means more `typeToString`
-  calls, which force resolutions EARLIER — the first-touch mechanism (INC.10) refused 66
-  ms over, and (INC.6)/(INC.8) spent two rounds inside. **The oracle is free and must be
-  built first**: per-caret answers and whole-file answers must agree span for span over
-  a real file, no baseline needed. Build the differential, then decide — the way
-  (INC.10)'s three-point table decided `buildFileLocalTypeMaps`. **Then, if it holds,
-  the bind:** 73-88 ms (20%) wholesale for an unchanged program, which `--shareBind`
-  (round 883) and round 882's zero-mutation census make attemptable, gated on program
-  SHAPE using the checker's own merge predicate — and note the site this round found by
-  reading, `mergeModuleAugmentations`, whose writes into `targetResult.locals` and into
-  a target symbol's `declarations`/`exports`/`flags` are idempotent by construction and
-  are WHY that census reads zero.
+- [x] **(INC.13) STAGE 2 LANDED 2026-08-23 — THE QUESTION A HOVER ASKS IS THE
+  BUFFER'S, NOT THE CARET'S.** `Project.captureAround` names
+  `SourceIndex.occurrenceNodes()` — deliberately `documentHighlightsAt`'s own
+  population — so `quickInfoAt`, `definitionsAt`, `semanticsAt`/`fileSemantics` and
+  highlights are **ONE build per buffer between them**. A second caret in `checker.ts`
+  **2,142 -> 73 ms**, in `binder.ts` **481 -> 2**, `fileSemantics` after a hover
+  **575 -> 17**; the FIRST query in a buffer pays for it, **+27% on `binder.ts`,
+  +65% on `checker.ts`**, i.e. break-even at the second caret. **The oracle was built
+  first and needed no baseline** (`scripts/caret-vs-file-capture.sh`, 904 sampled
+  spans in 76 files: **EQUIVALENT**, and the widening prices at **+17 ms at the
+  median file**). It does NOT widen for a caret on a node that is no occurrence — a
+  call expression, a literal, a `this` — because a file-wide request would not carry
+  it and an absent capture renders nothing with no error anywhere. Three ablations;
+  A3 was BLIND until the fixture grew a member-name literal. **The 34x batching ratio
+  `docs/language-service.md` advertised to hosts is GONE** — batching a buffer is now
+  a convenience, not a cost decision.
+
+- [ ] **(INC.15) STAGE 3 — REUSE THE BIND FOR AN UNCHANGED PROGRAM: 73-88 ms, 20% of
+  a median query, and it is the (INC.13) entry's unspent second half.** Not refused by
+  (INC.9)'s per-file argument, which is about redoing a bind ONE FILE at a time; this
+  is the WHOLESALE form. `--shareBind` (round 883) already hands one bind to N
+  concurrent checkers and round 882 measured the checker mutating **zero**
+  binder-owned `Symbol`s on an all-module program — so what stands between it and
+  landing is not the mechanism but the SHAPE GATE, which must REUSE the checker's own
+  merge predicate rather than re-derive it (a re-derivation wrong in the permissive
+  direction corrupts silently, and INV.3(d) is what makes the zero true). One site to
+  check first, found by reading in (INC.12): `mergeModuleAugmentations` writes
+  `targetResult.locals[exportName] = augSymbol` and mutates a local symbol's
+  `declarations`/`exports`/`flags` — every write idempotent BY CONSTRUCTION
+  (`if (decl !in ...)`, a same-value put, an `or` of the same bits), which is WHY that
+  census reads zero and which has to be checked rather than assumed for a program that
+  is not tsc's own sources. **The instrument is a full-vs-reused differential in
+  `scripts/caret-vs-file-capture.sh`'s shape** — two arms that must agree, no baseline
+  — over BOTH diagnostics and captures, because a reused bind is exactly the kind of
+  change whose failure is a missing declaration rather than an error. **Price it
+  against (INC.13)'s new floor before starting**: a buffer's second caret is now 2 ms,
+  so the 73-88 ms is only paid on the FIRST query in a buffer and on the first query
+  after an edit, which is a smaller population than it was this morning.
 
 - [ ] **(INC.14) THE LAST 63% IS THE CHECKER, AND ITS PRICE IS AN ORDER-DEPENDENCE
   DIFFERENTIAL.** 252-254 ms of every query's floor is the ~190 program-wide `init`
