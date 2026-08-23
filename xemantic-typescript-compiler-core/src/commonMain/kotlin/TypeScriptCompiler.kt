@@ -2300,6 +2300,8 @@ class TypeScriptCompiler {
                 // asked: it keeps every Type and Symbol of the build alive.
                 retainForRecheck = recheckHolder != null)
             if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
+            // (INC.16) hazard (a)'s instrument, at ONE fixed point of the pipeline.
+            if (LexDefer.census) LexDefer.fingerprint(binderResults)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
             // (INC.17) hand the LIVE program back. Deliberately after the diagnostics
             // are read, so a holder can never observe a half-built checker.

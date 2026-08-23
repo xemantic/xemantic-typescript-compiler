@@ -153,6 +153,27 @@ data class SourceFile(
      *  parent-chain climb classifies a detached node unreached. Body property —
      *  excluded from equals/copy like [nodeCount]. */
     var typeAliasesWithTpDefaults: List<TypeAliasDeclaration> = emptyList()
+
+    /**
+     * (INC.16) The `enum` / `type` declarations of this file that are NOT a direct
+     * statement of the file itself — the only ones that could possibly land in a FRESH
+     * INV.2(c) lexical scope, which is the only place `init:computeAllEnumValues`'
+     * scope-space census can ever find a row.
+     *
+     * Empty is the whole point: a file with no such declaration contributes nothing to
+     * `Checker.lexicalBlockScopedEnumNames` / `…TypeAliasNames`, so the census can skip
+     * it — and skipping it is what keeps [BinderResult.lexicalScopes] UNBUILT for that
+     * file, which is the entire (INC.16) prize. A declaration whose parent IS the
+     * SourceFile lands in the root scope, which always aliases file locals, so
+     * `declareLexical` can never bind it; everything else is decided per file by
+     * [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeAliasNames], where the
+     * namespace case is settled against the bind's own symbols.
+     *
+     * Stamped by [indexSourceFile], i.e. once per PARSE — and a parse is content-cached
+     * across compiles (`CrawlParseCache`), so a warm rebuild inherits it. Body property,
+     * excluded from equals/copy like [nodeCount].
+     */
+    var nestedEnumOrTypeAliasDecls: List<Node> = emptyList()
 }
 
 // ===========================================================================

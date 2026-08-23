@@ -594,9 +594,21 @@ fun indexSourceFile(sourceFile: SourceFile) {
         (buf[i] as NodeBase).parent = sourceFile
         stack.add(buf[i])
     }
+    var nested: ArrayList<Node>? = null
     while (stack.isNotEmpty()) {
         val node = stack.removeAt(stack.size - 1)
         (node as NodeBase).nodeId = nextId++
+        // (INC.16) two int compares per node, on the walk that already stamps the
+        // parent link this test needs. A decl whose parent IS the SourceFile lands
+        // in the root lexical scope, which ALIASES file locals, so `declareLexical`
+        // can never bind it — anything else might.
+        val k = node.kindId
+        if ((k == NodeKind.TYPE_ALIAS_DECLARATION || k == NodeKind.ENUM_DECLARATION) &&
+            node.parent !== sourceFile
+        ) {
+            val list = nested ?: ArrayList<Node>(4).also { nested = it }
+            list.add(node)
+        }
         // M0 census (inert off --passTiming): node-kind histogram for the
         // dispatch-order / kind-table design.
         if (PassTiming.detailed) PassTiming.noteNodeKind(node)
@@ -608,6 +620,7 @@ fun indexSourceFile(sourceFile: SourceFile) {
         }
     }
     sourceFile.nodeCount = nextId
+    sourceFile.nestedEnumOrTypeAliasDecls = nested ?: emptyList()
 }
 
 /**

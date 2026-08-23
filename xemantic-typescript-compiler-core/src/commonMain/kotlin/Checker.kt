@@ -13799,6 +13799,8 @@ class Checker(
         // relation a value-less enum. `computeEnumSymbolValues` is id-keyed and
         // scope-symbol ids are a disjoint negative space, so this cannot perturb any
         // conventionally-bound enum's values.
+        LexDefer.skippedFiles = 0
+        LexDefer.skipViolations = 0
         val blockScoped = HashSet<String>()
         // (CHK.19) round 945: the block-scoped TYPE-ALIAS census rides this SAME sweep — a
         // second pass over every scope of every file would be the identical walk for one more
@@ -13806,10 +13808,45 @@ class Checker(
         // probe on the hot type-reference path.
         val blockScopedAliases = HashSet<String>()
         for (result in binderResults) {
+            // (INC.16) THE ONE READER THAT FORCED EVERY FILE'S INV.2(c) TABLES, served
+            // by a PROJECTION instead. `declareLexical` mints a `TypeAlias`- or
+            // `Enum`-flagged scope symbol at exactly two sites — the `TypeAliasDeclaration`
+            // and `EnumDeclaration` arms of `bindLexicalScopes` — and both are gated on
+            // `scope.existing == null`, i.e. on the declaration NOT being one the main
+            // binder bound. So the binder can say, from the declarations alone, whether a
+            // file can contribute at all — and skipping it leaves its tables UNBUILT.
+            //
+            // The two halves are NOT symmetric: the alias half wants a NAME, which the
+            // binder hands over directly, while the enum half wants the scope-space SYMBOL
+            // (`computeEnumSymbolValues` is id-keyed) and that exists only inside the
+            // tables. Only an `enum` reaching a fresh scope therefore forces a build —
+            // 2 files of tsc's 78.
+            //
+            // Round 609's rule is untouched: this loop still iterates `binderResults`, not
+            // `checkedResults` — the skip is a property of the FILE's own syntax, not of
+            // the partition, so a narrowed build and a full one census the same set.
+            //
+            // The candidate list is stamped by `indexSourceFile` (once per parse, and a
+            // parse is content-cached); the namespace case is settled in the binder against
+            // its own symbols, because a namespace scope ALIASES the merged `exports` and
+            // that is not a syntactic fact. [LexDefer.verifySkip] is the positive control:
+            // it keeps walking every file and counts what the skip would have missed.
+            blockScopedAliases.addAll(result.scopeTypeAliasNames)
+            val skippable = !result.declaresScopeEnum
+            if (skippable) {
+                LexDefer.skippedFiles++
+                if (!LexDefer.verifySkip) continue
+            }
             for ((_, scope) in result.lexicalScopes) {
                 for ((symName, symbol) in scope.symbols) {
-                    if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) blockScopedAliases.add(symName)
+                    if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
+                        // The alias half is served WITHOUT the tables; under the control
+                        // this is where a name the projection missed would show up.
+                        if (symName !in result.scopeTypeAliasNames) LexDefer.skipViolations++
+                        blockScopedAliases.add(symName)
+                    }
                     if (!symbol.flags.hasAny(SymbolFlags.Enum)) continue
+                    if (skippable) LexDefer.skipViolations++
                     blockScoped.add(symName)
                     computeEnumSymbolValues(symbol)
                 }

@@ -38,13 +38,74 @@ class BinderResult(
     /** Module instance states for namespace/module declarations. */
     val moduleInstanceStates: MutableMap<Long, ModuleInstanceState>,
     /**
+     * (INC.16) Whether any `enum` in this file reaches a FRESH INV.2(c) scope, i.e.
+     * whether `init:computeAllEnumValues`' scope-space census has to BUILD this file's
+     * tables at all.
+     *
+     * The enum half is the only half that needs them: the census does not merely record
+     * the name, it calls `computeEnumSymbolValues` on the scope-space SYMBOL, and that
+     * symbol exists nowhere else. The type-alias half needs a name only, which
+     * [scopeTypeAliasNames] carries — so a file whose block-scoped declarations are all
+     * type aliases is censused WITHOUT its tables ever being built.
+     *
+     * False for 76 of tsc's own 78 sources. Decided from
+     * [SourceFile.nestedEnumOrTypeAliasDecls] (a fact about the tree, stamped once per
+     * parse) plus the bind's OWN namespace symbols, because the namespace case is not a
+     * syntactic one: a `namespace` scope ALIASES the merged `exports`, so
+     * `declareLexical` skips every name declared in it — but only when that `exports`
+     * table exists.
+     */
+    val declaresScopeEnum: Boolean,
+    /**
+     * (INC.16) The names of this file's `type` declarations that reach a FRESH INV.2(c)
+     * scope — exactly the names `declareLexical` will mint a `TypeAlias`-flagged scope
+     * symbol for, read off the declarations instead of off the scopes.
+     *
+     * Deliberately allowed to OVER-approximate in one shape: a same-named later
+     * declaration in the same fresh scope can overwrite the alias symbol and drop its
+     * `TypeAlias` flag. That only widens `Checker.lexicalBlockScopedTypeAliasNames`,
+     * which is a fast-path NAME GATE whose hit is re-verified against the real scope
+     * symbol's flags — so a widened gate costs a lookup and can change no answer.
+     */
+    val scopeTypeAliasNames: Set<String>,
+    /**
+     * (INC.16) Builds the INV.2(c) tables. Invoked on FIRST ASK (the shipped
+     * behaviour), or at the end of `Binder.bind` when [LexDefer.deferred] is false.
+     */
+    lexicalScopeBuilder: () -> Map<Int, LexicalScope>,
+) {
+
+    /**
      * INV.2(c): per-node lexical scopes, keyed by the scope-owner node's
      * `nodeId` (the SourceFile root is key 0). Built by the ADDITIVE
      * lexical-binding pass after conventional binding; empty for unindexed
      * (hand-constructed) trees.
+     *
+     * (INC.16) Built on FIRST ASK; `LexDefer.deferred = false` restores the eager
+     * build at the end of `Binder.bind`, which is the arm the differential runs
+     * against. `lazy` rather than a nullable field for the reason [flowGraph]
+     * documents: `--shareBind` hands one set of [BinderResult]s to N worker threads
+     * at once, so two of them can ask the same file at the same moment.
      */
-    val lexicalScopes: Map<Int, LexicalScope>,
-) {
+    val lexicalScopes: Map<Int, LexicalScope> get() {
+        if (!lazyLexicalScopes.isInitialized()) {
+            val v = lazyLexicalScopes.value
+            LexDefer.recordLazy()
+            return v
+        }
+        return lazyLexicalScopes.value
+    }
+
+    /** Whether [lexicalScopes] has been asked for yet — the pin's instrument. */
+    val lexicalScopesBuilt: Boolean get() = lazyLexicalScopes.isInitialized()
+
+    private val lazyLexicalScopes = lazy(lexicalScopeBuilder)
+
+    /** The eager path: build now, and count it as eager rather than as a first ask. */
+    internal fun forceLexicalScopesEagerly() {
+        lazyLexicalScopes.value
+        LexDefer.eagerBuilds++
+    }
 
     /**
      * (INC.9) The control-flow graph, built on FIRST ASK and never before.
@@ -116,8 +177,33 @@ class BinderResult(
  */
 class Binder(private val options: CompilerOptions) {
 
+    private companion object {
+        /** (INC.16) the answer for the 76-of-78 case, allocated once. */
+        val NO_SCOPE_TYPE_DECLARATIONS: Pair<Boolean, Set<String>> = Pair(false, emptySet())
+    }
+
     private val nodeToSymbol = mutableMapOf<Long, Symbol>()
     private val moduleInstanceStates = mutableMapOf<Long, ModuleInstanceState>()
+
+    /**
+     * (INC.16) THE FILE'S OWN `ModuleDeclaration` / `EnumDeclaration` symbols, keyed by
+     * `nodeId` — the two things [bindLexicalScopes] needs from the conventional bind.
+     *
+     * It exists because [nodeToSymbol] is shared by every [BinderResult] from one
+     * [Binder] and its `(pos, end)` keys COLLIDE ACROSS FILES, last-wins in bind order
+     * (CLAUDE.md). Reading it from a scope build that runs at the END of `bind` is
+     * usually right by accident — the file just wrote its own entries — and reading it
+     * from a build DEFERRED to first ask would not be: a later file's declaration at the
+     * same offsets would answer instead, aliasing a foreign namespace's `exports` into
+     * this file's scope chain. `nodeId` is per-file and dense, so this table cannot
+     * collide, and the deferral is order-independent BY CONSTRUCTION rather than by a
+     * measured zero (round (INC.19)'s lesson: an interned write whose winner depends on
+     * dispatch order fails as a plausible answer, never as an error).
+     *
+     * Only the CURRENT file's is live; each `bind` installs a fresh one and the deferred
+     * builder captures it.
+     */
+    private var lexOwnerSymbols: MutableMap<Int, Symbol> = HashMap()
 
     /** The current symbol table where new declarations are added. */
     private var currentScope: SymbolTable = symbolTable()
@@ -128,6 +214,9 @@ class Binder(private val options: CompilerOptions) {
     fun bind(sourceFile: SourceFile): BinderResult {
         val fileLocals = symbolTable()
         currentScope = fileLocals
+        // (INC.16) fresh per file — the deferred scope builder captures THIS one.
+        val lexOwners = HashMap<Int, Symbol>()
+        lexOwnerSymbols = lexOwners
         // (FRONT.2) round 801 — the three components of a bind, partitioned.
         // Exhaustive by construction (this function is these three statements)
         // and 3 timestamp pairs per FILE, so unlike every per-node partition in
@@ -135,19 +224,79 @@ class Binder(private val options: CompilerOptions) {
         val feD = FrontEnd.t()
         bindStatements(sourceFile.statements)
         FrontEnd.close(FrontEnd.BIND_DECL, feD)
-        val feL = FrontEnd.t()
-        val lexicalScopes = bindLexicalScopes(sourceFile, fileLocals)
-        FrontEnd.close(FrontEnd.BIND_LEX, feL)
-        // (WARM.28) the denominator for an EAGERLY built per-scope filter: a lazy
-        // one is written during checking, which `--shareBind` (round 883) hands to
-        // N worker threads at once, so the sound construction is here — and then
-        // it is paid for EVERY scope, not only the ones a query reaches.
-        if (MapCensus.on) MapCensus.lexBound(lexicalScopes)
         // (INC.9) The flow graph is NOT built here — [BinderResult.flowGraph]
         // builds it on first ask. A `recheckOnly` partition asks for one file's,
         // a full build asks for every checked file's, and nothing has ever asked
         // for a real-lib `.d.ts` file's.
-        return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates, lexicalScopes)
+        val scopeTypes = scopeTypeDeclarations(sourceFile, lexOwners)
+        val result = BinderResult(
+            sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates,
+            declaresScopeEnum = scopeTypes.first,
+            scopeTypeAliasNames = scopeTypes.second,
+        ) {
+            // The span stays [FrontEnd.BIND_LEX] wherever the build lands, so a
+            // cross-round comparison of the scope walk still compares the same
+            // quantity; what MOVES is the phase it is charged to.
+            val feL = FrontEnd.t()
+            val scopes = bindLexicalScopes(sourceFile, fileLocals, lexOwners)
+            FrontEnd.close(FrontEnd.BIND_LEX, feL)
+            // (WARM.28) the denominator for an EAGERLY built per-scope filter.
+            if (MapCensus.on) MapCensus.lexBound(scopes)
+            scopes
+        }
+        if (!LexDefer.deferred) result.forceLexicalScopesEagerly()
+        return result
+    }
+
+    /**
+     * (INC.16) See [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeAliasNames].
+     * Runs after [bindStatements], so [lexOwners] already holds every namespace/enum
+     * symbol this file's conventional bind produced.
+     *
+     * A recorded declaration's nearest LEXICAL scope owner is found by ascending through
+     * the one node kind that owns no scope on that path, [ModuleBlock]. Reaching a
+     * [ModuleDeclaration] whose innermost segment symbol has an `exports` table means the
+     * scope ALIASES it and `declareLexical` will skip the name; reaching the [SourceFile]
+     * means the root scope, which aliases file locals. Anything else — a block, a
+     * function, a class, a namespace the bind never gave an `exports` — is a fresh scope,
+     * which is where and only where a scope-space symbol is minted.
+     */
+    private fun scopeTypeDeclarations(
+        sourceFile: SourceFile,
+        lexOwners: Map<Int, Symbol>,
+    ): Pair<Boolean, Set<String>> {
+        val decls = sourceFile.nestedEnumOrTypeAliasDecls
+        if (decls.isEmpty()) return NO_SCOPE_TYPE_DECLARATIONS
+        var hasEnum = false
+        var aliases: MutableSet<String>? = null
+        for (decl in decls) {
+            if (!reachesFreshLexicalScope(decl, lexOwners)) continue
+            when (decl) {
+                is EnumDeclaration -> hasEnum = true
+                is TypeAliasDeclaration -> {
+                    val set = aliases ?: HashSet<String>(4).also { aliases = it }
+                    set.add(decl.name.text)
+                }
+                else -> {}
+            }
+        }
+        return if (!hasEnum && aliases == null) NO_SCOPE_TYPE_DECLARATIONS
+        else Pair(hasEnum, aliases ?: emptySet())
+    }
+
+    /** See [scopeTypeDeclarations]. */
+    private fun reachesFreshLexicalScope(decl: Node, lexOwners: Map<Int, Symbol>): Boolean {
+        var cur: Node? = (decl as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            when (cur) {
+                is SourceFile -> return false
+                is ModuleBlock -> cur = cur.parent
+                is ModuleDeclaration -> return lexOwners[cur.nodeId]?.exports == null
+                else -> return true
+            }
+        }
+        return false
     }
 
     private fun bindStatements(statements: List<Statement>) {
@@ -269,6 +418,7 @@ class Binder(private val options: CompilerOptions) {
             flags = flags or SymbolFlags.ExportValue
         }
         val symbol = declareSymbol(currentScope, decl.name.text, flags, decl)
+        recordLexOwner(decl, symbol)
 
         // Bind enum members into the enum's exports table
         if (symbol.exports == null) symbol.exports = symbolTable()
@@ -336,6 +486,8 @@ class Binder(private val options: CompilerOptions) {
             currentScope = sym.exports!!
             currentContainer = sym
         }
+
+        if (sym != null) recordLexOwner(decl, sym)
 
         // Bind the body in the innermost namespace's exports scope
         val body = decl.body
@@ -472,6 +624,12 @@ class Binder(private val options: CompilerOptions) {
         }
         recordNodeSymbol(declarationNode, symbol)
         return symbol
+    }
+
+    /** (INC.16) See [lexOwnerSymbols]. A synthesized node (nodeId < 0) is not recorded. */
+    private fun recordLexOwner(node: Node, symbol: Symbol) {
+        val id = (node as NodeBase).nodeId
+        if (id >= 0) lexOwnerSymbols[id] = symbol
     }
 
     private fun recordNodeSymbol(node: Node, symbol: Symbol) {
@@ -632,6 +790,7 @@ class Binder(private val options: CompilerOptions) {
     private fun bindLexicalScopes(
         sourceFile: SourceFile,
         fileLocals: SymbolTable,
+        lexOwners: Map<Int, Symbol>,
     ): MutableMap<Int, LexicalScope> {
         val scopes = HashMap<Int, LexicalScope>()
         // Unindexed (hand-constructed) tree: INV.2(a) nodeIds are absent, so
@@ -743,7 +902,7 @@ class Binder(private val options: CompilerOptions) {
                             else -> {}
                         }
                     }
-                    pushChildren(node, moduleLexicalScope(node, scope, scopes))
+                    pushChildren(node, moduleLexicalScope(node, scope, scopes, lexOwners))
                 }
                 is ImportEqualsDeclaration -> {
                     // Nested imports are grammar errors (TS1232) tsc still binds.
@@ -837,7 +996,7 @@ class Binder(private val options: CompilerOptions) {
                     pushChildren(node, aliasScope)
                 }
                 is EnumDeclaration -> {
-                    var enumSymbol = nodeToSymbol[nodeKey(node)]
+                    var enumSymbol = lexOwners[node.nodeId]
                     if (scope.existing == null) {
                         val flags = if (ModifierFlag.Const in node.modifiers) SymbolFlags.ConstEnum
                                     else SymbolFlags.RegularEnum
@@ -891,6 +1050,7 @@ class Binder(private val options: CompilerOptions) {
         node: ModuleDeclaration,
         outer: LexicalScope,
         scopes: MutableMap<Int, LexicalScope>,
+        lexOwners: Map<Int, Symbol>,
     ): LexicalScope {
         var segCount = 1
         var cur: Expression = node.name
@@ -899,7 +1059,7 @@ class Binder(private val options: CompilerOptions) {
             cur = cur.expression
         }
         val segSymbols = arrayOfNulls<Symbol>(segCount)
-        var sym = nodeToSymbol[nodeKey(node)]
+        var sym = lexOwners[node.nodeId]
         for (i in segCount - 1 downTo 0) {
             segSymbols[i] = sym
             sym = sym?.parent
