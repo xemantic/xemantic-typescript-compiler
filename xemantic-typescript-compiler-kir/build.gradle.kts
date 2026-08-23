@@ -166,7 +166,7 @@ val kirNativeWork: Provider<Directory> = layout.buildDirectory.dir("kir-native")
  * generator replaces exactly what Kotlin/Native lacks and fails on any anchor it
  * cannot find. See `scripts/kir_native_runtime.py`.
  */
-val kirNativeRuntimeSource by tasks.registering {
+val kirNativeRuntimeSource = tasks.register("kirNativeRuntimeSource") {
     val generator = rootProject.layout.projectDirectory.file("scripts/kir_native_runtime.py")
     val jvmRuntime = layout.projectDirectory
         .file("src/jvmMain/kotlin/kir/runtime/JsRuntime.kt")
@@ -184,7 +184,7 @@ val kirNativeRuntimeSource by tasks.registering {
 }
 
 /** The runtime as a klib, which every generated native program links against. */
-val kirNativeRuntimeKlib by tasks.registering {
+val kirNativeRuntimeKlib = tasks.register("kirNativeRuntimeKlib") {
     dependsOn(kirNativeRuntimeSource)
     val generated = kirNativeWork.map { it.file("JsRuntime.kt") }
     val klib = kirNativeWork.map { it.file("jsruntime.klib") }
@@ -201,7 +201,7 @@ val kirNativeRuntimeKlib by tasks.registering {
 }
 
 /** Compiles a TypeScript project to a Kotlin/Native binary through the KIR backend. */
-val kirNativeCompile by tasks.registering {
+tasks.register("kirNativeCompile") {
     group = "kir"
     description = "Compiles a TypeScript project to a Kotlin/Native binary " +
         "(-PkirProject=<dir> -PkirEntry=<file> -PkirOutput=<path> [-PkirLibrary])"

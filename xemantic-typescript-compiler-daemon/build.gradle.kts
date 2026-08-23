@@ -84,7 +84,7 @@ kotlin {
  * Wired into `assemble` because a launcher that works only after an extra,
  * undocumented task is a launcher that appears broken.
  */
-val xtscLib by tasks.registering(Sync::class) {
+val xtscLib = tasks.register<Sync>("xtscLib") {
     group = "build"
     description = "Stages the daemon jar and its runtime classpath as a distribution-shaped lib dir."
     from(tasks.named("jvmJar"))
