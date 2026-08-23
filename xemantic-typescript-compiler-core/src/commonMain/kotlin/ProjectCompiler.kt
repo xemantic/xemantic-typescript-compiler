@@ -134,6 +134,14 @@ class ProjectCompiler(private val vfs: Vfs) {
         outDir: String? = null,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
+        /** (INC.17) **EXPERIMENTAL, and nothing in a shipped path passes one.** When
+         *  non-null, this build hands its LIVE program back here, so a later question
+         *  about a file outside [recheckOnly] can be answered by re-entering the
+         *  partition-dependent checker passes instead of building. Retains the whole
+         *  checker, and its CAPTURE channel is known to diverge from a fresh build in
+         *  8 of 75 files of the compiler profile — read [ProgramRecheck]'s banner
+         *  before wiring this to anything. */
+        recheckHolder: RecheckHolder? = null,
     ): Result {
         // (INC.4) A partition may not EMIT. The Transformer queries the checker it is
         // handed (`isReferencedAliasDeclaration` and friends decide import elision),
@@ -251,6 +259,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
             typeCapture = typeCapture,
             checkedSink = checkedSink,
+            recheckHolder = recheckHolder,
         )
         // INV.7(d2): top-level declaration names per file (from the crawl parses)
         // for the shared-name full-rebuild bail.
@@ -302,6 +311,18 @@ class ProjectCompiler(private val vfs: Vfs) {
         val sharedNameFiles = moduleFiles.filterTo(HashSet()) { p2 ->
             topLevelNames(p2).any { it in Checker.KNOWN_GLOBALS || it in scriptTopNames }
         }
+        // (INC.17) A project-level answer is not the checker's answer: the config's
+        // own rows and the type-acquisition rows precede it, and TS5055 is filtered
+        // when an outDir was withheld. Wrapping the core handle here is what makes a
+        // recheck substitutable for a `build` — an unwrapped one would silently drop
+        // a malformed-tsconfig error the moment a host started using it.
+        recheckHolder?.recheck?.let { inner ->
+            recheckHolder.recheck = ProjectRecheck(
+                inner = inner,
+                prefix = config.diagnostics + typeDiagnostics,
+                dropOverwriteCheck = config.options.outDir != null,
+            )
+        }
         return Result(
             configPath = configPath,
             rootFiles = rootFiles,
@@ -320,6 +341,43 @@ class ProjectCompiler(private val vfs: Vfs) {
             capturedScopes = result.capturedScopes,
             capturedSignatures = result.capturedSignatures,
         )
+    }
+
+    /**
+     * (INC.17) The PROJECT's live program: the core's [ProgramRecheck] plus the two
+     * things `build` adds to a compile's diagnostics before returning them — the
+     * config's own rows (an unreadable or malformed `tsconfig.json`, a bad
+     * `extends`) and the type-acquisition rows, both of which precede the
+     * compiler's; and the TS5055 same-directory-overwrite filter that a withheld
+     * `outDir` would otherwise make spurious.
+     *
+     * The prefix is a property of the PROGRAM, not of the partition, so it is
+     * captured once at the build that produced the handle and prepended to every
+     * later answer — exactly as the build prepends it.
+     */
+    private class ProjectRecheck(
+        private val inner: ProgramRecheck,
+        private val prefix: List<Diagnostic>,
+        private val dropOverwriteCheck: Boolean,
+    ) : ProgramRecheck {
+
+        override val walkedFiles: Set<String> get() = inner.walkedFiles
+        override val replayedPasses: Set<String> get() = inner.replayedPasses
+
+        override fun recheck(files: Set<String>, capture: TypeCaptureRequest?): RecheckAnswer {
+            val answer = inner.recheck(files, capture)
+            val rows =
+                if (dropOverwriteCheck) answer.diagnostics.filter { it.code != 5055 }
+                else answer.diagnostics
+            return RecheckAnswer(
+                diagnostics = prefix + rows,
+                capturedTypes = answer.capturedTypes,
+                capturedDefinitions = answer.capturedDefinitions,
+                capturedMembers = answer.capturedMembers,
+                capturedScopes = answer.capturedScopes,
+                capturedSignatures = answer.capturedSignatures,
+            )
+        }
     }
 
     /**

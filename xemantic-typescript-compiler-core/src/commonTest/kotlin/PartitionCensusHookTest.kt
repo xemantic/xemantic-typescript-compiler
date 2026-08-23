@@ -124,7 +124,20 @@ class PartitionCensusHookTest {
         // population of `for (result in checkedResults)` passes.
         val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
         assert(reads.size >= 50)
-        assert("checkSubsequentVarTypes" in reads)
+        assert("checkSubsequentVarTypesCrossFile" in reads)
+    }
+
+    @Test
+    fun `a MIXED pass is split, so the census attributes each half to its own row`() {
+        // (INC.17) TS2403 used to be ONE `checkSubsequentVarTypes` pass whose two
+        // halves have OPPOSITE partition behaviour, and the census read their SUM:
+        // 14.90 ms recorded as partition-DEPENDENT, of which the `binderResults`
+        // half — the whole 14.90 — is partition-INVARIANT. Split, each half is
+        // classified on its own, and THIS is the pin that says so: the two names
+        // must land on opposite sides of the census.
+        val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
+        assert("checkSubsequentVarTypesCrossFile" in reads)
+        assert("checkSubsequentVarTypesPerFile" !in reads)
     }
 
     @Test

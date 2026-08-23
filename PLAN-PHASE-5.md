@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.19) — the re-entrant replay is 3.06x, it loses a type-parameter constraint on 8 of 75 files, and the DIAGNOSTICS sweep never noticed
+
+**WHAT THIS ROUND DID.** Closed out (INC.17) step 2, which a previous session left
+uncommitted mid-flight. The re-entrant replay — answer a semantic query about a
+file the checker was never asked about by re-entering only the partition-dependent
+`init` passes instead of rebuilding — is **built, measured, graded, and REFUSED as
+a default path.** It is landed EXPERIMENTAL and opt-in, the way `--shareBind` and
+`--mergeClone` were landed: available, off, with its known failing case written
+down at every entry point.
+
+**THE PRIZE IS REAL.** On tsc's own 78 sources, `replay=12572 ms` against
+`freshBuilds=38498 ms` over 75 questions = **3.06x**. It is exactly the shape step
+1's census predicted: the floor's **211 partition-invariant passes carry 350.89
+ms**, the 205 dependent ones **15.59 ms**, and 204 of those cost **0.69 ms**
+between them.
+
+**WHAT REFUSES IT.** `scripts/replay-differential.sh` reads
+
+```
+compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
+          typeSpans=373879 definitionSpans=352713
+DIVERGED: 8 of 75 file(s)
+```
+
+The **diagnostics half is untouched** — every row agrees, on both arms. The
+**capture** half diverges in 8 of 75 files, and the shape is a **lost
+type-parameter constraint**: the replay renders `<T extends Node, U>` where a
+fresh build renders `<T extends Node, U extends T>`. That is a plausible-looking
+type, never an error, so it fails in the silent direction. (INC.2) refused capture
+narrowing over **45 divergent spans**; 8 divergent FILES is far past that
+precedent, and a wrong hover is worse than a slow one.
+
+**THE TRANSFERABLE OUTPUT — and it is a CLAUDE.md entry.** *A partition or replay
+change must be graded on the CAPTURE sweep, not only the diagnostics sweep.* On
+the tsc profile the diagnostics comparison was **completely silent** about an
+8-file defect. (INC.18)'s arm a3 predicted exactly this and was recorded as a
+NEGATIVE; this is the same finding with a real defect behind it.
+
+**WHAT LANDED.** The mechanism, marked EXPERIMENTAL at `ProgramRecheck`,
+`RecheckHolder`, both `recheckHolder` parameters and
+`Checker.recheckAdditionalFiles`, each carrying the divergence and the "do not
+serve hover from this" instruction. `scripts/replay-differential.sh` +
+`ReplayDifferentialMain` (the oracle — (INC.19) starts from it rather than
+rebuilding it). `ProjectRecheckTest` pins **what the replay actually does**: the
+diagnostics channel agrees, the walked set grows, three files cost ONE build
+(counted on `tsconfig.json` reads, with the seed's own read as the live-instrument
+control), the arming is behaviour-free, and the capture channel is asserted to
+EXIST and deliberately **not** asserted equivalent — a soundness pin there would
+be false. And the `checkSubsequentVarTypes` split the census demanded: one MIXED
+pass whose two halves have OPPOSITE partition behaviour, whose SUM the census was
+reading as 14.90 ms of replay cost. Split, the replay's fixed cost is 0.69 ms, and
+`PartitionCensusHookTest` now pins both halves on opposite sides of the census.
+
+**THE OPT-IN IS THE LOAD-BEARING CHECK, and here is how it was verified.**
+`grep -rn 'recheckHolder\|RecheckHolder\|retainForRecheck\|recheckAdditionalFiles'`
+over every module: the only non-declaration call sites are `ProjectRecheckTest`
+and `ReplayDifferentialMain`. Every parameter defaults to `null`;
+`retainForRecheck = recheckHolder != null`; `recheckAdditionalFiles` `require`s
+`retainForRecheck`. `Project` — the embedding API a host uses — does not reference
+the type at all. And the property is now PINNED rather than argued: arming a
+holder must not change the build's own diagnostics, narrowed or whole-program,
+with a control asserting the arming actually happened (round 873's rule — two
+unarmed builds would agree and prove nothing).
+
+**WHAT DID NOT WORK.** Two attribution arms, both from the previous session, both
+recorded here so nobody spends a day rediscovering them. The FIRST died silently
+with no output; the probable cause is daemon starvation (BUILD.1 — two multi-hour
+daemons were holding ~4.9 GB). The SECOND — `replayAllPasses`, re-entering EVERY
+pass — ran **~100x over budget**: 53 minutes of CPU over **7** targets without
+finishing, against ~50 s of total compute for the 205-pass replay over **75**.
+That ratio is itself evidence: it is the signature of a pass that appends to a
+side table or re-emits on each replay, i.e. hypothesis (b) below. The arm is kept
+(`PassTiming.replayAllPasses`) and documented as an experiment, not restarted.
+
+**WHAT (INC.19) INHERITS.** Two live hypotheses — the replay SET is too small (a
+dependent pass classified invariant, because the classification measures *reads
+the partition* where soundness needs *its OUTPUT depends on the partition*), or
+replaying at all is non-idempotent. The named next instrument is a **BISECTION
+over the replay set** — which passes, added to the 205, repair the 8 files — which
+is O(log n) builds against the all-passes arm's unbounded cost and separates the
+two hypotheses directly.
+
 ### Round (INC.18) — the partition gate was VACUOUS on every profile this repo has, and it is now armed and PROVEN able to fail
 
 **THE MEASUREMENT THAT IS THE ROUND.** `scripts/partition-equivalence.sh` is the
@@ -2398,8 +2480,8 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `checker.ts`). A host knows its open buffers and this layer does not.
   `docs/language-service.md` §§ 3, 3a, 13, 14.
 
-- [ ] **(INC.17) THE RE-ENTRANT CHECKER — STEP 1 (THE CENSUS) IS DONE 2026-08-23, AND
-  IT SAYS *GO* ON THE PRIZE AND *STOP* ON THE GATE.** `prepare` collects the floor for
+- [x] **(INC.17) THE RE-ENTRANT CHECKER — BUILT, MEASURED AT 3.06x, AND **REFUSED AS A
+  DEFAULT PATH** 2026-08-23. STEP 1 (THE CENSUS) STANDS.** `prepare` collects the floor for
   files a HOST NAMED; a query about a file it did not name still pays the whole
   342-365 ms. Measured with `scripts/partition-census.sh` (a RUNTIME classification —
   `checkedResults` is a getter recording `PassTiming.currentPass`, so it cannot be
@@ -2438,6 +2520,59 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   needs *its OUTPUT depends on the partition*; and (INC.18)'s arm a3 shows the one
   round-609 collector it tried is invisible to a DIAGNOSTICS gate in BOTH arms (it is
   `capture-equivalence.sh`'s to own), so a replay must be graded on both sweeps.
+
+  **STEP 2 IS BUILT AND IT IS REFUSED. THE PRIZE IS REAL: 3.06x** on tsc's own 78
+  sources — `replay=12572 ms` against `freshBuilds=38498 ms` over 75 questions.
+  The mechanism is in the tree and OPT-IN by construction (`Recheck.kt`,
+  `Checker.recheckAdditionalFiles`, `build(recheckHolder = ...)`); nothing in a
+  shipped path passes a holder and `Project` does not know the type exists.
+  **WHAT REFUSES IT is the second sweep, exactly as (INC.18)'s arm a3 predicted.**
+  `scripts/replay-differential.sh` reads
+  `compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5 typeSpans=373879
+  definitionSpans=352713` and then **`DIVERGED: 8 of 75 file(s)`** — with the
+  DIAGNOSTICS half completely untouched. The shape is a **lost type-parameter
+  constraint**: the replay renders `<T extends Node, U>` where a fresh build renders
+  `<T extends Node, U extends T>`. A wrong hover is worse than a slow one, and
+  (INC.2) set the precedent by refusing capture narrowing over 45 divergent spans;
+  8 divergent FILES is far past it.
+  **WHAT LANDED ANYWAY**, so (INC.19) starts from an oracle rather than rebuilding
+  one: the mechanism marked EXPERIMENTAL at every entry point, `ProjectRecheckTest`
+  pinning what it ACTUALLY does (diagnostics equivalence, the build-count receipt,
+  the behaviour-free arming — and deliberately NOT capture equivalence, which would
+  be a false pin), `scripts/replay-differential.sh` + `ReplayDifferentialMain`, and
+  the `checkSubsequentVarTypes` split the census demanded (15.59 -> 0.69 ms of
+  replay cost), pinned on both sides by `PartitionCensusHookTest`.
+  **THE ATTRIBUTION ARM THAT DID NOT WORK, so nobody re-runs it:** re-entering ALL
+  passes over **7** targets burned **53 minutes of CPU without finishing**, against
+  ~50 s of total compute for the 205-pass replay over **75** targets — ~100x, the
+  signature of a pass that appends to a side table or re-emits per replay. Killed,
+  not completed. (INC.19)'s instrument is a BISECTION, not that arm.
+
+- [ ] **(INC.19) THE REPLAY DIVERGES ON 8 OF 75 FILES AND THE NEXT INSTRUMENT IS A
+  BISECTION, NOT ANOTHER ALL-PASSES ARM.** (INC.17)'s successor. Three numbers it
+  starts from: the prize is **3.06x** (12,572 ms vs 38,498 ms over 75 questions);
+  the floor's **211 partition-invariant passes carry 350.89 ms** while the 205
+  dependent ones cost **15.59 ms** (204 of them 0.69 ms between them); and the
+  differential reads **`DIVERGED: 8 of 75 file(s)`**, captures only, diagnostics
+  clean.
+  **TWO LIVE HYPOTHESES, and they call for opposite work.** (a) *The replay SET is
+  too small* — a partition-DEPENDENT pass is classified invariant, because the
+  classification measures *reads the partition* where soundness needs *its OUTPUT
+  depends on the partition*, and the two come apart at every spine-produces /
+  program-wide-pass-consumes pair. (b) *Replaying at all is non-idempotent* — a
+  replayed pass appends to a side table or re-emits, which is what the 100x CPU
+  blow-up of the all-passes arm points at.
+  **THE INSTRUMENT: bisect the replay set.** Which passes, ADDED to the 205, repair
+  the 8 files? That is O(log n) builds over a set of 211 candidates against the
+  all-passes arm's unbounded cost, and it separates (a) from (b) directly — under
+  (a) some addition repairs them, under (b) additions make it worse. Point it at
+  the 8 named files with `scripts/replay-differential.sh realism 0 '' <suffixes>`,
+  which narrows what is COMPARED without narrowing what the seed walked.
+  **THE SHAPE TO LOOK AT FIRST** is whatever writes a type parameter's constraint
+  into a scope the renderer reads — a lost constraint is a *scope* that was filled
+  by a pass the replay skipped, not a wrong type.
+  **DO NOT** wire the recheck into `Project` before this closes; `Recheck.kt`'s
+  banner says so and `ProjectRecheckTest` pins that nothing reaches it by default.
 
 - [x] **(INC.18) THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS —
   THE FIXTURE THAT RE-ARMS IT LANDED 2026-08-23, AND IT IS PROVEN ABLE TO FAIL.**

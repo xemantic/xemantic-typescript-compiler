@@ -146,6 +146,45 @@ object PassTiming {
      *  behavior — any run using it is an experiment, never a gate. */
     var disabledPasses: Set<String> = emptySet()
 
+    /**
+     * (INC.17) THE RE-ENTRANT REPLAY'S FILTER — when non-null, [pass] runs the
+     * body of a registration ONLY when its name is in this set, and skips every
+     * other one.
+     *
+     * This is what lets `Checker.recheckAdditionalFiles` re-enter the whole
+     * `init` dispatch SEQUENCE — `initSetupPasses()` then `initCheckPasses1()`
+     * through `initCheckPasses8()`, verbatim, in source order — and have only
+     * the partition-DEPENDENT rows execute. Re-entering the sequence rather
+     * than re-listing the dependent passes is the whole point: a hand-kept list
+     * of "the passes to replay, in order" is CLAUDE.md's mirrored-list hazard
+     * (`ccetPrologueMayFire`), and it would drift silently the first time a pass
+     * is added, moved or renamed.
+     *
+     * SEQUENTIAL PATH ONLY, and set/restored inside one call. `Checker` refuses
+     * to arm a recheck beside a partition worker, so no `--workers` run can
+     * observe it. Deliberately NOT routed through the round-848 `ModeLedger`:
+     * that ledger is for CLI flags a `--serve` daemon must restore between
+     * requests, and this is neither a flag nor observable outside one method.
+     */
+    var replayPasses: Set<String>? = null
+
+    /**
+     * (INC.17) EXPERIMENT ARM — when true, `Checker.recheckAdditionalFiles` arms NO
+     * filter and re-enters EVERY `init` pass.
+     *
+     * It exists to attribute a divergence rather than to be shipped. A replay that
+     * diverges from a fresh narrowed build has two candidate causes and they call
+     * for opposite work: the CLASSIFICATION is starving a pass that should have
+     * re-entered (fix the classification), or the checker's caches simply carry the
+     * seed build's first-touch order (the (INC.2)/(INC.5) order-dependence, which no
+     * classification can reach). Running with this on answers which: a divergence
+     * that SURVIVES a full re-entry is not a classification defect.
+     *
+     * Like [disabledPasses] this deliberately changes behaviour — any run using it
+     * is an experiment, never a gate — and it is off in every shipped path.
+     */
+    var replayAllPasses: Boolean = false
+
     /** [censusMode]'s accumulator: per-pass emitted-diagnostic counts summed
      *  across EVERY compile in the process. Deliberately NOT cleared by
      *  [reset] — process-lifetime, so mid-suite tests that reset the regular
@@ -1327,21 +1366,35 @@ object PassTiming {
 internal fun pass(name: String, body: () -> Unit) {
     // M0.1 tail-triage lab: batch-disable (experiment-only; empty by default).
     if (PassTiming.disabledPasses.isNotEmpty() && name in PassTiming.disabledPasses) return
+    // (INC.17) the re-entrant replay re-enters the whole dispatch SEQUENCE and
+    // lets only the partition-dependent rows run. Null on every ordinary compile.
+    PassTiming.replayPasses?.let { if (name !in it) return }
     if (!PassTiming.enabled) {
-        if (PassTiming.censusMode) {
-            // Light census: emitted-diagnostic delta only (no nanos/sets),
-            // into the reset-immune process-lifetime accumulator.
-            val c0 = PassTiming.diagnosticsSize?.invoke() ?: 0
-            try {
-                body()
-            } finally {
-                val c1 = PassTiming.diagnosticsSize?.invoke() ?: 0
-                if (c1 > c0) {
-                    PassTiming.censusByPass[name] = (PassTiming.censusByPass[name] ?: 0) + (c1 - c0)
+        // (INC.17) `currentPass` is maintained UNCONDITIONALLY: the partition-read
+        // recording that classifies a pass as dependent runs on an ordinary
+        // (instrumentation-free) build, because that is the build whose partition a
+        // recheck widens. Two field writes per registration, ~513 per compile.
+        val savedName = PassTiming.currentPass
+        PassTiming.currentPass = name
+        try {
+            if (PassTiming.censusMode) {
+                // Light census: emitted-diagnostic delta only (no nanos/sets),
+                // into the reset-immune process-lifetime accumulator.
+                val c0 = PassTiming.diagnosticsSize?.invoke() ?: 0
+                try {
+                    body()
+                } finally {
+                    val c1 = PassTiming.diagnosticsSize?.invoke() ?: 0
+                    if (c1 > c0) {
+                        PassTiming.censusByPass[name] =
+                            (PassTiming.censusByPass[name] ?: 0) + (c1 - c0)
+                    }
                 }
+            } else {
+                body()
             }
-        } else {
-            body()
+        } finally {
+            PassTiming.currentPass = savedName
         }
         return
     }

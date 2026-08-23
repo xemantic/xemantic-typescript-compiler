@@ -1,0 +1,240 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler
+
+/**
+ * (INC.17) **EXPERIMENTAL — NOT A SHIPPED PATH, AND KNOWN TO ANSWER A WRONG TYPE.**
+ *
+ * A LIVE, ALREADY-BUILT PROGRAM that can be asked about a file its check partition
+ * did not cover — without crawling, parsing, binding or re-running the 211
+ * program-wide checker passes that carry **350.89 ms of a 366.47 ms** narrowed
+ * build's floor. Measured on tsc's own 78 sources: **3.06x** (replay 12,572 ms
+ * against 38,498 ms of fresh narrowed builds, over 75 questions).
+ *
+ * ## READ THIS BEFORE USING IT
+ *
+ * **(INC.17) was REFUSED as a default path and nothing routes through it.** No
+ * caller in this repository passes a [RecheckHolder] outside
+ * `ProjectRecheckTest` and `ReplayDifferentialMain`; the embedding API (`Project`)
+ * does not know this type exists. A wrong hover is worse than a slow one, which is
+ * the same judgement (INC.2) made when it refused capture narrowing over 45
+ * divergent spans.
+ *
+ * `scripts/replay-differential.sh` grades this against a fresh narrowed build, row
+ * for row and span for span. On tsc's own sources it reads:
+ *
+ * ```
+ * compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
+ *           typeSpans=373879 definitionSpans=352713
+ * DIVERGED: 8 of 75 file(s)
+ * ```
+ *
+ * * **the DIAGNOSTIC channel is UNTOUCHED** — every row agrees, on both arms;
+ * * **the CAPTURE channel DIVERGES in 8 of 75 files** — a lost TYPE-PARAMETER
+ *   CONSTRAINT: the replay renders `<T extends Node, U>` where a fresh build
+ *   renders `<T extends Node, U extends T>`.
+ *
+ * So this **MUST NOT** serve hover, quick-info, go-to-definition, completions or
+ * signature help until (INC.19) closes. It is silent in the dangerous direction:
+ * a lost constraint is a plausible-looking type, never an error, and the
+ * diagnostics sweep is completely blind to it.
+ *
+ * ## Why the divergence is not simply a starved pass
+ *
+ * Two hypotheses are live and (INC.19) names the instrument that separates them:
+ * the replay SET is too small (a partition-dependent pass classified invariant),
+ * or replaying at all is non-idempotent. The evidence for the second is that an
+ * attribution arm re-entering ALL passes over 7 targets burned **53 minutes of CPU
+ * without finishing**, against ~50 s for the 205-pass replay over 75 targets —
+ * ~100x, the signature of a pass that appends to a side table or re-emits per
+ * replay. Do not restart that arm; (INC.19)'s instrument is a BISECTION over the
+ * replay set.
+ *
+ * ## Retention
+ *
+ * Handed out ONLY to a caller that asked for one ([RecheckHolder]), because it
+ * retains the whole checker: every `Type`, every `Symbol` and every side table the
+ * build produced. An ordinary compile drops all of that the moment it has its
+ * diagnostics, and must go on doing so.
+ *
+ * ## The contract it is REACHING FOR (and does not yet meet)
+ *
+ * [recheck] answers about the UNION of every file this program has walked, and
+ * that union only grows. The answer for a file is meant to be the answer a build
+ * narrowed to that file gives — the same contract `recheckOnly` itself has (INV.6
+ * sequential equivalence). That holds for diagnostics and does NOT hold for
+ * captures; see above.
+ *
+ * ## What invalidates it
+ *
+ * Any edit to any file in the program. There is no invalidation protocol here and
+ * there deliberately is not one: the program's text is fixed at the build that
+ * produced this handle, and a handle used after an edit would answer about the
+ * previous text with no way for a caller to tell.
+ */
+interface ProgramRecheck {
+
+    /** Every file this program has walked so far — the constructor's partition
+     *  plus every set [recheck] has since added. */
+    val walkedFiles: Set<String>
+
+    /**
+     * The `init` passes a [recheck] re-enters — the RECEIPT of this whole
+     * mechanism, and a COUNT rather than a ms.
+     *
+     * Two witnessed classes, unioned: the passes that READ the check partition,
+     * and the passes that depend on rows already in the diagnostics list (they
+     * retract, rewrite or decide from them, so a replay's new rows must pass under
+     * them too). Both are recorded by the run itself rather than listed, so neither
+     * can drift out of step with the checker.
+     *
+     * It GROWS: a pass whose partition read sits behind a branch the first build
+     * did not enter joins the set the moment it is first seen.
+     */
+    val replayedPasses: Set<String>
+
+    /**
+     * **EXPERIMENTAL.** Make [files] answerable and return the program's
+     * diagnostics for everything walked so far.
+     *
+     * Files already in [walkedFiles] cost nothing — the answer is already held —
+     * so a caller may pass its whole working set every time rather than tracking
+     * what it has asked about.
+     *
+     * **The DIAGNOSTICS in the answer are graded equivalent to a fresh narrowed
+     * build's; the CAPTURES are NOT — they diverge in 8 of 75 files of the compiler
+     * profile (a lost type-parameter constraint). Do not serve a hover from them
+     * until (INC.19) closes.** See [ProgramRecheck].
+     *
+     * @param capture (API.3) a capture request whose spans the re-entry records as
+     *   it walks. Only spans in the FRESH files are visited: the spine walks the
+     *   files being added, not the ones already walked.
+     */
+    fun recheck(files: Set<String>, capture: TypeCaptureRequest? = null): RecheckAnswer
+}
+
+/**
+ * (INC.17) What a [ProgramRecheck.recheck] produced: the same five channels a
+ * [CompilationResult] carries, so a caller can substitute one for the other.
+ */
+class RecheckAnswer(
+    val diagnostics: List<Diagnostic>,
+    val capturedTypes: List<CapturedType> = emptyList(),
+    val capturedDefinitions: List<CapturedDefinition> = emptyList(),
+    val capturedMembers: List<CapturedMembers> = emptyList(),
+    val capturedScopes: List<CapturedScope> = emptyList(),
+    val capturedSignatures: List<CapturedSignatures> = emptyList(),
+)
+
+/**
+ * (INC.17) **EXPERIMENTAL** — the out-parameter by which a caller asks a compile to
+ * hand back its live program. Passing one is the ONLY way to reach
+ * [ProgramRecheck], and nothing in a shipped path does: `grep -rn RecheckHolder`
+ * finds the two parameter declarations, this file, `ProjectRecheckTest` and
+ * `ReplayDifferentialMain`, and nothing else. Read [ProgramRecheck]'s banner
+ * before adding a caller — the capture channel is known wrong.
+ *
+ * A HOLDER rather than a field on [CompilationResult] / `ProjectCompiler.Result`
+ * for two reasons. Both are `data class`es, so a `Checker` reference in one would
+ * put identity semantics into their `equals`; and both are produced by every
+ * compile in the 13k-baseline corpus, where retaining a checker per result would
+ * be a memory cost paid by callers that never asked for it. Passing a holder makes
+ * the retention the CALLER's explicit act.
+ */
+class RecheckHolder {
+    var recheck: ProgramRecheck? = null
+}
+
+/**
+ * (INC.17) A `MutableList` view that reports every dependency on rows ALREADY in
+ * it, so a re-entrant recheck can classify a pass by what it did rather than by
+ * what a source analyzer thinks it does.
+ *
+ * ## What counts as a dependency, and what deliberately does not
+ *
+ * APPENDING is not one: a pass that only calls `add`/`addAll` produces rows, it
+ * does not consume them, and whether those rows are a function of the partition is
+ * what the partition-read classification already answers.
+ *
+ * Everything else is: a read (`get`, `iterator`, `contains`, `indexOf`, `size`, …)
+ * because the pass may be deciding from a row the spine emitted for a file the
+ * partition happened to contain, and every non-appending mutation (`removeAll`,
+ * `removeAt`, `set`, `clear`, `retainAll`, an indexed `add`) because those RETRACT
+ * or REWRITE rows and a replay's new rows would escape them.
+ *
+ * `size` is included on purpose — `ctaDiagnosticsBefore = diagnostics.size` is
+ * exactly how the largest such consumer takes its cutoff — which is why the
+ * `PassTiming` census probe reads the BACKING list instead of this one.
+ *
+ * ## The delegation is the point
+ *
+ * Only the recorded operations are overridden; every other member is forwarded to
+ * [backing] by Kotlin's delegation, so this cannot drift out of step with
+ * `MutableList` the way a hand-written forwarder would. The two lists share ONE
+ * backing store, so a holder of either sees the same rows.
+ */
+internal class RecheckWitnessList(
+    private val backing: MutableList<Diagnostic>,
+    private val note: () -> Unit,
+) : MutableList<Diagnostic> by backing {
+
+    override val size: Int get() { note(); return backing.size }
+    override fun get(index: Int): Diagnostic { note(); return backing[index] }
+    override fun isEmpty(): Boolean { note(); return backing.isEmpty() }
+    override fun contains(element: Diagnostic): Boolean { note(); return backing.contains(element) }
+    override fun containsAll(elements: Collection<Diagnostic>): Boolean {
+        note(); return backing.containsAll(elements)
+    }
+    override fun indexOf(element: Diagnostic): Int { note(); return backing.indexOf(element) }
+    override fun lastIndexOf(element: Diagnostic): Int { note(); return backing.lastIndexOf(element) }
+    override fun iterator(): MutableIterator<Diagnostic> { note(); return backing.iterator() }
+    override fun listIterator(): MutableListIterator<Diagnostic> { note(); return backing.listIterator() }
+    override fun listIterator(index: Int): MutableListIterator<Diagnostic> {
+        note(); return backing.listIterator(index)
+    }
+    override fun subList(fromIndex: Int, toIndex: Int): MutableList<Diagnostic> {
+        note(); return backing.subList(fromIndex, toIndex)
+    }
+    override fun set(index: Int, element: Diagnostic): Diagnostic {
+        note(); return backing.set(index, element)
+    }
+    override fun removeAt(index: Int): Diagnostic { note(); return backing.removeAt(index) }
+    override fun remove(element: Diagnostic): Boolean { note(); return backing.remove(element) }
+    override fun removeAll(elements: Collection<Diagnostic>): Boolean {
+        note(); return backing.removeAll(elements)
+    }
+    override fun retainAll(elements: Collection<Diagnostic>): Boolean {
+        note(); return backing.retainAll(elements)
+    }
+    override fun clear() { note(); backing.clear() }
+    override fun add(index: Int, element: Diagnostic) { note(); backing.add(index, element) }
+    override fun addAll(index: Int, elements: Collection<Diagnostic>): Boolean {
+        note(); return backing.addAll(index, elements)
+    }
+
+    // APPENDING is not a dependency — deliberately NOT overridden, so `add` and the
+    // appending `addAll` go straight to [backing] with no call at all.
+}

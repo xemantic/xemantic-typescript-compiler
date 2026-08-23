@@ -1,3 +1,35 @@
+**HOVERING AROUND A FILE IS NOW FREE AFTER THE FIRST HOVER — A SECOND CARET IN `checker.ts`
+WENT 2,142 ms -> 73, ONE IN `binder.ts` 481 -> 2, AND `fileSemantics` AFTER A HOVER 575 -> 17
+(2026-08-23, (INC.13)).** (INC.12) memoized a capture on its REQUEST, so a repeated question
+was free; every caret-scoped query except `documentHighlightsAt` asked about ONE span, so the
+caret NEXT DOOR still paid the whole ~345 ms floor. `Project.captureAround` now asks about the
+**BUFFER** — `SourceIndex.occurrenceNodes()`, deliberately `documentHighlightsAt`'s own
+population — so `quickInfoAt`, `definitionsAt`, `semanticsAt`/`fileSemantics` and highlights
+are **ONE build per buffer between them**. **The oracle was built FIRST and cost no baseline**,
+which is the part worth copying: at a fixed partition, a span asked ALONE and the same span
+asked as part of its file are the same question, so any divergence is a defect in one arm.
+`scripts/caret-vs-file-capture.sh` reads **EQUIVALENT — 904 sampled spans in 76 files, zero
+divergence in either channel — and it REPLICATES at a second, disjoint sample (979 more spans,
+EQUIVALENT again; 1,883 positions between the two draws)** — and prices the widening at
+**+9 to +17 ms at the median file**, because a narrowed build is mostly FLOOR and extra spans
+are cheap beside it.
+(INC.10)'s first-touch hazard does not fire, and the reason is stated: a capture changes WHERE
+a walk records, not WHEN the compiler resolves a declaration. **The trade is not hidden — the
+FIRST query in a buffer gets dearer, +27% on `binder.ts` and +65% on `checker.ts`, so
+break-even is the SECOND caret**; it was NOT gated on file size, because a size heuristic is a
+guess where the differential is a measurement. **It does NOT widen for a caret on a node that
+is no occurrence** (a call expression, a literal, a `this`): a file-wide request would not
+carry it and an absent capture renders nothing with no error anywhere. **The receipt is a
+COUNT — N carets in one buffer is ONE build, pinned from a FRESH state.** Three ablations
+(never widen -> 4 RED; widen unconditionally -> 2 RED including an independent hover control;
+the shared population drifts -> 1 RED **only after the fixture grew a member-name literal — it
+read 0 RED first, and the pin was BLIND, not the invariant redundant**). Three public claims
+inverted in place, including the **34x batching ratio `docs/language-service.md` advertised to
+hosts, which is GONE** — batching a buffer is a convenience now, not a cost decision. Suite
+**15,683 / 0 / 3**, `cost_gate.py` PASS (+1.02% `mapped.hits`, the same pre-existing drift and
+the expected answer for a round that changed no compiler code), `huge_methods.py --fail-over 0`
+green on core (755 classes) and `-project` (49), `partition-equivalence` **EQUIVALENT on all 78 files** (median narrowed query 385 ms, floor 365, ratio 12.60x — a redraw of the same compiler, which this round did not touch), and both capture censuses **unmoved at their baselines** (5 spans / 3 files, `narrowRendersMoreAny=0`; 286 rows / 49 files, members=285 scopes=0 signatures=1).
+
 **A REPEATED LANGUAGE-SERVICE QUESTION NOW COSTS NOTHING, AND THE REST OF THE WARM PROGRAM IS
 PRICED (2026-08-22, (INC.12)).** Measured first: **(P1) — a second query with the program
 UNCHANGED — is worth the WHOLE ~345 ms floor** (config+crawl+imports ~12 ms, BIND 73-88, the

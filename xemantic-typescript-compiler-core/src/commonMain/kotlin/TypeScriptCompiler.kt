@@ -203,12 +203,21 @@ class TypeScriptCompiler {
          *  too — which `Checker`'s own `require` refuses, here with a message that
          *  names the caller's mistake. */
         checkedSink: CheckedNodeSink? = null,
+        /** (INC.17) **EXPERIMENTAL, and nothing in a shipped path passes one.** When
+         *  non-null, the compile hands its LIVE program back here, so the caller can
+         *  later ask it about a file this partition did not cover without rebuilding
+         *  — see [ProgramRecheck], whose banner records that the CAPTURE channel is
+         *  known wrong. Null, the default, retains nothing, which is every compile
+         *  that did not ask. */
+        recheckHolder: RecheckHolder? = null,
     ): CompilationResult {
         require(checkedSink == null || recheckOnly == null) {
             "a CheckedNodeSink needs the whole program: recheckOnly walks a partition"
         }
         return runWithDeepStack {
-            compileParsedCore(parsed, baseOptions, fileName, recheckOnly, typeCapture, checkedSink)
+            compileParsedCore(
+                parsed, baseOptions, fileName, recheckOnly, typeCapture, checkedSink, recheckHolder,
+            )
         }
     }
 
@@ -224,6 +233,7 @@ class TypeScriptCompiler {
         recheckOnly: Set<String>? = null,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
+        recheckHolder: RecheckHolder? = null,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
@@ -291,6 +301,7 @@ class TypeScriptCompiler {
                 recheckOnly = recheckOnly,
                 typeCapture = typeCapture,
                 checkedSink = checkedSink,
+                recheckHolder = recheckHolder,
             )
         }
     }
@@ -1233,6 +1244,7 @@ class TypeScriptCompiler {
         recheckOnly: Set<String>?,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
+        recheckHolder: RecheckHolder? = null,
     ): CompilationResult {
         // All source files including tsconfig.json (for error baselines)
         val allFiles = parsed.files.map { it.fileName to it.content }
@@ -1412,6 +1424,12 @@ class TypeScriptCompiler {
             importedJsonBaseNames = importedJsonBaseNames,
         )
 
+        // (INC.17) Everything the compile has emitted BEFORE the checker — the option
+        // rows and every file's parser rows. They are a function of the PROGRAM, not
+        // of the partition, so a re-entrant recheck must carry them forward verbatim
+        // rather than re-derive them; without this an answer loses every TS1005 the
+        // file it names has, which is exactly what the replay differential caught.
+        val preCheckerRows = diagnostics.toList()
         val checker = cpcBindAndCheck(
             parsed = parsed,
             options = options,
@@ -1420,6 +1438,7 @@ class TypeScriptCompiler {
             diagnostics = diagnostics,
             typeCapture = typeCapture,
             checkedSink = checkedSink,
+            recheckHolder = recheckHolder,
         )
         val fePostT0 = FrontEnd.t()
         // (WARM.8) round 861 — the four blocks of [FrontEnd.POST] abut from here
@@ -1431,7 +1450,12 @@ class TypeScriptCompiler {
         // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
         // they don't duplicate the reemitted set. Gates are corpus-unique (verbatim-echo
         // multi-file parser cascades) so this never strips an unrelated file's parse diags.
-        run {
+        // (INC.17) ONE implementation of the parse-cascade suppression, applied to the
+        // build's own list here AND to a re-entrant recheck's recomposed list below.
+        // A second copy would be CLAUDE.md's mirrored-list hazard: these rules DELETE
+        // checker rows (TS1212 & co) in parse-errored files, so a recheck that skipped
+        // them would report a diagnostic the build suppresses.
+        val applyParseCascadeSuppression: (MutableList<Diagnostic>) -> Unit = { rows ->
             fun isParserCascadePinFile(fn: String?): Boolean {
                 if (fn == null) return false
                 if (fn.substringAfterLast('/') == "es6ImportNamedImportParsingError_1.ts") return true
@@ -1455,27 +1479,29 @@ class TypeScriptCompiler {
                 return hasModulePreserve4 && fn.substringAfterLast('/') in mp4Files
             }
             if (allParserDiagsForPins.isNotEmpty()) {
-                diagnostics.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
+                rows.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
+            }
+            // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
+            if (filesWithParseDiagnostics.isNotEmpty()) {
+                rows.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
+            }
+            // TS1036: only REAL parse diagnostics suppress (see the single-file path note).
+            if (filesWithRealParseDiagnostics.isNotEmpty()) {
+                rows.removeAll { (it.code == 1036 || it.code == 1117) && it.fileName in filesWithRealParseDiagnostics }
+            }
+            // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
+            // (see the single-file path note).
+            if (filesWithRealParseDiagnostics.isNotEmpty()) {
+                rows.removeAll {
+                    val fn = it.fileName
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214) &&
+                        fn in filesWithRealParseDiagnostics &&
+                        !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
+                }
             }
         }
-        // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
-        if (filesWithParseDiagnostics.isNotEmpty()) {
-            diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
-        }
-        // TS1036: only REAL parse diagnostics suppress (see the single-file path note).
-        if (filesWithRealParseDiagnostics.isNotEmpty()) {
-            diagnostics.removeAll { (it.code == 1036 || it.code == 1117) && it.fileName in filesWithRealParseDiagnostics }
-        }
-        // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
-        // (see the single-file path note).
-        if (filesWithRealParseDiagnostics.isNotEmpty()) {
-            diagnostics.removeAll {
-                val fn = it.fileName
-                (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214) &&
-                    fn in filesWithRealParseDiagnostics &&
-                    !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
-            }
-        }
+        applyParseCascadeSuppression(diagnostics)
+        val rowsAfterSuppression = diagnostics.size
         // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
         // resolves through an `exports` field that exposes no types entry.
         diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
@@ -1498,6 +1524,16 @@ class TypeScriptCompiler {
                 )
             }
         }
+
+        // (INC.17) Everything the post-checker region APPENDED — every one of those
+        // blocks reads `parsed`/`parsedSourceFiles` and nothing partitioned, so they
+        // are a function of the program and travel with the recheck unchanged.
+        val postCheckerRows = diagnostics.drop(rowsAfterSuppression)
+        (recheckHolder?.recheck as? CheckerRecheck)?.installProgramRows(
+            preCheckerRows = preCheckerRows,
+            postCheckerRows = postCheckerRows,
+            suppress = applyParseCascadeSuppression,
+        )
 
         // Pre-compute cross-file namespace exports for multi-file namespace merging.
         // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
@@ -2136,6 +2172,7 @@ class TypeScriptCompiler {
         diagnostics: MutableList<Diagnostic>,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
+        recheckHolder: RecheckHolder? = null,
     ): Checker {
         // Phase 2: Bind all files and create shared checker
         //
@@ -2257,9 +2294,16 @@ class TypeScriptCompiler {
                 typeCapture = typeCapture,
                 // (KIR) and the sink, for which sequential is FORCED above rather
                 // than assumed.
-                checkedSink = checkedSink)
+                checkedSink = checkedSink,
+                // (INC.17) recording the partition classification, and retaining the
+                // state a later [ProgramRecheck.recheck] re-enters. Only when a caller
+                // asked: it keeps every Type and Symbol of the build alive.
+                retainForRecheck = recheckHolder != null)
             if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+            // (INC.17) hand the LIVE program back. Deliberately after the diagnostics
+            // are read, so a holder can never observe a half-built checker.
+            recheckHolder?.recheck = CheckerRecheck(checker, options)
             if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
                 options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
             )
@@ -2539,6 +2583,79 @@ class TypeScriptCompiler {
  * checking of declaration files, it does not suppress their SYNTAX errors, and
  * parser diagnostics are collected separately at every call site here.
  */
+/**
+ * (INC.17) The live program a compile hands back through a [RecheckHolder].
+ *
+ * A thin adapter and nothing more: the re-entry itself is `Checker`'s
+ * (`recheckAdditionalFiles`), and everything this adds is what the COMPILE adds on
+ * top of a raw checker answer — the `skipLibCheck` filter. Its five capture
+ * channels are the checker's own accumulated ones, which is why a caller reads the
+ * answer for the file it just asked about rather than assuming the list is fresh.
+ *
+ * Lives in this file rather than beside [ProgramRecheck] because `Checker`'s
+ * capture accessors are `internal` and `applySkipLibCheck` is private here.
+ */
+private class CheckerRecheck(
+    private val checker: Checker,
+    private val options: CompilerOptions,
+) : ProgramRecheck {
+
+    /** Option and PARSER rows — everything the compile emitted before the checker. */
+    private var preCheckerRows: List<Diagnostic> = emptyList()
+
+    /** What the post-checker region APPENDED (TS2688, TS2209, isolatedDeclarations). */
+    private var postCheckerRows: List<Diagnostic> = emptyList()
+
+    /**
+     * The build's OWN parse-cascade suppression, as a function — not a copy of it.
+     * These rules DELETE checker rows (TS1212, TS1036, TS2737, …) in files that
+     * failed to parse, so a recomposed answer that skipped them would report
+     * diagnostics the build itself suppresses. Measured: the replay differential's
+     * first run diverged on exactly the three fixture files with parse errors.
+     */
+    private var suppress: (MutableList<Diagnostic>) -> Unit = {}
+
+    fun installProgramRows(
+        preCheckerRows: List<Diagnostic>,
+        postCheckerRows: List<Diagnostic>,
+        suppress: (MutableList<Diagnostic>) -> Unit,
+    ) {
+        this.preCheckerRows = preCheckerRows
+        this.postCheckerRows = postCheckerRows
+        this.suppress = suppress
+    }
+
+    override val walkedFiles: Set<String> get() = checker.recheckWalkedFiles
+    override val replayedPasses: Set<String> get() = checker.recheckReplayedPasses
+
+    override fun recheck(files: Set<String>, capture: TypeCaptureRequest?): RecheckAnswer =
+        runWithDeepStack {
+            // The same deep stack the build ran on: a re-entry runs the same walkers,
+            // so it needs the same 256 MB (DeepStack.kt, and CLAUDE.md's rule that a
+            // native overflow is uncatchable).
+            val checkerRows = checker.recheckAdditionalFiles(files, capture)
+            // Recomposed in the build's own order — option/parser rows, then the
+            // checker's, then the post-checker additions — and put through the build's
+            // own suppression so the two answers are the same function of the same
+            // parts.
+            val rows = ArrayList<Diagnostic>(
+                preCheckerRows.size + checkerRows.size + postCheckerRows.size,
+            )
+            rows.addAll(preCheckerRows)
+            rows.addAll(checkerRows.applySkipLibCheck(options))
+            suppress(rows)
+            rows.addAll(postCheckerRows)
+            RecheckAnswer(
+                diagnostics = rows,
+                capturedTypes = checker.capturedTypes,
+                capturedDefinitions = checker.capturedDefinitions,
+                capturedMembers = checker.capturedMembers,
+                capturedScopes = checker.capturedScopes,
+                capturedSignatures = checker.capturedSignatures,
+            )
+        }
+}
+
 private fun List<Diagnostic>.applySkipLibCheck(options: CompilerOptions): List<Diagnostic> =
     if (!options.skipLibCheck) this
     else filter { d -> d.fileName?.endsWith(".d.ts") != true }

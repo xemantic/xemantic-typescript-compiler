@@ -56,7 +56,7 @@ class Checker(
      * pinned by SpinePartitionEquivalenceTest; any divergence is a cross-file
      * spine-state leak (an order-dependence bug, not an acceptable delta).
      */
-    private val assignedFileNames: Set<String>? = null,
+    assignedFileNames: Set<String>? = null,
     /**
      * All RAW input file names from the program — including `.js`/`.jsx` files that were
      * parsed-but-not-bound (no `allowJs`, so absent from [fileResults]). Used by the
@@ -83,7 +83,7 @@ class Checker(
      * `copy()` call site (round 815), and a capture request is DATA, not an option.
      * Nor is it a process-global mode — those go through the round-848 `ModeLedger`.
      */
-    private val typeCapture: TypeCaptureRequest? = null,
+    typeCapture: TypeCaptureRequest? = null,
     /**
      * (KIR) When non-null, the check spine hands every checked [Expression] to
      * this sink AS IT WALKS PAST IT, under the same reconstructed ambient
@@ -96,6 +96,20 @@ class Checker(
      * another's — a sink that saw both would silently conflate them.
      */
     private val checkedSink: CheckedNodeSink? = null,
+    /**
+     * (INC.17) When true this checker is a RE-ENTRANT one: it records which `init`
+     * passes read the partition, and [recheckAdditionalFiles] may later widen that
+     * partition and re-enter exactly those passes — answering about a file the
+     * first build never checked WITHOUT paying the ~350 ms program-wide floor
+     * again.
+     *
+     * Off by default, and off is the whole compiler: the recording is two field
+     * reads on the partition getter and the retained state is the checker itself,
+     * which an ordinary compile drops as soon as it has its diagnostics. Only the
+     * embedding API (`Project`) arms it, and only for a build that was already
+     * narrowed — a checker with no partition holds every file's answer already.
+     */
+    private val retainForRecheck: Boolean = false,
 ) {
     /**
      * INV.6(6d): the PARTITION VIEW of [binderResults] — per-file PASS loops
@@ -107,19 +121,59 @@ class Checker(
      * wrongly-gated loop shows up as a `--partitionCheck` divergence, never
      * as a sequential regression.
      */
-    private val checkedResultsAll: List<BinderResult> =
+    private var checkedResultsAll: List<BinderResult> =
         if (assignedFileNames == null) binderResults
         else binderResults.filter { it.sourceFile.fileName in assignedFileNames }
 
     /**
+     * (INC.17) THE PARTITION, as a `var` — a checker that has already run can be
+     * asked about a file its first walk did not cover (see
+     * [recheckAdditionalFiles]), which moves this from the file set the
+     * constructor was given to the UNION of every set this checker has walked.
+     *
+     * Null still means "the whole program", and on that path nothing below ever
+     * changes it: an unpartitioned checker already holds every file's answer and
+     * has nothing to re-enter for.
+     */
+    private var assignedFiles: Set<String>? = assignedFileNames
+
+    /**
+     * (INC.17) THE FILES THIS CHECKER HAS ACTUALLY WALKED — the union of the
+     * constructor's partition and every set [recheckAdditionalFiles] has since
+     * added, or null for an unpartitioned checker.
+     *
+     * Distinct from [assignedFiles] because a replay narrows the partition to the
+     * FRESH files for the duration of the re-entry (so the replayed passes walk
+     * only what has not been walked, and cannot double-emit) and then restores it
+     * to this union (so [getDiagnostics] reports every file the checker knows
+     * about).
+     */
+    private var walkedFiles: Set<String>? = assignedFileNames
+
+    /**
+     * (INC.17) THE CLASSIFICATION, RECORDED RATHER THAN LISTED: the names of the
+     * `init` passes that reached the partition view while this checker was
+     * building, i.e. exactly the rows [recheckAdditionalFiles] must re-enter.
+     *
+     * Accumulated across the first build AND every replay, so a pass whose
+     * partition read sits inside a branch only some partitions enter is added the
+     * moment it is first seen. Recorded only when [retainForRecheck] is on, which
+     * is the sequential embedding path — under `--workers` [PassTiming.currentPass]
+     * is shared between worker checkers and the names would be another worker's.
+     */
+    private val partitionReadingPasses = LinkedHashSet<String>()
+
+    /**
      * (INC.17): every read of the partition view goes through this getter so
      * [PassTiming.partitionReadsByPass] can classify each `init` pass as
-     * partition-INVARIANT (never reaches here) or partition-DEPENDENT. Off the
-     * census this is one static boolean read and a field load.
+     * partition-INVARIANT (never reaches here) or partition-DEPENDENT, and so a
+     * checker armed for recheck records the same classification for its own use.
+     * Off both, this is two static boolean reads and a field load.
      */
     private val checkedResults: List<BinderResult>
         get() {
             if (PassTiming.enabled) PassTiming.notePartitionRead()
+            if (retainForRecheck) PassTiming.currentPass?.let { partitionReadingPasses.add(it) }
             return checkedResultsAll
         }
 
@@ -326,7 +380,47 @@ class Checker(
     // Delegating properties — allow all existing code to work unchanged
     // while mutable state is clearly grouped in CheckerState.
     // -----------------------------------------------------------------------
-    @get:JvmName("diagnostics_") private val diagnostics get() = state.diagnostics
+    /**
+     * (INC.17) THE SECOND RESIDUE CLASS, WITNESSED RATHER THAN REASONED ABOUT.
+     *
+     * `reads the partition` is not the classification a replay needs — soundness
+     * needs `its OUTPUT depends on the partition` — and the largest place the two
+     * come apart is that **the diagnostics list is itself a side table**. There are
+     * 73 `removeAll`, 5 `removeAt` and 2 `clear` sites in this file, and the passes
+     * holding them iterate [binderResults]: `ctaPostFilters` suppresses TS2322 rows
+     * the spine emitted after a cutoff it reads off `diagnostics.size`,
+     * `applyDomLibSuggestionRewrite` REWRITES every TS2339 in the list to TS2812,
+     * `init:flowDisabledTs2454Retraction` and `init:tpTargetReturnDedup` retract
+     * against tables the spine filled, and ~41 corpus pins wipe a whole file's rows
+     * and re-emit a pinned set. Every one of them is partition-INVARIANT by the
+     * partition-read test and partition-DEPENDENT in fact: rows a replay adds after
+     * they have run are never retracted, rewritten or wiped.
+     *
+     * So a checker armed for recheck hands its passes a VIEW that records which
+     * pass READ an existing row or MUTATED the list other than by appending. Same
+     * discipline as [checkedResults]' getter and for the same reason: a source
+     * analyzer over this file fails silently and in the reassuring direction, while
+     * a view cannot be wrong about who called it.
+     *
+     * Installed at the top of `init`, so property initializers that emit before any
+     * pass runs see the raw list — they are outside every pass and would be
+     * attributed to nobody anyway. Null on every ordinary compile.
+     */
+    private var diagnosticsView: MutableList<Diagnostic>? = null
+
+    @get:JvmName("diagnostics_") private val diagnostics
+        get() = diagnosticsView ?: state.diagnostics
+
+    /**
+     * (INC.17) The pass names [diagnosticsView] has witnessed depending on rows
+     * already in the list — the second half of [partitionReadingPasses]'s job.
+     */
+    private val diagnosticsDependentPasses = LinkedHashSet<String>()
+
+    /** (INC.17) [RecheckWitnessList]'s callback: attribute one dependency. */
+    private fun noteDiagnosticsDependency() {
+        PassTiming.currentPass?.let { diagnosticsDependentPasses.add(it) }
+    }
     private val referencedAliases get() = state.referencedAliases
     /** (WARM.31) round 904 — EVERY `enumValues[...]` expression evaluates this
      *  accessor exactly once, so one hook here counts all ~25 boxed-`Int` map
@@ -5070,7 +5164,9 @@ class Checker(
      * The requested spans indexed by file, or an empty map when no capture was
      * requested — which is every production compile.
      */
-    private val typeCaptureKeysByFile: Map<String, Set<Long>> =
+    private var typeCapture: TypeCaptureRequest? = typeCapture
+
+    private var typeCaptureKeysByFile: Map<String, Set<Long>> =
         typeCapture?.keysByFile ?: emptyMap()
 
     /**
@@ -5081,7 +5177,7 @@ class Checker(
      * reason: `Project.fileSemantics` hands in every identifier in a file and must
      * not enumerate a type at each of them.
      */
-    private val typeCaptureMemberKeysByFile: Map<String, Set<Long>> =
+    private var typeCaptureMemberKeysByFile: Map<String, Set<Long>> =
         typeCapture?.memberKeysByFile ?: emptyMap()
 
     /**
@@ -5093,7 +5189,7 @@ class Checker(
      * free position is usually anchored at a Block or a statement, which no other
      * capture has any use for.
      */
-    private val typeCaptureScopeKeysByFile: Map<String, Set<Long>> =
+    private var typeCaptureScopeKeysByFile: Map<String, Set<Long>> =
         typeCapture?.scopeKeysByFile ?: emptyMap()
 
     /**
@@ -5105,7 +5201,7 @@ class Checker(
      * a set because the active argument index travels with the span
      * ([SignatureCaptureSpan] says why it cannot be recomputed here).
      */
-    private val typeCaptureSignatureArgsByFile: Map<String, Map<Long, Int>> =
+    private var typeCaptureSignatureArgsByFile: Map<String, Map<Long, Int>> =
         typeCapture?.signatureArgsByFile ?: emptyMap()
 
     /**
@@ -9487,16 +9583,24 @@ class Checker(
         // (KIR) a sink and a partition worker are mutually exclusive by
         // construction: ids are rebased per worker, so a sink that saw two
         // workers' nodes would silently conflate two different `Type`s.
-        require(checkedSink == null || assignedFileNames == null) {
+        require(checkedSink == null || assignedFiles == null) {
             "a CheckedNodeSink is sequential-path only: Type/Symbol ids are rebased per worker"
         }
         // INV.0: opt-in pass-time instrumentation (see PassTiming.kt) — inert when
         // PassTiming.enabled is false (the default; only the --passTiming CLI turns it on).
         PassTiming.noteInitStart()
+        // (INC.17) install the witness BEFORE the first pass runs — see
+        // [diagnosticsView]. Deliberately the first statement of the dispatch.
+        if (retainForRecheck) {
+            diagnosticsView = RecheckWitnessList(state.diagnostics, ::noteDiagnosticsDependency)
+        }
         // M0 census: let pass() attribute emitted diagnostics to the emitting pass
         // (full instrumentation OR the light censusMode).
         if (PassTiming.enabled || PassTiming.censusMode) {
-            PassTiming.diagnosticsSize = { diagnostics.size }
+            // Straight to the backing list: `pass` itself calls this on EVERY
+            // registration, so routing it through the witness would attribute a
+            // dependency to all 416 of them and the classification would be total.
+            PassTiming.diagnosticsSize = { state.diagnostics.size }
         }
         initSetupPasses()
 
@@ -9541,6 +9645,148 @@ class Checker(
             // Do NOT re-add inline catches — fix the recursion (guard/iterate) instead.
             reportCheckerStackOverflow(e)
         }
+    }
+
+    /**
+     * (INC.17) **EXPERIMENTAL — REFUSED AS A DEFAULT PATH, AND KNOWN TO ANSWER A
+     * WRONG TYPE.** THE RE-ENTRANT RECHECK — answer about files this checker's
+     * first walk did not cover, WITHOUT rebuilding the program.
+     *
+     * Reachable only from a checker built with [retainForRecheck], which only a
+     * caller that passed a `RecheckHolder` gets, which nothing in a shipped path
+     * does. Graded by `scripts/replay-differential.sh`: the DIAGNOSTIC channel
+     * agrees on both arms, the CAPTURE channel **diverges in 8 of 75 files** of
+     * the compiler profile — a lost type-parameter constraint, `<T extends Node,
+     * U>` for `<T extends Node, U extends T>`. `ProgramRecheck`'s banner carries
+     * the numbers, the two live hypotheses and (INC.19)'s next instrument. **Do
+     * not serve hover/quick-info/completions from this until (INC.19) closes.**
+     *
+     * ## What it does
+     *
+     * A checker built with a partition (`assignedFileNames`) has already run every
+     * one of its ~416 `init` passes. Of those, the ones that never reached the
+     * partition view produced a function of the PROGRAM: they iterated
+     * [binderResults], emitted the rows they were ever going to emit — including
+     * rows naming files outside the partition — and filled their side tables from
+     * the whole program. `getDiagnostics` merely FILTERED those rows out at the
+     * end. Only the partition-DEPENDENT rows have anything left to do for a new
+     * file, and this re-enters exactly those: the whole `init` dispatch sequence is
+     * walked again with [PassTiming.replayPasses] armed, so the order is the
+     * constructor's order by construction and no list of "passes to replay" can
+     * drift out of step with it.
+     *
+     * Measured on tsc's own 78 sources ((INC.17) step 1's census): 211 of the 416
+     * rows never read the partition and carry **350.89 ms of the 366.47 ms floor**,
+     * so that is what this does not pay.
+     *
+     * ## The partition it walks, and why it is the FRESH files only
+     *
+     * The re-entry narrows the partition to `files` MINUS everything already
+     * walked, then restores it to the union. A pass re-entered with a file it has
+     * already seen would emit that file's rows a second time, and the two would be
+     * indistinguishable duplicates; narrowing to the fresh set makes that
+     * impossible rather than deduplicated. Asking only about files already walked
+     * therefore performs NO work at all and answers by filtering.
+     *
+     * ## What it does NOT promise
+     *
+     * The classification is `read the partition`, and soundness wants `its output
+     * depends on the partition`. The two come apart at a producer/consumer pair: a
+     * partition-dependent producer (the spine) fills a side table that a
+     * program-wide pass consumes, and that consumer is recorded INVARIANT and is
+     * not re-entered. That residue is bounded EMPIRICALLY rather than argued —
+     * `scripts/replay-differential.sh` compares this answer against a fresh
+     * narrowed build's, row for row and span for span, over BOTH the tsc profile
+     * and `test-fixtures/partition-gate`.
+     *
+     * **MEASURED, AND IT IS NOT EMPTY.** On the tsc profile the diagnostics agree
+     * and the captures do not: 8 of 75 files render a type parameter without its
+     * constraint. So a caller that cannot afford a wrong answer must build
+     * instead — which today is every caller, because this is wired to nothing.
+     *
+     * @param files the file names to make answerable; already-walked names are free.
+     * @param capture (API.3) a capture request to install for the re-entry, or null
+     *   to keep the current one. The spans of files already walked are NOT
+     *   re-captured — the spine only visits the fresh partition.
+     * @return this checker's diagnostics for the UNION of everything it has walked.
+     */
+    /** (INC.17) The passes a replay re-enters — see [ProgramRecheck.replayedPasses]. */
+    val recheckReplayedPasses: Set<String>
+        get() = LinkedHashSet(partitionReadingPasses).also { it.addAll(diagnosticsDependentPasses) }
+
+    /** (INC.17) Every file this checker has walked — see [ProgramRecheck.walkedFiles]. */
+    val recheckWalkedFiles: Set<String>
+        get() = walkedFiles ?: binderResults.mapTo(LinkedHashSet()) { it.sourceFile.fileName }
+
+    fun recheckAdditionalFiles(
+        files: Set<String>,
+        capture: TypeCaptureRequest? = null,
+    ): List<Diagnostic> {
+        require(retainForRecheck) {
+            "this Checker was not built for recheck: pass retainForRecheck = true"
+        }
+        val walked = walkedFiles
+        require(walked != null) {
+            "an unpartitioned Checker has already walked every file — recheck is a no-op " +
+                "and asking for one hides a caller's mistake"
+        }
+        val fresh = files - walked
+        if (fresh.isEmpty()) return getDiagnostics()
+        if (capture != null) installCaptureRequest(capture)
+        // The classification this run re-enters. Snapshotted BEFORE the re-entry:
+        // the replay's own partition reads add to [partitionReadingPasses], and a
+        // set being iterated by `pass`'s filter must not grow underneath it.
+        val replay = recheckReplayedPasses
+        assignedFiles = fresh
+        walkedFiles = walked + fresh
+        checkedResultsAll = binderResults.filter { it.sourceFile.fileName in fresh }
+        val savedReplay = PassTiming.replayPasses
+        // Null arms no filter at all, i.e. every pass re-enters — the attribution
+        // experiment, see [PassTiming.replayAllPasses]. Never on in a shipped path.
+        PassTiming.replayPasses = if (PassTiming.replayAllPasses) null else replay
+        try {
+            initSetupPasses()
+            if (declarationOnly) {
+                initDeclarationOnlyPasses()
+            } else {
+                initCheckPasses1()
+                initCheckPasses2()
+                initCheckPasses3()
+                initCheckPasses4()
+                initCheckPasses5()
+                initCheckPasses6()
+                initCheckPasses7()
+                initCheckPasses8()
+            }
+        } catch (e: StackOverflowError) {
+            // The `init` boundary guard, one entry point over: a re-entry runs the
+            // same walkers, so the same net has to be under it.
+            reportCheckerStackOverflow(e)
+        } finally {
+            PassTiming.replayPasses = savedReplay
+            assignedFiles = walkedFiles
+            checkedResultsAll =
+                walkedFiles?.let { u -> binderResults.filter { it.sourceFile.fileName in u } }
+                    ?: binderResults
+        }
+        return getDiagnostics()
+    }
+
+    /**
+     * (INC.17) Install a new (API.3) capture request on a live checker, for
+     * [recheckAdditionalFiles].
+     *
+     * The four derived per-file index maps are what the spine's per-node hook
+     * actually reads, so setting the request alone would leave a re-entry
+     * capturing the PREVIOUS request's spans — silently, since a span that is
+     * never asked about simply produces no row.
+     */
+    private fun installCaptureRequest(request: TypeCaptureRequest) {
+        typeCapture = request
+        typeCaptureKeysByFile = request.keysByFile
+        typeCaptureMemberKeysByFile = request.memberKeysByFile
+        typeCaptureScopeKeysByFile = request.scopeKeysByFile
+        typeCaptureSignatureArgsByFile = request.signatureArgsByFile
     }
 
     /**
@@ -11371,8 +11617,16 @@ class Checker(
         // slot-move pre-gate, round 641).
         // 65a. Check for-in LHS type (TS2405: must be 'string' or 'any')
         pass("checkForInLhsTypes") { checkForInLhsTypes() }
-        // 65b. Check subsequent var declaration type mismatch (TS2403)
-        pass("checkSubsequentVarTypes") { checkSubsequentVarTypes() }
+        // 65b. Check subsequent var declaration type mismatch (TS2403).
+        // (INC.17) SPLIT IN TWO, in the order the single pass ran them, because the
+        // two halves have opposite partition behaviour and the census read the sum:
+        // the cross-file half iterates `checkedResults` (partition-DEPENDENT, and
+        // ~free — on an empty partition it does nothing at all), while the per-file
+        // half iterates `binderResults` and is 14.90 ms of the floor that a
+        // re-entrant recheck must NOT pay again. Unsplit, the pass was the single
+        // biggest thing in the replay set and was 95% of its whole cost.
+        pass("checkSubsequentVarTypesCrossFile") { checkSubsequentVarTypesCrossFile() }
+        pass("checkSubsequentVarTypesPerFile") { checkSubsequentVarTypesPerFile() }
         // 65c. Check `import x = require(...)` inside namespace bodies (TS1147)
         pass("checkRequireImportInNamespace") { checkRequireImportInNamespace() }
         // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
@@ -12064,8 +12318,8 @@ class Checker(
         // `new C<...>(...)` explicit-type-arg resolution sites that triggered
         // [deepInstantiationBailed]. Done once at first getDiagnostics() call.
         flushDeepBailNewExpressionEmits()
-        if (assignedFileNames == null) return diagnostics.toList()
-        return diagnostics.filter { it.fileName == null || it.fileName in assignedFileNames }
+        val assigned = assignedFiles ?: return diagnostics.toList()
+        return diagnostics.filter { it.fileName == null || it.fileName in assigned }
     }
 
     // -----------------------------------------------------------------------
@@ -26609,7 +26863,9 @@ class Checker(
                 // (INC.17): a DIRECT partition read — not routed through
                 // [checkedResults], so the census must be told explicitly.
                 if (PassTiming.enabled) PassTiming.notePartitionRead()
-                if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
+                if (retainForRecheck) PassTiming.currentPass?.let { partitionReadingPasses.add(it) }
+                val partitionHere = assignedFiles
+                if (partitionHere != null && sf.fileName !in partitionHere) continue
                 spineFileName = sf.fileName
                 // (API.3): null for every file unless a caller asked for a span in
                 // it, which is what keeps [spineEnterNode]'s hook to one field read.
@@ -38156,7 +38412,9 @@ class Checker(
                 val sf = result.sourceFile
                 // (INC.17): a DIRECT partition read — see [checkedResults].
                 if (PassTiming.enabled) PassTiming.notePartitionRead()
-                if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
+                if (retainForRecheck) PassTiming.currentPass?.let { partitionReadingPasses.add(it) }
+                val partitionHere = assignedFiles
+                if (partitionHere != null && sf.fileName !in partitionHere) continue
                 spineFileName = sf.fileName
                 spineSource = sf.text
                 spineUResSetup(result)
@@ -42765,13 +43023,31 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check that when `var` is declared multiple times in the same scope,
-     * all declarations have compatible types.
+     * Check that when `var` is declared multiple times in the same scope, all
+     * declarations have compatible types — the CROSS-FILE half.
+     *
+     * (INC.17) Both helpers iterate `checkedResults`, so this half is
+     * partition-DEPENDENT and a re-entrant recheck re-enters it. It is also
+     * essentially free on a narrow partition: each builds a by-name index over the
+     * partition's SCRIPT files and needs two entries for a name before it does any
+     * type work at all.
      */
-    private fun checkSubsequentVarTypes() {
+    private fun checkSubsequentVarTypesCrossFile() {
         // Check file-level vars (in globals, which merges across files)
         checkSubsequentVarTypesInGlobals()
         checkSubsequentVarTypesAcrossScriptFiles()
+    }
+
+    /**
+     * The PER-FILE half of TS2403 — file-level and function-level `var`
+     * redeclaration within one file.
+     *
+     * (INC.17) Iterates `binderResults`, so it is partition-INVARIANT: it emits
+     * every file's rows on the first build whatever the partition was, and
+     * `getDiagnostics` filters. A re-entrant recheck therefore never re-enters it,
+     * which is where the split's 14.90 ms goes.
+     */
+    private fun checkSubsequentVarTypesPerFile() {
         // Check file-level and function-level vars per file
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName

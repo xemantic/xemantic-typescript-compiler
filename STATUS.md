@@ -1,5 +1,49 @@
 # Status
 
+**THE RE-ENTRANT REPLAY IS 3.06x, IT LOSES A TYPE-PARAMETER CONSTRAINT ON 8 OF 75 FILES, AND
+THE DIAGNOSTICS SWEEP NEVER NOTICED (2026-08-23, (INC.17) step 2 — BUILT, MEASURED, AND
+REFUSED AS A DEFAULT PATH).** Answering a semantic query about a file the checker was never
+asked about, by re-entering only the partition-DEPENDENT `init` passes instead of rebuilding,
+measures **3.06x** on tsc's own 78 sources — `replay=12572 ms` against `freshBuilds=38498 ms`
+over 75 questions — exactly the shape step 1's census predicted (211 partition-INVARIANT rows
+carrying **350.89 ms of the 366.47 ms floor**; the 205 dependent ones **15.59 ms**, 204 of them
+**0.69 ms** between them). **WHAT REFUSES IT IS THE SECOND SWEEP**, precisely as (INC.18)'s arm
+a3 predicted: `scripts/replay-differential.sh` reads `compared: files=75 diagnosticRows=46
+filesCarryingDiagnostics=5 typeSpans=373879 definitionSpans=352713` and then **`DIVERGED: 8 of
+75 file(s)`** — with the **diagnostics half completely untouched**. The shape is a **lost
+type-parameter constraint**: the replay renders `<T extends Node, U>` where a fresh build
+renders `<T extends Node, U extends T>`. A wrong hover is worse than a slow one, and (INC.2)
+set the precedent by refusing capture narrowing over 45 divergent SPANS; 8 divergent FILES is
+far past it. **THE TRANSFERABLE OUTPUT, now a CLAUDE.md entry: a partition or replay change is
+graded on the CAPTURE sweep, not only the diagnostics sweep** — a lost collector or a lost
+type-parameter scope surfaces as a wrong TYPE, never as a missing error, i.e. it fails in the
+reassuring direction. **WHAT LANDED** is the mechanism marked EXPERIMENTAL at every entry point
+(`ProgramRecheck`, `RecheckHolder`, both `recheckHolder` parameters,
+`Checker.recheckAdditionalFiles`), each carrying the divergence and a "do not serve hover from
+this" instruction; the oracle (`scripts/replay-differential.sh` + `ReplayDifferentialMain`), so
+(INC.19) starts from it rather than rebuilding it; and the `checkSubsequentVarTypes` SPLIT the
+census demanded — one MIXED pass whose two halves have OPPOSITE partition behaviour and whose
+SUM the census read as 14.90 ms, now 0.69, pinned on both sides by `PartitionCensusHookTest`.
+**THE OPT-IN IS THE LOAD-BEARING CHECK AND IT IS PINNED, NOT ARGUED**: every parameter defaults
+to null, `retainForRecheck = recheckHolder != null`, `recheckAdditionalFiles` `require`s it,
+`Project` does not reference the type, and a new pin asserts arming a holder does not change
+the build's own diagnostics (narrowed or whole-program) **with a control that the arming
+actually happened** — two unarmed builds would agree and prove nothing. `ProjectRecheckTest`
+pins what the replay ACTUALLY does, including its defect: the capture channel is asserted to
+EXIST and deliberately **not** asserted equivalent, because a soundness pin there would be
+false. **WHAT DID NOT WORK:** two attribution arms, both killed — the first died silently
+(probable daemon starvation, BUILD.1), the second (`replayAllPasses`) ran **~100x over budget**
+at 53 minutes of CPU over **7** targets without finishing, against ~50 s for the 205-pass
+replay over **75**; that ratio is itself evidence of a pass that appends or re-emits per replay.
+(INC.19)'s instrument is a BISECTION over the replay set, not that arm. Suite **15,725 / 0 / 3**
+(+11), `cost_gate.py` PASS (largest **+1.02% `mapped.hits`**, the standing pre-existing drift;
+next is +0.18%), `huge_methods.py --fail-over 0` green on core (763 classes) and `-project`
+(50), `partition-gate.sh` **EQUIVALENT on BOTH arms** (78 and 76 files), `capture-equivalence`
+**5 spans / 3 files, `narrowRendersMoreAny=0`**, `capture-channel` **286 rows / 49 files,
+members=285 scopes=0 signatures=1**, `caret-vs-file` **EQUIVALENT, 904 spans**, and
+`checker-reuse-differential` in BOTH orders — program order the known single `watchPublic.ts`
+row, editor order **EQUIVALENT over 550,480 types** (101 queries, 25 revisits). `docs/language-service.md`, `Recheck.kt`.
+
 **THE PARTITION GATE WAS VACUOUS ON EVERY PROFILE THIS REPO HAS, AND IT IS NOW ARMED AND
 PROVEN ABLE TO FAIL (2026-08-23, (INC.18)).** `scripts/partition-equivalence.sh` — the
 detector (INC.7)'s 68 gated walkers, (INC.9)'s deferral and (INC.17)'s replay would all be
@@ -137,35 +181,3 @@ at their baselines. **Three ablations, all recorded as CONTROLS rather than clai
 demonstrably a dead arm, two not provably reached — with the fixture's own structural
 half-blindness stated: a capture is recorded DURING the walk, so a later-walked file cannot
 influence an earlier one's answers in either arm.
-
-**HOVERING AROUND A FILE IS NOW FREE AFTER THE FIRST HOVER — A SECOND CARET IN `checker.ts`
-WENT 2,142 ms -> 73, ONE IN `binder.ts` 481 -> 2, AND `fileSemantics` AFTER A HOVER 575 -> 17
-(2026-08-23, (INC.13)).** (INC.12) memoized a capture on its REQUEST, so a repeated question
-was free; every caret-scoped query except `documentHighlightsAt` asked about ONE span, so the
-caret NEXT DOOR still paid the whole ~345 ms floor. `Project.captureAround` now asks about the
-**BUFFER** — `SourceIndex.occurrenceNodes()`, deliberately `documentHighlightsAt`'s own
-population — so `quickInfoAt`, `definitionsAt`, `semanticsAt`/`fileSemantics` and highlights
-are **ONE build per buffer between them**. **The oracle was built FIRST and cost no baseline**,
-which is the part worth copying: at a fixed partition, a span asked ALONE and the same span
-asked as part of its file are the same question, so any divergence is a defect in one arm.
-`scripts/caret-vs-file-capture.sh` reads **EQUIVALENT — 904 sampled spans in 76 files, zero
-divergence in either channel — and it REPLICATES at a second, disjoint sample (979 more spans,
-EQUIVALENT again; 1,883 positions between the two draws)** — and prices the widening at
-**+9 to +17 ms at the median file**, because a narrowed build is mostly FLOOR and extra spans
-are cheap beside it.
-(INC.10)'s first-touch hazard does not fire, and the reason is stated: a capture changes WHERE
-a walk records, not WHEN the compiler resolves a declaration. **The trade is not hidden — the
-FIRST query in a buffer gets dearer, +27% on `binder.ts` and +65% on `checker.ts`, so
-break-even is the SECOND caret**; it was NOT gated on file size, because a size heuristic is a
-guess where the differential is a measurement. **It does NOT widen for a caret on a node that
-is no occurrence** (a call expression, a literal, a `this`): a file-wide request would not
-carry it and an absent capture renders nothing with no error anywhere. **The receipt is a
-COUNT — N carets in one buffer is ONE build, pinned from a FRESH state.** Three ablations
-(never widen -> 4 RED; widen unconditionally -> 2 RED including an independent hover control;
-the shared population drifts -> 1 RED **only after the fixture grew a member-name literal — it
-read 0 RED first, and the pin was BLIND, not the invariant redundant**). Three public claims
-inverted in place, including the **34x batching ratio `docs/language-service.md` advertised to
-hosts, which is GONE** — batching a buffer is a convenience now, not a cost decision. Suite
-**15,683 / 0 / 3**, `cost_gate.py` PASS (+1.02% `mapped.hits`, the same pre-existing drift and
-the expected answer for a round that changed no compiler code), `huge_methods.py --fail-over 0`
-green on core (755 classes) and `-project` (49), `partition-equivalence` **EQUIVALENT on all 78 files** (median narrowed query 385 ms, floor 365, ratio 12.60x — a redraw of the same compiler, which this round did not touch), and both capture censuses **unmoved at their baselines** (5 spans / 3 files, `narrowRendersMoreAny=0`; 286 rows / 49 files, members=285 scopes=0 signatures=1).

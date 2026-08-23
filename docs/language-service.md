@@ -403,6 +403,62 @@ because there was nothing worth not doing. Neither case hurts a host that follow
 above (a clean project answers from the cached build and does not compile at all), but do
 not expect a ratio on a small project.
 
+### (INC.17) A file the host never named — a RE-ENTRY was built, measured, and REFUSED
+
+The three properties above are about a query the project has already answered, or
+one whose files are a subset of a set it has. The case they do not cover is the
+one an editor hits constantly: the user opens a file nobody declared, or the
+annotator asks about a buffer that was not in the last batch. That pays a whole
+narrowed build — the crawl, the parse, the bind and all ~417 checker `init`
+passes — and **it still does.**
+
+(INC.17) built the alternative and did not ship it. The mechanism is real and it
+is in the tree (`Recheck.kt`, `Checker.recheckAdditionalFiles`,
+`ProjectCompiler.build(recheckHolder = ...)`), reachable only by passing a
+`RecheckHolder`, which **nothing in a shipped path does** — `Project` does not
+know the type exists. Read this section before wiring it to anything.
+
+**What it does.** The checker that answered the previous `diagnosticsOf` is still
+alive, and **211 of its 417 `init` rows never read the check partition at all**:
+they iterate the whole program, so they already emitted the new file's rows during
+the first query and `getDiagnostics()` merely filtered them out. Only the
+partition-dependent rows have anything left to do, and they are re-entered with
+the widened partition. On tsc's own 78 sources the invariant rows carry **350.89
+ms of a 366.47 ms floor**, and the whole mechanism measured **3.06x** — 75
+questions answered in 12,572 ms against 38,498 ms of fresh narrowed builds.
+
+**Why it is refused.** `scripts/replay-differential.sh` compares a re-entered
+answer against a fresh narrowed build's, file by file, over two projects and two
+channels — diagnostics, and the captured type and definition at every identifier.
+On tsc's own sources:
+
+```
+compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
+          typeSpans=373879 definitionSpans=352713
+DIVERGED: 8 of 75 file(s)
+```
+
+Every **diagnostic** row agrees, on both arms. The **capture** channel diverges in
+**8 of 75 files**, and the shape is a lost TYPE-PARAMETER CONSTRAINT: the replay
+renders `<T extends Node, U>` where a fresh build renders `<T extends Node, U
+extends T>`. A hover that quietly drops a constraint is worse than a hover that
+took 500 ms — the same judgement (INC.2) made when it refused capture narrowing
+over 45 divergent spans — so the re-entry serves nothing until (INC.19) closes.
+
+**The lesson that outlives the refusal.** A partition or replay change must be
+graded on the CAPTURE sweep, not only the diagnostics sweep. Here the diagnostics
+half was *completely silent* about an 8-file defect: a lost collector or a lost
+type-parameter scope surfaces as a wrong TYPE, never as a missing error.
+
+**What (INC.19) inherits.** Two live hypotheses — the replay SET is too small (a
+partition-dependent pass classified invariant), or replaying at all is
+non-idempotent. The evidence for the second is that an arm re-entering *all*
+passes over 7 targets burned 53 minutes of CPU without finishing, against ~50 s
+for the 205-pass replay over 75 targets; ~100x is the signature of a pass that
+appends to a side table or re-emits per replay. The named next instrument is a
+BISECTION over the replay set — which passes, added to the 205, repair the 8
+files — not another all-passes arm.
+
 **When to use which.** Wire `diagnosticsOf` to the editor's per-file annotator —
 it is the query an IDE actually makes, and the one whose cost falls with the size
 of what the user is looking at rather than with the size of their project. Keep
