@@ -1,5 +1,43 @@
 # Status
 
+**157 TAIL WALKERS ARE NOW PARTITION-SCOPED, THE INCREMENTAL FLOOR IS 340 ms, AND THE ONE-LINE
+TECHNIQUE IS CLOSED BECAUSE 65% OF WHAT REMAINS IS REFUSED BY SHAPE (2026-08-23, (INC.7) batch 4).**
+Batch 4 gated **89** more program-wide tail walkers onto the check partition in two independently
+swept sub-batches, taking the arc to 157 across four batches: **floor 1,207 -> 340 ms, narrowed
+query median 1,077 -> 367 ms, ratio at the median file 13.30x** (`partition-equivalence.sh`). The
+diff is 89 loop headers and nothing else — `for (result in binderResults)` **221 -> 132**,
+`checkedResults` **255 -> 344**. **THIS, NOT A REUSE MECHANISM, IS WHAT HELPS THE OWNER'S QUERY**:
+(INC.15) measured that an edit invalidates every reuse mechanism, so the FIRST query after a
+keystroke — the error-reporting query — reuses nothing and pays the whole floor. **THE FOURTH
+DISCOUNT POINT IS THE LOWEST**: summed rows of the 89 **54.23 -> 0.13 ms**, whole floor pass table
+**254.57 -> 212.16**, banked **42.41 ms = 78.2%**, next to 79.0 / 85.5 / 92.9. **DO NOT quote the
+floor WALL for this** — the intermediate post-4a draw read **444 ms, HIGHER than before**, while
+the deterministic pass table had already fallen 34.7 ms; a 42 ms effect is not resolvable in a
+4-draw wall, which is round 716's "counters decide, wall time confirms" one instrument over.
+**(INC.19)'s WRITE-ONCE-RACE HAZARD WAS CHECKED, NOT ASSUMED**: gating a walker is exactly the
+operation that changes who wins such a race, and that failure is a plausible TYPE rather than a
+diagnostic, so both capture sweeps ran after EACH sub-batch — `capture-equivalence` **5 spans /
+3 files, `narrowRendersMoreAny=0`** and `capture-channel` **286 rows / 49 files**, byte-identical
+throughout. **WHY THE TECHNIQUE IS DONE**: 172 ungated passes / 251.9 ms remain and the top TEN
+rows are **165 ms** of it, every one refused — 53 of the 83 write a checker field or retract inside
+the private closure, **43 retract via `diagnostics.removeAll`**, 4 carry more than one
+`binderResults` reference, 4 hold a cross-file accumulator. Analyzer-CLEAN was only 54 ms in total.
+A successor must change a pass's SHAPE, which is (INC.20), whose template is (INC.17)'s
+`checkSubsequentVarTypes` split. **THE ANALYZER'S CONTROLS CAUGHT THREE DEFECTS IN THE ANALYZER,
+ALL FAILING IN THE REASSURING DIRECTION**, the new one being that **a MULTI-LINE PARAMETER LIST
+truncates a function's span to its header**, hiding the body and every field write in it — it
+wrongly cleared two passes this queue had ALREADY REFUSED, so **the refusal list was the oracle
+that caught the analyzer**. Also: a `pass("…")`-registering helper is not a caller, and without
+excluding the 12 `initCheckPasses*` registrars the clean set is **0**. The pin is per-walker
+attributable — an ablation reddens **exactly 3 of 22 arms, exactly the three naming that walker** —
+and its first namespace-`this` fixture was VACUOUS until the PassLab said so (a `this` inside a
+FUNCTION in a namespace body is reported by a different pass). **The sensitivity fixture is what
+carried this batch**: it nets **16 of the 89** as real netting passes against **one** (`checkSpine`)
+on every dashboard profile — (INC.18)'s whole point, collected one round later. Suite **15,735 / 0 /
+3** (+7 pins), `cost_gate.py` identical (largest **+1.02% `mapped.hits`**, the standing drift),
+`huge_methods.py --fail-over 0` clean (763 classes), `partition-gate.sh` **EQUIVALENT on both arms**
+(realism 78/78; sensitivity 76/76, 78 netting passes).
+
 **THE REPLAY'S LOST TYPE-PARAMETER CONSTRAINT WAS NEVER A REPLAY DEFECT — IT IS A WRITE-ONCE
 INTERNED FIELD RESOLVED BEFORE ITS OWN SCOPE, FROZEN IN THE SEED BUILD, AND THE CORPUS IS
 STRUCTURALLY BLIND TO IT (2026-08-23, (INC.19)).** The re-entrant replay diverged on **8 of 75
@@ -160,38 +198,4 @@ EQUIVALENT on 78 files; `capture-equivalence` 5 spans / 3 files, `narrowRendersM
 **(INC.18) DONE the same day** — the fixture is `test-fixtures/partition-gate` at
 **78 netting passes**, and the gate is proven able to fail; the replay's two remaining
 obligations are recorded on the queue item.
-
-**AN EDITOR'S WHOLE WORKING SET IS NOW ONE `Checker`: 18 SEMANTIC QUERIES IN SIX BUFFERS
-WENT 5,230 ms -> 737, AND SIX PER-BUFFER ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0
-(2026-08-23, (INC.14) LANDED).** 252-254 ms of every query's floor is the ~190 program-wide
-`init` passes, and the census had already said a `Checker` shared by k queries answers all k
-exactly as k fresh ones do. **The refactor the queue called for was not needed, and the
-census's own model is why**: a checker asked a k-th query IS a checker whose partition is
-those k files, so the arrangement is expressible with no checker surgery — hand `recheckOnly`
-the working set once and capture all of it in the one walk. `Project.prepare(files)` is that,
-made public; beside it and independent of it, `diagnosticsOf`'s memo is now keyed by the
-PARTITION the build walked, so a question about any SUBSET is answered by filtering — which is
-the error-reporting case whole, N builds for N buffers becoming ONE. **THE ORDER GAP THE
-CENSUS LEFT IS CLOSED FIRST, AND IT CLOSED CLEANER THAN PROGRAM ORDER**: the differential's new
-`editor` arm is a deterministic shuffled query SEQUENCE with REVISITS, compared position by
-position, with the COLD arm run over the same sequence so the reference's own order-dependence
-is a control that REFUSES the run rather than an assumption — **101 queries over 76 files, 25
-revisits, 1,070,012 compared rows per run, and 0 divergent rows at k=3 (2.16x) and k=8
-(3.88x)**, 1 at k=26 (5.18x) which is byte for byte the row program order already found and
-already inside `capture-equivalence.sh`'s 5-span baseline; `coldSelfDiverged =
-sharedSelfDiverged = 0` in all three, i.e. a revisited file is answered identically by a fresh
-checker AND by a reused one. Replicated in a second warm run (4,997 -> 704 and 2,376 -> 539),
-with the existing 15-query block unmoved as a CONTROL. **What a held prepared check costs has
-a control rather than being an absolute — heap 163 -> 167 MB, identical to the MB in all six
-rotations, ~4 MB for a 415 KB working set**, bounded at ONE and dropped by any edit.
-**Seven ablations, seven discriminating, each with its own RED set** — the first round in this
-arc with no arm recorded as a control. **REFUSED with its arithmetic**: making the working set
-AUTOMATIC costs `k·floor + k(k+1)/2·perFile` against a cold `k·floor + k·perFile`, a loss at
-every k with the floor at 365 ms and a median file at 31 — a host knows its open buffers and
-this layer does not. Suite **15,701 / 0 / 3** (+13), `cost_gate.py` PASS (largest +1.02%
-`mapped.hits`, the standing drift and the expected answer for a round that changed no compiler
-code), `huge_methods.py --fail-over 0` green on core and `-project`, and all four equivalence
-sweeps exactly at their baselines. Successor **(INC.17)**: the re-entrant checker buys exactly
-what `prepare` cannot — a query about a file the host did not name — and its first step is a
-count, not a rewrite.
 

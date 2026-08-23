@@ -20,6 +20,100 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.7) batch 4 — 89 walkers gated, the floor is 340 ms, and the one-line technique is now CLOSED: 65% of what is left is refused shapes
+
+**WHAT THIS ROUND DID.** Gated **89** program-wide tail walkers onto the check
+partition in two sub-batches, each swept independently. **Floor 378 -> 340 ms,
+narrowed query median 422 -> 367, ratio at the median file 12.43x -> 13.30x**
+(`partition-equivalence.sh`, the instrument the arc quotes). The diff is 89 loop
+headers and nothing else: `for (result in binderResults)` **221 -> 132**,
+`checkedResults` **255 -> 344**.
+
+**WHY THIS AND NOT A REUSE MECHANISM.** (INC.15) measured that an edit invalidates
+every reuse mechanism, so the FIRST query after a keystroke — the error-reporting
+query the owner directive names — reuses nothing and pays the whole floor. Reducing
+the floor is the only thing that helps it.
+
+**THE FOURTH DISCOUNT POINT, AND IT IS THE LOWEST.** Summed floor rows of the 89:
+**54.23 -> 0.13 ms**; whole floor pass table (417 rows) **254.57 -> 212.16 ms**.
+Banked **42.41 ms** against 54.23 of rows = **78.2%**, next to 79.0 / 85.5 / 92.9.
+Largest relocation victims `checkPropertyOverride` +6.17, `checkClassImplements-
+Interface` +2.11, `checkDerivedConstructorSuper` +1.51.
+
+**DO NOT QUOTE `floor-decomposition.sh`'s WALL FOR THIS.** It reads 424 -> 352 ms at
+the identical recipe, but the intermediate post-4a draw read **444 ms — HIGHER than
+before** while the deterministic pass table had already fallen 34.7 ms. A 42 ms
+effect is not resolvable in a 4-draw floor wall; the pass table is. Round 716's
+"counters decide, wall time confirms", one instrument over.
+
+**(INC.19)'s WRITE-ONCE-RACE HAZARD DID NOT FIRE, AND THAT WAS CHECKED RATHER THAN
+ASSUMED.** Gating a walker is exactly the operation that changes who wins a race for
+a write-once interned field, and that failure is a plausible TYPE, not a diagnostic —
+so this batch was graded on BOTH capture sweeps after EACH sub-batch, not only the
+partition gate. `capture-equivalence` **5 spans / 3 files, `narrowRendersMoreAny=0`**
+and `capture-channel` **286 rows / 49 files**, byte-identical after 4a AND after 4b.
+Not luck to be relied on: none of the 89 resolves a type-parameter constraint, and the
+only one resolving types at all (`checkSignatureGroupOverloadExcessCalls`, 0.18 ms)
+left both sweeps unmoved.
+
+**THE TECHNIQUE IS CLOSED, AND THE REFUSAL LIST IS THE ROUND'S REAL OUTPUT.** The
+queue's headline ("174 ungated passes, 268.8 ms") is now **172 / 251.9 ms**, and
+**the top TEN rows are 165 ms of it — 65% — and every one is a refused shape**:
+`init:buildFileLocalTypeMaps` 62.06 (writes `deepInstantiationBailed`),
+`checkTypeArgumentConstraints` 21.69, `checkBaseClassImprovedMismatch` 19.51
+(`diagnostics[i] =`), `checkInterfaceMultiBaseConflicts` 12.73,
+`checkSubsequentVarTypesPerFile` 10.70, `checkPropertyOverride` 9.61,
+`checkDerivedConstructorSuper` 9.04, `init:computeAllEnumValues` 8.75,
+`checkCircularClassBaseViaDefaultTypeArg` 6.91, `checkClassImplementsInterface` 5.94.
+Analyzer-CLEAN was only 54 ms in total. Histogram of the 83 refused: **53** write a
+checker field or retract inside the private closure, 8 of those plus a post-loop, 4
+carry more than one `binderResults` reference, 4 hold a cross-file pre-loop
+accumulator, and **43 retract via `diagnostics.removeAll`**. **The remaining tail is
+not gateable one line at a time** — a successor has to change the SHAPE of a
+retracting or field-writing pass, not its loop header.
+
+**THE PIN DISCRIMINATES PER WALKER.** 7 new arms in `ProjectGatedTailWalkerTest` (22
+in the class, 0 failed) over four 4a walkers whose diagnostics the PassLab confirmed
+they own: TS2331+TS2683 / `checkThisInNamespaceBodies`, TS2335 /
+`checkSuperInNonDerived`, TS2411 / `checkIndexSignatureProperties`, TS1340 /
+`checkImportTypeUsedAsType`. **The first namespace-`this` fixture was VACUOUS and the
+lab said so** — a `this` inside a FUNCTION in a namespace body reports TS2683 from a
+different pass, so the row survived the disable; the `this` has to sit directly in the
+namespace body. Ablation (the walker's loop made to walk nothing, committed first per
+round 789): **exactly 3 of 22 arms redden, and they are exactly the three naming that
+walker** — whole-program control, its narrowed arm, and the public-API arm.
+
+**THE ANALYZER'S OWN CONTROLS CAUGHT THREE DEFECTS IN IT, ALL FAILING IN THE
+REASSURING DIRECTION — and the third is new.** (a) a `${…}` template desynchronised
+the stripper; (b) an expression-bodied `fun isDtsFile(x) = expr` swallowed the next
+function; (c) **a MULTI-LINE PARAMETER LIST truncated a function's span to its header,
+so the body — and every field write in it — was invisible.** Defect (c) wrongly
+cleared `checkSpreadNonIterableIntoFixedArity` and `populateAmbientCyclicBaseClasses`,
+i.e. **the queue's own REFUSAL LIST worked as the oracle that caught the analyzer.**
+Controls now held: 4,541 `fun` raw = 4,541 stripped (0 blanked), all 10 `pass("name")`
+KDoc samples refused, whole-file brace balance 0, 0 depth anomalies, spans
+non-overlapping and containing no inner header, `isDtsFile` <= 3 lines, and named body
+probes. **Also: a `pass("…")`-REGISTERING HELPER IS NOT A CALLER** — without excluding
+the 12 `initCheckPasses*` registrars from the call graph every walker reads as
+"reached from elsewhere" and the clean set is **0**.
+
+**THE VICTIM MOVED TWICE IN ONE ROUND**, which is the sharpest evidence yet for the
+queue's retirement of the victim heuristic: `checkExportEqualsCloduleReExport` went
+0.13 -> 4.33 ms after 4a (it became the first later asker), and gating it in 4b moved
+the same cost onto `checkPropertyOverride` (+6.17). The victim is a LOCATION, never a
+walker that got slower.
+
+**THE SENSITIVITY FIXTURE IS WHAT CARRIED THIS BATCH.** It nets **16 of the 89** gated
+walkers as real netting passes, against **one** (`checkSpine`) on every dashboard
+profile — (INC.18)'s whole point, collected one round later.
+
+**GATES.** Suite **15,735 / 0 / 3** (+7 pins), `cost_gate.py` **identical** (largest
+`mapped.hits` +1.02%, the standing drift; then `mapped.keyed` +0.32%,
+`typeOfExpr.calls` +0.18%), `huge_methods.py --fail-over 0` clean (763 classes),
+`partition-equivalence.sh` **EQUIVALENT 78/78 after BOTH sub-batches**,
+`partition-gate.sh` **EQUIVALENT on both arms** (realism 78/78; sensitivity 76/76, 78
+netting passes), and both capture sweeps unmoved as above.
+
 ### Round (INC.19) — the replay's lost constraint was never a replay defect: a write-once interned field, resolved before its own scope, frozen in the SEED build
 
 **WHAT THIS ROUND DID.** (INC.17) landed the re-entrant replay at **3.06x** and
@@ -2812,49 +2906,58 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   display order is pinned byte-for-byte across the corpus — so this is a
   logical-parity conversation (`docs/logical-parity.md` § 2), not a refactor.
 
-- [ ] **(INC.7) BATCH 4 — 174 UNGATED PASSES LEFT AND A 268.8 ms PASS TABLE, AND THE
-  READING-BEATS-SWEEPING WINDOW IS CLOSING (mean ~1.6 ms per walker).** Batches 1-3 LANDED:
-  **68 walkers gated, floor 1,207 -> 514 ms, narrowed query 1,077 -> 542 ms, ratio at the
-  median file 9.70x**, suite unmoved, `partition-equivalence.sh` EQUIVALENT on all 78 files
-  after every one of the six sub-batches. **The discount is now measured three times and
-  behaved exactly as predicted — 79.0%, 85.5%, 92.9%** (batch 3: 295.9 ms of rows for 275 ms
-  of floor). Do NOT read batch 3's per-sub-batch split (137% / 81% / 30%) as three more
-  points: each is one four-sample floor draw against a 19-168 ms effect, and 3a's >100% is
-  batch 2's relocation being collected at the same time.
-  **START WITH THE TWO WALKERS BATCH 3 REFUSED AND THEN CLEARED BY READING** (3.3 ms, and
-  the reasoning is already done): `checkImportTypeUsedAsType` and
-  `checkBareAtTypesExportEqualsMissingNamedImport` were refused because a PRIVATE HELPER
-  scans `binderResults` itself. That is not a hazard — the helper is not a pass, so it is
-  never gated, and it keeps resolving against the whole program while the walker's loop
-  narrows. `checkMixinClassConstructor`, which batch 3 DID gate, has two such helpers
-  (`findTypeParamDeclByName`, `findTypeAliasByName`) and swept EQUIVALENT.
-  **THE VICTIM HEURISTIC IS RETIRED — do not open batch 4 by reading the relocation
-  victim.** Batch 2's victim `checkBaseClassImprovedMismatch` (0.07 -> 17.89 ms) is a
-  REWRITER and can never qualify, and its 17.89 ms was not relocated type work but an
-  inherited lazy per-file `SourceScanFilter` build (`SrcScanCache.filterFor`) — it was the
-  first walker to ASK, not the walker that COSTS. **34 ungated walkers still reach
-  `srcScan`; that family only banks when gated TOGETHER, and it is the best-shaped batch-4
-  cluster.**
-  **THE ANALYZER IS REUSABLE AND ITS CONTROLS ARE NOT OPTIONAL.** Rebuild it against the
-  CURRENT file (batch 3's inherited snapshot was already stale) and keep the stripper's
-  positive control — 4,509 `fun` declarations raw, 4,509 stripped, ZERO blanked. Its four
-  verdicts per walker: no checker-field write in the private closure, no `diagnostics`
-  read-back, no pre-loop accumulator, and **exactly one `binderResults` reference in the
-  walker body** (the closure-wide count is a lead to READ, not a refusal).
-  **REFUSED AND DECIDED — do not re-litigate**: `checkTypeArgumentConstraints` (fields 120+
-  passes read), `checkPropertyOverride`, `checkInterfaceMultiBaseConflicts`,
-  `checkSubsequentVarTypes`, `checkDerivedConstructorSuper`, `checkClassImplementsInterface`,
-  `populateAmbientCyclicBaseClasses`, `checkSpreadNonIterableIntoFixedArity` (a
-  producer/consumer side set `spineArgCallEnter` reads), the 49 that read or rewrite
-  `diagnostics`, the 12 cross-file accumulators, and **`trackAllImportReferences`** — which
-  is analyzer-clean and is a COLLECTOR, caught only by its name and its `init:` pass slot.
-  **THE STANDING TRAP, now in CLAUDE.md: 33 of the 252 ungated loops are NOT PASSES** but
-  lookup helpers (`resolveIdentifierInFile`, `getEnumMemberValue`, `computeTypeParamInfo`,
-  …). All are 0.00 ms; gating one breaks name resolution rather than dropping a diagnostic;
-  a mechanical `sed` over the loop header hits every one.
-  **Expected**: the tail is flat from here (the remaining 174 passes average ~1.6 ms), so
-  batch 4 is a bigger batch for a smaller prize — and the floor is now 95% of a median
-  narrowed query, so the (INC.3) decomposition, not this arc, is what bounds the rest.
+- [x] **(INC.7) DONE 2026-08-23 — 157 WALKERS GATED ACROSS FOUR BATCHES, AND BATCH 4
+  CLOSED THE TECHNIQUE RATHER THAN THE FAMILY.** Batches 1-3 gated 68; batch 4 gated
+  **89** more in two independently swept sub-batches. **Floor 1,207 -> 340 ms,
+  narrowed query median 1,077 -> 367 ms, ratio at the median file 13.30x.** The batch-4
+  diff is 89 loop headers and nothing else (`binderResults` 221 -> 132, `checkedResults`
+  255 -> 344). The relocation discount now has FOUR points — 79.0 / 85.5 / 92.9 /
+  **78.2%** (54.23 ms of rows for 42.41 ms of floor).
+  **WHY IT IS DONE: 65% OF WHAT REMAINS IS REFUSED BY SHAPE.** 172 ungated passes /
+  251.9 ms remain, and the top TEN rows are **165 ms** of it, every one refused —
+  `init:buildFileLocalTypeMaps` 62.06 (writes `deepInstantiationBailed`),
+  `checkTypeArgumentConstraints` 21.69, `checkBaseClassImprovedMismatch` 19.51
+  (`diagnostics[i] =`), `checkInterfaceMultiBaseConflicts` 12.73,
+  `checkSubsequentVarTypesPerFile` 10.70, `checkPropertyOverride` 9.61,
+  `checkDerivedConstructorSuper` 9.04, `init:computeAllEnumValues` 8.75,
+  `checkCircularClassBaseViaDefaultTypeArg` 6.91, `checkClassImplementsInterface` 5.94.
+  Analyzer-CLEAN was only 54 ms in total. Of the 83 refused: **53** write a checker
+  field or retract inside the private closure, 4 carry more than one `binderResults`
+  reference, 4 hold a cross-file pre-loop accumulator, and **43 retract via
+  `diagnostics.removeAll`**. **A successor must change the SHAPE of a retracting or
+  field-writing pass — the loop header is exhausted.** See (INC.20).
+  **TWO ANALYZER INVARIANTS WORTH MORE THAN THE BATCH** (both now in CLAUDE.md): a
+  MULTI-LINE PARAMETER LIST truncates a function's span to its header, hiding the body
+  and every field write in it — it wrongly cleared two passes THIS QUEUE HAD ALREADY
+  REFUSED, so the refusal list is the oracle that catches the analyzer; and a
+  `pass("…")`-REGISTERING helper is not a caller, so without excluding the 12
+  `initCheckPasses*` registrars the clean set is **0**.
+
+- [ ] **(INC.20) (INC.7)'s SUCCESSOR — SPLIT THE MIXED PASSES, BECAUSE THE LOOP
+  HEADER IS EXHAUSTED AND 65% OF THE REMAINING FLOOR IS REFUSED BY SHAPE.** After
+  batch 4 the floor's pass table is **212.16 ms** over 172 ungated passes, and the top
+  ten rows are **165 ms** of it with every one refused: 53 write a checker field or
+  retract inside the private closure, 43 retract via `diagnostics.removeAll`, 4 carry
+  more than one `binderResults` reference, 4 hold a cross-file pre-loop accumulator.
+  **THE TEMPLATE ALREADY EXISTS AND IS MEASURED**: (INC.17) split
+  `checkSubsequentVarTypes` — one MIXED pass whose two halves have OPPOSITE partition
+  behaviour and whose SUM a census had read as 14.90 ms — into a program-wide half and
+  a per-file half, taking the replay's fixed cost **15.59 -> 0.69 ms**, pinned on both
+  sides by `PartitionCensusHookTest`. The question for each candidate is the same one:
+  **is the field write / retraction a property of the PROGRAM or of the FILE?** A
+  program-wide COLLECTION half stays ungated and a per-file EMITTING half narrows.
+  **START WITH THE RETRACTORS, NOT THE FIELD WRITERS — they are the bigger and the
+  better-shaped group (43 passes).** A retraction removes rows another pass emitted, and
+  under a partition the rows for unassigned files are filtered out at the end anyway
+  (that is (INC.17)'s own model), so a retractor whose target is WITHIN-FILE may be
+  gateable unchanged. Read the `removeAll` predicate: one keyed on `fileName` is a
+  per-file retraction; one keyed on code+position alone may reach another file's row.
+  **DO NOT re-open `init:buildFileLocalTypeMaps` (62.06 ms, the single biggest row)
+  here — it is (INC.11)'s**, and its deferral is refused for a first-touch-ORDER reason
+  that a split does not address.
+  **GATES ARE (INC.7) BATCH 4's, INCLUDING BOTH CAPTURE SWEEPS** — a shape change to a
+  pass that writes checker state is far more likely than a loop header to fire
+  (INC.19)'s write-once-race hazard, which no diagnostics gate can see.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
