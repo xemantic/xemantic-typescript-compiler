@@ -90690,7 +90690,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkDerivedConstructorSuper() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -131063,7 +131063,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkInterfaceMultiBaseConflicts() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -132223,7 +132223,7 @@ interface DataView {
      */
     private fun checkDestructuredParamOptionalMemberArgs() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -134146,7 +134146,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkClassImplementsInterface() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -135968,7 +135968,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkPropertyOverride() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -138054,7 +138054,7 @@ interface DataView {
      */
     private fun checkBindingPatternUnknownInference() {
         if (!strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -138155,7 +138155,7 @@ interface DataView {
     }
 
     private fun checkObjectLiteralAccessorImpliedReturn() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -138231,7 +138231,7 @@ interface DataView {
     }
 
     private fun checkTypeArgumentConstraints() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -138252,7 +138252,7 @@ interface DataView {
      * Walks every TP list (functions / interfaces / classes / type-aliases / methods).
      */
     private fun checkGenericDefaultsValidation() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
