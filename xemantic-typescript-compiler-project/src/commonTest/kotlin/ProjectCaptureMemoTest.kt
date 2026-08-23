@@ -61,11 +61,19 @@ class ProjectCaptureMemoTest {
     private val b = "/proj/src/b.ts"
     private val c = "/proj/src/c.ts"
 
+    /**
+     * The `o["p"]` line is LOAD-BEARING and not decoration: without it this file's
+     * identifiers and its occurrence nodes are the SAME set, and the pin below that
+     * says hover and document highlights share one build passes whichever population
+     * each of them asks for. Ablated, it read 0 RED (CLAUDE.md round 813: a pin green
+     * under its own ablation is as often BLIND as the guard is redundant).
+     */
     private val source = """
         interface Shape { readonly p: string; }
         const o: Shape = { p: "x" };
         const first = o.p;
         const second = o.p;
+        const third = o["p"];
     """.trimIndent()
 
     /** A buffer whose interesting caret lands on something that is NO occurrence. */
