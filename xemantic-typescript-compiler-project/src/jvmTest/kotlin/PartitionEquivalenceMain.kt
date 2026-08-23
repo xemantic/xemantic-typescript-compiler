@@ -55,24 +55,30 @@ fun main(args: Array<String>) {
     val limit = if (args.size > 1) args[1].toInt() else Int.MAX_VALUE
     val compiler = ProjectCompiler(SystemVfs)
 
-    fun rowsOf(diagnostics: List<com.xemantic.typescript.compiler.Diagnostic>) =
-        diagnostics.groupBy { it.fileName }
-            .mapValues { (_, ds) ->
-                ds.map { "${it.code}|${it.start}|${it.length}|${it.message}" }.sorted()
-            }
-
     // A warm-up build, discarded. Without it the full arm is the first build in the
     // process — the slowest draw in this repo by a wide margin — and the ratio it is
     // divided into would compare a COLD number against warm ones, which is the error
     // CLAUDE.md names for every cross-regime comparison here.
     compiler.build(args[0], noEmit = true)
     val full = compiler.build(args[0], noEmit = true)
-    val fullRows = rowsOf(full.diagnostics)
+    val fullRows = PartitionGate.rowsOf(full.diagnostics)
     val filesWithDiagnostics = full.programFiles.count { !fullRows[it].isNullOrEmpty() }
     println(
         "program: files=${full.programFiles.size}  diagnostics=${full.diagnostics.size}  " +
             "filesCarryingThem=$filesWithDiagnostics",
     )
+    // (INC.18) THE RECEIPT, printed here so the CONTRAST is on one page: this arm is
+    // the REALISM arm and its sensitivity is 1 — every diagnostic tsc's own sources
+    // produce is netted by `checkSpine`, so what follows compares an essentially
+    // empty per-file population. `scripts/partition-gate.sh` runs the SENSITIVITY
+    // arm beside it.
+    val sensitivity = PartitionGate.sensitivity(compiler, args[0])
+    println(
+        "SENSITIVITY passes=${sensitivity.nettingPasses.size} " +
+            "netTotal=${sensitivity.netTotal} diagnostics=${sensitivity.diagnostics}",
+    )
+    println("SENSITIVITY passList ${sensitivity.nettingPasses}")
+
     require(filesWithDiagnostics > 0) {
         "REFUSED: the full build reports no per-file diagnostics, so every comparison " +
             "below would agree vacuously. Point this at a project that has some."
@@ -86,19 +92,11 @@ fun main(args: Array<String>) {
     val targets = full.programFiles.take(limit)
     for (file in targets) {
         val t0 = System.nanoTime()
-        val part = compiler.build(args[0], noEmit = true, recheckOnly = setOf(file))
+        disagreed += PartitionGate.sweep(compiler, args[0], listOf(file), fullRows)
         val ms = (System.nanoTime() - t0) / 1_000_000
         partitionTotal += ms
         each.add(ms)
         if (ms > slowest) { slowest = ms; slowestFile = file }
-        val expected = fullRows[file] ?: emptyList()
-        val actual = rowsOf(part.diagnostics)[file] ?: emptyList()
-        if (expected != actual) {
-            disagreed++
-            println("DISAGREE ${file.substringAfterLast('/')}  full=${expected.size} partition=${actual.size}")
-            for (row in (expected - actual.toSet())) println("   only-full: ${row.take(160)}")
-            for (row in (actual - expected.toSet())) println("   only-part: ${row.take(160)}")
-        }
     }
     each.sort()
     val median = each[each.size / 2]
