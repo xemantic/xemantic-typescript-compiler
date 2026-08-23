@@ -237,8 +237,24 @@ public class Project private constructor(
      * cacheable is the ANSWER to the exact question that was asked, which is what
      * this map holds. Dropped wherever [cached] is, since both describe the same
      * project state.
+     *
+     * ## (INC.14) The key is the PARTITION, and a subset is served from a superset
+     *
+     * The value is every row that build reported for ANY file of its partition, not
+     * only for the files the caller happened to name — so a later question about a
+     * SUBSET of that partition is answered by filtering, with no build. That is the
+     * whole of the error-reporting case: a host that asks `diagnosticsOf(openBuffers)`
+     * once on idle then answers its per-buffer annotator for free, `N` builds for `N`
+     * buffers becoming ONE.
+     *
+     * It is sound because a partition build's rows for a file are the rows a build of
+     * that file ALONE reports — which is not assumed but swept, at two granularities:
+     * `scripts/partition-equivalence.sh` compares a partition against the whole
+     * program, and `scripts/checker-reuse-differential.sh` compares a group of `k`
+     * against one build per file, over 1.07 M rows in an editor-ordered query
+     * sequence with revisits.
      */
-    private val narrowed = HashMap<String, List<Diagnostic>>()
+    private val narrowed = LinkedHashMap<Set<String>, List<Diagnostic>>()
 
     /**
      * (INC.12) The capture builds [captureIn] has already performed for this project
@@ -289,6 +305,53 @@ public class Project private constructor(
      * captures of two large files, where it used to be one plus a single span.
      */
     private val captures = LinkedHashMap<TypeCaptureRequest, ProjectCompiler.Result>()
+
+    /**
+     * (INC.14) The one capture build [prepare] has performed for this project STATE,
+     * or null — ONE `Checker`'s answers to every caret-scoped question about every
+     * file of a working set.
+     *
+     * ## Why it is a slot of its own and not another [captures] entry
+     *
+     * [captures] is an access-ordered LRU of two, sized for "the buffer in front of
+     * the user plus the one in the other split". A prepared check is the opposite
+     * shape — deliberately wide, deliberately expensive to earn, and worth keeping
+     * precisely while the user moves AWAY from the buffer that earned it — so an
+     * ordinary hover in an unprepared file must not evict it. Keeping it here means a
+     * caret query can only ever ADD to what is resident, never replace this.
+     *
+     * ## What it may serve, and what it may not
+     *
+     * It may serve every question [captureAround] asks about a file it covers, and
+     * nothing else. In particular it may NOT serve [diagnostics] or [diagnosticsOf]:
+     * a capture build types nodes the checker had no reason to type, so its
+     * diagnostics are not interchangeable with a plain build's — the rule
+     * `docs/language-service.md` § 3 has always stated, and the reason [prepare] is
+     * documented as preparing SEMANTIC queries rather than "the files".
+     *
+     * ## The bound is ONE, and the reason is memory
+     *
+     * A file-wide capture holds one answer per identifier per file; over a working
+     * set it is the largest value this class ever retains. One entry, replaced
+     * wholesale by the next [prepare] and dropped by any edit, is a bound a host
+     * cannot grow past however it calls.
+     */
+    private var prepared: PreparedCheck? = null
+
+    /**
+     * One [prepare] build: the partition its checker walked, the span set it was
+     * asked about per file, and its answers.
+     *
+     * [covered] is the REQUEST's own spans grouped by file, not something re-derived
+     * from the parse — so "does this prepared check carry the answer to that
+     * question" is decided against what was actually asked, and a future change to
+     * how a request is built cannot silently make the containment test optimistic.
+     */
+    private class PreparedCheck(
+        val files: Set<String>,
+        val covered: Map<String, Set<Long>>,
+        val result: ProjectCompiler.Result,
+    )
 
     private var closed: Boolean = false
 
@@ -352,12 +415,17 @@ public class Project private constructor(
      * `diagnostics(fileName)`. An EMPTY collection answers empty and does not build:
      * "the diagnostics of no files" needs no compile to be answered.
      *
-     * Three cost properties a host may rely on. A query on a CLEAN project performs
+     * Four cost properties a host may rely on. A query on a CLEAN project performs
      * NO build — the whole-program result is already in hand and filtering it is
      * strictly better than a narrowed compile. A query on a dirty project performs
-     * exactly ONE build, however many files were asked about. And a repeated
-     * identical query on an unchanged project performs none, because the answer is
-     * memoized per file set.
+     * exactly ONE build, however many files were asked about. A repeated identical
+     * query on an unchanged project performs none, because the answer is memoized per
+     * file set. And **(INC.14)** a query about any SUBSET of a set already asked about
+     * performs none either: the memo is keyed by the PARTITION the build walked and
+     * holds every row it reported for it, so `N` per-file questions after one
+     * `N`-file question are `N` filters and no build at all. That is the whole of the
+     * error-reporting case — a host asks `diagnosticsOf(openBuffers)` once on idle
+     * and its per-buffer annotator is free afterwards.
      *
      * The narrowed build's result is deliberately NOT retained as this project's
      * build: its checker walked a partition, so adopting it would make a subsequent
@@ -377,9 +445,14 @@ public class Project private constructor(
                 d.fileName?.let { PathUtil.normalize(it) } in keys
             }
         }
-        // Set-shaped, so the memo does not distinguish two spellings of one question.
-        val memoKey = keys.sorted().joinToString(" ")
-        narrowed[memoKey]?.let { return it }
+        // (INC.14) A build already performed for this state whose PARTITION contains
+        // every file asked about answers this question by filtering — so `N` per-file
+        // questions after one `N`-file question are `N` filters and no build.
+        for ((partition, rows) in narrowed) {
+            if (!keys.all { it in partition }) continue
+            return if (partition.size == keys.size) rows
+            else rows.filter { d -> d.fileName?.let { PathUtil.normalize(it) } in keys }
+        }
         val result = ProjectCompiler(overlay)
             .build(projectPath, noEmit = true, recheckOnly = keys)
         // The partition already filters its checker's diagnostics to the assigned
@@ -390,9 +463,100 @@ public class Project private constructor(
         val answer = result.diagnostics.filter { d ->
             d.fileName?.let { PathUtil.normalize(it) } in keys
         }
-        narrowed[memoKey] = answer
+        narrowed[keys] = answer
         return answer
     }
+
+    /**
+     * (INC.14) Checks [fileNames] NOW, so that every later SEMANTIC query about any
+     * of them is answered without compiling.
+     *
+     * ## What it is
+     *
+     * One build, one `Checker`, one walk, over the file set a host declares as its
+     * working set — an editor's open buffers — capturing every one of those files'
+     * whole occurrence population in that single walk. [quickInfoAt],
+     * [definitionsAt], [semanticsAt], [fileSemantics] and [documentHighlightsAt] then
+     * answer about any prepared file for FREE, at any caret, until something is
+     * edited. Where (INC.13) made the unit of a capture the BUFFER, this makes it the
+     * WORKING SET: `N` buffers cost ONE build between them instead of `N`.
+     *
+     * Measured on the 78 sources of tsc's own compiler, one build answering `k`
+     * queries against `k` builds answering one each: **1.79x at k = 2, 3.19x at
+     * k = 8, 3.82x at k = 26**, because the floor every narrowed build pays — crawl,
+     * bind, and the program-wide checker passes, ~345 ms there — is paid once
+     * instead of `k` times.
+     *
+     * ## That it tells the truth is SWEPT, not argued
+     *
+     * A `Checker` carries caches that record which question reached a type FIRST, so
+     * sharing one across queries could in principle make the ORDER of a host's
+     * queries observable. `scripts/checker-reuse-differential.sh` compares this
+     * arrangement against one fresh build per query, span for span and row for row:
+     * over 1.07 M compared rows in an editor-ordered query sequence WITH REVISITS
+     * (101 queries over 76 files, 25 of them asked again later by a DIFFERENT
+     * checker), **no row differs**, and a file asked twice is answered identically
+     * both times. In program order the same sweep finds ONE row of 741,864 — a
+     * redundant self-intersection that the shared arm renders correctly and the
+     * per-query arm does not.
+     *
+     * ## What it does NOT do
+     *
+     * It does not answer [diagnostics] or [diagnosticsOf], and that is a rule rather
+     * than an omission: a capture build types nodes the checker had no reason to
+     * type, so its diagnostics are not interchangeable with a plain build's
+     * (`docs/language-service.md` § 3). A host that wants both prepares for hover and
+     * calls `diagnosticsOf(theSameFiles)` for errors — itself ONE build for the whole
+     * set, and since (INC.14) reused by every later per-file question about a file in
+     * it.
+     *
+     * It also does not survive an EDIT, and nothing here does. Preparing again on
+     * idle after an edit is the intended rhythm, exactly as a host debounces
+     * [diagnostics].
+     *
+     * ## The cost, stated plainly
+     *
+     * It is a real build and it is not free: the first query is made DEARER so every
+     * later one is free — the same trade (INC.13) made one granularity down. The work
+     * is proportional to the identifiers in the prepared files, and the ANSWERS are
+     * RETAINED until the next edit: one type and one definition per identifier per
+     * file, which is the largest value this class ever holds. Prepare the buffers a
+     * user is looking at, not the program.
+     *
+     * A file that is not part of the program contributes nothing rather than raising,
+     * and an EMPTY collection prepares nothing and does not build — same reasoning as
+     * [diagnosticsOf]. Preparing a set already covered by the current prepared check
+     * does not build either, so a host may call this on every idle tick.
+     */
+    public fun prepare(fileNames: Collection<String>) {
+        checkOpen()
+        if (fileNames.isEmpty()) return
+        val keys = fileNames.mapTo(LinkedHashSet()) { keyOf(it) }
+        prepared?.let { if (keys.all { file -> file in it.files }) return }
+        val spans = ArrayList<TypeCaptureSpan>()
+        val covered = HashMap<String, Set<Long>>(keys.size * 2)
+        for (file in keys) {
+            val index = sourceIndexOf(file) ?: continue
+            // The SAME list [captureAround] would ask for, from the same cached
+            // parse — which is what makes a prepared answer serve that question
+            // rather than merely resemble it.
+            val fileWide = occurrenceSpansOf(file, index)
+            if (fileWide.isEmpty()) continue
+            spans.addAll(fileWide)
+            covered[file] = fileWide.mapTo(HashSet(fileWide.size * 2)) { packSpan(it.start, it.end) }
+        }
+        // Every named file was unreadable or held no occurrence: there is no question
+        // to prepare an answer to, and building would capture nothing.
+        if (spans.isEmpty()) return
+        val result = ProjectCompiler(overlay).build(
+            projectPath,
+            noEmit = true,
+            recheckOnly = keys,
+            typeCapture = TypeCaptureRequest(spans),
+        )
+        prepared = PreparedCheck(keys, covered, result)
+    }
+
 
     // --- positions -------------------------------------------------------------
 
@@ -1314,7 +1478,13 @@ public class Project private constructor(
         // name every file in the program, which buys nothing and takes a different
         // code path to do it.
         val definitions = (
-            if (narrow) captureIn(request)
+            // (INC.14) A prepared check carrying every swept span answers this
+            // without building — which is what makes document highlights free in a
+            // prepared buffer. It is consulted only on the NARROW branch: the
+            // whole-program sweep's claim is about files a prepared check's partition
+            // need not contain, and [preparedAnswerFor] must not be the only thing
+            // standing between that claim and a subset of it.
+            if (narrow) preparedAnswerFor(spans) ?: captureIn(request)
             else ProjectCompiler(overlay)
                 .build(projectPath, noEmit = true, typeCapture = request)
             )
@@ -2163,6 +2333,7 @@ public class Project private constructor(
         cached = null
         narrowed.clear()
         captures.clear()
+        prepared = null
         invalidate(key)
     }
 
@@ -2180,6 +2351,7 @@ public class Project private constructor(
         cached = null
         narrowed.clear()
         captures.clear()
+        prepared = null
         invalidate(key)
     }
 
@@ -2204,6 +2376,7 @@ public class Project private constructor(
         cached = null
         narrowed.clear()
         captures.clear()
+        prepared = null
         lineMaps.clear()
         sourceIndexes.clear()
         parseOptions = null
@@ -2266,12 +2439,39 @@ public class Project private constructor(
             val covered = HashSet<Long>(fileWide.size * 2)
             for (span in fileWide) covered.add(packSpan(span.start, span.end))
             if (nodes.all { packSpan(it.pos, it.end) in covered }) {
-                return captureIn(TypeCaptureRequest(fileWide))
+                return preparedAnswerFor(fileWide) ?: captureIn(TypeCaptureRequest(fileWide))
             }
         }
-        return captureIn(
-            TypeCaptureRequest(nodes.map { TypeCaptureSpan(key, it.pos, it.end) }.distinct()),
-        )
+        val asked = nodes.map { TypeCaptureSpan(key, it.pos, it.end) }.distinct()
+        // A caret on a node the file-wide request would not carry — a call
+        // expression, a literal, a `this`. A prepared check does not carry it either,
+        // UNLESS it happens to: the containment test is over what was ASKED, so it
+        // decides that rather than assuming it.
+        return preparedAnswerFor(asked) ?: captureIn(TypeCaptureRequest(asked))
+    }
+
+    /**
+     * (INC.14) [prepared]'s answer to [wanted], when the prepared build was asked
+     * about every one of those spans — otherwise null, and the caller builds.
+     *
+     * The test is CONTAINMENT of the asked spans, not membership of a file, because
+     * an answer that was never asked for is ABSENT rather than wrong: a hover served
+     * from a check that did not carry its span would render nothing, silently — which
+     * is [captureIn]'s own partition hazard one layer up. Deciding it against the
+     * prepared REQUEST's spans is what makes it a property of what actually happened
+     * rather than of two call sites deriving their span lists the same way today.
+     *
+     * It also decides the whole-program cases without their callers stating anything:
+     * [referencesAt] sweeps every file, so a prepared check over a working set does
+     * not contain its spans and this answers null.
+     */
+    private fun preparedAnswerFor(wanted: List<TypeCaptureSpan>): ProjectCompiler.Result? {
+        val check = prepared ?: return null
+        for (span in wanted) {
+            val covered = check.covered[span.fileName] ?: return null
+            if (packSpan(span.start, span.end) !in covered) return null
+        }
+        return check.result
     }
 
     /**
