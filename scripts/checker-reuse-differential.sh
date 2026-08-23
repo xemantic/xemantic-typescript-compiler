@@ -11,7 +11,9 @@
 # REFUSES rather than skips when its inputs are absent — a differential that quietly
 # compares nothing is round 853's defect.
 #
-# Usage: scripts/checker-reuse-differential.sh [<projectDir> [groupSize [maxFiles [dumpFile]]]]
+# Usage: scripts/checker-reuse-differential.sh [<projectDir> [groupSize [maxFiles [dumpFile [order]]]]]
+#   order: 'program' (default) or 'editor' — a shuffled query sequence WITH REVISITS,
+#   which is the only arm that puts one file in two different checkers' hands.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -41,4 +43,4 @@ CP="$CP:$ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$D
 echo "project: $PROJECT"
 exec java -Xmx6g -cp "$CP" \
   com.xemantic.typescript.compiler.project.CheckerReuseDifferentialMainKt \
-  "$PROJECT" "${2:-8}" "${3:-2147483647}" ${4:+"$4"}
+  "$PROJECT" "${2:-8}" "${3:-2147483647}" "${4:-}" "${5:-program}"

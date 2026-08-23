@@ -67,23 +67,39 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * model in between — an upper bound, since a real reused checker also has to reset
  * whatever a per-file pass wrote.
  *
- * **The one thing it does NOT model** is query ORDER: a reused checker answers in
- * the order the editor asks, this arm walks the group in program order. It is
- * therefore a census of one specific order, and the magnitude is the finding rather
- * than the identity of any single row.
+ * **EDITOR ORDER — the gap the first census left, closed by the `editor` arm.** The
+ * `program` arm walks the files in program order and groups consecutive ones, which
+ * models a set of queries but not an editor's SEQUENCE: a real host asks about
+ * whatever buffer the user touched next, and it comes BACK to buffers it has already
+ * asked about. So the `editor` arm builds a deterministic shuffled query SEQUENCE
+ * WITH REVISITS (every third query re-asks a file asked two queries ago), chunks
+ * THAT into groups, and compares POSITION BY POSITION rather than file by file — so
+ * a file answered by one checker and then again by a later one is compared at both
+ * of its positions. It additionally runs the COLD arm over the same sequence, which
+ * gives two controls the file-keyed census could not have: `coldSelfDiverged` (does a
+ * fresh checker answer a revisited file the same way twice?) and `sharedSelfDiverged`
+ * (does a REUSED one?). A non-zero `coldSelfDiverged` would mean the reference arm is
+ * itself order-dependent and the comparison is not attributable.
  *
  * ```
- * scripts/checker-reuse-differential.sh [<projectDir> [groupSize [maxFiles [dumpFile]]]]
+ * scripts/checker-reuse-differential.sh [<projectDir> [groupSize [maxFiles [dumpFile [order]]]]]
  * ```
+ *
+ * `order` is `program` (the default) or `editor`.
  *
  * Exit 1 on any divergence, exit 2 on a refusal.
  */
 fun main(args: Array<String>) {
-    require(args.isNotEmpty()) { "usage: <projectDir> [groupSize [maxFiles [dumpFile]]]" }
+    require(args.isNotEmpty()) { "usage: <projectDir> [groupSize [maxFiles [dumpFile [order]]]]" }
     val groupSize = if (args.size > 1) args[1].toInt() else 8
     require(groupSize >= 2) { "REFUSED: a group of 1 IS the cold arm, so it compares nothing" }
     val limit = if (args.size > 2) args[2].toInt() else Int.MAX_VALUE
-    val dumpFile = if (args.size > 3) args[3] else null
+    val dumpFile = if (args.size > 3 && args[3].isNotEmpty()) args[3] else null
+    val order = if (args.size > 4) args[4] else "program"
+    require(order == "program" || order == "editor") {
+        "REFUSED: order must be 'program' or 'editor', not '$order'"
+    }
+    val editorOrder = order == "editor"
 
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
@@ -147,42 +163,80 @@ fun main(args: Array<String>) {
 
     val files = spansOf.keys.toList()
 
-    // --- COLD arm: one build per file -------------------------------------------
-    val coldTypes = HashMap<String, Map<Long, String>>()
-    val coldDefinitions = HashMap<String, Map<Long, String>>()
-    val coldDiagnostics = HashMap<String, List<String>>()
+    // --- the QUERY SEQUENCE -------------------------------------------------------
+    // `program`: every file once, in program order — the original census, unchanged
+    // byte for byte so its numbers stay comparable.
+    // `editor`: a DETERMINISTIC shuffle with REVISITS. The seed is fixed so a rerun
+    // compares the same thing; the revisit rule (every third query re-asks the file
+    // asked two queries earlier) is what puts a file in TWO different checkers'
+    // hands, which program order structurally cannot do.
+    val sequence: List<String> =
+        if (!editorOrder) files
+        else {
+            var seed = 20260823L
+            fun nextInt(bound: Int): Int {
+                // xorshift64*, so the shuffle is reproducible on every platform and
+                // does not depend on any stdlib RNG's implementation.
+                seed = seed xor (seed shl 13)
+                seed = seed xor (seed ushr 7)
+                seed = seed xor (seed shl 17)
+                return ((seed ushr 1) % bound).toInt()
+            }
+            val pool = files.toMutableList()
+            val shuffled = ArrayList<String>(pool.size)
+            while (pool.isNotEmpty()) shuffled.add(pool.removeAt(nextInt(pool.size)))
+            val seq = ArrayList<String>(shuffled.size * 4 / 3)
+            for ((i, file) in shuffled.withIndex()) {
+                seq.add(file)
+                if (i >= 2 && i % 3 == 2) seq.add(shuffled[i - 2])
+            }
+            seq
+        }
+    val revisits = sequence.size - sequence.toSet().size
+    println("order: $order  queries=${sequence.size}  distinct=${sequence.toSet().size}  revisits=$revisits")
+    require(!editorOrder || revisits > 0) {
+        "REFUSED: the editor arm produced no revisit, so its whole added claim would be vacuous"
+    }
+
+    // --- COLD arm: one build per QUERY -------------------------------------------
+    val coldTypes = ArrayList<Map<Long, String>>(sequence.size)
+    val coldDefinitions = ArrayList<Map<Long, String>>(sequence.size)
+    val coldDiagnostics = ArrayList<List<String>>(sequence.size)
     var coldMs = 0L
-    for (file in files) {
+    for (file in sequence) {
         val t0 = System.nanoTime()
         val cold = compiler.build(
             project, noEmit = true, recheckOnly = setOf(file),
             typeCapture = TypeCaptureRequest(spansOf.getValue(file)),
         )
         coldMs += (System.nanoTime() - t0) / 1_000_000
-        coldTypes[file] = typeRows(cold, file)
-        coldDefinitions[file] = definitionRows(cold, file)
-        coldDiagnostics[file] = diagnosticRows(cold, file)
+        coldTypes.add(typeRows(cold, file))
+        coldDefinitions.add(definitionRows(cold, file))
+        coldDiagnostics.add(diagnosticRows(cold, file))
     }
 
-    // --- SHARED arm: one build per group of `groupSize` files --------------------
-    val sharedTypes = HashMap<String, Map<Long, String>>()
-    val sharedDefinitions = HashMap<String, Map<Long, String>>()
-    val sharedDiagnostics = HashMap<String, List<String>>()
+    // --- SHARED arm: one build per GROUP of `groupSize` queries -------------------
+    val sharedTypes = arrayOfNulls<Map<Long, String>>(sequence.size)
+    val sharedDefinitions = arrayOfNulls<Map<Long, String>>(sequence.size)
+    val sharedDiagnostics = arrayOfNulls<List<String>>(sequence.size)
     var sharedMs = 0L
     var sharedBuilds = 0
-    for (group in files.chunked(groupSize)) {
-        val spans = group.flatMap { spansOf.getValue(it) }
+    var position = 0
+    for (group in sequence.chunked(groupSize)) {
+        val distinct = group.toSet()
+        val spans = distinct.flatMap { spansOf.getValue(it) }
         val t0 = System.nanoTime()
         val shared = compiler.build(
-            project, noEmit = true, recheckOnly = group.toSet(),
+            project, noEmit = true, recheckOnly = distinct,
             typeCapture = TypeCaptureRequest(spans),
         )
         sharedMs += (System.nanoTime() - t0) / 1_000_000
         sharedBuilds++
         for (file in group) {
-            sharedTypes[file] = typeRows(shared, file)
-            sharedDefinitions[file] = definitionRows(shared, file)
-            sharedDiagnostics[file] = diagnosticRows(shared, file)
+            sharedTypes[position] = typeRows(shared, file)
+            sharedDefinitions[position] = definitionRows(shared, file)
+            sharedDiagnostics[position] = diagnosticRows(shared, file)
+            position++
         }
     }
 
@@ -215,13 +269,35 @@ fun main(args: Array<String>) {
         }
     }
 
-    for (file in files) {
-        val ct = coldTypes.getValue(file)
-        val st = sharedTypes.getValue(file)
-        val cd = coldDefinitions.getValue(file)
-        val sd = sharedDefinitions.getValue(file)
-        val cx = coldDiagnostics.getValue(file)
-        val sx = sharedDiagnostics.getValue(file)
+    // Self-divergence controls, meaningful only in the `editor` arm: does an arm
+    // answer a REVISITED file the same way at both of its positions? A non-zero
+    // `coldSelfDiverged` means the REFERENCE arm is order-dependent and no comparison
+    // against it is attributable — so it is checked before the arms are compared.
+    var coldSelfDiverged = 0
+    var sharedSelfDiverged = 0
+    run {
+        val firstColdAt = HashMap<String, Int>()
+        for ((i, file) in sequence.withIndex()) {
+            val first = firstColdAt.getOrPut(file) { i }
+            if (first == i) continue
+            if (coldTypes[first] != coldTypes[i] ||
+                coldDefinitions[first] != coldDefinitions[i] ||
+                coldDiagnostics[first] != coldDiagnostics[i]
+            ) coldSelfDiverged++
+            if (sharedTypes[first] != sharedTypes[i] ||
+                sharedDefinitions[first] != sharedDefinitions[i] ||
+                sharedDiagnostics[first] != sharedDiagnostics[i]
+            ) sharedSelfDiverged++
+        }
+    }
+
+    for ((positionIndex, file) in sequence.withIndex()) {
+        val ct = coldTypes[positionIndex]
+        val st = sharedTypes[positionIndex]!!
+        val cd = coldDefinitions[positionIndex]
+        val sd = sharedDefinitions[positionIndex]!!
+        val cx = coldDiagnostics[positionIndex]
+        val sx = sharedDiagnostics[positionIndex]!!
         typesCompared += ct.size
         definitionsCompared += cd.size
         diagnosticsCompared += cx.size
@@ -267,7 +343,7 @@ fun main(args: Array<String>) {
         if (here > 0) {
             divergingFiles++
             divergences += here
-            println("DIVERGED ${file.substringAfterLast('/')}: $here row(s)")
+            println("DIVERGED [$positionIndex] ${file.substringAfterLast('/')}: $here row(s)")
         }
     }
 
@@ -278,8 +354,14 @@ fun main(args: Array<String>) {
 
     println(
         "compared: types=$typesCompared definitions=$definitionsCompared " +
-            "diagnostics=$diagnosticsCompared over ${files.size} file(s)",
+            "diagnostics=$diagnosticsCompared over ${sequence.size} quer(ies) in " +
+            "${files.size} file(s)",
     )
+    println("self-consistency: coldSelfDiverged=$coldSelfDiverged sharedSelfDiverged=$sharedSelfDiverged")
+    require(coldSelfDiverged == 0) {
+        "REFUSED: the COLD arm answered a revisited file differently at two positions " +
+            "($coldSelfDiverged), so it is not a reference and nothing below is attributable"
+    }
     require(typesCompared > 0) {
         "REFUSED: the cold arm captured no types at all, so every comparison agreed vacuously"
     }
@@ -288,16 +370,16 @@ fun main(args: Array<String>) {
             "this census would be vacuous. Point it at a project that reports something."
     }
     println(
-        "cost: cold=${coldMs}ms over ${files.size} build(s)  " +
+        "cost: cold=${coldMs}ms over ${sequence.size} build(s)  " +
             "shared=${sharedMs}ms over $sharedBuilds build(s)  " +
             "ratio=${"%.2f".format(coldMs.toDouble() / sharedMs.coerceAtLeast(1))}x",
     )
     println(
         if (divergences == 0) {
-            "EQUIVALENT: a checker shared by $groupSize queries answers every one of them " +
-                "exactly as a fresh checker does"
+            "EQUIVALENT: a checker shared by $groupSize queries ($order order) answers " +
+                "every one of them exactly as a fresh checker does"
         } else {
-            "DIVERGED: $divergences row(s) in $divergingFiles of ${files.size} file(s) — " +
+            "DIVERGED: $divergences row(s) in $divergingFiles of ${sequence.size} quer(ies) — " +
                 "types=$typeDivergences definitions=$definitionDivergences " +
                 "diagnostics=$diagnosticDivergences; " +
                 "sharedRendersMoreAny=$sharedRendersMoreAny absentInShared=$absentInShared " +
