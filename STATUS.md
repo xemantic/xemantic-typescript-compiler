@@ -11,8 +11,10 @@ are **ONE build per buffer between them**. **The oracle was built FIRST and cost
 which is the part worth copying: at a fixed partition, a span asked ALONE and the same span
 asked as part of its file are the same question, so any divergence is a defect in one arm.
 `scripts/caret-vs-file-capture.sh` reads **EQUIVALENT — 904 sampled spans in 76 files, zero
-divergence in either channel** — and prices the widening at **+17 ms at the median file**
-(373 -> 390), because a narrowed build is mostly FLOOR and extra spans are cheap beside it.
+divergence in either channel — and it REPLICATES at a second, disjoint sample (979 more spans,
+EQUIVALENT again; 1,883 positions between the two draws)** — and prices the widening at
+**+9 to +17 ms at the median file**, because a narrowed build is mostly FLOOR and extra spans
+are cheap beside it.
 (INC.10)'s first-touch hazard does not fire, and the reason is stated: a capture changes WHERE
 a walk records, not WHEN the compiler resolves a declaration. **The trade is not hidden — the
 FIRST query in a buffer gets dearer, +27% on `binder.ts` and +65% on `checker.ts`, so

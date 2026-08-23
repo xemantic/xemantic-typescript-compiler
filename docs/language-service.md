@@ -1746,7 +1746,7 @@ is +27% on `binder.ts` and +65% on `checker.ts`, which is tsc's largest source a
 of that whole program — so break-even is at **the second caret**, and everything after it
 is free. The reason it is not worse is that a narrowed build is mostly FLOOR (§ 13's
 ~345 ms), and the extra spans are cheap beside it: swept over all 78 files, a whole-file
-capture is **+17 ms at the median file** (373 → 390).
+capture is **+9 to +17 ms at the median file** (372 → 381 and 373 → 390, the two draws).
 
 **That the two answers AGREE is measured, not assumed.** A capture types nodes the
 checker had no reason to type, and typing populates order-dependent caches, so a
@@ -1754,7 +1754,8 @@ file-wide request could plausibly render a different type for the same span — 
 the mechanism `(INC.10)` refused a 66 ms saving over. `scripts/caret-vs-file-capture.sh`
 is the differential and needs no baseline, because a span asked alone and the same span
 asked as part of its file are the same question: **904 sampled spans in 76 files, zero
-divergence in either channel.**
+divergence in either channel — and a second sweep over 979 DIFFERENT positions reads
+EQUIVALENT again**, 1,883 sampled positions between the two draws.
 
 **What it does NOT do**: a query about a DIFFERENT file is a different request and still
 builds, and so is a caret on a node that is no occurrence at all — a call expression, a

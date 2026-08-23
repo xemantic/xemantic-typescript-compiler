@@ -61,6 +61,14 @@ simply does not fire here, and the reason is worth stating: (INC.10) changed WHE
 the compiler resolves a file's declarations, where this only changes how many
 spans a walk RECORDS at.
 
+**REPLICATED AT DIFFERENT POSITIONS, WHICH IS THE PART A SINGLE DRAW CANNOT
+CLAIM.** The sample is deterministic and evenly spaced, so changing its SIZE
+changes every position in it: a second sweep at **13** carets per file compared
+**979** spans and read **EQUIVALENT** again. Two draws, **1,883 sampled
+positions**, zero divergence. The price replicates too and is therefore quoted as
+a range — the whole-file capture is **+9 to +17 ms at the median file**
+(372 -> 381 and 373 -> 390).
+
 **MEASURED, BLOCKED ARMS, SAME BINARY WITH THE WIDENING OFF AND ON**
 (`scripts/warm-program-cost.sh`, compiler profile, warm, three rotations; blocked
 rather than interleaved because one arm's whole point is that some code does not
