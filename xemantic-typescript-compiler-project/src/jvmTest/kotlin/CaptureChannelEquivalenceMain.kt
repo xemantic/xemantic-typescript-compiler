@@ -29,6 +29,7 @@ import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
 import com.xemantic.typescript.compiler.SymTypeOrderCensus
+import com.xemantic.typescript.compiler.SymTypeOrderGate
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -100,6 +101,9 @@ fun main(args: Array<String>) {
     // it appends a row per rendered member and the whole sweep renders millions.
     SymTypeOrderCensus.on = System.getenv("XTSC_SYMORDER") == "1"
     System.getenv("XTSC_SYMORDER_FILTER")?.let { SymTypeOrderCensus.rowFilter = it }
+    // (INC.23) the candidate FOURTH dimension of round 778's write gate.
+    SymTypeOrderGate.refuseTruncatedWrites = System.getenv("XTSC_SYMORDER_GATE") == "1"
+    if (SymTypeOrderGate.refuseTruncatedWrites) println("SYMORDER gate: refuseTruncatedWrites")
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])

@@ -1048,6 +1048,26 @@ class Checker(
     private val fltmBuildInProgress = HashSet<String>()
 
     /**
+     * (INC.23) TRUE WHEN THE RESOLUTION IN FLIGHT WAS CUT SHORT BY A CYCLE GUARD —
+     * the dimension round 778's write gate does NOT read.
+     *
+     * `symbolTypeContextIsEmpty` asks whether the ambient INSTANTIATION context is
+     * empty (a type-param scope, alias args, an inference namespace), i.e. whether
+     * the answer depends on who INSTANTIATED it. It says nothing about whether the
+     * answer depends on WHAT WAS ALREADY RESOLVED — and
+     * [resolveStructuredTypeMembersCore] returns SILENTLY, leaving `properties`
+     * null, when the type it is asked about is already being resolved further up
+     * the stack. A `keyof` over such a type is empty and the mapped type above it
+     * degrades to `any`.
+     *
+     * Maintained like `deepInstantiationBailed`: save, reset, resolve, read, restore
+     * with an OR so an outer resolution inherits an inner truncation. Its consumer
+     * is the census by default and, when [SymTypeOrderGate.refuseTruncatedWrites] is
+     * armed, the `symbolTypes` write itself.
+     */
+    private var memberResolutionTruncated: Boolean = false
+
+    /**
      * (INC.23) Whether the map's one reader must be able to BUILD, i.e. whether some
      * file this checker may be asked about was skipped by the eager pass.
      *
@@ -111515,9 +111535,16 @@ interface DataView {
         if (PassTiming.detailed) {
             if (cacheable) PassTiming.symbolTypeCached++ else PassTiming.symbolTypeContextBypassed++
         }
+        val savedTruncated = memberResolutionTruncated
+        memberResolutionTruncated = false
         try {
             val type = getTypeOfSymbolWorker(symbol)
-            val persisted = cacheable || !SYMBOL_TYPE_ORDER_GATE
+            val truncated = memberResolutionTruncated
+            // (INC.23) THE FOURTH DIMENSION OF THE WRITE GATE, and it is a MEASUREMENT
+            // ARM: off — the shipped configuration — `persisted` is exactly round
+            // 778's verdict and this is one static boolean read.
+            val persisted = (cacheable && !(truncated && SymTypeOrderGate.refuseTruncatedWrites)) ||
+                !SYMBOL_TYPE_ORDER_GATE
             if (persisted) symbolTypes[symbol.id] = type
             // (INC.23) THE WRITER HOOK. Inside the guard, not merely behind it: the
             // arguments would otherwise be evaluated on every production resolution
@@ -111535,10 +111562,14 @@ interface DataView {
                     symbolTypeResolutionInProgress.size,
                     nodeTypeResolutionInProgress.size,
                     memberResolutionInProgress.size,
+                    truncated,
                 )
             }
             return type
         } finally {
+            // An inner truncation belongs to every resolution above it, exactly as
+            // `deepInstantiationBailed` propagates.
+            memberResolutionTruncated = savedTruncated || memberResolutionTruncated
             if (MapCensus.boxedKeyCensus) {
                 MapCensus.bk(MapCensus.BK_SYM_INPROG, symbol.id.toLong())
                 MapCensus.bkPop(MapCensus.BK_SYM_INPROG)
@@ -112259,7 +112290,14 @@ interface DataView {
         if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_SYM_INPROG, type.id.toLong())
         val memberInProgressAdded = memberResolutionInProgress.add(type.id)
         if (MapCensus.on) MapCensus.memberEnter(memberInProgressAdded)
-        if (!memberInProgressAdded) return
+        if (!memberInProgressAdded) {
+            // (INC.23) THE TRUNCATION, RECORDED. Everything above this line is a
+            // comment about why returning member-less is correct for the caller; what
+            // was never recorded is that the ANSWER the caller then computes is a
+            // function of the resolution ORDER, and `symbolTypes` freezes it.
+            memberResolutionTruncated = true
+            return
+        }
         try {
             if (LibTypeCensus.enabled) resolveStructuredTypeMembersCensused(type)
             else resolveStructuredTypeMembersDispatch(type)

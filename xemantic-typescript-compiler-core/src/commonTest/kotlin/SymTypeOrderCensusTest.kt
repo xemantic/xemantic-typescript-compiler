@@ -44,6 +44,24 @@ class SymTypeOrderCensusTest {
     @Test
     fun `the census is off by default`() {
         assert(!SymTypeOrderCensus.on)
+        assert(SymTypeOrderCensus.rowFilter == "any")
+    }
+
+    /**
+     * THE REFUTED ARM'S DEFAULT, WITH NO INSTALL — (INC.16) arm a1's lesson, and
+     * the one pin in this file that must not touch the flag it asserts.
+     *
+     * [SymTypeOrderGate.refuseTruncatedWrites] was (INC.23)'s candidate fourth
+     * dimension for round 778's `symbolTypes` write gate: do not persist a
+     * resolution that a member-resolution cycle guard cut short. Measured over the
+     * whole capture-channel sweep it changes NOTHING — the same 78 lost-to-`any`
+     * rows and a byte-identical narrow digest — because the re-resolution re-enters
+     * the same guard. Off, `getTypeOfSymbol`'s write is exactly round 778's verdict,
+     * which is what makes the flag provably inert rather than merely disabled.
+     */
+    @Test
+    fun `the truncation write gate is off by default`() {
+        assert(!SymTypeOrderGate.refuseTruncatedWrites)
     }
 
     /** A default compile records nothing at all. */
@@ -91,6 +109,9 @@ class SymTypeOrderCensusTest {
         }
         assert(SymTypeOrderCensus.firstResolve.isNotEmpty())
         assert(SymTypeOrderCensus.firstResolve.values.any { "ambient=empty" in it })
+        // The two dimensions round 778's gate does not read are recorded too.
+        assert(SymTypeOrderCensus.firstResolve.values.any { "depth=sym" in it })
+        assert(SymTypeOrderCensus.firstResolve.values.any { "truncated=false" in it })
         SymTypeOrderCensus.reset()
         assert(!SymTypeOrderCensus.on)
     }

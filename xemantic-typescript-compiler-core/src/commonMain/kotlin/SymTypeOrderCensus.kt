@@ -106,6 +106,7 @@ object SymTypeOrderCensus {
         symbolDepth: Int,
         nodeDepth: Int,
         memberDepth: Int,
+        truncated: Boolean,
     ) {
         resolves[id] = (resolves[id] ?: 0) + 1
         if (id in firstResolve) return
@@ -122,7 +123,7 @@ object SymTypeOrderCensus {
         // truncated answer is `any`.
         firstResolve[id] =
             "name=$name pass=${pass ?: "<outside>"} ambient=$ambient persisted=$persisted " +
-                "depth=sym$symbolDepth/node$nodeDepth/member$memberDepth"
+                "depth=sym$symbolDepth/node$nodeDepth/member$memberDepth truncated=$truncated"
     }
 
     /** The READER hook — one captured completion member and its provenance. */
@@ -153,7 +154,8 @@ object SymTypeOrderCensus {
         appendLine(
             "SYMORDER[$tag] members=${memberRows.size} anyMembers=${rows.size} " +
                 "resolvedSymbols=${firstResolve.size} " +
-                "refusedWrites=${firstResolve.values.count { "persisted=false" in it }}",
+                "refusedWrites=${firstResolve.values.count { "persisted=false" in it }} " +
+                "truncatedResolutions=${firstResolve.values.count { "truncated=true" in it }}",
         )
         for (row in rows) appendLine("SYMORDER[$tag]   $row")
     }

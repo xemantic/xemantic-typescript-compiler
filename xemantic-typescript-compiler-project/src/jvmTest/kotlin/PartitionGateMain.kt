@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SystemVfs
 
@@ -57,6 +58,15 @@ fun main(args: Array<String>) {
     val project = args[0]
     val minPasses = if (args.size > 1) args[1].toInt() else 0
     val minFilesCarrying = if (args.size > 2) args[2].toInt() else 1
+    // (INC.23) the `init:buildFileLocalTypeMaps` arms, unset by default so an unset
+    // run IS the shipped gate. That pass EMITS (TS2589/TS2615), so it is one of this
+    // fixture's netting passes and a scope change is a DIAGNOSTIC question here, not
+    // only a capture one.
+    FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
+    FltmDefer.scope = FltmDefer.scopeFromName(System.getenv("XTSC_FLTM_SCOPE"))
+    if (FltmDefer.eager != FltmDefer.Phases.ALL || FltmDefer.scope != FltmDefer.Scope.PROGRAM) {
+        println("FLTM eager phases: ${FltmDefer.eager} scope: ${FltmDefer.scope}")
+    }
     val compiler = ProjectCompiler(SystemVfs)
 
     // Discarded: the first build in a process is the slowest draw in this repo, and
