@@ -81,6 +81,12 @@ fun main(args: Array<String>) {
     val limit = if (args.size > 1) args[1].toInt() else Int.MAX_VALUE
     val perChannel = if (args.size > 2) args[2].toInt() else PER_CHANNEL
     val only = if (args.size > 3 && args[3].isNotEmpty()) args[3] else null
+    // (INC.24) The print caps, liftable for an investigation without changing anything
+    // the gate measures. `CaptureEquivalenceMain`'s rule: the CLASSIFICATION of a
+    // divergence is the finding, and 40 rows cut at 160 characters is not one.
+    val printCap = System.getenv("XTSC_CAPCH_PRINT")?.toIntOrNull() ?: 40
+    val mechCap = System.getenv("XTSC_CAPCH_MECH")?.toIntOrNull() ?: 20
+    val mechChars = System.getenv("XTSC_CAPCH_MECHCHARS")?.toIntOrNull() ?: 400
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])
@@ -139,6 +145,25 @@ fun main(args: Array<String>) {
         }
         return rows
     }
+
+    /**
+     * (INC.24) A DETERMINISTIC FOLD OVER ONE ARM'S WHOLE ANSWER SET — the twin of
+     * `CaptureEquivalenceMain`'s, and here it covers the three channels that runner
+     * cannot see. The full-vs-narrow report below compares two builds of ONE arm; the
+     * digest is what lets two ARMS be compared, i.e. what makes "a full build is
+     * unchanged by construction" a measurement instead of an argument.
+     */
+    fun digest(rows: Map<Long, String>): Long {
+        var h = 1125899906842597L
+        for (k in rows.keys.sorted()) {
+            h = h * 1000003L + k
+            for (c in rows.getValue(k)) h = h * 1000003L + c.code
+        }
+        return h
+    }
+
+    var fullDigestAll = 0L
+    var narrowDigestAll = 0L
 
     var divergences = 0
     var printed = 0
@@ -228,9 +253,9 @@ fun main(args: Array<String>) {
                     val mechanism = "$label ${firstDifference(left, right)}"
                     mechanisms[mechanism] = (mechanisms[mechanism] ?: 0) + 1
                 }
-                if (printed < 40) {
+                if (printed < printCap) {
                     printed++
-                    val width = if (only == null) 160 else Int.MAX_VALUE
+                    val width = if (only == null && printCap <= 40) 160 else Int.MAX_VALUE
                     println(
                         "$label ${file.substringAfterLast('/')} " +
                             "full=${left?.take(width) ?: "<absent>"}  " +
@@ -242,12 +267,23 @@ fun main(args: Array<String>) {
         val fullMembers = memberRows(full, file)
         val fullScopes = scopeRows(full, file)
         val fullSignatures = signatureRows(full, file)
+        val narrowMembers = memberRows(narrow, file)
+        val narrowScopes = scopeRows(narrow, file)
+        val narrowSignatures = signatureRows(narrow, file)
         memberCaptures += fullMembers.size
         scopeCaptures += fullScopes.size
         signatureCaptures += fullSignatures.size
-        compare("MEMBERS", fullMembers, memberRows(narrow, file))
-        compare("SCOPE", fullScopes, scopeRows(narrow, file))
-        compare("SIGS", fullSignatures, signatureRows(narrow, file))
+        // (INC.24) Folded per file in `programFiles` order — a function of the program,
+        // not of the sweep's scheduling.
+        for (rows in listOf(fullMembers, fullScopes, fullSignatures)) {
+            fullDigestAll = fullDigestAll * 1000003L + digest(rows)
+        }
+        for (rows in listOf(narrowMembers, narrowScopes, narrowSignatures)) {
+            narrowDigestAll = narrowDigestAll * 1000003L + digest(rows)
+        }
+        compare("MEMBERS", fullMembers, narrowMembers)
+        compare("SCOPE", fullScopes, narrowScopes)
+        compare("SIGS", fullSignatures, narrowSignatures)
         if (here > 0) {
             divergingFiles++
             divergences += here
@@ -255,6 +291,7 @@ fun main(args: Array<String>) {
         }
     }
 
+    println("ARM DIGEST full=$fullDigestAll narrow=$narrowDigestAll")
     println(
         "captures: members=$memberCaptures scopes=$scopeCaptures signatures=$signatureCaptures " +
             "over $filesCompared file(s)",
@@ -267,8 +304,8 @@ fun main(args: Array<String>) {
     }
     if (mechanisms.isNotEmpty()) {
         println("mechanisms (distinct first differing element), most frequent first:")
-        for ((mechanism, count) in mechanisms.entries.sortedByDescending { it.value }.take(20)) {
-            println("  x$count  ${mechanism.take(400)}")
+        for ((mechanism, count) in mechanisms.entries.sortedByDescending { it.value }.take(mechCap)) {
+            println("  x$count  ${mechanism.take(mechChars)}")
         }
     }
     println(

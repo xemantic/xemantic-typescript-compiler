@@ -80,6 +80,12 @@ fun main(args: Array<String>) {
         println("FLTM eager phases: ${FltmDefer.eager}")
     }
     AliasDisplayCensus.on = System.getenv("XTSC_ALIAS_CENSUS") == "1"
+    // (INC.24) How many divergent rows to PRINT, and how wide. The CLASSIFICATION of a
+    // divergence is the finding, not its count, and 40 rows truncated at 140 characters
+    // is not a classification of a few thousand — so both caps are liftable for an
+    // investigation WITHOUT changing anything the gate measures.
+    val printCap = System.getenv("XTSC_CAPEQ_PRINT")?.toIntOrNull() ?: 40
+    val rowCap = System.getenv("XTSC_CAPEQ_ROWCHARS")?.toIntOrNull() ?: 140
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])
@@ -120,6 +126,32 @@ fun main(args: Array<String>) {
         }
         return rows
     }
+
+    /**
+     * (INC.24) A DETERMINISTIC FOLD OVER ONE ARM'S WHOLE ANSWER SET, so two arms of
+     * this runner can be compared on what they AGREE about and not only on where the
+     * full and the narrowed build of ONE arm differ.
+     *
+     * The divergence report below is a full-vs-narrow comparison WITHIN one arm. It
+     * cannot say whether the FULL build still answers what it answered before a
+     * change — and "an unpartitioned compile is unchanged by construction" is exactly
+     * the kind of claim that is true of the code and false of the binary (CLAUDE.md
+     * rounds 853/873). Running this main twice and comparing the FULL digests is that
+     * verification; the NARROW digest is the half a partition-shaped change is allowed
+     * to move. Ordering is by span key so the fold is a property of the ANSWERS and
+     * not of `HashMap` iteration.
+     */
+    fun digest(rows: Map<Long, String>): Long {
+        var h = 1125899906842597L
+        for (k in rows.keys.sorted()) {
+            h = h * 1000003L + k
+            for (c in rows.getValue(k)) h = h * 1000003L + c.code
+        }
+        return h
+    }
+
+    var fullDigestAll = 0L
+    var narrowDigestAll = 0L
 
     var divergences = 0
     var printed = 0
@@ -173,6 +205,12 @@ fun main(args: Array<String>) {
         capturedTypes += fullTypes.size
         capturedDefinitions += fullDefinitions.size
 
+        // (INC.24) Folded per file and in `programFiles` order, so the whole-program
+        // digest is a function of the program rather than of the sweep's scheduling.
+        fullDigestAll = fullDigestAll * 1000003L + (digest(fullTypes) * 31 + digest(fullDefinitions))
+        narrowDigestAll =
+            narrowDigestAll * 1000003L + (digest(narrowTypes) * 31 + digest(narrowDefinitions))
+
         var here = 0
         for (span in (fullTypes.keys + narrowTypes.keys)) {
             val a = fullTypes[span]
@@ -186,11 +224,11 @@ fun main(args: Array<String>) {
                 b.split("any").size > a.split("any").size -> widenedToAny++
                 else -> otherShape++
             }
-            if (printed < 40) {
+            if (printed < printCap) {
                 printed++
                 println(
                     "TYPE ${file.substringAfterLast('/')} " +
-                        "full=${a?.take(140) ?: "<absent>"}  narrow=${b?.take(140) ?: "<absent>"}",
+                        "full=${a?.take(rowCap) ?: "<absent>"}  narrow=${b?.take(rowCap) ?: "<absent>"}",
                 )
             }
         }
@@ -205,11 +243,11 @@ fun main(args: Array<String>) {
                 a == null -> absentInFull++
                 else -> otherShape++
             }
-            if (printed < 40) {
+            if (printed < printCap) {
                 printed++
                 println(
                     "DEF  ${file.substringAfterLast('/')} " +
-                        "full=${a?.take(140) ?: "<absent>"}  narrow=${b?.take(140) ?: "<absent>"}",
+                        "full=${a?.take(rowCap) ?: "<absent>"}  narrow=${b?.take(rowCap) ?: "<absent>"}",
                 )
             }
         }
@@ -220,6 +258,7 @@ fun main(args: Array<String>) {
         }
     }
 
+    println("ARM DIGEST full=$fullDigestAll narrow=$narrowDigestAll")
     if (AliasDisplayCensus.on) println(AliasDisplayCensus.report())
     println(
         "captures: spansAsked=$spansAsked  types=$capturedTypes  definitions=$capturedDefinitions " +

@@ -15161,6 +15161,26 @@ class Checker(
     }
 
     /**
+     * (INC.24) A READ-ONLY view of one file's finished map, for the pins alone.
+     *
+     * The soundness of ANY change to how [buildFileLocalTypeMaps] is scoped is not
+     * that a file's map is eventually built but that it is built with the SAME
+     * CONTENT: (INC.11) measured that simply not resolving these declarations loses
+     * 321 resolutions to `any`, which is a WRONG answer and not a missing one.
+     * Nothing in a diagnostic, an emitted byte or a `cost_gate.py` counter can see
+     * that difference — the one reader's own fallback chain resolves most names
+     * anyway — so the only instrument is the map itself, compared between one build
+     * and another.
+     *
+     * Rendered to strings because a `Type` instance is minted per build and its
+     * identity is meaningless across two of them. Deliberately does NOT build: it
+     * reports what the build under test left behind, so a pin cannot manufacture the
+     * entry it is asserting.
+     */
+    internal fun fileLocalTypeMapSnapshot(fileName: String): Map<String, String>? =
+        fileLocalTypeMaps[fileName]?.mapValues { (_, type) -> typeToString(type) }
+
+    /**
      * (INC.11) The map's ONE reader goes through here, so a phase the `init` pass
      * did not run is built the first time this file's names are asked about.
      *
