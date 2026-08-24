@@ -56051,6 +56051,15 @@ class Checker(
          *  emit TS2589 at the appropriate use site. */
         private const val MAPPED_TYPE_MAX_DEPTH = 10
 
+        /**
+         * (INC.25) Base-type depth cap for `keyofNamesFromDeclarations`. The walk is
+         * already bounded by a visited set on type id; the cap is the second belt,
+         * because the whole point of that helper is that a `keyof` reached through a
+         * CYCLE must terminate by construction rather than by luck. Exceeding it
+         * REFUSES (the pre-(INC.25) `string`), never returns a partial key set.
+         */
+        private const val KEYOF_DECL_MAX_DEPTH = 16
+
         /** Predefined type names that cannot be used as class/interface names (TS2414/TS2427). */
         private val PREDEFINED_TYPE_NAMES = setOf(
             "any", "number", "boolean", "string", "void", "never", "object",
@@ -163570,7 +163579,24 @@ interface DataView {
             // Members not yet resolved — trigger resolution
             resolveStructuredTypeMembers(type)
             val resolvedProps = type.properties
-            if (resolvedProps.isNullOrEmpty()) return stringType
+            // (INC.25) A NULL TABLE HERE MEANS THE RESOLUTION WAS **TRUNCATED**, and it
+            // is the only thing that can leave it null: every other exit of
+            // `resolveStructuredTypeMembersCore` assigns `properties` (an interface to
+            // its merged table, a reference to its instantiated one, an anonymous type
+            // to at worst `emptyList()`), while the cycle guard returns having assigned
+            // nothing. Answering `string` there is what made the lib's
+            // `{ [K in keyof any[]]?: boolean }` degrade to `any` and get FROZEN into
+            // `symbolTypes` — `keyof` must instead answer from the DECLARATIONS.
+            if (resolvedProps == null) {
+                val declared = keyofNamesFromDeclarations(type)
+                if (declared != null && declared.isNotEmpty()) {
+                    KeyofCycleCensus.answeredFromDeclarations++
+                    return getUnionType(declared.map { Type.StringLiteral(it) })
+                }
+                KeyofCycleCensus.refused++
+                return stringType
+            }
+            if (resolvedProps.isEmpty()) return stringType
             val literals = resolvedProps.map { Type.StringLiteral(it.name) }
             return getUnionType(literals)
         }
@@ -163584,6 +163610,108 @@ interface DataView {
             return stringType
         }
         return stringType
+    }
+
+    /**
+     * (INC.25) THE KEY SET OF A TYPE WHOSE MEMBER TABLE IS IN FLIGHT, read off the
+     * DECLARATIONS instead of off the table that does not exist yet — or null when
+     * it cannot be read completely.
+     *
+     * **IT IS TERMINATING BY CONSTRUCTION, WHICH IS THE WHOLE POINT.** (INC.19) hit
+     * the shape this could otherwise become: a cycle guard that ANSWERS instead of
+     * degrading can turn a bounded recursion into an unbounded one, and its tell is
+     * a spurious TS2589 at (0,0) (`reportCheckerStackOverflow`), never a depth
+     * diagnostic. So this walk calls NO resolver — not `resolveStructuredTypeMembers`,
+     * not `getTypeOfSymbol`, not `getTypeFromTypeNode`, not `getDeclaredTypeOfSymbol`.
+     * It reads only tables that are ALREADY computed and the AST, under a visited set
+     * keyed on type id and a depth cap; the self-referential-alias family that broke
+     * (INC.19) (`type Shared<I, D extends Shared<I, D>>`) cannot be reached from here
+     * at all, because nothing here resolves a constraint.
+     *
+     * **A PARTIAL ANSWER IS A WRONG ANSWER, SO IT REFUSES RATHER THAN GUESSES**
+     * (round 463: a partial key domain manufactured an excess-property TS2353 on a
+     * genuinely-valid key). Null — hence the pre-(INC.25) `string` — whenever some
+     * contributor cannot be enumerated: a base type that is not an object, an
+     * interface whose heritage has not been resolved yet, a symbol with no
+     * class/interface declaration at all.
+     *
+     * The names, their ORDER and the lib target filter are
+     * [resolveInterfaceMembersCore]'s, because the two must not drift: base members
+     * first in base order, then own members in declaration order across the merged
+     * declaration group, first spelling winning its position.
+     */
+    private fun keyofNamesFromDeclarations(type: Type.Object): List<String>? {
+        val out = LinkedHashSet<String>()
+        return if (collectKeyofDeclaredNames(type, out, HashSet(), 0)) out.toList() else null
+    }
+
+    /** [keyofNamesFromDeclarations]'s worker; false means "cannot be enumerated". */
+    private fun collectKeyofDeclaredNames(
+        type: Type.Object,
+        out: MutableSet<String>,
+        visited: MutableSet<Int>,
+        depth: Int,
+    ): Boolean {
+        if (depth > KEYOF_DECL_MAX_DEPTH) return false
+        // A reference's key set IS its target's: instantiation substitutes member
+        // TYPES and never renames a member.
+        val target = if (type is Type.Reference) type.target else type
+        if (!visited.add(target.id)) return true
+        // The exact answer whenever it exists — and in the shipped instance of this
+        // defect it always does, because `resolveReferenceMembers` resolves the
+        // TARGET before the instantiation loop that re-enters here.
+        target.properties?.let { props ->
+            for (p in props) out.add(p.name)
+            return true
+        }
+        val symbol = target.symbol ?: return false
+        if (target is Type.Interface) {
+            val bases = target.baseTypes ?: return false
+            for (base in bases) {
+                val baseObject = base as? Type.Object ?: return false
+                if (!collectKeyofDeclaredNames(baseObject, out, visited, depth + 1)) return false
+            }
+        }
+        var sawDeclaration = false
+        for (decl in symbol.declarations) {
+            val declaredMembers = when (decl) {
+                is ClassDeclaration -> decl.members
+                is InterfaceDeclaration -> decl.members
+                is ClassExpression -> decl.members
+                else -> continue
+            }
+            sawDeclaration = true
+            val isBuiltinDecl = decl in builtinLibDecls
+            for (member in declaredMembers) {
+                if (member is Constructor) {
+                    // Parameter properties are members, exactly as in the resolver.
+                    for (param in member.parameters) {
+                        val paramName = param.name
+                        if (param.modifiers.isNotEmpty() && paramName is Identifier) {
+                            out.add(paramName.text)
+                        }
+                    }
+                    continue
+                }
+                val name = when (member) {
+                    is PropertyDeclaration -> declaredMemberName(member.name)
+                    // An EMPTY name is a call signature and `new` a construct
+                    // signature; neither is a named property, exactly as in the
+                    // resolver's own `when`.
+                    is MethodDeclaration -> declaredMemberName(member.name)
+                        ?.takeIf { it.isNotEmpty() && it != "new" }
+                    is GetAccessor -> declaredMemberName(member.name)
+                    is SetAccessor -> declaredMemberName(member.name)
+                    else -> null
+                } ?: continue
+                if (isBuiltinDecl) {
+                    val minTarget = LIB_MIN_TARGET["${symbol.name}.$name"]
+                    if (minTarget != null && !libFeatureAvailable(minTarget)) continue
+                }
+                out.add(name)
+            }
+        }
+        return sawDeclaration
     }
 
     // -----------------------------------------------------------------------
