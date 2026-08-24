@@ -1,5 +1,48 @@
 # Status
 
+**AN ERROR-REPORTING QUERY IS 104-108 ms -> 25 ms — THE RE-ENTRANT REPLAY IS **2.25-2.30x**, NOT
+THE "DECAYING 1.68x" FIVE ROUNDS RECORDED, AND IT IS NOW WIRED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL
+VALVE (2026-08-24, (INC.40)).** The lineage was not wrong about the floor shrinking; it was
+measuring the wrong thing. **Every figure in it carried a whole-file `TypeCaptureRequest` in BOTH
+arms** — the request `replay-differential.sh` needs in order to GRADE the mechanism — and that is
++9-17 ms per query of cost common to both arms, which **dilutes a ratio and leaves no trace in
+it**. Measured that way at HEAD the same run still reads 1.34x; the diagnostics channel asks for no
+capture at all, and it is exactly the channel the differential grades as EQUIVALENT. Re-priced in
+**two independent JVMs**, warm, six warm-ups, leading draw discarded, ABBA-rotated, tsc's own 78
+sources: at `k = 1` **10,656 / 10,783 ms fresh against 4,728 / 4,685 replay = 2.25 / 2.30x**, per
+query **104 / 108 ms -> 25 / 25**; at `k = 2` 1.72 / 1.81x; at `k = 8` 1.26 / 1.25x. **The ratio
+falls with the working set exactly as it must** — the thing the replay deletes is the floor, paid
+once per QUERY and not per file — and **the replay arm's TOTAL lands on the whole-program CHECK
+cost** (4,728 against ~4,935 ms), i.e. (INC.37)'s **1.39x re-derivation tax being COLLECTED rather
+than re-paid**: 77 fresh checkers each re-derive the shared lib and foreign-declaration
+resolutions, one live checker does not. Floor **54 ms**, cross-checked against
+`partition-equivalence.sh`'s 61 ms at the same commit.
+**IT SERVES DIAGNOSTICS AND NOTHING ELSE, AND THE REFUSAL IS A *TYPE* RATHER THAN A COMMENT.**
+`replay-differential` at HEAD: **0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF`** on both arms (46 rows over
+tsc's sources, 178 over the 71 `partition-gate` files carrying them, 352,713 definition spans),
+against **43 `DIVERGE-TYPE` of 75 files** — the pre-existing HEAD state, overwhelmingly the
+union-alias display family (INC.26)/(INC.27) in which the FRESH arm is not automatically the right
+one. So `Project.diagnosticsOf` holds the live program through `DiagnosticsOnlyRecheck`, a private
+one-way valve whose single member takes a `Set<String>` and returns a `List<Diagnostic>`: **no
+`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave it**, so the
+caret channels cannot reach it even by mistake. The handle is dropped by `updateFile`,
+`deleteFile` and `close`. Queued as **(INC.41)**: closing those 43 is what would let captures
+through the same valve, and the prize for it is NOT measured.
+**THE ABLATION'S ONE TRANSFERABLE ARM.** Four arms, one mistake each, each verified as a real diff
+against the committed file — and in a3 (**the handle serves without widening, so it answers an
+empty list**) **the build-COUNT pin stays GREEN**. A count-only suite would have shipped a
+language service reporting no errors at all, at full speed, with every cost pin green; the value
+pins are what redden. One pin is recorded as UNDISCRIMINATED rather than claimed as coverage.
+**TWO INSTRUMENT TRAPS, BOTH FAILING TOWARD A PLAUSIBLE TABLE**: a **floor build is its own code
+path**, so floor draws taken after whole-program warm-ups read 129/89/96 ms against a true 52-56 —
+a 1.7x over-read that would have understated every derived ratio, now drawn at the END and
+cross-checked against the other instrument; and **arming is priced, not assumed free** (an armed
+77-query sweep reads 10,546 ms against 10,783 plain, changing no diagnostic row in 231 group
+comparisons). Suite **15,824 / 0 / 3** (+9 pins), 0 warnings, `partition-equivalence` EQUIVALENT
+78/78, `partition-gate` sensitivity 75/75, `cost_gate.py` all counters in band (`mapped.hits`
++1.63%, the standing drift, NOT rebaselined), `huge_methods --fail-over 0` 0 over limit.
+`docs/language-service.md` § 4a.
+
 **A MEDIAN NARROWED QUERY IS 108 ms — INDEPENDENTLY REPRODUCED — AND ITS OTHER HALF IS NOW
 DECOMPOSED: `checkSpine` IS 89-92% OF A FILE'S OWN CHECK, SCALING IS **LINEAR** WITH
 `checker.ts` AT THE *p10* PER NODE, AND Σ`own(F)` IS **1.39x** THE WHOLE-PROGRAM CHECK
@@ -203,51 +246,3 @@ exit 0 on both modules (core 781 classes), `partition-equivalence` EQUIVALENT 78
 inertness a measurement rather than a claim — **`capture-equivalence` returns full
 `3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files, BIT-IDENTICAL to the
 recorded baseline.**
-
-**AN ALIAS WAS RENAMING EVERY TYPE THAT ALREADY HAD ITS OWN NAME — IN THE *DIAGNOSTICS* CHANNEL, ON
-ORDINARY BUILDS — AND THE GATE THAT WAS SUPPOSED TO CATCH IT HAD THE REFERENCE ARM BACKWARDS
-(2026-08-24, (INC.26)).** **OPERATIONAL, READ FIRST: two recorded full-build digests MOVED, by
-design, for the first time in this arc — `capture-equivalence` `-3718897727265589316` ->
-**`3349895618940861366`**, `capture-channel` `4065921979171190360` -> **`-3278907782584108296`**.
-A full build is exactly what this round corrects; re-record them, do not read them as a regression.**
-The round was sent to buy back the capture gate (INC.25) moved from 5 to 2,275 spans, with two
-candidate routes. **The census inverted the brief and neither route was correct.** Classified per
-ELEMENT (nesting-aware, 62 distinct pairs), the `Intl.LocalesArgument` case the queue entry led with
-is **2 rows of 2,275**, and the dominant direction is the reverse of the assumption: **the FULL build
-attaches a name, the NARROW one renders the honest type** — 421 `HasIllegalExpressionInitializer` vs
-`PropertySignature`, 346 `ModuleName` vs `ModuleExportName`, 292 `IsInterface` vs
-`InterfaceDeclaration`, 127 `FunctionBody` vs `Block`. In tsc's own `types.ts` those are **aliases
-whose body is a single NAMED interface**: we stamped the alias onto that interface's `Type.id`, and
-`typeToString` reads `aliasDisplayMap` BEFORE the structural fallback, so every occurrence
-program-wide rendered under the alias. **The alias census independently refuted the assumed
-mechanism** — `DIFFERENT-NAME CLOBBER: 0`, 80 different-name refusals from one pair, nowhere near
-2,275, so (INC.11)'s first-wins hypothesis was simply not what these rows are.
-**IT REPRODUCES ON FOUR LINES WITH NO PARTITION, IN THE DIAGNOSTICS CHANNEL** — xtsc
-`Type 'FunctionBody' is not assignable to type 'number'.` against tsc 7.0.2's `Type 'Block'`. **That
-is the THIRD shipped correctness defect this session found while chasing latency**, after (INC.11)'s
-unbound `T` in a tooltip and (INC.25)'s `[Symbol.unscopables]: any`; all three were invisible to the
-corpus, the cost gate and all eight profiles. **Both queued routes were treating a symptom**: the
-6.68 ms one would have bought the gate back by making narrowed hovers **as wrong as full ones**.
-**THE FIX IS THE TEST THE SIBLING ARM ALREADY HAD** — `shouldRegister`'s Object arm never applied the
-`symbol == null` check its Intersection arm applies per constituent. Anonymous bodies still register
-(`type Foo = { a: number }` -> `Foo`); that boundary is the negative control. **ROUND 754 BIT AND THE
-HANDLING IS THE PART WORTH COPYING**: the first version reddened four `Table` rows and **no
-logical-parity divergence was taken** — that baseline is pristine tsc's, so switching it off would
-have moved AWAY from tsc. The rule was NARROWED to exclude a GENERIC named type (a bare all-defaulted
-generic resolves to the raw `Type.Interface` rendering `TableClass<any>`, not a name the source
-spells), and the ablation pins it: removing that exclusion reddens **exactly 2 of 504 tests — the new
-pin AND the corpus baseline, together**.
-**THE GATE READS 2,275 -> 1,128 SPANS (-50%), 46 -> 43 FILES**, `narrowRendersMoreAny=0`,
-`absentInNarrow=0`, `absentInFull=0` — **and 1,128 is recorded as the new baseline, not 5**, because
-the residual is two measured mechanisms in which the NARROWED arm is again the more correct one:
-~790 rows of `unionAliasStructural` (B416), which names ANY union matching a declared alias's member
-set first-wins — tsc renders `Ident | Str` where no alias was written and we answer `ModuleName` —
-and ~298 rows where the FULL build renders `any` and the narrow renders `T | readonly Node[]`. Queued
-as (INC.27)/(INC.28). **So the honest target for that gate is not "narrow agrees with full" but
-"neither arm has a wrong name to disagree about", and closing it by making narrow match full should
-be refused on sight.** Suite **15,805 / 0 / 3** (+4 pins), **zero corpus baselines moved**,
-`cost_gate.py` exit 0, `huge_methods --fail-over 0` exit 0 on both modules, `partition-equivalence`
-EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76 over 78 netting passes. **The FLOOR IS UNTOUCHED
-and no before-arm was run, deliberately, because the change cannot reach it**; and
-`capture-channel`'s DIVERGED count has **no same-session before-arm, so no claim is made about it** —
-which is the right way to report a number you did not control for.

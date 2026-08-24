@@ -1,3 +1,99 @@
+### Round (INC.21) — the scanning family gated as ONE batch banks 99.9%, the first ~100% discount in the arc, and the floor is now 75% a single refused row
+
+**WHAT THIS ROUND DID.** Gated the 19 whole-source-scanning passes TOGETHER (the point
+of the item: piecemeal banks nothing), four stragglers, and (INC.20)'s escalated design
+reversal.
+
+| | before | after |
+|---|---:|---:|
+| **`PT.total both.floor`** | 123.95 ms | **97.12 ms** |
+| `partition-equivalence.sh` floor | 162 ms | **137 ms** |
+| narrowed-query median, all 78 | 207 ms | **166 ms** |
+| ratio at the median file | 24.16x | **29.86x** |
+
+**THE PREDICTION WAS THE POINT AND IT HELD: 19.064 -> 0.024 ms = a 99.9% DISCOUNT**,
+against the arc's 79.0 / 85.5 / 92.9 / 78.2 / 86.3. Gating the family together left the
+lazily-built n-gram filter with nowhere to relocate to. **No row outside the batch
+rose** — the largest riser is `init:buildFileLocalTypeMaps` +2.4 ms on 70 (+3.5%)
+against the arm's own total drifting +9% between draws.
+**And WHY nothing catches it was measured, not inferred**: the three whole-program text
+gates that remain use a **raw `String.contains`, not round 895's filtered `srcHas`**, so
+they never touch the filter at all.
+
+**THE LIST WAS DERIVED BY TWO INDEPENDENT INSTRUMENTS AND THEY AGREE** — a call-graph
+walk from each registered `pass("name")` to `srcHas`/`srcIndexOf`/`srcLastIndexOf`, and
+a purely lexical scan for a `for (… in binderResults)` loop containing one. Largest row
+`checkReverseMappedIntersectionConstraint` **17.752 -> 0.001 ms**; the other 18 are
+0.78 ms and below.
+
+**THE STRAGGLERS TAUGHT SOMETHING THE BATCH DID NOT: THREE OF THEM KEEP THEIR COST, AND
+THE CONTROL PROVES IT.** All three have a whole-program `.contains` gate ABOVE the loop
+— a question about the PROGRAM, which must stay on `binderResults` — so gating the loop
+banks **~0.02 ms each**. `checkModulePreserve4Pin` is the control: its loops are
+narrowed and its row does NOT move (1.639 -> 1.699). What banks the ms is a **NAME
+PRE-GATE**, sound because it asks only what the pass can already do (a `when (basename)`
+with no `else`; a loop that `continue`s on any other name):
+`checkReexportedSymlinkReference3Pin` **2.509 -> 0.002**,
+`checkSubclassThisTypeAssignable01` **2.064 -> 0.002**.
+
+**THE AUTHORISED REVERSAL, AND ITS OBLIGATION WAS DISCHARGED ON BOTH ARMS OF ONE BOX.**
+`checkSubsequentVarTypesPerFile` **11.740 -> 0.004 ms**. (INC.17) had deliberately left
+it program-wide so a replay never re-enters it; the orchestrating session authorised the
+reversal because the replay is EXPERIMENTAL, refused by (INC.19) and reached by nothing
+shipped, while that row is paid by every real query. Measured rather than assumed:
+
+| | replayedPasses | replay | freshBuilds | DIVERGED |
+|---|---|---|---|---|
+| before | 284 of 417 | 11,625 ms | 22,253 ms | 5 of 75 |
+| after | **304 of 417** | **11,651 ms** | 19,601 ms | **5 of 75** |
+
+**20 more re-entered passes cost 26 ms over 75 questions (+0.2%)** and the divergence
+count is unchanged — it terminates and makes no answer worse. **Its ADVANTAGE fell
+1.91x -> 1.68x purely because the fresh build got cheaper, which strengthens (INC.19)'s
+refusal of the replay as a default path**: every round that shrinks the floor shrinks
+the replay's reason to exist. `ProjectRecheckTest`'s replay-set bound went 300 -> 360,
+and that number is not a constant — the classified set IS whatever reads the partition.
+
+**REFUSED, WITH REASONS.** `checkModuleAugmentationReexportDuplicates` and
+`checkCjsExportAugmentationConflict` loop `binderResults` and scan source, but
+`emitAugReexportDup` adds TWO top-level diagnostics — one on the augmenting file and one
+on the augmentation's **TARGET** — so a partition holding only the target loses its row
+(rows 0.15 and 0.00 ms, so the refusal is free). A name pre-gate for
+`checkModulePreserve4Pin` would change behaviour for a program carrying its needle and
+none of the five pinned files. And **routing the three raw `.contains` gates through
+`srcHas` would COST ~17.8 ms to build 78 filters to save three ~2 ms scans** — on a
+floor build no pass builds a filter any more.
+
+**THE PINS FAIL AGAINST THE UNFIXED BINARY, AND THE ABLATION REPRODUCES THE
+SESSION-START BASELINE.** 25 partition pins; the ablation (24 loop headers reverted + 2
+pre-gates removed) turns **9 RED**, including the count receipt *a narrowed build builds
+fewer whole-source scan filters than the whole program* on `SrcScan.builds`. Every pin
+green under ablation is a negative control by construction. **The ablated build
+reproduces `checkReverseMappedIntersectionConstraint` at 18.18 ms and the family sum at
+19.47** — round 776's rebuild-the-baseline control, satisfied.
+
+**THE ANALYZER CAUGHT A SIXTH DEFECT IN ITSELF.** A raw LINE-based brace matcher ran
+away exactly as CLAUDE.md warns — `checkParseUnmatchedTypeAssertion` read as **16,363
+lines against its true 15** — and was replaced by one matching on the STRIPPED text.
+**The tell was the impossible span, not a verdict.**
+
+**TWO THINGS FOR THE NEXT ROUND.** (1) **The floor is now 75% ONE ROW**:
+`init:buildFileLocalTypeMaps` **73.21 ms of 96.57**; everything else is <= 8.5 ms. It is
+refused twice over — (INC.11) measured a deferral losing 321 resolutions to `any`, and
+round 829 established its `typealias` resolutions are a TS2589/TS2615 **DETECTOR**, so
+not resolving them DELETES a diagnostic. (2) `init:moduleTypeNameIndex` is **BIMODAL on
+the FIRST sub-draw of a process** — [5.01, 0.32] / [8.80, 0.29] — **and does the same on
+the ABLATED binary** (5.55, 0.27), so it is not this round's victim. Another
+lazy-first-asker row, worth its own look.
+
+**GATES.** Suite **15,771 -> 15,784 / 0 / 3** (+13 pins, no baseline moved so no
+`logicalParityDivergences` entry), `partition-equivalence` EQUIVALENT 78/78,
+`partition-gate` realism 78/78 and sensitivity 76/76 with **78 netting passes**,
+`capture-equivalence` **5 spans / 3 of 76, `narrowRendersMoreAny=0`** and
+`capture-channel` **286 / 49, members=285 scopes=0 signatures=1** — both BASELINE,
+`cost_gate.py` largest `mapped.hits` +1.02% (standing) with all others <= 0.32%,
+`huge_methods --fail-over 0` core 775/0 and `-project` 50/0.
+
 ### Round (INC.20) — the floor pass table nearly HALVES: 13 passes whose "field write" was a per-file ambient, two MIXED splits, and the relocation victim finally has a NAME
 
 **WHAT THIS ROUND DID.** (INC.7) batch 4 closed the loop-header technique and left 83

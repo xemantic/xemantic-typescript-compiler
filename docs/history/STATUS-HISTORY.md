@@ -1,3 +1,51 @@
+**AN ALIAS WAS RENAMING EVERY TYPE THAT ALREADY HAD ITS OWN NAME — IN THE *DIAGNOSTICS* CHANNEL, ON
+ORDINARY BUILDS — AND THE GATE THAT WAS SUPPOSED TO CATCH IT HAD THE REFERENCE ARM BACKWARDS
+(2026-08-24, (INC.26)).** **OPERATIONAL, READ FIRST: two recorded full-build digests MOVED, by
+design, for the first time in this arc — `capture-equivalence` `-3718897727265589316` ->
+**`3349895618940861366`**, `capture-channel` `4065921979171190360` -> **`-3278907782584108296`**.
+A full build is exactly what this round corrects; re-record them, do not read them as a regression.**
+The round was sent to buy back the capture gate (INC.25) moved from 5 to 2,275 spans, with two
+candidate routes. **The census inverted the brief and neither route was correct.** Classified per
+ELEMENT (nesting-aware, 62 distinct pairs), the `Intl.LocalesArgument` case the queue entry led with
+is **2 rows of 2,275**, and the dominant direction is the reverse of the assumption: **the FULL build
+attaches a name, the NARROW one renders the honest type** — 421 `HasIllegalExpressionInitializer` vs
+`PropertySignature`, 346 `ModuleName` vs `ModuleExportName`, 292 `IsInterface` vs
+`InterfaceDeclaration`, 127 `FunctionBody` vs `Block`. In tsc's own `types.ts` those are **aliases
+whose body is a single NAMED interface**: we stamped the alias onto that interface's `Type.id`, and
+`typeToString` reads `aliasDisplayMap` BEFORE the structural fallback, so every occurrence
+program-wide rendered under the alias. **The alias census independently refuted the assumed
+mechanism** — `DIFFERENT-NAME CLOBBER: 0`, 80 different-name refusals from one pair, nowhere near
+2,275, so (INC.11)'s first-wins hypothesis was simply not what these rows are.
+**IT REPRODUCES ON FOUR LINES WITH NO PARTITION, IN THE DIAGNOSTICS CHANNEL** — xtsc
+`Type 'FunctionBody' is not assignable to type 'number'.` against tsc 7.0.2's `Type 'Block'`. **That
+is the THIRD shipped correctness defect this session found while chasing latency**, after (INC.11)'s
+unbound `T` in a tooltip and (INC.25)'s `[Symbol.unscopables]: any`; all three were invisible to the
+corpus, the cost gate and all eight profiles. **Both queued routes were treating a symptom**: the
+6.68 ms one would have bought the gate back by making narrowed hovers **as wrong as full ones**.
+**THE FIX IS THE TEST THE SIBLING ARM ALREADY HAD** — `shouldRegister`'s Object arm never applied the
+`symbol == null` check its Intersection arm applies per constituent. Anonymous bodies still register
+(`type Foo = { a: number }` -> `Foo`); that boundary is the negative control. **ROUND 754 BIT AND THE
+HANDLING IS THE PART WORTH COPYING**: the first version reddened four `Table` rows and **no
+logical-parity divergence was taken** — that baseline is pristine tsc's, so switching it off would
+have moved AWAY from tsc. The rule was NARROWED to exclude a GENERIC named type (a bare all-defaulted
+generic resolves to the raw `Type.Interface` rendering `TableClass<any>`, not a name the source
+spells), and the ablation pins it: removing that exclusion reddens **exactly 2 of 504 tests — the new
+pin AND the corpus baseline, together**.
+**THE GATE READS 2,275 -> 1,128 SPANS (-50%), 46 -> 43 FILES**, `narrowRendersMoreAny=0`,
+`absentInNarrow=0`, `absentInFull=0` — **and 1,128 is recorded as the new baseline, not 5**, because
+the residual is two measured mechanisms in which the NARROWED arm is again the more correct one:
+~790 rows of `unionAliasStructural` (B416), which names ANY union matching a declared alias's member
+set first-wins — tsc renders `Ident | Str` where no alias was written and we answer `ModuleName` —
+and ~298 rows where the FULL build renders `any` and the narrow renders `T | readonly Node[]`. Queued
+as (INC.27)/(INC.28). **So the honest target for that gate is not "narrow agrees with full" but
+"neither arm has a wrong name to disagree about", and closing it by making narrow match full should
+be refused on sight.** Suite **15,805 / 0 / 3** (+4 pins), **zero corpus baselines moved**,
+`cost_gate.py` exit 0, `huge_methods --fail-over 0` exit 0 on both modules, `partition-equivalence`
+EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76 over 78 netting passes. **The FLOOR IS UNTOUCHED
+and no before-arm was run, deliberately, because the change cannot reach it**; and
+`capture-channel`'s DIVERGED count has **no same-session before-arm, so no claim is made about it** —
+which is the right way to report a number you did not control for.
+
 **`[Symbol.unscopables]` HAS BEEN RENDERING `any` IN EVERY SMALL PROJECT'S HOVERS ON THE ORDINARY
 SHIPPED BUILD, AND FIXING IT COLLECTED THE FLOOR 129 -> 58 ms (2026-08-24, (INC.25)).** Three rounds
 read this as a partition defect. It is not: a THREE-LINE scratch project (`export const strArr:
