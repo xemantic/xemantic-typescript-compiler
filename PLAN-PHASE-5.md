@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.23)+(INC.24) — the census: "+61 member types" is ONE member name and ONE truncated resolution, the write gate is refuted, and `narrowRendersMoreAny` is a substring heuristic
+
+**WHAT THIS ROUND DID.** Produced the census (INC.23) exists for, and it shrank
+(INC.22)'s refusal by two orders of magnitude. **Nothing about the shipped default
+changed** — every instrument is off by default and every gate is byte-identical to
+baseline.
+
+**FINDING 1 — THE OBSTRUCTION IS ONE MEMBER NAME.** (INC.22) recorded "+61 member types
+collapse to `any`". Classified per ELEMENT (nesting-aware, so a function-typed member is
+not fragmented into its parameters), it is **78 rows carrying exactly ONE member —
+`[Symbol.unscopables]`** (the lib's `{ [K in keyof any[]]?: boolean }`) — in 14 files.
+
+| | baseline | partition-scoped arm |
+|---|---:|---:|
+| divergent spans | 286 / 49 files | 1,457 / 65 files |
+| rows LOSING a member to `any` | **0** | **78** |
+| **distinct member names lost** | 0 | **1** |
+| rows where NARROW is better (`any` -> real) | 2 | 3 |
+| other differing elements | 520 / 10 names | 9,397 / 196 names |
+
+Everything else — 1,379 rows over 196 names — is the (INC.11)(a) alias-display family,
+which (INC.22) already measured collapsing to **+1 row for 6.68 ms**.
+
+**FINDING 2 — `narrowRendersMoreAny` IS A SUBSTRING HEURISTIC AND IT OVER-REPORTS.**
+**ZERO of the shipped baseline's 168 "moreAny" rows actually loses a member type.** So a
+NONZERO value is a LEAD, not a finding, and (INC.22)'s headline number was the heuristic
+rather than the defect. A ZERO still means what it always did, which is why
+`capture-equivalence`'s `narrowRendersMoreAny=0` remains a real gate — but the
+capture-CHANNEL sweep's 168 is noise, and every quotation of it in this arc (including
+this session's own notes) should be read that way.
+
+**FINDING 3 — THE MECHANISM IS *NOT* ROUND 778's WRITE GATE.** The writer hook prints
+`(pass, ambient, persisted, depth, truncated)`, and the victim reads `ambient=empty
+persisted=true truncated=false` in the FULL arm against `ambient=empty persisted=true
+truncated=TRUE` in the narrow one. **The ambient is empty in BOTH**, so round 778 says
+cacheable either way and the suspected mechanism is dead. What differs is that under a
+partition the first ask arrives from INSIDE the member-table resolution the mapped type's
+`keyof` needs: `resolveStructuredTypeMembersCore` returns silently leaving `properties`
+null, and the mapped type degrades to `any`. **The whole narrowed compile has exactly ONE
+truncated resolution out of 822; a full build has 0 of 21,315 — and that one IS the
+defect.**
+
+**FINDING 4 — THE OBVIOUS FIX IS REFUTED, WITH A POSITIVE CONTROL.** Refusing to persist
+a TRUNCATED resolution changes nothing across the whole sweep (same 78 rows, byte-
+identical narrow digest). **The arm is not dead**: a single-file control shows
+`refusedWrites` 593 -> 594 and the victim going `persisted=true resolves=1` ->
+`persisted=false resolves=2`. The re-resolution simply re-enters the same guard and
+answers `any` again. **So the lever is the CYCLE HANDLING, not the cache** — a `keyof`
+over a type whose member table is IN FLIGHT must answer from the DECLARATIONS rather than
+degrade. That is a member-resolution change with corpus-wide blast radius and was
+deliberately not attempted.
+
+**FINDING 5 — (INC.22)'s THIRD OBSTRUCTION IS RETIRED.** The pure partition-scoped arm is
+**EQUIVALENT on BOTH `partition-gate` arms** (realism 78/78, sensitivity 76/76), even
+though `init:buildFileLocalTypeMaps` is one of that fixture's 78 netting passes — its rows
+carry the alias's OWN `fileName`, so a row for an out-of-partition file is dropped by the
+partition filter anyway. **(INC.22)'s "DIVERGED 1 file" belongs to its MIXED
+`TypeAlias`-program-wide configuration, not to partition-scoping.**
+
+**SO WHAT NOW GATES 62-65 ms IS ONE DEFECT ON ONE LIB MEMBER**, not a general
+order-dependence of `symbolTypes`. See (INC.25).
+
+**(INC.24) LANDED FIRST, ON ITS OWN COMMIT, AND REPRODUCED ITS OWN RECORDED VALUE.** Both
+capture runners now fold their whole answer set into ONE number per arm, **ordered by span
+key so it is a property of the ANSWERS and not of `HashMap` iteration**. From a clean tree
+the re-landed digest reproduces (INC.22)'s recorded `full=-3718897727265589316` over
+381,666 types + 360,152 definitions exactly — which is round 776's rebuild-the-baseline
+control, satisfied on an instrument rather than on a binary.
+
+**A PROCESS VIOLATION, RECORDED BECAUSE IT MATTERS MORE THAN THE FACT IT SURVIVED.** A
+`compileKotlinJvm` was run while a sweep JVM was live, which CLAUDE.md forbids in both
+directions. The sweep survived and its summary matched the earlier run exactly, so no
+measurement here is tainted — but the documented failure mode is SILENT (an empty results
+dir, or a run against half-written class files), so "it was fine this time" is not
+evidence the rule is soft.
+
+**GATES — all at the shipped default, all byte-identical to baseline.** Suite **15,800 /
+0 / 3** (15,784 + 16 pins), `cost_gate.py` `output.errors`/`spine.nodes` **+0.00%** with
+`mapped.hits` +1.02% (standing), `huge_methods --fail-over 0` clean (778 core classes +
+`-project`), `capture-equivalence` **5 / 3, moreAny 0** with digests unchanged,
+`capture-channel` **286 / 49, moreAny 168** with digests unchanged,
+`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
+`partition-gate` 78/78 and 76/76.
+
 ### Round (INC.22) — the floor's largest row is worth 62-65 ms by an axis that provably cannot move a full build, and it is REFUSED because the order it buys is RESOLUTIONS and not only a name
 
 **WHAT THIS ROUND DID.** Re-priced `init:buildFileLocalTypeMaps` — **69.16 ms of a
@@ -3427,37 +3511,55 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   IS the program's FIRST-TOUCH ORDER, and that order buys BOTH an alias name (cheap,
   fixable) AND member resolutions (not fixable without the expensive phase). See (INC.23).
 
-- [ ] **(INC.23) MAKE MEMBER RESOLUTION ORDER-INDEPENDENT — THE ONLY REMAINING ROUTE TO
-  THE FLOOR'S LAST BIG ROW, AND IT IS AN ARCHITECTURAL ITEM, NOT A PERF ONE.**
-  (INC.22) proved the prize (**62-65 ms of a 90 ms pass table; floor 131 -> 57, query
-  median 166 -> 116, ratio 42.61x**) is reachable by an axis that CANNOT move a full
-  build, and that the only thing standing in the way is that
-  `init:buildFileLocalTypeMaps` doubles as the program's FIRST-TOUCH ORDER for member
-  resolution: partition-scope it and **+61 member types collapse to `any`**
-  (`capture-channel` `moreAny` 168 -> 229), with `partition-gate`'s sensitivity arm
-  diverging on a diagnostic too.
-  **SO THE QUESTION IS NO LONGER "can the pass be deferred" BUT "why does resolving a
-  member depend on WHO ASKED FIRST".** The known mechanism is round 778's write gate:
-  `getTypeOfSymbol` persists into `symbolTypes` only when the CALLER's instantiation
-  context is empty, so a member first resolved from inside a namespace / type-param
-  scope / alias-arg install answers correctly and is NOT recorded — and (INC.6) already
-  found the mirror case, where a MINTED symbol must have its type written at MINT TIME,
-  ungated, because the gated write is refused exactly where it is needed.
-  **START BY CENSUSING THE 61**, not by designing: which symbols, resolved by which pass,
-  under what ambient — the instrument is (INC.19)/(INC.11)'s, a hook on the WRITER
-  printing (writer-pass, ambient, value) per arm. If they are one mechanism the fix may
-  be small; if they are the general order-dependence of `symbolTypes` it is a large
-  architectural change and should be recorded as such rather than half-attempted.
-  **DO NOT re-open the phase-deferral axis** — (INC.10), (INC.11) and (INC.22) have each
-  refused it, the last of them with a binary-verified digest.
+- [x] **(INC.23) THE CENSUS IS DONE 2026-08-24, AND IT SHRANK (INC.22)'s REFUSAL BY TWO
+  ORDERS OF MAGNITUDE.** "+61 member types collapse to `any`" is, classified per ELEMENT,
+  **78 rows carrying exactly ONE member name — `[Symbol.unscopables]`** (the lib's
+  `{ [K in keyof any[]]?: boolean }`) in 14 files. Everything else (1,379 rows, 196 names)
+  is the (INC.11)(a) alias-display family, which collapses to **+1 row for 6.68 ms**.
+  **ROUND 778's WRITE GATE IS REFUTED AS THE MECHANISM**: the writer hook reads
+  `ambient=empty persisted=true` in BOTH arms and differs only in `truncated` — under a
+  partition the first ask arrives from INSIDE the member-table resolution the mapped
+  type's `keyof` needs, `resolveStructuredTypeMembersCore` returns leaving `properties`
+  null, and the type degrades. **The whole narrowed compile has ONE truncated resolution
+  of 822; a full build has 0 of 21,315.**
+  **THE OBVIOUS FIX IS REFUTED WITH A POSITIVE CONTROL**: refusing to persist a truncated
+  resolution changes nothing sweep-wide (same 78 rows, byte-identical digest) while the
+  control shows the arm is live (`persisted=true resolves=1` -> `persisted=false
+  resolves=2`) — the re-resolution re-enters the same guard.
+  **AND `narrowRendersMoreAny` IS A SUBSTRING HEURISTIC THAT OVER-REPORTS**: **zero** of
+  the shipped baseline's 168 "moreAny" rows loses a member type. A nonzero value is a
+  LEAD; a zero still means what it always did.
+  **(INC.22)'s THIRD OBSTRUCTION IS RETIRED**: the PURE partition-scoped arm is EQUIVALENT
+  on both `partition-gate` arms — the "DIVERGED 1 file" belonged to its MIXED
+  `TypeAlias`-program-wide configuration.
 
-- [ ] **(INC.24) RE-LAND (INC.22)'s CAPTURE DIGEST — a general gate strengthening that
-  died with a refusal's revert.** `CaptureEquivalenceMain` gained a per-arm DIGEST over
-  every captured answer (381,666 types + 360,152 definitions), which is what let
-  (INC.22) PROVE a full build was untouched rather than argue it. That is useful for ANY
-  partition-shaped change and is independent of the refused behaviour. Re-land the
-  instrument alone, with no behaviour change: the digest, and `Checker.fileLocal-
-  TypeMapSnapshot` if it is cheap to keep. Small.
+- [x] **(INC.24) LANDED 2026-08-24 — both capture runners fold their whole answer set into
+  ONE number per arm, ordered by span key so it is a property of the ANSWERS and not of
+  `HashMap` iteration.** From a clean tree it reproduces (INC.22)'s recorded
+  `full=-3718897727265589316` over 381,666 types + 360,152 definitions exactly — round
+  776's rebuild-the-baseline control, satisfied on an instrument. `Checker.fileLocal-
+  TypeMapSnapshot` came with it, plus 4 pins.
+
+- [ ] **(INC.25) ONE LIB MEMBER NOW GATES 62-65 ms — `keyof` OVER A TYPE WHOSE MEMBER
+  TABLE IS IN FLIGHT MUST ANSWER FROM THE DECLARATIONS.** (INC.23) reduced (INC.22)'s
+  refusal to a single defect: under a partition the first ask for `[Symbol.unscopables]`
+  arrives from INSIDE the member-table resolution its own `keyof any[]` needs;
+  `resolveStructuredTypeMembersCore` returns silently with `properties` null and the
+  mapped type degrades to `any`, in 78 rows across 14 files. **ONE truncated resolution
+  out of 822 in a narrowed compile; ZERO of 21,315 in a full one.**
+  **THE CACHE IS NOT THE LEVER AND THAT IS MEASURED** — refusing to persist the truncated
+  answer re-resolves and re-enters the same guard, answering `any` again (positive control
+  recorded). **The lever is the CYCLE HANDLING.**
+  **THE PRIZE, ALREADY MEASURED BY (INC.22) AND UNCONTESTED**: floor **131 -> 57 ms**,
+  narrowed-query median **166 -> 116**, ratio **29.86x -> 42.61x**, full build unchanged
+  BY CONSTRUCTION and verified by an identical whole-answer digest.
+  **THE HAZARD IS THE BLAST RADIUS**: this is a member-resolution change, so the corpus is
+  the gate as much as the sweeps, and a cycle guard that answers instead of degrading can
+  turn a bounded recursion into an unbounded one — (INC.19) hit exactly that shape and its
+  tell was a spurious **TS2589 at (0,0)**, `reportCheckerStackOverflow`, never a depth
+  diagnostic. Build the repro on the LIB shape first (`@useRealLibs`, round 725 — without
+  it the utility type degrades to `any` and the pin is vacuous).
+
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
   `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`

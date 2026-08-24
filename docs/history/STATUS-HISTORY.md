@@ -1,3 +1,46 @@
+**A HOVER HAS BEEN RENDERING AN UNBOUND `T` PROGRAM-WIDE ON THE ORDINARY SHIPPED BUILD, AND THE
+FLOOR'S BIGGEST ROW IS REFUSED ON A PREMISE ITS OWN QUEUE ITEM HAD BACKWARDS (2026-08-23,
+(INC.11)).** The item existed to unblock **66 ms** — `init:buildFileLocalTypeMaps`, the largest
+single row in a 212 ms floor pass table — on the belief that the cost buys nothing but a
+program-wide FIRST-TOUCH ORDER for interning and `aliasDisplayMap`. **A three-phase re-measurable
+arm says part of it buys RESOLUTIONS**: fully deferred is **1,665 divergent capture spans in 47
+files with `narrowRendersMoreAny = 321`** — 321 resolutions LOST TO `any`, which no display fix can
+reach. (The arm beats (INC.10)'s own table 1.6x-3.4x — 137 / 10 files for `TYPEALIAS`-only against
+462 / 18 — and refuses anyway.) **REFUSED, and the item is closed rather than re-tried.**
+**CLASSIFYING THE RESIDUAL REFUTED THE QUEUE'S HYPOTHESIS AND FOUND A SHIPPED DEFECT.** The item
+guessed the undiagnosed 462 spans "may be two genuinely different `Type` instances". They are **ONE
+instance carrying TWO COMPETING NAMES**: an `Extract<ClassLikeDeclaration, Pick<T, "kind">>` whose
+conditional CANNOT DECIDE (a free `T` in the second argument) answers its own CHECK TYPE — the
+interned union — and the generic site then wrote `aliasDisplayMap[union.id] = ("Extract", args)`
+**unconditionally**. So a caret on `ClassLikeDeclaration` reported
+`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` — **an unbound `T` in a tooltip, for
+every user, on the whole-program build** — and nothing in this repo could see it but the capture
+sweeps, since no diagnostic moves. **FIXED**: an instantiation that answers one of its own arguments
+unchanged no longer registers a name for it, verified against the ablated binary through the CLI
+(`Type 'Pass<Shape, Pick<T, "a">>' is not assignable to type 'number'`).
+**TWO INSTRUMENT LESSONS, BOTH OF THE FAILING-REASSURINGLY KIND.** The census had to be
+**WITHIN-ARM** — `Type.id` is minted in resolution order, so no cross-arm comparison is possible —
+and **the first hook watched the wrong site**, reading `0` clobbers at the last-wins site; **reading
+that zero as "not a display question" would have been exactly wrong.** The sharpened census reads
+**86** instantiations answering an argument unchanged (24x `Partial`, 18x `Extract`) with a positive
+control that it is not dead: **6** different-name refusals at the first-wins site. And **the pin was
+BLIND on its first draft** — the embedded lib declares no `Pick`, so the shape degraded to `any` and
+it passed against the ablated binary; only the ablation said so. With `@useRealLibs` it goes RED
+against the unfixed binary with its negative control green.
+**WHAT REMAINS IS A CHANGE OF KEY, NOT OF POLICY**: the other half — 302 spans in `checker.ts` alone
+under full deferral — is two SYNONYMOUS non-generic aliases resolving to one interned type, decided
+first-wins, and **tsc picks by the REFERENCE's declaration site, which an id-keyed global map cannot
+express**. Against round 754's deliberate `Type.Reference` exclusion and a union display order
+pinned byte-for-byte across ~13k baselines, that is a logical-parity conversation and not worth
+opening for a 66 ms already refused. **GATES**: suite **15,741 / 0 / 3** (+6 pins),
+`capture-equivalence` **5 spans / 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 /
+49** both IDENTICAL, `partition-equivalence` EQUIVALENT on all 78, `partition-gate` EQUIVALENT on
+both arms (78 netting passes), `cost_gate.py` PASS (`output.errors` 46, `spine.nodes` +0.00%,
+largest `mapped.hits` **+1.02%**, the standing drift), `huge_methods.py --fail-over 0` clean on core
+AND `-project`. **Floor 324 ms / median 357 / ratio 14.06x are DRAW-TO-DRAW against the round's
+340 / 367 / 13.30x, NOT a saving — the landed change moves no work.**
+
+
 **157 TAIL WALKERS ARE NOW PARTITION-SCOPED, THE INCREMENTAL FLOOR IS 340 ms, AND THE ONE-LINE
 TECHNIQUE IS CLOSED BECAUSE 65% OF WHAT REMAINS IS REFUSED BY SHAPE (2026-08-23, (INC.7) batch 4).**
 Batch 4 gated **89** more program-wide tail walkers onto the check partition in two independently

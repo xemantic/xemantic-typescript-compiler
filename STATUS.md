@@ -1,5 +1,49 @@
 # Status
 
+**THE 62-65 ms THAT (INC.22) REFUSED IS GATED BY *ONE LIB MEMBER* AND *ONE TRUNCATED RESOLUTION*,
+AND THE COUNTER THAT REPORTED IT IS A SUBSTRING HEURISTIC (2026-08-24, (INC.23)+(INC.24)).** (INC.22)
+refused partition-scoping the floor's largest row — `init:buildFileLocalTypeMaps`, 69.16 ms of a
+90.15 ms pass table — because `capture-channel`'s `moreAny` went 168 -> 229, read as "+61 member
+types collapse to `any`". **Classified per ELEMENT (nesting-aware, so a function-typed member is not
+fragmented into its parameters) that is 78 rows carrying exactly ONE member name —
+`[Symbol.unscopables]`, the lib's `{ [K in keyof any[]]?: boolean }` — in 14 files.** The other 1,379
+rows over 196 names are the (INC.11)(a) alias-display family, which (INC.22) already measured
+collapsing to **+1 row for 6.68 ms**. **AND `narrowRendersMoreAny` OVER-REPORTS: ZERO of the shipped
+baseline's own 168 "moreAny" rows actually loses a member type**, so a nonzero value is a LEAD and
+not a finding — a zero still means what it always did, which is why `capture-equivalence`'s
+`narrowRendersMoreAny=0` remains a real gate. Every moreAny figure quoted in an older round note,
+this session's included, should be re-read that way.
+**ROUND 778's WRITE GATE IS REFUTED AS THE MECHANISM.** A writer hook printing `(pass, ambient,
+persisted, depth, truncated)` reads `ambient=empty persisted=true` in **both** arms — so round 778
+says cacheable either way — and differs only in `truncated`. Under a partition the first ask arrives
+from **inside** the member-table resolution the mapped type's own `keyof` needs;
+`resolveStructuredTypeMembersCore` returns silently leaving `properties` null and the type degrades.
+**A narrowed compile has exactly ONE truncated resolution out of 822; a full build has 0 of 21,315 —
+and that one IS the defect.** **THE OBVIOUS FIX IS REFUTED WITH A POSITIVE CONTROL**: refusing to
+persist a truncated resolution changes nothing sweep-wide (same 78 rows, byte-identical digest) while
+a single-file control proves the arm is live (`refusedWrites` 593 -> 594, the victim going
+`persisted=true resolves=1` -> `persisted=false resolves=2`) — the re-resolution simply re-enters the
+same guard. **So the lever is the CYCLE HANDLING, not the cache**: a `keyof` over a type whose member
+table is IN FLIGHT must answer from the DECLARATIONS rather than degrade. That is a member-resolution
+change with corpus-wide blast radius and was deliberately not attempted — queued as (INC.25).
+**(INC.22)'s THIRD OBSTRUCTION IS RETIRED**: the PURE partition-scoped arm is EQUIVALENT on BOTH
+`partition-gate` arms (78/78 and 76/76), even though that pass is one of the sensitivity fixture's 78
+netting passes — its rows carry the alias's own `fileName`, so an out-of-partition row is dropped by
+the partition filter anyway. The "DIVERGED 1 file" belonged to the MIXED `TypeAlias`-program-wide
+configuration. **(INC.24) LANDED FIRST, ON ITS OWN COMMIT**: both capture runners now fold their whole
+answer set into ONE number per arm, **ordered by span key so it is a property of the ANSWERS and not
+of `HashMap` iteration**, and from a clean tree it reproduces (INC.22)'s recorded
+`full=-3718897727265589316` over 381,666 types + 360,152 definitions **exactly** — round 776's
+rebuild-the-baseline control, satisfied on an instrument rather than a binary. **A PROCESS VIOLATION
+IS RECORDED**: a `compileKotlinJvm` ran while a sweep JVM was live, which CLAUDE.md forbids in both
+directions; the sweep's summary matched the earlier run exactly so no measurement is tainted, but the
+documented failure mode is SILENT and "it was fine this time" is not evidence the rule is soft.
+Everything is off by default. Suite **15,800 / 0 / 3** (+16 pins), `cost_gate.py` `output.errors` and
+`spine.nodes` **+0.00%**, `huge_methods` clean (778 core classes + `-project`), `capture-equivalence`
+**5 / 3, moreAny 0** and `capture-channel` **286 / 49** with digests unchanged,
+`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
+`partition-gate` 78/78 and 76/76.
+
 **THE FLOOR'S LAST BIG ROW IS WORTH 62-65 ms BY AN AXIS THAT PROVABLY CANNOT MOVE A FULL BUILD, AND
 IT IS REFUSED BECAUSE THE ORDER IT BUYS IS *RESOLUTIONS* AND NOT ONLY A NAME (2026-08-24,
 (INC.22)).** `init:buildFileLocalTypeMaps` is **69.16 ms of a 90.15 ms floor pass table — 77%** —
@@ -162,46 +206,4 @@ classes) and `-project`, **`capture-equivalence` 5 spans / 3 of 76 with `narrowR
 reordering did not bite — `partition-equivalence` EQUIVALENT on all 78, `partition-gate` realism
 78/78 and sensitivity 76/76 with 78 netting passes. **Left open, ~20 ms**: 3 files still force, the
 ones with a genuinely block-scoped `enum` where the census needs the symbol and not a name.
-
-**A HOVER HAS BEEN RENDERING AN UNBOUND `T` PROGRAM-WIDE ON THE ORDINARY SHIPPED BUILD, AND THE
-FLOOR'S BIGGEST ROW IS REFUSED ON A PREMISE ITS OWN QUEUE ITEM HAD BACKWARDS (2026-08-23,
-(INC.11)).** The item existed to unblock **66 ms** — `init:buildFileLocalTypeMaps`, the largest
-single row in a 212 ms floor pass table — on the belief that the cost buys nothing but a
-program-wide FIRST-TOUCH ORDER for interning and `aliasDisplayMap`. **A three-phase re-measurable
-arm says part of it buys RESOLUTIONS**: fully deferred is **1,665 divergent capture spans in 47
-files with `narrowRendersMoreAny = 321`** — 321 resolutions LOST TO `any`, which no display fix can
-reach. (The arm beats (INC.10)'s own table 1.6x-3.4x — 137 / 10 files for `TYPEALIAS`-only against
-462 / 18 — and refuses anyway.) **REFUSED, and the item is closed rather than re-tried.**
-**CLASSIFYING THE RESIDUAL REFUTED THE QUEUE'S HYPOTHESIS AND FOUND A SHIPPED DEFECT.** The item
-guessed the undiagnosed 462 spans "may be two genuinely different `Type` instances". They are **ONE
-instance carrying TWO COMPETING NAMES**: an `Extract<ClassLikeDeclaration, Pick<T, "kind">>` whose
-conditional CANNOT DECIDE (a free `T` in the second argument) answers its own CHECK TYPE — the
-interned union — and the generic site then wrote `aliasDisplayMap[union.id] = ("Extract", args)`
-**unconditionally**. So a caret on `ClassLikeDeclaration` reported
-`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` — **an unbound `T` in a tooltip, for
-every user, on the whole-program build** — and nothing in this repo could see it but the capture
-sweeps, since no diagnostic moves. **FIXED**: an instantiation that answers one of its own arguments
-unchanged no longer registers a name for it, verified against the ablated binary through the CLI
-(`Type 'Pass<Shape, Pick<T, "a">>' is not assignable to type 'number'`).
-**TWO INSTRUMENT LESSONS, BOTH OF THE FAILING-REASSURINGLY KIND.** The census had to be
-**WITHIN-ARM** — `Type.id` is minted in resolution order, so no cross-arm comparison is possible —
-and **the first hook watched the wrong site**, reading `0` clobbers at the last-wins site; **reading
-that zero as "not a display question" would have been exactly wrong.** The sharpened census reads
-**86** instantiations answering an argument unchanged (24x `Partial`, 18x `Extract`) with a positive
-control that it is not dead: **6** different-name refusals at the first-wins site. And **the pin was
-BLIND on its first draft** — the embedded lib declares no `Pick`, so the shape degraded to `any` and
-it passed against the ablated binary; only the ablation said so. With `@useRealLibs` it goes RED
-against the unfixed binary with its negative control green.
-**WHAT REMAINS IS A CHANGE OF KEY, NOT OF POLICY**: the other half — 302 spans in `checker.ts` alone
-under full deferral — is two SYNONYMOUS non-generic aliases resolving to one interned type, decided
-first-wins, and **tsc picks by the REFERENCE's declaration site, which an id-keyed global map cannot
-express**. Against round 754's deliberate `Type.Reference` exclusion and a union display order
-pinned byte-for-byte across ~13k baselines, that is a logical-parity conversation and not worth
-opening for a 66 ms already refused. **GATES**: suite **15,741 / 0 / 3** (+6 pins),
-`capture-equivalence` **5 spans / 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 /
-49** both IDENTICAL, `partition-equivalence` EQUIVALENT on all 78, `partition-gate` EQUIVALENT on
-both arms (78 netting passes), `cost_gate.py` PASS (`output.errors` 46, `spine.nodes` +0.00%,
-largest `mapped.hits` **+1.02%**, the standing drift), `huge_methods.py --fail-over 0` clean on core
-AND `-project`. **Floor 324 ms / median 357 / ratio 14.06x are DRAW-TO-DRAW against the round's
-340 / 367 / 13.30x, NOT a saving — the landed change moves no work.**
 
