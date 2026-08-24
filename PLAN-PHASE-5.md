@@ -20,6 +20,63 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (DOC.1) — `CLAUDE.md` 427 -> 320 KB by MOVING 107 entries, and the arithmetic says the remaining lever is DISTILLATION, not more moving
+
+**WHAT THIS ROUND DID.** Enforced the file's own residency rule after its THIRD and
+largest regrowth (the header ladder: 284 -> 170 KB, 594 -> ~280, 425 -> ~91, then back to
+427). **Nothing was deleted** — progressive disclosure is the design, so every removed
+entry is verbatim in `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`.
+
+| | before | after |
+|---|---:|---:|
+| `CLAUDE.md` | 427,436 B | **320,285 B (-25.1%)** |
+| archive | 697,758 B | 822,487 B |
+| CLAUDE.md entries | 490 | 383 (-107) |
+| archive entries | 728 | 845 (+117) |
+
+**CONSERVATION WAS PROVEN MECHANICALLY, NOT BY `--stat`** (which shows an edit landed,
+never that it is correct): **490 + 728 = 1,218 -> 383 + 845 = 1,228**, the +10 being
+exactly the ten entries DISTILLED rather than moved — full text archived, short form
+resident. All 107 moved entries verified present verbatim in the archive by exact string
+match and absent from `CLAUDE.md`; a random 10-entry spot check by mid-entry phrase read
+`archive=1 claude=0` every time.
+
+**WHAT MOVED** (~84 KB): ~47 per-walker / per-narrowing-rule entries from the regrown
+"Checker walker gotchas" tail — the exact category the 2026-07-26 trim moved wholesale;
+~29 per-diagnostic entries misfiled under "Measured dead-ends"; ~28 per-instrument perf
+narratives whose conclusion a resident law already carries (the `CtaSections`/
+`CpaSections` probe cookbook, JFR aggregation craft, per-region tables already retired by
+(INC.3)'s floor decomposition); and **6 EXACT DUPLICATES** of a resident entry — where the
+moved twin held a unique clause it was folded into the survivor rather than lost.
+**DISTILLED IN PLACE (10)**, the format rule's own prescription: the INV.4 check-spine
+cookbook **13.3 KB -> 1.7 KB** (its ~25 per-shape migration recipes archive-only, with a
+grep pointer), plus INV.4(c)(iii), the per-kind dispatch table, the huge-method JIT gate,
+B83.5, `C = A - B`, the three target notions, the try/catch(SOE) doctrine and the two
+scope-stack entries.
+
+**THE ~91 KB TARGET IS UNREACHABLE UNDER THIS ROUND'S CONSTRAINTS, AND THE ARITHMETIC IS
+NOW IN THE HEADER LADDER**: header 3.6 KB + protocol 14.1 KB + the protected
+(INC.*)/2026-08-2x set **61.8 KB over 72 entries** = a **79.5 KB floor before ONE process
+trap is kept**, and the process/build traps plus measurement laws add roughly another
+80 KB. **Only ~84 KB of the 336 KB added since 2026-07-26 was archive-assigned narrative**
+— the regrowth is genuinely concentrated in categories the rule KEEPS.
+
+**SO THE REMAINING LEVER IS DISTILLATION AND IT IS LARGE**: the 383 resident entries
+average **780 bytes — 5-6 lines against the file's own stated "1-3 lines"** — and a
+distillation pass (not more moving) is what would take it to ~200 KB. Queued as (DOC.2).
+
+**AND THE ROUND FLAGGED AN OVER-BROAD INSTRUCTION OF MINE**, which is worth recording
+because it is the kind of thing a sub-agent usually just obeys: **15 of the 72
+date-protected entries (~11.5 KB) are the KIR / Kotlin-native BACKEND arc, not the
+incremental language-service arc the constraint's rationale described.** It kept them to
+the letter and said so. If that arc is parked, they are the next obvious 11.5 KB.
+
+**PROTECTED SECTIONS VERIFIED BYTE-IDENTICAL**: the whole mission/protocol tail is
+**14,078 bytes unchanged** (`cmp` clean) and the "Rules for editing this file" block
+differs in exactly one line, the ladder. A blank-line collapse initially leaked into the
+protected tail and the file was rebuilt from the original head+tail to fix it — caught by
+the byte check, which is why the byte check was required rather than a visual read.
+
 ### Round (INC.26) — the gate assumed the FULL build was the reference, and it was wrong: an alias was renaming types that already had their own name, in the DIAGNOSTICS channel, on ordinary builds
 
 **READ THIS FIRST — TWO RECORDED DIGESTS MOVED, BY DESIGN, FOR THE FIRST TIME IN THIS
@@ -3101,24 +3158,35 @@ to carry an IntelliJ-style plugin's error reporting.** (INC.1) landed and MEASUR
 rest of the arc: narrowing the CHECK is finished (a median file's own checking is 15 ms),
 so (INC.2) and (INC.3) below are what is left, in that order.
 
-- [ ] **(DOC.1) `CLAUDE.md` HAS SILENTLY REGROWN 91 KB -> 409 KB, WHICH IS THE THIRD
-  TIME AND THE LARGEST (measured 2026-08-23).** Its own header records the ladder —
-  284 -> 170 KB (2026-06-10), 594 -> ~280 KB (2026-07-06, "after it silently regrew
-  — do not regrow it"), 425 -> ~91 KB (2026-07-26, the owner's "less is more"
-  context-engineering directive that moved every per-diagnostic and per-walker
-  section WHOLESALE to `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`). It is now **4.5x
-  that target** and every session pays it on every request.
-  **This is not a judgement call about which entries are good** — the file states
-  the residency rule itself: what stays is cross-cutting architecture of LIVE
-  subsystems, process/build traps, measured negative knowledge, test conventions,
-  Kotlin idioms and the mission; per-walker, per-TS-code, per-round and per-fix
-  narrative goes to the archive, which is PROGRESSIVE DISCLOSURE, not deletion.
-  So the trim is mechanical against a written rule, and the round that does it must
-  (a) move rather than delete, (b) keep the "GREP THE ARCHIVE FIRST" pointer
-  accurate, and (c) record the new size in the header ladder so the next regrowth
-  is visible. Also worth checking the same axis on `PLAN-PHASE-5.md` (4,903 lines)
-  against the ~10-round trim-on-write rule.
+- [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
+  to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
+  383+845 = 1,228; the +10 are entries distilled in place, full text archived). Moved: ~47
+  per-walker, ~29 per-diagnostic, ~28 per-instrument perf narratives, and 6 exact
+  duplicates (unique clauses folded into the survivor). Distilled 10, led by the INV.4
+  check-spine cookbook **13.3 KB -> 1.7 KB**. Protected sections byte-identical (14,078 B,
+  `cmp` clean).
 
+- [ ] **(DOC.2) THE REMAINING `CLAUDE.md` LEVER IS DISTILLATION, NOT MOVING — 383 RESIDENT
+  ENTRIES AVERAGE 780 BYTES AGAINST THE FILE'S OWN "1-3 LINES" RULE.** (DOC.1) established
+  the arithmetic and it is in the header ladder: header 3.6 KB + protocol 14.1 KB + the
+  protected (INC.*)/2026-08-2x set 61.8 KB = a **79.5 KB floor before one process trap is
+  kept**, so the ~91 KB target cannot be reached by moving. **Only ~84 KB of the 336 KB
+  added since 2026-07-26 was archive-assigned narrative** — the rest is in categories the
+  rule KEEPS, but at 5-6 lines each where the rule says 1-3.
+  **THE MECHANISM IS (DOC.1)'s OWN, ALREADY EXERCISED TEN TIMES AND SAFE**: archive the
+  entry's full text, leave a resident form that states the trap/invariant and where to
+  look, and drop the fix story. **Nothing is lost, so this is not a judgement call about
+  value** — it is the format rule applied to entries that already passed the residency
+  test. Target ~200 KB.
+  **START WITH THE FREE 11.5 KB (DOC.1) NAMED**: 15 of the 72 date-protected entries are
+  the KIR / Kotlin-native BACKEND arc, not the incremental language-service arc whose
+  liveness justified the protection. Confirm with the owner whether that arc is parked; if
+  so they are archive candidates outright rather than distillation ones.
+  **DO NOT distil**: the measurement-protocol laws, the Gradle/daemon/memory traps, the
+  narrowing-probe fixture conventions (their loss silently produces VACUOUS pins), or any
+  entry whose invariant IS its detail. **Verify as (DOC.1) did** — conservation by exact
+  string match, protected sections byte-identical by `cmp`, and a read-through; `git diff
+  --stat` proves an edit landed, never that it is correct.
 - [x] **(INC.1) A NARROWED DIAGNOSTICS QUERY — LANDED 2026-08-22.**
   `Project.diagnosticsOf(fileNames)`, 4,818 -> 1,107 ms warm, all 78 files of the compiler
   profile agreeing row for row. See the session note; the gate is
