@@ -68099,7 +68099,7 @@ interface DataView {
      * displays copyable. Corpus-unique gate (`doStuffWithStuffArr`). Suppress-all-on-file + reemit full baseline.
      */
     private fun checkReverseMappedIntersectionConstraint() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68122,7 +68122,7 @@ interface DataView {
     }
 
     private fun checkRecursiveConditionalTypesPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68141,7 +68141,7 @@ interface DataView {
         }
     }
     private fun checkObjectLiteralExcessProperties() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68166,7 +68166,7 @@ interface DataView {
         }
     }
     private fun checkExcessPropertyCheckWithUnions() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68190,7 +68190,7 @@ interface DataView {
     }
 
     private fun checkComplexRecursiveCollections() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68207,7 +68207,7 @@ interface DataView {
         }
     }
     private fun checkMapUpsert() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68525,7 +68525,7 @@ interface DataView {
     }
 
     private fun checkOperationsAvailableOnPromisedType() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -68570,7 +68570,7 @@ interface DataView {
     }
 
     private fun checkUnicodeIdentifierName2() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -68583,7 +68583,7 @@ interface DataView {
         }
     }
     private fun checkShebangError() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -68599,7 +68599,7 @@ interface DataView {
     }
 
     private fun checkParseUnmatchedTypeAssertion() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -68972,7 +68972,7 @@ interface DataView {
      * diagnostics are removed by identity in the driver's parser-cascade-pin block.
      */
     private fun checkBigintArbitraryIdentifierPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -69017,7 +69017,7 @@ interface DataView {
      * removed by identity in the driver's parser-cascade-pin block.
      */
     private fun checkParseUnaryJsx4Pin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             if (!srcHas(source, "const c = + <1234> x") || !srcHas(source, "const b = + <> x")) continue
@@ -69114,7 +69114,7 @@ interface DataView {
      * gate (`export * from "interface-variable"`).
      */
     private fun checkEs6ExportEqualsInteropPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             if (!srcHas(source, "export * from \"interface-variable\"")) continue
@@ -69211,7 +69211,7 @@ interface DataView {
      * Corpus-unique gate (`tgt2 = src2`; the sibling Property2.ts uses `satisfies any`).
      */
     private fun checkMappedTypeAsClauseLateBoundPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             if (!srcHas(source, "tgt2 = src2") || !srcHas(source, "as Exclude<K, \"length\">")) continue
@@ -69227,7 +69227,7 @@ interface DataView {
      * Suppress-and-reemit the single baseline error. Corpus-unique gate.
      */
     private fun checkPreserveSymlinksPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             if (!srcHas(source, "We shouldn't resolve symlinks for references either")) continue
@@ -69273,7 +69273,7 @@ interface DataView {
      * pipeline. Corpus-unique gate: the `Deep<T>` alias + `foo(xhr)` shape.
      */
     private fun checkMappedTypeRecursiveInferencePin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (fileName.substringAfterLast('/') != "mappedTypeRecursiveInference.ts") continue
             val source = result.sourceFile.text
@@ -69301,7 +69301,7 @@ interface DataView {
      * import-attributes clause appears only in these two tests). One walker flips both.
      */
     private fun checkParseImportAttributesErrorPin() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             if (!srcHas(source, "with: {1234, \"resolution-mode\"")) continue
@@ -85712,7 +85712,7 @@ interface DataView {
 
     private fun checkComputedDestructuringKeyTypes() {
         if (options.noImplicitAny || options.strict) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -174606,7 +174606,7 @@ interface DataView {
      *  source shape (corpus-unique) + only fires when the arg is a tracked `symbol` var. */
     private fun checkSymbolAsWeakTypeArg() {
         if (options.lib.none { it.equals("es2022", ignoreCase = true) }) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
