@@ -42,6 +42,10 @@ import kotlin.test.Test
  *   including an edit that adds a file to the program, which is the direction where
  *   a stale hit is a MISSING FILE rather than a wrong type.
  *
+ * (INC.32) added a third: an entry may only ever evict one of its OWN WEIGHT CLASS,
+ * so the caret channels — completion and signature help, one span each — cannot throw
+ * out the file-wide answer a hover in the same buffer paid a rebuild for.
+ *
  * ## The receipt is a COUNT
  *
  * A build is not observable from its result — two builds of one state return equal
@@ -81,6 +85,43 @@ class ProjectCaptureMemoTest {
         const sum = 41 + 1;
         const twice = sum + sum;
     """.trimIndent()
+
+    /**
+     * (INC.32) A buffer carrying a caret for all THREE channels: an occurrence-rich
+     * body for the file-wide hover request, a member receiver for [Project.completionsAt],
+     * and a call for [Project.signatureHelpAt].
+     */
+    private val channels = """
+        interface Shape { readonly p: string; }
+        const o: Shape = { p: "x" };
+        const first = o.p;
+        const label: string = "y";
+        const width = label.length;
+        declare function take(s: string): number;
+        const called = take(first);
+    """.trimIndent()
+
+    private val hoverCaret get() = offsetOf(channels, "o.p", plus = 2)
+    private val memberCaret get() = offsetOf(channels, "label.length", plus = 6)
+    private val signatureCaret get() = offsetOf(channels, "take(first)", plus = 5)
+
+    /** Five receivers, so five DISTINCT caret-scoped requests in one buffer. */
+    private val receivers = """
+        interface Shape { readonly p: string; }
+        declare const r1: Shape;
+        declare const r2: Shape;
+        declare const r3: Shape;
+        declare const r4: Shape;
+        declare const r5: Shape;
+        const u1 = r1.p;
+        const u2 = r2.p;
+        const u3 = r3.p;
+        const u4 = r4.p;
+        const u5 = r5.p;
+    """.trimIndent()
+
+    /** The caret just past the dot of `r<n>.p`'s USE — the declarations have no dot. */
+    private fun receiverCaret(n: Int) = offsetOf(receivers, "r$n.p", plus = 3)
 
     private fun projectWith(files: Map<String, String>): Pair<Project, CountingVfs> {
         val counting = CountingVfs(
@@ -294,5 +335,124 @@ class ProjectCaptureMemoTest {
         // the eviction just above took the LEAST RECENTLY USED entry (`b`), not the
         // oldest inserted one (`c`).
         assert(buildsIn(counting) { project.quickInfoAt(c, caret) } == 0)
+    }
+
+    /**
+     * (INC.32) THE HEADLINE. A caret channel must not evict the buffer it was asked
+     * in.
+     *
+     * Before it, this read `== 1` on the last row: the memo was bounded by ENTRY
+     * COUNT at two, and [Project.completionsAt] and [Project.signatureHelpAt] each
+     * name exactly ONE span — so two questions that cost nothing to retain threw out
+     * the file-wide answer that cost a narrowed rebuild to earn, and the hover the
+     * user came back to paid for it again. No edit occurs anywhere in this sequence.
+     * The wall cost of that last row on tsc's own sources was 267 ms and 275 ms in
+     * two independent JVMs against 4 ms served (`scripts/inc31-ls-cost.sh`).
+     */
+    @Test
+    fun `a completion and a signature help do NOT evict the hover of their own buffer`() {
+        val (project, counting) = projectWith(mapOf(a to channels))
+        var hover: QuickInfo? = null
+        var again: QuickInfo? = null
+        var members: List<String> = emptyList()
+        var help: SignatureHelp? = null
+        assert(buildsIn(counting) { hover = project.quickInfoAt(a, hoverCaret) } == 1)
+        assert(
+            buildsIn(counting) {
+                members = project.completionsAt(a, memberCaret).items.map { it.name }
+            } == 1,
+        )
+        assert(buildsIn(counting) { help = project.signatureHelpAt(a, signatureCaret) } == 1)
+        assert(buildsIn(counting) { again = project.quickInfoAt(a, hoverCaret) } == 0)
+        // Every channel ANSWERED, and the served hover answered the SAME thing: a memo
+        // handing back an empty or a foreign result would satisfy the counts alone.
+        assert(hover?.displayString == "string")
+        assert(again?.displayString == "string")
+        assert("length" in members)
+        assert(help?.signatures?.size == 1)
+    }
+
+    /**
+     * (INC.32) …and the caret lane is a BOUND, not an exemption. A host that walks the
+     * caret across a buffer asks a new question at every stop, and none of them may
+     * accumulate.
+     */
+    @Test
+    fun `the caret lane is BOUNDED too, so cycling carets cannot grow the memo`() {
+        val (project, counting) = projectWith(mapOf(a to receivers))
+        for (n in 1..5) {
+            assert(buildsIn(counting) { project.completionsAt(a, receiverCaret(n)) } == 1)
+        }
+        // Five distinct receivers against four caret slots, so the FIRST is gone.
+        assert(buildsIn(counting) { project.completionsAt(a, receiverCaret(1)) } == 1)
+        // …and the lane is ACCESS-ordered like the buffer one: the eviction just above
+        // took the least recently used entry, not the most recent survivor.
+        assert(buildsIn(counting) { project.completionsAt(a, receiverCaret(5)) } == 0)
+    }
+
+    /**
+     * (INC.32) The other direction of the same rule, and the one that says the lanes
+     * are lanes rather than a bigger single bound: buffer churn evicts buffers.
+     */
+    @Test
+    fun `hovering in other buffers does not evict a caret-scoped entry`() {
+        val (project, counting) = projectWith(
+            mapOf(a to channels, b to channels, c to channels),
+        )
+        assert(buildsIn(counting) { project.quickInfoAt(a, hoverCaret) } == 1)
+        assert(buildsIn(counting) { project.completionsAt(a, memberCaret) } == 1)
+        // Two more buffers is exactly the buffer lane's bound, so `a`'s FILE-WIDE entry
+        // is evicted here — that is the design, unchanged since (INC.13) — and the row
+        // below says its completion was not taken with it.
+        assert(buildsIn(counting) { project.quickInfoAt(b, hoverCaret) } == 1)
+        assert(buildsIn(counting) { project.quickInfoAt(c, hoverCaret) } == 1)
+        assert(buildsIn(counting) { project.completionsAt(a, memberCaret) } == 0)
+        assert(buildsIn(counting) { project.quickInfoAt(a, hoverCaret) } == 1)
+    }
+
+    /**
+     * (INC.32) Retaining MORE makes a stale serve more likely, so the staleness
+     * obligation is re-pinned over BOTH lanes at once.
+     *
+     * (INC.12)'s law decides the shape: a memo can only serve a stale answer when its
+     * key is byte-identical across the change, so the queried file is never touched —
+     * every request below is the same request before and after — and the edit is the
+     * dangerous direction, one that changes what the program CONTAINS, where a
+     * mis-keyed hit is a missing FILE rather than a wrong type.
+     */
+    @Test
+    fun `an edit that ADDS A FILE drops the caret lane as well as the buffer one`() {
+        val importer = """
+            import { shared } from "./b";
+            const x = shared;
+            const y = x;
+            const label: string = "y";
+            const width = label.length;
+            declare function take(s: number): number;
+            const called = take(x);
+        """.trimIndent()
+        val (project, counting) = projectWith(mapOf(a to importer))
+        val hover = offsetOf(importer, "x", occurrence = 1)
+        val member = offsetOf(importer, "label.length", plus = 6)
+        val signature = offsetOf(importer, "take(x)", plus = 5)
+        var before: QuickInfo? = null
+        var after: QuickInfo? = null
+        assert(buildsIn(counting) { before = project.quickInfoAt(a, hover) } == 1)
+        assert(buildsIn(counting) { project.completionsAt(a, member) } == 1)
+        assert(buildsIn(counting) { project.signatureHelpAt(a, signature) } == 1)
+        // All three are resident at once — which is the (INC.32) property, and what
+        // makes the rows after the edit a statement about invalidation rather than
+        // about a bound that had already thrown two of them away.
+        assert(buildsIn(counting) { project.quickInfoAt(a, hover) } == 0)
+        assert(buildsIn(counting) { project.completionsAt(a, member) } == 0)
+        assert(buildsIn(counting) { project.signatureHelpAt(a, signature) } == 0)
+        project.updateFile(b, "export const shared = 1;\n")
+        assert(buildsIn(counting) { after = project.quickInfoAt(a, hover) } == 1)
+        assert(buildsIn(counting) { project.completionsAt(a, member) } == 1)
+        assert(buildsIn(counting) { project.signatureHelpAt(a, signature) } == 1)
+        // …and the answer MOVED, so the rebuild is a rebuild of the new program and
+        // not a rebuild that re-derived the old one.
+        assert(before?.displayString != "1")
+        assert(after?.displayString == "1")
     }
 }

@@ -168,7 +168,32 @@ import com.xemantic.typescript.compiler.computeParserFlags
  * driven synchronously on the calling thread (the compiler runs its pipeline on
  * its own deep-stack thread internally and joins it before returning).
  */
-private const val CAPTURE_MEMO_ENTRIES = 2
+/**
+ * Buffer-sized capture entries [Project.captures] retains — the split-editor pair.
+ * See that field's KDoc for what two BUYS and why it did not go down to one.
+ */
+private const val CAPTURE_MEMO_BUFFERS = 2
+
+/**
+ * (INC.32) A capture request naming at most this many spans is CARET-scoped rather
+ * than buffer-sized.
+ *
+ * The three caret channels — member completion, free-name completion and signature
+ * help — each name exactly ONE span, where a file-wide request names one per
+ * occurrence node in its file (125,289 of them on tsc's own `checker.ts`). So the
+ * two populations are four orders of magnitude apart and any number in between
+ * separates them; four rather than one because a caller may hand [Project] a handful
+ * of nodes the file-wide request does not carry, and that is still a caret. Anything
+ * above it is classed as a buffer, which is the conservative direction: a
+ * misclassified entry costs a slot in the lane that is bounded at two, never memory.
+ */
+private const val CAPTURE_MEMO_CARET_SPANS = 4
+
+/**
+ * (INC.32) Caret-scoped entries [Project.captures] retains BESIDE the buffer-sized
+ * ones — the caret channels of one buffer, so that none of them evicts its hover.
+ */
+private const val CAPTURE_MEMO_CARET_ENTRIES = 4
 
 public class Project private constructor(
     /** The project path as given to [open], normalized and absolute. */
@@ -288,7 +313,7 @@ public class Project private constructor(
      * disk, exactly as [cached] has always assumed). So an entry can only ever be
      * returned to the identical question about the identical state.
      *
-     * ## Why it is BOUNDED, and at two
+     * ## Why it is BOUNDED, and by WEIGHT
      *
      * A [ProjectCompiler.Result] holds values only — no AST, no `Symbol`, no `Type` —
      * but a file-wide capture over a large file holds one answer per identifier in it,
@@ -301,8 +326,36 @@ public class Project private constructor(
      * hover, go-to-definition, document highlights and [fileSemantics] all ask ONE
      * file-wide question per file (see [captureAround]), so the pair is TWO BUFFERS —
      * which is what a host with a split editor holds, and the reason the number did
-     * not go down to one. The cost of that is honest and worth stating: two file-wide
-     * captures of two large files, where it used to be one plus a single span.
+     * not go down to one.
+     *
+     * **(INC.32) …and the bound is on WEIGHT, not on entry COUNT.** Counting entries
+     * let a request that costs nothing to retain evict one that cost a rebuild to
+     * earn: [completionsAt]'s two branches and [signatureHelpAt] each name exactly ONE
+     * span, so the ordinary editor sequence hover → completion → signature help →
+     * hover, with NO edit anywhere in it, evicted the hover's file-wide entry and paid
+     * a whole narrowed rebuild for the last step — measured 267 ms and 275 ms in two
+     * independent JVMs against 4 ms when nothing evicted it (`scripts/inc31-ls-cost.sh`,
+     * row `quickInfo.mid.afterTwoOtherChannels`). The fix is NOT a larger
+     * [CAPTURE_MEMO_BUFFERS]: that would double the worst case below to buy a case
+     * that needs no extra memory at all. A request naming at most
+     * [CAPTURE_MEMO_CARET_SPANS] spans is retained in a lane of its own and can
+     * therefore only ever evict another caret-scoped entry.
+     *
+     * The cost of that is honest and worth stating, and it is the (INC.13) statement
+     * plus a rounding error: at most TWO buffer-sized captures — UNCHANGED — beside at
+     * most [CAPTURE_MEMO_CARET_ENTRIES] entries of at most [CAPTURE_MEMO_CARET_SPANS]
+     * answers each. Sixteen answers, against 125,289 for ONE file-wide capture of
+     * `checker.ts`: 0.013%. What is NOT a rounding error and is the reason the caret
+     * lane is bounded in COUNT as well as in spans: every entry also holds its build's
+     * program-shaped fields — `programFiles`, `importEdges`, the partition's
+     * diagnostics — which are a property of the PROGRAM and not of the request, so
+     * they do not shrink with the span count.
+     *
+     * Retaining more makes a stale serve strictly more likely, so the invalidation was
+     * re-audited rather than assumed: `cached = null` occurs at exactly three sites in
+     * this class ([updateFile], [deleteFile], [close]) and every one of them clears
+     * this map in the same breath. There is no fourth path that changes program text
+     * or options.
      */
     private val captures = LinkedHashMap<TypeCaptureRequest, ProjectCompiler.Result>()
 
@@ -2548,12 +2601,47 @@ public class Project private constructor(
             recheckOnly = captureFiles(request),
             typeCapture = request,
         )
-        while (captures.size >= CAPTURE_MEMO_ENTRIES) {
-            captures.remove(captures.keys.first())
-        }
-        captures[request] = result
+        rememberCapture(request, result)
         return result
     }
+
+    /**
+     * (INC.32) Files [result] under [request], then evicts down to the two lanes
+     * [captures] documents — buffer-sized entries bounded at [CAPTURE_MEMO_BUFFERS],
+     * caret-scoped ones at [CAPTURE_MEMO_CARET_ENTRIES], neither able to evict the
+     * other's.
+     */
+    private fun rememberCapture(request: TypeCaptureRequest, result: ProjectCompiler.Result) {
+        captures[request] = result
+        while (true) {
+            var buffers = 0
+            var carets = 0
+            for (key in captures.keys) if (isBufferSized(key)) buffers++ else carets++
+            // The lane that is OVER decides which lane the victim comes from. Taking
+            // the map's least recently used entry regardless would not bring an
+            // over-full lane under its bound, and this loop would spin.
+            val evictBuffer = buffers > CAPTURE_MEMO_BUFFERS
+            if (!evictBuffer && carets <= CAPTURE_MEMO_CARET_ENTRIES) return
+            // [captureIn] re-inserts on a hit, so this map is in ACCESS order and the
+            // FIRST key of a lane is that lane's least recently used entry.
+            val victim = captures.keys.firstOrNull { isBufferSized(it) == evictBuffer } ?: return
+            captures.remove(victim)
+        }
+    }
+
+    /**
+     * Whether [request] is a BUFFER-sized capture rather than a caret-scoped one —
+     * see [CAPTURE_MEMO_CARET_SPANS] for where the line is and why anywhere between
+     * one and a hundred would do.
+     *
+     * Weighed on the REQUEST rather than on the answer because the request is the key
+     * and is therefore in hand before the build as well as after it, and because the
+     * two agree by construction: the checker records at most one answer per span it
+     * was asked about.
+     */
+    private fun isBufferSized(request: TypeCaptureRequest): Boolean =
+        request.spans.size + request.memberSpans.size +
+            request.scopeSpans.size + request.signatureSpans.size > CAPTURE_MEMO_CARET_SPANS
 
     /**
      * Every file [request] names — see [captureIn] for why this is derived and not

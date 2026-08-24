@@ -146,7 +146,7 @@ fun main(args: Array<String>) {
             coveredSet.add(
                 us {
                     val s = HashSet<Long>(spans!!.size * 2)
-                    for (sp in spans!!) s.add((sp.start.toLong() shl 32) or sp.end.toLong())
+                    for (sp in spans) s.add((sp.start.toLong() shl 32) or sp.end.toLong())
                     covered = s
                 },
             )
