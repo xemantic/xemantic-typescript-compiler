@@ -3718,6 +3718,29 @@ class Checker(
      *  (`View<T[K]>` — excessPropertyChecksWithNestedIntersections) recursive aliases. */
     private val aliasObjLiteralInstantiationStack: ArrayDeque<Int> = ArrayDeque()
 
+    /** (INC.42) Symbol ids of *every* generic type alias currently being substituted —
+     *  the [aliasObjLiteralInstantiationStack] of the whole population, kept separately
+     *  so that stack's TypeLiteral/union-only cycle-break semantics stay untouched.
+     *  Read by [aliasSubstitutionIsRecursive] alone: the B57.1b constraint guard doubles
+     *  as this checker's recursion brake for a self-referential alias, so the (INC.42)
+     *  relaxation must leave that case answering exactly what it answers today. */
+    private val aliasSubstitutionStack: ArrayDeque<Int> = ArrayDeque()
+
+    /** (INC.42) memo for [aliasBodyMentionsOwnName], keyed by alias symbol id. A property
+     *  of the DECLARATION, so it is a function of the program and not of who asked first. */
+    private val aliasSelfReferentialCache: HashMap<Long, Boolean> = HashMap()
+
+    /** (INC.42) Non-zero while [resolveTypeAliasBody] is resolving a generic alias's body
+     *  for its own DISPLAY — the (INC.28) split, one layer down. The B57.1b relaxation is
+     *  confined to this region because the same relaxation on the CHECKING path costs TWO
+     *  false positives on tsc's own sources (`output.errors` 46 -> 48, measured): a
+     *  `VisitResult<T>` return that no longer erases to `any` exposes an overload-
+     *  resolution defect at `checker.ts:2503`, and a second TS2322 at
+     *  `watchPublic.ts:576`. Exactly (INC.28)'s reason for leaving
+     *  [getDeclaredTypeOfSymbol] untouched while [getTypeOfSymbolWorker] answers the
+     *  parametric form. */
+    private var aliasBodyDisplayDepth: Int = 0
+
     /** B86.1b-1: Additive infrastructure for inference-context mapper threading.
      *  When a call site enters an inference context (e.g. resolving a generic
      *  function's signature against contextual type args), it can push a
@@ -109310,7 +109333,12 @@ interface DataView {
             }
             scope[tp.name.text] = p
         }
-        return withInstantiationContext(scopeMapper(scope)) { getTypeFromTypeNode(decl.type) }
+        aliasBodyDisplayDepth++
+        try {
+            return withInstantiationContext(scopeMapper(scope)) { getTypeFromTypeNode(decl.type) }
+        } finally {
+            aliasBodyDisplayDepth--
+        }
     }
 
     /**
@@ -110341,30 +110369,67 @@ interface DataView {
                             // Without this, the recursive alias body still expands 10
                             // levels deep and (wrongly) emits TS2589.
                             var constraintFails = false
+                            var relaxedConstraint = false
                             for (i in declTPs.indices) {
                                 val tpConstraintNode = declTPs[i].constraint
                                 if (tpConstraintNode != null) {
                                     val constraintType = getTypeFromTypeNode(tpConstraintNode)
                                     if (constraintType !== anyType && constraintType !== errorType) {
-                                        // (INC.28) MEASURED AND REFUSED: judging a
-                                        // `Type.TypeParam` argument by its APPARENT type here.
-                                        // `checkTypeRelatedToCore` has no general "TypeParam source
-                                        // via its constraint" rule — its `NonPrimitive` leg says so
-                                        // deliberately — so `T extends Node` is NOT related to
-                                        // `Node` and this guard refuses every generic alias
-                                        // reference whose argument is a constrained parameter of
-                                        // the ENCLOSING declaration. Relaxing it with
-                                        // `getApparentType` renders `type Visitor<TIn, TOut extends
-                                        // Node> = (node: TIn) => VisitResult<TOut>` as tsc 7.0.2
-                                        // does, `(node: TIn) => VisitResult<TOut>` instead of
-                                        // `(node: TIn) => any` — and costs a corpus FALSE POSITIVE:
-                                        // a recursive alias (`BuildTree<T, N extends number = -1,
-                                        // I extends any[] = []>`) then expands one level further
-                                        // and `excessPropertyCheckIntersectionWithRecursiveType`
-                                        // gains a TS2322 at `GrandUser` that pristine tsc does not
-                                        // emit. The refusal IS the recursion brake here, so it
-                                        // cannot be relaxed until the relation learns the rule.
-                                        if (!checkTypeRelatedTo(resolvedArgs[i], constraintType, assignableRelation)) {
+                                        // (INC.28) MEASURED AND REFUSED FOR THE *CHECKING*
+                                        // PATH: judging a `Type.TypeParam` argument by its
+                                        // APPARENT type here. `checkTypeRelatedToCore` has no
+                                        // general "TypeParam source via its constraint" rule —
+                                        // its `NonPrimitive` leg says so deliberately — so
+                                        // `T extends Node` is NOT related to `Node`, and this
+                                        // guard therefore refuses every generic alias reference
+                                        // whose argument is a constrained parameter of the
+                                        // ENCLOSING declaration. That is (INC.30), a
+                                        // RELATION-ENGINE item: adding the rule needs a
+                                        // termination argument that does not rely on the absence
+                                        // of the rule.
+                                        //
+                                        // (INC.42) A BARE `Type.TypeParam` ARGUMENT IS AN
+                                        // *UNDECIDED* CONSTRAINT, NOT A FAILED ONE — `X extends
+                                        // Nd` handed to `R<T extends Nd>`, the argument and the
+                                        // parameter constrained IDENTICALLY, read as a failure
+                                        // and collapsed the whole reference to `errorType`, i.e.
+                                        // to a rendered `any`. tsc 7.0.2's LSP answers
+                                        // `(n: number) => R1<X>` at the same caret; we answered
+                                        // `(n: number) => any`, which on tsc's own sources is
+                                        // `type Visitor<…> = (node: TIn) => any` — 213 rows of
+                                        // (INC.41)'s classification, in BOTH of its arms.
+                                        //
+                                        // So the argument is judged LOCALLY against its own
+                                        // already-resolved constraint. No new rule enters
+                                        // `checkTypeRelatedToCore`, and TWO gates keep this
+                                        // strictly a DISPLAY answer, both measured:
+                                        //
+                                        //  * `aliasBodyDisplayDepth > 0` — (INC.28)'s split, one
+                                        //    layer down. Unconfined, the same relaxation reads
+                                        //    `output.errors` **46 -> 48** on the compiler profile:
+                                        //    a `VisitResult<T>` return that no longer erases to
+                                        //    `any` exposes an overload-resolution defect at
+                                        //    `checker.ts:2503` and a second TS2322 at
+                                        //    `watchPublic.ts:576`. Two false positives on the
+                                        //    flagship profile is not a trade for 213 hovers.
+                                        //  * [aliasGuardIsRecursionBrake] — see its KDoc; the
+                                        //    corpus's `excessPropertyCheckIntersectionWith-
+                                        //    RecursiveType` is what measures it.
+                                        val arg = resolvedArgs[i]
+                                        var argSatisfies =
+                                            checkTypeRelatedTo(arg, constraintType, assignableRelation)
+                                        if (!argSatisfies && aliasBodyDisplayDepth > 0 &&
+                                            arg is Type.TypeParam &&
+                                            !aliasGuardIsRecursionBrake(symbol, decl, node)
+                                        ) {
+                                            val argConstraint = arg.constraint
+                                            argSatisfies = argConstraint != null &&
+                                                checkTypeRelatedTo(
+                                                    argConstraint, constraintType, assignableRelation,
+                                                )
+                                            relaxedConstraint = argSatisfies
+                                        }
+                                        if (!argSatisfies) {
                                             constraintFails = true
                                             break
                                         }
@@ -110433,6 +110498,7 @@ interface DataView {
                             try {
                                 typeAliasResolutionDepth++
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
+                                aliasSubstitutionStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
                                 // matches; the cycle-break above re-checks deferability)
                                 val result = getTypeFromTypeNodeWithMapper(decl.type, mapper)
@@ -110487,12 +110553,19 @@ interface DataView {
                                     }
                                     aliasDisplayMap[result.id] = symbol.name to resolvedArgs
                                     // B58.3: cache for future calls with same (symbol, args).
-                                    substitutionResultCache[cacheKey] = result
+                                    // (INC.42) NOT for a result the display-only relaxation
+                                    // produced: `substitutionResultCache` is keyed by
+                                    // `(symbol, args)` alone, so a relaxed entry would be
+                                    // served to the CHECKING path too and the split would
+                                    // leak — silently, and only for whoever asked second
+                                    // (round 778's write gate, (INC.19)'s first-touch freeze).
+                                    if (!relaxedConstraint) substitutionResultCache[cacheKey] = result
                                 }
                                 return result
                             } finally {
                                 typeAliasResolutionDepth--
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
+                                aliasSubstitutionStack.removeLast()
                             }
                         }
                     }
@@ -110553,6 +110626,95 @@ interface DataView {
      *  through the recursion — tsc genuinely errors TS2589 on
      *  `N<T,K> = T | { [P in K]: N<T,K> }[K]` (recursivelyExpandingUnionNoStackoverflow),
      *  so such unions keep the eager depth-bail. */
+    /**
+     * (INC.42) Is B57.1b's constraint guard acting here as this checker's RECURSION BRAKE
+     * rather than as a constraint check?
+     *
+     * Three tests, and the third is the one that was MEASURED rather than guessed:
+     *
+     *  * `symbol.id in aliasSubstitutionStack` — the referenced alias is re-entering its
+     *    own substitution, directly or through another alias (MUTUAL recursion, which no
+     *    property of one declaration can see).
+     *  * [aliasBodyMentionsOwnName] on the REFERENCED alias.
+     *  * [aliasBodyMentionsOwnName] on the alias whose body syntactically ENCLOSES this
+     *    reference. **This is where the brake actually lives**, and a census of the
+     *    corpus's own `excessPropertyCheckIntersectionWithRecursiveType` says so: the
+     *    only four decisions the relaxation flips there are `Length<I>` and
+     *    `Prepend<any, I>` — two aliases that are NOT recursive, referenced from inside
+     *    `BuildTree<T, N extends number = -1, I extends any[] = []>`, which is. Refusing
+     *    them is what keeps `BuildTree`'s own parametric body degraded, and letting them
+     *    through expands it one level further: `GrandUser` then gains a TS2322 that
+     *    pristine tsc does not emit. Gating on the referenced alias alone leaves that
+     *    test RED — measured, one failure in 14,869.
+     *
+     * None of this claims a recursive alias's argument really fails its constraint. It
+     * claims the guard is load-bearing for a *different* reason inside one, so the
+     * relaxation is applied only where that role does not exist. The real rule —
+     * `checkTypeRelatedToCore` learning "a TypeParam source via its constraint" — is
+     * (INC.30), and it still needs a termination argument that does not rely on the
+     * absence of the rule.
+     *
+     * The enclosing declaration is found through `Node.parent` (INV.2(a) stamps it in
+     * `indexSourceFile`), so the answer is a property of the SOURCE, not of ambient
+     * checker state: `substitutionResultCache` is keyed by `(symbol, args)` alone, and a
+     * context-dependent decision there would be frozen by whoever asked first
+     * (round 778's write gate, (INC.19)'s first-touch freeze). An interned
+     * `Type.TypeParam` argument belongs to exactly one declaration, so two enclosing
+     * aliases cannot share a key.
+     */
+    private fun aliasGuardIsRecursionBrake(
+        symbol: Symbol,
+        decl: TypeAliasDeclaration,
+        reference: Node,
+    ): Boolean {
+        if (symbol.id in aliasSubstitutionStack) return true
+        if (aliasDeclIsSelfReferential(decl)) return true
+        var parent: Node? = (reference as? NodeBase)?.parent
+        while (parent != null) {
+            val enclosing = parent
+            if (enclosing is TypeAliasDeclaration) return aliasDeclIsSelfReferential(enclosing)
+            parent = (enclosing as? NodeBase)?.parent
+        }
+        return false
+    }
+
+    /**
+     * (INC.42) Memoised [aliasBodyMentionsOwnName], keyed by the alias's FIRST type
+     * parameter through [internKey] — the per-file salt plus a node position, i.e. the
+     * one key in reach here that cannot collide across files (a raw `nodeId` restarts in
+     * every `SourceFile`, round 787). A non-generic alias has no bare type-parameter
+     * argument to judge, so it answers `false` without a walk.
+     */
+    private fun aliasDeclIsSelfReferential(decl: TypeAliasDeclaration): Boolean {
+        val first = decl.typeParameters?.firstOrNull() ?: return false
+        return aliasSelfReferentialCache.getOrPut(internKey(first)) {
+            aliasBodyMentionsOwnName(decl)
+        }
+    }
+
+    /**
+     * (INC.42) Does [decl]'s body contain a `TypeReference` spelling [decl]'s own name?
+     *
+     * A syntactic over-approximation on purpose: a shadowing declaration of the same name
+     * inside the body would read as self-reference and merely keep today's answer, which
+     * is the safe direction. Iterative (CLAUDE.md: a new full-tree walker must not
+     * recurse), and it resolves nothing, so it cannot re-enter the checker.
+     */
+    private fun aliasBodyMentionsOwnName(decl: TypeAliasDeclaration): Boolean {
+        val own = decl.name.text
+        val stack = ArrayDeque<Node>()
+        stack.addLast(decl.type)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            if (node is TypeReference) {
+                val name = node.typeName
+                if (name is Identifier && name.text == own) return true
+            }
+            forEachChild(node) { child -> stack.addLast(child) }
+        }
+        return false
+    }
+
     private fun unionBodyIsDeferredPositionOnly(body: TypeNode): Boolean {
         if (body !is UnionType) return false
         return body.types.none { m ->
