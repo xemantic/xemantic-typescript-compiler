@@ -1,5 +1,40 @@
 # Status
 
+**A CAPTURE REQUEST IS PRICED PER *ANCHOR* WHERE AN EDITOR NEEDS A PRICE PER *ANSWER* — SO WIDENING
+THE HOVER TO SERVE COMPLETION IS A **LOSS**, MEASURED AND REFUSED (2026-08-24, (INC.33)).** After
+(INC.32) a completion in an already-hovered buffer still BUILDS (~201-228 ms), because a hover's
+file-wide request carries `spans` and a member completion asks `memberSpans`. That is CORRECT
+((INC.14): an answer that was never asked for is ABSENT), so the only fix on offer was to widen the
+file-wide capture with member/scope/signature anchors — exactly as (INC.13) widened the TYPE channel
+from a caret to a file for **+9-17 ms**. **It does not transfer.** Cold narrowed builds through
+`ProjectCompiler` with the memo bypassed, two batches (batch 2 replicating batch 1 on every sign),
+every population biased IN FAVOUR of the widening: the widened hover costs **+286 ms on `binder.ts`**
+(300 -> 586, the two arms' ranges DISJOINT in both batches) and **+25.1 s on `checker.ts`**
+(3,624 -> 28,751) to save a completion build of **204 ms / 2,078 ms** — **break-even 1.40 and 12.1
+completions per hover IN A BUFFER WITH NO EDIT SINCE**, where the dominant completion path types a
+`.` first, which is an edit, which clears the memo. Even the cheapest shippable variant
+(occurrences + members, no scopes) is +96 ms on `binder.ts` for 0.47 but **+3,326 ms on `checker.ts`
+for 1.60**, and makes EVERY hover ~32% dearer to serve a case reachable only when nothing has been
+typed.
+**THE SECOND REFUSAL IS INDEPENDENT AND HARDER: RETENTION.** One widened entry holds **798,531**
+records for `binder.ts` and **54.4 M** for `checker.ts` — **48x and 205x** today's file-wide hover
+entry, of which **49,879,917** are `CapturedName`s — and (INC.32) keeps `CAPTURE_MEMO_BUFFERS` of
+them. That is structural, not incidental, and `CapturedScope`'s own KDoc already recorded it: a
+free-name caret sees hundreds of names, almost all lib globals, and a widened request repeats that
+set at **every one of 13,601 anchors — O(anchors x globals)**.
+**WHAT WOULD FLIP IT IS NOT A WIDER REQUEST**, and that is the transferable half: only a re-entrant
+capture against a RETAINED checker ((INC.17)'s `ProgramRecheck`) can answer a span nobody asked for
+up front without a new build. It is behind (INC.40)'s diagnostics-only valve because its
+captured-TYPE channel diverges from a fresh build in **43 of 75 files**, so **(INC.41) is now the
+named unblocker for the whole caret-channel latency story** — with the rider that free-name
+completion additionally needs the `CapturedScope` per-anchor globals fix whichever mechanism serves
+it. **No compiler code changed and the suite is unchanged at 15,824 / 0 / 3**; the instrument is
+kept so the refusal is re-takeable (`scripts/inc33-widen-cost.sh` + `Inc33WidenMain`'s KDoc, which
+is the authority for the table), REFUSES rather than skips when its profile or runner is absent, and
+carries an ablated positive control — empty output, a zero population and a sub-50 ms base arm each
+refuse, because exit 0 says the JVM finished, not that anything was measured. Every figure here is
+WALL TIME on one box and is pinned by NO test; re-take it rather than quoting it.
+
 **AN ERROR-REPORTING QUERY IS 104-108 ms -> 25 ms — THE RE-ENTRANT REPLAY IS **2.25-2.30x**, NOT
 THE "DECAYING 1.68x" FIVE ROUNDS RECORDED, AND IT IS NOW WIRED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL
 VALVE (2026-08-24, (INC.40)).** The lineage was not wrong about the floor shrinking; it was
@@ -205,44 +240,3 @@ cost-gate drift grew for the first time this session — `mapped.hits` **+1.02% 
 ±2%), understood (parametric resolutions run with a scope installed, so bypassed rather than
 cacheable) and justified but NOT rebaselined; the next round in this area should `--update`
 deliberately rather than discover the breach.
-
-**(INC.27) REFUSED WITH A PROOF: B416's KEY CANNOT NAME A UNION THE WAY tsc DOES, AND THE OBVIOUS
-NARROWING WAS BUILT, MEASURED, AND MADE THE GATE *WORSE* (2026-08-24).** The ~790-row
-`unionAliasStructural` residual (INC.26) left splits, per element and nesting-aware, into **432**
-rows where SEVERAL aliases claim one member set (arbitrary in BOTH arms), **~393** where a SOLITARY
-alias names a union at sites that never spell it — measured, not inferred: `AssignmentPattern` has
-**0 references** in binder.ts, `MemberName` **0** in checker.ts, `JsxCallLike` **0** in parser.ts —
-and **~303** of the unrelated (INC.28) family. **tsc gives THREE answers for one member set**
-(`ModuleName`, `ModuleExportName`, and the bare `Ident | Str` where nobody wrote an alias) because it
-keys its union cache by `getTypeListId(types) + getAliasId(aliasSymbol, …)`. **And a fourth probe
-named the real mechanism: tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not
-structural matching** — a join-built `A | B` renders structurally while a narrow of `x: MyType` that
-removes nothing renders `MyType`, both visible in one pristine baseline.
-**THE PROOF THAT BOUNDS THE DIRECTION**: round 545's INV.5(a) interns our unions by **member-id list
-ALONE**, so every one of tsc's instances is a single `Type` here. No id-keyed or member-set-keyed
-table can give three answers from one key, and **anything able to name the flow-RECONSTRUCTED union
-necessarily also names a union nobody wrote.** The residual is an INTERNING-KEY defect, not a defect
-of B416's table — queued as (INC.29), which is an INV.5(a) change and must price the id churn first
-(union interning is load-bearing for relation caching and for a display ORDER pinned byte-for-byte
-across ~13k baselines).
-**THE NARROWING WAS BUILT RATHER THAN ARGUED ABOUT, AND THAT IS WHAT SETTLED IT.** Poisoning a member
-set two differently-named aliases claim does exactly what it claims — the `full=name/narrow=name`
-bucket collapses **416 -> 2** — and the gate still goes **1,128 -> 1,351 spans, 43 -> 46 files**,
-because a `full=structural/narrow=name` bucket of **657** appears: **the poison TRIGGER is itself
-coverage-dependent**, converting a small difference in which aliases happened to be resolved into a
-difference in whether a name exists at all, and amplifying it. Nor can ambiguity be decided
-syntactically — of **407** collisions per compile the largest are aliases whose body is ANOTHER alias
-(`type FunctionLike = SignatureDeclaration`), spelling no members at all — so deciding it means
-resolving every union alias up front, i.e. (INC.22)'s eager `TypeAlias` phase, already refused for
-6.68 ms of the floor and for diverging a DIAGNOSTIC on the sensitivity arm.
-**WHAT LANDED IS BEHAVIOUR-FREE AND PROVEN SO BY DIGEST**: the `unionAliasStructural` KDoc carrying
-the proof, census hooks placed OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations, 407
-collisions), and two pins guarding what a future round must not lose — a solitary alias names its
-member set, and the switch-fallthrough-reconstructed union still displays as `MyType`. **Nothing pins
-the open gap** (round 765: a pin on a known-open gap is a countdown, not a guard). Suite **15,807 / 0
-/ 3** (+2 pins), zero corpus baselines moved, `cost_gate.py` exit 0, `huge_methods --fail-over 0`
-exit 0 on both modules (core 781 classes), `partition-equivalence` EQUIVALENT 78/78, `partition-gate`
-78/78 and 76/76 over 78 netting passes, floor **57 ms** untouched, and — the control that makes the
-inertness a measurement rather than a claim — **`capture-equivalence` returns full
-`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files, BIT-IDENTICAL to the
-recorded baseline.**

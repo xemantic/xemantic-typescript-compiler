@@ -1,3 +1,88 @@
+### Round (INC.22) — the floor's largest row is worth 62-65 ms by an axis that provably cannot move a full build, and it is REFUSED because the order it buys is RESOLUTIONS and not only a name
+
+**WHAT THIS ROUND DID.** Re-priced `init:buildFileLocalTypeMaps` — **69.16 ms of a
+90.15 ms floor pass table, 77%** — against the NEW floor, found a third axis neither
+(INC.10) nor (INC.11) had varied, verified its central claim in the BINARY rather than
+arguing it, and refused it on three independent gates. **Nothing landed. The tree is at
+`aa3c0629`; the mid-round commit was never pushed and is reset away.**
+
+**THE PRIZE IS REAL AND IT IS THE BIGGEST LEFT** (mean of 2 `both.floor` draws):
+
+| arm | `PT.total both.floor` | `init:buildFileLocalTypeMaps` |
+|---|---:|---:|
+| shipped (`program`) | **90.15 ms** | **69.16 ms** |
+| all phases partition-scoped | **28.05** | **0.014** |
+| `TypeAlias` program-wide, rest partitioned | **24.69** | 6.68 |
+
+`partition-equivalence.sh`: floor **131 -> 57 ms**, narrowed-query median **166 -> 116**,
+ratio at the median file **29.86x -> 42.61x**, full build unmoved (4,751 vs 4,818, inside
+the spread).
+
+**THE THIRD AXIS, AND WHY IT LOOKED SO GOOD.** (INC.10) and (INC.11) both deferred
+PHASES — what every file's map CARRIES — which perturbs a FULL build's first-touch order
+as much as a narrowed one's, and that is what refused them both (2,722 and 1,665 moved
+spans). This round varied **WHICH FILES the eager pass covers**, through the INV.6(6d)
+partition view — which **IS** `binderResults` when there is no partition, so an
+unpartitioned compile is unchanged BY CONSTRUCTION. That is the same property that
+carried the whole (INC.7) gating arc.
+
+**AND THE BY-CONSTRUCTION CLAIM WAS VERIFIED IN THE BINARY, WHICH IS THE ROUND'S BEST
+PROCESS OUTPUT.** A per-arm DIGEST over every captured answer was added to
+`CaptureEquivalenceMain`: over **381,666 captured types and 360,152 definitions in 76
+files**, the full-build digest is `-3718897727265589316` for the pre-round arm **and
+identical for both new arms**. Corroborated by `FltmDefer.lazyBuilds == 0` on every
+unpartitioned build (`program` arm `eager=78 lazy=0`), `cost_gate.py` at **+0.00%** on
+`output.errors`/`spine.nodes`, and `partition-equivalence` EQUIVALENT 78/78. **"A full
+build is unchanged" is exactly the claim that is true of the code and false of the
+binary; this one was made checkable.**
+
+**THE QUEUE'S PREMISE HAD ALREADY EXPIRED.** (INC.11)'s `TypeAlias`-only arm was recorded
+at **137 divergent spans**; re-measured today it is **5 spans / 3 of 76,
+`narrowRendersMoreAny=0` — byte-identical to the shipped baseline.** The 137 were closed
+by (INC.11)'s own `returnsArgumentUnchanged` fix and the (INC.5)/(INC.16)/(INC.19)-(21)
+work since. So the question the item posed ("is ~66 ms worth 137 display rows?") no
+longer existed, and **no display fix and no `aliasDisplayMap` re-key was needed or
+attempted.**
+
+**WHAT ACTUALLY REFUSES IT — three gates, and only the second is decisive:**
+
+| arm | capture-equivalence (base 5 / 3) | capture-channel (base 286 / 49, moreAny **168**) | partition-gate |
+|---|---|---|---|
+| all phases partitioned | 2,275 / 46 of 76, moreAny 0 | 1,457 / 65, moreAny **247** | EQUIVALENT |
+| `TypeAlias` kept program-wide | **6 / 4** | 348 / 51, moreAny **229** | **DIVERGED 1 file** |
+
+(i) The 2,275 are (INC.11)'s (a) half at scale — id-keyed FIRST-WINS alias display
+(`ModuleName` for `ModuleExportName`, `AssignmentPattern` for its unfolded union) — and
+keeping the cheap `TypeAlias` phase program-wide (6.68 ms) collapses them to **+1 row**.
+So the NAMING half is solved for 6.68 ms. (ii) **But the MEMBER channel loses resolutions
+either way: `moreAny` 168 -> 229, i.e. +61 member types collapsing to `any` under a
+narrowed build.** That is a WRONG ANSWER, not a naming difference — the exact class
+(INC.11) refused the full deferral over (321 there, 61 here). Closing it needs the DECL
+phase program-wide, which IS the whole cost. (iii) And `partition-gate`'s SENSITIVITY
+arm — the one built to refuse rather than print green — **DIVERGES on a diagnostic**, so
+it is not purely a display question either.
+
+**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY.**
+The map's one reader rebuilds a foreign file's map on demand; the round pinned both that
+it FIRES (a count) **and that it produces the SAME map** —
+`Checker.fileLocalTypeMapSnapshot` renders a finished map to strings so an eagerly-built
+and a lazily-built one can be compared, with a non-emptiness assertion and a negative
+control that two files' maps differ. Ablations: forcing `Scope.PROGRAM` reddens 4 pins
+INCLUDING the no-mode-install default pin ((INC.16) a1's lesson, applied); disarming the
+lazy path reddens exactly the 2 rebuild pins and nothing else. Suite on the change was
+**15,795 / 0 / 3** and `huge_methods` clean — but the capture gates are the gates for
+this family, and they refuse it.
+
+**THE TRANSFERABLE RESULT, AND IT RE-AIMS THE WHOLE DIRECTION.** The obstruction is NOT
+the eager pass's COST but that the pass IS the program's FIRST-TOUCH ORDER — and that
+order buys two different things: an alias NAME (cheap, fixable, 6.68 ms) and member
+RESOLUTIONS (not fixable without the expensive phase). **A future attempt must make
+member resolution ORDER-INDEPENDENT; making the pass cheaper cannot work.** See (INC.23).
+
+**WORTH RE-LANDING SEPARATELY**: the per-arm capture DIGEST is a general strengthening of
+`capture-equivalence.sh` — it proves a full build is untouched for ANY partition-shaped
+change — and it died with the revert.
+
 ### Round (INC.21) — the scanning family gated as ONE batch banks 99.9%, the first ~100% discount in the arc, and the floor is now 75% a single refused row
 
 **WHAT THIS ROUND DID.** Gated the 19 whole-source-scanning passes TOGETHER (the point

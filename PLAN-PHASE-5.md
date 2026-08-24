@@ -20,6 +20,91 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.33) — REFUSED: a capture request is priced per ANCHOR where an editor needs a price per ANSWER, and the widened hover costs **+286 ms / +25.1 s** to save a **204 / 2,078 ms** completion
+
+**WHAT THIS ROUND DID.** Priced the one candidate (INC.32) left standing. A hover's file-wide
+request carries `spans`; a member completion asks `memberSpans`, so a completion in an
+already-hovered buffer still BUILDS (~201-228 ms). That is CORRECT under (INC.14) — *an answer
+that was never asked for is ABSENT* — not a cache defect, so the only fix available was to
+WIDEN the file-wide capture / `prepare` to carry member + scope + signature anchors, exactly as
+(INC.13) widened the TYPE channel from a caret to a file for **+9-17 ms**. **The trade does not
+hold, by 1.4x on `binder.ts` and 12x on `checker.ts`, and it is refused a second time,
+independently, on RETENTION.** No compiler code changed; the instrument is kept
+(`scripts/inc33-widen-cost.sh`, `Inc33WidenMain`) so the refusal is re-takeable.
+
+**THE POPULATIONS A WIDENED REQUEST WOULD NAME** — and every one is biased IN FAVOUR of the
+widening, so this refuses the cheapest variant that could work:
+
+| file | chars | occurrence spans (hover today) | receivers | calls | scope owners | all nodes |
+|---|---:|---:|---:|---:|---:|---:|
+| `es2019.ts` | 1.5 K | 80 | 11 | 9 | 13 | 171 |
+| `binder.ts` | 194 K | 7,787 | 1,749 | 1,038 | 785 | 16,842 |
+| `checker.ts` | 3.15 M | 125,289 | 24,950 | 18,594 | 13,601 | 275,478 |
+
+The scope column is the FAVOURABLE one: `scopeAnchorAt` answers the innermost ENCLOSING node,
+so a naive free-name widening needs the ALL-NODES column, not that one.
+
+**THE COST TABLE** (ms; cold narrowed builds through `ProjectCompiler`, the memo deliberately
+bypassed so no row is a memo hit wearing a build's clothes; two batches, batch 2 replicating
+batch 1 on every sign):
+
+| arm | `binder.ts` b1 | `binder.ts` b2 | `checker.ts` |
+|---|---:|---:|---:|
+| base, no capture | 248 | 201 | 2,407 |
+| `spans.file` — **hover today** | 275 | 300 | 3,624 |
+| `member.caret` — **completion today** | 270 | 204 | 2,078 |
+| `members.file` | 380 | 371 | 6,950 |
+| `scopes.file` | 365 | 366 | **23,011** |
+| `sigs.file` | 261 | 228 | 2,033 |
+| `spansMembers.file` — cheapest shippable | — | 396 | 5,733 |
+| `all.file` — **widened hover** | 607 | 586 | **28,751** |
+
+**THE DECIDING NUMBER.** A widened hover costs **+286 ms on `binder.ts`** and **+25.1 s on
+`checker.ts`** to save a completion build of **204 ms / 2,078 ms**: break-even **1.40** and
+**12.1 completions per hover IN A BUFFER WITH NO EDIT SINCE** — and the dominant completion
+path types a `.` first, which IS an edit, which clears the memo, so the realistic ratio is far
+below 1. The separation is not noise: `spans.file` and `all.file` ranges are **disjoint in both
+batches** ([242-439] vs [547-674]; [251-424] vs [561-703]). Even the cheapest shippable variant
+— occurrences + members, no scopes — is +96 ms on `binder.ts` for a break-even of 0.47 but
+**+3,326 ms on `checker.ts` for 1.60**, and it makes **EVERY hover ~32% dearer** to serve a case
+reachable only when nothing has been typed.
+
+**THE SECOND, INDEPENDENT REFUSAL IS RETENTION, AND IT IS THE HARDER ONE.** One widened entry
+holds, per file:
+
+| | types+defs | memberItems | scopeNames | sigItems | total | vs today's hover entry |
+|---|---:|---:|---:|---:|---:|---:|
+| `binder.ts` | 16,488 | 243,178 | 538,354 | 511 | 798,531 | **48x** |
+| `checker.ts` | 265,550 | 4,274,434 | **49,879,917** | 9,540 | **54.4 M** | **205x** |
+
+(INC.32) keeps `CAPTURE_MEMO_BUFFERS` of those. The scope channel is nearly the whole of it and
+the cause is STRUCTURAL rather than incidental — `CapturedScope`'s own KDoc already records it:
+a free-name caret sees hundreds of names, almost all lib globals, and a widened request repeats
+that set at **every one of 13,601 anchors**. **O(anchors x globals).**
+
+**WHAT WOULD FLIP THE ANSWER — THE TRANSFERABLE HALF.** Not a wider request. **A request is
+priced PER ANCHOR; an editor needs a price PER ANSWER.** The only shape with that property is a
+re-entrant capture against a retained checker — (INC.17)'s `ProgramRecheck`, which can answer a
+span nobody asked for up front WITHOUT a new build. It sits behind (INC.40)'s diagnostics-only
+valve because its captured-TYPE channel diverges from a fresh build in **43 of 75 files**, so
+**closing that divergence — (INC.41) — is the named unblocker for the whole caret-channel
+latency story**, and a wider request is not a substitute for it. A free-name widening would
+ADDITIONALLY need `CapturedScope` to stop repeating the global set per anchor (49.9 M names, two
+orders of magnitude of headroom), and even then `scopes.file`'s **+19.4 s** on `checker.ts`
+stands on its own.
+
+**THE INSTRUMENT'S OWN GUARDS**, because a measurement that cannot fail is not one: the script
+REFUSES rather than skips when the profile or the runner is absent (rounds 853/873), and its
+positive control is ABLATED — an empty output and a zero population both refuse, and a base arm
+under a 50 ms floor refuses too, since a narrowed build of a real 78-file program is not a
+sub-100 ms thing (round 947: exit 0 says the JVM finished, not that anything was measured).
+
+**GATES.** Suite **15,824 / 0 / 3**, unchanged — no compiler code, no gradle, no baseline. Every
+number on this page is WALL TIME on a local artifact and on one box, so **none of it is pinned by
+any test**: re-take it with `scripts/inc33-widen-cost.sh` rather than quoting it. The two batches
+were drawn at `dbbb900e`; `cost_gate.py` and `huge_methods.py` are CONTROLS here and were not
+run (the round adds one jvmTest `main` runner and one script).
+
 ### Round (INC.40) — a ratio is a property of what BOTH arms were asked: the "decaying" replay is **2.25-2.30x**, and it is now SHIPPED for diagnostics behind a type-level valve
 
 **THE TRANSFERABLE FINDING, AND IT COST THIS ARC FIVE ROUNDS OF A WRONG NUMBER.** CLAUDE.md's
@@ -883,92 +968,6 @@ evidence the rule is soft.
 `partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
 `partition-gate` 78/78 and 76/76.
 
-### Round (INC.22) — the floor's largest row is worth 62-65 ms by an axis that provably cannot move a full build, and it is REFUSED because the order it buys is RESOLUTIONS and not only a name
-
-**WHAT THIS ROUND DID.** Re-priced `init:buildFileLocalTypeMaps` — **69.16 ms of a
-90.15 ms floor pass table, 77%** — against the NEW floor, found a third axis neither
-(INC.10) nor (INC.11) had varied, verified its central claim in the BINARY rather than
-arguing it, and refused it on three independent gates. **Nothing landed. The tree is at
-`aa3c0629`; the mid-round commit was never pushed and is reset away.**
-
-**THE PRIZE IS REAL AND IT IS THE BIGGEST LEFT** (mean of 2 `both.floor` draws):
-
-| arm | `PT.total both.floor` | `init:buildFileLocalTypeMaps` |
-|---|---:|---:|
-| shipped (`program`) | **90.15 ms** | **69.16 ms** |
-| all phases partition-scoped | **28.05** | **0.014** |
-| `TypeAlias` program-wide, rest partitioned | **24.69** | 6.68 |
-
-`partition-equivalence.sh`: floor **131 -> 57 ms**, narrowed-query median **166 -> 116**,
-ratio at the median file **29.86x -> 42.61x**, full build unmoved (4,751 vs 4,818, inside
-the spread).
-
-**THE THIRD AXIS, AND WHY IT LOOKED SO GOOD.** (INC.10) and (INC.11) both deferred
-PHASES — what every file's map CARRIES — which perturbs a FULL build's first-touch order
-as much as a narrowed one's, and that is what refused them both (2,722 and 1,665 moved
-spans). This round varied **WHICH FILES the eager pass covers**, through the INV.6(6d)
-partition view — which **IS** `binderResults` when there is no partition, so an
-unpartitioned compile is unchanged BY CONSTRUCTION. That is the same property that
-carried the whole (INC.7) gating arc.
-
-**AND THE BY-CONSTRUCTION CLAIM WAS VERIFIED IN THE BINARY, WHICH IS THE ROUND'S BEST
-PROCESS OUTPUT.** A per-arm DIGEST over every captured answer was added to
-`CaptureEquivalenceMain`: over **381,666 captured types and 360,152 definitions in 76
-files**, the full-build digest is `-3718897727265589316` for the pre-round arm **and
-identical for both new arms**. Corroborated by `FltmDefer.lazyBuilds == 0` on every
-unpartitioned build (`program` arm `eager=78 lazy=0`), `cost_gate.py` at **+0.00%** on
-`output.errors`/`spine.nodes`, and `partition-equivalence` EQUIVALENT 78/78. **"A full
-build is unchanged" is exactly the claim that is true of the code and false of the
-binary; this one was made checkable.**
-
-**THE QUEUE'S PREMISE HAD ALREADY EXPIRED.** (INC.11)'s `TypeAlias`-only arm was recorded
-at **137 divergent spans**; re-measured today it is **5 spans / 3 of 76,
-`narrowRendersMoreAny=0` — byte-identical to the shipped baseline.** The 137 were closed
-by (INC.11)'s own `returnsArgumentUnchanged` fix and the (INC.5)/(INC.16)/(INC.19)-(21)
-work since. So the question the item posed ("is ~66 ms worth 137 display rows?") no
-longer existed, and **no display fix and no `aliasDisplayMap` re-key was needed or
-attempted.**
-
-**WHAT ACTUALLY REFUSES IT — three gates, and only the second is decisive:**
-
-| arm | capture-equivalence (base 5 / 3) | capture-channel (base 286 / 49, moreAny **168**) | partition-gate |
-|---|---|---|---|
-| all phases partitioned | 2,275 / 46 of 76, moreAny 0 | 1,457 / 65, moreAny **247** | EQUIVALENT |
-| `TypeAlias` kept program-wide | **6 / 4** | 348 / 51, moreAny **229** | **DIVERGED 1 file** |
-
-(i) The 2,275 are (INC.11)'s (a) half at scale — id-keyed FIRST-WINS alias display
-(`ModuleName` for `ModuleExportName`, `AssignmentPattern` for its unfolded union) — and
-keeping the cheap `TypeAlias` phase program-wide (6.68 ms) collapses them to **+1 row**.
-So the NAMING half is solved for 6.68 ms. (ii) **But the MEMBER channel loses resolutions
-either way: `moreAny` 168 -> 229, i.e. +61 member types collapsing to `any` under a
-narrowed build.** That is a WRONG ANSWER, not a naming difference — the exact class
-(INC.11) refused the full deferral over (321 there, 61 here). Closing it needs the DECL
-phase program-wide, which IS the whole cost. (iii) And `partition-gate`'s SENSITIVITY
-arm — the one built to refuse rather than print green — **DIVERGES on a diagnostic**, so
-it is not purely a display question either.
-
-**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY.**
-The map's one reader rebuilds a foreign file's map on demand; the round pinned both that
-it FIRES (a count) **and that it produces the SAME map** —
-`Checker.fileLocalTypeMapSnapshot` renders a finished map to strings so an eagerly-built
-and a lazily-built one can be compared, with a non-emptiness assertion and a negative
-control that two files' maps differ. Ablations: forcing `Scope.PROGRAM` reddens 4 pins
-INCLUDING the no-mode-install default pin ((INC.16) a1's lesson, applied); disarming the
-lazy path reddens exactly the 2 rebuild pins and nothing else. Suite on the change was
-**15,795 / 0 / 3** and `huge_methods` clean — but the capture gates are the gates for
-this family, and they refuse it.
-
-**THE TRANSFERABLE RESULT, AND IT RE-AIMS THE WHOLE DIRECTION.** The obstruction is NOT
-the eager pass's COST but that the pass IS the program's FIRST-TOUCH ORDER — and that
-order buys two different things: an alias NAME (cheap, fixable, 6.68 ms) and member
-RESOLUTIONS (not fixable without the expensive phase). **A future attempt must make
-member resolution ORDER-INDEPENDENT; making the pass cheaper cannot work.** See (INC.23).
-
-**WORTH RE-LANDING SEPARATELY**: the per-arm capture DIGEST is a general strengthening of
-`capture-equivalence.sh` — it proves a full build is untouched for ANY partition-shaped
-change — and it died with the revert.
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **OWNER DIRECTIVE 2026-08-22, TOP OF QUEUE: make the language service incremental enough
@@ -1779,7 +1778,25 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   3 of 13 RED; **a2 was needed because a stricter bound cannot fail a BOUND pin** — see the
   session note. Suite 15,811 -> **15,815 / 0 / 3**.
 
-- [ ] **(INC.33) THE CARET CHANNELS ARE COLD PER CHANNEL PER BUFFER — a completion in an
+- [x] **(INC.33) REFUSED 2026-08-24 (`cf56bfe8`) — THE WIDENING IS PRICED AND IT LOSES: A
+  CAPTURE REQUEST IS PRICED PER *ANCHOR* WHERE AN EDITOR NEEDS A PRICE PER *ANSWER*.** A widened
+  file-wide hover costs **+286 ms on `binder.ts`** (300 -> 586, ranges disjoint in both batches)
+  and **+25.1 s on `checker.ts`** (3,624 -> 28,751) to save a completion build of **204 / 2,078
+  ms** — break-even **1.40** and **12.1 completions per hover IN A BUFFER WITH NO EDIT SINCE**,
+  and the dominant completion path types a `.` first, which is an edit, which clears the memo.
+  The cheapest shippable variant (occurrences + members, no scopes) is +96 ms on `binder.ts` for
+  0.47 but **+3,326 ms on `checker.ts` for 1.60**, and makes EVERY hover ~32% dearer. **The
+  second, independent refusal is RETENTION**: one widened entry holds 798,531 records for
+  `binder.ts` and **54.4 M** for `checker.ts` — **48x / 205x** today's hover entry — of which
+  49,879,917 are `CapturedName`s, because a free-name caret sees the lib globals and a widened
+  request repeats that set at every one of 13,601 anchors (**O(anchors x globals)**, structural,
+  and `CapturedScope`'s own KDoc already said so). **THE UNBLOCKER IS (INC.41), NOT A WIDER
+  REQUEST** — a re-entrant capture against a retained checker ((INC.17)'s `ProgramRecheck`)
+  answers a span nobody asked for up front with no new build. Instrument kept and re-takeable:
+  `scripts/inc33-widen-cost.sh` + `Inc33WidenMain`'s KDoc (which is the authority for the table;
+  the figures are WALL TIME on one box and pinned by no test). ORIGINAL ENTRY, whose reasoning
+  stands and whose sub-question (a) is what was measured:
+  **THE CARET CHANNELS ARE COLD PER CHANNEL PER BUFFER — a completion in an
   already-hovered buffer still BUILDS, measured 201-228 ms, and the prize is UNMEASURED.**
   (INC.32) stopped the caret channels evicting the hover; it did not make them SERVED. A
   hover's file-wide request carries `spans`, and a member completion asks `memberSpans`, so
@@ -1927,8 +1944,9 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   0 `DIVERGE-DEF` on both arms** against 43 `DIVERGE-TYPE` — see (INC.41). +9 pins, suite
   15,824 / 0 / 3; `docs/language-service.md` § 4a.
 
-- [ ] **(INC.41) THE 43 `DIVERGE-TYPE` FILES ARE THE STANDING CAPTURE-CHANNEL STATE, AND THEY
-  ARE THE WHOLE REASON (INC.40)'s VALVE IS DIAGNOSTICS-ONLY. THE PRIZE IS *NOT* MEASURED.**
+- [ ] **(INC.41) THE 43 `DIVERGE-TYPE` FILES ARE THE STANDING CAPTURE-CHANNEL STATE, THEY ARE
+  THE WHOLE REASON (INC.40)'s VALVE IS DIAGNOSTICS-ONLY, AND SINCE (INC.33) THEY ARE THE **NAMED
+  UNBLOCKER FOR THE ENTIRE CARET-CHANNEL LATENCY STORY.***
   `replay-differential.sh` at HEAD: every diagnostic row and all 352,713 definition spans
   agree between a re-entered answer and a fresh narrowed build's, while the CAPTURED TYPE
   channel diverges in **43 of 75 files** (the banner's "5 of 75" was stale, pre-(INC.26)/(INC.28);
@@ -1945,6 +1963,19 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   arm's own with-capture ratio at HEAD is 1.34x, so the prize must be re-priced for the caret
   channels before any work — not inherited from the 2.25x row. Classify per ELEMENT
   ((INC.23): `narrowRendersMoreAny` over-reports and a nonzero is a LEAD, never a finding).
+  **WHAT (INC.33) ADDED, AND IT IS WHY THIS ITEM IS NOW THE ONLY ROUTE.** The obvious
+  alternative — widen the file-wide request so one build serves every caret channel — was
+  PRICED AND REFUSED: **+286 ms on `binder.ts` and +25.1 s on `checker.ts`** against a **204 /
+  2,078 ms** completion (break-even **1.40** / **12.1** completions per hover with no edit
+  since), plus a retention blow-up of **48x / 205x** (54.4 M records for one `checker.ts`
+  entry). **A request is priced per ANCHOR; an editor needs a price per ANSWER**, and a
+  re-entrant capture against a retained checker is the only shape with that property — so
+  closing these 43 rows is not one option among several, it is the route. **TWO CONSTRAINTS ON
+  RIDING IT.** (i) The prize still has to be measured for the caret channels, per the paragraph
+  above. (ii) **A re-entrant capture does NOT by itself unblock free-name completion**:
+  `CapturedScope` repeats the lib globals at every anchor (**O(anchors x globals)** — 49,879,917
+  names for `checker.ts`, and a widened `scopes.file` arm read **+19.4 s** there), so that
+  channel needs its own fix whichever mechanism serves it.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:

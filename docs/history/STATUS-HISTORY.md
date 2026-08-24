@@ -1,3 +1,44 @@
+**(INC.27) REFUSED WITH A PROOF: B416's KEY CANNOT NAME A UNION THE WAY tsc DOES, AND THE OBVIOUS
+NARROWING WAS BUILT, MEASURED, AND MADE THE GATE *WORSE* (2026-08-24).** The ~790-row
+`unionAliasStructural` residual (INC.26) left splits, per element and nesting-aware, into **432**
+rows where SEVERAL aliases claim one member set (arbitrary in BOTH arms), **~393** where a SOLITARY
+alias names a union at sites that never spell it — measured, not inferred: `AssignmentPattern` has
+**0 references** in binder.ts, `MemberName` **0** in checker.ts, `JsxCallLike` **0** in parser.ts —
+and **~303** of the unrelated (INC.28) family. **tsc gives THREE answers for one member set**
+(`ModuleName`, `ModuleExportName`, and the bare `Ident | Str` where nobody wrote an alias) because it
+keys its union cache by `getTypeListId(types) + getAliasId(aliasSymbol, …)`. **And a fourth probe
+named the real mechanism: tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not
+structural matching** — a join-built `A | B` renders structurally while a narrow of `x: MyType` that
+removes nothing renders `MyType`, both visible in one pristine baseline.
+**THE PROOF THAT BOUNDS THE DIRECTION**: round 545's INV.5(a) interns our unions by **member-id list
+ALONE**, so every one of tsc's instances is a single `Type` here. No id-keyed or member-set-keyed
+table can give three answers from one key, and **anything able to name the flow-RECONSTRUCTED union
+necessarily also names a union nobody wrote.** The residual is an INTERNING-KEY defect, not a defect
+of B416's table — queued as (INC.29), which is an INV.5(a) change and must price the id churn first
+(union interning is load-bearing for relation caching and for a display ORDER pinned byte-for-byte
+across ~13k baselines).
+**THE NARROWING WAS BUILT RATHER THAN ARGUED ABOUT, AND THAT IS WHAT SETTLED IT.** Poisoning a member
+set two differently-named aliases claim does exactly what it claims — the `full=name/narrow=name`
+bucket collapses **416 -> 2** — and the gate still goes **1,128 -> 1,351 spans, 43 -> 46 files**,
+because a `full=structural/narrow=name` bucket of **657** appears: **the poison TRIGGER is itself
+coverage-dependent**, converting a small difference in which aliases happened to be resolved into a
+difference in whether a name exists at all, and amplifying it. Nor can ambiguity be decided
+syntactically — of **407** collisions per compile the largest are aliases whose body is ANOTHER alias
+(`type FunctionLike = SignatureDeclaration`), spelling no members at all — so deciding it means
+resolving every union alias up front, i.e. (INC.22)'s eager `TypeAlias` phase, already refused for
+6.68 ms of the floor and for diverging a DIAGNOSTIC on the sensitivity arm.
+**WHAT LANDED IS BEHAVIOUR-FREE AND PROVEN SO BY DIGEST**: the `unionAliasStructural` KDoc carrying
+the proof, census hooks placed OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations, 407
+collisions), and two pins guarding what a future round must not lose — a solitary alias names its
+member set, and the switch-fallthrough-reconstructed union still displays as `MyType`. **Nothing pins
+the open gap** (round 765: a pin on a known-open gap is a countdown, not a guard). Suite **15,807 / 0
+/ 3** (+2 pins), zero corpus baselines moved, `cost_gate.py` exit 0, `huge_methods --fail-over 0`
+exit 0 on both modules (core 781 classes), `partition-equivalence` EQUIVALENT 78/78, `partition-gate`
+78/78 and 76/76 over 78 netting passes, floor **57 ms** untouched, and — the control that makes the
+inertness a measurement rather than a claim — **`capture-equivalence` returns full
+`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files, BIT-IDENTICAL to the
+recorded baseline.**
+
 **AN ALIAS WAS RENAMING EVERY TYPE THAT ALREADY HAD ITS OWN NAME — IN THE *DIAGNOSTICS* CHANNEL, ON
 ORDINARY BUILDS — AND THE GATE THAT WAS SUPPOSED TO CATCH IT HAD THE REFERENCE ARM BACKWARDS
 (2026-08-24, (INC.26)).** **OPERATIONAL, READ FIRST: two recorded full-build digests MOVED, by
