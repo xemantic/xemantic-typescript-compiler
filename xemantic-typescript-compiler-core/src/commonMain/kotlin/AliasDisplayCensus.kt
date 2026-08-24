@@ -87,6 +87,18 @@ object AliasDisplayCensus {
     /** The alias names that did so. */
     val argIdentityRows: MutableList<String> = ArrayList()
 
+    /** (INC.27) B416 union-alias member sets registered under exactly one name. */
+    var unionRegistered: Long = 0
+
+    /** …and the ones POISONED because a second, differently-named alias claimed them. */
+    var unionAmbiguous: Long = 0
+
+    /** `"<standing> vs <incoming>"` rows for the poisoned member sets. */
+    val unionAmbiguousRows: MutableList<String> = ArrayList()
+
+    /** The alias names that registered a member set. */
+    val unionRegisteredRows: MutableList<String> = ArrayList()
+
     private const val ROW_CAP = 4000
 
     fun reset() {
@@ -98,6 +110,10 @@ object AliasDisplayCensus {
         plainRefused = 0
         plainRefusedDifferent = 0
         genericArgIdentity = 0
+        unionRegistered = 0
+        unionAmbiguous = 0
+        unionAmbiguousRows.clear()
+        unionRegisteredRows.clear()
         clobberRows.clear()
         refusalRows.clear()
         argIdentityRows.clear()
@@ -141,6 +157,18 @@ object AliasDisplayCensus {
         }
     }
 
+    /** (INC.27) Hook for a B416 registration that took a previously-unclaimed member set. */
+    fun noteUnionRegistered(name: String) {
+        unionRegistered++
+        if (unionRegisteredRows.size < ROW_CAP) unionRegisteredRows.add(name)
+    }
+
+    /** (INC.27) Hook for a B416 member set poisoned by a second, differently-named alias. */
+    fun noteUnionAmbiguous(standing: String, incoming: String) {
+        unionAmbiguous++
+        if (unionAmbiguousRows.size < ROW_CAP) unionAmbiguousRows.add("$standing vs $incoming")
+    }
+
     fun report(): String = buildString {
         appendLine("== (INC.11) aliasDisplayMap write census ==")
         appendLine("generic (last-wins) writes: $genericWrites")
@@ -163,5 +191,12 @@ object AliasDisplayCensus {
             .sortedByDescending { it.value }
         appendLine("distinct clobber rows: ${distinct.size}")
         for ((row, n) in distinct.take(60)) appendLine("  ${n}x  $row")
+        appendLine(
+            "(INC.27) B416 union-alias member sets: registered=$unionRegistered " +
+                "POISONED=$unionAmbiguous",
+        )
+        val poisoned = unionAmbiguousRows.groupingBy { it }.eachCount().entries
+            .sortedByDescending { it.value }
+        for ((row, n) in poisoned.take(40)) appendLine("  ${n}x  $row")
     }
 }

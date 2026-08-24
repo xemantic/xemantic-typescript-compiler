@@ -3809,13 +3809,68 @@ class Checker(
      *  [typeToStringInProgress] guards against recursive alias chains (e.g.
      *  `FindConditions<T[P]>` self-reference) when rendering args. */
     private val aliasDisplayMap = mutableMapOf<Int, Pair<String, List<Type>>>()
-    /** B416: STRUCTURAL union-alias display — keyed by the SORTED member-id list of a
-     *  NON-generic union type alias's resolved union, mapping to the alias name. A
-     *  freshly-CONSTRUCTED union (e.g. flow narrowing / switch fallthrough reconstructing
-     *  the full alias union) has a different `Type.id` than the alias's union, so the
-     *  id-keyed [aliasDisplayMap] misses; this matches by member set so the reconstructed
-     *  FULL union still displays as the alias (`MyType`, not `A | B | C`). A strict SUBSET
-     *  (`A | B`) has a different member set → no match → unfolds, matching tsc. */
+    /**
+     * B416: STRUCTURAL union-alias display — keyed by the SORTED member-id list of a
+     * NON-generic union type alias's resolved union, mapping to the alias name. A
+     * freshly-CONSTRUCTED union (flow narrowing / switch fallthrough rebuilding the full
+     * alias union) may have a different `Type.id` than the alias's own, so the id-keyed
+     * [aliasDisplayMap] misses; this matches by member set, so the reconstructed FULL
+     * union still displays as the alias (`MyType`, not `A | B | C`). A strict SUBSET
+     * (`A | B`) has a different member set → no match → unfolds, matching tsc. Both
+     * halves are pinned by `narrowByClauseExpressionInSwitchTrue6`, whose pristine
+     * baseline reports `A | B` at one line and `MyType` at the next.
+     *
+     * ## (INC.27) FIRST-WINS IS ARBITRARY, AND NO RULE OVER THIS KEY CAN FIX IT
+     *
+     * tsc keys its union cache by `getTypeListId(types) + getAliasId(aliasSymbol, …)`
+     * (`checker.ts` `getUnionTypeFromSortedList`), so an alias is part of a union's
+     * IDENTITY there and one member set can have several named instances plus an unnamed
+     * one. Measured against `tools/tsgo-7.0.2/lib/tsc` with
+     * `type ModuleName = Ident | Str` and `type ModuleExportName = Ident | Str`:
+     *
+     * ```
+     * Type 'ModuleName' is not assignable to type 'number'.        // annotated ModuleName
+     * Type 'ModuleExportName' is not assignable to type 'number'.  // annotated ModuleExportName
+     * Type 'Ident | Str' is not assignable to type 'number'.       // no alias written
+     * ```
+     *
+     * INV.5(a) (round 545) interns OUR unions by member-id list ALONE, so all three of
+     * those are ONE `Type` here. **That is a proof, not a guess: no id-keyed or
+     * member-set-keyed table can reproduce tsc's three answers, and any mechanism able to
+     * name the reconstructed union above necessarily also names a union nobody named.**
+     * The residual is an INTERNING-KEY defect, not a defect of this table; closing it
+     * needs the alias symbol in the union's identity (a per-alias union instance
+     * registered in [aliasDisplayMap], plus tsc's `filterType` identity-preservation so a
+     * narrow that removes nothing returns the instance it was handed) — i.e. undoing
+     * INV.5(a)'s canonicalization for alias-resolved unions, which is round 543/544's
+     * blocker and its own round.
+     *
+     * ## THE REFUSAL THAT WAS BUILT AND REVERTED, AND WHY IT IS NOT COMING BACK
+     *
+     * Refusing to name a member set that TWO differently-named aliases both claim was
+     * implemented, pinned and measured. It does exactly what it says — the
+     * `full=name / narrow=name` bucket of `scripts/capture-equivalence.sh` collapses
+     * **416 → 2** — and the gate still gets **WORSE, 1,128 → 1,351 spans in 43 → 46
+     * files**, because a NEW `full=structural / narrow=name` bucket of **657** rows
+     * appears: **the poison trigger is itself coverage-dependent.** A whole-program build
+     * resolves every competing alias and poisons; a `recheckOnly` build resolves some and
+     * does not. So the refusal converts a small difference in WHICH aliases got resolved
+     * into a difference in WHETHER a name exists at all, and amplifies it.
+     *
+     * Making the trigger stable means knowing every alias for a member set before naming
+     * any of them, and **that cannot be done syntactically**: of the 407 collisions
+     * measured per compile on tsc's own sources, the largest are `type FunctionLike =
+     * SignatureDeclaration` and `type AssertionKey = ImportAttributeName` (an alias whose
+     * body is ANOTHER ALIAS, spelling no members at all) and
+     * `BindingOrAssignmentPattern` vs `DestructuringPattern` (structurally equal,
+     * spelled entirely differently). Determining it therefore means resolving every union
+     * alias in the program up front — which is (INC.22)'s eager `TypeAlias` phase,
+     * refused there for costing 6.68 ms of a 58 ms incremental floor and for diverging a
+     * DIAGNOSTIC on `scripts/partition-gate.sh`'s sensitivity arm.
+     *
+     * The census behind those numbers is live and off by default:
+     * `XTSC_ALIAS_CENSUS=1`, [AliasDisplayCensus.unionRegistered] / `unionAmbiguous`.
+     */
     private val unionAliasStructural = mutableMapOf<List<Int>, String>()
     private val typeToStringInProgress = mutableSetOf<Int>()
 
@@ -110558,6 +110613,10 @@ interface DataView {
                 // so a reconstructed full union (flow narrowing / switch fallthrough)
                 // displays as the alias name. First-write-wins (don't clobber a prior alias
                 // for the same member set). Skip if any member is a shared singleton id.
+                //
+                // (INC.27) FIRST-WINS IS ARBITRARY HERE AND CANNOT BE IMPROVED BY ANY RULE
+                // OVER THIS KEY — see [unionAliasStructural]'s KDoc for the measurement and
+                // the proof. The refusal that was built and reverted is recorded there.
                 if (decl != null && decl.typeParameters.isNullOrEmpty() && resolved is Type.Union) {
                     val key = resolved.types.map { it.id }.sorted()
                     // FP firewall: only register when EVERY member is a NAMED object type
@@ -110573,6 +110632,24 @@ interface DataView {
                             cur = cur.parent
                         }
                         unionAliasStructural[key] = segments.joinToString(".")
+                        if (AliasDisplayCensus.on) {
+                            AliasDisplayCensus.noteUnionRegistered(segments.joinToString("."))
+                        }
+                    } else if (AliasDisplayCensus.on && allNamed && key.size >= 2) {
+                        // (INC.27) The instrument, and it is deliberately OUTSIDE the write:
+                        // a member set a SECOND, differently-named alias also resolves to has
+                        // no determined name, and counting those is how the size of that
+                        // population was measured (407 on tsc's own 78 sources, per compile).
+                        // Behaviour-free — nothing here writes.
+                        val segments = mutableListOf(symbol.name)
+                        var cur = symbol.parent
+                        while (cur != null && cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+                            segments.add(0, cur.name)
+                            cur = cur.parent
+                        }
+                        val aliasName = segments.joinToString(".")
+                        val standing = unionAliasStructural.getValue(key)
+                        if (standing != aliasName) AliasDisplayCensus.noteUnionAmbiguous(standing, aliasName)
                     }
                 }
                 resolved
