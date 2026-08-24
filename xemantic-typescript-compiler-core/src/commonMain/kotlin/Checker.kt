@@ -110479,7 +110479,50 @@ interface DataView {
                 // display `From`, not the expanded `{ field: null; } & { anotherField: any; }`.
                 // A NAMED intersection (`Foo & Bar`, Type.Interface/Reference constituents)
                 // stays unfolded per tsc (the load-bearing TS2416 case above).
-                val shouldRegister = resolved is Type.Object && resolved !is Type.Reference ||
+                // (INC.26) …AND THE BODY MUST BE **ANONYMOUS**. An alias whose body is a
+                // type that ALREADY CARRIES ITS OWN NAME is an alias FOR that type, not a
+                // second name for it — `type FunctionBody = Block` does not rename `Block`.
+                // Registering there writes the alias onto the INTERFACE's own `Type.id`,
+                // and since `aliasDisplayMap` is consulted by `typeToString` BEFORE the
+                // structural fallback, every occurrence of that interface anywhere in the
+                // program then renders under the alias. Measured on four lines with no
+                // partition and no arm: `interface Block {}; type FunctionBody = Block;
+                // declare const b: Block; const bad: number = b` reported
+                // `Type 'FunctionBody' is not assignable to type 'number'` where tsc 7.0.2
+                // reports `Type 'Block'`. It is a SHIPPED defect of the diagnostics
+                // channel, not a capture or partition artifact, and it is the largest
+                // single family of `capture-equivalence`'s narrowed divergence — the FULL
+                // build stamps the name and a narrowed build, which never resolves that
+                // alias, renders the honest one.
+                // The test is close to the one the Intersection arm below already applies
+                // to each constituent (`c.symbol == null`); the Object arm simply never had
+                // it. An anonymous body keeps registering: `getTypeFromTypeLiteral` leaves
+                // `symbol` null, so `type Foo = { a: number }` still displays as `Foo`.
+                //
+                // ## …AND A *GENERIC* NAMED TYPE IS EXCLUDED FROM THE REFUSAL, WHICH IS
+                // ## ROUND 754's INVARIANT AND IS PINNED BY A BASELINE
+                //
+                // A bare reference to a generic whose every parameter has a DEFAULT
+                // resolves to the RAW `Type.Interface` — members keep the un-substituted
+                // parameter, and the defaulted instantiation is applied at the RELATION
+                // boundary (`defaultedInstantiationOfOpenGeneric`), deliberately, so that a
+                // bare `TableClass` and an explicit `TableClass<any>` do not intern as one
+                // instance. That raw stand-in therefore does NOT carry a complete name a
+                // user could have written: it renders `TableClass<any>`, which is not what
+                // `type Table = TableClass` spells, and the alias is the only complete name
+                // in hand. Refusing there costs the four `Table` rows of
+                // `typeVariableConstraintedToAliasNotAssignableToUnion`, whose baseline is
+                // pristine tsc's and says `Table` — so the refusal must read "already has a
+                // complete own name", not merely "has a symbol".
+                //
+                // The two shapes are separated by exactly one property and nothing else:
+                // `Block` / `PropertySignature` / `InterfaceDeclaration` — the three largest
+                // families — are non-generic, `TableClass<S = any>` is not.
+                val bodyHasCompleteOwnName = resolved is Type.Object && resolved.symbol != null &&
+                    (resolved !is Type.Interface || resolved.typeParameters.isNullOrEmpty())
+                val shouldRegister =
+                    resolved is Type.Object && resolved !is Type.Reference &&
+                        !bodyHasCompleteOwnName ||
                     (resolved is Type.Intersection && (
                         resolved.types.any { it is Type.Union } ||
                         resolved.types.all { c -> c is Type.Object && c !is Type.Reference && c.symbol == null }

@@ -110,4 +110,118 @@ class AliasDisplayIdentityTest {
         assert(ts2322.size == 1)
         assert("Boxed<Shape>" in ts2322.single().message)
     }
+
+    /**
+     * (INC.26) AN ALIAS WHOSE BODY IS A TYPE THAT ALREADY HAS ITS OWN NAME MUST NOT
+     * TAKE THAT NAME OVER — `type FunctionBody = Block` does not rename `Block`.
+     *
+     * `aliasDisplayMap` is keyed by `Type.id`, so registering the alias there writes
+     * it onto the INTERFACE's own type, and `typeToString` consults the map before
+     * the structural fallback: every occurrence of that interface in the whole
+     * program then renders under the alias's name. Reproduced on four lines with no
+     * partition and no arm, and confirmed against the reference compiler on the box
+     * (`tools/tsgo-7.0.2/lib/tsc`), which reports `Type 'Block'` where we reported
+     * `Type 'FunctionBody'`.
+     *
+     * This is the largest single family of `scripts/capture-equivalence.sh`'s
+     * narrowed divergence, and the direction is the one that matters: the FULL build
+     * is the WRONG arm. A narrowed build never resolves the unrelated alias, so it
+     * renders the honest name, and the gate reported the two disagreeing without
+     * being able to say which was right.
+     */
+    @Test
+    fun `an alias to a named interface does not rename that interface`() {
+        val diagnostics = diagnose(
+            """
+            interface Block { stmts: number }
+            type FunctionBody = Block;
+            declare const b: Block;
+            const bad: number = b;
+            """,
+        )
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        val message = ts2322.single().message
+        // The declared type is `Block`, and that is what tsc 7.0.2 reports.
+        assert("'Block'" in message)
+        // …not the name of an alias the declaration never mentions.
+        assert("FunctionBody" !in message)
+    }
+
+    /**
+     * The same rule one shape over: the alias body is a CLASS rather than an
+     * interface. Both carry their own symbol, which is the property the rule reads,
+     * so a fixture that only ever tested an interface would not say that.
+     */
+    @Test
+    fun `an alias to a named class does not rename that class`() {
+        val diagnostics = diagnose(
+            """
+            class Widget { w: number = 1 }
+            type Gadget = Widget;
+            declare const w: Widget;
+            const bad: number = w;
+            """,
+        )
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        val message = ts2322.single().message
+        assert("'Widget'" in message)
+        assert("Gadget" !in message)
+    }
+
+    /**
+     * (INC.26) THE NEGATIVE CONTROL, and it is what keeps the rule an ANONYMITY test
+     * rather than a blanket refusal: an alias whose body is a type literal is the
+     * ONLY name that type has, so it must still register.
+     *
+     * `getTypeFromTypeLiteral` leaves `Type.Object.symbol` null, which is exactly the
+     * property the rule branches on — so this fixture fails if the fix is widened to
+     * refuse every object body.
+     */
+    @Test
+    fun `negative control - an alias to an anonymous type literal still names it`() {
+        val diagnostics = diagnose(
+            """
+            type Config = { retries: number };
+            declare const c: Config;
+            const bad: number = c;
+            """,
+        )
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        assert("'Config'" in ts2322.single().message)
+    }
+
+    /**
+     * (INC.26) THE GENERIC EXCLUSION, and it is round 754's invariant restated as a
+     * pin so the refusal above cannot be widened back over it.
+     *
+     * A bare reference to a generic whose every parameter has a DEFAULT resolves to
+     * the RAW `Type.Interface` — the defaulted instantiation is applied at the
+     * relation boundary on purpose, so that a bare `TableClass` and an explicit
+     * `TableClass<any>` never intern as one instance. That raw stand-in renders
+     * `TableClass<any>`, which is not a name the source spells, so the alias is the
+     * only complete name in hand and must still be registered.
+     *
+     * The corpus pins the same thing from the other side —
+     * `typeVariableConstraintedToAliasNotAssignableToUnion` has four `Table` rows
+     * whose baseline is pristine tsc's — but that baseline lives in generated code
+     * and states nothing about WHY, which is what this test is for.
+     */
+    @Test
+    fun `an alias to a generic named type with defaulted parameters still names it`() {
+        val diagnostics = diagnose(
+            """
+            declare class TableClass<S = any> { _field: S }
+            type Table = TableClass;
+            declare const o: Table;
+            const bad: boolean = o;
+            """,
+        )
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        // tsc 7.0.2 and the pristine baseline both report the alias here.
+        assert("'Table'" in ts2322.single().message)
+    }
 }
