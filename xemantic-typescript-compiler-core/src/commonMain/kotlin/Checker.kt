@@ -110644,8 +110644,11 @@ interface DataView {
      *    `BuildTree<T, N extends number = -1, I extends any[] = []>`, which is. Refusing
      *    them is what keeps `BuildTree`'s own parametric body degraded, and letting them
      *    through expands it one level further: `GrandUser` then gains a TS2322 that
-     *    pristine tsc does not emit. Gating on the referenced alias alone leaves that
-     *    test RED — measured, one failure in 14,869.
+     *    pristine tsc does not emit. **Ablated twice**: gating on the referenced alias
+     *    alone leaves that baseline RED (one failure in 14,869), and deleting this leg
+     *    outright reddens it plus
+     *    `GenericAliasConstrainedArgumentTest.the recursion brake …` — so this is a
+     *    load-bearing guard with a failure uniquely its own, not a superstition.
      *
      * None of this claims a recursive alias's argument really fails its constraint. It
      * claims the guard is load-bearing for a *different* reason inside one, so the

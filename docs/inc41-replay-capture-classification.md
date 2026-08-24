@@ -220,6 +220,40 @@ their own merits:
    render a name the user's own declaration did not write — but that is a call for
    the owner, not for a round.
 
+## 6a. (INC.42) — what the 213-row BOTH-WRONG family turned out to be
+
+Re-measured after (INC.42) landed. **The population is unchanged: 796 rows, 37 pairs,
+213 GAINED-INFERENCE.** That is a finding, not a failure, and it names the residual
+exactly.
+
+The p000 rows are **not** hovers on `Visitor`. Read out of the classifier's own dump,
+they are carets on `visitEachChild` / `visitFunctionBody` / `discardVisitor` — i.e. on
+FUNCTION NAMES whose rendered OVERLOAD SET contains a parameter declared `Visitor`. So
+the string comes from the **checking** path (`getTypeFromTypeReference` on a bare
+`Visitor`), and both arms render an UNBOUND parameter: `(node: TIn) => any` fresh,
+`(node: TIn) => T | readonly Node[]` replayed. tsc renders `Visitor`.
+
+(INC.42) fixed the adjacent defect — a generic alias reference whose argument is a bare
+type parameter answered `errorType` and rendered `any`, so `type A1<X extends Nd> =
+(n: number) => R1<X>` rendered `(n: number) => any` where tsc renders `R1<X>` — and
+confined it to the DISPLAY path. The 213 rows need the checking path, and reaching them
+is blocked THREE times over, each cost measured:
+
+1. **(INC.28)**: handing a reference the alias's parametric form costs two corpus false
+   positives (`typeArgumentDefaultUsesConstraintOnCircularDefault`,
+   `excessPropertyCheckIntersectionWithRecursiveType`).
+2. **(INC.42)**: relaxing B57.1b's constraint guard on the checking path reads
+   `output.errors` **46 -> 48** on the compiler profile — an overload-resolution defect
+   at `checker.ts:2503` that a no-longer-`any` `VisitResult<T>` exposes, and a TS2322 at
+   `watchPublic.ts:576`. Two false positives on the flagship profile against 213 hovers.
+3. **Even with both closed**, we would render `(node: TIn) => VisitResult<TOut>` where
+   tsc renders `Visitor` — the alias NAME is deliberately not registered for a result
+   that is a pure function type (B50.5's `isPureFunctionType`, pinned by
+   `nestedCallbackErrorNotFlattened_ts`).
+
+So the family is a **relation-engine** item ((INC.30)) plus an alias-NAMING one, not a
+display bug, and the honest order is (1) before (2) before (3).
+
 ## 7. What grades a future attempt
 
 * `scripts/replay-differential.sh realism` — the gate; today `43 of 75`, `0

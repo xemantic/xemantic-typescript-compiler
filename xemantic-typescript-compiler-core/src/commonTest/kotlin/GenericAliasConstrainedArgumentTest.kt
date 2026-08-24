@@ -200,6 +200,64 @@ class GenericAliasConstrainedArgumentTest {
     }
 
     @Test
+    fun `a hover on a self-referential alias does not expand without bound`() {
+        // The DISPLAY path's own version of the gate above. `diagnose` never asks for a
+        // capture, so it never reaches `resolveTypeAliasBody` — and the relaxation lives
+        // there. This drives the same recursive shape THROUGH the capture channel, where
+        // a hover on `BuildTree` resolves the alias's parametric body: without the gate
+        // that body is one level richer at every step and the `init` boundary guard has
+        // to stop it, which surfaces as TS2589 at position (0,0) ((INC.19)).
+        //
+        // MEASURED AND RECORDED AS NON-DISCRIMINATING: this stayed GREEN under the
+        // ablation that deletes the gate's enclosing-declaration leg, where the
+        // `diagnose`-driven pin above and the corpus baseline both went RED. The
+        // prediction behind it — that `diagnose` never reaches `resolveTypeAliasBody`,
+        // so only a capture could exercise the display path — is FALSE; it does. Kept
+        // as a companion because it carries the vacuity control below, and named here
+        // rather than claimed, per CLAUDE.md: a signal with no uniquely-its-own failure
+        // is a redundant guard and must be said to be one.
+        val recursive =
+            """
+            export type Prepend<V, T extends any[]> =
+              ((head: V, ...args: T) => void) extends ((...args: infer R) => void) ? R : any;
+            export type Length<T extends any[]> = T["length"];
+            export type BuildTree<T, N extends number = -1, I extends any[] = []> = {
+              1: T;
+              0: T & { children: BuildTree<T, N, Prepend<any, I>>[] };
+            }[Length<I> extends N ? 1 : 0];
+            export interface User { name: string }
+            export type GrandUser = BuildTree<User, 2>;
+            """.trimIndent()
+        val file = "/work/rec.ts"
+        val vfs = InMemoryVfs(
+            mapOf(
+                "/work/tsconfig.json" to
+                    """{"compilerOptions":{"module":"esnext","target":"es2015","strict":true}}""",
+                "/work/rec.ts" to recursive,
+            ),
+        )
+        val parsed = Parser(recursive, file).parse()
+        val carets = ArrayList<TypeCaptureSpan>()
+        val stack = ArrayList<Node>()
+        stack.add(parsed)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is Identifier) carets.add(TypeCaptureSpan(file, node.pos, node.end))
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        val result = ProjectCompiler(vfs).build(
+            "/work",
+            noEmit = true,
+            typeCapture = TypeCaptureRequest(carets.distinct()),
+        )
+        // Vacuity control: the carets really were answered, so a silent assertion below
+        // is a fact about the compiler and not about an empty population.
+        assert(result.capturedTypes.any { recursive.startsWith("BuildTree<", it.start) })
+        assert(result.diagnostics.none { it.code == 2589 })
+        assert(result.diagnostics.none { it.code == 2322 })
+    }
+
+    @Test
     fun `negative control - a genuinely unsatisfied constraint is still refused`() {
         // `X extends Nd | undefined` does NOT satisfy `B1<T extends Nd>`. The relaxation
         // consults the ARGUMENT'S OWN constraint, so this must stay refused — a guard
