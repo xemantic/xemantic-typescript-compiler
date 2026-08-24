@@ -1,3 +1,43 @@
+**THE FLOOR'S LAST BIG ROW IS WORTH 62-65 ms BY AN AXIS THAT PROVABLY CANNOT MOVE A FULL BUILD, AND
+IT IS REFUSED BECAUSE THE ORDER IT BUYS IS *RESOLUTIONS* AND NOT ONLY A NAME (2026-08-24,
+(INC.22)).** `init:buildFileLocalTypeMaps` is **69.16 ms of a 90.15 ms floor pass table — 77%** —
+and partition-scoping it takes the floor **131 -> 57 ms**, the narrowed-query median **166 -> 116**,
+and the ratio at the median file **29.86x -> 42.61x**, with the full build unmoved. **The axis is
+new**: (INC.10) and (INC.11) deferred PHASES — what every file's map carries — which perturbs a FULL
+build's first-touch order as much as a narrowed one's, and that is what refused them both. This
+round varied **WHICH FILES** the eager pass covers, through the INV.6(6d) partition view, which
+**IS** `binderResults` when there is no partition — so an ordinary compile is unchanged BY
+CONSTRUCTION, the same property that carried the entire (INC.7) gating arc.
+**AND THAT CLAIM WAS VERIFIED IN THE BINARY RATHER THAN ARGUED, WHICH IS THE ROUND'S BEST PROCESS
+OUTPUT.** A per-arm DIGEST over every captured answer — **381,666 types and 360,152 definitions in
+76 files** — reads `-3718897727265589316` for the pre-round arm and **identical for both new arms**,
+corroborated by a COUNT (`FltmDefer.lazyBuilds == 0` on every unpartitioned build) and `cost_gate.py`
+at **+0.00%** on `output.errors`/`spine.nodes`. "A full build is unchanged by construction" is
+exactly the claim that is true of the code and false of the binary; this one was made checkable.
+**THE QUEUE'S PREMISE HAD ALREADY EXPIRED**: (INC.11)'s `TypeAlias`-only arm was recorded at **137
+divergent spans** and re-measures at **5 / 3 of 76 — byte-identical to baseline**, closed by
+(INC.11)'s own `returnsArgumentUnchanged` fix and the work since. So no `aliasDisplayMap` re-key was
+needed and none was attempted. **WHAT ACTUALLY REFUSES IT IS THE MEMBER CHANNEL, NOT DISPLAY**:
+`capture-channel`'s `moreAny` goes **168 -> 229**, i.e. **+61 member types collapsing to `any`**
+under a narrowed build — a WRONG ANSWER, the same class (INC.11) refused the full deferral over —
+and `partition-gate`'s SENSITIVITY arm, the one built to refuse rather than print green, **diverges
+on a DIAGNOSTIC**. Keeping the cheap `TypeAlias` phase program-wide (6.68 ms) solves the NAMING half
+completely (2,275 divergent spans down to **+1 row**) and does nothing for the member half.
+**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY**: the map's
+one reader rebuilds a foreign file's map on demand, and the round pinned both that it FIRES and that
+it produces the **SAME map**, with a non-emptiness assertion and a negative control that two files'
+maps differ; ablations reddened 4 pins including the no-mode-install DEFAULT pin ((INC.16) a1's
+lesson applied) and, separately, exactly the 2 rebuild pins. Suite on the change was **15,795 / 0 /
+3** and `huge_methods` clean — but the capture gates are the gates for this family and they refuse
+it, so **nothing landed and the tree is back at `aa3c0629`.**
+**THE TRANSFERABLE RESULT RE-AIMS THE DIRECTION**: the obstruction is not the pass's COST but that
+the pass IS the program's FIRST-TOUCH ORDER, and that order buys BOTH an alias name (cheap, fixable)
+AND member resolutions (not fixable without the expensive phase). **A future attempt must make
+member resolution ORDER-INDEPENDENT — round 778's `getTypeOfSymbol` write gate is the known
+mechanism — not make the pass cheaper.** Queued as (INC.23), with (INC.24) to re-land the capture
+digest, a general gate strengthening that died with the revert.
+
+
 **THE SCANNING FAMILY GATED AS ONE BATCH BANKS 99.9% — THE ARC'S FIRST ~100% DISCOUNT — AND A
 NARROWED QUERY IS NOW 29.86x FASTER THAN A FULL BUILD (2026-08-24, (INC.21)).** 19 whole-source-
 scanning passes moved TOGETHER (**19.064 -> 0.024 ms**), because round 895's `srcHas` builds its

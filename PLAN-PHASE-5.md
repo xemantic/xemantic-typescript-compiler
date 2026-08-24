@@ -20,6 +20,92 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.28) — `type Box<T> = { v: T }` rendered `{ v: any; }`: a generic alias's own parameters were not in scope for its body, on ordinary builds
+
+**WHAT THIS ROUND DID.** Censused the last of (INC.27)'s three residual families, found a
+**FOURTH shipped defect** of this session, fixed the half that is safe, and refused the
+other half with the mechanism named. **The full arm was the one losing information —
+third time in this arc**, after (INC.25) and (INC.26).
+
+**THE CENSUS** (per element, nesting-aware; reproduced the 1,128-span baseline exactly) —
+the family is **298 rows**, two shapes:
+
+| rows | full | narrow | where |
+|---:|---|---|---|
+| 130 | `any` | `T \| readonly Node[]` | a caret on the alias NAME (`VisitResult`, `Visitor`) |
+| 146 | `…) => any` | `…) => T \| readonly Node[]` | the alias inside a rendered OVERLOAD SET (`visitEachChild` & co) |
+| 20 | same | | es2017/es2015 transformer variants |
+| 2 | `any` | `T` | tsbuildPublic.ts |
+
+**tsc 7.0.2, asked over its own LSP** (`--lsp -stdio`, the ground-truth instrument round
+924 added rather than hand-written expectations): `type Box<T> = { v: T; }`,
+`type VisitResult<T extends Node | undefined> = T | readonly Node[]`. **The NARROW arm was
+right.**
+
+**THE MECHANISM, FROM A WRITER HOOK — AND IT REFUTES BOTH STANDING SUSPECTS.** A second
+`SymTypeOrderCensus` ledger over `declaredTypes` writes prints the same row on tsc's own
+sources and on a four-line fixture:
+
+```
+name=VisitResult pass=init:buildFileLocalTypeMaps ambient=empty depth=sym1/node0 type=any
+```
+
+**`ambient=empty` refutes round 778's write gate; `depth=sym1/node0` refutes truncation.**
+The cause is plain once seen: `getDeclaredTypeOfSymbolWorker`'s type-alias arm resolves
+`decl.type` with **NO type-parameter scope**, so the alias's own `T` answers `errorType` —
+and **`any` ABSORBS A UNION**, so a union body collapses entirely rather than partially.
+
+**IT IS NOT A PARTITION DEFECT AND NOT ORDER-DEPENDENT**: `type Box<T> = { v: T }` alone
+answers `{ v: any; }`, and swapping declaration order changes nothing. **The partition
+divergence is a CONSEQUENCE**: a narrowed build skips `init:buildFileLocalTypeMaps` for a
+foreign file, so the first toucher is `checkConstraintsInStatements`' `withDeclType-
+ParamScope`, which DOES install the scope — and `declaredTypes` has **no write gate at
+all**, so first touch freezes. That is the (INC.19) shape once more, with the roles
+reversed.
+
+**WHAT LANDED IS A SPLIT, AND THE SPLIT WAS FORCED BY MEASUREMENT.** `getTypeOfSymbol-
+Worker`'s alias arm now answers `parametricTypeOfAlias` — the body resolved under the
+alias's own parameters, with the constraint fill write-once and **OUTSIDE** the install per
+(INC.19)'s TS2589 hazard. **`getDeclaredTypeOfSymbol` — what a REFERENCE resolves to — is
+deliberately untouched**: handing references the parametric form costs **two corpus false
+positives** (`typeArgumentDefaultUsesConstraintOnCircularDefault` gains TS2322 `Type '{}'
+is not assignable to type 'T'`; `excessPropertyCheckIntersectionWithRecursiveType` gains
+one at `GrandUser`), both measured and both reverted.
+
+**THE REFUSAL, WITH ITS MECHANISM — AND IT IS A RECURSION BRAKE.** Judging a
+`Type.TypeParam` alias argument by its APPARENT type in the B57.1b guard renders `Visitor`
+exactly as tsc does, and costs a corpus FP: `checkTypeRelatedToCore` has no general
+"TypeParam source via its constraint" rule — its `NonPrimitive` leg says so deliberately —
+so `T extends Node` is NOT related to `Node`, and **that refusal is what brakes the
+recursion for `BuildTree<T, N extends number = -1, I extends any[] = []>`.** Recorded at
+the site. **This is why 173 of the 298 rows remain: they need the RELATION to learn the
+rule, not the display.**
+
+**GATES.** Suite **15,811 / 0 / 3** (+4 pins), **zero corpus baselines moved**.
+**Ablation: 2 of 4 pins RED on the unfixed binary**, reading exactly `[{ v: any; }, { v:
+any; }]` and `[any, any]` — **and the two-arms-agree test and the negative control stay
+GREEN, because both arms agree on the WRONG answer**, which is precisely why a
+full-vs-narrow comparison is not a pin. `capture-equivalence` **1,128 -> 1,003 spans**, 43
+files, `narrowRendersMoreAny=0`, and **ZERO NEW divergent spans — the after-set is a strict
+SUBSET, 125 fixed**. `capture-channel` full digest **BIT-IDENTICAL**; its narrow count
+1,262 -> 1,273 (+11), which is the narrow arm becoming MORE correct in the residual family.
+`partition-equivalence` **EQUIVALENT 78/78**, `partition-gate` realism 78/78 and
+sensitivity 76/76 over 78 netting passes, floor **60 ms `[59, 72, 57, 60]`** — untouched,
+the 57 ms baseline sitting inside that spread. `huge_methods --fail-over 0` exit 0 both
+modules.
+**DIGESTS MOVED BY DESIGN** (second time in the arc, and expected whenever the fix corrects
+a FULL build): `capture-equivalence` full `3349895618940861366` ->
+**`8385940838610938556`**, narrow `306524840298287433` -> **`-7423700524621287041`**.
+
+**ONE THING TO WATCH: THE STANDING COST-GATE DRIFT GREW.** `mapped.hits` **+1.02% ->
++1.63%**, `mapped.keyed` +0.66%, `typeNode.bypassed` +0.62%, with `output.errors` still 46.
+The gate passes (±2%) and the cause is understood — parametric resolutions run with a scope
+INSTALLED, so they are bypassed rather than cacheable — but this is the first round of the
+session to move it, and it is now within 0.4% of the threshold. **The protocol's answer is
+to justify AND rebaseline in the same commit; the justification is here and the rebaseline
+is not, so the next round in this area should `--update` deliberately rather than discover
+the breach.**
+
 ### Round (INC.27) — REFUSED with a PROOF: B416's key cannot name a union the way tsc does, and the obvious narrowing makes the gate WORSE
 
 **WHAT THIS ROUND DID.** Censused the ~790 `unionAliasStructural` rows (INC.26) left,
@@ -3957,13 +4043,44 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   dependent), the eager `TypeAlias` phase ((INC.22), 6.68 ms and a diverging diagnostic),
   or closing the gate by making the NARROW arm match the full one ((INC.26): the narrow
   arm is the more correct one in every remaining family).
-- [ ] **(INC.28) THE VISITOR-SIGNATURE FAMILY — ~298 ROWS WHERE THE *FULL* BUILD RENDERS
-  `any` AND THE NARROW ONE RENDERS `T | readonly Node[]`.** Measured by (INC.26),
-  untouched, not alias-related. Same direction as everything else this arc has found: the
-  full arm is the one losing information. Diagnose before designing; the instrument is the
-  per-element nesting-aware classifier (INC.26) built, and (INC.19)/(INC.11)'s
-  hook-the-writer technique is what has settled every mechanism question in this family so
-  far.
+- [x] **(INC.28) LANDED 2026-08-24 — A GENERIC ALIAS'S OWN PARAMETERS WERE NOT IN SCOPE
+  FOR ITS BODY, SO `type Box<T> = { v: T }` RENDERED `{ v: any; }` ON ORDINARY BUILDS.**
+  `getDeclaredTypeOfSymbolWorker`'s type-alias arm resolved `decl.type` with NO
+  type-parameter scope, the alias's own `T` answered `errorType`, and **`any` ABSORBS A
+  UNION**, so a union body collapsed entirely. **Four lines reproduce it with no partition
+  and it is not order-dependent**; the partition divergence was a CONSEQUENCE (a narrowed
+  build skips `init:buildFileLocalTypeMaps`, so the first toucher is
+  `withDeclTypeParamScope`, which DOES install the scope — and `declaredTypes` has no write
+  gate, so first touch freezes). A writer hook printing `ambient=empty depth=sym1/node0`
+  **refuted BOTH standing suspects** — round 778's write gate and truncation.
+  **THE FIX IS A SPLIT FORCED BY MEASUREMENT**: `getTypeOfSymbolWorker`'s alias arm answers
+  the parametric form; **`getDeclaredTypeOfSymbol` (what a REFERENCE resolves to) is
+  deliberately untouched**, because handing references the parametric form costs two corpus
+  false positives, both measured and reverted.
+  **Gate 1,128 -> 1,003 spans with ZERO NEW divergent spans** (a strict subset, 125 fixed);
+  suite **15,811 / 0 / 3**; ablation 2 of 4 pins RED, **with the two-arms-agree test staying
+  GREEN because both arms agreed on the WRONG answer** — the reason a comparison is not a
+  pin. Digests moved by design (second time in the arc): full `3349895618940861366` ->
+  `8385940838610938556`, narrow `306524840298287433` -> `-7423700524621287041`.
+  **173 of the 298 rows REMAIN and need the RELATION, not the display** — see (INC.30).
+
+- [ ] **(INC.30) THE RELATION HAS NO "TYPE PARAMETER VIA ITS CONSTRAINT" RULE, AND THAT
+  REFUSAL IS LOAD-BEARING AS A RECURSION BRAKE.** (INC.28) measured it: judging a
+  `Type.TypeParam` alias argument by its APPARENT type in the B57.1b guard renders
+  `Visitor` exactly as tsc 7.0.2 does and closes **173 of its 298 rows** — and costs a
+  corpus false positive, because `checkTypeRelatedToCore` has no general rule relating a
+  TypeParam source through its constraint (its `NonPrimitive` leg refuses it DELIBERATELY),
+  and **that refusal is what brakes the recursion for
+  `BuildTree<T, N extends number = -1, I extends any[] = []>`**. Recorded at the site.
+  **So this is a RELATION-ENGINE item, not a display one**, and it belongs with the M3
+  engine work rather than the (INC.*) arc: adding the rule needs a termination argument
+  that does not rely on the absence of the rule. CLAUDE.md already records the two lenience
+  directions a bare `Type.TypeParam` has in this relation (a union SOURCE relates to a bare
+  TypeParam TARGET; a bare TypeParam SOURCE relates to most object targets) and that they
+  CANCEL for one candidate and COMPOUND for a union — read that before touching it.
+  **Do not attempt it as a rendering fix**: (INC.28) established the rows are a relation
+  verdict, and (INC.26)/(INC.27) established that `typeToString` is shared with the
+  diagnostics and pinned byte-for-byte across ~13k baselines.
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
   `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`

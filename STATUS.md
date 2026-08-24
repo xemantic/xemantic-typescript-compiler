@@ -1,5 +1,48 @@
 # Status
 
+**`type Box<T> = { v: T }` RENDERED `{ v: any; }` ON ORDINARY BUILDS — A GENERIC ALIAS'S OWN
+PARAMETERS WERE NOT IN SCOPE FOR ITS BODY (2026-08-24, (INC.28)).** The fourth shipped correctness
+defect this session found while chasing latency, and the third in a row where **the FULL build was
+the arm losing information**. `getDeclaredTypeOfSymbolWorker`'s type-alias arm resolved `decl.type`
+with **no type-parameter scope**, so the alias's own `T` answered `errorType` — and **`any` ABSORBS A
+UNION**, so a union body collapsed entirely rather than partially, which is why the symptom is a
+whole type vanishing. **Four lines reproduce it with no partition, and it is not order-dependent**;
+the partition divergence was a CONSEQUENCE, since a narrowed build skips
+`init:buildFileLocalTypeMaps` and the first toucher becomes `withDeclTypeParamScope`, which DOES
+install the scope — and `declaredTypes` has **no write gate at all**, so first touch freezes.
+**A WRITER HOOK REFUTED BOTH STANDING SUSPECTS** rather than confirming a guess: the ledger prints
+`name=VisitResult pass=init:buildFileLocalTypeMaps ambient=empty depth=sym1/node0 type=any` —
+`ambient=empty` kills round 778's write gate, `depth=sym1/node0` kills truncation. Ground truth came
+from **tsc 7.0.2 over its own LSP** (`--lsp -stdio`, round 924's instrument) rather than a
+hand-written expectation: `type VisitResult<T extends Node | undefined> = T | readonly Node[]`.
+**THE FIX IS A SPLIT AND THE SPLIT WAS FORCED BY MEASUREMENT**: `getTypeOfSymbolWorker`'s alias arm
+now answers the parametric form, with the constraint fill write-once and OUTSIDE the install per
+(INC.19)'s TS2589 hazard; **`getDeclaredTypeOfSymbol` — what a REFERENCE resolves to — is
+deliberately untouched**, because handing references the parametric form costs two corpus false
+positives, both measured and both reverted.
+**THE REFUSAL IS A RECURSION BRAKE, AND IT IS WHY 173 OF THE 298 ROWS REMAIN.** Judging a
+`Type.TypeParam` alias argument by its APPARENT type renders `Visitor` exactly as tsc does and costs
+a corpus FP: `checkTypeRelatedToCore` has no general "TypeParam source via its constraint" rule — its
+`NonPrimitive` leg refuses it deliberately — and **that refusal is what brakes the recursion for
+`BuildTree<T, N extends number = -1, I extends any[] = []>`**. Those rows need the RELATION to learn
+the rule, not the display; queued as (INC.30), an engine item rather than an (INC.*) one.
+**THE PIN LESSON IS THE TRANSFERABLE ONE**: the ablation put 2 of 4 pins RED on the unfixed binary
+reading exactly `[{ v: any; }, { v: any; }]` — **while the two-arms-agree test and the negative
+control stayed GREEN, because both arms agreed on the WRONG answer.** The capture sweeps are
+differentials, so a defect present in BOTH arms is invisible to them by construction; that is how
+this survived every gate in the repo. A pin for a display defect must assert the VALUE, never that
+two arms agree. Suite **15,811 / 0 / 3** (+4 pins), **zero corpus baselines moved**,
+`capture-equivalence` **1,128 -> 1,003 spans with ZERO NEW divergent spans** (a strict subset, 125
+fixed), `capture-channel` full digest BIT-IDENTICAL with its narrow arm becoming more correct (+11),
+`partition-equivalence` EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76 over 78 netting passes,
+floor **60 ms `[59, 72, 57, 60]`** untouched, `huge_methods` exit 0 both modules. Digests moved by
+design for the second time in the arc: full `3349895618940861366` -> **`8385940838610938556`**,
+narrow `306524840298287433` -> **`-7423700524621287041`**. **ONE THING TO WATCH**: the standing
+cost-gate drift grew for the first time this session — `mapped.hits` **+1.02% -> +1.63%** (band is
+±2%), understood (parametric resolutions run with a scope installed, so bypassed rather than
+cacheable) and justified but NOT rebaselined; the next round in this area should `--update`
+deliberately rather than discover the breach.
+
 **(INC.27) REFUSED WITH A PROOF: B416's KEY CANNOT NAME A UNION THE WAY tsc DOES, AND THE OBVIOUS
 NARROWING WAS BUILT, MEASURED, AND MADE THE GATE *WORSE* (2026-08-24).** The ~790-row
 `unionAliasStructural` residual (INC.26) left splits, per element and nesting-aware, into **432**
@@ -176,43 +219,4 @@ Everything is off by default. Suite **15,800 / 0 / 3** (+16 pins), `cost_gate.py
 **5 / 3, moreAny 0** and `capture-channel` **286 / 49** with digests unchanged,
 `partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
 `partition-gate` 78/78 and 76/76.
-
-**THE FLOOR'S LAST BIG ROW IS WORTH 62-65 ms BY AN AXIS THAT PROVABLY CANNOT MOVE A FULL BUILD, AND
-IT IS REFUSED BECAUSE THE ORDER IT BUYS IS *RESOLUTIONS* AND NOT ONLY A NAME (2026-08-24,
-(INC.22)).** `init:buildFileLocalTypeMaps` is **69.16 ms of a 90.15 ms floor pass table — 77%** —
-and partition-scoping it takes the floor **131 -> 57 ms**, the narrowed-query median **166 -> 116**,
-and the ratio at the median file **29.86x -> 42.61x**, with the full build unmoved. **The axis is
-new**: (INC.10) and (INC.11) deferred PHASES — what every file's map carries — which perturbs a FULL
-build's first-touch order as much as a narrowed one's, and that is what refused them both. This
-round varied **WHICH FILES** the eager pass covers, through the INV.6(6d) partition view, which
-**IS** `binderResults` when there is no partition — so an ordinary compile is unchanged BY
-CONSTRUCTION, the same property that carried the entire (INC.7) gating arc.
-**AND THAT CLAIM WAS VERIFIED IN THE BINARY RATHER THAN ARGUED, WHICH IS THE ROUND'S BEST PROCESS
-OUTPUT.** A per-arm DIGEST over every captured answer — **381,666 types and 360,152 definitions in
-76 files** — reads `-3718897727265589316` for the pre-round arm and **identical for both new arms**,
-corroborated by a COUNT (`FltmDefer.lazyBuilds == 0` on every unpartitioned build) and `cost_gate.py`
-at **+0.00%** on `output.errors`/`spine.nodes`. "A full build is unchanged by construction" is
-exactly the claim that is true of the code and false of the binary; this one was made checkable.
-**THE QUEUE'S PREMISE HAD ALREADY EXPIRED**: (INC.11)'s `TypeAlias`-only arm was recorded at **137
-divergent spans** and re-measures at **5 / 3 of 76 — byte-identical to baseline**, closed by
-(INC.11)'s own `returnsArgumentUnchanged` fix and the work since. So no `aliasDisplayMap` re-key was
-needed and none was attempted. **WHAT ACTUALLY REFUSES IT IS THE MEMBER CHANNEL, NOT DISPLAY**:
-`capture-channel`'s `moreAny` goes **168 -> 229**, i.e. **+61 member types collapsing to `any`**
-under a narrowed build — a WRONG ANSWER, the same class (INC.11) refused the full deferral over —
-and `partition-gate`'s SENSITIVITY arm, the one built to refuse rather than print green, **diverges
-on a DIAGNOSTIC**. Keeping the cheap `TypeAlias` phase program-wide (6.68 ms) solves the NAMING half
-completely (2,275 divergent spans down to **+1 row**) and does nothing for the member half.
-**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY**: the map's
-one reader rebuilds a foreign file's map on demand, and the round pinned both that it FIRES and that
-it produces the **SAME map**, with a non-emptiness assertion and a negative control that two files'
-maps differ; ablations reddened 4 pins including the no-mode-install DEFAULT pin ((INC.16) a1's
-lesson applied) and, separately, exactly the 2 rebuild pins. Suite on the change was **15,795 / 0 /
-3** and `huge_methods` clean — but the capture gates are the gates for this family and they refuse
-it, so **nothing landed and the tree is back at `aa3c0629`.**
-**THE TRANSFERABLE RESULT RE-AIMS THE DIRECTION**: the obstruction is not the pass's COST but that
-the pass IS the program's FIRST-TOUCH ORDER, and that order buys BOTH an alias name (cheap, fixable)
-AND member resolutions (not fixable without the expensive phase). **A future attempt must make
-member resolution ORDER-INDEPENDENT — round 778's `getTypeOfSymbol` write gate is the known
-mechanism — not make the pass cheaper.** Queued as (INC.23), with (INC.24) to re-land the capture
-digest, a general gate strengthening that died with the revert.
 
