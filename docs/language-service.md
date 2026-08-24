@@ -180,16 +180,16 @@ you call them.
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
-| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean, repeated, or a SUBSET of a set already asked about | checks only those files: 1.2 s against 4.6 s on tsc's own sources — see § 4a |
+| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean, repeated, or a SUBSET of a set already asked about | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 14 has the provenance) — see § 4a |
 | `prepare(files)` | **ONE NARROWED build**, whatever the file count | checks and captures a whole working set at once, so every later semantic query about any of them is free — see § 3a |
-| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — 4.7x on tsc's own sources; the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
+| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — **129 – 137 ms at the median file, 38x a full rebuild** on tsc's own sources (2026-08-24); the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
 | `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays; free in a `prepare`d file |
 | `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span; the same build the three neighbours use; free in a `prepare`d file |
 | `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again; free in a `prepare`d file |
-| `completionsAt(f, o)` | **one NARROWED build, every call** | a DIFFERENT question (a receiver's members, or a scope chain), so it does not share; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
+| `completionsAt(f, o)` | **one NARROWED build, every call** | 194 – 202 ms on tsc's own sources (2026-08-24). A DIFFERENT question (a receiver's members, or a scope chain), so it does not share — **not even with `prepare`, which is an open defect, see § 14 `(INC.32)`**; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
 | `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share; free in a `prepare`d file |
 | `referencesAt(f, o)` | **ONE FULL build clean, TWO dirty** | sweeps the whole program's, so it is not narrowed; § 10b has the measured figures |
-| `signatureHelpAt(f, o)` | **one NARROWED build, every call** | free at a caret in no argument list — those do not build |
+| `signatureHelpAt(f, o)` | **one NARROWED build, every call** | 190 – 214 ms on tsc's own sources (2026-08-24); shares nothing, same open defect as `completionsAt`; free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
 
@@ -199,8 +199,11 @@ narrows is the per-file CHECKING, which the compiler takes as a partition
 hands it the buffer the caret is in, because an editor's question about one buffer
 claims nothing about the other files; `referencesAt` and `renameAt` do not, because
 their claim IS about every file. Measured warm and rotated in one process on tsc's
-own 78 compiler sources, a capture build of `binder.ts` (7,787 spans) falls
-**4,581 ms -> 979 ms, 4.7x**, and across all 76 files the medians are 4,636 -> 819 ms.
+own 78 compiler sources (2026-08-24, commit d018af0a, two independent processes),
+a first capture of `binder.ts` (7,787 spans) is **290 – 306 ms** against a
+**4,864 – 5,096 ms** full rebuild, and the median over all 73 sweepable files is
+**129 – 137 ms — 38x**. The figures this paragraph used to quote (4,581 -> 979 ms,
+4.7x) are round-930 history and are 5 – 15x stale; § 14 carries both columns.
 That the narrowed answer is the whole-program answer is swept span for span rather
 than argued: `scripts/capture-equivalence.sh` for types and definitions,
 `scripts/capture-channel-equivalence.sh` for members, scopes and signatures.
@@ -212,9 +215,9 @@ no checker, because the checker's construction *is* the compilation. What makes
 a re-query cheap anyway is the compiler's process-global, **content-keyed** parse
 cache, which every unedited file hits — so the second build of an N-file project
 re-parses only what changed. For scale: a warm rebuild of the TypeScript
-compiler's own 78-file sources is **5.0 – 5.5 s** (re-taken round 930; the first
-rebuild in a process is ~9 s, so a host's first query is not the steady state); a
-normal application project is far less.
+compiler's own 78-file sources is **4.86 – 5.10 s** (re-taken 2026-08-24, two
+processes; the first rebuild in a process is ~9 s, so a host's first query is not
+the steady state); a normal application project is far less.
 
 Two consequences for a host:
 
@@ -266,10 +269,18 @@ project.documentHighlightsAt(a, caret)       // 0
 ```
 
 Before this, a query about a buffer cost one narrowed build, and a narrowed build
-is mostly FLOOR: crawl, bind and the program-wide checker passes come to ~345 ms on
-tsc's own 78 sources whatever file you ask about, against 47 ms for a median file's
-own checking. `N` buffers therefore paid that floor `N` times. One `prepare` pays it
-once.
+is mostly FLOOR: crawl, bind and the program-wide checker passes, which run whatever
+file you ask about, against a median file's own checking of tens of ms. `N` buffers
+therefore paid that floor `N` times. One `prepare` pays it once.
+
+**That floor has since collapsed, so `prepare`'s ratio is smaller than the table
+below** — it was ~345 ms when this section was written and `(INC.30)` reports 58 ms;
+what this page measured itself on 2026-08-24 is the end-to-end consequence, a median
+narrowed query of **108 – 137 ms** where six unprepared hovers cost 920 ms and a
+`prepare` of the same six costs 466 ms. `prepare` is still the right call for a
+declared working set — it is the only way to make a query about a buffer the user has
+not touched free — but it is now roughly a 2x amortisation rather than a 7x one
+(§ 14, `(INC.14)`).
 
 Measured on those sources, one build answering `k` queries against `k` builds
 answering one each:
@@ -1079,11 +1090,14 @@ error the checker reports separately.
 
 **Cost: one compile, one caret.** The same caveats as hover (§ 8): it builds, and
 that build is not the `diagnostics()` build. Batching many carets is
-`semanticsAt`'s question, not this one. Measured on the compiler profile above, a
-free-name completion is **5.3 – 8.9 s warm** — essentially all of it the rebuild,
-with the enumeration under a millisecond of it. **So debounce.** This is not a
-per-keystroke query on a project of that size, and the reason is the compiler's
-lack of incremental reuse (§ 3), not the completion machinery.
+`semanticsAt`'s question, not this one. Measured on the compiler profile above
+(2026-08-24, commit d018af0a, four rotations in each of two processes), a MEMBER
+completion is **194 – 202 ms** — essentially all of it the narrowed build, with the
+enumeration under a millisecond of it. The **5.3 – 8.9 s** this paragraph used to
+quote is round-930 history: it predates `(INC.2b)`, which narrowed the capture
+path, and is **~24x stale**. **So debounce anyway** — 200 ms is not a
+per-keystroke budget on a project of that size, and it is paid on EVERY
+invocation, because this query shares its build with nothing (§ 14 `(INC.32)`).
 
 ## 10b. Find references, and document highlights
 
@@ -1234,14 +1248,28 @@ half-open and **exact** — the identifier's own text, not a raw `Node.end`.
 ### Cost, measured
 
 On this repo's own compiler profile — tsc's 78 source files, 9,977,097 characters,
-**381,670 identifiers**, real libs, warm:
+**381,670 identifiers**, real libs, warm. Re-taken **2026-08-24 at commit d018af0a**,
+two independent processes; the round-930 column is kept so the staleness is visible
+rather than silently overwritten. **No number in this table is pinned by any test**
+(§ 14 says why):
 
-| query | builds | wall |
-|---|---|---|
-| a plain rebuild, for reference | 1 | 5.5 – 5.9 s |
-| `documentHighlightsAt` — `checker.ts`, 125,289 identifiers | 1 | **6.0 – 7.2 s** |
-| `referencesAt` on a **clean** project | 1 | **8.3 – 9.9 s** |
-| `referencesAt` on a **dirty** project | 2 | **13.0 – 13.5 s** |
+| query | builds | round 930 | 2026-08-24 | moved? |
+|---|---|---|---|---|
+| a plain rebuild, for reference | 1 | 5.5 – 5.9 s | **4.86 – 5.10 s** | no |
+| `documentHighlightsAt` — `binder.ts`, first caret | 1 | — | **336 ms** | — |
+| `documentHighlightsAt` — `binder.ts`, later caret | **0** | 19 ms | **10 – 18 ms** | no |
+| `documentHighlightsAt` — `checker.ts`, first caret | 1 | 6.0 – 7.2 s | **3.34 – 3.58 s** | **1.9x** |
+| `documentHighlightsAt` — `checker.ts`, later caret | **0** | — | **104 – 115 ms** | — |
+| `referencesAt` on a **clean** project | 1 | 8.3 – 9.9 s | **8.8 – 9.6 s** | **NO — by design** |
+| `referencesAt` on a **dirty** project | 2 | 13.0 – 13.5 s | **13.2 – 13.9 s** | **NO — by design** |
+
+**The last two rows are the load-bearing ones.** `documentHighlightsAt` moved because
+it goes through `captureIn`'s partition; `referencesAt` did not, and cannot, because
+its CLAIM is about every file — it builds whole-program on purpose (`captureIn`'s
+KDoc, "What may NOT come through here"). The same is true of `renameAt` (§ 10c) and
+of a plain `diagnostics()`. So an incremental round moves the narrowed queries and
+leaves these exactly where they are; a host must budget for them as whole-program
+operations forever.
 
 **`(API.9)` cost nothing measurable, and the reason is a counter rather than a
 stopwatch.** Widening the swept population from identifiers to *identifiers plus the
@@ -1269,16 +1297,22 @@ file (a local of `createTypeChecker`) or **9,827 hits across 49 files**
 `files`' — the program's file list is a question only a build answers — so a host
 that has just asked for `diagnostics()` pays one build, not two.
 
-**Budget memory as well as time.** A whole-program sweep holds a resolution per
-identifier: peak heap on that profile is **~1.9 GB**, and the default 512 MB of a
-plain JVM is not enough. `documentHighlightsAt` does not have this shape — it holds
-one file's.
+**Budget memory as well as time, and the number is smaller than this page used to
+say.** Re-measured 2026-08-24 per memory POOL (the honest reading; summing pool peaks
+taken at different instants over-reads badly and can even exceed `-Xmx`): a
+`referencesAt` sweep on this profile peaks at **1,077 – 1,125 MB in G1 old gen**, with
+**264 MB still live after a full GC** — i.e. most of it is transient allocation rather
+than retention. **`-Xmx2g` is the floor**: measured green at 2g and 3g and 6g, and
+`OutOfMemoryError` at 1g. The "**~1.9 GB**" this paragraph used to quote overstated
+what is HELD by ~7x, which matters because an IDE budgets retention, not allocation.
+`documentHighlightsAt` does not have this shape at all — it holds one file's.
 
-Round 930 re-took this table and every row held its band on the caret it was taken
-at — `documentHighlightsAt` 6.3 s on `checker.ts`, `referencesAt` 9.1 s clean / 14.1 s
-dirty — which is also how it found that the row is a statement about a FILE: the same
-call on `types.ts` is 5.0 – 5.5 s. The re-taken figures, with their carets named, are in
-§ 14; the runner is `scripts/round930-ls-cost.sh`.
+That a highlight row is a statement about a FILE and not about the API is unchanged
+and is why the table names files: `binder.ts` (7,787 occurrences) and `checker.ts`
+(125,289) differ by 10x in the first-caret row and by the same factor in the residue.
+The current runner is **`scripts/inc31-ls-cost.sh`** (it supersedes
+`scripts/round930-ls-cost.sh`, which cannot reach the completion, signature-help,
+prepare-vs-completion or per-pool-heap cells); § 14 carries the whole table.
 
 **So: `documentHighlightsAt` is the one to wire to caret movement** (debounced —
 it still builds), and `referencesAt` is the one a user asks for explicitly.
@@ -1558,24 +1592,27 @@ renames nothing, which is what tsc answers there too.
 On this repo's own compiler profile — tsc's 78 source files, 9,977,097 characters,
 381,670 identifiers, real libs, warm:
 
-| query | builds | wall |
-|---|---|---|
-| `referencesAt`, for reference | 1 | 8.4 – 8.7 s |
-| `renameAt` — `createTypeChecker`, 3 edits in 2 files | 2 | **13.3 – 14.3 s** |
-| `referencesAt` on `SyntaxKind` | 1 | 10.6 – 16.0 s |
-| `renameAt` — `SyntaxKind`, **9,827 edits in 49 files** | 2 | **23.9 – 24.5 s** |
-| a refusal decided on syntax alone | **0** | microseconds |
+| query | builds | wall | moved since round 930? |
+|---|---|---|---|
+| `referencesAt`, for reference | 1 | 8.8 – 9.6 s | no |
+| `renameAt` — `SyntaxKind`, clean | 2 | **20.0 – 21.3 s** | no |
+| `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | no |
+| a refusal decided on syntax alone | **0** | microseconds | — |
+
+Re-taken **2026-08-24 at commit d018af0a**, two independent processes;
+**unpinned by any test**, per § 14. **Nothing here moved, and nothing here can**:
+a rename's sweep and its verification are whole-program by CLAIM, so they never
+enter `captureIn`'s partition and no narrowing round reaches them (§ 10b's closing
+note).
 
 The second build is the verification, and it costs less than the first on a small rename
 (it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
-and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is the
-same shape, ~1.9 GB peak on that profile, and the default 512 MB of a plain JVM is not
-enough.
+and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is
+the same shape, and § 10b's corrected reading applies here too: **`-Xmx2g` is the
+floor**, ~1.1 GB peaks in old gen, ~264 MB actually retained.
 
-Round 930 re-took both rename rows on the same carets: `createTypeChecker` 14.3 s and
-`SyntaxKind` 20.1 – 21.0 s clean, 19.6 – 26.7 s dirty. Same order, same shape; the
-absolute numbers are a property of the run that took them and only the § 14 table is
-kept current. The runner is `scripts/round930-ls-cost.sh`.
+The absolute numbers are a property of the run that took them; only the § 14 table is
+kept current, and the runner is **`scripts/inc31-ls-cost.sh`**.
 
 **So: this is a query a user asks for explicitly.** Do not wire it to a keystroke, and
 prefer to refuse early — a bad new name costs nothing at all.
@@ -1916,23 +1953,72 @@ conflict instead of a span nobody looked at.
 
 ### What it costs
 
-Per § 3, and this is the number that shapes a host: **almost every semantic query is a
-full rebuild**, because `ProjectCompiler.Result` is a flat value that retains no checker.
-Re-taken round 930 on tsc's own 78 sources (9,977,097 characters, 381,670 identifiers,
-real libs, warm, one process per battery, three rotations):
+**Provenance, because a wall figure without one is what made this table mislead for
+a year.** Every number below was taken on **2026-08-24 at commit `d018af0a`**, on tsc's
+own 78 compiler sources (`build/bench/tsc-project-*`: 9,977,097 characters, 381,670
+identifiers, real libs), warm, **six warm-up cycles**, four rotations, replicated in
+**two independent JVM processes** whose medians are quoted as a band. The runner is
+`scripts/inc31-ls-cost.sh`. The round-930 column is kept beside it as HISTORY: those
+figures predate `(INC.2b)`'s narrowing of the capture path and the `(INC.1)`–`(INC.30)`
+collapse of the incremental floor from 1,092 ms to 58 ms, and they are **10 – 24x stale**
+in the narrowed rows.
 
-| query | builds | wall | caret |
-|---|---|---|---|
-| a plain rebuild, for reference | 1 | 5.0 – 5.5 s | — |
-| `diagnosticsOf(files)` — the narrowed one | 1 narrowed | **1.1 – 1.2 s** (2.7 s for `checker.ts`) | § 4a |
-| `completionsAt` / `signatureHelpAt` | 1 **each** | ≈ a rebuild (4.7 – 5.1 s) | any |
-| `quickInfoAt` / `definitionsAt` | 1 per **BUFFER**, not per caret | a whole-file capture; **0** for every later caret in it | any |
-| …and a REPEATED capture request | **0** | microseconds | (INC.12), below |
-| `fileSemantics` / `semanticsAt`, any number of carets | 1 | rebuild + the walk: 5.0 s on `types.ts`, 6.2 s on `checker.ts` | — |
-| `documentHighlightsAt` | 1 | 5.0 – 5.5 s on `types.ts`, **6.3 s on `checker.ts`** | it sweeps one FILE, so the file is the cost |
-| `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 s clean, 13.2 – 14.8 s dirty | whole program either way |
-| `renameAt` | 2, 3 dirty | 14.3 s (`createTypeChecker`, 3 edits) – 21.0 s (`SyntaxKind`, 9,827 edits); 19.6 – 26.7 s dirty | the plan's size shows |
-| a refusal decided on syntax alone | **0** | microseconds | — |
+**The old headline is now false and is retracted.** This section used to open "almost
+every semantic query is a full rebuild". It is not: every caret-scoped query is a
+NARROWED build, and at the median file that is **108 – 113 ms against a 4.9 s rebuild,
+a factor of 45**. What is still a full rebuild is `diagnostics()`, and what is still
+whole-program are `referencesAt` and `renameAt` — the "moved?" column says which is
+which, and that column is the half a host must design around.
+
+| query | builds | round 930 | **2026-08-24** | moved? |
+|---|---|---|---|---|
+| a plain rebuild (`diagnostics()`), for reference | 1 | 5.0 – 5.5 s | **4,864 – 5,096 ms** | **NO — full build by design** |
+| `diagnosticsOf(f)` — **median over all 78 files** | 1 narrowed | 1.1 – 1.2 s | **108 – 113 ms** (p90 202 – 219) | **≈10x** |
+| `diagnosticsOf(checker.ts)` — the 3.15 MB extreme | 1 narrowed | 2.7 s | **1,744 – 1,763 ms** | 1.5x |
+| `diagnosticsOf` repeated, or a SUBSET of a set already asked | **0** | 0 | **0 ms** | = |
+| `completionsAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **194 – 202 ms** | **≈24x** |
+| `signatureHelpAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **190 – 214 ms** | **≈23x** |
+| `quickInfoAt` — first caret, **median file** | 1 per BUFFER | — | **129 – 137 ms** | — |
+| `quickInfoAt` — first caret, `binder.ts` (7,787 spans) | 1 per BUFFER | 610 ms | **290 – 306 ms** | **2.0x** |
+| `quickInfoAt` — first caret, `checker.ts` (125,289 spans) | 1 per BUFFER | 3,796 ms | **3,341 – 3,581 ms** | 1.14x |
+| …a SECOND caret: median file / `binder.ts` / `checker.ts` | **0** | — / 2 ms / 73 ms | **2 ms / 4 ms / 75 – 83 ms** | = (see the residue note) |
+| `definitionsAt` after `quickInfoAt`, same caret | **0** | 0 | **4 ms** | = |
+| `fileSemantics(binder.ts)` cold / after a hover | 1 / **0** | 5.0 – 6.2 s | **329 ms / 18 – 22 ms** | **≈15x** |
+| `documentHighlightsAt(binder.ts)` cold / later caret | 1 / **0** | 5.0 – 5.5 s / 19 ms | **336 ms / 10 – 18 ms** | **≈15x** |
+| `prepare(6 mid-sized buffers)` | 1 | 674 – 698 ms | **466 – 468 ms** | 1.45x |
+| …then 6 hovers, 12 defs+highlights | **0** | 7 – 12 / 23 – 27 ms | **13 – 14 / 33 – 43 ms** | = |
+| `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 / 13.2 – 14.8 s | **8.8 – 9.6 / 13.2 – 13.9 s** | **NO — whole-program by design** |
+| `renameAt` (`SyntaxKind`, 9,827 edits) | 2, 3 dirty | 21.0 / 19.6 – 26.7 s | **20.0 – 21.3 / 25.0 – 26.0 s** | **NO — whole-program by design** |
+| a refusal decided on syntax alone | **0** | microseconds | microseconds | = |
+
+**A REAL keystroke costs the narrowed path nothing extra**, which is the row an
+error-reporting host cares about most and which no earlier table had: `diagnosticsOf`
+of one buffer after re-writing its own bytes is 212 ms, after an appended comment
+247 ms, after an inserted statement 218 ms, and after a statement that *introduces* a
+`TS2322` 215 ms — against 5,067 – 5,184 ms for the full build of the same states.
+Every figure in the paragraph and the table above is **WALL TIME AND THEREFORE PINNED
+BY NO TEST** (see the note that closes this section).
+
+### Two open defects this table exposes — `(INC.32)`
+
+Both are measured, both are in the table above, and neither is a gap in the
+architecture — they are bounds that are now the wrong size.
+
+1. **`completionsAt` and `signatureHelpAt` cannot reach a prepared check, at all.**
+   Not a policy: `Project.kt:995` (free-name), `:1041` (member) and `:1162` (signature
+   help) each call `captureIn(...)` **directly**, while `preparedAnswerFor` is reached
+   only from `captureAround` (`:2442`, `:2450`) and `referencesOf` (`:1487`). So a
+   `scopeSpans` / `memberSpans` / `signatureSpans` request is structurally unservable
+   from `prepared`. Measured: `completionsAt` costs **207 ms immediately after
+   `prepare(6 files)`**, **202 ms immediately after a hover in the same buffer**, and
+   194 ms cold — the same build three ways. An *identical repeat* is free (0 – 1 ms),
+   because `captureIn` still probes the LRU.
+2. **The two-entry `captures` LRU thrashes on an ordinary editor sequence.** Hover →
+   complete → signature-help → hover **rebuilds the hover at 257 – 285 ms**, against
+   **3 – 5 ms** when nothing evicted it: three channels in one buffer do not fit in two
+   entries. The bound exists for memory (`captures`' KDoc), and the memory argument is
+   sound; the SIZE was chosen for "the buffer in front of the user plus the one in the
+   other split" and predates completions and signature help asking their own questions.
 
 **(INC.12) A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
 entries, dropped by every edit alongside the diagnostics cache), which changes the
@@ -1949,7 +2035,31 @@ Measured in one process on the compiler profile (warm, three rotations): re-aski
 hover **1,933 ms → 0**; `definitionsAt` after `quickInfoAt` at one caret in `binder.ts`
 **506 → 0**; `documentHighlightsAt` at a second caret in `binder.ts` **592 → 19** — 19
 and not 0 because the BUILD is gone while the per-caret grouping over the file's
-occurrences remains. `scripts/warm-program-cost.sh` re-takes it.
+occurrences remains. `scripts/warm-program-cost.sh` re-takes it. (Those are round-930
+figures; the 2026-08-24 equivalents are in the table above, and the residue is
+decomposed below.)
+
+**What that residue IS, decomposed 2026-08-24 — and why it was REFUSED as a lever.**
+On a memo HIT, `captureAround` still re-derives the file's whole occurrence set before
+it can look the answer up: `SourceIndex.occurrenceNodes()` (two full iterative tree
+walks and two `sortWith`s, memoized nowhere), then a `TypeCaptureSpan` per occurrence,
+then a `HashSet<Long>` of every span. Measured directly, medians of 25 calls:
+
+| file | occurrences | `occurrenceNodes()` | span map | covered set | **sum** | measured 2nd-caret hover |
+|---|---:|---:|---:|---:|---:|---:|
+| `semver.ts` (18 KB) | 714 | 0.84 ms | 0.13 | 0.25 | **1.21 ms** | ~1 ms |
+| `binder.ts` (194 KB) | 7,787 | 1.09 ms | 0.27 | 0.91 | **2.27 ms** | **4 ms** |
+| `checker.ts` (3.15 MB) | 125,289 | 47.1 ms | 5.8 | 29.8 | **82.7 ms** | **83 ms** |
+
+The arithmetic closes to 0.4% on `checker.ts`: essentially ALL of that residue is this
+prologue, and every part of it is a pure function of an immutable `SourceIndex` that is
+already cached per file and dropped on edit — i.e. memoizing it is easy and safe.
+**It was measured and refused anyway**, because at the median file the whole prize is
+**1 – 2 ms**, which is below this repo's floor for spending a round. It is a TAIL fix
+worth **~78 ms per caret movement in a >1 MB buffer** and nothing at the median, and
+that is the number any future proposal must be argued on. It is not a lever for
+`referencesAt` either: the same prologue over all 78 files is ~140 ms of a 9.3 s sweep
+(1.5%). `Inc31ResidueMain` is the instrument that would grade it.
 
 **(INC.13) …AND THE QUESTION ASKED IS THE FILE'S, NOT THE CARET'S**, which is what makes
 that memo hit for a caret nobody has visited yet. `quickInfoAt`, `definitionsAt`,
@@ -1960,14 +2070,14 @@ buffer changes. Measured on the compiler profile, three rotations, the same bina
 the widening off and on (blocked arms, not interleaved — one arm's whole point is that
 some code does not run):
 
-| sequence | before | after |
-|---|---:|---:|
-| first hover in `checker.ts` (3.15 MB, 125,289 spans) | 2,307 ms | **3,796 ms** |
-| a SECOND caret in `checker.ts` | 2,142 ms | **73 ms** |
-| first hover in `binder.ts` (7,787 spans) | 481 ms | **610 ms** |
-| a SECOND caret in `binder.ts` | 481 ms | **2 ms** |
-| `fileSemantics(binder.ts)` after that hover | 575 ms | **17 ms** |
-| `diagnosticsOf`, and the build floor itself | unchanged | unchanged |
+| sequence | before | after (round 930) | **2026-08-24** |
+|---|---:|---:|---:|
+| first hover in `checker.ts` (3.15 MB, 125,289 spans) | 2,307 ms | 3,796 ms | **3,341 – 3,581 ms** |
+| a SECOND caret in `checker.ts` | 2,142 ms | 73 ms | **75 – 83 ms** |
+| first hover in `binder.ts` (7,787 spans) | 481 ms | 610 ms | **290 – 306 ms** |
+| a SECOND caret in `binder.ts` | 481 ms | 2 ms | **4 ms** |
+| `fileSemantics(binder.ts)` after that hover | 575 ms | 17 ms | **18 – 22 ms** |
+| `diagnosticsOf`, and the build floor itself | unchanged | unchanged | 108 – 113 ms median |
 
 **The trade is stated rather than hidden: the FIRST query in a buffer gets dearer.** It
 is +27% on `binder.ts` and +65% on `checker.ts`, which is tsc's largest source and 31.6%
@@ -1983,12 +2093,17 @@ building. Measured on the compiler profile, three rotations, replicated in a sec
 over six mid-sized sources (55–83 KB, 415 KB together — deliberately not `checker.ts`,
 whose 1.65 s of own checking would bury the floor the arm exists to show):
 
-| sequence, six buffers | one build per buffer | prepared |
-|---|---:|---:|
-| a hover in each | 2,581 / 2,484 ms | **698 / 674 to prepare, then 12 / 7** |
-| go-to-definition + highlights in each (12 more) | 2,649 / 2,513 ms | **27 / 23** |
-| all 18 semantic queries | 5,230 / 4,997 ms | **737 / 704 ms — 7.1x** |
-| `diagnosticsOf` per buffer (6) | 2,338 / 2,376 ms | **526 / 539 for the set, then 0** |
+| sequence, six buffers | one build per buffer | prepared | **2026-08-24, both arms** |
+|---|---:|---:|---|
+| a hover in each | 2,581 / 2,484 ms | **698 / 674 to prepare, then 12 / 7** | **920 / 927 unprepared; 466 – 468 to prepare, then 13 – 14** |
+| go-to-definition + highlights in each (12 more) | 2,649 / 2,513 ms | **27 / 23** | **33 – 43** |
+| `diagnosticsOf` per buffer (6) | 2,338 / 2,376 ms | **526 / 539 for the set, then 0** | **748 – 771 per file; 321 – 342 for the set, then 0** |
+
+The ratio shrank (7.1x → ~2.0x for the hover arm) and that is the arc working as
+intended rather than `prepare` regressing: the thing `prepare` amortises is the FLOOR,
+and `(INC.1)`–`(INC.30)` took the floor from 1,092 ms to 58 ms, so there is far less
+left to amortise. `prepare` is still the right call for a declared working set, and it
+is still the only way to make a query about a buffer the user has not touched free.
 
 The memory it holds has a control rather than an absolute: a reading taken right after
 the edit that dropped every cached answer and one taken after the prepared queries are
@@ -2012,10 +2127,16 @@ error anywhere. `completionsAt` and `signatureHelpAt` ask different questions
 (P1) proper, and § 13 carries its price.
 
 **The `builds` column is pinned** (`LanguageServiceStateTest`, counted at the backing
-`Vfs`) and **the `wall` column is not pinnable** — it is a property of one box on one
-day, a timed assertion over a compile is a coin flip, and only figures taken in one run
-are comparable to each other. Re-take it with `scripts/round930-ls-cost.sh` rather than
-quoting a number from another round beside a fresh one. Memory is the other budget: a
+`Vfs`, and `ProjectCaptureMemoTest` / `ProjectPreparedCheckTest` for the memo and the
+prepared check) and **EVERY WALL FIGURE ON THIS PAGE IS PINNED BY NOTHING** — it is a
+property of one box on one day, a timed assertion over a compile is a coin flip
+(CLAUDE.md round 868), and only figures taken in one run are comparable to each other.
+That is why each is dated and stamped with the commit it was taken at, and why the
+round-930 column is kept beside the current one instead of being overwritten: four
+false claims were written into this page at round 930 and survived three readings,
+and a stale wall number is invisible to every gate in this repo. Re-take the table
+with `scripts/inc31-ls-cost.sh` rather than quoting a number from another round beside
+a fresh one. Memory is the other budget: a
 whole-program sweep holds a resolution per identifier and the default 512 MB of a plain
 JVM is nowhere near enough (§ 10b).
 
@@ -2036,19 +2157,23 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
 1. **No incrementality — HALF TRUE since 2026-08-22, and the half that is left is now
    measured.** Every query still *builds*; what changed is how much of the program a build
    CHECKS. `diagnosticsOf` (§ 4a) hands its file set to the compiler as a check partition
-   and costs **1.2 s against 4.6 s** on tsc's own sources, with every one of those 78 files
+   and costs **108 – 113 ms at the median file against a 4,864 – 5,096 ms full rebuild**
+   (2026-08-24, commit `d018af0a` — a factor of 45), with every one of those 78 files
    agreeing row for row with the full build. The gap that remains is not the checking:
-   **a median file's own checking is 15 ms, against a 1,092 ms floor** — the crawl, the
-   parse, the bind and the program-wide passes, which run whatever is narrowed. So the
+   a median file's own checking is tens of ms, and the rest is the FLOOR — the crawl,
+   the parse, the bind and the program-wide passes, which run whatever is narrowed.
+   That floor was 1,092 ms when this gap was written and `(INC.30)` reports **58 ms**. So the
    architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) is still what removes the
    floor, but it was never the prerequisite for narrowing the check. **The interactive
    queries are narrowed too since 2026-08-22 (INC.2b)** — hover, go-to-definition,
    completion, signature help, the semantic sweep and document highlights each hand the
-   compiler the queried buffer, and a capture build of `binder.ts` falls **4,581 -> 979 ms
-   (4.7x)** warm and rotated in one process. End to end through this API, and with
-   `referencesAt`, `renameAt` and a plain rebuild flat across the two arms as controls:
-   `quickInfoAt` **5,004 -> 1,015 ms**, `fileSemantics` 5,178 -> 1,185, and
-   `documentHighlightsAt` 5,050 -> 1,159.
+   compiler the queried buffer, and a capture build of `binder.ts` fell **4,581 -> 979 ms
+   (4.7x)** warm and rotated in one process when `(INC.2b)` landed. End to end through
+   this API, and with `referencesAt`, `renameAt` and a plain rebuild flat across the two
+   arms as controls: `quickInfoAt` **5,004 -> 1,015 ms**, `fileSemantics` 5,178 -> 1,185,
+   and `documentHighlightsAt` 5,050 -> 1,159. **Those are `(INC.2b)`-era figures and are
+   now stale in the fast direction**: re-taken 2026-08-24, the same `binder.ts` capture
+   is **290 – 306 ms** and the median file's is **129 – 137 ms** (§ 14).
 
    It was REFUSED when first measured, at 45 divergent spans of 381,666, and the refusal
    is what found the defect: a type reference inside a foreign file's anonymous object
