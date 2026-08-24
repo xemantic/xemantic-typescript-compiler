@@ -59,9 +59,9 @@ class CompileThreadInvariantTest {
 
     @Test
     fun `consecutive compiles run on the very same thread`() = runBlocking {
-        val first = CompileServer.onCompileThread { Thread.currentThread().id }
-        val second = CompileServer.onCompileThread { Thread.currentThread().id }
-        val third = CompileServer.onCompileThread { Thread.currentThread().id }
+        val first = CompileServer.onCompileThread { Thread.currentThread().threadId() }
+        val second = CompileServer.onCompileThread { Thread.currentThread().threadId() }
+        val third = CompileServer.onCompileThread { Thread.currentThread().threadId() }
         assert(second == first)
         assert(third == first)
     }
@@ -72,13 +72,13 @@ class CompileThreadInvariantTest {
     @Test
     fun `the compile thread does not follow the calling dispatcher`() = runBlocking {
         val fromDefault = withContext(Dispatchers.Default) {
-            CompileServer.onCompileThread { Thread.currentThread().id }
+            CompileServer.onCompileThread { Thread.currentThread().threadId() }
         }
         val fromIo = withContext(Dispatchers.IO) {
-            CompileServer.onCompileThread { Thread.currentThread().id }
+            CompileServer.onCompileThread { Thread.currentThread().threadId() }
         }
         val fromUnconfined = withContext(Dispatchers.Unconfined) {
-            CompileServer.onCompileThread { Thread.currentThread().id }
+            CompileServer.onCompileThread { Thread.currentThread().threadId() }
         }
         assert(fromIo == fromDefault)
         assert(fromUnconfined == fromDefault)
@@ -91,7 +91,7 @@ class CompileThreadInvariantTest {
     fun `concurrent callers are serialized onto one thread`() = runBlocking {
         val ids = (1..8).map {
             async(Dispatchers.IO) {
-                CompileServer.onCompileThread { Thread.currentThread().id }
+                CompileServer.onCompileThread { Thread.currentThread().threadId() }
             }
         }.awaitAll()
         assert(ids.distinct().size == 1)
