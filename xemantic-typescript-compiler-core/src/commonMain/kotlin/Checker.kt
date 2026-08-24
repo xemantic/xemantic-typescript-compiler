@@ -111532,6 +111532,9 @@ interface DataView {
                     currentTypeAliasArgs != null,
                     inferenceNamespaceStack.isNotEmpty(),
                     persisted,
+                    symbolTypeResolutionInProgress.size,
+                    nodeTypeResolutionInProgress.size,
+                    memberResolutionInProgress.size,
                 )
             }
             return type

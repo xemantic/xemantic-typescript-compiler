@@ -99,6 +99,7 @@ fun main(args: Array<String>) {
     // (INC.23) THE CENSUS. Only ever armed for a DRILL-DOWN run (a file suffix), because
     // it appends a row per rendered member and the whole sweep renders millions.
     SymTypeOrderCensus.on = System.getenv("XTSC_SYMORDER") == "1"
+    System.getenv("XTSC_SYMORDER_FILTER")?.let { SymTypeOrderCensus.rowFilter = it }
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])

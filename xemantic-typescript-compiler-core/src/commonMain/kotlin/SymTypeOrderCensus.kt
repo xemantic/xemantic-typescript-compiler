@@ -62,6 +62,15 @@ object SymTypeOrderCensus {
     var on: Boolean = false
 
     /**
+     * The substring a rendered member row must contain to be REPORTED. `any` by
+     * default, because the divergence class (INC.23) exists to explain is a member
+     * type collapsing to `any` — but the arm that RENDERS it correctly prints no
+     * such row, so comparing the two arms' provenance needs the filter widened to
+     * the member's own name.
+     */
+    var rowFilter: String = "any"
+
+    /**
      * `symbolId` -> the FIRST resolution that reached `getTypeOfSymbolWorker`.
      *
      * Keyed by id and not by name because the question is about one `Symbol`
@@ -94,6 +103,9 @@ object SymTypeOrderCensus {
         typeAliasArgs: Boolean,
         inferenceNamespace: Boolean,
         persisted: Boolean,
+        symbolDepth: Int,
+        nodeDepth: Int,
+        memberDepth: Int,
     ) {
         resolves[id] = (resolves[id] ?: 0) + 1
         if (id in firstResolve) return
@@ -103,8 +115,14 @@ object SymTypeOrderCensus {
             if (inferenceNamespace) append("ns,")
             if (isEmpty()) append("empty")
         }.removeSuffix(",")
+        // (INC.23) THE FOURTH DIMENSION, and the one round 778's gate does NOT read:
+        // how deep inside OTHER resolutions this one is. `symbolTypeContextIsEmpty`
+        // asks whether the ambient INSTANTIATION context is empty; it says nothing
+        // about whether the answer was truncated by an in-progress sentinel, and a
+        // truncated answer is `any`.
         firstResolve[id] =
-            "name=$name pass=${pass ?: "<outside>"} ambient=$ambient persisted=$persisted"
+            "name=$name pass=${pass ?: "<outside>"} ambient=$ambient persisted=$persisted " +
+                "depth=sym$symbolDepth/node$nodeDepth/member$memberDepth"
     }
 
     /** The READER hook — one captured completion member and its provenance. */
@@ -130,7 +148,7 @@ object SymTypeOrderCensus {
      * zero here is a finding or an unarmed instrument.
      */
     fun report(tag: String, onlyAny: Boolean = true): String = buildString {
-        val rows = if (onlyAny) memberRows.filter { "any" in it.substringBefore("  sym=") }
+        val rows = if (onlyAny) memberRows.filter { rowFilter in it.substringBefore("  sym=") }
         else memberRows
         appendLine(
             "SYMORDER[$tag] members=${memberRows.size} anyMembers=${rows.size} " +
