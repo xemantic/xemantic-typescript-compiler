@@ -52,10 +52,22 @@ import kotlin.test.Test
  * it into `Project`**, because `scripts/replay-differential.sh` found the CAPTURE
  * channel diverging in **8 of 75 files** — a lost type-parameter constraint,
  * `<T extends Node, U>` where a fresh build renders `<T extends Node, U extends
- * T>`. (INC.19) closed THAT class — the differential now reads **5 of 75 files,
- * 23 spans**, all of them lost generic inference — and pinned it in
+ * T>`. (INC.19) closed THAT class and pinned it in
  * [ProjectRecheckConstraintTest], which is the fixture this class says below it
- * cannot host. The channel is still not equivalent, so the refusal stands.
+ * cannot host.
+ *
+ * **RE-MEASURED AT HEAD BY (INC.40) (2026-08-24, `8d4e95b0`): the differential
+ * reads 0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF` and **43** `DIVERGE-TYPE` of 75 files.**
+ * The "5 of 75, all lost generic inference" this comment used to carry was stale
+ * on BOTH counts: 43 is the pre-existing HEAD state, verified on a clean tree
+ * before any edit, and the surviving rows are overwhelmingly the union-alias
+ * DISPLAY family ((INC.26)/(INC.27)) — where the FRESH arm is not automatically
+ * the right one — rather than lost inference.
+ *
+ * So the refusal stands **for the capture channel only**. (INC.40) wired the
+ * DIAGNOSTICS channel into `Project.diagnosticsOf` behind a type-level valve
+ * (`DiagnosticsOnlyRecheck`, which cannot express a `TypeCaptureRequest`), on the
+ * strength of that measured `0 DIVERGE-DIAG`; see `docs/language-service.md` § 4a.
  *
  * ## What these pins do and do NOT assert
  *
@@ -308,8 +320,11 @@ class ProjectRecheckTest {
      * THE CAPTURE CHANNEL IS WIRED, AND IS DELIBERATELY **NOT** PINNED EQUIVALENT.
      *
      * `scripts/replay-differential.sh` grades it against a fresh narrowed build
-     * over 373,879 spans and finds it DIVERGING in 5 of 75 files of the compiler
-     * profile — lost generic inference, since (INC.19) closed the lost
+     * over 373,879 spans and finds it DIVERGING in **43 of 75 files** of the
+     * compiler profile at HEAD ((INC.40), re-measured 2026-08-24 — the "5 of 75"
+     * this comment used to carry predated (INC.26)/(INC.28)); the surviving rows
+     * are overwhelmingly the union-alias DISPLAY family rather than the lost
+     * generic inference named here, and (INC.19) closed the lost
      * type-parameter constraint. THIS fixture cannot reproduce either (it has no
      * generic with a constraint referring to a sibling parameter — that shape is
      * [ProjectRecheckConstraintTest]'s, and it IS pinned equivalent there), so an
