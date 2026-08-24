@@ -1,3 +1,43 @@
+**THE BIND IS 70 ms -> 6 ms AND A NARROWED QUERY IS 20.5% FASTER: THE INV.2(c) TABLES NOW BUILD ON
+FIRST ASK, AND THEIR ONE PROGRAM-WIDE READER IS SERVED BY A PROJECTION (2026-08-23, (INC.16)).**
+`bindLexicalScopes` was 93% of the bind and — after (INC.7) batch 4 closed the gating technique and
+(INC.11) refused `init:buildFileLocalTypeMaps` — the largest single remaining mechanism in the
+incremental floor. **Scope tables built on a floor build 123 -> 3; floor median 333 -> 286 ms;
+narrowed-query median over all 78 files 346 -> 275 ms, the SUM 29,378 -> 23,909 ms.**
+`partition-equivalence.sh`'s own recipe reads floor **248 ms**, query median **313 ms**, ratio at
+the median file **15.66x** (batch 4 read 340 / 367 / 13.30x on that same recipe).
+**THE BLOCKER WAS SERVED, NOT GATED.** A `forcedBy` census — `PassTiming.currentPass` recorded at
+each first ask — confirms `init:computeAllEnumValues` was the **SOLE forcer of all 78 program
+files**, and that the 45 real-lib `.d.ts` binds are forced by NOBODY but are worth only ~2 ms, so
+the tempting lib half was never the prize. It is a round-609 COLLECTOR and may not be gated, so it
+is served by a projection instead: `declareLexical`'s two mint sites turn out **NOT to be
+symmetric** — the alias half needs only a NAME, which the binder hands over directly, while the enum
+half needs the scope-space SYMBOL itself (`computeEnumSymbolValues` is id-keyed) — so **only an
+`enum` in a fresh scope forces a build.** The projection costs two int compares per node on
+`indexSourceFile`, a walk that already runs and is content-cached across compiles; its refinement is
+measured rather than guessed (67 of 78 skipped, then 69, then **75**), and it ships with round 790's
+positive control, `LexDefer.verifySkip` — **75 skipped, 0 violations** — because a zero is evidence
+only beside a non-empty skipped population.
+**THE HAZARD THE QUEUE CALLED MOST LIKELY TO KILL THE ROUND DID NOT FIRE, AND WAS REMOVED ANYWAY.**
+A scope built at first-ask could see a FULLER `nodeToSymbol` than one built mid-bind, since its
+`(pos,end)` keys collide across files — the (INC.9) refusal's own mechanism. An **ID-FREE
+FINGERPRINT** of every file's tables (scope keys, owner/parent nodeIds, per-scope symbol
+names+flags, the aliased `existing` key set) is **IDENTICAL on all 78 files across three runs** —
+but that bounds FREQUENCY, not existence, so `Binder.lexOwnerSymbols`, a per-file `nodeId -> Symbol`
+table, replaces both reads of the shared map and makes order-independence structural.
+**AN ABLATION ARM READ 0 RED AND THAT WAS A REAL FINDING, NOT A PASS**: restoring the eager build
+broke nothing in a 15,741-test suite, because **every pin installed the mode it wanted and restored
+it, so the shipped DEFAULT was pinned by nothing at all.** A default pin was added and the arm then
+discriminates; all four arms now have a uniquely-its-own red set (1 / 5 / 4 / 1). Suite **15,752 / 0
+/ 3** (+11 pins), `cost_gate.py` within ±0.32% but for the standing `mapped.hits` +1.02%
+(`output.errors` 46, `spine.nodes` unchanged), `huge_methods.py --fail-over 0` clean on core (775
+classes) and `-project`, **`capture-equivalence` 5 spans / 3 of 76 with `narrowRendersMoreAny=0` and
+`capture-channel` 286 / 49, both at BASELINE** — which is what says the deferral's negative-id
+reordering did not bite — `partition-equivalence` EQUIVALENT on all 78, `partition-gate` realism
+78/78 and sensitivity 76/76 with 78 netting passes. **Left open, ~20 ms**: 3 files still force, the
+ones with a genuinely block-scoped `enum` where the census needs the symbol and not a name.
+
+
 **A HOVER HAS BEEN RENDERING AN UNBOUND `T` PROGRAM-WIDE ON THE ORDINARY SHIPPED BUILD, AND THE
 FLOOR'S BIGGEST ROW IS REFUSED ON A PREMISE ITS OWN QUEUE ITEM HAD BACKWARDS (2026-08-23,
 (INC.11)).** The item existed to unblock **66 ms** — `init:buildFileLocalTypeMaps`, the largest

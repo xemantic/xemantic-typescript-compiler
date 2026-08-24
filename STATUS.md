@@ -1,5 +1,49 @@
 # Status
 
+**`[Symbol.unscopables]` HAS BEEN RENDERING `any` IN EVERY SMALL PROJECT'S HOVERS ON THE ORDINARY
+SHIPPED BUILD, AND FIXING IT COLLECTED THE FLOOR 129 -> 58 ms (2026-08-24, (INC.25)).** Three rounds
+read this as a partition defect. It is not: a THREE-LINE scratch project (`export const strArr:
+string[] = []` plus a `number[]` sibling) reproduces it on a FULL build with no partition and no arm
+— `truncatedResolutions=1`, `MEMBER [Symbol.unscopables] : any`. **A hand-written `interface Foo { un:
+{[K in keyof Foo]?: boolean} }` resolves CORRECTLY in all four forms tried**, because the spine walks
+an interface body and resolves the mapped-type node before any member table is in flight; **`interface
+Array<T>`'s body is never spine-walked**, so the first ask arrives from inside
+`resolveReferenceMembers`. The 78-file tsc profiles hid it because `init:buildFileLocalTypeMaps`
+happens to resolve that member first — which is exactly why it looked partition-shaped.
+**THE MECHANISM AND A FIX THAT TERMINATES BY CONSTRUCTION.** `resolveStructuredTypeMembersCore`
+returns silently on re-entry leaving `properties` null — correct for circular heritage, TRUNCATED for
+any reader of the key set. `getKeyofType` read that null as `string`, the mapped type bailed to `any`,
+and round 778's write gate froze it (`ambient=empty` throughout, so the cache was never the lever).
+The fix answers such a `keyof` **from the DECLARATIONS**: no resolver call at all, only
+already-computed tables plus AST, under a visited set and a depth cap, **REFUSING rather than
+returning a partial key domain** (round 463). **No TS2589 at (0,0) appeared anywhere** — (INC.19)'s
+self-referential-alias family is unreachable because nothing on this path resolves a constraint.
+**The ablation is decisive and the counters are its control**: disabled, the pin reads `typeText=any`;
+enabled, the exact 34-member mapped object — and the ablated binary's cost-gate counters are
+**identical digit for digit**, so the fix moves zero counters and all standing drift is pre-existing.
+**THE PRIZE, COLLECTED.** With the defect gone, `narrowRendersMoreAny` returns **229 -> 168** (the
+baseline) — the one observable that refused (INC.22) — and partition-scoping the floor's largest row
+is now the shipped default, pinned with **no mode install in it**. **Floor 129 -> 58 ms;
+narrowed-query median 173 -> 117; ratio at the median file 30.91x -> 43.07x; the floor is now HALF a
+median query instead of three quarters.**
+**A GATE BASELINE MOVED AND IT IS THE ONE THIS ARC HAS QUOTED ALL WEEK — DO NOT TRUST AN OLDER
+`5 / 3` FIGURE.** `capture-equivalence.sh`'s NARROW arm goes **5 spans / 3 files -> 2,275 of 381,666
+(0.60%) in 46 files**. The FULL-build digest is unchanged (`-3718897727265589316`), so an ordinary
+compile is untouched; the movement is entirely in what a NARROWED query renders. **It is not the trade
+(INC.2) refused** — that was 45 spans rendering `any` where the full build rendered the declared type,
+i.e. wrong answers. Here **no row renders more `any`, none is absent, and the direction is MIXED**
+(the narrow arm KEEPS `Intl.LocalesArgument` where the full arm expands it, 113 rows; and renders a
+signature the full arm gives up on as `any`, 38 rows) — two draws from the id-keyed first-wins
+`aliasDisplayMap`, which CLAUDE.md already records as arbitrary in both arms. **It is still a 455x
+move in a gate that stood at 5 for the whole (INC.*) arc, and the mitigation is already measured**:
+(INC.22)'s `TypeAlias`-phase-program-wide configuration costs **6.68 ms** — 11% of a 58 ms floor — and
+collapses 2,275 to **+1 row**. It is queued as (INC.26), which must first diagnose the ONE diagnostic
+that configuration diverges on `partition-gate`'s sensitivity arm; the alternative road is a
+CAPTURE-LOCAL alias resolution, which cannot move a baseline at all. Suite **15,801 / 0 / 3**, **zero
+corpus baselines moved**, `cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50
+`-project`), `capture-channel` digest `4065921979171190360` with moreAny 168, `partition-equivalence`
+EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76.
+
 **THE 62-65 ms THAT (INC.22) REFUSED IS GATED BY *ONE LIB MEMBER* AND *ONE TRUNCATED RESOLUTION*,
 AND THE COUNTER THAT REPORTED IT IS A SUBSTRING HEURISTIC (2026-08-24, (INC.23)+(INC.24)).** (INC.22)
 refused partition-scoping the floor's largest row — `init:buildFileLocalTypeMaps`, 69.16 ms of a
@@ -167,43 +211,4 @@ its own netting list — the sensitivity arm carried this round too), `capture-e
 / 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** both at BASELINE,
 `cost_gate.py` PASS (largest `mapped.hits` +1.02%, the standing drift), `huge_methods.py
 --fail-over 0` clean on core AND `-project`.
-
-**THE BIND IS 70 ms -> 6 ms AND A NARROWED QUERY IS 20.5% FASTER: THE INV.2(c) TABLES NOW BUILD ON
-FIRST ASK, AND THEIR ONE PROGRAM-WIDE READER IS SERVED BY A PROJECTION (2026-08-23, (INC.16)).**
-`bindLexicalScopes` was 93% of the bind and — after (INC.7) batch 4 closed the gating technique and
-(INC.11) refused `init:buildFileLocalTypeMaps` — the largest single remaining mechanism in the
-incremental floor. **Scope tables built on a floor build 123 -> 3; floor median 333 -> 286 ms;
-narrowed-query median over all 78 files 346 -> 275 ms, the SUM 29,378 -> 23,909 ms.**
-`partition-equivalence.sh`'s own recipe reads floor **248 ms**, query median **313 ms**, ratio at
-the median file **15.66x** (batch 4 read 340 / 367 / 13.30x on that same recipe).
-**THE BLOCKER WAS SERVED, NOT GATED.** A `forcedBy` census — `PassTiming.currentPass` recorded at
-each first ask — confirms `init:computeAllEnumValues` was the **SOLE forcer of all 78 program
-files**, and that the 45 real-lib `.d.ts` binds are forced by NOBODY but are worth only ~2 ms, so
-the tempting lib half was never the prize. It is a round-609 COLLECTOR and may not be gated, so it
-is served by a projection instead: `declareLexical`'s two mint sites turn out **NOT to be
-symmetric** — the alias half needs only a NAME, which the binder hands over directly, while the enum
-half needs the scope-space SYMBOL itself (`computeEnumSymbolValues` is id-keyed) — so **only an
-`enum` in a fresh scope forces a build.** The projection costs two int compares per node on
-`indexSourceFile`, a walk that already runs and is content-cached across compiles; its refinement is
-measured rather than guessed (67 of 78 skipped, then 69, then **75**), and it ships with round 790's
-positive control, `LexDefer.verifySkip` — **75 skipped, 0 violations** — because a zero is evidence
-only beside a non-empty skipped population.
-**THE HAZARD THE QUEUE CALLED MOST LIKELY TO KILL THE ROUND DID NOT FIRE, AND WAS REMOVED ANYWAY.**
-A scope built at first-ask could see a FULLER `nodeToSymbol` than one built mid-bind, since its
-`(pos,end)` keys collide across files — the (INC.9) refusal's own mechanism. An **ID-FREE
-FINGERPRINT** of every file's tables (scope keys, owner/parent nodeIds, per-scope symbol
-names+flags, the aliased `existing` key set) is **IDENTICAL on all 78 files across three runs** —
-but that bounds FREQUENCY, not existence, so `Binder.lexOwnerSymbols`, a per-file `nodeId -> Symbol`
-table, replaces both reads of the shared map and makes order-independence structural.
-**AN ABLATION ARM READ 0 RED AND THAT WAS A REAL FINDING, NOT A PASS**: restoring the eager build
-broke nothing in a 15,741-test suite, because **every pin installed the mode it wanted and restored
-it, so the shipped DEFAULT was pinned by nothing at all.** A default pin was added and the arm then
-discriminates; all four arms now have a uniquely-its-own red set (1 / 5 / 4 / 1). Suite **15,752 / 0
-/ 3** (+11 pins), `cost_gate.py` within ±0.32% but for the standing `mapped.hits` +1.02%
-(`output.errors` 46, `spine.nodes` unchanged), `huge_methods.py --fail-over 0` clean on core (775
-classes) and `-project`, **`capture-equivalence` 5 spans / 3 of 76 with `narrowRendersMoreAny=0` and
-`capture-channel` 286 / 49, both at BASELINE** — which is what says the deferral's negative-id
-reordering did not bite — `partition-equivalence` EQUIVALENT on all 78, `partition-gate` realism
-78/78 and sensitivity 76/76 with 78 netting passes. **Left open, ~20 ms**: 3 files still force, the
-ones with a genuinely block-scoped `enum` where the census needs the symbol and not a name.
 
