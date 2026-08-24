@@ -1,3 +1,49 @@
+**THE REPLAY'S LOST TYPE-PARAMETER CONSTRAINT WAS NEVER A REPLAY DEFECT — IT IS A WRITE-ONCE
+INTERNED FIELD RESOLVED BEFORE ITS OWN SCOPE, FROZEN IN THE SEED BUILD, AND THE CORPUS IS
+STRUCTURALLY BLIND TO IT (2026-08-23, (INC.19)).** The re-entrant replay diverged on **8 of 75
+files**, and the queue's diagnosis was "the replay SET is too small — bisect it". The instrument
+was built and **refuted that**: `Type.TypeParam.constraint` is interned per node and **write-once**
+(24 guarded writers), and `checkConstraintsInStatements` resolved it BEFORE installing the
+type-parameter scope — so `U extends T` resolved its sibling against the OUTER scope, answered
+`errorType`, and froze. Two passes race for the field: `checkSpine` (dispatch row **28**,
+partition-scoped) and `checkTypeArgumentConstraints` (row **261**, program-wide). **Unpartitioned,
+`checkSpine` always wins, which is why all ~13k corpus baselines never saw it.** A setter probe
+settles the direction: seed `binder.ts` -> target `debug.ts` reads `seedWrites=526 replayWrites=6
+freshWrites=532` with the replay writing **ZERO** `U` constraints — **the damage happened in the
+SEED, before any recheck**, so no replay-set change could ever have reached it. Exactly 6
+constraints move from `checkTypeArgumentConstraints|error` to `checkSpine|T` between arms, and
+exactly 6 renders differ. **THE FIX IS TWO SITES HOISTED AND A THIRD DELIBERATELY NOT** — and the
+third is the round's best find: `withDeclTypeParamScope` serves the TYPE-ALIAS arm, where an alias
+may constrain a parameter **by itself** (`type Shared<I, D extends Shared<I, D>>`, the react-redux
+shape pinned by name), so hoisting there recurses without bound and the `init` guard reports a
+spurious **TS2589 at (0,0)**. **The outer-scope resolution was accidentally load-bearing.** That
+site took the missing write-once GUARD instead — its write was unconditional, i.e. it CLOBBERED a
+correct constraint (measured: `U.constraint` going `T` -> `any`). **`replay-differential.sh`
+realism 8 -> 5 diverging files, 23 spans of 373,879, and NOT ONE survivor is a lost constraint** —
+they are lost generic INFERENCE (`Map<string, SeenPackageName>` -> `Map<any, any>`).
+**THE PIN DISCRIMINATES IN BOTH DIRECTIONS**: `ProjectRecheckConstraintTest` is **2-of-3 RED
+against HEAD** on the exact row `<T extends Nd, U extends T> != <T extends Nd, U>` **with its
+control green**, and 0-of-3 against the fix. It had to be a **namespace-nested** generic function —
+`init:buildFileLocalTypeMaps` (row 13) resolves every FILE-LEVEL `Function` symbol of every file,
+partition or not, so the obvious top-level shapes are vacuous and cost an earlier attempt its
+budget. **TWO NEGATIVES WORTH MORE THAN THE FIX.** (INC.8)(a)'s 167 `<K>` / `<K extends any>` rows
+are **NOT** this bug — the channel is byte-identical after the fix (286 spans / 49 files), and a
+probe reads `TPWRITE name=K was=any now=any`, i.e. the constraint is `any` *before*
+`checkTypeArgumentConstraints` runs: a namespace-local type alias failing to resolve in constraint
+position, a NAME-RESOLUTION defect. And **a replay set is a PER-PASS question, never a
+superset/subset one**: `init:computeAllEnumValues` is classified partition-INVARIANT yet repairs a
+file, `init:mergeLibGlobals` replayed is strictly WORSE, `init:wireGlobalArrayTypes` replayed **does
+not terminate** — so a bisection may not assume monotonicity. Instrument (`scripts/replay-bisect.sh`,
+`PassTiming.replayExtraPasses`, a RUN-TIME pass universe — a source grep of `pass("…"` reads **480**
+names against the dispatch's **417**, so a grep-derived bisection cannot close) is committed and
+resumable; 19 of 210 candidates swept. Suite **15,728 / 0 / 3** (+3), `cost_gate.py` PASS (largest
+**+1.02% `mapped.hits`**, the standing drift), `huge_methods.py --fail-over 0` clean (763 classes),
+`partition-gate.sh` **EQUIVALENT on BOTH arms**, `capture-equivalence` **5 spans / 3 files** and
+`capture-channel` **286 / 49**, both unchanged. Three sites still resolve a constraint outside its
+siblings' scope and are reported not fixed, the hardest being `Checker.kt:137404` — **inside
+`typeParamInternCache.getOrPut`**, a first-touch freeze by construction.
+
+
 **THE RE-ENTRANT REPLAY IS 3.06x, IT LOSES A TYPE-PARAMETER CONSTRAINT ON 8 OF 75 FILES, AND
 THE DIAGNOSTICS SWEEP NEVER NOTICED (2026-08-23, (INC.17) step 2 — BUILT, MEASURED, AND
 REFUSED AS A DEFAULT PATH).** Answering a semantic query about a file the checker was never

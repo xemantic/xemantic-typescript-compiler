@@ -1,5 +1,49 @@
 # Status
 
+**THE SCANNING FAMILY GATED AS ONE BATCH BANKS 99.9% — THE ARC'S FIRST ~100% DISCOUNT — AND A
+NARROWED QUERY IS NOW 29.86x FASTER THAN A FULL BUILD (2026-08-24, (INC.21)).** 19 whole-source-
+scanning passes moved TOGETHER (**19.064 -> 0.024 ms**), because round 895's `srcHas` builds its
+per-file n-gram filter LAZILY and gating one merely hands the ~19.4 ms to the next scanner — a cost
+this repo had already misattributed twice. Gated together it has nowhere to relocate to, and **no
+row outside the batch rose**: the largest riser is `init:buildFileLocalTypeMaps` +2.4 ms on 70
+(+3.5%) against the arm's own total drifting +9% between draws. **Why nothing rebuilds it was
+measured, not inferred**: the three whole-program text gates that remain use a RAW `String.contains`,
+never the filtered `srcHas`. `PT.total both.floor` **123.95 -> 97.12 ms**; `partition-equivalence.sh`
+floor **162 -> 137 ms**, narrowed-query median **207 -> 166 ms**, ratio at the median file **24.16x
+-> 29.86x**. The 19-pass list was derived by TWO independent instruments — a call-graph walk from
+each registered `pass("name")` and a purely lexical loop scan — which agree.
+**THE FOUR STRAGGLERS TAUGHT THE OPPOSITE LESSON.** Three keep their cost because a whole-program
+`.contains` gate sits ABOVE the loop — a question about the PROGRAM, which must stay on
+`binderResults` — so gating the loop banks ~0.02 ms each, with `checkModulePreserve4Pin` as the
+control (loops narrowed, row unmoved at 1.639 -> 1.699). What banks the ms is a **NAME PRE-GATE**,
+sound only because it asks what the pass can already do: **2.509 -> 0.002** and **2.064 -> 0.002**.
+**THE AUTHORISED REVERSAL, WITH ITS OBLIGATION DISCHARGED ON BOTH ARMS OF ONE BOX.**
+`checkSubsequentVarTypesPerFile` **11.740 -> 0.004 ms**. (INC.17) had deliberately left it
+program-wide so a replay never re-enters it; that was reversed because the replay is EXPERIMENTAL,
+refused by (INC.19) and reached by nothing shipped, while the row is paid by every real query.
+Measured rather than assumed: **284 -> 304 of 417 re-entered passes for +26 ms over 75 questions
+(+0.2%)**, divergence unchanged at **5 of 75**. **And the replay's ADVANTAGE fell 1.91x -> 1.68x
+purely because the fresh build got cheaper** — every round that shrinks the floor shrinks the
+replay's reason to exist, which strengthens (INC.19)'s refusal of it as a default path.
+**THE PINS FAIL AGAINST THE UNFIXED BINARY AND THE ABLATION REPRODUCES THE SESSION-START BASELINE**
+(round 776's control): 25 partition pins, the ablation turns **9 RED** including the count receipt
+*a narrowed build builds fewer whole-source scan filters than the whole program* on `SrcScan.builds`,
+and the ablated binary reads `checkReverseMappedIntersectionConstraint` at 18.18 ms with the family
+sum at 19.47. **The analyzer caught a SIXTH defect in itself** — a raw LINE-based brace matcher ran
+away, reading `checkParseUnmatchedTypeAssertion` as **16,363 lines against its true 15**; the tell
+was the impossible span, not a verdict. **REFUSED**: two passes whose emitter adds a row on an
+augmentation's TARGET (a partition holding only the target would lose it), a pre-gate for a pass
+that wipes rows unconditionally, and routing the three raw `.contains` gates through `srcHas` —
+which would now **COST ~17.8 ms to build 78 filters to save three ~2 ms scans.**
+**WHAT IS LEFT: THE FLOOR IS 75% ONE ROW.** `init:buildFileLocalTypeMaps` is **73.21 ms of 96.57**;
+everything else is <= 8.5 ms. It is refused twice over, but the arithmetic that refused its
+alias-display half was written against a 340 ms floor and the floor is now 137 — see (INC.22).
+Suite **15,784 / 0 / 3** (+13 pins, no baseline moved), `partition-equivalence` EQUIVALENT 78/78,
+`partition-gate` realism 78/78 and sensitivity 76/76 with 78 netting passes, `capture-equivalence`
+**5 spans / 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** both BASELINE,
+`cost_gate.py` largest `mapped.hits` +1.02% (standing) with all others <= 0.32%, `huge_methods
+--fail-over 0` core 775/0 and `-project` 50/0.
+
 **THE FLOOR PASS TABLE NEARLY HALVES — 219.98 -> 119.74 ms — AND A NARROWED QUERY IS NOW 24.16x
 FASTER THAN A FULL BUILD (2026-08-23, (INC.20)).** (INC.7) batch 4 closed the loop-header technique
 and left 83 passes refused by SHAPE, 53 of them on "writes a checker field inside the private
@@ -159,49 +203,4 @@ on every dashboard profile — (INC.18)'s whole point, collected one round later
 3** (+7 pins), `cost_gate.py` identical (largest **+1.02% `mapped.hits`**, the standing drift),
 `huge_methods.py --fail-over 0` clean (763 classes), `partition-gate.sh` **EQUIVALENT on both arms**
 (realism 78/78; sensitivity 76/76, 78 netting passes).
-
-**THE REPLAY'S LOST TYPE-PARAMETER CONSTRAINT WAS NEVER A REPLAY DEFECT — IT IS A WRITE-ONCE
-INTERNED FIELD RESOLVED BEFORE ITS OWN SCOPE, FROZEN IN THE SEED BUILD, AND THE CORPUS IS
-STRUCTURALLY BLIND TO IT (2026-08-23, (INC.19)).** The re-entrant replay diverged on **8 of 75
-files**, and the queue's diagnosis was "the replay SET is too small — bisect it". The instrument
-was built and **refuted that**: `Type.TypeParam.constraint` is interned per node and **write-once**
-(24 guarded writers), and `checkConstraintsInStatements` resolved it BEFORE installing the
-type-parameter scope — so `U extends T` resolved its sibling against the OUTER scope, answered
-`errorType`, and froze. Two passes race for the field: `checkSpine` (dispatch row **28**,
-partition-scoped) and `checkTypeArgumentConstraints` (row **261**, program-wide). **Unpartitioned,
-`checkSpine` always wins, which is why all ~13k corpus baselines never saw it.** A setter probe
-settles the direction: seed `binder.ts` -> target `debug.ts` reads `seedWrites=526 replayWrites=6
-freshWrites=532` with the replay writing **ZERO** `U` constraints — **the damage happened in the
-SEED, before any recheck**, so no replay-set change could ever have reached it. Exactly 6
-constraints move from `checkTypeArgumentConstraints|error` to `checkSpine|T` between arms, and
-exactly 6 renders differ. **THE FIX IS TWO SITES HOISTED AND A THIRD DELIBERATELY NOT** — and the
-third is the round's best find: `withDeclTypeParamScope` serves the TYPE-ALIAS arm, where an alias
-may constrain a parameter **by itself** (`type Shared<I, D extends Shared<I, D>>`, the react-redux
-shape pinned by name), so hoisting there recurses without bound and the `init` guard reports a
-spurious **TS2589 at (0,0)**. **The outer-scope resolution was accidentally load-bearing.** That
-site took the missing write-once GUARD instead — its write was unconditional, i.e. it CLOBBERED a
-correct constraint (measured: `U.constraint` going `T` -> `any`). **`replay-differential.sh`
-realism 8 -> 5 diverging files, 23 spans of 373,879, and NOT ONE survivor is a lost constraint** —
-they are lost generic INFERENCE (`Map<string, SeenPackageName>` -> `Map<any, any>`).
-**THE PIN DISCRIMINATES IN BOTH DIRECTIONS**: `ProjectRecheckConstraintTest` is **2-of-3 RED
-against HEAD** on the exact row `<T extends Nd, U extends T> != <T extends Nd, U>` **with its
-control green**, and 0-of-3 against the fix. It had to be a **namespace-nested** generic function —
-`init:buildFileLocalTypeMaps` (row 13) resolves every FILE-LEVEL `Function` symbol of every file,
-partition or not, so the obvious top-level shapes are vacuous and cost an earlier attempt its
-budget. **TWO NEGATIVES WORTH MORE THAN THE FIX.** (INC.8)(a)'s 167 `<K>` / `<K extends any>` rows
-are **NOT** this bug — the channel is byte-identical after the fix (286 spans / 49 files), and a
-probe reads `TPWRITE name=K was=any now=any`, i.e. the constraint is `any` *before*
-`checkTypeArgumentConstraints` runs: a namespace-local type alias failing to resolve in constraint
-position, a NAME-RESOLUTION defect. And **a replay set is a PER-PASS question, never a
-superset/subset one**: `init:computeAllEnumValues` is classified partition-INVARIANT yet repairs a
-file, `init:mergeLibGlobals` replayed is strictly WORSE, `init:wireGlobalArrayTypes` replayed **does
-not terminate** — so a bisection may not assume monotonicity. Instrument (`scripts/replay-bisect.sh`,
-`PassTiming.replayExtraPasses`, a RUN-TIME pass universe — a source grep of `pass("…"` reads **480**
-names against the dispatch's **417**, so a grep-derived bisection cannot close) is committed and
-resumable; 19 of 210 candidates swept. Suite **15,728 / 0 / 3** (+3), `cost_gate.py` PASS (largest
-**+1.02% `mapped.hits`**, the standing drift), `huge_methods.py --fail-over 0` clean (763 classes),
-`partition-gate.sh` **EQUIVALENT on BOTH arms**, `capture-equivalence` **5 spans / 3 files** and
-`capture-channel` **286 / 49**, both unchanged. Three sites still resolve a constraint outside its
-siblings' scope and are reported not fixed, the hardest being `Checker.kt:137404` — **inside
-`typeParamInternCache.getOrPut`**, a first-touch freeze by construction.
 
