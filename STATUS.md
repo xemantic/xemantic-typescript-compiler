@@ -1,5 +1,64 @@
 # Status
 
+**THE LANGUAGE SERVICE IS 10-24x FASTER THAN ITS OWN DOCUMENTED COST TABLE, AND THE ONE DEFECT
+THE NEW TABLE EXPOSED IS FIXED: A MEDIAN NARROWED DIAGNOSTICS QUERY IS 108-113 ms — 43-47x A FULL
+REBUILD — AND AN ORDINARY HOVER AFTER TWO OTHER CHANNELS WENT 324 ms -> 4 ms (2026-08-24,
+(INC.31)+(INC.32)).** Every wall figure on `docs/language-service.md` was round-930, i.e. taken
+before (INC.2b) narrowed the capture path and before (INC.1)-(INC.30) took the incremental floor
+from 1,092 ms to 58 ms. Re-taken on tsc's own 78 sources (9,977,097 chars), warm, six warm-up
+cycles, medians with their draw lists, **every row reproduced in two independent JVMs**:
+`diagnosticsOf(f)` median **1.1-1.2 s -> 108-113 ms** (p90 202-219), `completionsAt`
+**~4.7-5.1 s -> 194-202 ms**, `signatureHelpAt` **190-214 ms**, `documentHighlightsAt(binder.ts)`
+cold **~15x**, first hover on `binder.ts` **610 -> 290-306 ms**, against a **4,864-5,096 ms** full
+rebuild that is unchanged and is the anchor. **A REAL KEYSTROKE COSTS THE NARROWED PATH
+NOTHING EXTRA** — identical bytes 212 ms, an appended comment 247, an inserted statement 218,
+a statement introducing a TS2322 215 — which no earlier harness here could say, because they
+all dirty a buffer by writing its own bytes back.
+**THE HALF THAT DID NOT MOVE IS THE HALF A PLUGIN AUTHOR HAS TO DESIGN AROUND, AND IT CANNOT
+MOVE.** `referencesAt` (8.8-9.6 / 13.2-13.9 s), `renameAt` (20.0-21.3 / 25.0-26.0 s) and a
+project-wide `diagnostics()` (4,864-5,096 ms) never enter `captureIn`'s partition, because
+their claim is about every file; that column is now marked on the page rather than left to
+be inferred. The heap claim is corrected in the direction an IDE budgets: not "~1.9 GB peak, 512 MB not enough" but
+**1,077-1,125 MB peak in G1 old gen with 264 MB RETAINED** after a full GC — green at `-Xmx2g`,
+OOM at `-Xmx1g`.
+**TWO LEVERS WERE REFUSED BY MEASUREMENT BEFORE BEING BUILT, WHICH IS THE ROUND'S CHEAPEST
+PRODUCT.** (a) Memoizing `SourceIndex`'s derived populations — on a memo hit `captureAround`
+still re-derives the file's occurrence set — decomposes to **1.21 ms on a 17.9 KB file, 2.27 ms
+at 194 KB and 82.7 ms at 3.15 MB**, closing the arithmetic to 0.4% of the measured 83 ms
+second-caret hover on `checker.ts`; at the MEDIAN file the whole prize is **1-2 ms**, and it is
+not a `referencesAt` lever either (~140 ms of a 9.3 s sweep = 1.5%). (b) "Completions over-capture the
+file" is simply **FALSE** — the three call sites already pass a single caret span, so their
+194-202 ms IS the narrowed build, and since a completion is by definition asked on a just-edited
+buffer, **no cross-edit memo can ever serve it**.
+**THE DEFECT: A MEMO BOUNDED BY ENTRY *COUNT* LET A ONE-SPAN ENTRY EVICT A 125,289-SPAN ONE.**
+`Project.captures` was an access-ordered LRU bounded at two ENTRIES. Hover, go-to-definition,
+highlights and `fileSemantics` ask ONE file-wide question per buffer (125,289 spans on
+`checker.ts`); `completionsAt`'s two branches and `signatureHelpAt` each name exactly ONE span.
+So **hover -> completion -> signature help -> hover, with no edit anywhere in it**, threw the
+hover's file-wide entry out and paid a whole narrowed rebuild for the last step. **The fix is not
+a larger limit** — that would double the worst case to buy a case needing no extra memory at all
+— but a bound on WEIGHT, in two lanes that cannot evict each other: at most 4 spans is
+caret-scoped and bounded at 4 entries, everything above it is buffer-sized and bounded at 2,
+unchanged since (INC.13). **Worst-case retention is two buffer captures (UNCHANGED) beside 16
+answers = 0.013% of ONE file-wide capture**, and invalidation was re-audited rather than assumed
+(`cached = null` at exactly three sites, every one clearing `captures` in the same breath).
+**THE PIN LESSON IS THE TRANSFERABLE ONE, AND IT NEEDED A SECOND ARM TO FIND.** Ablating the
+count-based eviction put **3 of 13 RED**; the fourth new pin — *"the caret lane is BOUNDED too"* —
+stayed **GREEN, correctly, because a stricter bound cannot fail a bound pin**. Only a second arm
+(caret lane unbounded, 4 -> 4096) turned it red. So all four pins do fail against the mistake each
+actually names, but *"I wrote four pins and three went red"* would have been the wrong summary.
+Suite **15,815 / 0 / 3** (+4 pins); `cost_gate.py` and `huge_methods.py` were CONTROLS and
+deliberately not run — no checker code and no compiled core method is touched, the change being
+confined to the `-project` module's memo policy. **FOUR FOLLOW-UPS QUEUED**: (INC.33) the caret
+channels are cold per channel per buffer (a hover's request carries `spans`, not `memberSpans`, so
+a completion in an already-hovered buffer still builds at 201-228 ms — correct, and the widening
+is unpriced); (INC.34) the `SourceIndex` refusal, recorded with the instrument that can re-open
+it; (INC.35) project-wide `diagnostics()` at ~4.9-5.1 s is now the biggest number in the service by
+3x and is **BLOCKED-PENDING-USER**, because round 772 measured reverse-dependency closure DEAD on
+*this* corpus (tsc's own sources are `export *` barrels) — it would pay off on a layered
+application and buy the benchmark nothing; (INC.36) the `-Xmx2g` floor, where the 264 MB retained
+is the number to attack rather than the seconds.
+
 **`type Box<T> = { v: T }` RENDERED `{ v: any; }` ON ORDINARY BUILDS — A GENERIC ALIAS'S OWN
 PARAMETERS WERE NOT IN SCOPE FOR ITS BODY (2026-08-24, (INC.28)).** The fourth shipped correctness
 defect this session found while chasing latency, and the third in a row where **the FULL build was
@@ -175,48 +234,3 @@ CAPTURE-LOCAL alias resolution, which cannot move a baseline at all. Suite **15,
 corpus baselines moved**, `cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50
 `-project`), `capture-channel` digest `4065921979171190360` with moreAny 168, `partition-equivalence`
 EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76.
-
-**THE 62-65 ms THAT (INC.22) REFUSED IS GATED BY *ONE LIB MEMBER* AND *ONE TRUNCATED RESOLUTION*,
-AND THE COUNTER THAT REPORTED IT IS A SUBSTRING HEURISTIC (2026-08-24, (INC.23)+(INC.24)).** (INC.22)
-refused partition-scoping the floor's largest row — `init:buildFileLocalTypeMaps`, 69.16 ms of a
-90.15 ms pass table — because `capture-channel`'s `moreAny` went 168 -> 229, read as "+61 member
-types collapse to `any`". **Classified per ELEMENT (nesting-aware, so a function-typed member is not
-fragmented into its parameters) that is 78 rows carrying exactly ONE member name —
-`[Symbol.unscopables]`, the lib's `{ [K in keyof any[]]?: boolean }` — in 14 files.** The other 1,379
-rows over 196 names are the (INC.11)(a) alias-display family, which (INC.22) already measured
-collapsing to **+1 row for 6.68 ms**. **AND `narrowRendersMoreAny` OVER-REPORTS: ZERO of the shipped
-baseline's own 168 "moreAny" rows actually loses a member type**, so a nonzero value is a LEAD and
-not a finding — a zero still means what it always did, which is why `capture-equivalence`'s
-`narrowRendersMoreAny=0` remains a real gate. Every moreAny figure quoted in an older round note,
-this session's included, should be re-read that way.
-**ROUND 778's WRITE GATE IS REFUTED AS THE MECHANISM.** A writer hook printing `(pass, ambient,
-persisted, depth, truncated)` reads `ambient=empty persisted=true` in **both** arms — so round 778
-says cacheable either way — and differs only in `truncated`. Under a partition the first ask arrives
-from **inside** the member-table resolution the mapped type's own `keyof` needs;
-`resolveStructuredTypeMembersCore` returns silently leaving `properties` null and the type degrades.
-**A narrowed compile has exactly ONE truncated resolution out of 822; a full build has 0 of 21,315 —
-and that one IS the defect.** **THE OBVIOUS FIX IS REFUTED WITH A POSITIVE CONTROL**: refusing to
-persist a truncated resolution changes nothing sweep-wide (same 78 rows, byte-identical digest) while
-a single-file control proves the arm is live (`refusedWrites` 593 -> 594, the victim going
-`persisted=true resolves=1` -> `persisted=false resolves=2`) — the re-resolution simply re-enters the
-same guard. **So the lever is the CYCLE HANDLING, not the cache**: a `keyof` over a type whose member
-table is IN FLIGHT must answer from the DECLARATIONS rather than degrade. That is a member-resolution
-change with corpus-wide blast radius and was deliberately not attempted — queued as (INC.25).
-**(INC.22)'s THIRD OBSTRUCTION IS RETIRED**: the PURE partition-scoped arm is EQUIVALENT on BOTH
-`partition-gate` arms (78/78 and 76/76), even though that pass is one of the sensitivity fixture's 78
-netting passes — its rows carry the alias's own `fileName`, so an out-of-partition row is dropped by
-the partition filter anyway. The "DIVERGED 1 file" belonged to the MIXED `TypeAlias`-program-wide
-configuration. **(INC.24) LANDED FIRST, ON ITS OWN COMMIT**: both capture runners now fold their whole
-answer set into ONE number per arm, **ordered by span key so it is a property of the ANSWERS and not
-of `HashMap` iteration**, and from a clean tree it reproduces (INC.22)'s recorded
-`full=-3718897727265589316` over 381,666 types + 360,152 definitions **exactly** — round 776's
-rebuild-the-baseline control, satisfied on an instrument rather than a binary. **A PROCESS VIOLATION
-IS RECORDED**: a `compileKotlinJvm` ran while a sweep JVM was live, which CLAUDE.md forbids in both
-directions; the sweep's summary matched the earlier run exactly so no measurement is tainted, but the
-documented failure mode is SILENT and "it was fine this time" is not evidence the rule is soft.
-Everything is off by default. Suite **15,800 / 0 / 3** (+16 pins), `cost_gate.py` `output.errors` and
-`spine.nodes` **+0.00%**, `huge_methods` clean (778 core classes + `-project`), `capture-equivalence`
-**5 / 3, moreAny 0** and `capture-channel` **286 / 49** with digests unchanged,
-`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
-`partition-gate` 78/78 and 76/76.
-

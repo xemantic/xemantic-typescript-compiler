@@ -1,3 +1,2536 @@
+### Round (INC.16) — the INV.2(c) tables build on first ask, its one program-wide reader is served by a projection, and a narrowed query is 20.5% faster
+
+**WHAT THIS ROUND DID.** `BinderResult.lexicalScopes` — **93% of the bind and, after
+(INC.7) batch 4 and (INC.11), the largest single remaining mechanism in the floor** —
+now builds on FIRST ASK, and `init:computeAllEnumValues`, the one program-wide reader
+that forced every file, is served by a PROJECTION instead of by the tables.
+
+| | eager (pre-round) | deferred (shipped) |
+|---|---:|---:|
+| scope tables built, FLOOR build | 123 | **3** |
+| floor median | 333 ms | **286 ms** |
+| **narrowed-query median, all 78 files** | 346 ms | **275 ms (−20.5%)** |
+| narrowed-query SUM over 78 | 29,378 ms | **23,909 ms** |
+| `FrontEnd` "bind (all program files)" | 70 ms | **6 ms** |
+| `bindLexicalScopes` row | 64.5 ms / 123 calls | **~20 ms / 3 calls** |
+| full build median | 4,896 ms | 4,993 (inside the 4,575-5,053 spread) |
+
+`partition-equivalence.sh`'s own arms read the same direction on its own recipe:
+**floor 248 ms, query median 313 ms, ratio 15.66x** — quote paired numbers from ONE
+instrument, since the two recipes differ (batch 4 read 340/367/13.30x on that one).
+
+**HAZARD (a) DOES NOT FIRE — AND WAS THEN REMOVED STRUCTURALLY ANYWAY.** The queue
+named it as most likely to kill the round: `moduleLexicalScope` reads the BINDER's
+accumulated `nodeToSymbol`, whose `(pos,end)` keys collide across files, so a scope
+built at first-ask would see a FULLER map than one built mid-bind — the (INC.9)
+refusal's mechanism, one pass over. The instrument is an **ID-FREE FINGERPRINT** of
+every file's INV.2(c) tables (scope keys, owner/parent nodeIds, per-scope symbol
+names+flags, and the aliased `existing` table's key set) taken at one fixed point and
+diffed between arms: **IDENTICAL on all 78 files, three independent runs**
+(`scripts/lex-defer.sh`). **That bounds its FREQUENCY, not its existence**, so the
+dependence was removed by construction: `Binder.lexOwnerSymbols`, a per-file
+`nodeId -> Symbol` table filled by `bindModuleDeclaration`/`bindEnumDeclaration`,
+replaces both reads of the shared map. Order-independence is now a property of the
+construction rather than a measurement — and arm **a4** (put the shared map back)
+reddens exactly one pin, built from two same-length sources whose namespaces share a
+node key.
+
+**THE CENSUS CONFIRMED THE QUEUE'S ONE-LINE DIAGNOSIS EXACTLY.** A `forcedBy` census
+(recording `PassTiming.currentPass` at each first ask) reads
+**`init:computeAllEnumValues` as the SOLE forcer of all 78 program files**, floor and
+full build alike. The 45 real-lib `.d.ts` binds are forced by NOBODY — but they are
+worth **~2 ms**, so the lib half alone was never the prize.
+
+**THE PROJECTION, AND WHY IT IS NOT A SECOND WALK.** `declareLexical` mints a
+`TypeAlias`/`Enum`-flagged scope symbol at exactly two sites, both gated on
+`scope.existing == null`. **The two halves are NOT symmetric**: the alias half wants a
+NAME, which the binder can hand over directly; the enum half wants the scope-space
+SYMBOL itself, because `computeEnumSymbolValues` is id-keyed and that symbol exists
+only inside the tables. **So only an `enum` in a fresh scope forces a build.** The
+projection costs **two int compares per node on `indexSourceFile`** — a walk that
+already runs and is content-cached across compiles — plus a parent-chain ascent per
+candidate declaration in `Binder.bind`. Its refinement is measured, not guessed:
+parent-is-not-`SourceFile` alone skips 67 of 78, adding the namespace rule 69,
+splitting off the alias half **75**.
+
+**AND IT SHIPS WITH ITS OWN POSITIVE CONTROL**, per round 790: `LexDefer.verifySkip`
+keeps walking every file and counts what the skip passed over — **75 skipped, 0
+violations** on the profile, pinned on a fixture, because a zero is evidence only
+beside a NON-EMPTY skipped population.
+
+**THE ABLATION'S FIRST ARM READ 0 RED, AND THAT WAS A REAL FINDING.** a1 (restore the
+eager build) reddened NOTHING, because **every other pin installs the mode it wants
+and restores it — so the shipped DEFAULT was pinned by nothing at all.** A pin for the
+default was added and a1 then discriminates. Four arms, each with a uniquely-its-own
+red set: a1 restore-eager **1**; a2 never force for a fresh-scope enum **5** (3x
+`FunctionScopedEnumTypePositionTest` + the `verifySkip` control); a3 hand over no alias
+names **4** (2x `BlockScopedTypeAliasArityTest` + 2 new); a4 read the shared map again
+**1**.
+
+**GATES.** Suite **15,741 -> 15,752 / 0 / 3** (+11 pins), `cost_gate.py` all within
+±0.32% except the standing `mapped.hits` +1.02% (`output.errors` 46, `spine.nodes`
+unchanged, re-run on the restored tree identical), `huge_methods.py --fail-over 0`
+clean on core (775 classes) AND `-project`, `capture-equivalence` **5 spans / 3 of 76,
+`narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** — both at BASELINE, which
+is what says hazard (b)'s negative-id reordering did not bite — `partition-equivalence`
+**EQUIVALENT on all 78**, `partition-gate` realism **78/78** and sensitivity **76/76,
+78 netting passes**.
+
+**LEFT OPEN, ~20 ms**: 3 files still force on the floor — the ones with a genuinely
+block-scoped `enum`, where the census needs the scope-space SYMBOL rather than a name.
+Serving those means minting that symbol outside the scope walk, which is a larger
+change than this round's.
+
+### Round (INC.11) — the residual IS a display question, the 66 ms is REFUSED anyway, and the round's product is a shipped hover defect: an unbound `T` in a tooltip
+
+**WHAT THIS ROUND DID.** Classified (INC.10)'s undiagnosed residual, **refuted the
+queue's own hypothesis about it**, refused the 66 ms with a sharper table than the
+one that motivated the item, and landed the display defect the classification
+exposed — which turned out to be **program-wide on the SHIPPED whole-program build**,
+not a partition artifact at all.
+
+**(b) IS A DISPLAY QUESTION. The queue said the residual 462 spans "may be two
+genuinely different `Type` instances"; they are ONE instance carrying TWO COMPETING
+NAMES.** The span is the type reference `ClassLikeDeclaration` in `es2015.ts`'s
+`isPartOfClassBody(declaration: ClassLikeDeclaration, …)`. `ClassLikeDeclaration` is
+a UNION alias, so it registers through `unionAliasStructural`, while `typeToString`
+consults `aliasDisplayMap` FIRST. Two overloads (`classThis.ts:103`,
+`namedEvaluation.ts:178`) return `Extract<ClassLikeDeclaration, Pick<T, "kind">>`;
+the conditional **cannot decide** (a free `T` in the second argument), so it answers
+its own CHECK TYPE — the interned union — and the generic site then writes
+`aliasDisplayMap[thatUnion.id] = ("Extract", args)` **unconditionally**.
+
+**THE CENSUS HAD TO BE WITHIN-ARM, AND THE FIRST HOOK WATCHED THE WRONG SITE.** A
+cross-arm comparison is impossible here because `Type.id` is minted in resolution
+order, so `AliasDisplayCensus` classifies inside ONE arm. The first hook watched
+CLOBBERS at the last-wins site and read **0** — and **reading that as "not a display
+question" would have been exactly wrong.** The sharpened census reads **86**
+instantiations answering an argument unchanged (24x `Partial`, 18x `Extract`) with a
+positive control that the instrument is not dead: **6** different-name refusals at
+the first-wins site (`IncrementalBuildInfoDiagnosticOfFile` beating
+`IncrementalBuildInfoEmitDiagnostic`). Round 849's law again — a zero from an
+un-instrumented site reads exactly like a real negative.
+
+**WHAT LANDED IS A CORRECTNESS FIX, NOT A PERF CHANGE.** A generic instantiation that
+returns one of its own arguments UNCHANGED no longer registers an alias name for it.
+Before it, a caret on `ClassLikeDeclaration` reported
+`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` — **an unbound `T` in a
+hover** — on the ordinary shipped build, for every user. Verified against the ablated
+binary through the CLI: `Type 'Pass<Shape, Pick<T, "a">>' is not assignable to type
+'number'`.
+
+**THE PIN WAS BLIND ON ITS FIRST DRAFT AND ONLY THE ABLATION SAID SO.** The embedded
+lib declares no `Pick`, so the shape degraded to `any` and the pin passed against the
+ablated binary. With `@useRealLibs` it goes **RED against the unfixed binary with its
+negative control still green.** CLAUDE.md already carries "a repro for this family
+MUST set `@useRealLibs`" (round 725); this is a second consumer of that rule.
+
+**THE 66 ms IS REFUSED, AND THE NEW TABLE IS 3.4x / 1.6x BETTER THAN (INC.10)'s AND
+STILL REFUSES.** `FltmDefer` splits the pass into three phases so the table is
+re-measurable in ONE binary (`XTSC_FLTM_EAGER`, default = shipped, pinned inert by
+`FltmDeferArmTest`):
+
+| eager phases | capture divergence | (INC.10)'s |
+|---|---|---|
+| all (shipped) | **5** spans / 3 of 76 files, `narrowRendersMoreAny=0` | 5 |
+| `TYPEALIAS` only | **137** / 10 files, `narrowRendersMoreAny=0` | 462 / 18 |
+| none | **1,665** / 47 files, **`narrowRendersMoreAny=321`** | 2,722 / 46 |
+
+The ask-triggered whole-file build beats (INC.10)'s because in a full build every
+file's map is still built in check order. **It refuses anyway: the fully-deferred arm
+LOSES 321 RESOLUTIONS TO `any`, which is not a naming question at all.** So the 66 ms
+is not reachable by fixing display, and the item's premise — that the 65 ms buys only
+a first-touch ORDER — is now measured false: part of it buys RESOLUTIONS.
+
+**FLOOR NUMBERS ARE DRAW-TO-DRAW, NOT A SAVING — SAY SO.** The landed tree reads
+floor **324 ms**, sweep median **357**, ratio **14.06x** against the round's stated
+340 / 367 / 13.30x. **The landed change moves no work**; these are two draws of the
+same quantity, and quoting them as an improvement would be exactly the error batch 4's
+note warned about one round earlier.
+
+**FOR THE NEXT ROUND.** The remaining (a) half — **302 spans in `checker.ts` alone**
+under full deferral — is a DIFFERENT mechanism: two synonymous non-generic aliases
+resolving to one interned type, decided first-wins. That one is genuinely ambiguous,
+because **tsc picks by the REFERENCE's declaration site, which an id-keyed global map
+cannot express** — so closing it is a change of key, not a change of policy.
+
+**GATES.** Suite **15,741 / 0 / 3** (+6 pins), `capture-equivalence` **5 spans / 3 of
+76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49, moreAny=168** — both
+IDENTICAL, `partition-equivalence` EQUIVALENT on all 78, `partition-gate` EQUIVALENT
+on both arms (78 netting passes), `cost_gate.py` PASS (`output.errors` 46,
+`spine.nodes` +0.00%, largest `mapped.hits` **+1.02%**, the standing drift), and
+`huge_methods.py --fail-over 0` clean on core AND `-project`.
+
+### Round (INC.7) batch 4 — 89 walkers gated, the floor is 340 ms, and the one-line technique is now CLOSED: 65% of what is left is refused shapes
+
+**WHAT THIS ROUND DID.** Gated **89** program-wide tail walkers onto the check
+partition in two sub-batches, each swept independently. **Floor 378 -> 340 ms,
+narrowed query median 422 -> 367, ratio at the median file 12.43x -> 13.30x**
+(`partition-equivalence.sh`, the instrument the arc quotes). The diff is 89 loop
+headers and nothing else: `for (result in binderResults)` **221 -> 132**,
+`checkedResults` **255 -> 344**.
+
+**WHY THIS AND NOT A REUSE MECHANISM.** (INC.15) measured that an edit invalidates
+every reuse mechanism, so the FIRST query after a keystroke — the error-reporting
+query the owner directive names — reuses nothing and pays the whole floor. Reducing
+the floor is the only thing that helps it.
+
+**THE FOURTH DISCOUNT POINT, AND IT IS THE LOWEST.** Summed floor rows of the 89:
+**54.23 -> 0.13 ms**; whole floor pass table (417 rows) **254.57 -> 212.16 ms**.
+Banked **42.41 ms** against 54.23 of rows = **78.2%**, next to 79.0 / 85.5 / 92.9.
+Largest relocation victims `checkPropertyOverride` +6.17, `checkClassImplements-
+Interface` +2.11, `checkDerivedConstructorSuper` +1.51.
+
+**DO NOT QUOTE `floor-decomposition.sh`'s WALL FOR THIS.** It reads 424 -> 352 ms at
+the identical recipe, but the intermediate post-4a draw read **444 ms — HIGHER than
+before** while the deterministic pass table had already fallen 34.7 ms. A 42 ms
+effect is not resolvable in a 4-draw floor wall; the pass table is. Round 716's
+"counters decide, wall time confirms", one instrument over.
+
+**(INC.19)'s WRITE-ONCE-RACE HAZARD DID NOT FIRE, AND THAT WAS CHECKED RATHER THAN
+ASSUMED.** Gating a walker is exactly the operation that changes who wins a race for
+a write-once interned field, and that failure is a plausible TYPE, not a diagnostic —
+so this batch was graded on BOTH capture sweeps after EACH sub-batch, not only the
+partition gate. `capture-equivalence` **5 spans / 3 files, `narrowRendersMoreAny=0`**
+and `capture-channel` **286 rows / 49 files**, byte-identical after 4a AND after 4b.
+Not luck to be relied on: none of the 89 resolves a type-parameter constraint, and the
+only one resolving types at all (`checkSignatureGroupOverloadExcessCalls`, 0.18 ms)
+left both sweeps unmoved.
+
+**THE TECHNIQUE IS CLOSED, AND THE REFUSAL LIST IS THE ROUND'S REAL OUTPUT.** The
+queue's headline ("174 ungated passes, 268.8 ms") is now **172 / 251.9 ms**, and
+**the top TEN rows are 165 ms of it — 65% — and every one is a refused shape**:
+`init:buildFileLocalTypeMaps` 62.06 (writes `deepInstantiationBailed`),
+`checkTypeArgumentConstraints` 21.69, `checkBaseClassImprovedMismatch` 19.51
+(`diagnostics[i] =`), `checkInterfaceMultiBaseConflicts` 12.73,
+`checkSubsequentVarTypesPerFile` 10.70, `checkPropertyOverride` 9.61,
+`checkDerivedConstructorSuper` 9.04, `init:computeAllEnumValues` 8.75,
+`checkCircularClassBaseViaDefaultTypeArg` 6.91, `checkClassImplementsInterface` 5.94.
+Analyzer-CLEAN was only 54 ms in total. Histogram of the 83 refused: **53** write a
+checker field or retract inside the private closure, 8 of those plus a post-loop, 4
+carry more than one `binderResults` reference, 4 hold a cross-file pre-loop
+accumulator, and **43 retract via `diagnostics.removeAll`**. **The remaining tail is
+not gateable one line at a time** — a successor has to change the SHAPE of a
+retracting or field-writing pass, not its loop header.
+
+**THE PIN DISCRIMINATES PER WALKER.** 7 new arms in `ProjectGatedTailWalkerTest` (22
+in the class, 0 failed) over four 4a walkers whose diagnostics the PassLab confirmed
+they own: TS2331+TS2683 / `checkThisInNamespaceBodies`, TS2335 /
+`checkSuperInNonDerived`, TS2411 / `checkIndexSignatureProperties`, TS1340 /
+`checkImportTypeUsedAsType`. **The first namespace-`this` fixture was VACUOUS and the
+lab said so** — a `this` inside a FUNCTION in a namespace body reports TS2683 from a
+different pass, so the row survived the disable; the `this` has to sit directly in the
+namespace body. Ablation (the walker's loop made to walk nothing, committed first per
+round 789): **exactly 3 of 22 arms redden, and they are exactly the three naming that
+walker** — whole-program control, its narrowed arm, and the public-API arm.
+
+**THE ANALYZER'S OWN CONTROLS CAUGHT THREE DEFECTS IN IT, ALL FAILING IN THE
+REASSURING DIRECTION — and the third is new.** (a) a `${…}` template desynchronised
+the stripper; (b) an expression-bodied `fun isDtsFile(x) = expr` swallowed the next
+function; (c) **a MULTI-LINE PARAMETER LIST truncated a function's span to its header,
+so the body — and every field write in it — was invisible.** Defect (c) wrongly
+cleared `checkSpreadNonIterableIntoFixedArity` and `populateAmbientCyclicBaseClasses`,
+i.e. **the queue's own REFUSAL LIST worked as the oracle that caught the analyzer.**
+Controls now held: 4,541 `fun` raw = 4,541 stripped (0 blanked), all 10 `pass("name")`
+KDoc samples refused, whole-file brace balance 0, 0 depth anomalies, spans
+non-overlapping and containing no inner header, `isDtsFile` <= 3 lines, and named body
+probes. **Also: a `pass("…")`-REGISTERING HELPER IS NOT A CALLER** — without excluding
+the 12 `initCheckPasses*` registrars from the call graph every walker reads as
+"reached from elsewhere" and the clean set is **0**.
+
+**THE VICTIM MOVED TWICE IN ONE ROUND**, which is the sharpest evidence yet for the
+queue's retirement of the victim heuristic: `checkExportEqualsCloduleReExport` went
+0.13 -> 4.33 ms after 4a (it became the first later asker), and gating it in 4b moved
+the same cost onto `checkPropertyOverride` (+6.17). The victim is a LOCATION, never a
+walker that got slower.
+
+**THE SENSITIVITY FIXTURE IS WHAT CARRIED THIS BATCH.** It nets **16 of the 89** gated
+walkers as real netting passes, against **one** (`checkSpine`) on every dashboard
+profile — (INC.18)'s whole point, collected one round later.
+
+**GATES.** Suite **15,735 / 0 / 3** (+7 pins), `cost_gate.py` **identical** (largest
+`mapped.hits` +1.02%, the standing drift; then `mapped.keyed` +0.32%,
+`typeOfExpr.calls` +0.18%), `huge_methods.py --fail-over 0` clean (763 classes),
+`partition-equivalence.sh` **EQUIVALENT 78/78 after BOTH sub-batches**,
+`partition-gate.sh` **EQUIVALENT on both arms** (realism 78/78; sensitivity 76/76, 78
+netting passes), and both capture sweeps unmoved as above.
+
+### Round (INC.19) — the replay's lost constraint was never a replay defect: a write-once interned field, resolved before its own scope, frozen in the SEED build
+
+**WHAT THIS ROUND DID.** (INC.17) landed the re-entrant replay at **3.06x** and
+refused it, because `scripts/replay-differential.sh` read `DIVERGED: 8 of 75
+file(s)` on the capture channel with the diagnostics channel untouched. This round
+built the instrument the queue asked for, used it to refute the queue's own
+diagnosis, and fixed the real defect. **The replay is now `DIVERGED: 5 of 75`, 23
+spans of 373,879, and NOT ONE of the survivors is a lost constraint.**
+
+**THE QUEUE'S CHARACTERISATION WAS WRONG, AND THE INSTRUMENT IS WHAT SHOWED IT.**
+(INC.19) was written as "the replay SET is too small — bisect it". Three causes
+were measured and the dominant one is reachable by NO replay-set change:
+
+* **(a) real but small.** `init:computeAllEnumValues` — classified partition-
+  INVARIANT, never reads `checkedResults` — repairs `program.ts` when added to the
+  replay set (6 -> 5 files, replicated in two draws against a same-session control).
+  Its row is `Map<string, SeenPackageName>` and `SeenPackageName` is a **block-scoped
+  `const enum`**, i.e. exactly the B83.5-unbound population that pass's
+  `result.lexicalScopes` sweep exists for.
+* **(b) real.** Replaying is non-idempotent for some passes:
+  `init:wireGlobalArrayTypes` **does not terminate** (TIMEOUT at 200 s against a
+  ~48 s healthy draw; the 14-pass `init` group holding it timed out at 600 s), and
+  `init:mergeLibGlobals` makes the answer **strictly worse** (+1 diverging file) —
+  `mergeSingleSymbol`'s `merged.declarations.addAll(...)` is not idempotent. This is
+  the all-passes arm's 100x blow-up reproduced in miniature and ATTRIBUTED.
+* **(c) DOMINATES, and it is neither.** `Type.TypeParam` is interned per
+  TypeParameter node and its `constraint` is **write-once** (`if (constraint ==
+  null)`, 24 writers). Two passes race for it: `checkSpine` (dispatch row 28, walks
+  only the PARTITION) and `checkTypeArgumentConstraints` (row 261, walks
+  `binderResults`, so it reaches every file in every build). A probe on the setter
+  (built, measured, reverted) reads, for seed `binder.ts` -> target `debug.ts`:
+  `seedWrites=526 replayWrites=6 freshWrites=532`, with the replay writing **ZERO**
+  `U` constraints. **The damage happened in the SEED build, before any recheck**;
+  exactly 6 constraints move from `checkTypeArgumentConstraints|error` to
+  `checkSpine|T` between the arms, and exactly 6 renders differ.
+
+**THE DEFECT, AND IT IS AN ORDINARY BUG.** At `checkConstraintsInStatements`'
+`FunctionDeclaration` arm the type-parameter `scope` is built and each
+`tp.constraint` resolved **in the same loop**, with `withInstantiationContext`
+installed only afterwards — so for `<T extends Node, U extends T>` the sibling `T`
+resolves against the OUTER scope, answers `errorType`, and is frozen for the
+checker's life. In an UNPARTITIONED build `checkSpine` always wins the race and
+writes the right answer, **which is why all ~13k corpus baselines are structurally
+blind to it.**
+
+**THE CANDIDATE PATCH WAS NOT SAFE AS DIAGNOSED, AND THE COUNTER-EXAMPLE IS THE
+ROUND'S BEST FIND.** Hoisting the resolution inside the scope install at all three
+sites of the family reddens two corpus baselines with a REAL meaning regression: a
+spurious TS2589 at `(0,0)`, i.e. `reportCheckerStackOverflow` — a genuine
+`StackOverflowError` caught by the `init` boundary guard. `withDeclTypeParamScope`
+serves the **type-alias** arm, and a type alias may constrain a parameter **by
+itself** — `type Shared<I, D extends Shared<I, D>>`, the react-redux shape that
+`reactReduxLikeDeferredInferenceAllowsAssignment` and
+`circularlyConstrainedMappedTypeContainingConditionalNoInfiniteInstantiationDepth`
+pin by name. **Resolving that constraint with the parameters in scope recurses
+without bound: the outer-scope resolution was accidentally load-bearing there.**
+
+**WHAT LANDED**, three sites, two treatments:
+
+| site | change |
+|---|---|
+| `checkConstraintsInStatements` (`FunctionDeclaration` arm) | resolution **hoisted** inside `withInstantiationContext` |
+| `checkTpListDefaults` | **hoisted** — its own comment already said the scope exists "so default/constraint TypeNodes resolve to the sibling TPs" |
+| `withDeclTypeParamScope` | **NOT hoisted.** Given the `if (p.constraint == null)` guard every other writer has: its write was **unconditional**, so it CLOBBERED a correct constraint an earlier pass had written (measured: `class C<T extends Nd, U extends T>`, `U.constraint` went `T` -> `any`). Sibling refs in a class/interface/alias head still answer `errorType` there; they can no longer overwrite a better answer. |
+
+**THE PIN, VERIFIED IN BOTH DIRECTIONS.** `ProjectRecheckConstraintTest` (3 tests,
+`-project` commonTest) seeds a build over `a.ts`, replays onto `b.ts`, and asserts
+the replayed captures equal a fresh `recheckOnly={b.ts}` build's. **Against HEAD:
+2 of 3 FAIL** on the exact row `@158 <T extends Nd, U extends T>… != <T extends
+Nd, U>…`, with the CONTROL passing (the reference arm really does render the
+constraint), so the failure is not vacuity. **Against the fix: 0 fail.**
+**The shape had to be a NAMESPACE-nested generic function** — an earlier attempt
+spent its budget on top-level `declare function` and overload-set shapes that are
+all vacuous, because `init:buildFileLocalTypeMaps` (row 13) resolves every
+FILE-LEVEL `Function` symbol of every file, partition or not, and writes the
+constraint correctly before either racer. The KDoc records this.
+
+**(INC.8)(a) IS **NOT** FOLDED IN, AND THE NEGATIVE IS WORTH MORE THAN THE GUESS.**
+The round's hypothesis was that (INC.8)(a)'s 167 `<K>` / `<K extends any>` rows are
+this same bug's shipped-path face. They are not: `capture-channel-equivalence.sh`
+reads **286 spans in 49 of 76 files, byte-identical** before and after. A probe on
+the shape shows the constraint is **already `any` before `checkTypeArgumentConstraints`
+runs** (`TPWRITE name=K was=any now=any`) — a **namespace-local type alias failing
+to resolve as a constraint**, i.e. a NAME-RESOLUTION defect, not a first-touch
+freeze. Same symptom, different mechanism; (INC.8) stays open and its (a) is now
+diagnosed one level deeper than the queue entry had it.
+
+**THE FAMILY SWEEP — all 24 `.constraint =` writers read.** Thirteen are correct
+(they resolve inside the scope install), and `checkConstraintsForTypeArgs`' own
+comment states the law verbatim: *"this is WHY the resolution is a separate loop
+and not folded into the intern factory (which runs before the scope is set)."*
+**Three sites had drifted from a rule the codebase already knew.** Reported and
+deliberately NOT fixed, each resolving a constraint outside the scope its siblings
+live in: `Checker.kt:111069` (`getDeclaredTypeOfSymbol`'s class/interface branch —
+no scope at all, but it mints FRESH non-interned params so it cannot corrupt the
+cache), `Checker.kt:137404` (resolves **inside `typeParamInternCache.getOrPut { }`**,
+i.e. a first-touch freeze BY CONSTRUCTION, and the hardest to fix since the factory
+runs before any scope exists), `Checker.kt:139240` (`getTypeParametersOfSymbol`),
+and `withDeclTypeParamScope` itself for the self-referential-alias hazard above.
+
+**THE INSTRUMENT** (`aca8a60f`, committed BEFORE any ablation per round 789):
+`PassTiming.replayExtraPasses` (default empty, union-ed into the replayed set, so
+empty is behaviour-free by construction); `PassTiming.recordRegistrations` /
+`registeredPasses`, the candidate universe recorded AT RUN TIME — **a source grep of
+`pass("…"` reads 480 names against the dispatch's 417, so a grep-derived bisection
+could never have closed**; `ReplayDifferentialMain`'s 5th argument plus a
+`--dump-passes` mode and a machine-readable `divergentFiles=` line; and
+`scripts/replay-bisect.sh` (`dump` / `sweep` / `try` / `narrow`), which compares
+ONLY the diverging files (~48 s a draw against ~4 min for all 75) under a
+wall-clock cap so a non-terminating pass kills one draw rather than the sweep. It
+REFUSES (exit 2) on missing inputs. Positive control: `--dump-passes` answers
+`all=417 replayed=207 candidates=210`, the 417 matching the differential's
+independently printed row count.
+
+**WHAT THE REPLAY'S SURVIVING 23 SPANS ARE — a different class, and (INC.19) is not
+closed.** No lost constraint remains. What is left is lost generic INFERENCE:
+`Connection[][]` -> `any[][]`, `Map<string, SeenPackageName>` -> `Map<any, any>`,
+`(key: K, valueInNewMap: U) => T` -> `… => any`. 19 of 210 candidate passes were
+swept per-pass before the probe showed pass additions cannot reach the dominant
+family; `build/bench/replay-bisect/{passes,cand,rest}.txt` hold the universe and the
+191-pass remainder, so looping `scripts/replay-bisect.sh try` over `rest.txt`
+resumes it.
+
+**GATES.** Suite **15,728 / 0 / 3** (+3, the new pin), `cost_gate.py` all in band
+(largest `mapped.hits` **+1.02%**, the standing pre-existing drift; then
+`mapped.keyed` +0.32%, `typeOfExpr.calls` +0.18%), `huge_methods.py --fail-over 0`
+clean (763 classes), `partition-gate.sh` **EQUIVALENT on BOTH arms** (realism 78
+files; sensitivity 76 files, 78 netting passes, floors cleared),
+`capture-equivalence.sh` **5 spans / 3 files unchanged**,
+`capture-channel-equivalence.sh` **286 / 49 unchanged**, and
+`replay-differential.sh realism` **8 -> 5 diverging files**. `Recheck.kt`'s banner
+and `ProjectRecheckTest`'s KDoc were corrected in the same commit — both still
+carried the now-stale "8 of 75 files — a lost type-parameter constraint".
+
+### Round (INC.17) step 2 — the re-entrant replay is 3.06x, it loses a type-parameter constraint on 8 of 75 files, and the DIAGNOSTICS sweep never noticed
+
+**WHAT THIS ROUND DID.** Closed out (INC.17) step 2, which a previous session left
+uncommitted mid-flight. The re-entrant replay — answer a semantic query about a
+file the checker was never asked about by re-entering only the partition-dependent
+`init` passes instead of rebuilding — is **built, measured, graded, and REFUSED as
+a default path.** It is landed EXPERIMENTAL and opt-in, the way `--shareBind` and
+`--mergeClone` were landed: available, off, with its known failing case written
+down at every entry point.
+
+**THE PRIZE IS REAL.** On tsc's own 78 sources, `replay=12572 ms` against
+`freshBuilds=38498 ms` over 75 questions = **3.06x**. It is exactly the shape step
+1's census predicted: the floor's **211 partition-invariant passes carry 350.89
+ms**, the 205 dependent ones **15.59 ms**, and 204 of those cost **0.69 ms**
+between them.
+
+**WHAT REFUSES IT.** `scripts/replay-differential.sh` reads
+
+```
+compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
+          typeSpans=373879 definitionSpans=352713
+DIVERGED: 8 of 75 file(s)
+```
+
+The **diagnostics half is untouched** — every row agrees, on both arms. The
+**capture** half diverges in 8 of 75 files, and the shape is a **lost
+type-parameter constraint**: the replay renders `<T extends Node, U>` where a
+fresh build renders `<T extends Node, U extends T>`. That is a plausible-looking
+type, never an error, so it fails in the silent direction. (INC.2) refused capture
+narrowing over **45 divergent spans**; 8 divergent FILES is far past that
+precedent, and a wrong hover is worse than a slow one.
+
+**THE TRANSFERABLE OUTPUT — and it is a CLAUDE.md entry.** *A partition or replay
+change must be graded on the CAPTURE sweep, not only the diagnostics sweep.* On
+the tsc profile the diagnostics comparison was **completely silent** about an
+8-file defect. (INC.18)'s arm a3 predicted exactly this and was recorded as a
+NEGATIVE; this is the same finding with a real defect behind it.
+
+**WHAT LANDED.** The mechanism, marked EXPERIMENTAL at `ProgramRecheck`,
+`RecheckHolder`, both `recheckHolder` parameters and
+`Checker.recheckAdditionalFiles`, each carrying the divergence and the "do not
+serve hover from this" instruction. `scripts/replay-differential.sh` +
+`ReplayDifferentialMain` (the oracle — (INC.19) starts from it rather than
+rebuilding it). `ProjectRecheckTest` pins **what the replay actually does**: the
+diagnostics channel agrees, the walked set grows, three files cost ONE build
+(counted on `tsconfig.json` reads, with the seed's own read as the live-instrument
+control), the arming is behaviour-free, and the capture channel is asserted to
+EXIST and deliberately **not** asserted equivalent — a soundness pin there would
+be false. And the `checkSubsequentVarTypes` split the census demanded: one MIXED
+pass whose two halves have OPPOSITE partition behaviour, whose SUM the census was
+reading as 14.90 ms of replay cost. Split, the replay's fixed cost is 0.69 ms, and
+`PartitionCensusHookTest` now pins both halves on opposite sides of the census.
+
+**THE OPT-IN IS THE LOAD-BEARING CHECK, and here is how it was verified.**
+`grep -rn 'recheckHolder\|RecheckHolder\|retainForRecheck\|recheckAdditionalFiles'`
+over every module: the only non-declaration call sites are `ProjectRecheckTest`
+and `ReplayDifferentialMain`. Every parameter defaults to `null`;
+`retainForRecheck = recheckHolder != null`; `recheckAdditionalFiles` `require`s
+`retainForRecheck`. `Project` — the embedding API a host uses — does not reference
+the type at all. And the property is now PINNED rather than argued: arming a
+holder must not change the build's own diagnostics, narrowed or whole-program,
+with a control asserting the arming actually happened (round 873's rule — two
+unarmed builds would agree and prove nothing).
+
+**WHAT DID NOT WORK.** Two attribution arms, both from the previous session, both
+recorded here so nobody spends a day rediscovering them. The FIRST died silently
+with no output; the probable cause is daemon starvation (BUILD.1 — two multi-hour
+daemons were holding ~4.9 GB). The SECOND — `replayAllPasses`, re-entering EVERY
+pass — ran **~100x over budget**: 53 minutes of CPU over **7** targets without
+finishing, against ~50 s of total compute for the 205-pass replay over **75**.
+That ratio is itself evidence: it is the signature of a pass that appends to a
+side table or re-emits on each replay, i.e. hypothesis (b) below. The arm is kept
+(`PassTiming.replayAllPasses`) and documented as an experiment, not restarted.
+
+**WHAT (INC.19) INHERITS.** Two live hypotheses — the replay SET is too small (a
+dependent pass classified invariant, because the classification measures *reads
+the partition* where soundness needs *its OUTPUT depends on the partition*), or
+replaying at all is non-idempotent. The named next instrument is a **BISECTION
+over the replay set** — which passes, added to the 205, repair the 8 files — which
+is O(log n) builds against the all-passes arm's unbounded cost and separates the
+two hypotheses directly.
+
+### Round (INC.18) — the partition gate was VACUOUS on every profile this repo has, and it is now armed and PROVEN able to fail
+
+**THE MEASUREMENT THAT IS THE ROUND.** `scripts/partition-equivalence.sh` is the
+detector (INC.7)'s 68 walker gatings were graded by, (INC.9)'s deferral was graded
+by, and the one (INC.17)'s re-entrant replay would be graded by. It is a
+DIFFERENTIAL (full build versus `recheckOnly = {file}`), so its resolution is
+bounded by how many of the checker's 416 `init` passes contribute a row to the
+comparison:
+
+| project | files | diagnostics | files carrying a row | **distinct passes netting one** |
+|---|---:|---:|---:|---:|
+| `build/bench/tsc-project-*` — the arm that has always run | 78 | 46 | **5** | **1** (`checkSpine`) |
+| `test-fixtures/partition-gate` — this round | 71 | 175 | **70** | **78** |
+
+**73 of 78 per-file comparisons on the realism arm are empty against empty**, and
+every row that does exist is netted by ONE pass. All eight dashboard profiles are
+that same codebase. So a green run there is evidence about ~1 of 416 passes, and
+(INC.17)'s refusal was right on its own numbers.
+
+**THE FINDING UNDERNEATH THE FINDING, AND IT EXPLAINS *WHY* NO REAL PROJECT CAN ARM
+THIS GATE.** `PassDiagMineMain` compiled every single-file conformance case under
+one fixed option set — the case's own `// @directive` header DROPPED, because a
+fixture is one tsconfig — and recorded `PassTiming.diagNetByPass`: **6,451 cases
+walked, 2,802 netting, 241 DISTINCT passes**. Greedy-covering that record,
+`scripts/partition_fixture_compose.py` reaches 44 passes at 20 files and then adds
+**exactly ONE new pass per additional file** out to 200. **The tail walkers are
+one-shape walkers**; coverage is bought one hand-written shape at a time and a real
+codebase reaches one.
+
+**THE FIXTURE IS HAND-WRITTEN, DELIBERATELY.** The miner says WHICH shapes to write;
+the files were written from scratch against that map. This repo does not vendor
+TypeScript source — `typescript-repo/` is gitignored and even the real lib sources
+are GENERATED into `build/` — and a fixture generated at gate time from a clone is a
+fixture that drifts. 71 files, every one a module so nothing collides.
+
+**THE RECEIPT IS `diagNetByPass`, NOT `diagsByPass`.** The latter records
+`if (d1 > d0)`, so a pass whose net effect is a RETRACTION is absent from it
+entirely (73 `removeAll` + 5 `removeAt` + 2 `clear` sites in `Checker.kt`; round
+749 already records that such a pass is invisible to a count-based ablation). The
+receipt prints `netTotal` beside `diagnostics` as its own positive control — 167
+against 175 on the fixture, the eight-row gap being SYNTAX errors, which the Parser
+emits through no `pass(...)` wrapper at all; 46 against 46 on the profile.
+
+**THE PROOF THAT IT CAN FAIL — `scripts/partition-gate-ablate.sh`, one mistake at a
+time, both arms per arm.**
+
+**GATE ARMS.** Fixture 76 files / 182 diagnostics / 72 carrying / 78 netting passes;
+profile 78 / 46 / 5 / 1.
+
+| arm | injected mistake | realism | sensitivity |
+|---|---|---|---|
+| a1 | `checkMissingImplementations` silent when narrowed | GREEN | **RED** (1 file, TS2389) |
+| a2 | `checkConflictMarkers` silent when narrowed | GREEN | **RED** (1 file, 3x TS1185) |
+| a3 | round 609: `buildFileLocalTypeMaps` gated on the partition | GREEN | GREEN — **control** |
+| a4 | `checkCloduleTest2`, nets on NEITHER — CONTROL | GREEN | GREEN |
+| a5 | `checkSpine`, nets EVERY row tsc reports — CONTROL | **RED** (5) | **RED** (36) |
+
+**a5 IS THE SHARPEST NUMBER IN THE ROUND: ABLATING THE ONE PASS THAT NETS EVERY ROW
+tsc's OWN SOURCES REPORT REDDENS EXACTLY *5 OF 78* FILES — WHICH IS HOW MANY CARRY A
+ROW.** That is the realism arm's entire resolution, measured rather than argued: no
+defect whatsoever can make it fail on more than 5 files, and only through one pass.
+
+**a3 IS AN HONEST NEGATIVE, RECORDED AS A CONTROL AND NOT AS COVERAGE.** Starving
+that collector onto the partition changes nothing observable on either project, and
+the arm was RE-RUN after the fixture gained cross-file structure (a shared
+base/interface/enum/alias module and its dependents, a cross-file circular pair, a
+cross-file overload set) — still both-green. The arm is REACHED (its loop iterates 1
+file instead of 76 when narrowed), so this is a fact about the collector: consistent
+with (INC.10), which measured that this map's product is consumed by type DISPLAY,
+not diagnostics — deferring it entirely moved **2,722 capture spans and ZERO
+diagnostics**. The instrument that owns it is `capture-equivalence.sh`. **A
+round-609 starvation of a DIAGNOSTIC-producing collector is still unpinned by any
+arm here, and that is this round's honest limit.**
+
+**PIN ARMS**, the same mistakes graded by the two `commonTest` pins, so a pin
+recorded as discriminating has been SEEN to fail:
+
+| arm | `PartitionSensitivityTest` | `PassDiagNetSignTest` |
+|---|---|---|
+| a1 | **RED** (1/3) | GREEN |
+| a3 | GREEN | GREEN |
+| a4 | GREEN | GREEN |
+| a5 | **RED** (1/3) | GREEN |
+| a6 — `diagNetByPass` clamped to `d1 > d0` | GREEN | **RED** (1/2) |
+
+Each pin reddens under its OWN mistake and stays green under the other's, which is
+what separates the two claims: one is about the partition, the other about the
+accumulator the receipt is read from.
+
+**WHAT THIS RETRO-PRICES.** (INC.7)'s 68 gated walkers and (INC.9)'s deferral were
+profile-GREEN for a reason that says nothing about them; only the CORPUS, which has
+no partition, stood behind them. They are not thereby wrong — they are unmeasured on
+this axis and re-runnable now.
+
+**NO COMPILER CHANGE.** Everything here is fixtures, jvmTest runners, scripts and
+two `commonTest` pins; `cost_gate.py` and both `huge_methods.py` censuses are
+CONTROLS this round rather than gates, and any movement in them would have meant the
+change escaped its module.
+
+`docs/partition-gate-sensitivity.md`.
+
+### Round (INC.17) step 1 — the three-bucket census: the prize is 95.7% of the floor, the replay's own cost is 0.69 ms, and the gate that would have to see it is VACUOUS
+
+**MEASURED, tsc's own 78 sources, six draws in a palindrome over three partition
+shapes (`scripts/partition-census.sh`):**
+
+| bucket | rows | floor ms | one-file ms |
+|---|---:|---:|---:|
+| partition-**INVARIANT** (never reads the partition) | **211** | **350.89** | 375.44 |
+| partition-**DEPENDENT** (reads `checkedResults` or `assignedFileNames`) | **205** | **15.59** | 55.05 |
+| total | 416 | 366.47 | 430.49 |
+
+So **95.7% of the floor's pass time is partition-INVARIANT** — that is (INC.17)'s
+prize, and it is the whole 350 ms. And the replay's own fixed cost is smaller than
+the bucket suggests: **204 of the 205 dependent passes cost 0.69 ms BETWEEN THEM at
+the floor**, because **201 of them read the partition exactly ONCE per build** — they
+are `for (result in checkedResults) { … }` and nothing else, the (INC.7) shape. The
+205th, `checkSubsequentVarTypes`, is **14.90 ms** with an EMPTY partition, i.e. it is a
+MIXED pass doing program-wide work (`…InGlobals`, `…AcrossScriptFiles`) outside its
+partition loop; splitting it would take the replay's fixed cost to ~0.7 ms.
+
+**THE MODEL THE CENSUS PRODUCED IS SMALLER THAN THE ONE (INC.14) PRICED, AND THAT IS
+THE FINDING.** (INC.14) budgeted "416 pass rows classified, a diagnostics prefix to
+reset, every per-file side table to reset". The census says the prefix is not needed:
+a program-wide pass iterates `binderResults`, so **it already emitted the newly asked
+file's rows during the FIRST build** — `getDiagnostics()` merely filtered them out,
+at the very end, because that file was not assigned. A replay therefore does not reset
+anything: it re-runs the 205 dependent passes with the new partition (which appends
+only the new file's rows, since that file contributed none before) and re-filters.
+
+**WHAT THIS ROUND REFUSES TO LAND, AND THE REFUSAL IS ABOUT THE INSTRUMENT, NOT THE
+DESIGN.** A replay that silently produced NOTHING from 204 of those 205 passes would
+be **invisible to every gate this repo has for partition work**, and that is measured
+rather than argued: on the tsc profile the full build's **46 diagnostics are netted by
+exactly ONE pass — `checkSpine`** (the new signed-delta census reads 46 against the
+build's own `fullDiagnostics=46`, its positive control). Every one of the other 415
+rows moves the diagnostics count by zero. So `scripts/partition-equivalence.sh` —
+the designated detector, and the one (INC.7) leaned on — is comparing an essentially
+EMPTY population on this profile, and the same is true of the other seven, which are
+the same codebase. What carried (INC.7) was the 13k-baseline CORPUS, which has no
+partition; there is no instrument here that exercises *many emitting passes* and *a
+partition* at once. Landing a re-entrant checker behind a gate that cannot see a
+starved replay is rounds 853/873/895 again — a green run that tested nothing.
+
+**AND THE CLASSIFICATION THE HOOK PRODUCES IS NOT YET THE ONE THE REPLAY NEEDS.** It
+measures *reads the partition*; soundness needs *its OUTPUT depends on the partition*,
+and the two come apart wherever a program-wide pass CONSUMES a side set the spine
+fills — the producer/consumer pattern CLAUDE.md names three times
+(`spineCollectObjLitVar` → `spineResolveDeferredIterationChecks`,
+`spreadNonIterableHandledCalls`, `populateAmbientCyclicBaseClasses`). Such a pass is
+recorded INVARIANT and would be skipped. Nothing measured here bounds that class,
+because on this profile those passes emit nothing.
+
+**THE INSTRUMENT IS A RUNTIME ONE ON PURPOSE, AND ITS CONTROLS ARE PRINTED.**
+`Checker.checkedResults` is now a getter that records `PassTiming.currentPass`, so the
+census cannot be wrong about who read it — where a source analyzer over `Checker.kt`
+fails silently and in the reassuring direction (CLAUDE.md: a stripper handling `'x'`
+desynchronises on `'\''`; a `pass("name") { … }` sample inside a KDoc parses as a real
+registration). The two partition reads that BYPASS the property — `checkSpine`'s file
+loop and `checkUnresolvedNames`, both testing `assignedFileNames` directly — are hooked
+explicitly, and `checkSpine` is asserted present in every arm. Controls, all printed by
+the runner: 416 rows and 205 read-sites in **all six draws and all three partition
+shapes**, `outside = 0` in every one (so the per-pass sums partition the reads rather
+than sampling them), and the diagnostics hook reading exactly the build's own count.
+
+**WHAT WAS CONSIDERED AND REJECTED AS AN EXPERIMENT.** Simulating the replay with
+`PassTiming.disabledPasses` (disable the 211 invariant rows, compare) is PESSIMISTIC
+and therefore cannot exonerate: a real replay retains those passes' *results* in the
+live checker, where the simulation deletes them — `init:buildFileLocalTypeMaps` alone
+is 76 ms of invariant work that `checkSpine` consumes. And on this profile it would
+also be vacuous in the other direction, comparing 0 diagnostics to 0.
+
+**GATES.** Suite, `cost_gate.py`, `huge_methods.py` on core and `-project`, and the
+four equivalence sweeps — all at their baselines; the hook is behind
+`PassTiming.enabled`, so every sweep is unchanged by construction and is a control.
+
+**SUCCESSOR — (INC.18), and it is the blocker rather than the feature.** Build a
+partition fixture whose diagnostics come from MANY passes: a small multi-file project,
+each file carrying a shape a different dedicated walker owns, driven through
+`partition-equivalence.sh`'s own comparison. Its receipt is a COUNT — *how many
+distinct passes net a diagnostic on it* — and it must be in the tens before any
+re-entrant replay may be believed. It costs no compiler change, it re-arms the gate
+(INC.7) and (INC.9) were graded by, and only then is (INC.17)'s 350 ms landable.
+
+### Round (INC.14) — a `Checker` now answers a whole WORKING SET, and editor order was the last thing it could have gone wrong on
+
+**EIGHTEEN SEMANTIC QUERIES IN SIX BUFFERS WENT 5,230 ms -> 737, AND SIX PER-BUFFER
+ERROR QUERIES 2,338 -> 526 WITH EVERY RE-ASK AT 0 — because `Project.prepare(files)`
+performs ONE narrowed build over a declared working set and `diagnosticsOf`'s memo is
+now keyed by the PARTITION rather than by the question.** Replicated in a second run
+(4,997 -> 704 and 2,376 -> 539); the 15-query block `warm-program-cost.sh` already
+drove is a CONTROL and did not move (diagA 2,032, hover1 3,921, hoverB 609, defB 3,
+hoverB2 3, semB 20, hlB1 7, hlB2 8 — (INC.13)'s numbers to the ms).
+
+**THE ORDER GAP THE CENSUS LEFT IS CLOSED, AND IT CLOSED CLEANER THAN PROGRAM ORDER.**
+The (INC.14) census modelled a SET of queries walked in program order; a host asks in
+whatever order a user touches buffers and COMES BACK to a buffer another checker
+already answered. The differential's new `editor` arm builds a deterministic shuffled
+query SEQUENCE with revisits, chunks THAT into groups and compares POSITION BY
+POSITION, and runs the COLD arm over the same sequence so the reference's own
+order-dependence is a measured control (`coldSelfDiverged`, which REFUSES the run if
+non-zero) rather than an assumption:
+
+| k | cold | shared | ratio | rows that differ |
+|---:|---:|---:|---:|---:|
+| 3 | 51,996 ms / 101 builds | 24,088 / 34 | **2.16x** | 0 |
+| 8 | 50,771 / 101 | 13,080 / 13 | **3.88x** | 0 |
+| 26 | 51,728 / 101 | 9,992 / 4 | **5.18x** | 1 |
+
+101 queries over 76 files, 25 revisits, **1,070,012 compared rows per run**, and
+`coldSelfDiverged = sharedSelfDiverged = 0` in all three — a revisited file is
+answered identically by a fresh checker AND by a reused one, which is the property no
+file-keyed census could have tested. The one k=26 row is byte for byte the row program
+order already found (`watchPublic.ts@24148`, the COLD arm inventing `X & X`), already
+inside `capture-equivalence.sh`'s 5-span baseline.
+
+**WHAT LANDED IS NOT THE RE-ENTRANT CHECKER, AND THE REASON IS THE CENSUS'S OWN
+MODEL.** (INC.14) says "what is left is the refactor" — 416 pass rows classified
+per-file vs program-wide, a diagnostics prefix to reset, every per-file side table to
+reset. But the census's whole trick is that **a checker asked a k-th query IS a checker
+whose partition is those k files**, and that arrangement is expressible with NO checker
+surgery: hand `recheckOnly` the working set once and capture all of it. So `prepare` is
+the census's SHARED arm made public. The refactor buys one thing this does not — a
+working set the host did not have to name — and it is now the successor, (INC.17),
+priced below.
+
+**THREE RULES, EACH CARRYING ITS PIN, EACH ONE A PLACE THIS COULD HAVE FAILED
+SILENTLY.** (a) The prepared slot is SEPARATE from the two-entry capture LRU, so an
+ordinary hover in an unprepared buffer cannot evict what a prepare earned. (b) Serving
+is decided by CONTAINMENT of the asked spans against the prepared REQUEST's own spans,
+never by "is this file prepared" — an answer never asked for is ABSENT rather than
+wrong, and a hover served from a check that did not carry its span renders NOTHING with
+no error anywhere. (c) A prepared check may not answer `diagnostics`/`diagnosticsOf`:
+§ 3's standing rule is that a capture build types nodes the checker had no reason to
+type, so its diagnostics are not interchangeable with a plain build's.
+
+**SEVEN ABLATIONS, SEVEN DISCRIMINATING, EACH WITH ITS OWN RED SET** — the first round
+this session where no arm had to be recorded as a control:
+
+    A1  `prepared = null` dropped from the 3 invalidation sites   -> 2 RED
+    A2  `preparedAnswerFor` always null                           -> 3 RED
+    A3  `diagnosticsOf` served only on an EXACT partition match   -> 2 RED
+    A4  a subset answered with the SUPERSET's rows                -> 1 RED
+    A5  `prepare` rebuilds what is already prepared               -> 1 RED
+    A6  document highlights bypass the prepared check             -> 1 RED
+    A7  containment weakened to file MEMBERSHIP                   -> 1 RED
+
+A7 is the one worth keeping: it reddens only `a caret on a NON-occurrence in a prepared
+file is still answered`, a pin that exists solely for it. The staleness pins edit
+`t.ts` and query `a.ts` — (INC.12)'s gotcha is that a pin editing the file it queries is
+vacuous, because the edit moves the request key rather than exposing a stale answer.
+
+**WHAT A HELD PREPARED CHECK COSTS, WITH A CONTROL AND NOT AS AN ABSOLUTE.** A heap
+reading taken right after the edit that dropped every cached answer and one taken after
+the prepared queries are **163 -> 167 MB**, identical to the MB in all six rotations:
+**~4 MB for a 415 KB working set of six files**. The bound is ONE prepared check,
+replaced wholesale by the next `prepare` and dropped by any edit — a host cannot grow
+it however it calls.
+
+**WHAT WAS CONSIDERED AND REFUSED, WITH ITS ARITHMETIC.** Making the working set
+AUTOMATIC — grow the partition to `{queried} ∪ {recently queried}` on every miss — was
+refused before it was built: at k distinct files it costs `k·floor + k(k+1)/2·perFile`
+against a cold `k·floor + k·perFile`, so with the floor at 342 ms and a median file at
+47 ms it is a LOSS at every k, and bounding the growth at B files makes every miss
+`(B−1)·perFile` dearer (+42% at B=4 on a median file, catastrophic on `checker.ts`).
+A host knows its open buffers; this layer does not, and guessing is the one thing the
+whole API refuses to do.
+
+**GATES.** Suite **15,701 / 0 / 3** (+13, exactly this round's pins, summed with a
+real XML parser over all six modules). `cost_gate.py` **PASS**, largest **+1.02%
+`mapped.hits`** — the same pre-existing drift the last six rounds recorded, and the
+EXPECTED answer for a round that changed no compiler code, i.e. a control rather than a
+green light. `huge_methods.py --fail-over 0` green on core (755 classes, 16,170 methods,
+0 over, largest 7,702) and on `-project` (50 classes, 478 methods, 0 over, largest
+2,480). **All four equivalence sweeps exactly at their baselines**:
+`partition-equivalence.sh` **EQUIVALENT on all 78 files** (median narrowed query 396 ms,
+floor 365, ratio **13.37x**); `capture-equivalence.sh` **5 spans / 3 files,
+`narrowRendersMoreAny = 0`**; `capture-channel-equivalence.sh` **286 rows / 49 files,
+members=285 scopes=0 signatures=1**; `caret-vs-file-capture.sh` **EQUIVALENT, 904
+spans**. And `checker-reuse-differential.sh` in BOTH orders, six runs between them.
+
+**SUCCESSOR — (INC.17), and its price is already known.** The re-entrant checker buys
+exactly the case `prepare` cannot: a query about a file the host did not name. Its
+prize is the same 342 ms floor, its instrument is the differential (which needs no new
+work — it already models the arrangement), and its cost is the 416-row classification
+plus a diagnostics prefix and every per-file side table. The one thing to measure
+FIRST, and it is cheap: how many of the 479 `pass(...)` rows ever touch
+`checkedResults` at all. (INC.7) says 376 of 400 tail walkers iterate `binderResults`
+and are partition-INVARIANT by construction — if that ratio holds for the whole init,
+the replayable set is small and the refactor is a classification, not a rewrite.
+
+
+### Round (INC.14/INC.15) — the checker CAN be reused: 1 divergent row in 741,864, and it is the shared arm that is right
+
+**A `Checker` SHARED BY EIGHT QUERIES ANSWERS ALL EIGHT EXACTLY AS EIGHT FRESH
+CHECKERS DO — 381,666 captured types, 360,152 captured definitions and 46
+diagnostics over 76 of tsc's own compiler sources, and ONE row differs. In that
+row the shared arm renders `(fileName: string) => boolean` where the cold arm
+renders `(fileName: string) => boolean & (fileName: string) => boolean`, so the
+divergence is a redundant self-intersection the PARTITION-OF-ONE invents and
+sharing removes.** And the same run prices it: **cold 38,404 ms over 76 builds
+against shared 12,035 ms over 10 — 3.19x.**
+
+**THE MODEL IS WHAT MADE THIS COST ONE AFTERNOON INSTEAD OF A REFACTOR.** (INC.14)
+says "do not start the refactor, start with the differential", and the differential
+needs no re-entrant entry point at all: **a checker that has already answered k−1
+queries and is asked a k-th IS a checker whose partition is those k files**, because
+`recheckOnly` is a SET and the spine walks it in program order either way. So the
+arms are `recheckOnly = {file}` per query (today's language service) against
+`recheckOnly = group` once (one checker, k queries), and they must agree file for
+file. No baseline is recorded and none is needed — both arms claim to answer the
+same question.
+
+**REPLICATED AT THREE GROUP SIZES, WHICH RE-GROUPS EVERY FILE.** Changing k changes
+which files share a checker with which, so this is not one draw three times:
+
+| k | cold | shared | ratio | divergent rows |
+|---:|---:|---:|---:|---:|
+| 2 | 39,173 ms / 76 builds | 21,918 ms / 38 builds | **1.79x** | 1 |
+| 8 | 38,404 / 76 | 12,035 / 10 | **3.19x** | 1 |
+| 26 | 39,508 / 76 | 10,347 / 3 | **3.82x** | 1 |
+
+Every run: `types=1 definitions=0 diagnostics=0`, `sharedRendersMoreAny=0`,
+`absentInShared=0`, `absentInCold=0` — and byte for byte THE SAME ROW, at
+`watchPublic.ts@24148..24160`. The cold arm's own wall replicates to ±1.4% across
+the three, which is the self-consistency check that says the ladder is one binary.
+
+**THE CENSUS CLASSIFIED, IN (INC.2b)'s FIVE-MECHANISM STYLE — and it is one
+mechanism, already catalogued.** The row is (INC.6)'s fifth reversed row, the one
+its session note recorded as "1 in `watchPublic.ts` rendering a signature twice": it
+is inside the **5-span baseline `scripts/capture-equivalence.sh` already gates**, so
+checker sharing introduces NOTHING the full-vs-narrow sweep had not already found,
+and reproduces only 1 of those 5. **Nothing in the other four mechanism classes: no
+lost member resolution, no widening to `any`, no definition changed, no diagnostic
+changed.** It fires at k=2 as well as k=26, so it takes ONE companion file, not many
+— which is the tell that it is a first-touch display artefact of checking a file
+ALONE, not an accumulation effect.
+
+**SO (INC.14) IS NOT REFUSED. Its soundness question is answered with a number, and
+what is left is the refactor** — a re-entrant "now check THIS partition" entry point,
+deciding for 416 pass rows which are per-file and which program-wide, resetting the
+diagnostics list to the program-wide prefix, and resetting every side table a
+per-file pass writes. The census says the caches it would carry cost 1 display row.
+
+**(INC.15) IS REFUSED, AND THE REFUSAL IS A RE-PRICING RATHER THAN A SOUNDNESS
+FINDING.** The mechanism checks out on today's binary: `--bindMutationCheck` reads
+**`binder Symbols checked 15580, changed 0`** over a population reaching
+transitively through `locals` + `nodeToSymbol` + every `members`/`exports` table, in
+the SAME run as `mergeSingleSymbol: adopts 406, mutates 175 (164 reaching an adopted
+symbol)` — all 175 land on LIB symbols, which are in no program `BinderResult`.
+`mergeModuleAugmentations` was read as the queue entry asked: three of its four
+writes are idempotent by construction and the fourth (`mergeSymbolTable` into an
+`exports` table) is NOT, because `mergeSingleSymbol` does a bare
+`declarations.addAll` — it simply never reaches binder-owned state here, which is
+what the zero says. **What refuses it is the population.** Bind is **66–74 ms of a
+359–407 ms floor**, i.e. 12.8% of `diagnosticsOf(binder.ts)`, **10.7%** of a first
+hover in that buffer, **3.1%** of a query about `checker.ts`, and **2.75% of the
+whole 15-query editor sequence** — and it is worth **0** on the first query after an
+edit, which is the error-reporting query the owner directive names. **And it is the
+wrong order: a reused `Checker` carries its own bind, so (INC.14) subsumes (INC.15)
+by construction** and would throw away its four layers of plumbing.
+
+**A THIRD FACT THAT ONLY READING FOUND: the shape gate (INC.15) demands cannot be
+evaluated before a build.** The checker's own merge predicate is
+`moduleLocalContributesGlobally`, which reads `umdGlobalNames` and
+`mergeSharedKeepNames` — both computed INSIDE `Checker`'s init — so the design is
+necessarily "build once fresh, reuse only if that build reported clean", and the
+first query of a session never benefits either.
+
+**THE SUCCESSOR THE REFUSAL FOUND, WITH ITS BLOCKER ALREADY NAMED — (INC.16).**
+The floor table says `bind` is 74 ms of which **`bindLexicalScopes` is 69** and
+`bindStatements` 5: the INV.2(c) tables ARE the bind, and (INC.9)'s deferral
+template is the obvious shape. It does not apply as-is, and one line says why:
+`Checker.kt:13536` is `for (result in binderResults) for ((_, scope) in
+result.lexicalScopes)` — a program-wide block-scoped enum/type-alias collector that
+would force every file's table anyway. The question is therefore whether that
+collector can be served by a PROJECTION of the pass rather than by all of it.
+
+**THREE ABLATIONS, AND ALL THREE ARE RECORDED AS CONTROLS RATHER THAN CLAIMED.**
+`ProjectCheckerSharingTest` (5 tests, one of them the non-vacuity control) stayed
+green under every arm, and round 902's rule says that is as often a DEAD ARM as a
+blind pin — so each is diagnosed rather than filed as "the guard is redundant":
+
+    A1  (INC.6)'s mint-time `symbolTypes[copy.id] = copyType` removed   -> 0 RED
+        NOT provably reached: no cheap positive control says the fixture's
+        `Readonly<Program>` enters `materializeModifierUtility` at all.
+    A2  `SYMBOL_TYPE_ORDER_GATE = false` — round 778's write gate off,   -> 0 RED
+        i.e. `symbolTypes` persists a resolution taken under a non-empty
+        instantiation context. Reached on every `getTypeOfSymbol`, but the
+        fixture may present no context-bypassed resolution at all.
+    A3  `buildFileLocalTypeMaps` starved onto `checkedResults` — round   -> 0 RED
+        609's collector mistake, and DEMONSTRABLY DEAD here: that pass
+        resolves only Function/Class/Interface/Enum/TypeAlias/Alias
+        symbols, and the only such local either checked file holds is the
+        import alias `make`, which BOTH arms resolve.
+
+**AND THE FIXTURE HAS A STRUCTURAL HALF-BLINDNESS WORTH RECORDING, because it is a
+property of captures and not of this fixture: a capture is recorded DURING the walk,
+so a file walked LATER cannot influence an earlier file's captured answers in either
+arm.** Only the second-walked file's rows are sensitive, which halves what any such
+pin can see and is the reason the sweep — 741,864 rows over 76 files in every walk
+position — is the discriminating instrument here and the pin is a regression fence.
+
+**GATES.** Suite **15,688 / 0 / 3** (+5 pins, summed with a real XML parser over all
+four modules). `cost_gate.py` **PASS**, largest **+1.02% `mapped.hits`** — the same
+pre-existing drift the last five rounds recorded, and the EXPECTED answer for a round
+that changed no compiler code, i.e. a control rather than a green light.
+`huge_methods.py --fail-over 0` green on core (largest 5,204) and on `-project`
+(largest 275). `scripts/partition-equivalence.sh` **EQUIVALENT on all 78 files**
+(median narrowed query 421 ms, floor 335, ratio **11.92x** — a redraw of the same
+binary, which this round did not touch). `scripts/capture-equivalence.sh` **5 spans /
+3 files, `narrowRendersMoreAny = 0`**; `scripts/capture-channel-equivalence.sh`
+**286 rows / 49 files, members=285 scopes=0 signatures=1**;
+`scripts/caret-vs-file-capture.sh` **EQUIVALENT, 904 spans over 76 files** — all three
+exactly at their baselines.
+
+
+### Round (INC.13) — the question a hover asks is now the BUFFER's, and a free differential said it was safe
+
+**HOVERING AROUND A FILE IS FREE AFTER THE FIRST HOVER. A SECOND CARET IN
+`checker.ts` WENT 2,142 ms -> 73, ONE IN `binder.ts` 481 -> 2, AND
+`fileSemantics` AFTER A HOVER 575 -> 17 — AND THE ONLY THING THAT PAID FOR IT IS
+THE FIRST QUERY IN A BUFFER, +27% ON `binder.ts` AND +65% ON `checker.ts`.**
+
+(INC.12) memoized a capture build on its REQUEST, so a question asked twice was
+free. Every caret-scoped query except `documentHighlightsAt` asked about ONE
+span, so the caret NEXT DOOR was still a full build — the whole ~345 ms floor for
+a question about a buffer the compiler had just walked. `Project.captureAround`
+now widens the question to the file: the population is
+`SourceIndex.occurrenceNodes()`, which is DELIBERATELY the population
+`documentHighlightsAt` already sweeps, so hover, go-to-definition,
+`semanticsAt`/`fileSemantics` and highlights ask ONE question per buffer and
+share ONE memo entry.
+
+**THE ORACLE WAS BUILT FIRST AND IT COST NO BASELINE — WHICH IS THE PART WORTH
+COPYING.** At a fixed partition, a span asked ALONE and the same span asked as
+part of its file's whole set are the same question, so any divergence is a defect
+in one arm and nothing has to be recorded to compare against.
+`scripts/caret-vs-file-capture.sh` (12 evenly spaced carets per file, one build
+each, against one whole-file build) reads:
+
+    compared: spans=904 over 76 file(s)
+    caret-arm type answers=904  definition answers=848
+    file-wide request sizes min=4 median=1,559 max=125,289
+    one-caret capture : median 373 ms  mean 412  slowest 2,161
+    whole-file capture: median 390 ms  mean 483  slowest 3,949
+    EQUIVALENT
+
+**Zero divergences**, and the second finding is the price: a whole-file capture is
+**+17 ms at the median file**, because a narrowed build is mostly FLOOR and the
+extra spans are cheap beside it. The risk this was built for is real and named —
+a capture types nodes the checker had no reason to type, typing populates
+`symbolTypes`/`aliasDisplayMap`/lazy member tables, and (INC.10) refused a 66 ms
+saving because that mechanism moved capture divergence from 5 spans to 2,722. It
+simply does not fire here, and the reason is worth stating: (INC.10) changed WHEN
+the compiler resolves a file's declarations, where this only changes how many
+spans a walk RECORDS at.
+
+**REPLICATED AT DIFFERENT POSITIONS, WHICH IS THE PART A SINGLE DRAW CANNOT
+CLAIM.** The sample is deterministic and evenly spaced, so changing its SIZE
+changes every position in it: a second sweep at **13** carets per file compared
+**979** spans and read **EQUIVALENT** again. Two draws, **1,883 sampled
+positions**, zero divergence. The price replicates too and is therefore quoted as
+a range — the whole-file capture is **+9 to +17 ms at the median file**
+(372 -> 381 and 373 -> 390).
+
+**MEASURED, BLOCKED ARMS, SAME BINARY WITH THE WIDENING OFF AND ON**
+(`scripts/warm-program-cost.sh`, compiler profile, warm, three rotations; blocked
+rather than interleaved because one arm's whole point is that some code does not
+run — round 871):
+
+| | before | after |
+|---|---:|---:|
+| first hover, `checker.ts` (3.15 MB, 125,289 spans) | 2,307 | **3,796** |
+| a SECOND caret, `checker.ts` | 2,142 | **73** |
+| first hover, `binder.ts` (7,787 spans) | 481 | **610** |
+| a SECOND caret, `binder.ts` | 481 | **2** |
+| `fileSemantics(binder.ts)` after that hover | 575 | **17** |
+| `definitionsAt` after that hover | 2 | 2 |
+| `diagnosticsOf` rows, and the FrontEnd floor | 2,070 / 557 / 356+332 | 2,325 / 546 / 339+343 |
+
+**Break-even is the SECOND caret**, and the controls say the change is confined
+to the API: the floor table and every `diagnosticsOf` row are flat, because
+nothing in the compiler was touched.
+
+**THE RECEIPT IS A COUNT, NOT A ms: N carets in one buffer is ONE build.** Pinned
+from a FRESH state (`six carets in one buffer are ONE build, batched or not`), so
+it is not a statement about the memo's hit rate.
+
+**IT DOES NOT WIDEN UNCONDITIONALLY, AND THAT IS THE ONE PLACE A SILENT WRONG
+ANSWER COULD HAVE COME FROM.** A caret can land on a node that is no occurrence —
+a call expression, a numeric literal, a `this` — and a file-wide request would
+simply not carry it, which renders NOTHING with no error anywhere. So the
+widening is conditional on every asked node being in the file's set, and anything
+else is asked about alone.
+
+**THREE ABLATIONS, AND ONE OF THEM CAUGHT A BLIND PIN.**
+
+    A1  never widens (the coverage test off by one)  -> 4 RED: the headline pin,
+                                                       the four-member sharing pin,
+                                                       the six-carets pin, and the
+                                                       cost table's build column
+    A2  widens unconditionally                       -> 2 RED: the fallback control
+                                                       (uniquely its own) and an
+                                                       independent hover negative
+                                                       control
+    A3  the two sides of the shared population drift -> 1 RED, alone... but only
+        apart by one method name                        after the fixture was fixed
+
+**A3 read 0 RED on the first pass and the pin was BLIND, not the invariant
+redundant**: the fixture declared its member with an identifier key and read it
+with a dot, so that file's identifiers and its occurrence nodes were the SAME
+set and either population satisfied the pin. One line (`const third = o["p"];`)
+puts a member-name LITERAL in the file — the exact element the two populations
+differ by — and the arm then reddens exactly one test. The memo's BOUND pin is
+reddened by no arm and is recorded as what it is: it tests the bound, which
+(INC.12)'s own A3 already discriminated.
+
+**THREE PUBLIC CLAIMS CHANGED AND ALL THREE ARE INVERTED IN PLACE.** `a DIFFERENT
+caret's hover still builds` -> `builds NOTHING` (with both answers asserted, so a
+memo returning one span's answer for every caret could not satisfy it); `a batched
+query over six spans costs ONE build where six single queries cost six` -> six
+carets are one build either way; and the memo's BOUND is now about how many
+BUFFERS stay warm rather than one caret-scoped entry plus one file-wide one, so it
+is pinned with three files and with the LRU's ACCESS order asserted (the third
+file is still resident after the eviction). `docs/language-service.md` carried a
+34x batching ratio as its headline advice to hosts; that ratio is GONE, and its
+disappearance is the finding — batching is now a convenience, not a cost decision.
+
+**WHAT DID NOT WORK / WAS NOT DONE.** The bind is still not reused: (INC.13)'s
+queue entry carried a second half ("then, if it holds, the bind", 73-88 ms = 20%)
+and it is left whole as **(INC.15)** — it is a soundness change (a program-SHAPE
+gate reusing the checker's own merge predicate) and does not belong in the same
+round as a change to what every hover asks. The first-query regression was NOT
+gated on file size: a size heuristic would be a guess where the differential is a
+measurement, and break-even at two carets does not justify one.
+
+Suite **15,683 / 0 / 3**. `cost_gate.py` PASS (largest +1.02% `mapped.hits`, the
+same pre-existing drift, and the expected answer for a round that changed no
+compiler code — a control, not a green light). `huge_methods.py --fail-over 0`
+green on core (755 classes) and `-project` (49). `partition-equivalence` **EQUIVALENT on all 78 files** (median narrowed query 385 ms, floor 365, ratio 12.60x — a redraw of the same compiler, which this round did not touch), and both capture censuses **unmoved at their baselines** (5 spans / 3 files, `narrowRendersMoreAny=0`; 286 rows / 49 files, members=285 scopes=0 signatures=1).
+
+### Round (INC.12) — the warm program PRICED, and the one part of it that needed no compiler change LANDED
+
+**(P1) IS THE WHOLE FLOOR — ~345 ms A QUERY — AND (P2) IS WORTH ESSENTIALLY
+NOTHING TODAY. BOTH ARE MEASUREMENTS, AND THE SECOND ONE IS THE MORE USEFUL
+FINDING.**
+
+Measured before anything was built (`scripts/warm-program-cost.sh`, the compiler
+profile, warm, three rotations, two vacuity controls):
+
+    diagnosticsOf(checker.ts)                    1,999 ms
+    the same question again (already memoized)       0
+    diagnosticsOf(binder.ts), NOTHING changed      505
+    quickInfoAt(checker.ts, caret1)              2,205
+    quickInfoAt(checker.ts, caret2), unchanged   1,901
+    quickInfoAt(checker.ts, caret1) AGAIN        1,933
+    diagnosticsOf(checker.ts) after editing it   2,001
+    diagnosticsOf(binder.ts) after editing A       498
+
+**(P1) and (P2) cost the SAME, which is the finding**: outside the content-keyed
+parse cache and `diagnosticsOf`'s exact-question memo there was NO cross-query
+reuse of any kind — re-asking one hover cost a full build. The FrontEnd phase
+table of a floor build says what that build is:
+
+| | ms | reusable when NOTHING changed? |
+|---|---:|---|
+| config + crawl + imports | ~12 | yes, and parses are already content-cached |
+| BIND, all program files | **73-88** | wholesale yes for an all-module program; NOT per file |
+| CHECK, the ~190 program-wide `init` passes | **252-254** | only by reusing the `Checker` |
+| the queried file's own checking | 47 median, 150 `binder.ts`, ~1,650 `checker.ts` | never |
+
+**LANDED — STAGE 1: A CAPTURE BUILD IS MEMOIZED ON ITS REQUEST (`767f4d5f`).**
+`Project.captures`, two entries, access-ordered, dropped wherever `cached` and
+`narrowed` are. It collects the part of (P1) that needs no compiler change — the
+case where the QUESTION repeats — and two of the editor's commonest sequences
+turn out to be exactly that:
+
+    quickInfoAt(caret) then definitionsAt(caret)     506 ms -> 0
+    documentHighlightsAt(caret1) then (caret2)       592    -> 19
+    quickInfoAt(caret) twice                       1,933    -> 0
+
+Neither is special-cased, and that is the design: **hover and go-to-definition at
+one caret build an IDENTICAL `TypeCaptureRequest`** (both name the caret's node as
+a single span and read different channels of the one answer), and
+**`documentHighlightsAt`'s request is derived from the FILE's occurrence nodes and
+not from the caret at all** — the caret only picks the seed afterwards. Keying on
+the REQUEST rather than on the caret is what makes both fall out. The 19 rather
+than 0 is the honest figure: the build is gone, the per-caret grouping over the
+file's occurrences is not. A third hit appeared unlooked-for and is real —
+`fileSemantics(f)` and `documentHighlightsAt(f, ·)` can ask the same question,
+because a file's identifiers and its occurrence nodes can coincide.
+
+**BOUNDED AT TWO, AND THE BOUND IS THE DESIGN.** A `ProjectCompiler.Result` holds
+values only (no AST, no `Symbol`, no `Type`) but a file-wide capture holds one
+answer per identifier, which is tens of MB on a file the size of `checker.ts`.
+Two covers the editor's actual pair — one caret-scoped request plus one file-wide
+one — and the LRU is ACCESS-ordered, which is what keeps the file-wide entry
+resident while the caret-scoped one is replaced on every caret move.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION SAYS WHICH DO NOT.** Three arms, one
+mistake each, each diffed against the ablation's OWN snapshot (round 922: a
+`git diff --shortstat` on a tree carrying the round's work is vacuous).
+
+    A1  `updateFile` no longer drops the memo   -> RED: all three staleness pins
+                                                   + the cost-table row
+    A2  the memo never HITS                     -> RED: both reuse pins, the
+                                                   "an edit drops the memo" pin
+                                                   and the cost-table row
+    A3  the bound raised 2 -> 4                 -> RED: the bound pin, alone
+
+`a DIFFERENT caret's hover still builds` is green under all three and is recorded
+as a CONTROL, not claimed as a pin: it asserts that a build HAPPENS, which every
+arm satisfies. What it buys is the statement the two reuse pins need — the memo
+answers the question it was asked and no other one.
+
+**THE STALENESS OBLIGATION IS PINNED IN BOTH DIRECTIONS, INCLUDING THE ONE
+CLAUDE.md CALLS THE DANGEROUS ONE.** A memo can only ever serve a stale answer
+when the REQUEST is byte-identical across a change, so both pins keep the caret's
+own file untouched and edit something else: one changes another file's content
+(the answer must move `1` -> `"s"`), and one **ADDS A FILE TO THE PROGRAM** — the
+direction where a mis-keyed hit is a MISSING FILE and not a wrong type, and the
+only shape that sees it is an edit that changes what the program CONTAINS.
+
+**REFUSED FOR THIS ROUND, WITH THE MEASUREMENT: STAGE 3, REUSING THE BIND.** It
+is **73-88 ms of a ~402 ms median query, i.e. 20%**, and (INC.9) refused its
+per-file form. The WHOLESALE form for an unchanged program is a different
+question and is not refused by that argument — `--shareBind` (round 883) already
+hands one bind to N concurrent checkers, and round 882 measured the checker
+mutating ZERO binder-owned `Symbol`s on an all-module program. What stands
+between it and landing is a SHAPE GATE that must reuse the checker's own merge
+predicate rather than re-derive it, plus one mutation site this round found by
+reading: `mergeModuleAugmentations` writes `targetResult.locals[exportName] =
+augSymbol` and mutates `localSymbol.declarations`/`.exports`/`.flags` — every
+write idempotent by construction (`if (decl !in ...)`, a same-value put, an `or`
+of the same bits), which is WHY round 882's fingerprint reads zero, and which is
+an argument that has to be checked rather than assumed for a program that is not
+tsc's own sources. 20% is not worth a silent-failure-shaped change in the same
+round that landed one; it is the next round's, with a full-vs-reused differential
+sweep as its gate.
+
+**REFUSED, WITH THE MEASUREMENT: STAGE 4, REUSING THE CHECKER.** It is the
+remaining **252-254 ms, 63% of a query's floor and the largest single thing left**
+— and it is the whole of the ~190 program-wide `init` passes, which run inside
+`Checker`'s constructor. Reusing them across queries means giving `Checker` a
+re-entrant "now check THIS partition" entry point, which means deciding, for 416
+pass rows, which are per-file and which are program-wide, resetting the
+diagnostics list to the program-wide prefix, and resetting every side table a
+per-file pass writes. **And the caches it would carry across queries are the
+order-dependent ones this whole session has been fighting**: `symbolTypes`
+persists the first resolution (round 778), (INC.2)/(INC.5)/(INC.6) spent three
+rounds on hovers rendering `any` because a different file resolved a type first,
+and (INC.10) refused a 66 ms deferral because it moved capture divergence from 5
+spans to 2,722. A reused checker makes WHICH QUERY RAN FIRST observable, on
+purpose, for every query afterwards. The instrument exists
+(`scripts/capture-equivalence.sh` as a warm-vs-cold differential) and the price is
+worth a round; it is not worth one without that differential built first.
+
+**(P2) IS THE ONE TO STATE PLAINLY, BECAUSE IT IS WHAT "INCREMENTAL" USUALLY
+MEANS AND IT IS WORTH ~NOTHING WITH TODAY'S STRUCTURES.** The crawl is already 9
+ms; the bind cannot be redone per file (every `BinderResult` from one `Binder`
+shares that binder's `(pos, end)`-keyed maps, whose keys collide across files and
+are last-wins in bind order — (INC.9)); and the ~190 program-wide passes are
+program-wide by construction, which round 609 priced at 1,174 false positives for
+one starved collector. So (P2) is not a caching problem at all: it is
+"make ~190 program-wide products per-file decomposable", one at a time, and each
+one is its own round. **Do not open it as a cache.**
+
+**GATES.** Suite **15,681 / 0 failed / 3 skipped** (15,674 + this round's 7 pins), no corpus baseline moved.
+`scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files** (median narrowed query 382 ms,
+floor 342, own checking 40, ratio at the median file **13.15x**).
+`scripts/capture-equivalence.sh` **5 divergent spans in 3 of 76 files,
+`narrowRendersMoreAny = 0`** and
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files, members=285 scopes=0
+signatures=1** — both unmoved, and
+both exit non-zero BY DESIGN. `cost_gate.py` PASS, largest delta **+1.02% `mapped.hits`** — the same row and
+figure the last three rounds recorded, i.e. pre-existing drift and not this change
+(`spine.nodes` +0.00%, `output.errors` 46).
+`huge_methods.py --fail-over 0` green on core (largest 5,204) AND on `-project`
+(largest 246).
+
+**NEXT LEVER, PRICED — AND IT IS STAGE 2, NOT STAGE 3.** The memo hits when the
+QUESTION repeats; the next thing is to make more questions repeat. **Ask
+`quickInfoAt`/`definitionsAt` the FILE's whole span set instead of the caret's
+one span**, exactly as `documentHighlightsAt` already asks, and every caret in an
+unchanged buffer becomes free after the first — the same 506 -> 0 the definition
+arm just measured, but for a caret the user has not visited yet. Its price is one
+build that is bigger than a single-caret build (`fileSemantics` measured 1,185 ms
+against `quickInfoAt`'s 1,015 in round (INC.2b)'s battery) and its RISK is
+named and testable: requesting more spans means more `typeToString` calls, which
+FORCE resolutions earlier, which is exactly the first-touch mechanism (INC.10)
+refused 66 ms over. **The oracle is free** — per-caret answers and whole-file
+answers must agree span for span, no baseline needed — so build that differential
+first and let it decide, the way (INC.10)'s three-point table decided
+`buildFileLocalTypeMaps`.
+
+### Round (INC.10) — the alias walk moved onto the ask, and the 66 ms row is REFUSED with a three-point measurement
+
+**THE TWO ROWS WERE 95.5 ms OF A 305.3 ms FLOOR PASS TABLE. ONE OF THEM WAS
+EMIT-ONLY WORK AND IS GONE; THE OTHER IS NOT A COLLECTOR OF ENTRIES AT ALL, IT
+IS THE PROGRAM'S FIRST-TOUCH ORDER, AND ITS PRICE IS WHAT THE CAPTURE CHANNEL
+RENDERS.**
+
+Baseline re-taken on this binary before anything was touched
+(`scripts/floor-decomposition.sh`, floor arm, mean of four instrumented draws):
+**417 rows summing 305.3 ms**, `init:buildFileLocalTypeMaps` **66.07 ms**,
+`init:trackAllImportReferences` **29.44 ms**, plain floor arms 443 early / 393
+late.
+
+**LANDED — `trackAllImportReferences` RUNS ON `isReferencedAliasDeclaration`'s
+FIRST ASK (`c3add44a`).** The whole `trackReferences*` family's only mutation is
+`referencedAliases.add`; that set's only reader is
+`Checker.isReferencedAliasDeclaration`; and that method has exactly ONE caller —
+one line of `Transformer`, reached only by `import x = require(…)` under
+`module: preserve` without `verbatimModuleSyntax`. Round 738's `skipEmitOutputs`
+gate means a `--noEmit` build never constructs a transformer at all, so on every
+language-service query the walk filled a set nothing could read.
+
+    pass table, floor arm      305.3 ms over 417 rows -> 274.8 over 416   (-30.5)
+    init:trackAllImportReferences   29.44 ms          -> the row does not exist
+    alias-reference walks, floor    78 (one per file, per checker) -> 0
+    alias-reference walks, full     78                             -> 0   (--noEmit)
+    narrowed query, median of 78    422 ms -> 402      ratio 12.43x -> 12.61x
+
+**The banked ms EXCEEDS the row (30.5 against 29.44), which is the first time in
+this arc that the (INC.7) discount has not applied** — and the reason is
+structural rather than lucky: batches 1-3 banked 79-93% because a gated walker
+was driving MEMOIZED type resolutions that the first later asker then paid for.
+This walk resolves nothing. It reads the frozen AST, `result.locals` and one
+symbol flag, so there is no relocation for a discount to describe.
+
+**Deferring rather than gating on `skipEmitOutputs` is the point.** A static
+`if (options.skipEmitOutputs) return` would be correct today, silent the day a
+second consumer appears, and — because the corpus EMITS — would leave the
+deferred path untested. Built on the ask, the ~13k-baseline corpus, thousands of
+whose `.js` baselines pin exactly which imports survive elision, exercises this
+path on every suite run. It also deletes N-1 copies of itself: `CheckerPool`
+builds N checkers over one bind and each ran the walk in its own `init`, while
+only the primary is ever questioned.
+
+**AND THE FIXTURE THAT MEASURED NOTHING — AGAIN, AND CAUGHT BY THE ABLATION AND
+NOTHING ELSE.** The first draft's elision pins used an ordinary ESM
+`import { a } from "./x"`; both stayed GREEN against a binary with the ask
+deleted, because ESM elision decides on its own evidence and never consults this
+set. That is round 806's law in a new costume: a shape that looks like it
+exercises a mechanism is not a pin until the ablation says so. The fixture is now
+the ONE shape that reaches the consumer, as a pair (a referenced alias that must
+survive, an unreferenced one that must not), and the ESM case is kept as the
+CONTROL that records why — it also bounds the blast radius of the whole change.
+
+    ablation A1, restore the eager pass  -> RED: `a fresh checker has not walked
+                                            alias references`, `the pass table no
+                                            longer carries an init row for the walk`
+    ablation A2, delete the ask          -> RED: `asking … performs the walk`,
+                                            `a second ask does not walk again`,
+                                            `a referenced import-require survives
+                                            elision through the deferred walk`
+
+**REFUSED, WITH A THREE-POINT MEASUREMENT: `buildFileLocalTypeMaps`.** It was
+built, measured, and reverted. The design was the one (INC.9) used for the flow
+graph and the one the queue asked for — eager over `checkedResults` (a strict
+no-op for full builds, since `checkedResults` IS `binderResults` when
+`assignedFileNames == null`) plus an on-demand per-file build behind the pass's
+ONE reader, which is keyed on `currentCheckFileName`. It works, and the receipt
+is excellent: **file-local type maps built go 78 -> 3 on the floor arm and stay
+78 -> 78 on a full build**, the row falls **66.07 -> 0.01 ms**, the pass table
+falls to 232.1, the narrowed query median to 349 and the ratio to **14.17x**,
+`partition-equivalence.sh` says EQUIVALENT on all 78 files, `cost_gate.py` is
+unmoved, and the suite does not move a baseline.
+
+**`scripts/capture-equivalence.sh` is what refused it, and no other gate could
+have.** (INC.2) recorded that the check path and the capture path are DIFFERENT
+RESOLVERS and that a green diagnostics sweep says nothing about captures; this
+is that warning being collected.
+
+| phase kept EAGER over all 78 files | `init:buildFileLocalTypeMaps` | capture divergence |
+|---|---:|---|
+| nothing — fully deferred | **0.01 ms** | **2,722** spans in 46 of 76 files |
+| the `TypeAlias` symbols only | **6.81 ms** | **462** spans in 18 of 76 files |
+| the whole DECLARATION branch | **64.94 ms** | **5** spans in 3 files — the baseline |
+| (unchanged, for reference) | 66.07 ms | 5 spans in 3 files |
+
+**So the deferrable part is 1.13 ms of 66, and the other 65 is buying the
+RENDERING of 2,722 spans.** Every divergence is a display one and they run in
+both directions — full `ModuleName` vs narrow `ModuleExportName`, full
+`AssignmentPattern` vs narrow `ObjectLiteralExpression | ArrayLiteralExpression`,
+and the residual 462 the other way round (full
+`Extract<ClassDeclaration | ClassExpression, Pick<T, "kind">>` vs narrow
+`ClassLikeDeclaration`). The mechanism is `aliasDisplayMap`: an alias name is
+attached to an interned type at its FIRST mint, so resolving every file's
+declarations up front is what makes the program's type display a function of the
+program rather than of who walked first.
+
+**THE GENERAL LESSON, AND IT RETIRES A QUESTION ROUND 829 ASKED.** That round
+censused this pass as *"12,738 direct resolves producing 4,161 entries of which
+1,499 are ever read, 278,355 misses"* and priced the deletable part at 47.1%.
+Read-ness of the ENTRY was the wrong question. The pass has a second product it
+was never censused for — the whole-program first-touch ORDER — and that product
+has a consumer, at 2,722 spans in 46 of 76 files. Round 861 already warned that
+any deletable-ms from that census is an UPPER bound because the MOVE test is
+keyed on symbols; this is the same warning with a name and a number.
+
+**GATES, on the landed tree.** Suite **15,674 / 0 failed / 3 skipped** (15,666 +
+this round's 8 pins), no corpus baseline moved.
+`scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files**; sweep median
+**402 ms**, floor 355, ratio at the median file **12.61x**. `cost_gate.py` PASS,
+largest delta **+1.02% `mapped.hits`** — the same row and the same figure the last
+two rounds recorded, i.e. pre-existing drift and not this change (`output.errors`
+46, `spine.nodes` +0.00%). `huge_methods.py --fail-over 0` green on core (755
+classes, 0 over) AND on `-project`. `scripts/capture-equivalence.sh` **5 spans in
+3 of 76 files, `narrowRendersMoreAny = 0`** and
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files,
+members=285 scopes=0 signatures=1, `narrowRendersMoreAny = 168`** — both censuses
+identical to baseline.
+
+**NEXT LEVER, PRICED — AND THE TAIL IS NOW FLAT ENOUGH TO SAY SO.** The floor's
+pass table is **274.8 ms over 416 rows**, of which `init:buildFileLocalTypeMaps`
+is **69.1 ms and is now REFUSED**, eleven rows are over 5 ms, forty-six are over
+1 ms, and the remaining **370 rows sum to 11.9 ms between them**. So the
+"gate one more walker" arc has run out of population: (INC.7) batch 4's whole
+remaining prize is the 46 rows between 1 and 5 ms, and its best-shaped cluster
+(the 34 ungated walkers reaching `srcScan`) only banks when gated TOGETHER. The
+honest ranking of what is left, largest first: `checkTypeArgumentConstraints`
+22.9 (REFUSED — 120+ passes read its fields), `checkBaseClassImprovedMismatch`
+18.3 (REFUSED — a rewriter), `checkInterfaceMultiBaseConflicts` 13.3 and
+`checkPropertyOverride` 10.7 (both REFUSED by batch 3), `checkSubsequentVarTypes`
+12.0 (REFUSED), `checkDerivedConstructorSuper` 9.8 (REFUSED),
+`init:computeAllEnumValues` 9.3 — **which is the one large row nobody has looked
+at, and the only unrefused member of the top eight.** Its instrument is this
+round's: give it a produced-vs-consumed count first, then ask whether its product
+has a second consumer the way `buildFileLocalTypeMaps`' turned out to have.
+
+**AND THE 66 ms IS NOT LOST — IT IS BLOCKED ON ONE THING, WHICH IS THE BEST-VALUE
+ITEM THIS ROUND PRODUCED.** The refusal above is a statement about
+`aliasDisplayMap`, not about `buildFileLocalTypeMaps`: an alias name is attached
+to an interned type at its FIRST mint, so the 65 ms is being spent to make that
+first mint happen in a program-wide order. **83% of the divergence is plainly
+`aliasDisplayMap` and costs 6.81 ms to keep eager; the residual 462 spans are
+UNDIAGNOSED, run the other way round, and are what the other 58 ms buys.** So the
+item splits: close the alias-display half properly, then classify the residual
+before assuming it is the same thing — its rows look more like two different
+`Type` instances than two renderings of one.** Two things make it attemptable:
+the divergence census is a ready-made differential oracle that costs one
+`scripts/capture-equivalence.sh` run and needs no baseline, and the three-point
+table above says exactly how much of the divergence each phase owns. Two things
+make it dangerous: round 754 already recorded that `aliasDisplayMap` excludes
+`Type.Reference` DELIBERATELY (making a bare defaulted generic display as its
+alias broke eight baselines of
+`typeVariableConstraintedToAliasNotAssignableToUnion`), and display order is
+pinned byte-for-byte by ~13k corpus baselines — so this is a logical-parity
+conversation (`docs/logical-parity.md` § 2), not a refactor.
+
+### Round (INC.9) — the floor re-decomposed, and the flow graph moved onto the ask: 514 -> 378 ms
+
+**MEASURED FIRST, AND THE RANKING HAD MOVED.** (INC.3)'s decomposition was taken
+at a 1,219 ms floor; after (INC.7) gated 68 tail walkers it is a different table,
+and it was re-taken rather than scaled (`scripts/floor-decomposition.sh`, one
+process, palindrome-drawn, `both.floor` arm, wall 523 ms — plain floor arms 601
+early / 498 late in the same process, so read the ms at +-10% and the shares as
+the measurement):
+
+|  | (INC.3), 1,219 ms floor | today, ~523 ms floor |
+|---|---:|---:|
+| the ~400 tail walkers + `init:*` setup (CHECK) | 918.9 (75.4%) | **304.2 (58.2%)** |
+| BIND | 240.6 (19.7%) | **197.8 (37.8%)** |
+| — of which `FlowGraphBuilder.build` | — | **126.1 (24.1%)** |
+| — of which `bindLexicalScopes` | — | 66.7 (12.8%) |
+| — of which `bindStatements` | — | 6.8 (1.3%) |
+| crawl WALL + config + imports + post | 30.8 (2.5%) | 18.4 (3.5%) |
+| `checkSpine` | 0.1 | ~0 |
+
+**So the live hypothesis in the queue — "bind is very likely now the largest
+single component" — is HALF right, and the half that is wrong is the half that
+matters.** BIND is 37.8% against CHECK's 58.2%, so it is not the largest
+COMPONENT; but CHECK is ~190 passes whose largest row is 66 ms, while bind
+contains ONE mechanism at **126 ms**, which is the largest single thing a
+narrowed query pays for. `FlowGraphBuilder` it is.
+
+**LANDED: `BinderResult.flowGraph` IS BUILT ON FIRST ASK (`a0a6d46b`).**
+
+    floor, sweep harness          514 ms -> 378   (-136, -26%)
+    narrowed query, median of 78  542    -> 422   (-120, -22%)
+    ratio at the median file      9.70x  -> 12.43x
+    the floor as a share of it    95%    -> 90%
+    a median file's OWN checking  28 ms  -> 44    (its graph is now charged here)
+
+**THIS IS THE CANDIDATE ROUND 865 PRICED AND REFUSED, IN THE REGIME THAT CHANGES
+ITS POPULATION BY 130x.** `docs/perf/warm-flow-graph-attribution.md` § 9.3 rows
+"skip a FILE whose graph is never read" at **52 of 123 files, 885 nodes, 0.3% of
+the mints** and stops there. That number is right, and it is a number about a
+FULL BUILD, where every checked file's spine setup asks for its graph. Under a
+partition the same rule reaches **122 of 123 files**. A cost prior does not
+transfer across regimes any more than it transfers across families (CLAUDE.md,
+round 789) — and the refusal is still correct for the regime it was written in,
+which is why this is an amendment and not a reversal.
+
+**DEFER, NEVER OMIT — and the soundness argument is that the builder is PURE.**
+Round 865's inverted failure direction is the whole constraint here: a missing
+side table degrades to a correct fallback, but a missing FLOW NODE makes `flowAt`
+answer null, nothing narrows, and the compiler emits a FALSE POSITIVE. Laziness
+satisfies that exactly. It is sound because `FlowGraphBuilder` is a pure function
+of the `SourceFile` — fresh builder per file, every cache an instance field, ids
+that restart per file, no `Symbol` and no `Type` minted, and every global it
+touches is a probe — so nothing about the graph depends on when it is built.
+`lazy` (SYNCHRONIZED) rather than a nullable field is load-bearing: `CheckerPool`
+and `--shareBind` both hand ONE `BinderResult` set to several threads, and an
+unsynchronised field would publish a half-built graph there.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION SAYS WHICH ONES DO NOT.** Two arms,
+one mistake each, on a committed tree. Restoring the EAGER build reddens exactly
+two: `binding a file does not build its flow graph` and `a partition builds
+strictly fewer flow graphs than the whole-program build`. The other laziness
+assertions — same-instance-on-second-ask, and the asked file's own graph being
+built — stay green and are recorded as CONTROLS, because an eager build satisfies
+both. Emptying the deferred graph reddens the narrowing half and leaves the
+block-shaped guard green, which is the asymmetry that says the fixture is about
+the FLOW GRAPH and not about narrowing in general.
+
+**AND THE FIXTURE THAT MEASURED NOTHING, AGAIN.** The core class's first draft
+probed narrowing with a property READ (`x.length` on `string | number`) and was
+VACUOUS IN BOTH DIRECTIONS: this checker reports nothing there un-narrowed, so
+the positive assertion and the ablation would both have passed forever. Its own
+NEGATIVE CONTROL is what caught it — the third time in this arc that a control,
+not a pin, is what earned its place. The probe is now an assignment to an
+incompatible type (CLAUDE.md's standing rule for narrowing probes), and the
+block-shaped guard sits beside it as the control that separates the two
+narrowing mechanisms.
+
+**REFUSED, WITH THE MEASUREMENT: REUSING BINDER OUTPUT ACROSS QUERIES.** The
+queue's step 2 asked for a bind cache keyed on content — whole-program (a) or
+per-file (b). After this round the whole of bind is **72 ms** (decls 7 + lexical
+scopes 67) of a 378 ms floor, so the ceiling on (a) is 19% and on (b) rather
+less. Against that: every `BinderResult` from one `Binder` SHARES its
+`nodeToSymbol` and `moduleInstanceStates` maps — they are the binder's own
+fields, accumulated across files and keyed by `(pos, end)`, which COLLIDES across
+files — so reusing 77 results and re-binding one does not reproduce today's
+tables; and `Checker.mergeSingleSymbol` ADOPTS binder-owned symbols into
+`globals` while `declarations.addAll` is not idempotent (round 881: adopts 406,
+mutates 175), so a second consumer over reused tables appends duplicates. That is
+a large, silent-failure-shaped change for at most 72 ms, when the same 72 ms sits
+beside a 304 ms pass table nobody has narrowed yet. **Not attempted; priced.**
+
+**THE RECEIPT IS A COUNT, NOT A ms — AND IT SAYS THE CHANGE ALSO REACHES FULL
+BUILDS.** `FrontEnd`'s per-file flow-graph census, same instrument before and
+after:
+
+    flow graphs built, FLOOR arm     123 -> 0
+    flow graphs built, FULL arm      123 -> 78
+
+The 45 that vanish from the FULL build are the real-lib `.d.ts` files: they were
+bound — flow graph included — on every compile this repo has ever run, and no
+consumer has ever read one. They are cheap (bind's three sub-rows summed to its
+own row before, so the lib binds were ~2 ms between them), which is why no wall
+moves and why only the count says it happened. The floor's own decomposition
+after the change:
+
+    BIND      197.8 -> 78.8 ms   (decls 7.1 + lexical scopes 73.4, and NO flow row)
+    CHECK     304.2 -> 341.2     (drift: the same arm's wall fell 506/541 -> 420/468)
+    PLAIN floor arms  601/498 -> 480/384
+
+**GATES.** Suite **15,666 / 0 failed / 3 skipped** (15,655 + this round's 11 pins), no
+corpus baseline moved. `scripts/partition-equivalence.sh` **EQUIVALENT, all 78 files**.
+`cost_gate.py` PASS — largest delta **+1.02% `mapped.hits`**, which is the SAME row and the
+same figure batch 3 recorded, i.e. pre-existing drift and not this change (`spine.nodes`
++0.00%, `output.errors` 46). `huge_methods.py --fail-over 0` green on the core module AND on
+`-project`. `scripts/capture-equivalence.sh` **5 divergent spans in 3 of 76 files,
+`narrowRendersMoreAny = 0`** — unmoved, and its own timing arms improved with everything else
+(narrowed capture median **556 -> 420 ms**; `binder.ts` warm rotated **7.51x -> 8.31x**).
+`scripts/capture-channel-equivalence.sh` **286 rows in 49 of 76 files, members=285 scopes=0
+signatures=1, `narrowRendersMoreAny = 168`** — every count identical to the baseline, and the
+168 is still the 167 `<K extends any>` spellings plus the one real row, not 168 wrong types.
+Both capture runners exit non-zero BY DESIGN; what matters is that their censuses are
+unmoved, and they are.
+
+**NEXT LEVER, PRICED.** The floor is now CHECK-dominated again: 304 ms over ~190
+passes, of which `init:buildFileLocalTypeMaps` is **66 ms** and
+`init:trackAllImportReferences` **30 ms** — two program-wide SETUP passes that
+are 32% of the whole remaining floor between them, i.e. worth more than every
+remaining tail walker put together. Neither is gateable onto the partition as
+(INC.7) gates an emitter (both are collectors, and round 609 priced a starved
+collector at 1,174 false positives), so the question is whether either can be
+made LAZY per file the way the flow graph just was — `buildFileLocalTypeMaps`
+already has a census (round 829) saying 1,499 of its 4,161 entries are ever read.
+
+### Round (INC.7) batch 3 — 45 tail walkers gated, floor 789 -> 514 ms, and the discount reached 92.9%
+
+**LANDED**: 45 walkers moved from `binderResults` to `checkedResults` in three
+gated sub-batches (`e7ccd21f` 15, `d2c0cb36` 15, `2fb81e83` 15), plus four pins
+(`68635ffc`). Every sub-batch was swept with `scripts/partition-equivalence.sh`
+before the next was applied, and every sweep read **EQUIVALENT over all 78
+files** — with a baseline sweep taken at HEAD first, so the after-runs are
+attributable rather than merely green.
+
+    floor (sweep harness)         789 ms -> 621 (3a) -> 533 (3b) -> 514 (3c)
+    narrowed query, median of 78  818    -> 681    -> 584    -> 542
+    ratio at the median file      6.17x  -> 7.37x  -> 8.57x  -> 9.70x
+    floor as a share of a query   96%    -> 91%    -> 91%    -> 95%
+
+**THE DISCOUNT KEPT SHRINKING, WHICH WAS THE ROUND'S LIVE PREDICTION.**
+
+                       batch 1    batch 2    batch 3
+    naive sum          162.6 ms   221.3 ms   295.9 ms
+    actually banked    128.4      189.1      275
+    ratio              79.0%      85.5%      92.9%
+
+The mechanism is the one batch 1 stated: relocation lands on ungated tail
+walkers, so the more of them are gated, the more of the moved work is never
+asked for at all. **Do not read the PER-SUB-BATCH split as three more data
+points** — it reads 137%, 81%, 30%, and the >100% is real but is batch 2's
+relocation being collected at the same time (see below), while each sub-batch's
+floor is a single four-sample draw against a 19-168 ms effect. The batch-level
+92.9% is over a 275 ms delta and is the number to quote.
+
+**THE VICTIM HEURISTIC MISFIRED, AND THAT IS WHY 3a BANKED MORE THAN ITS ROWS.**
+The queue said to start by reading `checkBaseClassImprovedMismatch` (0.07 ->
+17.89 ms), batch 2's relocation victim, on the rule that the victim is always
+the next candidate. It is a REWRITER (`for (i in diagnostics.indices) { …
+diagnostics[i] = d.copy(messageChain = …) }`) and can never qualify. Its 17.89
+ms was not relocated type work at all but an inherited lazy per-file
+`SourceScanFilter` build (`SrcScanCache.filterFor`) — so it was the first
+walker to ASK, not the walker that COSTS. Gating batch 3a moved that asking to
+walkers that are themselves now gated, which is why 3a shed 168 ms against a
+122 ms row sum. **A relocation victim is a lead about WHERE the next ask lands,
+not a candidate**; check what kind of work moved before treating it as one. 34
+ungated walkers still reach `srcScan`, and that family only banks when gated
+together.
+
+**WHAT DID NOT WORK, AND WHAT IT TAUGHT.**
+
+1. **The pin written for the batch's biggest privacy clearance measured
+   nothing.** `checkMixinClassConstructor` (9.71 ms) emits TS2545, and the
+   fixture written for it produced ZERO rows in either arm — the two equality
+   assertions compared empty lists. What failed was the CONTROL, and it failed
+   in the way that names the cause: a whole-program build cannot be moved by
+   this change at all, so a red control is a statement about the fixture and
+   never about the gate. `emitTs2545IfBrokenMixin` needs a type parameter whose
+   constraint is a constructor type with an OPTIONAL REST PARAMETER
+   (`dotDotDotToken && questionToken`), a corpus-unique B72.1 shape.
+   `checkMissingImplementations`/TS2391 carries the privacy-clearance pin
+   instead, and the test records why TS2545 is unpinned rather than leaving a
+   plausible dead assertion behind.
+
+2. **Two walkers were REFUSED on a rule that turns out to be the wrong way
+   round.** `checkImportTypeUsedAsType` and
+   `checkBareAtTypesExportEqualsMissingNamedImport` pass every body-level test
+   but have a PRIVATE HELPER that itself scans `binderResults`. That looked like
+   a cross-file lookup wearing a per-file loop, so both were refused — and then
+   `checkMixinClassConstructor`, which was GATED, turned out to have two of
+   them (`findTypeParamDeclByName`, `findTypeAliasByName`). Reading them
+   settles it: such a helper is **not a pass, so it is never gated**, and it
+   keeps resolving against the whole program while the walker's own loop
+   narrows — which is exactly the behaviour wanted.
+   `visitBareImportType`'s scan is `binderResults.any { … declare module "fs" … }`,
+   a whole-program ambient-module RESOLUTION. **The count is how you find the
+   sites; the direction is how you judge them.** Both are batch-4 candidates
+   (3.3 ms), cleared by reading rather than refused.
+
+3. **33 of the 252 ungated `binderResults` loops are not passes at all** —
+   `resolveIdentifierInFile`, `findTypeParamDeclByName`, `getEnumMemberValue`,
+   `isReferencedAliasDeclaration`, `computeTypeParamInfo`, … Gating one breaks
+   NAME RESOLUTION rather than dropping a diagnostic, they are all 0.00 ms, and
+   a mechanical `sed` over the loop header hits every one. This is the single
+   most important guard in the round and it is now in CLAUDE.md.
+
+**THE FINAL GATE SET, AND THE FLOOR DECOMPOSED BEFORE AND AFTER.**
+
+    the 45 gated rows          295.86 ms -> 0.00   (they no longer run at the floor)
+    pass-table total           581.2     -> 268.8  (shed 312.4)
+    floor, sweep harness       789       -> 514
+    floor, PLAIN early median  883       -> 548
+    floor, PLAIN late median   808       -> 506
+    narrowed capture, median   n/a       -> 556 ms; binder.ts warm rotated 7.51x
+
+    suite            15,655 / 0 failed / 3 skipped  (15,648 + the 7 new pins)
+    cost_gate.py     PASS, largest counter delta +1.02% (`mapped.hits`)
+    huge_methods.py  PASS at --fail-over 0, core AND the -project module
+    capture-equivalence      5 spans, narrowRendersMoreAny=0  -- UNMOVED
+    capture-channel          286 rows, members=285 scopes=0   -- UNMOVED
+
+**RELOCATION IS ESSENTIALLY GONE, WHICH IS THE STRONGEST FORM OF THE PREDICTION.** The
+pass table shed **312.4 ms** against a naive row sum of 295.86, and the single biggest
+riser in the whole table is `checkProtectedAssignmentMismatch` at **+4.74 ms** (0.11 ->
+4.85) — against batch 2's +17.82. So two of the three floor instruments read a banked
+amount ABOVE the naive sum (PLAIN early 335 ms, PLAIN late 302 ms; the sweep harness, the
+instrument used for every sub-batch, reads 275 ms = 92.9%), which is what it looks like
+when a batch banks all of its own rows PLUS ambient work its walkers were the first to
+ask for. **Both capture gates are censuses of the known (INC.2)/(INC.5)/(INC.6)
+order-dependence and exit non-zero by design — what matters is that both counts are
+unmoved, and they are.**
+
+**METHOD.** The static classification inherited from the prior session was
+re-derived rather than trusted: its snapshot (md5 `cdeafb06`) was no longer the
+working tree (`bc815431`). The rebuilt analyzer agrees with it on 128 of 130
+CLEAN walkers, and its stripper carries the control CLAUDE.md demands — 4,509
+`fun` declarations in raw source, 4,509 in stripped, i.e. ZERO blanked, which is
+the batch-2 failure mode that reported a confident "no hazard" over an EMPTY
+closure. Every one of the 45 bodies was read.
+
+**THE PINS DISCRIMINATE, AND THE ABLATION ALSO SAYS WHICH ONES DO NOT.** One
+deliberate mistake — the partition filter at `Checker.kt:112` inverted to
+`!in assignedFileNames`, i.e. the gate drops exactly the file it was asked
+about — turns **10 of the 15** red: every "a partition of X keeps its own
+walker's row" and every narrowed-query-through-the-public-API pin. The five
+that stay green are green for a reason worth recording rather than for none:
+the three whole-program CONTROLS cannot move (a full build has
+`assignedFileNames == null`, so the inverted filter never executes — which is
+the same property that makes this whole change a no-op for the corpus), and the
+two "invents nothing" pins are filtered downstream by
+`diagnostics.filter { it.fileName in assignedFileNames }` (`Checker.kt:12047`),
+so a row invented for ANOTHER file cannot reach them. **They guard the round-609
+direction — an invented row for the ASKED file — which this ablation does not
+inject, and `scripts/partition-equivalence.sh` over 78 real files is their real
+instrument.** Recorded as guards, not claimed as discriminating pins.
+
+**(INC.2b) THE INTERACTIVE CAPTURE QUERIES ARE NARROWED — LANDED 2026-08-22, owner
+directive. Hover, go-to-definition, completion, signature help, the semantic sweep and
+document highlights each hand the compiler the queried BUFFER as its check partition.
+Measured end to end through the API, two processes with three FLAT CONTROLS in each:
+`quickInfoAt` 5,004 -> 1,015 ms, `fileSemantics` 5,178 -> 1,185, `documentHighlightsAt`
+5,050 -> 1,159 — while `referencesAt` (8,846 -> 8,788), `renameAt` (20,597 -> 20,170) and
+a plain rebuild (5,272 -> 4,835) do not move, because they are the two queries left
+whole-program plus the build itself. Within ONE process, warm and rotated, the same claim
+on `binder.ts`'s 7,787 spans is 4,581 -> 979 ms = 4.68x.**
+
+**THE PARTITION IS DERIVED FROM THE REQUEST'S OWN SPANS, AND THAT IS THE WHOLE SAFETY
+ARGUMENT.** Narrowing's failure mode is silent: a span in a file the checker never walks
+is never walked PAST, so the answer is ABSENT rather than wrong — an empty tooltip, an
+empty completion, no error anywhere. So `Project.captureIn` computes the file set from
+the request instead of taking one beside it, and a call site cannot forget a file it asked
+about because it never states the set. That is also what makes the pins DISCRIMINATE,
+which an equivalence pin cannot: dropping any one of the four span lists from
+`captureFiles` reddens exactly the queries that use it (`spans` -> hover, definition and
+the semantic sweep; `memberSpans` -> member completion; `scopeSpans` -> free-name
+completion; `signatureSpans` -> signature help). All four ablations were run.
+
+**`referencesAt` AND THE RENAME SWEEP STAY WHOLE-PROGRAM, AND THE REASON IS THE CLAIM,
+NOT THE MACHINERY.** They sweep every file, so a derived partition would name every file
+anyway — no win, a different code path, and both additionally read the build's
+DIAGNOSTICS, which a partition filters to its own files by design. **The flag that says so
+is UNDISCRIMINATED and it is recorded rather than claimed** (round 807): flipping
+`referencesAt`'s own `narrow = false` leaves all eight pins green, and must.
+
+**THE EXISTING GATE COVERED TWO OF THE FIVE CAPTURE CHANNELS, WHICH IS A CONTROL AND NOT
+A GATE.** `scripts/capture-equivalence.sh` sweeps captured TYPES and DEFINITIONS — what
+hover, go-to-definition and the semantic sweep read. It says nothing about
+`capturedMembers`, `capturedScopes` or `capturedSignatures`, and two of those three render
+TYPE TEXT, i.e. carry exactly the first-touch identity risk the sweep exists to measure.
+`scripts/capture-channel-equivalence.sh` is the second gate, deliberately SEPARATE:
+adding spans to a request changes what the checker types and therefore the first-touch
+order, so a merged runner's numbers would no longer be comparable to the ones every
+(INC.2)/(INC.5)/(INC.6) round quoted. The old gate re-ran unchanged at **5 divergent
+spans of 381,666 in 3 of 76 files, `narrowRendersMoreAny = 0`**.
+
+**AND IT FOUND 286 DIVERGENT ROWS, WHICH ARE FIVE MECHANISMS — THE CENSUS IS THE FINDING
+AND THE COUNT IS NOT.** A row in that channel is a LIST (a type's members, a scope's
+names, an overload set), so ONE display mechanism reaches as many rows as the program has
+carets on that receiver. The runner therefore aggregates the first DIFFERING ELEMENT and
+prints a census of distinct causes; over 21,507 captures in 76 files:
+
+- **x167** a member's own type parameter — `<K>` (full) against `<K extends any>`
+  (narrow). NEITHER renders the declared constraint (`keyof typeof assertionCache`), so
+  both arms are wrong alike and differ only in whether the unresolved one is spelled or
+  omitted. Cosmetic, in a signature LABEL, and the narrow arm is the noisier of the two.
+- **x116** `Intl.LocalesArgument` (narrow) against its expanded body with `| undefined`
+  DOUBLED (full). tsc renders the alias, so the narrow arm is the better answer — the
+  same `aliasDisplayMap` first-touch mechanism (INC.6) diagnosed in `watch.ts`.
+- **x2** a generic member's `TData` (narrow) against `any` (full) — round 778's shape,
+  narrow better.
+- **x1** a signature parameter rendering `any` under the narrowed arm. **This is the only
+  row in either channel where a narrowed answer is worse in the way a user would call
+  wrong**, and it is 1 of 5,516 signature captures.
+- SCOPES diverge NOWHERE (0 of 8,986), so free-name completion is equivalent outright.
+
+`absentInNarrow` and `absentInFull` are both **0** in both channels: no partition ever
+LOST an answer, in 402,000 captured spans. **`narrowRendersMoreAny = 168` is reported and
+is not 168 wrong types** — 167 of them are the `extends any` spelling, which a substring
+classifier cannot tell from a type; the census is what separates them, and a round that
+read the flag without the census would have refused this on a false reading.
+
+**WHAT DID NOT WORK.** (a) The mirror pin — "find references still answers about the whole
+program" — passed against a sweep cut down to the queried file, i.e. for a reason it did
+not name: `referencesOf` adds the SEED's own declaration locations as hits
+unconditionally, so a declaration in the other file is reported whatever was swept. Only
+a NON-declaration occurrence there discriminates, and the pin now asserts one. (b) Two
+harness traps cost real time and both are CLAUDE.md's own, re-learned: a backgrounded
+`sleep` is preempted by the next command, so an elapsed-time reading of a running
+measurement is meaningless (`ps -o etimes=` said 5 minutes where the transcript implied
+50); and `pgrep -f`/`pkill -f` with a pattern that appears in the poller's own command
+line matches ITSELF — once reporting a finished sweep as RUNNING, once killing the
+compound command that contained it (exit 144).
+
+**(LIB.3) SIX CLI LIBRARIES SCREENED, 126 FALSE POSITIVES ROOT-CAUSED INTO FIVE FAMILIES —
+2026-08-22, NO CODE LANDED. The largest is not a type-system defect at all: `// @ts-ignore`
+suppresses NOTHING, in a compiler whose grep says the feature exists.**
+Owner asked for a TS CLI library to drive a KIR performance comparison, knip having been
+disqualified by (LIB.1). Six candidates fetched and put through (LIB.2)'s screen; the import
+census alone disqualified `sql-formatter` (`nearley` imported inside `src`) before a compiler ran.
+
+**THE SCREEN'S OWN LESSON CONTRADICTS THE ENTRY THAT COMMISSIONED IT.** (LIB.2) said to pick by
+imports; that is necessary and it is not sufficient, because **the library closest to compiling
+and the library best for benchmarking are different libraries**. `cronstrue` is the only
+candidate the checker already passes — `typeErrors=0` over 52 files and 8,812 lines, agreeing
+with tsgo exactly — and the only one whose lowering runs; but its per-call work is small, so it
+benchmarks as a loop rather than as one heavy invocation. `marked` is the workload worth
+publishing (markdown -> HTML over a big document) and is 15 checker errors plus a 76%-of-files
+backend gap away. `fflate` would be the best number of all and is structurally blocked: **183
+typed-array uses against a runtime with none.**
+
+**THE ERROR ANALYSIS IS THE ROUND'S PRODUCT.** With `@types/node` present on both sides and each
+library's own tsconfig, diffed against tsgo per `(file, line, code)`: marked 0/15, jsonrepair
+1/16, fflate 2/17, yaml 0/78, cronstrue 0/0 — **126 ours-only rows, and tsgo at ZERO on two of
+the four.** Five families carry 67 of them and each was reduced to a repro or an exact
+correspondence, not to an inspection:
+
+**(CHK.31) `@ts-ignore` / `@ts-expect-error` suppress nothing — and we are wrong in BOTH
+directions.** A four-file repro: the directive above a TS2322 leaves it emitted, and an
+`@ts-expect-error` above a clean line fails to produce tsgo's TS2578 `Unused directive`. On
+`fflate` this is all 9 TS2391 rows, and the correspondence is exact — the file contains exactly
+9 `@ts-ignore` comments. **It looks already done**, which is the trap: `CompilerOptions.kt:562`
+parses both spellings and `Checker.kt:16167` consults one for a narrow commonjs suppression, so a
+grep finds the feature. There is no general filter.
+
+**(CHK.32) a primitive is not related to a structural object target through its apparent type.**
+`jsonrepair` types its whole scanner against `interface Text { length; charAt; charCodeAt;
+substring }` and passes a `string`; all 7 of its TS2345 rows are that call. The repro shows it is
+not about `string` — `number` against `{ toFixed(d?): string }` fails identically — and the
+object-source control in the same file passes, so it is the primitive side failing to reach
+`getApparentType`.
+
+**(CHK.33) a destructuring parameter breaks arity, and the message says so out loud: `Expected
+1-0 arguments, but got 1`, 8 rows in `marked`.** This is round 921's documented hazard reaching a
+diagnostic for the first time — `getParameterSymbols` drops binding-pattern parameters, so
+`parameters` is empty while `minArgumentCount` still counts the pattern. **An inverted range is a
+free assertion**: no correct signature has `minArgumentCount > parameters.size`, and requiring
+that at signature construction would have caught this before a library did.
+
+**(CHK.34) `isolatedDeclarations` over-reports 32 rows on `yaml`, which ships with the flag ON and
+is clean under tsgo** — one member identified as an overload IMPLEMENTATION signature, which the
+flag exempts. Deliberately sequenced LAST of the five: biggest row count, narrowest trigger, and
+the 8 profiles do not set the flag, so every profile instrument is blind and `yaml` is the gate.
+
+**(CHK.35) a function expression assigned through an index signature gets no contextual
+signature** — TS7019 + TS2683×4 in `marked`. Filed with the instruction to check whether it and
+(CHK.30) are one path before either is written.
+
+**WHAT IS DELIBERATELY NOT CLAIMED: ~59 rows are NOT root-caused**, led by TS2322×14 (six of them
+one shape — an excess `undefined` in `yaml/compose/resolve-props.ts`) and TS2339×7. The captures
+regenerate in ~10 s per library and the entry says so rather than implying the tail is understood.
+
+**GATES: none, and deliberately** — three markdown files changed and no Kotlin. The KIR module was
+built only because the probe needs it.
+
+**(LIB.1) knip MEASURED 2026-08-22 — NO CODE LANDED, AND THE MEASUREMENT IS THE
+DELIVERABLE. 2,634 xtsc errors against tsgo 7.0.2's 23, of which 94.1% are ONE absent
+lookup; and the backend is blocked by knip's DEPENDENCIES rather than by its TypeScript.**
+Owner question: can we compile `webpro-nl/knip` to JVM bytecode. Answer: not today, and the
+two halves fail for unrelated reasons — which is the whole value of running
+`docs/kir-library-readiness.md`'s two-command loop instead of arguing about it.
+
+**THE FRONT END IS ONE DEFECT WEARING A LARGE NUMBER.** 498 files / 35,663 lines, 7,131 ms
+cold. TS1295×1,959 + TS1287×519 = **2,478 of 2,634**, every one of them saying "this is a
+CommonJS file" about a package whose `package.json` says `"type": "module"`. We never read
+that field, so under `moduleResolution: nodenext` the format defaults to CommonJS and
+`verbatimModuleSyntax` rejects every import and export in the program. **The attribution was
+confirmed rather than asserted** — deleting `verbatimModuleSyntax` from the tsconfig reads
+**2,634 -> 156**, and tsgo re-run on the SAME config still reads 23, so the option is not
+doing anything to the oracle. Queued (CHK.29).
+
+**THE RESIDUAL IS 0.31 FP/file — BETTER THAN `yaml`'s 0.9 — AND IT IS ENTIRELY THE TWO
+FAMILIES THE READINESS PAGE ALREADY NAMES.** TS7006×89 is 57% of it and is one shape: an
+object-literal shorthand METHOD's parameters are not contextually typed from the annotated
+return type ((CHK.30)). TS2339×23 is union member access after a narrow. **The overlap with
+tsgo's 23 is ZERO IN BOTH DIRECTIONS**, so the honest figure is 156 false positives AND 23
+false negatives — including two real TS2322 and a TS2722 in `util/glob-core.ts` that tsgo
+reports and we do not. *A residual FP count is not a conformance number until the misses are
+counted too*; the first draft of this note quoted 156 alone and was wrong to.
+
+**WHAT PASSED, AND IT IS NOT NOTHING:** all **1,921** relative specifiers carry an explicit
+`.ts` extension and every one resolved. (KIR.EMIT.1)'s `rewriteRelativeImportExtensions` work
+holds on a codebase nobody wrote it for.
+
+**THE BACKEND NEVER GOT A TURN, SO IT WAS MEASURED ON ONE FILE.** The project probe refuses
+to lower a program the checker rejected, so `KIR_PROBE_FILE` was pointed at
+`src/util/graph-sequencer.ts` — 131 lines, no imports, `typeErrors=0` — and the first refusal
+is `a spread element is out of the spike subset`. Censusing knip against the 17 refusal
+messages in `lower/`: destructuring parameter **51%** of files, spread 33%, destructuring
+declaration 24%, `async`/generators 22%, computed property name 12%; the union is **237 of
+498 files (48%)**. `async` alone is decisive — knip's entry point IS an `async` arrow.
+
+**BUT THE LADDER IS THE WRONG THING TO COST, AND THAT IS THE ROUND'S REAL LESSON.** knip
+imports **two native Rust N-API binaries** (`oxc-parser`, 32 sites; `oxc-resolver`) and **10
+`node:` builtins** (`fs`×21, `fs/promises`×5, `util`, `path`, `module`, `crypto`, `url`,
+`process`, `perf_hooks`, `child_process`), against a `KirIntrinsics.libraryClass` table of
+**six** entries. Those have nothing to lower TO — no amount of language coverage reaches them.
+So a candidate library must be screened by **what it imports**, not by its size or its error
+count, and the screen is one `grep` over `src` ((LIB.2)). Both refusals to extrapolate here
+are the same one the readiness page already made once, from the other side: it generalized
+`yaml`'s front-end obstacle into a rule and `mitt` falsified it. **A library's obstacle is a
+property of that library.**
+
+**GATES: none run, and deliberately.** This round changed three markdown files and no Kotlin;
+the suite, `cost_gate.py` and `huge_methods.py` have nothing to say about it. The KIR module
+was built (`:xemantic-typescript-compiler-kir:compileTestKotlinJvm`, BUILD SUCCESSFUL) only
+because the probe needed it. Scratch tree with the clone, the deps and both captures is under
+the session scratchpad and is not committed.
+
+**(INC.6) THE LAST WRONG-DIRECTION CAPTURE DIVERGENCES ARE GONE — LANDED 2026-08-22. The
+sweep reads 9 -> 5 divergent spans of 381,666, and the class a user would call WRONG —
+the narrowed build rendering `any` where the type is known — is at ZERO. Suite 15,640 / 0 / 3
+(+6, this round's pin), no corpus baseline moved, cost gate a measured no-op, partition
+sweep EQUIVALENT on all 78 files.**
+
+**THE DIAGNOSIS HELD, AND THE TRACE SHARPENED IT INTO THE PART THAT EXPLAINS THE PREVIOUS
+ROUND'S BLIND SPOT.** The queue said `materializeModifierUtility` mints FRESH copy symbols
+per materialization, so a warmed `symbolTypes` entry dies with the instance. True, and not
+what was failing: an instrumented run over `builderState.ts` showed `getTypeOfSymbol`
+answering `Map<string & { __pathBrand: any; }, FileInfo>` on **every** ask and
+`symbolTypes` holding **none** of the eight members — because the only writer of that entry
+is `getTypeOfSymbol` itself and **round 778's write gate refuses whenever the ambient
+instantiation context is non-empty**, which inside a `namespace` body it always is
+(`inferenceNamespaceStack`). So (INC.5)'s capture-time force — ask `getTypeOfSymbol`, then
+let `typeToString`'s RAW `symbolTypes[id]` read pick the answer up — is a no-op exactly
+there, and is why its own pin was green: **that fixture captures at FILE level, where the
+context is empty and the write lands.** The fix is `resolveReferenceMembers`' idiom, one
+line: write the copy's type at MINT time, ungated, which is sound where `getTypeOfSymbol`'s
+write is not because the id was minted by that materialization and is reachable only from
+the type just built.
+
+**WHAT DID NOT WORK, AND IT COST TWO BUILDS: TWO FIXTURES FAILED TO REPRODUCE BEFORE THE
+THIRD DID, AND BOTH FAILED BECAUSE THEY VARIED THE WRONG END.** A `Readonly<I>` parameter
+on a function inside `export namespace NS`, captured from another file — green. An
+interface MERGED with a namespace whose body takes `Readonly<State>` — still green. What
+discriminates is where the **CAPTURE** is, not where the `Readonly<>` is: move the capture
+inside a namespace body and both arms render `fileInfos: any`. **So the defect is not a
+partition defect at all** — the whole-program arm renders it too, and only the
+full-vs-narrow sweep on a real project made it visible, because on tsc's sources some other
+file's check happened to warm one arm. The pin therefore asserts BOTH arms, and its
+whole-program assertion is one of the three that were measured RED on the un-fixed binary.
+
+**THE COST GATE'S DRIFT IS PRE-EXISTING AND THE CONTROL IS WHAT SAYS SO** — (INC.5) recorded
+the suspicion, this round measured it. The un-fixed binary prints the same
+`typeOfExpr.calls +0.18%` and a *larger* `mapped.hits +1.14%` than the fixed one (6,465
+against 6,457); `typeNode.bypassed` likewise moves the other way (111,017 -> 110,988). So
+`docs/perf/cost-counters.txt` is stale at HEAD, this change is a no-op on all 20 counters,
+and it is deliberately NOT rebaselined here — a rebaseline would silently adopt someone
+else's drift.
+
+**THE 5 REVERSED ROWS ARE THREE DISTINCT DISPLAY-ONLY MECHANISMS, NONE A LOST MEMBER
+RESOLUTION, AND IN FOUR OF THE FIVE THE NARROWED ARM IS THE BETTER ANSWER.** Diagnosed by
+dumping both arms' FULL strings (the sweep truncates at 140 chars, which is why the entry
+could only call them "overload-set content"):
+
+- **`watch.ts` x2, `toLocaleTimeString`** — identical overload sets; the third overload's
+  parameter renders as the alias `Intl.LocalesArgument` under the narrow arm and as its
+  expanded body `string | Locale | readonly (string | Locale)[] | undefined | undefined`
+  under the full one. `aliasDisplayMap` registration is first-touch. tsc renders the alias,
+  so the narrow arm is right — and the full arm additionally doubles `| undefined`.
+- **`tsbuildPublic.ts` x2, `createNewValue`** — `interface MutateMapOptions<K, T, U>`
+  declares `createNewValue(key: K, valueInNewMap: U): T` and the FULL arm renders `=> any`
+  where the narrow renders `=> T`. This is round 778's shape verbatim, one member over: the
+  un-instantiated member type resolved with no type-parameter scope installed answers `any`
+  AND is the cacheable one, so the first toucher outside a scope freezes it. Fixing it means
+  installing a generic interface's own type parameters before resolving its members — a
+  checker-wide change with diagnostic blast radius, not a capture fix.
+- **`watchPublic.ts` x1, `compilerHost.fileExists`** — the receiver is
+  `CompilerHost & ResolutionCacheHost`, both constituents declare `fileExists`, and the
+  narrow arm renders the member as `(fileName: string) => boolean & (fileName: string) =>
+  boolean`. Redundant, not wrong: the two constituents' member types are equal in shape and
+  distinct in identity under that arm's interning order. A structural dedupe in
+  `getIntersectionType` would touch every intersection in the compiler (CLAUDE.md: identity
+  and display there are load-bearing), and a display-level dedupe on the capture path would
+  MASK an identity difference rather than fix it. Recorded, not attempted.
+
+**SO (INC.2b)'s TRADEOFF HAS INVERTED AND THE ENTRY IS UPDATED WITH THE MEASUREMENT, NOT A
+DECISION.** Zero spans where a narrowed hover renders more `any`; the remaining asymmetry
+now runs the other way in 4 of 5 rows. The decision stays the owner's.
+
+**(INC.3) THE FLOOR IS DECOMPOSED, AND IT INVERTED ITS OWN LEVER ORDER — 2026-08-22. Of a
+1,219 ms floor: tail walkers 806.7 ms (66.2%), `init:*` setup 112.2 (9.2%), BIND 240.6
+(19.7%), crawl 27.4 (2.2%), `checkSpine` 0.1 ms, residue 3.1. The queue had ranked bind
+first, the passes second and the crawl third; measured, it is passes 75%, bind 20%,
+crawl 2%.**
+
+**FOUR INHERITED FIGURES REFUTED, EACH FOR A DIFFERENT REASON WORTH KEEPING.**
+(i) **Bind is 241 ms, not ~515** — round 880's number is the bind component of a per-WORKER
+fixed term under `--workers 4`, where four whole-program binds run concurrently beside the
+JIT threads; the same fit measured +37% contention and round 883's `--shareBind` −5% is
+that contention being collected. What DID transfer from round 880, almost exactly, is its
+other half: "~930 ms of program-wide checker work" against 943.1 measured.
+(ii) **The crawl is 27 ms, not ~138** — the parse half is gone and the instrument says so
+directly rather than by inference (`78 reused / 0 fresh`, PARSE row zero calls).
+(iii) `init:buildFileLocalTypeMaps` is **1.4%** of a warm compile, not 3.56% — rounds
+829/859/861 landed levers in it and the queue's figure predated them.
+(iv) The "two whole-program regex passes that never warm, 98 ms, matching zero times" are
+**already gone**: 0.44 ms between them, gated by rounds 859/862.
+A queue entry's numbers decay, and all four decayed in the direction that would have sent a
+round at the wrong target.
+
+**THE 20.3% TAIL FIGURE IS CONFIRMED AND MISREAD, WHICH IS THE ACTUAL FINDING.** The same
+400 rows are 951 ms on a full build (19.0%) — but **85% of that survives narrowing**. Only
+**24 of the 400** narrow (the ones iterating `checkedResults`); the other **376** iterate
+`binderResults` and drive their own whole-tree walk, so they cost the same whether the
+checker checks 78 files or none. `checkSpine` reading **0.1 ms** on the floor is the receipt
+that `recheckOnly` removes per-file checking completely — which is exactly why nothing but
+program-wide work is left to explain.
+
+**AND THE TAIL IS FLAT, WHICH KILLS THE OBVIOUS FIX**: the largest single pass on the floor
+is 26.3 ms, the top 10 are 25%, and 100 passes at a mean of **7.9 ms** carry 98%. A
+consistency check (not a measurement) puts that at ~9.3 ns per node visit, i.e. what a
+`forEachChild`-driven `when` dispatch costs. So (INC.3)(b)'s stated form — "make one
+cheaper" — has no one to make cheaper. The lever has to be structural, and (INC.7) is the
+cheapest structural form available: a loop RECEIVER per walker, `binderResults` ->
+`checkedResults`, which is a strict no-op on every full build and only changes a partition.
+
+**METHOD NOTE, because the ms are soft and the shares are not.** The floor drifted **−9.6%**
+across one process with nothing changed (two plain batches bracketing the instrumented
+ones), and the first instrumented build read 1,373 ms with its bind and text-scan rows 2-4x
+every other draw. Quote the SHARES, which are computed inside one build; treat the ms as
+±10%. The phase partition closes at 99.7% and the pass table over `init` at 99.8%, so
+nothing above ~25 ms is unattributed.
+
+
+**(INC.5) A CAPTURED TYPE'S DISPLAY NO LONGER DEPENDS ON WALK ORDER — LANDED 2026-08-22,
+and it is a defect (INC.2)'s REFUSAL found rather than one anybody reported. 45 divergent
+spans -> 9; the 40 wrong-direction rows -> 4. Suite 15,626 / 0, no corpus baseline moved,
+cost gate a strict no-op.**
+
+**THE CAUSE, and the rows are what named it.** `typeToString`'s anonymous-object branch
+renders a property as `symbolTypes[p.id]` — a RAW CACHE READ — and prints `any` when the
+entry is absent. The two utility materializers never populate it:
+`materializeMemberSetUtility` (`Pick`/`Omit`) hands back the SOURCE interface's own member
+symbols and `materializeModifierUtility` (`Readonly`) hands back fresh copies carrying the
+source declarations, so the member's type is resolvable from its declaration and has
+simply never been asked for. Which file asks first decided the display. **Two probes were
+spent ruling out the mapped-type path first** (`getIndexedAccessType` never called,
+`TRACE size=0` in `getTypeFromMappedType`) — the dedicated materializers are reached
+BEFORE `substitutionResultCache`, which is why the obvious suspect was innocent.
+
+**WHY IT IS FORCED AT THE CAPTURE SITES AND NOT IN `typeToString`** — the constraint that
+made it a one-round change. `typeToString` is the DIAGNOSTIC renderer: forcing there would
+put ~13k corpus baselines in play, and pay for the walk on every compile, for a defect only
+a language service can see. Five capture render sites now call `typeCaptureRenderType`;
+an ordinary compile executes none of it. The walk follows `typeToString`'s OWN shape rather
+than the type graph (an interface and a reference render as a NAME, so neither is walked),
+carries a `Type.id` seen-set plus the existing depth horizon, and asks plain
+`getTypeOfSymbol` — which writes `symbolTypes` only under round 778's empty-context gate,
+so it cannot freeze a context-dependent resolution an ordinary check would have refused.
+
+**THE PIN WAS SHOWN TO FAIL ON THE UN-FIXED BINARY** (4 of 4, with `any` in the rendered
+string, reproducing the arm asymmetry), which is the only thing that separates a fix from
+an inert one. Its fixture carries a FOURTH file whose only job is to keep the whole-program
+control from collapsing as well — without it both arms agree on the wrong answer and the
+comparison passes vacuously, which is the same trap that made (INC.2)'s first
+false-negative fixture worthless.
+
+**THE COST GATE WAS NOT `+0.00%` AND THE CONTROL IS WHAT SETTLED IT.** Small drift showed
+on `typeOfExpr.calls` / `mapped.hits`; running the gate on the UN-FIXED binary printed
+byte-identical counters, so the drift is **pre-existing staleness in
+`docs/perf/cost-counters.txt` at HEAD**, not this change. Worth knowing before the next
+round reads that gate and blames itself: it passes, but its baseline has drifted.
+
+**WHAT IS LEFT IS NAMED AND SMALL.** The 4 surviving wrong-direction spans are all
+`Readonly<BuilderState>` in one file: `materializeModifierUtility` mints FRESH copies per
+materialization, so warming one dies with the instance, where `Pick`/`Omit` cleared because
+their symbols are the source's and their ids are stable. Populating `symbolTypes[copy.id]`
+at MINT time is the fix and it is **not capture-scoped** — it would move diagnostic
+messages — so it is (INC.6) with the corpus as its gate. The 5 REVERSED rows are a
+different family and may not be defects at all.
+
+
+**(INC.2) REFUSED AND (INC.4) LANDED — 2026-08-22, same session as (INC.1). The refusal is
+the product: narrowing the CAPTURE queries would have been 3.73x and it renders a WRONG
+TYPE in 45 of 381,666 spans, so hover/completion/definition/signature help stay
+whole-program builds.**
+
+**WHAT WAS MEASURED.** `scripts/capture-equivalence.sh` (new, committed) asks every
+identifier of every file for its captured type and definition, twice — once whole-program,
+once with `recheckOnly = {thatFile}` — and compares span for span: **381,666 spans, 76
+files, 45 divergent spans in 11 files, types 45, definitions 0**, of which 40 render MORE
+`any` under the partition. Timings, warm and rotated on `binder.ts` (7,787 spans): full
+4,719 ms, narrowed 1,264 ms.
+
+**THE MECHANISM IS FIRST-TOUCH CACHE ORDER, AND THE CENSUS PROVES IT RATHER THAN ASSUMING
+IT.** The collapsing shape is a type reference INSIDE a foreign file's ANONYMOUS OBJECT
+TYPE LITERAL — `{ program?: any }` for `{ program?: Program }` — with the outer signature
+intact. **In 5 of the 45 the FULL build is the one rendering `any`** where the narrowed
+build renders `T`, which rules out "narrow is simply worse": `symbolTypes` persists the
+first resolution (round 778) and the two arms differ in which file asks first. So the
+sweep is a DETECTOR for a pre-existing order-dependence in what a hover reports, now
+queued as **(INC.5)** with the full-vs-narrow pair as its differential oracle — no
+baseline needed, because the two arms must agree.
+
+**AND IT DOES NOT REACH DIAGNOSTICS, WHICH IS THE QUESTION (INC.1) RESTS ON, SO IT WAS
+MEASURED AND NOT ARGUED.** The check path is keyed by the node's OWNING file
+(`lookupPerFileForNode`, rounds 508/509); the capture path is not. A fixture whose error
+exists only while the literal's member keeps its declared type
+(`const n: number = make().program`, the literal in a second file, `Program` in a third)
+is reported identically by the partition, by the public API and by the whole-project sweep.
+**THE FIRST FIXTURE FOR IT WAS VACUOUS AND ITS OWN CONTROL CAUGHT THAT**: an
+argument-position error (`use({ program: 1 })`) is not reported by this compiler at all, so
+both arms agreed on an empty list and the pin passed having measured nothing. Any
+equivalence pin over two arms needs a control asserting the reference arm is NON-EMPTY.
+
+**(INC.4) LANDED**: `ProjectCompiler.build` now REFUSES `recheckOnly` together with emit.
+The Transformer queries the checker it is handed, so a partition would decide import
+elision from a checker that never walked the files whose uses keep an import alive —
+wrong JavaScript, silently, with every diagnostic still agreeing. Nothing in the repo does
+it today; the parameter is public and the next caller would have had no way to know.
+4 pins including both negative controls.
+
+**A SECOND CAVEAT FOR HOSTS, MEASURED WHILE PROBING: NARROWING ONLY PAYS ON A LARGE
+PROGRAM.** On a three-file project the narrow query is **0.87x** — slower than the whole
+build — because the floor is 90% of it and there was nothing worth not doing. Recorded in
+`docs/language-service.md` § 4a beside the 4.35x, because a host that reads only the ratio
+would wire it the wrong way round for small projects.
+
+
+**(INC.1) THE LANGUAGE SERVICE'S ERROR REPORTING IS NOW A PARTITION — LANDED 2026-08-22,
+owner directive ("make the LanguageService truly incremental, as if it were providing
+perfect support for an IntelliJ TypeScript plugin"). `Project.diagnosticsOf(fileNames)`
+answers the diagnostics of a file set by handing that set to the compiler as its CHECK
+PARTITION: 4,818 ms -> 1,107 ms warm on tsc's own 78 sources, with all 78 files agreeing
+row for row with the full build.**
+
+**THE SEAM ALREADY EXISTED AND THIS MODULE WAS PASSING NULL TO IT.**
+`ProjectCompiler.build` has taken `recheckOnly` all along — it threads to
+`Checker(assignedFileNames)`, the INV.6 partition view `--workers` uses — and
+`Project.build()`'s KDoc argued it stays null because narrowing "is only sound with a
+dependency closure this class does not maintain", while `docs/language-service.md` § 14
+listed *no incrementality* as gap 1 and said closing it was "the architectural inversion,
+not an API item". **Both are true of the question `--watch` asks and false of the question
+an editor asks.** `--watch` must keep EVERY file's diagnostics valid, so it needs the
+reverse-dependency closure — which CLAUDE.md already prices at nothing on a
+barrel-exporting codebase (touching the leaf `semver.ts` still rechecks 77 of 78). An
+editor's annotator asks *what are the errors in THIS buffer*, claims nothing about the
+other files, and therefore needs no closure at all. The inversion is still the end state;
+it was not the prerequisite for this.
+
+**THE NUMBER THAT REDIRECTS THE ARC: A MEDIAN FILE'S OWN CHECKING IS 15 ms.** The floor —
+a partition naming a file the program does not contain, so no file is checked and what
+remains is the crawl, the parse, the bind and the program-wide passes — is **1,092 ms,
+99% of a narrowed query**. It is free to measure and needs no probe, which is why it is
+now an arm of the sweep. Consequences, both worth more than the fix:
+
+- **Narrowing the CHECK is DONE.** (INC.1) collects essentially all of it (4.35x at the
+  median file, 1.76x at `checker.ts`, which is 31.6% of that program by itself). Another
+  round spent partitioning the checker is chasing 15 ms. Do not spend it.
+- **Everything left is the floor**, and its ceiling is the whole remaining query. Bind is
+  a known ~515 ms of it; the ~14 program-wide setup passes and the ~416 tail passes
+  (20.3% of a warm compile, `buildFileLocalTypeMaps` alone 3.56%) are most of the rest,
+  and every one of them iterates `binderResults` by an explicit correctness rule
+  (CLAUDE.md: a gated collector cost 1,174 false positives in round 609). That is (INC.3).
+
+**THE GATE IS NOT THE SUITE AND CANNOT BE.** A corpus fixture is one or two files, where
+a partition of one is nearly the whole program, so the round-609 failure class is
+invisible to it. `scripts/partition-equivalence.sh` runs a partition of one for EVERY
+file of a real project and compares that file's rows against the full build's: all 78
+agree, 5 of them carrying the program's 46 diagnostics, and the runner REFUSES a verdict
+when no file carries any — a green sweep over an all-clean program tests nothing.
+
+**WHAT NOTHING PINS, MEASURED RATHER THAN ASSUMED.** No test in the suite fails if
+`diagnosticsOf` stops passing `recheckOnly` and builds the whole program: the answer is
+filtered afterwards either way, and the two differ only in wall time, which a timed
+assertion over a compile cannot hold. **Ablated it and confirmed — 14/14 green with the
+wiring removed** (fresh XML checked by mtime; a stale one reads exactly like a green
+ablation). So the narrowing is pinned at the SEAM — the compiler's own partition build
+reports the assigned file's rows and not another file's, which fails uniquely — and that
+it is REACHED is held by the two harnesses. Recorded rather than papered over (round 807).
+
+**FOUR TRAPS PAID FOR IN THIS ROUND.**
+1. **A timing arm's POSITION IN THE PROCESS outweighed the effect it measured.** The
+   first floor reading was 1,632 ms — larger than the 1,107 ms median partition it is a
+   strict subset of — because it sat at slot 3 while the partitions ran at slots 4-81,
+   and the same process read the full build at 9,421 ms against a warm 4,818. Timing arms
+   now run last and rotated; four full draws then span 0.7%. An impossible ORDERING
+   (a subset costing more than its superset) is the cheapest tell that a ramp is being
+   measured — cheaper than any spread statistic.
+2. **A real keystroke costs the same as a byte-identical dirty** (4.7-4.9 s), because
+   `LanguageServiceCostMain` dirties a file by writing its own bytes back and the
+   content-keyed parse cache hits either way. So parse reuse was already complete and
+   "cache the parses harder" is retired without building it.
+3. **`grep` without `-a` returns NOTHING on `Project.kt` too**, not only `Checker.kt` —
+   an anchor-count guard read zero for a string plainly present, which would have aborted
+   an ablation as "anchor not found".
+4. **The probe's own edit site assumed LF** and the bench profile's tsc sources are CRLF,
+   so the first run died before measuring anything.
+
+
+**(KAPI.1) A TYPESCRIPT LIBRARY'S PUBLIC API, AS A KOTLIN METADATA KLIB — LANDED 2026-08-22,
+owner directive.** A checked TypeScript library now exports as the artifact a Kotlin
+Multiplatform `commonMain` compiles against: `exportTypeScriptProjectApi(project, entry,
+out.klib)` writes a metadata klib holding the library's exported declarations as Kotlin
+declarations. 22 pins, `docs/kir-kotlin-metadata.md`.
+
+**The route is generated Kotlin SOURCE through kotlinc's own metadata compiler, and that is
+the decision the rest follows from.** Kotlin metadata is a versioned protobuf whose only
+writer lives in the compiler, so writing it directly would be a second implementation of a
+format that moves every release; going through `KotlinMetadataCompiler` — the THIRD kotlinc
+entry point this module drives, beside the JVM pipeline and the native
+`IrGenerationExtension` — makes the artifact by construction what kotlinc would have
+written, and leaves `KotlinMetadataExport.source` as a readable intermediate. No classpath
+is needed, because the exported surface names only Kotlin BUILT-INS: the artifact is
+self-contained, and the standard library's common metadata (a separate `-all` artifact this
+project does not ship) never enters into it.
+
+**The surface is the ENTRY MODULE's exports, followed through re-exports — not the union of
+everything every file marks `export`.** A package's `index.ts` is its statement of what it
+offers, and the union publishes names a library deliberately keeps internal; the pin asserts
+both directions, including that a module the entry does not re-export is unreachable from
+the artifact.
+
+**REFUSALS ARE PER DECLARATION here, where the IR lowering refuses the whole program, and the
+asymmetry is the point: an absent declaration is a compile error at the consumer's use site,
+a wrongly-typed one is silent.** A rest parameter, an anonymous export, an unresolvable
+specifier, an enum whose member values disagree — each is omitted and reported with file,
+line and column, rather than guessed.
+
+**VERIFICATION IS BY A CONSUMER AND ONLY BY A CONSUMER.** A metadata klib is a binary nobody
+reads by eye and every failure mode it has is silent, so each end-to-end pin compiles Kotlin
+against the artifact through the same metadata compiler — with four negative controls,
+because a round trip that passes because the consumer compiles whatever it is given would
+pass for an EMPTY klib: a non-exported name must not resolve, the erased parameter types must
+be ENFORCED (`greet(1)` against a `Double` parameter must fail), a non-re-exported module must
+not be reachable, and a program the checker rejects must produce no artifact at all.
+
+**Four traps, each silent, recorded so they are not re-found.** (i) `metadataKlib = true` is
+load-bearing: left false the compiler writes the LEGACY layout under the same `.klib` name,
+with no diagnostic, and a multiplatform consumer resolves nothing — hence a pin on the layout
+itself. (ii) `K2MetadataCompiler` is deprecated in 2.4 and the deprecation is an ERROR in this
+build; `KotlinMetadataCompiler` is the live class. (iii) a klib is accepted on a consumer's
+classpath both as a DIRECTORY (what the compiler writes) and as a ZIP (what a build publishes),
+measured both ways. (iv) a path glob written into a KDoc opens a nested block comment —
+CLAUDE.md's own entry, met in the first file that documented the legacy layout.
+
+**What it is worth today, measured on the two real libraries this module already compiles:**
+`mitt` exports `mitt(all: Any?): Any?` and `smol-toml` exports `parse(toml: String, options:
+Any?): Any?`. Primitives, unions, optionality, classes, enums and callbacks reach the surface
+typed; ARRAYS and OBJECT TYPES do not, because they are `JsArray`/`JsObject` at run time and
+those are JVM classes with no common metadata artifact. That is a stage, not a verdict — it is
+§6's item 2 and the pins are written where it will show.
+
+**(KAPI.3) LANDED IN THE SAME SESSION, and it is what makes an exported library usable.** With
+`runtimeKlib =` the export writes a second metadata klib declaring `JsObject`/`JsArray` under
+their real fully qualified names and compiles the library against it, so `smol-toml` exports
+**`parse(toml: String, options: JsObject?): JsObject`** and a Kotlin consumer reads
+`document.get("title")` — measured on the library's own 1,082 lines, pinned end to end. Three
+decisions carry it: a bag needs POSITIVE evidence (the lowering's own gate, because a `Date` is
+a `JsDate` and a bag-typed one offers members the value lacks); an intersection is a bag only
+when EVERY member is one, stricter than `ErasedTypes` and forced by having no library-type
+table; and the hand-stated facade is kept honest by a REFLECTION pin over the real classes
+rather than by a promise, with two negative controls proving the pin can fail.
+
+**(KAPI.4) LANDED TOO, and it is what makes the erasure PRECISE rather than merely non-`Any?`.**
+The facade declares `JsMap`, `JsSet`, `JsDate`, `JsRegExp` and `JsError` beside the first two, and
+`KirRuntimeApi.libraryType` mirrors `KirIntrinsics.libraryClass` entry for entry — so `mitt`'s
+parameter is **`JsMap?`** (its `EventHandlerMap` is an alias of a `Map`), which is what the compiled
+program holds there and is strictly better than a bag. **The round's real finding is a defect in the
+gate it was extending: an absent declaration is not evidence of an anonymous shape.** A
+`Promise<string>` arrives with no declaration to walk — a `Type.Reference`'s own symbol carries none,
+its TARGET's does — and read as a bag it would have offered a Kotlin consumer `get`/`set` on a
+promise. Both halves are now pins, and the same shape is queued as a LEAD against `ErasedTypes`
+itself ((KIR.LOWER.2)), where the consequence is wrong CODE rather than a wrong declaration.
+
+**NAMED SUCCESSORS (both queued): (KAPI.2)** the platform half — nothing yet pins that the JVM
+classes the KIR backend emits match the signatures this metadata declares, and until something
+does, the artifact types a consumer's common code without linking its platform code; **(KAPI.3)**
+a runtime metadata klib, which is what turns those `Any?` positions into `JsObject`/`JsArray`
+with members.
+
+
+**THE KIR QUEUE — ALL FIVE ITEMS CLOSED (2026-08-21).** Five open (KIR.\*) items
+at the start, five checked off.
+
+**(KIR.EMIT.2), the smallest and the one that says where a decision belongs.**
+`a + '|' + b` with `b` undefined printed `x|null`. §3.1 puts `undefined` and `null` on one
+JVM value, so `string | undefined` and `string | null` are both `String?` and the RUNTIME
+cannot tell them apart — but the LOWERING still holds the TypeScript type. `asString`, the
+single funnel for `+` and for a template span, now asks whether every nullish member the
+operand admits is `undefined`, and a type admitting BOTH keeps `"null"`: the wrong answer
+is narrowed to the shapes the collapse cannot separate, not swapped for the opposite wrong
+answer. 5 pins.
+
+**(KIR.EMIT.1) — `rewriteRelativeImportExtensions`, at four specifier positions.** The
+post-pass position is the load-bearing decision: the specifier TEXT is also how the
+transformer ASKS the checker about the target module (`isValueExport`, const-enum inlining,
+import elision), so rewriting any earlier asks about a `.js` file the program does not
+contain. mitt's EXTENSIONLESS `./mitt` stays a benchmark expedient because tsgo leaves it
+alone too — rewriting it would be a divergence, not a fix. 10 pins, each condition of the
+population with its own negative control, and the option-OFF control is what shows the
+positives discriminate.
+
+**(KIR.PERF.2) — the regex engine, and it beat its own prediction.** −27.5% against the
+−18% predicted (47.05 → 34.10 us/parse, 2.08x Node → **1.52x**), because two smaller
+members came along: `replace(/_/g,'')` on a literal path and `split` no longer building a
+fresh `Regex(source)` per call (which also silently ignored the expression's flags). The
+design is three decisions, each of which is what makes it an optimisation rather than a
+second semantics: it answers `test` and NOTHING else (the one question on which a DFA's
+leftmost-longest and JavaScript's leftmost-first agree by construction); everything outside
+the subset is REFUSED at compile time and cached as a refusal; and `java.util.regex` stays
+LIVE as the differential oracle. **It found a defect in the oracle rather than in itself** —
+Java's `$` matches before a final line terminator where JavaScript's matches only at the
+end, so `/^\d+$/.test("12\n")` answered `true` here; three of the matcher's first
+differential runs failed on exactly that shape and were right to. 20 pins.
+
+**(KIR.NATIVE.1)(b)+(c) — the native arm, in the gate.** `KIR_BENCH_NATIVE=1` builds both
+libraries through the same `kirNativeCompile`, gates their `sink=` with the other three arms
+and times them in the same interleave; the run prints the arms it ACTUALLY ran rather than a
+fixed count. The regex engine is carried to native verbatim and is worth **−22.5%** there
+(163.30 → 126.55 us/parse, 7.26x → **5.70x**) with mitt flat as the control. **The
+prediction was directionally right and quantitatively over** — it said native should gain
+MORE than the JVM's −27.5% and it gained less — which is what writing a prediction down
+before the run is for. One trap that exits 0: konanc appends `.kexe` to whatever `-o` names.
+
+**(KIR.PERF.1) — the container half REFUTED four times, and the nominal half BUILT.**
+Censused by OPERATION the bag is 3,333 ops/parse (2,555 `get`, 737 `set` of which 63.5%
+OVERWRITE) at ~4.9 ns each — a row that SURVIVES round 896's division, where its neighbour
+`jsTruthyBooleanOrNull` implied 8.2 ns for `value != null && value` and was refused without
+a build. The new fact is that **the READ side is unimodal**: 93.6% of reads land on a
+three-key bag with interned names, where §2's census (of ALLOCATION) had said bimodal. So
+the most favourable possible scan was built — no promotion, single-shaped `get`, everything
+else cold — and it measured NO EFFECT, as did a `LinkedHashMap` sized to the census.
+**Both looked like small regressions until the baseline was replicated and moved 692 → 735
+ms on the same bytes**; that correction is the round's methodological result and is now in
+`scripts/kir-screen.sh`'s own header. Four designs, no win — which also refuses the guarded
+slot hint the entry used to propose, since its claim was that an indexed compare beats a
+scan that turns out to be LEVEL with a hash probe.
+
+**So the NOMINAL half was built instead, and its first slice landed: `mitt` −10.7%**
+(61.00 → 54.50 ns/emit, ranges disjoint, both Node arms flat, 1.35x → **1.54x FASTER** than
+Node). An object literal whose names are statically known becomes a generated JVM class
+with one real field per property, EXTENDING `JsObject` — which is the decision that made it
+affordable: §7's 12x price is for changing what an object type ERASES to, and here the
+erasure is untouched, so structural assignability never enters into it and the dynamic half
+stays total (an undeclared property goes to the bag; the first `delete` or `Object.keys`
+spills the fields into it in declaration order). `smol-toml` is FLAT and that is the honest
+half — its ten shapes fire, but `get` had to become virtual and the parser builds its tables
+dynamically, so the gain on the context and the loss on the tables cancel. Two traps that
+compile and fail at RUN time: a shape class is per FILE in one shared package (two files
+both mint `JsShape0` → `NoSuchMethodError`), and `coerce` decides on classifiers alone, so
+a shape widening to the bag it extends has to be told.
+
+**GATES.** Suite **15,563 / 0 failures** (KIR module 83 → 108). Both KIR benchmark runs
+passed their equivalence gate before any timing, on all three and then all four arms.
+
+**(KIR.PERF) THE BACKEND, MEASURED FOUR TIMES AND MOVED −17% — AND THE ONE
+DIRECTION THAT LOOKS OBVIOUS IS NOW REFUTED TWICE (2026-08-21).**
+
+**THE RESULT.** `smol-toml` on the JVM goes **56.60 → 47.05 us/parse (−16.9%)**,
+i.e. 2.49x slower than the same library on Node down to **2.08x**. The last four
+runs cover only changes that measured inside the band and read 46.95 / 48.00 /
+47.75 / 47.05, so that is a replicated number and not a draw. **`mitt` moves only at the end** — 62.25 -> 61.00,
+still 1.41x faster than Node — which is the expected shape: an event emitter
+barely compares characters, barely reads properties and never matches a regular
+expression, so none of this session's levers has anything to do there. Every figure is a within-round paired delta on
+`scripts/kir-bench.sh` with 5 interleaved processes per arm, and **both Node
+arms held flat across every pair** (tsgo 452/455/453/451 ms, ours 448/445/447/453),
+which is what licenses reading these as backend numbers rather than as box
+weather. `docs/perf/kir-backend-levers.md` carries the table.
+
+**LEVER 1, THE WIN: an operand the lowering already typed no longer takes the
+boxed path (−13.6% on toml, ranges DISJOINT; nothing on mitt).** `===`, `!==`, `==`, `!=`, a `switch`
+clause, a condition and a string conversion all went through an `Any?` entry
+point, so `s.charCodeAt(p) === 0x20` — what a hand-written scanner's inner loop
+is made of — boxed BOTH operands and then walked an `instanceof` chain to
+rediscover what the lowering had proven. `+` has decided by the erased operand
+types since the beginning (`addValues`); this is that rule reaching the rest of
+the family and nothing else. The semantics are pinned rather than argued
+(`KirEqualitySemanticsTest`, `KirPrimitiveOperandTest`): `NaN !== NaN` and
+`0 === -0`, `-0`/`NaN` falsy but the STRING `'0'` truthy, `1 == true` and
+`null == undefined` true so no MIXED case may specialize, and the left operand
+evaluated first in both half-specialized directions.
+
+**LEVER 2, REFUTED, REVERTED, AND IT IS THE MOST USEFUL THING HERE.** A
+per-owner leaf census (`scripts/kir-profile.sh`, new) charges **44.3%** of the
+toml arm to the property bag — `JsObject.set` 25.6%, `get` 17.3% — so it is
+plainly the largest cost. Giving `JsObject` the shape its LITERAL declared,
+promoted at the first UNDECLARED key (chosen precisely to leave alone the
+dictionary half that killed the 2026-08-21 size-threshold attempt), measured
+**+31%, ranges disjoint**. The rule worked — `HashMap` fell from 38.3% of
+samples to **4.7%** — and the saving did not exist: counted in SAMPLES rather
+than shares, the bag cost **709 before and 771 after**, and the rest of the
+regression landed on `program.*` and regex frames that did not change.
+
+So: **two independent attempts at making the dynamic representation cheaper
+have now cost 21% and 31%. The bag is expensive in the NUMBER of operations,
+not in their unit cost**, and only the nominal half removes them. (KIR.PERF.1)'s
+case is now made by measurement from both directions.
+
+**LEVER 3: three rows the census named, two of them pure overhead (−4.0%).**
+`jsTruthy` decided its answer with an equality `when`, which Kotlin compiles to
+a chain of `Intrinsics.areEqual` — **5.0% of samples spent asking whether a
+value equals `false`**. `JsRegExp` allocated a `Matcher` per `test` and per
+`exec` (`Matcher.reset` was the largest regex leaf at 10.2%); the two now share
+one, which is safe because neither lets other code run between starting a match
+and reading its groups. And a regex LITERAL inside a function is a fresh object
+per call, so `value.replace(/_/g, '')` was re-parsing its source every time —
+every distinct `(source, flags)` now compiles once. `KirRegExpTest` uses ONE
+expression many ways at once, because both changes fail the same way.
+
+**LEVER 4: `+` asks the checker what the other arithmetic operators already
+ask — MEASURED NEUTRAL and kept, explicitly not counted as a win.** A bag read
+erases to `Any?` however precisely the checker typed it, so `ctx.p + 1` reached
+`jsAdd` with both sides boxed; asking whether the whole SUM is a `number`
+decides both coercions at once and is exact. 46.95 → 48.00 us/parse with the
+ranges OVERLAPPING. Kept because it is cost-monotone, pinned, and closes the one
+place where `+` disagreed with `-` about whom to ask.
+
+**LEVER 5: Kotlin's null assertions leave the GENERATED program — a fidelity fix
+that also measures favourably.** Every generated function opened with an
+`Intrinsics.checkNotNullParameter` per non-null reference parameter, which is an
+invariant JavaScript does not have: a JS function handed `undefined` for a
+declared parameter does not throw at ENTRY. The runtime's own assertions and the
+lowering's `as Double` casts are untouched. 47.75 → 47.05 us/parse and mitt
+62.25 → 61.00 ns/emit, both ranges overlapping.
+
+**GATES.** KIR module 58 → **83 tests, 0 failures** (+25 pins: 9 equality, 8
+primitive-operand, 5 regex, and `KirPropertyBagTest` rebuilt from 7 to 10 and
+made to cross BOTH construction routes — it had been building every fixture
+with `set`, so an entire representation was untested and read as covered).
+`KirPropertyBagTest`'s cases are representation-independent by construction:
+both refuted bag attempts passed all of them unchanged, which is exactly what
+makes it the grading harness for the next one.
+
+**THE SUCCESSOR, NAMED WITH ITS PRICE AND ITS INSTRUMENT** — see (KIR.PERF.1)
+below, which now carries the census, the ceiling (the bag is 44.3%, so a
+free property access is worth ~−44% at the limit) and the one design the two
+refutations do not rule out.
+
+
+**(BENCH.1) ANSWERED, AND ONE OF THE TWO PERFORMANCE LEVERS IT LICENSED IS A
+MEASURED REFUTATION (2026-08-21, same day).**
+
+**THE THIRD ARM SAYS THE FRONT END IS NOT THE PROBLEM.** `-core`'s own emitted
+JavaScript, on the same Node, against tsgo's: **mitt 83.75 vs 84.50 ns/emit
+(1.01x), toml 22.35 vs 22.75 us/parse (1.02x)** — i.e. INDISTINGUISHABLE, which
+is the prediction the queue entry recorded before the run. So the 2.5x on
+`smol-toml` belongs to the KIR BACKEND in its entirety, confirming the leaf
+profile by a second instrument rather than by inference, and the arm is now the
+standing control: any future backend claim can be read against a JavaScript
+number produced by our own front end.
+
+**LEVER 1 LANDED — `jsCall` no longer allocates an array to make one call.**
+`jsCall0`..`jsCall3` pass arguments positionally and test the arity they were
+called with FIRST. Measured, medians of 5 interleaved processes with both Node
+arms flat: **mitt 65.75 -> 61.50 ns/emit (-6.5%, ranges DISJOINT [261..287] ->
+[242..250])**, toml 57.25 -> 55.75 us/parse (-2.6%, ranges overlap). mitt is now
+**1.35x FASTER** than the same library on Node. The specialization deliberately
+keeps ADAPTING the callee's arity — mitt registers a one-parameter wildcard
+handler that `emit` calls with two arguments, so an implementation that trusted
+the declared arity would compile and fail on the library this backend exists to
+run.
+
+**AND THE PIN EXPOSED A DEFECT THAT WAS ALREADY THERE: the chain stopped at
+`Function3`, so a FOUR-parameter method of an object literal was a runtime
+`JsTypeError: … is not a function`.** Arities 4 and 5 now work. Nothing in the
+corpus reached it because no corpus program has a four-parameter bag member.
+
+**LEVER 3 IS REFUTED, BY MEASUREMENT, AND IS REVERTED.** Holding a small bag in
+parallel arrays with a linear identity-first scan — aimed at the 28.3% the
+profile charges to `HashMap`/`LinkedHashMap` — made `smol-toml` **21% SLOWER**
+(55.75 -> **67.35 us/parse**), while mitt moved only 61.50 -> 59.50. **The
+mechanism is that the bag population is BIMODAL and the profile's single number
+hid it**: `ParseContext` is a four-field scanner state, which the scan suits,
+but the parsed document's tables are the OTHER half — the root table alone has
+18 keys — and every bag that outgrows the inline capacity pays the arrays AND
+the promotion AND the map. The half that dominates the samples is the half the
+change taxes. Two corollaries worth carrying: a hash-family share is not
+evidence about ANY particular container until the container's key-count
+DISTRIBUTION is censused (round 902's law, one runtime over), and an
+identity-first compare is a pure loss where keys come from DATA rather than from
+emitted literals — a TOML key is never the interned string the scan hopes for.
+
+**WHAT SURVIVES THE REFUTATION: `KirPropertyBagTest`.** Its seven pins are
+REPRESENTATION-INDEPENDENT — insertion order across the promotion boundary,
+`delete` closing the gap, a deleted-then-reinserted key moving to the end, an
+EQUAL-but-not-identical key resolving, `has` distinguishing absent from
+`undefined` — so they were written against the array form, pass unchanged
+against the map form, and are what the next attempt at this will be graded by.
+That is the cheap half of a refuted round and it is worth keeping.
+
+**STILL OPEN, AND NOW THE ONLY NAMED LEVER FOR THE 2.5x:** the NOMINAL half of
+`docs/kir-design.md` §3.3's hybrid — `ErasedTypes.mapObject` sends a declared
+`class` to a generated JVM class and sends an `interface`, a `type X = {…}` and
+every object literal to the bag. `docs/kir-structural-typing.md` §7 prices the
+nominal half at 12x. Lever 3's refutation is evidence FOR that direction rather
+than against it: what failed was making the dynamic representation cheaper, not
+removing the dynamic representation.
+
+**KIR RUNTIME BENCHMARK (2026-08-21) — THE COMPILED LIBRARIES, TIMED AGAINST THE
+JavaScript THEY WERE WRITTEN FOR. THE ANSWER DISAGREES BY LIBRARY AND BY *SIGN*,
+AND THE LEAF PROFILE SAYS WHY.**
+
+**THE MEASUREMENT.** Same TypeScript source through two toolchains — tsgo 7.0.2 ->
+JavaScript -> Node 22.20.0, against xtsc `-kir` -> Kotlin IR -> JVM bytecode -> java
+(Zulu 26.0.2) — drivers ours and identical for both arms, 5 interleaved processes per
+arm, best-of-10 rounds inside each process, box otherwise idle.
+
+| workload | Node (tsgo) | JVM (xtsc/KIR) | |
+|---|---|---|---|
+| mitt, 4M `emit`/round | 344 ms · **86.0 ns/emit** | 266 ms · **66.5 ns/emit** | **JVM 1.29x FASTER** |
+| smol-toml, 20k parses/round | 452 ms · **22.6 us/parse** | 1128 ms · **56.4 us/parse** | **JVM 2.50x SLOWER** |
+
+One-shot wall clock including startup (10 runs, the acceptance programs as shipped):
+mitt **35 -> 92 ms**, toml **39 -> 115 ms**, i.e. the JVM pays ~2.6-2.9x and it is
+startup, not work. Compile side: tsgo emits either project in ~0.35 s against the KIR
+backend's 4.5 s (mitt) / 5.6 s (toml) in-process, which is mostly kotlinc pipeline
+setup rather than lowering.
+
+**THE CONTROL THAT MAKES IT A MEASUREMENT.** Both arms produced IDENTICAL `sink`
+accumulators (128,000,000 and -5,440,000) and byte-identical acceptance output against
+the `tomllib`-derived expectation — so the two compilations compute the same thing, and
+a divergence would have read as a timing result rather than as the bug it is.
+
+**WHY THE TWO LIBRARIES SPLIT — PROFILED, NOT INFERRED** (JFR, `settings=profile`,
+leaf frames). **smol-toml on the JVM, 2,159 samples: ~60% is JS-semantics emulation
+rather than the library's logic** — `HashMap` get/put/resize + `LinkedHashMap.newNode`
+**28.3%**, `java.util.regex` **17.5%**, `Intrinsics.areEqual`/`String.equals`
+**11.1%**, `Double.valueOf` **3.4%**; the lowered library code (`program.*`) is
+**17.7%**. **mitt on the JVM, 567 samples: `JsRuntimeKt.jsCall` ALONE is ~60% of
+leaves**, with `TypeIntrinsics.isFunctionOfArity` behind it — so even the arm that WINS
+spends most of its time in the dynamic-call shim.
+
+**THE FOUR LEVERS THE PROFILE NAMES, and their prices, read out of the source rather
+than guessed.** (i) `jsCall(callee, vararg)` allocates an `Object[]` per call and walks
+an `instanceof` chain; ARITY-SPECIALIZED entry points remove both, and the adaptivity
+must SURVIVE — mitt registers a `Function1` wildcard handler that `emit` calls with two
+arguments, which is exactly why `lowerFunctionValueCall`'s direct `invoke` is not used
+for a bag member (`KirFileLowering.kt:2714`'s comment is the record). (ii) `ErasedTypes.
+mapObject` sends a declared `class` to a generated JVM class and sends an `interface`,
+a `type X = {…}` and every object literal to the **property bag** — so smol-toml's
+`export type ParseContext = {…}` scanner state is a `LinkedHashMap` probe per `ctx.p`,
+which IS the 28.3%. The design page's own §7 prices the nominal half at **12x** the
+dynamic half. (iii) The bag's keys are literals at the lowering, so INTERNING them and
+comparing by identity attacks the 11.1%; a small-object linear-scan representation
+attacks the hashing, and neither touches the lowering. (iv) `Double.valueOf` is
+BOUNDARY boxing, not the erasure — `ErasedTypes` already maps `number` to a primitive
+`double`, and the boxes are minted at bag get/set, `JsArray` elements and
+`FunctionN<Any?,…>` edges.
+
+**WHAT IS NOT A LEVER: the regex family.** `JsRegExp` compiles its `Pattern` once per
+instance and the profile shows no `Pattern.compile`, so the 17.5% is genuine matching
+cost — `java.util.regex` is a backtracking interpreter where V8's Irregexp emits native
+code. It caps how close this backend can get on a regex-heavy library, and swapping
+engines would change the semantics rather than the speed.
+
+**KOTLIN/NATIVE WAS ASKED FOR AND IS NOT RUNNABLE — a structural answer, not a missing
+tool.** `KotlinIrEmitter` drives kotlinc's **JVM** phases and `JsRuntime.kt` is
+`jvmMain` with 26 `java.*` references (`java.time` for `JsDate`, `System.
+currentTimeMillis`, `java.util.regex`); a native leg needs a K/N pipeline driver AND a
+multiplatform runtime, which is the module's own "JVM today, JS/Native/Wasm for free
+later" roadmap. The K/N toolchain itself IS on this box
+(`~/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.10/bin/konanc`), so what is missing
+is ours. Compiling hand-written Kotlin and reporting it as a native number would have
+measured Kotlin, not this compiler.
+
+**THE HARNESS.** Node 22.20.0 under `tools/` (gitignored, downloaded — no JS runtime
+was installed on this box); bench projects, drivers and the interleaved runner in the
+session scratchpad; a `KirBench` java main over `compileTypeScriptProjectToJvm` that
+leaves the classes on disk so the generated program runs as an ordinary `java` process
+with the compiler out of the picture. **NOT COMMITTED YET** — (BENCH.1) is where it
+lands if the third arm proceeds. Two protocol notes it earned: a `nohup … &` gradle run
+ended with NO `BUILD SUCCESSFUL` line and had to be re-run in the foreground (the
+round-851 shape, caught by grepping for the verdict rather than trusting exit status),
+and the emitted-JS arms need their import specifiers checked rather than assumed —
+tsgo rewrites `./parse.ts` -> `./parse.js` under `rewriteRelativeImportExtensions` but
+leaves mitt's extensionless `./mitt` alone, which Node ESM refuses.
+
+**KIR SPIKE (2026-08-21, branch `spike/ts-to-kotlin-ir`) — TWO REAL PUBLISHED
+LIBRARIES COMPILE TO JVM BYTECODE AND RUN, AND SIX CHECKER DEFECTS FELL OUT OF
+GETTING THERE.**
+
+**THE RESULT.** `mitt` 3.0.1 (123 lines) compiles and runs twice — as a corpus
+program, and as a real MODULE that a second file imports. `smol-toml` (1,082
+lines over seven files, its own source unmodified) compiles and PARSES a 40-line
+TOML document; the expectation is produced by **Python's `tomllib`**, so the test
+checks the compiled library against a second, independent implementation rather
+than against itself. The checker reports **zero errors** on both, which is what
+tsgo 7.0.2 reports.
+
+**THE METHOD, WHICH IS THE PART THAT TRANSFERS.** Point the compiler at code
+nobody wrote for it, read the FIRST refusal — it names a file, a line, a column
+and a construct — fix exactly that, repeat. Roughly forty iterations produced
+the whole backend surface below, and every one of them was a real gap rather
+than a guess. Two instruments made it cheap: `LibraryProbe`
+(`KIR_PROBE_PROJECT` / `KIR_PROBE_FILE`, an env var because Gradle does not
+forward `-D` to the test JVM) and `tsgo --noEmit -p <dir>` as the front-end
+oracle.
+
+**`docs/kir-library-readiness.md` PREDICTED THE OPPOSITE AND NOW SAYS SO.** It
+concluded from `yaml` and `zod` that "the blocker is the FRONT END, not the
+backend"; measured on a third library, mitt reached zero checker errors
+untouched and every step between "type-checks" and "runs" was backend work. The
+rule is per-library, and the page now names the two commands that answer it
+before any planning.
+
+**THE SIX CHECKER DEFECTS**, each a false positive or a silent false negative
+that a corpus of ONE codebase's style could not contain, each landed with pins
+and an ablation:
+
+- an imported class's `instanceof` narrowed NOTHING — the alias has neither
+  `SymbolFlags.Class` nor the value flags the constructor-value leg needs;
+- an imported TYPE GUARD narrowed nothing — round 512's dir-relative resolver
+  lesson, one resolver over (`computeImportedFunctionLikeDecl`);
+- **a guard written `const isX = (n): n is X => …` narrowed nothing at all**,
+  local or imported, because it resolves to a VariableDeclaration with no
+  parameter list — the style `yaml` writes ALL of its guards in;
+- `export default function f` resolved to `any`, so every misuse of a
+  default-imported function went unreported;
+- a returned LITERAL widened against a literal-containing union (the string
+  fallback re-renders the source as its base primitive, and the arrow's concise
+  body never had 17.70 at all);
+- a MODULE-level `const` widened where a body-local one kept its literal; an
+  object literal typed its members in a vacuum in a var-decl where the RETURN
+  path has given it context since round 462; and assigning a computed primitive
+  dropped a narrow that assigning a CALL kept.
+
+Plus one in the type-of-a-binding family: a `for…of` binding was typed `any`
+everywhere except inside `checkPropertyAccessInStatement`, which carries its own
+B70.4 copy of the element-type rule.
+
+`yaml` — which nobody worked on — went **80 -> 24 errors** (4 environmental) on
+those alone, with TS2339-on-a-union going 21 -> 0.
+
+**ONE CANDIDATE FALSE POSITIVE WAS FOUND AND DESIGNED OUT RATHER THAN SHIPPED.**
+Installing the annotation as an object literal's contextual type UNCONDITIONALLY
+— which is what the return path does — turned `program.ts:1075` red on the
+compiler profile, where an object literal assigns a GENERIC function to a
+non-generic member and the relation cannot yet instantiate one against the
+other. The context is now installed only where the target's SHAPE asks for it (a
+member that is a tuple or contains literals), `output.errors` stayed at 46, and
+the relation gap is recorded rather than papered over.
+
+**GATES: 15,492 tests / 0 failures across all modules; `cost_gate.py`
+`output.errors` +0.00%, `typeOfExpr.calls` +0.18% (the `for…of` subject is now
+typed at the loop's enter); `huge_methods.py --fail-over 0` green.**
+
+**BACKEND SURFACE ADDED** (each with a corpus program that compiles to bytecode
+and runs, or with the library acceptance): arrays (`T[]` -> one `JsArray`,
+members found by the ERASED receiver), closures (every function type erases
+UNIFORMLY to `FunctionN<Any?, …, Any?>`, because TypeScript's assignability is
+bivariant and the JVM's is not), object literals and interfaces as property bags
+(the DYNAMIC half of the hybrid, which §7 of the structural-typing page measured
+as 12x the nominal half), `Map`/`Set`/`RegExp`/`Date`/`Error` runtime classes,
+enums as inlined constants, `bigint` literals, the operator families, strings
+and templates (never Kotlin's same-named members — `length` is a NUMBER and
+`Double.toString()` prints `6.0`), control flow (`switch` with fall-through as a
+one-iteration `do…while` plus a `matched` flag, `for…of` as an index walk,
+`try`/`catch`, `throw` of any value), classes 2 (`extends` a generated OR a
+runtime class, `super`, statics, accessors, `instanceof`), modules with a
+dependency-ordered `moduleInit` per file, destructuring with defaults at both
+levels, optional chaining, overloads, and the DYNAMIC member operations
+(`jsGet`/`jsSet`/`jsInvoke`/`jsIndexGet`/`jsIndexSet`) for an `any` receiver.
+
+**TWO HARNESS DEFECTS THE LIBRARIES EXPOSED.** The corpus runner's
+`waitFor(2, MINUTES)` sat one line BELOW a `readText()` of the child's stdout,
+which blocks until the child exits — so a generated program that looped without
+printing hung the whole suite at 100% CPU with the deadline unreached (it now
+redirects to files). And a `continue` inside a `for…of` skipped the increment,
+which is the same trampoline `for(;;)` already had.
+
 **Round 948 (2026-08-19) — (CHK.25): `using` / `await using` DECLARATIONS DID NOT PARSE AT
 ALL, AND THAT WAS THE LARGEST SINGLE CASCADE IN THE WHOLE PRISTINE POPULATION. LANDED
 PARSE + BIND + THE GRAMMAR RULES + THE DISPOSABILITY RULE + A VERBATIM EMIT — OURS-ONLY

@@ -1,3 +1,47 @@
+**THE 62-65 ms THAT (INC.22) REFUSED IS GATED BY *ONE LIB MEMBER* AND *ONE TRUNCATED RESOLUTION*,
+AND THE COUNTER THAT REPORTED IT IS A SUBSTRING HEURISTIC (2026-08-24, (INC.23)+(INC.24)).** (INC.22)
+refused partition-scoping the floor's largest row — `init:buildFileLocalTypeMaps`, 69.16 ms of a
+90.15 ms pass table — because `capture-channel`'s `moreAny` went 168 -> 229, read as "+61 member
+types collapse to `any`". **Classified per ELEMENT (nesting-aware, so a function-typed member is not
+fragmented into its parameters) that is 78 rows carrying exactly ONE member name —
+`[Symbol.unscopables]`, the lib's `{ [K in keyof any[]]?: boolean }` — in 14 files.** The other 1,379
+rows over 196 names are the (INC.11)(a) alias-display family, which (INC.22) already measured
+collapsing to **+1 row for 6.68 ms**. **AND `narrowRendersMoreAny` OVER-REPORTS: ZERO of the shipped
+baseline's own 168 "moreAny" rows actually loses a member type**, so a nonzero value is a LEAD and
+not a finding — a zero still means what it always did, which is why `capture-equivalence`'s
+`narrowRendersMoreAny=0` remains a real gate. Every moreAny figure quoted in an older round note,
+this session's included, should be re-read that way.
+**ROUND 778's WRITE GATE IS REFUTED AS THE MECHANISM.** A writer hook printing `(pass, ambient,
+persisted, depth, truncated)` reads `ambient=empty persisted=true` in **both** arms — so round 778
+says cacheable either way — and differs only in `truncated`. Under a partition the first ask arrives
+from **inside** the member-table resolution the mapped type's own `keyof` needs;
+`resolveStructuredTypeMembersCore` returns silently leaving `properties` null and the type degrades.
+**A narrowed compile has exactly ONE truncated resolution out of 822; a full build has 0 of 21,315 —
+and that one IS the defect.** **THE OBVIOUS FIX IS REFUTED WITH A POSITIVE CONTROL**: refusing to
+persist a truncated resolution changes nothing sweep-wide (same 78 rows, byte-identical digest) while
+a single-file control proves the arm is live (`refusedWrites` 593 -> 594, the victim going
+`persisted=true resolves=1` -> `persisted=false resolves=2`) — the re-resolution simply re-enters the
+same guard. **So the lever is the CYCLE HANDLING, not the cache**: a `keyof` over a type whose member
+table is IN FLIGHT must answer from the DECLARATIONS rather than degrade. That is a member-resolution
+change with corpus-wide blast radius and was deliberately not attempted — queued as (INC.25).
+**(INC.22)'s THIRD OBSTRUCTION IS RETIRED**: the PURE partition-scoped arm is EQUIVALENT on BOTH
+`partition-gate` arms (78/78 and 76/76), even though that pass is one of the sensitivity fixture's 78
+netting passes — its rows carry the alias's own `fileName`, so an out-of-partition row is dropped by
+the partition filter anyway. The "DIVERGED 1 file" belonged to the MIXED `TypeAlias`-program-wide
+configuration. **(INC.24) LANDED FIRST, ON ITS OWN COMMIT**: both capture runners now fold their whole
+answer set into ONE number per arm, **ordered by span key so it is a property of the ANSWERS and not
+of `HashMap` iteration**, and from a clean tree it reproduces (INC.22)'s recorded
+`full=-3718897727265589316` over 381,666 types + 360,152 definitions **exactly** — round 776's
+rebuild-the-baseline control, satisfied on an instrument rather than a binary. **A PROCESS VIOLATION
+IS RECORDED**: a `compileKotlinJvm` ran while a sweep JVM was live, which CLAUDE.md forbids in both
+directions; the sweep's summary matched the earlier run exactly so no measurement is tainted, but the
+documented failure mode is SILENT and "it was fine this time" is not evidence the rule is soft.
+Everything is off by default. Suite **15,800 / 0 / 3** (+16 pins), `cost_gate.py` `output.errors` and
+`spine.nodes` **+0.00%**, `huge_methods` clean (778 core classes + `-project`), `capture-equivalence`
+**5 / 3, moreAny 0** and `capture-channel` **286 / 49** with digests unchanged,
+`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
+`partition-gate` 78/78 and 76/76.
+
 **THE FLOOR'S LAST BIG ROW IS WORTH 62-65 ms BY AN AXIS THAT PROVABLY CANNOT MOVE A FULL BUILD, AND
 IT IS REFUSED BECAUSE THE ORDER IT BUYS IS *RESOLUTIONS* AND NOT ONLY A NAME (2026-08-24,
 (INC.22)).** `init:buildFileLocalTypeMaps` is **69.16 ms of a 90.15 ms floor pass table — 77%** —
