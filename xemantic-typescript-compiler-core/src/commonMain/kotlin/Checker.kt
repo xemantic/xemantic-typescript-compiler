@@ -1046,6 +1046,24 @@ class Checker(
     private val fileLocalTypeMapPhases = HashMap<String, MutableSet<FltmDefer.Phase>>()
     /** (INC.11) re-entrancy guard for the lazy per-file build. */
     private val fltmBuildInProgress = HashSet<String>()
+
+    /**
+     * (INC.23) Whether the map's one reader must be able to BUILD, i.e. whether some
+     * file this checker may be asked about was skipped by the eager pass.
+     *
+     * Two independent reasons, deliberately not folded into [FltmDefer.armed]: a
+     * deferred PHASE skips work on every build, while the PARTITION scope skips work
+     * only when there IS a partition — which is a property of this checker. Off
+     * both — the shipped configuration — this is one static-final boolean read on the
+     * hottest identifier path in the compiler, exactly as before.
+     *
+     * `assignedFileNames` rather than the (INC.17) `assignedFiles` var, because a
+     * replay only ever WIDENS the partition: a checker that started partitioned stays
+     * partitioned, and one that started whole has nothing to defer.
+     */
+    private val fltmLazyArmed: Boolean =
+        FltmDefer.armed ||
+            (FltmDefer.scope == FltmDefer.Scope.PARTITION && assignedFileNames != null)
     /**
      * Whether [ensureImportReferencesTracked] has run. Per-`Checker`, like
      * [referencedAliases] itself; exposed so the deferral can be pinned as a
@@ -6308,6 +6326,21 @@ class Checker(
         val first = symbols[0]
         val declaration = first.valueDeclaration ?: first.declarations.firstOrNull()
         val modifiers = typeCaptureMemberModifiers(first)
+        // (INC.23) THE READER HOOK — the rendering a user would see, with the
+        // provenance of the resolution behind it. `memo` says the answer came from
+        // `symbolTypes` rather than from a fresh resolution, which is the half of the
+        // race a caret can observe.
+        if (SymTypeOrderCensus.on) {
+            SymTypeOrderCensus.noteMember(
+                name,
+                types.joinToString(" | "),
+                first.id,
+                symbolTypes[first.id] != null,
+                declaration?.kind?.name ?: "Unknown",
+                declaration?.let { typeCaptureEnclosingFile(it)?.fileName } ?: "<none>",
+                declaration?.pos ?: -1,
+            )
+        }
         return CapturedMember(
             name = name,
             kind = declaration?.kind?.name ?: "Unknown",
@@ -15152,7 +15185,16 @@ class Checker(
         if (FltmCensus.on) FltmCensus.beginSetup()
         val eager = FltmDefer.eager
         if (eager.isNotEmpty()) {
-            for (result in binderResults) {
+            // (INC.23) THE MEASUREMENT ARM, and it is a strict no-op at the shipped
+            // `Scope.PROGRAM`. Under `PARTITION` the loop moves to `checkedResults`,
+            // which IS `binderResults` when `assignedFileNames` is null — so even the
+            // armed binary builds every file's map in the order it always did on an
+            // unpartitioned compile. What a narrowed build skips,
+            // [fileLocalTypeMapFor] rebuilds on demand.
+            for (result in
+                if (FltmDefer.scope == FltmDefer.Scope.PARTITION) checkedResults
+                else binderResults
+            ) {
                 buildFileLocalTypeMapPhases(result, eager)
                 FltmDefer.eagerBuilds++
             }
@@ -15188,7 +15230,7 @@ class Checker(
      * boolean read and the map behaves exactly as the eager pass left it.
      */
     private fun fileLocalTypeMapFor(fileName: String): Map<String, Type>? {
-        if (FltmDefer.armed) ensureFileLocalTypeMap(fileName)
+        if (fltmLazyArmed) ensureFileLocalTypeMap(fileName)
         return fileLocalTypeMaps[fileName]
     }
 
@@ -111475,7 +111517,23 @@ interface DataView {
         }
         try {
             val type = getTypeOfSymbolWorker(symbol)
-            if (cacheable || !SYMBOL_TYPE_ORDER_GATE) symbolTypes[symbol.id] = type
+            val persisted = cacheable || !SYMBOL_TYPE_ORDER_GATE
+            if (persisted) symbolTypes[symbol.id] = type
+            // (INC.23) THE WRITER HOOK. Inside the guard, not merely behind it: the
+            // arguments would otherwise be evaluated on every production resolution
+            // (round 900). Off — the shipped configuration — this is one static
+            // boolean read.
+            if (SymTypeOrderCensus.on) {
+                SymTypeOrderCensus.noteResolve(
+                    symbol.id,
+                    symbol.name,
+                    PassTiming.currentPass,
+                    currentTypeParamScope != null,
+                    currentTypeAliasArgs != null,
+                    inferenceNamespaceStack.isNotEmpty(),
+                    persisted,
+                )
+            }
             return type
         } finally {
             if (MapCensus.boxedKeyCensus) {

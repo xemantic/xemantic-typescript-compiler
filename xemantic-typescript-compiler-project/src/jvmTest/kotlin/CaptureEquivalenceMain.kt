@@ -76,8 +76,10 @@ fun main(args: Array<String>) {
     // (INC.11) arms for `init:buildFileLocalTypeMaps`. Unset means the shipped
     // behaviour, so an unset sweep is the baseline and needs no separate binary.
     FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
-    if (FltmDefer.eager != FltmDefer.Phases.ALL) {
-        println("FLTM eager phases: ${FltmDefer.eager}")
+    // (INC.23) the SECOND, independent axis — which FILES the eager pass covers.
+    FltmDefer.scope = FltmDefer.scopeFromName(System.getenv("XTSC_FLTM_SCOPE"))
+    if (FltmDefer.eager != FltmDefer.Phases.ALL || FltmDefer.scope != FltmDefer.Scope.PROGRAM) {
+        println("FLTM eager phases: ${FltmDefer.eager} scope: ${FltmDefer.scope}")
     }
     AliasDisplayCensus.on = System.getenv("XTSC_ALIAS_CENSUS") == "1"
     // (INC.24) How many divergent rows to PRINT, and how wide. The CLASSIFICATION of a

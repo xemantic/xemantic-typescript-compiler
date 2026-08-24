@@ -25,8 +25,10 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
+import com.xemantic.typescript.compiler.SymTypeOrderCensus
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -87,6 +89,16 @@ fun main(args: Array<String>) {
     val printCap = System.getenv("XTSC_CAPCH_PRINT")?.toIntOrNull() ?: 40
     val mechCap = System.getenv("XTSC_CAPCH_MECH")?.toIntOrNull() ?: 20
     val mechChars = System.getenv("XTSC_CAPCH_MECHCHARS")?.toIntOrNull() ?: 400
+    // (INC.23) THE TWO AXES of `init:buildFileLocalTypeMaps`, both unset by default so
+    // an unset sweep IS the baseline and needs no separate binary.
+    FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
+    FltmDefer.scope = FltmDefer.scopeFromName(System.getenv("XTSC_FLTM_SCOPE"))
+    if (FltmDefer.eager != FltmDefer.Phases.ALL || FltmDefer.scope != FltmDefer.Scope.PROGRAM) {
+        println("FLTM eager phases: ${FltmDefer.eager} scope: ${FltmDefer.scope}")
+    }
+    // (INC.23) THE CENSUS. Only ever armed for a DRILL-DOWN run (a file suffix), because
+    // it appends a row per rendered member and the whole sweep renders millions.
+    SymTypeOrderCensus.on = System.getenv("XTSC_SYMORDER") == "1"
     val vfs = SystemVfs
     val compiler = ProjectCompiler(vfs)
     val project = vfs.resolveAbsolute(args[0])
@@ -221,10 +233,19 @@ fun main(args: Array<String>) {
             scopeSpans = scopeSpans.values.toList(),
             signatureSpans = signatureSpans.values.toList(),
         )
+        if (SymTypeOrderCensus.on) SymTypeOrderCensus.reset()
         val full = compiler.build(project, noEmit = true, typeCapture = request)
+        val fullCensus = if (SymTypeOrderCensus.on) {
+            SymTypeOrderCensus.report("full ${file.substringAfterLast('/')}")
+        } else ""
+        if (SymTypeOrderCensus.on) SymTypeOrderCensus.reset()
         val narrow = compiler.build(
             project, noEmit = true, recheckOnly = setOf(file), typeCapture = request,
         )
+        if (SymTypeOrderCensus.on) {
+            print(fullCensus)
+            print(SymTypeOrderCensus.report("narrow ${file.substringAfterLast('/')}"))
+        }
         filesCompared++
 
         var here = 0

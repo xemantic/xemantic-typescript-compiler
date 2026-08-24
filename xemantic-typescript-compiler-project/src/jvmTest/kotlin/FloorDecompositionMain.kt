@@ -84,7 +84,9 @@ fun main(args: Array<String>) {
     val warmups = if (args.size > 1) args[1].toInt() else 3
     // (INC.11) the eager-phase arm; unset means the shipped behaviour.
     FltmDefer.eager = FltmDefer.fromName(System.getenv("XTSC_FLTM_EAGER"))
-    println("FLTM eager phases: ${FltmDefer.eager}")
+    // (INC.23) the SECOND, independent axis — which FILES the eager pass covers.
+    FltmDefer.scope = FltmDefer.scopeFromName(System.getenv("XTSC_FLTM_SCOPE"))
+    println("FLTM eager phases: ${FltmDefer.eager} scope: ${FltmDefer.scope}")
     val compiler = ProjectCompiler(SystemVfs)
 
     fun full() = compiler.build(project, noEmit = true)

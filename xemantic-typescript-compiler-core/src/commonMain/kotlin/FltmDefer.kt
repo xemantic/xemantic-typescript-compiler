@@ -74,6 +74,32 @@ object FltmDefer {
     }
 
     /**
+     * (INC.23) THE SECOND AXIS — WHICH FILES the `init` pass covers, as opposed to
+     * [eager], which says which PHASES each covered file gets.
+     *
+     * (INC.10) and (INC.11) both varied [eager], i.e. changed what every file's map
+     * carries, which perturbs a FULL build's first-touch order as much as a narrowed
+     * one's; both were refused. [PARTITION] instead iterates the INV.6(6d) partition
+     * view, which **IS** `binderResults` whenever there is no partition — so an
+     * unpartitioned compile runs byte-for-byte the pass it always ran and only a
+     * `recheckOnly` build skips anything.
+     *
+     * (INC.22) measured that arm at **floor 131 -> 57 ms, narrowed-query median
+     * 166 -> 116, ratio 29.86x -> 42.61x** and REFUSED it: `capture-channel-
+     * equivalence`'s `narrowRendersMoreAny` goes **168 -> 229**, i.e. +61 member
+     * types collapse to `any` under a narrowed build. That is a WRONG answer, so
+     * [PROGRAM] is the shipped default and [PARTITION] is a MEASUREMENT ARM — the
+     * instrument (INC.23) censuses the 61 with, not a behaviour anything ships.
+     */
+    enum class Scope {
+        /** Every file in the program — the shipped pass. */
+        PROGRAM,
+
+        /** The check partition, with the map's one reader building the rest. */
+        PARTITION,
+    }
+
+    /**
      * The eager set. Assigning anything other than [Phases.ALL] arms the lazy path.
      *
      * NOT routed through `ModeLedger`: this is not a CLI flag, and the two sweeps
@@ -81,7 +107,23 @@ object FltmDefer {
      */
     var eager: Set<Phase> = Phases.ALL
 
-    /** True when some phase is deferred, i.e. when the lazy path may run. */
+    /**
+     * (INC.23) Which files the eager pass covers. [Scope.PROGRAM] is the shipped
+     * pass; anything else is an arm, and `FltmDeferArmTest` pins that the DEFAULT
+     * is the shipped one with no mode install of its own — (INC.16) arm a1's
+     * lesson, that a pin which sets the mode it wants leaves the default pinned by
+     * nothing.
+     */
+    var scope: Scope = Scope.PROGRAM
+
+    /**
+     * True when some PHASE is deferred, i.e. when the lazy path may run even on a
+     * build with no partition.
+     *
+     * Deliberately says nothing about [scope]: a partition-scoped pass needs the
+     * lazy path only when there IS a partition, which is a property of the checker
+     * and not of this object, so that half is decided per-checker.
+     */
     val armed: Boolean get() = eager.size != 3
 
     /** Per-checker count of files whose map was built lazily, for the pins. */
@@ -103,5 +145,16 @@ object FltmDefer {
         "typealias" -> Phases.TYPEALIAS_ONLY
         "none" -> Phases.NONE
         else -> Phases.ALL
+    }
+
+    /**
+     * (INC.23) Parses `XTSC_FLTM_SCOPE`; unset or unrecognised means [Scope.PROGRAM],
+     * the shipped pass. A SEPARATE environment variable from `XTSC_FLTM_EAGER`
+     * because the two axes are independent and a sweep must be able to vary exactly
+     * one of them.
+     */
+    fun scopeFromName(name: String?): Scope = when (name?.lowercase()) {
+        "partition" -> Scope.PARTITION
+        else -> Scope.PROGRAM
     }
 }
