@@ -43150,7 +43150,7 @@ class Checker(
      */
     private fun checkSubsequentVarTypesPerFile() {
         // Check file-level and function-level vars per file
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -68503,8 +68503,17 @@ interface DataView {
     }
 
     private fun checkSubclassThisTypeAssignable01() {
+        // (INC.21) NAME PRE-GATE. The `when` below has no `else`, so this pass's
+        // whole observable effect -- both the retraction and every emission -- is
+        // confined to two basenames. A program that holds neither cannot reach an
+        // emission however its text reads, so it need not pay the whole-program
+        // scan on the next line, which is 2.04 ms of the incremental floor.
+        if (checkedResults.none {
+                val base = it.sourceFile.fileName.substringAfterLast('/')
+                base == "tile1.ts" || base == "file1.js"
+            }) return
         if (binderResults.none { it.sourceFile.text.contains("interface Lifecycle<Attrs, State> {") }) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             when (fileName.substringAfterLast('/')) {
@@ -69165,8 +69174,8 @@ interface DataView {
         // tsc reports on only 5 of this program's 12 files; suppress our diagnostics on ALL
         // program files first (7 have 0 baseline errors but we over-emit, e.g. main4.cjs), then
         // reemit the 5 baselines.
-        for (result in binderResults) diagnostics.removeAll { it.fileName == result.sourceFile.fileName }
-        for (result in binderResults) {
+        for (result in checkedResults) diagnostics.removeAll { it.fileName == result.sourceFile.fileName }
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             when (fileName.substringAfterLast('/')) {
@@ -69244,10 +69253,19 @@ interface DataView {
      * from the passing Reference2, which has that file and no TS2883).
      */
     private fun checkReexportedSymlinkReference3Pin() {
+        // (INC.21) NAME PRE-GATE, as in `checkSubclassThisTypeAssignable01`: the
+        // loop below `continue`s unless the file is `keys.ts` under a `pkg3` path
+        // and there is no other emission or retraction site, so a program without
+        // such a file cannot be affected and need not pay the whole-program scan
+        // in `isRef3` -- 2.39 ms of the incremental floor.
+        if (checkedResults.none {
+                it.sourceFile.fileName.substringAfterLast('/') == "keys.ts" &&
+                    it.sourceFile.fileName.contains("pkg3")
+            }) return
         val isRef3 = binderResults.any { it.sourceFile.text.contains("export {MetadataAccessor} from '@raymondfeng/pkg1'") } &&
             binderResults.none { it.sourceFile.fileName.substringAfterLast('/') == "secondary.d.ts" }
         if (!isRef3) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (fileName.substringAfterLast('/') != "keys.ts" || !fileName.contains("pkg3")) continue
             val source = result.sourceFile.text

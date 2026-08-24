@@ -130,14 +130,23 @@ class PartitionCensusHookTest {
     @Test
     fun `a MIXED pass is split, so the census attributes each half to its own row`() {
         // (INC.17) TS2403 used to be ONE `checkSubsequentVarTypes` pass whose two
-        // halves have OPPOSITE partition behaviour, and the census read their SUM:
+        // halves have DIFFERENT partition behaviour, and the census read their SUM:
         // 14.90 ms recorded as partition-DEPENDENT, of which the `binderResults`
-        // half — the whole 14.90 — is partition-INVARIANT. Split, each half is
-        // classified on its own, and THIS is the pin that says so: the two names
-        // must land on opposite sides of the census.
+        // half — the whole 14.90 — was then partition-INVARIANT. Split, each half
+        // is classified and timed on its own row, and THIS is the pin that says so:
+        // a re-merge collapses the two names to one, so both must be present.
+        //
+        // (INC.21) CHANGED WHAT THIS PIN EXPECTS OF THE SECOND NAME, DELIBERATELY.
+        // `checkSubsequentVarTypesPerFile` used to be REQUIRED ABSENT here, because
+        // (INC.17) left it on `binderResults` so its re-entrant replay would never
+        // have to re-enter it. That replay is EXPERIMENTAL, (INC.19) refused it as
+        // a default path, and nothing shipped reaches it — while the row is 10.9 ms
+        // of an incremental floor that every real language-service query pays. So
+        // the pass is now gated and this expectation is inverted; the replay cost
+        // of the extra re-entered pass was measured rather than assumed.
         val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
         assert("checkSubsequentVarTypesCrossFile" in reads)
-        assert("checkSubsequentVarTypesPerFile" !in reads)
+        assert("checkSubsequentVarTypesPerFile" in reads)
     }
 
     @Test

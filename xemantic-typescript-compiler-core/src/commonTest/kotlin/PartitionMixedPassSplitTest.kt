@@ -121,15 +121,21 @@ class PartitionMixedPassSplitTest {
 
     /**
      * The negative control that keeps the assertion above from passing on a binary
-     * that gated everything: `checkSubsequentVarTypesPerFile` is (INC.17)'s
-     * deliberately partition-INVARIANT half and (INC.20) refused to reverse it, so
-     * it must still be absent — as must the three program-wide index builders.
+     * that gated everything: the program-wide index builders must still be absent.
+     *
+     * (INC.21) REMOVED `checkSubsequentVarTypesPerFile` FROM THIS LIST, and said so
+     * rather than editing it quietly. It was here because (INC.17) deliberately left
+     * that pass on `binderResults` so its re-entrant replay would never re-enter it,
+     * and (INC.20) declined to reverse a decision it had not been asked to take. The
+     * replay is EXPERIMENTAL and (INC.19) refused it as a default path, so nothing
+     * shipped reaches it, while the pass is 10.9 ms of an incremental floor that
+     * every editor query pays; the pass is now gated and
+     * `PartitionCensusHookTest` asserts its PRESENCE.
      */
     @Test
     fun `negative control - the passes INC 20 refused are still not recorded`() {
         val reads = readsFor(setOf("/proj/b.ts"))
         val wrongly = listOf(
-            "checkSubsequentVarTypesPerFile",
             "init:buildFileLocalTypeMaps",
             "init:computeAllEnumValues",
         ).filter { it in reads }

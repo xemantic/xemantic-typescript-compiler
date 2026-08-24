@@ -246,8 +246,18 @@ class ProjectRecheckTest {
         // The receipt of the whole mechanism. Both bounds matter: an empty set would
         // mean nothing re-enters (and the answers above would be the seed build's),
         // and a set as large as the dispatch would mean nothing is being saved.
+        //
+        // (INC.21) RAISED THE UPPER BOUND FROM 300 TO 360, AND THE REASON IS THE
+        // POINT OF THE PIN RATHER THAN AN EXCUSE FOR IT. The classified set is not
+        // a constant: it is exactly the passes that read the partition view, so
+        // every pass this arc narrows JOINS it. (INC.17) measured 204 of 417 init
+        // rows; after (INC.21)'s 24 it is 300 here and 304 on tsc's own sources.
+        // The mechanism is unchanged and still a strict subset of the dispatch --
+        // but the replay's own advantage shrinks as the FLOOR it is replayed
+        // against shrinks, which is measured in that round's note and is one more
+        // reason (INC.19)'s refusal of the replay as a default path stands.
         assert(program.replayedPasses.isNotEmpty())
-        assert(program.replayedPasses.size < 300)
+        assert(program.replayedPasses.size < 360)
         // `checkSpine` reads the partition directly and is the one row that MUST be
         // in it — without the spine the new file is never walked at all.
         assert("checkSpine" in program.replayedPasses)
