@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.27) — REFUSED with a PROOF: B416's key cannot name a union the way tsc does, and the obvious narrowing makes the gate WORSE
+
+**WHAT THIS ROUND DID.** Censused the ~790 `unionAliasStructural` rows (INC.26) left,
+measured what tsc actually answers, **built the narrowing anyway and measured it making
+things worse**, and landed only the knowledge. Nothing behavioural changed — proven, not
+asserted.
+
+**THE CENSUS** (1,128 divergent spans, per-element, nesting-aware; reproduced the recorded
+baseline exactly, 43 files):
+
+| rows | family | who is right |
+|---:|---|---|
+| **432** | one member set claimed by SEVERAL aliases, the arms disagreeing about which name won (`ModuleName`/`ModuleExportName`/`ImportAttributeName`; `EntityNameExpression`/`SerializedEntityName`) | **neither — arbitrary in both** |
+| **~393** | a SOLITARY alias naming a union at sites that never spell it | **narrow (structural)** |
+| **~303** | the (INC.28) visitor-signature family, not alias-related | narrow |
+
+The second family is MEASURED, not inferred: `AssignmentPattern` has **0 references** in
+binder.ts (95 rows), `MemberName` **0** in checker.ts (76), `JsxCallLike` **0** in
+parser.ts, likewise `CommentKind`, `BindingElementGrandparent` and
+`IsObjectLiteralOrClassExpressionMethodOrAccessor`.
+
+**WHAT tsc ANSWERS, AND THE MECHANISM IS NOT WHAT THE NAME SUGGESTS.** Three answers for
+ONE member set — `ModuleName`, `ModuleExportName`, and `Ident | Str` where no alias was
+written — because tsc keys its union cache by `getTypeListId(types) + getAliasId(alias-
+Symbol, …)`. **A fourth probe named the real mechanism: a join-built `A | B` renders
+STRUCTURALLY while a narrow of `x: MyType` that removes nothing renders `MyType`. So
+tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not structural
+matching** — and both halves are visible in `narrowByClauseExpressionInSwitchTrue6`'s own
+pristine baseline.
+
+**THE PROOF THAT BOUNDS THE WHOLE DIRECTION.** INV.5(a) (round 545) interns our unions by
+**member-id list ALONE**, so every one of tsc's instances is a single `Type` here. That is
+not an obstacle to work around, it is a proof: **no id-keyed or member-set-keyed table can
+give three answers from one key, and anything able to name the flow-RECONSTRUCTED union
+necessarily also names a union nobody named.** The residual is an INTERNING-KEY defect,
+not a defect of B416's table, and full parity needs the alias in the union's IDENTITY.
+
+**THE NARROWING WAS BUILT AND MEASURED, AND IT MAKES THE GATE WORSE — THIS IS THE PART
+WORTH KEEPING.** Poisoning a member set that two differently-named aliases claim does
+exactly what it says: the `full=name / narrow=name` bucket collapses **416 -> 2**. And the
+gate goes **1,128 -> 1,351 spans, 43 -> 46 files**, because a new
+`full=structural / narrow=name` bucket of **657** appears. **The poison TRIGGER is itself
+coverage-dependent**, so it converts a small difference in which aliases happened to be
+resolved into a difference in whether a name exists at all — and amplifies it. A fix whose
+own precondition depends on the thing it is correcting for cannot be stable.
+
+**AND IT CANNOT BE MADE STABLE SYNTACTICALLY.** Of the **407** collisions the census
+counts per compile, the largest are `type FunctionLike = SignatureDeclaration` and
+`type AssertionKey = ImportAttributeName` — **an alias whose body is ANOTHER alias,
+spelling no members at all** — and `BindingOrAssignmentPattern` vs `DestructuringPattern`,
+structurally equal and spelled entirely differently. Deciding ambiguity therefore means
+resolving every union alias UP FRONT, which is (INC.22)'s eager `TypeAlias` phase —
+already refused at 6.68 ms of a 58 ms floor AND for diverging a DIAGNOSTIC on the
+sensitivity arm.
+
+**WHAT LANDED IS BEHAVIOUR-FREE AND THE INERTNESS IS PROVEN BY DIGEST, NOT CLAIMED**: the
+`unionAliasStructural` KDoc carrying the above, `AliasDisplayCensus.unionRegistered` /
+`unionAmbiguous` hooked OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations,
+407 collisions), and `UnionAliasDisplayTest` pinning the two things a future round must
+not lose — a solitary alias names its member set, and the switch-fallthrough-reconstructed
+full union still displays as `MyType`. **Nothing pins the open gap** (round 765's rule: do
+not pin a known-open gap, it is a countdown, not a guard).
+
+**GATES.** Suite **15,807 / 0 / 3** (+2 pins), zero corpus baselines moved, `cost_gate.py`
+exit 0 (largest `mapped.hits` +1.02%, standing), `huge_methods --fail-over 0` exit 0 both
+modules (core 781 classes, largest 5,388), `partition-equivalence` **EQUIVALENT 78/78**,
+`partition-gate` realism **78/78** and sensitivity **76/76 over 78 netting passes**, floor
+**57 ms** (untouched, and printed in passing rather than measured with a before-arm it did
+not need), `capture-channel` full digest `-3278907782584108296` with `moreAny=168` at
+baseline. **THE BEHAVIOUR CONTROL: `capture-equivalence` returns full
+`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files —
+BIT-IDENTICAL to the recorded baseline, which is what proves the census hooks are inert.**
+
 ### Round (DOC.1) — `CLAUDE.md` 427 -> 320 KB by MOVING 107 entries, and the arithmetic says the remaining lever is DISTILLATION, not more moving
 
 **WHAT THIS ROUND DID.** Enforced the file's own residency rule after its THIRD and
@@ -3841,21 +3914,49 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `4065921979171190360` -> **`-3278907782584108296`**. First time in the arc; a full
   build is what this corrects.
 
-- [ ] **(INC.27) `unionAliasStructural` (B416) NAMES A UNION NOBODY NAMED — ~790 ROWS,
-  WRONG IN *BOTH* ARMS, AND WRONG EVEN WHERE NO ALIAS EXISTS.** (INC.26) measured it and
-  deliberately did not touch it. B416 keys a global by the SORTED MEMBER-ID SET, so it
-  names ANY union matching a declared alias, first-wins. **Probed against tsc 7.0.2**:
-  for `type ModuleName = Ident|Str; type ModuleExportName = Ident|Str`, tsc renders
-  `ModuleExportName` for the annotation that SAYS so, and **`Ident | Str` where no alias
-  was written at all** — we answer `ModuleName` for both.
-  **THE HAZARD IS WHY B416 EXISTS**: unions RECONSTRUCTED by flow narrowing have no
-  annotation to read, so a naive "only name what the source spelled" rule loses the
-  naming B416 was built to provide. The (INC.26) shape is the precedent — narrow the rule
-  by a property that separates the families, do not delete it — and the corpus is the
-  gate, since this is `typeToString` and reaches diagnostics.
-  **DO NOT close this by making the NARROW arm match the FULL one**: (INC.26) established
-  that in every remaining family the narrowed arm is the MORE correct one.
+- [x] **(INC.27) REFUSED 2026-08-24 WITH A PROOF — B416's KEY CANNOT NAME A UNION THE WAY
+  tsc DOES, AND THE OBVIOUS NARROWING MAKES THE GATE *WORSE*.** Census of the 1,128
+  residual spans: **432** where several aliases claim one member set (arbitrary in BOTH
+  arms), **~393** where a SOLITARY alias names a union at sites that never spell it
+  (measured: `AssignmentPattern` has **0 references** in binder.ts, `MemberName` 0 in
+  checker.ts), **~303** the (INC.28) family.
+  **tsc gives THREE answers for one member set** (`ModuleName`, `ModuleExportName`,
+  `Ident | Str`) because it keys its union cache by `getTypeListId + getAliasId`; **and
+  its naming turns out to be IDENTITY PRESERVATION (`filterType`), not structural
+  matching** — a join-built `A | B` renders structurally while a no-op narrow of
+  `x: MyType` renders `MyType`, both in one pristine baseline.
+  **INV.5(a) (round 545) interns our unions by member-id list ALONE**, so all of tsc's
+  instances are ONE `Type` here — a proof that no id- or member-set-keyed table can give
+  three answers from one key, and that **anything able to name the reconstructed union
+  also names a union nobody named.**
+  **THE NARROWING WAS BUILT AND MEASURED**: it collapses `full=name/narrow=name` **416 ->
+  2** and takes the gate **1,128 -> 1,351 spans, 43 -> 46 files**, because the poison
+  TRIGGER is itself coverage-dependent and a new `full=structural/narrow=name` bucket of
+  657 appears. Nor can ambiguity be decided syntactically: of 407 collisions per compile
+  the largest are aliases whose body is ANOTHER alias (`type FunctionLike =
+  SignatureDeclaration`), so deciding it means resolving every union alias up front —
+  (INC.22)'s eager `TypeAlias` phase, already refused twice.
+  **Landed behaviour-free and PROVEN so**: KDoc, census hooks outside the write, 2 pins,
+  and `capture-equivalence` returning BIT-IDENTICAL digests.
 
+- [ ] **(INC.29) PUT THE ALIAS IN A UNION'S IDENTITY — the only route to tsc's union
+  display, and it is an INV.5(a) change, not a display one.** (INC.27) proved the bound:
+  tsc keys its union cache by `getTypeListId(types) + getAliasId(aliasSymbol, …)` and so
+  holds distinct instances for one member set, while round 545's INV.5(a) interns ours by
+  **member-id list alone**. **Until that changes, no naming rule can be correct** — every
+  mechanism that can name a flow-reconstructed union also names one nobody wrote.
+  **AND THE TARGET BEHAVIOUR IS NOT "MATCH THE ANNOTATION" BUT IDENTITY PRESERVATION**:
+  tsc renders `MyType` for a narrow that removes nothing and the structural union for a
+  join-built one, which is `filterType` returning its input unchanged — so the rule is
+  "an operation that did not change the type does not change its name".
+  **THE COST IS THE HAZARD.** Union interning is load-bearing for relation caching and for
+  union display ORDER, which is pinned byte-for-byte across ~13k baselines; splitting the
+  key mints more `Type` ids, and id drift reshuffles ~350 boundary tests (round 881's
+  warning about moving id allocation). Price the id churn BEFORE building anything.
+  **Do NOT re-open**: naming from the annotation ((INC.27), unstable and coverage-
+  dependent), the eager `TypeAlias` phase ((INC.22), 6.68 ms and a diverging diagnostic),
+  or closing the gate by making the NARROW arm match the full one ((INC.26): the narrow
+  arm is the more correct one in every remaining family).
 - [ ] **(INC.28) THE VISITOR-SIGNATURE FAMILY — ~298 ROWS WHERE THE *FULL* BUILD RENDERS
   `any` AND THE NARROW ONE RENDERS `T | readonly Node[]`.** Measured by (INC.26),
   untouched, not alias-related. Same direction as everything else this arc has found: the

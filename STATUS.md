@@ -1,5 +1,46 @@
 # Status
 
+**(INC.27) REFUSED WITH A PROOF: B416's KEY CANNOT NAME A UNION THE WAY tsc DOES, AND THE OBVIOUS
+NARROWING WAS BUILT, MEASURED, AND MADE THE GATE *WORSE* (2026-08-24).** The ~790-row
+`unionAliasStructural` residual (INC.26) left splits, per element and nesting-aware, into **432**
+rows where SEVERAL aliases claim one member set (arbitrary in BOTH arms), **~393** where a SOLITARY
+alias names a union at sites that never spell it — measured, not inferred: `AssignmentPattern` has
+**0 references** in binder.ts, `MemberName` **0** in checker.ts, `JsxCallLike` **0** in parser.ts —
+and **~303** of the unrelated (INC.28) family. **tsc gives THREE answers for one member set**
+(`ModuleName`, `ModuleExportName`, and the bare `Ident | Str` where nobody wrote an alias) because it
+keys its union cache by `getTypeListId(types) + getAliasId(aliasSymbol, …)`. **And a fourth probe
+named the real mechanism: tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not
+structural matching** — a join-built `A | B` renders structurally while a narrow of `x: MyType` that
+removes nothing renders `MyType`, both visible in one pristine baseline.
+**THE PROOF THAT BOUNDS THE DIRECTION**: round 545's INV.5(a) interns our unions by **member-id list
+ALONE**, so every one of tsc's instances is a single `Type` here. No id-keyed or member-set-keyed
+table can give three answers from one key, and **anything able to name the flow-RECONSTRUCTED union
+necessarily also names a union nobody wrote.** The residual is an INTERNING-KEY defect, not a defect
+of B416's table — queued as (INC.29), which is an INV.5(a) change and must price the id churn first
+(union interning is load-bearing for relation caching and for a display ORDER pinned byte-for-byte
+across ~13k baselines).
+**THE NARROWING WAS BUILT RATHER THAN ARGUED ABOUT, AND THAT IS WHAT SETTLED IT.** Poisoning a member
+set two differently-named aliases claim does exactly what it claims — the `full=name/narrow=name`
+bucket collapses **416 -> 2** — and the gate still goes **1,128 -> 1,351 spans, 43 -> 46 files**,
+because a `full=structural/narrow=name` bucket of **657** appears: **the poison TRIGGER is itself
+coverage-dependent**, converting a small difference in which aliases happened to be resolved into a
+difference in whether a name exists at all, and amplifying it. Nor can ambiguity be decided
+syntactically — of **407** collisions per compile the largest are aliases whose body is ANOTHER alias
+(`type FunctionLike = SignatureDeclaration`), spelling no members at all — so deciding it means
+resolving every union alias up front, i.e. (INC.22)'s eager `TypeAlias` phase, already refused for
+6.68 ms of the floor and for diverging a DIAGNOSTIC on the sensitivity arm.
+**WHAT LANDED IS BEHAVIOUR-FREE AND PROVEN SO BY DIGEST**: the `unionAliasStructural` KDoc carrying
+the proof, census hooks placed OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations, 407
+collisions), and two pins guarding what a future round must not lose — a solitary alias names its
+member set, and the switch-fallthrough-reconstructed union still displays as `MyType`. **Nothing pins
+the open gap** (round 765: a pin on a known-open gap is a countdown, not a guard). Suite **15,807 / 0
+/ 3** (+2 pins), zero corpus baselines moved, `cost_gate.py` exit 0, `huge_methods --fail-over 0`
+exit 0 on both modules (core 781 classes), `partition-equivalence` EQUIVALENT 78/78, `partition-gate`
+78/78 and 76/76 over 78 netting passes, floor **57 ms** untouched, and — the control that makes the
+inertness a measurement rather than a claim — **`capture-equivalence` returns full
+`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files, BIT-IDENTICAL to the
+recorded baseline.**
+
 **AN ALIAS WAS RENAMING EVERY TYPE THAT ALREADY HAD ITS OWN NAME — IN THE *DIAGNOSTICS* CHANNEL, ON
 ORDINARY BUILDS — AND THE GATE THAT WAS SUPPOSED TO CATCH IT HAD THE REFERENCE ARM BACKWARDS
 (2026-08-24, (INC.26)).** **OPERATIONAL, READ FIRST: two recorded full-build digests MOVED, by
@@ -174,48 +215,4 @@ AND member resolutions (not fixable without the expensive phase). **A future att
 member resolution ORDER-INDEPENDENT — round 778's `getTypeOfSymbol` write gate is the known
 mechanism — not make the pass cheaper.** Queued as (INC.23), with (INC.24) to re-land the capture
 digest, a general gate strengthening that died with the revert.
-
-**THE SCANNING FAMILY GATED AS ONE BATCH BANKS 99.9% — THE ARC'S FIRST ~100% DISCOUNT — AND A
-NARROWED QUERY IS NOW 29.86x FASTER THAN A FULL BUILD (2026-08-24, (INC.21)).** 19 whole-source-
-scanning passes moved TOGETHER (**19.064 -> 0.024 ms**), because round 895's `srcHas` builds its
-per-file n-gram filter LAZILY and gating one merely hands the ~19.4 ms to the next scanner — a cost
-this repo had already misattributed twice. Gated together it has nowhere to relocate to, and **no
-row outside the batch rose**: the largest riser is `init:buildFileLocalTypeMaps` +2.4 ms on 70
-(+3.5%) against the arm's own total drifting +9% between draws. **Why nothing rebuilds it was
-measured, not inferred**: the three whole-program text gates that remain use a RAW `String.contains`,
-never the filtered `srcHas`. `PT.total both.floor` **123.95 -> 97.12 ms**; `partition-equivalence.sh`
-floor **162 -> 137 ms**, narrowed-query median **207 -> 166 ms**, ratio at the median file **24.16x
--> 29.86x**. The 19-pass list was derived by TWO independent instruments — a call-graph walk from
-each registered `pass("name")` and a purely lexical loop scan — which agree.
-**THE FOUR STRAGGLERS TAUGHT THE OPPOSITE LESSON.** Three keep their cost because a whole-program
-`.contains` gate sits ABOVE the loop — a question about the PROGRAM, which must stay on
-`binderResults` — so gating the loop banks ~0.02 ms each, with `checkModulePreserve4Pin` as the
-control (loops narrowed, row unmoved at 1.639 -> 1.699). What banks the ms is a **NAME PRE-GATE**,
-sound only because it asks what the pass can already do: **2.509 -> 0.002** and **2.064 -> 0.002**.
-**THE AUTHORISED REVERSAL, WITH ITS OBLIGATION DISCHARGED ON BOTH ARMS OF ONE BOX.**
-`checkSubsequentVarTypesPerFile` **11.740 -> 0.004 ms**. (INC.17) had deliberately left it
-program-wide so a replay never re-enters it; that was reversed because the replay is EXPERIMENTAL,
-refused by (INC.19) and reached by nothing shipped, while the row is paid by every real query.
-Measured rather than assumed: **284 -> 304 of 417 re-entered passes for +26 ms over 75 questions
-(+0.2%)**, divergence unchanged at **5 of 75**. **And the replay's ADVANTAGE fell 1.91x -> 1.68x
-purely because the fresh build got cheaper** — every round that shrinks the floor shrinks the
-replay's reason to exist, which strengthens (INC.19)'s refusal of it as a default path.
-**THE PINS FAIL AGAINST THE UNFIXED BINARY AND THE ABLATION REPRODUCES THE SESSION-START BASELINE**
-(round 776's control): 25 partition pins, the ablation turns **9 RED** including the count receipt
-*a narrowed build builds fewer whole-source scan filters than the whole program* on `SrcScan.builds`,
-and the ablated binary reads `checkReverseMappedIntersectionConstraint` at 18.18 ms with the family
-sum at 19.47. **The analyzer caught a SIXTH defect in itself** — a raw LINE-based brace matcher ran
-away, reading `checkParseUnmatchedTypeAssertion` as **16,363 lines against its true 15**; the tell
-was the impossible span, not a verdict. **REFUSED**: two passes whose emitter adds a row on an
-augmentation's TARGET (a partition holding only the target would lose it), a pre-gate for a pass
-that wipes rows unconditionally, and routing the three raw `.contains` gates through `srcHas` —
-which would now **COST ~17.8 ms to build 78 filters to save three ~2 ms scans.**
-**WHAT IS LEFT: THE FLOOR IS 75% ONE ROW.** `init:buildFileLocalTypeMaps` is **73.21 ms of 96.57**;
-everything else is <= 8.5 ms. It is refused twice over, but the arithmetic that refused its
-alias-display half was written against a 340 ms floor and the floor is now 137 — see (INC.22).
-Suite **15,784 / 0 / 3** (+13 pins, no baseline moved), `partition-equivalence` EQUIVALENT 78/78,
-`partition-gate` realism 78/78 and sensitivity 76/76 with 78 netting passes, `capture-equivalence`
-**5 spans / 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** both BASELINE,
-`cost_gate.py` largest `mapped.hits` +1.02% (standing) with all others <= 0.32%, `huge_methods
---fail-over 0` core 775/0 and `-project` 50/0.
 
