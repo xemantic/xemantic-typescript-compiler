@@ -122,18 +122,11 @@ fun main(args: Array<String>) {
     require(programFiles.size >= 4) { "REFUSED: a program of ${programFiles.size} files" }
     println("program: files=${programFiles.size} diagnostics=${probeFull.diagnostics.size}")
 
-    val floorDraws = ArrayList<Long>()
-    repeat(3) {
-        val t0 = System.nanoTime()
-        val f = compiler.build(project, noEmit = true, recheckOnly = setOf(NOWHERE))
-        floorDraws.add((System.nanoTime() - t0) / 1_000_000)
-        require(f.diagnostics.isEmpty()) {
-            "REFUSED: the floor build reported ${f.diagnostics.size} diagnostics — " +
-                "recheckOnly did not narrow the checker to nothing."
-        }
-    }
-    println("floor: median=${median(floorDraws)} ms draws=$floorDraws")
-
+    // The FLOOR is measured at the END, not here. A floor build exercises a code
+    // path the whole-program warm-ups do not (it checks no file at all), so draws
+    // taken before the arms read a warm-up ramp: measured, 129/89/96 ms before
+    // against 55-62 after, where `scripts/partition-equivalence.sh` reads 54-62.
+    // Same trap as round 869's leading draw, one arm over.
     // The seed stands for "the buffer the host named"; every other file is one the
     // seed checker was NOT asked about, which is the population the replay exists for.
     val seed = programFiles.first()
@@ -155,6 +148,29 @@ fun main(args: Array<String>) {
             val ms = (System.nanoTime() - t0) / 1_000_000
             per.add(ms); total += ms
             freshRows[g.first()] = rowsOf(r.diagnostics, g.toSet())
+        }
+        return ArmResult(per, total, 0)
+    }
+
+    // (INC.40) What ARMING costs. `Project.diagnosticsOf` now passes a RecheckHolder
+    // on the first narrowed query of a project state, which installs the
+    // `RecheckWitnessList` over the diagnostics list and makes the checker retain
+    // itself. `ProjectRecheckTest` pins that this is behaviour-FREE; this prices it.
+    fun freshArmedArm(groups: List<List<String>>): ArmResult {
+        val per = ArrayList<Long>()
+        var total = 0L
+        for (g in groups) {
+            val holder = RecheckHolder()
+            val t0 = System.nanoTime()
+            val r = compiler.build(
+                project, noEmit = true, recheckOnly = g.toSet(), recheckHolder = holder,
+            )
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            require(holder.recheck != null) {
+                "REFUSED: the armed arm got no handle back, so it is a copy of the plain one"
+            }
+            per.add(ms); total += ms
+            armedRows[g.first()] = rowsOf(r.diagnostics, g.toSet())
         }
         return ArmResult(per, total, 0)
     }
@@ -197,6 +213,8 @@ fun main(args: Array<String>) {
     val freshTotals = LinkedHashMap<Int, MutableList<Long>>()
     val replayTotals = LinkedHashMap<Int, MutableList<Long>>()
     val seedTotals = LinkedHashMap<Int, MutableList<Long>>()
+    val armedTotals = ArrayList<Long>()
+    val armedPer = ArrayList<Long>()
     val freshPer = LinkedHashMap<Int, MutableList<Long>>()
     val replayPer = LinkedHashMap<Int, MutableList<Long>>()
     var mismatches = 0
@@ -213,6 +231,22 @@ fun main(args: Array<String>) {
                 fresh = freshArm(groups); replay = replayArm(groups)
             } else {
                 replay = replayArm(groups); fresh = freshArm(groups)
+            }
+            // The arming price, at k = 1 only — one extra sweep per rotation, and the
+            // arm the wiring's FIRST query pays. Its rows must equal the plain arm's:
+            // arming that changed an answer would make "behaviour-free" a fiction.
+            if (k == groupSizes.first()) {
+                armedRows.clear()
+                val armed = freshArmedArm(groups)
+                var armedBad = 0
+                for (key in freshRows.keys) if (freshRows[key] != armedRows[key]) armedBad++
+                if (!discard) {
+                    require(armedBad == 0) {
+                        "REFUSED: arming changed $armedBad group(s)' diagnostic rows"
+                    }
+                    armedTotals.add(armed.totalMs)
+                    armedPer.addAll(armed.perQuery)
+                }
             }
             var bad = 0
             for (key in freshRows.keys) if (freshRows[key] != replayRows[key]) bad++
@@ -254,7 +288,22 @@ fun main(args: Array<String>) {
         println("   freshTotalDraws=$ft")
         println("   replayTotalDraws=$rt")
     }
-    println("floorMedian=${median(floorDraws)} ms")
+    val floorDraws = ArrayList<Long>()
+    repeat(4) {
+        val t0 = System.nanoTime()
+        val f = compiler.build(project, noEmit = true, recheckOnly = setOf(NOWHERE))
+        floorDraws.add((System.nanoTime() - t0) / 1_000_000)
+        require(f.diagnostics.isEmpty()) {
+            "REFUSED: the floor build reported ${f.diagnostics.size} diagnostics — " +
+                "recheckOnly did not narrow the checker to nothing."
+        }
+    }
+    println(
+        "arming: freshArmedTotalMed=${median(armedTotals)} ms perQueryMed=${median(armedPer)} ms " +
+            "against plain fresh ${median(freshTotals.getValue(groupSizes.first()))} / " +
+            "${median(freshPer.getValue(groupSizes.first()))} ms  draws=$armedTotals",
+    )
+    println("floorMedian=${median(floorDraws)} ms draws=$floorDraws")
     require(mismatches == 0) {
         "REFUSED: $mismatches group(s) had DIFFERENT diagnostic rows between the arms — " +
             "the ratio above prices two different answers"
@@ -263,4 +312,5 @@ fun main(args: Array<String>) {
 
 private val freshRows = LinkedHashMap<String, List<String>>()
 private val replayRows = LinkedHashMap<String, List<String>>()
+private val armedRows = LinkedHashMap<String, List<String>>()
 private var replayedPasses = 0

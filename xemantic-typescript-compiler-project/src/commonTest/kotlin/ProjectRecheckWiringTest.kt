@@ -50,16 +50,20 @@ import kotlin.test.Test
  * three rotations after six warm-ups:
  *
  * ```
- * k  queries  freshTotal  replayTotal  ratio   freshPerQueryMed  replayPerQueryMed
- * 1  77       10,656 ms   4,728 ms     2.25x   104 ms            25 ms
- * 2  39        7,716 ms   4,500 ms     1.72x   141 ms            55 ms
- * 8  10        5,342 ms   4,228 ms     1.26x   377 ms           260 ms
+ * k  queries  freshTotal         replayTotal      ratio        freshPerQ  replayPerQ
+ * 1  77       10,656 / 10,783    4,728 / 4,685    2.25 / 2.30  104 / 108  25 / 25
+ * 2  39        7,716 /  7,803    4,500 / 4,314    1.72 / 1.81  141 / 139  55 / 54
+ * 8  10        5,342 /  5,420    4,228 / 4,351    1.26 / 1.25  377 / 360  260 / 238
  * ```
+ *
+ * Two independent JVMs, medians quoted as a band; the floor they were measured
+ * against is **54 ms** in the second batch and **61 ms [54, 62, 61, 53]** from
+ * `scripts/partition-equivalence.sh` at the same commit.
  *
  * The ratio FALLS with the working-set size because the thing the replay deletes —
  * the incremental floor — is paid once per QUERY, not per file. What a user feels
  * is the k = 1 row: an editor opening buffers one at a time answers the second
- * buffer's errors in **25 ms instead of 104**.
+ * buffer's errors in **25 ms instead of 104-108**.
  *
  * ## Why it may serve THIS and nothing else
  *
@@ -76,6 +80,32 @@ import kotlin.test.Test
  * the project's `tsconfig.json` — exactly one per `ProjectCompiler.build`, served
  * by no cross-build cache (CLAUDE.md round 914: a count of ALL Vfs reads is not a
  * count of builds).
+ *
+ * ## What the ablation says, including where it says NOTHING
+ *
+ * Four arms, one mistake at a time (round 807), each verified to land as a real
+ * diff against the committed file rather than against the working tree (round 922):
+ *
+ * | arm | the mistake | RED here |
+ * |---|---|---|
+ * | a1 | the wiring removed — `diagnosticsOf` builds every time | `cost NO build`, `multi-file … free`, `an edit drops the handle`, `a deletion drops the handle` |
+ * | a2 | the VALVE WIDENED — `captureIn` served from the handle | `the capture channels do NOT reach the handle` (alone) |
+ * | a3 | the handle serves WITHOUT widening — an unwalked file answers EMPTY | `and the answer is …`, `multi-file … free`, `an edit is SEEN` |
+ * | a4 | `updateFile` no longer drops the handle | `an edit is SEEN`, `an edit drops the handle`, and the CONTROL |
+ *
+ * Two readings that matter more than the table. **a3 is why the value pins exist**:
+ * `cost NO build` stays GREEN against a handle answering an empty list, so a
+ * count-only suite would have shipped that. And **a2 is the refusal's own pin** —
+ * it is the only arm that reddens the boundary, so that pin is not a redundant
+ * guard.
+ *
+ * **One pin is UNDISCRIMINATED and this says so rather than claiming coverage**
+ * (round 807): `a hover after a diagnostics query still answers correctly` stays
+ * green in every arm, including a2, because THIS FIXTURE cannot reproduce the
+ * capture divergence — it has no generic whose inference the replay loses, which is
+ * the same reason `ProjectRecheckTest` declines to assert capture equivalence.
+ * `scripts/replay-differential.sh` is what grades that channel; this pin only keeps
+ * the boundary from being satisfied by a hover that is absent or broken.
  */
 class ProjectRecheckWiringTest {
 

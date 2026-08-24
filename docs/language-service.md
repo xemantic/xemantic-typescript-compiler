@@ -434,13 +434,21 @@ is — i.e. until the next edit — and it is dropped by `updateFile`, `deleteFi
 
 **What it is worth, re-priced at HEAD for the diagnostics channel with no capture
 request in either arm** (`scripts/inc40-replay-cost.sh`, tsc's own 78 sources,
-three rotations after six warm-ups; the floor it is measured against is ~50-80 ms):
+three rotations after six warm-ups, in two independent JVMs):
 
 | working set `k` | queries | fresh total | replay total | ratio | fresh per query (median) | replay per query (median) |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 77 | 10,656 ms | 4,728 ms | **2.25x** | **104 ms** | **25 ms** |
-| 2 | 39 | 7,716 ms | 4,500 ms | 1.72x | 141 ms | 55 ms |
-| 8 | 10 | 5,342 ms | 4,228 ms | 1.26x | 377 ms | 260 ms |
+| 1 | 77 | 10,656 / 10,783 ms | 4,728 / 4,685 ms | **2.25 / 2.30x** | **104 / 108 ms** | **25 / 25 ms** |
+| 2 | 39 | 7,716 / 7,803 ms | 4,500 / 4,314 ms | 1.72 / 1.81x | 141 / 139 ms | 55 / 54 ms |
+| 8 | 10 | 5,342 / 5,420 ms | 4,228 / 4,351 ms | 1.26 / 1.25x | 377 / 360 ms | 260 / 238 ms |
+
+Two independent JVM processes, medians quoted as a band (CLAUDE.md: a sign-consistent
+paired batch is not a result until a second batch replicates it). The floor they were
+measured against is **54 ms** in the second batch and **61 ms [54, 62, 61, 53]** from
+`scripts/partition-equivalence.sh` at the same commit. ARMING — the `RecheckHolder`
+`diagnosticsOf` now passes on a project state's first narrowed query — is free within
+the band (an armed 77-query sweep reads 10,546 ms against 10,783 plain, 106 against
+108 per query) and changed no diagnostic row in 231 group comparisons.
 
 The ratio FALLS as the working set grows because the thing the replay deletes — the
 incremental floor — is paid once per QUERY and not per file, so a host that batches

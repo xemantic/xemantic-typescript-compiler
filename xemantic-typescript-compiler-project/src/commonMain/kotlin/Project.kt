@@ -296,12 +296,16 @@ public class Project private constructor(
      * replay) and (INC.37)'s **1.39x re-derivation tax** — the shared lib and
      * foreign-declaration resolutions a whole-program build performs once and each
      * per-file query re-derives inside its own `Checker`. A live program pays
-     * neither. Re-priced at HEAD on tsc's own 78 sources, diagnostics only, three
-     * rotations: the per-query MEDIAN is **104 ms fresh against 25 ms replayed
-     * (4.2x)** against a floor of ~50-80 ms, and the whole 77-query sweep is
-     * **10,656 ms against 4,728 ms (2.25x)** — the replayed total landing on the
+     * neither. Re-priced at HEAD on tsc's own 78 sources, diagnostics only, six
+     * warm-ups, three rotations, **replicated in two independent JVMs** whose
+     * medians are quoted as a band (`scripts/inc40-replay-cost.sh`): the per-query
+     * MEDIAN is **104-108 ms fresh against 25 ms replayed (4.2x)** against a floor
+     * of **54-61 ms**, and the whole 77-query sweep is **10,656-10,783 ms against
+     * 4,685-4,728 ms (2.25-2.30x)** — the replayed total landing on the
      * whole-program CHECK cost (~4,935 ms), which is the re-derivation tax being
-     * collected rather than re-paid.
+     * collected rather than re-paid. ARMING is free within the band (an armed
+     * 77-query sweep reads 10,546 ms against 10,783 plain) and changed no
+     * diagnostic row in 231 group comparisons.
      *
      * ## Why it may serve THIS member and nothing else
      *
