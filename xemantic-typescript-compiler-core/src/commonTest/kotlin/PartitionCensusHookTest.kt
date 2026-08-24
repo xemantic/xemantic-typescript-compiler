@@ -152,11 +152,19 @@ class PartitionCensusHookTest {
     @Test
     fun `a program-wide pass that iterates binderResults is NOT recorded`() {
         val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
-        // These three run on every build and every one of them is a
-        // `binderResults` loop, so a census that marked everything would fail.
-        assert("init:buildFileLocalTypeMaps" !in reads)
+        // Both run on every build and both are `binderResults` loops, so a census
+        // that marked everything would fail here.
+        //
+        // (INC.25) REMOVED `init:buildFileLocalTypeMaps` FROM THIS CONTROL, and
+        // says so rather than editing it quietly. It was here because (INC.11) and
+        // (INC.22) refused partition-scoping it over a first-touch ORDER cost that
+        // a gate does not address — and (INC.23) reduced that cost to ONE member
+        // name, `[Symbol.unscopables]`, which (INC.25) fixed in `getKeyofType` and
+        // measured to be no partition defect at all. The pass is now
+        // partition-scoped by default and the assertion below pins its PRESENCE.
         assert("init:computeAllEnumValues" !in reads)
         assert("init:computePerFileVisibility" !in reads)
+        assert("init:buildFileLocalTypeMaps" in reads)
     }
 
     @Test

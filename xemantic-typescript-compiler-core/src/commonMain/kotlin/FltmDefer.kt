@@ -82,20 +82,36 @@ object FltmDefer {
      * one's; both were refused. [PARTITION] instead iterates the INV.6(6d) partition
      * view, which **IS** `binderResults` whenever there is no partition — so an
      * unpartitioned compile runs byte-for-byte the pass it always ran and only a
-     * `recheckOnly` build skips anything.
+     * `recheckOnly` build skips anything. **That by-construction claim is checked in
+     * the BINARY, not argued**: the per-arm capture DIGEST over 381,666 captured
+     * types and 360,152 definitions is identical across the two scopes, with
+     * `lazyBuilds == 0` on every unpartitioned build as the corroborating count.
      *
-     * (INC.22) measured that arm at **floor 131 -> 57 ms, narrowed-query median
-     * 166 -> 116, ratio 29.86x -> 42.61x** and REFUSED it: `capture-channel-
-     * equivalence`'s `narrowRendersMoreAny` goes **168 -> 229**, i.e. +61 member
-     * types collapse to `any` under a narrowed build. That is a WRONG answer, so
-     * [PROGRAM] is the shipped default and [PARTITION] is a MEASUREMENT ARM — the
-     * instrument (INC.23) censuses the 61 with, not a behaviour anything ships.
+     * ## [PARTITION] IS NOW THE SHIPPED DEFAULT ((INC.25))
+     *
+     * (INC.22) measured it at **floor 131 -> 57 ms, narrowed-query median
+     * 166 -> 116, ratio 29.86x -> 42.61x** and REFUSED it on ONE observable:
+     * `capture-channel-equivalence`'s `narrowRendersMoreAny` went **168 -> 229**.
+     * (INC.23) censused those 61 to **78 rows carrying exactly ONE member name**,
+     * `[Symbol.unscopables]`, and named the mechanism: a `keyof` over a type whose
+     * member table is IN FLIGHT answered `string`, so the lib's
+     * `{ [K in keyof any[]]?: boolean }` degraded to `any`. (INC.25) fixed THAT — in
+     * `getKeyofType`, which now answers such a `keyof` from the declarations — and it
+     * was never a partition defect at all: the same collapse was measured on a
+     * three-line project with no partition and no arm.
+     *
+     * With the wrong answer gone the scope is a pure win, so [PROGRAM] survives only
+     * as the measurement arm the two sweeps can still select.
      */
     enum class Scope {
-        /** Every file in the program — the shipped pass. */
+        /** Every file in the program — the pre-(INC.25) arm. */
         PROGRAM,
 
-        /** The check partition, with the map's one reader building the rest. */
+        /**
+         * The check partition, with the map's one reader building the rest — the
+         * shipped pass since (INC.25), and identical to [PROGRAM] on any build
+         * that has no partition.
+         */
         PARTITION,
     }
 
@@ -108,13 +124,14 @@ object FltmDefer {
     var eager: Set<Phase> = Phases.ALL
 
     /**
-     * (INC.23) Which files the eager pass covers. [Scope.PROGRAM] is the shipped
-     * pass; anything else is an arm, and `FltmDeferArmTest` pins that the DEFAULT
-     * is the shipped one with no mode install of its own — (INC.16) arm a1's
-     * lesson, that a pin which sets the mode it wants leaves the default pinned by
-     * nothing.
+     * (INC.25) Which files the eager pass covers. [Scope.PARTITION] is the shipped
+     * pass; [Scope.PROGRAM] is the pre-(INC.25) arm, kept so the sweeps can still
+     * measure against it. `FltmDeferArmTest` pins that the DEFAULT is the shipped
+     * one **with no mode install of its own** — (INC.16) arm a1's lesson, that a pin
+     * which sets the mode it wants leaves the default pinned by nothing, so an
+     * ablation of it reads 0 RED and looks like a redundant change.
      */
-    var scope: Scope = Scope.PROGRAM
+    var scope: Scope = Scope.PARTITION
 
     /**
      * True when some PHASE is deferred, i.e. when the lazy path may run even on a
@@ -148,13 +165,13 @@ object FltmDefer {
     }
 
     /**
-     * (INC.23) Parses `XTSC_FLTM_SCOPE`; unset or unrecognised means [Scope.PROGRAM],
-     * the shipped pass. A SEPARATE environment variable from `XTSC_FLTM_EAGER`
-     * because the two axes are independent and a sweep must be able to vary exactly
-     * one of them.
+     * (INC.25) Parses `XTSC_FLTM_SCOPE`; unset or unrecognised means
+     * [Scope.PARTITION], the shipped pass. A SEPARATE environment variable from
+     * `XTSC_FLTM_EAGER` because the two axes are independent and a sweep must be
+     * able to vary exactly one of them.
      */
     fun scopeFromName(name: String?): Scope = when (name?.lowercase()) {
-        "partition" -> Scope.PARTITION
-        else -> Scope.PROGRAM
+        "program" -> Scope.PROGRAM
+        else -> Scope.PARTITION
     }
 }

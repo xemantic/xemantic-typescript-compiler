@@ -29,8 +29,8 @@ import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
- * (INC.23) THE SCOPE AXIS IS A MEASUREMENT ARM AND THE SHIPPED DEFAULT IS
- * `PROGRAM` — and the first pin here is the one that CANNOT install a mode.
+ * (INC.25) THE SCOPE AXIS SHIPS AS `PARTITION`, AND THE FIRST PIN HERE IS THE ONE
+ * THAT CANNOT INSTALL A MODE.
  *
  * (INC.16) arm a1's lesson: a pin that sets the mode it wants and restores it
  * leaves the shipped DEFAULT pinned by nothing, so flipping the default reads as
@@ -38,15 +38,22 @@ import kotlin.test.Test
  * test in this class saves and restores [FltmDefer.scope]; the first one must not,
  * because its whole subject is what the binary does with no install at all.
  *
- * ## What the arm is for
+ * ## Why it ships, and why it did not before
  *
- * (INC.22) measured partition-scoping this pass at **floor 131 -> 57 ms,
+ * (INC.22) measured partition-scoping `init:buildFileLocalTypeMaps` — **69.16 ms
+ * of a 90.15 ms incremental floor pass table** — at **floor 131 -> 57 ms,
  * narrowed-query median 166 -> 116 ms, ratio 29.86x -> 42.61x**, with a per-arm
- * capture DIGEST proving an unpartitioned build byte-identical — and REFUSED it,
- * because `capture-channel-equivalence`'s `narrowRendersMoreAny` goes **168 ->
- * 229**: +61 captured member types collapse to `any` under a narrowed build. That
- * is a wrong answer. The arm exists so (INC.23) can census those 61 in the binary
- * rather than reason about them; nothing ships it.
+ * capture DIGEST proving an unpartitioned build byte-identical, and REFUSED it on
+ * ONE observable: `capture-channel-equivalence`'s `narrowRendersMoreAny` went
+ * **168 -> 229**. (INC.23) censused those 61 to **78 rows carrying exactly ONE
+ * member name** — `[Symbol.unscopables]`, whose lib type is
+ * `{ [K in keyof any[]]?: boolean }` — and (INC.25) found the cause was not the
+ * scope at all: a `keyof` over a type whose member table is IN FLIGHT answered
+ * `string`, which collapses that mapped type to `any` on a THREE-LINE project with
+ * no partition and no arm. With `getKeyofType` repaired the scope is a pure win.
+ *
+ * `Scope.PROGRAM` survives as the pre-(INC.25) arm, so the two capture sweeps can
+ * still measure against the old pass.
  */
 class FltmScopeArmTest {
 
@@ -56,28 +63,28 @@ class FltmScopeArmTest {
      * future third scope cannot satisfy it by accident.
      */
     @Test
-    fun `the shipped scope is the whole program and nothing installs it`() {
-        assert(FltmDefer.scope == FltmDefer.Scope.PROGRAM)
+    fun `the shipped scope is the check partition and nothing installs it`() {
+        assert(FltmDefer.scope == FltmDefer.Scope.PARTITION)
     }
 
     /** An unset or unrecognised environment value means the shipped pass. */
     @Test
-    fun `an unset or unknown scope name means the whole program`() {
-        assert(FltmDefer.scopeFromName(null) == FltmDefer.Scope.PROGRAM)
-        assert(FltmDefer.scopeFromName("") == FltmDefer.Scope.PROGRAM)
-        assert(FltmDefer.scopeFromName("nonsense") == FltmDefer.Scope.PROGRAM)
-        assert(FltmDefer.scopeFromName("program") == FltmDefer.Scope.PROGRAM)
-        // The phase arm's own names must NOT silently arm this axis too — the two
-        // are independent and a sweep has to be able to vary exactly one.
-        assert(FltmDefer.scopeFromName("typealias") == FltmDefer.Scope.PROGRAM)
-        assert(FltmDefer.scopeFromName("none") == FltmDefer.Scope.PROGRAM)
+    fun `an unset or unknown scope name means the check partition`() {
+        assert(FltmDefer.scopeFromName(null) == FltmDefer.Scope.PARTITION)
+        assert(FltmDefer.scopeFromName("") == FltmDefer.Scope.PARTITION)
+        assert(FltmDefer.scopeFromName("nonsense") == FltmDefer.Scope.PARTITION)
+        assert(FltmDefer.scopeFromName("partition") == FltmDefer.Scope.PARTITION)
+        // The phase arm's own names must NOT silently move this axis either — the
+        // two are independent and a sweep has to be able to vary exactly one.
+        assert(FltmDefer.scopeFromName("typealias") == FltmDefer.Scope.PARTITION)
+        assert(FltmDefer.scopeFromName("none") == FltmDefer.Scope.PARTITION)
     }
 
-    /** The one name that arms it. */
+    /** The one name that selects the pre-(INC.25) whole-program pass. */
     @Test
-    fun `the partition scope is reachable by exactly one name`() {
-        assert(FltmDefer.scopeFromName("partition") == FltmDefer.Scope.PARTITION)
-        assert(FltmDefer.scopeFromName("PARTITION") == FltmDefer.Scope.PARTITION)
+    fun `the program scope is reachable by exactly one name`() {
+        assert(FltmDefer.scopeFromName("program") == FltmDefer.Scope.PROGRAM)
+        assert(FltmDefer.scopeFromName("PROGRAM") == FltmDefer.Scope.PROGRAM)
     }
 
     private val twoFiles = arrayOf(
@@ -118,52 +125,54 @@ class FltmScopeArmTest {
     }
 
     /**
-     * THE SHIPPED BEHAVIOUR, AS A COUNT: at `PROGRAM` a partitioned build still
-     * builds EVERY file's map eagerly. This is what the arm changes, so it is also
-     * the control that says the count below is about the arm.
+     * THE PRE-(INC.25) BEHAVIOUR, AS A COUNT: at `PROGRAM` a partitioned build
+     * still builds EVERY file's map eagerly. It is the control that says the count
+     * below is about the SCOPE and not about the fixture.
      */
     @Test
-    fun `at the shipped scope a partitioned build still builds every map`() {
-        check(setOf("/proj/b.ts"))
+    fun `at the program scope a partitioned build still builds every map`() {
+        withScope(FltmDefer.Scope.PROGRAM) { check(setOf("/proj/b.ts")) }
         assert(FltmDefer.eagerBuilds == 2)
         assert(FltmDefer.lazyBuilds == 0)
     }
 
     /**
-     * THE ARM, AS A COUNT: at `PARTITION` a partition of one file builds ONE map
-     * eagerly rather than the program's two. RED against a binary whose loop still
-     * says `binderResults` — there the count is 2 whatever the scope is.
+     * THE SHIPPED BEHAVIOUR, AS A COUNT AND WITH NO INSTALL: a partition of one
+     * file builds ONE map eagerly rather than the program's two. RED against a
+     * binary whose loop still says `binderResults` — there the count is 2 whatever
+     * the scope is — and RED against a reverted default, which is what makes the
+     * absence of a `withScope` here load-bearing.
      */
     @Test
-    fun `the arm builds only the partition's maps eagerly`() {
-        withScope(FltmDefer.Scope.PARTITION) { check(setOf("/proj/b.ts")) }
+    fun `the shipped scope builds only the partition's maps eagerly`() {
+        check(setOf("/proj/b.ts"))
         assert(FltmDefer.eagerBuilds == 1)
-        assert(FltmDefer.scope == FltmDefer.Scope.PROGRAM)
+        assert(FltmDefer.scope == FltmDefer.Scope.PARTITION)
     }
 
     /**
-     * THE ARM IS A NO-OP OFF A PARTITION, which is the whole reason this axis was
-     * worth building: `checkedResults` IS `binderResults` when `assignedFileNames`
-     * is null, so an unpartitioned compile runs the identical list in the identical
+     * IT IS A NO-OP OFF A PARTITION, which is the whole reason this axis was worth
+     * building: `checkedResults` IS `binderResults` when `assignedFileNames` is
+     * null, so an unpartitioned compile runs the identical list in the identical
      * order and the lazy path never fires. (INC.22) verified the same claim at
      * program scale with a capture digest over 741,818 answers.
      */
     @Test
-    fun `the arm is inert on a build with no partition`() {
-        withScope(FltmDefer.Scope.PARTITION) { check(null) }
+    fun `the shipped scope is inert on a build with no partition`() {
+        check(null)
         assert(FltmDefer.eagerBuilds == 2)
         assert(FltmDefer.lazyBuilds == 0)
     }
 
     /**
-     * THE ANSWER IS UNCHANGED under the arm, not merely cheaper — the partition
-     * still reports its own file's error.
+     * THE ANSWER IS UNCHANGED, not merely cheaper — the partition still reports its
+     * own file's error.
      */
     @Test
-    fun `the arm keeps the partition's own diagnostics`() {
-        val armed = withScope(FltmDefer.Scope.PARTITION) { check(setOf("/proj/b.ts")) }
-        assert(armed.any { it.code == 2322 && it.fileName == "/proj/b.ts" })
-        assert(armed.none { it.fileName == "/proj/a.ts" })
+    fun `the shipped scope keeps the partition's own diagnostics`() {
+        val narrowed = check(setOf("/proj/b.ts"))
+        assert(narrowed.any { it.code == 2322 && it.fileName == "/proj/b.ts" })
+        assert(narrowed.none { it.fileName == "/proj/a.ts" })
     }
 
     /**

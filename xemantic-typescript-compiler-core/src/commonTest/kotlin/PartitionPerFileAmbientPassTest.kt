@@ -83,13 +83,17 @@ class PartitionPerFileAmbientPassTest {
      * the negative control that stops the assertions above from passing on a binary
      * that simply gated everything.
      *
-     *  * `init:buildFileLocalTypeMaps` is (INC.11)'s, refused for a first-touch
-     *    ORDER reason a gate does not address;
      *  * `init:computeAllEnumValues` and `init:computePerFileVisibility` build
      *    cross-file accumulators the partition's own files are read out of.
+     *
+     * (INC.25) REMOVED `init:buildFileLocalTypeMaps` from this list, and says so
+     * rather than editing it quietly. It was refused by (INC.11) and (INC.22) for a
+     * first-touch ORDER cost; (INC.23) censused that cost down to ONE member name
+     * and (INC.25) fixed it in `getKeyofType`, where it was never a partition
+     * defect to begin with. The pass is now partition-scoped by default and
+     * `FltmScopeArmTest` pins that as a COUNT, with no mode install.
      */
     private val programWide = listOf(
-        "init:buildFileLocalTypeMaps",
         "init:computeAllEnumValues",
         "init:computePerFileVisibility",
     )

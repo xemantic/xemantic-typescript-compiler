@@ -15205,12 +15205,14 @@ class Checker(
         if (FltmCensus.on) FltmCensus.beginSetup()
         val eager = FltmDefer.eager
         if (eager.isNotEmpty()) {
-            // (INC.23) THE MEASUREMENT ARM, and it is a strict no-op at the shipped
-            // `Scope.PROGRAM`. Under `PARTITION` the loop moves to `checkedResults`,
-            // which IS `binderResults` when `assignedFileNames` is null — so even the
-            // armed binary builds every file's map in the order it always did on an
-            // unpartitioned compile. What a narrowed build skips,
-            // [fileLocalTypeMapFor] rebuilds on demand.
+            // (INC.25) THE SHIPPED SCOPE IS `PARTITION`, and it is a strict no-op on
+            // any build that has no partition: `checkedResults` **IS**
+            // `binderResults` when `assignedFileNames` is null, so a full compile
+            // builds every file's map in the order it always did. What a NARROWED
+            // build skips — 69.16 ms of a 90.15 ms floor pass table — is rebuilt on
+            // demand by [fileLocalTypeMapFor], with the SAME content (pinned by
+            // [fileLocalTypeMapSnapshot], because "eventually built" is not the
+            // invariant that matters here). `Scope.PROGRAM` is the pre-(INC.25) arm.
             for (result in
                 if (FltmDefer.scope == FltmDefer.Scope.PARTITION) checkedResults
                 else binderResults

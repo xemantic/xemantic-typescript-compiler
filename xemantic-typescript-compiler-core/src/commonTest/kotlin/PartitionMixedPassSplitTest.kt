@@ -135,8 +135,13 @@ class PartitionMixedPassSplitTest {
     @Test
     fun `negative control - the passes INC 20 refused are still not recorded`() {
         val reads = readsFor(setOf("/proj/b.ts"))
+        // (INC.25) REMOVED `init:buildFileLocalTypeMaps` from this list. It was
+        // refused for a first-touch ORDER cost that (INC.23) reduced to one member
+        // name and (INC.25) then fixed in `getKeyofType`; the pass is now
+        // partition-scoped by default, and `FltmScopeArmTest` pins that as a COUNT.
+        // `init:computeAllEnumValues` keeps the control non-vacuous — it builds a
+        // cross-file accumulator the partition's own files are read out of.
         val wrongly = listOf(
-            "init:buildFileLocalTypeMaps",
             "init:computeAllEnumValues",
         ).filter { it in reads }
         assert(wrongly.isEmpty())
