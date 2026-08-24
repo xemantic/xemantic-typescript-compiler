@@ -1,3 +1,45 @@
+**THE FLOOR PASS TABLE NEARLY HALVES — 219.98 -> 119.74 ms — AND A NARROWED QUERY IS NOW 24.16x
+FASTER THAN A FULL BUILD (2026-08-23, (INC.20)).** (INC.7) batch 4 closed the loop-header technique
+and left 83 passes refused by SHAPE, 53 of them on "writes a checker field inside the private
+closure". **That verdict was true and the inference from it was wrong**: for nine of them the write
+is a per-FILE AMBIENT install (`currentFileLocals` / `currentCheckFileName`), reset after the loop or
+save-and-restored per iteration — gone before the next file is walked, with the same resting value
+whether the loop ran 78 times or none. Sub-batch B then used (INC.17)'s split template as intended:
+two MIXED passes that build a program-wide INDEX and then emit per file (**only the second loop
+moved**) and two per-file retractors — one of which, `checkPreEmitCountMismatchPins`, is **IMPROVED
+rather than narrowed**, because its TS-1 marker carries `fileName = null` and therefore SURVIVED the
+partition filter, so the ungated loop could emit a global marker about a file nobody asked about.
+**Banked 100.23 ms of a 116.08 ms row removal = 86.3%, a fifth discount point** (79.0 / 85.5 / 92.9
+/ 78.2 / 86.3), and the whole production diff across both perf commits collapses to exactly TWO
+distinct lines. `partition-equivalence.sh`: floor **248 -> 162 ms**, narrowed-query median **313 ->
+207 ms**, ratio at the median file **15.66x -> 24.16x**.
+**THE RELOCATION VICTIM FINALLY HAS A MECHANISM AND A NAME RATHER THAN BEING A RESIDUE.**
+`checkReverseMappedIntersectionConstraint` went **0.067 -> 19.431 ms** and is the ONLY row outside
+the batch that moved more than 0.2 ms: round 895's `srcHas` builds its per-file n-gram filter
+**LAZILY**, so the FIRST such caller in pass order pays it for all 78 files, and gating
+`checkBaseClassImprovedMismatch` simply handed the bill to the next scanner. The same shape was
+mis-read in batch 2 as a walker that "got slower". **19 registered passes still iterate
+`binderResults` AND scan whole source, so that ~19.4 ms cannot be BANKED until all 19 are gated
+together** — queued as (INC.21), now the second-largest row in the floor after the refused
+`init:buildFileLocalTypeMaps`.
+**THE ANALYZER CAUGHT A FIFTH DEFECT IN ITSELF BEFORE PRODUCING A VERDICT** — a Kotlin `${…}`
+template containing a nested string desynchronised the stripper at `Checker.kt:64608`, hiding
+**2,523 of the file's 4,520 `fun` declarations**, i.e. failing in the reassuring direction exactly as
+CLAUDE.md warns. Controls held: length preservation, 4,520 `fun` lines raw and stripped, five named
+functions found, every KDoc `pass("name")` sample refused. **PINS: 19**, and the discriminating ones
+assert on (INC.17)'s partition CENSUS hook — a COUNT, not a time (round 868). Reverting all 14 loop
+headers reddens **5 of 7** census assertions (the two that stay green assert ABSENCE and must hold
+in both arms); gating the two COLLECTION loops reddens **exactly the three cross-file arms and
+nothing else**, which is the evidence the MIXED split is load-bearing. Ownership of every pinned
+diagnostic was established in `build/pass-lab.txt`, not assumed. **GATES, run on EACH sub-batch**:
+suite **15,771 / 0 / 3** (+19), `partition-equivalence` EQUIVALENT all 78, `partition-gate` realism
+78/78 and sensitivity 76/76 with **78 netting passes** (seven of sub-batch A's nine walkers sit in
+its own netting list — the sensitivity arm carried this round too), `capture-equivalence` **5 spans
+/ 3 of 76, `narrowRendersMoreAny=0`** and `capture-channel` **286 / 49** both at BASELINE,
+`cost_gate.py` PASS (largest `mapped.hits` +1.02%, the standing drift), `huge_methods.py
+--fail-over 0` clean on core AND `-project`.
+
+
 **THE BIND IS 70 ms -> 6 ms AND A NARROWED QUERY IS 20.5% FASTER: THE INV.2(c) TABLES NOW BUILD ON
 FIRST ASK, AND THEIR ONE PROGRAM-WIDE READER IS SERVED BY A PROJECTION (2026-08-23, (INC.16)).**
 `bindLexicalScopes` was 93% of the bind and — after (INC.7) batch 4 closed the gating technique and

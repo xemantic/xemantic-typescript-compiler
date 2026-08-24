@@ -20,6 +20,110 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.26) — the gate assumed the FULL build was the reference, and it was wrong: an alias was renaming types that already had their own name, in the DIAGNOSTICS channel, on ordinary builds
+
+**READ THIS FIRST — TWO RECORDED DIGESTS MOVED, BY DESIGN, FOR THE FIRST TIME IN THIS
+ARC. Re-record them; do NOT read them as a regression.**
+
+| sweep | old full digest | **new full digest** |
+|---|---|---|
+| `capture-equivalence.sh` | `-3718897727265589316` | **`3349895618940861366`** |
+| `capture-channel-equivalence.sh` | `4065921979171190360` | **`-3278907782584108296`** |
+
+A full build is exactly what this round CORRECTS, so its digest had to move. Every
+earlier round in the arc quoted an unchanged full digest as proof of safety; that check
+is still right, but it is a check that the change is *display-only for full builds*, and
+this change deliberately is not.
+
+**WHAT THIS ROUND DID.** It was sent to buy back the capture gate (INC.25) moved from 5
+to 2,275 spans. **The census inverted the brief and neither queued route was correct.**
+
+**THE CENSUS.** Per-element, nesting-aware, 62 distinct pairs. **The
+`Intl.LocalesArgument` example the queue entry led with is 2 rows of 2,275**, and the
+dominant direction is the opposite of the assumption — **the FULL build attaches a name
+and the NARROW one renders the honest type**:
+
+| rows | full | narrow |
+|---:|---|---|
+| 421 | `HasIllegalExpressionInitializer` | `PropertySignature` |
+| 346 | `ModuleName` | `ModuleExportName` |
+| 292 | `IsInterface` | `InterfaceDeclaration` |
+| 130 | `any` | `T \| readonly Node[]` |
+| 127 | `FunctionBody` | `Block` |
+
+In tsc's own `types.ts`: `type FunctionBody = Block`, `type IsInterface =
+InterfaceDeclaration`, `type HasIllegalExpressionInitializer = PropertySignature` —
+**aliases whose body is a single NAMED interface.** We stamped the alias onto that
+interface's `Type.id`, and `typeToString` reads `aliasDisplayMap` BEFORE the structural
+fallback, so every occurrence program-wide rendered under the alias.
+**And the alias census independently refuted the assumed mechanism**: `DIFFERENT-NAME
+CLOBBER: 0`, with only 80 different-name refusals from a single pair — nowhere near 2,275.
+(INC.11)'s first-wins hypothesis was simply not what these rows are.
+
+**IT IS A SHIPPED DIAGNOSTICS DEFECT, ON FOUR LINES, WITH NO PARTITION** — the third such
+find of this session, and again in the channel nobody was looking at:
+
+```
+interface Block { stmts: number }
+type FunctionBody = Block;
+declare const b: Block;
+export const bad: number = b;
+```
+xtsc `Type 'FunctionBody' is not assignable to type 'number'.`
+tsc 7.0.2 `Type 'Block' is not assignable to type 'number'.`
+
+**SO BOTH QUEUED ROUTES WERE TREATING A SYMPTOM.** Route A (`TypeAlias` phase
+program-wide, 6.68 ms) would have bought the gate back by making narrowed hovers **as
+wrong as full ones**. Route B's capture-local pre-check would have papered over a defect
+that was never capture-local — it is in `typeToString`, reached by the diagnostics.
+
+**THE FIX IS THE TEST THE SIBLING ARM ALREADY HAD**: `shouldRegister`'s Object arm never
+applied the `symbol == null` check its Intersection arm applies per constituent. An
+ANONYMOUS body still registers, so `type Foo = { a: number }` still displays as `Foo` —
+that boundary is the negative control, and getting it wrong in the other direction would
+have silently regressed every anonymous-type hover.
+
+**ROUND 754 BIT EXACTLY AS ITS CLAUDE.md ENTRY WARNS, AND THE HANDLING IS THE PART WORTH
+COPYING.** The first version reddened `typeVariableConstraintedToAliasNotAssignable-
+ToUnion`'s four `Table` rows. **A logical-parity divergence was NOT taken** — that
+baseline is pristine tsc's and says `Table`, so switching it off would have moved AWAY
+from tsc, which is the opposite of what the mechanism exists for. The rule was NARROWED
+instead: a GENERIC named type is excluded, because a bare all-defaulted generic resolves
+to the raw `Type.Interface` rendering `TableClass<any>` — not a name the source spells.
+The two shapes differ by exactly one property (the three big families are non-generic,
+`TableClass<S = any>` is not), and arm (b) of the ablation pins it: removing the generic
+exclusion reddens **exactly 2 of 504 tests — the new pin AND the corpus baseline,
+together.**
+
+**WHAT THE RESIDUAL ACTUALLY IS — and why the target is NOT 5.** The gate reads
+**2,275 -> 1,128 spans (-50%), 46 -> 43 files**, `narrowRendersMoreAny=0`,
+`absentInNarrow=0`, `absentInFull=0`. The remaining 1,128 are two measured mechanisms,
+deliberately untouched, **and in BOTH the narrowed arm is the more correct one**:
+(1) **~790 rows, `unionAliasStructural` (B416)** — a member-id-set-keyed global naming
+ANY union that matches a declared alias, first-wins. Probed against tsc: for
+`type ModuleName = Ident|Str; type ModuleExportName = Ident|Str`, tsc renders
+`ModuleExportName` for the annotation that says so and **`Ident | Str` where no alias was
+written**; we answer `ModuleName` for both — wrong in both arms, and wrong even where no
+alias exists. Riskier, because B416 exists for unions reconstructed by flow narrowing.
+(2) **~298 rows** where the FULL build renders `any` and the narrow renders
+`T | readonly Node[]` in a visitor-signature family — not alias-related, and again the
+full arm is the one losing information.
+**So the honest target is not "narrow agrees with full" but "neither arm has a wrong name
+to disagree about", and any future attempt to close this gate by making NARROW match FULL
+should be refused on sight.**
+
+**GATES.** Suite **15,805 / 0 / 3** (+4 pins), **zero corpus baselines moved**,
+`cost_gate.py` exit 0 (largest `mapped.hits` +1.02%, standing), `huge_methods
+--fail-over 0` exit 0 on both modules (core 779 classes, largest 5,204),
+`partition-equivalence` **EQUIVALENT 78/78**, `partition-gate` realism **78/78** and
+sensitivity **76/76 over 78 netting passes**, `capture-channel`'s
+`narrowRendersMoreAny=168` at its recorded baseline. **The FLOOR IS UNTOUCHED and no
+before-arm was run, deliberately, because the change cannot reach it** —
+`init:buildFileLocalTypeMaps` reads 0.011-0.051 ms with `FLTM eager=0 lazy=0`, (INC.25)'s
+scoping intact. **`capture-channel`'s DIVERGED count (1,262 / 64) has NO same-session
+before-arm and no claim is made about it** — which is the correct way to report a number
+you did not control for.
+
 ### Round (INC.25) — it was never a partition defect: `[Symbol.unscopables]` rendered `any` on ORDINARY builds, and fixing it collected the floor 129 -> 58 ms
 
 **WHAT THIS ROUND DID.** Closed the single defect (INC.23) reduced (INC.22)'s refusal
@@ -3644,32 +3748,53 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   **Ablation: counters identical DIGIT FOR DIGIT to the fixed binary** — the fix moves
   zero counters, so all standing drift is pre-existing.
 
-- [ ] **(INC.26) BUY BACK THE CAPTURE GATE — 6.68 ms OF A 58 ms FLOOR FOR A 455x
-  REDUCTION IN NARROWED-HOVER DIVERGENCE.** (INC.25) moved `capture-equivalence.sh`'s
-  NARROW arm from **5 spans / 3 files to 2,275 of 381,666 (0.60%) in 46 files**. The
-  full-build digest is UNCHANGED, so an ordinary compile is untouched; this is purely
-  what a NARROWED query renders.
-  **It is not the trade (INC.2) refused** — that was 45 spans rendering `any` where the
-  full build rendered the declared type, i.e. WRONG answers. Here **no row renders more
-  `any`, none is absent, and the direction is MIXED** (the narrow arm KEEPS
-  `Intl.LocalesArgument` where the full arm expands it, 113 rows; and renders a signature
-  the full arm gives up on as `any`, 38 rows). Two draws from the id-keyed first-wins
-  `aliasDisplayMap`, which CLAUDE.md records as arbitrary in BOTH arms.
-  **But it is a 455x move in a gate that stood at 5 all through the (INC.*) arc, and the
-  mitigation is already measured**: (INC.22)'s `TypeAlias`-phase-program-wide
-  configuration costs **6.68 ms** and collapses 2,275 to **+1 row**.
-  **TWO THINGS BLOCK IT AND BOTH ARE NAMED.** (a) It needs per-PHASE scope composition —
-  `FltmDefer` today has a whole-pass `Scope`, not a per-phase one. (b) (INC.22) measured
-  that exact configuration **diverging a DIAGNOSTIC** on `partition-gate`'s sensitivity
-  arm, and (INC.23) confirmed the divergence belongs to the MIXED configuration and NOT
-  to plain partition-scoping. **Diagnose that diagnostic FIRST** — it is one file, the
-  sensitivity fixture is designed to be attributable, and landing a display fix that
-  costs a diagnostic would invert the whole point.
-  **The alternative, if (b) proves stubborn**: close the alias family at its root instead
-  — tsc picks an alias by the REFERENCE's declaration site, which an id-keyed global map
-  cannot express ((INC.11)'s finding), so a CAPTURE-LOCAL resolution (the capture knows
-  its reference node; the diagnostics renderer stays untouched) would close it with no
-  baseline able to move. That is the (INC.22) brief's road not taken.
+- [x] **(INC.26) LANDED 2026-08-24 — AND THE ROUTE WAS NEITHER A NOR B, BECAUSE THE GATE
+  ASSUMED THE FULL BUILD WAS THE REFERENCE AND IT WAS WRONG.** The census inverted the
+  entry: the `Intl.LocalesArgument` case it led with is **2 rows of 2,275**, and the
+  dominant direction is the reverse — **the FULL build attaches a name, the NARROW one
+  renders the honest type**. The mechanism is aliases whose body is a single NAMED
+  interface (`type FunctionBody = Block`, `type IsInterface = InterfaceDeclaration`,
+  `type HasIllegalExpressionInitializer = PropertySignature` in tsc's own `types.ts`):
+  we stamped the alias onto that interface's `Type.id`, and `typeToString` reads
+  `aliasDisplayMap` BEFORE the structural fallback, so every occurrence program-wide
+  rendered under the alias. **Four lines reproduce it with no partition, in the
+  DIAGNOSTICS channel** (`Type 'FunctionBody'` where tsc 7.0.2 says `Type 'Block'`).
+  **So both routes were treating a symptom** — Route A would have made narrowed hovers
+  as wrong as full ones. The fix is the `symbol == null` test the sibling Intersection
+  arm already applied; anonymous bodies still register.
+  **ROUND 754 BIT AND WAS HANDLED CORRECTLY**: the first version reddened four `Table`
+  rows, and **no logical-parity divergence was taken** — that baseline is pristine tsc's,
+  so switching it off would move AWAY from tsc. The rule was narrowed to exclude a
+  GENERIC named type instead, and arm (b) pins it: removing that exclusion reddens
+  **exactly 2 of 504 tests, the new pin AND the corpus baseline, together.**
+  **Gate: 2,275 -> 1,128 spans (-50%), 46 -> 43 files**, `narrowRendersMoreAny=0`.
+  **TWO RECORDED DIGESTS MOVED BY DESIGN** — `capture-equivalence` full
+  `-3718897727265589316` -> **`3349895618940861366`**, `capture-channel` full
+  `4065921979171190360` -> **`-3278907782584108296`**. First time in the arc; a full
+  build is what this corrects.
+
+- [ ] **(INC.27) `unionAliasStructural` (B416) NAMES A UNION NOBODY NAMED — ~790 ROWS,
+  WRONG IN *BOTH* ARMS, AND WRONG EVEN WHERE NO ALIAS EXISTS.** (INC.26) measured it and
+  deliberately did not touch it. B416 keys a global by the SORTED MEMBER-ID SET, so it
+  names ANY union matching a declared alias, first-wins. **Probed against tsc 7.0.2**:
+  for `type ModuleName = Ident|Str; type ModuleExportName = Ident|Str`, tsc renders
+  `ModuleExportName` for the annotation that SAYS so, and **`Ident | Str` where no alias
+  was written at all** — we answer `ModuleName` for both.
+  **THE HAZARD IS WHY B416 EXISTS**: unions RECONSTRUCTED by flow narrowing have no
+  annotation to read, so a naive "only name what the source spelled" rule loses the
+  naming B416 was built to provide. The (INC.26) shape is the precedent — narrow the rule
+  by a property that separates the families, do not delete it — and the corpus is the
+  gate, since this is `typeToString` and reaches diagnostics.
+  **DO NOT close this by making the NARROW arm match the FULL one**: (INC.26) established
+  that in every remaining family the narrowed arm is the MORE correct one.
+
+- [ ] **(INC.28) THE VISITOR-SIGNATURE FAMILY — ~298 ROWS WHERE THE *FULL* BUILD RENDERS
+  `any` AND THE NARROW ONE RENDERS `T | readonly Node[]`.** Measured by (INC.26),
+  untouched, not alias-related. Same direction as everything else this arc has found: the
+  full arm is the one losing information. Diagnose before designing; the instrument is the
+  per-element nesting-aware classifier (INC.26) built, and (INC.19)/(INC.11)'s
+  hook-the-writer technique is what has settled every mechanism question in this family so
+  far.
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
   `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`
