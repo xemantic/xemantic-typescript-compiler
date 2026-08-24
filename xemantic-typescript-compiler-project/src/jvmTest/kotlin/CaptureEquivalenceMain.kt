@@ -29,6 +29,7 @@ import com.xemantic.typescript.compiler.AliasDisplayCensus
 import com.xemantic.typescript.compiler.CapturedDeclaration
 import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.SymTypeOrderCensus
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
@@ -82,6 +83,12 @@ fun main(args: Array<String>) {
         println("FLTM eager phases: ${FltmDefer.eager} scope: ${FltmDefer.scope}")
     }
     AliasDisplayCensus.on = System.getenv("XTSC_ALIAS_CENSUS") == "1"
+    // (INC.28) the `declaredTypes` writer ledger; `XTSC_DECLARED=<name,name>` names
+    // the symbols whose first declared-type write is to be attributed, per arm.
+    System.getenv("XTSC_DECLARED")?.let {
+        SymTypeOrderCensus.on = true
+        SymTypeOrderCensus.declaredFilter = it
+    }
     // (INC.24) How many divergent rows to PRINT, and how wide. The CLASSIFICATION of a
     // divergence is the finding, not its count, and 40 rows truncated at 140 characters
     // is not a classification of a few thousand — so both caps are liftable for an
@@ -188,9 +195,14 @@ fun main(args: Array<String>) {
         spansAsked += spans.size
         val request = TypeCaptureRequest(spans)
 
+        if (SymTypeOrderCensus.declaredFilter.isNotEmpty()) SymTypeOrderCensus.reset()
         val t0 = System.nanoTime()
         val full = compiler.build(project, noEmit = true, typeCapture = request)
         fullMs.add((System.nanoTime() - t0) / 1_000_000)
+        if (SymTypeOrderCensus.declaredFilter.isNotEmpty()) {
+            print(SymTypeOrderCensus.declaredReport("full ${file.substringAfterLast('/')}"))
+            SymTypeOrderCensus.reset()
+        }
         val t1 = System.nanoTime()
         val narrow = compiler.build(
             project,
@@ -199,6 +211,9 @@ fun main(args: Array<String>) {
             typeCapture = request,
         )
         narrowMs.add((System.nanoTime() - t1) / 1_000_000)
+        if (SymTypeOrderCensus.declaredFilter.isNotEmpty()) {
+            print(SymTypeOrderCensus.declaredReport("narrow ${file.substringAfterLast('/')}"))
+        }
 
         val fullTypes = typeRows(full, file)
         val narrowTypes = typeRows(narrow, file)

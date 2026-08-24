@@ -437,6 +437,13 @@ class Checker(
     private val nodeTypeResolutionInProgress get() = state.nodeTypeResolutionInProgress
     private val memberResolutionInProgress get() = state.memberResolutionInProgress
     private val declaredTypes get() = state.declaredTypes
+
+    /**
+     * (INC.28) A generic alias's body resolved with its OWN type parameters in scope —
+     * see [resolveTypeAliasBody]. Separate from [declaredTypes] because the two answer
+     * different questions and only this one is a name a user asked about.
+     */
+    private val aliasParametricTypes: MutableMap<Int, Type> = HashMap()
     private val subtypeRelation get() = state.subtypeRelation
     private val assignableRelation get() = state.assignableRelation
     private val comparableRelation get() = state.comparableRelation
@@ -109193,6 +109200,117 @@ interface DataView {
         InstantiationMapper(currentTypeAliasArgs, tpScope, inferenceNamespaceStack.size)
 
     /**
+     * (INC.28) A type alias's DECLARED type: its body resolved with the alias's OWN
+     * type parameters in scope.
+     *
+     * ## The defect this closes, which was shipped and had nothing to do with a partition
+     *
+     * Without the install the body's references to the alias's own parameters resolve
+     * against whatever the AMBIENT scope happens to hold — nothing, at declaration
+     * time — so they answered `errorType` and the declared type froze wrong:
+     * `type Box<T> = { v: T }` became `{ v: any; }`, and a UNION body collapsed
+     * ENTIRELY, because `any` absorbs a union (`type VisitResult<T> = T | readonly
+     * Node[]` became `any`). Two lines reproduce it with no partition and no arm.
+     * `tools/tsgo-7.0.2/lib/tsc --lsp` answers `type Box<T> = { v: T; }` and
+     * `type VisitResult<T extends Node | undefined> = T | readonly Node[]` at the same
+     * carets, so this is not a display convention we were choosing differently.
+     *
+     * On tsc's own sources every hover on `Visitor` and `VisitResult` reported `any` /
+     * `(node: TIn) => any`, which is ~300 of `capture-equivalence`'s 1,128 divergent
+     * spans — and the NARROWED arm was the one answering CORRECTLY, because a narrowed
+     * build skips `init:buildFileLocalTypeMaps` for a foreign file and the first toucher
+     * is then a walker that DOES install the scope (`checkConstraintsInStatements`'
+     * [withDeclTypeParamScope]). `declaredTypes` has no write gate of any kind — unlike
+     * `symbolTypes`, which round 778 gated on an empty ambient context — so whoever
+     * touched first won permanently.
+     *
+     * ## The constraints ARE filled, and strictly OUTSIDE the install
+     *
+     * (INC.19) records that an alias may constrain a parameter BY ITSELF
+     * (`type Shared<I, D extends Shared<I, D>>`, the react-redux shape two corpus
+     * baselines pin) and that resolving such a head WITH the parameters in scope
+     * recurses until the `init` boundary guard reports a spurious TS2589 at (0,0). So
+     * the fill sits in the scope-BUILDING loop, before `withInstantiationContext` — the
+     * same place [withDeclTypeParamScope] puts it, and for the same reason. It stays
+     * write-once, so this adds no new value to the field's race, only a new occasion to
+     * fill it.
+     *
+     * Leaving them null is not an option: an unconstrained parameter relates to nothing,
+     * so a NESTED generic alias reference in the body fails its own
+     * `checkConstraintsForTypeArgs` and the whole body answers `errorType`. Measured on
+     * `type Visitor<TIn, TOut> = (node: TIn) => VisitResult<TOut>`: with the constraint
+     * filled it renders `(node: TIn) => VisitResult<TOut>`, which is what tsc 7.0.2's
+     * LSP answers; without it, `(node: TIn) => any`.
+     *
+     * The interning key is [withDeclTypeParamScope]'s and [withInternedTpScope]'s — the
+     * `TypeParameter` node's position plus the per-file salt — so the parameter a body
+     * resolves to is the same object every other consumer already sees.
+     */
+    /**
+     * (INC.28) THE TYPE OF A TYPE-ALIAS *SYMBOL*, which is not the type a REFERENCE to
+     * that alias resolves to.
+     *
+     * [getDeclaredTypeOfSymbol] answers the second question, and its answer for a generic
+     * alias is the body resolved with the alias's own parameters NOT in scope — so they
+     * answer `errorType`, `type Box<T> = { v: T }` freezes as `{ v: any; }`, and a UNION
+     * body collapses ENTIRELY because `any` absorbs a union (`type VisitResult<T> =
+     * T | readonly Node[]` froze as plain `any`). That is what every reference to a
+     * generic alias whose arguments could NOT be substituted has always been judged
+     * against, and ~13k corpus baselines pin it: handing those sites the parametric form
+     * instead is two measured false positives, a TS2322 `Type '{}' is not assignable to
+     * type 'T'` on `typeArgumentDefaultUsesConstraintOnCircularDefault` and a TS2322 at
+     * `GrandUser` on `excessPropertyCheckIntersectionWithRecursiveType`.
+     *
+     * But it is NOT what a caret on the alias's NAME means, and that is the question this
+     * answers. `tools/tsgo-7.0.2/lib/tsc --lsp` renders `type Box<T> = { v: T; }` and
+     * `type VisitResult<T extends Node | undefined> = T | readonly Node[]`; we rendered
+     * `any` and `{ v: any; }` — every hover on `Visitor` / `VisitResult` in tsc's own
+     * sources, which is ~300 of `scripts/capture-equivalence.sh`'s 1,128 divergent spans,
+     * with the NARROWED arm the one that was RIGHT (a narrowed build skips
+     * `init:buildFileLocalTypeMaps` for a foreign file, so the first toucher was a walker
+     * that DOES install the scope — `checkConstraintsInStatements`'
+     * [withDeclTypeParamScope]; `declaredTypes` has no write gate, so first touch won).
+     *
+     * Reached from [getTypeOfSymbolWorker] alone, i.e. from `getTypeOfExpression` on an
+     * IDENTIFIER that names the alias. A type-alias name in value position is TS2693
+     * already, so the type-checking blast radius of this answer is the capture channel.
+     */
+    private fun parametricTypeOfAlias(symbol: Symbol): Type {
+        aliasParametricTypes[symbol.id]?.let { return it }
+        val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+        if (decl == null || decl.typeParameters.isNullOrEmpty()) return getDeclaredTypeOfSymbol(symbol)
+        // The sentinel is [getDeclaredTypeOfSymbolWorker]'s, for its reason: a circular
+        // alias body must terminate.
+        aliasParametricTypes[symbol.id] = errorType
+        val resolved = resolveTypeAliasBody(decl)
+        aliasParametricTypes[symbol.id] = resolved
+        return resolved
+    }
+
+    private fun resolveTypeAliasBody(decl: TypeAliasDeclaration): Type {
+        val tps = decl.typeParameters
+        if (tps.isNullOrEmpty()) return getTypeFromTypeNode(decl.type)
+        val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+        for (tp in tps) {
+            val p = typeParamInternCache.getOrPut(internKey(tp)) {
+                Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
+            }
+            // WRITE-ONCE and OUTSIDE the install, character for character
+            // [withDeclTypeParamScope]'s shape — see the KDoc for why both halves are
+            // load-bearing. Without the constraint the parameter is unrelated to
+            // everything, so a NESTED generic alias reference in the body fails its own
+            // `checkConstraintsForTypeArgs` and answers `errorType`: measured, the
+            // difference between `(node: TIn) => VisitResult<TOut>` (tsc's own answer)
+            // and `(node: TIn) => any`.
+            if (p.constraint == null) {
+                tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+            }
+            scope[tp.name.text] = p
+        }
+        return withInstantiationContext(scopeMapper(scope)) { getTypeFromTypeNode(decl.type) }
+    }
+
+    /**
      * INV.5(b2c): run [block] under an explicit instantiation context — the
      * REGION form of [getTypeFromTypeNodeWithMapper] for installers that wrap
      * multiple resolution calls. Inline so regions keep their non-local
@@ -110225,6 +110343,24 @@ interface DataView {
                                 if (tpConstraintNode != null) {
                                     val constraintType = getTypeFromTypeNode(tpConstraintNode)
                                     if (constraintType !== anyType && constraintType !== errorType) {
+                                        // (INC.28) MEASURED AND REFUSED: judging a
+                                        // `Type.TypeParam` argument by its APPARENT type here.
+                                        // `checkTypeRelatedToCore` has no general "TypeParam source
+                                        // via its constraint" rule — its `NonPrimitive` leg says so
+                                        // deliberately — so `T extends Node` is NOT related to
+                                        // `Node` and this guard refuses every generic alias
+                                        // reference whose argument is a constrained parameter of
+                                        // the ENCLOSING declaration. Relaxing it with
+                                        // `getApparentType` renders `type Visitor<TIn, TOut extends
+                                        // Node> = (node: TIn) => VisitResult<TOut>` as tsc 7.0.2
+                                        // does, `(node: TIn) => VisitResult<TOut>` instead of
+                                        // `(node: TIn) => any` — and costs a corpus FALSE POSITIVE:
+                                        // a recursive alias (`BuildTree<T, N extends number = -1,
+                                        // I extends any[] = []>`) then expands one level further
+                                        // and `excessPropertyCheckIntersectionWithRecursiveType`
+                                        // gains a TS2322 at `GrandUser` that pristine tsc does not
+                                        // emit. The refusal IS the recursion brake here, so it
+                                        // cannot be relaxed until the relation learns the rule.
                                         if (!checkTypeRelatedTo(resolvedArgs[i], constraintType, assignableRelation)) {
                                             constraintFails = true
                                             break
@@ -110436,7 +110572,38 @@ interface DataView {
             return it
         }
         if (LibTypeCensus.enabled) return getDeclaredTypeOfSymbolCensused(symbol)
+        // (INC.28) THE `declaredTypes` WRITER HOOK. The ambient dimensions are read
+        // BEFORE the worker runs, because the worker save-and-restores them and the
+        // question is what context this resolution BEGAN in. Both the name filter and
+        // the `typeToString` sit inside the `if`: an argument is evaluated strictly,
+        // so a census whose argument does the work is not off when it says it is
+        // (round 900).
+        val censusTps = SymTypeOrderCensus.on && SymTypeOrderCensus.declaredMatches(symbol.name)
+        val censusAmbient = if (censusTps) {
+            Triple(
+                currentTypeParamScope != null,
+                currentTypeAliasArgs != null,
+                inferenceNamespaceStack.isNotEmpty(),
+            )
+        } else null
+        val censusPass = if (censusTps) PassTiming.currentPass else null
+        val censusDepth = if (censusTps) {
+            symbolTypeResolutionInProgress.size to nodeTypeResolutionInProgress.size
+        } else null
         val type = getDeclaredTypeOfSymbolWorker(symbol)
+        if (censusAmbient != null && censusDepth != null) {
+            SymTypeOrderCensus.noteDeclared(
+                symbol.id,
+                symbol.name,
+                censusPass,
+                censusAmbient.first,
+                censusAmbient.second,
+                censusAmbient.third,
+                typeToString(type),
+                censusDepth.first,
+                censusDepth.second,
+            )
+        }
         declaredTypes[symbol.id] = type
         return type
     }
@@ -111727,7 +111894,7 @@ interface DataView {
             flags.hasAny(SymbolFlags.Class) -> getDeclaredTypeOfSymbol(symbol)
             flags.hasAny(SymbolFlags.Interface) -> getDeclaredTypeOfSymbol(symbol)
             flags.hasAny(SymbolFlags.Enum) -> getDeclaredTypeOfSymbol(symbol)
-            flags.hasAny(SymbolFlags.TypeAlias) -> getDeclaredTypeOfSymbol(symbol)
+            flags.hasAny(SymbolFlags.TypeAlias) -> parametricTypeOfAlias(symbol)
             flags.hasAny(SymbolFlags.Alias) -> {
                 // Import alias — resolve to target symbol's type
                 val target = resolveAliasTarget(symbol)

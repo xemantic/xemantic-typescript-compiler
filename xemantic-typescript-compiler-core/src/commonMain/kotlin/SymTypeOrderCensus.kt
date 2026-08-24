@@ -84,10 +84,96 @@ object SymTypeOrderCensus {
     /** One row per rendered completion member, in render order. */
     val memberRows: MutableList<String> = ArrayList()
 
+    /**
+     * (INC.28) THE SECOND WRITER LEDGER — `Checker.declaredTypes`, which is a
+     * DIFFERENT cache from `symbolTypes` with a DIFFERENT staleness rule.
+     *
+     * `getTypeOfSymbol` persists behind round 778's write gate
+     * (`symbolTypeContextIsEmpty`); `getDeclaredTypeOfSymbol` persists
+     * UNCONDITIONALLY, so the first resolution of a type alias's declared type
+     * freezes whatever ambient instantiation context happened to be installed at
+     * that moment. This records that first write per symbol so the two arms of a
+     * full-vs-narrow sweep can be compared on WHO wrote and under WHAT ambient.
+     *
+     * Kept behind [declaredMatches] as well as [on]: the value is a `typeToString`
+     * of the resolved type, which is real work and must never be computed for a
+     * symbol the investigation is not about (round 900 — a guard inside the callee
+     * cannot protect its own argument).
+     */
+    val declaredWrites: MutableMap<Int, String> = HashMap()
+
+    /** How many `declaredTypes` writes the filter admitted, in order. */
+    val declaredOrder: MutableList<String> = ArrayList()
+
+    /**
+     * Comma-separated symbol names whose `declaredTypes` write is recorded. EMPTY
+     * means record NOTHING — a census that records everything would `typeToString`
+     * every declared type in the program.
+     */
+    var declaredFilter: String = ""
+
+    /** Is [name] one of [declaredFilter]'s names? Cheap, and false when unset. */
+    fun declaredMatches(name: String): Boolean {
+        if (declaredFilter.isEmpty()) return false
+        var from = 0
+        while (from <= declaredFilter.length) {
+            val next = declaredFilter.indexOf(',', from).let { if (it < 0) declaredFilter.length else it }
+            if (next - from == name.length && declaredFilter.regionMatches(from, name, 0, name.length)) return true
+            from = next + 1
+        }
+        return false
+    }
+
     fun reset() {
         firstResolve.clear()
         resolves.clear()
         memberRows.clear()
+        declaredWrites.clear()
+        declaredOrder.clear()
+    }
+
+    /**
+     * The `declaredTypes` WRITER hook. [ambientOf]'s three dimensions plus the
+     * resolution depth, exactly as [noteResolve] records them, so a row from either
+     * ledger reads the same way.
+     */
+    fun noteDeclared(
+        id: Int,
+        name: String,
+        pass: String?,
+        typeParamScope: Boolean,
+        typeAliasArgs: Boolean,
+        inferenceNamespace: Boolean,
+        typeText: String,
+        symbolDepth: Int,
+        nodeDepth: Int,
+    ) {
+        val row = "name=$name id=$id pass=${pass ?: "<outside>"} " +
+            "ambient=${ambientOf(typeParamScope, typeAliasArgs, inferenceNamespace)} " +
+            "depth=sym$symbolDepth/node$nodeDepth type=$typeText"
+        declaredOrder.add(row)
+        if (id in declaredWrites) return
+        declaredWrites[id] = row
+    }
+
+    private fun ambientOf(
+        typeParamScope: Boolean,
+        typeAliasArgs: Boolean,
+        inferenceNamespace: Boolean,
+    ): String = buildString {
+        if (typeParamScope) append("tps,")
+        if (typeAliasArgs) append("alias,")
+        if (inferenceNamespace) append("ns,")
+        if (isEmpty()) append("empty")
+    }.removeSuffix(",")
+
+    /** Every admitted `declaredTypes` write, in write order, with the first flagged. */
+    fun declaredReport(tag: String): String = buildString {
+        appendLine("DECLARED[$tag] writes=${declaredOrder.size} symbols=${declaredWrites.size}")
+        val firsts = declaredWrites.values.toSet()
+        for (row in declaredOrder) {
+            appendLine("DECLARED[$tag]  ${if (row in firsts) "FIRST" else "     "} $row")
+        }
     }
 
     /**
