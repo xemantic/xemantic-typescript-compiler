@@ -20,6 +20,91 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.22) — the floor's largest row is worth 62-65 ms by an axis that provably cannot move a full build, and it is REFUSED because the order it buys is RESOLUTIONS and not only a name
+
+**WHAT THIS ROUND DID.** Re-priced `init:buildFileLocalTypeMaps` — **69.16 ms of a
+90.15 ms floor pass table, 77%** — against the NEW floor, found a third axis neither
+(INC.10) nor (INC.11) had varied, verified its central claim in the BINARY rather than
+arguing it, and refused it on three independent gates. **Nothing landed. The tree is at
+`aa3c0629`; the mid-round commit was never pushed and is reset away.**
+
+**THE PRIZE IS REAL AND IT IS THE BIGGEST LEFT** (mean of 2 `both.floor` draws):
+
+| arm | `PT.total both.floor` | `init:buildFileLocalTypeMaps` |
+|---|---:|---:|
+| shipped (`program`) | **90.15 ms** | **69.16 ms** |
+| all phases partition-scoped | **28.05** | **0.014** |
+| `TypeAlias` program-wide, rest partitioned | **24.69** | 6.68 |
+
+`partition-equivalence.sh`: floor **131 -> 57 ms**, narrowed-query median **166 -> 116**,
+ratio at the median file **29.86x -> 42.61x**, full build unmoved (4,751 vs 4,818, inside
+the spread).
+
+**THE THIRD AXIS, AND WHY IT LOOKED SO GOOD.** (INC.10) and (INC.11) both deferred
+PHASES — what every file's map CARRIES — which perturbs a FULL build's first-touch order
+as much as a narrowed one's, and that is what refused them both (2,722 and 1,665 moved
+spans). This round varied **WHICH FILES the eager pass covers**, through the INV.6(6d)
+partition view — which **IS** `binderResults` when there is no partition, so an
+unpartitioned compile is unchanged BY CONSTRUCTION. That is the same property that
+carried the whole (INC.7) gating arc.
+
+**AND THE BY-CONSTRUCTION CLAIM WAS VERIFIED IN THE BINARY, WHICH IS THE ROUND'S BEST
+PROCESS OUTPUT.** A per-arm DIGEST over every captured answer was added to
+`CaptureEquivalenceMain`: over **381,666 captured types and 360,152 definitions in 76
+files**, the full-build digest is `-3718897727265589316` for the pre-round arm **and
+identical for both new arms**. Corroborated by `FltmDefer.lazyBuilds == 0` on every
+unpartitioned build (`program` arm `eager=78 lazy=0`), `cost_gate.py` at **+0.00%** on
+`output.errors`/`spine.nodes`, and `partition-equivalence` EQUIVALENT 78/78. **"A full
+build is unchanged" is exactly the claim that is true of the code and false of the
+binary; this one was made checkable.**
+
+**THE QUEUE'S PREMISE HAD ALREADY EXPIRED.** (INC.11)'s `TypeAlias`-only arm was recorded
+at **137 divergent spans**; re-measured today it is **5 spans / 3 of 76,
+`narrowRendersMoreAny=0` — byte-identical to the shipped baseline.** The 137 were closed
+by (INC.11)'s own `returnsArgumentUnchanged` fix and the (INC.5)/(INC.16)/(INC.19)-(21)
+work since. So the question the item posed ("is ~66 ms worth 137 display rows?") no
+longer existed, and **no display fix and no `aliasDisplayMap` re-key was needed or
+attempted.**
+
+**WHAT ACTUALLY REFUSES IT — three gates, and only the second is decisive:**
+
+| arm | capture-equivalence (base 5 / 3) | capture-channel (base 286 / 49, moreAny **168**) | partition-gate |
+|---|---|---|---|
+| all phases partitioned | 2,275 / 46 of 76, moreAny 0 | 1,457 / 65, moreAny **247** | EQUIVALENT |
+| `TypeAlias` kept program-wide | **6 / 4** | 348 / 51, moreAny **229** | **DIVERGED 1 file** |
+
+(i) The 2,275 are (INC.11)'s (a) half at scale — id-keyed FIRST-WINS alias display
+(`ModuleName` for `ModuleExportName`, `AssignmentPattern` for its unfolded union) — and
+keeping the cheap `TypeAlias` phase program-wide (6.68 ms) collapses them to **+1 row**.
+So the NAMING half is solved for 6.68 ms. (ii) **But the MEMBER channel loses resolutions
+either way: `moreAny` 168 -> 229, i.e. +61 member types collapsing to `any` under a
+narrowed build.** That is a WRONG ANSWER, not a naming difference — the exact class
+(INC.11) refused the full deferral over (321 there, 61 here). Closing it needs the DECL
+phase program-wide, which IS the whole cost. (iii) And `partition-gate`'s SENSITIVITY
+arm — the one built to refuse rather than print green — **DIVERGES on a diagnostic**, so
+it is not purely a display question either.
+
+**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY.**
+The map's one reader rebuilds a foreign file's map on demand; the round pinned both that
+it FIRES (a count) **and that it produces the SAME map** —
+`Checker.fileLocalTypeMapSnapshot` renders a finished map to strings so an eagerly-built
+and a lazily-built one can be compared, with a non-emptiness assertion and a negative
+control that two files' maps differ. Ablations: forcing `Scope.PROGRAM` reddens 4 pins
+INCLUDING the no-mode-install default pin ((INC.16) a1's lesson, applied); disarming the
+lazy path reddens exactly the 2 rebuild pins and nothing else. Suite on the change was
+**15,795 / 0 / 3** and `huge_methods` clean — but the capture gates are the gates for
+this family, and they refuse it.
+
+**THE TRANSFERABLE RESULT, AND IT RE-AIMS THE WHOLE DIRECTION.** The obstruction is NOT
+the eager pass's COST but that the pass IS the program's FIRST-TOUCH ORDER — and that
+order buys two different things: an alias NAME (cheap, fixable, 6.68 ms) and member
+RESOLUTIONS (not fixable without the expensive phase). **A future attempt must make
+member resolution ORDER-INDEPENDENT; making the pass cheaper cannot work.** See (INC.23).
+
+**WORTH RE-LANDING SEPARATELY**: the per-arm capture DIGEST is a general strengthening of
+`capture-equivalence.sh` — it proves a full build is untouched for ANY partition-shaped
+change — and it died with the revert.
+
 ### Round (INC.21) — the scanning family gated as ONE batch banks 99.9%, the first ~100% discount in the arc, and the floor is now 75% a single refused row
 
 **WHAT THIS ROUND DID.** Gated the 19 whole-source-scanning passes TOGETHER (the point
@@ -3319,33 +3404,60 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   raw `.contains` gates through `srcHas`, which would **COST ~17.8 ms to build 78 filters
   to save three ~2 ms scans** now that no pass builds one.
 
-- [ ] **(INC.22) THE FLOOR IS 75% ONE ROW, AND THE ARITHMETIC THAT REFUSED IT HAS
-  CHANGED UNDER IT.** `init:buildFileLocalTypeMaps` is **73.21 ms of a 96.57 ms pass
-  table**; everything else is <= 8.5 ms. (INC.11) refused its deferral in the same
-  breath as calling the alias-display fix "not worth opening for a 66 ms already
-  refused" — **but that judgement was made against a 340 ms floor. The floor is now 137
-  ms, so the same 66 ms is roughly HALF of it.** Re-price before re-refusing.
-  **THE ONE ARM WORTH RE-MEASURING FIRST, AND ITS INSTRUMENT ALREADY EXISTS**
-  (`FltmDefer` / `XTSC_FLTM_EAGER`, default = shipped, pinned inert): (INC.11)'s middle
-  phase, **`TypeAlias` symbols eager**, measured **137 divergent capture spans in 10
-  files with `narrowRendersMoreAny = 0`.** That last number is the whole point — the
-  fully-deferred arm's refusal was **321 resolutions LOST TO `any`**, and this arm loses
-  NONE. So the residual is DISPLAY only, and the question is whether ~66 ms is worth
-  closing 137 display rows.
-  **WHAT CLOSING THEM MEANS IS A CHANGE OF KEY, NOT OF POLICY** ((INC.11)'s own finding):
-  two synonymous aliases resolving to one interned type are decided FIRST-WINS here,
-  where **tsc picks by the REFERENCE's declaration site — which an id-keyed global map
-  cannot express.** Against round 754's deliberate `Type.Reference` exclusion and a union
-  display order pinned byte-for-byte across ~13k baselines, so it is a logical-parity
-  conversation (`docs/logical-parity.md` § 2) and the renderer is SHARED with the
-  diagnostics ((INC.5): never `typeToString` casually).
-  **DO NOT re-open the FULL deferral** — 321 lost resolutions, plus round 829's finding
-  that the `typealias` resolutions are a TS2589/TS2615 **DETECTOR**, so not resolving
-  them DELETES a diagnostic rather than deferring it.
-  **A SMALLER, UNRELATED LEAD FROM THE SAME ROUND**: `init:moduleTypeNameIndex` is
-  BIMODAL on the FIRST sub-draw of a process — [5.01, 0.32] / [8.80, 0.29] — and does
-  the same on an ABLATED binary, so it is nobody's relocation victim. Another
-  lazy-first-asker row.
+- [x] **(INC.22) REFUSED 2026-08-24, WITH THE SHARPEST MEASUREMENT THE ARC HAS OF THIS
+  ROW — AND THE REFUSAL RE-AIMS THE DIRECTION.** `init:buildFileLocalTypeMaps` is
+  **69.16 ms of a 90.15 ms floor pass table (77%)**, and partition-scoping it would take
+  the floor **131 -> 57 ms**, the narrowed-query median **166 -> 116**, and the ratio
+  **29.86x -> 42.61x**. The axis is new — (INC.10)/(INC.11) deferred PHASES, this varies
+  **WHICH FILES** through the INV.6(6d) partition view, so a full build is unchanged BY
+  CONSTRUCTION — **and the claim was verified in the BINARY**: a per-arm DIGEST over
+  381,666 captured types and 360,152 definitions is IDENTICAL across arms, with
+  `FltmDefer.lazyBuilds == 0` on every unpartitioned build as the corroborating count.
+  **THE QUEUE'S PREMISE HAD EXPIRED**: (INC.11)'s "137 divergent spans" for the
+  `TypeAlias`-only arm re-measures as **5 / 3 of 76** — byte-identical to baseline —
+  closed by (INC.11)'s own fix and the (INC.5)/(INC.16)/(INC.19)-(21) work. So no
+  `aliasDisplayMap` re-key was needed, and none was attempted.
+  **WHAT REFUSES IT IS THE MEMBER CHANNEL, NOT DISPLAY**: `capture-channel`'s `moreAny`
+  goes **168 -> 229**, i.e. **+61 member types collapsing to `any`** under a narrowed
+  build — a WRONG ANSWER, the same class (INC.11) refused the full deferral over — and
+  `partition-gate`'s SENSITIVITY arm diverges on a DIAGNOSTIC. Keeping the cheap
+  `TypeAlias` phase program-wide (6.68 ms) solves the NAMING half completely (2,275
+  divergent spans -> +1 row) and does nothing for the member half.
+  **THE TRANSFERABLE RESULT**: the obstruction is not the pass's COST but that the pass
+  IS the program's FIRST-TOUCH ORDER, and that order buys BOTH an alias name (cheap,
+  fixable) AND member resolutions (not fixable without the expensive phase). See (INC.23).
+
+- [ ] **(INC.23) MAKE MEMBER RESOLUTION ORDER-INDEPENDENT — THE ONLY REMAINING ROUTE TO
+  THE FLOOR'S LAST BIG ROW, AND IT IS AN ARCHITECTURAL ITEM, NOT A PERF ONE.**
+  (INC.22) proved the prize (**62-65 ms of a 90 ms pass table; floor 131 -> 57, query
+  median 166 -> 116, ratio 42.61x**) is reachable by an axis that CANNOT move a full
+  build, and that the only thing standing in the way is that
+  `init:buildFileLocalTypeMaps` doubles as the program's FIRST-TOUCH ORDER for member
+  resolution: partition-scope it and **+61 member types collapse to `any`**
+  (`capture-channel` `moreAny` 168 -> 229), with `partition-gate`'s sensitivity arm
+  diverging on a diagnostic too.
+  **SO THE QUESTION IS NO LONGER "can the pass be deferred" BUT "why does resolving a
+  member depend on WHO ASKED FIRST".** The known mechanism is round 778's write gate:
+  `getTypeOfSymbol` persists into `symbolTypes` only when the CALLER's instantiation
+  context is empty, so a member first resolved from inside a namespace / type-param
+  scope / alias-arg install answers correctly and is NOT recorded — and (INC.6) already
+  found the mirror case, where a MINTED symbol must have its type written at MINT TIME,
+  ungated, because the gated write is refused exactly where it is needed.
+  **START BY CENSUSING THE 61**, not by designing: which symbols, resolved by which pass,
+  under what ambient — the instrument is (INC.19)/(INC.11)'s, a hook on the WRITER
+  printing (writer-pass, ambient, value) per arm. If they are one mechanism the fix may
+  be small; if they are the general order-dependence of `symbolTypes` it is a large
+  architectural change and should be recorded as such rather than half-attempted.
+  **DO NOT re-open the phase-deferral axis** — (INC.10), (INC.11) and (INC.22) have each
+  refused it, the last of them with a binary-verified digest.
+
+- [ ] **(INC.24) RE-LAND (INC.22)'s CAPTURE DIGEST — a general gate strengthening that
+  died with a refusal's revert.** `CaptureEquivalenceMain` gained a per-arm DIGEST over
+  every captured answer (381,666 types + 360,152 definitions), which is what let
+  (INC.22) PROVE a full build was untouched rather than argue it. That is useful for ANY
+  partition-shaped change and is independent of the refused behaviour. Re-land the
+  instrument alone, with no behaviour change: the digest, and `Checker.fileLocal-
+  TypeMapSnapshot` if it is cheap to keep. Small.
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:
   `recheckOnly` + EMIT IS UNSOUND AND `ProjectCompiler.build` DOES NOT REFUSE IT.** The Transformer queries the checker it is handed (`isReferencedAliasDeclaration`

@@ -1,5 +1,44 @@
 # Status
 
+**THE FLOOR'S LAST BIG ROW IS WORTH 62-65 ms BY AN AXIS THAT PROVABLY CANNOT MOVE A FULL BUILD, AND
+IT IS REFUSED BECAUSE THE ORDER IT BUYS IS *RESOLUTIONS* AND NOT ONLY A NAME (2026-08-24,
+(INC.22)).** `init:buildFileLocalTypeMaps` is **69.16 ms of a 90.15 ms floor pass table — 77%** —
+and partition-scoping it takes the floor **131 -> 57 ms**, the narrowed-query median **166 -> 116**,
+and the ratio at the median file **29.86x -> 42.61x**, with the full build unmoved. **The axis is
+new**: (INC.10) and (INC.11) deferred PHASES — what every file's map carries — which perturbs a FULL
+build's first-touch order as much as a narrowed one's, and that is what refused them both. This
+round varied **WHICH FILES** the eager pass covers, through the INV.6(6d) partition view, which
+**IS** `binderResults` when there is no partition — so an ordinary compile is unchanged BY
+CONSTRUCTION, the same property that carried the entire (INC.7) gating arc.
+**AND THAT CLAIM WAS VERIFIED IN THE BINARY RATHER THAN ARGUED, WHICH IS THE ROUND'S BEST PROCESS
+OUTPUT.** A per-arm DIGEST over every captured answer — **381,666 types and 360,152 definitions in
+76 files** — reads `-3718897727265589316` for the pre-round arm and **identical for both new arms**,
+corroborated by a COUNT (`FltmDefer.lazyBuilds == 0` on every unpartitioned build) and `cost_gate.py`
+at **+0.00%** on `output.errors`/`spine.nodes`. "A full build is unchanged by construction" is
+exactly the claim that is true of the code and false of the binary; this one was made checkable.
+**THE QUEUE'S PREMISE HAD ALREADY EXPIRED**: (INC.11)'s `TypeAlias`-only arm was recorded at **137
+divergent spans** and re-measures at **5 / 3 of 76 — byte-identical to baseline**, closed by
+(INC.11)'s own `returnsArgumentUnchanged` fix and the work since. So no `aliasDisplayMap` re-key was
+needed and none was attempted. **WHAT ACTUALLY REFUSES IT IS THE MEMBER CHANNEL, NOT DISPLAY**:
+`capture-channel`'s `moreAny` goes **168 -> 229**, i.e. **+61 member types collapsing to `any`**
+under a narrowed build — a WRONG ANSWER, the same class (INC.11) refused the full deferral over —
+and `partition-gate`'s SENSITIVITY arm, the one built to refuse rather than print green, **diverges
+on a DIAGNOSTIC**. Keeping the cheap `TypeAlias` phase program-wide (6.68 ms) solves the NAMING half
+completely (2,275 divergent spans down to **+1 row**) and does nothing for the member half.
+**THE READER'S MISS PATH WAS PINNED PROPERLY, WHICH IS WHY THE REFUSAL IS TRUSTWORTHY**: the map's
+one reader rebuilds a foreign file's map on demand, and the round pinned both that it FIRES and that
+it produces the **SAME map**, with a non-emptiness assertion and a negative control that two files'
+maps differ; ablations reddened 4 pins including the no-mode-install DEFAULT pin ((INC.16) a1's
+lesson applied) and, separately, exactly the 2 rebuild pins. Suite on the change was **15,795 / 0 /
+3** and `huge_methods` clean — but the capture gates are the gates for this family and they refuse
+it, so **nothing landed and the tree is back at `aa3c0629`.**
+**THE TRANSFERABLE RESULT RE-AIMS THE DIRECTION**: the obstruction is not the pass's COST but that
+the pass IS the program's FIRST-TOUCH ORDER, and that order buys BOTH an alias name (cheap, fixable)
+AND member resolutions (not fixable without the expensive phase). **A future attempt must make
+member resolution ORDER-INDEPENDENT — round 778's `getTypeOfSymbol` write gate is the known
+mechanism — not make the pass cheaper.** Queued as (INC.23), with (INC.24) to re-land the capture
+digest, a general gate strengthening that died with the revert.
+
 **THE SCANNING FAMILY GATED AS ONE BATCH BANKS 99.9% — THE ARC'S FIRST ~100% DISCOUNT — AND A
 NARROWED QUERY IS NOW 29.86x FASTER THAN A FULL BUILD (2026-08-24, (INC.21)).** 19 whole-source-
 scanning passes moved TOGETHER (**19.064 -> 0.024 ms**), because round 895's `srcHas` builds its
@@ -165,42 +204,4 @@ both arms (78 netting passes), `cost_gate.py` PASS (`output.errors` 46, `spine.n
 largest `mapped.hits` **+1.02%**, the standing drift), `huge_methods.py --fail-over 0` clean on core
 AND `-project`. **Floor 324 ms / median 357 / ratio 14.06x are DRAW-TO-DRAW against the round's
 340 / 367 / 13.30x, NOT a saving — the landed change moves no work.**
-
-**157 TAIL WALKERS ARE NOW PARTITION-SCOPED, THE INCREMENTAL FLOOR IS 340 ms, AND THE ONE-LINE
-TECHNIQUE IS CLOSED BECAUSE 65% OF WHAT REMAINS IS REFUSED BY SHAPE (2026-08-23, (INC.7) batch 4).**
-Batch 4 gated **89** more program-wide tail walkers onto the check partition in two independently
-swept sub-batches, taking the arc to 157 across four batches: **floor 1,207 -> 340 ms, narrowed
-query median 1,077 -> 367 ms, ratio at the median file 13.30x** (`partition-equivalence.sh`). The
-diff is 89 loop headers and nothing else — `for (result in binderResults)` **221 -> 132**,
-`checkedResults` **255 -> 344**. **THIS, NOT A REUSE MECHANISM, IS WHAT HELPS THE OWNER'S QUERY**:
-(INC.15) measured that an edit invalidates every reuse mechanism, so the FIRST query after a
-keystroke — the error-reporting query — reuses nothing and pays the whole floor. **THE FOURTH
-DISCOUNT POINT IS THE LOWEST**: summed rows of the 89 **54.23 -> 0.13 ms**, whole floor pass table
-**254.57 -> 212.16**, banked **42.41 ms = 78.2%**, next to 79.0 / 85.5 / 92.9. **DO NOT quote the
-floor WALL for this** — the intermediate post-4a draw read **444 ms, HIGHER than before**, while
-the deterministic pass table had already fallen 34.7 ms; a 42 ms effect is not resolvable in a
-4-draw wall, which is round 716's "counters decide, wall time confirms" one instrument over.
-**(INC.19)'s WRITE-ONCE-RACE HAZARD WAS CHECKED, NOT ASSUMED**: gating a walker is exactly the
-operation that changes who wins such a race, and that failure is a plausible TYPE rather than a
-diagnostic, so both capture sweeps ran after EACH sub-batch — `capture-equivalence` **5 spans /
-3 files, `narrowRendersMoreAny=0`** and `capture-channel` **286 rows / 49 files**, byte-identical
-throughout. **WHY THE TECHNIQUE IS DONE**: 172 ungated passes / 251.9 ms remain and the top TEN
-rows are **165 ms** of it, every one refused — 53 of the 83 write a checker field or retract inside
-the private closure, **43 retract via `diagnostics.removeAll`**, 4 carry more than one
-`binderResults` reference, 4 hold a cross-file accumulator. Analyzer-CLEAN was only 54 ms in total.
-A successor must change a pass's SHAPE, which is (INC.20), whose template is (INC.17)'s
-`checkSubsequentVarTypes` split. **THE ANALYZER'S CONTROLS CAUGHT THREE DEFECTS IN THE ANALYZER,
-ALL FAILING IN THE REASSURING DIRECTION**, the new one being that **a MULTI-LINE PARAMETER LIST
-truncates a function's span to its header**, hiding the body and every field write in it — it
-wrongly cleared two passes this queue had ALREADY REFUSED, so **the refusal list was the oracle
-that caught the analyzer**. Also: a `pass("…")`-registering helper is not a caller, and without
-excluding the 12 `initCheckPasses*` registrars the clean set is **0**. The pin is per-walker
-attributable — an ablation reddens **exactly 3 of 22 arms, exactly the three naming that walker** —
-and its first namespace-`this` fixture was VACUOUS until the PassLab said so (a `this` inside a
-FUNCTION in a namespace body is reported by a different pass). **The sensitivity fixture is what
-carried this batch**: it nets **16 of the 89** as real netting passes against **one** (`checkSpine`)
-on every dashboard profile — (INC.18)'s whole point, collected one round later. Suite **15,735 / 0 /
-3** (+7 pins), `cost_gate.py` identical (largest **+1.02% `mapped.hits`**, the standing drift),
-`huge_methods.py --fail-over 0` clean (763 classes), `partition-gate.sh` **EQUIVALENT on both arms**
-(realism 78/78; sensitivity 76/76, 78 netting passes).
 

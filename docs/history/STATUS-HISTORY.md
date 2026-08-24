@@ -1,3 +1,42 @@
+**157 TAIL WALKERS ARE NOW PARTITION-SCOPED, THE INCREMENTAL FLOOR IS 340 ms, AND THE ONE-LINE
+TECHNIQUE IS CLOSED BECAUSE 65% OF WHAT REMAINS IS REFUSED BY SHAPE (2026-08-23, (INC.7) batch 4).**
+Batch 4 gated **89** more program-wide tail walkers onto the check partition in two independently
+swept sub-batches, taking the arc to 157 across four batches: **floor 1,207 -> 340 ms, narrowed
+query median 1,077 -> 367 ms, ratio at the median file 13.30x** (`partition-equivalence.sh`). The
+diff is 89 loop headers and nothing else — `for (result in binderResults)` **221 -> 132**,
+`checkedResults` **255 -> 344**. **THIS, NOT A REUSE MECHANISM, IS WHAT HELPS THE OWNER'S QUERY**:
+(INC.15) measured that an edit invalidates every reuse mechanism, so the FIRST query after a
+keystroke — the error-reporting query — reuses nothing and pays the whole floor. **THE FOURTH
+DISCOUNT POINT IS THE LOWEST**: summed rows of the 89 **54.23 -> 0.13 ms**, whole floor pass table
+**254.57 -> 212.16**, banked **42.41 ms = 78.2%**, next to 79.0 / 85.5 / 92.9. **DO NOT quote the
+floor WALL for this** — the intermediate post-4a draw read **444 ms, HIGHER than before**, while
+the deterministic pass table had already fallen 34.7 ms; a 42 ms effect is not resolvable in a
+4-draw wall, which is round 716's "counters decide, wall time confirms" one instrument over.
+**(INC.19)'s WRITE-ONCE-RACE HAZARD WAS CHECKED, NOT ASSUMED**: gating a walker is exactly the
+operation that changes who wins such a race, and that failure is a plausible TYPE rather than a
+diagnostic, so both capture sweeps ran after EACH sub-batch — `capture-equivalence` **5 spans /
+3 files, `narrowRendersMoreAny=0`** and `capture-channel` **286 rows / 49 files**, byte-identical
+throughout. **WHY THE TECHNIQUE IS DONE**: 172 ungated passes / 251.9 ms remain and the top TEN
+rows are **165 ms** of it, every one refused — 53 of the 83 write a checker field or retract inside
+the private closure, **43 retract via `diagnostics.removeAll`**, 4 carry more than one
+`binderResults` reference, 4 hold a cross-file accumulator. Analyzer-CLEAN was only 54 ms in total.
+A successor must change a pass's SHAPE, which is (INC.20), whose template is (INC.17)'s
+`checkSubsequentVarTypes` split. **THE ANALYZER'S CONTROLS CAUGHT THREE DEFECTS IN THE ANALYZER,
+ALL FAILING IN THE REASSURING DIRECTION**, the new one being that **a MULTI-LINE PARAMETER LIST
+truncates a function's span to its header**, hiding the body and every field write in it — it
+wrongly cleared two passes this queue had ALREADY REFUSED, so **the refusal list was the oracle
+that caught the analyzer**. Also: a `pass("…")`-registering helper is not a caller, and without
+excluding the 12 `initCheckPasses*` registrars the clean set is **0**. The pin is per-walker
+attributable — an ablation reddens **exactly 3 of 22 arms, exactly the three naming that walker** —
+and its first namespace-`this` fixture was VACUOUS until the PassLab said so (a `this` inside a
+FUNCTION in a namespace body is reported by a different pass). **The sensitivity fixture is what
+carried this batch**: it nets **16 of the 89** as real netting passes against **one** (`checkSpine`)
+on every dashboard profile — (INC.18)'s whole point, collected one round later. Suite **15,735 / 0 /
+3** (+7 pins), `cost_gate.py` identical (largest **+1.02% `mapped.hits`**, the standing drift),
+`huge_methods.py --fail-over 0` clean (763 classes), `partition-gate.sh` **EQUIVALENT on both arms**
+(realism 78/78; sensitivity 76/76, 78 netting passes).
+
+
 **THE REPLAY'S LOST TYPE-PARAMETER CONSTRAINT WAS NEVER A REPLAY DEFECT — IT IS A WRITE-ONCE
 INTERNED FIELD RESOLVED BEFORE ITS OWN SCOPE, FROZEN IN THE SEED BUILD, AND THE CORPUS IS
 STRUCTURALLY BLIND TO IT (2026-08-23, (INC.19)).** The re-entrant replay diverged on **8 of 75
