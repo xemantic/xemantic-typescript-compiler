@@ -1,5 +1,66 @@
 # Status
 
+**A MEDIAN NARROWED QUERY IS 108 ms — INDEPENDENTLY REPRODUCED — AND ITS OTHER HALF IS NOW
+DECOMPOSED: `checkSpine` IS 89-92% OF A FILE'S OWN CHECK, SCALING IS **LINEAR** WITH
+`checker.ts` AT THE *p10* PER NODE, AND Σ`own(F)` IS **1.39x** THE WHOLE-PROGRAM CHECK
+(2026-08-24, (INC.37)).** (INC.3) decomposed the incremental FLOOR; nothing here had ever
+split the other half — the queried file's own checking, which after (INC.1)-(INC.32) is the
+dominant term. `own(F) = build(recheckOnly={F}) − build(recheckOnly={a name not in the
+program})`, per wall and per pass, over all 78 of tsc's own sources, with a control built
+in: every floor-resident pass row cancels to ~0 in the subtraction and the per-pass sum
+reconstructs the wall to 2-4%. **Floor 56 ms; `own(F)` min 4 / median 52 / p90 138 / max
+1,726; query median 108 ms** — which reproduces (INC.31)'s 108-113 ms from a completely
+different measurement. **THERE ARE TWO LATENCY PROBLEMS AND THEY NEED DIFFERENT LEVERS**: at
+the median file the floor is still the LARGER half (52%), and at the tail — the file a user
+is most likely to be in — it is **3.1%** and everything is `checkSpine` on one file.
+**THE SCALING ANSWER IS A NEGATIVE RESULT AND IT RETIRES A STANDING SUSPICION.** `own(F)` is
+LINEAR in the file's NODE count, and `checker.ts` is at the **p10** of per-node cost —
+**6.27 µs/node against a population median of 9.71** over the 51 files with >2,000 nodes
+(`parser.ts`, 5.8x smaller, reads 6.08). Its 1,726 ms is 275,478 nodes at a below-median
+price: **there is no quadratic to find and no structural lever inside the big file, only the
+constant factor per node.** Confirmed independently — Σ per-file `spineNodes` over the 78
+narrowed builds is **856,962**, the whole-program figure to the node, so the walk partitions
+exactly. **AND THE PROXY THAT WOULD HAVE INVENTED THE OPPOSITE ANSWER IS BYTES**: 76 -> 739
+µs/KB among files >100 KB, and every byte-based regression in this round's first pass
+predicted `checker.ts` LOW by 1.2-4.3x — i.e. would have been read as a super-linearity that
+is not there.
+**WHAT IS INSIDE `own(F)`.** `checkSpine` is **89-92%** of it above ~15,000 nodes (1,576 of
+1,771 ms on `checker.ts`). The ~400 partition-scoped tail walkers are 10.5% there and 5-7%
+elsewhere, and they are FLAT — 78 rows above 0.5 ms, largest **11.45 ms = 0.65% of the
+query** — so round 830's arithmetic closes them: there is nobody to make cheaper. Inside
+`checkSpine` the four disjoint type-system rows (relation 39, type-node 43, member 7, flow
+narrowing 167) are **255 ms = 16.2%**, so **84% is the walk and the handler bodies** —
+round 758's whole-program result, sharper under a partition.
+**ROUND 847's SIX-HANDLER SET IS CONFIRMED (65.7% vs 63.0% whole-program-warm) AND ITS ORDER
+IS REFUTED.** `cpaSpineLeave` is **22.9%** here against round 847's third place;
+`ccetSpineLeave`, its first at 18.2%, is **10.9%**; and the top-three permutation differs on
+all three of `binder.ts` / `parser.ts` / `checker.ts`, with `binder.ts` putting a handler in
+nobody's top six second. Round 847 explained its own swap by differing warm-up RATES — every
+arm here is warm, so what is left is the POPULATION. **A per-handler ranking is a claim about
+a codebase's shape, not about the compiler: quote the file with it.**
+**THE SURPRISE — A 1.39x RE-DERIVATION TAX, AND IT IS THE LARGEST MEDIAN-CASE TERM NAMED.**
+Σ`own(F)` over 78 files is **6,841 ms** against a whole-program check of **~4,935**. The walk
+partitions to the node, so the extra **1,906 ms** is shared type resolution (lib types,
+foreign declarations, instantiations) a full build resolves once and every per-file query
+re-derives inside its own fresh `Checker` — averaged, **~24 ms per query, roughly HALF the
+median file's entire own check.** Same object (INC.14) measured from the other side. Queued
+as **(INC.38)**, whose actionable form is NOT automatic working-set growth ((INC.14) refused
+that on `k·floor + k(k+1)/2·perFile` arithmetic) but a host asking for its whole open set in
+one call: 342 ms once against 771 asked per file. **(INC.39)** carries the other lever — the
+three big handlers, 645 ms the object on `checker.ts`, prize NOT measured.
+**THREE INSTRUMENT TRAPS, ALL OF WHICH FAILED TOWARD A PLAUSIBLE TABLE**, which is the most
+reusable part of the round: the `dispatch` tier needs a warm-up OF ITS OWN (its by-id
+dispatcher is not the production walk — run 1 read a handler at **82 µs per consultation**,
+a warm-up artifact wearing a handler's name); **a six-point size ladder cannot answer the
+scaling question at all**, since `corePublic.ts` (1,337 B) costs 7.5 ms and `es2019.ts`
+(1,533 B) costs 26.5 — 3.5x at the same size, so the fitted intercept is whichever small
+file you drew, and it was replaced by the 78-file sweep; and round 846's `full`-tier
+inflation of `checkSpine` reconfirmed here at **1.08-1.37x**, so every per-pass ms comes from
+the `rows` tier and the probe's timestamp pair is measured in situ (34-36 ns) rather than
+inherited. Instrument only — no compiler behaviour touched, no checker code, no compiled core
+method — so `cost_gate.py` and `huge_methods.py` are CONTROLS and were deliberately not run.
+Suite **15,815 / 0 / 3** (unchanged). `docs/perf/file-check-decomposition.md`.
+
 **THE LANGUAGE SERVICE IS 10-24x FASTER THAN ITS OWN DOCUMENTED COST TABLE, AND THE ONE DEFECT
 THE NEW TABLE EXPOSED IS FIXED: A MEDIAN NARROWED DIAGNOSTICS QUERY IS 108-113 ms — 43-47x A FULL
 REBUILD — AND AN ORDINARY HOVER AFTER TWO OTHER CHANNELS WENT 324 ms -> 4 ms (2026-08-24,
@@ -190,47 +251,3 @@ EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76 over 78 netting passes. **The
 and no before-arm was run, deliberately, because the change cannot reach it**; and
 `capture-channel`'s DIVERGED count has **no same-session before-arm, so no claim is made about it** —
 which is the right way to report a number you did not control for.
-
-**`[Symbol.unscopables]` HAS BEEN RENDERING `any` IN EVERY SMALL PROJECT'S HOVERS ON THE ORDINARY
-SHIPPED BUILD, AND FIXING IT COLLECTED THE FLOOR 129 -> 58 ms (2026-08-24, (INC.25)).** Three rounds
-read this as a partition defect. It is not: a THREE-LINE scratch project (`export const strArr:
-string[] = []` plus a `number[]` sibling) reproduces it on a FULL build with no partition and no arm
-— `truncatedResolutions=1`, `MEMBER [Symbol.unscopables] : any`. **A hand-written `interface Foo { un:
-{[K in keyof Foo]?: boolean} }` resolves CORRECTLY in all four forms tried**, because the spine walks
-an interface body and resolves the mapped-type node before any member table is in flight; **`interface
-Array<T>`'s body is never spine-walked**, so the first ask arrives from inside
-`resolveReferenceMembers`. The 78-file tsc profiles hid it because `init:buildFileLocalTypeMaps`
-happens to resolve that member first — which is exactly why it looked partition-shaped.
-**THE MECHANISM AND A FIX THAT TERMINATES BY CONSTRUCTION.** `resolveStructuredTypeMembersCore`
-returns silently on re-entry leaving `properties` null — correct for circular heritage, TRUNCATED for
-any reader of the key set. `getKeyofType` read that null as `string`, the mapped type bailed to `any`,
-and round 778's write gate froze it (`ambient=empty` throughout, so the cache was never the lever).
-The fix answers such a `keyof` **from the DECLARATIONS**: no resolver call at all, only
-already-computed tables plus AST, under a visited set and a depth cap, **REFUSING rather than
-returning a partial key domain** (round 463). **No TS2589 at (0,0) appeared anywhere** — (INC.19)'s
-self-referential-alias family is unreachable because nothing on this path resolves a constraint.
-**The ablation is decisive and the counters are its control**: disabled, the pin reads `typeText=any`;
-enabled, the exact 34-member mapped object — and the ablated binary's cost-gate counters are
-**identical digit for digit**, so the fix moves zero counters and all standing drift is pre-existing.
-**THE PRIZE, COLLECTED.** With the defect gone, `narrowRendersMoreAny` returns **229 -> 168** (the
-baseline) — the one observable that refused (INC.22) — and partition-scoping the floor's largest row
-is now the shipped default, pinned with **no mode install in it**. **Floor 129 -> 58 ms;
-narrowed-query median 173 -> 117; ratio at the median file 30.91x -> 43.07x; the floor is now HALF a
-median query instead of three quarters.**
-**A GATE BASELINE MOVED AND IT IS THE ONE THIS ARC HAS QUOTED ALL WEEK — DO NOT TRUST AN OLDER
-`5 / 3` FIGURE.** `capture-equivalence.sh`'s NARROW arm goes **5 spans / 3 files -> 2,275 of 381,666
-(0.60%) in 46 files**. The FULL-build digest is unchanged (`-3718897727265589316`), so an ordinary
-compile is untouched; the movement is entirely in what a NARROWED query renders. **It is not the trade
-(INC.2) refused** — that was 45 spans rendering `any` where the full build rendered the declared type,
-i.e. wrong answers. Here **no row renders more `any`, none is absent, and the direction is MIXED**
-(the narrow arm KEEPS `Intl.LocalesArgument` where the full arm expands it, 113 rows; and renders a
-signature the full arm gives up on as `any`, 38 rows) — two draws from the id-keyed first-wins
-`aliasDisplayMap`, which CLAUDE.md already records as arbitrary in both arms. **It is still a 455x
-move in a gate that stood at 5 for the whole (INC.*) arc, and the mitigation is already measured**:
-(INC.22)'s `TypeAlias`-phase-program-wide configuration costs **6.68 ms** — 11% of a 58 ms floor — and
-collapses 2,275 to **+1 row**. It is queued as (INC.26), which must first diagnose the ONE diagnostic
-that configuration diverges on `partition-gate`'s sensitivity arm; the alternative road is a
-CAPTURE-LOCAL alias resolution, which cannot move a baseline at all. Suite **15,801 / 0 / 3**, **zero
-corpus baselines moved**, `cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50
-`-project`), `capture-channel` digest `4065921979171190360` with moreAny 168, `partition-equivalence`
-EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76.

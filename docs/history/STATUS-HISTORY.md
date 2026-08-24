@@ -1,3 +1,47 @@
+**`[Symbol.unscopables]` HAS BEEN RENDERING `any` IN EVERY SMALL PROJECT'S HOVERS ON THE ORDINARY
+SHIPPED BUILD, AND FIXING IT COLLECTED THE FLOOR 129 -> 58 ms (2026-08-24, (INC.25)).** Three rounds
+read this as a partition defect. It is not: a THREE-LINE scratch project (`export const strArr:
+string[] = []` plus a `number[]` sibling) reproduces it on a FULL build with no partition and no arm
+— `truncatedResolutions=1`, `MEMBER [Symbol.unscopables] : any`. **A hand-written `interface Foo { un:
+{[K in keyof Foo]?: boolean} }` resolves CORRECTLY in all four forms tried**, because the spine walks
+an interface body and resolves the mapped-type node before any member table is in flight; **`interface
+Array<T>`'s body is never spine-walked**, so the first ask arrives from inside
+`resolveReferenceMembers`. The 78-file tsc profiles hid it because `init:buildFileLocalTypeMaps`
+happens to resolve that member first — which is exactly why it looked partition-shaped.
+**THE MECHANISM AND A FIX THAT TERMINATES BY CONSTRUCTION.** `resolveStructuredTypeMembersCore`
+returns silently on re-entry leaving `properties` null — correct for circular heritage, TRUNCATED for
+any reader of the key set. `getKeyofType` read that null as `string`, the mapped type bailed to `any`,
+and round 778's write gate froze it (`ambient=empty` throughout, so the cache was never the lever).
+The fix answers such a `keyof` **from the DECLARATIONS**: no resolver call at all, only
+already-computed tables plus AST, under a visited set and a depth cap, **REFUSING rather than
+returning a partial key domain** (round 463). **No TS2589 at (0,0) appeared anywhere** — (INC.19)'s
+self-referential-alias family is unreachable because nothing on this path resolves a constraint.
+**The ablation is decisive and the counters are its control**: disabled, the pin reads `typeText=any`;
+enabled, the exact 34-member mapped object — and the ablated binary's cost-gate counters are
+**identical digit for digit**, so the fix moves zero counters and all standing drift is pre-existing.
+**THE PRIZE, COLLECTED.** With the defect gone, `narrowRendersMoreAny` returns **229 -> 168** (the
+baseline) — the one observable that refused (INC.22) — and partition-scoping the floor's largest row
+is now the shipped default, pinned with **no mode install in it**. **Floor 129 -> 58 ms;
+narrowed-query median 173 -> 117; ratio at the median file 30.91x -> 43.07x; the floor is now HALF a
+median query instead of three quarters.**
+**A GATE BASELINE MOVED AND IT IS THE ONE THIS ARC HAS QUOTED ALL WEEK — DO NOT TRUST AN OLDER
+`5 / 3` FIGURE.** `capture-equivalence.sh`'s NARROW arm goes **5 spans / 3 files -> 2,275 of 381,666
+(0.60%) in 46 files**. The FULL-build digest is unchanged (`-3718897727265589316`), so an ordinary
+compile is untouched; the movement is entirely in what a NARROWED query renders. **It is not the trade
+(INC.2) refused** — that was 45 spans rendering `any` where the full build rendered the declared type,
+i.e. wrong answers. Here **no row renders more `any`, none is absent, and the direction is MIXED**
+(the narrow arm KEEPS `Intl.LocalesArgument` where the full arm expands it, 113 rows; and renders a
+signature the full arm gives up on as `any`, 38 rows) — two draws from the id-keyed first-wins
+`aliasDisplayMap`, which CLAUDE.md already records as arbitrary in both arms. **It is still a 455x
+move in a gate that stood at 5 for the whole (INC.*) arc, and the mitigation is already measured**:
+(INC.22)'s `TypeAlias`-phase-program-wide configuration costs **6.68 ms** — 11% of a 58 ms floor — and
+collapses 2,275 to **+1 row**. It is queued as (INC.26), which must first diagnose the ONE diagnostic
+that configuration diverges on `partition-gate`'s sensitivity arm; the alternative road is a
+CAPTURE-LOCAL alias resolution, which cannot move a baseline at all. Suite **15,801 / 0 / 3**, **zero
+corpus baselines moved**, `cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50
+`-project`), `capture-channel` digest `4065921979171190360` with moreAny 168, `partition-equivalence`
+EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76.
+
 **THE 62-65 ms THAT (INC.22) REFUSED IS GATED BY *ONE LIB MEMBER* AND *ONE TRUNCATED RESOLUTION*,
 AND THE COUNTER THAT REPORTED IT IS A SUBSTRING HEURISTIC (2026-08-24, (INC.23)+(INC.24)).** (INC.22)
 refused partition-scoping the floor's largest row — `init:buildFileLocalTypeMaps`, 69.16 ms of a
