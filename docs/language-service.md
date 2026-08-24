@@ -180,7 +180,7 @@ you call them.
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
 | `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
-| `diagnosticsOf(files)` | **one NARROWED build** when dirty; **none** when clean, repeated, or a SUBSET of a set already asked about | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 14 has the provenance) — see § 4a |
+| `diagnosticsOf(files)` | **one NARROWED build** for the FIRST query of a project state; **none** when clean, repeated, a SUBSET of a set already asked about, or (INC.40) about any other file — a live re-entrant checker answers it | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 14 has the provenance) — see § 4a |
 | `prepare(files)` | **ONE NARROWED build**, whatever the file count | checks and captures a whole working set at once, so every later semantic query about any of them is free — see § 3a |
 | `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — **129 – 137 ms at the median file, 38x a full rebuild** on tsc's own sources (2026-08-24); the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
 | `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays; free in a `prepare`d file |
@@ -414,61 +414,95 @@ because there was nothing worth not doing. Neither case hurts a host that follow
 above (a clean project answers from the cached build and does not compile at all), but do
 not expect a ratio on a small project.
 
-### (INC.17) A file the host never named — a RE-ENTRY was built, measured, and REFUSED
+### (INC.17)/(INC.40) A file the host never named — the RE-ENTRY, shipped for diagnostics and refused for everything else
 
 The three properties above are about a query the project has already answered, or
 one whose files are a subset of a set it has. The case they do not cover is the
 one an editor hits constantly: the user opens a file nobody declared, or the
-annotator asks about a buffer that was not in the last batch. That pays a whole
-narrowed build — the crawl, the parse, the bind and all ~417 checker `init`
-passes — and **it still does.**
-
-(INC.17) built the alternative and did not ship it. The mechanism is real and it
-is in the tree (`Recheck.kt`, `Checker.recheckAdditionalFiles`,
-`ProjectCompiler.build(recheckHolder = ...)`), reachable only by passing a
-`RecheckHolder`, which **nothing in a shipped path does** — `Project` does not
-know the type exists. Read this section before wiring it to anything.
+annotator asks about a buffer that was not in the last batch. That used to pay a
+whole narrowed build — the crawl, the parse, the bind and all ~417 checker `init`
+passes. **Since (INC.40) it does not.**
 
 **What it does.** The checker that answered the previous `diagnosticsOf` is still
-alive, and **211 of its 417 `init` rows never read the check partition at all**:
-they iterate the whole program, so they already emitted the new file's rows during
-the first query and `getDiagnostics()` merely filtered them out. Only the
-partition-dependent rows have anything left to do, and they are re-entered with
-the widened partition. On tsc's own 78 sources the invariant rows carry **350.89
-ms of a 366.47 ms floor**, and the whole mechanism measured **3.06x** — 75
-questions answered in 12,572 ms against 38,498 ms of fresh narrowed builds.
+alive, and ~110 of its 417 `init` rows never read the check partition at all: they
+iterate the whole program, so they already emitted the new file's rows during the
+first query and `getDiagnostics()` merely filtered them out. Only the
+partition-dependent rows have anything left to do, and they are re-entered with the
+widened partition. The handle is kept by `Project` for exactly as long as `cached`
+is — i.e. until the next edit — and it is dropped by `updateFile`, `deleteFile` and
+`close`.
 
-**Why it is refused.** `scripts/replay-differential.sh` compares a re-entered
-answer against a fresh narrowed build's, file by file, over two projects and two
-channels — diagnostics, and the captured type and definition at every identifier.
-On tsc's own sources:
+**What it is worth, re-priced at HEAD for the diagnostics channel with no capture
+request in either arm** (`scripts/inc40-replay-cost.sh`, tsc's own 78 sources,
+three rotations after six warm-ups; the floor it is measured against is ~50-80 ms):
+
+| working set `k` | queries | fresh total | replay total | ratio | fresh per query (median) | replay per query (median) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 77 | 10,656 ms | 4,728 ms | **2.25x** | **104 ms** | **25 ms** |
+| 2 | 39 | 7,716 ms | 4,500 ms | 1.72x | 141 ms | 55 ms |
+| 8 | 10 | 5,342 ms | 4,228 ms | 1.26x | 377 ms | 260 ms |
+
+The ratio FALLS as the working set grows because the thing the replay deletes — the
+incremental floor — is paid once per QUERY and not per file, so a host that batches
+its questions has already collected most of it (§ 4's subset rule). The row a user
+feels is `k = 1`. And the replay arm's TOTAL (4,728 ms) lands on the whole-program
+CHECK cost (~4,935 ms), which is (INC.37)'s **1.39x re-derivation tax** being
+collected rather than re-paid: 77 fresh checkers each re-derive the shared lib and
+foreign-declaration resolutions, one live checker does not.
+
+Note that this number is NOT comparable to (INC.17)'s original **3.06x** or to the
+**1.68x** the arc later recorded: both of those were measured with a whole-file
+CAPTURE request in both arms, which is +9-17 ms of common cost per query that
+dilutes the ratio. Measured that way at HEAD the same run reads **1.34x**
+(replay 12,063 ms against 16,139 ms over 75 questions) — so the with-capture
+lineage has continued to decay exactly as CLAUDE.md's law predicts, and it is the
+capture-free diagnostics channel that is worth wiring.
+
+**Why it serves diagnostics and NOTHING else.**
+`scripts/replay-differential.sh` compares a re-entered answer against a fresh
+narrowed build's, file by file, over two projects and three channels — diagnostics,
+captured definitions, and the captured type at every identifier. At HEAD:
 
 ```
-compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
-          typeSpans=373879 definitionSpans=352713
-DIVERGED: 8 of 75 file(s)
+realism      (tsc's own sources)
+  compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
+            typeSpans=373879 definitionSpans=352713
+  DIVERGED: 43 of 75 file(s)   — 0 DIVERGE-DIAG, 0 DIVERGE-DEF, 43 DIVERGE-TYPE
+
+sensitivity  (test-fixtures/partition-gate — 178 rows over 71 files carrying them,
+              from 78 distinct netting passes against the profile's ONE)
+  EQUIVALENT: all 75 files agree (diagnostics, types, definitions)
 ```
 
-Every **diagnostic** row agrees, on both arms. The **capture** channel diverges in
-**8 of 75 files**, and the shape is a lost TYPE-PARAMETER CONSTRAINT: the replay
-renders `<T extends Node, U>` where a fresh build renders `<T extends Node, U
-extends T>`. A hover that quietly drops a constraint is worse than a hover that
-took 500 ms — the same judgement (INC.2) made when it refused capture narrowing
-over 45 divergent spans — so the re-entry serves nothing until (INC.19) closes.
+Every **diagnostic** row agrees, on both arms, and so does every one of the 352,713
+**definition** spans. The **captured type** channel diverges in 43 of 75 files.
+(INC.19) closed the lost TYPE-PARAMETER CONSTRAINT that used to dominate it; what
+is left is two classes. Most rows are the union-alias display family
+(INC.26)/(INC.27) — the replay renders `ModuleExportName` where a fresh build
+renders `StringLiteral | Identifier` — which (INC.27) proved is an INTERNING-KEY
+question, and in which the fresh arm is not automatically the correct one. The
+residue is lost generic INFERENCE (`Connection[][]` read as `any[][]`,
+`Map<string, SeenPackageName>` as `Map<any, any>`). Both are silent in the
+dangerous direction: a plausible-looking type, never an error.
 
-**The lesson that outlives the refusal.** A partition or replay change must be
-graded on the CAPTURE sweep, not only the diagnostics sweep. Here the diagnostics
-half was *completely silent* about an 8-file defect: a lost collector or a lost
-type-parameter scope surfaces as a wrong TYPE, never as a missing error.
+A hover that quietly drops an inference is worse than a hover that took 500 ms —
+the same judgement (INC.2) made when it refused capture narrowing over 45 divergent
+spans. So the split is enforced by a TYPE and not by a comment: `Project` holds the
+handle only through a private one-way valve (`DiagnosticsOnlyRecheck`) whose single
+member takes a `Set<String>` and returns a `List<Diagnostic>`. No
+`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave
+it, so `quickInfoAt`, `definitionsAt`, `completionsAt`, `signatureHelpAt`,
+`semanticsAt` and `prepare` cannot reach it even by mistake.
+`ProjectRecheckWiringTest` pins both halves — that the diagnostics path DOES reach
+a re-entry (a count of builds, not a time) and that the capture-serving members
+still pay a build.
 
-**What (INC.19) inherits.** Two live hypotheses — the replay SET is too small (a
-partition-dependent pass classified invariant), or replaying at all is
-non-idempotent. The evidence for the second is that an arm re-entering *all*
-passes over 7 targets burned 53 minutes of CPU without finishing, against ~50 s
-for the 205-pass replay over 75 targets; ~100x is the signature of a pass that
-appends to a side table or re-emits per replay. The named next instrument is a
-BISECTION over the replay set — which passes, added to the 205, repair the 8
-files — not another all-passes arm.
+**The lesson that outlives it.** A partition or replay change must be graded on the
+CAPTURE sweep, not only the diagnostics sweep. The diagnostics half was *completely
+silent* about the original 8-file defect: a lost collector or a lost type-parameter
+scope surfaces as a wrong TYPE, never as a missing error. That is why the
+diagnostics channel could be shipped on the strength of two arms agreeing and the
+capture channel could not.
 
 **When to use which.** Wire `diagnosticsOf` to the editor's per-file annotator —
 it is the query an IDE actually makes, and the one whose cost falls with the size
@@ -1976,6 +2010,7 @@ which, and that column is the half a host must design around.
 | `diagnosticsOf(f)` — **median over all 78 files** | 1 narrowed | 1.1 – 1.2 s | **108 – 113 ms** (p90 202 – 219) | **≈10x** |
 | `diagnosticsOf(checker.ts)` — the 3.15 MB extreme | 1 narrowed | 2.7 s | **1,744 – 1,763 ms** | 1.5x |
 | `diagnosticsOf` repeated, or a SUBSET of a set already asked | **0** | 0 | **0 ms** | = |
+| `diagnosticsOf(g)` — **another file, same state** (INC.40) | **0** | 1 narrowed | **25 ms median** (re-entry, no build) | **≈4x on 2026-08-24's own row** |
 | `completionsAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **194 – 202 ms** | **≈24x** |
 | `signatureHelpAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **190 – 214 ms** | **≈23x** |
 | `quickInfoAt` — first caret, **median file** | 1 per BUFFER | — | **129 – 137 ms** | — |

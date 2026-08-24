@@ -127,9 +127,8 @@ class PartitionMixedPassSplitTest {
      * rather than editing it quietly. It was here because (INC.17) deliberately left
      * that pass on `binderResults` so its re-entrant replay would never re-enter it,
      * and (INC.20) declined to reverse a decision it had not been asked to take. The
-     * replay is EXPERIMENTAL and (INC.19) refused it as a default path, so nothing
-     * shipped reaches it, while the pass is 10.9 ms of an incremental floor that
-     * every editor query pays; the pass is now gated and
+     * replay was then refused as a default path, while the pass is 10.9 ms of an
+     * incremental floor that every editor query pays; the pass is now gated and
      * `PartitionCensusHookTest` asserts its PRESENCE.
      */
     @Test

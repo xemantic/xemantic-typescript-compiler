@@ -39,8 +39,10 @@ import com.xemantic.typescript.compiler.computeParserFlags
 import kotlin.test.Test
 
 /**
- * (INC.17) THE RE-ENTRANT RECHECK, AT FIXTURE SCALE — **the mechanism, and it is
- * NOT a shipped path.**
+ * (INC.17) THE RE-ENTRANT RECHECK, AT FIXTURE SCALE — **the mechanism itself.**
+ * Since (INC.40) it IS a shipped path, for `Project.diagnosticsOf` and for nothing
+ * else; `ProjectRecheckWiringTest` pins that wiring and its boundary, this class
+ * pins the mechanism underneath it.
  *
  * `ProgramRecheck` answers about a file its checker's first walk did not cover by
  * re-entering only the 206 of 417 `init` rows whose answer depends on the check
@@ -65,8 +67,12 @@ import kotlin.test.Test
  * * **the CAPTURE channel is deliberately NOT pinned equivalent.** Its rows are
  *   asserted to EXIST (the channel is wired) and nothing more — the differential,
  *   not a two-consumer fixture, is what grades it, and it grades it WRONG;
- * * **nothing reaches it by default** — the arming is behaviour-free and a caller
- *   must pass a holder to get anywhere near it;
+ * * **the arming is behaviour-free** — a build that hands its program back must
+ *   answer exactly what an unarmed one answers, or "wired for diagnostics only"
+ *   would be a fiction and every compile would be paying for a path it never
+ *   asked for. (Before (INC.40) this bullet also said "nothing reaches it by
+ *   default"; that is now `ProjectRecheckWiringTest`'s subject, which pins WHICH
+ *   members reach it and which structurally cannot.);
  * * **the re-entry is a re-entry** — the receipt is a COUNT of builds, not a time.
  *   A "re-entry" that quietly performed a whole build would agree with everything
  *   and buy nothing, which is exactly how a green run tests nothing (CLAUDE.md

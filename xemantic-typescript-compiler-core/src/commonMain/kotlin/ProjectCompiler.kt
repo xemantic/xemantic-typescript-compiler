@@ -134,13 +134,15 @@ class ProjectCompiler(private val vfs: Vfs) {
         outDir: String? = null,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
-        /** (INC.17) **EXPERIMENTAL, and nothing in a shipped path passes one.** When
-         *  non-null, this build hands its LIVE program back here, so a later question
-         *  about a file outside [recheckOnly] can be answered by re-entering the
-         *  partition-dependent checker passes instead of building. Retains the whole
-         *  checker, and its CAPTURE channel is known to diverge from a fresh build in
-         *  8 of 75 files of the compiler profile — read [ProgramRecheck]'s banner
-         *  before wiring this to anything. */
+        /** (INC.17) When non-null, this build hands its LIVE program back here, so a
+         *  later question about a file outside [recheckOnly] can be answered by
+         *  re-entering the partition-dependent checker passes instead of building.
+         *  Retains the whole checker, and its CAPTURED-TYPE channel is known to
+         *  diverge from a fresh build in 43 of 75 files of the compiler profile while
+         *  its DIAGNOSTIC channel is graded equivalent on both arms — which is why
+         *  (INC.40)'s one shipped caller (`Project.diagnosticsOf`) puts the handle
+         *  behind a valve that can ask for nothing else. Read [ProgramRecheck]'s
+         *  banner before adding another. */
         recheckHolder: RecheckHolder? = null,
     ): Result {
         // (INC.4) A partition may not EMIT. The Transformer queries the checker it is

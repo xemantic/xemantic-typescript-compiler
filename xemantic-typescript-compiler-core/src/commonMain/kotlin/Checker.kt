@@ -9767,18 +9767,21 @@ class Checker(
     }
 
     /**
-     * (INC.17) **EXPERIMENTAL — REFUSED AS A DEFAULT PATH, AND KNOWN TO ANSWER A
-     * WRONG TYPE.** THE RE-ENTRANT RECHECK — answer about files this checker's
-     * first walk did not cover, WITHOUT rebuilding the program.
+     * (INC.17) **SHIPPED FOR DIAGNOSTICS ONLY, AND KNOWN TO ANSWER A WRONG TYPE.**
+     * THE RE-ENTRANT RECHECK — answer about files this checker's first walk did
+     * not cover, WITHOUT rebuilding the program.
      *
      * Reachable only from a checker built with [retainForRecheck], which only a
-     * caller that passed a `RecheckHolder` gets, which nothing in a shipped path
-     * does. Graded by `scripts/replay-differential.sh`: the DIAGNOSTIC channel
-     * agrees on both arms, the CAPTURE channel **diverges in 8 of 75 files** of
-     * the compiler profile — a lost type-parameter constraint, `<T extends Node,
-     * U>` for `<T extends Node, U extends T>`. `ProgramRecheck`'s banner carries
-     * the numbers, the two live hypotheses and (INC.19)'s next instrument. **Do
-     * not serve hover/quick-info/completions from this until (INC.19) closes.**
+     * caller that passed a `RecheckHolder` gets. Graded by
+     * `scripts/replay-differential.sh`: the DIAGNOSTIC channel agrees on both arms
+     * (0 rows of 46 on the realism arm, 0 of 178 on the sensitivity arm) and so
+     * does the DEFINITION channel (0 of 352,713 spans), while the CAPTURED-TYPE
+     * channel **diverges in 43 of 75 files** of the compiler profile — union-alias
+     * display plus lost generic inference; (INC.19) closed the lost type-parameter
+     * constraint that used to dominate. `ProgramRecheck`'s banner carries the
+     * numbers. **(INC.40) wired the diagnostics half to `Project.diagnosticsOf`
+     * behind a one-way valve; do NOT serve hover/quick-info/completions from
+     * this.**
      *
      * ## What it does
      *

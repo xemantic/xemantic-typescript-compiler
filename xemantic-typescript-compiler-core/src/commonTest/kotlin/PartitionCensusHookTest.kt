@@ -139,11 +139,12 @@ class PartitionCensusHookTest {
         // (INC.21) CHANGED WHAT THIS PIN EXPECTS OF THE SECOND NAME, DELIBERATELY.
         // `checkSubsequentVarTypesPerFile` used to be REQUIRED ABSENT here, because
         // (INC.17) left it on `binderResults` so its re-entrant replay would never
-        // have to re-enter it. That replay is EXPERIMENTAL, (INC.19) refused it as
-        // a default path, and nothing shipped reaches it — while the row is 10.9 ms
-        // of an incremental floor that every real language-service query pays. So
-        // the pass is now gated and this expectation is inverted; the replay cost
-        // of the extra re-entered pass was measured rather than assumed.
+        // have to re-enter it. That replay was refused as a default path at the time
+        // — while the row is 10.9 ms of an incremental floor that every real
+        // language-service query pays. So the pass is now gated and this expectation
+        // is inverted; the replay cost of the extra re-entered pass was measured
+        // rather than assumed, and (INC.40) has since re-priced the replay WITH this
+        // pass in its set and shipped it for diagnostics.
         val (reads, _) = censusOf(setOf("/proj/a.ts"), *twoFiles)
         assert("checkSubsequentVarTypesCrossFile" in reads)
         assert("checkSubsequentVarTypesPerFile" in reads)

@@ -203,12 +203,13 @@ class TypeScriptCompiler {
          *  too — which `Checker`'s own `require` refuses, here with a message that
          *  names the caller's mistake. */
         checkedSink: CheckedNodeSink? = null,
-        /** (INC.17) **EXPERIMENTAL, and nothing in a shipped path passes one.** When
-         *  non-null, the compile hands its LIVE program back here, so the caller can
-         *  later ask it about a file this partition did not cover without rebuilding
-         *  — see [ProgramRecheck], whose banner records that the CAPTURE channel is
-         *  known wrong. Null, the default, retains nothing, which is every compile
-         *  that did not ask. */
+        /** (INC.17) When non-null, the compile hands its LIVE program back here, so
+         *  the caller can later ask it about a file this partition did not cover
+         *  without rebuilding — see [ProgramRecheck], whose banner records that the
+         *  DIAGNOSTIC channel is graded equivalent and the CAPTURED-TYPE channel is
+         *  known wrong, and that (INC.40) therefore wired it to `diagnosticsOf` alone.
+         *  Null, the default, retains nothing, which is every compile that did not
+         *  ask. */
         recheckHolder: RecheckHolder? = null,
     ): CompilationResult {
         require(checkedSink == null || recheckOnly == null) {

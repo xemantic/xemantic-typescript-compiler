@@ -36,7 +36,9 @@ import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.PathUtil
+import com.xemantic.typescript.compiler.ProgramRecheck
 import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.RecheckHolder
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
@@ -282,6 +284,66 @@ public class Project private constructor(
     private val narrowed = LinkedHashMap<Set<String>, List<Diagnostic>>()
 
     /**
+     * (INC.40) The LIVE PROGRAM a previous [diagnosticsOf] build handed back — the
+     * re-entrant checker of `Recheck.kt`, wrapped so that it can answer **nothing
+     * but diagnostics**.
+     *
+     * ## Why this exists
+     *
+     * Every [diagnosticsOf] on a dirty project is a fresh narrowed build, and a
+     * fresh narrowed build pays two things over and over: the incremental FLOOR
+     * (crawl, parse, bind and the ~110 program-wide `init` passes it does not
+     * replay) and (INC.37)'s **1.39x re-derivation tax** — the shared lib and
+     * foreign-declaration resolutions a whole-program build performs once and each
+     * per-file query re-derives inside its own `Checker`. A live program pays
+     * neither. Re-priced at HEAD on tsc's own 78 sources, diagnostics only, three
+     * rotations: the per-query MEDIAN is **104 ms fresh against 25 ms replayed
+     * (4.2x)** against a floor of ~50-80 ms, and the whole 77-query sweep is
+     * **10,656 ms against 4,728 ms (2.25x)** — the replayed total landing on the
+     * whole-program CHECK cost (~4,935 ms), which is the re-derivation tax being
+     * collected rather than re-paid.
+     *
+     * ## Why it may serve THIS member and nothing else
+     *
+     * `scripts/replay-differential.sh` grades a replayed answer against a fresh
+     * narrowed build, per file, over three channels. At HEAD, over both arms:
+     *
+     * * **DIAGNOSTICS — 0 divergences**, on the realism arm (tsc's own sources, 46
+     *   rows) and on the sensitivity arm (`test-fixtures/partition-gate`, 178 rows
+     *   over 71 files carrying rows from 78 distinct netting passes);
+     * * **DEFINITIONS — 0 divergences**;
+     * * **CAPTURED TYPES — 43 of 75 files diverge** on the realism arm. Most are
+     *   the union-alias display family (INC.26)/(INC.27) — `ModuleExportName` for
+     *   `StringLiteral | Identifier` — and the residue is lost generic INFERENCE
+     *   (`Connection[][]` read as `any[][]`). Both are silent in the dangerous
+     *   direction: a plausible type, never an error.
+     *
+     * So the replay is wired to the channel that agrees and is UNREACHABLE from the
+     * ones that do not. That is enforced structurally rather than by documentation:
+     * [DiagnosticsOnlyRecheck] takes the `ProgramRecheck` private and exposes ONE
+     * method whose return type is `List<Diagnostic>`, so no `TypeCaptureRequest`
+     * can be handed to it and no `CapturedType` can escape it. [quickInfoAt],
+     * [definitionsAt], [completionsAt], [signatureHelpAt], [semanticsAt] and
+     * [prepare] cannot reach this field's contents even by mistake.
+     *
+     * ## What invalidates it
+     *
+     * The same thing that invalidates [cached] and [narrowed], and for the same
+     * reason: `ProgramRecheck` has no invalidation protocol and deliberately does
+     * not want one (its program's text is fixed at the build that produced it), so
+     * this handle is dropped at every one of the three sites that drops [cached] —
+     * [updateFile], [deleteFile] and [close].
+     *
+     * ## What it costs
+     *
+     * It RETAINS the whole checker — every `Type`, every `Symbol`, every side table
+     * — until the next edit. That is the price of the 4.2x, it is paid only by a
+     * project someone has asked [diagnosticsOf], and it is bounded by the same
+     * edit-scoped lifetime as [prepared].
+     */
+    private var recheck: DiagnosticsOnlyRecheck? = null
+
+    /**
      * (INC.12) The capture builds [captureIn] has already performed for this project
      * STATE, keyed by the REQUEST that produced them.
      *
@@ -468,17 +530,28 @@ public class Project private constructor(
      * `diagnostics(fileName)`. An EMPTY collection answers empty and does not build:
      * "the diagnostics of no files" needs no compile to be answered.
      *
-     * Four cost properties a host may rely on. A query on a CLEAN project performs
+     * Five cost properties a host may rely on. A query on a CLEAN project performs
      * NO build — the whole-program result is already in hand and filtering it is
      * strictly better than a narrowed compile. A query on a dirty project performs
      * exactly ONE build, however many files were asked about. A repeated identical
      * query on an unchanged project performs none, because the answer is memoized per
-     * file set. And **(INC.14)** a query about any SUBSET of a set already asked about
+     * file set. **(INC.14)** a query about any SUBSET of a set already asked about
      * performs none either: the memo is keyed by the PARTITION the build walked and
      * holds every row it reported for it, so `N` per-file questions after one
      * `N`-file question are `N` filters and no build at all. That is the whole of the
      * error-reporting case — a host asks `diagnosticsOf(openBuffers)` once on idle
      * and its per-buffer annotator is free afterwards.
+     *
+     * And **(INC.40)**: a query about a file NOT in any set already asked about
+     * performs no build EITHER. The first narrowed query of a project state keeps its
+     * live program (see [recheck]); every later one re-enters that checker over the
+     * new files instead of building a fresh one, which costs neither the incremental
+     * floor nor (INC.37)'s 1.39x re-derivation tax. Measured at HEAD over tsc's own
+     * 78 sources, diagnostics only: the median query **104 ms -> 25 ms**, the whole
+     * 77-file sweep **10,656 ms -> 4,728 ms**. So an editor that opens buffers one at
+     * a time pays one build for the first and a re-entry for each of the rest, rather
+     * than a build each — which is what makes a per-buffer error annotator viable
+     * without the host having to batch its questions.
      *
      * The narrowed build's result is deliberately NOT retained as this project's
      * build: its checker walked a partition, so adopting it would make a subsequent
@@ -506,8 +579,29 @@ public class Project private constructor(
             return if (partition.size == keys.size) rows
             else rows.filter { d -> d.fileName?.let { PathUtil.normalize(it) } in keys }
         }
+        // (INC.40) A LIVE PROGRAM from an earlier query for this same state answers a
+        // file its checker never walked by re-entering only the ~305 of 417 `init`
+        // rows that depend on the check partition — no crawl, no parse, no bind, and
+        // none of the ~110 program-wide rows that carry the floor. Measured at HEAD
+        // over tsc's own 78 sources: a median query 104 -> 25 ms. Sound HERE and
+        // nowhere else: the diagnostics channel is graded equivalent on both arms of
+        // `scripts/replay-differential.sh` and the captured-types channel is not,
+        // which is why [DiagnosticsOnlyRecheck] can express no other question.
+        recheck?.let { program ->
+            val replayed = program.diagnosticsOf(keys).filter { d ->
+                d.fileName?.let { PathUtil.normalize(it) } in keys
+            }
+            narrowed[keys] = replayed
+            return replayed
+        }
+        // The FIRST narrowed query of a project state arms a holder, so the SECOND
+        // and every later one takes the branch above. Arming is behaviour-free for
+        // this build's own answer — `ProjectRecheckTest` pins that, armed against
+        // unarmed, narrowed and whole-program — so nothing here depends on whether a
+        // holder was passed.
+        val holder = RecheckHolder()
         val result = ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, recheckOnly = keys)
+            .build(projectPath, noEmit = true, recheckOnly = keys, recheckHolder = holder)
         // The partition already filters its checker's diagnostics to the assigned
         // files; the filter here is what makes that a PROPERTY of this member rather
         // than something inherited from the core's current partition rules — a
@@ -517,6 +611,7 @@ public class Project private constructor(
             d.fileName?.let { PathUtil.normalize(it) } in keys
         }
         narrowed[keys] = answer
+        holder.recheck?.let { recheck = DiagnosticsOnlyRecheck(it) }
         return answer
     }
 
@@ -2387,6 +2482,10 @@ public class Project private constructor(
         narrowed.clear()
         captures.clear()
         prepared = null
+        // (INC.40) The live program is a claim about the text this project was built
+        // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
+        // none, so the handle goes wherever [cached] goes.
+        recheck = null
         invalidate(key)
     }
 
@@ -2405,6 +2504,10 @@ public class Project private constructor(
         narrowed.clear()
         captures.clear()
         prepared = null
+        // (INC.40) The live program is a claim about the text this project was built
+        // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
+        // none, so the handle goes wherever [cached] goes.
+        recheck = null
         invalidate(key)
     }
 
@@ -2430,6 +2533,10 @@ public class Project private constructor(
         narrowed.clear()
         captures.clear()
         prepared = null
+        // (INC.40) The live program is a claim about the text this project was built
+        // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
+        // none, so the handle goes wherever [cached] goes.
+        recheck = null
         lineMaps.clear()
         sourceIndexes.clear()
         parseOptions = null
@@ -2682,4 +2789,40 @@ public class Project private constructor(
     private fun checkOpen() {
         check(!closed) { "this Project is closed: $projectPath" }
     }
+}
+
+/**
+ * (INC.40) The ONE-WAY VALVE between [Project] and the re-entrant checker.
+ *
+ * `Recheck.kt`'s [ProgramRecheck] answers five channels and is graded EQUIVALENT
+ * on exactly one of them (diagnostics; definitions agree too, types do not — see
+ * `Project.recheck`'s KDoc for the counts). A comment saying "do not ask it for a
+ * type" is not a guard: the next caller to reach for a fast hover would find
+ * `recheck(files, capture)` sitting there with a `TypeCaptureRequest` parameter and
+ * a `RecheckAnswer` full of `CapturedType`s, and nothing would stop them.
+ *
+ * So the valve is the TYPE. [program] is `private`, the single member takes a
+ * `Set<String>` and returns a `List<Diagnostic>`, and no `TypeCaptureRequest` is
+ * expressible at this boundary and no `CapturedType` can leave it. Widening this
+ * class is what a future round would have to do deliberately, in a commit that
+ * says so — which is the whole difference between a refusal and a comment.
+ *
+ * `ProjectRecheckWiringTest` pins both halves: that the diagnostics path DOES reach
+ * a re-entry (a count of builds, not a time), and that the capture-serving members
+ * do not.
+ */
+private class DiagnosticsOnlyRecheck(private val program: ProgramRecheck) {
+
+    /** Every file the live program has walked — the seed partition plus everything
+     *  [diagnosticsOf] has since added. Exposed for pinning, not for policy. */
+    val walkedFiles: Set<String> get() = program.walkedFiles
+
+    /**
+     * The program's diagnostics with [files] made answerable, re-entering only the
+     * partition-dependent `init` passes for the ones it has not walked.
+     *
+     * Deliberately calls the DEFAULT-ARGUMENT form: `capture` stays null and there
+     * is no overload here that could pass one.
+     */
+    fun diagnosticsOf(files: Set<String>): List<Diagnostic> = program.recheck(files).diagnostics
 }

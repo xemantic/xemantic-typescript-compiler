@@ -26,7 +26,8 @@
 package com.xemantic.typescript.compiler
 
 /**
- * (INC.17) **EXPERIMENTAL — NOT A SHIPPED PATH, AND KNOWN TO ANSWER A WRONG TYPE.**
+ * (INC.17) **A SHIPPED PATH FOR *DIAGNOSTICS ONLY*, AND KNOWN TO ANSWER A WRONG
+ * TYPE.**
  *
  * A LIVE, ALREADY-BUILT PROGRAM that can be asked about a file its check partition
  * did not cover — without crawling, parsing, binding or re-running the 211
@@ -34,40 +35,65 @@ package com.xemantic.typescript.compiler
  * build's floor. Measured on tsc's own 78 sources: **3.06x** (replay 12,572 ms
  * against 38,498 ms of fresh narrowed builds, over 75 questions).
  *
- * ## READ THIS BEFORE USING IT
+ * ## READ THIS BEFORE USING IT — WHAT IS ALLOWED AND WHAT IS STILL FORBIDDEN
  *
- * **(INC.17) was REFUSED as a default path and nothing routes through it.** No
- * caller in this repository passes a [RecheckHolder] outside
- * `ProjectRecheckTest` and `ReplayDifferentialMain`; the embedding API (`Project`)
- * does not know this type exists. A wrong hover is worse than a slow one, which is
- * the same judgement (INC.2) made when it refused capture narrowing over 45
- * divergent spans.
+ * **(INC.40) wired this to `Project.diagnosticsOf` and TO NOTHING ELSE.** The
+ * split is not a convention, it is a TYPE: `Project` holds this handle only
+ * through a private one-way valve (`DiagnosticsOnlyRecheck`) whose single member
+ * takes a `Set<String>` and returns a `List<Diagnostic>`, so no
+ * [TypeCaptureRequest] is expressible at that boundary and no [CapturedType] can
+ * leave it. `Project.quickInfoAt` / `definitionsAt` / `completionsAt` /
+ * `signatureHelpAt` / `semanticsAt` / `prepare` cannot reach it even by mistake,
+ * and `ProjectRecheckWiringTest` pins both halves.
+ *
+ * **What is still FORBIDDEN, and why:** hover, quick-info, go-to-definition,
+ * completions and signature help. A wrong hover is worse than a slow one — the
+ * same judgement (INC.2) made when it refused capture narrowing over 45 divergent
+ * spans. Widening the valve is a deliberate act for a future round that has first
+ * closed the capture divergence below; it is not something to do in passing
+ * because a capture happened to be convenient.
  *
  * `scripts/replay-differential.sh` grades this against a fresh narrowed build, row
- * for row and span for span. On tsc's own sources it reads:
+ * for row and span for span. At HEAD (2026-08-24) it reads, on tsc's own sources:
  *
  * ```
  * compared: files=75 diagnosticRows=46 filesCarryingDiagnostics=5
  *           typeSpans=373879 definitionSpans=352713
- * DIVERGED: 5 of 75 file(s)
+ * DIVERGED: 43 of 75 file(s)      — 0 DIVERGE-DIAG, 0 DIVERGE-DEF, 43 DIVERGE-TYPE
  * ```
  *
- * * **the DIAGNOSTIC channel is UNTOUCHED** — every row agrees, on both arms;
- * * **the CAPTURE channel DIVERGES in 5 of 75 files, 23 spans of 373,879.**
+ * and on `test-fixtures/partition-gate`, the arm with the DIAGNOSTIC resolution
+ * (178 rows over 71 files carrying them, from 78 distinct netting passes, against
+ * the profile's ONE):
+ *
+ * ```
+ * compared: files=75 diagnosticRows=178 filesCarryingDiagnostics=71
+ * EQUIVALENT: all 75 files agree (diagnostics, types, definitions)
+ * ```
+ *
+ * * **the DIAGNOSTIC channel is UNTOUCHED** — every row agrees, on both arms, and
+ *   that is the channel (INC.40) wired;
+ * * **the DEFINITION channel is untouched too** — 0 of 352,713 spans;
+ * * **the CAPTURED-TYPE channel DIVERGES in 43 of 75 files.**
  *
  * (INC.19) closed the LOST TYPE-PARAMETER CONSTRAINT — the replay used to render
  * `<T extends Node, U>` where a fresh build renders `<T extends Node, U extends
  * T>`, because three walkers in the constraints/defaults region resolved a
  * constraint BEFORE installing the type-parameter scope and `Type.TypeParam`
- * freezes that answer. The remaining 23 spans are a DIFFERENT class and none of
- * them is a constraint: they are lost generic INFERENCE (`Connection[][]` read as
- * `any[][]`, `Map<string, SeenPackageName>` as `Map<any, any>`, a `(key: K,
- * valueInNewMap: U) => T` return read as `any`).
+ * freezes that answer. What is left is TWO classes, neither a constraint. Most
+ * rows are the UNION-ALIAS DISPLAY family (INC.26)/(INC.27) — the replay renders
+ * `ModuleExportName` where a fresh build renders `StringLiteral | Identifier`,
+ * `IsFunctionExpression` for `FunctionExpression | ArrowFunction` — which is
+ * first-wins alias naming over an interned union and which (INC.27) proved is an
+ * INTERNING-KEY question no policy change here can reach, and in which the FRESH
+ * arm is not automatically the correct one ((INC.26)). The residue is lost generic
+ * INFERENCE (`Connection[][]` read as `any[][]`, `Map<string, SeenPackageName>` as
+ * `Map<any, any>`, a `(key: K, valueInNewMap: U) => T` return read as `any`).
  *
- * So this **STILL MUST NOT** serve hover, quick-info, go-to-definition,
- * completions or signature help. It is silent in the dangerous direction: a lost
- * inference is a plausible-looking type, never an error, and the diagnostics
- * sweep is completely blind to it.
+ * Both are silent in the dangerous direction: a plausible-looking type, never an
+ * error, and the diagnostics sweep is completely blind to them. That asymmetry —
+ * one channel graded equivalent by two arms, another known wrong — is the entire
+ * reason the valve exists.
  *
  * ## Why the divergence is not simply a starved pass
  *
@@ -124,18 +150,19 @@ interface ProgramRecheck {
     val replayedPasses: Set<String>
 
     /**
-     * **EXPERIMENTAL.** Make [files] answerable and return the program's
-     * diagnostics for everything walked so far.
+     * Make [files] answerable and return the program's diagnostics for everything
+     * walked so far.
      *
      * Files already in [walkedFiles] cost nothing — the answer is already held —
      * so a caller may pass its whole working set every time rather than tracking
      * what it has asked about.
      *
      * **The DIAGNOSTICS in the answer are graded equivalent to a fresh narrowed
-     * build's; the CAPTURES are NOT — they diverge in 5 of 75 files of the compiler
-     * profile (lost generic inference; the lost type-parameter constraint that used
-     * to dominate is closed). Do not serve a hover from them.** See
-     * [ProgramRecheck].
+     * build's — 0 divergent rows on both arms of the differential, which is what
+     * (INC.40) wired to `Project.diagnosticsOf`. The CAPTURED TYPES are NOT: they
+     * diverge in 43 of 75 files of the compiler profile (union-alias display, plus
+     * lost generic inference; the lost type-parameter constraint that used to
+     * dominate is closed). Do not serve a hover from them.** See [ProgramRecheck].
      *
      * @param capture (API.3) a capture request whose spans the re-entry records as
      *   it walks. Only spans in the FRESH files are visited: the spine walks the
@@ -158,12 +185,13 @@ class RecheckAnswer(
 )
 
 /**
- * (INC.17) **EXPERIMENTAL** — the out-parameter by which a caller asks a compile to
- * hand back its live program. Passing one is the ONLY way to reach
- * [ProgramRecheck], and nothing in a shipped path does: `grep -rn RecheckHolder`
- * finds the two parameter declarations, this file, `ProjectRecheckTest` and
- * `ReplayDifferentialMain`, and nothing else. Read [ProgramRecheck]'s banner
- * before adding a caller — the capture channel is known wrong.
+ * (INC.17) The out-parameter by which a caller asks a compile to hand back its
+ * live program. Passing one is the ONLY way to reach [ProgramRecheck], and since
+ * (INC.40) exactly one shipped path does: `Project.diagnosticsOf`, which puts the
+ * handle straight behind a private one-way valve that can express no question but
+ * "the diagnostics of these files". Read [ProgramRecheck]'s banner before adding
+ * any other caller — the CAPTURED-TYPE channel is known wrong, and a caller that
+ * reaches `recheck(files, capture)` directly has walked round the valve.
  *
  * A HOLDER rather than a field on [CompilationResult] / `ProjectCompiler.Result`
  * for two reasons. Both are `data class`es, so a `Checker` reference in one would
