@@ -1,3 +1,87 @@
+### Round (INC.23)+(INC.24) — the census: "+61 member types" is ONE member name and ONE truncated resolution, the write gate is refuted, and `narrowRendersMoreAny` is a substring heuristic
+
+**WHAT THIS ROUND DID.** Produced the census (INC.23) exists for, and it shrank
+(INC.22)'s refusal by two orders of magnitude. **Nothing about the shipped default
+changed** — every instrument is off by default and every gate is byte-identical to
+baseline.
+
+**FINDING 1 — THE OBSTRUCTION IS ONE MEMBER NAME.** (INC.22) recorded "+61 member types
+collapse to `any`". Classified per ELEMENT (nesting-aware, so a function-typed member is
+not fragmented into its parameters), it is **78 rows carrying exactly ONE member —
+`[Symbol.unscopables]`** (the lib's `{ [K in keyof any[]]?: boolean }`) — in 14 files.
+
+| | baseline | partition-scoped arm |
+|---|---:|---:|
+| divergent spans | 286 / 49 files | 1,457 / 65 files |
+| rows LOSING a member to `any` | **0** | **78** |
+| **distinct member names lost** | 0 | **1** |
+| rows where NARROW is better (`any` -> real) | 2 | 3 |
+| other differing elements | 520 / 10 names | 9,397 / 196 names |
+
+Everything else — 1,379 rows over 196 names — is the (INC.11)(a) alias-display family,
+which (INC.22) already measured collapsing to **+1 row for 6.68 ms**.
+
+**FINDING 2 — `narrowRendersMoreAny` IS A SUBSTRING HEURISTIC AND IT OVER-REPORTS.**
+**ZERO of the shipped baseline's 168 "moreAny" rows actually loses a member type.** So a
+NONZERO value is a LEAD, not a finding, and (INC.22)'s headline number was the heuristic
+rather than the defect. A ZERO still means what it always did, which is why
+`capture-equivalence`'s `narrowRendersMoreAny=0` remains a real gate — but the
+capture-CHANNEL sweep's 168 is noise, and every quotation of it in this arc (including
+this session's own notes) should be read that way.
+
+**FINDING 3 — THE MECHANISM IS *NOT* ROUND 778's WRITE GATE.** The writer hook prints
+`(pass, ambient, persisted, depth, truncated)`, and the victim reads `ambient=empty
+persisted=true truncated=false` in the FULL arm against `ambient=empty persisted=true
+truncated=TRUE` in the narrow one. **The ambient is empty in BOTH**, so round 778 says
+cacheable either way and the suspected mechanism is dead. What differs is that under a
+partition the first ask arrives from INSIDE the member-table resolution the mapped type's
+`keyof` needs: `resolveStructuredTypeMembersCore` returns silently leaving `properties`
+null, and the mapped type degrades to `any`. **The whole narrowed compile has exactly ONE
+truncated resolution out of 822; a full build has 0 of 21,315 — and that one IS the
+defect.**
+
+**FINDING 4 — THE OBVIOUS FIX IS REFUTED, WITH A POSITIVE CONTROL.** Refusing to persist
+a TRUNCATED resolution changes nothing across the whole sweep (same 78 rows, byte-
+identical narrow digest). **The arm is not dead**: a single-file control shows
+`refusedWrites` 593 -> 594 and the victim going `persisted=true resolves=1` ->
+`persisted=false resolves=2`. The re-resolution simply re-enters the same guard and
+answers `any` again. **So the lever is the CYCLE HANDLING, not the cache** — a `keyof`
+over a type whose member table is IN FLIGHT must answer from the DECLARATIONS rather than
+degrade. That is a member-resolution change with corpus-wide blast radius and was
+deliberately not attempted.
+
+**FINDING 5 — (INC.22)'s THIRD OBSTRUCTION IS RETIRED.** The pure partition-scoped arm is
+**EQUIVALENT on BOTH `partition-gate` arms** (realism 78/78, sensitivity 76/76), even
+though `init:buildFileLocalTypeMaps` is one of that fixture's 78 netting passes — its rows
+carry the alias's OWN `fileName`, so a row for an out-of-partition file is dropped by the
+partition filter anyway. **(INC.22)'s "DIVERGED 1 file" belongs to its MIXED
+`TypeAlias`-program-wide configuration, not to partition-scoping.**
+
+**SO WHAT NOW GATES 62-65 ms IS ONE DEFECT ON ONE LIB MEMBER**, not a general
+order-dependence of `symbolTypes`. See (INC.25).
+
+**(INC.24) LANDED FIRST, ON ITS OWN COMMIT, AND REPRODUCED ITS OWN RECORDED VALUE.** Both
+capture runners now fold their whole answer set into ONE number per arm, **ordered by span
+key so it is a property of the ANSWERS and not of `HashMap` iteration**. From a clean tree
+the re-landed digest reproduces (INC.22)'s recorded `full=-3718897727265589316` over
+381,666 types + 360,152 definitions exactly — which is round 776's rebuild-the-baseline
+control, satisfied on an instrument rather than on a binary.
+
+**A PROCESS VIOLATION, RECORDED BECAUSE IT MATTERS MORE THAN THE FACT IT SURVIVED.** A
+`compileKotlinJvm` was run while a sweep JVM was live, which CLAUDE.md forbids in both
+directions. The sweep survived and its summary matched the earlier run exactly, so no
+measurement here is tainted — but the documented failure mode is SILENT (an empty results
+dir, or a run against half-written class files), so "it was fine this time" is not
+evidence the rule is soft.
+
+**GATES — all at the shipped default, all byte-identical to baseline.** Suite **15,800 /
+0 / 3** (15,784 + 16 pins), `cost_gate.py` `output.errors`/`spine.nodes` **+0.00%** with
+`mapped.hits` +1.02% (standing), `huge_methods --fail-over 0` clean (778 core classes +
+`-project`), `capture-equivalence` **5 / 3, moreAny 0** with digests unchanged,
+`capture-channel` **286 / 49, moreAny 168** with digests unchanged,
+`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
+`partition-gate` 78/78 and 76/76.
+
 ### Round (INC.22) — the floor's largest row is worth 62-65 ms by an axis that provably cannot move a full build, and it is REFUSED because the order it buys is RESOLUTIONS and not only a name
 
 **WHAT THIS ROUND DID.** Re-priced `init:buildFileLocalTypeMaps` — **69.16 ms of a

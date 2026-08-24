@@ -1,5 +1,50 @@
 # Status
 
+**THE CAPTURE VALVE STAYS DIAGNOSTICS-ONLY: THE REPLAY IS NOT A *DIFFERENT* DEFECT, IT IS **MORE
+OF** THE ALIAS-DISPLAY RACE, AND IT GETS WORSE THE LONGER THE SESSION RUNS (2026-08-24,
+(INC.41)).** The standing reason (`docs/language-service.md` § 4a) said the 43 `DIVERGE-TYPE`
+files were the union-alias family "in which the fresh arm is not automatically the correct one" —
+inferred from (INC.26), never tested. **Tested against tsc 7.0.2's own LSP, it is FALSE for this
+population.** `compared 373,879` captured type spans over 75 files -> **796 divergent (0.213%) in
+43 FILES** (41 basenames — tsc has THREE `utilities.ts`), classified per ELEMENT and
+nesting-aware per (INC.23) into **37 distinct `(fresh, replay)` pairs**, with **192 rows carrying
+more than one differing element** (a row count over-reports, exactly as (INC.23) found):
+**REPLAY WORSE 413 rows / 36 files, BOTH WRONG 375 / 17, REPLAY BETTER 8 / 4, EQUIVALENT 0.** All
+37 causes were sampled through `--lsp -stdio` — **100% coverage BY CAUSE**, ground truth read out
+of tsc rather than hand-written (round 924).
+**THE MECHANISM IS THE DURABLE HALF.** `aliasDisplayMap` is **id-keyed FIRST-WINS** over INV.5(a),
+which interns a union by its member-id list ALONE, so a registered alias renames that interned
+union *everywhere* whatever the reference site spelled. A fresh narrowed build resolved
+essentially only the queried file; **the replay carries the seed build plus every earlier
+recheck**, so more aliases are registered and more unions get renamed. **393 of the 413 are that
+one shape** — tsc and the fresh arm render `Identifier | PrivateIdentifier`, which
+`utilitiesPublic.ts:857` literally writes, and the replay renders `MemberName`. So the replay's
+answer would depend on what the user looked at EARLIER, and **a differential taken after one
+query understates a first-wins display defect**. (INC.27) already refused the mitigation with a
+proof. The remaining **20** are genuine lost resolutions (`Connection[][]`, `Map<string,
+SeenPackageName>`, a bare `T` -> `any`) and are the only bug in the replay itself.
+**THE PRIZE WAS MEASURED BEFORE THE RECOMMENDATION** (`Inc41HoverPriceMain`, both arms asked the
+SAME caret, 40 targets x 4 ABBA rotations, 6 warm-ups, vacuity control 160/160): arming 188 ms,
+ONE hover fresh **121 ms** (p90 234), ONE hover replayed **33 ms** (p90 143) — **3.67x, 88 ms**.
+**But name the row**: `quickInfoAt` memoises per BUFFER (~2-4 ms for a second caret) and any edit
+drops the handle, so it is bought once per *(file, program state)* pair — **the first hover in a
+file at a program state some earlier query already built for, with no edit since** — and
+`completionsAt`/`signatureHelpAt` get nothing at all ((INC.32) defect 1). **REFUSED against
+(INC.2)'s bar**, which turned capture narrowing down over **45** divergent spans of 381,666
+(0.012%): 413 of 373,879 is **0.11%, nine times that**, in the same silent direction. Two things
+would change it and both are worth more on their own merits — wiring completions/signature-help
+to `prepared`, which is NOT free ((INC.33) refused the widening it needs at +25.1 s and 54.4 M
+records, so the prepare-amortised case still needs measuring), and closing the 20 lost
+resolutions, after which what remains is an owner-level logical-parity conversation.
+**A SEPARATE, PRE-EXISTING, ORDINARY-BUILD DEFECT FELL OUT AND IS QUEUED AS (INC.42)**: the 375
+BOTH-WRONG rows are on **every build**, 213 of them `Visitor`/`VisitResult<T>` rendering
+`(node: TIn) => any` where tsc renders `Visitor`. The capture sweeps are DIFFERENTIALS and are
+blind to it by construction ((INC.28)'s law), so its pin must assert the VALUE, never that two
+arms agree. **No `.kt` file and no compiler behaviour touched — suite unchanged at 15,824 / 0 /
+3, and every sweep and gate is a CONTROL this round, deliberately not re-run.** Every figure here
+is WALL TIME on one box, pinned by NO test; `docs/inc41-replay-capture-classification.md` is the
+authority and carries the re-take instructions.
+
 **A CAPTURE REQUEST IS PRICED PER *ANCHOR* WHERE AN EDITOR NEEDS A PRICE PER *ANSWER* — SO WIDENING
 THE HOVER TO SERVE COMPLETION IS A **LOSS**, MEASURED AND REFUSED (2026-08-24, (INC.33)).** After
 (INC.32) a completion in an already-hovered buffer still BUILDS (~201-228 ms), because a hover's
@@ -198,45 +243,3 @@ it; (INC.35) project-wide `diagnostics()` at ~4.9-5.1 s is now the biggest numbe
 application and buy the benchmark nothing; (INC.36) the `-Xmx2g` floor, where the 264 MB retained
 is the number to attack rather than the seconds.
 
-**`type Box<T> = { v: T }` RENDERED `{ v: any; }` ON ORDINARY BUILDS — A GENERIC ALIAS'S OWN
-PARAMETERS WERE NOT IN SCOPE FOR ITS BODY (2026-08-24, (INC.28)).** The fourth shipped correctness
-defect this session found while chasing latency, and the third in a row where **the FULL build was
-the arm losing information**. `getDeclaredTypeOfSymbolWorker`'s type-alias arm resolved `decl.type`
-with **no type-parameter scope**, so the alias's own `T` answered `errorType` — and **`any` ABSORBS A
-UNION**, so a union body collapsed entirely rather than partially, which is why the symptom is a
-whole type vanishing. **Four lines reproduce it with no partition, and it is not order-dependent**;
-the partition divergence was a CONSEQUENCE, since a narrowed build skips
-`init:buildFileLocalTypeMaps` and the first toucher becomes `withDeclTypeParamScope`, which DOES
-install the scope — and `declaredTypes` has **no write gate at all**, so first touch freezes.
-**A WRITER HOOK REFUTED BOTH STANDING SUSPECTS** rather than confirming a guess: the ledger prints
-`name=VisitResult pass=init:buildFileLocalTypeMaps ambient=empty depth=sym1/node0 type=any` —
-`ambient=empty` kills round 778's write gate, `depth=sym1/node0` kills truncation. Ground truth came
-from **tsc 7.0.2 over its own LSP** (`--lsp -stdio`, round 924's instrument) rather than a
-hand-written expectation: `type VisitResult<T extends Node | undefined> = T | readonly Node[]`.
-**THE FIX IS A SPLIT AND THE SPLIT WAS FORCED BY MEASUREMENT**: `getTypeOfSymbolWorker`'s alias arm
-now answers the parametric form, with the constraint fill write-once and OUTSIDE the install per
-(INC.19)'s TS2589 hazard; **`getDeclaredTypeOfSymbol` — what a REFERENCE resolves to — is
-deliberately untouched**, because handing references the parametric form costs two corpus false
-positives, both measured and both reverted.
-**THE REFUSAL IS A RECURSION BRAKE, AND IT IS WHY 173 OF THE 298 ROWS REMAIN.** Judging a
-`Type.TypeParam` alias argument by its APPARENT type renders `Visitor` exactly as tsc does and costs
-a corpus FP: `checkTypeRelatedToCore` has no general "TypeParam source via its constraint" rule — its
-`NonPrimitive` leg refuses it deliberately — and **that refusal is what brakes the recursion for
-`BuildTree<T, N extends number = -1, I extends any[] = []>`**. Those rows need the RELATION to learn
-the rule, not the display; queued as (INC.30), an engine item rather than an (INC.*) one.
-**THE PIN LESSON IS THE TRANSFERABLE ONE**: the ablation put 2 of 4 pins RED on the unfixed binary
-reading exactly `[{ v: any; }, { v: any; }]` — **while the two-arms-agree test and the negative
-control stayed GREEN, because both arms agreed on the WRONG answer.** The capture sweeps are
-differentials, so a defect present in BOTH arms is invisible to them by construction; that is how
-this survived every gate in the repo. A pin for a display defect must assert the VALUE, never that
-two arms agree. Suite **15,811 / 0 / 3** (+4 pins), **zero corpus baselines moved**,
-`capture-equivalence` **1,128 -> 1,003 spans with ZERO NEW divergent spans** (a strict subset, 125
-fixed), `capture-channel` full digest BIT-IDENTICAL with its narrow arm becoming more correct (+11),
-`partition-equivalence` EQUIVALENT 78/78, `partition-gate` 78/78 and 76/76 over 78 netting passes,
-floor **60 ms `[59, 72, 57, 60]`** untouched, `huge_methods` exit 0 both modules. Digests moved by
-design for the second time in the arc: full `3349895618940861366` -> **`8385940838610938556`**,
-narrow `306524840298287433` -> **`-7423700524621287041`**. **ONE THING TO WATCH**: the standing
-cost-gate drift grew for the first time this session — `mapped.hits` **+1.02% -> +1.63%** (band is
-±2%), understood (parametric resolutions run with a scope installed, so bypassed rather than
-cacheable) and justified but NOT rebaselined; the next round in this area should `--update`
-deliberately rather than discover the breach.

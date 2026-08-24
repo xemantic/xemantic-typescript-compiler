@@ -20,6 +20,146 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.41) — REFUSED: the replay is not a DIFFERENT capture defect, it is MORE of the alias-display race, and it gets worse the longer the session runs
+
+**WHAT THIS ROUND DID.** Tested the clause that has kept (INC.40)'s valve diagnostics-only.
+`docs/language-service.md` § 4a said the 43 `DIVERGE-TYPE` files were "overwhelmingly the
+union-alias display family, **in which the fresh arm is not automatically the correct
+one**" — a plausible inference from (INC.26), never measured. It is **FALSE for this
+population**. Nothing landed in the compiler; the deliverable is a classification, a
+measured prize, and a refusal. Authority: `docs/inc41-replay-capture-classification.md`
+(re-derive from it; do not inherit this note's table — round 930's decay law).
+
+**THE MECHANISM, WHICH IS THE DURABLE HALF.** 393 of the 413 REPLAY-WORSE rows are the
+alias-display race, and the replay owns MORE of it than a fresh build **for a structural
+reason**: `aliasDisplayMap` is **id-keyed and FIRST-WINS** over round 545's INV.5(a),
+which interns a union by its member-id list ALONE — so an alias name, once registered,
+renames that interned union *everywhere*, whatever the reference site spelled. The fresh
+arm is a narrowed build that resolved essentially only the queried file, so few aliases
+are registered and most unions still render structurally. **The replay carries the seed
+build PLUS every earlier recheck in the session**, so far more alias declarations have
+been resolved and far more interned unions have had a name stamped on them.
+
+> **It is therefore not a different defect. It is MORE OF THE SAME defect — (INC.26)'s,
+> one type-former up — and it degrades MONOTONICALLY WITH SESSION LENGTH.** Today's
+> answer is stable for a given query; the replay's answer would depend on what the user
+> happened to look at earlier.
+
+Two consequences that outlive the item. **(i) A differential taken after ONE query
+understates a first-wins display defect** — the arm carrying more history is the arm with
+more of it, so the divergence a two-query gate reports is a floor, not the value. **(ii)
+(INC.27) already refused the obvious mitigation WITH A PROOF**: no id-keyed or
+member-set-keyed table can give tsc's several answers from one key (tsc keys a union by
+`getTypeListId(types) + getAliasId(...)`, so it has several *instances* where we have
+one), and the "poison the ambiguous member set" rule measured **worse** (1,128 -> 1,351
+spans) because its own trigger is coverage-dependent.
+
+Confirmed against the profile's own sources, not argued: `utilitiesPublic.ts:857` spells
+`idText(identifierOrPrivateName: Identifier | PrivateIdentifier)` while `types.ts:1746`
+declares `type MemberName = Identifier | PrivateIdentifier`. tsc hovers the expansion the
+source wrote; the replay hovers `MemberName`.
+
+**THE CLASSIFICATION.** `Inc41ClassifyMain` dumps every diverging row with its
+**project-relative** path (tsc has THREE `utilities.ts` — a basename column silently
+merges three files, which is where the stale "41" comes from), and
+`scripts/inc41_classify.py` reduces it the way (INC.23) requires: **per ELEMENT,
+nesting-aware**, by token-level `SequenceMatcher`, counting DISTINCT `(fresh, replay)`
+element pairs rather than rows.
+
+```
+compared   373,879 captured type spans over 75 files
+divergent      796 spans (0.213%) in 43 FILES (41 distinct basenames)
+                -> 37 distinct (fresh, replay) element pairs
+                -> 192 rows carry MORE THAN ONE differing element
+```
+
+| verdict | rows | files | share |
+|---|---:|---:|---:|
+| **REPLAY WORSE** | **413** | 36 | 51.9% |
+| BOTH WRONG | 375 | 17 | 47.1% |
+| REPLAY BETTER | 8 | 4 | 1.0% |
+| EQUIVALENT | 0 | — | — |
+
+All **37** causes were sampled through tsc 7.0.2's own LSP — `tools/tsgo-7.0.2/lib/tsc
+--lsp -stdio` via the new `scripts/lsp_hover_project.py`, which opens the profile's
+EXISTING files by path instead of materialising a fixture — so the sample covers **100%
+of the 796 rows BY CAUSE**, not by row count. Ground truth read out of tsc, never
+hand-written (round 924's two wrong predictions).
+
+| rows | fresh -> replay | tsc 7.0.2 | verdict |
+|---:|---|---|---|
+| 213 | `(node: TIn) => any` -> `... => T \| readonly Node[]` | `Visitor` | BOTH WRONG |
+| 92 | `ObjectLiteralExpression \| ArrayLiteralExpression` -> `AssignmentPattern` | the expansion — **the source writes it** | REPLAY WORSE |
+| 76 | `Identifier \| PrivateIdentifier` -> `MemberName` | the expansion — **the source writes it** | REPLAY WORSE |
+| 74 + 62 | `ModuleName` / `ImportAttributeName` -> `ModuleExportName` | `StringLiteral` (tsc narrowed) | BOTH WRONG |
+| 40 | `BindingOrAssignmentPattern` -> `DestructuringPattern` | `BindingOrAssignmentPattern` | REPLAY WORSE |
+| 20 | `Connection[][]`, `Map<string, SeenPackageName>`, `T` -> **`any`** | the concrete type | REPLAY WORSE — **LOST RESOLUTION** |
+| 8 | expansion -> `CommentKind` | `CommentKind` | **REPLAY BETTER** |
+
+The 20 lost resolutions (`debug.ts`, `program.ts`, `tsbuildPublic.ts`) are the only part
+that is a genuine bug **in the replay itself**; everything else in the REPLAY-WORSE
+column is the naming race.
+
+**THE PRIZE, MEASURED BEFORE THE RECOMMENDATION** — (INC.41)'s own entry demanded this
+and it is why the round is a refusal rather than a shrug. `Inc41HoverPriceMain` asks
+**both arms for the SAME single caret** (the identifier nearest each file's midpoint, a
+position-independent choice), 40 target files x 4 ABBA rotations, 6 warm-up rebuilds, one
+JVM, daemons stopped. Vacuity control: both arms captured a type at **160 of 160** carets.
+
+```
+arming (the seed build the handle comes from) : median 188 ms
+ONE hover, fresh narrowed build               : median 121 ms   p90 234   n=160
+ONE hover, replay re-entry                    : median  33 ms   p90 143   n=160
+                                                ratio 3.67x     saving 88 ms
+```
+
+**NAME THE ROW, because the ratio is not the story.** `quickInfoAt` memoises per BUFFER
+(a second caret in the same file is already ~2-4 ms) and **any edit drops the handle**.
+So the 88 ms is bought exactly once per *(file, program state)* pair, i.e. on **the first
+hover in a file, at a program state some earlier query already built for, with no edit
+since**. Reading by go-to-definition through several files hits it; the type-hover-type
+loop does not. And `completionsAt` / `signatureHelpAt` get **nothing** here, because
+(INC.32) defect 1 is that they call `captureIn` directly and cannot reach a prepared
+check at all.
+
+**THE VERDICT: REFUSE.** 413 rows in **36 of 43 files** would show the user a worse
+answer than today's — a wrong alias name in 393, an outright `any` in 20 — against **8**
+that would improve. Per span that is 413 / 373,879 = **0.11%**; the bar this arc has
+actually enforced is **(INC.2), which refused capture narrowing over 45 divergent spans
+of 381,666 (0.012%)**. This is **9x that bar**, in the same silent direction (a plausible
+type, never an error). 88 ms on an occasional row does not buy it.
+
+**WHAT WOULD CHANGE THE ANSWER, in order.** (1) Wire `completionsAt`/`signatureHelpAt` to
+`prepared` — ~200 ms on a keystroke-adjacent query with no correctness question — **but
+this is NOT free and the queue must not imply it is**: (INC.33) measured that `prepare`
+can only serve them if its request is WIDENED, and refused that at **+25.1 s on
+`checker.ts`** and **54.4 M retained records**. It needs its own measurement of the
+prepare-amortised case (pay once, query many) before anyone builds it. (2) Close the 20
+lost resolutions; after that the replay's remaining divergence is purely the naming race,
+at which point the honest framing is a **logical-parity conversation for the owner** —
+and this round's answer is that it is not merely a naming difference, since tsc renders
+the expansion and we would render a name the user's own declaration did not write.
+
+**A SEPARATE, PRE-EXISTING, ORDINARY-BUILD DEFECT FELL OUT — QUEUED AS (INC.42).** The
+375 BOTH-WRONG rows are not a replay defect at all: they are on **every ordinary build**,
+led by **213 rows** where `Visitor` / `VisitResult<T>` renders `(node: TIn) => any` and
+tsc renders `Visitor`. The capture sweeps are DIFFERENTIALS, so they are structurally
+blind to it ((INC.28)'s law: a defect present in BOTH arms is invisible by construction),
+which is exactly how it survived this whole arc.
+
+**GATES.** No `.kt` file and no compiler behaviour touched this round, so the suite,
+`cost_gate.py`, `huge_methods.py` and every equivalence sweep are CONTROLS and were
+deliberately not re-run; the tree stands at the previous round's **15,824 / 0 / 3**.
+Every figure above is WALL TIME on one box, pinned by NO test — re-take it rather than
+quoting it (`scripts/replay-differential.sh realism` is the gate, `Inc41ClassifyMain` +
+`scripts/inc41_classify.py` the classification, `scripts/lsp_hover_project.py` the
+oracle; a change is an improvement only if the REPLAY-WORSE **element-pair** count falls).
+
+**THE TRAP THIS ROUND PAID FOR.** The bench profile's tsc sources are **CRLF**, and
+Python's default universal-newline translation collapses `\r\n` and shifts every offset —
+so a caret file built from the compiler's own `(start, end)` lands on a **plausible wrong
+identifier**, silently. Both new scripts read with `newline=""`.
+
 ### Round (INC.33) — REFUSED: a capture request is priced per ANCHOR where an editor needs a price per ANSWER, and the widened hover costs **+286 ms / +25.1 s** to save a **204 / 2,078 ms** completion
 
 **WHAT THIS ROUND DID.** Priced the one candidate (INC.32) left standing. A hover's file-wide
@@ -883,90 +1023,6 @@ and it buys back the gate.
 **PROCESS NOTE, SELF-REPORTED**: no two JVMs ran at once, but logs were polled during
 runs more than the quiet-box rule prefers. No timing claim here rests on wall clock — the
 floor and ratio figures come from the deterministic pass table and the sweep harness.
-
-### Round (INC.23)+(INC.24) — the census: "+61 member types" is ONE member name and ONE truncated resolution, the write gate is refuted, and `narrowRendersMoreAny` is a substring heuristic
-
-**WHAT THIS ROUND DID.** Produced the census (INC.23) exists for, and it shrank
-(INC.22)'s refusal by two orders of magnitude. **Nothing about the shipped default
-changed** — every instrument is off by default and every gate is byte-identical to
-baseline.
-
-**FINDING 1 — THE OBSTRUCTION IS ONE MEMBER NAME.** (INC.22) recorded "+61 member types
-collapse to `any`". Classified per ELEMENT (nesting-aware, so a function-typed member is
-not fragmented into its parameters), it is **78 rows carrying exactly ONE member —
-`[Symbol.unscopables]`** (the lib's `{ [K in keyof any[]]?: boolean }`) — in 14 files.
-
-| | baseline | partition-scoped arm |
-|---|---:|---:|
-| divergent spans | 286 / 49 files | 1,457 / 65 files |
-| rows LOSING a member to `any` | **0** | **78** |
-| **distinct member names lost** | 0 | **1** |
-| rows where NARROW is better (`any` -> real) | 2 | 3 |
-| other differing elements | 520 / 10 names | 9,397 / 196 names |
-
-Everything else — 1,379 rows over 196 names — is the (INC.11)(a) alias-display family,
-which (INC.22) already measured collapsing to **+1 row for 6.68 ms**.
-
-**FINDING 2 — `narrowRendersMoreAny` IS A SUBSTRING HEURISTIC AND IT OVER-REPORTS.**
-**ZERO of the shipped baseline's 168 "moreAny" rows actually loses a member type.** So a
-NONZERO value is a LEAD, not a finding, and (INC.22)'s headline number was the heuristic
-rather than the defect. A ZERO still means what it always did, which is why
-`capture-equivalence`'s `narrowRendersMoreAny=0` remains a real gate — but the
-capture-CHANNEL sweep's 168 is noise, and every quotation of it in this arc (including
-this session's own notes) should be read that way.
-
-**FINDING 3 — THE MECHANISM IS *NOT* ROUND 778's WRITE GATE.** The writer hook prints
-`(pass, ambient, persisted, depth, truncated)`, and the victim reads `ambient=empty
-persisted=true truncated=false` in the FULL arm against `ambient=empty persisted=true
-truncated=TRUE` in the narrow one. **The ambient is empty in BOTH**, so round 778 says
-cacheable either way and the suspected mechanism is dead. What differs is that under a
-partition the first ask arrives from INSIDE the member-table resolution the mapped type's
-`keyof` needs: `resolveStructuredTypeMembersCore` returns silently leaving `properties`
-null, and the mapped type degrades to `any`. **The whole narrowed compile has exactly ONE
-truncated resolution out of 822; a full build has 0 of 21,315 — and that one IS the
-defect.**
-
-**FINDING 4 — THE OBVIOUS FIX IS REFUTED, WITH A POSITIVE CONTROL.** Refusing to persist
-a TRUNCATED resolution changes nothing across the whole sweep (same 78 rows, byte-
-identical narrow digest). **The arm is not dead**: a single-file control shows
-`refusedWrites` 593 -> 594 and the victim going `persisted=true resolves=1` ->
-`persisted=false resolves=2`. The re-resolution simply re-enters the same guard and
-answers `any` again. **So the lever is the CYCLE HANDLING, not the cache** — a `keyof`
-over a type whose member table is IN FLIGHT must answer from the DECLARATIONS rather than
-degrade. That is a member-resolution change with corpus-wide blast radius and was
-deliberately not attempted.
-
-**FINDING 5 — (INC.22)'s THIRD OBSTRUCTION IS RETIRED.** The pure partition-scoped arm is
-**EQUIVALENT on BOTH `partition-gate` arms** (realism 78/78, sensitivity 76/76), even
-though `init:buildFileLocalTypeMaps` is one of that fixture's 78 netting passes — its rows
-carry the alias's OWN `fileName`, so a row for an out-of-partition file is dropped by the
-partition filter anyway. **(INC.22)'s "DIVERGED 1 file" belongs to its MIXED
-`TypeAlias`-program-wide configuration, not to partition-scoping.**
-
-**SO WHAT NOW GATES 62-65 ms IS ONE DEFECT ON ONE LIB MEMBER**, not a general
-order-dependence of `symbolTypes`. See (INC.25).
-
-**(INC.24) LANDED FIRST, ON ITS OWN COMMIT, AND REPRODUCED ITS OWN RECORDED VALUE.** Both
-capture runners now fold their whole answer set into ONE number per arm, **ordered by span
-key so it is a property of the ANSWERS and not of `HashMap` iteration**. From a clean tree
-the re-landed digest reproduces (INC.22)'s recorded `full=-3718897727265589316` over
-381,666 types + 360,152 definitions exactly — which is round 776's rebuild-the-baseline
-control, satisfied on an instrument rather than on a binary.
-
-**A PROCESS VIOLATION, RECORDED BECAUSE IT MATTERS MORE THAN THE FACT IT SURVIVED.** A
-`compileKotlinJvm` was run while a sweep JVM was live, which CLAUDE.md forbids in both
-directions. The sweep survived and its summary matched the earlier run exactly, so no
-measurement here is tainted — but the documented failure mode is SILENT (an empty results
-dir, or a run against half-written class files), so "it was fine this time" is not
-evidence the rule is soft.
-
-**GATES — all at the shipped default, all byte-identical to baseline.** Suite **15,800 /
-0 / 3** (15,784 + 16 pins), `cost_gate.py` `output.errors`/`spine.nodes` **+0.00%** with
-`mapped.hits` +1.02% (standing), `huge_methods --fail-over 0` clean (778 core classes +
-`-project`), `capture-equivalence` **5 / 3, moreAny 0** with digests unchanged,
-`capture-channel` **286 / 49, moreAny 168** with digests unchanged,
-`partition-equivalence` **EQUIVALENT 78/78** (floor 129 ms, median 173, ratio 29.10x),
-`partition-gate` 78/78 and 76/76.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1929,6 +1985,20 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   is mask-gated (bit 5); the two LEAVE handlers above it are not. Re-read § 6 with that in
   mind before believing any enter-side share. Graded by the script's own `dispatch` arm
   before/after plus the corpus and `cost_gate.py`.
+  **WHERE THIS SITS IN THE CARET-CHANNEL ORDER, STATED EXPLICITLY BECAUSE THE ARC HAS NOW
+  REFUSED BOTH OF THE OTHER TWO.** (INC.33) refused WIDENING the prepared request (+286 ms /
+  **+25.1 s**, and a 48x / **205x** retention blow-up); (INC.41) refused the RE-ENTRANT VALVE
+  for captures (413 rows worse against (INC.2)'s 45-span bar). **The remaining NAMED candidate
+  is wiring `completionsAt`/`signatureHelpAt` to `prepared` — (INC.32) defect 1, ~200 ms on
+  every keystroke-adjacent query, no correctness question — and the queue must not imply it is
+  a cheap win: it is in direct TENSION with (INC.33)**, which measured that `prepare` can only
+  serve those channels if its request is widened, which is the thing it refused. So that
+  candidate is not free and is not yet priced. **What is missing is the PREPARE-AMORTISED
+  case** — pay the widening once for a working set, then answer many carets from it — which
+  neither round measured: (INC.33) priced a widened request against ONE hover that pays for it,
+  never against a session's worth of queries. Measure that (instrument kept and re-takeable:
+  `scripts/inc33-widen-cost.sh` + `Inc33WidenMain`) before anyone builds the wiring. This item
+  (per-handler spine cost) is orthogonal to all three and remains unpriced on its own terms.
 
 - [x] **(INC.40) DONE 2026-08-24 (`4eff0799`, `8d4e95b0`) — THE "DECAYING" REPLAY IS
   **2.25-2.30x**, AND IT IS NOW SHIPPED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL VALVE.** The
@@ -1944,7 +2014,49 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   0 `DIVERGE-DEF` on both arms** against 43 `DIVERGE-TYPE` — see (INC.41). +9 pins, suite
   15,824 / 0 / 3; `docs/language-service.md` § 4a.
 
-- [ ] **(INC.41) THE 43 `DIVERGE-TYPE` FILES ARE THE STANDING CAPTURE-CHANNEL STATE, THEY ARE
+- [x] **(INC.41) REFUSED 2026-08-24 (`6a54f258`) — CLASSIFIED AGAINST tsc's OWN LSP, AND THE
+  REPLAY IS THE WRONG ARM: 413 ROWS IN 36 OF 43 FILES GET *WORSE*, 8 GET BETTER, FOR 88 ms ON
+  A ROW A USER MEETS OCCASIONALLY.** The clause that kept the valve shut — "the fresh arm is
+  not automatically the correct one" — was inferred from (INC.26) and never tested; tested, it
+  is FALSE for this population. `compared 373,879` spans over 75 files -> **796 divergent
+  (0.213%) in 43 FILES** (41 basenames — tsc has THREE `utilities.ts`), reduced per ELEMENT and
+  nesting-aware per (INC.23) to **37 distinct `(fresh, replay)` pairs**, of which **192 rows
+  carry more than one differing element**, so a row count over-reports. **REPLAY WORSE 413 / 36
+  files; BOTH WRONG 375 / 17; REPLAY BETTER 8 / 4; EQUIVALENT 0.** All 37 causes sampled
+  through `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` = **100% coverage BY CAUSE**.
+  **THE MECHANISM IS THE TRANSFERABLE HALF: THE REPLAY IS NOT A *DIFFERENT* DEFECT, IT IS
+  *MORE OF* (INC.26)'s ALIAS-DISPLAY RACE, AND IT WORSENS WITH SESSION LENGTH.**
+  `aliasDisplayMap` is id-keyed FIRST-WINS over INV.5(a)'s member-id-list interning, so a
+  registered alias renames that interned union everywhere; the replay carries the seed build
+  **plus every earlier recheck**, so more aliases are registered and more unions get renamed.
+  393 of the 413 are that shape (tsc and the fresh arm render `Identifier | PrivateIdentifier`,
+  which `utilitiesPublic.ts:857` literally writes; the replay renders `MemberName`). **A
+  differential taken after ONE query therefore UNDERSTATES a first-wins display defect.**
+  (INC.27) already refused the mitigation with a proof. The other **20** are genuine LOST
+  RESOLUTIONS (`Connection[][]`, `Map<string, SeenPackageName>`, a bare `T` -> `any`) and are
+  the only part that is a bug in the replay itself.
+  **THE PRIZE WAS MEASURED FIRST, as this entry demanded** (`Inc41HoverPriceMain`; both arms
+  asked the SAME single caret, 40 targets x 4 ABBA rotations, 6 warm-ups, vacuity control
+  160/160): arming 188 ms; ONE hover fresh **121 ms** (p90 234); ONE hover replayed **33 ms**
+  (p90 143); **3.67x, 88 ms**. **But the row is only "the first hover in a file, at a program
+  state some earlier query already built for, with no edit since"** — `quickInfoAt` memoises
+  per BUFFER (~2-4 ms for a second caret) and any edit drops the handle, so the keystroke loop
+  gets nothing, and `completionsAt`/`signatureHelpAt` get nothing either ((INC.32) defect 1).
+  **AGAINST (INC.2)'s BAR — 45 divergent spans of 381,666 (0.012%) — 413 of 373,879 (0.11%) is
+  NINE TIMES IT, in the same silent direction.** REFUSED.
+  **WHAT WOULD CHANGE IT, IN ORDER, AND NEITHER IS FREE.** (1) Wire
+  `completionsAt`/`signatureHelpAt` to `prepared` (~200 ms per keystroke-adjacent query, no
+  correctness question) — **but (INC.33) measured that `prepare` can only serve them if its
+  request is WIDENED, and refused that at +25.1 s on `checker.ts` and 54.4 M retained records**,
+  so it needs its own measurement of the prepare-amortised case (pay once, query many) before
+  anyone builds it. (2) Close the 20 lost resolutions; what then remains is purely the naming
+  race, which is an owner-level logical-parity conversation, not a round.
+  **THE 375 BOTH-WRONG ROWS ARE NOT PART OF THIS ITEM** — they are an ordinary-build defect,
+  queued as **(INC.42)**. Authority and re-take instructions:
+  `docs/inc41-replay-capture-classification.md`; instruments `Inc41ClassifyMain`,
+  `scripts/inc41_classify.py`, `scripts/lsp_hover_project.py`. No compiler behaviour changed;
+  suite unchanged at 15,824 / 0 / 3. **ORIGINAL ENTRY:**
+  **THE 43 `DIVERGE-TYPE` FILES ARE THE STANDING CAPTURE-CHANNEL STATE, THEY ARE
   THE WHOLE REASON (INC.40)'s VALVE IS DIAGNOSTICS-ONLY, AND SINCE (INC.33) THEY ARE THE **NAMED
   UNBLOCKER FOR THE ENTIRE CARET-CHANNEL LATENCY STORY.***
   `replay-differential.sh` at HEAD: every diagnostic row and all 352,713 definition spans
@@ -1976,6 +2088,38 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `CapturedScope` repeats the lib globals at every anchor (**O(anchors x globals)** — 49,879,917
   names for `checker.ts`, and a widened `scopes.file` arm read **+19.4 s** there), so that
   channel needs its own fix whichever mechanism serves it.
+
+- [ ] **(INC.42) `Visitor` / `VisitResult<T>` HOVER AS `(node: TIn) => any` ON *EVERY ORDINARY
+  BUILD*, AND THE CAPTURE SWEEPS ARE STRUCTURALLY BLIND TO IT — 375 ROWS IN 17 FILES, 213 OF
+  THEM THIS ONE CAUSE.** Found as a by-product of (INC.41)'s classification: of the 796
+  divergent rows, **375 are BOTH WRONG** — the fresh arm and the replay agree, and tsc 7.0.2
+  disagrees with both. **That is not a replay defect and not a partition defect. It is on the
+  shipped build, at every caret, today.** The largest cause by far is `Visitor` /
+  `VisitResult<T>`: we render `(node: TIn) => any` where tsc renders `Visitor` (213 rows).
+  Two smaller causes in the same bucket, both a *widened* rendering where tsc narrowed:
+  `ModuleName` -> tsc's `StringLiteral` (74) and `ImportAttributeName` -> `StringLiteral` (62),
+  plus 17 rows where a 3-member expansion should be tsc's `JsxOpeningElement`.
+  **WHY NOTHING HERE HAS EVER SEEN IT, AND WHAT THAT DICTATES ABOUT THE PIN.**
+  `capture-equivalence.sh` and `capture-channel-equivalence.sh` are **DIFFERENTIALS** — they
+  compare two arms of our own compiler — so a defect present in BOTH arms is invisible to them
+  **by construction**, which is (INC.28)'s law verbatim (its two-arms-agree test and its
+  negative control both stayed GREEN against the unfixed binary while two real pins went RED).
+  The diagnostics channel is silent too: a wrong-but-plausible type is never an error.
+  **So the pin MUST ASSERT THE VALUE, never that two arms agree** — and the ground truth is
+  obtainable rather than guessable: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, through round 924's
+  `scripts/lsp_hover.py` or (INC.41)'s `scripts/lsp_hover_project.py` (which points at an
+  EXISTING project; read its sources with `newline=""` — the profile is CRLF).
+  **PRIZE: UNMEASURED, AND DELIBERATELY SO — THIS IS A CORRECTNESS ITEM, NOT A LATENCY ONE.**
+  It buys no milliseconds; it makes a hover right. **START BY SEPARATING THE CAUSES**: the
+  `Visitor` rows are a lost/attached ALIAS on a function type, while the `ModuleName` and
+  `ImportAttributeName` rows are the reverse of (INC.41)'s replay defect (we NAME where tsc
+  NARROWS), so they are probably not one fix — and note (INC.28) already touched
+  `VisitResult<T>`'s neighbourhood (its writer hook printed `name=VisitResult ... type=any`),
+  so re-read that session note before starting. `docs/inc41-replay-capture-classification.md`
+  § 3 carries the per-cause table; `scripts/inc41_classify.py` re-derives it, and a change is
+  an improvement only if the BOTH-WRONG **element-pair** count falls ((INC.23)'s rule: count
+  distinct pairs, not rows — 192 of the 796 rows carry more than one differing element).
+  Any change to union or alias display touches ~13k pinned corpus baselines.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:

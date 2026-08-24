@@ -483,19 +483,67 @@ sensitivity  (test-fixtures/partition-gate — 178 rows over 71 files carrying t
 ```
 
 Every **diagnostic** row agrees, on both arms, and so does every one of the 352,713
-**definition** spans. The **captured type** channel diverges in 43 of 75 files.
-(INC.19) closed the lost TYPE-PARAMETER CONSTRAINT that used to dominate it; what
-is left is two classes. Most rows are the union-alias display family
-(INC.26)/(INC.27) — the replay renders `ModuleExportName` where a fresh build
-renders `StringLiteral | Identifier` — which (INC.27) proved is an INTERNING-KEY
-question, and in which the fresh arm is not automatically the correct one. The
-residue is lost generic INFERENCE (`Connection[][]` read as `any[][]`,
-`Map<string, SeenPackageName>` as `Map<any, any>`). Both are silent in the
-dangerous direction: a plausible-looking type, never an error.
+**definition** spans. The **captured type** channel diverges in **43 FILES of 75** —
+**796 spans of 373,879 (0.213%)**, and note the units: 43 is a count of FILES, not of
+rows or of spans. (41 distinct basenames; tsc has three `utilities.ts`.)
+
+**(INC.41) classified those 796 spans against tsc 7.0.2's own LSP, and the arm that
+loses is the REPLAY.** An earlier revision of this page said the rows were the
+union-alias family "in which the fresh arm is not automatically the correct one" —
+an inference from (INC.26), never tested. Tested, **that clause is false for this
+population.** Reduced per ELEMENT and nesting-aware as (INC.23) requires (796 rows are
+**37** distinct `(fresh, replay)` element pairs, and 192 rows carry more than one
+differing element, so a row count over-reports), with every one of the 37 causes
+sampled through `--lsp -stdio`:
+
+| verdict | rows | files |
+|---|---:|---:|
+| **REPLAY WORSE** | **413** | 36 |
+| BOTH WRONG | 375 | 17 |
+| REPLAY BETTER | 8 | 4 |
+| EQUIVALENT | 0 | — |
+
+**393 of the 413 are the alias-display race, and the replay owns MORE of it for a
+structural reason.** `aliasDisplayMap` is id-keyed and FIRST-WINS over INV.5(a), which
+interns a union by its member-id list alone, so a registered alias renames that interned
+union everywhere — whatever the reference site spelled. A fresh narrowed build resolved
+essentially only the queried file; the replay carries the seed build **plus every earlier
+recheck**, so more aliases are registered and more unions get renamed. tsc and the fresh
+arm hover `Identifier | PrivateIdentifier`, which `utilitiesPublic.ts:857` literally
+writes; the replay hovers `MemberName`. **So this is not a different defect — it is more
+of (INC.26)'s, one type-former up, and it degrades with how much the session has already
+resolved.** The remaining 20 are outright lost resolutions (`Connection[][]` read as
+`any[][]`, `Map<string, SeenPackageName>` as `Map<any, any>`), where tsc confirms the
+fresh arm. Both classes are silent in the dangerous direction: a plausible-looking type,
+never an error.
+
+*The 375 BOTH-WRONG rows are neither arm's fault — they are an ordinary-build defect,
+led by 213 rows where `Visitor`/`VisitResult<T>` renders `(node: TIn) => any` and tsc
+renders `Visitor`. Queued separately as (INC.42).*
+
+**And opening the valve was priced before it was refused**: one hover through the replay
+is **33 ms** against a fresh narrowed build's **121 ms** (3.67x, 88 ms), but only for the
+first hover in a file at a program state some earlier query already built for, with no
+edit since — `quickInfoAt` memoises per buffer and any edit drops the handle. 88 ms on
+that row does not buy 413 worse answers in 36 of 43 files.
+
+**What here is pinned and what is not.** *Pinned by a test*: that the diagnostics path
+reaches a re-entry and that the capture-serving members still pay a build
+(`ProjectRecheckWiringTest`), and that no `TypeCaptureRequest` is expressible at the
+valve (it is a type, so the compiler is the pin). *Pinned by a re-runnable gate, not by
+the suite*: the channel counts and the 43/75 line (`scripts/replay-differential.sh
+realism`) and the classification (`Inc41ClassifyMain` + `scripts/inc41_classify.py`).
+*Pinned by NOTHING* — wall time on one box, re-take rather than quote: the 33 / 121 ms
+hover pair and every ratio derived from it. Do not inherit the verdict table without
+re-asking the oracle (`scripts/lsp_hover_project.py`); round 930 measured a doc section
+decaying at about one false claim per three rounds, which is exactly how the clause
+corrected above survived. Full derivation:
+`docs/inc41-replay-capture-classification.md`.
 
 A hover that quietly drops an inference is worse than a hover that took 500 ms —
 the same judgement (INC.2) made when it refused capture narrowing over 45 divergent
-spans. So the split is enforced by a TYPE and not by a comment: `Project` holds the
+spans, a bar this population exceeds ninefold (0.11% against 0.012%). So the split is
+enforced by a TYPE and not by a comment: `Project` holds the
 handle only through a private one-way valve (`DiagnosticsOnlyRecheck`) whose single
 member takes a `Set<String>` and returns a `List<Diagnostic>`. No
 `TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave
@@ -1899,8 +1947,9 @@ has to be reset, because a program-wide pass already emitted the newly asked fil
 rows during the first build — `diagnostics` is filtered to the assigned files only at
 the very end.
 
-**It is nevertheless not landed, and the reason is the instrument rather than the
-design.** On tsc's own sources the full build's 46 diagnostics are netted by exactly
+**SUPERSEDED for the diagnostics channel — (INC.40) landed it; see § 4a, which is the
+authority.** What follows is why it was held back, and it still governs the CAPTURE
+channel, which (INC.41) refused. On tsc's own sources the full build's 46 diagnostics are netted by exactly
 ONE pass, and all eight dashboard profiles are that same codebase — so the partition
 detector this repo grades such work with compares an essentially empty population, and
 a replay that produced nothing from 204 of those 205 passes would be invisible to it.
