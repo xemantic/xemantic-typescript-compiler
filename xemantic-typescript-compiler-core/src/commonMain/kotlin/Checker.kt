@@ -100226,6 +100226,31 @@ interface DataView {
                         is MethodDeclaration -> if (jsLike) walkMember(
                             prop.body, prop.type, prop.parameters, prop.typeParameters, ModifierFlag.Async in prop.modifiers,
                             generator = prop.asteriskToken)
+                        else {
+                            // (CHK.39b) …and in a `.ts` file the body is walked
+                            // TOO, just without the object-literal `this` typing
+                            // above (in TypeScript an un-annotated object-method
+                            // `this` is TS2683, so `walkMember`'s typing would be
+                            // wrong here — that gate is about `this`, and it was
+                            // silently deciding whether the body is CHECKED AT ALL).
+                            // Before this, no statement inside `{ m(node) {…} }`
+                            // reached the assignability walker in a `.ts` file:
+                            // the spine's own anchor runs `recordOnly` there and
+                            // truncates every diagnostic, so the whole body was
+                            // unchecked. `this` is cleared exactly as the
+                            // FunctionExpression arm clears it (B101).
+                            val savedThis = currentClassForThis
+                            currentClassForThis = null
+                            try {
+                                checkFunctionBody(
+                                    prop.body, prop.type, prop.parameters, prop.typeParameters,
+                                    source, fileName, varTypes, typeParams,
+                                    isAsync = ModifierFlag.Async in prop.modifiers,
+                                    isGenerator = prop.asteriskToken)
+                            } finally {
+                                currentClassForThis = savedThis
+                            }
+                        }
                         is GetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
                         is SetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
                         else -> {}

@@ -183,15 +183,34 @@ class ContextualParameterTypeTest {
     }
 
     /**
-     * KNOWN GAP (a second, separate defect): an object-literal METHOD's body is
-     * never walked by the assignability walker in a `.ts` file, so this reports
-     * NOTHING where tsc reports TS2322. Pinned as the current answer so the round
-     * that walks that body sees this test go red rather than discovering the gap
-     * again — the parameter itself IS typed (see the hover pins).
+     * (CHK.39b) An object-literal METHOD's body is CHECKED at all.
+     *
+     * The second defect this round found: `walkFunctionBodiesInExpr`'s
+     * `MethodDeclaration` arm was `if (jsLike)`, and that gate is about whether
+     * `this` is the object-literal type (which in TypeScript it is not — TS2683)
+     * — it was silently deciding whether the body reaches the assignability
+     * walker AT ALL. The spine's own anchor runs `recordOnly` inside a function
+     * body, so nothing else emitted there: every statement in every
+     * `{ m(node) {…} }` in every `.ts` file was unchecked.
      */
     @Test
-    fun `KNOWN GAP - an object-literal method body is not assignability-walked in ts`() {
+    fun `an object-literal METHOD's body is checked, and its parameter is typed`() {
         val d = diagnose(prelude + "const q: V = { m(node) { const bad: string = node.kind; } };")
+        assert(d.count { it.code == 2322 } == 1)
+    }
+
+    /** …through a member declared as a function-typed PROPERTY too. */
+    @Test
+    fun `an object-literal METHOD against a function-typed member is checked`() {
+        val d = diagnose(prelude + "const q: P = { m(node) { const bad: string = node.kind; } };")
+        assert(d.count { it.code == 2322 } == 1)
+    }
+
+    /** NEGATIVE CONTROL for the same arm: an object-literal method whose body is
+     *  correct stays silent — the arm must CHECK the body, not condemn it. */
+    @Test
+    fun `negative control - a correct object-literal method body is silent`() {
+        val d = diagnose(prelude + "const q: V = { m(node) { const good: number = node.kind; } };")
         assert(d.none { it.code == 2322 })
     }
 }
