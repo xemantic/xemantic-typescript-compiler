@@ -256,9 +256,17 @@ class ProjectCompiler(private val vfs: Vfs) {
         // Feed the gathered file set through the shared compilation core, handing it
         // the crawl's parses so program files are not parsed a second time.
         val files = program.map { (name, content) -> SourceFileEntry(name, content) }
-        val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
+        // (CHK.29) Under node16/nodenext a file's MODULE FORMAT is a property of the
+        // nearest enclosing `package.json`, which is not one of the program's inputs —
+        // so it has to be read from the Vfs here, where there is one, rather than out of
+        // the parsed source set the way the multi-file corpus path does. Zero cost under
+        // every other module kind: the crawl is not consulted at all.
+        val coreOptions =
+            if (!emitOptions.effectiveModule.isNodeNext) emitOptions
+            else emitOptions.copy(packageJsonTypes = packageScopesOf(program.keys))
+        val parsed = ParsedSource(coreOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
         val result = TypeScriptCompiler().compileParsed(
-            parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
+            parsed, coreOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
             typeCapture = typeCapture,
             checkedSink = checkedSink,
             recheckHolder = recheckHolder,
@@ -579,6 +587,47 @@ class ProjectCompiler(private val vfs: Vfs) {
     }
 
     // --- file discovery (glob) --------------------------------------------------
+
+    /**
+     * (CHK.29) The package SCOPES covering [fileNames]: every ancestor directory of a
+     * program file that carries a `package.json`, mapped to whether it declares
+     * `"type": "module"`. Consumed by `isESModuleFormat` through
+     * [CompilerOptions.packageJsonTypes]; see [packageScopeIsModule] for the lookup and
+     * for why a manifest with no `"type"` is present with `false` rather than absent.
+     *
+     * **Read through the [Vfs], never a direct filesystem call** — that is what puts the
+     * language service's in-memory overlay on the same path, so an edit that adds or
+     * changes a `package.json` is seen by the very next build.
+     *
+     * The walk is memoized on DIRECTORIES, not files, because the answer is a property of
+     * the directory: each ancestor is probed at most once per build, and a directory whose
+     * scope has already been located terminates every later walk that reaches it (its own
+     * ancestors cannot be nearer to anything below it than it is). So the cost is bounded
+     * by the number of distinct directories in the program, not by its file count — and it
+     * is exactly zero for every module kind that is not node16/nodenext, where the caller
+     * does not run this at all.
+     */
+    private fun packageScopesOf(fileNames: Collection<String>): Map<String, Boolean> {
+        val scopes = HashMap<String, Boolean>()
+        val probed = HashSet<String>()
+        for (fileName in fileNames) {
+            var dir = PathUtil.dirname(fileName)
+            while (true) {
+                // Already probed => so are all of its ancestors, or a nearer scope was
+                // found here and is already recorded. Either way this walk is done.
+                if (!probed.add(dir)) break
+                val manifest = vfs.readText(if (dir == "/") "/package.json" else "$dir/package.json")
+                if (manifest != null) {
+                    scopes[dir] = packageJsonDeclaresModule(manifest)
+                    break
+                }
+                val parent = PathUtil.dirname(dir)
+                if (parent == dir) break
+                dir = parent
+            }
+        }
+        return scopes
+    }
 
     private fun collectRootFiles(config: LoadedTsConfig, supportedExt: List<String>): List<String> {
         val result = LinkedHashSet<String>()

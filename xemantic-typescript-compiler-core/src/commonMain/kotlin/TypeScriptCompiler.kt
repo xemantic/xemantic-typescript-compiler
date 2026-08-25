@@ -2679,20 +2679,13 @@ private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, B
         val base = file.fileName.substringAfterLast('/')
         if (base != "package.json") continue
         if (file.fileName.contains("/node_modules/")) continue
-        // Find "type" field; primitive regex scan over the JSON text. JSON is small (test fixtures).
-        val text = file.content
-        // Naive but sufficient match for `"type" : "module"` / `"type": "commonjs"` ignoring whitespace.
-        val typeMatch = Regex("\"type\"\\s*:\\s*\"([^\"]+)\"").find(text)
-        val typeValue = typeMatch?.groupValues?.getOrNull(1) ?: continue
-        val isModule = when (typeValue) {
-            "module" -> true
-            "commonjs" -> false
-            else -> continue
-        }
         // Directory key: drop the `/package.json` suffix. Empty string for root.
         // Preserves leading `/` (matches caller's file paths which may be absolute or relative).
         val dir = if (file.fileName.contains('/')) file.fileName.substringBeforeLast('/') else ""
-        result[dir] = isModule
+        // (CHK.29) A manifest with no `"type"` still ESTABLISHES the scope, at CommonJS —
+        // tsc's walk stops at the first `package.json` it meets, so recording an entry only
+        // when a `"type"` is present would fall through to an outer `"type": "module"`.
+        result[dir] = packageJsonDeclaresModule(file.content)
     }
     return result
 }

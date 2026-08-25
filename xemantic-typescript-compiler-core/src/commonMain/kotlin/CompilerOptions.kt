@@ -245,10 +245,20 @@ data class CompilerOptions(
     /** Diagnostics from paths validation in tsconfig.json (TS5061/5062/5063/5064/5066/5090). */
     val pathsDiagnostics: List<Diagnostic> = emptyList(),
     /**
-     * Maps directory path (with trailing `/`, or `""` for the implicit root when no leading slash)
-     * to `true` if its `package.json` contains `"type": "module"`, `false` if `"type": "commonjs"`,
-     * absent otherwise. Used under Node16/Node18/Node20/NodeNext to determine whether plain `.ts`
-     * files emit as ESM or CJS (matching TypeScript's package-json-type lookup behavior).
+     * (CHK.29) The package SCOPES of the program: every directory carrying a
+     * `package.json`, mapped to whether that manifest says `"type": "module"`.
+     * A directory with a `package.json` that names no `"type"` is present with
+     * `false` — an ABSENT key means "no `package.json` here", which is a different
+     * fact and is what lets the walk continue upward (see [packageScopeIsModule]).
+     *
+     * Consulted under Node16/Node18/Node20/NodeNext only; under an ES module kind
+     * every file is ESM regardless, which is why tsc's own sources and all eight
+     * dashboard profiles are structurally unable to observe any of this.
+     *
+     * Two producers, deliberately: [ProjectCompiler] walks the [Vfs] up from each
+     * program file's directory (a real project has no `package.json` among its
+     * INPUTS), and the multi-file corpus path reads the `package.json` entries out
+     * of the parsed source set.
      */
     val packageJsonTypes: Map<String, Boolean> = emptyMap(),
 ) {
@@ -364,10 +374,10 @@ fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
  * `.ts`/`.js` files under Node16/Node18/Node20/NodeNext to determine ESM vs CJS based on
  * the nearest enclosing `package.json`'s `"type"` field.
  *
- * Lookup walks up the file's directory tree, picking the closest ancestor directory that
- * has an entry in `packageJsonTypes`. If `type: "module"` → ESM; if `type: "commonjs"` (or
- * absent type field, false) → CJS. If no enclosing package.json is found, falls back to
- * the legacy behavior (CJS for `.ts` under nodenext).
+ * Lookup walks up the file's directory tree, stopping at the closest ancestor directory
+ * that HAS a `package.json` (see [packageScopeIsModule]): `"type": "module"` → ESM,
+ * anything else — including no `"type"` field at all — → CJS. With no enclosing
+ * `package.json` anywhere, a plain `.ts` under nodenext is CJS, which is tsc's answer too.
  */
 fun isESModuleFormat(options: CompilerOptions, fileName: String): Boolean {
     val module = options.effectiveModule
@@ -376,32 +386,60 @@ fun isESModuleFormat(options: CompilerOptions, fileName: String): Boolean {
     if (fileName.endsWith(".mjs") || fileName.endsWith(".mts")) return true
     return when (module) {
         ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext -> true
-        ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20, ModuleKind.NodeNext -> {
-            // Walk up directory tree looking for a package.json type entry.
-            // packageJsonTypes is keyed by directory path (no trailing /, or "/" for root, or "" for relative root).
-            val pkgTypes = options.packageJsonTypes
-            if (pkgTypes.isEmpty()) return false
-            // Strip leading "./", normalize.
-            val normalized = fileName.removePrefix("./")
-            var dir = if (normalized.contains('/')) normalized.substringBeforeLast('/') else ""
-            while (true) {
-                val key = if (dir.isEmpty()) "" else dir
-                pkgTypes[key]?.let { return it }
-                if (dir.isEmpty()) break
-                if (dir == "/") {
-                    // Root-relative, also probe empty string before bailing
-                    pkgTypes[""]?.let { return it }
-                    break
-                }
-                val parent = if (dir.contains('/')) dir.substringBeforeLast('/') else ""
-                if (parent == dir) break
-                dir = parent
-            }
-            false
-        }
+        ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20, ModuleKind.NodeNext ->
+            packageScopeIsModule(options.packageJsonTypes, fileName) ?: false
         else -> false
     }
 }
+
+/**
+ * The nearest enclosing package scope's answer for [fileName], or `null` when no
+ * ancestor directory of it carries a `package.json` at all.
+ *
+ * [scopes] is keyed by DIRECTORY and holds an entry for every directory that has a
+ * `package.json` — including one that names no `"type"`, whose value is `false`.
+ * That is not a detail: tsc's walk stops at the first `package.json` it meets, so a
+ * scope with no `"type"` is CommonJS and must NOT fall through to a `"type":
+ * "module"` ancestor (verified against tsgo 7.0.2; pinned by
+ * `ProjectPackageJsonTypeTest.an inner package json without a type field stops the
+ * walk`). An implementation that files an entry only when a `"type"` is present
+ * gets that case silently wrong.
+ *
+ * Two key conventions are accepted for the root because the two producers differ:
+ * [ProjectCompiler] files [PathUtil.dirname]-shaped keys (`"/"` at the root) and
+ * the multi-file corpus path files `substringBeforeLast('/')`-shaped ones (`""`).
+ */
+internal fun packageScopeIsModule(scopes: Map<String, Boolean>, fileName: String): Boolean? {
+    if (scopes.isEmpty()) return null
+    var dir = PathUtil.dirname(fileName)
+    while (true) {
+        scopes[dir]?.let { return it }
+        if (dir == "/" || dir.isEmpty()) {
+            // The two root spellings mean the same directory; probe the other one.
+            return scopes[if (dir == "/") "" else "/"]
+        }
+        val parent = PathUtil.dirname(dir)
+        if (parent == dir) return null
+        dir = parent
+    }
+}
+
+/**
+ * Whether a `package.json`'s TEXT puts its directory in an ECMAScript-module scope,
+ * i.e. whether its `"type"` field is exactly `"module"`.
+ *
+ * Read through [LENIENT_JSON] rather than by a `"type"\s*:\s*"..."` regex, which
+ * matches a nested `"type"` (a `contributors` entry, a `peerDependenciesMeta` block)
+ * anywhere in the manifest. A manifest that does not parse answers `false` — the same
+ * answer as one with no `"type"`, and the same one tsc gives, so a broken dependency
+ * manifest degrades to CommonJS rather than aborting a build.
+ */
+internal fun packageJsonDeclaresModule(text: String): Boolean =
+    try {
+        LENIENT_JSON.parseToJsonElement(text).member("type")?.stringValue == "module"
+    } catch (_: Exception) {
+        false
+    }
 
 data class SourceFileEntry(
     val fileName: String,
