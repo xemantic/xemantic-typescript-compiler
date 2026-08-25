@@ -338,6 +338,58 @@ class CommentDirectiveSuppressionTest {
         diagnostics should { have(none { it.code == 2322 }) }
     }
 
+    /**
+     * (CHK.31) THE PARTITION HAZARD, and no `diagnose()` fixture can see it: an
+     * unchecked file produces no diagnostics for its `@ts-expect-error` to
+     * suppress, so scoping the TS2578 half to the PROGRAM instead of to the
+     * files this checker walked manufactures one false positive per directive on
+     * every narrowed build — which is what an editor asks for.
+     *
+     * The full-program arm is the control (round 790): without it the pin reads
+     * 0 both when the scoping is right and when the instrument is dead.
+     */
+    @Test
+    fun `a partition never reports TS2578 for a file it did not check`() {
+        val options = CompilerOptions()
+        val results = listOf(
+            "/proj/a.ts" to "export const a: string = \"a\";\n",
+            "/proj/b.ts" to "export const b: string = \"b\";\n// @ts-expect-error\nexport const fine: number = 1;\n",
+        ).map { (name, src) -> Binder(options).bind(Parser(src, name).parse()) }
+
+        val narrowed = Checker(
+            options, results, isMultiFileSource = true, assignedFileNames = setOf("/proj/a.ts"),
+        ).getDiagnostics()
+        narrowed should { have(none { it.code == 2578 }) }
+
+        val whole = Checker(options, results, isMultiFileSource = true).getDiagnostics()
+        assert(whole.count { it.code == 2578 } == 1)
+    }
+
+    @Test
+    fun `a partition still suppresses inside a file it DID check`() {
+        val options = CompilerOptions()
+        val results = listOf(
+            "/proj/a.ts" to "export const a: string = \"a\";\n",
+            "/proj/b.ts" to "export const b: string = \"b\";\n// @ts-ignore\nexport const bad: number = \"nope\";\n",
+        ).map { (name, src) -> Binder(options).bind(Parser(src, name).parse()) }
+
+        val narrowed = Checker(
+            options, results, isMultiFileSource = true, assignedFileNames = setOf("/proj/b.ts"),
+        ).getDiagnostics()
+        narrowed should { have(none { it.code == 2322 }) }
+
+        // Control: the same partition WITHOUT the directive reports it, so the
+        // silence above is suppression and not an empty partition.
+        val undirected = listOf(
+            "/proj/a.ts" to "export const a: string = \"a\";\n",
+            "/proj/b.ts" to "export const b: string = \"b\";\nexport const bad: number = \"nope\";\n",
+        ).map { (name, src) -> Binder(options).bind(Parser(src, name).parse()) }
+        val control = Checker(
+            options, undirected, isMultiFileSource = true, assignedFileNames = setOf("/proj/b.ts"),
+        ).getDiagnostics()
+        control should { have(any { it.code == 2322 }) }
+    }
+
     @Test
     fun `a syntax error is NOT suppressed - directives filter checker diagnostics only`() {
         val diagnostics = diagnose(
