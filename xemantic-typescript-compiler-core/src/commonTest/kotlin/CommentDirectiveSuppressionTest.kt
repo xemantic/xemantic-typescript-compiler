@@ -297,6 +297,48 @@ class CommentDirectiveSuppressionTest {
     }
 
     @Test
+    fun `a slash-slash inside PROSE is not the comment start - the services profile writes exactly this`() {
+        // `disableJsDiagnostics.ts` in the services profile. A backward
+        // lastIndexOf("//") lands on the INNER slashes and reads a sentence
+        // about a quick fix as a live directive.
+        val diagnostics = diagnose(
+            """
+            const zero = 0;
+            // Only need to add `// @ts-ignore` for a line once.
+            const a: number = "x";
+            """
+        )
+        diagnostics should { have(any { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `a directive spelled inside a STRING LITERAL is not a directive`() {
+        val diagnostics = diagnose(
+            """
+            const zero = 0;
+            const msg = "Add '@ts-ignore' to all error messages";
+            const a: number = "x";
+            const url = "http://x/@ts-ignore";
+            const b: number = "y";
+            """
+        )
+        val reported = diagnostics.filter { it.code == 2322 }.map { it.line }
+        assert(reported == listOf(3, 5))
+    }
+
+    @Test
+    fun `a directive AFTER a closed block comment on the same line is a directive`() {
+        val diagnostics = diagnose(
+            """
+            const zero = 0;
+            /* a block */ // @ts-ignore
+            const a: number = "x";
+            """
+        )
+        diagnostics should { have(none { it.code == 2322 }) }
+    }
+
+    @Test
     fun `a syntax error is NOT suppressed - directives filter checker diagnostics only`() {
         val diagnostics = diagnose(
             """

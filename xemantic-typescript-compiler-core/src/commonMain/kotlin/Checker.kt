@@ -12548,39 +12548,91 @@ class Checker(
      * `^(?:\/|\*)*\s*@(ts-expect-error|ts-ignore)` for the last line of a block
      * comment (both applied to the comment text `trimStart()`ed). NEITHER has a
      * trailing word boundary, so `@ts-ignoreXYZ` IS a directive — measured on
-     * tsgo 7.0.2, and its scanner is a plain `strings.HasPrefix`.
+     * tsgo 7.0.2, whose scanner is a plain `strings.HasPrefix`.
+     *
+     * Both regexes are anchored at the COMMENT's OWN START, which is why the
+     * opener is located by a string-aware forward scan
+     * ([commentOpenOnLineBefore]) and never by a backward `lastIndexOf("//")`:
+     * `disableJsDiagnostics.ts` (the services profile) writes the prose comment
+     * `// Only need to add ` + backtick + `// @ts-ignore` + backtick + ` for a line once.`
+     * and a backward search lands on the INNER slashes, reading a sentence about
+     * a quick fix as a live directive that silences the next line. Nothing but a
+     * real codebase contains that shape — CLAUDE.md's (GATE.2) lesson.
      */
     private fun classifyTsCommentDirectiveAt(source: String, at: Int, expectError: Boolean): TsCommentDirective? {
         val lineStart = if (at == 0) 0 else source.lastIndexOf('\n', at - 1) + 1
-        val lastOpen = source.lastIndexOf("/*", at)
-        val lastClose = source.lastIndexOf("*/", at)
-        if (lastOpen >= 0 && lastOpen > lastClose) {
-            // Inside a block comment. tsc offers the regex `lastLineStart ?? tokenStart`.
-            val textStart = if (lastOpen > lineStart) lastOpen else lineStart
-            var k = textStart
-            while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
-            while (k < at && (source[k] == '/' || source[k] == '*')) k++
-            while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
-            if (k != at) return null
-            val close = source.indexOf("*/", at)
-            if (close < 0) return null
-            // The directive only counts on the comment's LAST line.
-            var j = at
-            while (j < close) { if (source[j] == '\n') return null; j++ }
-            return TsCommentDirective(expectError, textStart, close + 2)
+        val opener = commentOpenOnLineBefore(source, lineStart, at)
+        // A block comment, whether it opened on this line or an earlier one. tsc
+        // offers the regex `text.slice(lastLineStart ?? tokenStart, pos)`, so the
+        // directive only counts on the comment's LAST line.
+        val blockStart = when {
+            opener >= 0 && source[opener + 1] == '*' -> opener
+            opener < 0 && source.lastIndexOf("/*", at) > source.lastIndexOf("*/", at) -> lineStart
+            else -> -1
         }
-        var slashes = source.lastIndexOf("//", at)
-        if (slashes < lineStart) return null
-        while (slashes > lineStart && source[slashes - 1] == '/') slashes--
+        if (blockStart >= 0 && isTsDirectiveCommentPrefix(source, blockStart, at)) {
+            val close = source.indexOf("*/", at)
+            if (close >= 0) {
+                var j = at
+                var sameLine = true
+                while (j < close) { if (source[j] == '\n') { sameLine = false; break }; j++ }
+                if (sameLine) return TsCommentDirective(expectError, blockStart, close + 2)
+            }
+            return null
+        }
+        if (opener < 0 || source[opener + 1] != '/') return null
         var count = 0
-        var k = slashes
+        var k = opener
         while (k < at && source[k] == '/') { count++; k++ }
         if (count != 2 && count != 3) return null
         while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
         if (k != at) return null
         var end = at
         while (end < source.length && source[end] != '\n' && source[end] != '\r') end++
-        return TsCommentDirective(expectError, slashes, end)
+        return TsCommentDirective(expectError, opener, end)
+    }
+
+    /** (CHK.31) `^\s*(?:\/|\*)*\s*$` — the text a block comment's last line may
+     *  carry before the `@`, per tsc's multi-line directive regex applied to the
+     *  `trimStart()`ed comment text. */
+    private fun isTsDirectiveCommentPrefix(source: String, from: Int, to: Int): Boolean {
+        var k = from
+        while (k < to && (source[k] == ' ' || source[k] == '\t')) k++
+        while (k < to && (source[k] == '/' || source[k] == '*')) k++
+        while (k < to && (source[k] == ' ' || source[k] == '\t')) k++
+        return k == to
+    }
+
+    /**
+     * (CHK.31) The offset at which a comment OPENS on [at]'s own line before
+     * [at], or -1 — string-aware, because a `//` inside a string or a template
+     * is not a comment opener and a directive regex anchored anywhere but the
+     * real comment start is a suppression the author never wrote.
+     */
+    private fun commentOpenOnLineBefore(source: String, lineStart: Int, at: Int): Int {
+        var k = lineStart
+        while (k < at) {
+            val ch = source[k]
+            if (ch == '"' || ch == '\'' || ch == '`') {
+                k++
+                while (k < at) {
+                    if (source[k] == '\\') { k += 2; continue }
+                    if (source[k] == ch) { k++; break }
+                    k++
+                }
+            } else if (ch == '/' && k + 1 < source.length && source[k + 1] == '/') {
+                return k
+            } else if (ch == '/' && k + 1 < source.length && source[k + 1] == '*') {
+                // A block that CLOSES before `at` is trivia the directive sits
+                // after, not the comment carrying it: `/* a block */ // @ts-ignore`.
+                val close = source.indexOf("*/", k + 2)
+                if (close < 0 || close + 2 > at) return k
+                k = close + 2
+            } else {
+                k++
+            }
+        }
+        return -1
     }
 
     /**
