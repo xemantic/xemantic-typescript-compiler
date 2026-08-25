@@ -125,6 +125,27 @@ class ProjectPackageJsonTypeTest {
         assert(codesOf("/proj/package.json" to """{ "name": "p" }""") == commonJsRows)
     }
 
+    /**
+     * The manifest is read as JSON, not scanned for `"type"\s*:\s*"..."`. A real
+     * `package.json` carries several nested `"type"` keys and they come FIRST: the
+     * shape below is knip's own manifest reduced — `repository.type: "git"` and two
+     * `funding[].type` precede the top-level `"type": "module"`, so a first-match
+     * regex answers `"git"`, i.e. CommonJS, for a package that is an ES module. That
+     * is 2,478 false positives on that library from a scan that looks correct.
+     */
+    @Test
+    fun `a nested type key does not decide the scope`() {
+        val manifest = """
+            {
+              "name": "p",
+              "repository": { "type": "git", "url": "https://example.invalid/p" },
+              "funding": [{ "type": "github", "url": "https://example.invalid/f" }],
+              "type": "module"
+            }
+        """.trimIndent()
+        assert(codesOf("/proj/package.json" to manifest).isEmpty())
+    }
+
     @Test
     fun `the nearest package json wins over an outer one`() {
         assert(
