@@ -1434,6 +1434,32 @@ than retention. **`-Xmx2g` is the floor**: measured green at 2g and 3g and 6g, a
 what is HELD by ~7x, which matters because an IDE budgets retention, not allocation.
 `documentHighlightsAt` does not have this shape at all — it holds one file's.
 
+**And that 264 MB is now ATTRIBUTED, which is what a host actually needs**
+(2026-08-25, `docs/perf/language-service-retention.md` — a ten-step subtraction
+ladder over `liveAfterGc`, two processes agreeing to 0.6 MB):
+
+| retainer | MB | share | survives `close()` |
+|---|---:|---:|---|
+| `Project.sourceIndexes` — the parses `referencesAt` walks | 114.7 | 43.5% | no |
+| `CrawlParseCache` — the BUILD's parse of the same 78 files | 103.0 | 39.0% | **yes**, process-global |
+| `RealLibSnapshots.parseCache` | 2.6 | 1.0% | **yes** |
+| JVM baseline + embedded lib text + the 9,827 answers | 43.7 | 16.5% | — |
+
+Three things follow, and all three matter to someone deciding whether this fits
+in an IDE's JVM. **The program was parsed TWICE and both copies were kept** —
+the same 78 files, the same content, the same `computeParserFlags`, 217.7 of the
+264 MB between them (step 2 below removes one copy). **Every memo this API adds
+is free**: `cached`, `captures`, `prepared`, `narrowed`, `recheck` and
+`lineMaps` are **0.0 MB combined**, so (INC.32)'s weight-bounded capture lanes
+are doing their job and no further memo needs a budget line. And **the
+per-project MARGINAL figure is ~115 MB, not 264**: a second `Project` in the
+same process re-earned 105.9 MB of shared caches and then added 115.3 MB of its
+own, so budget **`103 + 115·N`** for N open projects — the 103 is paid once,
+because it is keyed by content and shared.
+
+Both heap figures are pinned by no test and never can be (a sized assertion is a
+coin flip); re-take them with `scripts/inc36-retention.sh`.
+
 That a highlight row is a statement about a FILE and not about the API is unchanged
 and is why the table names files: `binder.ts` (7,787 occurrences) and `checker.ts`
 (125,289) differ by 10x in the first-caret row and by the same factor in the residue.
@@ -1736,7 +1762,12 @@ The second build is the verification, and it costs less than the first on a smal
 (it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
 and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is
 the same shape, and § 10b's corrected reading applies here too: **`-Xmx2g` is the
-floor**, ~1.1 GB peaks in old gen, ~264 MB actually retained.
+floor**, ~1.1 GB peaks in old gen, ~264 MB actually retained — of which **83%
+is parses** (`Project.sourceIndexes` 114.7 MB + the process-global
+`CrawlParseCache` 103.0 MB) and **0.0 MB is any memo this API keeps**. The
+per-project MARGINAL figure is **~115 MB**, not 264: budget `103 + 115·N` for N
+open projects. Attribution and method:
+`docs/perf/language-service-retention.md`.
 
 The absolute numbers are a property of the run that took them; only the § 14 table is
 kept current, and the runner is **`scripts/inc31-ls-cost.sh`**.
