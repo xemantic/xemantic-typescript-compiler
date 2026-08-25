@@ -334,6 +334,43 @@ project.diagnosticsOf(listOf(b))             // 0
 which is what lets a per-buffer annotator run at editor speed: ask about the whole
 open set once on idle, then answer each buffer from it.
 
+### Ask for the whole open set in one call — this is a rule, not a tip
+
+`(INC.37)` decomposed a narrowed query and found `Σ own(F)` over 78 files is
+6,841 ms against a 4,935 ms whole-program check — a **1.39x re-derivation tax**
+— even though the spine walk itself partitions exactly (node counts sum to the
+whole-program figure to the node). The extra 1,906 ms is shared type resolution
+(lib types, foreign declarations, instantiations) that one build resolves once
+and that every separate per-file query re-derives in its own fresh `Checker`
+(`(INC.38)`). Averaged over a 108 ms median query that is **~24 ms — 22% of it**,
+the largest single lever this arc has named at the median case.
+
+The batching above is how a host collects that tax back: one `diagnosticsOf`
+call over `N` files pays the floor and the shared derivation **once**; `N`
+separate calls pay both **`N` times**. Measured on `docs/language-service.md`'s
+own six-buffer arm (§ 14, `2fa8a39f`, 2026-08-24): the same six-file set asked
+as **one call costs 321 – 342 ms**; asked **one file at a time it costs
+748 – 771 ms**. That is wall time and therefore pinned by nothing — see § 14's
+standing caveat — but the direction is arithmetic, not noise: one call always
+pays one floor and one derivation, `N` calls always pay `N` of each, so the gap
+between them can only widen with the size of the open set.
+
+What this does **not** remove: `(INC.40)`'s retained-checker replay collects the
+FLOOR across queries (a held `Checker` re-entered for later `diagnosticsOf`
+calls), but not the per-file re-derivation the 1.39x names — that tax is paid
+once per **build**, not once per **process**, so it still falls on a host that
+asks one file at a time even with the replay in play. The only way to collect it
+is to name the files together.
+
+**Automatic working-set growth is refused, deliberately.** `(INC.14)` priced
+growing the partition to "the queried file plus whatever was recently queried"
+on every miss: it costs `k·floor + k(k+1)/2·perFile` against a cold
+`k·floor + k·perFile` — a **loss at every k** — because each growth step redoes
+the derivation for files already answered. A host knows its open buffers where
+this layer does not, so the API will not guess a working set on the caller's
+behalf; batching the visible tabs into one call is the host's job, not
+something `Project` infers.
+
 ## 4. Diagnostics
 
 ```kotlin

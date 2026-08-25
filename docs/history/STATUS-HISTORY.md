@@ -1,3 +1,64 @@
+**A MEDIAN NARROWED QUERY IS 108 ms — INDEPENDENTLY REPRODUCED — AND ITS OTHER HALF IS NOW
+DECOMPOSED: `checkSpine` IS 89-92% OF A FILE'S OWN CHECK, SCALING IS **LINEAR** WITH
+`checker.ts` AT THE *p10* PER NODE, AND Σ`own(F)` IS **1.39x** THE WHOLE-PROGRAM CHECK
+(2026-08-24, (INC.37)).** (INC.3) decomposed the incremental FLOOR; nothing here had ever
+split the other half — the queried file's own checking, which after (INC.1)-(INC.32) is the
+dominant term. `own(F) = build(recheckOnly={F}) − build(recheckOnly={a name not in the
+program})`, per wall and per pass, over all 78 of tsc's own sources, with a control built
+in: every floor-resident pass row cancels to ~0 in the subtraction and the per-pass sum
+reconstructs the wall to 2-4%. **Floor 56 ms; `own(F)` min 4 / median 52 / p90 138 / max
+1,726; query median 108 ms** — which reproduces (INC.31)'s 108-113 ms from a completely
+different measurement. **THERE ARE TWO LATENCY PROBLEMS AND THEY NEED DIFFERENT LEVERS**: at
+the median file the floor is still the LARGER half (52%), and at the tail — the file a user
+is most likely to be in — it is **3.1%** and everything is `checkSpine` on one file.
+**THE SCALING ANSWER IS A NEGATIVE RESULT AND IT RETIRES A STANDING SUSPICION.** `own(F)` is
+LINEAR in the file's NODE count, and `checker.ts` is at the **p10** of per-node cost —
+**6.27 µs/node against a population median of 9.71** over the 51 files with >2,000 nodes
+(`parser.ts`, 5.8x smaller, reads 6.08). Its 1,726 ms is 275,478 nodes at a below-median
+price: **there is no quadratic to find and no structural lever inside the big file, only the
+constant factor per node.** Confirmed independently — Σ per-file `spineNodes` over the 78
+narrowed builds is **856,962**, the whole-program figure to the node, so the walk partitions
+exactly. **AND THE PROXY THAT WOULD HAVE INVENTED THE OPPOSITE ANSWER IS BYTES**: 76 -> 739
+µs/KB among files >100 KB, and every byte-based regression in this round's first pass
+predicted `checker.ts` LOW by 1.2-4.3x — i.e. would have been read as a super-linearity that
+is not there.
+**WHAT IS INSIDE `own(F)`.** `checkSpine` is **89-92%** of it above ~15,000 nodes (1,576 of
+1,771 ms on `checker.ts`). The ~400 partition-scoped tail walkers are 10.5% there and 5-7%
+elsewhere, and they are FLAT — 78 rows above 0.5 ms, largest **11.45 ms = 0.65% of the
+query** — so round 830's arithmetic closes them: there is nobody to make cheaper. Inside
+`checkSpine` the four disjoint type-system rows (relation 39, type-node 43, member 7, flow
+narrowing 167) are **255 ms = 16.2%**, so **84% is the walk and the handler bodies** —
+round 758's whole-program result, sharper under a partition.
+**ROUND 847's SIX-HANDLER SET IS CONFIRMED (65.7% vs 63.0% whole-program-warm) AND ITS ORDER
+IS REFUTED.** `cpaSpineLeave` is **22.9%** here against round 847's third place;
+`ccetSpineLeave`, its first at 18.2%, is **10.9%**; and the top-three permutation differs on
+all three of `binder.ts` / `parser.ts` / `checker.ts`, with `binder.ts` putting a handler in
+nobody's top six second. Round 847 explained its own swap by differing warm-up RATES — every
+arm here is warm, so what is left is the POPULATION. **A per-handler ranking is a claim about
+a codebase's shape, not about the compiler: quote the file with it.**
+**THE SURPRISE — A 1.39x RE-DERIVATION TAX, AND IT IS THE LARGEST MEDIAN-CASE TERM NAMED.**
+Σ`own(F)` over 78 files is **6,841 ms** against a whole-program check of **~4,935**. The walk
+partitions to the node, so the extra **1,906 ms** is shared type resolution (lib types,
+foreign declarations, instantiations) a full build resolves once and every per-file query
+re-derives inside its own fresh `Checker` — averaged, **~24 ms per query, roughly HALF the
+median file's entire own check.** Same object (INC.14) measured from the other side. Queued
+as **(INC.38)**, whose actionable form is NOT automatic working-set growth ((INC.14) refused
+that on `k·floor + k(k+1)/2·perFile` arithmetic) but a host asking for its whole open set in
+one call: 342 ms once against 771 asked per file. **(INC.39)** carries the other lever — the
+three big handlers, 645 ms the object on `checker.ts`, prize NOT measured.
+**THREE INSTRUMENT TRAPS, ALL OF WHICH FAILED TOWARD A PLAUSIBLE TABLE**, which is the most
+reusable part of the round: the `dispatch` tier needs a warm-up OF ITS OWN (its by-id
+dispatcher is not the production walk — run 1 read a handler at **82 µs per consultation**,
+a warm-up artifact wearing a handler's name); **a six-point size ladder cannot answer the
+scaling question at all**, since `corePublic.ts` (1,337 B) costs 7.5 ms and `es2019.ts`
+(1,533 B) costs 26.5 — 3.5x at the same size, so the fitted intercept is whichever small
+file you drew, and it was replaced by the 78-file sweep; and round 846's `full`-tier
+inflation of `checkSpine` reconfirmed here at **1.08-1.37x**, so every per-pass ms comes from
+the `rows` tier and the probe's timestamp pair is measured in situ (34-36 ns) rather than
+inherited. Instrument only — no compiler behaviour touched, no checker code, no compiled core
+method — so `cost_gate.py` and `huge_methods.py` are CONTROLS and were deliberately not run.
+Suite **15,815 / 0 / 3** (unchanged). `docs/perf/file-check-decomposition.md`.
+
 **THE LANGUAGE SERVICE IS 10-24x FASTER THAN ITS OWN DOCUMENTED COST TABLE, AND THE ONE DEFECT
 THE NEW TABLE EXPOSED IS FIXED: A MEDIAN NARROWED DIAGNOSTICS QUERY IS 108-113 ms — 43-47x A FULL
 REBUILD — AND AN ORDINARY HOVER AFTER TWO OTHER CHANNELS WENT 324 ms -> 4 ms (2026-08-24,

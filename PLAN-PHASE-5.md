@@ -20,6 +20,44 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.38) — DOC-ONLY: the host-facing recommendation ("ask for the whole open set in one call") is written down, with its numbers traced to their actual source
+
+**WHAT THIS ROUND DID.** Closed out the open half of `(INC.38)` — the code half
+(collecting the re-derivation tax via a retained checker) shipped already as
+`(INC.40)`, `8d4e95b0`; what remained was the host-facing recommendation the item
+itself deferred to "documentation, not code". Added one new subsection to
+`docs/language-service.md` § 3a, "Ask for the whole open set in one call — this is a
+rule, not a tip", right after the existing `diagnosticsOf` batching example. No
+Kotlin source touched.
+
+**THE NUMBERS THE ITEM QUOTED ("342 against 771") DO NOT APPEAR VERBATIM IN THE
+(INC.14) SESSION NOTE** — they were traced instead to `docs/language-service.md` § 14's
+own six-buffer table, refreshed by the `(INC.31)+(INC.32)` round (`2fa8a39f`,
+2026-08-24): the same 6-file `diagnosticsOf` set asked as **one call costs
+321–342 ms**; asked **one file at a time it costs 748–771 ms**. The item's "342 / 771"
+is the upper bound of each range — correct, just sourced from the wrong round number.
+The new subsection cites the actual source (§ 14, `2fa8a39f`) rather than repeating
+the item's attribution.
+
+**WHAT THE NEW SECTION STATES**, beyond the numbers: the arithmetic that makes this a
+rule rather than a tip (one call pays one floor + one shared derivation; N calls pay N
+of each — from `(INC.37)`'s Σ`own(F)` = 6,841 ms against a 4,935 ms whole-program check,
+a 1.39x tax, ~24 ms = 22% of a 108 ms median query); that this is wall time and
+therefore pinned by nothing, per the page's own standing caveat; what `(INC.40)`'s
+retained-checker replay does and does not remove (collects the floor across queries,
+not the per-file derivation a build still pays once per named file); and `(INC.14)`'s
+refusal of automatic working-set growth (`k·floor + k(k+1)/2·perFile` against a cold
+`k·floor + k·perFile` — a loss at every k), restated here so the "why not grow the set
+automatically" question sits beside the recommendation it explains.
+
+**GATES.** Doc-only round — no compiler source, no compiled core method touched, so
+`jvmTest`, `cost_gate.py` and `huge_methods.py` were not run; nothing in this change
+can move a counter, a diagnostic or a byte of emitted output. `git diff --stat` before
+commit touches exactly four files, all `.md`: `PLAN-PHASE-5.md` (this note plus the
+queue item), `docs/language-service.md` (the new § 3a subsection),
+`STATUS.md` (a short new headline, trim-on-write) and `docs/history/STATUS-HISTORY.md`
+(the (INC.37) block moved out to keep STATUS.md at ~5 rounds).
+
 ### Round (INC.42) — a bare type parameter is an UNDECIDED constraint, not a failed one: `(n: number) => R1<X>` rendered `(n: number) => any` on every ordinary build
 
 **THE REPRO IS THREE LINES, NEEDS NO PARTITION, AND HAS NOTHING TO DO WITH `Visitor`.**
@@ -1971,30 +2009,33 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   REFUTED** — see (INC.39). `docs/perf/file-check-decomposition.md`; instrument-only, suite
   unchanged at 15,815 / 0 / 3.
 
-- [ ] **(INC.38) THE 1.39x RE-DERIVATION TAX — ~24 ms = 22% OF A MEDIAN QUERY, THE LARGEST
-  MEDIAN-CASE LEVER THIS ARC HAS NAMED, AND THE PRIZE IS MEASURED.** (INC.37): Σ`own(F)`
+- [x] **(INC.38) DONE 2026-08-25 (doc-only) — THE 1.39x RE-DERIVATION TAX'S HOST-FACING
+  RECOMMENDATION IS NOW WRITTEN DOWN, WITH ITS NUMBERS AND ITS LIMIT.** (INC.37): Σ`own(F)`
   over 78 files is 6,841 ms against a 4,935 ms whole-program check while the spine walk
   partitions to the node, so **1,906 ms is shared type resolution a full build amortises and
   every per-file query re-derives in its own fresh `Checker`**. Against a 108 ms median
-  query that is ~24 ms; against `checker.ts` it is 0, because there the file IS the program.
-  **THE ACTIONABLE FORM IS NOT AUTOMATIC WORKING-SET GROWTH — (INC.14) ALREADY REFUSED THAT
-  ON ARITHMETIC**: growing the partition on every miss costs `k·floor + k(k+1)/2·perFile`
-  against a cold `k·floor + k·perFile`, i.e. a LOSS at every k, and a host knows its open
-  buffers where this layer does not. **What is actionable is that a host asking for its
-  whole open set in ONE `diagnosticsOf` call already pays one floor and one derivation** —
-  measured in (INC.14): the 6-file set asked once is **342 ms** against **771 ms** asked per
-  file. So step 1 is documentation and a host-facing recommendation, not code.
-  **THE OPEN QUESTION IS ANSWERED AND SHIPPED — (INC.40), `8d4e95b0`.** It asked whether a
+  query that is ~24 ms = 22%; against `checker.ts` it is 0, because there the file IS the
+  program. **THE CODE HALF SHIPPED ALREADY — (INC.40), `8d4e95b0`.** It asked whether a
   HELD plain-build `Checker` can serve `diagnosticsOf` across queries at one program state,
   the way `prepare` serves captures. It can, and it does: `Project.diagnosticsOf` now keeps
   the program its first narrowed build hands back and re-enters it, worth **2.25-2.30x**
-  (104-108 ms -> 25 ms at `k = 1`), which is this tax being COLLECTED rather than re-paid.
-  Graded exactly as this item demanded — `partition-equivalence` 78/78, `partition-gate`'s
-  sensitivity arm 75/75, and the capture channel — and the capture channel is why the handle
-  serves **diagnostics only**, behind a type-level valve. **What remains of (INC.38) is its
-  first half**: the host-facing recommendation to ask for the whole open set in ONE call
-  (342 ms against 771), which the replay does not remove — it deletes the floor, not the
-  per-file derivation, and (INC.14)'s arithmetic still refuses automatic working-set growth.
+  (104-108 ms -> 25 ms at `k = 1`), which is this tax being COLLECTED rather than re-paid,
+  and it does not remove the recommendation below — it deletes the FLOOR across queries,
+  not the per-file derivation a single build still pays once per file named.
+  **THIS ROUND LANDS ONLY THE DOCUMENTATION HALF, NO CODE.** `docs/language-service.md`
+  § 3a gained a new subsection, "Ask for the whole open set in one call — this is a rule,
+  not a tip", right after the existing `diagnosticsOf` batching example. It states the
+  arithmetic (one call pays one floor + one derivation; N calls pay N of each), quotes the
+  measured numbers **from § 14's own six-buffer table (`2fa8a39f`, 2026-08-24)**: the same
+  6-file set asked as one call costs **321-342 ms**, asked one file at a time it costs
+  **748-771 ms** — matching what this item paraphrased as "342 against 771", now traced to
+  its actual source rather than to the (INC.14) queue note, which does not carry those two
+  numbers verbatim. States plainly this is wall time, pinned by nothing (the page's own
+  standing caveat), and restates (INC.14)'s refusal of automatic working-set growth
+  (`k·floor + k(k+1)/2·perFile` against a cold `k·floor + k·perFile` — a loss at every k)
+  so the "why not just grow the set automatically" question is answered in the same place
+  as the recommendation. **GATES: none — no Kotlin source touched, `git diff --stat` shows
+  only `.md` files, so `jvmTest`/`cost_gate.py`/`huge_methods.py` were not run.**
 
 - [ ] **(INC.39) (SPINE.1) FOR THE LARGE-BUFFER TAIL — 645 ms IS THE OBJECT ON `checker.ts`,
   AND THE PRIZE IS *NOT* MEASURED.** (INC.37): the three biggest spine handlers
