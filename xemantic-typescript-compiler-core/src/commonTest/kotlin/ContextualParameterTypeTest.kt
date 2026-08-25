@@ -108,6 +108,56 @@ class ContextualParameterTypeTest {
         assert(d.count { it.code == 2322 } == 1)
     }
 
+    // --- the PROPERTY-ACCESS family, which reads its context separately ----------
+
+    /**
+     * KNOWN GAP, and a MEASURED refusal rather than an oversight — **the two
+     * walkers disagree about one caret and the fix is blocked on a THIRD
+     * defect.**
+     *
+     * The assignability family has read a declaration's ANNOTATION as a
+     * contextual type since round 462; the property-access family never has —
+     * its spine anchor walks `decl.initializer` with no context at all — so in
+     * `const a: (n: N) => void = (node) => { node.nope }` the TS2322 family sees
+     * `node: N` and the TS2339 family sees `any`, and tsc reports the TS2339.
+     *
+     * The one-line fix was written and REVERTED. It gives exactly the rows tsc
+     * gives on every fixture, and all 8 dashboard profiles stay `added=0
+     * removed=0` — and it costs **+15 false positives on knip** (66 -> 79), every
+     * one of them a parameter whose contextual type is a UNION that the body
+     * then narrows by assignment (`if (typeof localConfig === 'function')
+     * localConfig = localConfig()`, then `localConfig.files`). tsgo is silent at
+     * every one. The property-access family has no assignment/`typeof`
+     * narrowing for a parameter, so handing it a union contextual type
+     * manufactures TS2339; that narrowing is the blocker, not the contextual
+     * type. Recorded as the current answer so the round that fixes it sees these
+     * go red rather than rediscovering the whole chain.
+     */
+    @Test
+    fun `KNOWN GAP - an annotated variable's arrow parameter is NOT typed for the property-access family`() {
+        val d = diagnose(prelude + "const q: (n: N) => void = (node) => { node.nope; };")
+        assert(d.none { it.code == 2339 })
+    }
+
+    /** …and the same for an object-literal METHOD's body, which that walker does
+     *  not walk at all (`cpaExprObjectLiteral`'s `else`). The ASSIGNABILITY half
+     *  of the same body IS walked, since (CHK.39b) — that asymmetry is the whole
+     *  point of pinning it. */
+    @Test
+    fun `KNOWN GAP - an object-literal method body is not property-access-walked`() {
+        val d = diagnose(prelude + "const q: V = { m(node) { node.nope; } };")
+        assert(d.none { it.code == 2339 })
+    }
+
+    /** The call-argument path DOES reach the property-access family, and has
+     *  since B81.1 — the control that says the two gaps above are about the
+     *  contextual SOURCE and not about the walker being unable to report. */
+    @Test
+    fun `a CALL-ARGUMENT arrow's parameter is typed for the property-access family`() {
+        val d = diagnose(prelude + "take((node) => { node.nope; });")
+        assert(d.count { it.code == 2339 } == 1)
+    }
+
     // --- the negative half ------------------------------------------------------
 
     /** A CORRECT use of the same parameter stays silent — the pin above must not
