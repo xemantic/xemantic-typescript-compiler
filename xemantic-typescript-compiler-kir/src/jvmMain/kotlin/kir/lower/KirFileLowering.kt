@@ -3396,6 +3396,24 @@ internal class KirFileLowering(
      * Reached only after the call resolved to no generated declaration, which
      * is the honest order: a call of a declared function is a direct call and
      * must stay one.
+     *
+     * **THE CALL IS ARITY-ADAPTING AND MAY NOT BE A DIRECT `FunctionN.invoke`
+     * (2026-08-25, (CHK.39)).** TypeScript's function assignability accepts a
+     * function of FEWER parameters wherever one of more is declared, so a value
+     * whose declared type says `(a, b) => void` is at run time perfectly likely
+     * to be a `Function1` — `mitt`'s own driver registers a one-parameter
+     * wildcard handler against a two-parameter `WildcardHandler`, and `emit`
+     * calls it with two arguments. A `coerce(…, types.function(arity))` there is
+     * a hard cast that throws `ClassCastException` at run time, and NOTHING in
+     * the type system is wrong when it does. The repo already knew this for a
+     * BAG member (the comment above [lowerBagRead]'s call site); it is the same
+     * fact about a function value, and it was invisible only because such a
+     * callee used to be `any` — the checker did not type a contextually-typed
+     * parameter until (CHK.39), so this branch was never reached for one.
+     *
+     * The declared arity survives as the ARGUMENT-COUNT check alone, which is a
+     * statement about the call SITE (something the checker also rejects) rather
+     * than about the value that arrives.
      */
     private fun lowerFunctionValueCall(node: CallExpression, arity: Int): IrExpression {
         if (node.arguments.size != arity) {
@@ -3404,16 +3422,7 @@ internal class KirFileLowering(
                 "a function value of arity $arity called with ${node.arguments.size} argument(s)"
             )
         }
-        val invoke = intrinsics.invoke(arity)
-        return scope.irCall(invoke, types.anyNullable).apply {
-            arguments[0] = coerce(
-                node.expression, lowerExpression(node.expression), types.function(arity)
-            )
-            node.arguments.forEachIndexed { index, argument ->
-                arguments[index + 1] =
-                    coerce(argument, lowerExpression(argument), types.anyNullable)
-            }
-        }
+        return lowerDynamicCall(node)
     }
 
     // ---- object literals and property bags ---------------------------------
