@@ -263,4 +263,208 @@ class ContextualParameterTypeTest {
         val d = diagnose(prelude + "const q: V = { m(node) { const good: number = node.kind; } };")
         assert(d.none { it.code == 2322 })
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // (CHK.40) round 951 — the four contextual-type SOURCES the walker did not
+    // read, plus the `async` return type that made one of them a FALSE POSITIVE.
+    // Every expectation below is tsc 7.0.2's, measured with
+    // `tools/tsgo-7.0.2/lib/tsc --noEmit` on the same source.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * (CHK.40)(e) THE ROOT CAUSE, and the only row in the item that painted a
+     * WRONG error rather than a spurious TS7006: an `async` function-like whose
+     * return type is INFERRED returns `Promise<T>`, not `T`.
+     *
+     * The item read it as "an async object-literal method's parameters are not
+     * contextually typed"; measured, the parameters were fine and the RETURN
+     * TYPE was not — `{ async m(node) {…} }` against `{ m(n: N): Promise<void> }`
+     * reported `Type 'void' is not assignable to type 'Promise<void>'`, and the
+     * same defect fired for an `async` function declaration, arrow, function
+     * expression and class method. It is symmetric: three false POSITIVES and
+     * four false NEGATIVES on one seven-shape fixture.
+     *
+     * These pins assert the TYPE — a silencing fix cannot satisfy them, because
+     * the assignment they name is one tsc REPORTS.
+     */
+    @Test
+    fun `an async function declaration's inferred return type is a Promise`() {
+        val d = diagnose("async function f() { return 1; }\nconst n: number = f();")
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.first { it.code == 2322 }.message.contains("'Promise<number>'"))
+    }
+
+    @Test
+    fun `an async arrow's inferred return type is a Promise`() {
+        val d = diagnose("const f = async () => 1;\nconst n: number = f();")
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.first { it.code == 2322 }.message.contains("'Promise<number>'"))
+    }
+
+    @Test
+    fun `an async function expression's inferred return type is a Promise`() {
+        val d = diagnose("const f = async function () { return \"s\"; };\nconst n: number = f();")
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.first { it.code == 2322 }.message.contains("'Promise<string>'"))
+    }
+
+    @Test
+    fun `an async class method's inferred return type is a Promise`() {
+        val d = diagnose("class C { async m() { return 1; } }\nconst n: number = new C().m();")
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.first { it.code == 2322 }.message.contains("'Promise<number>'"))
+    }
+
+    /** …and the VOID case, which is the one that produced the item's own false
+     *  positive: an async body with no `return` answers `Promise<void>`. */
+    @Test
+    fun `an async function with no return is assignable to a Promise-returning type`() {
+        val d = diagnose("async function f() { }\nconst g: () => Promise<void> = f;")
+        assert(d.none { it.code == 2322 })
+    }
+
+    /** NEGATIVE CONTROL. A NON-async function's inferred return type is NOT
+     *  wrapped — a fix that wrapped every inferred return would pass all four
+     *  positives above and fail here. */
+    @Test
+    fun `negative control - a non-async function's inferred return is not a Promise`() {
+        val d = diagnose("function f() { return 1; }\nconst n: number = f();")
+        assert(d.none { it.code == 2322 })
+    }
+
+    /** NEGATIVE CONTROL. An ANNOTATED return type is never touched — the
+     *  annotation already spells whatever wrapper it wants. */
+    @Test
+    fun `negative control - an annotated async return type is used verbatim`() {
+        val d = diagnose(
+            "async function f(): Promise<number> { return 1; }\n" +
+                "const g: () => Promise<number> = f;"
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    /** (CHK.40)(e) The item's own fixture: the false TS2322 about the LITERAL is
+     *  gone, and the one tsc does report — inside the body — survives. Asserting
+     *  the count alone would pass against a binary that lost both. */
+    @Test
+    fun `an async object-literal method is assignable, and its body is still checked`() {
+        val d = diagnose(
+            prelude +
+                "interface Pr { m(n: N): Promise<void> }\n" +
+                "const q: Pr = { async m(node) { const bad: string = node.kind; } };"
+        )
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.first { it.code == 2322 }.message.contains("Type 'number' is not assignable to type 'string'"))
+    }
+
+    /**
+     * (CHK.40)(c) A STRING-LITERAL member name, and the root cause was NOT the
+     * TS7006 walker: `getTypeOfSymbolWorker`'s MethodDeclaration arm extracted
+     * the name with `decl.name as? Identifier` and answered `anyType` for
+     * anything else, so `interface VS { "m-x"(node: N): void }` had that member
+     * PRESENT and typed `any` — while the property form `"m-x": (n: N) => void`
+     * was byte-correct. The name is now taken with `declaredMemberName`, the very
+     * helper `resolveInterfaceMembersCore` used to REGISTER the member, so the
+     * two cannot disagree about which member this is.
+     */
+    @Test
+    fun `a string-literal-named method's parameter is typed and its body is checked`() {
+        val d = diagnose(
+            "interface N2 { kind: number }\n" +
+                "interface VS { \"m-x\"(node: N2): void }\n" +
+                "const q: VS = { \"m-x\"(node) { const bad: string = node.kind; } };"
+        )
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.none { it.code == 7006 })
+    }
+
+    /** …and through the PROPERTY-ASSIGNMENT form of the same member, which is the
+     *  second extraction site (`spineIanyPropAssignEdge`). */
+    @Test
+    fun `a string-literal-named property's arrow parameter is typed`() {
+        val d = diagnose(
+            "interface N2 { kind: number }\n" +
+                "interface VS { \"m-x\"(node: N2): void }\n" +
+                "const q: VS = { \"m-x\": (node) => { const bad: string = node.kind; } };"
+        )
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.none { it.code == 7006 })
+    }
+
+    /**
+     * (CHK.40)(a)/(b)/(d) — the three RETURN-position sources.
+     *
+     * These are TS7006-SUPPRESSION pins and nothing more, and that is a
+     * deliberate, recorded limitation rather than the (CHK.39) mistake: a
+     * function body nested in a `return` expression is not walked by the
+     * assignability walker AT ALL ((CHK.40)(f), measured and queued), so no
+     * diagnostic inside it can fire in either direction and no positive
+     * assertion is expressible here. The TYPE half of the same fixtures IS
+     * asserted, in `ProjectContextualParamHoverTest`, whose expectations are read
+     * out of tsc 7.0.2's own language server.
+     */
+    @Test
+    fun `an ARRAY LITERAL returned at an annotated array type types its elements`() {
+        val d = diagnose(prelude + "function f(): V[] { return [{ m(node) { } }]; }")
+        assert(d.none { it.code == 7006 })
+    }
+
+    @Test
+    fun `- at a readonly array type`() {
+        val d = diagnose(prelude + "function f(): readonly V[] { return [{ m(node) { } }]; }")
+        assert(d.none { it.code == 7006 })
+    }
+
+    @Test
+    fun `- and at a TUPLE type, positionally`() {
+        val d = diagnose(prelude + "function f(): [V] { return [{ m(node) { } }]; }")
+        assert(d.none { it.code == 7006 })
+    }
+
+    @Test
+    fun `an async function's Promise return annotation is unwrapped for its return`() {
+        val d = diagnose(prelude + "async function f(): Promise<V> { return { m(node) { } }; }")
+        assert(d.none { it.code == 7006 })
+    }
+
+    @Test
+    fun `an object-literal METHOD's own CONTEXTUAL return type reaches its return`() {
+        val d = diagnose(
+            prelude + "interface Outer { inner(): V }\n" +
+                "const q: Outer = { inner() { return { m(node) { } }; } };"
+        )
+        assert(d.none { it.code == 7006 })
+    }
+
+    /**
+     * NEGATIVE CONTROLS for the whole return family. A `return` position that
+     * supplies NO usable type must leave the parameter implicitly `any` and still
+     * report — the arms above are additive by construction and a fix that simply
+     * stopped emitting in return position would pass all five and fail these.
+     */
+    @Test
+    fun `negative control - an UNANNOTATED function's returned literal still reports TS7006`() {
+        val d = diagnose(prelude + "function f() { return [{ m(node) { } }]; }")
+        assert(d.count { it.code == 7006 } == 1)
+    }
+
+    /** NEGATIVE CONTROL for (b). The unwrap is gated on `async` and on nothing
+     *  else: a NON-async function annotated `Promise<V>` returns the literal AT
+     *  `Promise<V>`, so `m` is an excess property (TS2353) and its parameter stays
+     *  implicitly `any` — both rows, byte for byte, are tsc 7.0.2's. */
+    @Test
+    fun `negative control - a NON-async Promise return annotation is not unwrapped`() {
+        val d = diagnose(prelude + "function f(): Promise<V> { return { m(node) { } }; }")
+        assert(d.count { it.code == 7006 } == 1)
+        assert(d.count { it.code == 2353 } == 1)
+    }
+
+    @Test
+    fun `a tuple SECOND slot receives its OWN element type`() {
+        val d = diagnose(
+            prelude + "interface W { z(a: number, b: number): void }\n" +
+                "function f(): [V, W] { return [{ m(node) { } }, { z(p, q) { } }]; }"
+        )
+        assert(d.none { it.code == 7006 })
+    }
 }

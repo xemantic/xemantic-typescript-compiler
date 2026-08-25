@@ -62,6 +62,14 @@ class ProjectContextualParamHoverTest {
         take((cbArg) => { const useIt = cbArg; });
         const objm: V = { m(methArg) { const useM = methArg; } };
         const propa: { m: (n: N) => void } = { m: (paArg) => { const useP = paArg; } };
+        export interface Outer { inner(): V }
+        export interface VS { "m-x"(node: N): void }
+        export function arr(): V[] { return [{ m(arrArg) { const useA = arrArg; } }]; }
+        export function tup(): [V] { return [{ m(tupArg) { const useT = tupArg; } }]; }
+        export async function asy(): Promise<V> { return { m(asyArg) { const useY = asyArg; } }; }
+        export const nested: Outer = { inner() { return { m(nesArg) { const useN = nesArg; } }; } };
+        export const strk: VS = { "m-x"(strArg) { const useS = strArg; } };
+        export async function inferredRet() { return 1; }
     """.trimIndent() + "\n"
 
     private fun project(): Project = Project.open(
@@ -104,6 +112,65 @@ class ProjectContextualParamHoverTest {
      * type, so a fix that simply typed every parameter as something would pass
      * the three above and fail here.
      */
+    // ══════════════════════════════════════════════════════════════════════════
+    // (CHK.40) round 951 — the four contextual-type SOURCES the pull did not
+    // read. Every expectation is READ OUT of tsc 7.0.2's own language server
+    // (`scripts/lsp_hover.py`), which answers `(parameter) X: N` at all five
+    // carets and `function inferredRet(): Promise<number>` at the sixth.
+    //
+    // THESE PINS ARE THE POSITIVE HALF of (CHK.40)(a)/(b)/(d): a function body
+    // nested in a `return` expression is not walked by the assignability walker
+    // at all ((CHK.40)(f), measured and queued), so no diagnostic inside one can
+    // fire and the core suite can only pin the TS7006 SUPPRESSION there. A hover
+    // asserts the TYPE, which a fix that merely silenced TS7006 cannot produce.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /** (CHK.40)(a) an ARRAY LITERAL returned at an annotated array type. */
+    @Test
+    fun `a hover on a parameter inside a RETURNED ARRAY LITERAL answers the contextual type`() {
+        val info = project().quickInfoAt(fileName, offsetOf("arrArg", 1) + 1)
+        assert(info != null)
+        assert(info.displayString == "N")
+    }
+
+    /** (CHK.40)(a) …and at a TUPLE type, which takes the element POSITIONALLY
+     *  where an array reference's element type is index-independent. */
+    @Test
+    fun `a hover on a parameter inside a RETURNED TUPLE LITERAL answers the contextual type`() {
+        val info = project().quickInfoAt(fileName, offsetOf("tupArg", 1) + 1)
+        assert(info != null)
+        assert(info.displayString == "N")
+    }
+
+    /** (CHK.40)(b) an `async` function's `Promise<T>` annotation is unwrapped:
+     *  a `return` inside it is at `T`. */
+    @Test
+    fun `a hover on a parameter returned from an ASYNC function answers the contextual type`() {
+        val info = project().quickInfoAt(fileName, offsetOf("asyArg", 1) + 1)
+        assert(info != null)
+        assert(info.displayString == "N")
+    }
+
+    /** (CHK.40)(d) an object-literal METHOD's own CONTEXTUAL return type — the
+     *  method spells no annotation, so the source is the signature that
+     *  contextually types the method itself. */
+    @Test
+    fun `a hover on a parameter returned from a CONTEXTUALLY-TYPED objlit method answers the contextual type`() {
+        val info = project().quickInfoAt(fileName, offsetOf("nesArg", 1) + 1)
+        assert(info != null)
+        assert(info.displayString == "N")
+    }
+
+    /** (CHK.40)(c) a STRING-LITERAL member name. Its root cause was one layer
+     *  down — a string-named METHOD's own type was `any` — so this hover answered
+     *  `any` for the member as well as for the parameter. */
+    @Test
+    fun `a hover on a STRING-LITERAL-named method's parameter answers the contextual type`() {
+        val info = project().quickInfoAt(fileName, offsetOf("strArg", 1) + 1)
+        assert(info != null)
+        assert(info.displayString == "N")
+    }
+
     @Test
     fun `negative control - a parameter with no contextual type still answers any`() {
         val text = source + "export function free(loose) { const useLoose = loose; }\n"
