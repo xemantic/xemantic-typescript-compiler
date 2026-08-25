@@ -3360,6 +3360,12 @@ class Checker(
                     }
                     ctaTypeParamsIntoLocals(parameters, frame.varTypes)
                 }
+                // (CHK.39) the CONTEXTUAL half — after the annotated params (so
+                // an annotation always wins), under the frame ambient but NOT
+                // under the fn's own TP scope (see [checkFunctionBody]'s twin).
+                (body as NodeBase).parent?.let {
+                    applyPulledContextualParamTypes(it, parameters)
+                }
             }
             } finally {
                 repeat(sandwichNsPushed) { inferenceNamespaceStack.removeLast() }
@@ -99841,6 +99847,23 @@ interface DataView {
                 }
                 ctaTypeParamsIntoLocals(parameters, innerTypes)
             }
+            // (CHK.39) the CONTEXTUAL half. It must be HERE and not only on the
+            // spine frame: a statement nested in a function body is
+            // EMISSION-OWNED by this legacy walk — the spine's own anchor runs
+            // `recordOnly` for it and truncates every diagnostic — so a
+            // parameter typed only in [ctaFnBodyFrame] is correct and completely
+            // invisible. Both sites carry it, deliberately: the frame's copy is
+            // what a language-service capture reads.
+            //
+            // OUTSIDE the `withInternedTpScope` above, on purpose and in both
+            // directions: a contextual type is written OUTSIDE this function, so
+            // resolving it under the function's OWN type parameters could bind a
+            // name the writer never meant — and INV.5(c) bypasses its cache for
+            // every resolution taken under a non-empty instantiation context, so
+            // resolving it in there cost `typeNode.bypassed` +31% for nothing.
+            (it as NodeBase).parent?.let { fn ->
+                applyPulledContextualParamTypes(fn, parameters)
+            }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
             // B205: lib-FlatArray depth-param assignment (both annotations resolve to
@@ -141906,6 +141929,127 @@ interface DataView {
             val sigParam = sig.parameters.getOrNull(i) ?: continue
             val pType = getTypeOfSymbol(sigParam)
             if (pType !== anyType && pType !== errorType) currentLocalTypes[name] = pType
+        }
+    }
+
+    /**
+     * (CHK.39) The contextual type of an expression POSITION, pulled from the
+     * parent chain — tsc's `getContextualType`, restricted to the positions a
+     * function-like node can occupy and to the sources this checker can already
+     * resolve.
+     *
+     * WHY A PULL, WHERE EVERY OTHER WALKER HERE PUSHES. The CTA family runs on
+     * the INV.4 spine, and the spine arrives at a function body through
+     * [ctaSpineEnter]'s Block arm carrying NO contextual ambient at all (round
+     * 911: the anchors install-and-restore per dispatch, so at an arbitrary
+     * spine node `contextualType` is whatever the file-level ambient holds).
+     * Threading a contextual stack down the spine would be a second, parallel
+     * discipline over the question the `spineIany*` family already threads for
+     * ARITY; the parent chain is a function of the AST alone and cannot drift
+     * from it.
+     *
+     * DELIBERATELY PARTIAL — a `return`, an array literal, an `as`/`satisfies`,
+     * a JSX attribute and a `=` assignment are **(CHK.40)** and answer null,
+     * which leaves the parameter `any` exactly as before rather than giving it a
+     * wrong type. Everything it does answer is a type the annotation SPELLS.
+     */
+    private fun pullContextualTypeAt(node: Node, depth: Int = 0): Type? {
+        if (depth > 6) return null
+        val parent = (node as NodeBase).parent ?: return null
+        return when (parent) {
+            is ParenthesizedExpression -> pullContextualTypeAt(parent, depth + 1)
+            is VariableDeclaration ->
+                if (parent.initializer === node) parent.type?.let { pullCtxResolveAnnotation(it) } else null
+            is PropertyDeclaration ->
+                if (parent.initializer === node) parent.type?.let { pullCtxResolveAnnotation(it) } else null
+            is PropertyAssignment -> {
+                val objLit = (parent as NodeBase).parent as? ObjectLiteralExpression
+                val name = pullCtxMemberName(parent.name)
+                if (parent.initializer !== node || objLit == null || name == null) null
+                else pullContextualTypeAt(objLit, depth + 1)?.let { lookupPropertyTypeForCtx(it, name) }
+            }
+            // A METHOD / accessor member of an object literal: the member itself
+            // is the "expression" whose position is contextually typed.
+            is ObjectLiteralExpression -> {
+                val name = when (node) {
+                    is MethodDeclaration -> pullCtxMemberName(node.name)
+                    else -> null
+                }
+                if (name == null) null
+                else pullContextualTypeAt(parent, depth + 1)?.let { lookupPropertyTypeForCtx(it, name) }
+            }
+            is CallExpression -> {
+                val idx = parent.arguments.indexOfFirst { it === node }
+                if (idx < 0) null
+                else cpaComputeArgCtxTypes(parent, null)?.getOrNull(idx)
+            }
+            else -> null
+        }
+    }
+
+    /** A member name usable as a contextual-type lookup key. A COMPUTED name is
+     *  refused rather than guessed — round 935's rule that a member name derived
+     *  from a TYPE is not a function of the program here. */
+    private fun pullCtxMemberName(name: Node?): String? = when (name) {
+        is Identifier -> name.text
+        is StringLiteralNode -> name.text
+        else -> null
+    }
+
+    /** The annotation resolution the pull uses: the ns-aware SAFE one, so an
+     *  unresolvable annotation answers null instead of `errorType` (which
+     *  `lookupPropertyTypeForCtx` would happily read members off). */
+    private fun pullCtxResolveAnnotation(node: TypeNode): Type? =
+        getTypeFromTypeNodeSafeNsAware(node)?.takeIf { it !== anyType && it !== errorType }
+
+    /**
+     * (CHK.39) Write the CONTEXTUAL parameter types of a function-like node into
+     * the frame's [currentLocalTypes] — the half of contextual typing this
+     * checker did not have.
+     *
+     * Before this, contextual typing here supplied an ARITY and nothing else:
+     * `spineIanyFnExprEnter` / `spineIanyObjLitMethodEnter` decide TS7006 from
+     * the contextual signature's parameter COUNT (B224), so a covered parameter
+     * went quiet — and then stayed `any` to every walker that reads a type. So
+     * `take((node) => { const bad: string = node.kind })` was silent where tsc
+     * reports TS2322, for every shape, including the ones that have "worked"
+     * since B81.1.
+     *
+     * Purely ADDITIVE: it writes only where the parameter has NO annotation and
+     * the position supplies a concrete type, so it can turn an `any` into a real
+     * type and can never redirect one that already resolved.
+     */
+    private fun applyPulledContextualParamTypes(fn: Node, parameters: List<Parameter>) {
+        // The population is exactly the un-annotated identifier parameters; the
+        // gate is what keeps the (possibly inference-driving) pull off every
+        // other function body in the program.
+        if (parameters.none { it.type == null && !it.dotDotDotToken && it.name is Identifier }) return
+        val ctx = pullContextualTypeAt(fn) ?: return
+        val sig = callableSignaturesForCtx(ctx)?.singleOrNull() ?: return
+        for ((i, param) in parameters.withIndex()) {
+            if (param.type != null || param.dotDotDotToken) continue
+            val name = (param.name as? Identifier)?.text ?: continue
+            val sigParam = sig.parameters.getOrNull(i) ?: continue
+            val pType = getTypeOfSymbol(sigParam)
+            if (pType === anyType || pType === errorType) continue
+            // Round 569: an UN-INFERRED callee TP in a contextual param type
+            // means OUR inference failed where tsc would have bound it —
+            // registering the bare TP turns downstream uncertainty-bails into
+            // constraint-based verdicts. Skip (the param stays `any`).
+            if (typeContainsUnresolvedTypeParam(pType)) continue
+            // B85.1a, and it is LOAD-BEARING here rather than a detail: an
+            // OPTIONAL contextual parameter (`cb: (a: T, b?: U) => void`) has
+            // effective type `U | undefined` inside the body, so writing the
+            // bare `U` reports `base = undefined` as TS2322 — measured, one
+            // false positive on three dashboard profiles
+            // (`findAllReferences.ts`'s `baseSymbol?: Symbol`). Both siblings
+            // already carry the rule ([ctaTypeParamsIntoLocals],
+            // [checkCallTypesInContextualFnExpr]).
+            val optional = (sigParam.valueDeclaration as? Parameter)
+                ?.let { it.questionToken && it.initializer == null } == true
+            currentLocalTypes[name] =
+                if (optional && strictNullChecks) getUnionType(listOf(pType, undefinedType))
+                else pType
         }
     }
 
