@@ -277,6 +277,19 @@ option reads 2,634 -> 156, which is what turns the attribution from a hypothesis
 measurement — and this page's own § "Family 1" is the standing warning that an error count
 attributed to a family by inspection is a hypothesis until one member of it is fixed.
 
+> **SUPERSEDED 2026-08-25 by (CHK.30) — the TS7006 attribution below is WRONG, and knip now
+> reads 156 -> 66 errors with TS7006 89 -> 1.** Those 89 rows were not "an object-literal
+> shorthand method's parameters are not contextually typed": that shape, written out by hand,
+> has always been silent here. A type imported from a `node_modules` PACKAGE resolved to `any`
+> — knip's `PluginVisitorObject` is `VisitorObject` from `'oxc-parser'` — because the checker
+> re-derived module resolution by string-matching a specifier against the program's own file
+> NAMES, which cannot express a bare specifier. **This page's own standing warning is what
+> caught it**: an error count attributed to a family BY INSPECTION is a hypothesis until one
+> member of it is fixed, and here fixing a member refuted the family. The measurement was
+> retaken on `webpro-nl/knip@main` with its 20 dependencies fetched from npm; the pre-fix
+> binary reproduces the 156/89 recorded below EXACTLY, which is what licenses the delta.
+> Residual now **0.13 FP/file**, and no row appeared that was not there before.
+
 **The residual is 0.31 FP/file — better than `yaml`'s 0.9 when this page was written — and
 it is this page's two families.** TS7006×89 (57%) is the METHOD-member half of family 1:
 an object-literal shorthand method's parameters are not contextually typed from the

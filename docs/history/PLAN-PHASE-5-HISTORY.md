@@ -1,3 +1,228 @@
+### Round (INC.31)+(INC.32) — the language-service cost table was 10-24x stale, two levers were REFUSED before being built, and the capture memo threw a 125,289-span entry away to keep a one-span one
+
+**WHAT THIS ROUND DID.** Re-took every wall figure in `docs/language-service.md` — all of
+them round-930, i.e. taken BEFORE (INC.2b) narrowed the capture path and before (INC.1)
+through (INC.30) took the incremental floor from 1,092 ms to 58 ms — refused two levers
+with numbers instead of building them, and landed the one defect the new table exposed.
+Two commits: **`2fa8a39f`** (the table; `docs/language-service.md` plus two jvmTest runners
+and a script, no compiler source touched) and **`689df5bb`** (`Project.captures` now
+evicts by WEIGHT). Suite **15,811 -> 15,815 / 0 / 3** (+4 pins).
+
+**THE TABLE WAS 10-24x STALE, AND THE HALF THAT DID *NOT* MOVE IS THE LOAD-BEARING HALF.**
+Profile `build/bench/tsc-project-637d5746`, 78 files, 9,977,097 chars; warm, six warm-up
+cycles, medians quoted with their draw lists, every row reproduced in TWO independent JVMs:
+
+| cell | documented (r930) | measured 2026-08-24 | ratio |
+| --- | --- | --- | --- |
+| a plain rebuild (`diagnostics()`), the anchor | 5.0-5.5 s | **4,864-5,096 ms** | 1.0x — the anchor holds |
+| `diagnosticsOf(f)`, **median over all 78 files** | 1.1-1.2 s | **108-113 ms** (p90 202-219) | **~10x** |
+| `diagnosticsOf(checker.ts)`, the 3.15 MB extreme | 2.7 s | 1,744-1,763 ms | 1.5x |
+| `completionsAt` | ~4.7-5.1 s | **194-202 ms** | **~24x** |
+| `signatureHelpAt` | ~4.7-5.1 s | 190-214 ms | ~23x |
+| `quickInfoAt` first caret, **median file** | not stated | 129-137 ms | new cell |
+| `quickInfoAt` first caret, `binder.ts` / `checker.ts` | 610 / 3,796 ms | 290-306 / 3,341-3,581 ms | 2.0x / 1.14x |
+| …a SECOND caret: median / `binder.ts` / `checker.ts` | — / 2 / 73 ms | 2 / 4 / 75-83 ms | = |
+| `documentHighlightsAt(binder.ts)` cold | 5.0-5.5 s | 336 ms | ~15x |
+| `fileSemantics(binder.ts)` cold | 5.0-6.2 s | 329 ms | ~15x |
+| `prepare(6 buffers)`, then 6 hovers | 674-698 ms, then 7-12 | 466-468 ms, then 13-14 | 1.45x |
+| `referencesAt` clean / dirty | 8.3-10.2 / 13.2-14.8 s | 8.8-9.6 / 13.2-13.9 s | **NO — by design** |
+| `renameAt` clean / dirty | 21.0 / 19.6-26.7 s | 20.0-21.3 / 25.0-26.0 s | **NO — by design** |
+
+The narrowed:full ratio at the median file is **43-47x** (108-113 ms against a
+4,864-5,096 ms rebuild). **The rows that did not move CANNOT move**: `referencesAt`,
+`renameAt` and a plain `diagnostics()` never enter `captureIn`'s partition, because their
+claim is about every file — that column is now marked on the page, since it is the half a
+plugin author has to design around.
+
+**AND A REAL KEYSTROKE COSTS THE NARROWED PATH NOTHING EXTRA**, which every earlier
+harness here was structurally unable to say (they all dirty a buffer by writing its own
+bytes back): identical bytes **212 ms**, an appended comment **247**, an inserted statement
+**218**, and a statement that introduces a TS2322 **215 ms**.
+
+**THE HEAP CLAIM WAS WRONG BY ~7x IN THE DIRECTION AN IDE CARES ABOUT.** The page said
+"~1.9 GB peak, 512 MB not enough". Measured per POOL — summing pool peaks over-reads and
+can exceed `-Xmx` — a `referencesAt` sweep peaks at **1,077-1,125 MB** in G1 old gen with
+**264 MB RETAINED** after a full GC, is green at `-Xmx2g` and OOMs at `-Xmx1g`. `-Xmx2g` is
+the floor; the old figure overstated retention, which is what an IDE budgets.
+
+**LEVER 1 REFUSED WITH A NUMBER — `SourceIndex` derived-population memoization.** On a memo
+hit `captureAround` still re-derives the file's occurrence set: `occurrenceNodes()` (two
+tree walks, two sorts, memoized nowhere) plus a span per occurrence plus a `HashSet` of
+every span. Decomposed: **1.21 ms on a 17.9 KB file, 2.27 ms at 194 KB, 82.7 ms at
+3.15 MB** — the arithmetic closes to **0.4%** of the measured 83 ms second-caret hover on
+`checker.ts`. At the median file the whole prize is **1-2 ms**, below this repo's floor for
+a round, so it is refused as a general win and stands only as a tail fix for buffers above
+~1 MB. It is not a `referencesAt` lever either: **~140 ms of a 9.3 s sweep = 1.5%**.
+Queued as (INC.34) — a measured refusal with its re-opening instrument named, NOT a task.
+
+**LEVER 2 REFUSED BY READING THE CODE — "completions over-capture the file" IS FALSE.**
+`Project.kt:1048/1094/1215` (at `689df5bb`) already pass `listOf(span)`, a single caret, so
+the **194-202 ms** IS the narrowed build. And because a completion is by definition asked on a
+just-edited buffer, **no cross-edit memo can ever serve it**: the only lever on completion
+latency is the narrowed build itself. Measured three ways to the same answer — 207 ms right
+after `prepare(6)`, 202 ms right after a hover in the same buffer, 194 ms cold.
+
+**THE DEFECT (INC.32): A MEMO BOUNDED BY ENTRY *COUNT* LET A ONE-SPAN ENTRY EVICT A
+125,289-SPAN ONE.** `Project.captures` was an access-ordered LRU bounded at
+`CAPTURE_MEMO_ENTRIES = 2` by entry count. Hover / definition / highlights / `fileSemantics`
+each ask ONE file-wide question per buffer through `captureAround` (125,289 spans on
+`checker.ts`); `completionsAt`'s two branches and `signatureHelpAt` call `captureIn`
+directly with ONE span. So **hover -> completion -> signature help -> hover, with no edit
+anywhere in it**, threw the hover's file-wide entry out and paid a whole narrowed rebuild
+for the last step.
+
+| row | before | after |
+| --- | --- | --- |
+| **`quickInfo.mid.afterTwoOtherChannels`** | **324 ms** | **4 ms** |
+| `quickInfo.mid.secondCaret` (served) | 7 | 5 |
+| `quickInfo.mid.first` | 327 | 318 |
+| `completions.mid.afterHover` | 201 | 228 |
+| `signatureHelp.mid.afterCompletion` | 222 | 237 |
+| `rebuild.full` (anchor) | 5,067 | 5,155 (+1.7%) |
+
+The target row now reads what a served hover reads; every other row wanders in both
+directions inside the run-to-run band, the anchor included. The pre-fix reading replicated
+at 257-285 ms across the (INC.31) survey and at 267/275 ms in two independent JVMs.
+
+**THE FIX IS A WEIGHT BOUND IN TWO LANES THAT CANNOT EVICT EACH OTHER, AND IT IS NOT A
+BIGGER LIMIT.** Raising `CAPTURE_MEMO_ENTRIES` would double the documented worst case to buy
+a case needing no extra memory at all ("never raise the limit to make a red gate green"). A
+request naming at most `CAPTURE_MEMO_CARET_SPANS` (**4**) spans is caret-scoped and lives in
+a lane bounded at `CAPTURE_MEMO_CARET_ENTRIES` (**4**); everything above it is buffer-sized
+and bounded at `CAPTURE_MEMO_BUFFERS` (**2**, unchanged since (INC.13)). `CAPTURE_MEMO_ENTRIES`
+is gone; `prepared` is untouched and remains a slot of its own. **Worst-case retention: two
+buffer-sized captures — UNCHANGED — beside at most 4 entries of at most 4 answers = 16
+answers, against 125,289 for ONE file-wide capture of `checker.ts`, i.e. 0.013%.** The caret
+lane is bounded in COUNT as well as in spans because every entry also holds its build's
+program-shaped fields (`programFiles`, `importEdges`, the partition's diagnostics), which do
+not shrink with the span count. **Invalidation was re-audited rather than assumed** — since
+retaining more makes a stale serve strictly more likely: `cached = null` occurs at exactly
+three sites (`updateFile`, `deleteFile`, `close`) and every one clears `captures` in the same
+breath.
+
+**THE ABLATION NEEDED A SECOND ARM, AND THAT IS THE ROUND'S MOST TRANSFERABLE PART.** Arm a1
+(restore count-based eviction) put **3 of 13 RED** — "a completion and a signature help do
+NOT evict the hover of their own buffer", "hovering in other buffers does not evict a
+caret-scoped entry", "an edit that ADDS A FILE drops the caret lane as well as the buffer
+one". The FOURTH new pin, *"the caret lane is BOUNDED too"*, stayed **GREEN, and correctly
+so: a stricter bound cannot fail a bound pin.** A second arm a2 (caret lane unbounded,
+4 -> 4096) put it **RED**. So all four pins fail against the mistake each actually names —
+but only because a second arm was run, and *"I wrote four pins and three went red"* would
+have been the WRONG summary. Each arm's edit was diffed against **its own snapshot** (round
+922: `git diff` is vacuous on a tree carrying the round's own work) and restored
+byte-identically with `cmp -s`. The staleness pin deliberately never touches the queried
+file ((INC.12): an edit there moves the span and therefore the key, so such a pin is vacuous
+by construction) and takes the dangerous direction — an edit that ADDS A FILE.
+
+**THE SURPRISE, AND IT IS THE NEXT ITEM.** `completions.mid.afterHover` is still ~201-228 ms
+WITH the fix, because a hover's file-wide request carries `spans`, not `memberSpans` — so a
+completion in an already-hovered buffer still builds. That is **CORRECT** ((INC.14): an
+answer that was never asked for is ABSENT, and an absent member answer renders nothing), but
+it means the caret channels are cold **per channel per buffer**. Queued as (INC.33).
+
+**GATES.** Suite **15,815 / 0 / 3** (core 14,869 · project 666 · kir 146 · daemon 66 ·
+api 30 · client 20 · cli 18), counted with `xml.etree` over the seven-module glob.
+`cost_gate.py` and `huge_methods.py` were **CONTROLS, not gates, and were not run**: no
+checker code and no compiled core method is touched — (INC.31) adds only two jvmTest `main`
+runners and a script, and (INC.32) is confined to the `-project` module's memo policy.
+Every wall number on the page is now dated, stamped with the commit it was taken at, and
+marked WALL TIME AND THEREFORE PINNED BY NO TEST, with the round-930 column kept beside the
+new one so the staleness stays visible rather than being silently overwritten; the build
+COUNTS remain pinned by `LanguageServiceStateTest`.
+
+**FOLLOW-UPS QUEUED**: **(INC.33)** the per-channel coldness above; **(INC.34)** the
+`SourceIndex` refusal, recorded with its re-opening instrument; **(INC.35)** project-wide
+`diagnostics()` at ~4.9-5.1 s per edit is now the single biggest number in the service by 3x
+and is `BLOCKED-PENDING-USER`, because round 772 measured reverse-dependency closure DEAD on
+*this* corpus; **(INC.36)** `referencesAt`/`renameAt` need `-Xmx2g`, an operational
+constraint for a plugin living in the IDE's JVM.
+
+### Round (INC.28) — `type Box<T> = { v: T }` rendered `{ v: any; }`: a generic alias's own parameters were not in scope for its body, on ordinary builds
+
+**WHAT THIS ROUND DID.** Censused the last of (INC.27)'s three residual families, found a
+**FOURTH shipped defect** of this session, fixed the half that is safe, and refused the
+other half with the mechanism named. **The full arm was the one losing information —
+third time in this arc**, after (INC.25) and (INC.26).
+
+**THE CENSUS** (per element, nesting-aware; reproduced the 1,128-span baseline exactly) —
+the family is **298 rows**, two shapes:
+
+| rows | full | narrow | where |
+|---:|---|---|---|
+| 130 | `any` | `T \| readonly Node[]` | a caret on the alias NAME (`VisitResult`, `Visitor`) |
+| 146 | `…) => any` | `…) => T \| readonly Node[]` | the alias inside a rendered OVERLOAD SET (`visitEachChild` & co) |
+| 20 | same | | es2017/es2015 transformer variants |
+| 2 | `any` | `T` | tsbuildPublic.ts |
+
+**tsc 7.0.2, asked over its own LSP** (`--lsp -stdio`, the ground-truth instrument round
+924 added rather than hand-written expectations): `type Box<T> = { v: T; }`,
+`type VisitResult<T extends Node | undefined> = T | readonly Node[]`. **The NARROW arm was
+right.**
+
+**THE MECHANISM, FROM A WRITER HOOK — AND IT REFUTES BOTH STANDING SUSPECTS.** A second
+`SymTypeOrderCensus` ledger over `declaredTypes` writes prints the same row on tsc's own
+sources and on a four-line fixture:
+
+```
+name=VisitResult pass=init:buildFileLocalTypeMaps ambient=empty depth=sym1/node0 type=any
+```
+
+**`ambient=empty` refutes round 778's write gate; `depth=sym1/node0` refutes truncation.**
+The cause is plain once seen: `getDeclaredTypeOfSymbolWorker`'s type-alias arm resolves
+`decl.type` with **NO type-parameter scope**, so the alias's own `T` answers `errorType` —
+and **`any` ABSORBS A UNION**, so a union body collapses entirely rather than partially.
+
+**IT IS NOT A PARTITION DEFECT AND NOT ORDER-DEPENDENT**: `type Box<T> = { v: T }` alone
+answers `{ v: any; }`, and swapping declaration order changes nothing. **The partition
+divergence is a CONSEQUENCE**: a narrowed build skips `init:buildFileLocalTypeMaps` for a
+foreign file, so the first toucher is `checkConstraintsInStatements`' `withDeclType-
+ParamScope`, which DOES install the scope — and `declaredTypes` has **no write gate at
+all**, so first touch freezes. That is the (INC.19) shape once more, with the roles
+reversed.
+
+**WHAT LANDED IS A SPLIT, AND THE SPLIT WAS FORCED BY MEASUREMENT.** `getTypeOfSymbol-
+Worker`'s alias arm now answers `parametricTypeOfAlias` — the body resolved under the
+alias's own parameters, with the constraint fill write-once and **OUTSIDE** the install per
+(INC.19)'s TS2589 hazard. **`getDeclaredTypeOfSymbol` — what a REFERENCE resolves to — is
+deliberately untouched**: handing references the parametric form costs **two corpus false
+positives** (`typeArgumentDefaultUsesConstraintOnCircularDefault` gains TS2322 `Type '{}'
+is not assignable to type 'T'`; `excessPropertyCheckIntersectionWithRecursiveType` gains
+one at `GrandUser`), both measured and both reverted.
+
+**THE REFUSAL, WITH ITS MECHANISM — AND IT IS A RECURSION BRAKE.** Judging a
+`Type.TypeParam` alias argument by its APPARENT type in the B57.1b guard renders `Visitor`
+exactly as tsc does, and costs a corpus FP: `checkTypeRelatedToCore` has no general
+"TypeParam source via its constraint" rule — its `NonPrimitive` leg says so deliberately —
+so `T extends Node` is NOT related to `Node`, and **that refusal is what brakes the
+recursion for `BuildTree<T, N extends number = -1, I extends any[] = []>`.** Recorded at
+the site. **This is why 173 of the 298 rows remain: they need the RELATION to learn the
+rule, not the display.**
+
+**GATES.** Suite **15,811 / 0 / 3** (+4 pins), **zero corpus baselines moved**.
+**Ablation: 2 of 4 pins RED on the unfixed binary**, reading exactly `[{ v: any; }, { v:
+any; }]` and `[any, any]` — **and the two-arms-agree test and the negative control stay
+GREEN, because both arms agree on the WRONG answer**, which is precisely why a
+full-vs-narrow comparison is not a pin. `capture-equivalence` **1,128 -> 1,003 spans**, 43
+files, `narrowRendersMoreAny=0`, and **ZERO NEW divergent spans — the after-set is a strict
+SUBSET, 125 fixed**. `capture-channel` full digest **BIT-IDENTICAL**; its narrow count
+1,262 -> 1,273 (+11), which is the narrow arm becoming MORE correct in the residual family.
+`partition-equivalence` **EQUIVALENT 78/78**, `partition-gate` realism 78/78 and
+sensitivity 76/76 over 78 netting passes, floor **60 ms `[59, 72, 57, 60]`** — untouched,
+the 57 ms baseline sitting inside that spread. `huge_methods --fail-over 0` exit 0 both
+modules.
+**DIGESTS MOVED BY DESIGN** (second time in the arc, and expected whenever the fix corrects
+a FULL build): `capture-equivalence` full `3349895618940861366` ->
+**`8385940838610938556`**, narrow `306524840298287433` -> **`-7423700524621287041`**.
+
+**ONE THING TO WATCH: THE STANDING COST-GATE DRIFT GREW.** `mapped.hits` **+1.02% ->
++1.63%**, `mapped.keyed` +0.66%, `typeNode.bypassed` +0.62%, with `output.errors` still 46.
+The gate passes (±2%) and the cause is understood — parametric resolutions run with a scope
+INSTALLED, so they are bypassed rather than cacheable — but this is the first round of the
+session to move it, and it is now within 0.4% of the threshold. **The protocol's answer is
+to justify AND rebaseline in the same commit; the justification is here and the rebaseline
+is not, so the next round in this area should `--update` deliberately rather than discover
+the breach.**
+
 ### Round (INC.25) — it was never a partition defect: `[Symbol.unscopables]` rendered `any` on ORDINARY builds, and fixing it collected the floor 129 -> 58 ms
 
 **WHAT THIS ROUND DID.** Closed the single defect (INC.23) reduced (INC.22)'s refusal

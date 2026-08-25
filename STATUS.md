@@ -1,5 +1,56 @@
 # Status
 
+**A TYPE IMPORTED FROM A `node_modules` PACKAGE RESOLVED TO `any` — SILENTLY, ON EVERY REAL
+PROJECT (2026-08-25, (CHK.30)). knip **156 -> 66** ERRORS, TS7006 **89 -> 1**, AND NO ROW
+APPEARED THAT WAS NOT THERE BEFORE.** The queue entry called this "an object-literal method's
+parameters are not contextually typed" and its diagnosis was WRONG: written out by hand, that
+shape and five variants of it are silent on a pre-fix binary. knip's `PluginVisitorObject` is
+`VisitorObject`, and `VisitorObject` comes from `'oxc-parser'`. **The mechanism**: the crawl
+resolves a bare specifier correctly and the package's `.d.ts` really is in the program, but the
+CHECKER re-derives which file a specifier names by string-matching it against the program's file
+NAMES, and that corpus-era matcher cannot express a bare specifier — a package's
+`types`/`main`/`exports` entry is not a string transformation of `pkg`. Fifteen lines reproduce
+it: a `node_modules/tiny/index.d.ts` imported bare gives us **0 errors** where tsgo gives four.
+`ParsedSource.moduleResolutions` now carries the crawl's own `(importer, specifier) -> file`
+answers into the `Checker` as the last leg of all ten alias ladders.
+
+**IT FAILS IN THE SILENT DIRECTION, WHICH IS WHY IT SURVIVED.** `any` is legal everywhere, so
+nothing MOVED at the import — the only thing that surfaced was the false-positive SHADOW, a
+TS7006 on every un-annotated callback parameter whose contextual type lived in the package. 89 of
+knip's 156 rows, read as a contextual-typing family.
+
+**A SECOND, SMALLER DEFECT LANDED WITH IT**: a concise-body arrow's OWN return annotation was not
+a contextual type for its body in either walker, while a BLOCK body always had it at the `return`
+edge — so `(): V => { return {…} }` was right and `(): V => ({…})` was not, and nobody noticed
+because the two spellings are interchangeable to a reader.
+
+**WHAT DID NOT WORK IS THE ROUND'S MOST TRANSFERABLE FINDING.** The first arrow fix silenced
+every TS7006 asked for and the POSITIVE half of the probe showed it had typed NOTHING. Pushing on
+that found something larger: **every contextually-typed parameter in this checker is still `any`
+to the assignability walker**, back to the plain arrow ARGUMENT — `take((node) => { const bad:
+string = node.kind; })` is silent here and TS2322 under tsc. Contextual typing here supplies an
+ARITY (which is what decides TS7006) and never enters the parameter into the scope those walkers
+read. Queued as **(CHK.39)** with its probe; four further unread contextual SOURCES are
+**(CHK.40)**.
+
+**GATES.** Suite **15,883 / 0 / 3** (+12 pins, exactly the two new classes), zero corpus
+baselines moved. `cost_gate.py` PASSES, `output.errors` **46** — a real gate here, not a
+control: the vector is the standing one plus `typeOfExpr.calls` **+0.18%** / `narrow.walks`
+**+0.05%**, which are one extra annotation resolution per reached concise-body arrow, far inside
+±2% and not rebaselined. `huge_methods.py --fail-over 0` exit 0, **783** classes scanned
+(unchanged, correctly — no new class). `partition-equivalence` **EQUIVALENT, all 78**, floor
+**57 ms**. `capture-equivalence` **1,003 / 43 / moreAny 0**, **both digests BIT-IDENTICAL**.
+`round895-grid` 8 profiles `added=0 removed=0`, and a BEFORE/AFTER 8-profile grid against a
+rebuilt parent (positive control: `javap` finds the new method 0 times before, 1 after) is
+`added=0 removed=0` on all eight.
+
+**Ablation, five arms, one mistake each.** a1 (the crawl-map leg never answers) reddens the four
+package pins and leaves the negative control green; a3 (the implicit-any walker forgets the
+annotation) reddens all five arrow pins; a4 and a5 redden the SAME single pin, so they are ONE
+observable, not two. **a2 is `0 RED` across the whole 15,883-test suite** — the `node_modules`
+walker legs the first cut also consulted are a REDUNDANT GUARD wherever the crawl can answer, so
+they were REMOVED rather than shipped un-gateable.
+
 **A FILE'S MODULE FORMAT NOW COMES FROM THE NEAREST `package.json` `"type"` — `TS1295+TS1287`
 ON knip GO **2,478 -> 0**, AND EVERY STANDING GATE IN THIS REPO IS BLIND TO IT (2026-08-25,
 (CHK.29)).** Under `nodenext`/`node16` tsc reads the nearest enclosing `package.json`; we had the
@@ -116,57 +167,3 @@ source (§ 14's six-buffer table, `2fa8a39f`, 2026-08-24, not the (INC.14) sessi
 which does not carry them verbatim): the same 6-file set costs **321-342 ms** asked once
 against **748-771 ms** asked per file. No Kotlin source touched; `jvmTest`/`cost_gate.py`/
 `huge_methods.py` not run (nothing to gate).
-
-**A BARE TYPE PARAMETER WAS READ AS A *FAILED* CONSTRAINT WHERE THE HONEST ANSWER IS *UNDECIDED*,
-AND A WHOLE ALIAS BODY RENDERED `any` ON EVERY ORDINARY BUILD (2026-08-24, (INC.42)).** Three
-lines reproduce it, with no partition and nothing to do with `Visitor`:
-`export type R1<T extends Nd> = T | readonly Nd[];` then
-`export type A1<X extends Nd> = (n: number) => R1<X>;` renders **`(n: number) => any`** where tsc
-7.0.2 over its own LSP (`--lsp -stdio`, round 924's oracle — read out, never hand-written)
-renders `(n: number) => R1<X>`. **A CONSTRAINT MATRIX ISOLATED THE PREDICATE, AND THAT IS THE
-DURABLE HALF:** an **unconstrained** inner parameter is **always** correct, and **every** row
-whose inner alias's parameter carries a constraint read `any` — **including where the two
-constraints are IDENTICAL**. So the shape is not "a wrong constraint"; it is "a constraint at
-all". **Cause:** B57.1b skips an alias substitution when an argument fails its parameter's
-constraint and judged that with `checkTypeRelatedTo`, which has **no "TypeParam source via its
-constraint" rule** ((INC.30), deliberately) — so the reference answered `errorType` and rendered
-`any`, and where the body is a function type the `any` lands in the RETURN position, which is how
-tsc's own `type Visitor<…> = (node: TIn) => VisitResult<TOut>` rendered `(node: TIn) => any`.
-**Nothing here could see it**: the capture sweeps are DIFFERENTIALS, blind by construction to a
-defect both arms share ((INC.28)'s law), and a wrong-but-plausible type attaches no diagnostic,
-so no corpus baseline moves. Every one of the seven pins therefore asserts the rendered STRING.
-**THE FIX IS LOCAL AND BOTH ITS GATES WERE FORCED BY MEASUREMENT, NEITHER GUESSED.** The argument
-is judged against its **own** already-resolved constraint — **no new rule enters
-`checkTypeRelatedToCore`, so (INC.30)'s termination argument is untouched**. `aliasBodyDisplayDepth`
-confines it to `resolveTypeAliasBody`: **unconfined it reads `output.errors` 46 -> 48** on the
-compiler profile (an overload-resolution defect at `checker.ts:2503` that a no-longer-`any`
-`VisitResult<T>` exposes, plus a TS2322 at `watchPublic.ts:576`) — **two dashboard false positives
-for 213 hovers is not a trade**. `aliasGuardIsRecursionBrake` keeps today's answer where this
-guard is the recursion brake rather than a constraint check, and **the brake lives in the
-ENCLOSING declaration, not the referenced one**: the first gate written asked about the referenced
-alias alone and left the corpus **RED**, and a **flip census** named the mechanism — the only four
-decisions the relaxation flips in `excessPropertyCheckIntersectionWithRecursiveType` are
-`Length<I>` and `Prepend<any, I>`, two **non-recursive** aliases referenced from inside the
-self-referential `BuildTree`. Ablations, one mistake at a time: a1 (relaxation disarmed) reddens
-the three value pins and nothing else; a2 (the enclosing leg deleted) reddens the recursion pin
-**and** the corpus baseline, so that leg is load-bearing with a failure uniquely its own. **One
-pin is recorded NON-DISCRIMINATING** — it stayed green under a2, and the prediction behind it
-(that `diagnose` never reaches `resolveTypeAliasBody`) is FALSE; named rather than claimed.
-**GATES.** Suite **15,831 / 0 / 3** (+7 pins), **zero corpus baselines moved**; `cost_gate.py`
-PASSES with `output.errors` **46** and `mapped.hits` at the standing +1.63% (not moved by this
-round, still not rebaselined); `huge_methods.py --fail-over 0` exit 0. `capture-equivalence`
-**1,003 / 43 / moreAny 0** and `capture-channel` **1,273 / 64 / moreAny 168** — both exactly
-(INC.28)'s baselines, unmoved. **Both capture digests moved BY DESIGN** (full
-`8385940838610938556 -> -7005799195003297838`, narrow `-7423700524621287041 ->
--1948231081793666447`): the signature of a fix that corrects an ORDINARY build, and the **third**
-time this arc has had to re-record rather than read a moved digest as a regression.
-**SAY IT PLAINLY: THE 213 ROWS THIS ROUND WAS AIMED AT ARE *NOT* CLOSED.** `Inc41ClassifyMain`
-re-run reads **796 rows / 37 pairs / 213 GAINED-INFERENCE — UNCHANGED**. Read out of the
-classifier's dump rather than assumed, those rows are **not hovers on `Visitor`**: they are carets
-on `visitEachChild` / `visitFunctionBody` / `discardVisitor`, function names whose rendered
-**OVERLOAD SET** carries a `Visitor` parameter — the **CHECKING** path, where both arms render an
-unbound parameter. It is blocked three times over, each cost measured ((INC.28)'s two corpus FPs;
-this round's two dashboard FPs; and B50.5's deliberate refusal to name a pure function type, so
-even with both closed we would render `(node: TIn) => VisitResult<TOut>` where tsc renders
-`Visitor`). **A relation-engine item ((INC.30)) plus an alias-NAMING one, not a display bug** —
-re-queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the authority.
