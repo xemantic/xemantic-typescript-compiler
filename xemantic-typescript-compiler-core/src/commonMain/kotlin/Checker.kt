@@ -9720,6 +9720,16 @@ class Checker(
      *  only the per-walk depth limit is tsc's TS2563 semantic. */
     private var flowDepthTripped = false
 
+    /**
+     * (CHK.31) Per-FILE map `line -> directive` for tsc's `// @ts-ignore` /
+     * `// @ts-expect-error` comment directives, keyed by file name and built
+     * once per file (see [tsCommentDirectivesOf]). Declared before `init` per
+     * the init-order trap, and empty for every file whose source does not
+     * mention a directive at all — which the round-895 n-gram filter answers
+     * without scanning.
+     */
+    private val tsCommentDirectiveCache: MutableMap<String, Map<Int, TsCommentDirective>> = HashMap()
+
     init {
         try {
         // (KIR) a sink and a partition worker are mutually exclusive by
@@ -12459,15 +12469,216 @@ class Checker(
     // Public API
     // -----------------------------------------------------------------------
 
-    /** Returns diagnostics produced by the checker, filtered to assigned files if set. */
+    /** Returns diagnostics produced by the checker, filtered to assigned files if set,
+     *  and with tsc's `@ts-ignore`/`@ts-expect-error` comment directives applied
+     *  ((CHK.31), [applyTsCommentDirectives]). */
     fun getDiagnostics(): List<Diagnostic> {
         // B57.3d (a): flush any deferred TS2589 emissions captured at
         // `new C<...>(...)` explicit-type-arg resolution sites that triggered
         // [deepInstantiationBailed]. Done once at first getDiagnostics() call.
         flushDeepBailNewExpressionEmits()
-        val assigned = assignedFiles ?: return diagnostics.toList()
-        return diagnostics.filter { it.fileName == null || it.fileName in assigned }
+        val assigned = assignedFiles
+        val visible =
+            if (assigned == null) diagnostics.toList()
+            else diagnostics.filter { it.fileName == null || it.fileName in assigned }
+        return applyTsCommentDirectives(visible)
     }
+
+    /**
+     * (CHK.31) One `// @ts-ignore` / `// @ts-expect-error` comment directive, as
+     * tsc's scanner records it (`appendIfCommentDirective`, scanner.ts).
+     *
+     * [pos]..[end] is the COMMENT's own span — and for a block comment only its
+     * LAST LINE, because that is the only line tsc offers the directive regex
+     * (`text.slice(lastLineStart ?? tokenStart, pos)`). A directive written on
+     * an INNER line of a block comment is therefore not a directive at all,
+     * which `tools/tsgo-7.0.2/lib/tsc` confirms: a three-line block comment whose
+     * MIDDLE line spells the directive leaves the next line's error reported.
+     *
+     * The map this lands in is keyed by the line the comment ENDS on, which is
+     * the line [markPrecedingTsCommentDirective] walks up to.
+     */
+    private class TsCommentDirective(
+        val expectError: Boolean,
+        val pos: Int,
+        val end: Int,
+    )
+
+    /**
+     * (CHK.31) The directives of one file, built once and memoized.
+     *
+     * The whole-source scans go through [srcHas]/[srcIndexOf] deliberately: the
+     * round-895 n-gram filter answers "this file mentions no directive" without
+     * touching the text, which is every file on all eight dashboard profiles
+     * bar the three that merely SPELL the words in a string literal or a prose
+     * comment.
+     */
+    private fun tsCommentDirectivesOf(fileName: String, source: String): Map<Int, TsCommentDirective> =
+        tsCommentDirectiveCache.getOrPut(fileName) { scanTsCommentDirectives(source) }
+
+    private fun scanTsCommentDirectives(source: String): Map<Int, TsCommentDirective> {
+        val hasIgnore = srcHas(source, "@ts-ignore")
+        val hasExpect = srcHas(source, "@ts-expect-error")
+        if (!hasIgnore && !hasExpect) return emptyMap()
+        // Insertion-ordered (ascending position) so a later directive on the
+        // same line wins, exactly as tsc's `directivesByLine` Map build does.
+        val out = mutableMapOf<Int, TsCommentDirective>()
+        var from = 0
+        while (from < source.length) {
+            val a = if (hasIgnore) srcIndexOf(source, "@ts-ignore", from) else -1
+            val b = if (hasExpect) srcIndexOf(source, "@ts-expect-error", from) else -1
+            val at = when {
+                a < 0 -> b
+                b < 0 -> a
+                else -> if (a < b) a else b
+            }
+            if (at < 0) break
+            val directive = classifyTsCommentDirectiveAt(source, at, expectError = at == b)
+            if (directive != null) {
+                out[getLineAndCharacterOfPosition(source, directive.end).first] = directive
+            }
+            from = at + 1
+        }
+        return out
+    }
+
+    /**
+     * (CHK.31) tsc's two directive regexes, hand-scanned:
+     * `^\/\/\/?\s*@(ts-expect-error|ts-ignore)` for a `//` comment and
+     * `^(?:\/|\*)*\s*@(ts-expect-error|ts-ignore)` for the last line of a block
+     * comment (both applied to the comment text `trimStart()`ed). NEITHER has a
+     * trailing word boundary, so `@ts-ignoreXYZ` IS a directive — measured on
+     * tsgo 7.0.2, and its scanner is a plain `strings.HasPrefix`.
+     */
+    private fun classifyTsCommentDirectiveAt(source: String, at: Int, expectError: Boolean): TsCommentDirective? {
+        val lineStart = if (at == 0) 0 else source.lastIndexOf('\n', at - 1) + 1
+        val lastOpen = source.lastIndexOf("/*", at)
+        val lastClose = source.lastIndexOf("*/", at)
+        if (lastOpen >= 0 && lastOpen > lastClose) {
+            // Inside a block comment. tsc offers the regex `lastLineStart ?? tokenStart`.
+            val textStart = if (lastOpen > lineStart) lastOpen else lineStart
+            var k = textStart
+            while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
+            while (k < at && (source[k] == '/' || source[k] == '*')) k++
+            while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
+            if (k != at) return null
+            val close = source.indexOf("*/", at)
+            if (close < 0) return null
+            // The directive only counts on the comment's LAST line.
+            var j = at
+            while (j < close) { if (source[j] == '\n') return null; j++ }
+            return TsCommentDirective(expectError, textStart, close + 2)
+        }
+        var slashes = source.lastIndexOf("//", at)
+        if (slashes < lineStart) return null
+        while (slashes > lineStart && source[slashes - 1] == '/') slashes--
+        var count = 0
+        var k = slashes
+        while (k < at && source[k] == '/') { count++; k++ }
+        if (count != 2 && count != 3) return null
+        while (k < at && (source[k] == ' ' || source[k] == '\t')) k++
+        if (k != at) return null
+        var end = at
+        while (end < source.length && source[end] != '\n' && source[end] != '\r') end++
+        return TsCommentDirective(expectError, slashes, end)
+    }
+
+    /**
+     * (CHK.31) tsc's `markPrecedingCommentDirectiveLine` (program.ts), 1-based:
+     * from the line ABOVE the diagnostic, walk UP — a line carrying a directive
+     * suppresses (and is returned, so the caller can mark it USED); a blank line
+     * or a `//` line continues the walk; anything else stops it, INCLUDING the
+     * body or tail line of a block comment.
+     *
+     * Returns the suppressing line, or -1.
+     */
+    private fun markPrecedingTsCommentDirective(
+        source: String,
+        diagnosticLine: Int,
+        directives: Map<Int, TsCommentDirective>,
+    ): Int {
+        val starts = lineStartsFor(source)
+        var line = diagnosticLine - 1
+        while (line >= 1) {
+            if (directives.containsKey(line)) return line
+            if (line > starts.size) return -1
+            val s = starts[line - 1]
+            val e = if (line < starts.size) starts[line] else source.length
+            val text = source.substring(s, e).trim()
+            if (text.isNotEmpty() && !text.startsWith("//")) return -1
+            line--
+        }
+        return -1
+    }
+
+    /**
+     * (CHK.31) The general comment-directive filter, applied at the one funnel
+     * every consumer passes through ([getDiagnostics]).
+     *
+     * Two halves, in tsc's order: every diagnostic preceded by a directive is
+     * DROPPED and marks that directive used, then every `@ts-expect-error` that
+     * marked nothing is reported as TS2578.
+     *
+     * THE PARTITION RULE: both halves are scoped to [checkedResults], i.e. to
+     * the files this checker actually WALKED — never to the whole program. A
+     * file the partition did not check produces no diagnostics for its
+     * `@ts-expect-error` to suppress, so a program-wide TS2578 pass would
+     * manufacture one false positive per directive on every narrowed build,
+     * which is exactly what an editor asks for. (INC.20)'s per-file rule.
+     *
+     * Pure in [diagnostics]: [getDiagnostics] is called more than once per
+     * compile, so nothing here mutates the list it reads.
+     */
+    private fun applyTsCommentDirectives(visible: List<Diagnostic>): List<Diagnostic> {
+        var perFile: MutableMap<String, Map<Int, TsCommentDirective>>? = null
+        var sources: MutableMap<String, String>? = null
+        // Deliberately the FIELD, not the (INC.17) `checkedResults` getter: that
+        // getter's census classifies `init` PASSES as partition-invariant or
+        // partition-dependent, and this is not a pass — it is the public API,
+        // called after every pass has run and more than once per compile. Routing
+        // it through the getter attributes a read to no pass at all, which is
+        // exactly what `PartitionCensusHookTest` refuses (and rightly: the
+        // per-pass sums must partition the reads, not sample them).
+        for (result in checkedResultsAll) {
+            val fileName = result.sourceFile.fileName
+            val text = result.sourceFile.text
+            val directives = tsCommentDirectivesOf(fileName, text)
+            if (directives.isEmpty()) continue
+            if (perFile == null) { perFile = mutableMapOf(); sources = mutableMapOf() }
+            perFile[fileName] = directives
+            sources!![fileName] = text
+        }
+        val files = perFile ?: return visible
+        val texts = sources!!
+        val used = HashMap<String, MutableSet<Int>>()
+        val kept = ArrayList<Diagnostic>(visible.size)
+        for (d in visible) {
+            val fileName = d.fileName
+            val directives = if (fileName == null) null else files[fileName]
+            if (directives == null || fileName == null) { kept.add(d); continue }
+            val source = texts[fileName]!!
+            val line = d.line ?: d.start?.let { getLineAndCharacterOfPosition(source, it).first }
+            if (line == null) { kept.add(d); continue }
+            val marked = markPrecedingTsCommentDirective(source, line, directives)
+            if (marked >= 0) used.getOrPut(fileName) { HashSet() }.add(marked) else kept.add(d)
+        }
+        for ((fileName, directives) in files) {
+            val source = texts[fileName]!!
+            val usedHere = used[fileName]
+            for ((line, directive) in directives) {
+                if (!directive.expectError) continue
+                if (usedHere != null && line in usedHere) continue
+                val (l, c) = getLineAndCharacterOfPosition(source, directive.pos)
+                kept.add(Diagnostic(
+                    message = "Unused '@ts-expect-error' directive.",
+                    category = DiagnosticCategory.Error, code = 2578, fileName = fileName,
+                    line = l, character = c, start = directive.pos, length = directive.end - directive.pos,
+                ))
+            }
+        }
+        return kept
+    }
+
 
     // -----------------------------------------------------------------------
     // Public API — called by Transformer
@@ -16749,30 +16960,6 @@ class Checker(
                 offset += line.length + 1
             }
         }
-    }
-
-    /**
-     * True when the source line containing [pos] — or the line immediately above it — carries a
-     * `@ts-expect-error` or `@ts-ignore` suppression directive. Used to suppress the node/commonjs
-     * relative-missing TS2307 (we don't model directive-based suppression generally, so a narrow
-     * line-scan keeps this gate from FP'ing on deliberately-unresolved imports).
-     */
-    private fun hasTsErrorSuppressionAbove(pos: Int, source: String): Boolean {
-        if (pos < 0 || pos > source.length) return false
-        // Start of the current line.
-        var lineStart = pos
-        while (lineStart > 0 && source[lineStart - 1] != '\n') lineStart--
-        // The current line text (up to its newline).
-        var lineEnd = pos
-        while (lineEnd < source.length && source[lineEnd] != '\n') lineEnd++
-        val currentLine = source.substring(lineStart, lineEnd)
-        if (currentLine.contains("@ts-expect-error") || currentLine.contains("@ts-ignore")) return true
-        // The previous line (the common placement for @ts-expect-error).
-        if (lineStart <= 1) return false
-        var prevStart = lineStart - 1
-        while (prevStart > 0 && source[prevStart - 1] != '\n') prevStart--
-        val prevLine = source.substring(prevStart, (lineStart - 1).coerceAtLeast(prevStart))
-        return prevLine.contains("@ts-expect-error") || prevLine.contains("@ts-ignore")
     }
 
     /** Normalize a path by resolving `..` and `.` segments. Memoized (M0.3(iv)) —
@@ -34561,35 +34748,15 @@ class Checker(
         }
     }
 
-    /** B234: tsc's @ts-ignore/@ts-expect-error comment-directive rule (program.ts
-     *  markPrecedingCommentDirectiveLine): from the line ABOVE the error, walk UP —
-     *  a directive line suppresses; a blank or slash-slash comment line continues the
-     *  walk; anything else (incl. the body/tail lines of a multi-line block comment)
-     *  stops it. Directive forms: slash-slash (2 or 3 slashes) or one-line block
-     *  comment, then "@ts-ignore"/"@ts-expect-error", optional trailing text. Broader
-     *  than the import-line-only [hasTsErrorSuppressionAbove]. */
-    private fun tsIgnoreDirectiveSuppressed(pos: Int, source: String): Boolean {
-        val directiveRe = Regex("""^\s*(//{1,2}|/\*+)\s*@ts-(ignore|expect-error)\b?""")
-        // collect line starts up to pos's line
-        var lineStart = source.lastIndexOf('\n', (pos - 1).coerceAtLeast(0)) + 1
-        while (lineStart > 0) {
-            val prevEnd = lineStart - 1 // the '\n'
-            val prevStart = source.lastIndexOf('\n', prevEnd - 1) + 1
-            val lineText = source.substring(prevStart, prevEnd).trim().removeSuffix("\r").trim()
-            if (directiveRe.containsMatchIn(lineText)) return true
-            if (lineText.isNotEmpty() && !lineText.startsWith("//")) return false
-            lineStart = prevStart
-        }
-        return false
-    }
-
     /** B234: TS2349 for CALLING a top-level JS var whose only value is a primitive
      *  literal — `var x = 0; x();` → "This expression is not callable." + "  Type
      *  'Number' has no call signatures." (apparent wrapper display). checkJs files
      *  only; the var must have exactly ONE declaration, a literal initializer, and NO
      *  assignment anywhere in the file (a later `x = function(){}` makes the call
-     *  legal in JS). Calls are suppressed per tsc's comment-directive walk-up rule
-     *  ([tsIgnoreDirectiveSuppressed]) — checkJsFiles_skipDiagnostics is exactly this. */
+     *  legal in JS). (CHK.31): the emission is NOT pre-filtered here — the general
+     *  comment-directive filter at [getDiagnostics] drops it, which is what lets a
+     *  `@ts-expect-error` above such a call count as USED instead of being reported
+     *  TS2578. checkJsFiles_skipDiagnostics is the gate. */
     private fun checkJsUncallableVarCalls() {
         if (!options.checkJs) return
         for (result in checkedResults) {
@@ -34627,7 +34794,6 @@ class Checker(
                 val expr = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
                 val callee = expr.expression as? Identifier ?: continue
                 val wrapper = candidates[callee.text] ?: continue
-                if (tsIgnoreDirectiveSuppressed(callee.pos, source)) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
                 diagnostics.add(Diagnostic(
                     message = "This expression is not callable.",
@@ -50692,7 +50858,6 @@ class Checker(
                         if (resolveRelativeIncludingIndex(moduleName, fileName) == null
                             && moduleName !in ambientModuleNames
                             && moduleName !in dtsFileBaseNames
-                            && !hasTsErrorSuppressionAbove(specifier.pos, source)
                         ) {
                             // B98.r21: a relative specifier resolving to an untyped `.js` sibling
                             // (present in raw input but not bound — no `allowJs`) is NOT a missing
@@ -50739,7 +50904,6 @@ class Checker(
                         if (resolveRelativeIncludingIndex(moduleName, fileName) == null
                             && moduleName !in ambientModuleNames
                             && moduleName !in dtsFileBaseNames
-                            && !hasTsErrorSuppressionAbove(specifier.pos, source)
                         ) {
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
@@ -51007,7 +51171,6 @@ class Checker(
                         if (resolveRelativeIncludingIndex(mod, fileName) == null
                             && mod !in ambientModuleNames
                             && mod !in dtsFileBaseNames
-                            && !hasTsErrorSuppressionAbove(spec.pos, source)
                         ) {
                             emitTS2307(spec, mod, source, fileName)
                         }
@@ -51021,7 +51184,6 @@ class Checker(
                         && !hasNodeModulesPackage(mod)
                         && mod !in NODE_BUILTIN_MODULES
                         && resolveModuleSpecifier(mod, null) == null
-                        && !hasTsErrorSuppressionAbove(spec.pos, source)
                     ) {
                         // B98.r169: a bare `require("X")` in a JS file whose single-segment
                         // specifier resolves to nothing (no node_modules package / ambient
@@ -179509,7 +179671,6 @@ interface DataView {
                             && options.moduleSuffixes.isNullOrEmpty()
                             && resolveRelativeIncludingIndex(bareSpec, fileName) == null
                             && resolveRelativeJsSibling(bareSpec, fileName) == null
-                            && !hasTsErrorSuppressionAbove(litNode.pos, source)
                         ) {
                             emitTS2307(litNode, bareSpec, source, fileName)
                         }
