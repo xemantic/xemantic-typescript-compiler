@@ -1,3 +1,38 @@
+**A CAPTURE REQUEST IS PRICED PER *ANCHOR* WHERE AN EDITOR NEEDS A PRICE PER *ANSWER* — SO WIDENING
+THE HOVER TO SERVE COMPLETION IS A **LOSS**, MEASURED AND REFUSED (2026-08-24, (INC.33)).** After
+(INC.32) a completion in an already-hovered buffer still BUILDS (~201-228 ms), because a hover's
+file-wide request carries `spans` and a member completion asks `memberSpans`. That is CORRECT
+((INC.14): an answer that was never asked for is ABSENT), so the only fix on offer was to widen the
+file-wide capture with member/scope/signature anchors — exactly as (INC.13) widened the TYPE channel
+from a caret to a file for **+9-17 ms**. **It does not transfer.** Cold narrowed builds through
+`ProjectCompiler` with the memo bypassed, two batches (batch 2 replicating batch 1 on every sign),
+every population biased IN FAVOUR of the widening: the widened hover costs **+286 ms on `binder.ts`**
+(300 -> 586, the two arms' ranges DISJOINT in both batches) and **+25.1 s on `checker.ts`**
+(3,624 -> 28,751) to save a completion build of **204 ms / 2,078 ms** — **break-even 1.40 and 12.1
+completions per hover IN A BUFFER WITH NO EDIT SINCE**, where the dominant completion path types a
+`.` first, which is an edit, which clears the memo. Even the cheapest shippable variant
+(occurrences + members, no scopes) is +96 ms on `binder.ts` for 0.47 but **+3,326 ms on `checker.ts`
+for 1.60**, and makes EVERY hover ~32% dearer to serve a case reachable only when nothing has been
+typed.
+**THE SECOND REFUSAL IS INDEPENDENT AND HARDER: RETENTION.** One widened entry holds **798,531**
+records for `binder.ts` and **54.4 M** for `checker.ts` — **48x and 205x** today's file-wide hover
+entry, of which **49,879,917** are `CapturedName`s — and (INC.32) keeps `CAPTURE_MEMO_BUFFERS` of
+them. That is structural, not incidental, and `CapturedScope`'s own KDoc already recorded it: a
+free-name caret sees hundreds of names, almost all lib globals, and a widened request repeats that
+set at **every one of 13,601 anchors — O(anchors x globals)**.
+**WHAT WOULD FLIP IT IS NOT A WIDER REQUEST**, and that is the transferable half: only a re-entrant
+capture against a RETAINED checker ((INC.17)'s `ProgramRecheck`) can answer a span nobody asked for
+up front without a new build. It is behind (INC.40)'s diagnostics-only valve because its
+captured-TYPE channel diverges from a fresh build in **43 of 75 files**, so **(INC.41) is now the
+named unblocker for the whole caret-channel latency story** — with the rider that free-name
+completion additionally needs the `CapturedScope` per-anchor globals fix whichever mechanism serves
+it. **No compiler code changed and the suite is unchanged at 15,824 / 0 / 3**; the instrument is
+kept so the refusal is re-takeable (`scripts/inc33-widen-cost.sh` + `Inc33WidenMain`'s KDoc, which
+is the authority for the table), REFUSES rather than skips when its profile or runner is absent, and
+carries an ablated positive control — empty output, a zero population and a sub-50 ms base arm each
+refuse, because exit 0 says the JVM finished, not that anything was measured. Every figure here is
+WALL TIME on one box and is pinned by NO test; re-take it rather than quoting it.
+
 **A MEDIAN NARROWED QUERY IS 108 ms — INDEPENDENTLY REPRODUCED — AND ITS OTHER HALF IS NOW
 DECOMPOSED: `checkSpine` IS 89-92% OF A FILE'S OWN CHECK, SCALING IS **LINEAR** WITH
 `checker.ts` AT THE *p10* PER NODE, AND Σ`own(F)` IS **1.39x** THE WHOLE-PROGRAM CHECK

@@ -82,6 +82,136 @@ and it buys back the gate.
 runs more than the quiet-box rule prefers. No timing claim here rests on wall clock — the
 floor and ratio figures come from the deterministic pass table and the sweep harness.
 
+### Round (INC.27) — REFUSED with a PROOF: B416's key cannot name a union the way tsc does, and the obvious narrowing makes the gate WORSE
+
+**WHAT THIS ROUND DID.** Censused the ~790 `unionAliasStructural` rows (INC.26) left,
+measured what tsc actually answers, **built the narrowing anyway and measured it making
+things worse**, and landed only the knowledge. Nothing behavioural changed — proven, not
+asserted.
+
+**THE CENSUS** (1,128 divergent spans, per-element, nesting-aware; reproduced the recorded
+baseline exactly, 43 files):
+
+| rows | family | who is right |
+|---:|---|---|
+| **432** | one member set claimed by SEVERAL aliases, the arms disagreeing about which name won (`ModuleName`/`ModuleExportName`/`ImportAttributeName`; `EntityNameExpression`/`SerializedEntityName`) | **neither — arbitrary in both** |
+| **~393** | a SOLITARY alias naming a union at sites that never spell it | **narrow (structural)** |
+| **~303** | the (INC.28) visitor-signature family, not alias-related | narrow |
+
+The second family is MEASURED, not inferred: `AssignmentPattern` has **0 references** in
+binder.ts (95 rows), `MemberName` **0** in checker.ts (76), `JsxCallLike` **0** in
+parser.ts, likewise `CommentKind`, `BindingElementGrandparent` and
+`IsObjectLiteralOrClassExpressionMethodOrAccessor`.
+
+**WHAT tsc ANSWERS, AND THE MECHANISM IS NOT WHAT THE NAME SUGGESTS.** Three answers for
+ONE member set — `ModuleName`, `ModuleExportName`, and `Ident | Str` where no alias was
+written — because tsc keys its union cache by `getTypeListId(types) + getAliasId(alias-
+Symbol, …)`. **A fourth probe named the real mechanism: a join-built `A | B` renders
+STRUCTURALLY while a narrow of `x: MyType` that removes nothing renders `MyType`. So
+tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not structural
+matching** — and both halves are visible in `narrowByClauseExpressionInSwitchTrue6`'s own
+pristine baseline.
+
+**THE PROOF THAT BOUNDS THE WHOLE DIRECTION.** INV.5(a) (round 545) interns our unions by
+**member-id list ALONE**, so every one of tsc's instances is a single `Type` here. That is
+not an obstacle to work around, it is a proof: **no id-keyed or member-set-keyed table can
+give three answers from one key, and anything able to name the flow-RECONSTRUCTED union
+necessarily also names a union nobody named.** The residual is an INTERNING-KEY defect,
+not a defect of B416's table, and full parity needs the alias in the union's IDENTITY.
+
+**THE NARROWING WAS BUILT AND MEASURED, AND IT MAKES THE GATE WORSE — THIS IS THE PART
+WORTH KEEPING.** Poisoning a member set that two differently-named aliases claim does
+exactly what it says: the `full=name / narrow=name` bucket collapses **416 -> 2**. And the
+gate goes **1,128 -> 1,351 spans, 43 -> 46 files**, because a new
+`full=structural / narrow=name` bucket of **657** appears. **The poison TRIGGER is itself
+coverage-dependent**, so it converts a small difference in which aliases happened to be
+resolved into a difference in whether a name exists at all — and amplifies it. A fix whose
+own precondition depends on the thing it is correcting for cannot be stable.
+
+**AND IT CANNOT BE MADE STABLE SYNTACTICALLY.** Of the **407** collisions the census
+counts per compile, the largest are `type FunctionLike = SignatureDeclaration` and
+`type AssertionKey = ImportAttributeName` — **an alias whose body is ANOTHER alias,
+spelling no members at all** — and `BindingOrAssignmentPattern` vs `DestructuringPattern`,
+structurally equal and spelled entirely differently. Deciding ambiguity therefore means
+resolving every union alias UP FRONT, which is (INC.22)'s eager `TypeAlias` phase —
+already refused at 6.68 ms of a 58 ms floor AND for diverging a DIAGNOSTIC on the
+sensitivity arm.
+
+**WHAT LANDED IS BEHAVIOUR-FREE AND THE INERTNESS IS PROVEN BY DIGEST, NOT CLAIMED**: the
+`unionAliasStructural` KDoc carrying the above, `AliasDisplayCensus.unionRegistered` /
+`unionAmbiguous` hooked OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations,
+407 collisions), and `UnionAliasDisplayTest` pinning the two things a future round must
+not lose — a solitary alias names its member set, and the switch-fallthrough-reconstructed
+full union still displays as `MyType`. **Nothing pins the open gap** (round 765's rule: do
+not pin a known-open gap, it is a countdown, not a guard).
+
+**GATES.** Suite **15,807 / 0 / 3** (+2 pins), zero corpus baselines moved, `cost_gate.py`
+exit 0 (largest `mapped.hits` +1.02%, standing), `huge_methods --fail-over 0` exit 0 both
+modules (core 781 classes, largest 5,388), `partition-equivalence` **EQUIVALENT 78/78**,
+`partition-gate` realism **78/78** and sensitivity **76/76 over 78 netting passes**, floor
+**57 ms** (untouched, and printed in passing rather than measured with a before-arm it did
+not need), `capture-channel` full digest `-3278907782584108296` with `moreAny=168` at
+baseline. **THE BEHAVIOUR CONTROL: `capture-equivalence` returns full
+`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files —
+BIT-IDENTICAL to the recorded baseline, which is what proves the census hooks are inert.**
+
+### Round (DOC.1) — `CLAUDE.md` 427 -> 320 KB by MOVING 107 entries, and the arithmetic says the remaining lever is DISTILLATION, not more moving
+
+**WHAT THIS ROUND DID.** Enforced the file's own residency rule after its THIRD and
+largest regrowth (the header ladder: 284 -> 170 KB, 594 -> ~280, 425 -> ~91, then back to
+427). **Nothing was deleted** — progressive disclosure is the design, so every removed
+entry is verbatim in `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`.
+
+| | before | after |
+|---|---:|---:|
+| `CLAUDE.md` | 427,436 B | **320,285 B (-25.1%)** |
+| archive | 697,758 B | 822,487 B |
+| CLAUDE.md entries | 490 | 383 (-107) |
+| archive entries | 728 | 845 (+117) |
+
+**CONSERVATION WAS PROVEN MECHANICALLY, NOT BY `--stat`** (which shows an edit landed,
+never that it is correct): **490 + 728 = 1,218 -> 383 + 845 = 1,228**, the +10 being
+exactly the ten entries DISTILLED rather than moved — full text archived, short form
+resident. All 107 moved entries verified present verbatim in the archive by exact string
+match and absent from `CLAUDE.md`; a random 10-entry spot check by mid-entry phrase read
+`archive=1 claude=0` every time.
+
+**WHAT MOVED** (~84 KB): ~47 per-walker / per-narrowing-rule entries from the regrown
+"Checker walker gotchas" tail — the exact category the 2026-07-26 trim moved wholesale;
+~29 per-diagnostic entries misfiled under "Measured dead-ends"; ~28 per-instrument perf
+narratives whose conclusion a resident law already carries (the `CtaSections`/
+`CpaSections` probe cookbook, JFR aggregation craft, per-region tables already retired by
+(INC.3)'s floor decomposition); and **6 EXACT DUPLICATES** of a resident entry — where the
+moved twin held a unique clause it was folded into the survivor rather than lost.
+**DISTILLED IN PLACE (10)**, the format rule's own prescription: the INV.4 check-spine
+cookbook **13.3 KB -> 1.7 KB** (its ~25 per-shape migration recipes archive-only, with a
+grep pointer), plus INV.4(c)(iii), the per-kind dispatch table, the huge-method JIT gate,
+B83.5, `C = A - B`, the three target notions, the try/catch(SOE) doctrine and the two
+scope-stack entries.
+
+**THE ~91 KB TARGET IS UNREACHABLE UNDER THIS ROUND'S CONSTRAINTS, AND THE ARITHMETIC IS
+NOW IN THE HEADER LADDER**: header 3.6 KB + protocol 14.1 KB + the protected
+(INC.*)/2026-08-2x set **61.8 KB over 72 entries** = a **79.5 KB floor before ONE process
+trap is kept**, and the process/build traps plus measurement laws add roughly another
+80 KB. **Only ~84 KB of the 336 KB added since 2026-07-26 was archive-assigned narrative**
+— the regrowth is genuinely concentrated in categories the rule KEEPS.
+
+**SO THE REMAINING LEVER IS DISTILLATION AND IT IS LARGE**: the 383 resident entries
+average **780 bytes — 5-6 lines against the file's own stated "1-3 lines"** — and a
+distillation pass (not more moving) is what would take it to ~200 KB. Queued as (DOC.2).
+
+**AND THE ROUND FLAGGED AN OVER-BROAD INSTRUCTION OF MINE**, which is worth recording
+because it is the kind of thing a sub-agent usually just obeys: **15 of the 72
+date-protected entries (~11.5 KB) are the KIR / Kotlin-native BACKEND arc, not the
+incremental language-service arc the constraint's rationale described.** It kept them to
+the letter and said so. If that arc is parked, they are the next obvious 11.5 KB.
+
+**PROTECTED SECTIONS VERIFIED BYTE-IDENTICAL**: the whole mission/protocol tail is
+**14,078 bytes unchanged** (`cmp` clean) and the "Rules for editing this file" block
+differs in exactly one line, the ladder. A blank-line collapse initially leaked into the
+protected tail and the file was rebuilt from the original head+tail to fix it — caught by
+the byte check, which is why the byte check was required rather than a visual read.
+
 ### Round (INC.23)+(INC.24) — the census: "+61 member types" is ONE member name and ONE truncated resolution, the write gate is refuted, and `narrowRendersMoreAny` is a substring heuristic
 
 **WHAT THIS ROUND DID.** Produced the census (INC.23) exists for, and it shrank

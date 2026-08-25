@@ -341,6 +341,12 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    9 of `fflate`'s TS2391 rows, matching its 9 `@ts-ignore` comments exactly. The feature
    *appears* implemented: both spellings are parsed as directives and one is consulted for a
    narrow commonjs suppression.
+   **CLOSED 2026-08-25, (CHK.31)**: the general filter now lives at `Checker.getDiagnostics()`
+   and TS2578 with it, both scoped to the files the checker WALKED. The blocking defect was a
+   suppression written at an EMITTER (the commonjs relative-import branch skipped its own
+   TS2307 when a directive sat above it, so the directive marked nothing and read as unused).
+   The `fflate` screen was NOT re-run — the library sources are not on this box — but its exact
+   shape is pinned in `CommentDirectiveSuppressionTest` and matches tsgo 7.0.2 row for row.
 2. **A primitive is not related to a structural object target through its apparent type** —
    `string` against `interface Text {…}` (all 7 of `jsonrepair`'s TS2345 rows), and equally
    `number` against `{ toFixed(d?): string }`.

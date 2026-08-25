@@ -1,5 +1,41 @@
 # Status
 
+**`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
+DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
+(CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`
+all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in tsc's order:
+every diagnostic preceded by a directive is dropped and marks that directive USED, then every
+`@ts-expect-error` that marked nothing is reported **TS2578**. The walk-up rule already
+existed with exactly one caller; the general FILTER was what was missing, exactly as the queue
+item said. **THE ITEM'S SIZE WAS WRONG IN THE HELPFUL DIRECTION**: a real two-arm 8-profile
+grid (pre-(CHK.31) `Checker.kt` rebuilt into the class dir, positive-controlled by `javap`)
+reads **`added=0 removed=0` on all eight**, and the whole corpus moved **one** baseline.
+**THAT ONE BASELINE IS THE FINDING.** `isolatedModulesExportDeclarationType`'s `/test4.ts`
+puts `@ts-expect-error` over an import of `./doesntexist`; pristine reports 0 errors there
+(it emits TS2307 and the directive eats it) while WE emitted no TS2307 at all, because the
+commonjs relative-import branch pre-suppressed its own emission. **A diagnostic a compiler
+declines to EMIT turns every `@ts-expect-error` above it into a false TS2578** — both ad-hoc
+pre-suppressions are deleted and suppression happens only where it can be counted.
+**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES AND COULD NOT HAVE BEEN FOUND BY
+RUNNING THEM**: `disableJsDiagnostics.ts` writes the prose comment ``// Only need to add
+`// @ts-ignore` for a line once.``, and since both of tsc's directive regexes anchor at the
+comment's OWN start, a backward `lastIndexOf("//")` read that sentence as a live directive.
+The grid is green with and WITHOUT the fix (the falsely-silenced line carries no diagnostic);
+only a tsgo differential separates them. The opener is now a string-aware FORWARD scan.
+**Every one of the 25 pins was read out of `tools/tsgo-7.0.2/lib/tsc`, and two contradict the
+obvious guess**: `@ts-ignoreXYZ` IS a directive (no trailing word boundary in either
+reference) and a directive on an INNER line of a block comment is NOT one.
+**GATES.** Suite **15,860 / 0 / 3** (+25 pins); `cost_gate.py` PASSES with `output.errors`
+**46** and the standing stale-baseline drifts unmoved (`mapped.hits` +1.63%);
+`huge_methods.py --fail-over 0` exit 0, **783** classes scanned (782 last round, so not
+blind); `partition-equivalence` **EQUIVALENT 78/78** plus 4/4 on a purpose-built
+directive-carrying project, `partition-gate` sensitivity arm **EQUIVALENT 76/76**;
+`capture-equivalence` **1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**.
+**Ablation: 8 arms, one mistake each — a5 (partition scoping), a6 (backward `lastIndexOf`)
+and a7 (block-comment inner line) each redden EXACTLY the pin that names them; a8's own pin
+is NOT uniquely discriminating and is recorded as a shared guard rather than claimed.**
+`// @ts-nocheck` is deliberately untouched — a FILE-level switch, not a line-level one.
+
 **THE PROGRAM WAS PARSED *TWICE* AND BOTH COPIES WERE KEPT — LANGUAGE-SERVICE RETENTION
 **264 -> 177 MB (-33%)** (2026-08-25, (INC.36)).** A ten-step subtraction ladder over
 `liveAfterGc` attributed the 264 MB a whole-program `referencesAt` sweep holds:
@@ -138,38 +174,3 @@ arms agree. **No `.kt` file and no compiler behaviour touched — suite unchange
 3, and every sweep and gate is a CONTROL this round, deliberately not re-run.** Every figure here
 is WALL TIME on one box, pinned by NO test; `docs/inc41-replay-capture-classification.md` is the
 authority and carries the re-take instructions.
-
-**A CAPTURE REQUEST IS PRICED PER *ANCHOR* WHERE AN EDITOR NEEDS A PRICE PER *ANSWER* — SO WIDENING
-THE HOVER TO SERVE COMPLETION IS A **LOSS**, MEASURED AND REFUSED (2026-08-24, (INC.33)).** After
-(INC.32) a completion in an already-hovered buffer still BUILDS (~201-228 ms), because a hover's
-file-wide request carries `spans` and a member completion asks `memberSpans`. That is CORRECT
-((INC.14): an answer that was never asked for is ABSENT), so the only fix on offer was to widen the
-file-wide capture with member/scope/signature anchors — exactly as (INC.13) widened the TYPE channel
-from a caret to a file for **+9-17 ms**. **It does not transfer.** Cold narrowed builds through
-`ProjectCompiler` with the memo bypassed, two batches (batch 2 replicating batch 1 on every sign),
-every population biased IN FAVOUR of the widening: the widened hover costs **+286 ms on `binder.ts`**
-(300 -> 586, the two arms' ranges DISJOINT in both batches) and **+25.1 s on `checker.ts`**
-(3,624 -> 28,751) to save a completion build of **204 ms / 2,078 ms** — **break-even 1.40 and 12.1
-completions per hover IN A BUFFER WITH NO EDIT SINCE**, where the dominant completion path types a
-`.` first, which is an edit, which clears the memo. Even the cheapest shippable variant
-(occurrences + members, no scopes) is +96 ms on `binder.ts` for 0.47 but **+3,326 ms on `checker.ts`
-for 1.60**, and makes EVERY hover ~32% dearer to serve a case reachable only when nothing has been
-typed.
-**THE SECOND REFUSAL IS INDEPENDENT AND HARDER: RETENTION.** One widened entry holds **798,531**
-records for `binder.ts` and **54.4 M** for `checker.ts` — **48x and 205x** today's file-wide hover
-entry, of which **49,879,917** are `CapturedName`s — and (INC.32) keeps `CAPTURE_MEMO_BUFFERS` of
-them. That is structural, not incidental, and `CapturedScope`'s own KDoc already recorded it: a
-free-name caret sees hundreds of names, almost all lib globals, and a widened request repeats that
-set at **every one of 13,601 anchors — O(anchors x globals)**.
-**WHAT WOULD FLIP IT IS NOT A WIDER REQUEST**, and that is the transferable half: only a re-entrant
-capture against a RETAINED checker ((INC.17)'s `ProgramRecheck`) can answer a span nobody asked for
-up front without a new build. It is behind (INC.40)'s diagnostics-only valve because its
-captured-TYPE channel diverges from a fresh build in **43 of 75 files**, so **(INC.41) is now the
-named unblocker for the whole caret-channel latency story** — with the rider that free-name
-completion additionally needs the `CapturedScope` per-anchor globals fix whichever mechanism serves
-it. **No compiler code changed and the suite is unchanged at 15,824 / 0 / 3**; the instrument is
-kept so the refusal is re-takeable (`scripts/inc33-widen-cost.sh` + `Inc33WidenMain`'s KDoc, which
-is the authority for the table), REFUSES rather than skips when its profile or runner is absent, and
-carries an ablated positive control — empty output, a zero population and a sub-50 ms base arm each
-refuse, because exit 0 says the JVM finished, not that anything was measured. Every figure here is
-WALL TIME on one box and is pinned by NO test; re-take it rather than quoting it.

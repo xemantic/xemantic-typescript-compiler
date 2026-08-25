@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.31) — `// @ts-ignore` and `// @ts-expect-error` now suppress, an unused expect-error is **TS2578**, and the defect that blocked it was a suppression written at an EMITTER
+
+**THE SHAPE OF THE ITEM WAS RIGHT AND ITS SIZE WAS WRONG.** The queue entry called this the
+highest-blast-radius item in the library screen and warned that corpus baselines carrying a
+directive "currently record the UNSUPPRESSED diagnostics". Measured: **all eight dashboard
+profiles are `added=0 removed=0` before vs after** (a real two-arm grid — pre-`(CHK.31)`
+`Checker.kt` rebuilt into the class dir, positive-controlled by the absence of
+`commentOpenOnLineBefore` from `javap`), and the whole corpus moved **one** baseline. The
+profiles contain **zero real directive uses**: every grep hit is a string literal in
+`diagnosticInformationMap.generated.ts` or a prose comment.
+
+**WHAT LANDED.** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and
+`-project` all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in
+tsc's order: every diagnostic preceded by a directive is dropped and marks that directive
+USED, then every `@ts-expect-error` that marked nothing is reported TS2578. The walk-up rule
+already existed (`tsIgnoreDirectiveSuppressed`) with exactly one caller; what was missing was
+the general filter, exactly as the item said. Directive recognition is tsc's scanner
+hand-scanned rather than regexed, with the two whole-source probes routed through round 895's
+n-gram filter so a file that never mentions a directive is not scanned.
+
+**THE ONE CORPUS FAILURE WAS NOT THIS CHANGE — IT WAS A SUPPRESSION WRITTEN AT AN EMITTER,
+AND THAT IS THE TRANSFERABLE LAW.** `isolatedModulesExportDeclarationType`'s `/test4.ts` is
+`// @ts-expect-error` above an import of `./doesntexist`; pristine reports **0 errors** for
+that file, i.e. it emits TS2307 and the directive suppresses it. We emitted no TS2307 at
+all, because the commonjs relative-import branch called
+`!hasTsErrorSuppressionAbove(specifier.pos, source)` in its own gate — so the directive
+marked nothing and read as unused. **A diagnostic a compiler declines to EMIT turns every
+`@ts-expect-error` above it into a false TS2578.** Both ad-hoc pre-suppressions
+(`hasTsErrorSuppressionAbove`, 5 call sites, and `tsIgnoreDirectiveSuppressed`'s one) are
+deleted as superseded; suppression now happens only at the funnel, where it can be counted.
+
+**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES, AND THE PROFILES COULD NOT HAVE
+CAUGHT IT BY RUNNING.** `disableJsDiagnostics.ts` (services/server/harness) carries the prose
+comment ``// Only need to add `// @ts-ignore` for a line once.`` — and both of tsc's directive
+regexes are anchored at the comment's OWN start, so a backward `lastIndexOf("//")` lands on
+the INNER slashes and reads a sentence about a quick fix as a live directive silencing the
+next line. The 8-profile grid is **green with and without the fix**, because the line it
+falsely silenced carries no diagnostic; only a `tools/tsgo-7.0.2/lib/tsc` differential over a
+hand-made fixture separates them. The opener is now located by a string-aware FORWARD scan
+that also skips a block comment closing before the directive, so `"http://x/@ts-ignore"` is
+inert and `/* a block */ // @ts-ignore` is a directive — three shapes, three pins, all three
+agreeing with tsgo. CLAUDE.md's (GATE.2) lesson, one subsystem over: **a hand-written fixture
+does not contain what real source contains.**
+
+**GROUND TRUTH WAS READ, NOT WRITTEN.** Every expectation in the 25 pins came out of tsgo
+7.0.2 over the same fixture, and two of them contradict the obvious guess: `@ts-ignoreXYZ`
+**is** a directive (neither reference has a trailing word boundary — tsgo's scanner is a
+plain `strings.HasPrefix`), and a directive on an INNER line of a block comment is **not**
+one (only the comment's last line is offered to the regex). Pristine's own
+`ts-expect-error.errors.txt` and `multiline.errors.txt` confirm the span (the whole comment;
+for a block, its last line only) and the walk-up.
+
+**ONE DIVERGENCE FROM PRISTINE, RECORDED AND NOT CHASED.** `multiline.errors.txt` shows a.ts
+with **0 errors** where a `/**`-newline-` @ts-expect-error */` block is unused; tsgo reports
+TS2578 there and so do we. Both that case and `ts-expect-error.ts` are absent from
+`tests/cases` in this clone, so neither baseline is an active gate; we implement the algorithm
+both references document.
+
+**ABLATION — eight arms, one mistake at a time, each diffed against its OWN snapshot (round
+922, since `git diff --shortstat` is vacuous on a tree carrying the round's own work). RED of
+25 pins:**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the filter is a no-op | 17 |
+| a2 | TS2578 never emitted | 3 |
+| a3 | TS2578 for EVERY expect-error, used or not | 5 |
+| a4 | the walk-up crosses nothing | 2 |
+| **a5** | **both halves scoped to the PROGRAM, not the partition** | **1 — uniquely its own** |
+| **a6** | **the comment opener found by a backward `lastIndexOf`** | **1 — uniquely its own** |
+| **a7** | **a block directive counts on ANY line, not the last** | **1 — uniquely its own** |
+| a8 | the walk starts on the diagnostic's OWN line | 15 |
+
+a8's own pin (`a directive on the SAME line as the error does not suppress it`) also reddens
+under a1 and a2, so **it is not uniquely discriminating and is recorded as such rather than
+claimed**. a5 is the partition hazard and **no `diagnose()` fixture can see it** — the two
+pins that catch it build a `Checker` with `assignedFileNames` directly, each with its own
+control (the whole-program arm reports the one TS2578; the same partition without the
+directive reports the error), because `checkedResults == binderResults` whenever there is no
+partition.
+
+**TWO PROCESS FAILURES WORTH MORE THAN THE FIX.** (i) `./gradlew … -q 2>&1 | grep -E '^(e:|w:)'`
+printed nothing for a compile that **did not put the edit in the class dir**, and the next
+probe read the old binary — round 947's law, hit again; `javap -p | grep <new method>` is the
+positive control that settles it in one second. (ii) The ablation driver restored the SOURCE
+and left the CLASS DIR holding arm a8's build; the next CLI probe then measured a8 and read
+as a fresh, dramatic defect in the shipped code. ~15 minutes went into bisecting a phantom.
+**An ablation must rebuild after it restores, or the next thing you run is the last arm.**
+
+**GATES.** Suite **15,860 / 0 / 3** (+25 pins over the 15,835 baseline), **one corpus
+baseline moved and it moved because a genuine defect was fixed, not switched off**.
+`cost_gate.py` PASSES with `output.errors` **46** (the clean control the recon predicted) —
+`mapped.hits` at the standing +1.63%, `typeNode.bypassed` +0.65%, `mapped.keyed` +0.66%, all
+inherited from a baseline **242 commits stale** and none of them movable by a change that
+runs after every pass. `huge_methods.py --fail-over 0` exit 0, **783 classes scanned** (782
+last round — the +1 is the new nested `TsCommentDirective`, which is the positive control
+that the census is not blind). `partition-equivalence.sh` **EQUIVALENT, all 78 files**, and
+on a purpose-built 4-file directive-carrying project **EQUIVALENT, all 4**;
+`partition-gate.sh`'s sensitivity arm **EQUIVALENT, all 76 files / 182 diagnostics / 78
+netting passes**. `capture-equivalence.sh` **1,003 spans / 43 of 76 files /
+`narrowRendersMoreAny` = 0** with **both digests BIT-IDENTICAL** to (INC.42)'s record.
+`round895-grid.sh` 8 profiles `added=0 removed=0` (the filter-on/off arms — the gate that the
+two new `srcHas` needles are not falsely refused), and the before/after grid 8 profiles
+`added=0 removed=0`.
+
+**WHAT IS NOT DONE.** `// @ts-nocheck` is untouched — a third spelling with zero hits in
+`commonMain` and zero in the profiles; it is a FILE-level switch, not a line-level one, so it
+does not fall out of this mechanism and is left out deliberately. The `fflate` screen was not
+re-run (the library sources are not on this box), but its exact shape — a `@ts-ignore` above
+one declaration-only class member, suppressing that member's TS2391 and not its sibling's —
+is pinned and matches tsgo row for row.
+
+
 ### Round (INC.36) — the program was parsed TWICE and both copies were kept: retention **264 -> 177 MB**
 
 **WHAT THIS ROUND DID.** Attributed the 264 MB a whole-program `referencesAt` sweep
@@ -956,136 +1069,6 @@ session to move it, and it is now within 0.4% of the threshold. **The protocol's
 to justify AND rebaseline in the same commit; the justification is here and the rebaseline
 is not, so the next round in this area should `--update` deliberately rather than discover
 the breach.**
-
-### Round (INC.27) — REFUSED with a PROOF: B416's key cannot name a union the way tsc does, and the obvious narrowing makes the gate WORSE
-
-**WHAT THIS ROUND DID.** Censused the ~790 `unionAliasStructural` rows (INC.26) left,
-measured what tsc actually answers, **built the narrowing anyway and measured it making
-things worse**, and landed only the knowledge. Nothing behavioural changed — proven, not
-asserted.
-
-**THE CENSUS** (1,128 divergent spans, per-element, nesting-aware; reproduced the recorded
-baseline exactly, 43 files):
-
-| rows | family | who is right |
-|---:|---|---|
-| **432** | one member set claimed by SEVERAL aliases, the arms disagreeing about which name won (`ModuleName`/`ModuleExportName`/`ImportAttributeName`; `EntityNameExpression`/`SerializedEntityName`) | **neither — arbitrary in both** |
-| **~393** | a SOLITARY alias naming a union at sites that never spell it | **narrow (structural)** |
-| **~303** | the (INC.28) visitor-signature family, not alias-related | narrow |
-
-The second family is MEASURED, not inferred: `AssignmentPattern` has **0 references** in
-binder.ts (95 rows), `MemberName` **0** in checker.ts (76), `JsxCallLike` **0** in
-parser.ts, likewise `CommentKind`, `BindingElementGrandparent` and
-`IsObjectLiteralOrClassExpressionMethodOrAccessor`.
-
-**WHAT tsc ANSWERS, AND THE MECHANISM IS NOT WHAT THE NAME SUGGESTS.** Three answers for
-ONE member set — `ModuleName`, `ModuleExportName`, and `Ident | Str` where no alias was
-written — because tsc keys its union cache by `getTypeListId(types) + getAliasId(alias-
-Symbol, …)`. **A fourth probe named the real mechanism: a join-built `A | B` renders
-STRUCTURALLY while a narrow of `x: MyType` that removes nothing renders `MyType`. So
-tsc's union-alias naming is IDENTITY PRESERVATION (`filterType`), not structural
-matching** — and both halves are visible in `narrowByClauseExpressionInSwitchTrue6`'s own
-pristine baseline.
-
-**THE PROOF THAT BOUNDS THE WHOLE DIRECTION.** INV.5(a) (round 545) interns our unions by
-**member-id list ALONE**, so every one of tsc's instances is a single `Type` here. That is
-not an obstacle to work around, it is a proof: **no id-keyed or member-set-keyed table can
-give three answers from one key, and anything able to name the flow-RECONSTRUCTED union
-necessarily also names a union nobody named.** The residual is an INTERNING-KEY defect,
-not a defect of B416's table, and full parity needs the alias in the union's IDENTITY.
-
-**THE NARROWING WAS BUILT AND MEASURED, AND IT MAKES THE GATE WORSE — THIS IS THE PART
-WORTH KEEPING.** Poisoning a member set that two differently-named aliases claim does
-exactly what it says: the `full=name / narrow=name` bucket collapses **416 -> 2**. And the
-gate goes **1,128 -> 1,351 spans, 43 -> 46 files**, because a new
-`full=structural / narrow=name` bucket of **657** appears. **The poison TRIGGER is itself
-coverage-dependent**, so it converts a small difference in which aliases happened to be
-resolved into a difference in whether a name exists at all — and amplifies it. A fix whose
-own precondition depends on the thing it is correcting for cannot be stable.
-
-**AND IT CANNOT BE MADE STABLE SYNTACTICALLY.** Of the **407** collisions the census
-counts per compile, the largest are `type FunctionLike = SignatureDeclaration` and
-`type AssertionKey = ImportAttributeName` — **an alias whose body is ANOTHER alias,
-spelling no members at all** — and `BindingOrAssignmentPattern` vs `DestructuringPattern`,
-structurally equal and spelled entirely differently. Deciding ambiguity therefore means
-resolving every union alias UP FRONT, which is (INC.22)'s eager `TypeAlias` phase —
-already refused at 6.68 ms of a 58 ms floor AND for diverging a DIAGNOSTIC on the
-sensitivity arm.
-
-**WHAT LANDED IS BEHAVIOUR-FREE AND THE INERTNESS IS PROVEN BY DIGEST, NOT CLAIMED**: the
-`unionAliasStructural` KDoc carrying the above, `AliasDisplayCensus.unionRegistered` /
-`unionAmbiguous` hooked OUTSIDE the write (`XTSC_ALIAS_CENSUS=1` -> 15,318 registrations,
-407 collisions), and `UnionAliasDisplayTest` pinning the two things a future round must
-not lose — a solitary alias names its member set, and the switch-fallthrough-reconstructed
-full union still displays as `MyType`. **Nothing pins the open gap** (round 765's rule: do
-not pin a known-open gap, it is a countdown, not a guard).
-
-**GATES.** Suite **15,807 / 0 / 3** (+2 pins), zero corpus baselines moved, `cost_gate.py`
-exit 0 (largest `mapped.hits` +1.02%, standing), `huge_methods --fail-over 0` exit 0 both
-modules (core 781 classes, largest 5,388), `partition-equivalence` **EQUIVALENT 78/78**,
-`partition-gate` realism **78/78** and sensitivity **76/76 over 78 netting passes**, floor
-**57 ms** (untouched, and printed in passing rather than measured with a before-arm it did
-not need), `capture-channel` full digest `-3278907782584108296` with `moreAny=168` at
-baseline. **THE BEHAVIOUR CONTROL: `capture-equivalence` returns full
-`3349895618940861366` / narrow `306524840298287433`, 1,128 spans in 43 files —
-BIT-IDENTICAL to the recorded baseline, which is what proves the census hooks are inert.**
-
-### Round (DOC.1) — `CLAUDE.md` 427 -> 320 KB by MOVING 107 entries, and the arithmetic says the remaining lever is DISTILLATION, not more moving
-
-**WHAT THIS ROUND DID.** Enforced the file's own residency rule after its THIRD and
-largest regrowth (the header ladder: 284 -> 170 KB, 594 -> ~280, 425 -> ~91, then back to
-427). **Nothing was deleted** — progressive disclosure is the design, so every removed
-entry is verbatim in `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`.
-
-| | before | after |
-|---|---:|---:|
-| `CLAUDE.md` | 427,436 B | **320,285 B (-25.1%)** |
-| archive | 697,758 B | 822,487 B |
-| CLAUDE.md entries | 490 | 383 (-107) |
-| archive entries | 728 | 845 (+117) |
-
-**CONSERVATION WAS PROVEN MECHANICALLY, NOT BY `--stat`** (which shows an edit landed,
-never that it is correct): **490 + 728 = 1,218 -> 383 + 845 = 1,228**, the +10 being
-exactly the ten entries DISTILLED rather than moved — full text archived, short form
-resident. All 107 moved entries verified present verbatim in the archive by exact string
-match and absent from `CLAUDE.md`; a random 10-entry spot check by mid-entry phrase read
-`archive=1 claude=0` every time.
-
-**WHAT MOVED** (~84 KB): ~47 per-walker / per-narrowing-rule entries from the regrown
-"Checker walker gotchas" tail — the exact category the 2026-07-26 trim moved wholesale;
-~29 per-diagnostic entries misfiled under "Measured dead-ends"; ~28 per-instrument perf
-narratives whose conclusion a resident law already carries (the `CtaSections`/
-`CpaSections` probe cookbook, JFR aggregation craft, per-region tables already retired by
-(INC.3)'s floor decomposition); and **6 EXACT DUPLICATES** of a resident entry — where the
-moved twin held a unique clause it was folded into the survivor rather than lost.
-**DISTILLED IN PLACE (10)**, the format rule's own prescription: the INV.4 check-spine
-cookbook **13.3 KB -> 1.7 KB** (its ~25 per-shape migration recipes archive-only, with a
-grep pointer), plus INV.4(c)(iii), the per-kind dispatch table, the huge-method JIT gate,
-B83.5, `C = A - B`, the three target notions, the try/catch(SOE) doctrine and the two
-scope-stack entries.
-
-**THE ~91 KB TARGET IS UNREACHABLE UNDER THIS ROUND'S CONSTRAINTS, AND THE ARITHMETIC IS
-NOW IN THE HEADER LADDER**: header 3.6 KB + protocol 14.1 KB + the protected
-(INC.*)/2026-08-2x set **61.8 KB over 72 entries** = a **79.5 KB floor before ONE process
-trap is kept**, and the process/build traps plus measurement laws add roughly another
-80 KB. **Only ~84 KB of the 336 KB added since 2026-07-26 was archive-assigned narrative**
-— the regrowth is genuinely concentrated in categories the rule KEEPS.
-
-**SO THE REMAINING LEVER IS DISTILLATION AND IT IS LARGE**: the 383 resident entries
-average **780 bytes — 5-6 lines against the file's own stated "1-3 lines"** — and a
-distillation pass (not more moving) is what would take it to ~200 KB. Queued as (DOC.2).
-
-**AND THE ROUND FLAGGED AN OVER-BROAD INSTRUCTION OF MINE**, which is worth recording
-because it is the kind of thing a sub-agent usually just obeys: **15 of the 72
-date-protected entries (~11.5 KB) are the KIR / Kotlin-native BACKEND arc, not the
-incremental language-service arc the constraint's rationale described.** It kept them to
-the letter and said so. If that arc is parked, they are the next obvious 11.5 KB.
-
-**PROTECTED SECTIONS VERIFIED BYTE-IDENTICAL**: the whole mission/protocol tail is
-**14,078 bytes unchanged** (`cmp` clean) and the "Rules for editing this file" block
-differs in exactly one line, the ladder. A blank-line collapse initially leaked into the
-protected tail and the file was rebuilt from the original head+tail to fix it — caught by
-the byte check, which is why the byte check was required rather than a visual read.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2468,7 +2451,7 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   **Rung 3 is the one to price first**: `var`'s function scoping is a real semantic difference,
   not a syntax rewrite, and 18 sites is enough that refusing it keeps blocking libraries.
 
-- [ ] **(CHK.31) `// @ts-ignore` AND `// @ts-expect-error` DO NOT SUPPRESS ANYTHING — MEASURED
+- [x] **(CHK.31 — DONE, round (CHK.31)) `// @ts-ignore` AND `// @ts-expect-error` DO NOT SUPPRESS ANYTHING — MEASURED
   IN BOTH DIRECTIONS, AND THIS IS THE HIGHEST-BLAST-RADIUS ITEM IN THE SCREEN.** A four-file
   repro settles it: `// @ts-ignore` above a TS2322 leaves the TS2322 emitted, `// @ts-expect-error`
   likewise, and an `@ts-expect-error` above a line with NO error fails to produce tsgo's
