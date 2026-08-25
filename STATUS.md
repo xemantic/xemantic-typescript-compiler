@@ -1,5 +1,59 @@
 # Status
 
+**A BARE TYPE PARAMETER WAS READ AS A *FAILED* CONSTRAINT WHERE THE HONEST ANSWER IS *UNDECIDED*,
+AND A WHOLE ALIAS BODY RENDERED `any` ON EVERY ORDINARY BUILD (2026-08-24, (INC.42)).** Three
+lines reproduce it, with no partition and nothing to do with `Visitor`:
+`export type R1<T extends Nd> = T | readonly Nd[];` then
+`export type A1<X extends Nd> = (n: number) => R1<X>;` renders **`(n: number) => any`** where tsc
+7.0.2 over its own LSP (`--lsp -stdio`, round 924's oracle — read out, never hand-written)
+renders `(n: number) => R1<X>`. **A CONSTRAINT MATRIX ISOLATED THE PREDICATE, AND THAT IS THE
+DURABLE HALF:** an **unconstrained** inner parameter is **always** correct, and **every** row
+whose inner alias's parameter carries a constraint read `any` — **including where the two
+constraints are IDENTICAL**. So the shape is not "a wrong constraint"; it is "a constraint at
+all". **Cause:** B57.1b skips an alias substitution when an argument fails its parameter's
+constraint and judged that with `checkTypeRelatedTo`, which has **no "TypeParam source via its
+constraint" rule** ((INC.30), deliberately) — so the reference answered `errorType` and rendered
+`any`, and where the body is a function type the `any` lands in the RETURN position, which is how
+tsc's own `type Visitor<…> = (node: TIn) => VisitResult<TOut>` rendered `(node: TIn) => any`.
+**Nothing here could see it**: the capture sweeps are DIFFERENTIALS, blind by construction to a
+defect both arms share ((INC.28)'s law), and a wrong-but-plausible type attaches no diagnostic,
+so no corpus baseline moves. Every one of the seven pins therefore asserts the rendered STRING.
+**THE FIX IS LOCAL AND BOTH ITS GATES WERE FORCED BY MEASUREMENT, NEITHER GUESSED.** The argument
+is judged against its **own** already-resolved constraint — **no new rule enters
+`checkTypeRelatedToCore`, so (INC.30)'s termination argument is untouched**. `aliasBodyDisplayDepth`
+confines it to `resolveTypeAliasBody`: **unconfined it reads `output.errors` 46 -> 48** on the
+compiler profile (an overload-resolution defect at `checker.ts:2503` that a no-longer-`any`
+`VisitResult<T>` exposes, plus a TS2322 at `watchPublic.ts:576`) — **two dashboard false positives
+for 213 hovers is not a trade**. `aliasGuardIsRecursionBrake` keeps today's answer where this
+guard is the recursion brake rather than a constraint check, and **the brake lives in the
+ENCLOSING declaration, not the referenced one**: the first gate written asked about the referenced
+alias alone and left the corpus **RED**, and a **flip census** named the mechanism — the only four
+decisions the relaxation flips in `excessPropertyCheckIntersectionWithRecursiveType` are
+`Length<I>` and `Prepend<any, I>`, two **non-recursive** aliases referenced from inside the
+self-referential `BuildTree`. Ablations, one mistake at a time: a1 (relaxation disarmed) reddens
+the three value pins and nothing else; a2 (the enclosing leg deleted) reddens the recursion pin
+**and** the corpus baseline, so that leg is load-bearing with a failure uniquely its own. **One
+pin is recorded NON-DISCRIMINATING** — it stayed green under a2, and the prediction behind it
+(that `diagnose` never reaches `resolveTypeAliasBody`) is FALSE; named rather than claimed.
+**GATES.** Suite **15,831 / 0 / 3** (+7 pins), **zero corpus baselines moved**; `cost_gate.py`
+PASSES with `output.errors` **46** and `mapped.hits` at the standing +1.63% (not moved by this
+round, still not rebaselined); `huge_methods.py --fail-over 0` exit 0. `capture-equivalence`
+**1,003 / 43 / moreAny 0** and `capture-channel` **1,273 / 64 / moreAny 168** — both exactly
+(INC.28)'s baselines, unmoved. **Both capture digests moved BY DESIGN** (full
+`8385940838610938556 -> -7005799195003297838`, narrow `-7423700524621287041 ->
+-1948231081793666447`): the signature of a fix that corrects an ORDINARY build, and the **third**
+time this arc has had to re-record rather than read a moved digest as a regression.
+**SAY IT PLAINLY: THE 213 ROWS THIS ROUND WAS AIMED AT ARE *NOT* CLOSED.** `Inc41ClassifyMain`
+re-run reads **796 rows / 37 pairs / 213 GAINED-INFERENCE — UNCHANGED**. Read out of the
+classifier's dump rather than assumed, those rows are **not hovers on `Visitor`**: they are carets
+on `visitEachChild` / `visitFunctionBody` / `discardVisitor`, function names whose rendered
+**OVERLOAD SET** carries a `Visitor` parameter — the **CHECKING** path, where both arms render an
+unbound parameter. It is blocked three times over, each cost measured ((INC.28)'s two corpus FPs;
+this round's two dashboard FPs; and B50.5's deliberate refusal to name a pure function type, so
+even with both closed we would render `(node: TIn) => VisitResult<TOut>` where tsc renders
+`Visitor`). **A relation-engine item ((INC.30)) plus an alias-NAMING one, not a display bug** —
+re-queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the authority.
+
 **THE CAPTURE VALVE STAYS DIAGNOSTICS-ONLY: THE REPLAY IS NOT A *DIFFERENT* DEFECT, IT IS **MORE
 OF** THE ALIAS-DISPLAY RACE, AND IT GETS WORSE THE LONGER THE SESSION RUNS (2026-08-24,
 (INC.41)).** The standing reason (`docs/language-service.md` § 4a) said the 43 `DIVERGE-TYPE`
@@ -183,63 +237,3 @@ the `rows` tier and the probe's timestamp pair is measured in situ (34-36 ns) ra
 inherited. Instrument only — no compiler behaviour touched, no checker code, no compiled core
 method — so `cost_gate.py` and `huge_methods.py` are CONTROLS and were deliberately not run.
 Suite **15,815 / 0 / 3** (unchanged). `docs/perf/file-check-decomposition.md`.
-
-**THE LANGUAGE SERVICE IS 10-24x FASTER THAN ITS OWN DOCUMENTED COST TABLE, AND THE ONE DEFECT
-THE NEW TABLE EXPOSED IS FIXED: A MEDIAN NARROWED DIAGNOSTICS QUERY IS 108-113 ms — 43-47x A FULL
-REBUILD — AND AN ORDINARY HOVER AFTER TWO OTHER CHANNELS WENT 324 ms -> 4 ms (2026-08-24,
-(INC.31)+(INC.32)).** Every wall figure on `docs/language-service.md` was round-930, i.e. taken
-before (INC.2b) narrowed the capture path and before (INC.1)-(INC.30) took the incremental floor
-from 1,092 ms to 58 ms. Re-taken on tsc's own 78 sources (9,977,097 chars), warm, six warm-up
-cycles, medians with their draw lists, **every row reproduced in two independent JVMs**:
-`diagnosticsOf(f)` median **1.1-1.2 s -> 108-113 ms** (p90 202-219), `completionsAt`
-**~4.7-5.1 s -> 194-202 ms**, `signatureHelpAt` **190-214 ms**, `documentHighlightsAt(binder.ts)`
-cold **~15x**, first hover on `binder.ts` **610 -> 290-306 ms**, against a **4,864-5,096 ms** full
-rebuild that is unchanged and is the anchor. **A REAL KEYSTROKE COSTS THE NARROWED PATH
-NOTHING EXTRA** — identical bytes 212 ms, an appended comment 247, an inserted statement 218,
-a statement introducing a TS2322 215 — which no earlier harness here could say, because they
-all dirty a buffer by writing its own bytes back.
-**THE HALF THAT DID NOT MOVE IS THE HALF A PLUGIN AUTHOR HAS TO DESIGN AROUND, AND IT CANNOT
-MOVE.** `referencesAt` (8.8-9.6 / 13.2-13.9 s), `renameAt` (20.0-21.3 / 25.0-26.0 s) and a
-project-wide `diagnostics()` (4,864-5,096 ms) never enter `captureIn`'s partition, because
-their claim is about every file; that column is now marked on the page rather than left to
-be inferred. The heap claim is corrected in the direction an IDE budgets: not "~1.9 GB peak, 512 MB not enough" but
-**1,077-1,125 MB peak in G1 old gen with 264 MB RETAINED** after a full GC — green at `-Xmx2g`,
-OOM at `-Xmx1g`.
-**TWO LEVERS WERE REFUSED BY MEASUREMENT BEFORE BEING BUILT, WHICH IS THE ROUND'S CHEAPEST
-PRODUCT.** (a) Memoizing `SourceIndex`'s derived populations — on a memo hit `captureAround`
-still re-derives the file's occurrence set — decomposes to **1.21 ms on a 17.9 KB file, 2.27 ms
-at 194 KB and 82.7 ms at 3.15 MB**, closing the arithmetic to 0.4% of the measured 83 ms
-second-caret hover on `checker.ts`; at the MEDIAN file the whole prize is **1-2 ms**, and it is
-not a `referencesAt` lever either (~140 ms of a 9.3 s sweep = 1.5%). (b) "Completions over-capture the
-file" is simply **FALSE** — the three call sites already pass a single caret span, so their
-194-202 ms IS the narrowed build, and since a completion is by definition asked on a just-edited
-buffer, **no cross-edit memo can ever serve it**.
-**THE DEFECT: A MEMO BOUNDED BY ENTRY *COUNT* LET A ONE-SPAN ENTRY EVICT A 125,289-SPAN ONE.**
-`Project.captures` was an access-ordered LRU bounded at two ENTRIES. Hover, go-to-definition,
-highlights and `fileSemantics` ask ONE file-wide question per buffer (125,289 spans on
-`checker.ts`); `completionsAt`'s two branches and `signatureHelpAt` each name exactly ONE span.
-So **hover -> completion -> signature help -> hover, with no edit anywhere in it**, threw the
-hover's file-wide entry out and paid a whole narrowed rebuild for the last step. **The fix is not
-a larger limit** — that would double the worst case to buy a case needing no extra memory at all
-— but a bound on WEIGHT, in two lanes that cannot evict each other: at most 4 spans is
-caret-scoped and bounded at 4 entries, everything above it is buffer-sized and bounded at 2,
-unchanged since (INC.13). **Worst-case retention is two buffer captures (UNCHANGED) beside 16
-answers = 0.013% of ONE file-wide capture**, and invalidation was re-audited rather than assumed
-(`cached = null` at exactly three sites, every one clearing `captures` in the same breath).
-**THE PIN LESSON IS THE TRANSFERABLE ONE, AND IT NEEDED A SECOND ARM TO FIND.** Ablating the
-count-based eviction put **3 of 13 RED**; the fourth new pin — *"the caret lane is BOUNDED too"* —
-stayed **GREEN, correctly, because a stricter bound cannot fail a bound pin**. Only a second arm
-(caret lane unbounded, 4 -> 4096) turned it red. So all four pins do fail against the mistake each
-actually names, but *"I wrote four pins and three went red"* would have been the wrong summary.
-Suite **15,815 / 0 / 3** (+4 pins); `cost_gate.py` and `huge_methods.py` were CONTROLS and
-deliberately not run — no checker code and no compiled core method is touched, the change being
-confined to the `-project` module's memo policy. **FOUR FOLLOW-UPS QUEUED**: (INC.33) the caret
-channels are cold per channel per buffer (a hover's request carries `spans`, not `memberSpans`, so
-a completion in an already-hovered buffer still builds at 201-228 ms — correct, and the widening
-is unpriced); (INC.34) the `SourceIndex` refusal, recorded with the instrument that can re-open
-it; (INC.35) project-wide `diagnostics()` at ~4.9-5.1 s is now the biggest number in the service by
-3x and is **BLOCKED-PENDING-USER**, because round 772 measured reverse-dependency closure DEAD on
-*this* corpus (tsc's own sources are `export *` barrels) — it would pay off on a layered
-application and buy the benchmark nothing; (INC.36) the `-Xmx2g` floor, where the 264 MB retained
-is the number to attack rather than the seconds.
-

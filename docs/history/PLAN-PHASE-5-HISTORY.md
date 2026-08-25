@@ -1,3 +1,87 @@
+### Round (INC.25) — it was never a partition defect: `[Symbol.unscopables]` rendered `any` on ORDINARY builds, and fixing it collected the floor 129 -> 58 ms
+
+**WHAT THIS ROUND DID.** Closed the single defect (INC.23) reduced (INC.22)'s refusal
+to, discovered it was a **shipped, always-present bug rather than a partition artifact**,
+and then collected the prize the last three rounds had been circling.
+
+| | before | after |
+|---|---:|---:|
+| **floor** | 129 ms | **58 ms** |
+| narrowed-query median | 173 ms | **117 ms** |
+| ratio at the median file | 30.91x | **43.07x** |
+| **floor as a share of a median query** | 75% | **50%** |
+
+**FINDING 1 — IT REPRODUCES ON A FULL BUILD, WITH NO PARTITION AND NO ARM.** Four
+hand-written user-code shapes (`interface Foo { un: {[K in keyof Foo]?: boolean} }`, its
+generic form, the `Foo<any>` self-instantiation, a cross-file form) all resolve
+**correctly** — the spine walks the interface body and resolves the mapped-type node
+before any member table is in flight. **The LIB is different**: `interface Array<T>`'s
+body is never spine-walked, so the first ask arrives from inside `resolveReferenceMembers`.
+A THREE-LINE scratch project — `export const strArr: string[] = []` and a `number[]`
+sibling — is enough:
+
+```
+SYMORDER[full a.ts] truncatedResolutions=1
+MEMBER [Symbol.unscopables] : any   first[pass=checkSpine ambient=empty persisted=true truncated=true]
+```
+
+**So any small or medium project has been rendering `[Symbol.unscopables]: any` in a
+hover or completion, on the ordinary shipped build.** The 78-file tsc profiles hide it
+because `init:buildFileLocalTypeMaps` happens to resolve that member first — which is
+exactly why three rounds read this as a partition problem.
+
+**FINDING 2 — THE GUARD, AND A FIX THAT TERMINATES BY CONSTRUCTION.**
+`resolveStructuredTypeMembersCore` returns silently on re-entry leaving `properties` null
+— correct for circular heritage, TRUNCATED for anything reading the key set.
+`getKeyofType` read that null as `string`, the mapped type bailed to `any`, and round
+778's write gate froze it (ambient empty throughout). The fix answers such a `keyof`
+**from the DECLARATIONS**: it calls no resolver at all, reads only already-computed
+tables plus AST, under a visited set and a depth cap, and **REFUSES rather than returning
+a partial key domain** (round 463). **No TS2589 at (0,0) appeared anywhere** — (INC.19)'s
+self-referential-alias family is unreachable here because nothing in this path resolves a
+constraint.
+
+**THE ABLATION IS DECISIVE AND THE COUNTERS ARE THE CONTROL.** With
+`keyofNamesFromDeclarations` disabled the pin reads `typeText=any`; with it, the exact
+34-member mapped object. **And the ablated binary's cost-gate counters are identical
+DIGIT FOR DIGIT to the fixed one** — the fix moves zero counters, so all standing drift
+is pre-existing and none of it is this round's.
+
+**FINDING 3 — THE PRIZE, AND `moreAny` RETURNED TO BASELINE.** With the defect gone,
+partition-scoping `init:buildFileLocalTypeMaps` takes `narrowRendersMoreAny` **229 -> 168**
+— the baseline — which was the one observable refusing (INC.22). Both `partition-gate`
+arms EQUIVALENT. The shipped default is now the partition-scoped one, pinned with **no
+mode install in it** ((INC.16) arm a1's lesson).
+
+**A GATE BASELINE MOVED, AND IT IS THE ONE THIS SESSION HAS QUOTED ALL DAY — READ THIS
+BEFORE TRUSTING AN OLDER `5 / 3` FIGURE.** `capture-equivalence.sh`'s NARROW arm goes
+**5 spans / 3 files -> 2,275 of 381,666 (0.60%) in 46 files.** The full-build digest is
+UNCHANGED (`-3718897727265589316`), so an ordinary compile is untouched; the movement is
+entirely in what a NARROWED query renders.
+**Why it is not the trade (INC.2) refused, and the distinction is real**: (INC.2) refused
+45 spans that rendered `any` where the full build rendered the declared type — WRONG
+answers. Here **no row renders more `any`, none is absent, and the direction is MIXED** —
+the narrow arm KEEPS `Intl.LocalesArgument` where the full arm expands it (113 rows) and
+renders a signature the full arm gives up on as `any` (38 rows). These are two draws from
+the id-keyed first-wins `aliasDisplayMap`, which CLAUDE.md already records as ARBITRARY
+in both arms.
+**It is still a 455x move in a gate, and the mitigation is known and measured**:
+(INC.22)'s `TypeAlias`-phase-program-wide configuration costs **6.68 ms** and collapses
+2,275 to **+1 row**. It was not taken here because it needs per-PHASE scope composition
+this axis does not have, and because (INC.22) measured that exact configuration diverging
+a **DIAGNOSTIC** on the sensitivity arm. See (INC.26) — 6.68 ms of a 58 ms floor is 11%,
+and it buys back the gate.
+
+**GATES.** Suite **15,801 / 0 / 3** (+1 pin), **zero corpus baselines moved**,
+`cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50 `-project`),
+`capture-equivalence` full digest `-3718897727265589316` (recorded baseline, unchanged),
+`capture-channel` full digest `4065921979171190360` with moreAny **168**,
+`partition-equivalence` **EQUIVALENT 78/78**, `partition-gate` **78/78** and **76/76**.
+
+**PROCESS NOTE, SELF-REPORTED**: no two JVMs ran at once, but logs were polled during
+runs more than the quiet-box rule prefers. No timing claim here rests on wall clock — the
+floor and ratio figures come from the deterministic pass table and the sweep harness.
+
 ### Round (INC.23)+(INC.24) — the census: "+61 member types" is ONE member name and ONE truncated resolution, the write gate is refuted, and `narrowRendersMoreAny` is a substring heuristic
 
 **WHAT THIS ROUND DID.** Produced the census (INC.23) exists for, and it shrank

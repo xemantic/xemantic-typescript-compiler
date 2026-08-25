@@ -20,6 +20,112 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.42) — a bare type parameter is an UNDECIDED constraint, not a failed one: `(n: number) => R1<X>` rendered `(n: number) => any` on every ordinary build
+
+**THE REPRO IS THREE LINES, NEEDS NO PARTITION, AND HAS NOTHING TO DO WITH `Visitor`.**
+
+```ts
+export interface Nd { kind: number }
+export type R1<T extends Nd> = T | readonly Nd[];
+export type A1<X extends Nd> = (n: number) => R1<X>;   // ours: (n: number) => any
+```
+
+tsc 7.0.2 over its own LSP (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, round 924's oracle —
+read out, never hand-written) answers `type A1<X extends Nd> = (n: number) => R1<X>`.
+
+**THE DURABLE FINDING IS THE PREDICATE, AND A CONSTRAINT MATRIX IS WHAT ISOLATED IT.** Five
+rows in one fixture (`GenericAliasConstrainedArgumentTest`): an **unconstrained** inner
+parameter (`R3<T>`, reached as `A3<X> = (n: number) => R3<X>`) is **always correct**, and
+**every row where the inner alias's parameter carries a constraint read `any` — including
+`A1`, where the argument and the parameter are constrained IDENTICALLY**, and `A4`, where
+the parameter's constraint is strictly wider. So the shape is not "a wrong constraint"; it
+is "a constraint at all". `C1` (`X extends Nd | undefined` handed to `B1<T extends Nd>`) is
+the one row still refused deliberately — that is a genuine violation and the guard is doing
+its job.
+
+**DIAGNOSIS.** B57.1b skips a generic-alias substitution when an argument fails its
+parameter's constraint, and it judged that with `checkTypeRelatedTo` — which has **no
+"TypeParam source via its constraint" rule**, deliberately ((INC.30); its `NonPrimitive` leg
+says so). So a bare `Type.TypeParam` argument read as a **FAILURE** where the honest answer
+is **UNDECIDED**, the reference answered `errorType`, and it rendered `any`. Where the alias
+body is a function type the `any` lands in the RETURN position, which is exactly how tsc's
+own `type Visitor<TIn extends Node = Node, TOut extends Node | undefined = TIn | undefined>
+= (node: TIn) => VisitResult<TOut>` rendered `(node: TIn) => any`.
+
+**WHY NOTHING HERE HAD EVER SEEN IT.** The capture sweeps are DIFFERENTIALS, so a defect
+present in BOTH arms is invisible to them by construction ((INC.28)'s law, whose own
+two-arms-agree test stayed green against an unfixed binary); the corpus is blind too,
+because a wrong-but-plausible type attaches no diagnostic and moves no baseline. Hence every
+one of the seven pins asserts the rendered **STRING**.
+
+**THE FIX.** The argument is judged **locally** against its own already-resolved constraint.
+**No new rule enters `checkTypeRelatedToCore`, so (INC.30)'s termination argument is
+untouched.** Two gates keep it a DISPLAY answer, and **both were forced by measurement,
+neither guessed**:
+
+* **`aliasBodyDisplayDepth`** confines the relaxation to `resolveTypeAliasBody` — (INC.28)'s
+  split one layer down. **Unconfined it reads `output.errors` 46 -> 48 on the compiler
+  profile**: a `VisitResult<T>` return that no longer erases to `any` exposes an
+  overload-resolution defect at `checker.ts:2503`, plus a TS2322 at `watchPublic.ts:576`.
+  **Two false positives on the flagship profile is not a trade for 213 hovers.**
+* **`aliasGuardIsRecursionBrake`** keeps today's answer wherever this guard is acting as
+  this checker's recursion brake rather than as a constraint check. Three tests: the
+  referenced alias is re-entering its own substitution (`aliasSubstitutionStack` — mutual
+  recursion, which no property of one declaration can see), the **referenced** alias is
+  self-referential, and the alias whose body syntactically **ENCLOSES** the reference is.
+  **The third is the one that was measured rather than guessed, and it is where the brake
+  actually lives.** The FIRST gate written asked about the referenced alias alone and left
+  the corpus **RED** (one failure in 14,869). A **flip census** named the mechanism: the only
+  four decisions the relaxation flips in `excessPropertyCheckIntersectionWithRecursiveType`
+  are `Length<I>` and `Prepend<any, I>` — **two NON-recursive aliases referenced from inside
+  the self-referential `BuildTree<T, N extends number = -1, I extends any[] = []>`**.
+  Refusing them is what keeps `BuildTree`'s own parametric body degraded; letting them
+  through expands it one level further and `GrandUser` gains a TS2322 pristine tsc does not
+  emit. The enclosing declaration is read through `Node.parent` (INV.2(a)), so the answer is
+  a property of the SOURCE and not of ambient state — which is what makes it safe beside a
+  `(symbol, args)`-keyed cache (round 778 / (INC.19)'s first-touch freeze).
+
+A relaxed result is deliberately **NOT** written to `substitutionResultCache`: that key is
+`(symbol, args)` alone and would otherwise serve the checking path.
+
+**ABLATIONS, ONE MISTAKE AT A TIME.** **a1** (the relaxation never arms) — RED: the three
+value pins (`identical constraint`, `wider constraint`, `Visitor keeps its VisitResult
+return`); GREEN: both negative controls, all four of (INC.28)'s pins, and the corpus
+baseline. **a2** (the gate's enclosing-declaration leg deleted) — RED: `the recursion brake
+inside a self-referential alias is untouched` **and**
+`excessPropertyCheckIntersectionWithRecursiveType`, so that leg is load-bearing with a
+failure uniquely its own. **One pin is recorded NON-DISCRIMINATING**: `a hover on a
+self-referential alias does not expand without bound` stayed green under a2, and the
+prediction behind it — that `diagnose` never reaches `resolveTypeAliasBody`, so only a
+capture could exercise the display path — is **FALSE**; it does. Named rather than claimed.
+
+**GATES.** Suite **15,831 / 0 / 3** (+7 pins), **zero corpus baselines moved**.
+`cost_gate.py` PASSES with `output.errors` **46** and `mapped.hits` at the standing +1.63%
+(not moved by this round, still not rebaselined); `huge_methods.py --fail-over 0` exit 0.
+`capture-equivalence` **1,003 spans / 43 files / `narrowRendersMoreAny` = 0** and
+`capture-channel` **1,273 / 64 / `moreAny` = 168** — both exactly (INC.28)'s recorded
+baselines, unmoved. **Both capture-equivalence DIGESTS moved BY DESIGN** (full
+`8385940838610938556 -> -7005799195003297838`, narrow `-7423700524621287041 ->
+-1948231081793666447`): that is the signature of a fix that corrects an ORDINARY build, and
+it is the **third** time this arc has had to RE-RECORD a digest rather than read a moved one
+as a regression ((INC.26)'s law).
+
+**THE 213 ROWS ARE NOT CLOSED, AND THIS IS THE PART A NEXT AGENT MUST NOT MISREAD.**
+`Inc41ClassifyMain` re-run after the fix reads **796 rows / 37 pairs / 213 GAINED-INFERENCE
+— UNCHANGED**, and REPLAY-WORSE did not grow. Read out of the classifier's own dump rather
+than assumed, those rows are **not hovers on `Visitor`**: they are carets on `visitEachChild`
+/ `visitFunctionBody` / `discardVisitor` — function names whose rendered **OVERLOAD SET**
+carries a `Visitor` parameter. That string comes from the **CHECKING** path
+(`getTypeFromTypeReference` on a bare `Visitor`), and both arms render an unbound parameter.
+Reaching it is blocked **three** times, each cost measured — (INC.28)'s two corpus FPs for
+the parametric form at a reference; this round's two dashboard FPs for relaxing the guard
+there; and, **even with both closed**, we would render `(node: TIn) => VisitResult<TOut>`
+where tsc renders `Visitor`, because B50.5 deliberately does not register an alias name for
+a pure function type (`isPureFunctionType`, pinned by `nestedCallbackErrorNotFlattened_ts`).
+**So the family is a relation-engine item ((INC.30)) plus an alias-NAMING one, not a display
+bug.** Queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the
+authority and carries the re-take instructions.
+
 ### Round (INC.41) — REFUSED: the replay is not a DIFFERENT capture defect, it is MORE of the alias-display race, and it gets worse the longer the session runs
 
 **WHAT THIS ROUND DID.** Tested the clause that has kept (INC.40)'s valve diagnostics-only.
@@ -940,90 +1046,6 @@ scoping intact. **`capture-channel`'s DIVERGED count (1,262 / 64) has NO same-se
 before-arm and no claim is made about it** — which is the correct way to report a number
 you did not control for.
 
-### Round (INC.25) — it was never a partition defect: `[Symbol.unscopables]` rendered `any` on ORDINARY builds, and fixing it collected the floor 129 -> 58 ms
-
-**WHAT THIS ROUND DID.** Closed the single defect (INC.23) reduced (INC.22)'s refusal
-to, discovered it was a **shipped, always-present bug rather than a partition artifact**,
-and then collected the prize the last three rounds had been circling.
-
-| | before | after |
-|---|---:|---:|
-| **floor** | 129 ms | **58 ms** |
-| narrowed-query median | 173 ms | **117 ms** |
-| ratio at the median file | 30.91x | **43.07x** |
-| **floor as a share of a median query** | 75% | **50%** |
-
-**FINDING 1 — IT REPRODUCES ON A FULL BUILD, WITH NO PARTITION AND NO ARM.** Four
-hand-written user-code shapes (`interface Foo { un: {[K in keyof Foo]?: boolean} }`, its
-generic form, the `Foo<any>` self-instantiation, a cross-file form) all resolve
-**correctly** — the spine walks the interface body and resolves the mapped-type node
-before any member table is in flight. **The LIB is different**: `interface Array<T>`'s
-body is never spine-walked, so the first ask arrives from inside `resolveReferenceMembers`.
-A THREE-LINE scratch project — `export const strArr: string[] = []` and a `number[]`
-sibling — is enough:
-
-```
-SYMORDER[full a.ts] truncatedResolutions=1
-MEMBER [Symbol.unscopables] : any   first[pass=checkSpine ambient=empty persisted=true truncated=true]
-```
-
-**So any small or medium project has been rendering `[Symbol.unscopables]: any` in a
-hover or completion, on the ordinary shipped build.** The 78-file tsc profiles hide it
-because `init:buildFileLocalTypeMaps` happens to resolve that member first — which is
-exactly why three rounds read this as a partition problem.
-
-**FINDING 2 — THE GUARD, AND A FIX THAT TERMINATES BY CONSTRUCTION.**
-`resolveStructuredTypeMembersCore` returns silently on re-entry leaving `properties` null
-— correct for circular heritage, TRUNCATED for anything reading the key set.
-`getKeyofType` read that null as `string`, the mapped type bailed to `any`, and round
-778's write gate froze it (ambient empty throughout). The fix answers such a `keyof`
-**from the DECLARATIONS**: it calls no resolver at all, reads only already-computed
-tables plus AST, under a visited set and a depth cap, and **REFUSES rather than returning
-a partial key domain** (round 463). **No TS2589 at (0,0) appeared anywhere** — (INC.19)'s
-self-referential-alias family is unreachable here because nothing in this path resolves a
-constraint.
-
-**THE ABLATION IS DECISIVE AND THE COUNTERS ARE THE CONTROL.** With
-`keyofNamesFromDeclarations` disabled the pin reads `typeText=any`; with it, the exact
-34-member mapped object. **And the ablated binary's cost-gate counters are identical
-DIGIT FOR DIGIT to the fixed one** — the fix moves zero counters, so all standing drift
-is pre-existing and none of it is this round's.
-
-**FINDING 3 — THE PRIZE, AND `moreAny` RETURNED TO BASELINE.** With the defect gone,
-partition-scoping `init:buildFileLocalTypeMaps` takes `narrowRendersMoreAny` **229 -> 168**
-— the baseline — which was the one observable refusing (INC.22). Both `partition-gate`
-arms EQUIVALENT. The shipped default is now the partition-scoped one, pinned with **no
-mode install in it** ((INC.16) arm a1's lesson).
-
-**A GATE BASELINE MOVED, AND IT IS THE ONE THIS SESSION HAS QUOTED ALL DAY — READ THIS
-BEFORE TRUSTING AN OLDER `5 / 3` FIGURE.** `capture-equivalence.sh`'s NARROW arm goes
-**5 spans / 3 files -> 2,275 of 381,666 (0.60%) in 46 files.** The full-build digest is
-UNCHANGED (`-3718897727265589316`), so an ordinary compile is untouched; the movement is
-entirely in what a NARROWED query renders.
-**Why it is not the trade (INC.2) refused, and the distinction is real**: (INC.2) refused
-45 spans that rendered `any` where the full build rendered the declared type — WRONG
-answers. Here **no row renders more `any`, none is absent, and the direction is MIXED** —
-the narrow arm KEEPS `Intl.LocalesArgument` where the full arm expands it (113 rows) and
-renders a signature the full arm gives up on as `any` (38 rows). These are two draws from
-the id-keyed first-wins `aliasDisplayMap`, which CLAUDE.md already records as ARBITRARY
-in both arms.
-**It is still a 455x move in a gate, and the mitigation is known and measured**:
-(INC.22)'s `TypeAlias`-phase-program-wide configuration costs **6.68 ms** and collapses
-2,275 to **+1 row**. It was not taken here because it needs per-PHASE scope composition
-this axis does not have, and because (INC.22) measured that exact configuration diverging
-a **DIAGNOSTIC** on the sensitivity arm. See (INC.26) — 6.68 ms of a 58 ms floor is 11%,
-and it buys back the gate.
-
-**GATES.** Suite **15,801 / 0 / 3** (+1 pin), **zero corpus baselines moved**,
-`cost_gate.py` exit 0, `huge_methods --fail-over 0` clean (779 core, 50 `-project`),
-`capture-equivalence` full digest `-3718897727265589316` (recorded baseline, unchanged),
-`capture-channel` full digest `4065921979171190360` with moreAny **168**,
-`partition-equivalence` **EQUIVALENT 78/78**, `partition-gate` **78/78** and **76/76**.
-
-**PROCESS NOTE, SELF-REPORTED**: no two JVMs ran at once, but logs were polled during
-runs more than the quiet-box rule prefers. No timing claim here rests on wall clock — the
-floor and ratio figures come from the deterministic pass table and the sweep harness.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **OWNER DIRECTIVE 2026-08-22, TOP OF QUEUE: make the language service incremental enough
@@ -1795,6 +1817,16 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   **Do not attempt it as a rendering fix**: (INC.28) established the rows are a relation
   verdict, and (INC.26)/(INC.27) established that `typeToString` is shared with the
   diagnostics and pinned byte-for-byte across ~13k baselines.
+  **AMENDED 2026-08-24 — (INC.42) REACHED THIS BOUNDARY FROM A SECOND DIRECTION AND DID NOT
+  WEAKEN THE TERMINATION ARGUMENT.** It judges a bare `Type.TypeParam` argument LOCALLY against
+  its own already-resolved constraint, inside B57.1b's guard and nowhere else, so **no new rule
+  enters `checkTypeRelatedToCore`** and this item's obligation is untouched. Two things it
+  measured that a future attempt inherits: the relaxation is confined to the DISPLAY path
+  because on the CHECKING path it reads `output.errors` **46 -> 48** on the compiler profile,
+  and this guard's role as a recursion brake lives in the **ENCLOSING** declaration rather than
+  the referenced one (a flip census of `excessPropertyCheckIntersectionWithRecursiveType` says
+  so — the only four decisions it flips there are two NON-recursive aliases referenced from
+  inside the self-referential `BuildTree`). See (INC.43) for what the real rule would buy.
 
 - [x] **(INC.31) DONE 2026-08-24 (`2fa8a39f`) — THE DOCUMENTED LANGUAGE-SERVICE COST TABLE
   WAS 10-24x STALE, AND THE ROWS THAT DID NOT MOVE ARE THE LOAD-BEARING ONES.** Every wall
@@ -2089,7 +2121,24 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   names for `checker.ts`, and a widened `scopes.file` arm read **+19.4 s** there), so that
   channel needs its own fix whichever mechanism serves it.
 
-- [ ] **(INC.42) `Visitor` / `VisitResult<T>` HOVER AS `(node: TIn) => any` ON *EVERY ORDINARY
+- [x] **(INC.42) PARTIALLY DONE 2026-08-24 (`73811153` + `624812c2`) — A REAL ORDINARY-BUILD
+  DEFECT IS FIXED, AND IT IS *NOT* THE 213 ROWS THIS ITEM WAS AIMED AT.** What landed: a bare
+  `Type.TypeParam` alias argument was judged by `checkTypeRelatedTo`, which has no "TypeParam
+  source via its constraint" rule, so it read as a constraint **FAILURE** where the honest
+  answer is **UNDECIDED** — the reference answered `errorType` and rendered `any`. Three lines
+  reproduce it with no partition (`type R1<T extends Nd> = T | readonly Nd[]; type A1<X extends
+  Nd> = (n: number) => R1<X>` renders `(n: number) => any`; tsc 7.0.2's LSP renders
+  `(n: number) => R1<X>`), and a constraint matrix isolated the predicate: an UNCONSTRAINED
+  inner parameter is always correct, and **every** row whose inner parameter carries a
+  constraint failed — including where the two constraints are IDENTICAL. The argument is now
+  judged locally against its own already-resolved constraint, behind two measured gates
+  (`aliasBodyDisplayDepth`, `aliasGuardIsRecursionBrake`); no new rule enters
+  `checkTypeRelatedToCore`. Suite 15,831 / 0 / 3 (+7 pins), zero corpus baselines moved, both
+  capture digests re-recorded by design. See the session note.
+  **WHAT IS NOT DONE: the 213 rows. `Inc41ClassifyMain` re-run reads 796 rows / 37 pairs /
+  213 GAINED-INFERENCE — UNCHANGED.** Do not read this checkbox as the mission closing; the
+  residual is re-scoped and re-queued as **(INC.43)** with what those rows actually are.
+  ORIGINAL ENTRY: **`Visitor` / `VisitResult<T>` HOVER AS `(node: TIn) => any` ON *EVERY ORDINARY
   BUILD*, AND THE CAPTURE SWEEPS ARE STRUCTURALLY BLIND TO IT — 375 ROWS IN 17 FILES, 213 OF
   THEM THIS ONE CAUSE.** Found as a by-product of (INC.41)'s classification: of the 796
   divergent rows, **375 are BOTH WRONG** — the fresh arm and the replay agree, and tsc 7.0.2
@@ -2120,6 +2169,46 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   an improvement only if the BOTH-WRONG **element-pair** count falls ((INC.23)'s rule: count
   distinct pairs, not rows — 192 of the 796 rows carry more than one differing element).
   Any change to union or alias display touches ~13k pinned corpus baselines.
+
+- [ ] **(INC.43) THE 213 ROWS (INC.42) DID NOT CLOSE — AND THEY ARE NOT WHAT THE QUEUE HAS
+  BEEN CALLING THEM.** Re-measured after (INC.42) landed: `Inc41ClassifyMain` reads **796 rows
+  / 37 pairs / 213 GAINED-INFERENCE, UNCHANGED**, and REPLAY-WORSE did not grow. **Read out of
+  the classifier's own dump rather than assumed, the p000 rows are NOT hovers on `Visitor`**:
+  they are carets on `visitEachChild` / `visitFunctionBody` / `discardVisitor` — **function
+  names whose rendered OVERLOAD SET carries a parameter declared `Visitor`**. So the string
+  comes from the **CHECKING** path (`getTypeFromTypeReference` on a bare `Visitor`), which
+  (INC.42) deliberately does not reach, and **both arms render an unbound parameter**:
+  `(node: TIn) => any` fresh, `(node: TIn) => T | readonly Node[]` replayed. tsc renders
+  `Visitor`.
+  **REACHING IT IS BLOCKED THREE TIMES, EACH COST MEASURED — READ THESE BEFORE PROPOSING
+  ANYTHING.**
+  (1) **(INC.28)**: handing a reference the alias's PARAMETRIC form costs two corpus false
+  positives (`typeArgumentDefaultUsesConstraintOnCircularDefault`,
+  `excessPropertyCheckIntersectionWithRecursiveType`).
+  (2) **(INC.42)**: relaxing B57.1b's constraint guard on the CHECKING path (i.e. dropping
+  `aliasBodyDisplayDepth`) reads `output.errors` **46 -> 48** on the compiler profile — an
+  overload-resolution defect at `checker.ts:2503` that a no-longer-`any` `VisitResult<T>`
+  exposes, plus a TS2322 at `watchPublic.ts:576`. Two dashboard false positives against 213
+  hovers is not a trade.
+  (3) **Even with both closed**, we would render `(node: TIn) => VisitResult<TOut>` where tsc
+  renders `Visitor` — B50.5 deliberately does not register an alias NAME for a result that is a
+  pure function type (`isPureFunctionType`, pinned by `nestedCallbackErrorNotFlattened_ts`).
+  **VERDICT: this is a RELATION-ENGINE item ((INC.30)) plus an alias-NAMING one, NOT a display
+  bug**, and the honest order is (1) before (2) before (3). Do not attempt it as a rendering
+  fix — (INC.26)/(INC.27) established that `typeToString` is shared with the diagnostics and
+  pinned byte-for-byte across ~13k baselines.
+  **PRIZE: UNMEASURED, AND DELIBERATELY SO — a correctness item, not a latency one.** It buys
+  no milliseconds; it makes a hover right. The pin must assert the **VALUE** against
+  `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` (round 924's oracle,
+  `scripts/lsp_hover.py` / `scripts/lsp_hover_project.py` — read the profile's sources with
+  `newline=""`, it is CRLF), never that two arms agree: the capture sweeps are DIFFERENTIALS
+  and are blind to anything both arms get wrong ((INC.28)'s law).
+  **AUTHORITY: `docs/inc41-replay-capture-classification.md` § 6a**, with § 3's per-cause table
+  and § 7's grading rule — a change is an improvement only if the **element-pair** count falls
+  ((INC.23): 192 of the 796 rows carry more than one differing element, so a ROW count
+  over-reports). The two smaller causes in the same bucket are a different question and are
+  probably not one fix: `ModuleName` -> tsc's `StringLiteral` (74 rows) and
+  `ImportAttributeName` -> `StringLiteral` (62), where we WIDEN and tsc narrows.
 
 - [x] **(INC.4) LANDED 2026-08-22 — `ProjectCompiler.build` now refuses it, 4 pins
   including the DEFAULT-`noEmit` case and both negative controls. ORIGINAL ENTRY:

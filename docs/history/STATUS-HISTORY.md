@@ -1,3 +1,62 @@
+**THE LANGUAGE SERVICE IS 10-24x FASTER THAN ITS OWN DOCUMENTED COST TABLE, AND THE ONE DEFECT
+THE NEW TABLE EXPOSED IS FIXED: A MEDIAN NARROWED DIAGNOSTICS QUERY IS 108-113 ms — 43-47x A FULL
+REBUILD — AND AN ORDINARY HOVER AFTER TWO OTHER CHANNELS WENT 324 ms -> 4 ms (2026-08-24,
+(INC.31)+(INC.32)).** Every wall figure on `docs/language-service.md` was round-930, i.e. taken
+before (INC.2b) narrowed the capture path and before (INC.1)-(INC.30) took the incremental floor
+from 1,092 ms to 58 ms. Re-taken on tsc's own 78 sources (9,977,097 chars), warm, six warm-up
+cycles, medians with their draw lists, **every row reproduced in two independent JVMs**:
+`diagnosticsOf(f)` median **1.1-1.2 s -> 108-113 ms** (p90 202-219), `completionsAt`
+**~4.7-5.1 s -> 194-202 ms**, `signatureHelpAt` **190-214 ms**, `documentHighlightsAt(binder.ts)`
+cold **~15x**, first hover on `binder.ts` **610 -> 290-306 ms**, against a **4,864-5,096 ms** full
+rebuild that is unchanged and is the anchor. **A REAL KEYSTROKE COSTS THE NARROWED PATH
+NOTHING EXTRA** — identical bytes 212 ms, an appended comment 247, an inserted statement 218,
+a statement introducing a TS2322 215 — which no earlier harness here could say, because they
+all dirty a buffer by writing its own bytes back.
+**THE HALF THAT DID NOT MOVE IS THE HALF A PLUGIN AUTHOR HAS TO DESIGN AROUND, AND IT CANNOT
+MOVE.** `referencesAt` (8.8-9.6 / 13.2-13.9 s), `renameAt` (20.0-21.3 / 25.0-26.0 s) and a
+project-wide `diagnostics()` (4,864-5,096 ms) never enter `captureIn`'s partition, because
+their claim is about every file; that column is now marked on the page rather than left to
+be inferred. The heap claim is corrected in the direction an IDE budgets: not "~1.9 GB peak, 512 MB not enough" but
+**1,077-1,125 MB peak in G1 old gen with 264 MB RETAINED** after a full GC — green at `-Xmx2g`,
+OOM at `-Xmx1g`.
+**TWO LEVERS WERE REFUSED BY MEASUREMENT BEFORE BEING BUILT, WHICH IS THE ROUND'S CHEAPEST
+PRODUCT.** (a) Memoizing `SourceIndex`'s derived populations — on a memo hit `captureAround`
+still re-derives the file's occurrence set — decomposes to **1.21 ms on a 17.9 KB file, 2.27 ms
+at 194 KB and 82.7 ms at 3.15 MB**, closing the arithmetic to 0.4% of the measured 83 ms
+second-caret hover on `checker.ts`; at the MEDIAN file the whole prize is **1-2 ms**, and it is
+not a `referencesAt` lever either (~140 ms of a 9.3 s sweep = 1.5%). (b) "Completions over-capture the
+file" is simply **FALSE** — the three call sites already pass a single caret span, so their
+194-202 ms IS the narrowed build, and since a completion is by definition asked on a just-edited
+buffer, **no cross-edit memo can ever serve it**.
+**THE DEFECT: A MEMO BOUNDED BY ENTRY *COUNT* LET A ONE-SPAN ENTRY EVICT A 125,289-SPAN ONE.**
+`Project.captures` was an access-ordered LRU bounded at two ENTRIES. Hover, go-to-definition,
+highlights and `fileSemantics` ask ONE file-wide question per buffer (125,289 spans on
+`checker.ts`); `completionsAt`'s two branches and `signatureHelpAt` each name exactly ONE span.
+So **hover -> completion -> signature help -> hover, with no edit anywhere in it**, threw the
+hover's file-wide entry out and paid a whole narrowed rebuild for the last step. **The fix is not
+a larger limit** — that would double the worst case to buy a case needing no extra memory at all
+— but a bound on WEIGHT, in two lanes that cannot evict each other: at most 4 spans is
+caret-scoped and bounded at 4 entries, everything above it is buffer-sized and bounded at 2,
+unchanged since (INC.13). **Worst-case retention is two buffer captures (UNCHANGED) beside 16
+answers = 0.013% of ONE file-wide capture**, and invalidation was re-audited rather than assumed
+(`cached = null` at exactly three sites, every one clearing `captures` in the same breath).
+**THE PIN LESSON IS THE TRANSFERABLE ONE, AND IT NEEDED A SECOND ARM TO FIND.** Ablating the
+count-based eviction put **3 of 13 RED**; the fourth new pin — *"the caret lane is BOUNDED too"* —
+stayed **GREEN, correctly, because a stricter bound cannot fail a bound pin**. Only a second arm
+(caret lane unbounded, 4 -> 4096) turned it red. So all four pins do fail against the mistake each
+actually names, but *"I wrote four pins and three went red"* would have been the wrong summary.
+Suite **15,815 / 0 / 3** (+4 pins); `cost_gate.py` and `huge_methods.py` were CONTROLS and
+deliberately not run — no checker code and no compiled core method is touched, the change being
+confined to the `-project` module's memo policy. **FOUR FOLLOW-UPS QUEUED**: (INC.33) the caret
+channels are cold per channel per buffer (a hover's request carries `spans`, not `memberSpans`, so
+a completion in an already-hovered buffer still builds at 201-228 ms — correct, and the widening
+is unpriced); (INC.34) the `SourceIndex` refusal, recorded with the instrument that can re-open
+it; (INC.35) project-wide `diagnostics()` at ~4.9-5.1 s is now the biggest number in the service by
+3x and is **BLOCKED-PENDING-USER**, because round 772 measured reverse-dependency closure DEAD on
+*this* corpus (tsc's own sources are `export *` barrels) — it would pay off on a layered
+application and buy the benchmark nothing; (INC.36) the `-Xmx2g` floor, where the 264 MB retained
+is the number to attack rather than the seconds.
+
 **`type Box<T> = { v: T }` RENDERED `{ v: any; }` ON ORDINARY BUILDS — A GENERIC ALIAS'S OWN
 PARAMETERS WERE NOT IN SCOPE FOR ITS BODY (2026-08-24, (INC.28)).** The fourth shipped correctness
 defect this session found while chasing latency, and the third in a row where **the FULL build was
