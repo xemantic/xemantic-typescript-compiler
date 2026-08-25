@@ -73,6 +73,16 @@ class Checker(
      */
     private val jsonModuleContents: Map<String, String> = emptyMap(),
     /**
+     * (CHK.30) The project crawl's OWN module resolutions — importer file name ->
+     * (module specifier as written -> resolved program file) — see
+     * [ParsedSource.moduleResolutions] for why they have to be carried rather than
+     * re-derived. Consulted by [resolveImportTargetFallback] as the LAST leg of every
+     * import-alias target ladder, so it can only make MORE specifiers resolve and
+     * never redirect one that already resolved. Empty for every corpus fixture and
+     * for the string-based compile path.
+     */
+    private val moduleResolutions: Map<String, Map<String, String>> = emptyMap(),
+    /**
      * (API.3) When non-null, the check spine RECORDS the type of the expression at
      * each requested [TypeCaptureSpan] as it walks past it — see [TypeCaptureRequest]
      * for why the direction is inwards rather than a post-hoc query, and
@@ -9335,6 +9345,10 @@ class Checker(
     // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
     private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
     private val moduleSpecifierCache = HashMap<String, String>()
+    /** (CHK.30) round 949 — the [resolveImportTargetFallback] memo, keyed
+     *  `"<contextFile>\u0000<specifier>"` (both sources are per-IMPORTER, so the
+     *  specifier alone is NOT the key). Same [UNRESOLVED_MODULE_SPEC] sentinel. */
+    private val importTargetFallbackCache = HashMap<String, String>()
 
     /** M0.3(iv): memo for [normalizePath] — a pure function on the module-specifier
      *  resolution hot path (round-618 JFR: 17/24 joinTo samples were its
@@ -16215,6 +16229,77 @@ class Checker(
             val stripped = specifier.removeSuffix(ext)
             if (contextFile != null) resolveModuleSpecifierRelative(stripped, contextFile)?.let { return it }
             resolveModuleSpecifier(stripped)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * (CHK.30) round 949 — the LAST-RESORT leg of every import-alias target
+     * resolution, and the reason a type imported from a `node_modules` package used
+     * to be `any`.
+     *
+     * [resolveModuleSpecifier] and its relative siblings are the corpus-era string
+     * matchers: they look a specifier up among the [fileResults] KEYS, and the
+     * non-relative form deliberately refuses `.d.ts` (so `foo` cannot capture an
+     * ambient `foo.d.ts`). That is right for a flat fixture layout and leaves a real
+     * project with NO resolution at all for `import type { V } from 'pkg'` — a
+     * package's `types` / `main` / `exports` entry is not a string transformation of
+     * the specifier. The alias then resolved to nothing and every type it named
+     * degraded to `any`.
+     *
+     * **Nothing in this repo could see it.** `any` is legal everywhere, so no
+     * diagnostic MOVES at the import; what surfaces is the false-positive SHADOW —
+     * a TS7006 on every un-annotated callback parameter whose contextual type lived
+     * in that package (89 of knip's 156 residual rows, which is what (CHK.30) was
+     * opened about and mis-attributed to contextual typing).
+     *
+     * Two sources, in order of authority:
+     *  1. [moduleResolutions] — what the project crawl's real `ModuleResolver`
+     *     answered for this exact `(importer, specifier)` pair. It is the only thing
+     *     here that knows an `exports` map, a conditional export, or `paths`.
+     *  2. the `node_modules` walkers ~15 other checker sites (TS2307, augmentation
+     *     targets, `import()` types) have used all along — the alias ladders were
+     *     simply never given the leg. They are what serves an embedding caller that
+     *     built its own program without a crawl.
+     *
+     * APPENDED after every existing leg at each of the ten alias ladders, so it can
+     * only make MORE specifiers resolve, never redirect one that already resolved.
+     * A corpus fixture reaches neither source: [moduleResolutions] is empty off the
+     * project path and the walkers key on `node_modules/<spec>` paths no flat
+     * fixture layout has.
+     *
+     * Memoized per `(contextFile, specifier)` — a directory-tree walk per alias
+     * resolution otherwise, and it is a pure function of the (fixed)
+     * [moduleResolutions] / [fileResults] / [jsonModuleContents] tables.
+     */
+    private fun resolveImportTargetFallback(spec: String, contextFile: String?): String? {
+        if (contextFile == null || spec.isEmpty()) return null
+        val key = "$contextFile\u0000$spec"
+        importTargetFallbackCache[key]?.let {
+            return if (it === UNRESOLVED_MODULE_SPEC) null else it
+        }
+        val result = computeImportTargetFallback(spec, contextFile)
+        importTargetFallbackCache[key] = result ?: UNRESOLVED_MODULE_SPEC
+        return result
+    }
+
+    private fun computeImportTargetFallback(spec: String, contextFile: String): String? {
+        // Guarded on the answer still being a BOUND file: the crawl also pulls in
+        // `.json` and un-bound `.js` files, which have no binder result to read an
+        // export out of, and the ladders' callers all index [fileResults] next.
+        moduleResolutions[contextFile]?.get(spec)?.let { if (it in fileResults) return it }
+        // The bare-specifier walkers below cannot say anything about a relative or
+        // rooted specifier — those already had their own legs.
+        if (spec.startsWith(".") || spec.startsWith("/")) return null
+        resolveBareNodeModulesAnyPrefix(spec, contextFile)?.let { return it }
+        resolveBareViaPackageExportsRoot(spec, contextFile)?.let { return it }
+        // A nodenext package SUBPATH is spelled with the ESM output extension
+        // (`pkg/dist/x.js`) and ships as `pkg/dist/x.d.ts`; the node_modules walk
+        // builds `…/x.js.d.ts`, so the strip has to happen before it, not after.
+        for (ext in listOf(".js", ".jsx", ".mjs", ".cjs")) {
+            if (!spec.endsWith(ext)) continue
+            val stripped = spec.removeSuffix(ext)
+            resolveBareNodeModulesAnyPrefix(stripped, contextFile)?.let { return it }
         }
         return null
     }
@@ -60508,8 +60593,19 @@ interface DataView {
                 if (node !is Block) {
                     // Round 472: an EXPRESSION body inherits the contextual
                     // signature's RETURN type (nothing else).
+                    // (CHK.30) round 949: …and, FIRST, this arrow's OWN return
+                    // annotation, which outranks any inherited context — tsc's
+                    // `getContextualReturnType` consults `getReturnTypeFromAnnotation`
+                    // before the contextual signature. A BLOCK body already got this
+                    // from [spineIanyReturnCtxAt] at the ReturnStatement edge; only
+                    // the CONCISE body had no path to it, so the curried factory
+                    // `(dep: D): Handler => (a, b) => …` and the literal form
+                    // `(): V => ({ m(node) { … } })` reported TS7006 on every
+                    // parameter the annotation types (2 of knip's 3 residual rows).
+                    val ownRet = p.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                        ?.takeIf { it !== anyType && it !== errorType }
                     val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-                    val retT = contextualSigReturnTypeForCtx(cur?.type)
+                    val retT = ownRet ?: contextualSigReturnTypeForCtx(cur?.type)
                     spineIanyDefineCtx(node,
                         if (retT != null) SpineIanyCtx(kind = 0, type = retT) else null)
                 }
@@ -96830,6 +96926,7 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val leaf = computeExportedInterfaceFileThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
@@ -112323,6 +112420,7 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val d = resolveExportedVarDeclThroughStars(tr.sourceFile, originalName)
@@ -112369,6 +112467,7 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val fnDecls = computeExportedFnDeclsThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
@@ -119093,6 +119192,7 @@ interface DataView {
                             ?.sourceFile?.fileName
                     val targetFile = resolveModuleSpecifier(spec, imp)
                         ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                        ?: resolveImportTargetFallback(spec, contextFile)
                         ?: continue
                     val tr = fileResults[targetFile] ?: continue
                     val member = tr.locals[callee.name.text]
@@ -119164,6 +119264,7 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
@@ -119227,6 +119328,7 @@ interface DataView {
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveModuleSpecifierRelative(spec, contextFile)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
@@ -119294,6 +119396,7 @@ interface DataView {
                 // false TS2339 (measured on the `yaml` library, whose guards —
                 // `isNode`, `isScalar`, `isMap` — are all imported).
                 ?: resolveModuleSpecifierRelative(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
@@ -120935,6 +121038,7 @@ interface DataView {
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val targetFile = resolveModuleSpecifier(spec, importDecl)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
@@ -141078,6 +141182,20 @@ interface DataView {
                     if (ret != null && ret !== anyType && ret !== errorType) bodyCtx = ret
                 }
             }
+        }
+        // (CHK.30) round 949: this arrow's OWN return annotation OUTRANKS the
+        // inherited contextual signature's return type, and is the only source when
+        // there is no incoming context at all (`const p = (): V => ({ m(node) … })`).
+        // tsc's `getContextualReturnType` consults `getReturnTypeFromAnnotation`
+        // first; leaving this out made a caller's expectation win over what the
+        // arrow itself declares, which is a wrong TYPE rather than a missing one.
+        // Kept in step with the [spineIanyEdgeEnter] ArrowFunction arm deliberately —
+        // the two walkers disagreeing about the same caret is how a diagnostic ends
+        // up naming a type no reader can derive from the source.
+        if (expr.body is Expression) {
+            expr.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                ?.takeIf { it !== anyType && it !== errorType }
+                ?.let { bodyCtx = it }
         }
         val savedCtx = contextualType
         contextualType = bodyCtx
@@ -164785,7 +164903,8 @@ interface DataView {
                 // importing file's directory. Purely additive.
                 val target = resolveModuleSpecifier(spec, nsImport)
                     ?: resolveAliasJsModuleSpecifier(spec, ctx)
-                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx) ?: return null
+                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx)
+                    ?: resolveImportTargetFallback(spec, ctx) ?: return null
                 val tr = fileResults[target] ?: return null
                 if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
                     tr.locals[memberName]?.let { return it }
@@ -164804,7 +164923,8 @@ interface DataView {
                 val spec = (nsExport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
                 val target = resolveModuleSpecifier(spec, nsExport)
                     ?: resolveAliasJsModuleSpecifier(spec, ctx)
-                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx) ?: return null
+                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx)
+                    ?: resolveImportTargetFallback(spec, ctx) ?: return null
                 val tr = fileResults[target] ?: return null
                 if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
                     tr.locals[memberName]?.let { return it }

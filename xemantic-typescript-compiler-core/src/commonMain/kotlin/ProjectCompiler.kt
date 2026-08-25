@@ -236,13 +236,16 @@ class ProjectCompiler(private val vfs: Vfs) {
         val preParsed = HashMap<String, PreParsedFile>() // path -> crawl-time parse (INV.1(e))
         val unresolved = mutableListOf<Pair<String, String>>()
         val importEdges = mutableListOf<Pair<String, String>>()
+        // (CHK.30) importer -> specifier -> resolved file, as the crawl's own
+        // [ModuleResolver] answered it; carried into the core via [ParsedSource].
+        val moduleResolutions = mutableMapOf<String, MutableMap<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
         FrontEnd.close(FrontEnd.CONFIG, feConfigT0)
         val feCrawlT0 = FrontEnd.t()
         runCompilerPipeline {
             val typeRoots = effectiveTypeRoots(config)
             crawlImportGraph(
-                seeds, resolver, emitOptions, unresolved, importEdges,
+                seeds, resolver, emitOptions, unresolved, importEdges, moduleResolutions,
                 resolveReferenceTypes = { name ->
                     typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
                 },
@@ -264,7 +267,8 @@ class ProjectCompiler(private val vfs: Vfs) {
         val coreOptions =
             if (!emitOptions.effectiveModule.isNodeNext) emitOptions
             else emitOptions.copy(packageJsonTypes = packageScopesOf(program.keys))
-        val parsed = ParsedSource(coreOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
+        val parsed = ParsedSource(coreOptions, files, hasExplicitFilenames = true, preParsed = preParsed,
+            moduleResolutions = moduleResolutions)
         val result = TypeScriptCompiler().compileParsed(
             parsed, coreOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
             typeCapture = typeCapture,
@@ -441,6 +445,12 @@ class ProjectCompiler(private val vfs: Vfs) {
         options: CompilerOptions,
         unresolved: MutableList<Pair<String, String>>,
         importEdges: MutableList<Pair<String, String>> = mutableListOf(),
+        // (CHK.30): every specifier this crawl RESOLVED, keyed importer -> specifier
+        // -> resolved file. The checker re-derives the same mapping with a string
+        // matcher over the program's file names, which cannot express a bare package
+        // specifier at all; handing it the answer the real resolver already computed
+        // is what stops an imported type from silently degrading to `any`.
+        moduleResolutions: MutableMap<String, MutableMap<String, String>> = mutableMapOf(),
         // M4.8: `/// <reference types="pkg">` needs the tsconfig's type roots, which
         // the crawl has no other access to; the caller supplies the lookup.
         resolveReferenceTypes: (String) -> String? = { null },
@@ -468,6 +478,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                         continue
                     }
                     importEdges.add(f.path to resolved)
+                    moduleResolutions.getOrPut(f.path) { mutableMapOf() }[spec] = resolved
                     if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
                 // M4.8: `/// <reference path|types>` targets join the program too

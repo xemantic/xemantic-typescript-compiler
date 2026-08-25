@@ -2266,6 +2266,7 @@ class TypeScriptCompiler {
                         assignedFileNames = assigned,
                         allInputFileNames = allInputFileNames,
                         jsonModuleContents = jsonModules,
+                        moduleResolutions = parsed.moduleResolutions,
                     )
                     FrontEnd.workerNanos[w] = PassTiming.nowNanos() - workerT0
                     workerChecker
@@ -2287,6 +2288,7 @@ class TypeScriptCompiler {
                 assignedFileNames = recheckOnly,
                 allInputFileNames = allInputFileNames,
                 jsonModuleContents = jsonModules,
+                moduleResolutions = parsed.moduleResolutions,
                 // (API.3): the SEQUENTIAL checker is the only one handed a capture
                 // request — under `--workers` each worker walks its own partition
                 // and would race on one shared result map for no benefit, so a
@@ -6327,6 +6329,7 @@ private fun runPartitionEquivalenceCheck(
             options, results, isMultiFileSource = parsed.hasExplicitFilenames,
             assignedFileNames = assigned,
             allInputFileNames = allInput, jsonModuleContents = json,
+            moduleResolutions = parsed.moduleResolutions,
         )
         merged.addAll(workerChecker.getDiagnostics())
     }

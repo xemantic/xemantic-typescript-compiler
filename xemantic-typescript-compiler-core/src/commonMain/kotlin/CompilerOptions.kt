@@ -471,6 +471,23 @@ data class ParsedSource(
     // [ParserFlags] and the entry content match the recorded ones — reuse is a pure
     // optimization; any mismatch re-parses. Empty for the string-based [compile] path.
     val preParsed: Map<String, PreParsedFile> = emptyMap(),
+    /**
+     * (CHK.30): the project crawl's OWN module resolutions — importer file name ->
+     * (module specifier as written -> resolved program file). Empty for the
+     * string-based [compile] path and for every corpus fixture, which have no
+     * [ModuleResolver] and no directory layout to resolve against.
+     *
+     * WHY IT HAS TO BE CARRIED. The checker re-derives "which file does this
+     * specifier name" from the program's file NAMES ([Checker.resolveModuleSpecifier]
+     * and its relative siblings). That matcher is a corpus-era simplification and
+     * cannot express a bare package specifier — a `node_modules` package's `types` /
+     * `main` / `exports` entry is not a string transformation of the specifier — so
+     * an import alias into a package resolved to nothing and every type it named
+     * degraded to `any`. Silently: `any` is legal everywhere, so what shows up is
+     * the false-positive shadow (a TS7006 on each un-annotated callback parameter),
+     * never a missing error at the import itself.
+     */
+    val moduleResolutions: Map<String, Map<String, String>> = emptyMap(),
 )
 
 /**
