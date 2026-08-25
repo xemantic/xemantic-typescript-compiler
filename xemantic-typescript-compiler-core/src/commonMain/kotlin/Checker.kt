@@ -3965,6 +3965,16 @@ class Checker(
      *  if the lib didn't define ReadonlyArray (legacy compatibility). */
     private var globalReadonlyArrayType: Type.Interface? = null
 
+    /**
+     * (CHK.40) Global `Promise` interface — the wrapper an `async` function-like's
+     * INFERRED return type carries. Wired in `init:wireGlobalArrayTypes` beside
+     * Array/ReadonlyArray (a declaration lookup, so its answer is a property of the
+     * program and not of who asked first). NULL when the lib declares no `Promise`
+     * — [promiseWrappedReturnType] then answers the un-wrapped type, i.e. exactly
+     * the pre-(CHK.40) behaviour.
+     */
+    private var globalPromiseType: Type.Interface? = null
+
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
     private val maxRelationDepth = 100
@@ -10008,6 +10018,17 @@ class Checker(
             if (roArraySym.flags.hasAny(SymbolFlags.Interface)) {
                 val roType = getDeclaredTypeOfClassOrInterface(roArraySym)
                 globalReadonlyArrayType = roType
+            }
+        }
+        // 0c'. (CHK.40) …and `Promise`, for the same reason one level up: an
+        // `async` function-like whose return type is INFERRED returns
+        // `Promise<T>`, not `T`. Resolved HERE rather than on first ask because
+        // a lib interface's member table is lazy ((INC.25)) — reaching one from
+        // inside another resolution truncates it.
+        globals["Promise"]?.let { pSym ->
+            if (pSym.flags.hasAny(SymbolFlags.Interface)) {
+                val pType = getDeclaredTypeOfClassOrInterface(pSym)
+                if (pType.typeParameters?.size == 1) globalPromiseType = pType
             }
         }
         }
@@ -60608,11 +60629,28 @@ interface DataView {
                 // M1.6(b): resolve the annotation only for expr shapes that can
                 // consume a contextual type (bounds first-touch resolution-order
                 // changes to functions that return such shapes).
-                val retCtx = if (retAnn != null && (
-                        node is ObjectLiteralExpression || node is ArrowFunction ||
-                        node is FunctionExpression || node is ParenthesizedExpression ||
-                        node is ConditionalExpression))
+                // (CHK.40)(a): …and an ARRAY LITERAL is such a shape — the arm
+                // below distributes the ELEMENT type into object-literal elements,
+                // and without the array kind here it was handed no type at all, so
+                // `function f(): V[] { return [{ m(node) {…} }] }` reported TS7006
+                // where the annotated non-array form did not.
+                val ctxShape = node is ObjectLiteralExpression || node is ArrowFunction ||
+                    node is FunctionExpression || node is ParenthesizedExpression ||
+                    node is ConditionalExpression || node is ArrayLiteralExpression
+                val fromAnn = if (retAnn != null && ctxShape)
                     getTypeFromTypeNodeSafeNsAware(retAnn) else null
+                // (CHK.40) STRICTLY ADDITIVE, and the `when` is written so that it
+                // reads that way: an annotation that resolved keeps its own answer
+                // (bar the async unwrap, which is the identity for everything
+                // else), an annotation that did NOT resolve keeps answering null,
+                // and only the no-annotation case — previously null — consults the
+                // enclosing function's own CONTEXTUAL return type ((CHK.40)(d)).
+                val retCtx = when {
+                    !ctxShape -> null
+                    fromAnn != null -> pullCtxAwaitIfAsyncAt(p, fromAnn)
+                    retAnn != null -> null
+                    else -> pullCtxReturnTypeAt(p, 0)
+                }
                 spineIanyDefineCtx(node, if (retCtx != null || retAnn != null)
                     SpineIanyCtx(kind = 0, type = retCtx, ann = retAnn) else null)
             }
@@ -60650,9 +60688,13 @@ interface DataView {
             is ArrayLiteralExpression -> if (spineIanyReached(node)) {
                 // Contextual typing through arrays: object-literal elements get
                 // the array's ELEMENT type; bare arrows stay un-propagated.
+                // (CHK.40)(a): …and a TUPLE contributes its element at THIS position,
+                // which is why the index is computed here where the array-reference
+                // case never needed one.
                 val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-                val elemCtx = cur?.type?.let { arrayRefElement(it) }
-                    ?.takeIf { it !== anyType && it !== errorType }
+                val elemCtx = cur?.type?.let {
+                    pullCtxArrayElementAt(it, p.elements.indexOfFirst { e -> e === node })
+                }
                 val typed = if (node is ArrowFunction || node is FunctionExpression) false
                     else cur?.typed == true
                 spineIanyDefineCtx(node, if (typed || elemCtx != null || cur?.viaUnion == true)
@@ -60971,7 +61013,10 @@ interface DataView {
         val octx = ctx?.takeIf { it.kind == 3 }
         val typed = octx?.typed == true
         val viaUnion = octx?.viaUnion == true
-        val propName = (prop.name as? Identifier)?.text
+        // (CHK.40)(c) …and a STRING-literal key names the same member here as it does
+        // in `getTypeOfObjectLiteral`. A ComputedPropertyName still answers null, which
+        // the M1.6(a) branch below depends on.
+        val propName = pullCtxMemberName(prop.name)
         val octxType = octx?.type
         val propType = if (propName != null && octxType != null)
             lookupPropertyTypeForCtx(octxType, propName) else null
@@ -61034,7 +61079,10 @@ interface DataView {
     private fun spineIanyObjLitMethodEnter(prop: MethodDeclaration) {
         val octx = spineIanyCtx?.takeIf { it.kind == 3 }
         if (octx?.typed == true) return
-        val mName = (prop.name as? Identifier)?.text
+        // (CHK.40)(c) …including a STRING-literal member name: `{ "m-x"(node) {…} }`
+        // is the same member the PropertyAssignment path has always accepted, and
+        // reading only `Identifier` here reported TS7006 for it.
+        val mName = pullCtxMemberName(prop.name)
         val octxType = octx?.type
         val mType = if (mName != null && octxType != null)
             lookupPropertyTypeForCtx(octxType, mName) else null
@@ -112724,10 +112772,17 @@ interface DataView {
                 // member `p` (TS2741 fired for a missing one) and typed it `any`, i.e. the
                 // member existed and its return type did not. Deliberately narrow: only a
                 // ComputedPropertyName is routed, so a StringLiteralNode-named method keeps
-                // answering `anyType` exactly as it did — that is a separate pre-existing
-                // gap and not this stage's.
-                val methodName = (decl.name as? Identifier)?.text
-                    ?: (decl.name as? ComputedPropertyName)?.let { declaredMemberName(it) }
+                // answering `anyType` exactly as it did.
+                //
+                // (CHK.40)(c) round 951 CLOSES that residue, and the fix is to stop
+                // extracting the name here at all: `declaredMemberName` is the SAME
+                // helper `resolveInterfaceMembersCore` used to REGISTER this member, so
+                // the two can no longer disagree about which member this is. It was the
+                // root of the item's (c): `interface VS { "m-x"(node: N): void }` had the
+                // member present and typed `any`, so `{ "m-x"(node) {…} }` got no
+                // contextual signature and reported TS7006 — while the PROPERTY form
+                // `"m-x": (n: N) => void` was byte-correct.
+                val methodName = declaredMemberName(decl.name)
                 if (methodName.isNullOrEmpty() || methodName == "new") return anyType
                 // B280: a method on a NAMESPACE-NESTED interface/class must resolve its
                 // param/return annotations with the containing namespace's exports in
@@ -112788,8 +112843,9 @@ interface DataView {
                             // NOT infer `void` here (B420: `() => void` vs `() => any` regresses
                             // accessor/override assignability in getAndSetNotIdenticalType2/3 etc.).
                             val rt = md.type?.let { getTypeFromTypeNode(it) }
-                                ?: md.body?.let { b -> if (bodyHasReturnValue(b)) inferReturnTypeFromBody(b) else null }
-                                ?: anyType
+                                ?: asyncWrapInferredReturn(md,
+                                    md.body?.let { b -> if (bodyHasReturnValue(b)) inferReturnTypeFromBody(b) else null }
+                                        ?: anyType)
                             val ps = getParameterSymbols(md.parameters)
                             for ((pi, param) in ps.withIndex()) {
                                 if (pi < md.parameters.size) {
@@ -112915,9 +112971,10 @@ interface DataView {
                     }
                 }
                 val rt = decl.type?.let { getTypeFromTypeNode(it) }
-                    ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
-                    ?: decl.body?.let { inferReturnTypeFromBody(it) }
-                    ?: anyType
+                    ?: asyncWrapInferredReturn(decl,
+                        decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
+                            ?: decl.body?.let { inferReturnTypeFromBody(it) }
+                            ?: anyType)
                 // Resolve parameter types eagerly within the type param scope.
                 val ps = getParameterSymbols(decl.parameters)
                 val hasThisParam = (decl.parameters.firstOrNull()?.name as? Identifier)?.text == "this"
@@ -122152,8 +122209,9 @@ interface DataView {
                     // objectLiteralThisWidenedOnUse: a no-return method body infers `void`
                     // (matches resolveInterfaceMembers), not `any`.
                     val returnType = prop.type?.let { getTypeFromTypeNode(it) }
-                        ?: prop.body?.let { if (!hasReturnWithExpression(it)) voidType else inferReturnTypeFromBody(it) }
-                        ?: anyType
+                        ?: asyncWrapInferredReturn(prop,
+                            prop.body?.let { if (!hasReturnWithExpression(it)) voidType else inferReturnTypeFromBody(it) }
+                                ?: anyType)
                     val params = getParameterSymbols(prop.parameters)
                     val sig = Signature(
                         declaration = prop,
@@ -122741,6 +122799,51 @@ interface DataView {
         return null
     }
 
+    /**
+     * (CHK.40) Is [fn] an `async` function-like whose return type this checker
+     * models? A GENERATOR is deliberately excluded — `async function*` returns an
+     * `AsyncGenerator`, which nothing here builds, so leaving its inferred type
+     * alone is the pre-(CHK.40) behaviour rather than a wrong wrap.
+     */
+    private fun isAsyncNonGeneratorFn(fn: Node): Boolean = when (fn) {
+        is ArrowFunction -> ModifierFlag.Async in fn.modifiers
+        is FunctionExpression -> ModifierFlag.Async in fn.modifiers && !fn.asteriskToken
+        is FunctionDeclaration -> ModifierFlag.Async in fn.modifiers && !fn.asteriskToken
+        is MethodDeclaration -> ModifierFlag.Async in fn.modifiers && !fn.asteriskToken
+        else -> false
+    }
+
+    /**
+     * (CHK.40) `Promise<t>` — what an `async` function-like whose return type is
+     * INFERRED actually returns.
+     *
+     * Before this, an un-annotated `async` function's type was its BODY's type, so
+     * `async function f() { return 1 }` read `() => number`: a false TS2322 at every
+     * `Promise<number>` target AND a missed one at every `number` target — measured
+     * in both directions on one seven-shape fixture, tsgo silent / reporting exactly
+     * the complement.
+     *
+     * tsc's rule is `Promise<Awaited<T>>`. The one level modelled here is the one
+     * that matters: a body already answering `Promise<X>` keeps it (awaiting once
+     * more is the identity for a non-thenable X, and `Promise<Promise<X>>` is not a
+     * type tsc can produce), anything else is wrapped once. An ANNOTATED return type
+     * is never touched — the annotation already spells the `Promise`.
+     *
+     * Answers [t] unchanged when the lib declares no `Promise`, so a lib-less
+     * program is bit-for-bit what it was.
+     */
+    private fun promiseWrappedReturnType(t: Type): Type {
+        if (t === errorType) return t
+        if (t is Type.Reference && t.target.symbol?.name == "Promise") return t
+        val target = globalPromiseType ?: return t
+        return getOrInternReference(target, listOf(t))
+    }
+
+    /** [promiseWrappedReturnType], applied only when [fn] is `async` — the shape
+     *  every INFERRED-return site takes. */
+    private fun asyncWrapInferredReturn(fn: Node, t: Type): Type =
+        if (isAsyncNonGeneratorFn(fn)) promiseWrappedReturnType(t) else t
+
     /** Get the type of an arrow function expression. */
     private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
         // M3.0-gap-1: intern the arrow's OWN type parameters BEFORE resolving its
@@ -122781,7 +122884,7 @@ interface DataView {
         // its body return as `any` (x is invisible → `x.toFixed()` → `any`) instead of
         // `string`, leaving the arg type `(x: number) => any` and masking TS2345.
         applyContextualParameterTypes(params, expr.parameters)
-        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: run {
+        val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: asyncWrapInferredReturn(expr, run {
             val body = expr.body
             // B83.4f-c: push each named param's resolved type into `currentLocalTypes`
             // (save/restore) so `inferReturnTypeFromBody` resolves body identifiers
@@ -122844,7 +122947,7 @@ interface DataView {
             } finally {
                 currentLocalTypes = savedLocalTypes
             }
-        }
+        })
         val sig = Signature(
             declaration = expr,
             // Capture the arrow's own type parameters (with resolved constraints/defaults)
@@ -122906,10 +123009,10 @@ interface DataView {
                 }
             }
             val rt = expr.type?.let { getTypeFromTypeNode(it) }
-                ?: when {
+                ?: asyncWrapInferredReturn(expr, when {
                     !hasReturnWithExpression(expr.body) -> voidType
                     else -> inferReturnTypeFromFunctionExpressionBody(expr, ps) ?: anyType
-                }
+                })
             rt to ps
         }
         // Apply contextual typing: infer parameter types from contextual call signature
@@ -138327,7 +138430,8 @@ interface DataView {
     private fun getStaticMemberType(node: Node): Type? = when (node) {
         is FunctionDeclaration -> {
             val hasBodyNoReturn = node.body != null && !bodyHasReturnValue(node.body)
-            buildMethodType(node.parameters, node.type, node.typeParameters, hasBody = hasBodyNoReturn, bodyNode = node.body)
+            buildMethodType(node.parameters, node.type, node.typeParameters, hasBody = hasBodyNoReturn,
+                bodyNode = node.body, declNode = node)
         }
         is VariableDeclaration -> node.type?.let { getTypeFromTypeNode(it) }
         else -> getTypeOfMemberDecl(node)
@@ -138337,13 +138441,15 @@ interface DataView {
     private fun getReturnTypeOfCallable(node: Node): Type? = when (node) {
         is MethodDeclaration -> {
             node.type?.let { getTypeFromTypeNode(it) }
-                ?: node.body?.let { inferReturnTypeFromBody(it) }
-                ?: if (node.body != null && !bodyHasReturnValue(node.body)) voidType else null
+                ?: (node.body?.let { inferReturnTypeFromBody(it) }
+                    ?: if (node.body != null && !bodyHasReturnValue(node.body)) voidType else null)
+                    ?.let { asyncWrapInferredReturn(node, it) }
         }
         is FunctionDeclaration -> {
             node.type?.let { getTypeFromTypeNode(it) }
-                ?: node.body?.let { inferReturnTypeFromBody(it) }
-                ?: if (node.body != null && !bodyHasReturnValue(node.body)) voidType else null
+                ?: (node.body?.let { inferReturnTypeFromBody(it) }
+                    ?: if (node.body != null && !bodyHasReturnValue(node.body)) voidType else null)
+                    ?.let { asyncWrapInferredReturn(node, it) }
         }
         else -> null
     }
@@ -138453,7 +138559,8 @@ interface DataView {
             is MethodDeclaration -> {
                 // Use void return for methods with body that don't return a value
                 val hasBodyNoReturn = decl.body != null && !bodyHasReturnValue(decl.body)
-                buildMethodType(decl.parameters, decl.type, decl.typeParameters, hasBody = hasBodyNoReturn, bodyNode = decl.body)
+                buildMethodType(decl.parameters, decl.type, decl.typeParameters, hasBody = hasBodyNoReturn,
+                    bodyNode = decl.body, declNode = decl)
             }
             is GetAccessor -> decl.type?.let { getTypeFromTypeNode(it) } ?: decl.body?.let { inferReturnTypeFromBody(it) }
             is SetAccessor -> decl.parameters.firstOrNull()?.type?.let { getTypeFromTypeNode(it) }
@@ -138469,11 +138576,18 @@ interface DataView {
         typeParams: List<TypeParameter>? = null,
         hasBody: Boolean = false,
         bodyNode: Node? = null,
+        // (CHK.40) the DECLARATION whose `async` modifier decides whether an
+        // INFERRED return type is wrapped in `Promise<>`. Defaulted null so a
+        // caller that does not pass it keeps the pre-(CHK.40) answer.
+        declNode: Node? = null,
     ): Type {
         val fnType = Type.Object()
         val defaultReturn = if (hasBody) voidType else anyType
         val inferredReturn = if (returnTypeNode == null && bodyNode != null) inferReturnTypeFromBody(bodyNode) else null
-        val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: inferredReturn ?: defaultReturn
+        val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) }
+            ?: (inferredReturn ?: defaultReturn).let {
+                if (declNode != null) asyncWrapInferredReturn(declNode, it) else it
+            }
         val typeParameters = typeParams?.map { tp ->
             // B59.1: intern by TypeParameter node position. Same source-level <U>
             // returns the same Type.TypeParam instance across multiple sig resolutions.
@@ -142008,8 +142122,104 @@ interface DataView {
                 if (idx < 0) null
                 else cpaComputeArgCtxTypes(parent, null)?.getOrNull(idx)
             }
+            // (CHK.40)(a) an ELEMENT of an array literal is contextually typed by
+            // the literal's own contextual ELEMENT type.
+            is ArrayLiteralExpression -> {
+                val idx = parent.elements.indexOfFirst { it === node }
+                if (idx < 0) null
+                else pullContextualTypeAt(parent, depth + 1)
+                    ?.let { pullCtxArrayElementAt(it, idx) }
+            }
+            // (CHK.40)(b)/(d) a `return` expression is contextually typed by the
+            // enclosing function-like's RETURN type — its annotation, or, where it
+            // has none, the return type of the signature that contextually types
+            // the function itself.
+            is ReturnStatement ->
+                if (parent.expression === node) pullCtxReturnTypeAt(parent, depth) else null
             else -> null
         }
+    }
+
+    /**
+     * (CHK.40) The contextual type of a `return` expression's POSITION.
+     *
+     * Two sources, in tsc's own order (`getContextualReturnType` consults
+     * `getReturnTypeFromAnnotation` first): the enclosing function-like's own
+     * return ANNOTATION, else the return type of the single signature that
+     * contextually types that function — which is what makes
+     * `{ inner() { return { m(node) {…} } } }` under a contextual `inner(): V`
+     * behave like the annotated `inner(): V` form.
+     *
+     * An `async` function's annotation is `Promise<T>` and a `return` inside it
+     * is at `T`, so the wrapper is stripped — the mirror of
+     * [promiseWrappedReturnType] one layer up.
+     */
+    private fun pullCtxReturnTypeAt(ret: ReturnStatement, depth: Int): Type? {
+        if (depth > 6) return null
+        val fn = pullCtxEnclosingFnLike(ret) ?: return null
+        val ann = when (fn) {
+            is FunctionDeclaration -> fn.type
+            is MethodDeclaration -> fn.type
+            is GetAccessor -> fn.type
+            is ArrowFunction -> fn.type
+            is FunctionExpression -> fn.type
+            else -> null
+        }
+        val declared = ann?.let { pullCtxResolveAnnotation(it) }
+            ?: pullContextualTypeAt(fn, depth + 1)
+                ?.let { contextualSigReturnTypeForCtx(it) }
+            ?: return null
+        return pullCtxAwaitIfAsync(fn, declared)
+    }
+
+    /** (CHK.40) The function-like a `return` belongs to — [spineIanyReturnCtxAt]'s
+     *  walk, answering the NODE rather than its annotation. A Constructor /
+     *  SetAccessor has no return type to contribute, and a module / file boundary
+     *  ends the walk. */
+    private fun pullCtxEnclosingFnLike(ret: ReturnStatement): Node? {
+        var cur: Node? = (ret as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is FunctionDeclaration, is MethodDeclaration, is GetAccessor,
+                is ArrowFunction, is FunctionExpression -> return cur
+                is Constructor, is SetAccessor -> return null
+                is Block, is IfStatement, is ForStatement -> cur = (cur as NodeBase).parent
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** (CHK.40)(a) The contextual type of array-literal element [idx]: an
+     *  `Array`/`ReadonlyArray` element type (index-independent), else a TUPLE's own
+     *  element at that position. Null for anything else, and for an element type that
+     *  says nothing (`any`/error) — which keeps the parameter `any` exactly as before
+     *  rather than handing it a type the annotation does not spell. */
+    private fun pullCtxArrayElementAt(ctx: Type, idx: Int): Type? {
+        val elem = arrayRefElement(ctx)
+            ?: (ctx as? Type.Object)?.tupleElementTypes?.getOrNull(idx)
+            ?: return null
+        return elem.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /** (CHK.40)(b) [pullCtxAwaitIfAsync] addressed by the RETURN statement — the
+     *  shape the arity walker has in hand. */
+    private fun pullCtxAwaitIfAsyncAt(ret: ReturnStatement, t: Type): Type? {
+        val fn = pullCtxEnclosingFnLike(ret) ?: return t
+        return pullCtxAwaitIfAsync(fn, t)
+    }
+
+    /** (CHK.40)(b) Inside an `async` body a `return` is at the AWAITED type, so a
+     *  `Promise<T>` return type contributes `T`. Identity for a non-async [fn] and
+     *  for a non-Promise [t], so it can only ever open a position that answered
+     *  nothing usable before. */
+    private fun pullCtxAwaitIfAsync(fn: Node, t: Type): Type? {
+        if (!isAsyncNonGeneratorFn(fn)) return t
+        if (t is Type.Reference && t.target.symbol?.name == "Promise")
+            return t.resolvedTypeArguments?.singleOrNull()?.takeIf {
+                it !== anyType && it !== errorType
+            }
+        return t
     }
 
     /** A member name usable as a contextual-type lookup key. A COMPUTED name is
