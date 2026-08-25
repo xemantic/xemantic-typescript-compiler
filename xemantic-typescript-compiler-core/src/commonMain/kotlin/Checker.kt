@@ -9345,10 +9345,6 @@ class Checker(
     // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
     private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
     private val moduleSpecifierCache = HashMap<String, String>()
-    /** (CHK.30) round 949 — the [resolveImportTargetFallback] memo, keyed
-     *  `"<contextFile>\u0000<specifier>"` (both sources are per-IMPORTER, so the
-     *  specifier alone is NOT the key). Same [UNRESOLVED_MODULE_SPEC] sentinel. */
-    private val importTargetFallbackCache = HashMap<String, String>()
 
     /** M0.3(iv): memo for [normalizePath] — a pure function on the module-specifier
      *  resolution hot path (round-618 JFR: 17/24 joinTo samples were its
@@ -16253,55 +16249,28 @@ class Checker(
      * in that package (89 of knip's 156 residual rows, which is what (CHK.30) was
      * opened about and mis-attributed to contextual typing).
      *
-     * Two sources, in order of authority:
-     *  1. [moduleResolutions] — what the project crawl's real `ModuleResolver`
-     *     answered for this exact `(importer, specifier)` pair. It is the only thing
-     *     here that knows an `exports` map, a conditional export, or `paths`.
-     *  2. the `node_modules` walkers ~15 other checker sites (TS2307, augmentation
-     *     targets, `import()` types) have used all along — the alias ladders were
-     *     simply never given the leg. They are what serves an embedding caller that
-     *     built its own program without a crawl.
+     * So this answers from [moduleResolutions] — what the project crawl's real
+     * `ModuleResolver` already decided for this exact `(importer, specifier)` pair —
+     * and from nothing else. It is APPENDED after every existing leg at each of the
+     * ten alias ladders, so it can only make MORE specifiers resolve and never
+     * redirect one that already resolved, and a corpus fixture cannot reach it at all
+     * (the map is empty off the project path).
      *
-     * APPENDED after every existing leg at each of the ten alias ladders, so it can
-     * only make MORE specifiers resolve, never redirect one that already resolved.
-     * A corpus fixture reaches neither source: [moduleResolutions] is empty off the
-     * project path and the walkers key on `node_modules/<spec>` paths no flat
-     * fixture layout has.
+     * **AND IT IS DELIBERATELY THE ONLY SOURCE.** The first cut also consulted the
+     * `node_modules` walkers ~15 other checker sites use ([resolveBareNodeModulesAnyPrefix],
+     * [resolveBareViaPackageExportsRoot]); ablating those legs away is **0 RED across
+     * the whole 15,883-test suite**, because wherever they could answer the crawl has
+     * already answered better. Re-adding them would be shipping a leg no gate here
+     * can fail.
      *
-     * Memoized per `(contextFile, specifier)` — a directory-tree walk per alias
-     * resolution otherwise, and it is a pure function of the (fixed)
-     * [moduleResolutions] / [fileResults] / [jsonModuleContents] tables.
+     * The [fileResults] guard is not cosmetic: the crawl also pulls in `.json` and
+     * un-bound `.js` files, which have no binder result for a caller to read an
+     * export out of.
      */
     private fun resolveImportTargetFallback(spec: String, contextFile: String?): String? {
-        if (contextFile == null || spec.isEmpty()) return null
-        val key = "$contextFile\u0000$spec"
-        importTargetFallbackCache[key]?.let {
-            return if (it === UNRESOLVED_MODULE_SPEC) null else it
-        }
-        val result = computeImportTargetFallback(spec, contextFile)
-        importTargetFallbackCache[key] = result ?: UNRESOLVED_MODULE_SPEC
-        return result
-    }
-
-    private fun computeImportTargetFallback(spec: String, contextFile: String): String? {
-        // Guarded on the answer still being a BOUND file: the crawl also pulls in
-        // `.json` and un-bound `.js` files, which have no binder result to read an
-        // export out of, and the ladders' callers all index [fileResults] next.
-        moduleResolutions[contextFile]?.get(spec)?.let { if (it in fileResults) return it }
-        // The bare-specifier walkers below cannot say anything about a relative or
-        // rooted specifier — those already had their own legs.
-        if (spec.startsWith(".") || spec.startsWith("/")) return null
-        resolveBareNodeModulesAnyPrefix(spec, contextFile)?.let { return it }
-        resolveBareViaPackageExportsRoot(spec, contextFile)?.let { return it }
-        // A nodenext package SUBPATH is spelled with the ESM output extension
-        // (`pkg/dist/x.js`) and ships as `pkg/dist/x.d.ts`; the node_modules walk
-        // builds `…/x.js.d.ts`, so the strip has to happen before it, not after.
-        for (ext in listOf(".js", ".jsx", ".mjs", ".cjs")) {
-            if (!spec.endsWith(ext)) continue
-            val stripped = spec.removeSuffix(ext)
-            resolveBareNodeModulesAnyPrefix(stripped, contextFile)?.let { return it }
-        }
-        return null
+        if (contextFile == null || spec.isEmpty() || moduleResolutions.isEmpty()) return null
+        val target = moduleResolutions[contextFile]?.get(spec) ?: return null
+        return if (target in fileResults) target else null
     }
 
     private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol {
