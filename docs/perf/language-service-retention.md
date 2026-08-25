@@ -254,7 +254,88 @@ a parse may be shared across programs — the AST is written only by
 
 ---
 
-## 9. Step 2 — what landed
+## 9. Step 2 — what landed, and what it measured
 
-*(2026-08-25, filled in by the fix commit; see PLAN-PHASE-5.md's (INC.36)
-session note.)*
+*2026-08-25. Fix (a): `Project` stops parsing a second copy.* `sourceIndexOf`
+asks `parsedSourceOrNull(fileName, text, flags)` — one read-only window onto
+`CrawlParseCache` — and indexes its tokens around the compiler's own tree
+(`SourceIndex.around`). A file whose bytes the compiler has never seen still
+parses privately, which is the CORRECT answer for an unsaved buffer, and
+`upgradeIfShareable` lazily re-points such an index at the compiler's tree once
+a build has one, at the cost of a token scan and no parse.
+
+### 9a. The ladder, before and after
+
+Before = four processes at `51a64db3`; after = **two** processes at the fix.
+Megabytes.
+
+| step | before (4 processes) | after (2 processes) |
+|---|---|---|
+| 2 `diagnostics()` | 148.6 / 148.2 / 148.8 / 148.8 | 148.6 / 148.1 |
+| 3 `referencesAt` **peak** | **264.0 / 264.6 / 264.5 / 264.1** | **177.0 / 176.4** |
+| 3 the arm's own delta | +115.3 / +116.4 / +115.8 / +115.3 | **+28.4 / +28.3** |
+| 4 drop `sourceIndexes` | −114.7 / −115.1 / −115.2 / −114.7 | **−27.5 / −27.6** |
+| 5–8 memos + `close()` | +0.0 throughout | +0.0 throughout |
+| 9 drop `CrawlParseCache` | −103.0 / −103.0 / −103.1 / −103.2 | −103.3 / −102.8 |
+| 10 drop `RealLibSnapshots` | −2.6 / −2.6 / −2.7 / −2.6 | −2.6 / −2.7 |
+
+**Retention 264.3 → 176.7 MB: −87.6 MB, −33%.** The `sourceIndexes` row is
+**−115 → −27.5 MB, i.e. 76% of it deleted**, and every other row is unmoved —
+which is the shape a correct attribution predicts and an accidental one does
+not.
+
+Controls, both processes: `referencesAt` returned **9,827** hits (unchanged — a
+different count would mean the shared tree answered differently), the positive
+control passed at +28.4 / +28.3 MB, and the inert step returned −0.0.
+
+### 9b. The class histogram confirms it by halving, and names the residue
+
+| class | before | after |
+|---|---:|---:|
+| `Identifier` | 770,460 / 43.1 MB | **388,790 / 21.8 MB** |
+| `String` | 889,551 | **460,032** |
+| `[B` | 890,203 / 76.0 MB | 460,692 / 60.9 MB |
+| `[I` | 1,842 / **13.75 MB** | 1,840 / **13.75 MB** |
+| `[Lcom…SyntaxKind;` | 79 / **4.39 MB** | 79 / **4.39 MB** |
+
+`Identifier` HALVED — 770,460 was 44.5% of 856,962 nodes *doubled*, and 388,790
+is that figure once. The two rows that did **not** move are the answer to "why
+177 and not 149".
+
+### 9c. Why the peak did not fall to ~149 MB — the residue, attributed
+
+The 27.5 MB `sourceIndexes` still holds is **not a tree**. Three things, and the
+histogram prices two of them exactly:
+
+* **the token index**, `tokenStarts` + `tokenEnds` (`[I`, 13.75 MB) and
+  `tokenKinds` (`[LSyntaxKind;`, 4.39 MB) — **~18 MB**, byte-identical before
+  and after, because it is `SourceIndex`'s own product and no one else has one;
+* **a SECOND COPY OF THE SOURCE TEXT**, ~10 MB. `sourceIndexOf` reads the
+  overlay and gets a fresh `String`; the crawl read the same bytes into its own.
+  The tree is now shared, the characters are not.
+
+**The text half is a named, measured next lever and it is nearly free**:
+`SourceFile.text` exists and, by `parsedSourceOrNull`'s own content-equality
+key, IS the string the index was handed — so `SourceIndex.around` could adopt it
+and make the two identical rather than merely equal, for **~10 MB**. It is NOT
+taken here: it lands after this round's gates ran, and a 10 MB change that
+invalidates a five-gate sweep is a bad trade against recording the exact prize.
+The ~18 MB token index has no such shortcut — nothing else in the process holds
+one.
+
+### 9d. What the after-figures do NOT say
+
+The per-project MARGINAL figure was **not re-measured** — `mode=second` was not
+re-run. Arithmetic off the ladder rows suggests roughly `103 + 28·N` where § 5
+measured `103 + 115·N`, but that is a subtraction, not a measurement, and § 5's
+number is the one that was drawn.
+
+### 9e. A residue in the fix itself, stated rather than fixed
+
+`upgradeIfShareable` runs on every `sourceIndexOf` hit whose key is in
+`ownParses`, and `parsedSourceOrNull` ends in a full content `String` compare —
+on `checker.ts` a ~3.1 MB one. It is memcmp-speed and **bounded twice**: only a
+buffer whose bytes the compiler has never seen is ever in `ownParses` at all,
+and the entry leaves permanently the first time a build sees those bytes. Every
+other file returns on a map miss before any compare. Recorded so the next agent
+does not find it as a surprise.

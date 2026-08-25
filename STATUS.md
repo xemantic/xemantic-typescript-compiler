@@ -1,5 +1,35 @@
 # Status
 
+**THE PROGRAM WAS PARSED *TWICE* AND BOTH COPIES WERE KEPT — LANGUAGE-SERVICE RETENTION
+**264 -> 177 MB (-33%)** (2026-08-25, (INC.36)).** A ten-step subtraction ladder over
+`liveAfterGc` attributed the 264 MB a whole-program `referencesAt` sweep holds:
+`Project.sourceIndexes` **114.7 MB**, the process-global `CrawlParseCache` **103.0**,
+`RealLibSnapshots` 2.6, JVM baseline + lib text + the 9,827 answers 43.7 — and
+**`cached`/`captures`/`prepared`/`narrowed`/`recheck`/`lineMaps` 0.0 MB COMBINED**, so
+every memo (INC.12)/(INC.14)/(INC.32)/(INC.40) added is free and **`close()` frees
+nothing**. The two big rows are ONE program parsed twice at the same bytes under the same
+`computeParserFlags`; the class histogram says it independently — **770,460 `Identifier`s**
+against 856,962 nodes in one copy, i.e. CLAUDE.md's 44.5%, DOUBLED. **The fix deletes one
+copy**: `Project.sourceIndexOf` indexes tokens around the compiler's own crawl tree
+(`parsedSourceOrNull` -> `SourceIndex.around`), nothing writes to the process-global cache
+so round 825's threading discipline is untouched, and a dirty buffer still parses privately
+— which is the CORRECT answer, collected lazily once a build sees those bytes. Measured
+after arm (2 processes): peak **177.0 / 176.4** vs before's **264.0 / 264.6 / 264.5 /
+264.1**, `sourceIndexes` **-27.5 / -27.6** vs **-115.3 / -116.4 / -115.8 / -115.3**, every
+other row unmoved, `Identifier` HALVED to 388,790, **9,827 hits unchanged**. **The
+remaining 27.5 MB is NOT a tree** — ~18 MB of `SourceIndex`'s own token arrays (byte-identical
+before and after) and ~10 MB of a second copy of the source TEXT, a named next lever
+(`SourceFile.text`) left unlanded rather than taken after the gates had run. **FOUR of the
+five gates are CONTROLS and only the ladder is evidence**, because the compiler path never
+calls the new function. Suite **15,835 / 0 / 3** (+4: 3 pins, 1 control), zero corpus
+baselines moved; `cost_gate.py` PASSES with the counter vector identical to last round
+(`mapped.hits` at the standing +1.63%, not moved, not rebaselined); `huge_methods.py
+--fail-over 0` exit 0 with over-limit **0** and **782** classes scanned (781 last round, so
+not blind); `partition-equivalence` **EQUIVALENT 78/78**; `capture-equivalence` **1,003 / 43
+/ moreAny 0** with **BOTH DIGESTS UNMOVED**. Also this round: **(INC.35) DECIDED BY THE
+OWNER — option (b), per-buffer only**, closed as a decision, not an implementation.
+`docs/perf/language-service-retention.md`.
+
 **(INC.38) CLOSED, DOC-ONLY (2026-08-25): THE HOST-FACING RECOMMENDATION FOR THE 1.39x
 RE-DERIVATION TAX IS NOW WRITTEN DOWN.** The code half shipped already as (INC.40) (a
 retained checker collects the floor across `diagnosticsOf` queries, 2.25-2.30x). What
@@ -143,47 +173,3 @@ is the authority for the table), REFUSES rather than skips when its profile or r
 carries an ablated positive control — empty output, a zero population and a sub-50 ms base arm each
 refuse, because exit 0 says the JVM finished, not that anything was measured. Every figure here is
 WALL TIME on one box and is pinned by NO test; re-take it rather than quoting it.
-
-**AN ERROR-REPORTING QUERY IS 104-108 ms -> 25 ms — THE RE-ENTRANT REPLAY IS **2.25-2.30x**, NOT
-THE "DECAYING 1.68x" FIVE ROUNDS RECORDED, AND IT IS NOW WIRED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL
-VALVE (2026-08-24, (INC.40)).** The lineage was not wrong about the floor shrinking; it was
-measuring the wrong thing. **Every figure in it carried a whole-file `TypeCaptureRequest` in BOTH
-arms** — the request `replay-differential.sh` needs in order to GRADE the mechanism — and that is
-+9-17 ms per query of cost common to both arms, which **dilutes a ratio and leaves no trace in
-it**. Measured that way at HEAD the same run still reads 1.34x; the diagnostics channel asks for no
-capture at all, and it is exactly the channel the differential grades as EQUIVALENT. Re-priced in
-**two independent JVMs**, warm, six warm-ups, leading draw discarded, ABBA-rotated, tsc's own 78
-sources: at `k = 1` **10,656 / 10,783 ms fresh against 4,728 / 4,685 replay = 2.25 / 2.30x**, per
-query **104 / 108 ms -> 25 / 25**; at `k = 2` 1.72 / 1.81x; at `k = 8` 1.26 / 1.25x. **The ratio
-falls with the working set exactly as it must** — the thing the replay deletes is the floor, paid
-once per QUERY and not per file — and **the replay arm's TOTAL lands on the whole-program CHECK
-cost** (4,728 against ~4,935 ms), i.e. (INC.37)'s **1.39x re-derivation tax being COLLECTED rather
-than re-paid**: 77 fresh checkers each re-derive the shared lib and foreign-declaration
-resolutions, one live checker does not. Floor **54 ms**, cross-checked against
-`partition-equivalence.sh`'s 61 ms at the same commit.
-**IT SERVES DIAGNOSTICS AND NOTHING ELSE, AND THE REFUSAL IS A *TYPE* RATHER THAN A COMMENT.**
-`replay-differential` at HEAD: **0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF`** on both arms (46 rows over
-tsc's sources, 178 over the 71 `partition-gate` files carrying them, 352,713 definition spans),
-against **43 `DIVERGE-TYPE` of 75 files** — the pre-existing HEAD state, overwhelmingly the
-union-alias display family (INC.26)/(INC.27) in which the FRESH arm is not automatically the right
-one. So `Project.diagnosticsOf` holds the live program through `DiagnosticsOnlyRecheck`, a private
-one-way valve whose single member takes a `Set<String>` and returns a `List<Diagnostic>`: **no
-`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave it**, so the
-caret channels cannot reach it even by mistake. The handle is dropped by `updateFile`,
-`deleteFile` and `close`. Queued as **(INC.41)**: closing those 43 is what would let captures
-through the same valve, and the prize for it is NOT measured.
-**THE ABLATION'S ONE TRANSFERABLE ARM.** Four arms, one mistake each, each verified as a real diff
-against the committed file — and in a3 (**the handle serves without widening, so it answers an
-empty list**) **the build-COUNT pin stays GREEN**. A count-only suite would have shipped a
-language service reporting no errors at all, at full speed, with every cost pin green; the value
-pins are what redden. One pin is recorded as UNDISCRIMINATED rather than claimed as coverage.
-**TWO INSTRUMENT TRAPS, BOTH FAILING TOWARD A PLAUSIBLE TABLE**: a **floor build is its own code
-path**, so floor draws taken after whole-program warm-ups read 129/89/96 ms against a true 52-56 —
-a 1.7x over-read that would have understated every derived ratio, now drawn at the END and
-cross-checked against the other instrument; and **arming is priced, not assumed free** (an armed
-77-query sweep reads 10,546 ms against 10,783 plain, changing no diagnostic row in 231 group
-comparisons). Suite **15,824 / 0 / 3** (+9 pins), 0 warnings, `partition-equivalence` EQUIVALENT
-78/78, `partition-gate` sensitivity 75/75, `cost_gate.py` all counters in band (`mapped.hits`
-+1.63%, the standing drift, NOT rebaselined), `huge_methods --fail-over 0` 0 over limit.
-`docs/language-service.md` § 4a.
-

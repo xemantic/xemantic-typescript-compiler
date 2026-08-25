@@ -195,15 +195,41 @@ internal class SourceIndex private constructor(
              * passes it.
              */
             useParseAsLexerOracle: Boolean = true,
-        ): SourceIndex {
-            val sourceFile = Parser(
+        ): SourceIndex = around(
+            text,
+            Parser(
                 text,
                 fileName,
                 forceJsx = flags.forceJsx,
                 topLevelAwait = flags.topLevelAwait,
                 needsJsxFlag = flags.needsJsxFlag,
                 noImplicitAny = flags.noImplicitAny,
-            ).parse()
+            ).parse(),
+            useParseAsLexerOracle,
+        )
+
+        /**
+         * (INC.36) Indexes [text]'s tokens around a tree SOMEONE ELSE parsed.
+         *
+         * The whole of [of] except the parse, and the reason it is split out is a
+         * measurement: `Project` was parsing the program a second time beside the
+         * compiler's own crawl, which retained 103 MB of duplicate trees on tsc's
+         * own 78 sources (`docs/perf/language-service-retention.md`).
+         *
+         * CONTRACT, and it is the caller's to keep: [sourceFile] MUST be the parse
+         * of [text] under the flags [of] would have used. Nothing here can check
+         * that — the tree is consulted for the contextual lexemes a scanner cannot
+         * decide alone (a regex literal, a run of JSX text), so a tree belonging to
+         * DIFFERENT text would de-synchronise the token stream rather than fail.
+         * `parsedSourceOrNull` is the one supported source, and its own key is
+         * `(fileName, content, flags)`, i.e. exactly that contract expressed as a
+         * lookup.
+         */
+        fun around(
+            text: String,
+            sourceFile: SourceFile,
+            useParseAsLexerOracle: Boolean = true,
+        ): SourceIndex {
             val tokens = scanTokens(
                 text,
                 if (useParseAsLexerOracle) contextualLexemes(sourceFile) else emptyList(),

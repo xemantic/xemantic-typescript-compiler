@@ -161,3 +161,40 @@ internal object CrawlParseCache {
         misses = 0
     }
 }
+
+/**
+ * (INC.36) The parse THIS PROCESS has already made of exactly [source] as
+ * [fileName] under exactly [flags], or null when it has not.
+ *
+ * The ONE read-only window onto [CrawlParseCache], and it exists for a measured
+ * reason: `Project.sourceIndexOf` was parsing the program a SECOND time. A
+ * whole-program `referencesAt` sweep on tsc's own 78 sources retained 264 MB, of
+ * which `Project.sourceIndexes` was 114.7 MB and this cache 103.0 MB — the same
+ * 78 files, the same bytes, the same flags, two trees
+ * (`docs/perf/language-service-retention.md`).
+ *
+ * ## What it is safe to do with the answer
+ *
+ * READ it. The three properties this cache's own KDoc rests on carry straight
+ * over: the parse is a pure function of `(source, fileName, flags)`, the AST is
+ * never written after `indexSourceFile`, and `RealLibSnapshots` has shared
+ * parsed lib trees across programs since M2.1(c) on exactly this argument. What
+ * is NOT shared is the BIND — symbol merging mutates its inputs — so a consumer
+ * of this must be a consumer of SYNTAX.
+ *
+ * ## Why this is a lookup and not a parse-or-store
+ *
+ * A `parseAndStore` shape would close the one gap this leaves (a file asked
+ * about before any build parses privately, and a later build parses it again),
+ * and it is deliberately not offered: [CrawlParseCache.store] must stay off the
+ * concurrent path (round 825 — a plain `HashMap` write from N workers is a race
+ * with no exception to find it by), and a caller here cannot promise it is not
+ * running beside a crawl. [CrawlParseCache.lookup] is documented read-only and
+ * is already called from the crawl's own workers; adding a reader adds nothing.
+ *
+ * A miss is not an error and needs no branch at the call site beyond "parse it
+ * yourself": staleness is not expressible, because different bytes are a
+ * different key.
+ */
+fun parsedSourceOrNull(fileName: String, source: String, flags: ParserFlags): SourceFile? =
+    CrawlParseCache.lookup(fileName, source, flags)?.sourceFile

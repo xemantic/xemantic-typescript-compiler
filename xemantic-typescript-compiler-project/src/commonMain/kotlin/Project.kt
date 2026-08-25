@@ -35,17 +35,20 @@ import com.xemantic.typescript.compiler.ImportSpecifier
 import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
+import com.xemantic.typescript.compiler.ParserFlags
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProgramRecheck
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.RecheckHolder
 import com.xemantic.typescript.compiler.SignatureCaptureSpan
+import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
 import com.xemantic.typescript.compiler.TypeCaptureSpan
 import com.xemantic.typescript.compiler.Vfs
 import com.xemantic.typescript.compiler.computeParserFlags
+import com.xemantic.typescript.compiler.parsedSourceOrNull
 
 /**
  * An open TypeScript project a host application can query for diagnostics and
@@ -846,6 +849,19 @@ public class Project private constructor(
         sourceIndexOf(fileName)?.pathAt(offset)?.lastOrNull()
 
     /**
+     * (INC.36) The tree this project answers syntax questions about, BY IDENTITY.
+     *
+     * INTERNAL and for the pins only. The claim (INC.36) rests on cannot be
+     * expressed as a value — two equal trees and one shared tree answer every
+     * public query identically, and the difference is 103 MB — so the only
+     * instrument that can see it is `===` against the parse the compiler itself
+     * made. A heap assertion cannot do it (a sized assertion is a coin flip);
+     * this can, deterministically.
+     */
+    internal fun parsedFileOf(fileName: String): SourceFile? =
+        sourceIndexOf(fileName)?.sourceFile
+
+    /**
      * The parse of [fileName], built from the overlay's text and cached.
      *
      * The flags come from the compiler's own [computeParserFlags] over the project's
@@ -858,12 +874,64 @@ public class Project private constructor(
     private fun sourceIndexOf(fileName: String): SourceIndex? {
         checkOpen()
         val key = keyOf(fileName)
-        sourceIndexes[key]?.let { return it }
+        sourceIndexes[key]?.let { return upgradeIfShareable(key, it) }
         val text = overlay.readText(key) ?: return null
         val options = parseOptions
             ?: TsConfigLoader(overlay).load(configPath).options.also { parseOptions = it }
         val flags = computeParserFlags(key, text, options)
-        return SourceIndex.of(text, key, flags).also { sourceIndexes[key] = it }
+        val shared = parsedSourceOrNull(key, text, flags)
+        if (shared == null) ownParses[key] = flags
+        val index =
+            if (shared != null) SourceIndex.around(text, shared)
+            else SourceIndex.of(text, key, flags)
+        return index.also { sourceIndexes[key] = it }
+    }
+
+    /**
+     * (INC.36) The flags each entry of [sourceIndexes] whose tree is OUR OWN was
+     * parsed with — i.e. the ones that missed [parsedSourceOrNull].
+     *
+     * An entry is in here exactly while its tree is a duplicate waiting to happen:
+     * the compiler has not parsed those bytes, so a build over them later will,
+     * and this project would then be holding the second copy. Keeping the FLAGS
+     * rather than recomputing them is what makes [upgradeIfShareable] cheap enough
+     * to run on every hit — `computeParserFlags` scans the content.
+     *
+     * Invalidated wherever [sourceIndexes] is, and by the same rules.
+     */
+    private val ownParses = HashMap<String, ParserFlags>()
+
+    /**
+     * (INC.36) Re-points a privately-parsed [index] at the compiler's own tree once
+     * the compiler has one, dropping our copy.
+     *
+     * A file asked about while its buffer is dirty MUST parse privately — the
+     * compiler has never seen those bytes, so the lookup misses, and that miss is
+     * the correct answer rather than a shortfall. But the next build reads the same
+     * overlay, so the compiler then holds an equal tree and this project's copy
+     * becomes pure duplication — measured 103 MB over tsc's own 78 sources. This is
+     * where that is collected, LAZILY: the cost is one token scan (no parse) and it
+     * is paid only by a file that is asked about again after a build.
+     *
+     * Cheap on the common path by construction: an entry not in [ownParses] is
+     * already shared and returns immediately, and [ownParses] holds only files
+     * queried while dirty.
+     *
+     * Two residues this deliberately does not chase, recorded so they are not found
+     * as surprises. A file queried while dirty and never queried again keeps its own
+     * parse until it is re-edited or the project closes — sweeping it would need a
+     * hook on every build site for a copy the host has stopped looking at. And
+     * [parsedSourceOrNull] ends in a full content `String` compare, ~3.1 MB on
+     * `checker.ts`: that is memcmp-speed and bounded TWICE — only a buffer whose
+     * bytes the compiler has never seen is in [ownParses] at all, and the entry
+     * leaves permanently the first time a build sees them, so every other file
+     * returns on the map miss above before any compare happens.
+     */
+    private fun upgradeIfShareable(key: String, index: SourceIndex): SourceIndex {
+        val flags = ownParses[key] ?: return index
+        val shared = parsedSourceOrNull(key, index.text, flags) ?: return index
+        ownParses.remove(key)
+        return SourceIndex.around(index.text, shared).also { sourceIndexes[key] = it }
     }
 
     // --- semantics ---------------------------------------------------------------
@@ -2458,9 +2526,11 @@ public class Project private constructor(
     private fun invalidate(key: String) {
         lineMaps.remove(key)
         sourceIndexes.remove(key)
+        ownParses.remove(key)
         if (key.endsWith(".json")) {
             parseOptions = null
             sourceIndexes.clear()
+            ownParses.clear()
         }
     }
 
@@ -2543,6 +2613,7 @@ public class Project private constructor(
         recheck = null
         lineMaps.clear()
         sourceIndexes.clear()
+        ownParses.clear()
         parseOptions = null
     }
 

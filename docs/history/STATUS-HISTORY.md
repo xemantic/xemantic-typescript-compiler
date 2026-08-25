@@ -1657,3 +1657,45 @@ the earlier +21%): it is expensive in the NUMBER of operations, not their unit c
 only the NOMINAL half — (KIR.PERF.1), which now carries the census and a design — removes
 them. Suite **15,528 / 0 failures**; the KIR module 58 → 83 pins.
 
+**AN ERROR-REPORTING QUERY IS 104-108 ms -> 25 ms — THE RE-ENTRANT REPLAY IS **2.25-2.30x**, NOT
+THE "DECAYING 1.68x" FIVE ROUNDS RECORDED, AND IT IS NOW WIRED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL
+VALVE (2026-08-24, (INC.40)).** The lineage was not wrong about the floor shrinking; it was
+measuring the wrong thing. **Every figure in it carried a whole-file `TypeCaptureRequest` in BOTH
+arms** — the request `replay-differential.sh` needs in order to GRADE the mechanism — and that is
++9-17 ms per query of cost common to both arms, which **dilutes a ratio and leaves no trace in
+it**. Measured that way at HEAD the same run still reads 1.34x; the diagnostics channel asks for no
+capture at all, and it is exactly the channel the differential grades as EQUIVALENT. Re-priced in
+**two independent JVMs**, warm, six warm-ups, leading draw discarded, ABBA-rotated, tsc's own 78
+sources: at `k = 1` **10,656 / 10,783 ms fresh against 4,728 / 4,685 replay = 2.25 / 2.30x**, per
+query **104 / 108 ms -> 25 / 25**; at `k = 2` 1.72 / 1.81x; at `k = 8` 1.26 / 1.25x. **The ratio
+falls with the working set exactly as it must** — the thing the replay deletes is the floor, paid
+once per QUERY and not per file — and **the replay arm's TOTAL lands on the whole-program CHECK
+cost** (4,728 against ~4,935 ms), i.e. (INC.37)'s **1.39x re-derivation tax being COLLECTED rather
+than re-paid**: 77 fresh checkers each re-derive the shared lib and foreign-declaration
+resolutions, one live checker does not. Floor **54 ms**, cross-checked against
+`partition-equivalence.sh`'s 61 ms at the same commit.
+**IT SERVES DIAGNOSTICS AND NOTHING ELSE, AND THE REFUSAL IS A *TYPE* RATHER THAN A COMMENT.**
+`replay-differential` at HEAD: **0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF`** on both arms (46 rows over
+tsc's sources, 178 over the 71 `partition-gate` files carrying them, 352,713 definition spans),
+against **43 `DIVERGE-TYPE` of 75 files** — the pre-existing HEAD state, overwhelmingly the
+union-alias display family (INC.26)/(INC.27) in which the FRESH arm is not automatically the right
+one. So `Project.diagnosticsOf` holds the live program through `DiagnosticsOnlyRecheck`, a private
+one-way valve whose single member takes a `Set<String>` and returns a `List<Diagnostic>`: **no
+`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave it**, so the
+caret channels cannot reach it even by mistake. The handle is dropped by `updateFile`,
+`deleteFile` and `close`. Queued as **(INC.41)**: closing those 43 is what would let captures
+through the same valve, and the prize for it is NOT measured.
+**THE ABLATION'S ONE TRANSFERABLE ARM.** Four arms, one mistake each, each verified as a real diff
+against the committed file — and in a3 (**the handle serves without widening, so it answers an
+empty list**) **the build-COUNT pin stays GREEN**. A count-only suite would have shipped a
+language service reporting no errors at all, at full speed, with every cost pin green; the value
+pins are what redden. One pin is recorded as UNDISCRIMINATED rather than claimed as coverage.
+**TWO INSTRUMENT TRAPS, BOTH FAILING TOWARD A PLAUSIBLE TABLE**: a **floor build is its own code
+path**, so floor draws taken after whole-program warm-ups read 129/89/96 ms against a true 52-56 —
+a 1.7x over-read that would have understated every derived ratio, now drawn at the END and
+cross-checked against the other instrument; and **arming is priced, not assumed free** (an armed
+77-query sweep reads 10,546 ms against 10,783 plain, changing no diagnostic row in 231 group
+comparisons). Suite **15,824 / 0 / 3** (+9 pins), 0 warnings, `partition-equivalence` EQUIVALENT
+78/78, `partition-gate` sensitivity 75/75, `cost_gate.py` all counters in band (`mapped.hits`
++1.63%, the standing drift, NOT rebaselined), `huge_methods --fail-over 0` 0 over limit.
+`docs/language-service.md` § 4a.

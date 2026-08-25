@@ -1457,6 +1457,18 @@ same process re-earned 105.9 MB of shared caches and then added 115.3 MB of its
 own, so budget **`103 + 115·N`** for N open projects — the 103 is paid once,
 because it is keyed by content and shared.
 
+**Step 2 removed one of the two copies, and the retained figure is now
+`264 -> 177 MB` (−33%).** `Project` no longer parses the program a second time:
+its syntax layer indexes tokens around the tree the compiler's crawl already
+built (`parsedSourceOrNull` / `SourceIndex.around`), so the `sourceIndexes` row
+falls **114.7 -> 27.5 MB** while every other row is unchanged and
+`referencesAt`'s answer is bit-for-bit the same 9,827 hits. An unsaved buffer
+still parses privately — that is the correct answer, not a shortfall — and the
+copy is collected the next time that file is asked about after a build. **What
+the 27.5 MB still is**: ~18 MB of `SourceIndex`'s own token arrays, which
+nothing else in the process holds, and ~10 MB of a second copy of the source
+TEXT, which is a named next lever rather than a surprise.
+
 Both heap figures are pinned by no test and never can be (a sized assertion is a
 coin flip); re-take them with `scripts/inc36-retention.sh`.
 
@@ -1762,12 +1774,10 @@ The second build is the verification, and it costs less than the first on a smal
 (it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
 and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is
 the same shape, and § 10b's corrected reading applies here too: **`-Xmx2g` is the
-floor**, ~1.1 GB peaks in old gen, ~264 MB actually retained — of which **83%
-is parses** (`Project.sourceIndexes` 114.7 MB + the process-global
-`CrawlParseCache` 103.0 MB) and **0.0 MB is any memo this API keeps**. The
-per-project MARGINAL figure is **~115 MB**, not 264: budget `103 + 115·N` for N
-open projects. Attribution and method:
-`docs/perf/language-service-retention.md`.
+floor**, ~1.1 GB peaks in old gen, **~177 MB actually retained since (INC.36)
+step 2** (was 264 before it), of which the process-global `CrawlParseCache` is
+103.0 MB and **0.0 MB is any memo this API keeps**. Attribution, the before/after
+ladder and the remaining ~28 MB: `docs/perf/language-service-retention.md`.
 
 The absolute numbers are a property of the run that took them; only the § 14 table is
 kept current, and the runner is **`scripts/inc31-ls-cost.sh`**.
