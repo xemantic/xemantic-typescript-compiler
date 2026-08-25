@@ -24,8 +24,8 @@ manifest is parsed as JSON, because knip's own has `repository.type: "git"` and 
 (they already agreed POSITION-for-position on the CommonJS rows, which isolates the defect to the
 format decision); knip @ `dc7aca5` **2,634 -> 309** (147 of the 309 environmental, no
 `node_modules`); emit checked in both directions and byte-identical to tsgo.
-**GATES.** Suite **15,870 / 0 / 3** (+10 pins written BEFORE the fix and verified red against it,
-+1 in a follow-up commit); `cost_gate.py` `output.errors` **46**, vector unmoved (standing
+**GATES.** Suite **15,871 / 0 / 3** (+11 pins; the first ten were written BEFORE the fix and
+verified RED against it, the eleventh landed in a follow-up commit); build warning-clean; `cost_gate.py` `output.errors` **46**, vector unmoved (standing
 `mapped.hits` +1.63% drift unchanged, unrebaselined); `huge_methods.py --fail-over 0` exit 0,
 **783** classes scanned (unchanged — the change adds methods, not classes);
 `partition-equivalence` **EQUIVALENT 78/78**, floor **60 ms** `[53, 58, 60, 65]` against 59 last

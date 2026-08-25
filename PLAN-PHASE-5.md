@@ -75,8 +75,9 @@ new TS2578. Emit was checked too, in both directions and byte-identical to tsgo:
 with `"type": "module"` we emit `import { x } from "./a.js"`, without it the
 `require`/`exports` form.
 
-**GATES.** Suite **15,870 / 0 / 3** (baseline 15,860, `+10` = the ten pins written
-before the fix; the eleventh landed in a follow-up commit). `cost_gate.py`
+**GATES.** Suite **15,871 / 0 / 3** (baseline 15,860, `+11` = the ten pins written
+before the fix and verified RED against it, plus the eleventh in a follow-up commit;
+re-run after the ablation restored the tree, and the build is warning-clean). `cost_gate.py`
 `output.errors 46`, every counter inside ±2% (the standing `mapped.hits +1.63%`
 drift is unchanged and unrebaselined — the vector did not move). `huge_methods.py
 --fail-over 0`: **783 classes scanned, 0 over the limit** (783 is unchanged, which
