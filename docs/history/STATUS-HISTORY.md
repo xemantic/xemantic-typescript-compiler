@@ -1834,3 +1834,14 @@ comparisons). Suite **15,824 / 0 / 3** (+9 pins), 0 warnings, `partition-equival
 78/78, `partition-gate` sensitivity 75/75, `cost_gate.py` all counters in band (`mapped.hits`
 +1.63%, the standing drift, NOT rebaselined), `huge_methods --fail-over 0` 0 over limit.
 `docs/language-service.md` § 4a.
+
+**(INC.38) CLOSED, DOC-ONLY (2026-08-25): THE HOST-FACING RECOMMENDATION FOR THE 1.39x
+RE-DERIVATION TAX IS NOW WRITTEN DOWN.** The code half shipped already as (INC.40) (a
+retained checker collects the floor across `diagnosticsOf` queries, 2.25-2.30x). What
+remained — the recommendation to ask for the whole open set in ONE call rather than one
+file at a time — is now `docs/language-service.md` § 3a. Numbers traced to their actual
+source (§ 14's six-buffer table, `2fa8a39f`, 2026-08-24, not the (INC.14) session note,
+which does not carry them verbatim): the same 6-file set costs **321-342 ms** asked once
+against **748-771 ms** asked per file. No Kotlin source touched; `jvmTest`/`cost_gate.py`/
+`huge_methods.py` not run (nothing to gate).
+
