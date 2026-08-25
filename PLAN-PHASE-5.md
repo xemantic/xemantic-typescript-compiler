@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.29) — a file's module format now comes from the nearest `package.json` `"type"`: **2,478 false positives on knip go to ZERO**, and every standing gate in this repo is blind to it
+
+**THE DEFECT AND WHY IT WAS INVISIBLE.** Under `module`/`moduleResolution: nodenext`
+(and `node16`) tsc decides whether a plain `.ts` file is an ES module or CommonJS by
+walking up to the nearest `package.json` and reading its `"type"`. We had the
+CONSUMER — `CompilerOptions.packageJsonTypes` plus the ancestor lookup inside
+`isESModuleFormat(options, fileName)` — and exactly ONE producer,
+`collectPackageJsonTypes`, which reads `package.json` entries out of the PARSED
+SOURCE SET. **A real project has no `package.json` among its inputs**, so on every
+`ProjectCompiler` build the map was empty, every file was classified CommonJS, and
+every ESM import and export tripped `verbatimModuleSyntax`. On knip that is
+TS1295x1,959 + TS1287x519 = **2,478**, i.e. 94.1% of that library's errors from one
+absent lookup ((LIB.1)).
+
+**THE STRUCTURAL BLINDNESS, STATED AS A COUNT: the eight dashboard profiles hold
+`0` `package.json` files between them** (`find … -name package.json` over all eight
+= 0), and the corpus harness materialises no directory at all. The new walk DOES run
+on those profiles — the compiler profile is `"module": "NodeNext"` — it simply finds
+nothing, so `added=0 removed=0` on the grid, `output.errors 46` on `cost_gate.py`
+and a green 15,870-test suite are the EXPECTED answers and **none of them is
+evidence**. `ProjectPackageJsonTypeTest` (11 pins, `-project`, through a real
+`ProjectCompiler` + `Vfs`) is the instrument; the six gates are controls.
+
+**WHAT LANDED.** `ProjectCompiler` walks the `Vfs` up from each program file's
+directory, memoized on DIRECTORIES (the answer is a property of the directory, and a
+directory whose scope is already located terminates every later walk that reaches
+it), gated on `effectiveModule.isNodeNext`. Reading through the `Vfs` and not a real
+filesystem is what puts the language service's overlay on the same path — pinned:
+overlaying a `package.json` that exists nowhere on disk flips the project's format on
+the very next query.
+
+**TWO CORRECTIONS THE FIXTURES FORCED, BOTH READ OUT OF `tools/tsgo-7.0.2` RATHER
+THAN HAND-WRITTEN.**
+1. **A `package.json` with NO `"type"` field ESTABLISHES the scope, at CommonJS.**
+   tsc's walk stops at the first manifest it meets, so it must NOT fall through to a
+   `"type": "module"` ancestor — measured: outer `module` + inner `{ "name": … }`
+   reports the three CommonJS rows in tsgo. Both producers now record `false` there;
+   an ABSENT key is the different fact ("no manifest here") that continues the walk.
+   `collectPackageJsonTypes` used to `continue`, i.e. had this wrong.
+2. **The manifest is read through `LENIENT_JSON`, not a `"type"\s*:\s*"…"` regex.**
+   knip's own manifest is the counter-example on disk: its first three `"type"`
+   matches are `repository.type: "git"` and two `funding[].type`, and a first-match
+   regex answers `"git"` -> CommonJS for a package that is `"type": "module"`. The
+   scan looks correct and is worth all 2,478 rows on its own.
+
+**MEASURED, ONE DRAW EACH.** All seven disk fixtures agree with tsgo 7.0.2 error for
+error after the fix (they agreed on the CommonJS rows POSITION-for-position before
+it, which is what isolates the defect to the format decision alone). knip @ `dc7aca5`,
+no `node_modules` installed: **2,634 -> 309**, TS1295+TS1287 **2,478 -> 0**; of the
+309, 147 are environmental (TS2591x87 + TS2584x60, missing `@types/node`) and the
+rest reconciles with (LIB.1)'s recorded residual of 156 plus this session's own six
+new TS2578. Emit was checked too, in both directions and byte-identical to tsgo:
+with `"type": "module"` we emit `import { x } from "./a.js"`, without it the
+`require`/`exports` form.
+
+**GATES.** Suite **15,870 / 0 / 3** (baseline 15,860, `+10` = the ten pins written
+before the fix; the eleventh landed in a follow-up commit). `cost_gate.py`
+`output.errors 46`, every counter inside ±2% (the standing `mapped.hits +1.63%`
+drift is unchanged and unrebaselined — the vector did not move). `huge_methods.py
+--fail-over 0`: **783 classes scanned, 0 over the limit** (783 is unchanged, which
+is correct here: the change adds methods to existing core classes, not classes).
+`partition-equivalence.sh`: EQUIVALENT, all 78 files, floor **60 ms** `[53, 58, 60,
+65]` against last round's 59 — the walk runs on this profile and costs under a
+milli. `capture-equivalence.sh`: **1,003 spans / 43 of 76 files /
+narrowRendersMoreAny 0**, and BOTH digests bit-identical to the recorded baseline.
+`round895-grid.sh`: 8 profiles, `added=0 removed=0` on every one.
+
+**ABLATION — SIX ARMS, ONE MISTAKE EACH, each file compared against the arm's OWN
+SNAPSHOT (round 922).**
+
+| arm | the mistake | RED |
+|---|---|---|
+| a1 | never populate the scopes (the defect restored) | **5** — the four `"type": "module"` pins + the extension pin |
+| a2 | a typeless manifest does not establish a scope | **2** — *stops the walk*, *nearest wins* |
+| a3 | first-match regex instead of the JSON parser | **1** — *a nested type key does not decide the scope* (uniquely) |
+| a4 | the OUTERMOST manifest wins instead of the nearest | **2** — *stops the walk*, *nearest wins* |
+| a5b | scopes memoized process-wide | **5** |
+| a5c | memoized process-wide keyed by the program's FILE SET | **3** |
+| a6 | the `isNodeNext` gate removed (walk runs under every module kind) | **0** |
+
+**WHAT THAT ABLATION SAYS HONESTLY.** a3 is the only arm with a uniquely-its-own
+pin. a2 and a4 are INDISTINGUISHABLE from each other by any pin here — both turn a
+nearest-scope answer into an outer-scope one — so they are recorded as ONE
+observable rather than claimed as two (round 927's law). **a6 is red NOWHERE: no
+output gate in this repository can see the `isNodeNext` gate, because removing it
+only spends `Vfs` reads under a module kind whose answer the map cannot change.**
+And **arm a5 as first written was a DEAD ARM, not a blind pin**: it cached the scopes
+in a `ProjectCompiler` INSTANCE field, and `Project` constructs a fresh
+`ProjectCompiler` for every build, so the field could never survive — round 902
+exactly, and it printed `0 RED` which reads identically to a redundant guard. a5b/a5c
+are its reachable replacements; neither reddens the overlay pin ALONE (their memo
+leaks between fixtures that share a file set), so the overlay pin's discrimination is
+recorded as real but not unique.
+
+**SCOPED OUT, WITH WHAT WAS CHECKED.** `impliedNodeFormat` has more consumers in tsc
+than the one this item fixes, and they were audited rather than assumed:
+- **The `.mts`/`.cts`/`.mjs`/`.cjs` extension overrides were ALREADY correct** and
+  are decided ahead of the lookup. They are now a REGRESSION pin (tsgo agrees on
+  both directions), not a claim about new work.
+- **TS1479 / TS1471 / TS1286 / TS1203 / TS1202 — the "a CommonJS file cannot import
+  an ES module" family — are not implemented at all here** (`grep 'code = 14…'`
+  finds none), so correctly classifying files opens no new false-positive surface
+  from them. Queued as (CHK.36).
+- **`ModuleResolver` does not condition `exports`/`imports` on the importing file's
+  format** — it reads neither `isESModuleFormat` nor `effectiveModule` — so the
+  `"import"` vs `"require"` condition is unmodelled. Queued as (CHK.37); it is the
+  one with a real blast radius, because it decides which file a bare specifier
+  resolves to in a dual-published package.
+- **`esModuleInterop`'s 56 `Checker.kt` sites are gated on the global option, never
+  on the two files' formats**, where tsc makes a synthetic default available to an
+  ESM file importing a CommonJS one under node16/nodenext. Unmeasured; queued as
+  (CHK.38) rather than guessed at.
+
 ### Round (CHK.31) — `// @ts-ignore` and `// @ts-expect-error` now suppress, an unused expect-error is **TS2578**, and the defect that blocked it was a suppression written at an EMITTER
 
 **THE SHAPE OF THE ITEM WAS RIGHT AND ITS SIZE WAS WRONG.** The queue entry called this the
@@ -2345,7 +2458,18 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   and `KIR_PROBE_FILE=<knip>/packages/knip/src/util/graph-sequencer.ts ./gradlew :xemantic-typescript-compiler-kir:jvmTest --tests '*LibraryProbe*' --rerun -i`.
   Oracle: `npm i typescript@7` in a side root, then `tsc --noEmit -p <knip>/packages/knip`.
 
-- [ ] **(CHK.29) A FILE'S MODULE FORMAT IS NOT DERIVED FROM THE NEAREST `package.json`
+- [x] **(CHK.29) LANDED 2026-08-25 — the lookup exists; `TS1295+TS1287` on knip go
+  **2,478 -> 0** and the library goes 2,634 -> 309 (one draw, no `node_modules`, so 147
+  of the 309 are environmental `@types/node` rows). The producer was the missing half:
+  `packageJsonTypes` had a CONSUMER and one producer that reads the corpus's parsed
+  source set, and a real project has no `package.json` among its INPUTS —
+  `ProjectCompiler` now walks the `Vfs` up from each program file's directory, memoized
+  per directory, gated on `isNodeNext`. Two corrections tsgo forced: a manifest with no
+  `"type"` ESTABLISHES the scope at CommonJS (the walk stops at the first one it meets),
+  and the manifest is parsed as JSON — knip's own has `repository.type: "git"` FIRST, so
+  a regex answers CommonJS for a `"type": "module"` package. Pins:
+  `ProjectPackageJsonTypeTest` (11, `-project`). Residue queued as (CHK.36)-(CHK.38).
+  ORIGINAL ENTRY: A FILE'S MODULE FORMAT IS NOT DERIVED FROM THE NEAREST `package.json`
   `"type"` — 2,478 FALSE POSITIVES ON ONE LIBRARY, AND NOTHING IN THE CORPUS CAN SEE IT.**
   Under `module`/`moduleResolution: nodenext` (and `node16`), tsc decides whether a `.ts`
   file is an ES module or CommonJS by walking up to the nearest `package.json` and reading
@@ -2381,6 +2505,32 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `getTypeOfArrowFunction` measures nothing. The probe that discriminates must FAIL if the
   change is inert — make the parameter's contextual type wrong-typed at a use site and
   require the error to appear.
+
+- [ ] **(CHK.36) THE "A CommonJS FILE CANNOT IMPORT AN ES MODULE" FAMILY IS NOT
+  IMPLEMENTED AT ALL — TS1479 / TS1471 / TS1286 / TS1203 / TS1202.** Audited during
+  (CHK.29): `grep 'code = 1479|1471|1286|1203|1202'` over `commonMain` finds NONE of
+  them, so the format decision now being correct opens no new false-positive surface
+  from this family — and it is also why a nodenext project's genuine interop errors are
+  FALSE NEGATIVES here. Cheap to size: point the (LIB.1) loop at a dual CJS/ESM package
+  and diff against `tools/tsgo-7.0.2/lib/tsc`. Note the codes are only reachable once
+  (CHK.37) exists, because deciding that an IMPORTED file is ESM is what they test.
+
+- [ ] **(CHK.37) `ModuleResolver` DOES NOT CONDITION `exports`/`imports` ON THE
+  IMPORTING FILE'S FORMAT — the `"import"` vs `"require"` condition is unmodelled.**
+  Measured during (CHK.29): the resolver reads neither `isESModuleFormat` nor
+  `effectiveModule` (one grep, zero hits). For a dual-published package that is not a
+  cosmetic difference — it decides WHICH FILE a bare specifier resolves to, so an ESM
+  importer can be handed the CommonJS build's `.d.ts` and inherit its whole shape. This
+  is the (CHK.29) residue with real blast radius; size it on a library with a
+  conditional `exports` map before implementing.
+
+- [ ] **(CHK.38) `esModuleInterop` IS GATED ON THE GLOBAL OPTION AND NEVER ON THE TWO
+  FILES' FORMATS.** All 56 `Checker.kt` sites read `options.esModuleInterop`; tsc
+  additionally makes a synthetic default available to an ESM file importing a CommonJS
+  one under node16/nodenext (`allowSyntheticDefaultImports` is implied by the FORMAT,
+  not only by the flag). Blast radius UNMEASURED — recorded during (CHK.29)'s scope
+  audit rather than guessed at. It can fail in either direction, so the probe must be a
+  default import from a CJS package with the flag OFF and the importer ESM.
 
 - [x] **(LIB.2) ANSWERED 2026-08-22 BY (LIB.3)'s SCREEN — and the screen added a second
   criterion the entry did not predict: the library closest to COMPILING and the library best

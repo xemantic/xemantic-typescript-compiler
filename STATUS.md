@@ -1,5 +1,46 @@
 # Status
 
+**A FILE'S MODULE FORMAT NOW COMES FROM THE NEAREST `package.json` `"type"` — `TS1295+TS1287`
+ON knip GO **2,478 -> 0**, AND EVERY STANDING GATE IN THIS REPO IS BLIND TO IT (2026-08-25,
+(CHK.29)).** Under `nodenext`/`node16` tsc reads the nearest enclosing `package.json`; we had the
+CONSUMER (`packageJsonTypes` + the lookup in `isESModuleFormat`) and one producer that reads the
+corpus's PARSED SOURCE SET — and **a real project has no `package.json` among its inputs**, so on
+every project build the map was empty, every file was CommonJS, and every ESM import/export
+tripped `verbatimModuleSyntax`. `ProjectCompiler` now walks the `Vfs` up from each program file's
+directory, memoized per DIRECTORY, gated on `isNodeNext`; reading through the `Vfs` is what puts
+the language service's overlay on the same path (pinned: an overlaid `package.json` that exists
+nowhere on disk flips the format on the next query).
+**THE BLINDNESS AS A COUNT: the eight dashboard profiles hold `0` `package.json` files between
+them**, and the corpus materialises no directory at all — so a green suite, `added=0 removed=0`
+and `+0.00%` are the EXPECTED answers and none is evidence. `ProjectPackageJsonTypeTest` (11
+pins, `-project`, real `ProjectCompiler` + `Vfs`) is the instrument; the six gates are controls.
+**TWO CORRECTIONS tsgo FORCED, NEITHER GUESSED**: a manifest with NO `"type"` ESTABLISHES the
+scope at CommonJS (the walk stops at the first one it meets, so it must not fall through to a
+`"type": "module"` ancestor — the old collector `continue`d, i.e. had this wrong); and the
+manifest is parsed as JSON, because knip's own has `repository.type: "git"` and two
+`funding[].type` BEFORE the real key, so a first-match regex answers CommonJS for a `"type":
+"module"` package — worth all 2,478 rows on its own.
+**MEASURED, ONE DRAW EACH**: all seven disk fixtures now agree with tsgo 7.0.2 error for error
+(they already agreed POSITION-for-position on the CommonJS rows, which isolates the defect to the
+format decision); knip @ `dc7aca5` **2,634 -> 309** (147 of the 309 environmental, no
+`node_modules`); emit checked in both directions and byte-identical to tsgo.
+**GATES.** Suite **15,870 / 0 / 3** (+10 pins written BEFORE the fix and verified red against it,
++1 in a follow-up commit); `cost_gate.py` `output.errors` **46**, vector unmoved (standing
+`mapped.hits` +1.63% drift unchanged, unrebaselined); `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned (unchanged — the change adds methods, not classes);
+`partition-equivalence` **EQUIVALENT 78/78**, floor **60 ms** `[53, 58, 60, 65]` against 59 last
+round, and the walk DOES run there (the compiler profile is NodeNext); `capture-equivalence`
+**1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**; `round895-grid` 8 profiles,
+`added=0 removed=0` on every one.
+**Ablation: six arms, one mistake each. a3 (regex instead of JSON) is the only arm with a
+uniquely-its-own pin; a2 and a4 are indistinguishable from each other and are recorded as ONE
+observable; a6 (the `isNodeNext` gate removed) is red NOWHERE — no output gate here can see it.
+And arm a5 as first written was a DEAD ARM, not a blind pin: it cached in a `ProjectCompiler`
+INSTANCE field and `Project` builds a fresh one per build, so it printed `0 RED` exactly as a
+redundant guard would.** Residue queued as (CHK.36)-(CHK.38): the TS1479 interop family is not
+implemented at all, `ModuleResolver` does not condition `exports` on the importer's format, and
+`esModuleInterop` is gated on the global option and never on the two files' formats.
+
 **`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
 DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
 (CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`
@@ -129,48 +170,3 @@ this round's two dashboard FPs; and B50.5's deliberate refusal to name a pure fu
 even with both closed we would render `(node: TIn) => VisitResult<TOut>` where tsc renders
 `Visitor`). **A relation-engine item ((INC.30)) plus an alias-NAMING one, not a display bug** —
 re-queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the authority.
-
-**THE CAPTURE VALVE STAYS DIAGNOSTICS-ONLY: THE REPLAY IS NOT A *DIFFERENT* DEFECT, IT IS **MORE
-OF** THE ALIAS-DISPLAY RACE, AND IT GETS WORSE THE LONGER THE SESSION RUNS (2026-08-24,
-(INC.41)).** The standing reason (`docs/language-service.md` § 4a) said the 43 `DIVERGE-TYPE`
-files were the union-alias family "in which the fresh arm is not automatically the correct one" —
-inferred from (INC.26), never tested. **Tested against tsc 7.0.2's own LSP, it is FALSE for this
-population.** `compared 373,879` captured type spans over 75 files -> **796 divergent (0.213%) in
-43 FILES** (41 basenames — tsc has THREE `utilities.ts`), classified per ELEMENT and
-nesting-aware per (INC.23) into **37 distinct `(fresh, replay)` pairs**, with **192 rows carrying
-more than one differing element** (a row count over-reports, exactly as (INC.23) found):
-**REPLAY WORSE 413 rows / 36 files, BOTH WRONG 375 / 17, REPLAY BETTER 8 / 4, EQUIVALENT 0.** All
-37 causes were sampled through `--lsp -stdio` — **100% coverage BY CAUSE**, ground truth read out
-of tsc rather than hand-written (round 924).
-**THE MECHANISM IS THE DURABLE HALF.** `aliasDisplayMap` is **id-keyed FIRST-WINS** over INV.5(a),
-which interns a union by its member-id list ALONE, so a registered alias renames that interned
-union *everywhere* whatever the reference site spelled. A fresh narrowed build resolved
-essentially only the queried file; **the replay carries the seed build plus every earlier
-recheck**, so more aliases are registered and more unions get renamed. **393 of the 413 are that
-one shape** — tsc and the fresh arm render `Identifier | PrivateIdentifier`, which
-`utilitiesPublic.ts:857` literally writes, and the replay renders `MemberName`. So the replay's
-answer would depend on what the user looked at EARLIER, and **a differential taken after one
-query understates a first-wins display defect**. (INC.27) already refused the mitigation with a
-proof. The remaining **20** are genuine lost resolutions (`Connection[][]`, `Map<string,
-SeenPackageName>`, a bare `T` -> `any`) and are the only bug in the replay itself.
-**THE PRIZE WAS MEASURED BEFORE THE RECOMMENDATION** (`Inc41HoverPriceMain`, both arms asked the
-SAME caret, 40 targets x 4 ABBA rotations, 6 warm-ups, vacuity control 160/160): arming 188 ms,
-ONE hover fresh **121 ms** (p90 234), ONE hover replayed **33 ms** (p90 143) — **3.67x, 88 ms**.
-**But name the row**: `quickInfoAt` memoises per BUFFER (~2-4 ms for a second caret) and any edit
-drops the handle, so it is bought once per *(file, program state)* pair — **the first hover in a
-file at a program state some earlier query already built for, with no edit since** — and
-`completionsAt`/`signatureHelpAt` get nothing at all ((INC.32) defect 1). **REFUSED against
-(INC.2)'s bar**, which turned capture narrowing down over **45** divergent spans of 381,666
-(0.012%): 413 of 373,879 is **0.11%, nine times that**, in the same silent direction. Two things
-would change it and both are worth more on their own merits — wiring completions/signature-help
-to `prepared`, which is NOT free ((INC.33) refused the widening it needs at +25.1 s and 54.4 M
-records, so the prepare-amortised case still needs measuring), and closing the 20 lost
-resolutions, after which what remains is an owner-level logical-parity conversation.
-**A SEPARATE, PRE-EXISTING, ORDINARY-BUILD DEFECT FELL OUT AND IS QUEUED AS (INC.42)**: the 375
-BOTH-WRONG rows are on **every build**, 213 of them `Visitor`/`VisitResult<T>` rendering
-`(node: TIn) => any` where tsc renders `Visitor`. The capture sweeps are DIFFERENTIALS and are
-blind to it by construction ((INC.28)'s law), so its pin must assert the VALUE, never that two
-arms agree. **No `.kt` file and no compiler behaviour touched — suite unchanged at 15,824 / 0 /
-3, and every sweep and gate is a CONTROL this round, deliberately not re-run.** Every figure here
-is WALL TIME on one box, pinned by NO test; `docs/inc41-replay-capture-classification.md` is the
-authority and carries the re-take instructions.
