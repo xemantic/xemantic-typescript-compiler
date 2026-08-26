@@ -9694,6 +9694,12 @@ class Checker(
      * ABOVE them — the intersection-`never` TS2339 — outside its reach, exactly
      * as before. Written by the core, read and restored by the wrapper.
      */
+    /** (CHK.46) antecedent budget for [cmamInGuardMayAddProperty]; exhaustion REFUSES. */
+    private val CMAM_IN_GUARD_MAX_STEPS = 512
+
+    /** (CHK.46) expression-nesting budget for [cmamConditionMentionsIn]; exhaustion REFUSES. */
+    private val CMAM_IN_GUARD_MAX_DEPTH = 16
+
     private var cmamFlowBase = -1
 
     /** `--verifyDeferSuppression`: the predicate's verdict evaluated EAGERLY, at
@@ -65075,9 +65081,21 @@ interface DataView {
                 val propName = pa.name.text
                 if (propName in props) continue
                 val display = chainDisplay[recv] ?: continue
+                val message = "Property '$propName' does not exist on type '$display'."
+                // (CHK.46) …unless the general nested-access emission already produced
+                // this exact row. `checkSpine` runs BEFORE this pass and since
+                // (CHK.46) it covers the UN-ALIASED base of this very chain
+                // (`o1.shape.pX`, whose display is the literal `{ p1: 1; }` rather
+                // than a `merge<…>`), so the two populations now overlap in exactly
+                // one row per file. Identity on (code, position, file, message), so
+                // it can only ever drop a byte-identical duplicate.
+                if (diagnostics.any {
+                        it.code == 2339 && it.start == pa.name.pos &&
+                            it.fileName == fileName && it.message == message
+                    }) continue
                 val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
                 diagnostics.add(Diagnostic(
-                    message = "Property '$propName' does not exist on type '$display'.",
+                    message = message,
                     category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                     line = line, character = ch, start = pa.name.pos, length = propName.length,
                 ))
@@ -145294,6 +145312,160 @@ interface DataView {
     }
 
     /**
+     * (CHK.46) THE SINGLE-**OBJECT** EMISSION A NESTED ACCESS NEVER HAD.
+     *
+     * `h.inner.zzznope`, where `h.inner` is a plain object type, reported NOTHING
+     * where tsgo 7.0.2 reports TS2339 — for a parameter, a file-level `const` and a
+     * body-local alike, so this is not a block-scoping gap either. The receiver's
+     * type is not the problem: `rawForNarrowing` already reads `Inner` for it. What
+     * was missing is a consumer: a UNION receiver is decided by
+     * [cmamCheckUnionReceiverNarrowing] (which accepts a `PropertyAccessExpression`
+     * and whose tail already emits for a narrowed single object), and every
+     * non-union receiver falls into the `objectExpr !is Identifier` branch, whose
+     * three handlers are about `X.prototype` and namespace members.
+     *
+     * ### Why this is not the "broad structural-receiver gap" being opened
+     *
+     * It is (CHK.45)'s ALL-MISSING trust predicate applied to a receiver of ONE
+     * type instead of to each constituent of a union. [cmamAllMissingTrustedMember]
+     * is the whole FP firewall and it was calibrated on knip: it refuses a
+     * heritage-carrying interface (the B153 population, which is what knip's two
+     * measured false positives were), a `Type.Reference` (so `Inner[]` too), a class
+     * instance, an intersection, a type parameter, an enum-flavoured object, a NAMED
+     * anonymous object (so `typeof someNamespace`), a content-free one, and anything
+     * an index signature supplies. Every one of those is a tsc error we decline to
+     * report.
+     *
+     * ### The narrowing consult is load-bearing and is a REFUSAL
+     *
+     * `if ('zzznope' in h.inner) { h.inner.zzznope }` is LEGAL — measured on tsgo,
+     * which narrows an object type by `in` — so an emission that consulted nothing
+     * would be a false positive on idiomatic code. Rather than model that narrowing,
+     * this refuses outright whenever the flow answers anything other than the
+     * declared type, which is strictly safer: a narrow that ADDS a property and a
+     * narrow that changes the type both stop the emission.
+     *
+     * The receiver is restricted to a `PropertyAccessExpression` because that is the
+     * only non-Identifier shape `narrowingEligible` admits with a reference path; a
+     * CALL receiver (`h.fn().zzznope`) has no path and never reaches here.
+     */
+    /**
+     * (CHK.46) Could an `in` GUARD on the path to [objectExpr] have added
+     * [propName] to its type?
+     *
+     * `if ('zzznope' in h.inner) { h.inner.zzznope }` is LEGAL — tsc narrows an
+     * object type by `in` to `T & Record<'zzznope', unknown>` — and
+     * [narrowByInOperator]'s non-union arm deliberately answers the UNCHANGED type
+     * for that case ("we just keep `t` (conservative)"), which is correct for a
+     * suppression consumer and invisible to an identity test. So
+     * [cmamCheckNestedObjectReceiver]'s `narrowed !== raw` refusal cannot see it,
+     * and without this the shape is a false positive on idiomatic duck-typing code
+     * (measured against tsgo 7.0.2).
+     *
+     * A bounded backward walk over the flow antecedents, answering TRUE — refuse —
+     * for any `in` condition naming this property on this reference path, in either
+     * branch: the `isTrue` half is not consulted, because refusing costs a false
+     * negative and reading it wrong costs a false positive. Budget exhaustion also
+     * answers TRUE, so an unwalkable graph refuses rather than guesses.
+     */
+    private fun cmamInGuardMayAddProperty(objectExpr: Expression, propName: String): Boolean {
+        if (currentFlowGraph == null) return false
+        val path = getReferencePath(objectExpr) ?: return false
+        val start = getFlowAt(objectExpr) ?: return false
+        val seen = HashSet<Int>()
+        val queue = ArrayDeque<FlowNode>()
+        queue.add(start)
+        var steps = 0
+        while (queue.isNotEmpty()) {
+            if (steps++ > CMAM_IN_GUARD_MAX_STEPS) return true
+            val n = queue.removeFirst()
+            if (!seen.add(n.id)) continue
+            when (n) {
+                is FlowCondition -> {
+                    if (cmamConditionMentionsIn(n.expression, path, propName, 0)) return true
+                    queue.add(n.antecedent)
+                }
+                is FlowAssignment -> queue.add(n.antecedent)
+                is FlowCall -> queue.add(n.antecedent)
+                is FlowSwitchClause -> queue.add(n.antecedent)
+                is FlowArrayMutation -> queue.add(n.antecedent)
+                is FlowBranchLabel -> queue.addAll(n.antecedents)
+                is FlowLoopLabel -> queue.addAll(n.antecedents)
+                else -> {}
+            }
+        }
+        return false
+    }
+
+    /** (CHK.46) `<propName-literal> in <path>` anywhere inside a condition expression. */
+    private fun cmamConditionMentionsIn(
+        expr: Expression, path: String, propName: String, depth: Int,
+    ): Boolean {
+        if (depth > CMAM_IN_GUARD_MAX_DEPTH) return true
+        var e: Expression = expr
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e is PrefixUnaryExpression) return cmamConditionMentionsIn(e.operand, path, propName, depth + 1)
+        if (e !is BinaryExpression) return false
+        if (e.operator == SyntaxKind.InKeyword) {
+            val left = unwrapParensExpr(e.left)
+            val name = when (left) {
+                is StringLiteralNode -> left.text
+                is NoSubstitutionTemplateLiteralNode -> left.text
+                is NumericLiteralNode -> left.text
+                else -> return true
+            }
+            return name == propName && getReferencePath(e.right) == path
+        }
+        return cmamConditionMentionsIn(e.left, path, propName, depth + 1) ||
+            cmamConditionMentionsIn(e.right, path, propName, depth + 1)
+    }
+
+    private fun cmamCheckNestedObjectReceiver(
+        objectExpr: Expression,
+        raw: Type,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        if (objectExpr !is PropertyAccessExpression) return false
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        if (raw !is Type.Object) return false
+        if (isGlobalObjectOrFunctionType(raw)) return false
+        if (!cmamAllMissingTrustedMember(raw, propName)) return false
+        // MEASURED, not argued: an ARRAY-LIKE (a tuple is an anonymous object
+        // carrying a number index signature) reaches its `slice`/`map`/`filter`
+        // through the global `Array` interface, and `getApparentType` does not
+        // supply those here — `fourslashImpl.ts`'s
+        // `options.description.slice(1)` on `[string, (string | number)[]]` is the
+        // ONE row the harness profile gained before this line existed, and tsc is
+        // silent for it.
+        if (raw.numberIndexInfo != null) return false
+        // MEASURED: when the BASE of the nested access is a generic instantiation,
+        // some other walker already owns the access and this emission DUPLICATES it
+        // — the corpus's `longObjectInstantiationChain2` reports `o1.shape.p51`
+        // (`o1: Type<{ p1: 1 }>`) exactly once, and it went to twice. That producer
+        // runs AFTER this one, so neither the call site's emptiness test nor an
+        // identity test on `diagnostics` can see it (both were tried); the receiver
+        // shape is what separates the two populations.
+        if (getTypeOfExpression(objectExpr.expression) is Type.Reference) return false
+        if (currentFlowGraph != null && getNarrowedTypeForReference(raw, objectExpr) !== raw) return false
+        if (cmamInGuardMayAddProperty(objectExpr, propName)) return false
+        resolveStructuredTypeMembers(raw)
+        if (getPropertyOfType(raw, propName) != null) return false
+        if (getPropertyOfType(getApparentType(raw), propName) != null) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '${typeToString(raw)}'.",
+            category = DiagnosticCategory.Error, code = 2339,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+        ))
+        return true
+    }
+
+    /**
      * (CHK.46) THE DECLARED TYPE OF A **DESTRUCTURED** RECEIVER — the one shape the
      * property-access family types NOWHERE.
      *
@@ -145565,9 +145737,20 @@ interface DataView {
         CpaSections.atR(CpaSections.R_OT_NONIDENT)
         if (objectExpr !is Identifier) {
             // (JIT.1)(b): R_OT_NONIDENT — the non-Identifier receiver emissions.
+            val nonIdentBase = diagnostics.size
             cmamCheckNonIdentifierReceiver(
                 objectExpr, propName, diagStart, diagLength, source, fileName, keySuggestion,
             )
+            // (CHK.46) …and, when none of them fired, the single-OBJECT emission a
+            // NESTED access never had. See [cmamCheckNestedObjectReceiver]. The
+            // emptiness test is what keeps the existing handlers' verdicts first:
+            // each of them signals "done" with a bare `return`, so the diagnostics
+            // count is the only thing that reports whether one of them spoke.
+            if (diagnostics.size == nonIdentBase) {
+                cmamCheckNestedObjectReceiver(
+                    objectExpr, rawForNarrowing, propName, diagStart, diagLength, source, fileName,
+                )
+            }
             return null
         }
         CpaSections.atR(CpaSections.R_OT_IDENTSYM)
