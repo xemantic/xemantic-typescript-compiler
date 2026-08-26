@@ -165729,18 +165729,19 @@ interface DataView {
                 if (inner == "undefined" || inner == "null") null else inner
             }
             is SatisfiesExpression -> inferSimpleExprType(expr.expression, varTypes)
-            is AsExpression -> {
-                // Type assertion: return the asserted type, not the inner expression type
-                val assertedType = resolveSimpleTypeName(expr.type)
-                if (assertedType != null) assertedType
-                else inferSimpleExprType(expr.expression, varTypes)
-            }
-            is TypeAssertionExpression -> {
-                // `<T>expr` legacy assertion form — mirrors AsExpression
-                val assertedType = resolveSimpleTypeName(expr.type)
-                if (assertedType != null) assertedType
-                else inferSimpleExprType(expr.expression, varTypes)
-            }
+            // (CHK.43) A type assertion's value has the ASSERTED type — full stop. When
+            // [resolveSimpleTypeName] cannot render that type (an array, tuple, function
+            // type, type literal, indexed access, …) the honest answer at this layer is
+            // "unknowable", i.e. null, which makes every caller SKIP its string-based
+            // check. It must NOT be the OPERAND's type: for the `x as unknown as T`
+            // escape-hatch idiom that is `unknown`, precisely the type the outer
+            // assertion exists to assert away, and reporting it produced a shipped false
+            // positive (`(): B | A | (B|A)[]` + `return r as unknown as B[]`) that
+            // tsc 7.0.2 does not have. The engine path above is unaffected and still
+            // decides every assertion whose source genuinely does not relate.
+            is AsExpression -> resolveSimpleTypeName(expr.type)
+            // `<T>expr` legacy assertion form — mirrors AsExpression
+            is TypeAssertionExpression -> resolveSimpleTypeName(expr.type)
             is ArrayLiteralExpression -> "array" // Used internally for assignability
             is BinaryExpression -> when (expr.operator) {
                 SyntaxKind.Equals -> inferSimpleExprType(expr.right, varTypes)
