@@ -1,5 +1,53 @@
 # Status
 
+**A GUARDED REASSIGNMENT NOW REDUCES THE *DECLARED* UNION — `if (typeof c === 'function')
+c = c();` THEN `c.files` WAS A FALSE TS2339, AND SO WAS ITS ASSERTION SIBLING (2026-08-26,
+(CHK.41)).** Both are knip's own source and neither is reachable for any existing arm of
+`narrowByAssignmentRhs`: in the CALL form the callee **is** the walked reference, so
+`getTypeOfExpression` (which never narrows) asks about the whole union and
+`resolvedCallReturnTypeForFlow` wants a `FunctionDeclaration` a parameter is not — while the
+ANTECEDENT is exactly the callee's type there, the guard having already narrowed it. The
+ASSERTION states its own type syntactically ((CHK.43)), so the `await` and parens around it are
+irrelevant. **The reduction is of the DECLARED union, never the antecedent** (round 416's rule,
+which the identifier/property arms still predate): in the then-branch the antecedent IS the
+constituent being replaced, so filtering it answers `never` or itself and the branch join
+re-mints the union — which is exactly why the shape read as "no narrowing at all".
+
+**THE ITEM'S PREMISE WAS TWO-FIFTHS RIGHT, AND THE CORRECTION IS THE ROUND'S MOST USEFUL
+OUTPUT.** (CHK.41) recorded the +15 knip rows the two reverted contextual sources cost as
+"**every one**" this shape. Recovered from (CHK.39)'s own captures at zero cost and reproduced
+one by one with an **annotated** parameter, they are FIVE mechanisms: ava 3 + eleventy 3 (the
+guarded reassignment — **fixed**), release-it 2 (`typeof x.y?.z === 'string'` must narrow
+`x.y`), mdxlint+remark 4 (the `flatMap` callback's return-type INFERENCE), graphql-codegen 1 (a
+nested-ternary predicate) and yarn 2 (a `Plugin` NAME collision, not narrowing at all) — plus
+2 rows those sources REMOVE. **So the two sources stay reverted**, with a per-row map instead
+of a projection.
+
+**AND A LARGER FINDING FELL OUT OF ISOLATING THE FIRST: THE PROPERTY-ACCESS FAMILY ONLY REACHES
+A *PARAMETER*.** `const c: A | F = x; c.files` and `let c: A | F = x; c.files` are SILENT where
+tsgo reports TS2339 — 3 of 4 shapes are false negatives. That is why the item, and this
+session's first four probes, read "a LOCAL narrows and a PARAMETER does not": the local was
+never checked. Queued as **(CHK.44)**.
+
+**GATES.** Suite **15,959 / 0 / 3** (+9, exactly the new class), **zero corpus baselines
+moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes`
++0.00%, largest movement `mapped.hits` **+1.46%**. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **56 ms**
+[56, 66, 51, 53] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
+`definitions` **360,376** — unmoved, both digests. 8-profile grid against a rebuilt parent,
+`javap`-controlled (0 -> 1): **`added=0 removed=0` on all eight**, a CONTROL and not evidence.
+**knip 66 -> 66, every row byte-identical, BEFORE arm rebuilt in the same session.**
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (the whole
+fix inert) 6 RED; a2 (the CALL arm) 3 and a3 (the ASSERTION arm) 3 — an exact partition;
+a5 (drop the un-callable-union refusal) 1, uniquely the UNGUARDED control. **a4 read `0 RED`
+and WAS a dead arm** — a guarded substitution that reproduces the original wherever the
+antecedent is not a union, which in a `typeof` then-branch it never is; asking what shape only
+that arm can serve gave **a4b, 5 RED**. **a6 read `0 RED` and is a REDUNDANT GUARD, recorded
+as one rather than claimed** (round 807): `any`/`never`/`error` keep every member so the call
+site's `kept.size < declared.size` test refuses anyway, and `unknown` keeps none so
+`kept.isNotEmpty()` does.
+
 **A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOW CHECKED AT ALL — AND BOTH ROWS THAT
 BLOCKED IT WERE FALSE POSITIVES WE ALREADY SHIPPED (2026-08-26, (CHK.42) + (CHK.43)).**
 (CHK.40) measured the walk at full parity with tsgo and refused to land it because the
@@ -185,44 +233,3 @@ annotation) reddens all five arrow pins; a4 and a5 redden the SAME single pin, s
 observable, not two. **a2 is `0 RED` across the whole 15,883-test suite** — the `node_modules`
 walker legs the first cut also consulted are a REDUNDANT GUARD wherever the crawl can answer, so
 they were REMOVED rather than shipped un-gateable.
-
-**A FILE'S MODULE FORMAT NOW COMES FROM THE NEAREST `package.json` `"type"` — `TS1295+TS1287`
-ON knip GO **2,478 -> 0**, AND EVERY STANDING GATE IN THIS REPO IS BLIND TO IT (2026-08-25,
-(CHK.29)).** Under `nodenext`/`node16` tsc reads the nearest enclosing `package.json`; we had the
-CONSUMER (`packageJsonTypes` + the lookup in `isESModuleFormat`) and one producer that reads the
-corpus's PARSED SOURCE SET — and **a real project has no `package.json` among its inputs**, so on
-every project build the map was empty, every file was CommonJS, and every ESM import/export
-tripped `verbatimModuleSyntax`. `ProjectCompiler` now walks the `Vfs` up from each program file's
-directory, memoized per DIRECTORY, gated on `isNodeNext`; reading through the `Vfs` is what puts
-the language service's overlay on the same path (pinned: an overlaid `package.json` that exists
-nowhere on disk flips the format on the next query).
-**THE BLINDNESS AS A COUNT: the eight dashboard profiles hold `0` `package.json` files between
-them**, and the corpus materialises no directory at all — so a green suite, `added=0 removed=0`
-and `+0.00%` are the EXPECTED answers and none is evidence. `ProjectPackageJsonTypeTest` (11
-pins, `-project`, real `ProjectCompiler` + `Vfs`) is the instrument; the six gates are controls.
-**TWO CORRECTIONS tsgo FORCED, NEITHER GUESSED**: a manifest with NO `"type"` ESTABLISHES the
-scope at CommonJS (the walk stops at the first one it meets, so it must not fall through to a
-`"type": "module"` ancestor — the old collector `continue`d, i.e. had this wrong); and the
-manifest is parsed as JSON, because knip's own has `repository.type: "git"` and two
-`funding[].type` BEFORE the real key, so a first-match regex answers CommonJS for a `"type":
-"module"` package — worth all 2,478 rows on its own.
-**MEASURED, ONE DRAW EACH**: all seven disk fixtures now agree with tsgo 7.0.2 error for error
-(they already agreed POSITION-for-position on the CommonJS rows, which isolates the defect to the
-format decision); knip @ `dc7aca5` **2,634 -> 309** (147 of the 309 environmental, no
-`node_modules`); emit checked in both directions and byte-identical to tsgo.
-**GATES.** Suite **15,871 / 0 / 3** (+11 pins; the first ten were written BEFORE the fix and
-verified RED against it, the eleventh landed in a follow-up commit); build warning-clean; `cost_gate.py` `output.errors` **46**, vector unmoved (standing
-`mapped.hits` +1.63% drift unchanged, unrebaselined); `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned (unchanged — the change adds methods, not classes);
-`partition-equivalence` **EQUIVALENT 78/78**, floor **60 ms** `[53, 58, 60, 65]` against 59 last
-round, and the walk DOES run there (the compiler profile is NodeNext); `capture-equivalence`
-**1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**; `round895-grid` 8 profiles,
-`added=0 removed=0` on every one.
-**Ablation: six arms, one mistake each. a3 (regex instead of JSON) is the only arm with a
-uniquely-its-own pin; a2 and a4 are indistinguishable from each other and are recorded as ONE
-observable; a6 (the `isNodeNext` gate removed) is red NOWHERE — no output gate here can see it.
-And arm a5 as first written was a DEAD ARM, not a blind pin: it cached in a `ProjectCompiler`
-INSTANCE field and `Project` builds a fresh one per build, so it printed `0 RED` exactly as a
-redundant guard would.** Residue queued as (CHK.36)-(CHK.38): the TS1479 interop family is not
-implemented at all, `ModuleResolver` does not condition `exports` on the importer's format, and
-`esModuleInterop` is gated on the global option and never on the two files' formats.

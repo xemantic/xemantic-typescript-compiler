@@ -1,3 +1,44 @@
+**A FILE'S MODULE FORMAT NOW COMES FROM THE NEAREST `package.json` `"type"` — `TS1295+TS1287`
+ON knip GO **2,478 -> 0**, AND EVERY STANDING GATE IN THIS REPO IS BLIND TO IT (2026-08-25,
+(CHK.29)).** Under `nodenext`/`node16` tsc reads the nearest enclosing `package.json`; we had the
+CONSUMER (`packageJsonTypes` + the lookup in `isESModuleFormat`) and one producer that reads the
+corpus's PARSED SOURCE SET — and **a real project has no `package.json` among its inputs**, so on
+every project build the map was empty, every file was CommonJS, and every ESM import/export
+tripped `verbatimModuleSyntax`. `ProjectCompiler` now walks the `Vfs` up from each program file's
+directory, memoized per DIRECTORY, gated on `isNodeNext`; reading through the `Vfs` is what puts
+the language service's overlay on the same path (pinned: an overlaid `package.json` that exists
+nowhere on disk flips the format on the next query).
+**THE BLINDNESS AS A COUNT: the eight dashboard profiles hold `0` `package.json` files between
+them**, and the corpus materialises no directory at all — so a green suite, `added=0 removed=0`
+and `+0.00%` are the EXPECTED answers and none is evidence. `ProjectPackageJsonTypeTest` (11
+pins, `-project`, real `ProjectCompiler` + `Vfs`) is the instrument; the six gates are controls.
+**TWO CORRECTIONS tsgo FORCED, NEITHER GUESSED**: a manifest with NO `"type"` ESTABLISHES the
+scope at CommonJS (the walk stops at the first one it meets, so it must not fall through to a
+`"type": "module"` ancestor — the old collector `continue`d, i.e. had this wrong); and the
+manifest is parsed as JSON, because knip's own has `repository.type: "git"` and two
+`funding[].type` BEFORE the real key, so a first-match regex answers CommonJS for a `"type":
+"module"` package — worth all 2,478 rows on its own.
+**MEASURED, ONE DRAW EACH**: all seven disk fixtures now agree with tsgo 7.0.2 error for error
+(they already agreed POSITION-for-position on the CommonJS rows, which isolates the defect to the
+format decision); knip @ `dc7aca5` **2,634 -> 309** (147 of the 309 environmental, no
+`node_modules`); emit checked in both directions and byte-identical to tsgo.
+**GATES.** Suite **15,871 / 0 / 3** (+11 pins; the first ten were written BEFORE the fix and
+verified RED against it, the eleventh landed in a follow-up commit); build warning-clean; `cost_gate.py` `output.errors` **46**, vector unmoved (standing
+`mapped.hits` +1.63% drift unchanged, unrebaselined); `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned (unchanged — the change adds methods, not classes);
+`partition-equivalence` **EQUIVALENT 78/78**, floor **60 ms** `[53, 58, 60, 65]` against 59 last
+round, and the walk DOES run there (the compiler profile is NodeNext); `capture-equivalence`
+**1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**; `round895-grid` 8 profiles,
+`added=0 removed=0` on every one.
+**Ablation: six arms, one mistake each. a3 (regex instead of JSON) is the only arm with a
+uniquely-its-own pin; a2 and a4 are indistinguishable from each other and are recorded as ONE
+observable; a6 (the `isNodeNext` gate removed) is red NOWHERE — no output gate here can see it.
+And arm a5 as first written was a DEAD ARM, not a blind pin: it cached in a `ProjectCompiler`
+INSTANCE field and `Project` builds a fresh one per build, so it printed `0 RED` exactly as a
+redundant guard would.** Residue queued as (CHK.36)-(CHK.38): the TS1479 interop family is not
+implemented at all, `ModuleResolver` does not condition `exports` on the importer's format, and
+`esModuleInterop` is gated on the global option and never on the two files' formats.
+
 **`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
 DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
 (CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`

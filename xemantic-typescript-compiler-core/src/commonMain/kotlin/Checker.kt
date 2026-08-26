@@ -116665,7 +116665,13 @@ interface DataView {
      *    (TS2349), and inventing a post-state for it would be a silent guess.
      *
      * `any`/`error`/`unknown`/`never` are refused in both arms — they relate to
-     * every member, so reducing by one is either a no-op or a collapse.
+     * every member, so reducing by one is either a no-op or a collapse. That
+     * last refusal is a **REDUNDANT GUARD, measured and recorded rather than
+     * claimed** (round 807): ablated, no pin moves, because `any`/`never`/`error`
+     * keep EVERY member and the call site's own `kept.size < declaredType.types
+     * .size` test then refuses, while `unknown` keeps NONE and its
+     * `kept.isNotEmpty()` test refuses. It is kept as defence against the
+     * relation's known leniencies, and no pin covers it.
      */
     private fun assignedTypeOfGuardedReassignment(
         rhs: Expression, name: String, antecedent: Type,
