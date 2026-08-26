@@ -116527,6 +116527,40 @@ interface DataView {
                     }
                 }
             }
+            // (CHK.41) THE GUARDED REASSIGNMENT of a union-typed reference —
+            // tsc's `getAssignmentReducedType` for the two right-hand sides NO
+            // arm above can type, and which a real codebase writes where tsc's
+            // own 78 sources never do (both measured on knip):
+            //
+            //     if (typeof c === 'function') c = c();
+            //     if (typeof c === 'function') c = (await c(x)) as T;
+            //
+            // The CALL form is unreachable for every neighbour because the
+            // callee IS the walked reference: `getTypeOfExpression` never
+            // narrows (CLAUDE.md), so typing `c()` asks about the whole declared
+            // union, and [resolvedCallReturnTypeForFlow] reads a
+            // FunctionDeclaration's return annotation, which a parameter is not.
+            // The ANTECEDENT is precisely the callee's type here — the guard has
+            // already narrowed it — so the assigned type is its call signatures'
+            // return, needing no resolution the walk has not already paid for.
+            //
+            // Reduction is the neighbours' and tsc's: keep the members of the
+            // DECLARED union the assigned type is assignable to, NEVER the
+            // antecedent's (round 416's rule, which the identifier/property arms
+            // below still predate) — an assignment OVERWRITES the reference, and
+            // in the then-branch the antecedent is the very constituent the
+            // assignment replaces, so filtering it always answers `never` or
+            // itself and the branch join re-mints the declared union.
+            if (declaredType is Type.Union && rhs != null) {
+                assignedTypeOfGuardedReassignment(rhs, name, antecedent)?.let { assigned ->
+                    val kept = declaredType.types.filter { m ->
+                        checkTypeRelatedTo(assigned, m, assignableRelation)
+                    }
+                    if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                        return if (kept.size == 1) kept[0] else getUnionType(kept)
+                    }
+                }
+            }
         }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
             // Round 416: an assignment OVERWRITES the reference, so its post-state is the
@@ -116613,6 +116647,48 @@ interface DataView {
             }
         }
         return antecedent
+    }
+
+    /**
+     * (CHK.41) The type ASSIGNED by a guarded reassignment of [name], for the two
+     * right-hand sides [narrowByAssignmentRhs]'s other arms structurally cannot
+     * reach. Null means "not one of those shapes" — never "no narrowing", so a
+     * null answer leaves every arm below in charge.
+     *
+     *  - a type ASSERTION (`e as T` / `<T>e`) states its own type syntactically
+     *    ((CHK.43)); whatever is inside it — an `await`, a call, parens — is
+     *    irrelevant, because the assertion is the outermost node.
+     *  - a CALL WHOSE CALLEE IS [name] ITSELF is typed from [antecedent], the
+     *    reference's type immediately before the assignment. A UNION antecedent
+     *    with a non-callable constituent is REFUSED rather than reduced: that is
+     *    exactly the un-narrowed program in which the call is itself an error
+     *    (TS2349), and inventing a post-state for it would be a silent guess.
+     *
+     * `any`/`error`/`unknown`/`never` are refused in both arms — they relate to
+     * every member, so reducing by one is either a no-op or a collapse.
+     */
+    private fun assignedTypeOfGuardedReassignment(
+        rhs: Expression, name: String, antecedent: Type,
+    ): Type? {
+        val assigned: Type = when (rhs) {
+            is AsExpression, is TypeAssertionExpression -> getTypeOfExpression(rhs)
+            is CallExpression -> {
+                if (rhs.questionDotToken) return null
+                if ((unwrapParensExpr(rhs.expression) as? Identifier)?.text != name) return null
+                if (antecedent is Type.Union &&
+                    antecedent.types.any { getCallSignaturesOfType(it).isEmpty() }
+                ) return null
+                val sigs = getCallSignaturesOfType(antecedent)
+                if (sigs.isEmpty()) return null
+                val rets = ArrayList<Type>(sigs.size)
+                for (sig in sigs) rets.add(sig.resolvedReturnType ?: return null)
+                if (rets.size == 1) rets[0] else getUnionType(rets)
+            }
+            else -> return null
+        }
+        return if (assigned === anyType || assigned === errorType ||
+            assigned === unknownType || assigned === neverType
+        ) null else assigned
     }
 
     /** M1.12 (round 424): resolve a call's return type for the flow-walk
