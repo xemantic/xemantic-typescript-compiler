@@ -344,13 +344,12 @@ class LibGlobalNameShadowTest {
      * deliberate global contribution INV.3(d) keeps (`moduleLocalContributesGlobally`
      * answers true for the name `global`), and it must keep merging.
      *
-     * The assertion is on a `var` and NOT on an `interface` augmentation, because
-     * `declare global { interface Date { … } }` does not reach `globals` in this
-     * checker at all — measured on the (CHK.49) PARENT binary and after, in the
-     * same file and across files, and identical in both arms. That is a
-     * pre-existing gap this round neither causes nor closes; it is recorded in the
-     * session note and queued rather than pinned, since a pin on a known-open gap
-     * is a countdown and not a guard (round 765).
+     * (CHK.49) could only assert this on a `var`, because
+     * `declare global { interface Date { … } }` did not reach `globals` at all —
+     * queued as (CHK.50) rather than pinned, since a pin on a known-open gap is a
+     * countdown and not a guard (round 765). (CHK.50) LANDED, so the assertion is
+     * now a WRITE probe: cross-file, `zzzGlobalVar` typed silently `any` before
+     * that round and this pin would have been vacuous either way.
      */
     @Test
     fun `CONTROL - a declare global block in a module still merges into the lib globals`() {
@@ -362,11 +361,14 @@ class LibGlobalNameShadowTest {
             // @Filename: zzzUse.ts
             export {}
             export const zzzA: number = zzzGlobalVar
+            export const zzzB: string = zzzGlobalVar
             """,
             directives = realLibs,
         )
         assert(diagnostics.none { it.code == 2304 })
-        assert(diagnostics.none { it.code == 2322 })
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        assert(ts2322.single().message == "Type 'number' is not assignable to type 'string'.")
     }
 
     /**

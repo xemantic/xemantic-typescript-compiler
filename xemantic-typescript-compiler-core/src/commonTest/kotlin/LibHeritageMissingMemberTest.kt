@@ -54,7 +54,8 @@ import kotlin.test.Test
  *
  * So the relaxation demands POSITIVE evidence ((CHK.45)'s rule): every type in the
  * receiver's transitive base closure must be an interface whose declarations are
- * ALL lib declarations, none of them augmented by a `declare global` block, each
+ * ALL lib declarations OR a `declare global` interface augmentation ((CHK.50) —
+ * that block now merges, so its declaration is one of the symbol's own), each
  * with a member table that actually resolved. A lib interface's members are fully
  * declared in files this compiler ships and parses in one piece, so "absent from
  * the resolved table" is a witnessed verdict; a program interface's member table
@@ -175,14 +176,23 @@ class LibHeritageMissingMemberTest {
     }
 
     /**
-     * THE REFUSAL THE RELAXATION IS BOUGHT WITH, direction 1: a `declare global`
-     * interface augmentation of a lib name does NOT reach `globals` in this
-     * checker ((CHK.50), open and measured on the (CHK.49) parent), so the lib
-     * symbol's declaration list still reads "all lib" and the "every declaration
-     * is a lib declaration" test cannot see the augmentation. Without
-     * [Checker.globalAugmentedInterfaceNames] this relaxation would turn
-     * (CHK.50)'s silent false NEGATIVE into a false POSITIVE on the shape every
-     * `@types` package is written in. tsgo is silent here; so are we.
+     * (CHK.50) RE-PINNED — THIS WAS "THE REFUSAL THE RELAXATION IS BOUGHT WITH",
+     * AND THE COST IT NAMED IS NOW PAID.
+     *
+     * (CHK.51) shipped a `globalAugmentedInterfaceNames` NAME set here because a
+     * `declare global { interface HTMLElement { … } }` did not reach `globals` at
+     * all, so the lib symbol's declaration list still read "all lib" and the
+     * all-lib test could not see the augmentation — without the set the
+     * relaxation would have turned that silent false NEGATIVE into a false
+     * POSITIVE. The cost was recorded and named: in such a file
+     * `zzzH.zzzNotThere` was TS2339 in tsgo and silent here.
+     *
+     * (CHK.50) merged the block, so the symbol now carries a NON-lib declaration
+     * and [Checker.cmamIsGlobalAugmentation] admits exactly that declaration.
+     * The set and its collector are deleted, and BOTH directions are asserted
+     * here: the augmented member exists (no TS2339, and it types `number` rather
+     * than `any` — the `zzzS` line), and a genuinely missing one IS reported.
+     * tsgo 7.0.2 agrees on both, on code, message and column.
      */
     @Test
     fun `a declare global augmentation of a lib interface is not reported as missing`() {
@@ -191,10 +201,17 @@ class LibHeritageMissingMemberTest {
             declare global { interface HTMLElement { zzzAug: number } }
             declare const zzzH: HTMLElement
             export const zzzW = zzzH.zzzAug
+            export const zzzS: string = zzzH.zzzAug
+            export const zzzBad = zzzH.zzzNotThere
             """,
             directives = dom,
         )
-        assert(diagnostics.none { it.code == 2339 })
+        val ts2339 = diagnostics.filter { it.code == 2339 }
+        assert(ts2339.size == 1)
+        assert(ts2339.single().message == "Property 'zzzNotThere' does not exist on type 'HTMLElement'.")
+        val ts2322 = diagnostics.filter { it.code == 2322 }
+        assert(ts2322.size == 1)
+        assert(ts2322.single().message == "Type 'number' is not assignable to type 'string'.")
     }
 
     /**
