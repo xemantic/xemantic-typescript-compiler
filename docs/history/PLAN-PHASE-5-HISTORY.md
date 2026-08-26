@@ -1,3 +1,48 @@
+### Round (INC.38) — DOC-ONLY: the host-facing recommendation ("ask for the whole open set in one call") is written down, with its numbers traced to their actual source
+
+**WHAT THIS ROUND DID.** Closed out the open half of `(INC.38)` — the code half
+(collecting the re-derivation tax via a retained checker) shipped already as
+`(INC.40)`, `8d4e95b0`; what remained was the host-facing recommendation the item
+itself deferred to "documentation, not code". Added one new subsection to
+`docs/language-service.md` § 3a, "Ask for the whole open set in one call — this is a
+rule, not a tip", right after the existing `diagnosticsOf` batching example. No
+Kotlin source touched.
+
+**THE NUMBERS THE ITEM QUOTED ("342 against 771") DO NOT APPEAR VERBATIM IN THE
+(INC.14) SESSION NOTE** — they were traced instead to `docs/language-service.md` § 14's
+own six-buffer table, refreshed by the `(INC.31)+(INC.32)` round (`2fa8a39f`,
+2026-08-24): the same 6-file `diagnosticsOf` set asked as **one call costs
+321–342 ms**; asked **one file at a time it costs 748–771 ms**. The item's "342 / 771"
+is the upper bound of each range — correct, just sourced from the wrong round number.
+The new subsection cites the actual source (§ 14, `2fa8a39f`) rather than repeating
+the item's attribution.
+
+**WHAT THE NEW SECTION STATES**, beyond the numbers: the arithmetic that makes this a
+rule rather than a tip (one call pays one floor + one shared derivation; N calls pay N
+of each — from `(INC.37)`'s Σ`own(F)` = 6,841 ms against a 4,935 ms whole-program check,
+a 1.39x tax, ~24 ms = 22% of a 108 ms median query); that this is wall time and
+therefore pinned by nothing, per the page's own standing caveat; what `(INC.40)`'s
+retained-checker replay does and does not remove (collects the floor across queries,
+not the per-file derivation a build still pays once per named file); and `(INC.14)`'s
+refusal of automatic working-set growth (`k·floor + k(k+1)/2·perFile` against a cold
+`k·floor + k·perFile` — a loss at every k), restated here so the "why not grow the set
+automatically" question sits beside the recommendation it explains.
+
+**GATES.** Doc-only round — no compiler source, no compiled core method touched, so
+`jvmTest`, `cost_gate.py` and `huge_methods.py` were not run; nothing in this change
+can move a counter, a diagnostic or a byte of emitted output. `git diff --stat` before
+commit touches exactly four files, all `.md`: `PLAN-PHASE-5.md` (this note plus the
+queue item), `docs/language-service.md` (the new § 3a subsection),
+`STATUS.md` (a short new headline, trim-on-write) and `docs/history/STATUS-HISTORY.md`
+(the (INC.37) block moved out to keep STATUS.md at ~5 rounds).
+
+### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+**OWNER DIRECTIVE 2026-08-22, TOP OF QUEUE: make the language service incremental enough
+to carry an IntelliJ-style plugin's error reporting.** (INC.1) landed and MEASURED the
+rest of the arc: narrowing the CHECK is finished (a median file's own checking is 15 ms),
+so (INC.2) and (INC.3) below are what is left, in that order.
+
 ### Round (INC.42) — a bare type parameter is an UNDECIDED constraint, not a failed one: `(n: number) => R1<X>` rendered `(n: number) => any` on every ordinary build
 
 **THE REPRO IS THREE LINES, NEEDS NO PARTITION, AND HAS NOTHING TO DO WITH `Visitor`.**

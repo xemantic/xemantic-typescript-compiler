@@ -1,3 +1,43 @@
+**AN `async` FUNCTION'S *INFERRED* RETURN TYPE IS A `Promise`, AND IT WAS WRONG IN BOTH
+DIRECTIONS — 3 FALSE POSITIVES AND 4 FALSE NEGATIVES ON ONE SEVEN-SHAPE FIXTURE, tsgo 7.0.2
+REPORTING EXACTLY THE COMPLEMENT (2026-08-26, (CHK.40)).** The queue item read its own row (e)
+as "an async object-literal method's parameters are not contextually typed"; measured, the
+parameters were fine and the RETURN TYPE was not — an `async` function-like with no return
+annotation carried its BODY's type, so `async function f() { return 1 }` read `() => number`.
+Wrapped at the **eight** inferred-return sites; an ANNOTATED return type is never touched, a
+GENERATOR is deliberately excluded, and a lib with no `Promise` is bit-for-bit unchanged.
+
+**(c) HAD ITS ROOT ONE LAYER BELOW THE TS7006 WALKER, AND THE FILE ALREADY SAID SO.**
+`getTypeOfSymbolWorker`'s MethodDeclaration arm read `decl.name as? Identifier` and answered
+`anyType` for anything else — a residue round 937 named and left — so
+`interface VS { "m-x"(node: N): void }` had that member **present and typed `any`** while the
+property form was byte-correct. It now takes the name with `declaredMemberName`, the same
+helper that REGISTERED the member. (a)/(b)/(d) are one new arm: the contextual type of a
+`return` POSITION (the enclosing function's annotation, else the signature that contextually
+types it, with one `Promise<>` stripped when it is `async`), fed through an index-aware array
+arm so a TUPLE contributes its own slot.
+
+**THE ROUND'S BIGGEST FINDING DID NOT SHIP: A FUNCTION BODY NESTED IN A `return` EXPRESSION IS
+NOT CHECKED AT ALL** — the ONE expression position that does not reach
+`walkFunctionBodiesInExpr` (a var-decl initializer, a call ARGUMENT and an object-literal
+property value all do). With the two-line arm in, both probes reach FULL PARITY with tsgo, the
+corpus stays 15,928/0/3 and **knip stays 66 with every row identical** — and the grid gains
+**3 rows**, so it is queued as **(CHK.42)** with the cost characterized rather than shipped.
+One of those 3 is **(CHK.43)**, a SHIPPED false positive the walk merely exposes: a chained
+`x as unknown as T` in a `return` keeps the INNER assertion's type when the annotation is a
+≥3-member union, reachable today at top level in four lines.
+
+**GATES.** Suite **15,928 / 0 / 3** (+23 pins over 15,905: 18 core + 5 hover), **zero corpus
+baselines moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**,
+largest movement `mapped.hits` **+0.74%**. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **79 ms** [79, 87, 56,
+56] (one draw). `capture-equivalence` **1,005 / 43 / moreAny 0** — the standing state — with
+both digests MOVED and `definitions` 360,336 -> **360,361**, the expected direction. 8-profile
+grid against a rebuilt parent, `javap`-controlled: **`added=0 removed=0` on all eight**. knip
+**66 -> 66** with a BEFORE arm rebuilt in the same session. **Nine ablation arms, each with
+uniquely-its-own failures; a3/a4 partition the return family by LAYER (TYPE vs ARITY) rather
+than by shape.**
+
 **CONTEXTUAL TYPING SUPPLIED AN *ARITY*, NOT A *TYPE* — EVERY CONTEXTUALLY-TYPED PARAMETER IN THIS
 CHECKER WAS `any`, AND A HOVER ON ONE SAID `any` FOR EVERY CODEBASE (2026-08-25, (CHK.39)). The
 item's own six-shape probe went **0 of 6 reported here** to **6 of 6**, matching
