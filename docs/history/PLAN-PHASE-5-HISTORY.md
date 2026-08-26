@@ -1,3 +1,109 @@
+### Round (INC.42) — a bare type parameter is an UNDECIDED constraint, not a failed one: `(n: number) => R1<X>` rendered `(n: number) => any` on every ordinary build
+
+**THE REPRO IS THREE LINES, NEEDS NO PARTITION, AND HAS NOTHING TO DO WITH `Visitor`.**
+
+```ts
+export interface Nd { kind: number }
+export type R1<T extends Nd> = T | readonly Nd[];
+export type A1<X extends Nd> = (n: number) => R1<X>;   // ours: (n: number) => any
+```
+
+tsc 7.0.2 over its own LSP (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, round 924's oracle —
+read out, never hand-written) answers `type A1<X extends Nd> = (n: number) => R1<X>`.
+
+**THE DURABLE FINDING IS THE PREDICATE, AND A CONSTRAINT MATRIX IS WHAT ISOLATED IT.** Five
+rows in one fixture (`GenericAliasConstrainedArgumentTest`): an **unconstrained** inner
+parameter (`R3<T>`, reached as `A3<X> = (n: number) => R3<X>`) is **always correct**, and
+**every row where the inner alias's parameter carries a constraint read `any` — including
+`A1`, where the argument and the parameter are constrained IDENTICALLY**, and `A4`, where
+the parameter's constraint is strictly wider. So the shape is not "a wrong constraint"; it
+is "a constraint at all". `C1` (`X extends Nd | undefined` handed to `B1<T extends Nd>`) is
+the one row still refused deliberately — that is a genuine violation and the guard is doing
+its job.
+
+**DIAGNOSIS.** B57.1b skips a generic-alias substitution when an argument fails its
+parameter's constraint, and it judged that with `checkTypeRelatedTo` — which has **no
+"TypeParam source via its constraint" rule**, deliberately ((INC.30); its `NonPrimitive` leg
+says so). So a bare `Type.TypeParam` argument read as a **FAILURE** where the honest answer
+is **UNDECIDED**, the reference answered `errorType`, and it rendered `any`. Where the alias
+body is a function type the `any` lands in the RETURN position, which is exactly how tsc's
+own `type Visitor<TIn extends Node = Node, TOut extends Node | undefined = TIn | undefined>
+= (node: TIn) => VisitResult<TOut>` rendered `(node: TIn) => any`.
+
+**WHY NOTHING HERE HAD EVER SEEN IT.** The capture sweeps are DIFFERENTIALS, so a defect
+present in BOTH arms is invisible to them by construction ((INC.28)'s law, whose own
+two-arms-agree test stayed green against an unfixed binary); the corpus is blind too,
+because a wrong-but-plausible type attaches no diagnostic and moves no baseline. Hence every
+one of the seven pins asserts the rendered **STRING**.
+
+**THE FIX.** The argument is judged **locally** against its own already-resolved constraint.
+**No new rule enters `checkTypeRelatedToCore`, so (INC.30)'s termination argument is
+untouched.** Two gates keep it a DISPLAY answer, and **both were forced by measurement,
+neither guessed**:
+
+* **`aliasBodyDisplayDepth`** confines the relaxation to `resolveTypeAliasBody` — (INC.28)'s
+  split one layer down. **Unconfined it reads `output.errors` 46 -> 48 on the compiler
+  profile**: a `VisitResult<T>` return that no longer erases to `any` exposes an
+  overload-resolution defect at `checker.ts:2503`, plus a TS2322 at `watchPublic.ts:576`.
+  **Two false positives on the flagship profile is not a trade for 213 hovers.**
+* **`aliasGuardIsRecursionBrake`** keeps today's answer wherever this guard is acting as
+  this checker's recursion brake rather than as a constraint check. Three tests: the
+  referenced alias is re-entering its own substitution (`aliasSubstitutionStack` — mutual
+  recursion, which no property of one declaration can see), the **referenced** alias is
+  self-referential, and the alias whose body syntactically **ENCLOSES** the reference is.
+  **The third is the one that was measured rather than guessed, and it is where the brake
+  actually lives.** The FIRST gate written asked about the referenced alias alone and left
+  the corpus **RED** (one failure in 14,869). A **flip census** named the mechanism: the only
+  four decisions the relaxation flips in `excessPropertyCheckIntersectionWithRecursiveType`
+  are `Length<I>` and `Prepend<any, I>` — **two NON-recursive aliases referenced from inside
+  the self-referential `BuildTree<T, N extends number = -1, I extends any[] = []>`**.
+  Refusing them is what keeps `BuildTree`'s own parametric body degraded; letting them
+  through expands it one level further and `GrandUser` gains a TS2322 pristine tsc does not
+  emit. The enclosing declaration is read through `Node.parent` (INV.2(a)), so the answer is
+  a property of the SOURCE and not of ambient state — which is what makes it safe beside a
+  `(symbol, args)`-keyed cache (round 778 / (INC.19)'s first-touch freeze).
+
+A relaxed result is deliberately **NOT** written to `substitutionResultCache`: that key is
+`(symbol, args)` alone and would otherwise serve the checking path.
+
+**ABLATIONS, ONE MISTAKE AT A TIME.** **a1** (the relaxation never arms) — RED: the three
+value pins (`identical constraint`, `wider constraint`, `Visitor keeps its VisitResult
+return`); GREEN: both negative controls, all four of (INC.28)'s pins, and the corpus
+baseline. **a2** (the gate's enclosing-declaration leg deleted) — RED: `the recursion brake
+inside a self-referential alias is untouched` **and**
+`excessPropertyCheckIntersectionWithRecursiveType`, so that leg is load-bearing with a
+failure uniquely its own. **One pin is recorded NON-DISCRIMINATING**: `a hover on a
+self-referential alias does not expand without bound` stayed green under a2, and the
+prediction behind it — that `diagnose` never reaches `resolveTypeAliasBody`, so only a
+capture could exercise the display path — is **FALSE**; it does. Named rather than claimed.
+
+**GATES.** Suite **15,831 / 0 / 3** (+7 pins), **zero corpus baselines moved**.
+`cost_gate.py` PASSES with `output.errors` **46** and `mapped.hits` at the standing +1.63%
+(not moved by this round, still not rebaselined); `huge_methods.py --fail-over 0` exit 0.
+`capture-equivalence` **1,003 spans / 43 files / `narrowRendersMoreAny` = 0** and
+`capture-channel` **1,273 / 64 / `moreAny` = 168** — both exactly (INC.28)'s recorded
+baselines, unmoved. **Both capture-equivalence DIGESTS moved BY DESIGN** (full
+`8385940838610938556 -> -7005799195003297838`, narrow `-7423700524621287041 ->
+-1948231081793666447`): that is the signature of a fix that corrects an ORDINARY build, and
+it is the **third** time this arc has had to RE-RECORD a digest rather than read a moved one
+as a regression ((INC.26)'s law).
+
+**THE 213 ROWS ARE NOT CLOSED, AND THIS IS THE PART A NEXT AGENT MUST NOT MISREAD.**
+`Inc41ClassifyMain` re-run after the fix reads **796 rows / 37 pairs / 213 GAINED-INFERENCE
+— UNCHANGED**, and REPLAY-WORSE did not grow. Read out of the classifier's own dump rather
+than assumed, those rows are **not hovers on `Visitor`**: they are carets on `visitEachChild`
+/ `visitFunctionBody` / `discardVisitor` — function names whose rendered **OVERLOAD SET**
+carries a `Visitor` parameter. That string comes from the **CHECKING** path
+(`getTypeFromTypeReference` on a bare `Visitor`), and both arms render an unbound parameter.
+Reaching it is blocked **three** times, each cost measured — (INC.28)'s two corpus FPs for
+the parametric form at a reference; this round's two dashboard FPs for relaxing the guard
+there; and, **even with both closed**, we would render `(node: TIn) => VisitResult<TOut>`
+where tsc renders `Visitor`, because B50.5 deliberately does not register an alias name for
+a pure function type (`isPureFunctionType`, pinned by `nestedCallbackErrorNotFlattened_ts`).
+**So the family is a relation-engine item ((INC.30)) plus an alias-NAMING one, not a display
+bug.** Queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the
+authority and carries the re-take instructions.
+
 ### Round (INC.41) — REFUSED: the replay is not a DIFFERENT capture defect, it is MORE of the alias-display race, and it gets worse the longer the session runs
 
 **WHAT THIS ROUND DID.** Tested the clause that has kept (INC.40)'s valve diagnostics-only.

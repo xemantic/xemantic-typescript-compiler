@@ -39,6 +39,57 @@ redundant guard would.** Residue queued as (CHK.36)-(CHK.38): the TS1479 interop
 implemented at all, `ModuleResolver` does not condition `exports` on the importer's format, and
 `esModuleInterop` is gated on the global option and never on the two files' formats.
 
+**A TYPE IMPORTED FROM A `node_modules` PACKAGE RESOLVED TO `any` — SILENTLY, ON EVERY REAL
+PROJECT (2026-08-25, (CHK.30)). knip **156 -> 66** ERRORS, TS7006 **89 -> 1**, AND NO ROW
+APPEARED THAT WAS NOT THERE BEFORE.** The queue entry called this "an object-literal method's
+parameters are not contextually typed" and its diagnosis was WRONG: written out by hand, that
+shape and five variants of it are silent on a pre-fix binary. knip's `PluginVisitorObject` is
+`VisitorObject`, and `VisitorObject` comes from `'oxc-parser'`. **The mechanism**: the crawl
+resolves a bare specifier correctly and the package's `.d.ts` really is in the program, but the
+CHECKER re-derives which file a specifier names by string-matching it against the program's file
+NAMES, and that corpus-era matcher cannot express a bare specifier — a package's
+`types`/`main`/`exports` entry is not a string transformation of `pkg`. Fifteen lines reproduce
+it: a `node_modules/tiny/index.d.ts` imported bare gives us **0 errors** where tsgo gives four.
+`ParsedSource.moduleResolutions` now carries the crawl's own `(importer, specifier) -> file`
+answers into the `Checker` as the last leg of all ten alias ladders.
+
+**IT FAILS IN THE SILENT DIRECTION, WHICH IS WHY IT SURVIVED.** `any` is legal everywhere, so
+nothing MOVED at the import — the only thing that surfaced was the false-positive SHADOW, a
+TS7006 on every un-annotated callback parameter whose contextual type lived in the package. 89 of
+knip's 156 rows, read as a contextual-typing family.
+
+**A SECOND, SMALLER DEFECT LANDED WITH IT**: a concise-body arrow's OWN return annotation was not
+a contextual type for its body in either walker, while a BLOCK body always had it at the `return`
+edge — so `(): V => { return {…} }` was right and `(): V => ({…})` was not, and nobody noticed
+because the two spellings are interchangeable to a reader.
+
+**WHAT DID NOT WORK IS THE ROUND'S MOST TRANSFERABLE FINDING.** The first arrow fix silenced
+every TS7006 asked for and the POSITIVE half of the probe showed it had typed NOTHING. Pushing on
+that found something larger: **every contextually-typed parameter in this checker is still `any`
+to the assignability walker**, back to the plain arrow ARGUMENT — `take((node) => { const bad:
+string = node.kind; })` is silent here and TS2322 under tsc. Contextual typing here supplies an
+ARITY (which is what decides TS7006) and never enters the parameter into the scope those walkers
+read. Queued as **(CHK.39)** with its probe; four further unread contextual SOURCES are
+**(CHK.40)**.
+
+**GATES.** Suite **15,883 / 0 / 3** (+12 pins, exactly the two new classes), zero corpus
+baselines moved. `cost_gate.py` PASSES, `output.errors` **46** — a real gate here, not a
+control: the vector is the standing one plus `typeOfExpr.calls` **+0.18%** / `narrow.walks`
+**+0.05%**, which are one extra annotation resolution per reached concise-body arrow, far inside
+±2% and not rebaselined. `huge_methods.py --fail-over 0` exit 0, **783** classes scanned
+(unchanged, correctly — no new class). `partition-equivalence` **EQUIVALENT, all 78**, floor
+**57 ms**. `capture-equivalence` **1,003 / 43 / moreAny 0**, **both digests BIT-IDENTICAL**.
+`round895-grid` 8 profiles `added=0 removed=0`, and a BEFORE/AFTER 8-profile grid against a
+rebuilt parent (positive control: `javap` finds the new method 0 times before, 1 after) is
+`added=0 removed=0` on all eight.
+
+**Ablation, five arms, one mistake each.** a1 (the crawl-map leg never answers) reddens the four
+package pins and leaves the negative control green; a3 (the implicit-any walker forgets the
+annotation) reddens all five arrow pins; a4 and a5 redden the SAME single pin, so they are ONE
+observable, not two. **a2 is `0 RED` across the whole 15,883-test suite** — the `node_modules`
+walker legs the first cut also consulted are a REDUNDANT GUARD wherever the crawl can answer, so
+they were REMOVED rather than shipped un-gateable.
+
 **`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
 DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
 (CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`

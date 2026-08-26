@@ -20,6 +20,127 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.44) — the axis was **declared in a BLOCK**, not local-vs-parameter, and the queue item's own boundary was wrong in both directions
+
+**WHAT LANDED.** `Checker.cmamBlockScopedReceiverType` — the receiver of a member access, when
+`getTypeOfExpression` answers `anyType`, is looked up in the INV.2(c) lexical scope tables
+(round 748's `lexicalScopeSymbol`, `LexicalScope.symbols` ONLY) and typed from its declaration's
+annotation. CLAUDE.md's B83.5 is the cause end to end: `Binder.bindStatement` binds no
+declaration nested in a block, so `lookupPerFileForNode` answers null, `getTypeOfIdentifier`
+falls through to `anyType`, and every gate below it bails. Because `declareLexical` skips any
+name the main binder already bound, a hit is BY CONSTRUCTION a declaration the conventional
+tables do not have — so no bound name can resolve differently, and the chain walk is
+innermost-first from the REFERENCE, which gives shadowing for free.
+
+**THE MEASURED BOUNDARY IS NOT THE ONE THE ITEM STATES, AND THE CORRECTION IS THE ROUND'S MOST
+USEFUL OUTPUT.** (CHK.41) recorded "`const c: A | F = x`, `let c: A | F = x` and the same inside
+an arrow are ALL silent; only `function f(c: A | F)` is checked — 3 of 4". Re-measured shape by
+shape against `tools/tsgo-7.0.2/lib/tsc`:
+
+| shape | before | after | tsgo |
+|---|---|---|---|
+| file-level `const`/`let`, annotated union | **reports** | reports | reports |
+| parameter | reports | reports | reports |
+| body-local `const`/`let`/`var`, annotated union | **SILENT** | reports | reports |
+| method / arrow / nested function / nested block / **file-level block** | **SILENT** | reports | reports |
+| body-local, annotated NON-union (`A`) | reports (via flow recovery) | reports | reports |
+| body-local, member on **NO** constituent (`c.nope`) | SILENT | **still silent** | reports |
+| body-local, un-annotated (`const c = x`) | SILENT | **still silent** | reports |
+| body-local, destructured (`const { files } = x`) | SILENT | **still silent** | reports |
+| body-local, nested access (`c.files.nope`) | SILENT | **still silent** | reports |
+| body-local, NULLISH union (`A \| undefined`) | SILENT | **still silent, deliberately** | reports |
+
+So it is a FILE-LEVEL-vs-BLOCK axis, not a local-vs-parameter one. **The first probe that said
+otherwise named its receiver `top`, which collides with the DOM global `top: Window`** — the
+file-level shape read silent for a reason that had nothing to do with the item, and three
+follow-up probes inherited it. Rename the receiver before believing any resolution experiment.
+
+**TWO REFUSALS, BOTH MEASUREMENTS RATHER THAN ARGUMENTS.**
+* **A NULLISH union is refused.** Without that guard the 8-profile grid gains **11 rows on the
+  compiler profile and 16 on harness**, `removed=0`, and tsgo reports NONE of them. Every one is
+  a `let x: T | undefined` (or `| null`) the code narrows before use — `program.ts`'s
+  `automaticTypeDirectiveNames ??=`, `checker.ts`'s `if (!relatedInfo) … else
+  relatedInfo.push(info)`, `parser.ts`'s `!typeExpression || typeExpression.type`,
+  `visitorPublic.ts`'s `updated.push`, `esDecorators.ts`'s `top.classThis`,
+  `editorServices.ts`'s `false | WatchOptionsAndErrors | undefined`. A nullish annotation exists
+  in order to be narrowed, so handing the walker the declared type reports against a type the
+  code has already excluded. (CHK.39c)'s law with the population measured.
+* **A NON-union declared type is refused** — not for its shape but for its CONSUMER. A union is
+  decided by `cmamCheckUnionReceiverNarrowing`, which consults the flow before reporting;
+  everything else falls through to the `else` branch, which consults nothing. Supplying it there
+  costs **3 rows** on services/server/harness: `services/utilities.ts`'s `let next: Symbol =
+  symbol`, narrowed by `isTransientSymbol(next) && next.links.target` — a type-guard call inside
+  a `while` condition, which round 785's `if`-condition recorder does not reach.
+
+**`const`-NESS IS NOT A GUARD, MEASURED.** A first cut refused `let`/`var` on the argument that a
+reassignable local needs assignment narrowing. Dropping that guard measures `added=0 removed=0`
+on all eight profiles, so it was a redundant guard (round 807) and it cost the `let c: A | F`
+shape the item names. The declared type is an UPPER bound whatever the keyword.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE RESULT: WRITING THE ANNOTATION INTO
+`currentLocalTypes`.** The first implementation recorded it from `cpaApplyDeclRecordings` (the
+anchor) plus the legacy walk's VariableStatement arm. It closed the same population, passed the
+grid and knip, and cost **two corpus baselines**:
+* `discriminateWithOptionalProperty4` — `const zWorkAround: {a; b?} | {b; a?} = z` gained a
+  TS18048 from `emitTs18048ForOptionalPropertyAccessReceiver`, because we do not narrow a
+  discriminated union in a ternary;
+* `narrowingPastLastAssignment` — `const fooMap: Map<string, number[]>` suddenly let B136's
+  chaining arm type `fooMap.get("a")` as `number[] | undefined`, and the closure capture past
+  the last assignment is not narrowed either.
+Both are the SAME missing mechanism reached through consumers this round is not fixing. **The map
+is read by every consumer of the pass; the property-existence check is one call.** Reading the
+type AT that call is the smallest form of the change no other family can observe — and it also
+made the arrow case work for free, where the `currentLocalTypes` route needed a second call site
+because a nested arrow's statements are chain-excluded from anchoring.
+
+**THREE OF THE TWENTY PINS WERE VACUOUS AND ONLY A CONTROL PROBE PER SHAPE SAW IT.** This class
+IS the vacuity trap (CLAUDE.md, (CHK.41)), and it bit twice more inside the round:
+* **`c.nope` — a member on NEITHER constituent — is silent for a block-scoped local whatever this
+  round does**, because it is decided by the general receiver path and not by the union block.
+  Arm a3 read `0 RED` against a pin written that way. Every pin here now reads a member present
+  on SOME constituent and not all, and the `.nope` case is pinned as its own KNOWN GAP.
+* `const c: A | undefined = au; c.files` reports **TS18048**, not TS2339 — a second, independent
+  way for the nullish pin to be green against a broken binary.
+* the global-shadow suppression (`applyNestedGlobalShadow`) does not even FIRE on `const isNaN`
+  under the embedded lib, so that pin asserted nothing; the discriminating suppression is
+  `applyAmbiguousBlockScopedLocals`, which writes `currentLocalTypes` and NOT
+  `currentShadowedNames`.
+The two shapes that were ALWAYS green — a file-level declaration and a parameter — are in the
+class under names that say they are controls.
+
+**GATES.** Suite **15,979 / 0 / 3** (+20, exactly the new class), **zero corpus baselines moved**.
+`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
+largest movement `typeNode.cacheHits` **+1.96%** then `mapped.hits` +1.46% and `typeNode.cacheable`
++1.32% (one annotation resolution per reached block-scoped receiver). `huge_methods.py
+--fail-over 0` exit 0, **783** classes scanned. `partition-equivalence` **EQUIVALENT, all 78**,
+floor **65 ms** [79, 61, 65, 61] (one draw). `capture-equivalence` **1,005 spans / 43 of 76 /
+`narrowRendersMoreAny` 0**, `definitions` **360,376** — the standing state, both digests unmoved.
+8-profile grid against a REBUILT parent with a `javap` positive control:
+**`added=0 removed=0` on all eight**. **knip 66 -> 66, every row byte-identical**, before-arm
+capture recovered from (CHK.41)'s own run at zero build cost.
+
+**ABLATION — one mistake per arm, each diffed against the arm's OWN snapshot, each anchor
+asserted to occur exactly once.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the helper answers null | **10** — every positive |
+| a2 | drop the `currentLocalTypes` suppression refusal | **1** — the ambiguous-block pin |
+| a3 | drop the nullish refusal | **1** — the nullish pin |
+| a4 | drop the `t !is Type.Union` refusal | **0 — REDUNDANT today** |
+| a4b | re-add the `else`-branch injection alone | **0** — the union refusal blocks it |
+| a4c | a4 + a4b together (the real (CHK.39c) mistake) | **1** — the while-guard pin |
+| a5 | drop the single-declaration refusal | **1** — the two-declarations pin |
+| a6 | drop the `SymbolFlags.Variable` refusal | **0 — REDUNDANT** |
+| a7 | drop the `currentShadowedNames` refusal | **0 — REDUNDANT given a2** |
+
+**a4/a4b are a round-927 PAIR**: the union refusal and the ABSENCE of a second injection point
+block the same 3-row services false positive, so neither reddens alone and only a4c attributes
+it — the union refusal is redundant WHILE the `else` branch does not consult the helper, and
+load-bearing the moment it does. a6 is refused a second time by `valueDeclaration as?
+VariableDeclaration`; a7 because every shadow registrar writes `currentLocalTypes` too. Both are
+recorded as redundant guards (round 807) rather than claimed.
+
 ### Round (CHK.41) — the guarded reassignment `c = c()` now reduces the DECLARED union; and (CHK.41)'s own premise was two-fifths right — the 15 knip rows are **five** mechanisms, not one
 
 **WHAT LANDED.** `narrowByAssignmentRhs` gained the two right-hand sides no arm of it could
@@ -936,112 +1057,6 @@ commit touches exactly four files, all `.md`: `PLAN-PHASE-5.md` (this note plus 
 queue item), `docs/language-service.md` (the new § 3a subsection),
 `STATUS.md` (a short new headline, trim-on-write) and `docs/history/STATUS-HISTORY.md`
 (the (INC.37) block moved out to keep STATUS.md at ~5 rounds).
-
-### Round (INC.42) — a bare type parameter is an UNDECIDED constraint, not a failed one: `(n: number) => R1<X>` rendered `(n: number) => any` on every ordinary build
-
-**THE REPRO IS THREE LINES, NEEDS NO PARTITION, AND HAS NOTHING TO DO WITH `Visitor`.**
-
-```ts
-export interface Nd { kind: number }
-export type R1<T extends Nd> = T | readonly Nd[];
-export type A1<X extends Nd> = (n: number) => R1<X>;   // ours: (n: number) => any
-```
-
-tsc 7.0.2 over its own LSP (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, round 924's oracle —
-read out, never hand-written) answers `type A1<X extends Nd> = (n: number) => R1<X>`.
-
-**THE DURABLE FINDING IS THE PREDICATE, AND A CONSTRAINT MATRIX IS WHAT ISOLATED IT.** Five
-rows in one fixture (`GenericAliasConstrainedArgumentTest`): an **unconstrained** inner
-parameter (`R3<T>`, reached as `A3<X> = (n: number) => R3<X>`) is **always correct**, and
-**every row where the inner alias's parameter carries a constraint read `any` — including
-`A1`, where the argument and the parameter are constrained IDENTICALLY**, and `A4`, where
-the parameter's constraint is strictly wider. So the shape is not "a wrong constraint"; it
-is "a constraint at all". `C1` (`X extends Nd | undefined` handed to `B1<T extends Nd>`) is
-the one row still refused deliberately — that is a genuine violation and the guard is doing
-its job.
-
-**DIAGNOSIS.** B57.1b skips a generic-alias substitution when an argument fails its
-parameter's constraint, and it judged that with `checkTypeRelatedTo` — which has **no
-"TypeParam source via its constraint" rule**, deliberately ((INC.30); its `NonPrimitive` leg
-says so). So a bare `Type.TypeParam` argument read as a **FAILURE** where the honest answer
-is **UNDECIDED**, the reference answered `errorType`, and it rendered `any`. Where the alias
-body is a function type the `any` lands in the RETURN position, which is exactly how tsc's
-own `type Visitor<TIn extends Node = Node, TOut extends Node | undefined = TIn | undefined>
-= (node: TIn) => VisitResult<TOut>` rendered `(node: TIn) => any`.
-
-**WHY NOTHING HERE HAD EVER SEEN IT.** The capture sweeps are DIFFERENTIALS, so a defect
-present in BOTH arms is invisible to them by construction ((INC.28)'s law, whose own
-two-arms-agree test stayed green against an unfixed binary); the corpus is blind too,
-because a wrong-but-plausible type attaches no diagnostic and moves no baseline. Hence every
-one of the seven pins asserts the rendered **STRING**.
-
-**THE FIX.** The argument is judged **locally** against its own already-resolved constraint.
-**No new rule enters `checkTypeRelatedToCore`, so (INC.30)'s termination argument is
-untouched.** Two gates keep it a DISPLAY answer, and **both were forced by measurement,
-neither guessed**:
-
-* **`aliasBodyDisplayDepth`** confines the relaxation to `resolveTypeAliasBody` — (INC.28)'s
-  split one layer down. **Unconfined it reads `output.errors` 46 -> 48 on the compiler
-  profile**: a `VisitResult<T>` return that no longer erases to `any` exposes an
-  overload-resolution defect at `checker.ts:2503`, plus a TS2322 at `watchPublic.ts:576`.
-  **Two false positives on the flagship profile is not a trade for 213 hovers.**
-* **`aliasGuardIsRecursionBrake`** keeps today's answer wherever this guard is acting as
-  this checker's recursion brake rather than as a constraint check. Three tests: the
-  referenced alias is re-entering its own substitution (`aliasSubstitutionStack` — mutual
-  recursion, which no property of one declaration can see), the **referenced** alias is
-  self-referential, and the alias whose body syntactically **ENCLOSES** the reference is.
-  **The third is the one that was measured rather than guessed, and it is where the brake
-  actually lives.** The FIRST gate written asked about the referenced alias alone and left
-  the corpus **RED** (one failure in 14,869). A **flip census** named the mechanism: the only
-  four decisions the relaxation flips in `excessPropertyCheckIntersectionWithRecursiveType`
-  are `Length<I>` and `Prepend<any, I>` — **two NON-recursive aliases referenced from inside
-  the self-referential `BuildTree<T, N extends number = -1, I extends any[] = []>`**.
-  Refusing them is what keeps `BuildTree`'s own parametric body degraded; letting them
-  through expands it one level further and `GrandUser` gains a TS2322 pristine tsc does not
-  emit. The enclosing declaration is read through `Node.parent` (INV.2(a)), so the answer is
-  a property of the SOURCE and not of ambient state — which is what makes it safe beside a
-  `(symbol, args)`-keyed cache (round 778 / (INC.19)'s first-touch freeze).
-
-A relaxed result is deliberately **NOT** written to `substitutionResultCache`: that key is
-`(symbol, args)` alone and would otherwise serve the checking path.
-
-**ABLATIONS, ONE MISTAKE AT A TIME.** **a1** (the relaxation never arms) — RED: the three
-value pins (`identical constraint`, `wider constraint`, `Visitor keeps its VisitResult
-return`); GREEN: both negative controls, all four of (INC.28)'s pins, and the corpus
-baseline. **a2** (the gate's enclosing-declaration leg deleted) — RED: `the recursion brake
-inside a self-referential alias is untouched` **and**
-`excessPropertyCheckIntersectionWithRecursiveType`, so that leg is load-bearing with a
-failure uniquely its own. **One pin is recorded NON-DISCRIMINATING**: `a hover on a
-self-referential alias does not expand without bound` stayed green under a2, and the
-prediction behind it — that `diagnose` never reaches `resolveTypeAliasBody`, so only a
-capture could exercise the display path — is **FALSE**; it does. Named rather than claimed.
-
-**GATES.** Suite **15,831 / 0 / 3** (+7 pins), **zero corpus baselines moved**.
-`cost_gate.py` PASSES with `output.errors` **46** and `mapped.hits` at the standing +1.63%
-(not moved by this round, still not rebaselined); `huge_methods.py --fail-over 0` exit 0.
-`capture-equivalence` **1,003 spans / 43 files / `narrowRendersMoreAny` = 0** and
-`capture-channel` **1,273 / 64 / `moreAny` = 168** — both exactly (INC.28)'s recorded
-baselines, unmoved. **Both capture-equivalence DIGESTS moved BY DESIGN** (full
-`8385940838610938556 -> -7005799195003297838`, narrow `-7423700524621287041 ->
--1948231081793666447`): that is the signature of a fix that corrects an ORDINARY build, and
-it is the **third** time this arc has had to RE-RECORD a digest rather than read a moved one
-as a regression ((INC.26)'s law).
-
-**THE 213 ROWS ARE NOT CLOSED, AND THIS IS THE PART A NEXT AGENT MUST NOT MISREAD.**
-`Inc41ClassifyMain` re-run after the fix reads **796 rows / 37 pairs / 213 GAINED-INFERENCE
-— UNCHANGED**, and REPLAY-WORSE did not grow. Read out of the classifier's own dump rather
-than assumed, those rows are **not hovers on `Visitor`**: they are carets on `visitEachChild`
-/ `visitFunctionBody` / `discardVisitor` — function names whose rendered **OVERLOAD SET**
-carries a `Visitor` parameter. That string comes from the **CHECKING** path
-(`getTypeFromTypeReference` on a bare `Visitor`), and both arms render an unbound parameter.
-Reaching it is blocked **three** times, each cost measured — (INC.28)'s two corpus FPs for
-the parametric form at a reference; this round's two dashboard FPs for relaxing the guard
-there; and, **even with both closed**, we would render `(node: TIn) => VisitResult<TOut>`
-where tsc renders `Visitor`, because B50.5 deliberately does not register an alias name for
-a pure function type (`isPureFunctionType`, pinned by `nestedCallbackErrorNotFlattened_ts`).
-**So the family is a relation-engine item ((INC.30)) plus an alias-NAMING one, not a display
-bug.** Queued as **(INC.43)**; `docs/inc41-replay-capture-classification.md` § 6a is the
-authority and carries the re-take instructions.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2405,15 +2420,39 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `flatMap` callback's return-type inference), graphql-codegen 1 (a nested-ternary predicate)
   and yarn 2 (a `Plugin` NAME collision, not narrowing) — see the round note's table.
 
-- [ ] **(CHK.44) THE PROPERTY-ACCESS FAMILY ONLY REACHES A *PARAMETER* — a local `const`/`let`
-  with a union annotation is a FALSE NEGATIVE, program-wide.** Measured during (CHK.41):
-  `const c: A | F = x; c.files`, `let c: A | F = x; c.files` and the same inside an arrow are
-  ALL silent where tsgo 7.0.2 reports TS2339; only `function f(c: A | F) { c.files }` is
-  checked (3 of 4 shapes). It is what made (CHK.41)'s own first four probes read "a LOCAL
-  narrows and a PARAMETER does not" — the local was never checked at all. Bigger than
-  (CHK.41) and in the SILENT direction, so no dashboard profile, no corpus baseline and no
-  counter can see it; the instrument is a four-shape scratch project against tsgo. Expect the
-  fix to ADD diagnostics, so grade it on the 8-profile grid and on knip, one shape at a time.
+- [x] **(CHK.44) DONE 2026-08-26 — the axis was not `local`-vs-`parameter` but **declared in a
+  BLOCK**, and a block-scoped union receiver is now typed from the INV.2(c) lexical tables.**
+  (CHK.41)'s "3 of 4 shapes, only a parameter is checked" was wrong in both directions: a
+  FILE-LEVEL `const`/`let` IS checked (its first probe was named `top`, which collides with the
+  DOM global), and what fails is any declaration inside a block — function, method, arrow,
+  nested function, nested block and file-level block alike, for `const`/`let`/`var`. B83.5 is
+  the cause end to end: nothing binds such a declaration, so `getTypeOfIdentifier` answers
+  `anyType` and every gate below it bails. `cmamBlockScopedReceiverType` reads the declaration
+  back out of `lexicalScopeSymbol` (`LexicalScope.symbols` only) at the ONE call that asks
+  whether a property exists on the receiver. **Two refusals are MEASUREMENTS**: a nullish union
+  costs 11 compiler-profile / 16 harness rows tsgo does not report, and a NON-union declared
+  type costs 3 services/server/harness rows — while `const`-ness is NOT a guard (dropping it is
+  `added=0 removed=0`). Grid `added=0 removed=0` on all eight vs a rebuilt parent, knip 66 -> 66
+  byte-identical, suite **15,979/0/3**, `cost_gate` PASSES unrebaselined. Pins:
+  `BlockScopedReceiverTypeTest` (20). **FOUR POPULATIONS REMAIN SILENT and are queued as
+  (CHK.45)** — see below.
+
+- [ ] **(CHK.45) THE FOUR BLOCK-SCOPED RECEIVER POPULATIONS (CHK.44) LEFT SILENT, each measured
+  against tsgo 7.0.2 and each a distinct mechanism.** (a) **a member on NO constituent** —
+  `const c: A | F = u; c.nope` is decided by the general receiver path, not by
+  `cmamCheckUnionReceiverNarrowing`, so it never sees (CHK.44)'s type; this is also why every
+  pin in `BlockScopedReceiverTypeTest` reads a member present on SOME constituent, and a
+  `.nope` fixture pins nothing. (b) **an UN-ANNOTATED local** — `const c = x; c.nope`, and the
+  inferred-`new C()` / string-literal / object-literal forms with it; needs the initializer
+  typed under the cpa ambient. (c) **a DESTRUCTURED local** — `const { files } = x;
+  files.nope`. (d) **a NESTED access on a block-scoped local** — `c.files.nope`, which exits at
+  `cmamCheckNonIdentifierReceiver` and is a different gap again. **And the two REFUSALS above
+  are the real prize**: both are the same missing mechanism — narrowing of a block-scoped
+  REFERENCE (a truthiness/`??=` guard, a discriminated-union ternary, a type-guard call inside
+  a `while` condition's `&&`) — so closing THAT is what makes (a)-(d) and the nullish/non-union
+  populations safe at once. Grade any attempt on the 8-profile grid AND knip: the 11+16+3 rows
+  are the calibration, and the corpus adds two more (`discriminateWithOptionalProperty4`,
+  `narrowingPastLastAssignment`) the moment the type reaches `currentLocalTypes`.
 
 - [x] **(CHK.40) DONE 2026-08-26 — all five gaps closed, and (e)'s diagnosis was WRONG in
   a way that made the fix bigger and better: an `async` function-like whose return type is

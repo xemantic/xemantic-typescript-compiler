@@ -1,5 +1,64 @@
 # Status
 
+**A BLOCK-SCOPED LOCAL WITH A UNION ANNOTATION WAS NOT A RECEIVER AT ALL — `function f() {
+const c: A | F = u; c.files }` REPORTED **NOTHING** WHERE tsc 7.0.2 REPORTS TS2339 (2026-08-26,
+(CHK.44)).** CLAUDE.md's B83.5 is the whole cause: `Binder.bindStatement` binds no declaration
+nested in a block, so `lookupPerFileForNode` answers null, `getTypeOfIdentifier` falls through to
+`anyType`, and every gate below it bails. It held in a function, a method, an arrow, a nested
+function, a nested block and a file-level block, for `const`, `let` and `var` alike. The receiver
+is now read back out of the INV.2(c) lexical scope tables (round 748's `lexicalScopeSymbol`,
+`LexicalScope.symbols` only, so a hit is BY CONSTRUCTION a name the conventional tables do not
+have) at the ONE call that asks whether a property exists on it.
+
+**THE QUEUE ITEM'S MEASURED BOUNDARY WAS DIFFERENT FROM ITS STATED ONE, IN BOTH DIRECTIONS.**
+(CHK.41) recorded "3 of 4 shapes — file-level `const`, `let`, and inside an arrow — are silent;
+only a parameter is checked". Re-measured against tsgo: a **file-level** `const`/`let` IS checked
+(one of the round's first probes read otherwise because the receiver was named `top`, which
+collides with the DOM global), and the real axis is **declared in a block**. Four further
+populations were censused and are still silent, three of them by DECISION and one measured for
+the first time: a member on **NO** constituent (a different emitter), an **un-annotated** local,
+a **destructured** local, and a nested access `c.files.nope`.
+
+**TWO REFUSALS, BOTH MEASUREMENTS RATHER THAN ARGUMENTS.** A NULLISH union (`T | undefined`) is
+refused: without that guard the 8-profile grid gains **11 rows on the compiler profile and 16 on
+harness**, `removed=0`, and tsgo reports NONE of them — every site is a `let x: T | undefined`
+the code narrows before use. A NON-union declared type is refused: it is decided by the `else`
+branch, which consults no narrowing at all, and supplying it costs **3 rows** on
+services/server/harness (`let next: Symbol` narrowed by a type guard inside a `while` condition).
+`const`-ness is NOT a guard — refusing `let`/`var` measured `added=0 removed=0` on all eight, so
+it was redundant and cost the `let` shape the item names. **A FIRST CUT THAT WROTE THE ANNOTATION
+INTO `currentLocalTypes` WAS REVERTED**: it closed the same population and cost two corpus
+baselines, because that map is read by every consumer of the pass — a TS18048 from the optional
+-property emitter and another from B136's chaining arm, both the same missing narrowing reached
+through consumers this round does not fix.
+
+**THREE OF THE TWENTY PINS WERE VACUOUS AND ONLY A CONTROL PROBE PER SHAPE SAW IT.** `c.nope` — a
+member on NEITHER constituent — is silent for a block-scoped local whatever this round does, so
+every negative written that way stayed green with its guard ablated (a3 read `0 RED`);
+`A | undefined` + `files` reports TS18048, not TS2339; and the global-shadow suppression does not
+even fire on `const isNaN` under the embedded lib. This class **is** the vacuity trap (CLAUDE.md,
+(CHK.41)), so the two shapes that were ALWAYS green — a file-level declaration and a parameter —
+are in it under names that say they are controls.
+
+**GATES.** Suite **15,979 / 0 / 3** (+20, exactly the new class), **zero corpus baselines moved**.
+`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
+largest movement `typeNode.cacheHits` **+1.96%** (one annotation resolution per reached
+block-scoped receiver). `huge_methods.py --fail-over 0` exit 0, **783** classes scanned.
+`partition-equivalence` **EQUIVALENT, all 78**, floor **65 ms** [79, 61, 65, 61] (one draw).
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — the standing
+state, both digests unmoved. 8-profile grid against a REBUILT parent, `javap` positive control:
+**`added=0 removed=0` on all eight**. **knip 66 -> 66, every row byte-identical.**
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT.** a1 (the helper
+answers null) **10 RED — every positive**; a2 (drop the `currentLocalTypes` suppression refusal)
+**1**; a3 (drop the nullish refusal) **1**; a5 (drop the single-declaration refusal) **1**.
+**a4 and a4b each read `0 RED` and are a round-927 PAIR** — the union refusal and the ABSENCE of a
+second injection point block the same 3-row services false positive, so neither reddens alone and
+only **a4c (both together) reddens 1**. **a6 and a7 read `0 RED` and are REDUNDANT GUARDS,
+recorded as such rather than claimed** (round 807): a6 is refused a second time by
+`valueDeclaration as? VariableDeclaration`, a7 because every shadow registrar writes
+`currentLocalTypes` too.
+
 **A GUARDED REASSIGNMENT NOW REDUCES THE *DECLARED* UNION — `if (typeof c === 'function')
 c = c();` THEN `c.files` WAS A FALSE TS2339, AND SO WAS ITS ASSERTION SIBLING (2026-08-26,
 (CHK.41)).** Both are knip's own source and neither is reachable for any existing arm of
@@ -182,54 +241,3 @@ a per-node memo, since the two sites ask the same question about the same node.
 and `definitions` rose 360,152 -> 360,336. 8-profile grid vs a rebuilt parent (positive control on
 `javap`): `added=0 removed=0`. **knip 66 -> 66, every row identical**, with the BEFORE arm rebuilt
 in the same session against the same re-fetched dependency set.
-
-**A TYPE IMPORTED FROM A `node_modules` PACKAGE RESOLVED TO `any` — SILENTLY, ON EVERY REAL
-PROJECT (2026-08-25, (CHK.30)). knip **156 -> 66** ERRORS, TS7006 **89 -> 1**, AND NO ROW
-APPEARED THAT WAS NOT THERE BEFORE.** The queue entry called this "an object-literal method's
-parameters are not contextually typed" and its diagnosis was WRONG: written out by hand, that
-shape and five variants of it are silent on a pre-fix binary. knip's `PluginVisitorObject` is
-`VisitorObject`, and `VisitorObject` comes from `'oxc-parser'`. **The mechanism**: the crawl
-resolves a bare specifier correctly and the package's `.d.ts` really is in the program, but the
-CHECKER re-derives which file a specifier names by string-matching it against the program's file
-NAMES, and that corpus-era matcher cannot express a bare specifier — a package's
-`types`/`main`/`exports` entry is not a string transformation of `pkg`. Fifteen lines reproduce
-it: a `node_modules/tiny/index.d.ts` imported bare gives us **0 errors** where tsgo gives four.
-`ParsedSource.moduleResolutions` now carries the crawl's own `(importer, specifier) -> file`
-answers into the `Checker` as the last leg of all ten alias ladders.
-
-**IT FAILS IN THE SILENT DIRECTION, WHICH IS WHY IT SURVIVED.** `any` is legal everywhere, so
-nothing MOVED at the import — the only thing that surfaced was the false-positive SHADOW, a
-TS7006 on every un-annotated callback parameter whose contextual type lived in the package. 89 of
-knip's 156 rows, read as a contextual-typing family.
-
-**A SECOND, SMALLER DEFECT LANDED WITH IT**: a concise-body arrow's OWN return annotation was not
-a contextual type for its body in either walker, while a BLOCK body always had it at the `return`
-edge — so `(): V => { return {…} }` was right and `(): V => ({…})` was not, and nobody noticed
-because the two spellings are interchangeable to a reader.
-
-**WHAT DID NOT WORK IS THE ROUND'S MOST TRANSFERABLE FINDING.** The first arrow fix silenced
-every TS7006 asked for and the POSITIVE half of the probe showed it had typed NOTHING. Pushing on
-that found something larger: **every contextually-typed parameter in this checker is still `any`
-to the assignability walker**, back to the plain arrow ARGUMENT — `take((node) => { const bad:
-string = node.kind; })` is silent here and TS2322 under tsc. Contextual typing here supplies an
-ARITY (which is what decides TS7006) and never enters the parameter into the scope those walkers
-read. Queued as **(CHK.39)** with its probe; four further unread contextual SOURCES are
-**(CHK.40)**.
-
-**GATES.** Suite **15,883 / 0 / 3** (+12 pins, exactly the two new classes), zero corpus
-baselines moved. `cost_gate.py` PASSES, `output.errors` **46** — a real gate here, not a
-control: the vector is the standing one plus `typeOfExpr.calls` **+0.18%** / `narrow.walks`
-**+0.05%**, which are one extra annotation resolution per reached concise-body arrow, far inside
-±2% and not rebaselined. `huge_methods.py --fail-over 0` exit 0, **783** classes scanned
-(unchanged, correctly — no new class). `partition-equivalence` **EQUIVALENT, all 78**, floor
-**57 ms**. `capture-equivalence` **1,003 / 43 / moreAny 0**, **both digests BIT-IDENTICAL**.
-`round895-grid` 8 profiles `added=0 removed=0`, and a BEFORE/AFTER 8-profile grid against a
-rebuilt parent (positive control: `javap` finds the new method 0 times before, 1 after) is
-`added=0 removed=0` on all eight.
-
-**Ablation, five arms, one mistake each.** a1 (the crawl-map leg never answers) reddens the four
-package pins and leaves the negative control green; a3 (the implicit-any walker forgets the
-annotation) reddens all five arrow pins; a4 and a5 redden the SAME single pin, so they are ONE
-observable, not two. **a2 is `0 RED` across the whole 15,883-test suite** — the `node_modules`
-walker legs the first cut also consulted are a REDUNDANT GUARD wherever the crawl can answer, so
-they were REMOVED rather than shipped un-gateable.
