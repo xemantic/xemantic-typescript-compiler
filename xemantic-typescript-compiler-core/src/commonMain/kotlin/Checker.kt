@@ -145457,6 +145457,63 @@ interface DataView {
             cmamConditionMentionsIn(e.right, path, propName, depth + 1)
     }
 
+    /**
+     * (CHK.47) THE TYPE OF A DOTTED PATH WHOSE **ROOT** IS A BLOCK-SCOPED LOCAL
+     * NOTHING TYPES.
+     *
+     * (CHK.46)(b) substitutes an un-annotated body-local's initializer type at the
+     * bare-Identifier bail, and (CHK.46)(d) added a single-OBJECT emission for a
+     * NESTED access — but the two do not COMPOSE, because the nested path asks
+     * `getTypeOfExpression` for the whole chain and an `any` root makes the whole
+     * chain `any` long before either bail is reached. Measured against
+     * `tools/tsgo-7.0.2/lib/tsc`: `const c = h; c.inner.zzznope` was SILENT where
+     * `const c = h; c.zzznope` (one hop shorter) and `p.inner.zzznope` (a parameter
+     * root) both report.
+     *
+     * The repair resolves the chain by HAND from a root type the two (CHK.46)
+     * helpers can name, hop by hop through the already-resolved member tables. It
+     * adds no new typing rule: every hop is `getPropertyOfType` + `getTypeOfSymbol`
+     * on a type one of those helpers already vouched for, and the emission it feeds
+     * ([cmamCheckNestedObjectReceiver]) keeps every refusal it already had — the
+     * trust predicate, the array-like line, the generic-instantiation line, the flow
+     * consult and the `in`-guard consult.
+     *
+     * ### The refusals
+     *
+     *  - the root must actually be UNTYPED (`getTypeOfExpression` answers `anyType`).
+     *    Where it is typed there is nothing to repair and the ordinary path owns it.
+     *  - a non-Identifier root (a call, an element access, `this`) — the two helpers
+     *    take an [Identifier] and there is no declaration to read.
+     *  - ANY hop that does not resolve to a single property, or that resolves to
+     *    `any`/`error`/`unknown`. A partial chain is worse than none: it would let
+     *    the emission speak about a type the expression may not have, which is the
+     *    exact failure the rest of this round removes.
+     */
+    private fun cmamBlockScopedPathType(expr: PropertyAccessExpression): Type? {
+        var cur: Expression = expr
+        val hops = ArrayList<String>(2)
+        while (cur is PropertyAccessExpression) {
+            hops.add(cur.name.text)
+            cur = cur.expression
+        }
+        val root = cur as? Identifier ?: return null
+        if (hops.isEmpty()) return null
+        if (getTypeOfExpression(root) !== anyType) return null
+        val firstHop = hops[hops.size - 1]
+        var t = cmamDestructuredReceiverType(root)
+            ?: cmamUnannotatedLocalReceiverType(root, firstHop)
+            ?: return null
+        for (i in hops.indices.reversed()) {
+            val obj = t as? Type.Object ?: return null
+            resolveStructuredTypeMembers(obj)
+            val member = getPropertyOfType(obj, hops[i]) ?: return null
+            t = getTypeOfSymbol(member)
+            if (t === anyType || t === errorType || t === unknownType) return null
+            if (typeContainsUnresolvedTypeParam(t)) return null
+        }
+        return t
+    }
+
     private fun cmamCheckNestedObjectReceiver(
         objectExpr: Expression,
         raw: Type,
@@ -145902,6 +145959,11 @@ interface DataView {
                     // flow suppression.
                     ?: cmamDestructuredReceiverType(objectExpr)?.takeIf { d -> d is Type.Union }
                     ?: t
+            } else if (t === anyType && objectExpr is PropertyAccessExpression) {
+                // (CHK.47) …and a NESTED access whose ROOT is such a local answers
+                // `any` for the WHOLE chain, so (CHK.46)(b)'s substitution at the
+                // Identifier bail never composes. See [cmamBlockScopedPathType].
+                cmamBlockScopedPathType(objectExpr) ?: t
             } else t
         }
         CpaSections.atR(CpaSections.R_OT_UNION)
