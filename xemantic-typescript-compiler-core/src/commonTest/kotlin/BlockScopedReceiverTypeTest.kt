@@ -237,16 +237,25 @@ class BlockScopedReceiverTypeTest {
     }
 
     /**
-     * A member on **NO** constituent is a DIFFERENT emitter — the general
-     * receiver path, which for a block-scoped local still bails — so it stays
-     * silent. That is why every positive in this class reads a member present on
-     * SOME constituent and not all: a `.nope` fixture is silent either way and
-     * pins nothing. A measured KNOWN GAP.
+     * (CHK.45) CLOSED, AND THIS ROUND'S DIAGNOSIS WAS WRONG ABOUT THE CAUSE.
+     *
+     * A member on **NO** constituent was recorded here as "a different emitter —
+     * the general receiver path, which for a block-scoped local still bails". It
+     * is the SAME emitter: the union elaboration's ALL-MISSING verdict, which was
+     * whitelisted to `allWellResolved` / `allAnonPlainObjects` and so refused
+     * every union carrying a function type — `F` here. The proof that it was never
+     * a scoping gap is that a PARAMETER and a FILE-LEVEL `const` of the identical
+     * type were equally silent. See `AllMissingUnionMemberTest`.
+     *
+     * The vacuity warning this test carried is still exactly right and still
+     * applies to the rest of the class: a `.nope` fixture pinned nothing while the
+     * whitelist refused it, which is why every OTHER positive here reads a member
+     * present on SOME constituent.
      */
     @Test
-    fun `a member on NO constituent of a block-scoped union is still silent - known gap`() {
+    fun `a member on NO constituent of a block-scoped union reports - CHK 45`() {
         val d = diagnose(prelude + "export function f() { const c: A | F = u; c.nope; }")
-        assert(d.none { it.code == 2339 })
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     /**
