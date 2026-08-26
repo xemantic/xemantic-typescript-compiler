@@ -114844,6 +114844,63 @@ interface DataView {
         return true
     }
 
+    /**
+     * (CHK.54) THE WEAK-TYPE RULE, AS A PURE VERDICT, FOR OVERLOAD SELECTION.
+     *
+     * tsc puts the weak-type check INSIDE `checkTypeRelatedTo`, so every consumer of
+     * the relation inherits it. Here it lives in the B482 walkers instead
+     * ([tryEmitWeakTypeAssignment] and its siblings), which emit TS2559/TS2560 at a
+     * handful of named positions — so our RELATION answers "assignable" for a source
+     * that shares no property with an all-optional target, and every OTHER consumer
+     * of the relation silently inherits the wrong verdict. The consumer this was
+     * measured on is [signatureAcceptsArgs]: `readFileSync(p, 'utf8')` selected the
+     * `Buffer`-returning overload whose parameter is
+     * `{ encoding?: null; flag?: string } | null`, because `"utf8"` "matched" it.
+     * **Five of `knip`'s rows were that one call shape.**
+     *
+     * The rule, in one sentence: *an argument that shares no property name with a weak
+     * (all-optional, signature-free, index-free) parameter type does not select that
+     * overload, and for a UNION parameter that is decided per constituent — exactly
+     * tsc's `typeRelatedToSomeType`, where relating through a weak-and-disjoint
+     * constituent does not count as relating to the union.*
+     *
+     * CONSERVATIVE IN EVERY DIRECTION, because a wrong refusal here re-selects a
+     * different overload and silently retypes the call:
+     *  * `null`/`undefined` constituents are skipped (they never accept a value anyway);
+     *  * a constituent that is not weak is offered the ordinary relation, and ONE
+     *    acceptance anywhere cancels the refusal;
+     *  * a source whose property names we cannot enumerate ([weakSourcePropertyNames]
+     *    answers null for a union / intersection / type-param / `Type.Reference` /
+     *    `any` / nullish) never refuses;
+     *  * an EMPTY source (`{}`) is vacuously assignable to an all-optional target and
+     *    never refuses — the same guard [tryEmitWeakTypeAssignment] carries.
+     *
+     * Deliberately NOT pushed into the relation: that would change every assignability
+     * verdict in the compiler at once, where the defect this closes is one consumer's.
+     * The TS2769 *diagnostic* path ([allArgumentsMatch]) is likewise left alone — see
+     * the (CHK.55) queue entry; wiring it there ADDS rows and needs its own measurement.
+     */
+    private fun weakParamRefusesArg(argType: Type, paramType: Type): Boolean {
+        val constituents = (paramType as? Type.Union)?.types ?: listOf(paramType)
+        val weakNames = mutableListOf<List<String>>()
+        val others = mutableListOf<Type>()
+        for (c in constituents) {
+            if (c.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) continue
+            val props = weakTargetProperties(c)
+            val names = if (props != null && props.isNotEmpty() && props.all { isOptionalProperty(it) })
+                props.map { it.name }.filter { it.isNotEmpty() } else null
+            if (names != null && names.isNotEmpty()) weakNames += names else others += c
+        }
+        if (weakNames.isEmpty()) return false
+        val srcNames = weakSourcePropertyNames(argType) ?: return false
+        if (srcNames.isEmpty()) return false
+        if (weakNames.any { ns -> ns.any { it in srcNames } }) return false
+        return others.none {
+            isSimpleTypeRelatedTo(argType, it) ||
+                checkTypeRelatedTo(argType, it, assignableRelation)
+        }
+    }
+
     /** B482: look up a property by name across an intersection's constituents. */
     private fun getPropertyAcrossType(type: Type, name: String): Symbol? = when (type) {
         is Type.Intersection -> type.types.firstNotNullOfOrNull { getPropertyAcrossType(it, name) }
@@ -124194,6 +124251,7 @@ interface DataView {
             // fallback). Falls through to the widened type for non-literal args.
             val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
+            var acceptedType = argType
             if (!isSimpleTypeRelatedTo(argType, constrainedParamType) &&
                 !checkTypeRelatedTo(argType, constrainedParamType, assignableRelation)) {
                 // Round 743: SECOND CHANCE against the FLOW-narrowed type.
@@ -124214,7 +124272,14 @@ interface DataView {
                 if (narrowed === argType) return false
                 if (!isSimpleTypeRelatedTo(narrowed, constrainedParamType) &&
                     !checkTypeRelatedTo(narrowed, constrainedParamType, assignableRelation)) return false
+                acceptedType = narrowed
             }
+            // (CHK.54) The relation has just said "assignable"; the WEAK-TYPE rule is
+            // the part of tsc's answer our relation does not carry, and without it an
+            // all-optional parameter accepts any value at all. Asked about whichever
+            // type was actually accepted, so the round-743 second chance keeps its
+            // one-way property.
+            if (weakParamRefusesArg(acceptedType, constrainedParamType)) return false
         }
         return true
     }
