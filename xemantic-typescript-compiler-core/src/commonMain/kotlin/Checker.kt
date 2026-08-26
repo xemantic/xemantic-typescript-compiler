@@ -9047,6 +9047,24 @@ class Checker(
     private val globalAugmentationNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * (CHK.51) Names of INTERFACES declared inside any file's `declare global { ... }`
+     * block. Deliberately a SECOND set rather than more entries in
+     * [globalAugmentationNames]: that one is a VALUE-space suppression list (TS2591 &c.)
+     * and adding type names to it would silence unrelated diagnostics.
+     *
+     * Its one consumer is [cmamLibHeritageMembersComplete]. A `declare global` interface
+     * augmentation of a lib type does NOT currently reach `globals` (that is (CHK.50), an
+     * open defect measured on the (CHK.49) parent), so the lib symbol's declaration list
+     * is unchanged by it and the "every declaration is a lib declaration" test cannot see
+     * it. Without this set, relaxing the heritage firewall for lib types would turn
+     * (CHK.50)'s silent false NEGATIVE into a false POSITIVE on exactly the shape every
+     * `@types` package is written in (`declare global { interface Window { … } }`).
+     * A GLOBAL-SCRIPT augmentation (`interface HTMLElement { … }` in a non-module file)
+     * needs nothing here — it merges, so the symbol carries a non-lib declaration.
+     */
+    private val globalAugmentedInterfaceNames: MutableSet<String> = mutableSetOf()
+
+    /**
      * 17.33: file names that are modules (have imports/exports OR — for
      * JS files — a top-level `require(...)` call). Used as the second
      * gate for TS2686 emission. Populated alongside [umdGlobalNames].
@@ -15633,6 +15651,10 @@ class Checker(
                             }
                             is FunctionDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
                             is ClassDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
+                            // (CHK.51): an INTERFACE inside `declare global` goes into its own
+                            // set — see [globalAugmentedInterfaceNames] for why it must not join
+                            // the value-space list beside it.
+                            is InterfaceDeclaration -> globalAugmentedInterfaceNames.add(inner.name.text)
                             // `export import x = A.y;` inside `declare global` registers `x` as a
                             // global alias (importAliasInModuleAugmentation) — suppress TS2304 on `x`.
                             is ImportEqualsDeclaration -> globalAugmentationNames.add(inner.name.text)
@@ -147248,6 +147270,96 @@ interface DataView {
     }
 
     /**
+     * (CHK.51) POSITIVE evidence that a heritage-bearing receiver's member table is
+     * complete, so that a "the property is absent" verdict has a witness.
+     *
+     * True only when EVERY type in the receiver's transitive base closure is an
+     * interface that
+     *   * has a symbol with at least one declaration, and
+     *   * every one of those declarations is a BUILT-IN LIB declaration
+     *     ([builtinLibDecls] — which covers the embedded lib and the real-lib
+     *     snapshots alike), and
+     *   * is not augmented by a `declare global { interface … }` block anywhere in
+     *     the program ([globalAugmentedInterfaceNames]), and
+     *   * resolves to a non-null member table.
+     * Anything else in the closure — a program interface, a base that is not an
+     * interface reference, an unresolved member table — answers false and the
+     * caller keeps the firewall.
+     *
+     * WHY "ALL DECLARATIONS ARE LIB DECLARATIONS" IS THE RIGHT TEST AND NOT MERELY A
+     * CHEAP ONE: a lib interface's members are fully declared in files this compiler
+     * ships and parses in one piece, so a member absent from the resolved table is
+     * absent from the language; a PROGRAM interface's member table depends on the
+     * receiver having been narrowed to the right subtype, which is the failure the
+     * firewall exists for. A user augmentation of a lib name from a global SCRIPT
+     * file merges into the same symbol, so it shows up here as a non-lib declaration
+     * and refuses — which is why no separate augmentation test is needed for that
+     * form.
+     *
+     * ONLY CALLED FOR A RECEIVER THAT HAS BASE TYPES — the caller's two heritage
+     * tests are the ones that already existed, and each now consults this instead of
+     * returning outright. Deliberately not re-tested here: an early
+     * `if (root.baseTypes.isNullOrEmpty()) return false` was written, measured
+     * UNREACHABLE from the one call site, and deleted rather than shipped
+     * un-gateable ((CHK.49)'s a8 precedent). Keeping the test at the caller also
+     * keeps the closure walk off every base-less receiver on the hot path.
+     *
+     * ## ABLATION RECORD — TWO OF THE FIVE TESTS ABOVE DISCRIMINATE, THREE DO NOT
+     *
+     * Measured one mistake at a time, each arm `cmp`-diffed against its own snapshot
+     * and its `Checker.class` md5 checked against the landed one:
+     *
+     *  * dropping the all-lib-declarations test — 1 RED and the compiler profile at
+     *    **89**, i.e. it alone is worth 43 rows;
+     *  * dropping the `declare global` refusal — 1 RED (and dropping its COLLECTOR
+     *    instead is the same observable, a round-927 pair);
+     *  * dropping the resolved-member-table test, the null-symbol refusal, and the
+     *    empty-declarations refusal — **0 RED each, profile 46**.
+     *
+     * The last three are kept and are recorded here as UNDISCRIMINATED rather than
+     * claimed as coverage. They are not shown DEAD either, which is why (CHK.49)'s
+     * delete-it precedent does not apply: each is unreachable only because of what
+     * the shipped libs happen to CONTAIN today — every lib interface is bound, has
+     * declarations, resolves its members, and extends only other interfaces. They
+     * are the soundness contract of a predicate whose entire job is to demand
+     * positive evidence, and the libs are input this repo does not author.
+     */
+    private fun cmamLibHeritageMembersComplete(objectType: Type.Object): Boolean {
+        val root = when (objectType) {
+            is Type.Reference -> objectType.target
+            is Type.Interface -> objectType
+            else -> return false
+        }
+        val seen = HashSet<Int>()
+        val queue = ArrayDeque<Type.Interface>()
+        queue.addLast(root)
+        // A bound, not a policy: the DOM's deepest chain is a handful of levels and
+        // the whole lib closure of any one interface is far under this. A closure
+        // that exceeds it is refused, i.e. the firewall stands.
+        var budget = 256
+        while (queue.isNotEmpty()) {
+            if (budget-- <= 0) return false
+            val t = queue.removeFirst()
+            if (!seen.add(t.id)) continue
+            val sym = t.symbol ?: return false
+            if (sym.declarations.isEmpty()) return false
+            if (!sym.declarations.all { it in builtinLibDecls }) return false
+            if (sym.name in globalAugmentedInterfaceNames) return false
+            resolveStructuredTypeMembers(t)
+            if (t.properties == null) return false
+            for (b in t.baseTypes ?: emptyList()) {
+                val bt = when (b) {
+                    is Type.Reference -> b.target
+                    is Type.Interface -> b
+                    else -> return false
+                }
+                queue.addLast(bt)
+            }
+        }
+        return true
+    }
+
+    /**
      * (JIT.1)(b) round 804 — level-R sections `R_TYPEGATE` .. `R_POSTGATE`,
      * verbatim; tail-calls [cmamEmitMissingProperty] where the original body fell
      * through into `R_PROP`.
@@ -147391,10 +147503,31 @@ interface DataView {
         // Reference are populated via instantiation, but cache misses or ordering quirks
         // can leave one base's members unresolved, producing TS2339 for properties that
         // structurally exist).
-        if (objectType is Type.Interface && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) return
+        // (CHK.51) …AND THE ONE HOLE PUNCHED IN IT. The firewall above is a blunt
+        // suppressor and it is LOAD-BEARING: removing it outright measures **+43
+        // diagnostics on the compiler profile alone** (89 against 46), every one of
+        // them a NARROWING gap rather than a member-table gap — `canHaveSymbol(e) &&
+        // e.symbol`, `if (!isIdentifier(node.expression)) return; … node.expression
+        // .escapedText`. tsc's own sources are written in that style throughout, so
+        // the firewall has been standing in for flow narrowing we do not do.
+        //
+        // What it ALSO suppressed is the population this hole exists for: a missing
+        // member on a real-lib interface that happens to extend something —
+        // `Text`, `Node`, `Element`, `HTMLElement`, i.e. most of the DOM. The
+        // relaxation therefore demands POSITIVE evidence rather than the absence of a
+        // reason to refuse ((CHK.45)'s rule): every type in the receiver's transitive
+        // base closure must be an interface whose declarations are ALL lib
+        // declarations and whose member table actually resolved. A program type
+        // anywhere in that closure — which is what every one of the 43 rows has —
+        // keeps the firewall.
+        if (objectType is Type.Interface && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()) {
+            if (!cmamLibHeritageMembersComplete(objectType)) return
+        }
         if (objectType is Type.Reference) {
             val tgt = objectType.target
-            if (tgt.baseTypes != null && tgt.baseTypes!!.isNotEmpty()) return
+            if (tgt.baseTypes != null && tgt.baseTypes!!.isNotEmpty()) {
+                if (!cmamLibHeritageMembersComplete(objectType)) return
+            }
         }
         // Skip well-known runtime properties (FP-prevention for class instances and
         // structural types where we may not have full member info). For primitive
