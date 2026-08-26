@@ -20,6 +20,129 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.54)+(CHK.54b) — overload selection ignored the **weak-type rule** (five `knip` rows) and tried candidates in strict declaration order where tsc hoists **specialized** signatures; **knip 54 -> 49**
+
+**THE QUEUE ITEM'S AXIS WAS WRONG, AND A 14-ROW MATRIX AGAINST tsc 7.0.2 IS WHAT SAID SO.**
+(CHK.54) was written as "an OPTIONAL-parameter overload is selected without checking the
+argument". Measured: optionality is not the axis and the argument IS checked. The plain
+shape `(x: string, y?: null)` / `(x: string, y: "u")` called with `("a", "u")` **already
+selected the second overload correctly on the parent binary**, and making the parameter
+NON-optional reproduces the defect identically. Every row of the matrix, ours against
+tsgo 7.0.2 run directly (`tools/tsgo-7.0.2/lib/tsc`, and `tools/node/bin/node` does exist
+on this box):
+
+| # | overload set (call) | parent | tsc 7.0.2 | after |
+|---|---|---|---|---|
+| A | `("a"):R1` / `(string):R2` — `f("a")` | R1 | R1 | R1 |
+| B | `(string):R1` / `("a"):R2` — `f("a")` | **R1** | **R2** | R2 *(CHK.54b)* |
+| C | arity 1 then 2, two args | R2 | R2 | R2 |
+| D | `(x,y?)` then `(x)`, one arg | R1 | R1 | R1 |
+| E | `(x,y?:null):R1` / `(x,y:"u"):R2` — `("a","u")` | R2 | R2 | R2 |
+| F | same, `y` NOT optional | R2 | R2 | R2 |
+| G | `1\|2` vs `3\|4` — `f(3)` | R2 | R2 | R2 |
+| H | `({e?:null}):R1` / `(ZH1):R2` — `f({e:"u"})` | **R1** | **R2** | **R1 — still open** |
+| I/J | generic beside non-generic, both orders | R1 | R1 | R1 |
+| K | unmatchable | R1+2769 | `R1&R2`+2769 | same |
+| L | optional overload, one arg | R1 | R1 | R1 |
+| M | two identical overloads | R1 | R1 | R1 |
+| N | arg matches neither | R1+2769 | `R1&R2`+2769 | same |
+| Q | `(string):R1` / `("a"\|"b"):R2` | R1 | R1 | R1 |
+| R | `("a"\|"b"):R1` / `("a"):R2` | **R1** | **R2** | R2 *(CHK.54b)* |
+| V/W/Y | the `readFileSync` shape, ±optional, ±alias | **R1** | **R2** | R2 *(CHK.54)* |
+
+**(CHK.54) — THE WEAK-TYPE RULE IS ABSENT FROM OVERLOAD SELECTION.** Overload 1's
+parameter is `{ encoding?: null; flag?: string } | null`; `"utf8"` shares no property with
+it, so tsc rejects it and picks the `string`-returning overload. Our relation says
+assignable, because the weak rule lives in the B482 **walkers**
+(`tryEmitWeakTypeAssignment` & co, TS2559/TS2560 at named positions) where tsc puts it
+inside `checkTypeRelatedTo` and every consumer inherits it. **The direct probe that
+isolates it needs no overloads at all**: `const a: { e?: null } = "utf8"` is TS2559 in both
+compilers, and `const a: { e?: null } | null = "utf8"` is TS2559 in tsc and **silent here**
+— i.e. the hole is that the rule does not distribute over a UNION target.
+
+`weakParamRefusesArg` is the pure verdict `signatureAcceptsArgs` now asks, per constituent
+exactly as `typeRelatedToSomeType` does. Conservative in every direction: nullish
+constituents skipped, ONE acceptance by a non-weak constituent cancels the refusal, a
+source whose property names cannot be enumerated never refuses, an empty `{}` never
+refuses. Deliberately NOT in the relation and NOT in `allArgumentsMatch`.
+
+**(CHK.54b) — tsc TRIES A *SPECIALIZED* OVERLOAD FIRST (`reorderCandidates`, GH#1133).**
+Rows B and R above. A signature is specialized when a parameter's type ANNOTATION is a
+literal type NODE; those are hoisted ahead of the rest, stable within each group. **The
+test is syntactic and must stay so** — a literal UNION is a UnionType node and measurably
+does NOT specialize (row Q), nor does an alias to one; a rule derived from the RESOLVED
+type would hoist both and diverge the other way (that is arm b1). The "nothing accepted"
+fallback deliberately stays on `arityMatches[0]`.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+* **The three refusal pins were BLIND on the first writing and only an arm saw it.**
+  `resolveCallOverload` falls back to `arityMatches[0]`, so refusing a **first-declared**
+  overload restores exactly the answer the refusal was supposed to remove: arms a1/a2/a3
+  each demonstrably change the selection and all three pins read **0 RED**. The weak
+  overload must be declared SECOND for a refusal to be observable at all.
+* **A 20-minute false "the fix regressed object-literal selection".** The ablation driver
+  restored the SOURCE and left the class dir holding the last arm's binary, so the CLI
+  probes I ran straight after the batch measured arm a2. Two fixtures read a confident,
+  reproducible regression that did not exist. The driver now rebuilds after restore and
+  prints the restored `Checker.class` md5.
+* **The TS2769 half is a different mechanism and is NOT closed.** `readFileSync(p, {
+  encoding: 'utf8' })` still emits TS2769 because `allArgumentsMatch` widens the object
+  literal's property to `string` whenever the parameter is a UNION containing the object,
+  and `objLitLiteralPropsSatisfyParam` additionally refuses a target INTERFACE with
+  heritage — which is `knip`'s remaining `util/git.ts` `execSync` row. Queued as (CHK.55).
+
+**GATES.** Suite **16,133 / 0 / 3** (+15, exactly the two new classes); **no corpus
+baseline moved by either change**. `cost_gate.py` passes unrebaselined, exit 0, all **20
+counters digit-for-digit identical to the parent's** (parent rebuilt this session, table
+kept at `build/chk54/costgate-parent.txt`), `output.errors` **46**.
+`huge_methods --fail-over 0` exit 0, **783** classes scanned. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **56 ms** [56, 54, 67, 56] — one draw.
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both ARM
+DIGESTs unmoved. 8-profile grid over three binaries all built this session — parent
+`2d907a1a…`, weak-fix `c23ed851…`, +hoist `86ec37c3…`, `javap` control 0/2/6 —
+**`added=0 removed=0` on all eight**, capture md5 `503774c2…` identical across all three.
+**`knip` @ `dc7aca5` 54 -> 49** (exactly the five `Buffer<ArrayBuffer>` rows, nothing
+added); **`jsonrepair` 3.13.1 4 -> 4 byte-identical**. The specialized-first rule moves
+neither library, neither profile, no counter and no baseline — **the matrix is the only
+instrument in this repo that can see it**, and that is said in its test class KDoc.
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, each `cmp`-diffed against its OWN snapshot with the
+restore verified OUTSIDE the driver, each anchor asserted unique (exit 3 otherwise), each
+arm's build grepped for `e:`, each `Checker.class` md5 recorded and distinct.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a0 | the whole weak change reverted (parent, rebuilt this session) | **3** — the three positives |
+| a1 | the empty-source guard dropped | **1** — uniquely the `{}` refusal |
+| a2 | the shared-property test dropped | **1** — uniquely the shared-property refusal |
+| a3 | the other-constituent relation test dropped | **1** — uniquely the non-weak-constituent refusal |
+| a4 | the all-optional conjunct dropped (any object reads as weak) | **0** — see below |
+| a5 | nullish constituents no longer skipped | **0** — provably unobservable |
+| a6 | the RAW arg type asked instead of the accepted one | **0** — provably unobservable |
+| b0 | the specialized-first reorder reverted | **4 of 7** |
+| b1 | hoist by resolved TYPE shape (a literal union counts) | **2** — uniquely the two "does not specialize" refusals |
+| b2 | reversed inside the specialized group | **1** — uniquely the stable-partition pin |
+
+b0 run against the (CHK.54) weak pins reads **0 RED**, so the two changes are independent
+rather than one mechanism seen twice.
+
+**a4 IS UNDISCRIMINATED AND KEPT, WITH A WHOLE-OUTPUT DIFF BEHIND IT (round 813).** Two
+purpose-built falsifiers were written for it — a target with a REQUIRED property satisfied
+by INHERITANCE, and a source carrying an index signature — and it is byte-identical on
+those, on all five fixture families, on the **compiler profile** and on **knip's 49 rows**.
+The argument for why: `weakParamRefusesArg` is consulted only after the relation ACCEPTED,
+and a target with a required property can only be accepted by a source naming it, so the
+disjointness test can never fire there. Kept because it is the definition of "weak" that
+mirrors tsc's `isWeakType`, and dropping it would make the helper's behaviour depend on
+whether `Type.Object.properties` includes inherited members — which nothing pins.
+**a5/a6 are provably unobservable**: no source can both have enumerable property names and
+relate to a `null`/`undefined` constituent (`weakSourcePropertyNames` answers null for
+every nullish source), and the round-743 second chance cannot co-occur with a weak refusal
+because a weak parameter accepts any non-nullish source structurally in the first place.
+Both are KEPT — a5 as a cost guard (it saves a relation call per nullish constituent, and
+`{X} | null | undefined` is the commonest weak-param shape), a6 because `acceptedType` is
+simply the correct variable and writing `argType` there would be a latent trap.
+
 ### Round (CHK.50) — a `declare global { … }` block's EXPORTS never reached `globals`: the CARRIER merged and the contents did not, so **seven of eight declaration forms were wrong**
 
 **THE QUEUE ITEM'S FRAMING WAS WRONG IN THE SAME DIRECTION AS (CHK.49)'s AND (CHK.51)'s, AND
@@ -1234,98 +1357,6 @@ not `'A | F'`) — and three are negative controls green by construction. 6 of t
 against the rebuilt parent. Every expectation, including both refusals, is read off
 `tools/tsgo-7.0.2/lib/tsc --noEmit` over the same source; all nine shapes are at full parity
 with tsc 7.0.2 bar one PRE-EXISTING display divergence (`A | (F)` for `A | F`).
-
-### Round (CHK.42)+(CHK.43) — the three grid rows that blocked the return-position walk were ALL false positives we already shipped; the walk is in, `added=0 removed=0` on all eight
-
-**THE ROUND'S SHAPE.** (CHK.40) measured the two-line return-position walk at FULL parity with
-tsgo and refused to land it on one number: the 8-profile grid gained **3 rows**. This round
-diagnosed each row rather than accepting or overriding the number, and **none of the three is a
-genuine error tsc also reports** — all three are ours, and all three are reproducible on a
-REBUILT PARENT binary, i.e. the walk exposes them rather than creating them.
-
-**ROW 1 — (CHK.43): A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE, FULL STOP.**
-`inferSimpleExprType`'s `AsExpression` / `TypeAssertionExpression` arms answered the asserted
-type when `resolveSimpleTypeName` could render it and **the OPERAND's type when it could not**
-— an array, tuple, function type, type literal, indexed access. For `x as unknown as T` the
-operand's type is `unknown`, precisely the type the outer assertion exists to assert away, so
-the string-based fallback compared `unknown` against the annotation. The honest answer at that
-layer is "unknowable", i.e. null, which makes every caller SKIP its string check; the engine
-above is untouched and still decides every assertion whose source genuinely does not relate,
-naming the real asserted type (`p1` is byte-identical to tsgo).
-
-**AND THE ITEM'S TRIGGER WAS WRONG IN A WAY WORTH KEEPING.** It recorded ">= 3-member union";
-the rule is **"the target union carries an ARRAY member"**, and `A | (B|A)[]` (two members)
-fires. The mechanism explains the narrowness: the string fallback runs only after the ENGINE
-has declined to decide, and the engine declines exactly when the source DOES relate — so the
-FP needs a target the WRONG source type (`unknown`) fails against while the right one (`B[]`)
-passes. A bare array target and an array-free union are not such targets.
-
-**ROWS 2 AND 3 — ONE DEFECT, AND IT IS NOT ABOUT ASSERTIONS: A PARAMETER ALWAYS INTRODUCES A
-BINDING.** Both `importFixes.ts` rows reduce to
-`flatMap(exportInfo, (exportInfo, i) => … mapDefined(specs, (spec): F | undefined => ({ …,
-exportInfo })))` — the callback parameter deliberately SHADOWS the enclosing function's
-`exportInfo`, and the shorthand read came back as the OUTER
-`readonly (SymbolExportInfo | FutureSymbolExportInfo)[]`. `currentLocalTypes` is a **flat COPY**
-of the enclosing scope ([EpochMap]), so a parameter that nothing registers is not merely
-untyped: the enclosing entry is still sitting there. Round 569 correctly refuses to register an
-un-inferred contextual type parameter (`mapDefined<T,U>`'s `T`) and its own comment said "the
-param stays `any`" — **it did not, it stayed absent.** A pre-pass in `ctaTypeParamsIntoLocals`
-registers `anyType`, which is round 475's value for exactly this purpose on binding-pattern
-parameters and is also the correct type (such a parameter IS implicitly `any`). PRE, so every
-later write wins.
-
-**MEASURED "SHIPPED, NOT CREATED" RATHER THAN ARGUED.** On a rebuilt parent (positive control:
-`javap` counts 11 `inferSimpleExprType` call sites before, 9 after) the shadowing FP fires in an
-EXPRESSION-STATEMENT position the walker has reached for many rounds; only the `return`-position
-instance needs (CHK.42). (CHK.43) was reproduced on the pristine HEAD binary in four lines.
-
-**GRID, ATTRIBUTED IN THREE ARMS RATHER THAN ONE.** Parent -> (CHK.43) alone: `added=0
-removed=0` on all 8 (the shape is not in tsc's sources at a position the parent walks). Parent
--> (CHK.43)+walk: the `checker.ts:10950:25` row is GONE and the two `importFixes.ts` rows
-remain, on harness/server/services. Parent -> all three: **`added=0 removed=0` on all eight.**
-
-**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 `ChainedAssertionSourceTypeTest`, 4
-`ContextualParamShadowingTest`, 10 `ReturnPositionFunctionBodyTest`), **zero corpus baselines
-moved**. `cost_gate.py` PASSES with no rebaseline — `output.errors` **46**, `spine.nodes`
-+0.00%, largest `mapped.hits` +1.43%, `globals.misses` +0.93%. `huge_methods.py --fail-over 0`
-exit 0, **783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms**
-[53, 59, 52, 58] — one draw, read the spread. `capture-equivalence` **1,005 spans / 43 of 76 /
-`narrowRendersMoreAny` 0**, the standing state unmoved; `definitions` 360,361 -> **360,376**,
-the expected direction (a parameter that now has a type renders differently). knip **66 -> 66**
-with every row identical, BEFORE arm rebuilt in the same session against the same
-`node_modules`.
-
-**ABLATION — SEVEN ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT AND EACH
-DRY-RUN FOR A REAL DIFF AGAINST THAT SNAPSHOT FIRST.**
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a1 | (CHK.43) restore the `as` operand fallback | **3** — the three `as` negatives |
-| a2 | (CHK.43) restore ONLY the legacy `<T>expr` fallback | **1** — uniquely the angle-bracket row |
-| a3 | drop the LEGACY `checkTypeAssignabilityInStatements` return-arm walk | **1** — uniquely a `return` nested one function deeper |
-| a4 | drop the SPINE anchor's return-arm walk | **7** — every one-level return shape |
-| a5 | drop `contextualizeFnExprFromAnnotation` from both return arms | **1** — uniquely the REST parameter |
-| a6 | drop the parameter-shadow pre-pass | **2** — uniquely both shadowing rows |
-| a7 | make the shadow a POST-pass (clobbering the contextual write) | **22** — every contextual param type and every hover |
-
-**a3/a4 REFUTE THE ITEM'S OWN GUESS ABOUT WHICH ARM EMITS.** It said the anchor runs
-`recordOnly` and truncates "so the legacy arm is what EMITS"; measured, the partition is by
-NESTING — the anchor emits for a `return` in a top-level function's body (7 rows) and the
-legacy arm for a `return` inside a nested one (1 row). Both are needed; neither is redundant.
-
-**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE CORRECTION.** a5 read **0 RED** on
-its first run, which is the signature of a leg to delete rather than ship un-gateable. It is not
-one: `applyPulledContextualParamTypes` skips a `...rest` parameter BY CONSTRUCTION, so B183's
-annotation contextualizer is the only thing that types one in a return position — a single pin
-on that shape took a5 to 1 RED. The generalizable move is to ask **what shape only this leg can
-serve**, derived from the SIBLING's own gate, before reading a green arm as a dead leg.
-
-**RESIDUE, NOT FIXED, MEASURED.** (i) `function f(): (() => F | undefined) { return () => ({ …
-wrong … }) }` — tsgo reports the whole ARROW as not assignable to the annotation; we report
-nothing, because a returned function-VALUE's own assignability against the return annotation is
-not checked (a false negative, unrelated to the walk). (ii) `const x: A = r as unknown as B[]`
-reports `Property 'c' is missing … in type 'A'` where tsgo says `'a'` — a wrong missing-property
-NAME in the TS2741 elaboration, seen while validating a control. Neither blocks anything here.
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
@@ -3045,6 +3076,28 @@ NAME in the TS2741 elaboration, seen while validating a control. Neither blocks 
   genuine fix, six pre-existing overload rows that `any` had been hiding — (CHK.54)). See the
   session note for the eight-form census and the ten-arm ablation.
 
+- [ ] **(CHK.55) THE TS2769 *DIAGNOSTIC* PATH CARRIES THE SAME TWO HOLES `signatureAcceptsArgs`
+  JUST HAD, AND IT IS `knip`'s LAST OVERLOAD ROW — (CHK.54)'s measured residue.** Two
+  mechanisms, both in `allArgumentsMatch` / its five helpers rather than in selection.
+  **(a)** the WEAK-TYPE hole: `zU(123)` against an overload set whose first parameter is a
+  weak object is **silent** where tsc says TS2769, because the diagnostic matcher accepts
+  what selection now refuses. `weakParamRefusesArg` is the ready-made verdict; the reason
+  it was NOT wired there in (CHK.54) is that it ADDS rows, and the per-overload subline is
+  built by `getFirstArgumentError`, which uses the plain relation and would find no failing
+  argument for the very overload the weak rule rejected — so the message needs its own
+  design, not just the predicate. **(b)** an OBJECT LITERAL's literal property types are
+  preserved only against a plain object parameter: `f({ e: "utf8" })` against
+  `{ e: Enc } | Enc` reads the argument as `{ e: string }` and emits TS2769
+  (`objLitLiteralPropsSatisfyParam` takes `paramType is Type.Union` only via its single
+  non-nullish constituent, and refuses a target INTERFACE with heritage outright — the
+  latter is exactly `execSync(cmd, { encoding: 'utf8', stdio: [...] })`,
+  `src/util/git.ts:17:55`, the one `knip` row (CHK.54) left). (b) is the shipped-row half
+  and looks independently closable; (a) adds rows and needs the library arms before it
+  lands. **A third, separate row the same matrix found**: `f({e:"u"})` against
+  `({e?:null}):R1` / `(ZH1):R2` still selects R1 where tsc selects R2 (matrix row H) — an
+  object-literal argument that is neither weak-disjoint nor literal-rescued, and a
+  mechanism this round did not locate.
+
 - [ ] **(CHK.53) `namespace globalThis { … }` IS NOT A NAMESPACE DECLARATION AND WE MODEL IT
   AS ONE — (CHK.50)'s measured refusal.** tsc treats `declare global { namespace globalThis {
   var test: string } }` as an augmentation of the GLOBAL SCOPE ITSELF: `test` becomes a bare
@@ -3059,7 +3112,26 @@ NAME in the TS2741 elaboration, seen while validating a control. Neither blocks 
   as a global symbol` pins the refusal; the positive half is deliberately NOT pinned
   (round 765).
 
-- [ ] **(CHK.54) AN OPTIONAL-PARAMETER OVERLOAD IS SELECTED WITHOUT CHECKING THE ARGUMENT
+- [x] **(CHK.54)+(CHK.54b) DONE 2026-08-26 — THE AXIS IS THE **WEAK-TYPE RULE**, NOT
+  OPTIONALITY, AND A SECOND, INDEPENDENT RULE WAS HIDING BESIDE IT.** Measured over a
+  14-row overload matrix against tsc 7.0.2: the item's own shape
+  `(x, y?: null)` / `(x, y: "u")` called with `("a", "u")` already selected correctly on
+  the PARENT binary, and making the parameter non-optional reproduces the defect
+  identically. What decides it is that overload 1's parameter is a **weak type**
+  (all-optional, signature-free) and our relation says a string literal is assignable to
+  one — because the weak rule lives in the B482 *walkers*, not in `checkTypeRelatedTo`.
+  `signatureAcceptsArgs` now asks `weakParamRefusesArg`, per union constituent exactly as
+  tsc's `typeRelatedToSomeType` does. **(CHK.54b)**: tsc additionally hoists a
+  **specialized** signature (a parameter whose type ANNOTATION is a literal type NODE)
+  ahead of every plain one — `reorderCandidates` / GH#1133 — which we did not, so
+  `f(x: string): A` before `f(x: "a"): B` answered `A` for `f("a")`. Pins:
+  `OverloadWeakParamSelectionTest` (8), `OverloadSpecializedOrderTest` (7), every positive
+  asserting the selected overload's RETURN TYPE as a value. Suite 16,133 / 0 / 3, no
+  baseline moved, all 20 cost counters digit-identical to the parent, grid
+  `added=0 removed=0` on all eight, **knip 54 -> 49** (exactly the five
+  `Buffer<ArrayBuffer>` rows), jsonrepair 4 -> 4 byte-identical. Residue queued as
+  (CHK.55). See the session note for the matrix and the ten-arm ablation.
+  ORIGINAL ENTRY: AN OPTIONAL-PARAMETER OVERLOAD IS SELECTED WITHOUT CHECKING THE ARGUMENT
   AGAINST IT — SIX ROWS ON `knip`, AND A SIX-LINE REPRO.** `readFileSync(p, 'utf8')` resolves
   to the `Buffer`-returning overload whose parameter is `options?: { encoding?: null } | null`,
   a type `"utf8"` is not assignable to; tsgo picks the `string` one and is silent. Reproduced

@@ -1,3 +1,95 @@
+### Round (CHK.42)+(CHK.43) — the three grid rows that blocked the return-position walk were ALL false positives we already shipped; the walk is in, `added=0 removed=0` on all eight
+
+**THE ROUND'S SHAPE.** (CHK.40) measured the two-line return-position walk at FULL parity with
+tsgo and refused to land it on one number: the 8-profile grid gained **3 rows**. This round
+diagnosed each row rather than accepting or overriding the number, and **none of the three is a
+genuine error tsc also reports** — all three are ours, and all three are reproducible on a
+REBUILT PARENT binary, i.e. the walk exposes them rather than creating them.
+
+**ROW 1 — (CHK.43): A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE, FULL STOP.**
+`inferSimpleExprType`'s `AsExpression` / `TypeAssertionExpression` arms answered the asserted
+type when `resolveSimpleTypeName` could render it and **the OPERAND's type when it could not**
+— an array, tuple, function type, type literal, indexed access. For `x as unknown as T` the
+operand's type is `unknown`, precisely the type the outer assertion exists to assert away, so
+the string-based fallback compared `unknown` against the annotation. The honest answer at that
+layer is "unknowable", i.e. null, which makes every caller SKIP its string check; the engine
+above is untouched and still decides every assertion whose source genuinely does not relate,
+naming the real asserted type (`p1` is byte-identical to tsgo).
+
+**AND THE ITEM'S TRIGGER WAS WRONG IN A WAY WORTH KEEPING.** It recorded ">= 3-member union";
+the rule is **"the target union carries an ARRAY member"**, and `A | (B|A)[]` (two members)
+fires. The mechanism explains the narrowness: the string fallback runs only after the ENGINE
+has declined to decide, and the engine declines exactly when the source DOES relate — so the
+FP needs a target the WRONG source type (`unknown`) fails against while the right one (`B[]`)
+passes. A bare array target and an array-free union are not such targets.
+
+**ROWS 2 AND 3 — ONE DEFECT, AND IT IS NOT ABOUT ASSERTIONS: A PARAMETER ALWAYS INTRODUCES A
+BINDING.** Both `importFixes.ts` rows reduce to
+`flatMap(exportInfo, (exportInfo, i) => … mapDefined(specs, (spec): F | undefined => ({ …,
+exportInfo })))` — the callback parameter deliberately SHADOWS the enclosing function's
+`exportInfo`, and the shorthand read came back as the OUTER
+`readonly (SymbolExportInfo | FutureSymbolExportInfo)[]`. `currentLocalTypes` is a **flat COPY**
+of the enclosing scope ([EpochMap]), so a parameter that nothing registers is not merely
+untyped: the enclosing entry is still sitting there. Round 569 correctly refuses to register an
+un-inferred contextual type parameter (`mapDefined<T,U>`'s `T`) and its own comment said "the
+param stays `any`" — **it did not, it stayed absent.** A pre-pass in `ctaTypeParamsIntoLocals`
+registers `anyType`, which is round 475's value for exactly this purpose on binding-pattern
+parameters and is also the correct type (such a parameter IS implicitly `any`). PRE, so every
+later write wins.
+
+**MEASURED "SHIPPED, NOT CREATED" RATHER THAN ARGUED.** On a rebuilt parent (positive control:
+`javap` counts 11 `inferSimpleExprType` call sites before, 9 after) the shadowing FP fires in an
+EXPRESSION-STATEMENT position the walker has reached for many rounds; only the `return`-position
+instance needs (CHK.42). (CHK.43) was reproduced on the pristine HEAD binary in four lines.
+
+**GRID, ATTRIBUTED IN THREE ARMS RATHER THAN ONE.** Parent -> (CHK.43) alone: `added=0
+removed=0` on all 8 (the shape is not in tsc's sources at a position the parent walks). Parent
+-> (CHK.43)+walk: the `checker.ts:10950:25` row is GONE and the two `importFixes.ts` rows
+remain, on harness/server/services. Parent -> all three: **`added=0 removed=0` on all eight.**
+
+**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 `ChainedAssertionSourceTypeTest`, 4
+`ContextualParamShadowingTest`, 10 `ReturnPositionFunctionBodyTest`), **zero corpus baselines
+moved**. `cost_gate.py` PASSES with no rebaseline — `output.errors` **46**, `spine.nodes`
++0.00%, largest `mapped.hits` +1.43%, `globals.misses` +0.93%. `huge_methods.py --fail-over 0`
+exit 0, **783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms**
+[53, 59, 52, 58] — one draw, read the spread. `capture-equivalence` **1,005 spans / 43 of 76 /
+`narrowRendersMoreAny` 0**, the standing state unmoved; `definitions` 360,361 -> **360,376**,
+the expected direction (a parameter that now has a type renders differently). knip **66 -> 66**
+with every row identical, BEFORE arm rebuilt in the same session against the same
+`node_modules`.
+
+**ABLATION — SEVEN ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT AND EACH
+DRY-RUN FOR A REAL DIFF AGAINST THAT SNAPSHOT FIRST.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | (CHK.43) restore the `as` operand fallback | **3** — the three `as` negatives |
+| a2 | (CHK.43) restore ONLY the legacy `<T>expr` fallback | **1** — uniquely the angle-bracket row |
+| a3 | drop the LEGACY `checkTypeAssignabilityInStatements` return-arm walk | **1** — uniquely a `return` nested one function deeper |
+| a4 | drop the SPINE anchor's return-arm walk | **7** — every one-level return shape |
+| a5 | drop `contextualizeFnExprFromAnnotation` from both return arms | **1** — uniquely the REST parameter |
+| a6 | drop the parameter-shadow pre-pass | **2** — uniquely both shadowing rows |
+| a7 | make the shadow a POST-pass (clobbering the contextual write) | **22** — every contextual param type and every hover |
+
+**a3/a4 REFUTE THE ITEM'S OWN GUESS ABOUT WHICH ARM EMITS.** It said the anchor runs
+`recordOnly` and truncates "so the legacy arm is what EMITS"; measured, the partition is by
+NESTING — the anchor emits for a `return` in a top-level function's body (7 rows) and the
+legacy arm for a `return` inside a nested one (1 row). Both are needed; neither is redundant.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE CORRECTION.** a5 read **0 RED** on
+its first run, which is the signature of a leg to delete rather than ship un-gateable. It is not
+one: `applyPulledContextualParamTypes` skips a `...rest` parameter BY CONSTRUCTION, so B183's
+annotation contextualizer is the only thing that types one in a return position — a single pin
+on that shape took a5 to 1 RED. The generalizable move is to ask **what shape only this leg can
+serve**, derived from the SIBLING's own gate, before reading a green arm as a dead leg.
+
+**RESIDUE, NOT FIXED, MEASURED.** (i) `function f(): (() => F | undefined) { return () => ({ …
+wrong … }) }` — tsgo reports the whole ARROW as not assignable to the annotation; we report
+nothing, because a returned function-VALUE's own assignability against the return annotation is
+not checked (a false negative, unrelated to the walk). (ii) `const x: A = r as unknown as B[]`
+reports `Property 'c' is missing … in type 'A'` where tsgo says `'a'` — a wrong missing-property
+NAME in the TS2741 elaboration, seen while validating a control. Neither blocks anything here.
+
 ### Round (CHK.40) — an `async` function's INFERRED return type is a `Promise`, and it was wrong in BOTH directions; the item's fifth gap was a symptom of it, and its (a)/(b)/(d) are blocked on a whole family of unwalked bodies
 
 **THE ITEM'S DIAGNOSIS OF (e) WAS WRONG, AND THE ROOT CAUSE IS BIGGER THAN THE ITEM.** (e)
