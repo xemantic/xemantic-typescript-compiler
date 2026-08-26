@@ -1,4 +1,53 @@
 **AN `async` FUNCTION'S *INFERRED* RETURN TYPE IS A `Promise`, AND IT WAS WRONG IN BOTH
+
+**A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOW CHECKED AT ALL — AND BOTH ROWS THAT
+BLOCKED IT WERE FALSE POSITIVES WE ALREADY SHIPPED (2026-08-26, (CHK.42) + (CHK.43)).**
+(CHK.40) measured the walk at full parity with tsgo and refused to land it because the
+8-profile grid gained **3 rows**. Diagnosed one at a time, all three are OURS and none is a
+genuine error: one is **(CHK.43)** and two are one defect in `importFixes.ts` — and BOTH are
+reproducible on a rebuilt parent binary in positions the walker has reached for many rounds.
+With the two fixes in, the grid is **`added=0 removed=0` on all eight** and the walk shipped.
+
+**(CHK.43) A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE.** `inferSimpleExprType`'s two
+assertion arms answered the OPERAND's type whenever `resolveSimpleTypeName` could not render
+the asserted one (an array, tuple, function type, type literal) — and for the
+`x as unknown as T` escape hatch the operand's type is `unknown`, i.e. exactly what the outer
+assertion exists to assert away. `function m(): B | A | (B|A)[] { return r as unknown as B[] }`
+reported `Type 'unknown' is not assignable…`; tsgo 7.0.2 is silent. The item recorded a
+">= 3-member union" trigger; the real rule is **"the union carries an ARRAY member"** —
+`A | (B|A)[]` fires too — because the string fallback is only reached after the engine has
+declined, and the engine declines exactly when the source DOES relate.
+
+**(CHK.42)'s SECOND HALF: A PARAMETER ALWAYS INTRODUCES A BINDING.** `currentLocalTypes` is a
+flat COPY of the enclosing scope, so an un-annotated parameter that nothing could type was not
+merely untyped — the enclosing scope's same-named entry was still there and every read
+resolved to IT. Round 569's refusal to register an un-inferred contextual type parameter is
+correct and its comment said "the param stays `any`"; it did not, it stayed ABSENT. That is
+`flatMap(exportInfo, (exportInfo, i) => … { …, exportInfo })` in tsc's own `importFixes.ts`,
+reported as a TS2322 tsc does not have. A pre-pass registers `anyType` — round 475's value for
+exactly this purpose, and the correct one, since such a parameter IS implicitly `any`.
+
+**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 + 4 + 10), **zero corpus baselines moved**.
+`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
+largest movement `mapped.hits` **+1.43%**. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms** [53, 59, 52,
+58] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0** — the standing state,
+unmoved — with `definitions` 360,361 -> **360,376**, the expected direction. 8-profile grid
+against a rebuilt parent, `javap`-controlled (11 `inferSimpleExprType` call sites before, 9
+after): **`added=0 removed=0` on all eight**, where (CHK.43) alone was already 0/0 and the
+walk alone added the 2 `importFixes.ts` rows. knip **66 -> 66**, every row identical, BEFORE
+arm rebuilt in the same session.
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (restore
+the `as` fallback) 3 RED; a2 (restore only the legacy `<T>expr` fallback) 1, uniquely the
+angle-bracket row; a3 (drop the LEGACY return-arm walk) **1**, uniquely a `return` nested one
+function deeper; a4 (drop the SPINE anchor's) **7** — so the two arms partition by NESTING,
+the opposite of the item's guess about which one emits; a5 (drop the annotation
+contextualizer) 1; a6 (drop the parameter shadow) 2; a7 (make the shadow a POST-pass) **22**.
+**a5 read `0 RED` on its first run and was NOT a dead leg** — it serves exactly one shape the
+contextual pull skips by construction, a REST parameter, and a pin for that shape was the
+round's cheapest correction.
+
 DIRECTIONS — 3 FALSE POSITIVES AND 4 FALSE NEGATIVES ON ONE SEVEN-SHAPE FIXTURE, tsgo 7.0.2
 REPORTING EXACTLY THE COMPLEMENT (2026-08-26, (CHK.40)).** The queue item read its own row (e)
 as "an async object-literal method's parameters are not contextually typed"; measured, the

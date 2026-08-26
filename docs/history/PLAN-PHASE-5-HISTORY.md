@@ -1,5 +1,226 @@
 ### Round (INC.38) — DOC-ONLY: the host-facing recommendation ("ask for the whole open set in one call") is written down, with its numbers traced to their actual source
 
+
+### Round (CHK.31) — `// @ts-ignore` and `// @ts-expect-error` now suppress, an unused expect-error is **TS2578**, and the defect that blocked it was a suppression written at an EMITTER
+
+**THE SHAPE OF THE ITEM WAS RIGHT AND ITS SIZE WAS WRONG.** The queue entry called this the
+highest-blast-radius item in the library screen and warned that corpus baselines carrying a
+directive "currently record the UNSUPPRESSED diagnostics". Measured: **all eight dashboard
+profiles are `added=0 removed=0` before vs after** (a real two-arm grid — pre-`(CHK.31)`
+`Checker.kt` rebuilt into the class dir, positive-controlled by the absence of
+`commentOpenOnLineBefore` from `javap`), and the whole corpus moved **one** baseline. The
+profiles contain **zero real directive uses**: every grep hit is a string literal in
+`diagnosticInformationMap.generated.ts` or a prose comment.
+
+**WHAT LANDED.** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and
+`-project` all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in
+tsc's order: every diagnostic preceded by a directive is dropped and marks that directive
+USED, then every `@ts-expect-error` that marked nothing is reported TS2578. The walk-up rule
+already existed (`tsIgnoreDirectiveSuppressed`) with exactly one caller; what was missing was
+the general filter, exactly as the item said. Directive recognition is tsc's scanner
+hand-scanned rather than regexed, with the two whole-source probes routed through round 895's
+n-gram filter so a file that never mentions a directive is not scanned.
+
+**THE ONE CORPUS FAILURE WAS NOT THIS CHANGE — IT WAS A SUPPRESSION WRITTEN AT AN EMITTER,
+AND THAT IS THE TRANSFERABLE LAW.** `isolatedModulesExportDeclarationType`'s `/test4.ts` is
+`// @ts-expect-error` above an import of `./doesntexist`; pristine reports **0 errors** for
+that file, i.e. it emits TS2307 and the directive suppresses it. We emitted no TS2307 at
+all, because the commonjs relative-import branch called
+`!hasTsErrorSuppressionAbove(specifier.pos, source)` in its own gate — so the directive
+marked nothing and read as unused. **A diagnostic a compiler declines to EMIT turns every
+`@ts-expect-error` above it into a false TS2578.** Both ad-hoc pre-suppressions
+(`hasTsErrorSuppressionAbove`, 5 call sites, and `tsIgnoreDirectiveSuppressed`'s one) are
+deleted as superseded; suppression now happens only at the funnel, where it can be counted.
+
+**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES, AND THE PROFILES COULD NOT HAVE
+CAUGHT IT BY RUNNING.** `disableJsDiagnostics.ts` (services/server/harness) carries the prose
+comment ``// Only need to add `// @ts-ignore` for a line once.`` — and both of tsc's directive
+regexes are anchored at the comment's OWN start, so a backward `lastIndexOf("//")` lands on
+the INNER slashes and reads a sentence about a quick fix as a live directive silencing the
+next line. The 8-profile grid is **green with and without the fix**, because the line it
+falsely silenced carries no diagnostic; only a `tools/tsgo-7.0.2/lib/tsc` differential over a
+hand-made fixture separates them. The opener is now located by a string-aware FORWARD scan
+that also skips a block comment closing before the directive, so `"http://x/@ts-ignore"` is
+inert and `/* a block */ // @ts-ignore` is a directive — three shapes, three pins, all three
+agreeing with tsgo. CLAUDE.md's (GATE.2) lesson, one subsystem over: **a hand-written fixture
+does not contain what real source contains.**
+
+**GROUND TRUTH WAS READ, NOT WRITTEN.** Every expectation in the 25 pins came out of tsgo
+7.0.2 over the same fixture, and two of them contradict the obvious guess: `@ts-ignoreXYZ`
+**is** a directive (neither reference has a trailing word boundary — tsgo's scanner is a
+plain `strings.HasPrefix`), and a directive on an INNER line of a block comment is **not**
+one (only the comment's last line is offered to the regex). Pristine's own
+`ts-expect-error.errors.txt` and `multiline.errors.txt` confirm the span (the whole comment;
+for a block, its last line only) and the walk-up.
+
+**ONE DIVERGENCE FROM PRISTINE, RECORDED AND NOT CHASED.** `multiline.errors.txt` shows a.ts
+with **0 errors** where a `/**`-newline-` @ts-expect-error */` block is unused; tsgo reports
+TS2578 there and so do we. Both that case and `ts-expect-error.ts` are absent from
+`tests/cases` in this clone, so neither baseline is an active gate; we implement the algorithm
+both references document.
+
+**ABLATION — eight arms, one mistake at a time, each diffed against its OWN snapshot (round
+922, since `git diff --shortstat` is vacuous on a tree carrying the round's own work). RED of
+25 pins:**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the filter is a no-op | 17 |
+| a2 | TS2578 never emitted | 3 |
+| a3 | TS2578 for EVERY expect-error, used or not | 5 |
+| a4 | the walk-up crosses nothing | 2 |
+| **a5** | **both halves scoped to the PROGRAM, not the partition** | **1 — uniquely its own** |
+| **a6** | **the comment opener found by a backward `lastIndexOf`** | **1 — uniquely its own** |
+| **a7** | **a block directive counts on ANY line, not the last** | **1 — uniquely its own** |
+| a8 | the walk starts on the diagnostic's OWN line | 15 |
+
+a8's own pin (`a directive on the SAME line as the error does not suppress it`) also reddens
+under a1 and a2, so **it is not uniquely discriminating and is recorded as such rather than
+claimed**. a5 is the partition hazard and **no `diagnose()` fixture can see it** — the two
+pins that catch it build a `Checker` with `assignedFileNames` directly, each with its own
+control (the whole-program arm reports the one TS2578; the same partition without the
+directive reports the error), because `checkedResults == binderResults` whenever there is no
+partition.
+
+**TWO PROCESS FAILURES WORTH MORE THAN THE FIX.** (i) `./gradlew … -q 2>&1 | grep -E '^(e:|w:)'`
+printed nothing for a compile that **did not put the edit in the class dir**, and the next
+probe read the old binary — round 947's law, hit again; `javap -p | grep <new method>` is the
+positive control that settles it in one second. (ii) The ablation driver restored the SOURCE
+and left the CLASS DIR holding arm a8's build; the next CLI probe then measured a8 and read
+as a fresh, dramatic defect in the shipped code. ~15 minutes went into bisecting a phantom.
+**An ablation must rebuild after it restores, or the next thing you run is the last arm.**
+
+**GATES.** Suite **15,860 / 0 / 3** (+25 pins over the 15,835 baseline), **one corpus
+baseline moved and it moved because a genuine defect was fixed, not switched off**.
+`cost_gate.py` PASSES with `output.errors` **46** (the clean control the recon predicted) —
+`mapped.hits` at the standing +1.63%, `typeNode.bypassed` +0.65%, `mapped.keyed` +0.66%, all
+inherited from a baseline **242 commits stale** and none of them movable by a change that
+runs after every pass. `huge_methods.py --fail-over 0` exit 0, **783 classes scanned** (782
+last round — the +1 is the new nested `TsCommentDirective`, which is the positive control
+that the census is not blind). `partition-equivalence.sh` **EQUIVALENT, all 78 files**, and
+on a purpose-built 4-file directive-carrying project **EQUIVALENT, all 4**;
+`partition-gate.sh`'s sensitivity arm **EQUIVALENT, all 76 files / 182 diagnostics / 78
+netting passes**. `capture-equivalence.sh` **1,003 spans / 43 of 76 files /
+`narrowRendersMoreAny` = 0** with **both digests BIT-IDENTICAL** to (INC.42)'s record.
+`round895-grid.sh` 8 profiles `added=0 removed=0` (the filter-on/off arms — the gate that the
+two new `srcHas` needles are not falsely refused), and the before/after grid 8 profiles
+`added=0 removed=0`.
+
+**WHAT IS NOT DONE.** `// @ts-nocheck` is untouched — a third spelling with zero hits in
+`commonMain` and zero in the profiles; it is a FILE-level switch, not a line-level one, so it
+does not fall out of this mechanism and is left out deliberately. The `fflate` screen was not
+re-run (the library sources are not on this box), but its exact shape — a `@ts-ignore` above
+one declaration-only class member, suppressing that member's TS2391 and not its sibling's —
+is pinned and matches tsgo row for row.
+
+
+### Round (INC.36) — the program was parsed TWICE and both copies were kept: retention **264 -> 177 MB**
+
+**WHAT THIS ROUND DID.** Attributed the 264 MB a whole-program `referencesAt` sweep
+retains, found that 217.7 MB of it is ONE program parsed twice, and deleted one copy.
+Two commits: an instrument + a census (`71db0534`), then the fix.
+
+**STEP 1 — THE ATTRIBUTION.** A ten-step subtraction ladder over `liveAfterGc`
+(`Inc36RetentionMain` + `scripts/inc36-retention.sh`), FOUR processes agreeing to 0.6 MB
+at the peak: `Project.sourceIndexes` **114.7 MB (43.5%)**, the process-global
+`CrawlParseCache` **103.0 (39.0%)**, `RealLibSnapshots.parseCache` 2.6, and 43.7 of JVM
+baseline + embedded lib text + the 9,827 answers. **`cached`, `captures`, `prepared`,
+`narrowed`, `recheck` and `lineMaps` are 0.0 MB COMBINED** — every memo (INC.12),
+(INC.14), (INC.32) and (INC.40) added is free, and **`close()` frees nothing**. The class
+histogram reaches the same conclusion by a different route: **770,460 `Identifier`s /
+43.1 MB** against 856,962 nodes in ONE copy, i.e. CLAUDE.md's "IDENTIFIER is 44.5% of
+nodes", DOUBLED. Per-project MARGINAL retention measured **~115 MB, not 264** (a second
+`Project` re-earned 105.9 MB of shared caches and added 115.3 of its own), so a host
+budgets `103 + 115*N`. **One correction landed with it**: `CrawlParseCache` is NOT
+unbounded per edit — its map is keyed by PATH with the content INSIDE the value, so an
+edit REPLACES an entry; it is bounded by the distinct paths crawled, and its own KDoc
+says so.
+
+**STEP 2 — THE FIX, AND WHY THIS SEAM.** `Project.sourceIndexOf` now indexes tokens
+around the tree the compiler's crawl already built: one read-only core function
+`parsedSourceOrNull(fileName, source, flags)` over `CrawlParseCache.lookup`, plus
+`SourceIndex.around(text, sourceFile)` (all of `of` except the parse). **Nothing writes
+to the process-global cache**, so round 825's threading discipline is untouched — a
+`parseAndStore` shape would close the last gap and was refused for exactly that reason,
+since a caller cannot promise it is not running beside a crawl. A file whose bytes the
+compiler has never seen still parses privately, which is the CORRECT answer for an
+unsaved buffer, and `upgradeIfShareable` lazily re-points such an index at the compiler's
+tree once a build has one — a token scan, no parse.
+
+**REFUSED, WITH REASONS.** *(b), bounding `sourceIndexes` by weight ((INC.32)'s shape)*:
+it pays re-parses (**144-171 ms** for `checker.ts`, measured over four processes) to keep
+a duplicate that can simply not exist. *Threading the parses through
+`ProjectCompiler.Result`* — the brief's preferred seam: `cached` is nulled on EVERY edit
+and the hover path goes through `captureIn`, not `build()`, so the editor's own
+edit->hover loop would keep duplicating precisely the file being edited; it also lands
+trees in the `Result`s that `captures` retains, and under `CrawlParseCache`'s OFF arm it
+would newly retain the whole program where the accessor form degrades to today's
+behaviour.
+
+**GRADING — AND FOUR OF THE FIVE GATES ARE CONTROLS.** The change alters only WHERE
+`-project` obtains a parse; the compiler path never calls the new function, so a green
+suite, a `+0.00%` cost gate, a green partition sweep and an unmoved capture digest are
+what a WORKING change and a NO-OP change both produce. **Only the ladder is evidence.**
+After arm, TWO processes: peak **177.0 / 176.4** against before's 264.0 / 264.6 / 264.5 /
+264.1; the `sourceIndexes` step **-27.5 / -27.6** against **-115.3 / -116.4 / -115.8 /
+-115.3**; `CrawlParseCache` unmoved at -103.3 / -102.8; memos still +0.0. **-87.6 MB,
+-33%, with 76% of the `sourceIndexes` row deleted and every other row unmoved** — the
+shape a correct attribution predicts and an accidental one does not. `Identifier` HALVES
+to **388,790**. Non-vacuity control intact: **9,827 hits**, both processes.
+
+**IT DID NOT FALL TO ~149 MB, AND THAT IS A FINDING RATHER THAN A SHORTFALL.** The 27.5
+MB `sourceIndexes` still holds is **not a tree**: ~18 MB is `SourceIndex`'s own token
+arrays (`[I` 13.75 MB + `[LSyntaxKind;` 4.39 MB, **byte-identical before and after**,
+because nothing else in the process has one) and ~10 MB is a SECOND COPY OF THE SOURCE
+TEXT — `sourceIndexOf` reads the overlay into a fresh `String` while the crawl read the
+same bytes into its own. **The text half is a named next lever and nearly free**:
+`SourceFile.text` exists and, by `parsedSourceOrNull`'s own content key, IS that string.
+It was NOT taken here: it landed after the five-gate sweep had run, and a 10 MB change
+that invalidates five gates is a bad trade against recording the exact prize.
+
+**PINS AND ABLATIONS.** Four tests in `ProjectSharedParseTest`, all asserting IDENTITY
+rather than megabytes (a sized assertion over a collector's decision is a coin flip, round
+868) — the defect was worth 103 MB and was INVISIBLE to every value a query returns,
+because the two trees were EQUAL. Three arms, one mistake each, each diffed against **its
+own snapshot** (round 922: `git diff --shortstat` is vacuous on a tree carrying the
+round's work): **a1** (first ask never consults the compiler's parse) reddens ONLY `two
+projects over one program share ONE parse`; **a2** (a private index is never upgraded)
+reddens ONLY `...parses privately and upgrades after one`; **a3** (the reuse keyed by PATH,
+ignoring content) reddens ONLY `an unsaved buffer is answered from the buffer`. Three
+disjoint single-pin red sets. **The fourth test is recorded as a CONTROL, not a pin** —
+nothing reddens it, and saying so is cheaper than claiming coverage it does not have.
+
+**FOUR SUITE RUNS WERE LOST TO THE ENVIRONMENT, AND THE TWO GOTCHAS ARE THE DURABLE
+OUTPUT.** A concurrent orchestration `./gradlew jvmTest` plus a `--stop` at 13:24 killed
+three of them; the signatures were `NoSuchFileException: .../binary/in-progress-results-generic.bin`
+and `Gradle build daemon has been stopped: stop command received`. **A `run_in_background`
+gradle run OUTLIVES the command that started it**, so a second actor seeing "completed"
+concludes the shell is free while the build is live — and that is a SECOND, and on a box
+with free RAM more likely, cause of the signature CLAUDE.md attributes to the OOM-killer
+(reading `free -m` and seeing 12 GB otherwise leaves no hypothesis at all). And **a
+`--stop` can reach a LATER invocation's daemon**, which extends round 851's law, while
+`pkill -f 'GradleDaemon'` kills the invoking shell exactly as the documented
+`KotlinCompileDaemon` case does — the bracket rule is general. The restored binary was
+verified by POSITIVE CONTROL (`javap` shows `CrawlParseCacheKt` calling `lookup`, not the
+a3 arm's `peek`) rather than by `BUILD SUCCESSFUL in 2s`, which round 947 says proves
+nothing.
+
+**GATES.** Suite **15,835 / 0 / 3** over the seven-module glob (+4: 3 pins and 1 control),
+**zero corpus baselines moved**. `cost_gate.py` PASSES with the whole counter vector
+identical to last round's reading — `output.errors` 46, `spine.nodes` 856,962,
+`preparse.reused` 78 / `fresh` 0, `mapped.hits` at the standing **+1.63%**, not moved and
+so deliberately not rebaselined. `huge_methods.py --fail-over 0` exit 0, **over-limit 0,
+782 classes scanned** (781 last round — the count moved by exactly the one class added, so
+the census was not blind), largest method 7,702. `partition-equivalence` **EQUIVALENT: all
+78 files agree**, floor **59 ms [63, 59, 54, 53]** against the recorded 61 ms band.
+`capture-equivalence` **1,003 spans / 43 of 76 files / `narrowRendersMoreAny` 0** and
+**BOTH DIGESTS UNMOVED** (`full=-7005799195003297838`, `narrow=-1948231081793666447`) —
+the expected result, since the trees are equal by construction, and the one gate that
+would have caught a tree that is NOT the one `Project` used to parse.
+
+**(INC.35) WAS DECIDED BY THE OWNER THIS ROUND: OPTION (b), PER-BUFFER ONLY**, closed as
+a decision rather than an implementation — see its queue entry.
+
 **WHAT THIS ROUND DID.** Closed out the open half of `(INC.38)` — the code half
 (collecting the re-derivation tax via a retained checker) shipped already as
 `(INC.40)`, `8d4e95b0`; what remained was the host-facing recommendation the item

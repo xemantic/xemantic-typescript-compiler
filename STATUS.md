@@ -1,5 +1,66 @@
 # Status
 
+
+**AN OUTER BINDING OF THE SAME NAME DEFEATED EVERY BLOCK-SCOPED RECEIVER, AND THE MESSAGE THEN
+NAMED THE **OUTER** TYPE — 17 FALSE POSITIVES ON knip, EVERY ONE CONFIRMED SILENT IN tsgo
+(2026-08-26, (CHK.47)).** `lookupPerFileForNode` is keyed by the FILE, so a receiver identifier
+resolved to the file-level declaration of that spelling however deeply the reference was nested,
+and B83.5 keeps the shadowing block-scoped declaration out of the binder tables entirely — so
+nothing downstream could notice. Three of the four measured shapes were wrong in the worst
+direction a checker can be: a CONFIDENT message naming a type the expression does not have.
+All four now match tsgo 7.0.2 exactly, message and column.
+
+**IT WAS THREE MECHANISMS, NOT ONE — the queue item named only the first**, which is the FOURTH
+round running in which the item's framing was wrong. (1) `cmamLexicalValueShadow` refuses the
+per-file symbol when an inner lexical VALUE binding shadows the name, routing three of the four
+into the branch that reads `currentLocalTypes` and (CHK.46)'s helpers. (2) The destructured
+PARAMETER shape is not that walker at all: `spineExEnterNode` (the B431 expando anchor) carries
+its OWN shadow test, and `spineExFnShadows` compared `(x.name as? Identifier)?.text`, i.e. it was
+blind to every destructuring form. (3) The un-annotated body-local additionally needed round
+512's un-inferable-shadow bail to stand down where a helper CAN name the inner binding's type.
+**`perFileIdentSymbol != null` is part of (1)'s CONDITION, not an optimisation** — without it a
+`catch (error)` reached through an `in` guard goes silent on knip for a reason unrelated to
+shadowing, which is the arm's only uniquely-its-own failure.
+
+**AND (CHK.46)'s TWO HALVES DID NOT COMPOSE.** `const c = h; c.zzznope` reported and
+`p.inner.zzznope` reported, but `const c = h; c.inner.zzznope` was SILENT: the nested path asks
+`getTypeOfExpression` for the WHOLE chain and an `any` root makes the whole chain `any` before
+either substitution point. `cmamBlockScopedPathType` walks the chain by hand from a root type the
+two (CHK.46) helpers can name. The DESTRUCTURING composition stays open, at a different site.
+
+**THE ELEVEN "REFUSALS" (CHK.46) LEFT ARE FIVE MECHANISMS, AND ONE OF THEM IS ALREADY CLOSED.**
+Measured with three throwaway arms rather than by reading: (i) lifting `cmamDestructuredReceiverType`'s
+own lines produces a WRONG TYPE for the union source (`Inner` for `Holder | Inner`) and the
+class instance (`typeof Cls` for `Cls`) — those two need type CONSTRUCTION, not a relaxed guard;
+(ii) the rest element and the array pattern are refused by the SHARED `typeCaptureDestructured`,
+which the (API.3d) capture channel also reads; (iii) the heritage, generic-instantiation and
+tuple leaves are refused downstream by `cmamCheckResolvedObjectType` — B153 territory, the layer
+(CHK.45) measured as knip false positives when relaxed; (iv) only the `let` binding wakes with
+the CORRECT type, and it is exactly (CHK.44)'s measured 3-false-positive population; (v) a CALL
+receiver never reaches the family at all (`narrowingEligible`). **The NULLISH refusal is half
+phantom**: `leaf?: Inner` was never refused and already matches tsgo, only the explicit
+`Inner | undefined` form is.
+
+**GATES.** Suite **16,067 / 0 / 3** (+17, exactly the two new classes), **zero corpus baselines
+moved**. 8-profile grid **`added=0 removed=0` on all eight** against a parent rebuilt in this
+session (javap control: the three new methods read 0 before, 3 after). **knip 66 -> 49**,
+seventeen removals and no additions, every one a false positive tsgo is silent on — fifteen of
+them `Property '0' does not exist on type 'Plugin'` where a `for (const plugin of …)` loop
+variable resolved to the file's own `const plugin: Plugin`. `cost_gate.py` **PASSES with NO
+rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%, largest movement
+`narrow.memoServed` **+0.69%**. `huge_methods.py --fail-over 0` exit 0, **783** classes.
+`partition-equivalence` **EQUIVALENT 78/78**, floor **57 ms** [57, 55, 59, 57] (one draw).
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both ARM
+DIGESTs unmoved.
+
+**FOURTEEN ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT.** One leg was
+DELETED rather than shipped un-gateable (a10, inert on the pins, on knip AND on the grid); one
+arm's uniquely-its-own failure is a knip ROW rather than a pin (a2); and four arms are recorded
+as REDUNDANT GUARDS with the layer that actually refuses (a8, a9, b2, b3). **Arm a4 read `0 RED`
+on its first run and was NOT a dead leg** — a REST element under a colliding file-level `const`
+is the one shape where both helpers refuse and the fallback would restore the outer reading, and
+a pin for it took a4 to 1 RED.
+
 **THREE MECHANISMS, AND NONE OF THEM WAS THE GAP THE QUEUE ITEM NAMED: A DESTRUCTURED NAME, A
 NESTED ACCESS AND AN UN-ANNOTATED BODY-LOCAL WERE EACH UNCHECKED AS A RECEIVER (2026-08-26,
 (CHK.46)).** (CHK.45) left three populations measured and open; all three are closed, and in two
@@ -227,51 +288,3 @@ that arm can serve gave **a4b, 5 RED**. **a6 read `0 RED` and is a REDUNDANT GUA
 as one rather than claimed** (round 807): `any`/`never`/`error` keep every member so the call
 site's `kept.size < declared.size` test refuses anyway, and `unknown` keeps none so
 `kept.isNotEmpty()` does.
-
-**A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOW CHECKED AT ALL — AND BOTH ROWS THAT
-BLOCKED IT WERE FALSE POSITIVES WE ALREADY SHIPPED (2026-08-26, (CHK.42) + (CHK.43)).**
-(CHK.40) measured the walk at full parity with tsgo and refused to land it because the
-8-profile grid gained **3 rows**. Diagnosed one at a time, all three are OURS and none is a
-genuine error: one is **(CHK.43)** and two are one defect in `importFixes.ts` — and BOTH are
-reproducible on a rebuilt parent binary in positions the walker has reached for many rounds.
-With the two fixes in, the grid is **`added=0 removed=0` on all eight** and the walk shipped.
-
-**(CHK.43) A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE.** `inferSimpleExprType`'s two
-assertion arms answered the OPERAND's type whenever `resolveSimpleTypeName` could not render
-the asserted one (an array, tuple, function type, type literal) — and for the
-`x as unknown as T` escape hatch the operand's type is `unknown`, i.e. exactly what the outer
-assertion exists to assert away. `function m(): B | A | (B|A)[] { return r as unknown as B[] }`
-reported `Type 'unknown' is not assignable…`; tsgo 7.0.2 is silent. The item recorded a
-">= 3-member union" trigger; the real rule is **"the union carries an ARRAY member"** —
-`A | (B|A)[]` fires too — because the string fallback is only reached after the engine has
-declined, and the engine declines exactly when the source DOES relate.
-
-**(CHK.42)'s SECOND HALF: A PARAMETER ALWAYS INTRODUCES A BINDING.** `currentLocalTypes` is a
-flat COPY of the enclosing scope, so an un-annotated parameter that nothing could type was not
-merely untyped — the enclosing scope's same-named entry was still there and every read
-resolved to IT. Round 569's refusal to register an un-inferred contextual type parameter is
-correct and its comment said "the param stays `any`"; it did not, it stayed ABSENT. That is
-`flatMap(exportInfo, (exportInfo, i) => … { …, exportInfo })` in tsc's own `importFixes.ts`,
-reported as a TS2322 tsc does not have. A pre-pass registers `anyType` — round 475's value for
-exactly this purpose, and the correct one, since such a parameter IS implicitly `any`.
-
-**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 + 4 + 10), **zero corpus baselines moved**.
-`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
-largest movement `mapped.hits` **+1.43%**. `huge_methods.py --fail-over 0` exit 0, **783**
-classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms** [53, 59, 52,
-58] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0** — the standing state,
-unmoved — with `definitions` 360,361 -> **360,376**, the expected direction. 8-profile grid
-against a rebuilt parent, `javap`-controlled (11 `inferSimpleExprType` call sites before, 9
-after): **`added=0 removed=0` on all eight**, where (CHK.43) alone was already 0/0 and the
-walk alone added the 2 `importFixes.ts` rows. knip **66 -> 66**, every row identical, BEFORE
-arm rebuilt in the same session.
-
-**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (restore
-the `as` fallback) 3 RED; a2 (restore only the legacy `<T>expr` fallback) 1, uniquely the
-angle-bracket row; a3 (drop the LEGACY return-arm walk) **1**, uniquely a `return` nested one
-function deeper; a4 (drop the SPINE anchor's) **7** — so the two arms partition by NESTING,
-the opposite of the item's guess about which one emits; a5 (drop the annotation
-contextualizer) 1; a6 (drop the parameter shadow) 2; a7 (make the shadow a POST-pass) **22**.
-**a5 read `0 RED` on its first run and was NOT a dead leg** — it serves exactly one shape the
-contextual pull skips by construction, a REST parameter, and a pin for that shape was the
-round's cheapest correction.

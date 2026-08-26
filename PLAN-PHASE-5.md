@@ -20,6 +20,150 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.47) — an OUTER binding of the same name defeated every block-scoped receiver, the message named the OUTER type, and it was **three** mechanisms; **knip 66 -> 49, seventeen false positives gone**
+
+**WHAT LANDED.** `Checker.cmamLexicalValueShadow` + `cmamShadowReadingWins`,
+`spineExBindingNameShadows`, round 512's bail relaxed, and `cmamBlockScopedPathType`
+— commits `6a56f165` / `cb9d7bb9` / `b8966d18` / `3bd9e6ad`. New pins:
+`ShadowedReceiverTypeTest` (9), `BlockScopedPathReceiverTest` (8).
+
+**THE ROUND'S HEADLINE, AND IT IS THE FOURTH ROUND RUNNING TO PRODUCE ONE OF THIS
+SHAPE: THE QUEUE ITEM'S (i) WAS *ONE* OF THREE MECHANISMS AND NAMED ONLY THE FIRST.**
+Measured through the CLI against `tools/tsgo-7.0.2/lib/tsc` over identical source:
+
+| # | shape | ours (parent) | tsgo | owned by |
+|---|---|---|---|---|
+| A | `const inner: Deep` + `const { inner } = h; inner.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
+| B | `function alpha()` + `f({ alpha }: Inner) { alpha.zzznope }` | `typeof alpha` | `string` | `spineExBindingNameShadows` |
+| C | `const cc: Deep` + `const cc = h.inner; cc.zzznope` | SILENT | `Inner` | round 512's bail + `cmamLexicalValueShadow` |
+| D | `const dd: Deep` + `const dd: Inner = h.inner; dd.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
+
+**D was not in the item at all** and is the plainest shape of the four — an ORDINARY
+annotated body-local `const` shadowing a file-level one. **B is not the property-access
+family at all**: `--passTiming`'s `emissions by pass` said `checkSpine`, and a
+`Diagnostic`-constructor hook (round 726's instrument) named `spineExEnterNode`, the
+B431 expando anchor, whose own `spineExFnShadows` compared
+`(x.name as? Identifier)?.text` and was therefore blind to every destructuring form.
+Reading the queue item as the diagnosis would have sent the round at one walker and
+left two.
+
+**THE MECHANISM IN ONE SENTENCE, AND IT IS THE TRANSFERABLE PART.**
+`lookupPerFileForNode` is keyed by the FILE, so for a receiver identifier it answers
+the file-level declaration of that spelling **however deeply the reference is
+nested** — and B83.5 leaves the shadowing block-scoped declaration out of the binder
+tables, so it is invisible to that lookup and to `getTypeOfSymbol` alike. Round 748's
+`symbols`-only rule is what makes the INV.2(c) tables able to answer: a name the main
+binder bound is absent from its container's `symbols`, so a non-null
+`lexicalScopeSymbol` hit on the reference's parent chain IS the shadowing relation, no
+ordering question attached.
+
+**`perFileIdentSymbol != null` IS PART OF THE CONDITION, NOT AN OPTIMISATION.** Without
+it `lexicalShadow` fires where there is no outer declaration to lose to, and a
+`catch (error)` reached through an `in` guard goes SILENT on knip — outcome-correct
+(tsgo is silent too) for a reason that has nothing to do with shadowing, while its
+sibling in `errors.ts` keeps reporting. That row is arm a2's only uniquely-its-own
+failure; **no pin sees it.**
+
+**(ii) THE COMPOSITIONS — HALF CLOSED.** `const c = h; c.zzznope` reported and
+`p.inner.zzznope` reported, but `const c = h; c.inner.zzznope` was silent, because the
+nested path asks `getTypeOfExpression` for the WHOLE chain and an `any` root makes the
+chain `any` before either (CHK.46) substitution point is reached.
+`cmamBlockScopedPathType` walks it by hand from a root type the two helpers can name;
+one hop and two hops both match tsgo exactly. **The DESTRUCTURING composition
+(`const c = h; const { inner } = c; inner.zzznope`) stays open** and is a different
+site: `typeCaptureDestructured`'s `VariableDeclaration` arm reads
+`getTypeOfExpression(initializer)`. That helper is SHARED with the (API.3d) capture
+channel, so the substitution must be local to `cmamDestructuredReceiverType` — and
+doing so opens a re-entrancy cycle (`cmamDestructuredReceiverType` -> the fallback ->
+`cmamBlockScopedPathType` -> `cmamDestructuredReceiverType`) needing a depth guard.
+
+**(iii) THE ELEVEN REFUSALS ARE FIVE MECHANISMS, AND ONE IS ALREADY CLOSED.** Triaged
+with three throwaway measurement arms (t1 = drop `cmamDestructuredReceiverType`'s own
+lines; t2 = `cmamAllMissingTrustedMember` unconditionally true; t3 = drop
+`cmamUnannotatedLocalReceiverType`'s `const` + whitelist), each run over one 11-shape
+CLI probe rather than by reading:
+
+| group | rows | who refuses | verdict |
+|---|---|---|---|
+| 1 | union source, class instance | `cmamDestructuredReceiverType`'s own lines | **the refusal is RIGHT** — lifting it yields a WRONG type (`Inner` for `Holder \| Inner`; `typeof Cls` for `Cls`). Needs type CONSTRUCTION, not a relaxed guard |
+| 2 | rest element, array pattern | the SHARED `typeCaptureDestructured` | a hard boundary — the (API.3d) capture channel reads it, so any change moves the capture digests |
+| 3 | heritage leaf, generic-instantiation leaf, tuple leaf | `cmamCheckResolvedObjectType`, downstream | B153 territory — the layer (CHK.45) measured as knip false positives when relaxed |
+| 4 | `let` binding | `cmamUnannotatedLocalReceiverType`'s `const` line | **the only one that wakes with the CORRECT type** (`Holder`) — and it is exactly (CHK.44)'s measured 3-false-positive population, so it needs the reaching-definition question answered |
+| 5 | call receiver | `narrowingEligible` | never reaches the family at all |
+
+`new X(…)` did NOT wake from t3, so the whitelist is not what owns it today (its
+measured cost was a corpus baseline, not this shape). **And the NULLISH refusal is half
+phantom**: `leaf?: Inner` was never refused and already matches tsgo's TS2339 —
+`typeHasNullishConstituent` only sees the explicit `Inner | undefined` form. So the
+list of eleven is really **ten**, in five groups, and only group 4 is cheap.
+
+**FOURTEEN ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST THE ARM'S OWN SNAPSHOT,
+EACH ANCHOR ASSERTED UNIQUE.**
+
+| arm | mistake | RED |
+|---|---|---|
+| a1 | `cmamLexicalValueShadow` returns false | 4 — A, B, C, D |
+| a2 | drop the `perFileIdentSymbol != null` conjunct | **0 pins**, −1 knip row |
+| a3 | `cmamShadowReadingWins` accepts any recorded type | 1 — D |
+| a4 | the shadow route falls through instead of refusing | 1 — G (after the pin was added) |
+| a5 | `spineExBindingNameShadows` handles only an Identifier | 3 — B, E, E2 |
+| a6 | only its ARRAY arm off | 2 — E, E2 |
+| a7 | round 512's bail restored unconditionally | 1 — C |
+| a8 | drop the single-declaration refusal | **0**, knip unchanged |
+| a9 | drop the declaration-KIND whitelist | **0**, knip unchanged |
+| a10 | `cmamDestructuredReceiverType` ignores `shadowed` | **0**, knip AND grid unchanged — **LEG DELETED** |
+| a11 | `cmamUnannotatedLocalReceiverType` ignores `shadowed` | 1 — C |
+| b1 | `cmamBlockScopedPathType` returns null | 3 — every path positive |
+| b2 | drop the `any`/`error`/`unknown` HOP refusal | **0**, knip unchanged |
+| b3 | drop the "the root must be UNTYPED" refusal | **0**, knip unchanged |
+
+**ARM a4 READ `0 RED` ON ITS FIRST RUN AND WAS NOT A DEAD LEG.** The shape that
+discriminates it is a REST element under a colliding file-level `const`: both helpers
+refuse it, `currentLocalTypes` does not carry the name, so the fall-through would
+resolve the outer `const inner: Deep` and report exactly the reading the round removes.
+Pin G took it to 1 RED. **Arm a10 by contrast IS a dead leg and was deleted** — inside
+round 512's bail that call is a constant null by construction, since the branch is
+entered only for a name already in `currentShadowedNames`, which is one of the two
+refusals the flag suppresses. a8/a9/b2/b3 are recorded as REDUNDANT GUARDS (round 807)
+with the layer that actually refuses; a8/a9's protected populations are ones no fixture
+here can build without asserting a wrong answer in BOTH arms.
+
+**GATES.** Suite **16,067 / 0 / 3** (+17, exactly the two new classes), **zero corpus
+baselines moved**. 8-profile grid **`added=0 removed=0` on all eight** against a parent
+rebuilt in this session (javap control: the three new methods read 0 in the before arm
+and 3 in the after). **knip 66 -> 49** with the BEFORE arm taken from that same rebuilt
+parent — seventeen removals, no additions, and all seventeen confirmed FALSE POSITIVES
+by running tsgo over the same package (it reports nothing at any of those positions).
+Fifteen are `Property '0' does not exist on type 'Plugin'`, where a
+`for (const plugin of config.plugins)` loop variable was resolving to the file's own
+`const plugin: Plugin` — the family `PLAN-PHASE-5.md` had already flagged as "a
+resolution/collision, not narrowing" and left uncharacterized — and two are the same
+shape for `Args` at a callback parameter in `tsdown/index.ts`. `cost_gate.py` **PASSES
+with NO rebaseline**, exit 0: `output.errors` **46**, `spine.nodes` +0.00%, largest
+movement `narrow.memoServed` **+0.69%**. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**,
+floor **57 ms** [57, 55, 59, 57] (one draw). `capture-equivalence` **1,005 spans / 43
+of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376**, both ARM DIGESTs
+unmoved.
+
+**WHAT DID NOT WORK.** A first cut let `lexicalShadow` fire without requiring a
+per-file symbol; it read knip **48** — one better than the shipped 49 — and the extra
+removal was the `catch (error)` row above, silenced by a mechanism that has nothing to
+do with shadowing while its sibling kept reporting. Tightened rather than kept: an
+inconsistent silence you cannot attribute is worse than a false positive you can.
+A first cut of the shadow route also returned the member type RAW, so a primitive
+member (`string`) was refused downstream — the route now re-enters the same tail as
+every other reading, which is what supplies the apparent type.
+
+**OPEN, recorded rather than pinned (round 765).**
+ 1. The DESTRUCTURING composition, above, with its site and its recursion hazard.
+ 2. The ten refusals in five groups, above. Group 4 (`let`) is the cheapest and is
+    blocked on (CHK.44)'s measurement, not on conservatism.
+ 3. An ARRAY-pattern binding is typed as a receiver nowhere (pins E/E2 assert only that
+    we no longer name the OUTER type); tsgo reports `Inner`/`number` there.
+ 4. TS18048 is not emitted beside our TS2339 for an optional destructured member, where
+    tsc emits both.
+
 ### Round (CHK.46) — three mechanisms, and in TWO of them the type was never missing: a DESTRUCTURED name, a NESTED access and an un-annotated BODY-LOCAL were each unchecked as a RECEIVER
 
 **WHAT LANDED.** `Checker.cmamDestructuredReceiverType` + `cmamBindingElementDeclaration`
@@ -1067,225 +1211,6 @@ than the one this item fixes, and they were audited rather than assumed:
   ESM file importing a CommonJS one under node16/nodenext. Unmeasured; queued as
   (CHK.38) rather than guessed at.
 
-### Round (CHK.31) — `// @ts-ignore` and `// @ts-expect-error` now suppress, an unused expect-error is **TS2578**, and the defect that blocked it was a suppression written at an EMITTER
-
-**THE SHAPE OF THE ITEM WAS RIGHT AND ITS SIZE WAS WRONG.** The queue entry called this the
-highest-blast-radius item in the library screen and warned that corpus baselines carrying a
-directive "currently record the UNSUPPRESSED diagnostics". Measured: **all eight dashboard
-profiles are `added=0 removed=0` before vs after** (a real two-arm grid — pre-`(CHK.31)`
-`Checker.kt` rebuilt into the class dir, positive-controlled by the absence of
-`commentOpenOnLineBefore` from `javap`), and the whole corpus moved **one** baseline. The
-profiles contain **zero real directive uses**: every grep hit is a string literal in
-`diagnosticInformationMap.generated.ts` or a prose comment.
-
-**WHAT LANDED.** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and
-`-project` all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in
-tsc's order: every diagnostic preceded by a directive is dropped and marks that directive
-USED, then every `@ts-expect-error` that marked nothing is reported TS2578. The walk-up rule
-already existed (`tsIgnoreDirectiveSuppressed`) with exactly one caller; what was missing was
-the general filter, exactly as the item said. Directive recognition is tsc's scanner
-hand-scanned rather than regexed, with the two whole-source probes routed through round 895's
-n-gram filter so a file that never mentions a directive is not scanned.
-
-**THE ONE CORPUS FAILURE WAS NOT THIS CHANGE — IT WAS A SUPPRESSION WRITTEN AT AN EMITTER,
-AND THAT IS THE TRANSFERABLE LAW.** `isolatedModulesExportDeclarationType`'s `/test4.ts` is
-`// @ts-expect-error` above an import of `./doesntexist`; pristine reports **0 errors** for
-that file, i.e. it emits TS2307 and the directive suppresses it. We emitted no TS2307 at
-all, because the commonjs relative-import branch called
-`!hasTsErrorSuppressionAbove(specifier.pos, source)` in its own gate — so the directive
-marked nothing and read as unused. **A diagnostic a compiler declines to EMIT turns every
-`@ts-expect-error` above it into a false TS2578.** Both ad-hoc pre-suppressions
-(`hasTsErrorSuppressionAbove`, 5 call sites, and `tsIgnoreDirectiveSuppressed`'s one) are
-deleted as superseded; suppression now happens only at the funnel, where it can be counted.
-
-**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES, AND THE PROFILES COULD NOT HAVE
-CAUGHT IT BY RUNNING.** `disableJsDiagnostics.ts` (services/server/harness) carries the prose
-comment ``// Only need to add `// @ts-ignore` for a line once.`` — and both of tsc's directive
-regexes are anchored at the comment's OWN start, so a backward `lastIndexOf("//")` lands on
-the INNER slashes and reads a sentence about a quick fix as a live directive silencing the
-next line. The 8-profile grid is **green with and without the fix**, because the line it
-falsely silenced carries no diagnostic; only a `tools/tsgo-7.0.2/lib/tsc` differential over a
-hand-made fixture separates them. The opener is now located by a string-aware FORWARD scan
-that also skips a block comment closing before the directive, so `"http://x/@ts-ignore"` is
-inert and `/* a block */ // @ts-ignore` is a directive — three shapes, three pins, all three
-agreeing with tsgo. CLAUDE.md's (GATE.2) lesson, one subsystem over: **a hand-written fixture
-does not contain what real source contains.**
-
-**GROUND TRUTH WAS READ, NOT WRITTEN.** Every expectation in the 25 pins came out of tsgo
-7.0.2 over the same fixture, and two of them contradict the obvious guess: `@ts-ignoreXYZ`
-**is** a directive (neither reference has a trailing word boundary — tsgo's scanner is a
-plain `strings.HasPrefix`), and a directive on an INNER line of a block comment is **not**
-one (only the comment's last line is offered to the regex). Pristine's own
-`ts-expect-error.errors.txt` and `multiline.errors.txt` confirm the span (the whole comment;
-for a block, its last line only) and the walk-up.
-
-**ONE DIVERGENCE FROM PRISTINE, RECORDED AND NOT CHASED.** `multiline.errors.txt` shows a.ts
-with **0 errors** where a `/**`-newline-` @ts-expect-error */` block is unused; tsgo reports
-TS2578 there and so do we. Both that case and `ts-expect-error.ts` are absent from
-`tests/cases` in this clone, so neither baseline is an active gate; we implement the algorithm
-both references document.
-
-**ABLATION — eight arms, one mistake at a time, each diffed against its OWN snapshot (round
-922, since `git diff --shortstat` is vacuous on a tree carrying the round's own work). RED of
-25 pins:**
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a1 | the filter is a no-op | 17 |
-| a2 | TS2578 never emitted | 3 |
-| a3 | TS2578 for EVERY expect-error, used or not | 5 |
-| a4 | the walk-up crosses nothing | 2 |
-| **a5** | **both halves scoped to the PROGRAM, not the partition** | **1 — uniquely its own** |
-| **a6** | **the comment opener found by a backward `lastIndexOf`** | **1 — uniquely its own** |
-| **a7** | **a block directive counts on ANY line, not the last** | **1 — uniquely its own** |
-| a8 | the walk starts on the diagnostic's OWN line | 15 |
-
-a8's own pin (`a directive on the SAME line as the error does not suppress it`) also reddens
-under a1 and a2, so **it is not uniquely discriminating and is recorded as such rather than
-claimed**. a5 is the partition hazard and **no `diagnose()` fixture can see it** — the two
-pins that catch it build a `Checker` with `assignedFileNames` directly, each with its own
-control (the whole-program arm reports the one TS2578; the same partition without the
-directive reports the error), because `checkedResults == binderResults` whenever there is no
-partition.
-
-**TWO PROCESS FAILURES WORTH MORE THAN THE FIX.** (i) `./gradlew … -q 2>&1 | grep -E '^(e:|w:)'`
-printed nothing for a compile that **did not put the edit in the class dir**, and the next
-probe read the old binary — round 947's law, hit again; `javap -p | grep <new method>` is the
-positive control that settles it in one second. (ii) The ablation driver restored the SOURCE
-and left the CLASS DIR holding arm a8's build; the next CLI probe then measured a8 and read
-as a fresh, dramatic defect in the shipped code. ~15 minutes went into bisecting a phantom.
-**An ablation must rebuild after it restores, or the next thing you run is the last arm.**
-
-**GATES.** Suite **15,860 / 0 / 3** (+25 pins over the 15,835 baseline), **one corpus
-baseline moved and it moved because a genuine defect was fixed, not switched off**.
-`cost_gate.py` PASSES with `output.errors` **46** (the clean control the recon predicted) —
-`mapped.hits` at the standing +1.63%, `typeNode.bypassed` +0.65%, `mapped.keyed` +0.66%, all
-inherited from a baseline **242 commits stale** and none of them movable by a change that
-runs after every pass. `huge_methods.py --fail-over 0` exit 0, **783 classes scanned** (782
-last round — the +1 is the new nested `TsCommentDirective`, which is the positive control
-that the census is not blind). `partition-equivalence.sh` **EQUIVALENT, all 78 files**, and
-on a purpose-built 4-file directive-carrying project **EQUIVALENT, all 4**;
-`partition-gate.sh`'s sensitivity arm **EQUIVALENT, all 76 files / 182 diagnostics / 78
-netting passes**. `capture-equivalence.sh` **1,003 spans / 43 of 76 files /
-`narrowRendersMoreAny` = 0** with **both digests BIT-IDENTICAL** to (INC.42)'s record.
-`round895-grid.sh` 8 profiles `added=0 removed=0` (the filter-on/off arms — the gate that the
-two new `srcHas` needles are not falsely refused), and the before/after grid 8 profiles
-`added=0 removed=0`.
-
-**WHAT IS NOT DONE.** `// @ts-nocheck` is untouched — a third spelling with zero hits in
-`commonMain` and zero in the profiles; it is a FILE-level switch, not a line-level one, so it
-does not fall out of this mechanism and is left out deliberately. The `fflate` screen was not
-re-run (the library sources are not on this box), but its exact shape — a `@ts-ignore` above
-one declaration-only class member, suppressing that member's TS2391 and not its sibling's —
-is pinned and matches tsgo row for row.
-
-
-### Round (INC.36) — the program was parsed TWICE and both copies were kept: retention **264 -> 177 MB**
-
-**WHAT THIS ROUND DID.** Attributed the 264 MB a whole-program `referencesAt` sweep
-retains, found that 217.7 MB of it is ONE program parsed twice, and deleted one copy.
-Two commits: an instrument + a census (`71db0534`), then the fix.
-
-**STEP 1 — THE ATTRIBUTION.** A ten-step subtraction ladder over `liveAfterGc`
-(`Inc36RetentionMain` + `scripts/inc36-retention.sh`), FOUR processes agreeing to 0.6 MB
-at the peak: `Project.sourceIndexes` **114.7 MB (43.5%)**, the process-global
-`CrawlParseCache` **103.0 (39.0%)**, `RealLibSnapshots.parseCache` 2.6, and 43.7 of JVM
-baseline + embedded lib text + the 9,827 answers. **`cached`, `captures`, `prepared`,
-`narrowed`, `recheck` and `lineMaps` are 0.0 MB COMBINED** — every memo (INC.12),
-(INC.14), (INC.32) and (INC.40) added is free, and **`close()` frees nothing**. The class
-histogram reaches the same conclusion by a different route: **770,460 `Identifier`s /
-43.1 MB** against 856,962 nodes in ONE copy, i.e. CLAUDE.md's "IDENTIFIER is 44.5% of
-nodes", DOUBLED. Per-project MARGINAL retention measured **~115 MB, not 264** (a second
-`Project` re-earned 105.9 MB of shared caches and added 115.3 of its own), so a host
-budgets `103 + 115*N`. **One correction landed with it**: `CrawlParseCache` is NOT
-unbounded per edit — its map is keyed by PATH with the content INSIDE the value, so an
-edit REPLACES an entry; it is bounded by the distinct paths crawled, and its own KDoc
-says so.
-
-**STEP 2 — THE FIX, AND WHY THIS SEAM.** `Project.sourceIndexOf` now indexes tokens
-around the tree the compiler's crawl already built: one read-only core function
-`parsedSourceOrNull(fileName, source, flags)` over `CrawlParseCache.lookup`, plus
-`SourceIndex.around(text, sourceFile)` (all of `of` except the parse). **Nothing writes
-to the process-global cache**, so round 825's threading discipline is untouched — a
-`parseAndStore` shape would close the last gap and was refused for exactly that reason,
-since a caller cannot promise it is not running beside a crawl. A file whose bytes the
-compiler has never seen still parses privately, which is the CORRECT answer for an
-unsaved buffer, and `upgradeIfShareable` lazily re-points such an index at the compiler's
-tree once a build has one — a token scan, no parse.
-
-**REFUSED, WITH REASONS.** *(b), bounding `sourceIndexes` by weight ((INC.32)'s shape)*:
-it pays re-parses (**144-171 ms** for `checker.ts`, measured over four processes) to keep
-a duplicate that can simply not exist. *Threading the parses through
-`ProjectCompiler.Result`* — the brief's preferred seam: `cached` is nulled on EVERY edit
-and the hover path goes through `captureIn`, not `build()`, so the editor's own
-edit->hover loop would keep duplicating precisely the file being edited; it also lands
-trees in the `Result`s that `captures` retains, and under `CrawlParseCache`'s OFF arm it
-would newly retain the whole program where the accessor form degrades to today's
-behaviour.
-
-**GRADING — AND FOUR OF THE FIVE GATES ARE CONTROLS.** The change alters only WHERE
-`-project` obtains a parse; the compiler path never calls the new function, so a green
-suite, a `+0.00%` cost gate, a green partition sweep and an unmoved capture digest are
-what a WORKING change and a NO-OP change both produce. **Only the ladder is evidence.**
-After arm, TWO processes: peak **177.0 / 176.4** against before's 264.0 / 264.6 / 264.5 /
-264.1; the `sourceIndexes` step **-27.5 / -27.6** against **-115.3 / -116.4 / -115.8 /
--115.3**; `CrawlParseCache` unmoved at -103.3 / -102.8; memos still +0.0. **-87.6 MB,
--33%, with 76% of the `sourceIndexes` row deleted and every other row unmoved** — the
-shape a correct attribution predicts and an accidental one does not. `Identifier` HALVES
-to **388,790**. Non-vacuity control intact: **9,827 hits**, both processes.
-
-**IT DID NOT FALL TO ~149 MB, AND THAT IS A FINDING RATHER THAN A SHORTFALL.** The 27.5
-MB `sourceIndexes` still holds is **not a tree**: ~18 MB is `SourceIndex`'s own token
-arrays (`[I` 13.75 MB + `[LSyntaxKind;` 4.39 MB, **byte-identical before and after**,
-because nothing else in the process has one) and ~10 MB is a SECOND COPY OF THE SOURCE
-TEXT — `sourceIndexOf` reads the overlay into a fresh `String` while the crawl read the
-same bytes into its own. **The text half is a named next lever and nearly free**:
-`SourceFile.text` exists and, by `parsedSourceOrNull`'s own content key, IS that string.
-It was NOT taken here: it landed after the five-gate sweep had run, and a 10 MB change
-that invalidates five gates is a bad trade against recording the exact prize.
-
-**PINS AND ABLATIONS.** Four tests in `ProjectSharedParseTest`, all asserting IDENTITY
-rather than megabytes (a sized assertion over a collector's decision is a coin flip, round
-868) — the defect was worth 103 MB and was INVISIBLE to every value a query returns,
-because the two trees were EQUAL. Three arms, one mistake each, each diffed against **its
-own snapshot** (round 922: `git diff --shortstat` is vacuous on a tree carrying the
-round's work): **a1** (first ask never consults the compiler's parse) reddens ONLY `two
-projects over one program share ONE parse`; **a2** (a private index is never upgraded)
-reddens ONLY `...parses privately and upgrades after one`; **a3** (the reuse keyed by PATH,
-ignoring content) reddens ONLY `an unsaved buffer is answered from the buffer`. Three
-disjoint single-pin red sets. **The fourth test is recorded as a CONTROL, not a pin** —
-nothing reddens it, and saying so is cheaper than claiming coverage it does not have.
-
-**FOUR SUITE RUNS WERE LOST TO THE ENVIRONMENT, AND THE TWO GOTCHAS ARE THE DURABLE
-OUTPUT.** A concurrent orchestration `./gradlew jvmTest` plus a `--stop` at 13:24 killed
-three of them; the signatures were `NoSuchFileException: .../binary/in-progress-results-generic.bin`
-and `Gradle build daemon has been stopped: stop command received`. **A `run_in_background`
-gradle run OUTLIVES the command that started it**, so a second actor seeing "completed"
-concludes the shell is free while the build is live — and that is a SECOND, and on a box
-with free RAM more likely, cause of the signature CLAUDE.md attributes to the OOM-killer
-(reading `free -m` and seeing 12 GB otherwise leaves no hypothesis at all). And **a
-`--stop` can reach a LATER invocation's daemon**, which extends round 851's law, while
-`pkill -f 'GradleDaemon'` kills the invoking shell exactly as the documented
-`KotlinCompileDaemon` case does — the bracket rule is general. The restored binary was
-verified by POSITIVE CONTROL (`javap` shows `CrawlParseCacheKt` calling `lookup`, not the
-a3 arm's `peek`) rather than by `BUILD SUCCESSFUL in 2s`, which round 947 says proves
-nothing.
-
-**GATES.** Suite **15,835 / 0 / 3** over the seven-module glob (+4: 3 pins and 1 control),
-**zero corpus baselines moved**. `cost_gate.py` PASSES with the whole counter vector
-identical to last round's reading — `output.errors` 46, `spine.nodes` 856,962,
-`preparse.reused` 78 / `fresh` 0, `mapped.hits` at the standing **+1.63%**, not moved and
-so deliberately not rebaselined. `huge_methods.py --fail-over 0` exit 0, **over-limit 0,
-782 classes scanned** (781 last round — the count moved by exactly the one class added, so
-the census was not blind), largest method 7,702. `partition-equivalence` **EQUIVALENT: all
-78 files agree**, floor **59 ms [63, 59, 54, 53]** against the recorded 61 ms band.
-`capture-equivalence` **1,003 spans / 43 of 76 files / `narrowRendersMoreAny` 0** and
-**BOTH DIGESTS UNMOVED** (`full=-7005799195003297838`, `narrow=-1948231081793666447`) —
-the expected result, since the trees are equal by construction, and the one gate that
-would have caught a tree that is NOT the one `Project` used to parse.
-
-**(INC.35) WAS DECIDED BY THE OWNER THIS ROUND: OPTION (b), PER-BUFFER ONLY**, closed as
-a decision rather than an implementation — see its queue entry.
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
@@ -2697,7 +2622,38 @@ a decision rather than an implementation — see its queue entry.
   `DestructuredReceiverTypeTest` (21), `NestedAccessReceiverTest` (15),
   `UnannotatedLocalReceiverTest` (16).
 
-- [ ] **(CHK.47) THE THREE (CHK.46) LEFTOVERS, all measured, none a block-scoping gap.**
+- [x] **(CHK.47) DONE 2026-08-26 — (i) CLOSED and it was THREE mechanisms, not one; (ii) HALF
+  closed; (iii) TRIAGED into five groups, one of them already closed. knip 66 -> 49, seventeen
+  false positives, every one confirmed silent in tsgo.** (i)'s fourth shape (an ORDINARY
+  ANNOTATED body-local `const` shadowing a file-level one) was not in the item at all, and the
+  destructured-parameter shape belongs to `spineExEnterNode` (the B431 expando anchor) rather
+  than the property-access family. (ii) the NESTED composition is closed
+  (`cmamBlockScopedPathType`); the DESTRUCTURING one stays open at
+  `typeCaptureDestructured`'s VariableDeclaration arm, which is shared with the (API.3d)
+  capture channel. (iii) the eleven are really TEN in FIVE groups — see the round note; only
+  the `let` binding wakes with the CORRECT type, and it is (CHK.44)'s measured
+  3-false-positive population. 14 ablation arms; one leg deleted as dead; one arm's only
+  uniquely-its-own failure is a knip ROW. Suite **16,067/0/3**, grid `added=0 removed=0` on
+  all eight, `cost_gate` unrebaselined. Pins: `ShadowedReceiverTypeTest` (9),
+  `BlockScopedPathReceiverTest` (8).
+
+- [ ] **(CHK.48) THE (CHK.47) LEFTOVERS — one composition, five refusal groups, two
+  emissions.** (a) the DESTRUCTURING composition `const c = h; const { inner } = c;
+  inner.zzznope`: `typeCaptureDestructured`'s VariableDeclaration arm reads
+  `getTypeOfExpression(initializer)` and answers `any`; the helper is SHARED with the (API.3d)
+  capture channel, so the substitution must be local to `cmamDestructuredReceiverType` and
+  needs a depth guard against `cmamDestructuredReceiverType -> cmamBlockScopedPathType ->
+  cmamDestructuredReceiverType`. (b) refusal group 4 — a `let` binding is the ONLY one of the
+  ten that wakes with the correct type, and it is exactly (CHK.44)'s 3-false-positive
+  population, so it needs the reaching-definition question answered rather than a dropped
+  guard. (c) group 1 (a union source, a class instance) needs type CONSTRUCTION — lifting the
+  guard yields `Inner` for `Holder | Inner` and `typeof Cls` for `Cls`. (d) an ARRAY-pattern
+  binding is typed as a receiver nowhere. (e) TS18048 is not emitted beside our TS2339 for an
+  optional destructured member. Grade any attempt on the 8-profile grid AND knip; the standing
+  calibration is now knip **49** and grid `added=0 removed=0`.
+
+- [x] **(CHK.47-ORIG) SUPERSEDED — kept verbatim because its (i)/(ii)/(iii) framing is what the
+  round corrected. THE THREE (CHK.46) LEFTOVERS, all measured, none a block-scoping gap.**
   (i) **an outer-binding COLLISION defeats the shadow** — a body-local `const { inner } = h`
   under a file-level `const inner: Deep` reports `Deep` for an `Inner`, and a destructured
   parameter named like a file-level function reports `typeof alpha` for a `string`. PRE-EXISTING
