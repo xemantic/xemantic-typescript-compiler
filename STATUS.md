@@ -1,6 +1,63 @@
 # Status
 
 
+**A MODULE FILE'S OWN `interface Text` WAS MERGED *INTO* THE DOM `Text` — PROGRAM-WIDE,
+IN BOTH DIRECTIONS, AND SILENTLY (2026-08-26, (CHK.49)).** `mergeSingleSymbol` ADOPTS
+(round 884: `globals[name]` IS the binder's object), so one module's declaration grew the
+LIB symbol's declaration list and every OTHER file then saw the fusion — a file that never
+mentions the shadow included. The dangerous direction is the quiet one: the module-local
+interface ANSWERED the lib type's members, so a wrong member read went unreported.
+**Measured population: every lib global name — 185 for a plain `es2020` project, 2,242 with
+`dom`** — and every declaration form is affected (`interface`, `type`, `class`, `enum`,
+`const`), which retires the queue item's own claim that a `type` alias was correct.
+**`jsonrepair` 3.13.1: 11 -> 4 rows**, all 7 of its TS2345 gone; they are its
+`export interface Text { charCodeAt }` colliding with the DOM global, exactly as (CHK.32)
+predicted when it withdrew its own attribution.
+
+**THE TWO HALVES ARE ONE OBSERVABLE, AND EACH ALONE IS *WORSE* THAN THE PAIR.** Retiring
+the merge alone is round 510's 861-FP disaster re-measured as **969 errors on the compiler
+profile**; routing the name per-file alone changes nothing, because the merge still
+corrupts the lib symbol. Together: **46**, unmoved. The per-file half needed no new
+machinery — `perFileScope` already seeds every file with the lib symbol and lets the
+declaring file's own local override it.
+
+**THE VALUE MEANING SURVIVES A TYPE-ONLY SHADOW, AND *WHERE* THAT SECOND CHANCE SITS IS THE
+WHOLE OF IT.** `interface Map<K,V>` in a module hides the lib TYPE and leaves
+`declare var Map: MapConstructor` reachable. The first cut asked below
+`fileLocalTypeMapFor` — a map keyed by the file's own declarations, i.e. by the shadow —
+so both sites measured **DEAD** (arm a3: 0 red of 11 pins, profile 46) while `Date.now()`
+grew a fresh TS2339. Hoisted above it, and the dead lower site deleted; that also closed a
+false positive the PARENT had (`zzzTakes(Date)` against a `DateConstructor` was TS2345 on
+both binaries before, silent now, matching tsgo).
+
+**AND ONE PRE-EXISTING GAP FELL OUT: `resolveHeritageBaseSymbol`'s Identifier root was a
+raw `globals` consult**, so `class Promise<R> implements Promise.Thenable<R>` resolved
+ONLY because the name collided with a lib global and the merge fused the two — the
+identical shape spelled `Zromise` found nothing, on the parent binary. Node-keyed now, like
+the three heritage sites that call it.
+
+**GATES.** Suite **16,101 / 0 / 3** (+14, exactly the new class), **zero corpus baselines
+moved**. `cost_gate.py` **PASSES with NO rebaseline**, exit 0 — `output.errors` **46**,
+`spine.nodes` +0.00%, largest movement `narrow.memoServed` **+0.69%** and
+`typeOfExpr.calls` +0.59%, both identical to (CHK.32)'s, i.e. this change contributes
+0.00% on that profile. `huge_methods.py --fail-over 0` exit 0, **783** classes scanned.
+`partition-equivalence` **EQUIVALENT, all 78**, floor **55 ms** [50, 55, 50, 60] (one
+draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** —
+the standing state, unmoved. 8-profile grid, both arms from binaries built this session
+with a `javap` positive control: **`added=0 removed=0` on all eight**. **knip @ `dc7aca5`
+49 -> 49, byte-identical — and that is a CONFIGURATION fact, not an absence**: knip shadows
+five lib names (`File`, `Performance`, `Plugin`, `Report`, `caches`) and its tsconfig says
+`"lib": ["esnext"]`, so none of them is a global there.
+
+**EIGHT ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT AND EACH
+CLASS-CHECKSUM VERIFIED.** a0 (the whole change reverted; parent rebuilt this session,
+`javap` 0 vs 2) **5 RED — every positive pin**. a1 (merge not retired) **5**; a2 (no
+per-file routing) **5 + profile 969**; a3 (the value second chance back below the type map)
+**1**; a3b (deleted outright) **1**; a4 (drop the callee-position chance) **2**; a5 (revert
+the heritage root) **2**; a6 (drop the alias hop) **1 uniquely its own**; a7 (drop the
+value-meaning refusals) **2**. **a8 (`lib === local`) read 0 RED and is DELETED rather than
+shipped un-gateable** — it is provably unobservable, and the proof is in the KDoc.
+
 **A PRIMITIVE SOURCE NOW RELATES TO AN *ANONYMOUS* OBJECT TARGET THROUGH ITS WRAPPER
 INTERFACE — 8 OURS-ONLY ROWS OF A 14-ROW tsgo MATRIX, GONE (2026-08-26, (CHK.32)).**
 `string` carries `charCodeAt`/`length`/`substring` because `String` declares them, so
@@ -234,63 +291,3 @@ but by the LAST clause, because an enum-flavoured type resolves to no members an
 (CLAUDE.md: an enum's members live on `Symbol.exports` and on no type at all). So a5 and a8 read
 **0 RED and are REDUNDANT GUARDS, recorded as such rather than claimed** (round 807) — and the
 enum pin is NOT blind, since a2 reddens it.
-
-**A BLOCK-SCOPED LOCAL WITH A UNION ANNOTATION WAS NOT A RECEIVER AT ALL — `function f() {
-const c: A | F = u; c.files }` REPORTED **NOTHING** WHERE tsc 7.0.2 REPORTS TS2339 (2026-08-26,
-(CHK.44)).** CLAUDE.md's B83.5 is the whole cause: `Binder.bindStatement` binds no declaration
-nested in a block, so `lookupPerFileForNode` answers null, `getTypeOfIdentifier` falls through to
-`anyType`, and every gate below it bails. It held in a function, a method, an arrow, a nested
-function, a nested block and a file-level block, for `const`, `let` and `var` alike. The receiver
-is now read back out of the INV.2(c) lexical scope tables (round 748's `lexicalScopeSymbol`,
-`LexicalScope.symbols` only, so a hit is BY CONSTRUCTION a name the conventional tables do not
-have) at the ONE call that asks whether a property exists on it.
-
-**THE QUEUE ITEM'S MEASURED BOUNDARY WAS DIFFERENT FROM ITS STATED ONE, IN BOTH DIRECTIONS.**
-(CHK.41) recorded "3 of 4 shapes — file-level `const`, `let`, and inside an arrow — are silent;
-only a parameter is checked". Re-measured against tsgo: a **file-level** `const`/`let` IS checked
-(one of the round's first probes read otherwise because the receiver was named `top`, which
-collides with the DOM global), and the real axis is **declared in a block**. Four further
-populations were censused and are still silent, three of them by DECISION and one measured for
-the first time: a member on **NO** constituent (a different emitter), an **un-annotated** local,
-a **destructured** local, and a nested access `c.files.nope`.
-
-**TWO REFUSALS, BOTH MEASUREMENTS RATHER THAN ARGUMENTS.** A NULLISH union (`T | undefined`) is
-refused: without that guard the 8-profile grid gains **11 rows on the compiler profile and 16 on
-harness**, `removed=0`, and tsgo reports NONE of them — every site is a `let x: T | undefined`
-the code narrows before use. A NON-union declared type is refused: it is decided by the `else`
-branch, which consults no narrowing at all, and supplying it costs **3 rows** on
-services/server/harness (`let next: Symbol` narrowed by a type guard inside a `while` condition).
-`const`-ness is NOT a guard — refusing `let`/`var` measured `added=0 removed=0` on all eight, so
-it was redundant and cost the `let` shape the item names. **A FIRST CUT THAT WROTE THE ANNOTATION
-INTO `currentLocalTypes` WAS REVERTED**: it closed the same population and cost two corpus
-baselines, because that map is read by every consumer of the pass — a TS18048 from the optional
--property emitter and another from B136's chaining arm, both the same missing narrowing reached
-through consumers this round does not fix.
-
-**THREE OF THE TWENTY PINS WERE VACUOUS AND ONLY A CONTROL PROBE PER SHAPE SAW IT.** `c.nope` — a
-member on NEITHER constituent — is silent for a block-scoped local whatever this round does, so
-every negative written that way stayed green with its guard ablated (a3 read `0 RED`);
-`A | undefined` + `files` reports TS18048, not TS2339; and the global-shadow suppression does not
-even fire on `const isNaN` under the embedded lib. This class **is** the vacuity trap (CLAUDE.md,
-(CHK.41)), so the two shapes that were ALWAYS green — a file-level declaration and a parameter —
-are in it under names that say they are controls.
-
-**GATES.** Suite **15,979 / 0 / 3** (+20, exactly the new class), **zero corpus baselines moved**.
-`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
-largest movement `typeNode.cacheHits` **+1.96%** (one annotation resolution per reached
-block-scoped receiver). `huge_methods.py --fail-over 0` exit 0, **783** classes scanned.
-`partition-equivalence` **EQUIVALENT, all 78**, floor **65 ms** [79, 61, 65, 61] (one draw).
-`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — the standing
-state, both digests unmoved. 8-profile grid against a REBUILT parent, `javap` positive control:
-**`added=0 removed=0` on all eight**. **knip 66 -> 66, every row byte-identical.**
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT.** a1 (the helper
-answers null) **10 RED — every positive**; a2 (drop the `currentLocalTypes` suppression refusal)
-**1**; a3 (drop the nullish refusal) **1**; a5 (drop the single-declaration refusal) **1**.
-**a4 and a4b each read `0 RED` and are a round-927 PAIR** — the union refusal and the ABSENCE of a
-second injection point block the same 3-row services false positive, so neither reddens alone and
-only **a4c (both together) reddens 1**. **a6 and a7 read `0 RED` and are REDUNDANT GUARDS,
-recorded as such rather than claimed** (round 807): a6 is refused a second time by
-`valueDeclaration as? VariableDeclaration`, a7 because every shadow registrar writes
-`currentLocalTypes` too.
-

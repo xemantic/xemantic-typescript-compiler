@@ -1,3 +1,238 @@
+### Round (CHK.30) — the 89 TS7006 were never a contextual-typing defect: **a type imported from a `node_modules` package resolved to `any`**. knip **156 -> 66**, TS7006 **89 -> 1**
+
+**THE ENTRY'S DIAGNOSIS WAS WRONG, AND ITS OWN EXAMPLE WAS A VICTIM RATHER THAN AN
+INSTANCE.** (CHK.30) named "an object-literal method's parameters are not contextually
+typed" and quoted `createExecaVisitor(): PluginVisitorObject { return { TaggedTemplate…(node)
+{…} } }`. Written out by hand that shape is SILENT on a pre-fix binary — so is the
+optional-property form knip actually uses (`interface V { m?: (n: N) => void }` with
+`{ m(node) {…} }`), so is the mapped-type form, the `satisfies` form, the argument form and
+the `Partial<>` form. A 56-case matrix found only four failing shapes and none of them was
+knip's. What knip's really is: `PluginVisitorObject = VisitorObject`, and `VisitorObject`
+comes from `'oxc-parser'`.
+
+**THE MECHANISM.** The crawl resolves a bare specifier correctly and the package's `.d.ts`
+really is in the program (`files: 1 root, 2 in program` either way) — the CHECKER then
+re-derives which file a specifier names by string-matching it against the program's file
+NAMES (`resolveModuleSpecifier` + its relative siblings), and that corpus-era matcher
+cannot express a bare specifier at all: a package's `types` / `main` / `exports` entry is
+not a string transformation of `pkg`, and the non-relative path deliberately refuses
+`.d.ts` so that `foo` cannot capture an ambient `foo.d.ts`. So EVERY import alias into a
+package resolved to nothing and every type it named became `any`. **Fifteen lines
+reproduce it** and the reduction is the whole finding: a `node_modules/tiny/index.d.ts`
+exporting one interface and one function, imported bare, gives us **0 errors** where tsgo
+gives TS2305 + TS2322 + TS2345 + TS2353.
+
+**IT FAILS IN THE SILENT DIRECTION AND THAT IS WHY IT SURVIVED.** `any` is legal
+everywhere, so nothing MOVED at the import — no TS2307, no TS2305, no wrong type. The only
+thing that surfaced was the false-positive SHADOW: TS7006 on every un-annotated callback
+parameter whose contextual type lived in the package. 89 of knip's 156 rows, read as a
+contextual-typing family for three days.
+
+**WHAT LANDED.** `ParsedSource.moduleResolutions` carries the crawl's own
+`(importer, specifier) -> file` map into the `Checker`; `resolveImportTargetFallback`
+consults it as the LAST leg of all ten import-alias target ladders. Purely additive — it
+can only make more specifiers resolve, never redirect one that already resolved — and a
+corpus fixture cannot reach it (the map is empty off the project path).
+
+**THE FIRST CUT ALSO CONSULTED THE `node_modules` WALKERS ~15 OTHER CHECKER SITES USE, AND
+ABLATING THAT LEG AWAY IS `0 RED` ACROSS THE WHOLE 15,883-TEST SUITE** — wherever those
+walkers could answer, the crawl has already answered better, and the ladders never had the
+leg before this round. Rather than ship a leg no gate here can fail, the leg was removed
+(commit 3); the memo went with it, because what is left is two map gets. A redundant guard
+recorded as one, per round 807.
+
+**A SECOND, SMALLER DEFECT LANDED WITH IT.** A concise-body arrow's OWN return annotation
+was not a contextual type for its body, in EITHER the implicit-any walker
+(`spineIanyEdgeEnter`'s ArrowFunction arm read only the inherited contextual signature's
+return type, round 472) or the property-access walker (`cpaExprArrowFunction`'s `bodyCtx`).
+A BLOCK body always had it — `spineIanyReturnCtxAt` reads the enclosing function-like's
+`type` at the `return` edge — so `(): V => { return {…} }` was correct and
+`(): V => ({…})` was not, which is why nobody noticed: the two spellings are
+interchangeable to a reader and only one of them is checked. Worth 4 more knip rows, and
+the curried factory `(dep: D): Handler => (a, b) => …` is the idiom that pays.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE FINDING.** The first version
+of the arrow fix touched only the implicit-any walker. It silenced every TS7006 the queue
+entry asked about — and the POSITIVE half of the probe then showed it had typed nothing:
+`(): V => ({ m(node) { const bad: string = node.kind; } })` stayed silent where tsc reports
+TS2322. Pushing on that found something larger than the fix: **the same is true of every
+contextually-typed parameter this checker already "supported"**, back to the plain arrow
+ARGUMENT — `take((node) => { const bad: string = node.kind; })` is silent here and TS2322
+under tsc, as is `{ m(node) { node.nope; } }` against an annotated const. Contextual typing
+here supplies an ARITY (B224's rule, which is what decides TS7006) and does not put the
+parameter into the scope the assignability walkers read. That is queued as **(CHK.39)**
+with the six-line probe; the four further contextual SOURCES the matrix found are
+**(CHK.40)**. The (CHK.30) fix is therefore a false-POSITIVE fix with a known
+false-NEGATIVE behind it, and both test classes say so in their KDoc rather than leaving a
+future round to discover it.
+
+**THE PINS ARE SHAPED BY THE SILENCE.** Neither defect can be pinned by "the TS7006 went
+away" — that passes against a binary that disabled the diagnostic.
+`ProjectPackageTypeResolutionTest` (5, `-project`) requires an excess property, a wrong
+argument and a wrong return to be REPORTED through a package import; its fixture's
+declarations sit at the path its `types` field names, which ONLY the crawl's answer can
+reach (the checker's own walkers try `index.d.ts`, and the walker that reads a
+`package.json` cannot see this one — a manifest is not an import target, so it never enters
+the program's JSON contents). `ContextualReturnAnnotationTest` (7, core) pins the ARITY:
+the parameter the annotation covers is quiet while the one BEYOND it still reports.
+
+**ABLATION, one mistake per arm, each diffed against its own snapshot (round 922) and each
+rebuilt after restore (the (CHK.31) lesson).**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the crawl-map leg never answers | **4** — the three package positives + the object-literal silence pin; the negative control stays green |
+| a2 | the `node_modules` walker legs deleted | **0** of 23 pins, and **0 of 15,883** on the full suite — REDUNDANT GUARD, and the reason those legs are not in the shipped change |
+| a3 | the implicit-any walker forgets the arrow's own annotation | **5** — every `ContextualReturnAnnotationTest` pin |
+| a4 | the property-access walker forgets it | **1** — the precedence pin, uniquely |
+| a5 | the inherited context OUTRANKS the own annotation | **1** — the same pin |
+
+a4 and a5 have the SAME red set, so they are ONE observable, not two (round 927): the
+precedence pin cannot separate "never consulted the annotation" from "consulted it and
+ranked it second". Recorded rather than claimed. a2 is a REACHED-but-inert arm, not a dead
+one (round 902): the function runs, the walkers simply never get to answer.
+
+**GATES.** Suite **15,883 / 0 / 3** (+12 pins over the 15,871 baseline, exactly the two new
+classes), **zero corpus baselines moved**. `cost_gate.py` PASSES, `output.errors` **46** —
+and here it was a real gate rather than a control, since contextual typing runs on tsc's
+own sources: the vector is the standing one (`mapped.hits` +1.63%, `typeNode.bypassed`
++0.65%, `mapped.keyed` +0.66%, all inherited from a baseline ~242 commits stale) plus two
+new sub-percent movements that are the change itself, `typeOfExpr.calls` **+0.18%** and
+`narrow.walks` **+0.05%** — one extra annotation resolution per reached concise-body arrow.
+Not rebaselined: everything is far inside ±2%. `huge_methods.py --fail-over 0` exit 0,
+**783 classes scanned** (unchanged, correctly — this round adds no class, and its two new
+methods live in `Checker`, which is scanned). `partition-equivalence.sh` **EQUIVALENT, all
+78 files**, floor **57 ms** [54, 57, 57, 53]. `capture-equivalence.sh` **1,003 spans / 43 of
+76 files / `narrowRendersMoreAny` = 0** with **both digests BIT-IDENTICAL**
+(`full=-7005799195003297838`, `narrow=-1948231081793666447`). `round895-grid.sh` 8 profiles
+`added=0 removed=0`; and a BEFORE/AFTER 8-profile grid against a rebuilt parent (positive
+control: `javap` finds `resolveImportTargetFallback` **0** times in the before arm and
+**1** in the after) is **`added=0 removed=0` on all eight**.
+
+**knip, measured rather than estimated.** It is not on this box; the box has network, so
+`webpro-nl/knip@main` was fetched and its 20 dependencies pulled from the npm registry
+(`curl` + `tar`; there is no `node` here). The pre-fix binary then reproduces
+`docs/kir-library-readiness.md`'s recorded residual EXACTLY — **156 errors, TS7006x89** —
+which is what licenses reading the delta. After: **66 errors, TS7006x1**, ours-only rows
+**147 -> 59**, and the set of rows that appeared only in the AFTER arm is **EMPTY**. The
+one surviving TS7006 is `plugins/gatsby/index.ts:37`; the indexed-access annotation it
+looks like is not the cause (that shape is clean in a fixture), so it is unattributed.
+Numbers are one draw each; the counts are deterministic, the `time:` figures are not.
+
+### Round (CHK.29) — a file's module format now comes from the nearest `package.json` `"type"`: **2,478 false positives on knip go to ZERO**, and every standing gate in this repo is blind to it
+
+**THE DEFECT AND WHY IT WAS INVISIBLE.** Under `module`/`moduleResolution: nodenext`
+(and `node16`) tsc decides whether a plain `.ts` file is an ES module or CommonJS by
+walking up to the nearest `package.json` and reading its `"type"`. We had the
+CONSUMER — `CompilerOptions.packageJsonTypes` plus the ancestor lookup inside
+`isESModuleFormat(options, fileName)` — and exactly ONE producer,
+`collectPackageJsonTypes`, which reads `package.json` entries out of the PARSED
+SOURCE SET. **A real project has no `package.json` among its inputs**, so on every
+`ProjectCompiler` build the map was empty, every file was classified CommonJS, and
+every ESM import and export tripped `verbatimModuleSyntax`. On knip that is
+TS1295x1,959 + TS1287x519 = **2,478**, i.e. 94.1% of that library's errors from one
+absent lookup ((LIB.1)).
+
+**THE STRUCTURAL BLINDNESS, STATED AS A COUNT: the eight dashboard profiles hold
+`0` `package.json` files between them** (`find … -name package.json` over all eight
+= 0), and the corpus harness materialises no directory at all. The new walk DOES run
+on those profiles — the compiler profile is `"module": "NodeNext"` — it simply finds
+nothing, so `added=0 removed=0` on the grid, `output.errors 46` on `cost_gate.py`
+and a green 15,870-test suite are the EXPECTED answers and **none of them is
+evidence**. `ProjectPackageJsonTypeTest` (11 pins, `-project`, through a real
+`ProjectCompiler` + `Vfs`) is the instrument; the six gates are controls.
+
+**WHAT LANDED.** `ProjectCompiler` walks the `Vfs` up from each program file's
+directory, memoized on DIRECTORIES (the answer is a property of the directory, and a
+directory whose scope is already located terminates every later walk that reaches
+it), gated on `effectiveModule.isNodeNext`. Reading through the `Vfs` and not a real
+filesystem is what puts the language service's overlay on the same path — pinned:
+overlaying a `package.json` that exists nowhere on disk flips the project's format on
+the very next query.
+
+**TWO CORRECTIONS THE FIXTURES FORCED, BOTH READ OUT OF `tools/tsgo-7.0.2` RATHER
+THAN HAND-WRITTEN.**
+1. **A `package.json` with NO `"type"` field ESTABLISHES the scope, at CommonJS.**
+   tsc's walk stops at the first manifest it meets, so it must NOT fall through to a
+   `"type": "module"` ancestor — measured: outer `module` + inner `{ "name": … }`
+   reports the three CommonJS rows in tsgo. Both producers now record `false` there;
+   an ABSENT key is the different fact ("no manifest here") that continues the walk.
+   `collectPackageJsonTypes` used to `continue`, i.e. had this wrong.
+2. **The manifest is read through `LENIENT_JSON`, not a `"type"\s*:\s*"…"` regex.**
+   knip's own manifest is the counter-example on disk: its first three `"type"`
+   matches are `repository.type: "git"` and two `funding[].type`, and a first-match
+   regex answers `"git"` -> CommonJS for a package that is `"type": "module"`. The
+   scan looks correct and is worth all 2,478 rows on its own.
+
+**MEASURED, ONE DRAW EACH.** All seven disk fixtures agree with tsgo 7.0.2 error for
+error after the fix (they agreed on the CommonJS rows POSITION-for-position before
+it, which is what isolates the defect to the format decision alone). knip @ `dc7aca5`,
+no `node_modules` installed: **2,634 -> 309**, TS1295+TS1287 **2,478 -> 0**; of the
+309, 147 are environmental (TS2591x87 + TS2584x60, missing `@types/node`) and the
+rest reconciles with (LIB.1)'s recorded residual of 156 plus this session's own six
+new TS2578. Emit was checked too, in both directions and byte-identical to tsgo:
+with `"type": "module"` we emit `import { x } from "./a.js"`, without it the
+`require`/`exports` form.
+
+**GATES.** Suite **15,871 / 0 / 3** (baseline 15,860, `+11` = the ten pins written
+before the fix and verified RED against it, plus the eleventh in a follow-up commit;
+re-run after the ablation restored the tree, and the build is warning-clean). `cost_gate.py`
+`output.errors 46`, every counter inside ±2% (the standing `mapped.hits +1.63%`
+drift is unchanged and unrebaselined — the vector did not move). `huge_methods.py
+--fail-over 0`: **783 classes scanned, 0 over the limit** (783 is unchanged, which
+is correct here: the change adds methods to existing core classes, not classes).
+`partition-equivalence.sh`: EQUIVALENT, all 78 files, floor **60 ms** `[53, 58, 60,
+65]` against last round's 59 — the walk runs on this profile and costs under a
+milli. `capture-equivalence.sh`: **1,003 spans / 43 of 76 files /
+narrowRendersMoreAny 0**, and BOTH digests bit-identical to the recorded baseline.
+`round895-grid.sh`: 8 profiles, `added=0 removed=0` on every one.
+
+**ABLATION — SIX ARMS, ONE MISTAKE EACH, each file compared against the arm's OWN
+SNAPSHOT (round 922).**
+
+| arm | the mistake | RED |
+|---|---|---|
+| a1 | never populate the scopes (the defect restored) | **5** — the four `"type": "module"` pins + the extension pin |
+| a2 | a typeless manifest does not establish a scope | **2** — *stops the walk*, *nearest wins* |
+| a3 | first-match regex instead of the JSON parser | **1** — *a nested type key does not decide the scope* (uniquely) |
+| a4 | the OUTERMOST manifest wins instead of the nearest | **2** — *stops the walk*, *nearest wins* |
+| a5b | scopes memoized process-wide | **5** |
+| a5c | memoized process-wide keyed by the program's FILE SET | **3** |
+| a6 | the `isNodeNext` gate removed (walk runs under every module kind) | **0** |
+
+**WHAT THAT ABLATION SAYS HONESTLY.** a3 is the only arm with a uniquely-its-own
+pin. a2 and a4 are INDISTINGUISHABLE from each other by any pin here — both turn a
+nearest-scope answer into an outer-scope one — so they are recorded as ONE
+observable rather than claimed as two (round 927's law). **a6 is red NOWHERE: no
+output gate in this repository can see the `isNodeNext` gate, because removing it
+only spends `Vfs` reads under a module kind whose answer the map cannot change.**
+And **arm a5 as first written was a DEAD ARM, not a blind pin**: it cached the scopes
+in a `ProjectCompiler` INSTANCE field, and `Project` constructs a fresh
+`ProjectCompiler` for every build, so the field could never survive — round 902
+exactly, and it printed `0 RED` which reads identically to a redundant guard. a5b/a5c
+are its reachable replacements; neither reddens the overlay pin ALONE (their memo
+leaks between fixtures that share a file set), so the overlay pin's discrimination is
+recorded as real but not unique.
+
+**SCOPED OUT, WITH WHAT WAS CHECKED.** `impliedNodeFormat` has more consumers in tsc
+than the one this item fixes, and they were audited rather than assumed:
+- **The `.mts`/`.cts`/`.mjs`/`.cjs` extension overrides were ALREADY correct** and
+  are decided ahead of the lookup. They are now a REGRESSION pin (tsgo agrees on
+  both directions), not a claim about new work.
+- **TS1479 / TS1471 / TS1286 / TS1203 / TS1202 — the "a CommonJS file cannot import
+  an ES module" family — are not implemented at all here** (`grep 'code = 14…'`
+  finds none), so correctly classifying files opens no new false-positive surface
+  from them. Queued as (CHK.36).
+- **`ModuleResolver` does not condition `exports`/`imports` on the importing file's
+  format** — it reads neither `isESModuleFormat` nor `effectiveModule` — so the
+  `"import"` vs `"require"` condition is unmodelled. Queued as (CHK.37); it is the
+  one with a real blast radius, because it decides which file a bare specifier
+  resolves to in a dual-published package.
+- **`esModuleInterop`'s 56 `Checker.kt` sites are gated on the global option, never
+  on the two files' formats**, where tsc makes a synthetic default available to an
+  ESM file importing a CommonJS one under node16/nodenext. Unmeasured; queued as
+  (CHK.38) rather than guessed at.
+
 ### Round (INC.38) — DOC-ONLY: the host-facing recommendation ("ask for the whole open set in one call") is written down, with its numbers traced to their actual source
 
 
