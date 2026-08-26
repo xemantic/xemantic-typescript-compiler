@@ -79,6 +79,35 @@ import kotlin.test.Test
  * one `PLAN-PHASE-5.md` had already flagged as "a resolution/collision, not
  * narrowing" and left uncharacterized.
  *
+ * ### THE ARMS — one mistake each, each diffed against the arm's OWN snapshot,
+ * each anchor asserted unique
+ *
+ * | arm | mistake | RED |
+ * |---|---|---|
+ * | a1 | `cmamLexicalValueShadow` returns false | 4 — A, B, C, D |
+ * | a2 | drop the `perFileIdentSymbol != null` conjunct | **0 pins**, −1 knip row |
+ * | a3 | `cmamShadowReadingWins` accepts any recorded type | 1 — D |
+ * | a4 | the shadow route falls through instead of refusing | 1 — G |
+ * | a5 | `spineExBindingNameShadows` handles only an Identifier | 3 — B, E, E2 |
+ * | a6 | only its ARRAY arm off | 2 — E, E2 |
+ * | a7 | round 512's bail restored unconditionally | 1 — C |
+ * | a8 | drop the single-declaration refusal | **0** |
+ * | a9 | drop the declaration-KIND whitelist | **0** |
+ * | a10 | `cmamDestructuredReceiverType` ignores `shadowed` | **0** — LEG REMOVED |
+ * | a11 | `cmamUnannotatedLocalReceiverType` ignores `shadowed` | 1 — C |
+ *
+ * a2's uniquely-its-own failure is a knip ROW and not a pin: without it a
+ * `catch (error)` reached through an `in` guard goes silent, because `lexicalShadow`
+ * would fire where there is no outer declaration to lose to. a8 and a9 are
+ * REDUNDANT GUARDS TODAY (round 807) and are kept as documented conservatism — the
+ * populations they protect (a merged symbol; a type parameter, a block-scoped class
+ * or an import in the lexical tables) are ones no fixture here can build without
+ * asserting a wrong answer in BOTH arms, and knip does not reach them either. a10
+ * was measured inert on the pins, on knip AND on the 8-profile grid, so the leg was
+ * DELETED rather than shipped un-gateable: inside round 512's bail that call is a
+ * constant null by construction, since the branch is entered only for a name that is
+ * already in `currentShadowedNames`.
+ *
  * ### VACUITY
  *
  * Every one of the four pins FAILED on a parent binary rebuilt in this session, and
@@ -166,6 +195,30 @@ class ShadowedReceiverTypeTest {
                 "export function f() { const [alpha] = [1]; use(alpha.zzznope); }"
         )
         assert(d.none { it.code == 2339 && it.message.contains("typeof alpha") })
+    }
+
+    /**
+     * THE REFUSAL AT THE END OF THE SHADOW ROUTE. When a shadow is established and
+     * NEITHER block-scoped helper can name the inner binding's type, the route stops
+     * rather than letting `getTypeOfIdentifier` answer — which would restore exactly
+     * the outer reading the round removes.
+     *
+     * A REST element is the cheapest shape that reaches it: `cmamDestructuredReceiverType`
+     * refuses one (its type is the source minus the named members, which that helper
+     * does not compute), and the name is not in `currentLocalTypes`, so the fallback
+     * would resolve the file-level `const inner: Deep`. tsgo reports
+     * `{ inner: Inner; }` here and we are silent — a known false negative — but the
+     * pin owns the direction that matters, and arm a4 (fall through instead of
+     * refusing) is what reddens it.
+     */
+    @Test
+    fun `G - a REST element under a colliding file-level const must not report the outer type`() {
+        val d = diagnose(
+            prelude + "interface H2 { inner: Inner; other: number }\ndeclare const h2: H2;\n" +
+                "const inner: Deep = dcl;\nuse(inner.beta);\n" +
+                "export function f() { const { other, ...inner } = h2; use(inner.zzznope); }"
+        )
+        assert(d.none { it.code == 2339 && it.message.contains("'Deep'") })
     }
 
     // --- CONTROLS -------------------------------------------------------------

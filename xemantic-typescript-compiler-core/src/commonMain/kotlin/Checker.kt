@@ -144497,11 +144497,9 @@ interface DataView {
             // at file level beside a body-local `const cc = h.inner` was SILENT for
             // `cc.zzznope`, where tsc says `Inner`). Where neither answers the bail
             // stands — which is the `deprecate.ts` population it was written for.
-            if (localType === anyType) {
-                if (cmamDestructuredReceiverType(objectExpr, shadowed = true) == null &&
-                    cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true) == null
-                ) return
-            }
+            if (localType === anyType &&
+                cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true) == null
+            ) return
             if (localType != null && localType !== errorType) {
                 val app = getApparentType(localType)
                 if (getPropertyOfType(app, propName) != null) return
@@ -145625,10 +145623,10 @@ interface DataView {
      *    verdict rather than routing round it.
      *  - an unresolved type parameter anywhere in the source or the member type.
      */
-    private fun cmamDestructuredReceiverType(objectExpr: Identifier, shadowed: Boolean = false): Type? {
+    private fun cmamDestructuredReceiverType(objectExpr: Identifier): Type? {
         val name = objectExpr.text
-        if (!shadowed && currentLocalTypes.containsKey(name)) return null
-        if (!shadowed && name in currentShadowedNames) return null
+        if (currentLocalTypes.containsKey(name)) return null
+        if (name in currentShadowedNames) return null
         val element = cmamBindingElementDeclaration(objectExpr, name) ?: return null
         if (element.dotDotDotToken) return null
         val memberName = (element.propertyName ?: element.name) as? Identifier ?: return null
@@ -146145,7 +146143,7 @@ interface DataView {
             // `currentLocalTypes` is exempt because an entry there IS the inner
             // binding's own recorded type (an ANNOTATED body-local `const`).
             val rawType = if (lexicalShadow && cmamShadowReadingWins(identName)) {
-                cmamDestructuredReceiverType(objectExpr, shadowed = true)
+                cmamDestructuredReceiverType(objectExpr)
                     ?: cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true)
                     ?: return null
             } else getTypeOfIdentifier(objectExpr)
