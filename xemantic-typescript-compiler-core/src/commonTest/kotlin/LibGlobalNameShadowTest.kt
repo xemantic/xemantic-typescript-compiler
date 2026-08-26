@@ -188,6 +188,32 @@ class LibGlobalNameShadowTest {
         assert(diagnostics.none { it.code == 2350 })
     }
 
+    /**
+     * …and the value meaning survives in a MEMBER READ and in an ARGUMENT, not
+     * only under `new`.
+     *
+     * The TS2345 half is a POSITIVE pin — passing the shadowed `Date` where a
+     * `DateConstructor` is wanted was a false positive on the (CHK.49) PARENT
+     * too, because the merged symbol's VALUE side lost to its TYPE side there.
+     * The TS2339 half is the refusal direction and its falsifying arm is a3
+     * (the second chance moved back below the file-level type map, where the
+     * shadow's own entry answers first).
+     */
+    @Test
+    fun `a shadowed lib global keeps its value meaning in a member read and an argument`() {
+        val diagnostics = diagnose(
+            """
+            export interface Date { zzzUnique: number }
+            export const zzzNow: number = Date.now()
+            export function zzzTakes(c: DateConstructor) { return c }
+            export const zzzPassed = zzzTakes(Date)
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.none { it.code == 2339 })
+        assert(diagnostics.none { it.code == 2345 })
+    }
+
     /** …and the same when the TYPE-only shadow arrives as an IMPORT rather than a
      *  declaration: the alias is resolved onward before its meanings are read. */
     @Test

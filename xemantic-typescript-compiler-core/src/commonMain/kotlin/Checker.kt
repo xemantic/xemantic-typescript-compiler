@@ -115347,6 +115347,20 @@ interface DataView {
                 // merged globals → FP TS2345 ×9 self-compile. The binding's member type
                 // is unmodeled → anyType (suppression-only).
                 if (id.text in currentParamBindingNames) return anyType
+                // (CHK.49) a module file's TYPE-only declaration of a lib global
+                // does not hide the lib's VALUE meaning, and this function IS the
+                // value position. It must be asked BEFORE the file-level type map
+                // and the file locals, because both are keyed by the shadowing
+                // DECLARATION — `interface Date {…}` in a module made `Date.now()`
+                // report TS2339. It must be asked AFTER [currentLocalTypes] and
+                // the destructured-binding set, which carry genuine inner
+                // bindings that DO shadow in both meanings.
+                if (id.text in libValueShadowNames) {
+                    currentFileLocals?.get(id.text)?.let { local ->
+                        libValueBehindTypeOnlyShadow(id.text, local)
+                            ?.let { return getTypeOfSymbol(it) }
+                    }
+                }
                 // Check pre-built file-level type map (covers annotated file-level declarations)
                 currentCheckFileName?.let { fn ->
                     val fltm = fileLocalTypeMapFor(fn)?.get(id.text)
@@ -115356,9 +115370,6 @@ interface DataView {
                 }
                 // Check file-level locals symbol table (for symbols not in type map)
                 currentFileLocals?.get(id.text)?.let { symbol ->
-                    // (CHK.49) a TYPE-only shadow of a lib global does not hide
-                    // the lib's VALUE meaning, and this IS the value position.
-                    libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
                     val type = getTypeOfSymbol(symbol)
                     if (type !== anyType && type !== errorType) return type
                 }
