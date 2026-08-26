@@ -1,5 +1,45 @@
 # Status
 
+**AN `async` FUNCTION'S *INFERRED* RETURN TYPE IS A `Promise`, AND IT WAS WRONG IN BOTH
+DIRECTIONS — 3 FALSE POSITIVES AND 4 FALSE NEGATIVES ON ONE SEVEN-SHAPE FIXTURE, tsgo 7.0.2
+REPORTING EXACTLY THE COMPLEMENT (2026-08-26, (CHK.40)).** The queue item read its own row (e)
+as "an async object-literal method's parameters are not contextually typed"; measured, the
+parameters were fine and the RETURN TYPE was not — an `async` function-like with no return
+annotation carried its BODY's type, so `async function f() { return 1 }` read `() => number`.
+Wrapped at the **eight** inferred-return sites; an ANNOTATED return type is never touched, a
+GENERATOR is deliberately excluded, and a lib with no `Promise` is bit-for-bit unchanged.
+
+**(c) HAD ITS ROOT ONE LAYER BELOW THE TS7006 WALKER, AND THE FILE ALREADY SAID SO.**
+`getTypeOfSymbolWorker`'s MethodDeclaration arm read `decl.name as? Identifier` and answered
+`anyType` for anything else — a residue round 937 named and left — so
+`interface VS { "m-x"(node: N): void }` had that member **present and typed `any`** while the
+property form was byte-correct. It now takes the name with `declaredMemberName`, the same
+helper that REGISTERED the member. (a)/(b)/(d) are one new arm: the contextual type of a
+`return` POSITION (the enclosing function's annotation, else the signature that contextually
+types it, with one `Promise<>` stripped when it is `async`), fed through an index-aware array
+arm so a TUPLE contributes its own slot.
+
+**THE ROUND'S BIGGEST FINDING DID NOT SHIP: A FUNCTION BODY NESTED IN A `return` EXPRESSION IS
+NOT CHECKED AT ALL** — the ONE expression position that does not reach
+`walkFunctionBodiesInExpr` (a var-decl initializer, a call ARGUMENT and an object-literal
+property value all do). With the two-line arm in, both probes reach FULL PARITY with tsgo, the
+corpus stays 15,928/0/3 and **knip stays 66 with every row identical** — and the grid gains
+**3 rows**, so it is queued as **(CHK.42)** with the cost characterized rather than shipped.
+One of those 3 is **(CHK.43)**, a SHIPPED false positive the walk merely exposes: a chained
+`x as unknown as T` in a `return` keeps the INNER assertion's type when the annotation is a
+≥3-member union, reachable today at top level in four lines.
+
+**GATES.** Suite **15,928 / 0 / 3** (+23 pins over 15,905: 18 core + 5 hover), **zero corpus
+baselines moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**,
+largest movement `mapped.hits` **+0.74%**. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **79 ms** [79, 87, 56,
+56] (one draw). `capture-equivalence` **1,005 / 43 / moreAny 0** — the standing state — with
+both digests MOVED and `definitions` 360,336 -> **360,361**, the expected direction. 8-profile
+grid against a rebuilt parent, `javap`-controlled: **`added=0 removed=0` on all eight**. knip
+**66 -> 66** with a BEFORE arm rebuilt in the same session. **Nine ablation arms, each with
+uniquely-its-own failures; a3/a4 partition the return family by LAYER (TYPE vs ARITY) rather
+than by shape.**
+
 **CONTEXTUAL TYPING SUPPLIED AN *ARITY*, NOT A *TYPE* — EVERY CONTEXTUALLY-TYPED PARAMETER IN THIS
 CHECKER WAS `any`, AND A HOVER ON ONE SAID `any` FOR EVERY CODEBASE (2026-08-25, (CHK.39)). The
 item's own six-shape probe went **0 of 6 reported here** to **6 of 6**, matching
@@ -174,33 +214,3 @@ directive-carrying project, `partition-gate` sensitivity arm **EQUIVALENT 76/76*
 and a7 (block-comment inner line) each redden EXACTLY the pin that names them; a8's own pin
 is NOT uniquely discriminating and is recorded as a shared guard rather than claimed.**
 `// @ts-nocheck` is deliberately untouched — a FILE-level switch, not a line-level one.
-
-**THE PROGRAM WAS PARSED *TWICE* AND BOTH COPIES WERE KEPT — LANGUAGE-SERVICE RETENTION
-**264 -> 177 MB (-33%)** (2026-08-25, (INC.36)).** A ten-step subtraction ladder over
-`liveAfterGc` attributed the 264 MB a whole-program `referencesAt` sweep holds:
-`Project.sourceIndexes` **114.7 MB**, the process-global `CrawlParseCache` **103.0**,
-`RealLibSnapshots` 2.6, JVM baseline + lib text + the 9,827 answers 43.7 — and
-**`cached`/`captures`/`prepared`/`narrowed`/`recheck`/`lineMaps` 0.0 MB COMBINED**, so
-every memo (INC.12)/(INC.14)/(INC.32)/(INC.40) added is free and **`close()` frees
-nothing**. The two big rows are ONE program parsed twice at the same bytes under the same
-`computeParserFlags`; the class histogram says it independently — **770,460 `Identifier`s**
-against 856,962 nodes in one copy, i.e. CLAUDE.md's 44.5%, DOUBLED. **The fix deletes one
-copy**: `Project.sourceIndexOf` indexes tokens around the compiler's own crawl tree
-(`parsedSourceOrNull` -> `SourceIndex.around`), nothing writes to the process-global cache
-so round 825's threading discipline is untouched, and a dirty buffer still parses privately
-— which is the CORRECT answer, collected lazily once a build sees those bytes. Measured
-after arm (2 processes): peak **177.0 / 176.4** vs before's **264.0 / 264.6 / 264.5 /
-264.1**, `sourceIndexes` **-27.5 / -27.6** vs **-115.3 / -116.4 / -115.8 / -115.3**, every
-other row unmoved, `Identifier` HALVED to 388,790, **9,827 hits unchanged**. **The
-remaining 27.5 MB is NOT a tree** — ~18 MB of `SourceIndex`'s own token arrays (byte-identical
-before and after) and ~10 MB of a second copy of the source TEXT, a named next lever
-(`SourceFile.text`) left unlanded rather than taken after the gates had run. **FOUR of the
-five gates are CONTROLS and only the ladder is evidence**, because the compiler path never
-calls the new function. Suite **15,835 / 0 / 3** (+4: 3 pins, 1 control), zero corpus
-baselines moved; `cost_gate.py` PASSES with the counter vector identical to last round
-(`mapped.hits` at the standing +1.63%, not moved, not rebaselined); `huge_methods.py
---fail-over 0` exit 0 with over-limit **0** and **782** classes scanned (781 last round, so
-not blind); `partition-equivalence` **EQUIVALENT 78/78**; `capture-equivalence` **1,003 / 43
-/ moreAny 0** with **BOTH DIGESTS UNMOVED**. Also this round: **(INC.35) DECIDED BY THE
-OWNER — option (b), per-buffer only**, closed as a decision, not an implementation.
-`docs/perf/language-service-retention.md`.

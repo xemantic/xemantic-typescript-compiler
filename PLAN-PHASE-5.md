@@ -20,6 +20,114 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.40) — an `async` function's INFERRED return type is a `Promise`, and it was wrong in BOTH directions; the item's fifth gap was a symptom of it, and its (a)/(b)/(d) are blocked on a whole family of unwalked bodies
+
+**THE ITEM'S DIAGNOSIS OF (e) WAS WRONG, AND THE ROOT CAUSE IS BIGGER THAN THE ITEM.** (e)
+read "an `async` object-literal method's parameters are not contextually typed by
+`getTypeOfObjectLiteral`". Measured, the parameters were **fine** — `{ async m(node) {…} }`
+against `{ m(n: N): Promise<void> }` already reported the correct TS2322 *inside* the body —
+and the RETURN TYPE was not: an `async` function-like with no return annotation carried its
+BODY's type. One seven-shape fixture (`probe_f`) reads **three false positives and four false
+negatives**, tsgo 7.0.2 reporting exactly the complement:
+
+| shape | ours before | tsgo 7.0.2 |
+|---|---|---|
+| `async function f1() {}` → `() => Promise<void>` | TS2322 `() => void` **FP** | silent |
+| `async function f2() { return 1 }` → `() => Promise<number>` | TS2322 **FP** | silent |
+| `const g: number = f2()` | silent **FN** | TS2322 `Promise<number>` |
+| `const f4 = async () => 1; const g: number = f4()` | silent **FN** | TS2322 |
+| `class C { async m() { return 1 } }; const g: number = new C().m()` | silent **FN** | TS2322 |
+| `const f6 = async function () { return "s" }; const g: number = f6()` | TS2322 `string` **wrong type** | TS2322 `Promise<string>` |
+
+`promiseWrappedReturnType` wraps at the **eight** INFERRED-return sites (declaration, arrow,
+fn-expr, class method, objlit method, `buildMethodType` + its two declaration-carrying
+callers, `getReturnTypeOfCallable`). An ANNOTATED return type is never touched; a lib with no
+`Promise` answers the un-wrapped type, so a lib-less program is bit-for-bit unchanged;
+`globalPromiseType` is wired in `init:wireGlobalArrayTypes` beside Array/ReadonlyArray rather
+than on first ask, because a lib interface's member table is lazy ((INC.25)) and reaching one
+from inside another resolution truncates it. A GENERATOR is deliberately excluded —
+`async function*` returns an `AsyncGenerator`, which nothing here builds.
+
+**(c) HAD ITS ROOT ONE LAYER BELOW THE TS7006 WALKER, AND THE FILE SAID SO.**
+`getTypeOfSymbolWorker`'s MethodDeclaration arm read `decl.name as? Identifier` and answered
+`anyType` for anything else — round 937 had routed a COMPUTED name through it and written
+"a StringLiteralNode-named method keeps answering `anyType` … a separate pre-existing gap".
+So `interface VS { "m-x"(node: N): void }` had that member **present and typed `any`**, while
+the property form `"m-x": (n: N) => void` was byte-correct against tsgo (TS2322 ×2 + TS2741,
+identical). The fix stops extracting the name there at all: `declaredMemberName` is the SAME
+helper `resolveInterfaceMembersCore` used to REGISTER the member, so the two can no longer
+disagree about which member this is. Two arity edges (`spineIanyObjLitMethodEnter`,
+`spineIanyPropAssignEdge`) took the same key.
+
+**(a)/(b)/(d) ARE ONE ARM: the contextual type of a `return` POSITION.** `pullCtxReturnTypeAt`
+consults the enclosing function-like's own return ANNOTATION, else the return type of the
+signature that contextually types that function (tsc's `getContextualReturnType` order), and
+strips one `Promise<>` when the function is `async`. Fed to `pullContextualTypeAt` through two
+new arms — `ReturnStatement` and an index-aware `ArrayLiteralExpression`, so a TUPLE
+contributes its own slot where an array reference's element type is index-independent. **The
+ARITY half is strictly additive by construction and the `when` is written so it reads that
+way**: an annotation that resolved keeps its own answer (bar the async unwrap, the identity
+for everything else), one that did not resolve keeps answering null, and only the
+no-annotation case — previously null — consults the contextual source.
+
+**WHAT DID NOT LAND, AND IT IS THE ROUND'S BIGGEST FINDING: A FUNCTION BODY NESTED IN A
+`return` EXPRESSION IS NOT CHECKED AT ALL.** Neither `ReturnStatement` arm (the legacy
+statement walk nor the spine anchor) calls `walkFunctionBodiesInExpr`, and it is **the one
+expression position that does not** — measured against an obviously wrong `const q: number =
+"s"`: a file-level var-decl initializer ✓, a var-decl initializer inside a function body ✓, a
+CALL ARGUMENT ✓, an object-literal property value ✓, `return (node) => {…}` ✗, `return
+{ m(node) {…} }` ✗, `return (…)` parenthesised ✗. So (a)/(b)/(d)'s parameters are now typed
+and **no diagnostic inside those bodies can fire in either direction** — which is why their
+core pins assert TS7006 SUPPRESSION only and the TYPE is pinned as a HOVER instead, with the
+expectation read out of tsc 7.0.2's own LSP. Queued as **(CHK.42)**, fully measured (see the
+queue entry): with the two-line arm added, both probes reach FULL PARITY with tsgo, the
+**corpus stays 15,928/0/3**, **knip stays 66 with every row identical** — and the 8-profile
+grid gains **3 rows**, which is why it is not shipped.
+
+**AND ONE OF THOSE 3 IS A SHIPPED FALSE POSITIVE THE WALK MERELY EXPOSES — REACHABLE TODAY.**
+`function m4(): B | A | (B|A)[] { const r: any = 0; return r as unknown as B[]; }` reports
+`Type 'unknown' is not assignable to type 'B | A | (B | A)[]'` on the **shipped** binary, at
+top level, with no (CHK.42) arm involved; tsgo is silent. A SINGLE `as B[]` is silent, a
+2-member union target is silent, a non-union array target is silent — so the trigger is a
+CHAINED `as unknown as X` against a ≥3-member union return annotation, and the checker keeps
+the INNER assertion's type. Queued as **(CHK.43)**. Its first sighting was as an
+"outer function's `T` does not resolve in a nested function expression" theory, which the
+probe falsified in one run: it has nothing to do with type parameters.
+
+**GATES.** Suite **15,928 / 0 / 3** (+23 pins over the 15,905 baseline: 18 core + 5 hover),
+**zero corpus baselines moved**. `cost_gate.py` **PASSES, no rebaseline** — `output.errors`
+**46** throughout, largest movement `mapped.hits` **+0.74%**, `typeNode.bypassed` +0.03%
+(the (CHK.39) lever is unspent and untouched). `huge_methods.py --fail-over 0` exit 0,
+**783 classes scanned**. `partition-equivalence.sh` **EQUIVALENT, all 78 files**, floor
+**79 ms** [79, 87, 56, 56] (one draw; the arm spanned 56-87 ms within it, so read the spread).
+`capture-equivalence.sh` **1,005 spans / 43 of 76 files / `narrowRendersMoreAny` = 0** — the
+standing state, unmoved; both ARM DIGESTs moved and `definitions` rose **360,336 -> 360,361**,
+which is the expected direction (a string-named method whose type was `any` and a parameter
+that now has a real type both render differently). BEFORE/AFTER 8-profile grid against a
+rebuilt parent (positive control: `javap` finds `promiseWrappedReturnType` **0** times before
+and **1** after): **`added=0 removed=0` on all eight**. **knip, rebuilt BEFORE arm in the same
+session, same `node_modules`: 66 -> 66, every row identical.**
+
+**ABLATION — one mistake per arm, each restored from the arm's OWN snapshot, each build
+checked for `e:` before its result was read.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | `promiseWrappedReturnType` answers its argument | **6** — every async pin incl. the objlit one |
+| a2 | only the OBJLIT-METHOD async site removed | **1** — uniquely the item's own (e) fixture |
+| a3 | `pullCtxReturnTypeAt` answers null | **5** — all four return hovers + the (d) suppression pin |
+| a4 | `ArrayLiteralExpression` dropped from the M1.6(b) shape list | **4** — every array/tuple SUPPRESSION pin, no hover |
+| a5 | the TUPLE leg of the element rule | **3** — the two tuple pins + the tuple hover |
+| a6 | the `async` `Promise<>` unwrap for a return position | **2** — uniquely the (b) pin and its hover |
+| a7 | (c) root: `declaredMemberName` → `as? Identifier` | **3** — both (c) pins + the (c) hover |
+| a8 | (c) the objlit METHOD arity edge's key | **1** — uniquely the method form |
+| a9 | (c) the PropertyAssignment arity edge's key | **1** — uniquely the property form |
+
+a3 and a4 **partition** the return family by LAYER rather than by shape — a4 takes the ARITY
+half (TS7006) and leaves every hover green, a3 takes the TYPE half and leaves three of the
+four suppression pins green — which is the same two-call-site structure (CHK.39) found, seen
+from the other side. No arm was dead and none was redundant.
+
 ### Round (CHK.39) — contextual typing supplied an **ARITY**, not a **TYPE**: every contextually-typed parameter in this checker was `any`, and a hover on one said `any` for every codebase
 
 **THE DEFECT.** `spineIanyFnExprEnter` / `spineIanyObjLitMethodEnter` decide TS7006 from the
@@ -963,103 +1071,6 @@ number on this page is WALL TIME on a local artifact and on one box, so **none o
 any test**: re-take it with `scripts/inc33-widen-cost.sh` rather than quoting it. The two batches
 were drawn at `dbbb900e`; `cost_gate.py` and `huge_methods.py` are CONTROLS here and were not
 run (the round adds one jvmTest `main` runner and one script).
-
-### Round (INC.40) — a ratio is a property of what BOTH arms were asked: the "decaying" replay is **2.25-2.30x**, and it is now SHIPPED for diagnostics behind a type-level valve
-
-**THE TRANSFERABLE FINDING, AND IT COST THIS ARC FIVE ROUNDS OF A WRONG NUMBER.** CLAUDE.md's
-standing law said to re-price the re-entrant replay ((INC.17)) before spending a round on it,
-because its advantage fell **3.06x -> 1.91x -> 1.68x** while the replay itself never changed —
-every round that shrinks the incremental floor shrinks its reason to exist. That law is sound and
-it was not what happened. Re-priced at HEAD the replay is **2.25-2.30x on the total and ~4.2x at
-the median query**. The lineage was measuring the wrong thing: **every figure in it carried a
-whole-file `TypeCaptureRequest` in BOTH arms** — the request `replay-differential.sh` needs in
-order to GRADE the mechanism — and that is +9-17 ms of cost per query common to both arms
-((INC.13)). **A cost common to both arms dilutes a ratio and leaves no trace in it.** Measured
-that way at HEAD the same run still reads **1.34x** (replay 12,063 ms against 16,139 over 75
-questions), so the decay was real *about the with-capture channel* and says nothing about the
-capture-free one. And the capture-free one is precisely the channel the differential grades as
-EQUIVALENT: diagnostics.
-
-**RE-PRICED — TWO INDEPENDENT JVMs, MEDIANS QUOTED AS A BAND** (`scripts/inc40-replay-cost.sh`,
-tsc's own 78 sources, warm, six warm-ups, leading draw discarded, ABBA-rotated):
-
-| working set `k` | queries | fresh total | replay total | ratio | fresh/query (med) | replay/query (med) |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 77 | 10,656 / 10,783 ms | 4,728 / 4,685 ms | **2.25 / 2.30x** | **104 / 108 ms** | **25 / 25 ms** |
-| 2 | 39 | 7,716 / 7,803 ms | 4,500 / 4,314 ms | 1.72 / 1.81x | 141 / 139 ms | 55 / 54 ms |
-| 8 | 10 | 5,342 / 5,420 ms | 4,228 / 4,351 ms | 1.26 / 1.25x | 377 / 360 ms | 260 / 238 ms |
-
-**Two corroborations are worth more than the ratio.** The replay arm's TOTAL (4,728 ms) lands on
-the whole-program CHECK cost (~4,935 ms) — that is (INC.37)'s **1.39x re-derivation tax being
-COLLECTED rather than re-paid**: 77 fresh checkers each re-derive the shared lib and
-foreign-declaration resolutions where one live checker does not. And **the ratio falls with `k`
-exactly as it must**, because the thing the replay deletes is the floor, which is paid once per
-QUERY and not per file — a host that batches its open tabs has already collected most of it
-(§ 4's subset rule). The row a user feels is `k = 1`. Floor for these arms: **54 ms** in-process,
-cross-checked against `partition-equivalence.sh`'s **61 ms [54, 62, 61, 53]** at the same commit.
-
-**WHAT LANDED, AND THE REFUSAL IS A *TYPE*, NOT A COMMENT.** `Project.diagnosticsOf` keeps the
-live program its first narrowed build hands back and re-enters it for every later file of the
-same project state; the handle is dropped at the three sites that drop `cached` (`updateFile`,
-`deleteFile`, `close`), because `ProgramRecheck` has no invalidation protocol and wants none.
-It may serve THAT and nothing else: `DiagnosticsOnlyRecheck` takes the `ProgramRecheck` private
-and exposes ONE member taking a `Set<String>` and returning a `List<Diagnostic>`, so **no
-`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave it** —
-`quickInfoAt`, `definitionsAt`, `completionsAt`, `signatureHelpAt`, `semanticsAt` and `prepare`
-cannot reach it even by mistake. The replay SET is untouched ((INC.19)(b): `init:wireGlobalArrayTypes`
-does not terminate when replayed). Every banner that said "not a shipped path" now says what is
-allowed and what is still forbidden (`Recheck.kt`, `Checker.kt`, `ProjectCompiler.kt`,
-`TypeScriptCompiler.kt`, `ProjectRecheckTest`, `docs/language-service.md` § 4a).
-
-**CORRECTNESS AT HEAD, ON A CLEAN TREE BEFORE ANY EDIT.** `replay-differential.sh`, both arms:
-**0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF`** (46 diagnostic rows over tsc's sources, 178 rows over the
-71 `partition-gate` files carrying them; 352,713 definition spans), against **43 `DIVERGE-TYPE`
-of 75 files**. The banner's "5 of 75" was STALE — pre-(INC.26)/(INC.28) — and **43 is the
-pre-existing HEAD state, not this round's damage**; it is overwhelmingly the union-alias display
-family (INC.26)/(INC.27), where (INC.26) already established the FRESH arm is not automatically
-the right one. Sensitivity arm `partition-gate` **EQUIVALENT 75/75**; `partition-equivalence`
-**EQUIVALENT 78/78**. That asymmetry is the whole shipping argument: the diagnostics channel
-could be shipped on two arms agreeing and the capture channel could not.
-
-**THE ABLATION — FOUR ARMS, ONE MISTAKE EACH, EACH VERIFIED AS A REAL DIFF AGAINST THE
-*COMMITTED* FILE** (round 922's law: a `--shortstat` on a tree carrying the round's own work
-cannot tell a landed arm from a dead one):
-
-| arm | RED |
-|---|---|
-| a1 the wiring removed | `cost NO build`, `multi-file free`, `edit drops handle`, `deletion drops handle` |
-| a2 the VALVE WIDENED (`captureIn` served from the handle) | `the capture channels do NOT reach the handle` — ALONE |
-| a3 the handle serves without widening (EMPTY answer) | `and the answer is…`, `multi-file free`, `an edit is SEEN` |
-| a4 `updateFile` keeps the handle | `an edit is SEEN`, `edit drops handle`, and the control |
-
-**a3 is the one to carry forward: the build-COUNT pin stays GREEN against a handle that answers
-an empty list.** A count-only suite would have shipped a language service reporting no errors at
-all, at full speed, with every cost pin green — which is why each count pin is paired with a
-value pin. And one pin is recorded as UNDISCRIMINATED rather than claimed as coverage: `a hover
-after a diagnostics query still answers correctly` stays green even under a2, because the fixture
-cannot reproduce the capture divergence — that channel is graded by the differential, not by a
-two-consumer fixture (round 807: a signal with no uniquely-its-own failure is a redundant guard,
-say so).
-
-**TWO INSTRUMENT TRAPS, BOTH FAILING TOWARD A PLAUSIBLE TABLE.** (1) **A floor build is its own
-code path.** Drawn BEFORE the arms, after whole-program warm-ups, the floor read **129/89/96 ms**
-against a true **52-56** — a floor build checks no file, so nothing the full-build warm-up warmed
-is exercised, and the three `(k, total)` points fit a floor of ~79 rather than the recorded 54-61.
-A **1.7x over-read that would have understated every ratio derived from it**; it is now drawn at
-the END and cross-checked against the other instrument. (2) **Arming is priced, not assumed
-free**: an armed 77-query sweep reads **10,546 ms against 10,783** plain (106 vs 108 per query),
-i.e. free within the band, having changed no diagnostic row in 231 group comparisons.
-
-**GATES.** Suite **15,815 -> 15,824 / 0 / 3** (+9 pins, no baseline moved so no
-`logicalParityDivergences` entry), 0 warnings, 7 modules; `partition-equivalence` EQUIVALENT
-78/78; `partition-gate` sensitivity EQUIVALENT 75/75 over 178 rows; `replay-differential`
-0 `DIVERGE-DIAG` / 0 `DIVERGE-DEF` on both arms; `cost_gate.py` all counters in band
-(`mapped.hits` +1.63%, the standing drift, **NOT** rebaselined); `huge_methods --fail-over 0`
-0 over limit.
-
-**WHAT IT NAMES: (INC.41)** — the 43 `DIVERGE-TYPE` rows are the standing capture-channel state
-and the entire reason the valve is diagnostics-only. Closing them is what would let captures
-through the same valve; **the prize for doing so is NOT measured.**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2432,25 +2443,53 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   `cpaExprArrowFunction`. Pinned as KNOWN GAP in `ContextualParameterTypeTest`.
 
 
-- [ ] **(CHK.40) FOUR MORE CONTEXTUAL-TYPE SOURCES THE IMPLICIT-ANY WALKER DOES NOT
-  READ — each is one measured fixture, none is knip-visible.** Measured during (CHK.30)
-  (all silent under tsgo 7.0.2, all TS7006 here):
-  (a) an **ARRAY LITERAL** returned at an annotated array/tuple type —
-  `function f(): V[] { return [{ m(node) {…} }]; }`, also `[V]` and `readonly V[]`:
-  `spineIanyEdgeEnter`'s ReturnStatement arm gates `retCtx` on the M1.6(b) shape list
-  (`ObjectLiteral / Arrow / FunctionExpression / Parenthesized / Conditional`) and
-  `ArrayLiteralExpression` is absent from it, so the array arm below it gets no element
-  type; (b) an **`async` function's `Promise<T>` return annotation** is not unwrapped to
-  `T` — `async function f(): Promise<V> { return { m(node) {…} }; }`; (c) a **non-Identifier
-  member name** — `{ "m-x"(node) {…} }` — `spineIanyObjLitMethodEnter` reads
-  `prop.name as? Identifier` where the PropertyAssignment path already accepts a
-  `StringLiteralNode`; (d) an **object-literal METHOD's own return annotation** is not a
-  contextual source for a `return` inside it (`{ inner(): V { return { m(node) {…} } } }`
-  works, `{ inner() { return { m(node) {…} } } }` under a contextual `inner(): V` does not).
-  A fifth, in a different pass: an **`async` object-literal method's** parameters are not
-  contextually typed by `getTypeOfObjectLiteral`, which produces a real FALSE POSITIVE —
-  `const c: { m(n: N): Promise<void> } = { async m(node) {…} }` reports
-  `TS2322 … '{ m(node: any): void; }'`, losing both the parameter type and the `Promise`.
+- [x] **(CHK.40) DONE 2026-08-26 — all five gaps closed, and (e)'s diagnosis was WRONG in
+  a way that made the fix bigger and better: an `async` function-like whose return type is
+  INFERRED returns `Promise<T>`, not `T`.** (e)'s parameters were contextually typed all
+  along; the RETURN TYPE was not, in eight places, and the defect is symmetric — one
+  seven-shape fixture reads **3 false positives and 4 false negatives**, tsgo reporting
+  exactly the complement. (c)'s root was one layer below the TS7006 walker
+  (`getTypeOfSymbolWorker` typed a STRING-named method `any`, a residue round 937 named and
+  left); (a)/(b)/(d) are one new arm, the contextual type of a `return` POSITION.
+  Grid `added=0 removed=0` on all 8 against a rebuilt parent, suite **15,928/0/3**, knip
+  **66 -> 66** with every row identical, `cost_gate` PASSES with no rebaseline. Nine ablation
+  arms, each with uniquely-its-own failures. **(a)/(b)/(d) are pinned as TS7006 SUPPRESSION
+  plus a HOVER and not as a diagnostic, because of (CHK.42) below.**
+
+- [ ] **(CHK.42) A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOT CHECKED AT ALL —
+  the ONE expression position that does not reach `walkFunctionBodiesInExpr`, and the fix
+  is TWO LINES that are already measured.** Found and measured during (CHK.40) against an
+  obviously wrong `const q: number = "s"` nested one level down: a file-level var-decl
+  initializer ✓, a var-decl initializer inside a function body ✓, a CALL ARGUMENT ✓, an
+  object-literal property value ✓, `return (node) => {…}` ✗, `return { m(node) {…} }` ✗,
+  `return (…)` parenthesised ✗. Neither `ReturnStatement` arm calls the walker — the legacy
+  statement walk at `checkTypeAssignabilityInStatements` nor the spine anchor's twin — and
+  both are needed for (CHK.39)'s reason (the anchor runs `recordOnly` for a nested statement
+  and truncates, so the legacy arm is what EMITS). **MEASURED WITH THE ARM IN: both (CHK.40)
+  probes reach FULL PARITY with tsgo 7.0.2 (8/8 and 5/5, exact line:column and message), the
+  corpus stays 15,928/0/3, and knip stays 66 with every row identical.** The cost, and the
+  only reason it is not shipped: the 8-profile grid gains **3 distinct rows** —
+  `checker.ts:10950:25` (which is (CHK.43) below, a SHIPPED false positive the walk merely
+  exposes) and `importFixes.ts:1281:17` / `1304:13`, an object literal with `any`-typed
+  members reported not assignable to a 2-member union (`FixAddNewImport |
+  FixAddJsdocTypeImport | undefined`), UNCHARACTERIZED. So this item is: characterize the
+  importFixes pair, fix it and (CHK.43), then land the two lines. Reproduction of the walk's
+  own value is one `git diff` — the arm and its positive control are in the (CHK.40) session
+  note.
+
+- [ ] **(CHK.43) A CHAINED `x as unknown as T` IN A `return` KEEPS THE **INNER**
+  ASSERTION'S TYPE WHEN THE RETURN ANNOTATION IS A ≥3-MEMBER UNION — a SHIPPED false
+  positive, reachable today at top level.** Four lines:
+  `interface A { a: number } interface B { b: number }` +
+  `function m4(): B | A | (B|A)[] { const r: any = 0; return r as unknown as B[]; }` reports
+  `TS2322: Type 'unknown' is not assignable to type 'B | A | (B | A)[]'`; tsgo 7.0.2 is
+  silent. The differential is sharp and already taken: a SINGLE `as B[]` is silent, a
+  2-member union target (`B | A`) is silent, a non-union array target (`(B|A)[]`) is silent
+  — so the checker takes the INNER `as unknown` and the ≥3-member union is what stops
+  something downstream from bailing. It is one of the 3 rows blocking (CHK.42) and it is
+  independent of it. **It has nothing to do with type parameters** — its first sighting was
+  as an "an outer function's `T` does not resolve in a nested function expression" theory,
+  which one probe falsified.
 
 - [ ] **(CHK.36) THE "A CommonJS FILE CANNOT IMPORT AN ES MODULE" FAMILY IS NOT
   IMPLEMENTED AT ALL — TS1479 / TS1471 / TS1286 / TS1203 / TS1202.** Audited during

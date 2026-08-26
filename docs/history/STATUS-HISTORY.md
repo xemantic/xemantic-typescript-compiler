@@ -1,3 +1,33 @@
+**THE PROGRAM WAS PARSED *TWICE* AND BOTH COPIES WERE KEPT — LANGUAGE-SERVICE RETENTION
+**264 -> 177 MB (-33%)** (2026-08-25, (INC.36)).** A ten-step subtraction ladder over
+`liveAfterGc` attributed the 264 MB a whole-program `referencesAt` sweep holds:
+`Project.sourceIndexes` **114.7 MB**, the process-global `CrawlParseCache` **103.0**,
+`RealLibSnapshots` 2.6, JVM baseline + lib text + the 9,827 answers 43.7 — and
+**`cached`/`captures`/`prepared`/`narrowed`/`recheck`/`lineMaps` 0.0 MB COMBINED**, so
+every memo (INC.12)/(INC.14)/(INC.32)/(INC.40) added is free and **`close()` frees
+nothing**. The two big rows are ONE program parsed twice at the same bytes under the same
+`computeParserFlags`; the class histogram says it independently — **770,460 `Identifier`s**
+against 856,962 nodes in one copy, i.e. CLAUDE.md's 44.5%, DOUBLED. **The fix deletes one
+copy**: `Project.sourceIndexOf` indexes tokens around the compiler's own crawl tree
+(`parsedSourceOrNull` -> `SourceIndex.around`), nothing writes to the process-global cache
+so round 825's threading discipline is untouched, and a dirty buffer still parses privately
+— which is the CORRECT answer, collected lazily once a build sees those bytes. Measured
+after arm (2 processes): peak **177.0 / 176.4** vs before's **264.0 / 264.6 / 264.5 /
+264.1**, `sourceIndexes` **-27.5 / -27.6** vs **-115.3 / -116.4 / -115.8 / -115.3**, every
+other row unmoved, `Identifier` HALVED to 388,790, **9,827 hits unchanged**. **The
+remaining 27.5 MB is NOT a tree** — ~18 MB of `SourceIndex`'s own token arrays (byte-identical
+before and after) and ~10 MB of a second copy of the source TEXT, a named next lever
+(`SourceFile.text`) left unlanded rather than taken after the gates had run. **FOUR of the
+five gates are CONTROLS and only the ladder is evidence**, because the compiler path never
+calls the new function. Suite **15,835 / 0 / 3** (+4: 3 pins, 1 control), zero corpus
+baselines moved; `cost_gate.py` PASSES with the counter vector identical to last round
+(`mapped.hits` at the standing +1.63%, not moved, not rebaselined); `huge_methods.py
+--fail-over 0` exit 0 with over-limit **0** and **782** classes scanned (781 last round, so
+not blind); `partition-equivalence` **EQUIVALENT 78/78**; `capture-equivalence` **1,003 / 43
+/ moreAny 0** with **BOTH DIGESTS UNMOVED**. Also this round: **(INC.35) DECIDED BY THE
+OWNER — option (b), per-buffer only**, closed as a decision, not an implementation.
+`docs/perf/language-service-retention.md`.
+
 **A BARE TYPE PARAMETER WAS READ AS A *FAILED* CONSTRAINT WHERE THE HONEST ANSWER IS *UNDECIDED*,
 AND A WHOLE ALIAS BODY RENDERED `any` ON EVERY ORDINARY BUILD (2026-08-24, (INC.42)).** Three
 lines reproduce it, with no partition and nothing to do with `Visitor`:

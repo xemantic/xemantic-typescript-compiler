@@ -1,3 +1,100 @@
+### Round (INC.40) — a ratio is a property of what BOTH arms were asked: the "decaying" replay is **2.25-2.30x**, and it is now SHIPPED for diagnostics behind a type-level valve
+
+**THE TRANSFERABLE FINDING, AND IT COST THIS ARC FIVE ROUNDS OF A WRONG NUMBER.** CLAUDE.md's
+standing law said to re-price the re-entrant replay ((INC.17)) before spending a round on it,
+because its advantage fell **3.06x -> 1.91x -> 1.68x** while the replay itself never changed —
+every round that shrinks the incremental floor shrinks its reason to exist. That law is sound and
+it was not what happened. Re-priced at HEAD the replay is **2.25-2.30x on the total and ~4.2x at
+the median query**. The lineage was measuring the wrong thing: **every figure in it carried a
+whole-file `TypeCaptureRequest` in BOTH arms** — the request `replay-differential.sh` needs in
+order to GRADE the mechanism — and that is +9-17 ms of cost per query common to both arms
+((INC.13)). **A cost common to both arms dilutes a ratio and leaves no trace in it.** Measured
+that way at HEAD the same run still reads **1.34x** (replay 12,063 ms against 16,139 over 75
+questions), so the decay was real *about the with-capture channel* and says nothing about the
+capture-free one. And the capture-free one is precisely the channel the differential grades as
+EQUIVALENT: diagnostics.
+
+**RE-PRICED — TWO INDEPENDENT JVMs, MEDIANS QUOTED AS A BAND** (`scripts/inc40-replay-cost.sh`,
+tsc's own 78 sources, warm, six warm-ups, leading draw discarded, ABBA-rotated):
+
+| working set `k` | queries | fresh total | replay total | ratio | fresh/query (med) | replay/query (med) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 77 | 10,656 / 10,783 ms | 4,728 / 4,685 ms | **2.25 / 2.30x** | **104 / 108 ms** | **25 / 25 ms** |
+| 2 | 39 | 7,716 / 7,803 ms | 4,500 / 4,314 ms | 1.72 / 1.81x | 141 / 139 ms | 55 / 54 ms |
+| 8 | 10 | 5,342 / 5,420 ms | 4,228 / 4,351 ms | 1.26 / 1.25x | 377 / 360 ms | 260 / 238 ms |
+
+**Two corroborations are worth more than the ratio.** The replay arm's TOTAL (4,728 ms) lands on
+the whole-program CHECK cost (~4,935 ms) — that is (INC.37)'s **1.39x re-derivation tax being
+COLLECTED rather than re-paid**: 77 fresh checkers each re-derive the shared lib and
+foreign-declaration resolutions where one live checker does not. And **the ratio falls with `k`
+exactly as it must**, because the thing the replay deletes is the floor, which is paid once per
+QUERY and not per file — a host that batches its open tabs has already collected most of it
+(§ 4's subset rule). The row a user feels is `k = 1`. Floor for these arms: **54 ms** in-process,
+cross-checked against `partition-equivalence.sh`'s **61 ms [54, 62, 61, 53]** at the same commit.
+
+**WHAT LANDED, AND THE REFUSAL IS A *TYPE*, NOT A COMMENT.** `Project.diagnosticsOf` keeps the
+live program its first narrowed build hands back and re-enters it for every later file of the
+same project state; the handle is dropped at the three sites that drop `cached` (`updateFile`,
+`deleteFile`, `close`), because `ProgramRecheck` has no invalidation protocol and wants none.
+It may serve THAT and nothing else: `DiagnosticsOnlyRecheck` takes the `ProgramRecheck` private
+and exposes ONE member taking a `Set<String>` and returning a `List<Diagnostic>`, so **no
+`TypeCaptureRequest` is expressible at that boundary and no `CapturedType` can leave it** —
+`quickInfoAt`, `definitionsAt`, `completionsAt`, `signatureHelpAt`, `semanticsAt` and `prepare`
+cannot reach it even by mistake. The replay SET is untouched ((INC.19)(b): `init:wireGlobalArrayTypes`
+does not terminate when replayed). Every banner that said "not a shipped path" now says what is
+allowed and what is still forbidden (`Recheck.kt`, `Checker.kt`, `ProjectCompiler.kt`,
+`TypeScriptCompiler.kt`, `ProjectRecheckTest`, `docs/language-service.md` § 4a).
+
+**CORRECTNESS AT HEAD, ON A CLEAN TREE BEFORE ANY EDIT.** `replay-differential.sh`, both arms:
+**0 `DIVERGE-DIAG`, 0 `DIVERGE-DEF`** (46 diagnostic rows over tsc's sources, 178 rows over the
+71 `partition-gate` files carrying them; 352,713 definition spans), against **43 `DIVERGE-TYPE`
+of 75 files**. The banner's "5 of 75" was STALE — pre-(INC.26)/(INC.28) — and **43 is the
+pre-existing HEAD state, not this round's damage**; it is overwhelmingly the union-alias display
+family (INC.26)/(INC.27), where (INC.26) already established the FRESH arm is not automatically
+the right one. Sensitivity arm `partition-gate` **EQUIVALENT 75/75**; `partition-equivalence`
+**EQUIVALENT 78/78**. That asymmetry is the whole shipping argument: the diagnostics channel
+could be shipped on two arms agreeing and the capture channel could not.
+
+**THE ABLATION — FOUR ARMS, ONE MISTAKE EACH, EACH VERIFIED AS A REAL DIFF AGAINST THE
+*COMMITTED* FILE** (round 922's law: a `--shortstat` on a tree carrying the round's own work
+cannot tell a landed arm from a dead one):
+
+| arm | RED |
+|---|---|
+| a1 the wiring removed | `cost NO build`, `multi-file free`, `edit drops handle`, `deletion drops handle` |
+| a2 the VALVE WIDENED (`captureIn` served from the handle) | `the capture channels do NOT reach the handle` — ALONE |
+| a3 the handle serves without widening (EMPTY answer) | `and the answer is…`, `multi-file free`, `an edit is SEEN` |
+| a4 `updateFile` keeps the handle | `an edit is SEEN`, `edit drops handle`, and the control |
+
+**a3 is the one to carry forward: the build-COUNT pin stays GREEN against a handle that answers
+an empty list.** A count-only suite would have shipped a language service reporting no errors at
+all, at full speed, with every cost pin green — which is why each count pin is paired with a
+value pin. And one pin is recorded as UNDISCRIMINATED rather than claimed as coverage: `a hover
+after a diagnostics query still answers correctly` stays green even under a2, because the fixture
+cannot reproduce the capture divergence — that channel is graded by the differential, not by a
+two-consumer fixture (round 807: a signal with no uniquely-its-own failure is a redundant guard,
+say so).
+
+**TWO INSTRUMENT TRAPS, BOTH FAILING TOWARD A PLAUSIBLE TABLE.** (1) **A floor build is its own
+code path.** Drawn BEFORE the arms, after whole-program warm-ups, the floor read **129/89/96 ms**
+against a true **52-56** — a floor build checks no file, so nothing the full-build warm-up warmed
+is exercised, and the three `(k, total)` points fit a floor of ~79 rather than the recorded 54-61.
+A **1.7x over-read that would have understated every ratio derived from it**; it is now drawn at
+the END and cross-checked against the other instrument. (2) **Arming is priced, not assumed
+free**: an armed 77-query sweep reads **10,546 ms against 10,783** plain (106 vs 108 per query),
+i.e. free within the band, having changed no diagnostic row in 231 group comparisons.
+
+**GATES.** Suite **15,815 -> 15,824 / 0 / 3** (+9 pins, no baseline moved so no
+`logicalParityDivergences` entry), 0 warnings, 7 modules; `partition-equivalence` EQUIVALENT
+78/78; `partition-gate` sensitivity EQUIVALENT 75/75 over 178 rows; `replay-differential`
+0 `DIVERGE-DIAG` / 0 `DIVERGE-DEF` on both arms; `cost_gate.py` all counters in band
+(`mapped.hits` +1.63%, the standing drift, **NOT** rebaselined); `huge_methods --fail-over 0`
+0 over limit.
+
+**WHAT IT NAMES: (INC.41)** — the 43 `DIVERGE-TYPE` rows are the standing capture-channel state
+and the entire reason the valve is diagnostics-only. Closing them is what would let captures
+through the same valve; **the prize for doing so is NOT measured.**
+
 ### Round (INC.31)+(INC.32) — the language-service cost table was 10-24x stale, two levers were REFUSED before being built, and the capture memo threw a 125,289-span entry away to keep a one-span one
 
 **WHAT THIS ROUND DID.** Re-took every wall figure in `docs/language-service.md` — all of
