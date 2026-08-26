@@ -145293,6 +145293,92 @@ interface DataView {
         return t
     }
 
+    /**
+     * (CHK.45) IS THIS UNION CONSTITUENT ONE WHOSE **ABSENCE** OF A PROPERTY WE
+     * MAY BELIEVE?
+     *
+     * The union TS2339 elaboration has always had two verdicts with very
+     * different soundness requirements. PARTIAL coverage (`anyHasIt`) is safe on
+     * any member set, because SOME member was resolved well enough to answer
+     * "yes" — the diagnostic is then tsc's, whatever the other members are.
+     * ALL-MISSING has no such witness: every member answered "no", and a "no"
+     * from an incompletely resolved member table is exactly CLAUDE.md's B153
+     * ("a general PropertyAccess-receiver TS2339 fallback via resolved interface
+     * members: NOT viable — merged/cross-file interface member resolution is
+     * incomplete"). So all-missing needs a per-member trust predicate, and this
+     * is it.
+     *
+     * ### Why the shipped whitelist was too narrow, measured
+     *
+     * Before this round all-missing fired only for `allWellResolved` (every
+     * member a string/number literal or a single-declaration heritage-free
+     * user interface) or `allAnonPlainObjects`. Measured against
+     * `tools/tsgo-7.0.2/lib/tsc`, that silently dropped every union carrying a
+     * FUNCTION type, a PRIMITIVE, a TYPE LITERAL beside a named interface, or an
+     * interface WITH heritage — `function p(c: Alfa | Fn) { c.nope }` reports
+     * nothing where tsc reports TS2339, **and the gap is not block-scoping**: a
+     * parameter, a file-level `const` and a body-local are all equally silent, so
+     * (CHK.44)'s "a member on NO constituent is still silent" is a property of
+     * this whitelist and not of that round's receiver typing.
+     *
+     * ### Why it is a per-member predicate and not `true`
+     *
+     * Dropping the gate entirely is `added=0 removed=0` on all eight profiles AND
+     * moves zero corpus baselines — and still costs **2 false positives on knip**
+     * (`walk.ts`'s `item.members` / `item.jsDocTags` on `Export | undefined`),
+     * both of them a CROSS-FILE interface WITH a heritage clause whose member
+     * table we do not fully resolve. That is B153 arriving exactly where the
+     * shipped predicate already refused it, which is why the Interface arm below
+     * keeps [wellResolvedUnionMember]'s rule verbatim and everything the round
+     * adds is OUTSIDE the named-interface world.
+     *
+     * The refusals are therefore: a `Type.Reference` (a generic instantiation —
+     * `resolveGenericPropertyType` is not consulted here), a `Type.TypeParam` (a
+     * constraint that may not be resolved yet), an intersection, an
+     * enum-flavoured object (CLAUDE.md: an enum's members live on
+     * `Symbol.exports` and on no type at all, so every member reads as absent),
+     * a named non-interface object, `never`, and ANY member carrying an index
+     * signature — an index signature legitimately provides the property, which
+     * `memberHasIt` does not consult.
+     */
+    private fun cmamAllMissingTrustedMember(m: Type, propName: String): Boolean {
+        if (m is Type.StringLiteral || m is Type.NumberLiteral || m is Type.BigIntLiteral) return true
+        if (m === neverType) return false
+        if (m is Type.Intrinsic) return true
+        if (m is Type.Reference) return false
+        if (m is Type.TypeParam || m is Type.Union || m is Type.Intersection) return false
+        if (isEnumFlavoredObjectType(m)) return false
+        if (m is Type.Interface) {
+            val decl = m.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration ?: return false
+            if (!decl.heritageClauses.isNullOrEmpty()) return false
+            if (decl in builtinLibDecls) return false
+            resolveStructuredTypeMembers(m)
+            return !cmamIndexSignatureProvides(m, propName)
+        }
+        if (m is Type.Object) {
+            if (m.symbol != null) return false
+            resolveStructuredTypeMembers(m)
+            if (cmamIndexSignatureProvides(m, propName)) return false
+            return !m.callSignatures.isNullOrEmpty() || !m.constructSignatures.isNullOrEmpty() ||
+                !m.members.isNullOrEmpty()
+        }
+        return false
+    }
+
+    /**
+     * (CHK.45) Does an index signature on [m] legitimately supply [propName]?
+     *
+     * The same test the narrowed-single-Object emission a few lines below already
+     * applies (round 479's `indexSigProvides`): a STRING index signature provides
+     * every name, a NUMBER index signature only a numeric-literal one. Getting the
+     * numeric half wrong is a pure false NEGATIVE — `c: Alfa | { [k: number]:
+     * number }; c.zzznope` is a tsc error we would have refused — which is why it
+     * is a shared helper and not two hand-written conditions.
+     */
+    private fun cmamIndexSignatureProvides(m: Type.Object, propName: String): Boolean =
+        m.stringIndexInfo != null ||
+            (m.numberIndexInfo != null && isNumericLiteralName(propName))
+
     private fun cmamGeneralReceiverType(
         objectExpr: Expression,
         propName: String,
@@ -145810,7 +145896,12 @@ interface DataView {
                             !m.members.isNullOrEmpty()
                     }
             }
-            if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved || allAnonPlainObjects)) {
+            // (CHK.45) the fourth disjunct is the ALL-MISSING widening; it is last
+            // because it is the only one that resolves member tables.
+            val allMissingTrusted = !anyHasIt && !allWellResolved && !allAnonPlainObjects &&
+                members.isNotEmpty() && members.all { cmamAllMissingTrustedMember(it, propName) }
+            if (missingMembers.isNotEmpty() &&
+                (anyHasIt || allWellResolved || allAnonPlainObjects || allMissingTrusted)) {
                 val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
                 val missingMember = orderedMissing.first()
                 // Receiver annotated with a bare alias-of-union reference displays
@@ -145851,7 +145942,12 @@ interface DataView {
                     // The round-512 all-missing anonymous case carries no member
                     // chain (tsc names a member only when SOME member has it);
                     // the pre-existing partial/well-resolved paths keep theirs.
-                    messageChain = if (anyHasIt || allWellResolved)
+                    // (CHK.45) tsc names the FIRST missing constituent for the
+                    // all-missing case too (measured: `c: Alfa | Fn; c.nope` chains
+                    // `Alfa`). The round-512 anonymous-plain-object path keeps its
+                    // chainless form — its baselines pin it and this round does not
+                    // re-open them.
+                    messageChain = if (anyHasIt || allWellResolved || allMissingTrusted)
                         listOf("  Property '$propName' does not exist on type '$memberDisplay'.")
                     else emptyList(),
                 ))
