@@ -124197,13 +124197,43 @@ interface DataView {
             return restMatches.firstOrNull() ?: signatures.lastOrNull()
         }
         if (arityMatches.size == 1) return arityMatches[0]
-        // Multiple arity matches — try type-based resolution
-        for (sig in arityMatches) {
+        // Multiple arity matches — try type-based resolution, SPECIALIZED FIRST
+        // ((CHK.54b); see [specializedFirst]). The FALLBACK below deliberately stays
+        // on declaration order: the reorder decides who is ASKED first, never who is
+        // guessed when nobody accepts.
+        for (sig in specializedFirst(arityMatches)) {
             if (signatureAcceptsArgs(sig, args)) return sig
         }
         // No type match — return first arity match
         return if (strictSelect) null else arityMatches[0]
     }
+
+    /**
+     * (CHK.54b) tsc's `reorderCandidates`: a **specialized** signature — one with a
+     * parameter whose type ANNOTATION is a literal type node — is tried before every
+     * non-specialized one, keeping the relative order within each group. It is the
+     * `GH#1133` rule, and without it declaration order alone decides:
+     * `f(x: string): A` before `f(x: "a"): B` answered `A` for `f("a")` where tsc
+     * answers `B`. Measured against tsc 7.0.2 over a 14-row overload matrix.
+     *
+     * The test is SYNTACTIC and matches tsc's exactly (`param.type.kind ===
+     * SyntaxKind.LiteralType`), which is why a literal UNION does **not** specialize:
+     * `f(x: "a" | "b")` is a UnionType node, and tsc measurably leaves it in place.
+     * Reproducing that by type shape instead would hoist it and diverge.
+     */
+    private fun specializedFirst(sigs: List<Signature>): List<Signature> {
+        var seen = false
+        for (s in sigs) if (signatureHasLiteralTypes(s)) { seen = true; break }
+        if (!seen) return sigs
+        val out = ArrayList<Signature>(sigs.size)
+        for (s in sigs) if (signatureHasLiteralTypes(s)) out.add(s)
+        for (s in sigs) if (!signatureHasLiteralTypes(s)) out.add(s)
+        return out
+    }
+
+    /** (CHK.54b) tsc's `SignatureFlags.HasLiteralTypes`, computed from the AST. */
+    private fun signatureHasLiteralTypes(sig: Signature): Boolean =
+        signatureDeclarationParameters(sig.declaration)?.any { it.type is LiteralType } == true
 
     /**
      * Does [sig] accept [args] positionally? This is the type-based verdict
