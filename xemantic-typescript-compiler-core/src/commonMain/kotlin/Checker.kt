@@ -9046,23 +9046,20 @@ class Checker(
      */
     private val globalAugmentationNames: MutableSet<String> = mutableSetOf()
 
+
     /**
-     * (CHK.51) Names of INTERFACES declared inside any file's `declare global { ... }`
-     * block. Deliberately a SECOND set rather than more entries in
-     * [globalAugmentationNames]: that one is a VALUE-space suppression list (TS2591 &c.)
-     * and adding type names to it would silence unrelated diagnostics.
-     *
-     * Its one consumer is [cmamLibHeritageMembersComplete]. A `declare global` interface
-     * augmentation of a lib type does NOT currently reach `globals` (that is (CHK.50), an
-     * open defect measured on the (CHK.49) parent), so the lib symbol's declaration list
-     * is unchanged by it and the "every declaration is a lib declaration" test cannot see
-     * it. Without this set, relaxing the heritage firewall for lib types would turn
-     * (CHK.50)'s silent false NEGATIVE into a false POSITIVE on exactly the shape every
-     * `@types` package is written in (`declare global { interface Window { … } }`).
-     * A GLOBAL-SCRIPT augmentation (`interface HTMLElement { … }` in a non-module file)
-     * needs nothing here — it merges, so the symbol carries a non-lib declaration.
+     * (CHK.50) The names a `declare global { … }` block ADDED to [globals] —
+     * i.e. those [mergeGlobalAugmentations] adopted rather than merged into an
+     * existing symbol. [buildPerFileScopes] seeds every file with them, exactly
+     * as it seeds script-file locals: a global augmentation IS visible from every
+     * file, and without this seed the two halves disagree — the TYPE resolves
+     * through [globals] while the unresolved-name family, whose file root is
+     * [perFileScope], reports TS2304 on the very name it just typed. An
+     * AUGMENTED existing global needs no entry: [mergeSingleSymbol] mutates the
+     * lib/script symbol in place and every scope already holds that object.
+     * Declared before `init` (Kotlin initializes properties in declaration order).
      */
-    private val globalAugmentedInterfaceNames: MutableSet<String> = mutableSetOf()
+    private val globalAugmentationAddedSymbols: MutableMap<String, Symbol> = mutableMapOf()
 
     /**
      * 17.33: file names that are modules (have imports/exports OR — for
@@ -10183,6 +10180,15 @@ class Checker(
         var preAugmentationGlobalsKeys: Set<String> = emptySet()
         pass("init:snapshotPreAugGlobalKeys") { preAugmentationGlobalsKeys = HashSet(globals.keys) }
         pass("init:mergeModuleAugmentations") { mergeModuleAugmentations() }
+        // 1b'. (CHK.50) …and the GLOBAL-scope augmentations. `declare global { … }`
+        // is a ModuleDeclaration named `global`, so step 1 merges the CARRIER
+        // symbol (`moduleLocalContributesGlobally` answers true for that name)
+        // and nothing merged its EXPORTS — which is where every augmented name
+        // actually lives. Runs AFTER the step-1b snapshot deliberately: the
+        // names it adds are augmentation-ADDED and must classify as
+        // non-module-visible in [computePerFileVisibility], exactly like a
+        // `declare module "spec"` augmentation's.
+        pass("init:mergeGlobalAugmentations") { mergeGlobalAugmentations() }
         // 1b2. INV.3(b)(ii): compute the per-file visibility sets now that the
         // membership of [globals] has settled (steps 0/1/1b) — feeds the
         // [globalsForFile] conflation gate always, and installs the INV.3(a)
@@ -14032,6 +14038,111 @@ class Checker(
      * names. This method resolves the augmentation specifiers and merges augmented exports
      * (namespaces, interfaces, etc.) into the corresponding global symbols.
      */
+    /**
+     * (CHK.50) Merge every LEGAL `declare global { … }` block's exports into
+     * [globals].
+     *
+     * **The carrier merged and the contents did not.** `declare global` parses
+     * as a `ModuleDeclaration` whose name is the Identifier `global`, so step 1
+     * ([moduleLocalContributesGlobally] answers true for that name) merged the
+     * CARRIER symbol into [globals] under the key `global` — and nothing ever
+     * merged its `exports`, which is where every augmented name lives. Measured
+     * on the (CHK.49) parent: of the eight declaration forms only `var` was
+     * observable at all, and only in the DECLARING file (ordinary file-local
+     * resolution); cross-file even that was silent. `function`, `namespace` and
+     * `class` typed as `any` — suppressed out of TS2304 by
+     * [globalAugmentationNames] and typed by nothing — while `interface`,
+     * `type` and `enum` were TS2304 outright and an `interface Date { … }`
+     * augmentation reported TS2339 on the member it had just declared.
+     *
+     * **Legality is POSITIVE EVIDENCE, not a name test.** A `global` block is an
+     * augmentation only where TS2669 does not fire, which
+     * [spineCheckGlobalAugmentation] states as: every ancestor is a
+     * ModuleBlock/ModuleDeclaration, no ancestor is a regular (identifier-named,
+     * non-`global`) namespace, and either the FILE is an external module or some
+     * ancestor is a string-literal-named ambient module. This walk mirrors that
+     * exactly by descending only through ambient-module bodies, so a
+     * top-level `declare global` in a global SCRIPT contributes nothing — which
+     * is what tsgo 7.0.2 does too (its names stay TS2304 there). The
+     * declaration-identity test (`it === stmt`) is the second half of the
+     * evidence: a module's own `const global = …` reaches this scope under the
+     * same key and must not have its members published globally.
+     *
+     * **Each carrier is merged ONCE.** `mergeSingleSymbol` does
+     * `declarations.addAll` with no membership test, and several `declare
+     * global` blocks in one file share ONE `global` symbol — so a per-BLOCK
+     * merge would append each augmented declaration as many times as the file
+     * has blocks. Dedupe is by symbol id.
+     */
+    private fun mergeGlobalAugmentations() {
+        val seen = HashSet<Int>()
+        val carriers = ArrayList<Symbol>()
+        for (result in binderResults) {
+            collectGlobalAugmentationCarriers(
+                result.sourceFile.statements,
+                result.locals,
+                fileIsModule = isModuleFile(result.sourceFile.statements),
+                insideAmbientModule = false,
+                seen = seen,
+                out = carriers,
+            )
+        }
+        for (carrier in carriers) {
+            val exports = carrier.exports ?: continue
+            for ((name, exported) in exports) {
+                // `namespace globalThis { … }` is not a namespace DECLARATION at all —
+                // it is tsc's syntax for augmenting the GLOBAL SCOPE ITSELF, so its
+                // members become bare globals and `globalThis` never becomes an ordinary
+                // symbol. Publishing it as one makes `globalThis.<anything undeclared>`
+                // a TS2339, which pristine tsc does not report (`extendGlobalThis`).
+                // Modelling the real semantics is queued as (CHK.53); refusing here
+                // leaves that shape exactly where (CHK.50) found it.
+                if (name == "globalThis") continue
+                val adopted = globals[name] == null
+                mergeSingleSymbol(globals, name, exported)
+                if (adopted) globals[name]?.let { globalAugmentationAddedSymbols[name] = it }
+            }
+        }
+    }
+
+    /**
+     * (CHK.50) The walk behind [mergeGlobalAugmentations] — see its KDoc for why
+     * the descent is restricted to ambient-module bodies.
+     */
+    private fun collectGlobalAugmentationCarriers(
+        statements: List<Statement>,
+        scope: SymbolTable,
+        fileIsModule: Boolean,
+        insideAmbientModule: Boolean,
+        seen: MutableSet<Int>,
+        out: MutableList<Symbol>,
+    ) {
+        for (stmt in statements) {
+            if (stmt !is ModuleDeclaration) continue
+            when (val nameNode = stmt.name) {
+                is Identifier -> {
+                    // A `global` block nested in a REGULAR namespace is TS2669 and
+                    // augments nothing, so a non-`global` identifier name is not
+                    // descended into at all.
+                    if (nameNode.text != "global") continue
+                    if (!fileIsModule && !insideAmbientModule) continue
+                    val carrier = scope["global"] ?: continue
+                    if (carrier.declarations.none { it === stmt }) continue
+                    if (seen.add(carrier.id)) out.add(carrier)
+                }
+                is StringLiteralNode -> {
+                    val body = stmt.body as? ModuleBlock ?: continue
+                    val inner = scope[nameNode.text]?.exports ?: continue
+                    collectGlobalAugmentationCarriers(
+                        body.statements, inner, fileIsModule,
+                        insideAmbientModule = true, seen = seen, out = out,
+                    )
+                }
+                else -> {}
+            }
+        }
+    }
+
     private fun mergeModuleAugmentations() {
         val processedSpecifiers = mutableSetOf<String>()
         for (result in binderResults) {
@@ -15258,6 +15369,11 @@ class Checker(
             for ((name, sym) in scriptFileNames) {
                 if (name !in fileScope) fileScope[name] = sym
             }
+            // (CHK.50) `declare global { … }` additions — global by construction,
+            // and therefore visible from every file exactly as a script-file local is.
+            for ((name, sym) in globalAugmentationAddedSymbols) {
+                if (name !in fileScope) fileScope[name] = sym
+            }
             // Own-file locals — visible to ourselves. Module files override
             // any same-name lib/script entries (matches TypeScript's local-
             // shadows-global semantics for the file's own declarations).
@@ -15651,10 +15767,6 @@ class Checker(
                             }
                             is FunctionDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
                             is ClassDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
-                            // (CHK.51): an INTERFACE inside `declare global` goes into its own
-                            // set — see [globalAugmentedInterfaceNames] for why it must not join
-                            // the value-space list beside it.
-                            is InterfaceDeclaration -> globalAugmentedInterfaceNames.add(inner.name.text)
                             // `export import x = A.y;` inside `declare global` registers `x` as a
                             // global alias (importAliasInModuleAugmentation) — suppress TS2304 on `x`.
                             is ImportEqualsDeclaration -> globalAugmentationNames.add(inner.name.text)
@@ -147280,7 +147392,8 @@ interface DataView {
      *     ([builtinLibDecls] — which covers the embedded lib and the real-lib
      *     snapshots alike), and
      *   * is not augmented by a `declare global { interface … }` block anywhere in
-     *     the program ([globalAugmentedInterfaceNames]), and
+     *     the program — since (CHK.50) such a block MERGES, so its interface is one
+     *     of the symbol's declarations and [cmamIsGlobalAugmentation] admits it — and
      *   * resolves to a non-null member table.
      * Anything else in the closure — a program interface, a base that is not an
      * interface reference, an unresolved member table — answers false and the
@@ -147324,6 +147437,30 @@ interface DataView {
      * are the soundness contract of a predicate whose entire job is to demand
      * positive evidence, and the libs are input this repo does not author.
      */
+    /**
+     * (CHK.50) Is [decl] an `interface` written inside a `declare global { … }`
+     * block? Such a declaration is as COMPLETE as a lib one for
+     * [cmamLibHeritageMembersComplete]'s purpose — it is a source file this
+     * compiler parses in one piece, and since (CHK.50) merged the block's exports
+     * its members are in the lib symbol's own table — so it must not make the
+     * closure look like a PROGRAM interface. Before (CHK.50) the block never
+     * reached [globals] at all, and the refusal was spelled the other way round
+     * as a NAME set (`globalAugmentedInterfaceNames`, deleted with this change):
+     * the two are ONE observable, and this direction is the one that reports
+     * `el.zzzNotThere` on an augmented `HTMLElement` the way tsgo 7.0.2 does.
+     */
+    private fun cmamIsGlobalAugmentation(decl: Node): Boolean {
+        if (decl !is InterfaceDeclaration) return false
+        var cur = (decl as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            if (cur is ModuleDeclaration && (cur.name as? Identifier)?.text == "global" &&
+                ModifierFlag.Declare in cur.modifiers
+            ) return true
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
     private fun cmamLibHeritageMembersComplete(objectType: Type.Object): Boolean {
         val root = when (objectType) {
             is Type.Reference -> objectType.target
@@ -147343,8 +147480,7 @@ interface DataView {
             if (!seen.add(t.id)) continue
             val sym = t.symbol ?: return false
             if (sym.declarations.isEmpty()) return false
-            if (!sym.declarations.all { it in builtinLibDecls }) return false
-            if (sym.name in globalAugmentedInterfaceNames) return false
+            if (!sym.declarations.all { it in builtinLibDecls || cmamIsGlobalAugmentation(it) }) return false
             resolveStructuredTypeMembers(t)
             if (t.properties == null) return false
             for (b in t.baseTypes ?: emptyList()) {
@@ -148659,12 +148795,40 @@ interface DataView {
     }
 
     /** Check if `propName` is exported from a namespace symbol. */
+    /**
+     * (CHK.50) Is [node] lexically inside a `declare`-modified ModuleDeclaration?
+     * That is TypeScript's ambient CONTEXT for a namespace body: every declaration
+     * in it is ambient and implicitly exported, whether or not it repeats the
+     * modifier. Ascends only through module machinery, so an unindexed/synthesized
+     * node (parent `null`) answers false.
+     */
+    private fun isInAmbientModuleContext(node: Node): Boolean {
+        var cur = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            if (cur is ModuleDeclaration && ModifierFlag.Declare in cur.modifiers) return true
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
     private fun isNameExportedFromNamespace(nsSym: Symbol, propName: String): Boolean {
         val memberSym = nsSym.exports?.get(propName) ?: return false
         // Sub-namespaces (Module flag) are always accessible
         if (memberSym.flags.hasAny(SymbolFlags.Module)) return true
         // Ambient namespaces (declare namespace) implicitly export all members
         if (nsSym.flags.hasAny(SymbolFlags.NamespaceModule)) return true
+        // (CHK.50) …and so does a namespace that is ambient by CONTEXT rather than
+        // by its own modifier. `declare global { namespace NodeJS { interface
+        // ProcessEnv … } }` — the shape every `@types` package is written in — gives
+        // the inner `namespace` no `declare` of its own, so [Binder]
+        // `bindModuleDeclaration` types it `ValueModule` and the flag test above
+        // misses; before (CHK.50) published the block's exports the receiver typed
+        // `any` and nothing asked. The context is exactly "an enclosing
+        // ModuleDeclaration carries `declare`", which covers `declare global`,
+        // `declare module "spec"` and `declare namespace A { namespace B { … } }`
+        // alike. Deliberately NOT widened to "the file is a .d.ts": that is a much
+        // larger population with corpus baselines over it and no defect asking for it.
+        if (nsSym.declarations.any { it is ModuleDeclaration && isInAmbientModuleContext(it) }) return true
         // Non-ambient: check for explicit ExportValue flag
         if (memberSym.flags.hasAny(SymbolFlags.ExportValue)) return true
         for (decl in memberSym.declarations) {
