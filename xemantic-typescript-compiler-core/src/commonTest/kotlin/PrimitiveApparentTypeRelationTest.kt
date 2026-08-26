@@ -220,6 +220,21 @@ class PrimitiveApparentTypeRelationTest {
     }
 
     @Test
+    fun `a MISSING wrapper must answer null and not any - the embedded lib has no BigInt`() {
+        // The embedded lib declares String, Number, Boolean and Symbol but NOT BigInt,
+        // so `primitiveApparentWrapper` finds nothing here and the leg is a no-op. The
+        // reason that matters is the direction of the alternative: had it answered
+        // `anyType` the way `getApparentType` does, every bigint source would relate to
+        // every object target — a false NEGATIVE, which no gate in this repo can see.
+        diagnose(
+            """
+            declare function wants(o: { zzzNotOnBigInt: number }): void
+            export function f(g: bigint) { wants(g) }
+            """
+        ) should { have(any { it.code == 2345 }) }
+    }
+
+    @Test
     fun `an ENUM target is member-less and must not relate vacuously through Number`() {
         diagnose(
             """
