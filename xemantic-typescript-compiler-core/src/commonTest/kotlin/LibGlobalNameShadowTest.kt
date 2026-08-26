@@ -232,6 +232,50 @@ class LibGlobalNameShadowTest {
     }
 
     /**
+     * The second chance must NOT fire for a shadow that HAS a value meaning of
+     * its own: a module's `const Date = { … }` is the value `Date` in that file,
+     * and handing the lib's constructor back would be the defect inverted.
+     * Falsifying arm a7 (the helper's two value-meaning refusals dropped).
+     */
+    @Test
+    fun `a VALUE shadow of a lib global is not overridden by the lib value`() {
+        val diagnostics = diagnose(
+            """
+            export const Date = { zzzOwn: 1 }
+            export const zzzA: number = Date.zzzOwn
+            export const zzzB = Date.now()
+            """,
+            directives = realLibs,
+        )
+        val ts2339 = diagnostics.filter { it.code == 2339 }
+        assert(ts2339.size == 1)
+        assert(ts2339.single().message == "Property 'now' does not exist on type '{ zzzOwn: number; }'.")
+    }
+
+    /**
+     * …and the same when the value shadow arrives as an IMPORT. The identifier
+     * position hands the helper the RAW alias, so the alias must be resolved
+     * onward before its meanings are read. Falsifying arm a6 (that hop dropped).
+     */
+    @Test
+    fun `an imported VALUE shadow of a lib global is not overridden by the lib value`() {
+        val diagnostics = diagnose(
+            """
+            // @Filename: zzzVals.ts
+            export const Date = { zzzOwn: 1 }
+            // @Filename: zzzUse.ts
+            import { Date } from "./zzzVals"
+            export const zzzA: number = Date.zzzOwn
+            export const zzzB = Date.now()
+            """,
+            directives = realLibs,
+        )
+        val ts2339 = diagnostics.filter { it.code == 2339 }
+        assert(ts2339.size == 1)
+        assert(ts2339.single().message == "Property 'now' does not exist on type '{ zzzOwn: number; }'.")
+    }
+
+    /**
      * A namespace-qualified heritage target resolves through the file's OWN
      * namespace. `resolveHeritageBaseSymbol`'s Identifier root was a raw `globals`
      * consult, so before (CHK.49) this worked ONLY while the namespace's name

@@ -115315,11 +115315,17 @@ interface DataView {
      *
      * [libValueShadowNames] is empty for every program that shadows no lib
      * global, which is the guard that keeps this off the hot identifier path.
+     *
+     * There is deliberately NO `lib === local` early exit. It was written and
+     * ablated (arm a8) and is provably unobservable: at the identifier site
+     * [local] comes from a [BinderResult]'s own locals, which never holds the lib
+     * symbol, and at the callee site the two coincide only for a file that does
+     * NOT declare the name — where both branches go on to call
+     * `getTypeOfSymbol(lib)`.
      */
     private fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? {
         if (name !in libValueShadowNames) return null
         val lib = libGlobals[name] ?: return null
-        if (lib === local) return null
         var resolved = local
         if (resolved.flags.hasAny(SymbolFlags.Alias)) {
             resolved = resolveImportedSymbolGeneral(resolved) ?: resolved
