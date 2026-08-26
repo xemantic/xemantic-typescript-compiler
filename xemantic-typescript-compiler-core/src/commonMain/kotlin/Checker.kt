@@ -145294,6 +145294,100 @@ interface DataView {
     }
 
     /**
+     * (CHK.46) THE DECLARED TYPE OF A **DESTRUCTURED** RECEIVER — the one shape the
+     * property-access family types NOWHERE.
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc`, `const { inner } = h; inner.zzznope`
+     * reports NOTHING where tsc reports TS2339, and — unlike (CHK.44)'s population —
+     * it is not a block-scoping gap: a file-level `const`, a body-local and a
+     * destructured PARAMETER are all equally silent, in the arrow form as much as the
+     * declaration form. The two routes into [cmamGeneralReceiverType] fail for two
+     * different reasons and this helper repairs both:
+     *  - a BOUND binding name (a file-level pattern) reaches `identSymbol`, and
+     *    `getTypeOfSymbol` has **no `BindingElement` arm**, so it answers `anyType`;
+     *  - an UNBOUND one (a body-local pattern, or any parameter pattern) reaches the
+     *    `else` branch, where `getTypeOfIdentifier` answers `anyType` as well —
+     *    `currentLocalTypes` does not carry it in this pass and
+     *    [currentParamBindingNames] is a deliberate blanket `anyType` for the
+     *    parameter half (M3.1 round 429).
+     *
+     * ### Why resolving it here cannot re-open round 429
+     *
+     * That bail exists because a destructured parameter name FALLING THROUGH resolved
+     * to a same-named FUNCTION in the merged globals (sys.ts's
+     * `useCaseSensitiveFileNames`, 9 self-compile false positives). This helper never
+     * falls through to any name table: it finds the [BindingElement] **syntactically**,
+     * innermost-first from the reference itself — through the INV.2(c) lexical scopes
+     * (round 748's `symbols`-only rule, so a conventionally-bound name is untouched)
+     * and, for a bound file-level pattern, through the reference's own per-file symbol.
+     * A name that resolves to something other than a binding element answers null and
+     * the caller keeps its legacy bail.
+     *
+     * ### The refusals, and which are measurements
+     *
+     *  - `currentLocalTypes` / [currentShadowedNames] entries keep winning, for
+     *    (CHK.44)'s reason: an `anyType` recorded there is a DELIBERATE suppression.
+     *  - a REST element (`const { ...rest } = h`) — its type is the source minus the
+     *    named members, which this does not compute.
+     *  - an ARRAY pattern — [typeCaptureDestructured] answers null for one, so tuple
+     *    and iterable destructuring is out of scope by construction.
+     *  - MORE THAN ONE member symbol for the name (a union source answering per
+     *    constituent) — the receiver is then a union of member types this does not
+     *    build; a single answer is required.
+     *  - a NULLISH result — (CHK.44)'s measured guard: `A | undefined` is annotated in
+     *    order to be narrowed, and tsc reports such a receiver as TS18048, not TS2339.
+     *  - a CLASS instance type — both callers hand this type straight back as the
+     *    receiver type, which skips their own `instanceof`-narrowing bail
+     *    ([tryEmitClassInstanceMissingTs2339]); refusing it here keeps that bail's
+     *    verdict rather than routing round it.
+     *  - an unresolved type parameter anywhere in the source or the member type.
+     */
+    private fun cmamDestructuredReceiverType(objectExpr: Identifier): Type? {
+        val name = objectExpr.text
+        if (currentLocalTypes.containsKey(name)) return null
+        if (name in currentShadowedNames) return null
+        val element = cmamBindingElementDeclaration(objectExpr, name) ?: return null
+        if (element.dotDotDotToken) return null
+        val memberName = (element.propertyName ?: element.name) as? Identifier ?: return null
+        val source = typeCaptureDestructured(element, 0) ?: return null
+        if (source === anyType || source === errorType || source === unknownType) return null
+        if (typeContainsUnresolvedTypeParam(source)) return null
+        val symbols = ArrayList<Symbol>(2)
+        typeCaptureCollectMembers(source, memberName.text, symbols, 0)
+        val member = symbols.singleOrNull() ?: return null
+        val t = getTypeOfSymbol(member)
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (typeContainsUnresolvedTypeParam(t)) return null
+        if (typeHasNullishConstituent(t)) return null
+        if (t is Type.Interface && t.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return null
+        return t
+    }
+
+    /**
+     * (CHK.46) The [BindingElement] that declares [name] at [objectExpr], or null.
+     *
+     * Innermost-first from the REFERENCE, so shadowing falls out for free. The
+     * lexical tables are consulted FIRST because they are the only ones that hold a
+     * body-local or a parameter pattern at all ([Binder.bindLexicalBindingName]
+     * recurses into both binding-pattern kinds); the per-file symbol is the fallback
+     * for a FILE-LEVEL pattern, which the main binder does bind and which round 748's
+     * `symbols`-only rule therefore keeps out of the lexical tables.
+     *
+     * A multi-declaration symbol answers null for [cmamBlockScopedReceiverType]'s
+     * reason: a merged symbol cannot say which declaration a given reference means.
+     */
+    private fun cmamBindingElementDeclaration(objectExpr: Identifier, name: String): BindingElement? {
+        val lexical = lexicalScopeSymbol(objectExpr, name)
+        if (lexical != null) {
+            if (lexical.declarations.size != 1) return null
+            return lexical.valueDeclaration as? BindingElement
+        }
+        val perFile = lookupPerFileForNode(objectExpr, name) ?: return null
+        if (perFile.declarations.size != 1) return null
+        return perFile.valueDeclaration as? BindingElement
+    }
+
+    /**
      * (CHK.45) IS THIS UNION CONSTITUENT ONE WHOSE **ABSENCE** OF A PROPERTY WE
      * MAY BELIEVE?
      *
@@ -145442,7 +145536,16 @@ interface DataView {
         // substitution. See [cmamBlockScopedReceiverType].
         val rawForNarrowing = getTypeOfExpression(objectExpr).let { t ->
             if (t === anyType && objectExpr is Identifier) {
-                cmamBlockScopedReceiverType(objectExpr) ?: t
+                cmamBlockScopedReceiverType(objectExpr)
+                    // (CHK.46) a DESTRUCTURED receiver answers `any` here too. Only its
+                    // UNION reading is substituted at this site, for (CHK.44)'s measured
+                    // reason: the union block below consults the flow before reporting
+                    // and every other declared type falls through to a branch that does
+                    // not. The non-union reading is supplied at the two `any` bails
+                    // instead, which sit under [checkMemberAccessMissing]'s deferred
+                    // flow suppression.
+                    ?: cmamDestructuredReceiverType(objectExpr)?.takeIf { d -> d is Type.Union }
+                    ?: t
             } else t
         }
         CpaSections.atR(CpaSections.R_OT_UNION)
@@ -145547,6 +145650,10 @@ interface DataView {
                     // flow narrowed this reference to something concrete. See
                     // [cmamNarrowedAnyReceiverType].
                     cmamNarrowedAnyReceiverType(objectExpr, rawType)?.let { return Pair(it, null) }
+                    // (CHK.46) `getTypeOfSymbol` has no [BindingElement] arm, so a BOUND
+                    // destructured name arrives here as `any`. See
+                    // [cmamDestructuredReceiverType].
+                    cmamDestructuredReceiverType(objectExpr)?.let { return Pair(it, null) }
                     tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
                     return null
                 }
@@ -145646,6 +145753,11 @@ interface DataView {
                 // (a catch parameter, an un-annotated local). See
                 // [cmamNarrowedAnyReceiverType].
                 cmamNarrowedAnyReceiverType(objectExpr, rawType)?.let { return Pair(it, null) }
+                // (CHK.46) a body-local or PARAMETER binding pattern reaches this bail —
+                // `currentLocalTypes` does not carry it in this pass and
+                // [currentParamBindingNames] answers `anyType` on purpose. See
+                // [cmamDestructuredReceiverType].
+                cmamDestructuredReceiverType(objectExpr)?.let { return Pair(it, null) }
                 return null
             }
             // 16.0: For primitive types, use the apparent (wrapper) type so that

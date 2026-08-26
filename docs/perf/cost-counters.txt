@@ -1,7 +1,7 @@
 # COST.1 baseline — deterministic checker cost counters.
 #
 # Produced by: scripts/cost_gate.py --update  (profile: compiler)
-# Recorded:    2026-08-25 at 2d89db706e39+dirty
+# Recorded:    2026-08-26 at 05102f0a2b5b+dirty
 #
 # These are COUNTS, not times: they are identical across runs and boxes,
 # which is the whole point — a laptop's wall clock swings +/-13% and cannot
@@ -22,18 +22,18 @@ output.programFiles      78
 preparse.reused          78
 preparse.fresh           0
 spine.nodes              856962
-typeOfExpr.calls         580968
-typeOfExpr.distinct      225096
+typeOfExpr.calls         587332
+typeOfExpr.distinct      225271
 typeOfExpr.outsideInit   0
-narrow.walks             32044
+narrow.walks             32154
 narrow.walksOutsideInit  0
-narrow.memoServed        43035
-typeNode.cacheable       176512
-typeNode.cacheHits       117165
-typeNode.bypassed        145570
-mapped.keyed             26212
-mapped.hits              6504
+narrow.memoServed        43133
+typeNode.cacheable       178997
+typeNode.cacheHits       119618
+typeNode.bypassed        145692
+mapped.keyed             26316
+mapped.hits              6599
 ctxFingerprint.builds    0
-globals.lookups          752007
+globals.lookups          759945
 globals.conflated        0
-globals.misses           734503
+globals.misses           742400
