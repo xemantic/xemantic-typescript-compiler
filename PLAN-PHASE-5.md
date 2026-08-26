@@ -20,6 +20,98 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.42)+(CHK.43) — the three grid rows that blocked the return-position walk were ALL false positives we already shipped; the walk is in, `added=0 removed=0` on all eight
+
+**THE ROUND'S SHAPE.** (CHK.40) measured the two-line return-position walk at FULL parity with
+tsgo and refused to land it on one number: the 8-profile grid gained **3 rows**. This round
+diagnosed each row rather than accepting or overriding the number, and **none of the three is a
+genuine error tsc also reports** — all three are ours, and all three are reproducible on a
+REBUILT PARENT binary, i.e. the walk exposes them rather than creating them.
+
+**ROW 1 — (CHK.43): A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE, FULL STOP.**
+`inferSimpleExprType`'s `AsExpression` / `TypeAssertionExpression` arms answered the asserted
+type when `resolveSimpleTypeName` could render it and **the OPERAND's type when it could not**
+— an array, tuple, function type, type literal, indexed access. For `x as unknown as T` the
+operand's type is `unknown`, precisely the type the outer assertion exists to assert away, so
+the string-based fallback compared `unknown` against the annotation. The honest answer at that
+layer is "unknowable", i.e. null, which makes every caller SKIP its string check; the engine
+above is untouched and still decides every assertion whose source genuinely does not relate,
+naming the real asserted type (`p1` is byte-identical to tsgo).
+
+**AND THE ITEM'S TRIGGER WAS WRONG IN A WAY WORTH KEEPING.** It recorded ">= 3-member union";
+the rule is **"the target union carries an ARRAY member"**, and `A | (B|A)[]` (two members)
+fires. The mechanism explains the narrowness: the string fallback runs only after the ENGINE
+has declined to decide, and the engine declines exactly when the source DOES relate — so the
+FP needs a target the WRONG source type (`unknown`) fails against while the right one (`B[]`)
+passes. A bare array target and an array-free union are not such targets.
+
+**ROWS 2 AND 3 — ONE DEFECT, AND IT IS NOT ABOUT ASSERTIONS: A PARAMETER ALWAYS INTRODUCES A
+BINDING.** Both `importFixes.ts` rows reduce to
+`flatMap(exportInfo, (exportInfo, i) => … mapDefined(specs, (spec): F | undefined => ({ …,
+exportInfo })))` — the callback parameter deliberately SHADOWS the enclosing function's
+`exportInfo`, and the shorthand read came back as the OUTER
+`readonly (SymbolExportInfo | FutureSymbolExportInfo)[]`. `currentLocalTypes` is a **flat COPY**
+of the enclosing scope ([EpochMap]), so a parameter that nothing registers is not merely
+untyped: the enclosing entry is still sitting there. Round 569 correctly refuses to register an
+un-inferred contextual type parameter (`mapDefined<T,U>`'s `T`) and its own comment said "the
+param stays `any`" — **it did not, it stayed absent.** A pre-pass in `ctaTypeParamsIntoLocals`
+registers `anyType`, which is round 475's value for exactly this purpose on binding-pattern
+parameters and is also the correct type (such a parameter IS implicitly `any`). PRE, so every
+later write wins.
+
+**MEASURED "SHIPPED, NOT CREATED" RATHER THAN ARGUED.** On a rebuilt parent (positive control:
+`javap` counts 11 `inferSimpleExprType` call sites before, 9 after) the shadowing FP fires in an
+EXPRESSION-STATEMENT position the walker has reached for many rounds; only the `return`-position
+instance needs (CHK.42). (CHK.43) was reproduced on the pristine HEAD binary in four lines.
+
+**GRID, ATTRIBUTED IN THREE ARMS RATHER THAN ONE.** Parent -> (CHK.43) alone: `added=0
+removed=0` on all 8 (the shape is not in tsc's sources at a position the parent walks). Parent
+-> (CHK.43)+walk: the `checker.ts:10950:25` row is GONE and the two `importFixes.ts` rows
+remain, on harness/server/services. Parent -> all three: **`added=0 removed=0` on all eight.**
+
+**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 `ChainedAssertionSourceTypeTest`, 4
+`ContextualParamShadowingTest`, 10 `ReturnPositionFunctionBodyTest`), **zero corpus baselines
+moved**. `cost_gate.py` PASSES with no rebaseline — `output.errors` **46**, `spine.nodes`
++0.00%, largest `mapped.hits` +1.43%, `globals.misses` +0.93%. `huge_methods.py --fail-over 0`
+exit 0, **783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms**
+[53, 59, 52, 58] — one draw, read the spread. `capture-equivalence` **1,005 spans / 43 of 76 /
+`narrowRendersMoreAny` 0**, the standing state unmoved; `definitions` 360,361 -> **360,376**,
+the expected direction (a parameter that now has a type renders differently). knip **66 -> 66**
+with every row identical, BEFORE arm rebuilt in the same session against the same
+`node_modules`.
+
+**ABLATION — SEVEN ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT AND EACH
+DRY-RUN FOR A REAL DIFF AGAINST THAT SNAPSHOT FIRST.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | (CHK.43) restore the `as` operand fallback | **3** — the three `as` negatives |
+| a2 | (CHK.43) restore ONLY the legacy `<T>expr` fallback | **1** — uniquely the angle-bracket row |
+| a3 | drop the LEGACY `checkTypeAssignabilityInStatements` return-arm walk | **1** — uniquely a `return` nested one function deeper |
+| a4 | drop the SPINE anchor's return-arm walk | **7** — every one-level return shape |
+| a5 | drop `contextualizeFnExprFromAnnotation` from both return arms | **1** — uniquely the REST parameter |
+| a6 | drop the parameter-shadow pre-pass | **2** — uniquely both shadowing rows |
+| a7 | make the shadow a POST-pass (clobbering the contextual write) | **22** — every contextual param type and every hover |
+
+**a3/a4 REFUTE THE ITEM'S OWN GUESS ABOUT WHICH ARM EMITS.** It said the anchor runs
+`recordOnly` and truncates "so the legacy arm is what EMITS"; measured, the partition is by
+NESTING — the anchor emits for a `return` in a top-level function's body (7 rows) and the
+legacy arm for a `return` inside a nested one (1 row). Both are needed; neither is redundant.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE CORRECTION.** a5 read **0 RED** on
+its first run, which is the signature of a leg to delete rather than ship un-gateable. It is not
+one: `applyPulledContextualParamTypes` skips a `...rest` parameter BY CONSTRUCTION, so B183's
+annotation contextualizer is the only thing that types one in a return position — a single pin
+on that shape took a5 to 1 RED. The generalizable move is to ask **what shape only this leg can
+serve**, derived from the SIBLING's own gate, before reading a green arm as a dead leg.
+
+**RESIDUE, NOT FIXED, MEASURED.** (i) `function f(): (() => F | undefined) { return () => ({ …
+wrong … }) }` — tsgo reports the whole ARROW as not assignable to the annotation; we report
+nothing, because a returned function-VALUE's own assignability against the return annotation is
+not checked (a false negative, unrelated to the walk). (ii) `const x: A = r as unknown as B[]`
+reports `Property 'c' is missing … in type 'A'` where tsgo says `'a'` — a wrong missing-property
+NAME in the TS2741 elaboration, seen while validating a control. Neither blocks anything here.
+
 ### Round (CHK.40) — an `async` function's INFERRED return type is a `Promise`, and it was wrong in BOTH directions; the item's fifth gap was a symptom of it, and its (a)/(b)/(d) are blocked on a whole family of unwalked bodies
 
 **THE ITEM'S DIAGNOSIS OF (e) WAS WRONG, AND THE ROOT CAUSE IS BIGGER THAN THE ITEM.** (e)
@@ -986,91 +1078,6 @@ oracle; a change is an improvement only if the REPLAY-WORSE **element-pair** cou
 Python's default universal-newline translation collapses `\r\n` and shifts every offset —
 so a caret file built from the compiler's own `(start, end)` lands on a **plausible wrong
 identifier**, silently. Both new scripts read with `newline=""`.
-
-### Round (INC.33) — REFUSED: a capture request is priced per ANCHOR where an editor needs a price per ANSWER, and the widened hover costs **+286 ms / +25.1 s** to save a **204 / 2,078 ms** completion
-
-**WHAT THIS ROUND DID.** Priced the one candidate (INC.32) left standing. A hover's file-wide
-request carries `spans`; a member completion asks `memberSpans`, so a completion in an
-already-hovered buffer still BUILDS (~201-228 ms). That is CORRECT under (INC.14) — *an answer
-that was never asked for is ABSENT* — not a cache defect, so the only fix available was to
-WIDEN the file-wide capture / `prepare` to carry member + scope + signature anchors, exactly as
-(INC.13) widened the TYPE channel from a caret to a file for **+9-17 ms**. **The trade does not
-hold, by 1.4x on `binder.ts` and 12x on `checker.ts`, and it is refused a second time,
-independently, on RETENTION.** No compiler code changed; the instrument is kept
-(`scripts/inc33-widen-cost.sh`, `Inc33WidenMain`) so the refusal is re-takeable.
-
-**THE POPULATIONS A WIDENED REQUEST WOULD NAME** — and every one is biased IN FAVOUR of the
-widening, so this refuses the cheapest variant that could work:
-
-| file | chars | occurrence spans (hover today) | receivers | calls | scope owners | all nodes |
-|---|---:|---:|---:|---:|---:|---:|
-| `es2019.ts` | 1.5 K | 80 | 11 | 9 | 13 | 171 |
-| `binder.ts` | 194 K | 7,787 | 1,749 | 1,038 | 785 | 16,842 |
-| `checker.ts` | 3.15 M | 125,289 | 24,950 | 18,594 | 13,601 | 275,478 |
-
-The scope column is the FAVOURABLE one: `scopeAnchorAt` answers the innermost ENCLOSING node,
-so a naive free-name widening needs the ALL-NODES column, not that one.
-
-**THE COST TABLE** (ms; cold narrowed builds through `ProjectCompiler`, the memo deliberately
-bypassed so no row is a memo hit wearing a build's clothes; two batches, batch 2 replicating
-batch 1 on every sign):
-
-| arm | `binder.ts` b1 | `binder.ts` b2 | `checker.ts` |
-|---|---:|---:|---:|
-| base, no capture | 248 | 201 | 2,407 |
-| `spans.file` — **hover today** | 275 | 300 | 3,624 |
-| `member.caret` — **completion today** | 270 | 204 | 2,078 |
-| `members.file` | 380 | 371 | 6,950 |
-| `scopes.file` | 365 | 366 | **23,011** |
-| `sigs.file` | 261 | 228 | 2,033 |
-| `spansMembers.file` — cheapest shippable | — | 396 | 5,733 |
-| `all.file` — **widened hover** | 607 | 586 | **28,751** |
-
-**THE DECIDING NUMBER.** A widened hover costs **+286 ms on `binder.ts`** and **+25.1 s on
-`checker.ts`** to save a completion build of **204 ms / 2,078 ms**: break-even **1.40** and
-**12.1 completions per hover IN A BUFFER WITH NO EDIT SINCE** — and the dominant completion
-path types a `.` first, which IS an edit, which clears the memo, so the realistic ratio is far
-below 1. The separation is not noise: `spans.file` and `all.file` ranges are **disjoint in both
-batches** ([242-439] vs [547-674]; [251-424] vs [561-703]). Even the cheapest shippable variant
-— occurrences + members, no scopes — is +96 ms on `binder.ts` for a break-even of 0.47 but
-**+3,326 ms on `checker.ts` for 1.60**, and it makes **EVERY hover ~32% dearer** to serve a case
-reachable only when nothing has been typed.
-
-**THE SECOND, INDEPENDENT REFUSAL IS RETENTION, AND IT IS THE HARDER ONE.** One widened entry
-holds, per file:
-
-| | types+defs | memberItems | scopeNames | sigItems | total | vs today's hover entry |
-|---|---:|---:|---:|---:|---:|---:|
-| `binder.ts` | 16,488 | 243,178 | 538,354 | 511 | 798,531 | **48x** |
-| `checker.ts` | 265,550 | 4,274,434 | **49,879,917** | 9,540 | **54.4 M** | **205x** |
-
-(INC.32) keeps `CAPTURE_MEMO_BUFFERS` of those. The scope channel is nearly the whole of it and
-the cause is STRUCTURAL rather than incidental — `CapturedScope`'s own KDoc already records it:
-a free-name caret sees hundreds of names, almost all lib globals, and a widened request repeats
-that set at **every one of 13,601 anchors**. **O(anchors x globals).**
-
-**WHAT WOULD FLIP THE ANSWER — THE TRANSFERABLE HALF.** Not a wider request. **A request is
-priced PER ANCHOR; an editor needs a price PER ANSWER.** The only shape with that property is a
-re-entrant capture against a retained checker — (INC.17)'s `ProgramRecheck`, which can answer a
-span nobody asked for up front WITHOUT a new build. It sits behind (INC.40)'s diagnostics-only
-valve because its captured-TYPE channel diverges from a fresh build in **43 of 75 files**, so
-**closing that divergence — (INC.41) — is the named unblocker for the whole caret-channel
-latency story**, and a wider request is not a substitute for it. A free-name widening would
-ADDITIONALLY need `CapturedScope` to stop repeating the global set per anchor (49.9 M names, two
-orders of magnitude of headroom), and even then `scopes.file`'s **+19.4 s** on `checker.ts`
-stands on its own.
-
-**THE INSTRUMENT'S OWN GUARDS**, because a measurement that cannot fail is not one: the script
-REFUSES rather than skips when the profile or the runner is absent (rounds 853/873), and its
-positive control is ABLATED — an empty output and a zero population both refuse, and a base arm
-under a 50 ms floor refuses too, since a narrowed build of a real 78-file program is not a
-sub-100 ms thing (round 947: exit 0 says the JVM finished, not that anything was measured).
-
-**GATES.** Suite **15,824 / 0 / 3**, unchanged — no compiler code, no gradle, no baseline. Every
-number on this page is WALL TIME on a local artifact and on one box, so **none of it is pinned by
-any test**: re-take it with `scripts/inc33-widen-cost.sh` rather than quoting it. The two batches
-were drawn at `dbbb900e`; `cost_gate.py` and `huge_methods.py` are CONTROLS here and were not
-run (the round adds one jvmTest `main` runner and one script).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2456,7 +2463,7 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   arms, each with uniquely-its-own failures. **(a)/(b)/(d) are pinned as TS7006 SUPPRESSION
   plus a HOVER and not as a diagnostic, because of (CHK.42) below.**
 
-- [ ] **(CHK.42) A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOT CHECKED AT ALL —
+- [x] **(CHK.42) DONE 2026-08-26 — SHIPPED. A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOT CHECKED AT ALL —
   the ONE expression position that does not reach `walkFunctionBodiesInExpr`, and the fix
   is TWO LINES that are already measured.** Found and measured during (CHK.40) against an
   obviously wrong `const q: number = "s"` nested one level down: a file-level var-decl
@@ -2475,9 +2482,13 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   FixAddJsdocTypeImport | undefined`), UNCHARACTERIZED. So this item is: characterize the
   importFixes pair, fix it and (CHK.43), then land the two lines. Reproduction of the walk's
   own value is one `git diff` — the arm and its positive control are in the (CHK.40) session
-  note.
+  note. **OUTCOME: the importFixes pair was ONE defect and it was ours and SHIPPED — an
+  un-annotated parameter whose contextual type cannot be determined was registered nowhere, so
+  the deliberately-shadowing callback parameter resolved to the ENCLOSING function's binding.
+  Fixed with a `anyType` shadow pre-pass; with it and (CHK.43) the grid is `added=0 removed=0`
+  on all eight and the walk is shipped.**
 
-- [ ] **(CHK.43) A CHAINED `x as unknown as T` IN A `return` KEEPS THE **INNER**
+- [x] **(CHK.43) DONE 2026-08-26 — A CHAINED `x as unknown as T` IN A `return` KEEPS THE **INNER**
   ASSERTION'S TYPE WHEN THE RETURN ANNOTATION IS A ≥3-MEMBER UNION — a SHIPPED false
   positive, reachable today at top level.** Four lines:
   `interface A { a: number } interface B { b: number }` +
@@ -2489,7 +2500,11 @@ so (INC.2) and (INC.3) below are what is left, in that order.
   something downstream from bailing. It is one of the 3 rows blocking (CHK.42) and it is
   independent of it. **It has nothing to do with type parameters** — its first sighting was
   as an "an outer function's `T` does not resolve in a nested function expression" theory,
-  which one probe falsified.
+  which one probe falsified. **OUTCOME: the trigger is NOT ">= 3 members" but "the target union
+  carries an ARRAY member" (`A | (B|A)[]` fires). Root cause: `inferSimpleExprType`'s assertion
+  arms fell back to the OPERAND's type whenever `resolveSimpleTypeName` could not render the
+  asserted one; for `x as unknown as T` that is the type being asserted away. Both assertion
+  spellings fixed; grid `added=0 removed=0` on all eight for this change alone.**
 
 - [ ] **(CHK.36) THE "A CommonJS FILE CANNOT IMPORT AN ES MODULE" FAMILY IS NOT
   IMPLEMENTED AT ALL — TS1479 / TS1471 / TS1286 / TS1203 / TS1202.** Audited during

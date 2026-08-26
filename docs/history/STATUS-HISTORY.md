@@ -1,3 +1,39 @@
+**`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
+DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
+(CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`
+all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in tsc's order:
+every diagnostic preceded by a directive is dropped and marks that directive USED, then every
+`@ts-expect-error` that marked nothing is reported **TS2578**. The walk-up rule already
+existed with exactly one caller; the general FILTER was what was missing, exactly as the queue
+item said. **THE ITEM'S SIZE WAS WRONG IN THE HELPFUL DIRECTION**: a real two-arm 8-profile
+grid (pre-(CHK.31) `Checker.kt` rebuilt into the class dir, positive-controlled by `javap`)
+reads **`added=0 removed=0` on all eight**, and the whole corpus moved **one** baseline.
+**THAT ONE BASELINE IS THE FINDING.** `isolatedModulesExportDeclarationType`'s `/test4.ts`
+puts `@ts-expect-error` over an import of `./doesntexist`; pristine reports 0 errors there
+(it emits TS2307 and the directive eats it) while WE emitted no TS2307 at all, because the
+commonjs relative-import branch pre-suppressed its own emission. **A diagnostic a compiler
+declines to EMIT turns every `@ts-expect-error` above it into a false TS2578** — both ad-hoc
+pre-suppressions are deleted and suppression happens only where it can be counted.
+**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES AND COULD NOT HAVE BEEN FOUND BY
+RUNNING THEM**: `disableJsDiagnostics.ts` writes the prose comment ``// Only need to add
+`// @ts-ignore` for a line once.``, and since both of tsc's directive regexes anchor at the
+comment's OWN start, a backward `lastIndexOf("//")` read that sentence as a live directive.
+The grid is green with and WITHOUT the fix (the falsely-silenced line carries no diagnostic);
+only a tsgo differential separates them. The opener is now a string-aware FORWARD scan.
+**Every one of the 25 pins was read out of `tools/tsgo-7.0.2/lib/tsc`, and two contradict the
+obvious guess**: `@ts-ignoreXYZ` IS a directive (no trailing word boundary in either
+reference) and a directive on an INNER line of a block comment is NOT one.
+**GATES.** Suite **15,860 / 0 / 3** (+25 pins); `cost_gate.py` PASSES with `output.errors`
+**46** and the standing stale-baseline drifts unmoved (`mapped.hits` +1.63%);
+`huge_methods.py --fail-over 0` exit 0, **783** classes scanned (782 last round, so not
+blind); `partition-equivalence` **EQUIVALENT 78/78** plus 4/4 on a purpose-built
+directive-carrying project, `partition-gate` sensitivity arm **EQUIVALENT 76/76**;
+`capture-equivalence` **1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**.
+**Ablation: 8 arms, one mistake each — a5 (partition scoping), a6 (backward `lastIndexOf`)
+and a7 (block-comment inner line) each redden EXACTLY the pin that names them; a8's own pin
+is NOT uniquely discriminating and is recorded as a shared guard rather than claimed.**
+`// @ts-nocheck` is deliberately untouched — a FILE-level switch, not a line-level one.
+
 **THE PROGRAM WAS PARSED *TWICE* AND BOTH COPIES WERE KEPT — LANGUAGE-SERVICE RETENTION
 **264 -> 177 MB (-33%)** (2026-08-25, (INC.36)).** A ten-step subtraction ladder over
 `liveAfterGc` attributed the 264 MB a whole-program `referencesAt` sweep holds:

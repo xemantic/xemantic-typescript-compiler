@@ -1,5 +1,53 @@
 # Status
 
+**A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOW CHECKED AT ALL — AND BOTH ROWS THAT
+BLOCKED IT WERE FALSE POSITIVES WE ALREADY SHIPPED (2026-08-26, (CHK.42) + (CHK.43)).**
+(CHK.40) measured the walk at full parity with tsgo and refused to land it because the
+8-profile grid gained **3 rows**. Diagnosed one at a time, all three are OURS and none is a
+genuine error: one is **(CHK.43)** and two are one defect in `importFixes.ts` — and BOTH are
+reproducible on a rebuilt parent binary in positions the walker has reached for many rounds.
+With the two fixes in, the grid is **`added=0 removed=0` on all eight** and the walk shipped.
+
+**(CHK.43) A TYPE ASSERTION'S VALUE HAS THE *ASSERTED* TYPE.** `inferSimpleExprType`'s two
+assertion arms answered the OPERAND's type whenever `resolveSimpleTypeName` could not render
+the asserted one (an array, tuple, function type, type literal) — and for the
+`x as unknown as T` escape hatch the operand's type is `unknown`, i.e. exactly what the outer
+assertion exists to assert away. `function m(): B | A | (B|A)[] { return r as unknown as B[] }`
+reported `Type 'unknown' is not assignable…`; tsgo 7.0.2 is silent. The item recorded a
+">= 3-member union" trigger; the real rule is **"the union carries an ARRAY member"** —
+`A | (B|A)[]` fires too — because the string fallback is only reached after the engine has
+declined, and the engine declines exactly when the source DOES relate.
+
+**(CHK.42)'s SECOND HALF: A PARAMETER ALWAYS INTRODUCES A BINDING.** `currentLocalTypes` is a
+flat COPY of the enclosing scope, so an un-annotated parameter that nothing could type was not
+merely untyped — the enclosing scope's same-named entry was still there and every read
+resolved to IT. Round 569's refusal to register an un-inferred contextual type parameter is
+correct and its comment said "the param stays `any`"; it did not, it stayed ABSENT. That is
+`flatMap(exportInfo, (exportInfo, i) => … { …, exportInfo })` in tsc's own `importFixes.ts`,
+reported as a TS2322 tsc does not have. A pre-pass registers `anyType` — round 475's value for
+exactly this purpose, and the correct one, since such a parameter IS implicitly `any`.
+
+**GATES.** Suite **15,950 / 0 / 3** (+22 pins: 8 + 4 + 10), **zero corpus baselines moved**.
+`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
+largest movement `mapped.hits` **+1.43%**. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **58 ms** [53, 59, 52,
+58] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0** — the standing state,
+unmoved — with `definitions` 360,361 -> **360,376**, the expected direction. 8-profile grid
+against a rebuilt parent, `javap`-controlled (11 `inferSimpleExprType` call sites before, 9
+after): **`added=0 removed=0` on all eight**, where (CHK.43) alone was already 0/0 and the
+walk alone added the 2 `importFixes.ts` rows. knip **66 -> 66**, every row identical, BEFORE
+arm rebuilt in the same session.
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (restore
+the `as` fallback) 3 RED; a2 (restore only the legacy `<T>expr` fallback) 1, uniquely the
+angle-bracket row; a3 (drop the LEGACY return-arm walk) **1**, uniquely a `return` nested one
+function deeper; a4 (drop the SPINE anchor's) **7** — so the two arms partition by NESTING,
+the opposite of the item's guess about which one emits; a5 (drop the annotation
+contextualizer) 1; a6 (drop the parameter shadow) 2; a7 (make the shadow a POST-pass) **22**.
+**a5 read `0 RED` on its first run and was NOT a dead leg** — it serves exactly one shape the
+contextual pull skips by construction, a REST parameter, and a pin for that shape was the
+round's cheapest correction.
+
 **AN `async` FUNCTION'S *INFERRED* RETURN TYPE IS A `Promise`, AND IT WAS WRONG IN BOTH
 DIRECTIONS — 3 FALSE POSITIVES AND 4 FALSE NEGATIVES ON ONE SEVEN-SHAPE FIXTURE, tsgo 7.0.2
 REPORTING EXACTLY THE COMPLEMENT (2026-08-26, (CHK.40)).** The queue item read its own row (e)
@@ -178,39 +226,3 @@ INSTANCE field and `Project` builds a fresh one per build, so it printed `0 RED`
 redundant guard would.** Residue queued as (CHK.36)-(CHK.38): the TS1479 interop family is not
 implemented at all, `ModuleResolver` does not condition `exports` on the importer's format, and
 `esModuleInterop` is gated on the global option and never on the two files' formats.
-
-**`// @ts-ignore` AND `// @ts-expect-error` SUPPRESSED NOTHING, IN BOTH DIRECTIONS — AND THE
-DEFECT THAT BLOCKED THE FIX WAS A SUPPRESSION WRITTEN AT AN *EMITTER* (2026-08-25,
-(CHK.31)).** `Checker.getDiagnostics()` — the one funnel the CLI, the daemon and `-project`
-all pass through — now applies tsc's `getDiagnosticsWithPrecedingDirectives` in tsc's order:
-every diagnostic preceded by a directive is dropped and marks that directive USED, then every
-`@ts-expect-error` that marked nothing is reported **TS2578**. The walk-up rule already
-existed with exactly one caller; the general FILTER was what was missing, exactly as the queue
-item said. **THE ITEM'S SIZE WAS WRONG IN THE HELPFUL DIRECTION**: a real two-arm 8-profile
-grid (pre-(CHK.31) `Checker.kt` rebuilt into the class dir, positive-controlled by `javap`)
-reads **`added=0 removed=0` on all eight**, and the whole corpus moved **one** baseline.
-**THAT ONE BASELINE IS THE FINDING.** `isolatedModulesExportDeclarationType`'s `/test4.ts`
-puts `@ts-expect-error` over an import of `./doesntexist`; pristine reports 0 errors there
-(it emits TS2307 and the directive eats it) while WE emitted no TS2307 at all, because the
-commonjs relative-import branch pre-suppressed its own emission. **A diagnostic a compiler
-declines to EMIT turns every `@ts-expect-error` above it into a false TS2578** — both ad-hoc
-pre-suppressions are deleted and suppression happens only where it can be counted.
-**THE ONE REAL DEFECT WAS FOUND BY GREPPING THE PROFILES AND COULD NOT HAVE BEEN FOUND BY
-RUNNING THEM**: `disableJsDiagnostics.ts` writes the prose comment ``// Only need to add
-`// @ts-ignore` for a line once.``, and since both of tsc's directive regexes anchor at the
-comment's OWN start, a backward `lastIndexOf("//")` read that sentence as a live directive.
-The grid is green with and WITHOUT the fix (the falsely-silenced line carries no diagnostic);
-only a tsgo differential separates them. The opener is now a string-aware FORWARD scan.
-**Every one of the 25 pins was read out of `tools/tsgo-7.0.2/lib/tsc`, and two contradict the
-obvious guess**: `@ts-ignoreXYZ` IS a directive (no trailing word boundary in either
-reference) and a directive on an INNER line of a block comment is NOT one.
-**GATES.** Suite **15,860 / 0 / 3** (+25 pins); `cost_gate.py` PASSES with `output.errors`
-**46** and the standing stale-baseline drifts unmoved (`mapped.hits` +1.63%);
-`huge_methods.py --fail-over 0` exit 0, **783** classes scanned (782 last round, so not
-blind); `partition-equivalence` **EQUIVALENT 78/78** plus 4/4 on a purpose-built
-directive-carrying project, `partition-gate` sensitivity arm **EQUIVALENT 76/76**;
-`capture-equivalence` **1,003 / 43 / moreAny 0** with **BOTH DIGESTS BIT-IDENTICAL**.
-**Ablation: 8 arms, one mistake each — a5 (partition scoping), a6 (backward `lastIndexOf`)
-and a7 (block-comment inner line) each redden EXACTLY the pin that names them; a8's own pin
-is NOT uniquely discriminating and is recorded as a shared guard rather than claimed.**
-`// @ts-nocheck` is deliberately untouched — a FILE-level switch, not a line-level one.
