@@ -173,7 +173,79 @@ class BlockScopedReceiverTypeTest {
      */
     @Test
     fun `a NULLISH union local is deliberately still silent - a measured refusal`() {
-        val d = diagnose(prelude + "export function f() { const c: A | undefined = au; c.files; }")
+        // TWO vacuity traps in one line. The member must exist on SOME constituent
+        // and not all — `nope` (on NEITHER) is silent for a block-scoped local
+        // whatever this round does, so the pin would stay green with the refusal
+        // ablated; and `A | undefined` + `files` reports TS18048, not TS2339.
+        // `au.nope` read 0 RED under arm a3 before this was found.
+        val d = diagnose(prelude + "export function f() { const c: (A | F) | undefined = au as any; c.files; }")
+        assert(d.none { it.code == 2339 })
+    }
+
+    /**
+     * a4's shape: `services/utilities.ts`'s `let next: Symbol = symbol`, narrowed
+     * by a type guard inside a `while` condition — round 785's `if`-condition
+     * recorder does not reach it, so routing a NON-union declared type through the
+     * new path reports on a type the guard has excluded. tsc is silent here.
+     */
+    @Test
+    fun `a NON-union local narrowed by a type guard in a while condition stays silent`() {
+        val d = diagnose(
+            """
+            interface S { name: string }
+            interface TS2 extends S { links: { target: S } }
+            declare function isTS(s: S): s is TS2;
+            declare const s0: S;
+            export function g() {
+              let next: S = s0;
+              while (isTS(next) && next.links.target) { next = next.links.target; }
+              next.links;
+            }
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2339 })
+    }
+
+    /**
+     * a2's shape: `applyAmbiguousBlockScopedLocals` registers a name declared
+     * twice at any statement depth as `anyType` — flat `currentLocalTypes` cannot
+     * represent two block scopes — and that SUPPRESSION is older and wider than
+     * this change, so it must keep winning. tsc reports here; we do not.
+     *
+     * It discriminates where the global-shadow shape below does NOT, because this
+     * registrar writes only `currentLocalTypes` while `applyNestedGlobalShadow`
+     * writes `currentShadowedNames` as well.
+     */
+    @Test
+    fun `an AMBIGUOUS block-scoped name keeps its anyType suppression`() {
+        val d = diagnose(
+            prelude +
+                "export function f() { { const c: A | F = u; c.files; } { const c: A | B = ab; } }"
+        )
+        assert(d.none { it.code == 2339 })
+    }
+
+
+    /**
+     * a5's shape: two declarations of one name merge into a single scope-space
+     * symbol, and a merged symbol cannot say which declaration a reference means.
+     */
+    @Test
+    fun `a name with TWO declarations in one body is refused`() {
+        val d = diagnose(prelude + "export function f() { var c: A | F = u; var c: A | F = u; c.files; }")
+        assert(d.none { it.code == 2339 })
+    }
+
+    /**
+     * A member on **NO** constituent is a DIFFERENT emitter — the general
+     * receiver path, which for a block-scoped local still bails — so it stays
+     * silent. That is why every positive in this class reads a member present on
+     * SOME constituent and not all: a `.nope` fixture is silent either way and
+     * pins nothing. A measured KNOWN GAP.
+     */
+    @Test
+    fun `a member on NO constituent of a block-scoped union is still silent - known gap`() {
+        val d = diagnose(prelude + "export function f() { const c: A | F = u; c.nope; }")
         assert(d.none { it.code == 2339 })
     }
 
