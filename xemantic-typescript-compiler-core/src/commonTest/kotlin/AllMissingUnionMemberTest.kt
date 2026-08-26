@@ -159,6 +159,20 @@ class AllMissingUnionMemberTest {
         assert(d.count { it.code == 2339 } == 1)
     }
 
+    /**
+     * (CHK.44) also filed "(b) an UN-ANNOTATED local" as a separate mechanism. It
+     * SPLITS: the file-level form was silent for THIS round's reason (its inferred
+     * type is the same all-missing union) and reports now; the BLOCK-SCOPED form
+     * is a genuinely different gap — B83.5 leaves the declaration unbound and no
+     * initializer is typed for it — and is still silent, pinned as such in
+     * `BlockScopedReceiverTypeTest`.
+     */
+    @Test
+    fun `a FILE-LEVEL UN-ANNOTATED const reports an all-missing property`() {
+        val d = diagnose(prelude + "const c = uaf;\nc.zzznope;\nexport {};")
+        assert(d.count { it.code == 2339 } == 1)
+    }
+
     // --- NEGATIVE CONTROLS ---------------------------------------------------
 
     /** A property present on EVERY constituent is not an error anywhere. */

@@ -145340,6 +145340,25 @@ interface DataView {
      * a named non-interface object, `never`, and ANY member carrying an index
      * signature — an index signature legitimately provides the property, which
      * `memberHasIt` does not consult.
+     *
+     * ### Which clause actually refuses what, measured by ablation
+     *
+     * `AllMissingUnionMemberTest` pins one refusal per member kind and the arms
+     * attribute them, which is not what reading the code predicts:
+     *  - a CLASS instance is refused by the Interface arm's `as?
+     *    InterfaceDeclaration` and by nothing else (arm a9, 1 RED);
+     *  - a `Type.Reference` by its own line (arm a4, 1 RED) and a heritage
+     *    interface by its own (arm a3, 1 RED);
+     *  - an ENUM is refused by the LAST clause — an enum-flavoured type resolves
+     *    to no `members`, no call and no construct signature, so the "some
+     *    resolved content" requirement catches it. `isEnumFlavoredObjectType`
+     *    and `m.symbol != null` are therefore **redundant guards TODAY** (arms
+     *    a5, a8 and the combined a5b all read 0 RED). They stay because the
+     *    clause that carries them is an emptiness test on a table CLAUDE.md
+     *    says must stay empty — the day it is populated, the explicit guard is
+     *    the only thing left. The enum pin is NOT blind: the unconditional arm
+     *    (a2) reddens it, i.e. it discriminates the predicate as a whole and not
+     *    this line.
      */
     private fun cmamAllMissingTrustedMember(m: Type, propName: String): Boolean {
         if (m is Type.StringLiteral || m is Type.NumberLiteral || m is Type.BigIntLiteral) return true
