@@ -145466,6 +145466,74 @@ interface DataView {
     }
 
     /**
+     * (CHK.46) THE INITIALIZER TYPE OF AN **UN-ANNOTATED BODY-LOCAL** RECEIVER.
+     *
+     * `function f() { const c = h; c.zzznope }` reported nothing where tsgo 7.0.2
+     * reports TS2339. This one IS a block-scoping gap — CLAUDE.md's B83.5 leaves the
+     * declaration unbound, so `lookupPerFileForNode` misses and
+     * `getTypeOfIdentifier` falls through to `anyType` — and it is the half of
+     * (CHK.45)'s population (b) that its fix did not reach: the file-level half was
+     * the all-missing whitelist, this half has no type at all.
+     *
+     * [cmamBlockScopedReceiverType] already reads such a local's ANNOTATION and
+     * deliberately supplies only a `Type.Union`, because (CHK.44) measured a
+     * non-union declared type at that site as 3 rows on services/server/harness that
+     * tsc does not report (a `let` narrowed by a type guard in a `while` condition).
+     * This helper is the complementary case and keeps clear of that measurement:
+     *  - `const` ONLY ([varDeclIsImmutableBinding]) — a `let`/`var` is the shape that
+     *    measurement was about, and a binding that cannot be reassigned removes the
+     *    reaching-definition question entirely;
+     *  - UN-annotated only, so it can never contradict the annotated rule above;
+     *  - the initializer's type must pass (CHK.45)'s [cmamAllMissingTrustedMember],
+     *    the same knip-calibrated firewall the other two (CHK.46) mechanisms use;
+     *  - and the `in`-guard consult, for [cmamInGuardMayAddProperty]'s reason.
+     *
+     * Everything it supplies still passes under [checkMemberAccessMissing]'s deferred
+     * flow suppression, which is what keeps an ordinary type-guard narrow silent.
+     */
+    private fun cmamUnannotatedLocalReceiverType(objectExpr: Identifier, propName: String): Type? {
+        val name = objectExpr.text
+        if (currentLocalTypes.containsKey(name)) return null
+        if (name in currentParamBindingNames) return null
+        if (name in currentShadowedNames) return null
+        val sym = lexicalScopeSymbol(objectExpr, name) ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
+        if (sym.declarations.size != 1) return null
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+        if (decl.type != null) return null
+        if (!varDeclIsImmutableBinding(decl)) return null
+        val init = decl.initializer ?: return null
+        // A WHITELIST of initializer forms, not a blacklist, and the boundary is a
+        // MEASUREMENT: a `new X(…)` initializer costs `isolatedModulesShadowGlobalTypeNotValue`
+        // three baselines, because `Date` there is a TYPE-ONLY import shadowing the
+        // global `Date` VALUE — `getTypeOfExpression(new Date(…))` answers the
+        // imported INTERFACE, so `b.getTime()` reads as missing. That is a
+        // value-vs-type resolution gap of its own and not something this receiver
+        // may paper over, so only the two forms that measured clean are admitted:
+        // a REFERENCE to something already typed, and an object LITERAL.
+        if (init !is Identifier && init !is PropertyAccessExpression &&
+            init !is ObjectLiteralExpression) return null
+        val t = getTypeOfExpression(init)
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (typeContainsUnresolvedTypeParam(t)) return null
+        // The Object test is FIRST on purpose: it already decides every nullish
+        // reading (a nullish type is a union, or an intrinsic), which is why
+        // (CHK.44)'s `typeHasNullishConstituent` line is absent here rather than
+        // shipped un-gateable — arm c7 measured it as refusing nothing a fixture can
+        // build.
+        if (t !is Type.Object) return null
+        if (isGlobalObjectOrFunctionType(t)) return null
+        // An ARRAY-LIKE, for [cmamCheckNestedObjectReceiver]'s measured reason. A
+        // TUPLE is what isolates this line: an `Inner[]` is a `Type.Reference` and
+        // three separate layers refuse it, where a tuple is an anonymous object the
+        // trust predicate deliberately admits.
+        if (t.numberIndexInfo != null) return null
+        if (!cmamAllMissingTrustedMember(t, propName)) return null
+        if (cmamInGuardMayAddProperty(objectExpr, propName)) return null
+        return t
+    }
+
+    /**
      * (CHK.46) THE DECLARED TYPE OF A **DESTRUCTURED** RECEIVER — the one shape the
      * property-access family types NOWHERE.
      *
@@ -145941,6 +146009,9 @@ interface DataView {
                 // [currentParamBindingNames] answers `anyType` on purpose. See
                 // [cmamDestructuredReceiverType].
                 cmamDestructuredReceiverType(objectExpr)?.let { return Pair(it, null) }
+                // (CHK.46) …and so does an UN-ANNOTATED body-local `const`, which
+                // B83.5 leaves unbound. See [cmamUnannotatedLocalReceiverType].
+                cmamUnannotatedLocalReceiverType(objectExpr, propName)?.let { return Pair(it, null) }
                 return null
             }
             // 16.0: For primitive types, use the apparent (wrapper) type so that
