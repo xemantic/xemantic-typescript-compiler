@@ -1,6 +1,59 @@
 # Status
 
 
+**A PRIMITIVE SOURCE NOW RELATES TO AN *ANONYMOUS* OBJECT TARGET THROUGH ITS WRAPPER
+INTERFACE — 8 OURS-ONLY ROWS OF A 14-ROW tsgo MATRIX, GONE (2026-08-26, (CHK.32)).**
+`string` carries `charCodeAt`/`length`/`substring` because `String` declares them, so
+`scan(s)` against `(text: { charCodeAt(i: number): number })` is legal. A round-B69.8 leg
+has handled a NAMED interface target all along; it is scoped `target is Type.Interface` and
+RETURNS, so every anonymous structural target refused every primitive, in argument, return
+and annotation position and for `string`/`number`/`boolean`/`symbol`/`bigint` alike. The
+matrix now agrees with tsgo 7.0.2 **row for row in both directions** — the 6 rows tsgo
+reports are still reported, at its own message and column.
+
+**THE ITEM'S OWN PREMISE WAS WRONG ABOUT `jsonrepair`, AND THE FIX PROVES IT: 11 -> 11 ROWS,
+BYTE-IDENTICAL.** (CHK.32) attributed all 7 of that library's TS2345 to this gap, on a repro
+whose interface is named `Text`. That is a **NAME COLLISION with the DOM `Text` global**:
+rename it `Chars` and the row vanishes on the UNFIXED binary, and `t.wholeText` against the
+module-local `Text` is SILENT for us where tsgo says TS2339 — the module-local interface has
+been merged into the lib symbol in both directions. Queued as **(CHK.49)**; `Text` joins
+`top`/`name`/`files` on the collision list. Fifth round running in which the item's framing
+was measurably wrong.
+
+**THE TWO GUARDS WERE FORCED BY A RED SUITE, NOT BY READING.** The first cut cost **13
+tests** — every enum-flavoured type is a member-less `Type.Object` ((REL.1)(b)), so a
+structural comparison passes VACUOUSLY and the `Number` wrapper "related" to a numeric enum
+target. The second cut then cost `assignmentCompat1`: an index-signature target is B418's,
+because a `string`'s apparent type has a NUMERIC indexer and no string one while an ordinary
+structural comparison of the `String` wrapper against `{ [k: string]: any }` PASSES. The leg
+is placed AFTER the round-430 `{}` rule and after B418 so it is strictly a fallback and can
+only turn a rejection into an acceptance.
+
+**GATES.** Suite **16,087 / 0 / 3** (+20, exactly the new class), **zero corpus baselines
+moved in the landed shape**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors`
+**46**, `spine.nodes` +0.00%, largest movement `narrow.memoServed` **+0.69%**, identical to
+(CHK.47)'s, i.e. this change contributes 0.00% on the compiler profile, the expected control
+for a leg reached only after a failure. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned, 0 over limit. 8-profile grid against a parent rebuilt this session
+(`javap` control 0 -> 2): **`added=0 removed=0` on all eight**. `partition-equivalence`
+**EQUIVALENT 78/78**, floor **69 ms** [80, 69, 60, 60] — one draw, the leading 80 the ramp.
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both
+digests unmoved. **knip @ `dc7aca5` 49 -> 49 and `jsonrepair` 3.13.1 11 -> 11, every row
+byte-identical, BEFORE arms rebuilt in the same session.**
+
+**SIX ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT.** a0 (the
+whole leg removed) **8 RED** — every positive pin, over byte-identical source. a5 (a missing
+wrapper answers `anyType` as `getApparentType` does) **2 RED**, this round's dedicated pin and
+`elaboratedErrorsOnNullableTargets01`. a3 (drop the index-signature refusal) **1 RED**, and it
+names a narrower population than the guard reads — a PURE index target declares nothing, so
+only a target with BOTH members and an indexer needs that line. **a1 and a2 each read `0 RED`
+in 1,410 tests and a12 — both dropped — reads 13: a ROUND-927 PAIR**, one observable, neither
+deletable on the strength of its own arm. **a4 (let a `Type.TypeParam` through) read `0 RED`
+over the FULL 15,103-test core suite with a class-checksum positive control, and is recorded
+as a REDUNDANT guard and KEPT** — the shipped binary already relates a constrained
+`T extends string` through another path, so removing a refusal that keeps (INC.30)'s closed
+route closed buys nothing measurable.
+
 **AN OUTER BINDING OF THE SAME NAME DEFEATED EVERY BLOCK-SCOPED RECEIVER, AND THE MESSAGE THEN
 NAMED THE **OUTER** TYPE — 17 FALSE POSITIVES ON knip, EVERY ONE CONFIRMED SILENT IN tsgo
 (2026-08-26, (CHK.47)).** `lookupPerFileForNode` is keyed by the FILE, so a receiver identifier
@@ -241,50 +294,3 @@ recorded as such rather than claimed** (round 807): a6 is refused a second time 
 `valueDeclaration as? VariableDeclaration`, a7 because every shadow registrar writes
 `currentLocalTypes` too.
 
-**A GUARDED REASSIGNMENT NOW REDUCES THE *DECLARED* UNION — `if (typeof c === 'function')
-c = c();` THEN `c.files` WAS A FALSE TS2339, AND SO WAS ITS ASSERTION SIBLING (2026-08-26,
-(CHK.41)).** Both are knip's own source and neither is reachable for any existing arm of
-`narrowByAssignmentRhs`: in the CALL form the callee **is** the walked reference, so
-`getTypeOfExpression` (which never narrows) asks about the whole union and
-`resolvedCallReturnTypeForFlow` wants a `FunctionDeclaration` a parameter is not — while the
-ANTECEDENT is exactly the callee's type there, the guard having already narrowed it. The
-ASSERTION states its own type syntactically ((CHK.43)), so the `await` and parens around it are
-irrelevant. **The reduction is of the DECLARED union, never the antecedent** (round 416's rule,
-which the identifier/property arms still predate): in the then-branch the antecedent IS the
-constituent being replaced, so filtering it answers `never` or itself and the branch join
-re-mints the union — which is exactly why the shape read as "no narrowing at all".
-
-**THE ITEM'S PREMISE WAS TWO-FIFTHS RIGHT, AND THE CORRECTION IS THE ROUND'S MOST USEFUL
-OUTPUT.** (CHK.41) recorded the +15 knip rows the two reverted contextual sources cost as
-"**every one**" this shape. Recovered from (CHK.39)'s own captures at zero cost and reproduced
-one by one with an **annotated** parameter, they are FIVE mechanisms: ava 3 + eleventy 3 (the
-guarded reassignment — **fixed**), release-it 2 (`typeof x.y?.z === 'string'` must narrow
-`x.y`), mdxlint+remark 4 (the `flatMap` callback's return-type INFERENCE), graphql-codegen 1 (a
-nested-ternary predicate) and yarn 2 (a `Plugin` NAME collision, not narrowing at all) — plus
-2 rows those sources REMOVE. **So the two sources stay reverted**, with a per-row map instead
-of a projection.
-
-**AND A LARGER FINDING FELL OUT OF ISOLATING THE FIRST: THE PROPERTY-ACCESS FAMILY ONLY REACHES
-A *PARAMETER*.** `const c: A | F = x; c.files` and `let c: A | F = x; c.files` are SILENT where
-tsgo reports TS2339 — 3 of 4 shapes are false negatives. That is why the item, and this
-session's first four probes, read "a LOCAL narrows and a PARAMETER does not": the local was
-never checked. Queued as **(CHK.44)**.
-
-**GATES.** Suite **15,959 / 0 / 3** (+9, exactly the new class), **zero corpus baselines
-moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes`
-+0.00%, largest movement `mapped.hits` **+1.46%**. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **56 ms**
-[56, 66, 51, 53] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
-`definitions` **360,376** — unmoved, both digests. 8-profile grid against a rebuilt parent,
-`javap`-controlled (0 -> 1): **`added=0 removed=0` on all eight**, a CONTROL and not evidence.
-**knip 66 -> 66, every row byte-identical, BEFORE arm rebuilt in the same session.**
-
-**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (the whole
-fix inert) 6 RED; a2 (the CALL arm) 3 and a3 (the ASSERTION arm) 3 — an exact partition;
-a5 (drop the un-callable-union refusal) 1, uniquely the UNGUARDED control. **a4 read `0 RED`
-and WAS a dead arm** — a guarded substitution that reproduces the original wherever the
-antecedent is not a union, which in a `typeof` then-branch it never is; asking what shape only
-that arm can serve gave **a4b, 5 RED**. **a6 read `0 RED` and is a REDUNDANT GUARD, recorded
-as one rather than claimed** (round 807): `any`/`never`/`error` keep every member so the call
-site's `kept.size < declared.size` test refuses anyway, and `unknown` keeps none so
-`kept.isNotEmpty()` does.

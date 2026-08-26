@@ -20,6 +20,114 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.32) — a primitive now relates to an ANONYMOUS object target through its wrapper; and the item's own premise was wrong about `jsonrepair`, whose 7 rows are a **DOM name collision**
+
+**THE ITEM WAS TWO DEFECTS WEARING ONE NAME, AND THE NAMED-INTERFACE HALF WAS ALREADY
+WORKING.** (CHK.32) attributes all 7 of `jsonrepair`'s TS2345 rows to a missing
+`getApparentType` consult, on a repro whose interface is called `Text`. Measured, that
+repro is a **NAME COLLISION with the DOM `Text` global** — the same file with the
+interface renamed `Chars` is silent on the UNFIXED binary, and a `t.wholeText` read
+against the module-local `Text` is silent for us where tsgo says TS2339, i.e. the
+module-local interface has been MERGED INTO the lib global in both directions. A
+round-B69.8 leg has handled `target is Type.Interface` all along, so the genuine gap is
+the **ANONYMOUS** target. Queued as **(CHK.49)** with the four-line repro; `Text` joins
+`top`/`name`/`files` on the collision list.
+
+**WHAT THE GAP ACTUALLY IS, MEASURED AGAINST tsgo 7.0.2.** A hand-written 14-row matrix
+over (source primitive x target shape x position) had **8 ours-only rows**, all of them
+anonymous targets, spanning argument / return / annotation position and
+`string`/`number`/`boolean`/`symbol`/`bigint`, plus a string-literal source. After the
+fix the matrix agrees with tsgo **row for row**, in both directions — the 6 rows where
+tsgo reports are still reported, at tsgo's own message and position.
+
+**THE FIX IS A FALLBACK LEG, NOT A WIDENING OF B69.8's.** It sits AFTER the round-430
+empty-`{}` rule and after B418's index-signature rule, so every earlier acceptance path
+has already had its turn and it can only turn a rejection into an acceptance (round
+744's discipline). Widening B69.8's own `target is Type.Interface` test instead would
+have put a `return false` in front of both of those rules.
+`primitiveApparentWrapper` is deliberately NOT `getApparentType` — whose 72 call sites
+reach member lookup, narrowing and display — and diverges from it three ways, each
+measured: it answers **null** rather than `anyType` for a missing wrapper, it refuses a
+`Type.TypeParam`, and it covers `bigint`/`symbol`, which `getApparentType` does not.
+
+**THE TWO GUARDS WERE BOTH FORCED BY A RED SUITE, NOT BY READING.** The first cut cost
+**13 tests** (7 `EnumValueDomainRelationTest`, `enumAssignmentCompat5`,
+`FunctionScopedEnumTypePositionTest` x2, and three more): every enum-flavoured type is
+a member-less `Type.Object` ((REL.1)(b)), so a structural comparison against one passes
+VACUOUSLY and the `Number` wrapper "related" to a numeric enum target. The second cut
+then cost `assignmentCompat1`: `y = "foo"` against `{ [index: string]: any }` is TS2322
+because a `string`'s apparent type has a NUMERIC index signature and no string one, and
+an ordinary structural comparison of the `String` wrapper against such a target PASSES
+(every property conforms to an `any`-typed indexer). An index-signature target is
+B418's; it has already answered and this leg must not overturn it. Both tables are read
+BELOW `resolveStructuredTypeMembers` (round 833).
+
+**ABLATION — one mistake per arm, each arm `cmp`-diffed against its OWN snapshot, each
+patch anchor asserted unique.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a0 | the whole leg removed (parent binary, rebuilt this session, javap control 0 vs 2) | **8** — every positive pin, over byte-identical source |
+| a1 | drop the `Enum`/`EnumLiteral` flag test | **0** of 1,410 |
+| a2 | drop the "the target must DECLARE something" test | **0** of 1,410 |
+| a12 | drop **both** | **13** — 7 enum pins, 2 corpus baselines, 3 others, and this round's own enum pin |
+| a3 | drop the index-signature refusal | **1** — `an index signature beside a member still refuses`, uniquely its own |
+| a4 | let a `Type.TypeParam` source through | **0** of the FULL 15,103-test core suite |
+| a5 | a missing wrapper answers `anyType` | **2** — this round's dedicated pin **and** `elaboratedErrorsOnNullableTargets01` |
+
+Three readings that are not "all guards discriminate". **a1/a2 are a round-927 PAIR** —
+each layer refuses exactly what the other would get wrong, so neither has a
+uniquely-its-own failure and they are ONE observable; recorded in the KDoc, and neither
+is deleted on the strength of its own arm reading zero. **a3's uniquely-its-own
+population is narrower than the guard reads** — a PURE index-signature target declares
+nothing, so the vacuity rule already refuses it, and only a target carrying BOTH members
+and an index signature needs the line. **a4 is a REDUNDANT guard by round 807's
+definition and is KEPT anyway**: the shipped binary already relates a constrained
+`T extends string` to `{ charCodeAt(i: number): number }` through another path (measured
+— the two binaries agree on that shape), so what the refusal is redundant WITH is that
+path, and removing a refusal that keeps (INC.30)'s deliberately-closed constraint route
+closed buys nothing measurable in exchange for a widening no gate here would notice.
+a4's arm carries a **class-checksum positive control** (`Checker.class` md5
+`3305443e…` against the shipped `01419f2f…`), because its build read `BUILD SUCCESSFUL
+in 1s` from Gradle's cache and round 947 says a success message is not evidence.
+
+**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **8** positive pins were run against a
+parent binary rebuilt in this session over byte-identical source and **all 8 reported**;
+the parent's `javap` control reads 0 occurrences of `primitiveApparentWrapper` against
+the after-arm's 2. The 8 refusal pins and the `bigint` pin are green on the parent by
+construction — they are the refusal direction — and their falsifying arms are a3/a5/a12
+above, each of which names which pin it reddens. The 3 pins labelled `CONTROL` are green
+on every arm and are **not** counted as coverage.
+
+**GATES.** Suite **16,087 / 0 / 3** (+20, exactly the new class), **zero corpus
+baselines moved in the landed shape**. `cost_gate.py` PASSES with NO rebaseline, exit 0:
+`output.errors` **46**, `spine.nodes` +0.00%, largest movement `narrow.memoServed`
+**+0.69%** and `typeOfExpr.calls` +0.58% — both identical to (CHK.47)'s, i.e. this
+change contributes 0.00% on the compiler profile, which is the expected control for a
+fallback leg reached only after a failure. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned, 0 over limit. 8-profile grid **`added=0 removed=0` on all
+eight**, both arms from binaries built in this session. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **69 ms [80, 69, 60, 60]** — ONE draw, and the leading 80
+is the ramp (CHK.47)'s note describes; the three settled draws bracket its 57 ms.
+`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**,
+`definitions` **360,376**, both ARM DIGESTs unmoved.
+
+**LIBRARIES.** **`jsonrepair` 3.13.1: 11 -> 11 rows, every row byte-identical** — which
+is the round's most important negative result, because it is the receipt that the item's
+7 TS2345 rows are (CHK.49)'s collision and not this defect. **knip @ `dc7aca5`: 49 -> 49,
+every row byte-identical**, BEFORE arm from the same rebuilt parent. Reproducing that 49
+took most of an hour and the recipe is not the obvious one — see the gotcha below.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.** The first cut put the consult inside
+B69.8's own leg by widening its target test; that is what would have shadowed the
+round-430 and B418 rules, and it is why the leg is a separate fallback. The knip arm
+**could not be reproduced at first and the failure was not this change**: `webpro-nl/knip`
+installed with its devDependencies present (`@types/bun`, `@types/webpack`, `@jest/types`)
+OOMs the checker at **8 GB on the PARENT binary**, in `getTypeFromTypeLiteral` under
+nested conditional types. With the **13 runtime dependencies only**, hoisted to the
+monorepo root, plus `@types/node`, it reads exactly **49** and matches (CHK.47) row for
+row. A library baseline is a claim about a dependency SET, not about a library.
+
 ### Round (CHK.47) — an OUTER binding of the same name defeated every block-scoped receiver, the message named the OUTER type, and it was **three** mechanisms; **knip 66 -> 49, seventeen false positives gone**
 
 **WHAT LANDED.** `Checker.cmamLexicalValueShadow` + `cmamShadowReadingWins`,
@@ -2871,7 +2979,7 @@ than the one this item fixes, and they were audited rather than assumed:
   `logicalParityDivergence` mechanism to be the wrong tool — a suppressed diagnostic is a
   MEANING change, not a form one.
 
-- [ ] **(CHK.32) A PRIMITIVE SOURCE IS NOT RELATED TO A STRUCTURAL OBJECT TARGET THROUGH ITS
+- [x] **(CHK.32) LANDED 2026-08-26 — the ANONYMOUS half. A PRIMITIVE SOURCE IS NOT RELATED TO A STRUCTURAL OBJECT TARGET THROUGH ITS
   APPARENT TYPE — 13 TS2345 ROWS, AND IT GENERALISES BEYOND `string`.** `jsonrepair` types its
   whole scanner against `interface Text { length: number; charAt(i): string; charCodeAt(i): number;
   substring(s, e?): string }` and passes a `string` to it; every one of its 7 TS2345 rows is that
@@ -2890,6 +2998,38 @@ than the one this item fixes, and they were audited rather than assumed:
   machinery. Check the mirror direction while you are there (an apparent-typed source in a
   RETURN position, and `boolean`/`symbol`/`bigint`), and note the fix is in the RELATION, so
   the corpus is the gate.
+  **OUTCOME.** The NAMED-interface half was already working (a round-B69.8 leg has handled
+  `target is Type.Interface` all along); the gap is the ANONYMOUS target, and it is closed in
+  every direction the item names — a 14-row matrix over primitive x target-shape x position
+  had 8 ours-only rows against tsgo 7.0.2 and now agrees row for row.
+  **THE `jsonrepair` ATTRIBUTION IS WITHDRAWN**: measured before and after with rebuilt arms,
+  that library reads **11 -> 11 rows, byte-identical**, and its 7 TS2345 are the DOM `Text`
+  name collision now queued as (CHK.49). `PrimitiveApparentTypeRelationTest` (20 pins),
+  suite 16,087 / 0 / 3, `output.errors` 46, grid `added=0 removed=0` on all eight.
+
+- [ ] **(CHK.49) A MODULE-LOCAL `interface` WHOSE NAME COLLIDES WITH A LIB GLOBAL IS MERGED
+  INTO THE LIB SYMBOL — IN BOTH DIRECTIONS, SILENTLY, AND IT IS WHAT PRODUCES ALL 7 OF
+  `jsonrepair`'s TS2345 ROWS** (found 2026-08-26 while measuring (CHK.32), which had
+  attributed those rows to the apparent-type gap; that attribution is measured WRONG — the
+  fix leaves `jsonrepair` at 11 -> 11 byte-identical rows). Four lines reproduce it, in a
+  file that is unambiguously a MODULE:
+  ```ts
+  interface Text { zzzUnique: number }
+  declare function want(t: Text): void
+  export function p() { want({ zzzUnique: 1 }) }   // ours: TS2345. tsgo: silent
+  declare const t: Text
+  export const w: string = t.wholeText             // ours: SILENT. tsgo: TS2339
+  ```
+  Both directions matter and the second is the dangerous one: the module-local interface
+  ANSWERS the DOM `Text`'s members, so a wrong member read goes unreported. Rename the
+  interface to `Chars` and both rows go away, which is the whole diagnosis. It is
+  `interface`-SPECIFIC — a `type` alias of the same name is correct — so the suspect is
+  the merge (`mergeSingleSymbol` / `init:mergeLibGlobals`) rather than
+  `getTypeFromTypeReference`'s lookup order, and CLAUDE.md's INV.3(c)/(d) minefield notes
+  apply. Generalises past the DOM: `Event` fails identically. The whole class is invisible
+  to every gate here — tsc's own 8 profiles do not shadow a lib global, and the corpus's
+  embedded lib is small — so the instrument is a real library, and `Text` should be added
+  to the recorded collision list beside `top`, `name` and `files`.
 
 - [ ] **(CHK.33) A DESTRUCTURING PARAMETER BREAKS ARITY, AND THE MESSAGE PROVES IT: `Expected
   1-0 arguments, but got 1` — 8 ROWS IN `marked`, ON A LIBRARY tsgo REPORTS ZERO ERRORS FOR.**

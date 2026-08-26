@@ -1,3 +1,51 @@
+**A GUARDED REASSIGNMENT NOW REDUCES THE *DECLARED* UNION — `if (typeof c === 'function')
+c = c();` THEN `c.files` WAS A FALSE TS2339, AND SO WAS ITS ASSERTION SIBLING (2026-08-26,
+(CHK.41)).** Both are knip's own source and neither is reachable for any existing arm of
+`narrowByAssignmentRhs`: in the CALL form the callee **is** the walked reference, so
+`getTypeOfExpression` (which never narrows) asks about the whole union and
+`resolvedCallReturnTypeForFlow` wants a `FunctionDeclaration` a parameter is not — while the
+ANTECEDENT is exactly the callee's type there, the guard having already narrowed it. The
+ASSERTION states its own type syntactically ((CHK.43)), so the `await` and parens around it are
+irrelevant. **The reduction is of the DECLARED union, never the antecedent** (round 416's rule,
+which the identifier/property arms still predate): in the then-branch the antecedent IS the
+constituent being replaced, so filtering it answers `never` or itself and the branch join
+re-mints the union — which is exactly why the shape read as "no narrowing at all".
+
+**THE ITEM'S PREMISE WAS TWO-FIFTHS RIGHT, AND THE CORRECTION IS THE ROUND'S MOST USEFUL
+OUTPUT.** (CHK.41) recorded the +15 knip rows the two reverted contextual sources cost as
+"**every one**" this shape. Recovered from (CHK.39)'s own captures at zero cost and reproduced
+one by one with an **annotated** parameter, they are FIVE mechanisms: ava 3 + eleventy 3 (the
+guarded reassignment — **fixed**), release-it 2 (`typeof x.y?.z === 'string'` must narrow
+`x.y`), mdxlint+remark 4 (the `flatMap` callback's return-type INFERENCE), graphql-codegen 1 (a
+nested-ternary predicate) and yarn 2 (a `Plugin` NAME collision, not narrowing at all) — plus
+2 rows those sources REMOVE. **So the two sources stay reverted**, with a per-row map instead
+of a projection.
+
+**AND A LARGER FINDING FELL OUT OF ISOLATING THE FIRST: THE PROPERTY-ACCESS FAMILY ONLY REACHES
+A *PARAMETER*.** `const c: A | F = x; c.files` and `let c: A | F = x; c.files` are SILENT where
+tsgo reports TS2339 — 3 of 4 shapes are false negatives. That is why the item, and this
+session's first four probes, read "a LOCAL narrows and a PARAMETER does not": the local was
+never checked. Queued as **(CHK.44)**.
+
+**GATES.** Suite **15,959 / 0 / 3** (+9, exactly the new class), **zero corpus baselines
+moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes`
++0.00%, largest movement `mapped.hits` **+1.46%**. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned. `partition-equivalence` **EQUIVALENT 78/78**, floor **56 ms**
+[56, 66, 51, 53] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
+`definitions` **360,376** — unmoved, both digests. 8-profile grid against a rebuilt parent,
+`javap`-controlled (0 -> 1): **`added=0 removed=0` on all eight**, a CONTROL and not evidence.
+**knip 66 -> 66, every row byte-identical, BEFORE arm rebuilt in the same session.**
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EACH RESTORED FROM ITS OWN SNAPSHOT.** a1 (the whole
+fix inert) 6 RED; a2 (the CALL arm) 3 and a3 (the ASSERTION arm) 3 — an exact partition;
+a5 (drop the un-callable-union refusal) 1, uniquely the UNGUARDED control. **a4 read `0 RED`
+and WAS a dead arm** — a guarded substitution that reproduces the original wherever the
+antecedent is not a union, which in a `typeof` then-branch it never is; asking what shape only
+that arm can serve gave **a4b, 5 RED**. **a6 read `0 RED` and is a REDUNDANT GUARD, recorded
+as one rather than claimed** (round 807): `any`/`never`/`error` keep every member so the call
+site's `kept.size < declared.size` test refuses anyway, and `unknown` keeps none so
+`kept.isNotEmpty()` does.
+
 **AN `async` FUNCTION'S *INFERRED* RETURN TYPE IS A `Promise`, AND IT WAS WRONG IN BOTH
 
 **A FUNCTION BODY NESTED IN A `return` EXPRESSION IS NOW CHECKED AT ALL — AND BOTH ROWS THAT
