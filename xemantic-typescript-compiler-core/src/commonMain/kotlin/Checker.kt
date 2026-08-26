@@ -147424,8 +147424,12 @@ interface DataView {
      *
      *  * dropping the all-lib-declarations test — 1 RED and the compiler profile at
      *    **89**, i.e. it alone is worth 43 rows;
-     *  * dropping the `declare global` refusal — 1 RED (and dropping its COLLECTOR
-     *    instead is the same observable, a round-927 pair);
+     *  * (CHK.50) — that arm is GONE. (CHK.51) additionally refused any name a
+     *    `declare global` block declared, because such a block did not merge and the
+     *    all-lib test could not see it; (CHK.50) merged it, so the symbol carries a
+     *    non-lib declaration and [cmamIsGlobalAugmentation] admits exactly that one.
+     *    Reverting THAT allowance is (CHK.50)'s arm a8 — 2 RED, and it is what pays
+     *    the true positive (CHK.51) had to record as a cost;
      *  * dropping the resolved-member-table test, the null-symbol refusal, and the
      *    empty-declarations refusal — **0 RED each, profile 46**.
      *
