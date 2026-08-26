@@ -8775,6 +8775,10 @@ class Checker(
     private var stringWrapperType: Type? = null
     private var numberWrapperType: Type? = null
     private var booleanWrapperType: Type? = null
+    /** (CHK.32) — see [primitiveApparentWrapper]; not reached by [getApparentType]. */
+    private var bigIntWrapperType: Type? = null
+    /** (CHK.32) — see [primitiveApparentWrapper]; not reached by [getApparentType]. */
+    private var symbolWrapperType: Type? = null
 
     /**
      * Parsed source file for the built-in type declarations — retained so that
@@ -127028,6 +127032,82 @@ interface DataView {
     }
 
     /**
+     * (CHK.32) The WRAPPER INTERFACE of a primitive source, for the relation ONLY —
+     * `string` -> `String`, `number` -> `Number`, `boolean` -> `Boolean`,
+     * `bigint` -> `BigInt`, `symbol` -> `Symbol` — or null when [source] is not a
+     * primitive or the wrapper is not declared by the lib in force.
+     *
+     * WHY THIS IS NOT [getApparentType]. Three deliberate divergences, each of which
+     * would be unsound to push into that function's 72 call sites:
+     *
+     *  * it answers null rather than `anyType` when the wrapper is missing. In a
+     *    RELATION an `anyType` apparent type relates to everything, so a lib without
+     *    `Symbol`/`BigInt` would silently accept every symbol/bigint source against
+     *    every object target — a false NEGATIVE, the direction with no gate;
+     *  * it refuses a `Type.TypeParam` outright. The relation deliberately has no
+     *    "TypeParam source via its constraint" rule ((INC.30)); reaching a constraint
+     *    from here would open that route as a side effect of a primitive fix, which is
+     *    exactly the confinement (INC.42) had to apply one arc earlier;
+     *  * it covers `bigint` and `symbol`, which [getApparentType] does not. Widening
+     *    THAT function is a change to member lookup, narrowing and display all at once;
+     *    widening this one is a change to one relation leg.
+     *
+     * The source shapes are the same four [Type] classes the round-B69.8 wrapper leg
+     * above gates on, which is what keeps an ENUM out: every enum-flavoured type is a
+     * member-less `Type.Object` ((REL.1)(b)), so it matches none of them.
+     */
+    private fun primitiveApparentWrapper(source: Type): Type.Interface? {
+        if (source !is Type.Intrinsic && source !is Type.StringLiteral &&
+            source !is Type.NumberLiteral && source !is Type.BigIntLiteral) return null
+        val f = source.flags
+        val wrapper = when {
+            f.hasAny(TypeFlags.StringLike) ->
+                getBuiltinWrapperType("String") { stringWrapperType }?.also { stringWrapperType = it }
+            f.hasAny(TypeFlags.NumberLike) ->
+                getBuiltinWrapperType("Number") { numberWrapperType }?.also { numberWrapperType = it }
+            f.hasAny(TypeFlags.BooleanLike) ->
+                getBuiltinWrapperType("Boolean") { booleanWrapperType }?.also { booleanWrapperType = it }
+            f.hasAny(TypeFlags.BigIntLike) ->
+                getBuiltinWrapperType("BigInt") { bigIntWrapperType }?.also { bigIntWrapperType = it }
+            f.hasAny(TypeFlags.ESSymbolLike) ->
+                getBuiltinWrapperType("Symbol") { symbolWrapperType }?.also { symbolWrapperType = it }
+            else -> null
+        }
+        return wrapper as? Type.Interface
+    }
+
+    /**
+     * (CHK.32) Is [target] a plain MEMBER-shaped object — it declares something, and
+     * it carries no index signature? Members and index infos alike
+     * are resolved first (round 833: the table is lazy, so a reader that does not
+     * resolve gets a verdict that depends on whether an earlier line in the file
+     * happened to resolve the type).
+     *
+     * THIS IS THE GUARD THE FIRST ATTEMPT LACKED, AND IT COST 13 TESTS. Every
+     * enum-flavoured type is a member-less `Type.Object` ((REL.1)(b)), so a
+     * structural comparison against one passes VACUOUSLY — the `Number` wrapper
+     * "related" to a numeric enum target and seven `EnumValueDomainRelationTest` pins
+     * plus `enumAssignmentCompat5` went red. The `Enum`/`EnumLiteral` flag test beside
+     * this call states that intent; this test is what makes the leg sound for every
+     * OTHER member-less object as well, including one this repo has not met yet.
+     *
+     * A genuinely empty `{}` target is not a loss: the round-430 rule ~30 lines above
+     * has already accepted every non-nullish source against it, so it never reaches
+     * here. Nor is an INDEX-SIGNATURE target: B418 owns that comparison and has
+     * already answered it — see the caller's note, which `assignmentCompat1` pins.
+     */
+    private fun targetIsMemberShaped(target: Type.Object): Boolean {
+        // Round 833: the member table AND the index infos are lazy, so both tests must
+        // sit BELOW the resolve or the verdict depends on whether an earlier line in
+        // the file happened to resolve this type.
+        resolveStructuredTypeMembers(target)
+        if (target.stringIndexInfo != null || target.numberIndexInfo != null) return false
+        return !target.members.isNullOrEmpty() ||
+            !target.callSignatures.isNullOrEmpty() ||
+            !target.constructSignatures.isNullOrEmpty()
+    }
+
+    /**
      * Wrapper interface (Number/String/Boolean/Symbol/BigInt) → primitive elaboration.
      * Returns the chain line "  'X' is a primitive, but 'Y' is a wrapper object. Prefer
      * using 'X' when possible." when source is a named wrapper interface and the displayed
@@ -158785,6 +158865,53 @@ interface DataView {
                     (sStr != null && checkTypeRelatedTo(sStr.type, tNum.type, relation))
                 if (strOk && numOk) return true
             }
+        }
+        // (CHK.32): a PRIMITIVE source against a STRUCTURAL (anonymous) object target
+        // is decided through the source's WRAPPER INTERFACE. `string` carries
+        // `charCodeAt`/`length`/`substring` because `String` declares them, so
+        // `isWhitespace(s, 0)` against `(text: { charCodeAt(i: number): number })` is
+        // legal — 8 of the 14 rows of a hand-written primitive/target matrix were
+        // ours-only against tsgo 7.0.2, and the whole `jsonrepair` scanner is typed
+        // this way.
+        //
+        // WHY IT IS A SEPARATE LEG AND NOT A WIDENING OF THE ROUND-B69.8 ONE ~120 LINES
+        // ABOVE. That leg is scoped `target is Type.Interface` — a NAMED interface —
+        // and it RETURNS its verdict. Widening its target test would put a `return
+        // false` in front of the two legs between it and here: the empty-`{}` rule
+        // (round 430) and B418's index-signature rule, both of which accept sources
+        // this comparison rejects. Placed here it is strictly a FALLBACK in the
+        // round-744 sense — every earlier acceptance path has already had its turn,
+        // and this can only turn a rejection into an acceptance.
+        //
+        // The REFUSAL direction is the one that had to be pinned hardest, and it is
+        // carried by the ordinary structural comparison rather than by a gate here: a
+        // target member the wrapper does not declare (`{ zzzNotOnString: number }`) or
+        // declares at another type (`{ length: string }`) fails `objectTypeRelatedTo`
+        // and the TS2345/TS2322 stands, at tsgo's own message and position.
+        //
+        // Excluded, each for a measured reason: a NAMED interface target (the B69.8 leg
+        // already returned for it, so this is unreachable there and nothing moves); a
+        // `Type.Reference` target (`Promise<number>` needs true assignability, not
+        // wrapper-extends-Object — the B69.8 leg's own note); and every non-primitive
+        // source, via [primitiveApparentWrapper]'s shape test.
+        //
+        // AN INDEX-SIGNATURE TARGET IS B418's, NOT THIS LEG's, AND THAT IS THE SECOND
+        // GUARD MEASUREMENT FORCED. `assignmentCompat1` pins `y = "foo"` against
+        // `{ [index: string]: any }` as TS2322 — a `string`'s apparent type has a
+        // NUMERIC index signature and no string one — and pins `z = false` against
+        // `{ [index: number]: any }` likewise. An ordinary structural comparison of the
+        // `String` wrapper against such a target passes, because every property it
+        // carries conforms to an `any`-typed indexer; the rule tsc actually applies is
+        // that the SOURCE must supply a matching index signature, which is exactly what
+        // B418 twenty lines above decides. So a target carrying either indexer has
+        // already had its answer, and this leg must not overturn it.
+        if (target is Type.Object && target !is Type.Interface && target !is Type.Reference &&
+            target.flags.hasNone(TypeFlags.Enum or TypeFlags.EnumLiteral)) {
+            // Ordered cheapest-first: the source shape test is a class check plus a
+            // flag test, where [targetIsMemberShaped] forces the target's lazy tables.
+            val wrapper = primitiveApparentWrapper(source)
+            if (wrapper != null && targetIsMemberShaped(target) &&
+                checkTypeRelatedTo(wrapper, target, relation)) return true
         }
         // TypeParam vs TypeParam: relate via apparent types (constraint, or {} when
         // unconstrained). Matters for generic-method signature comparison where source's
