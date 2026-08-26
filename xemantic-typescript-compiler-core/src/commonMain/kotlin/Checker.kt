@@ -145191,6 +145191,108 @@ interface DataView {
         return narrowed
     }
 
+    /**
+     * (CHK.44) THE DECLARED TYPE OF A **BLOCK-SCOPED LOCAL** RECEIVER, WHICH THE
+     * PROPERTY-ACCESS FAMILY OTHERWISE CANNOT SEE AT ALL.
+     *
+     * CLAUDE.md's B83.5: `Binder.bindStatement` never binds a declaration nested
+     * inside a function body or a block, so [lookupPerFileForNode] answers null for
+     * such a name and [getTypeOfIdentifier] falls all the way through to `anyType`.
+     * The cpa pass's own scope model ([applyBodyLocalShadowing]) deliberately
+     * records only names that ALSO have an outer binding — "a pure local is left
+     * untouched (no member-access FP surface)" — which held right up until you ask
+     * what the FALSE-NEGATIVE surface is. Measured against tsgo 7.0.2:
+     * `function f() { const c: A | F = u; c.files }` reports NOTHING where tsc
+     * reports TS2339, in every container (function / method / arrow / nested
+     * function / nested block / file-level block) and for `const`, `let` and `var`
+     * alike. The only shape that limped through was a local whose declared type is a
+     * single OBJECT type, and only via [cmamNarrowedAnyReceiverType]'s flow
+     * recovery — which refuses a `Type.Union` by construction
+     * (`narrowed !is Type.Object`), so the union half had no route whatsoever.
+     *
+     * ### Why this reads the LEXICAL tables and does not write `currentLocalTypes`
+     *
+     * The first cut recorded the annotation into `currentLocalTypes` from
+     * [cpaApplyDeclRecordings]. It closed the same population and cost two corpus
+     * baselines, because that map is read by EVERY consumer of the pass, not by the
+     * property-existence check alone: `discriminateWithOptionalProperty4` gained a
+     * TS18048 from `emitTs18048ForOptionalPropertyAccessReceiver` (a discriminated
+     * union this compiler does not narrow in a ternary), and
+     * `narrowingPastLastAssignment` gained one because B136's chaining arm could
+     * suddenly type `fooMap.get("a")` as `number[] | undefined`. Both are the SAME
+     * missing mechanism — narrowing of a body-local reference — reached through
+     * consumers this round is not fixing. Reading the type HERE, at the one call
+     * that asks "does this property exist on the receiver", is the smallest form of
+     * the change that no other family can observe.
+     *
+     * ### Why it cannot change how a BOUND name resolves
+     *
+     * Round 748's rule: [lexicalScopeSymbol] consults `LexicalScope.symbols` ONLY,
+     * and `Binder.declareLexical` skips any name the main binder already bound in
+     * that container. So a hit here is by construction a declaration the
+     * conventional tables do NOT have, and a file-level `const c: A` keeps resolving
+     * through `currentFileLocals` / `globals` exactly as before. The chain walk is
+     * innermost-first from the REFERENCE, so shadowing falls out for free and no
+     * anchoring/ordering argument is needed.
+     *
+     * ### The two refusals, and which of them is a measurement
+     *
+     *  - `currentLocalTypes.containsKey(name)` — an entry there is a DELIBERATE one,
+     *    including the `anyType` suppressions [applyBodyLocalShadowing],
+     *    [applyNestedGlobalShadow] and [applyAmbiguousBlockScopedLocals] install for
+     *    the shadow / ambiguous-block-scope populations. Those must keep winning; a
+     *    receiver typed `any` because an earlier round decided so is not a receiver
+     *    this one may re-type. Same for a destructured-parameter binding name.
+     *  - [typeHasNullishConstituent] — **the guard that is a measurement, not an
+     *    argument.** Without it the 8-profile grid gains **11 rows on the compiler
+     *    profile and 16 on harness** (`removed=0`), and tsgo 7.0.2 reports NONE of
+     *    them: every site is a `let x: T | undefined` (or `| null`) the code narrows
+     *    before use — `program.ts`'s `automaticTypeDirectiveNames ??=`,
+     *    `checker.ts`'s `if (!relatedInfo) … else relatedInfo.push(info)`,
+     *    `parser.ts`'s `!typeExpression || typeExpression.type`. A nullish annotation
+     *    exists in order to be narrowed, and narrowing a body-local reference is the
+     *    gap this round does NOT close — so handing the walker that declared type
+     *    reports against a type the code has already excluded. (CHK.39c)'s law
+     *    ("giving the property-access family more contextual type manufactures
+     *    TS2339 because it has no narrowing"), with the population measured.
+     *
+     * A single declaration is required for the same reason
+     * [applyAmbiguousBlockScopedLocals] exists: two `const c` in two sibling blocks
+     * are one scope-space symbol here only if they share a scope, and a merged
+     * multi-declaration symbol cannot say which one a given reference means.
+     *
+     * ### And why the answer must be a UNION
+     *
+     * `Type.Union` is not a shape restriction, it is the choice of CONSUMER. A union
+     * receiver is decided by [cmamCheckUnionReceiverNarrowing], which consults the
+     * flow before reporting; every other declared type falls through to the `else`
+     * branch below, which consults nothing. Supplying a non-union declared type
+     * there costs `services/utilities.ts`'s `let next: Symbol = symbol` — narrowed
+     * by `isTransientSymbol(next) && next.links.target`, a type guard inside a
+     * `while` condition that round 785's `if`-condition recorder does not reach —
+     * i.e. **3 rows on the services / server / harness profiles that tsgo does not
+     * report**, measured. The non-union body-local is not a regression to accept
+     * either: it already resolves through [cmamNarrowedAnyReceiverType]'s flow
+     * recovery, which is exactly the narrowing consultation this refusal preserves.
+     */
+    private fun cmamBlockScopedReceiverType(objectExpr: Identifier): Type? {
+        val name = objectExpr.text
+        if (currentLocalTypes.containsKey(name)) return null
+        if (name in currentParamBindingNames) return null
+        if (name in currentShadowedNames) return null
+        val sym = lexicalScopeSymbol(objectExpr, name) ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
+        if (sym.declarations.size != 1) return null
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+        val ann = decl.type ?: return null
+        val t = getTypeFromTypeNode(ann)
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (typeContainsUnresolvedTypeParam(t)) return null
+        if (typeHasNullishConstituent(t)) return null
+        if (t !is Type.Union) return null
+        return t
+    }
+
     private fun cmamGeneralReceiverType(
         objectExpr: Expression,
         propName: String,
@@ -145230,7 +145332,14 @@ interface DataView {
             (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null)
         if (!narrowingEligible) return null
         CpaSections.atR(CpaSections.R_OT_RAW)
-        val rawForNarrowing = getTypeOfExpression(objectExpr)
+        // (CHK.44) a B83.5 block-scoped local answers `any` here; its DECLARED UNION
+        // replaces that reading, and nothing else in the compiler sees the
+        // substitution. See [cmamBlockScopedReceiverType].
+        val rawForNarrowing = getTypeOfExpression(objectExpr).let { t ->
+            if (t === anyType && objectExpr is Identifier) {
+                cmamBlockScopedReceiverType(objectExpr) ?: t
+            } else t
+        }
         CpaSections.atR(CpaSections.R_OT_UNION)
         if (rawForNarrowing is Type.Union) {
             // (JIT.1)(b): R_OT_UNION — the union-receiver narrowing block.
