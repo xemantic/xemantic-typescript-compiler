@@ -138,4 +138,61 @@ class ShadowedReceiverTypeTest {
         val diag = d.single { it.code == 2339 }
         assert(diag.message == "Property 'zzznope' does not exist on type 'Inner'.")
     }
+
+    /**
+     * The ARRAY half of `spineExBindingNameShadows`. We are SILENT here where tsgo
+     * reports `Inner` — `cmamDestructuredReceiverType` refuses a non-object pattern
+     * ([typeCaptureDestructured] answers null for one), which is a known false
+     * negative recorded in the round note. What this pin owns is the direction that
+     * matters: the expando anchor must not answer about the file-level `alpha`.
+     */
+    @Test
+    fun `E - an ARRAY-pattern parameter must not report the outer function type`() {
+        val d = diagnose(
+            prelude + "export function alpha() {}\n" +
+                "export function f([alpha]: [Inner]) { use(alpha.zzznope); }"
+        )
+        assert(d.none { it.code == 2339 && it.message.contains("typeof alpha") })
+    }
+
+    /**
+     * The same for an array-pattern BODY-LOCAL, which reaches
+     * `spineExFnShadows`' VariableStatement leg rather than its parameter leg.
+     */
+    @Test
+    fun `E2 - an ARRAY-pattern body-local must not report the outer function type`() {
+        val d = diagnose(
+            prelude + "export function alpha() {}\n" +
+                "export function f() { const [alpha] = [1]; use(alpha.zzznope); }"
+        )
+        assert(d.none { it.code == 2339 && it.message.contains("typeof alpha") })
+    }
+
+    // --- CONTROLS -------------------------------------------------------------
+
+    /**
+     * CONTROL, always green on both binaries: with NO inner binding of the name,
+     * the file-level declaration is still the right answer and still reports.
+     * `cmamLexicalValueShadow` must not fire for it.
+     */
+    @Test
+    fun `control - with no inner binding the file-level type still reports`() {
+        val d = diagnose(prelude + "const solo: Deep = dcl;\nuse(solo.beta);\nuse(solo.zzznope);")
+        val diag = d.single { it.code == 2339 }
+        assert(diag.message == "Property 'zzznope' does not exist on type 'Deep'.")
+    }
+
+    /**
+     * CONTROL, always green on both binaries: an inner binding of a DIFFERENT name
+     * leaves the file-level reading alone.
+     */
+    @Test
+    fun `control - an inner binding of another name does not shadow`() {
+        val d = diagnose(
+            prelude + "const solo2: Deep = dcl;\nuse(solo2.beta);\n" +
+                "export function f() { const other = h.inner; use(other.alpha); use(solo2.zzznope); }"
+        )
+        val diag = d.single { it.code == 2339 }
+        assert(diag.message == "Property 'zzznope' does not exist on type 'Deep'.")
+    }
 }
