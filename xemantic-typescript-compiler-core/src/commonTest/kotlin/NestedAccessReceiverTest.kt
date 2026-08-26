@@ -142,9 +142,7 @@ class NestedAccessReceiverTest {
      */
     @Test
     fun `negative control - an IN guard on the path suppresses the emission`() {
-        val d = diagnose(
-            prelude + "if ('zzznope' in h.inner) { use((h.inner as { zzznope: number }).zzznope); }"
-        )
+        val d = diagnose(prelude + "if ('zzznope' in h.inner) { use(h.inner.zzznope); }")
         assert(d.none { it.code == 2339 })
     }
 
