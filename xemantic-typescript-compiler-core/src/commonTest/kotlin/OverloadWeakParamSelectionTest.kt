@@ -110,14 +110,24 @@ class OverloadWeakParamSelectionTest {
 
     /**
      * REFUSAL. Sharing ONE property name with the weak parameter is all tsc asks,
-     * so the weak overload is still selected and the call is still a `ZBuf`. This is
-     * the boundary the rule is drawn at; widening the refusal to "the argument must
-     * be assignable" would take this case with it.
+     * so the weak overload is still selected. This is the boundary the rule is drawn
+     * at; widening the refusal to "the argument must be assignable" takes it.
+     *
+     * THE WEAK OVERLOAD IS DECLARED **SECOND**, AND THAT IS LOAD-BEARING FOR THE PIN.
+     * [Checker.resolveCallOverload] falls back to `arityMatches[0]` when nothing
+     * accepts, so refusing a FIRST-declared overload restores exactly the answer the
+     * refusal was supposed to remove — the first draft of this pin put the weak
+     * overload first and read 0 RED against an ablation that demonstrably changed the
+     * selection. Ordered this way, a wrong refusal picks the `string` overload and the
+     * probe moves.
      */
     @Test
     fun `an argument sharing a property with the weak parameter still selects it`() {
-        val d = diagnose(OVERLOADS + """
-            const zzzOut: string = zzzRead("f", { zzzFlag: "r" })
+        val d = diagnose("""
+            interface ZBuf { zzzB: number }
+            declare function zzzP(o: { zzzQ: 0 }): string
+            declare function zzzP(o: { zzzA?: null; zzzFlag?: string }): ZBuf
+            const zzzOut: string = zzzP({ zzzFlag: "r" })
         """)
         assert(d.map { it.code to it.message } == listOf(
             2322 to "Type 'ZBuf' is not assignable to type 'string'."
@@ -127,30 +137,39 @@ class OverloadWeakParamSelectionTest {
     /**
      * REFUSAL. An EMPTY object literal is vacuously assignable to an all-optional
      * target and tsc emits nothing — the same guard [Checker.tryEmitWeakTypeAssignment]
-     * already carried. Without it every `f({})` call would re-select.
+     * already carried. Weak overload declared second, for the reason above.
      */
     @Test
     fun `an empty object literal still selects the weak overload`() {
-        val d = diagnose(OVERLOADS + """
-            const zzzOut: ZBuf = zzzRead("f", {})
+        val d = diagnose("""
+            type ZzzEnc = "utf8" | "ascii"
+            interface ZBuf { zzzB: number }
+            declare function zzzE(o: ZzzEnc): string
+            declare function zzzE(o: { zzzA?: null; zzzFlag?: string }): ZBuf
+            const zzzOut: string = zzzE({})
         """)
-        assert(d.isEmpty())
+        assert(d.map { it.code to it.message } == listOf(
+            2322 to "Type 'ZBuf' is not assignable to type 'string'."
+        ))
     }
 
     /**
      * REFUSAL. A union parameter whose OTHER constituent accepts the argument is not
      * refused, however disjoint its weak constituent is — tsc's `typeRelatedToSomeType`
-     * asks each constituent and one acceptance is enough.
+     * asks each constituent and one acceptance is enough. Weak-carrying overload
+     * declared second, for the reason above.
      */
     @Test
     fun `a non-weak constituent that accepts cancels the refusal`() {
         val d = diagnose("""
             interface ZBuf { zzzB: number }
-            declare function zzzM(o: { zzzA?: 1 } | string): ZBuf
             declare function zzzM(o: number): string
-            const zzzOut: ZBuf = zzzM("x")
+            declare function zzzM(o: { zzzA?: 1 } | string): ZBuf
+            const zzzOut: string = zzzM("x")
         """)
-        assert(d.isEmpty())
+        assert(d.map { it.code to it.message } == listOf(
+            2322 to "Type 'ZBuf' is not assignable to type 'string'."
+        ))
     }
 
     /**
