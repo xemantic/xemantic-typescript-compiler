@@ -26,7 +26,7 @@ material for the M3 items below; do not work its queue.
 (population (c)), `cmamCheckNestedObjectReceiver` + `cmamInGuardMayAddProperty` +
 `cmamConditionMentionsIn` (population (d)), and `cmamUnannotatedLocalReceiverType`
 (population (b)) — the three (CHK.45) measured and left open. Three commits,
-`02f63e1f` / `c4f8bcc2` / `7c99bdc9`, each with its own gate cycle.
+`7b8fe396` / `e915a0d6` / `e9ae5f50`, each with its own gate cycle.
 
 **THE ROUND'S MOST TRANSFERABLE OUTPUT, AND IT IS THE THIRD ROUND RUNNING TO PRODUCE
 ONE OF THIS SHAPE: IN (c) AND (d) THE *TYPE* WAS NEVER MISSING.** A write probe
