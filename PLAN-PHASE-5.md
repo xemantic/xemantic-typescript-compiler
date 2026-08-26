@@ -20,6 +20,165 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.50) — a `declare global { … }` block's EXPORTS never reached `globals`: the CARRIER merged and the contents did not, so **seven of eight declaration forms were wrong**
+
+**THE QUEUE ITEM'S FRAMING WAS WRONG IN THE SAME DIRECTION AS (CHK.49)'s AND (CHK.51)'s, AND
+ONE WRITE-PROBE MATRIX SAYS SO.** The item said `declare global { var X }` works, "so the
+value half is fine and the TYPE half is not". Measured against `tools/tsgo-7.0.2/lib/tsc` on
+byte-identical source, on the (CHK.51) parent binary rebuilt in this session (`Checker.class`
+md5 `b347a38a…` — the very digest (CHK.51) recorded as ITS landed binary, an independent
+confirmation the parent reproduced), over all eight declaration forms in BOTH scopes:
+
+| form inside `declare global` | same file | cross-file | tsgo |
+|---|---|---|---|
+| `var` | correct | **silently `any`** | typed |
+| `function` | `any` | `any` | typed |
+| `namespace` | `any` | `any` | typed |
+| `class` | `any` | `any` | typed |
+| `interface` (new name) | **TS2304** | TS2304 | typed |
+| `type` alias | **TS2304** | TS2304 | typed |
+| `enum` | **TS2304** | TS2304 | typed |
+| `interface X` AUGMENTING a lib type | **TS2339 on the member it just declared** | TS2339 | typed |
+
+So exactly ONE of eight forms was observable at all, and only in the declaring file. The
+`function`/`namespace`/`class` rows are the dangerous half: `globalAugmentationNames`
+suppressed their TS2304 and NOTHING typed them, so they were `any` — legal everywhere.
+**A READ PROBE CANNOT SEE ANY OF THIS**; every row above is a write probe
+(`const s: string = <it>`), which is why the item had it backwards.
+
+**THE MECHANISM, IN ONE SENTENCE.** `declare global` parses as a `ModuleDeclaration` whose
+name is the Identifier `global`, so `init:mergeFileLocalsIntoGlobals` merged the CARRIER
+symbol — `moduleLocalContributesGlobally` answers true for that name, INV.3(d)'s deliberate
+global contribution — and nothing ever merged its `exports`, which is where every augmented
+name lives.
+
+**FOUR EDITS, AND THREE OF THEM ARE FORCED BY THE FIRST RATHER THAN CHOSEN.**
+
+  1. `init:mergeGlobalAugmentations` merges each LEGAL block's exports into `globals`, after
+     the step-1b snapshot so the names classify as augmentation-ADDED in
+     `computePerFileVisibility`. **Legality is positive evidence, not a name test**: the walk
+     mirrors `spineCheckGlobalAugmentation`'s TS2669 predicate by descending only through
+     ambient-module bodies, so a top-level block in a global SCRIPT contributes nothing —
+     measured, that is what tsgo does too (its names stay TS2304 there). Second half of the
+     evidence is a declaration-IDENTITY test (`it === stmt`, never `in`: AST nodes are data
+     classes and `in` deep-compares).
+  2. `buildPerFileScopes` seeds every file with the names the merge ADOPTED. Without it the
+     two halves DISAGREE: the type resolves through `globals` while the unresolved-name
+     family, whose file root is `perFileScope`, reports TS2304 on the very name it just
+     typed. That seed is arm a2 — **3 RED**.
+  3. `isNameExportedFromNamespace` now treats a namespace that is ambient by CONTEXT as
+     implicitly exporting. `declare global { namespace NodeJS { interface ProcessEnv … } }` —
+     the shape every `@types` package uses — gives the inner `namespace` no `declare` of its
+     own, so the binder types it `ValueModule` and the existing flag test missed. **This is a
+     regression THIS round would have introduced**, not a pre-existing defect: before the
+     merge the receiver typed `any` and nothing asked.
+  4. An export named `globalThis` is REFUSED. `namespace globalThis { … }` is tsc's syntax
+     for augmenting the GLOBAL SCOPE ITSELF, not a namespace declaration; publishing it as an
+     ordinary symbol made `globalThis.<undeclared>` a TS2339 that pristine tsc does not
+     report, and it reddened the corpus case `extendGlobalThis` — **the only corpus baseline
+     this round moved, and it was caught by the suite, not by any profile**. Queued as
+     (CHK.53).
+
+**AND (CHK.51)'s NAMED COST IS PAID.** That round had to refuse the heritage relaxation for
+any name a `declare global` block declared, via a `globalAugmentedInterfaceNames` NAME set,
+precisely BECAUSE the block did not merge — and it recorded the price: in such a file
+`el.zzzNotThere` was TS2339 in tsgo and silent here. The block merges now, so the lib symbol
+carries a non-lib declaration and `cmamLibHeritageMembersComplete`'s all-lib test admits
+exactly that declaration (`cmamIsGlobalAugmentation`). **The set and its collector are
+DELETED**; the two spellings are ONE observable, and this direction is the one that reports.
+Cross-file and same-file matrices over all eight forms now match tsgo 7.0.2 **row for row**.
+
+**GATES.** Suite **16,118 / 0 / 3** (+11, exactly the new class). **ONE corpus baseline moved
+and was restored within the round** (`extendGlobalThis`, edit 4 above); the landed shape moves
+none. `cost_gate.py` **PASSES with NO rebaseline**, exit 0: `output.errors` **46**,
+`spine.nodes` **+0.00%**, `globals.conflated` 0, largest movements `narrow.memoServed`
+**+0.69%** and `typeOfExpr.calls` **+0.59%** — digit-for-digit (CHK.49)'s and (CHK.51)'s, i.e.
+this round contributes 0.00% on the compiler profile. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned. `partition-equivalence` **EQUIVALENT, all 78**, floor **56 ms**
+[56, 56, 57, 52] — ONE draw, and unlike (CHK.51)'s it carries no leading ramp.
+`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions`
+**360,376** — the standing state, unmoved. 8-profile BEFORE/AFTER grid, both arms built in
+this session, distinct `Checker.class` md5s (`b347a38a…` / `3163ffc4…`) and a `javap` positive
+control (0 vs 3 occurrences of the new members): **`added=0 removed=0` on all eight**.
+
+**LIBRARIES — AND THE knip ROW COUNT WENT *UP*, WHICH IS THE HONEST RESULT.**
+**`jsonrepair` 3.13.1: 4 -> 4, byte-identical**, and its tsconfig loads `dom`, so that is a
+real no-false-positive arm. **`knip` @ `dc7aca5`: 49 -> 54**, decomposed exactly:
+
+  * **−1, a genuine FIX** — `src/util/watch.ts:186 TS2591 Cannot find name 'Buffer'` is gone.
+    `@types/node` declares `Buffer` in a `declare global` block, and it now resolves. (knip's
+    `"lib": ["esnext"]` excludes DOM, so (CHK.49)/(CHK.51) used it as a CONTROL; for THIS
+    round it is a real arm, because `@types/node` augments regardless of `lib`.)
+  * **+6, every one a PRE-EXISTING overload-selection defect that `any` had been hiding.**
+    Five `Buffer<ArrayBuffer>` TS2322/TS2345 rows plus a TS2769, all on
+    `readFileSync(p, 'utf8')` / `execSync(…, {encoding:'utf8'})` — calls whose STRING-returning
+    overload we decline in favour of the `Buffer` one. **Proved pre-existing by measurement,
+    not by argument**: a six-line repro with the interface declared as a PLAIN LOCAL (no
+    `declare global` anywhere) emits the identical three rows on the PARENT binary and on the
+    landed one, and tsgo is silent on both. Queued as **(CHK.54)**.
+
+That is round 789's shape at library scale: **making a type REAL surfaces the defects `any`
+was suppressing**, so a rising row count on a library arm is not automatically a regression —
+but it must be decomposed per row and each row attributed to a binary, which is what the
+plain-local repro does here.
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, each `cmp`-diffed against its OWN snapshot with the
+restore verified OUTSIDE the driver, each patch anchor asserted UNIQUE (exit 3 otherwise),
+each arm's build grepped for `e:` before its result was read, and each arm's `Checker.class`
+md5 recorded and distinct from the landed `3163ffc4…`.**
+
+| arm | injected mistake | RED | profile |
+|---|---|---|---|
+| a0 | the whole change reverted (parent, rebuilt this session; `javap` 0 vs 3) | **9** | 46 |
+| a1 | the merge loop iterates no carriers | **9** — the same set as a0 | 46 |
+| a2 | the per-file-scope seed of the ADOPTED names dropped | **3** | 46 |
+| a3 | the TS2669 legality gate dropped | **1** — uniquely the script refusal | 46 |
+| a4 | the declaration-IDENTITY evidence test dropped | **0** | 46 |
+| a5 | the per-carrier dedupe dropped | **0** | 46 |
+| a6 | the `globalThis` refusal dropped | **1** — uniquely its own pin | 46 |
+| a7 | the ambient-BY-CONTEXT namespace export rule reverted | **1** | 46 |
+| a8 | `cmamIsGlobalAugmentation` reverted to a bare all-lib test | **2** | 46 |
+| a9 | the ambient-module recursion dropped | **1** — uniquely the nested pin | 46 |
+
+**a0 and a1 are not a round-927 pair, they are a NESTING**, and saying which matters: a1
+disables only the merge and reddens everything a0 does, i.e. edits 2-4 are reachable ONLY
+because the merge exists. **a4 and a5 read 0 RED and are KEPT and recorded as
+UNDISCRIMINATED.** a5 was given a purpose-built falsifier — two `declare global` blocks in one
+file, which share ONE carrier symbol, against a `declarations.addAll` with no membership
+test — and **it still reads 0 RED**, because a member table is keyed by NAME and a doubled
+declaration list resolves to the same members (round 813: the retry was tried and it
+answered). The pin is kept for what it DOES assert, and the dedupe is kept because `addAll`
+on a shared binder-owned list is a contract. a4 is not shown dead either: I could not prove
+it unobservable the way (CHK.49)'s a8 was proven, so (CHK.49)'s delete-it precedent does not
+apply.
+
+**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **8** positives in `DeclareGlobalAugmentationTest`
+plus the re-pointed (CHK.51) pin and the upgraded `LibGlobalNameShadowTest` control — **9
+RED** — were run against the parent binary rebuilt in this session over byte-identical test
+source. The **two refusal pins** (script-file, `globalThis`) are green on the parent by
+construction and their falsifying arms are a3 and a6. The **one pin labelled CONTROL** (a
+module's plain top-level `interface Date` still does not merge — (CHK.49)'s direction, which
+this round pulls the OPPOSITE way on the same seam) is green on every arm and is NOT counted
+as coverage; (CHK.49)'s own 14 pins all stayed green throughout, so that hole was not
+re-opened. Every fixture carries `@useRealLibs` and an explicit `@lib` where DOM is involved —
+without them `Date`/`HTMLElement` do not exist and every pin passes vacuously ((CHK.51)).
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * The first cut was the merge alone, and it looked complete: every write probe typed
+    correctly. It still emitted TS2304 for `interface`/`type`/`enum` — the type resolved and
+    the name-existence family said the name did not exist, in the same compile. **Two
+    resolvers over one question, disagreeing, with neither of them wrong on its own inputs.**
+  * The `globalThis` case was found ONLY by the corpus, not by any profile, any library or
+    any hand-written probe — I did not know `namespace globalThis` was a distinct language
+    feature until a baseline moved.
+  * `class` inside `declare global` was the form I would have bet was fine (it produces no
+    TS2304), and it was `any`. `globalAugmentationNames` is a SUPPRESSION list, so a form on
+    it looks healthier than one that is not, and is in fact worse.
+  * knip going 49 -> 54 read as a regression for twenty minutes. It is one fix and six
+    newly-visible pre-existing rows, and the thing that settled it was deleting the
+    `declare global` from the repro — the defect stayed.
+
 ### Round (CHK.51) — the axis was **HERITAGE**, not "lib": a missing member on anything with an `extends` was silent, and the firewall that hides it is worth **43 rows** on the compiler profile
 
 **THE QUEUE ITEM'S FRAMING WAS WRONG IN BOTH DIRECTIONS, AND A ONE-CASE-PER-FILE CENSUS
@@ -1167,114 +1326,6 @@ nothing, because a returned function-VALUE's own assignability against the retur
 not checked (a false negative, unrelated to the walk). (ii) `const x: A = r as unknown as B[]`
 reports `Property 'c' is missing … in type 'A'` where tsgo says `'a'` — a wrong missing-property
 NAME in the TS2741 elaboration, seen while validating a control. Neither blocks anything here.
-
-### Round (CHK.40) — an `async` function's INFERRED return type is a `Promise`, and it was wrong in BOTH directions; the item's fifth gap was a symptom of it, and its (a)/(b)/(d) are blocked on a whole family of unwalked bodies
-
-**THE ITEM'S DIAGNOSIS OF (e) WAS WRONG, AND THE ROOT CAUSE IS BIGGER THAN THE ITEM.** (e)
-read "an `async` object-literal method's parameters are not contextually typed by
-`getTypeOfObjectLiteral`". Measured, the parameters were **fine** — `{ async m(node) {…} }`
-against `{ m(n: N): Promise<void> }` already reported the correct TS2322 *inside* the body —
-and the RETURN TYPE was not: an `async` function-like with no return annotation carried its
-BODY's type. One seven-shape fixture (`probe_f`) reads **three false positives and four false
-negatives**, tsgo 7.0.2 reporting exactly the complement:
-
-| shape | ours before | tsgo 7.0.2 |
-|---|---|---|
-| `async function f1() {}` → `() => Promise<void>` | TS2322 `() => void` **FP** | silent |
-| `async function f2() { return 1 }` → `() => Promise<number>` | TS2322 **FP** | silent |
-| `const g: number = f2()` | silent **FN** | TS2322 `Promise<number>` |
-| `const f4 = async () => 1; const g: number = f4()` | silent **FN** | TS2322 |
-| `class C { async m() { return 1 } }; const g: number = new C().m()` | silent **FN** | TS2322 |
-| `const f6 = async function () { return "s" }; const g: number = f6()` | TS2322 `string` **wrong type** | TS2322 `Promise<string>` |
-
-`promiseWrappedReturnType` wraps at the **eight** INFERRED-return sites (declaration, arrow,
-fn-expr, class method, objlit method, `buildMethodType` + its two declaration-carrying
-callers, `getReturnTypeOfCallable`). An ANNOTATED return type is never touched; a lib with no
-`Promise` answers the un-wrapped type, so a lib-less program is bit-for-bit unchanged;
-`globalPromiseType` is wired in `init:wireGlobalArrayTypes` beside Array/ReadonlyArray rather
-than on first ask, because a lib interface's member table is lazy ((INC.25)) and reaching one
-from inside another resolution truncates it. A GENERATOR is deliberately excluded —
-`async function*` returns an `AsyncGenerator`, which nothing here builds.
-
-**(c) HAD ITS ROOT ONE LAYER BELOW THE TS7006 WALKER, AND THE FILE SAID SO.**
-`getTypeOfSymbolWorker`'s MethodDeclaration arm read `decl.name as? Identifier` and answered
-`anyType` for anything else — round 937 had routed a COMPUTED name through it and written
-"a StringLiteralNode-named method keeps answering `anyType` … a separate pre-existing gap".
-So `interface VS { "m-x"(node: N): void }` had that member **present and typed `any`**, while
-the property form `"m-x": (n: N) => void` was byte-correct against tsgo (TS2322 ×2 + TS2741,
-identical). The fix stops extracting the name there at all: `declaredMemberName` is the SAME
-helper `resolveInterfaceMembersCore` used to REGISTER the member, so the two can no longer
-disagree about which member this is. Two arity edges (`spineIanyObjLitMethodEnter`,
-`spineIanyPropAssignEdge`) took the same key.
-
-**(a)/(b)/(d) ARE ONE ARM: the contextual type of a `return` POSITION.** `pullCtxReturnTypeAt`
-consults the enclosing function-like's own return ANNOTATION, else the return type of the
-signature that contextually types that function (tsc's `getContextualReturnType` order), and
-strips one `Promise<>` when the function is `async`. Fed to `pullContextualTypeAt` through two
-new arms — `ReturnStatement` and an index-aware `ArrayLiteralExpression`, so a TUPLE
-contributes its own slot where an array reference's element type is index-independent. **The
-ARITY half is strictly additive by construction and the `when` is written so it reads that
-way**: an annotation that resolved keeps its own answer (bar the async unwrap, the identity
-for everything else), one that did not resolve keeps answering null, and only the
-no-annotation case — previously null — consults the contextual source.
-
-**WHAT DID NOT LAND, AND IT IS THE ROUND'S BIGGEST FINDING: A FUNCTION BODY NESTED IN A
-`return` EXPRESSION IS NOT CHECKED AT ALL.** Neither `ReturnStatement` arm (the legacy
-statement walk nor the spine anchor) calls `walkFunctionBodiesInExpr`, and it is **the one
-expression position that does not** — measured against an obviously wrong `const q: number =
-"s"`: a file-level var-decl initializer ✓, a var-decl initializer inside a function body ✓, a
-CALL ARGUMENT ✓, an object-literal property value ✓, `return (node) => {…}` ✗, `return
-{ m(node) {…} }` ✗, `return (…)` parenthesised ✗. So (a)/(b)/(d)'s parameters are now typed
-and **no diagnostic inside those bodies can fire in either direction** — which is why their
-core pins assert TS7006 SUPPRESSION only and the TYPE is pinned as a HOVER instead, with the
-expectation read out of tsc 7.0.2's own LSP. Queued as **(CHK.42)**, fully measured (see the
-queue entry): with the two-line arm added, both probes reach FULL PARITY with tsgo, the
-**corpus stays 15,928/0/3**, **knip stays 66 with every row identical** — and the 8-profile
-grid gains **3 rows**, which is why it is not shipped.
-
-**AND ONE OF THOSE 3 IS A SHIPPED FALSE POSITIVE THE WALK MERELY EXPOSES — REACHABLE TODAY.**
-`function m4(): B | A | (B|A)[] { const r: any = 0; return r as unknown as B[]; }` reports
-`Type 'unknown' is not assignable to type 'B | A | (B | A)[]'` on the **shipped** binary, at
-top level, with no (CHK.42) arm involved; tsgo is silent. A SINGLE `as B[]` is silent, a
-2-member union target is silent, a non-union array target is silent — so the trigger is a
-CHAINED `as unknown as X` against a ≥3-member union return annotation, and the checker keeps
-the INNER assertion's type. Queued as **(CHK.43)**. Its first sighting was as an
-"outer function's `T` does not resolve in a nested function expression" theory, which the
-probe falsified in one run: it has nothing to do with type parameters.
-
-**GATES.** Suite **15,928 / 0 / 3** (+23 pins over the 15,905 baseline: 18 core + 5 hover),
-**zero corpus baselines moved**. `cost_gate.py` **PASSES, no rebaseline** — `output.errors`
-**46** throughout, largest movement `mapped.hits` **+0.74%**, `typeNode.bypassed` +0.03%
-(the (CHK.39) lever is unspent and untouched). `huge_methods.py --fail-over 0` exit 0,
-**783 classes scanned**. `partition-equivalence.sh` **EQUIVALENT, all 78 files**, floor
-**79 ms** [79, 87, 56, 56] (one draw; the arm spanned 56-87 ms within it, so read the spread).
-`capture-equivalence.sh` **1,005 spans / 43 of 76 files / `narrowRendersMoreAny` = 0** — the
-standing state, unmoved; both ARM DIGESTs moved and `definitions` rose **360,336 -> 360,361**,
-which is the expected direction (a string-named method whose type was `any` and a parameter
-that now has a real type both render differently). BEFORE/AFTER 8-profile grid against a
-rebuilt parent (positive control: `javap` finds `promiseWrappedReturnType` **0** times before
-and **1** after): **`added=0 removed=0` on all eight**. **knip, rebuilt BEFORE arm in the same
-session, same `node_modules`: 66 -> 66, every row identical.**
-
-**ABLATION — one mistake per arm, each restored from the arm's OWN snapshot, each build
-checked for `e:` before its result was read.**
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a1 | `promiseWrappedReturnType` answers its argument | **6** — every async pin incl. the objlit one |
-| a2 | only the OBJLIT-METHOD async site removed | **1** — uniquely the item's own (e) fixture |
-| a3 | `pullCtxReturnTypeAt` answers null | **5** — all four return hovers + the (d) suppression pin |
-| a4 | `ArrayLiteralExpression` dropped from the M1.6(b) shape list | **4** — every array/tuple SUPPRESSION pin, no hover |
-| a5 | the TUPLE leg of the element rule | **3** — the two tuple pins + the tuple hover |
-| a6 | the `async` `Promise<>` unwrap for a return position | **2** — uniquely the (b) pin and its hover |
-| a7 | (c) root: `declaredMemberName` → `as? Identifier` | **3** — both (c) pins + the (c) hover |
-| a8 | (c) the objlit METHOD arity edge's key | **1** — uniquely the method form |
-| a9 | (c) the PropertyAssignment arity edge's key | **1** — uniquely the property form |
-
-a3 and a4 **partition** the return family by LAYER rather than by shape — a4 takes the ARITY
-half (TS7006) and leaves every hover green, a3 takes the TYPE half and leaves three of the
-four suppression pins green — which is the same two-call-site structure (CHK.39) found, seen
-from the other side. No arm was dead and none was redundant.
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
@@ -2976,28 +3027,59 @@ from the other side. No arm was dead and none was redundant.
   all five declaration forms collide. `LibGlobalNameShadowTest` (14 pins). See the session
   note for the population census and the ten-arm ablation.
 
-- [ ] **(CHK.50) A `declare global { interface X { … } }` AUGMENTATION DOES NOT REACH
-  `globals` AT ALL — NEITHER AS AN AUGMENTATION OF A LIB INTERFACE NOR AS A NEW NAME**
-  (found 2026-08-26 while writing (CHK.49)'s must-still-merge control; measured identical on
-  the (CHK.49) parent binary and after, so it is pre-existing and unrelated to that round).
-  Three probes, all module files, all with `@useRealLibs`:
+- [x] **(CHK.50) DONE 2026-08-26 — THE CARRIER MERGED AND THE CONTENTS DID NOT, AND
+  **SEVEN OF EIGHT** DECLARATION FORMS WERE WRONG.** `declare global` parses as a
+  ModuleDeclaration named `global`, so step 1 merged the carrier symbol and nothing merged
+  its `exports`. The item's "the `var` form works, so the value half is fine" is measured
+  WRONG: `var` was correct only in the DECLARING file (cross-file it was silently `any`), and
+  `function`/`namespace`/`class` were `any` in both scopes — TS2304-suppressed by
+  `globalAugmentationNames` and typed by nothing, which is the dangerous direction. Fixed by
+  `init:mergeGlobalAugmentations` (legality mirrors `spineCheckGlobalAugmentation`'s TS2669
+  predicate; a global-SCRIPT block contributes nothing, as in tsgo) plus a `buildPerFileScopes`
+  seed of the ADOPTED names, an ambient-BY-CONTEXT implicit-export rule for
+  `declare global { namespace NodeJS { … } }`, and a `globalThis` refusal ((CHK.53)).
+  **(CHK.51)'s named cost is PAID** — `globalAugmentedInterfaceNames` deleted, `el.zzzNotThere`
+  on an augmented `HTMLElement` now TS2339 as tsgo says. Both matrices match tsgo row for row;
+  `DeclareGlobalAugmentationTest` (11 pins), suite 16,118 / 0 / 3, `output.errors` 46, grid
+  `added=0 removed=0` on all eight, **jsonrepair 4 -> 4 byte-identical, knip 49 -> 54** (one
+  genuine fix, six pre-existing overload rows that `any` had been hiding — (CHK.54)). See the
+  session note for the eight-form census and the ten-arm ablation.
+
+- [ ] **(CHK.53) `namespace globalThis { … }` IS NOT A NAMESPACE DECLARATION AND WE MODEL IT
+  AS ONE — (CHK.50)'s measured refusal.** tsc treats `declare global { namespace globalThis {
+  var test: string } }` as an augmentation of the GLOBAL SCOPE ITSELF: `test` becomes a bare
+  global and `globalThis` never becomes an ordinary symbol. (CHK.50) published it as one and
+  the corpus case `extendGlobalThis` reddened with a TS2339 on `globalThis.tests` that
+  pristine tsc does not report, so the name is now skipped outright — which leaves that shape
+  exactly where (CHK.50) found it: `globalThis.<anything>` is unchecked. **Two halves**: the
+  block's members should become bare globals, and `globalThis` itself should be a type whose
+  members are the global scope. The second half is what pristine's baseline is really about,
+  and it is the only instrument that sees any of this (no profile and neither library carries
+  the shape). `DeclareGlobalAugmentationTest`'s `a namespace globalThis block is not published
+  as a global symbol` pins the refusal; the positive half is deliberately NOT pinned
+  (round 765).
+
+- [ ] **(CHK.54) AN OPTIONAL-PARAMETER OVERLOAD IS SELECTED WITHOUT CHECKING THE ARGUMENT
+  AGAINST IT — SIX ROWS ON `knip`, AND A SIX-LINE REPRO.** `readFileSync(p, 'utf8')` resolves
+  to the `Buffer`-returning overload whose parameter is `options?: { encoding?: null } | null`,
+  a type `"utf8"` is not assignable to; tsgo picks the `string` one and is silent. Reproduced
+  hand-written, on the PARENT binary and the landed one identically, with NO `declare global`
+  in the fixture — so it is pre-existing and independent of (CHK.50), which merely made it
+  visible by giving `Buffer` a real type where it had been an unresolved `any`:
   ```ts
-  // zzzAug.ts
-  export {}
-  declare global { var zzzGlobalVar: number }            // WORKS on both binaries
-  declare global { interface Date { zzzUnique: number } }  // TS2339 on `t.zzzUnique`, tsgo silent
-  declare global { interface ZzzBrandNew { zzzU: number } } // TS2304, tsgo silent
+  type ZzzEnc = "utf8" | "ascii"
+  interface ZzzBuf { zzzB: number }
+  declare function zzzRead(p: string, options?: { encoding?: null } | null): ZzzBuf
+  declare function zzzRead(p: string, options: { encoding: ZzzEnc } | ZzzEnc): string
+  declare function zzzRead(p: string, options?: { encoding?: ZzzEnc | null } | ZzzEnc | null): string | ZzzBuf
+  const zzzS: string = zzzRead("f", "utf8")            // ours: TS2322 'ZzzBuf' -> 'string'
+  const zzzT: string = zzzRead("f", { encoding: "utf8" }) // ours: TS2769 + TS2322
   ```
-  It fails in the same file that writes the block, so it is not a cross-file visibility
-  problem: the `global` namespace symbol merges (`moduleLocalContributesGlobally` answers
-  true for the name `global`) but nothing merges its *exports* into `globals` the way
-  `mergeModuleAugmentations` does for `declare module "spec"`. `declare global` is how every
-  real `@types` package and every app that augments `Window`/`globalThis` is written, so the
-  population is large and the failure direction is BOTH (a missing member reported, and a
-  brand-new global unresolvable). The `var` form working is the control that says the
-  `global` symbol itself is bound. `LibGlobalNameShadowTest`'s
-  `CONTROL - a declare global block in a module still merges into the lib globals` pins the
-  half that works and deliberately does NOT pin the half that does not (round 765).
+  The `{ encoding: "utf8" }` form additionally emits TS2769, so the two are probably one
+  defect seen from both ends. **The population is large and silent today**: every `@types/node`
+  read/exec API is written this way, and until (CHK.50) the wrong pick was invisible because
+  the wrongly-chosen return type was `any`. Sequence it before any further library screening —
+  it is the largest remaining knip family.
 
 - [x] **(CHK.51) DONE 2026-08-26 — THE AXIS IS **HERITAGE**, NOT "LIB", AND THE FIREWALL THAT
   HIDES IT IS WORTH **43 ROWS** ON THE COMPILER PROFILE.** The item's own repro (`Date`) already

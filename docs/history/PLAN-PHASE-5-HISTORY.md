@@ -1,3 +1,111 @@
+### Round (CHK.40) — an `async` function's INFERRED return type is a `Promise`, and it was wrong in BOTH directions; the item's fifth gap was a symptom of it, and its (a)/(b)/(d) are blocked on a whole family of unwalked bodies
+
+**THE ITEM'S DIAGNOSIS OF (e) WAS WRONG, AND THE ROOT CAUSE IS BIGGER THAN THE ITEM.** (e)
+read "an `async` object-literal method's parameters are not contextually typed by
+`getTypeOfObjectLiteral`". Measured, the parameters were **fine** — `{ async m(node) {…} }`
+against `{ m(n: N): Promise<void> }` already reported the correct TS2322 *inside* the body —
+and the RETURN TYPE was not: an `async` function-like with no return annotation carried its
+BODY's type. One seven-shape fixture (`probe_f`) reads **three false positives and four false
+negatives**, tsgo 7.0.2 reporting exactly the complement:
+
+| shape | ours before | tsgo 7.0.2 |
+|---|---|---|
+| `async function f1() {}` → `() => Promise<void>` | TS2322 `() => void` **FP** | silent |
+| `async function f2() { return 1 }` → `() => Promise<number>` | TS2322 **FP** | silent |
+| `const g: number = f2()` | silent **FN** | TS2322 `Promise<number>` |
+| `const f4 = async () => 1; const g: number = f4()` | silent **FN** | TS2322 |
+| `class C { async m() { return 1 } }; const g: number = new C().m()` | silent **FN** | TS2322 |
+| `const f6 = async function () { return "s" }; const g: number = f6()` | TS2322 `string` **wrong type** | TS2322 `Promise<string>` |
+
+`promiseWrappedReturnType` wraps at the **eight** INFERRED-return sites (declaration, arrow,
+fn-expr, class method, objlit method, `buildMethodType` + its two declaration-carrying
+callers, `getReturnTypeOfCallable`). An ANNOTATED return type is never touched; a lib with no
+`Promise` answers the un-wrapped type, so a lib-less program is bit-for-bit unchanged;
+`globalPromiseType` is wired in `init:wireGlobalArrayTypes` beside Array/ReadonlyArray rather
+than on first ask, because a lib interface's member table is lazy ((INC.25)) and reaching one
+from inside another resolution truncates it. A GENERATOR is deliberately excluded —
+`async function*` returns an `AsyncGenerator`, which nothing here builds.
+
+**(c) HAD ITS ROOT ONE LAYER BELOW THE TS7006 WALKER, AND THE FILE SAID SO.**
+`getTypeOfSymbolWorker`'s MethodDeclaration arm read `decl.name as? Identifier` and answered
+`anyType` for anything else — round 937 had routed a COMPUTED name through it and written
+"a StringLiteralNode-named method keeps answering `anyType` … a separate pre-existing gap".
+So `interface VS { "m-x"(node: N): void }` had that member **present and typed `any`**, while
+the property form `"m-x": (n: N) => void` was byte-correct against tsgo (TS2322 ×2 + TS2741,
+identical). The fix stops extracting the name there at all: `declaredMemberName` is the SAME
+helper `resolveInterfaceMembersCore` used to REGISTER the member, so the two can no longer
+disagree about which member this is. Two arity edges (`spineIanyObjLitMethodEnter`,
+`spineIanyPropAssignEdge`) took the same key.
+
+**(a)/(b)/(d) ARE ONE ARM: the contextual type of a `return` POSITION.** `pullCtxReturnTypeAt`
+consults the enclosing function-like's own return ANNOTATION, else the return type of the
+signature that contextually types that function (tsc's `getContextualReturnType` order), and
+strips one `Promise<>` when the function is `async`. Fed to `pullContextualTypeAt` through two
+new arms — `ReturnStatement` and an index-aware `ArrayLiteralExpression`, so a TUPLE
+contributes its own slot where an array reference's element type is index-independent. **The
+ARITY half is strictly additive by construction and the `when` is written so it reads that
+way**: an annotation that resolved keeps its own answer (bar the async unwrap, the identity
+for everything else), one that did not resolve keeps answering null, and only the
+no-annotation case — previously null — consults the contextual source.
+
+**WHAT DID NOT LAND, AND IT IS THE ROUND'S BIGGEST FINDING: A FUNCTION BODY NESTED IN A
+`return` EXPRESSION IS NOT CHECKED AT ALL.** Neither `ReturnStatement` arm (the legacy
+statement walk nor the spine anchor) calls `walkFunctionBodiesInExpr`, and it is **the one
+expression position that does not** — measured against an obviously wrong `const q: number =
+"s"`: a file-level var-decl initializer ✓, a var-decl initializer inside a function body ✓, a
+CALL ARGUMENT ✓, an object-literal property value ✓, `return (node) => {…}` ✗, `return
+{ m(node) {…} }` ✗, `return (…)` parenthesised ✗. So (a)/(b)/(d)'s parameters are now typed
+and **no diagnostic inside those bodies can fire in either direction** — which is why their
+core pins assert TS7006 SUPPRESSION only and the TYPE is pinned as a HOVER instead, with the
+expectation read out of tsc 7.0.2's own LSP. Queued as **(CHK.42)**, fully measured (see the
+queue entry): with the two-line arm added, both probes reach FULL PARITY with tsgo, the
+**corpus stays 15,928/0/3**, **knip stays 66 with every row identical** — and the 8-profile
+grid gains **3 rows**, which is why it is not shipped.
+
+**AND ONE OF THOSE 3 IS A SHIPPED FALSE POSITIVE THE WALK MERELY EXPOSES — REACHABLE TODAY.**
+`function m4(): B | A | (B|A)[] { const r: any = 0; return r as unknown as B[]; }` reports
+`Type 'unknown' is not assignable to type 'B | A | (B | A)[]'` on the **shipped** binary, at
+top level, with no (CHK.42) arm involved; tsgo is silent. A SINGLE `as B[]` is silent, a
+2-member union target is silent, a non-union array target is silent — so the trigger is a
+CHAINED `as unknown as X` against a ≥3-member union return annotation, and the checker keeps
+the INNER assertion's type. Queued as **(CHK.43)**. Its first sighting was as an
+"outer function's `T` does not resolve in a nested function expression" theory, which the
+probe falsified in one run: it has nothing to do with type parameters.
+
+**GATES.** Suite **15,928 / 0 / 3** (+23 pins over the 15,905 baseline: 18 core + 5 hover),
+**zero corpus baselines moved**. `cost_gate.py` **PASSES, no rebaseline** — `output.errors`
+**46** throughout, largest movement `mapped.hits` **+0.74%**, `typeNode.bypassed` +0.03%
+(the (CHK.39) lever is unspent and untouched). `huge_methods.py --fail-over 0` exit 0,
+**783 classes scanned**. `partition-equivalence.sh` **EQUIVALENT, all 78 files**, floor
+**79 ms** [79, 87, 56, 56] (one draw; the arm spanned 56-87 ms within it, so read the spread).
+`capture-equivalence.sh` **1,005 spans / 43 of 76 files / `narrowRendersMoreAny` = 0** — the
+standing state, unmoved; both ARM DIGESTs moved and `definitions` rose **360,336 -> 360,361**,
+which is the expected direction (a string-named method whose type was `any` and a parameter
+that now has a real type both render differently). BEFORE/AFTER 8-profile grid against a
+rebuilt parent (positive control: `javap` finds `promiseWrappedReturnType` **0** times before
+and **1** after): **`added=0 removed=0` on all eight**. **knip, rebuilt BEFORE arm in the same
+session, same `node_modules`: 66 -> 66, every row identical.**
+
+**ABLATION — one mistake per arm, each restored from the arm's OWN snapshot, each build
+checked for `e:` before its result was read.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | `promiseWrappedReturnType` answers its argument | **6** — every async pin incl. the objlit one |
+| a2 | only the OBJLIT-METHOD async site removed | **1** — uniquely the item's own (e) fixture |
+| a3 | `pullCtxReturnTypeAt` answers null | **5** — all four return hovers + the (d) suppression pin |
+| a4 | `ArrayLiteralExpression` dropped from the M1.6(b) shape list | **4** — every array/tuple SUPPRESSION pin, no hover |
+| a5 | the TUPLE leg of the element rule | **3** — the two tuple pins + the tuple hover |
+| a6 | the `async` `Promise<>` unwrap for a return position | **2** — uniquely the (b) pin and its hover |
+| a7 | (c) root: `declaredMemberName` → `as? Identifier` | **3** — both (c) pins + the (c) hover |
+| a8 | (c) the objlit METHOD arity edge's key | **1** — uniquely the method form |
+| a9 | (c) the PropertyAssignment arity edge's key | **1** — uniquely the property form |
+
+a3 and a4 **partition** the return family by LAYER rather than by shape — a4 takes the ARITY
+half (TS7006) and leaves every hover green, a3 takes the TYPE half and leaves three of the
+four suppression pins green — which is the same two-call-site structure (CHK.39) found, seen
+from the other side. No arm was dead and none was redundant.
+
 ### Round (CHK.39) — contextual typing supplied an **ARITY**, not a **TYPE**: every contextually-typed parameter in this checker was `any`, and a hover on one said `any` for every codebase
 
 **THE DEFECT.** `spineIanyFnExprEnter` / `spineIanyObjLitMethodEnter` decide TS7006 from the
