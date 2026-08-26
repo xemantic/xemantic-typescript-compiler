@@ -8988,17 +8988,45 @@ class Checker(
 
     /**
      * INV.3(d): names with a legitimate NON-module global meaning at merge
-     * time — the step-0 lib key set plus every script-file local name. A
-     * module-file local colliding with one of these is the SHARED class of
-     * the INV.3(a) taxonomy: it KEEPS merging into [globals] in this leg
-     * (retiring SHARED merges — e.g. compiler/types.ts's `interface Symbol`
-     * riding the lib `Symbol` — needs per-file resolution at every lib-name
-     * consumer first; measured 861 FPs when retired naively, round 510).
+     * time — every SCRIPT-file local name.
+     *
+     * **(CHK.49) the LIB key set is deliberately NOT in here.** It used to be,
+     * which made a MODULE file's own `interface Text` merge INTO the DOM
+     * `Text` — in both directions and program-wide, since [mergeSingleSymbol]
+     * ADOPTS (round 884: `globals[name]` IS the binder's object, so the lib
+     * symbol itself grew the module's declarations and EVERY file then saw the
+     * fusion). Retiring it here alone is round 510's 861-FP disaster and is
+     * re-measured as **969** on the compiler profile; it is sound only
+     * TOGETHER with [computePerFileVisibility] no longer seeding
+     * `nonModuleVisible` with the lib keys, which routes such a name through
+     * [perFileScope] — the declaring file gets its own symbol, every other file
+     * gets the pristine lib one. The two are ONE observable (round 927): each
+     * alone is worse than the pair.
+     *
      * Computed at init step 0e, before the step-1 merge; consumed by
      * [moduleLocalContributesGlobally]. Declared before `init` (the Kotlin
      * init-order gotcha).
      */
     private var mergeSharedKeepNames: Set<String> = emptySet()
+
+    /**
+     * (CHK.49) lib global names a MODULE file shadows with a top-level
+     * declaration AND whose lib symbol carries a VALUE declaration
+     * (`declare var Text: { new (…): Text }` beside `interface Text`).
+     *
+     * The shadow is TYPE-space: tsc resolves a name per MEANING, so a module's
+     * `interface Map<K, V>` hides the lib TYPE and leaves the lib VALUE alone.
+     * This checker has one symbol per name per file, so the value half is
+     * restored as a SECOND CHANCE on the rejecting path in [getTypeOfIdentifier]
+     * — it can only turn "not constructable / not callable" back into the lib's
+     * answer, never change a name that already resolved to a value.
+     *
+     * Normally EMPTY (nothing shadows a lib global), which is what makes the
+     * guard affordable on the identifier path. Computed at init step 1b2 by
+     * [computePerFileVisibility]; declared before `init` (the Kotlin init-order
+     * gotcha).
+     */
+    private var libValueShadowNames: Set<String> = emptySet()
 
     /**
      * 17.33: UMD global names registered via `export as namespace X;` in
@@ -10059,15 +10087,14 @@ class Checker(
         // keep-predicate ([moduleLocalContributesGlobally]) — the misparsed
         // `export as namespace X` namespace must keep merging globally.
         pass("init:collectUmdGlobalsAndModuleFiles") { collectUmdGlobalsAndModuleFiles() }
-        // 0e. INV.3(d): names with a legitimate NON-module global meaning — lib
-        // globals (= the step-0 merge's key set) + script-file locals. A module
-        // local colliding with one of these is the SHARED class: its merge is
-        // what carries e.g. compiler/types.ts's `interface Symbol` members to
-        // importers whose barrel aliases the general resolver cannot follow —
-        // retiring SHARED names is a LATER leg (needs per-file resolution at
-        // every lib-name consumer). Only MODULE-ONLY names retire in this leg.
+        // 0e. INV.3(d): names with a legitimate NON-module global meaning —
+        // script-file locals. (CHK.49) retired the LIB half of this set: a
+        // module file's own top-level declaration of a lib name is module-scoped
+        // in real tsc, and merging it corrupted the lib symbol program-wide.
+        // See [mergeSharedKeepNames]'s KDoc for why that retire is sound only
+        // together with the [computePerFileVisibility] half.
         pass("init:mergeSharedKeepNames") {
-        mergeSharedKeepNames = HashSet<String>(globals.keys).also { keep ->
+        mergeSharedKeepNames = HashSet<String>().also { keep ->
             for (result in binderResults) {
                 if (!isModuleFile(result.sourceFile.statements)) keep.addAll(result.locals.keys)
             }
@@ -15244,7 +15271,14 @@ class Checker(
      */
     private fun computePerFileVisibility(preAugmentationGlobalsKeys: Set<String>) {
         val moduleLocalNames = HashSet<String>()
-        val nonModuleVisible = HashSet<String>(libGlobals.keys)
+        // (CHK.49) the LIB key set is deliberately NOT seeded here — see
+        // [mergeSharedKeepNames]'s KDoc. A lib name a MODULE file declares now
+        // falls into [moduleOnlyGlobalNames] and is resolved through
+        // [perFileScope], which already seeds every file with the lib symbol and
+        // lets the declaring file's own local override it. The INV.3(a)
+        // classifier below is still handed the OLD taxonomy (lib keys included)
+        // so its SHARED/CONFLATED counts stay comparable across rounds.
+        val nonModuleVisible = HashSet<String>()
         for (result in binderResults) {
             if (isModuleFile(result.sourceFile.statements)) {
                 // INV.3(d): entries the retired merge deliberately KEEPS global
@@ -15262,7 +15296,21 @@ class Checker(
             if (key !in preAugmentationGlobalsKeys) nonModuleVisible.add(key)
         }
         moduleOnlyGlobalNames = HashSet(moduleLocalNames).apply { removeAll(nonModuleVisible) }
-        installGlobalsLookupClassifier(moduleLocalNames, nonModuleVisible)
+        // (CHK.49) the VALUE meaning of a shadowed lib name SURVIVES the shadow:
+        // `interface Map<K, V>` declared in a module file shadows the lib TYPE
+        // and leaves `declare var Map: MapConstructor` reachable, which is what
+        // keeps `new Map()` constructable there. Precomputed (and normally
+        // EMPTY) so [libValueBehindTypeOnlyShadow]'s guard is one set probe on
+        // the ~2 M-identifier path.
+        libValueShadowNames =
+            if (moduleOnlyGlobalNames.isEmpty()) emptySet()
+            else moduleOnlyGlobalNames.filterTo(HashSet()) { n ->
+                libGlobals[n]?.valueDeclaration != null
+            }
+        installGlobalsLookupClassifier(
+            moduleLocalNames,
+            HashSet(nonModuleVisible).apply { addAll(libGlobals.keys) },
+        )
     }
 
     /**
@@ -112307,7 +112355,16 @@ interface DataView {
      */
     private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? {
         return when (expr) {
-            is Identifier -> globals[expr.text]
+            // (CHK.49) INV.3(d)(ii), node-keyed — the same treatment the three
+            // Identifier-rooted heritage sites that CALL this one already carry.
+            // A raw `globals` consult reaches a module file's own namespace only
+            // while that namespace's NAME happens to collide with a lib global
+            // and the merge fuses the two: `class Promise<R> implements
+            // Promise.Thenable<R>` resolved (bluebirdStaticThis) and the identical
+            // shape spelled `Zromise` did NOT, on the parent binary. Both work
+            // through the per-file probe, which degrades to `globals` for every
+            // name with no per-file meaning.
+            is Identifier -> lookupPerFileForNode(expr, expr.text)
             is PropertyAccessExpression -> {
                 val parent = resolveHeritageBaseSymbol(expr.expression) ?: return null
                 val resolvedParent = resolveAlias(parent)
@@ -115243,6 +115300,35 @@ interface DataView {
     }
 
     /** Get the type of an identifier expression. */
+    /**
+     * (CHK.49) the lib symbol whose VALUE meaning [local] does not in fact
+     * shadow, or null.
+     *
+     * A module file's `interface Text` / `type Date = …` / an `import { Date }`
+     * of one occupies the TYPE meaning only; tsc keeps resolving the VALUE
+     * meaning of that name to the lib's `declare var`. We carry one symbol per
+     * name per file, so the value half is recovered HERE and only on the
+     * rejecting path: the caller has already found a per-file symbol and this
+     * answers non-null only when that symbol has NO value meaning at all while
+     * the lib one does. An import ALIAS is resolved onward first — its meanings
+     * are its target's.
+     *
+     * [libValueShadowNames] is empty for every program that shadows no lib
+     * global, which is the guard that keeps this off the hot identifier path.
+     */
+    private fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? {
+        if (name !in libValueShadowNames) return null
+        val lib = libGlobals[name] ?: return null
+        if (lib === local) return null
+        var resolved = local
+        if (resolved.flags.hasAny(SymbolFlags.Alias)) {
+            resolved = resolveImportedSymbolGeneral(resolved) ?: resolved
+        }
+        if (resolved.valueDeclaration != null) return null
+        if (resolved.flags.hasAny(SymbolFlags.Value)) return null
+        return lib
+    }
+
     private fun getTypeOfIdentifier(id: Identifier): Type {
         return when (id.text) {
             "undefined" -> undefinedType
@@ -115270,6 +115356,9 @@ interface DataView {
                 }
                 // Check file-level locals symbol table (for symbols not in type map)
                 currentFileLocals?.get(id.text)?.let { symbol ->
+                    // (CHK.49) a TYPE-only shadow of a lib global does not hide
+                    // the lib's VALUE meaning, and this IS the value position.
+                    libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
                     val type = getTypeOfSymbol(symbol)
                     if (type !== anyType && type !== errorType) return type
                 }
@@ -115287,7 +115376,12 @@ interface DataView {
                 // probe to the SAME merged instance (which is how the round-442
                 // by-NAME nulling differs — it broke import-driven typing).
                 val symbol = lookupPerFileForNode(id, id.text)
-                if (symbol != null) getTypeOfSymbol(symbol) else anyType
+                if (symbol == null) return anyType
+                // (CHK.49) same second chance one resolution layer down: the
+                // per-file probe answers the declaring file's own TYPE-space
+                // symbol for a shadowed lib name.
+                libValueBehindTypeOnlyShadow(id.text, symbol)?.let { return getTypeOfSymbol(it) }
+                getTypeOfSymbol(symbol)
             }
         }
     }
@@ -153376,6 +153470,15 @@ interface DataView {
                 // meaning must not check args against a foreign module file's leaked
                 // signature (tsc: TS2304 → any; suppression-only).
                 val symbol = lookupPerFileForNode(expr, expr.text) ?: return anyType
+                // (CHK.49) the callee position is a VALUE position, and a module
+                // file's TYPE-only declaration/import of a lib name does not hide
+                // the lib's `declare var` — which is exactly the case the
+                // Blocker-#3 narrowing above is written about
+                // (isolatedModulesShadowGlobalTypeNotValue). Before (CHK.49) the
+                // per-file probe answered the MERGED globals symbol and carried
+                // the value meaning by accident; it now answers the shadowing
+                // TYPE, so the value half is restored here.
+                libValueBehindTypeOnlyShadow(expr.text, symbol)?.let { return getTypeOfSymbol(it) }
                 getTypeOfSymbol(symbol)
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
