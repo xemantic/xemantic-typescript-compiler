@@ -228,13 +228,26 @@ class DestructuredReceiverTypeTest {
 
     /**
      * A REST element's type is the source MINUS the named members, which this does
-     * not compute — offering the source type instead would report against members
-     * the rest element genuinely does not have. tsc reports here (against the
-     * residual object type); we stay silent on purpose.
+     * not compute; tsc reports `zzznope` against the residual `{ inner: Inner; }`
+     * and we stay silent on purpose.
+     *
+     * The pin is the FALSE-POSITIVE direction rather than that false negative,
+     * because only the FP direction is uniquely this guard's: a rest element whose
+     * NAME happens to be a member of the source (`const { other, ...inner } = h`)
+     * would otherwise adopt that member's type and report a LEGAL access. Written
+     * with a name that does not collide, the refusal is redundant — `symbols` comes
+     * back empty and `singleOrNull` refuses anyway (measured: arm a2 read 0 RED).
      */
     @Test
-    fun `refusal - a REST element is not typed`() {
-        val d = diagnose(prelude + "export function f() { const { ...others } = h; others.zzznope; }")
+    fun `refusal - a REST element does not adopt a same-named member's type`() {
+        val d = diagnose(
+            """
+            interface Inner { alpha: string }
+            interface Holder { inner: Inner; other: number }
+            declare const h: Holder;
+            export function f() { const { other, ...inner } = h; inner.inner; }
+            """.trimIndent()
+        )
         assert(d.none { it.code == 2339 })
     }
 
