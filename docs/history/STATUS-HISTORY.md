@@ -1,3 +1,50 @@
+**CONTEXTUAL TYPING SUPPLIED AN *ARITY*, NOT A *TYPE* — EVERY CONTEXTUALLY-TYPED PARAMETER IN THIS
+CHECKER WAS `any`, AND A HOVER ON ONE SAID `any` FOR EVERY CODEBASE (2026-08-25, (CHK.39)). The
+item's own six-shape probe went **0 of 6 reported here** to **6 of 6**, matching
+`tools/tsgo-7.0.2/lib/tsc` row for row.** `spineIanyFnExprEnter` decided TS7006 from the
+contextual signature's parameter COUNT (B224), so a covered parameter went quiet and then stayed
+`any` to every reader of a type — a false-NEGATIVE family the whole (CHK.30) arc sat on top of.
+`pullContextualTypeAt` is tsc's `getContextualType`, **PULLED from the parent chain** because the
+INV.4 spine arrives at a function body carrying no contextual ambient at all (round 911).
+
+**THE STRUCTURAL FINDING: IT NEEDS TWO CALL SITES AND THE ABLATION PARTITIONS THEM EXACTLY.** A
+statement nested in a function body is EMISSION-OWNED by the legacy walk — the spine's own anchor
+runs `recordOnly` for it and truncates every diagnostic — so the obvious fix (the spine frame
+alone) is correct and **completely invisible**. `checkFunctionBody` is the emitting half (7 pins),
+`ctaFnBodyFrame` the capture half a hover reads (3 pins), 7 + 3 = the 10 that the whole-pull arm
+reddens. B85.1a is load-bearing beside them: an OPTIONAL contextual parameter is `T | undefined`,
+and the bare type was the round's one measured false positive (three profiles,
+`findAllReferences.ts`'s `baseSymbol?: Symbol`).
+
+**TWO MORE DEFECTS SURFACED BECAUSE THE TYPES DID.** (CHK.39b): an object-literal METHOD's body
+was not walked by the assignability walker AT ALL in a `.ts` file — `walkFunctionBodiesInExpr`'s
+`if (jsLike)` is a gate about `this`, and it was silently deciding whether the body is CHECKED.
+And KIR: `lowerFunctionValueCall` emitted a direct `FunctionN.invoke`, but **TypeScript's function
+assignability accepts a LOWER-arity function** (mitt registers a one-parameter wildcard handler
+against a two-parameter type), so both mitt corpus tests died with a `ClassCastException` the
+moment the callee stopped being `any`. It goes through `jsCallN` now.
+
+**(CHK.39c) REFUSED — and the refusal is the round's most transferable result.** Giving the
+PROPERTY-ACCESS family its last two contextual sources takes all four probes to full parity with
+tsgo **and leaves all 8 dashboard profiles `added=0 removed=0`** — and costs **+15 false positives
+on knip (66 -> 79)**, every one a parameter whose contextual type is a UNION that the body narrows
+by ASSIGNMENT (`if (typeof x === 'function') x = x()`). That walker has no assignment/`typeof`
+narrowing for a parameter; the grid is structurally blind to it. Re-queued as **(CHK.41)**, and
+pinned as KNOWN GAP so the next round sees it rather than rediscovering the chain.
+
+**GATES.** Suite **15,905 / 0 / 3** (+22 pins over 15,883), **zero corpus baselines moved**.
+`output.errors` **46** throughout — a real gate here, and it is what caught the optional-parameter
+FP. **`typeNode.bypassed` +31.26% REBASELINED**: ~17.7k per call site, essentially all of it
+`cpaComputeArgCtxTypes` (the inference-aware resolver, which is what makes `xs.map(x => …)`
+work); by round 716's price that is **~+21 ms, ~0.4% of a warm rebuild**, and the unspent lever is
+a per-node memo, since the two sites ask the same question about the same node.
+`huge_methods.py --fail-over 0` exit 0, **783** classes scanned. `partition-equivalence`
+**EQUIVALENT 78/78**, floor **61 ms**. `capture-equivalence` **1,005 / 43 / moreAny 0** with
+**both digests MOVED — the expected direction**, a parameter with a real type renders differently
+and `definitions` rose 360,152 -> 360,336. 8-profile grid vs a rebuilt parent (positive control on
+`javap`): `added=0 removed=0`. **knip 66 -> 66, every row identical**, with the BEFORE arm rebuilt
+in the same session against the same re-fetched dependency set.
+
 **A FILE'S MODULE FORMAT NOW COMES FROM THE NEAREST `package.json` `"type"` — `TS1295+TS1287`
 ON knip GO **2,478 -> 0**, AND EVERY STANDING GATE IN THIS REPO IS BLIND TO IT (2026-08-25,
 (CHK.29)).** Under `nodenext`/`node16` tsc reads the nearest enclosing `package.json`; we had the
