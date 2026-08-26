@@ -20,6 +20,154 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.51) — the axis was **HERITAGE**, not "lib": a missing member on anything with an `extends` was silent, and the firewall that hides it is worth **43 rows** on the compiler profile
+
+**THE QUEUE ITEM'S FRAMING WAS WRONG IN BOTH DIRECTIONS, AND A ONE-CASE-PER-FILE CENSUS
+SAYS SO IN ONE COMMAND.** The item said "a missing member on a REAL LIB interface is not
+reported"; measured against the (CHK.49) parent binary rebuilt in this session, `Date`,
+`Map<string, number>`, `Set<number>`, `Promise<number>`, `RegExp`, `Error`, `JSON`, `Math`,
+`Symbol`, `Iterable<number>`, `ArrayBuffer`, `EventTarget`, `new Date()` and every primitive
+(`string`, `number`, `boolean`) **already reported** — every one of them declares no
+`extends`. And a HAND-WRITTEN `interface D1 extends B1` was silent exactly like `Text`, so
+the item's "a hand-written interface of the same shape IS reported" is true only of a
+heritage-free one. The axis is heritage.
+
+**THREE MECHANISMS, ONE CLOSED.** Isolated per case, and each named rather than inferred:
+
+  1. **the heritage firewall** — `cmamCheckResolvedObjectType`'s
+     `if (objectType is Type.Interface && baseTypes non-empty) return`, plus its
+     `Type.Reference` twin reading `target.baseTypes`. This is `Text`, `Node`,
+     `CharacterData`, `Element`, `HTMLElement`, `D1 extends B1`, `class CD extends CB`.
+     **CLOSED for an all-lib closure.**
+  2. **the numeric index-signature bail** in `cmamEmitMissingProperty`
+     (`if (numberIndexInfo != null) { if (displayTypeOverride == null || …) return }`) —
+     `number[]`, `Array<number>`, `ReadonlyArray<number>`, `Uint8Array`. NOT closed.
+  3. **the empty-`properties` early return** — a bare function type (`() => void`) has no
+     properties and a non-empty `callSignatures`, so it misses the `{}` emitter's gate and
+     returns. NOT closed.
+  A **CLASS instance with a base** stays silent even with (1) removed entirely, i.e. there
+  is a FOURTH mechanism which this round did not locate.
+
+**WHY (1) COULD NOT SIMPLY GO, MEASURED BEFORE ANY DESIGN.** Deleting both its legs and
+running the 8-profile grid reads **89 diagnostics on the compiler profile against 46** —
+**+43**, and every one of them is a NARROWING gap rather than a member-table gap:
+`canHaveSymbol(e) && e.symbol` at `checker.ts:32231`, `if (!isIdentifier(node.expression))
+return Debug.fail(); … node.expression.escapedText` at `:38034`, `node.argument.literal`
+nine times. tsc's own sources are written in that style throughout, so **the firewall has
+been standing in for flow narrowing this checker does not do** — which is the most
+transferable thing this round learned.
+
+**SO THE RELAXATION DEMANDS POSITIVE EVIDENCE ((CHK.45)'s RULE), AND THE EVIDENCE IS
+"EVERY TYPE IN THE TRANSITIVE BASE CLOSURE IS A LIB TYPE".** `cmamLibHeritageMembersComplete`
+answers true only when each type in the closure is an interface with a symbol, with at least
+one declaration, with every declaration in `builtinLibDecls`, not named by any
+`declare global { interface … }` block, and with a member table that resolved. A lib
+interface's members are fully declared in files this compiler ships and parses in one piece,
+so "absent from the resolved table" is a WITNESSED verdict; a program interface's table
+depends on the receiver having been narrowed, which is exactly failure (1) exists for.
+
+**THE `declare global` SET IS THE LOAD-BEARING HALF AND IT EXISTS BECAUSE OF AN *OPEN*
+DEFECT.** (CHK.50) — queued by (CHK.49) and measured on its parent — is that a
+`declare global { interface X { … } }` in a module does not reach `globals` at all. So the
+lib symbol's declaration list still reads "all lib" after such an augmentation, and the
+all-lib test cannot see it: without a separate `globalAugmentedInterfaceNames` set this
+relaxation would have converted (CHK.50)'s silent false NEGATIVE into a false POSITIVE on
+the shape every `@types` package is written in. It is a SECOND set beside
+`globalAugmentationNames` deliberately — that one is a value-space suppression list and
+adding type names to it would silence unrelated diagnostics. A GLOBAL-SCRIPT augmentation
+needs nothing: it merges, so the symbol carries a non-lib declaration and the all-lib test
+refuses on its own.
+
+**COST: ONE TRUE POSITIVE, NAMED.** In a file that writes
+`declare global { interface HTMLElement { … } }`, `el.zzzNotThere` is TS2339 in tsgo and
+silent here. That is the conservative direction and it goes away when (CHK.50) lands.
+
+**AGREEMENT WITH tsgo 7.0.2 IS EXACT** — code, message and column — for `Text`,
+`HTMLElement`, `Node`, `Element` and `CustomEvent<number>`, read out of
+`tools/tsgo-7.0.2/lib/tsc` on the same source rather than hand-written.
+
+**GATES.** Suite **16,107 / 0 / 3** (+6, exactly the new class), **zero corpus baselines
+moved** — expected, since the generated corpus compiles against the EMBEDDED lib, which has
+no DOM. `cost_gate.py` **PASSES with NO rebaseline**, exit 0: `output.errors` **46**,
+`spine.nodes` **+0.00%**, `globals.conflated` 0, largest movements `narrow.memoServed`
+**+0.69%** and `typeOfExpr.calls` **+0.59%** — digit-for-digit (CHK.49)'s, i.e. this round
+contributes 0.00% on the compiler profile. `huge_methods.py --fail-over 0` exit 0, **783**
+classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**, floor
+**59 ms** [89, 56, 57, 59] — ONE draw, the leading 89 the documented ramp.
+`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions`
+**360,376** — the standing state, unmoved. 8-profile grid with BOTH arms built in this
+session and a `javap` positive control (before = 0 occurrences of
+`cmamLibHeritageMembersComplete`, after = 3): **`added=0 removed=0` on all eight**.
+
+**LIBRARIES — ONE REAL ARM AND ONE CONTROL.** **`jsonrepair` 3.13.1: 4 -> 4 rows,
+byte-identical**, and its tsconfig says `"lib": ["es2020", "dom"]` — so that is a genuine
+no-false-positive measurement over a DOM-loading project rather than a control.
+**`knip` @ `dc7aca5`: 49 -> 49, byte-identical**, and that one IS a pure control:
+(CHK.49) established that knip's `"lib": ["esnext"]` excludes DOM, so it has no lib-heritage
+receiver to report about.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT, EACH
+ANCHOR ASSERTED UNIQUE, AND EACH ARM'S `Checker.class` md5 CHECKED AGAINST THE LANDED
+`b347a38a…`.**
+
+| arm | injected mistake | RED | profile |
+|---|---|---|---|
+| a0 | the whole change reverted (parent rebuilt this session, `javap` 0 vs 3) | **3** — every positive | 46 |
+| a1 | the all-lib-declarations test dropped | **1** | **89** |
+| a2 | the `declare global` refusal dropped | **1** | 46 |
+| a3 | the resolved-member-table test dropped | **0** | 46 |
+| a4a | a null symbol treated as complete | **0** | 46 |
+| a4b | the empty-declarations refusal dropped | **0** | 46 |
+| a5 | a non-interface base skipped instead of refused | **0** | 46 |
+| a6 | the `declare global` interface COLLECTOR dropped | **1** — the same pin as a2 | 46 |
+| a7 | the `Type.Reference` leg reverted to a bare `return` | **1** — uniquely the generic pin | 46 |
+
+a2/a6 are a **round-927 pair** — one observable reachable from either end. a3/a4a/a4b/a5 are
+recorded as **UNDISCRIMINATED and KEPT**, which is not the same as redundant and not the same
+as dead: each is unreachable only because of what the shipped libs happen to CONTAIN today
+(every lib interface is bound, has declarations, resolves its members, and extends only other
+interfaces). (CHK.49)'s delete-the-un-gateable-guard precedent does not apply, because none of
+them is PROVABLY unobservable — the libs are input this repo does not author.
+
+**THE OBVIOUS FALSE-POSITIVE PIN IS BLIND, AND ONLY AN ARM SAW IT.** The first draft of the
+"a narrowed member is not reported missing" pin used a guard whose predicate type is a
+SUBTYPE of the receiver's (`x is ZzzSub` for an `x: ZzzBase`). That narrows correctly here, so
+the pin was green on the ablated binary too: **arm a1 read `0 RED` with the profile at 89** —
+round 902's law, a blind pin rather than a redundant guard. What this checker cannot do is the
+INTERSECTION narrow tsc performs when the predicate names a SIBLING
+(`canHaveSymbol(node: Node): node is Declaration` applied to an `e: Expression`), and rewriting
+the fixture that way takes a1 to 1 RED. **A type-guard FP fixture must name a sibling, not a
+subtype.**
+
+**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **three** positives were run against the
+(CHK.49) parent binary rebuilt in this session (`Checker.class` md5 `093544ff…`, `javap`
+reading 0 occurrences of the new members) over byte-identical test source, and **all three
+reported RED**. The two refusal pins are green on the parent by construction and their
+falsifying arms are a2/a6 and a1 above. The one pin labelled CONTROL (12 inherited members
+across three DOM types and a generic instantiation) is green on every arm and is NOT counted
+as coverage. The fixtures carry `@useRealLibs` + `@lib: es2020,dom`: with the embedded lib
+none of these types exists and every one of them would have passed vacuously.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * Deleting the firewall — the obvious first cut, and a 43-row catastrophe. Its 43 rows are
+    a free map of this checker's narrowing gaps and are worth mining as a queue item.
+  * The subtype-guard FP pin, above.
+  * The helper was first written with an early `if (root.baseTypes.isNullOrEmpty()) return
+    false` and the caller consulting it unconditionally. Moving the heritage test back to the
+    caller (where it already lived) made that guard unreachable, so it was DELETED rather
+    than shipped un-gateable, and it keeps the closure walk off every base-less receiver.
+  * **A batch of ablation arms timed out mid-arm and left the tree ABLATED** — round 805's
+    hazard, caught by a `cmp` against the snapshot before anything else was run. Any driver
+    whose `finally` restores the tree needs the restore VERIFIED from outside it.
+
+**WHAT IS LEFT, MAPPED AND NOT PINNED (round 765).** A PROGRAM interface with heritage
+(`interface D1 extends B1`), a MIXED closure (`interface Mine extends HTMLElement`), a CLASS
+instance with a base, an ARRAY or any numeric-index receiver, and a bare function type: tsgo
+reports a missing member on all of them and we do not. The first two are the same object as
+the 43 rows and are blocked on narrowing; the last three are mechanisms (2), (3) and the
+unlocated fourth. Queued as **(CHK.52)**.
+
 ### Round (CHK.49) — a module file's own `interface Text` was merged INTO the DOM `Text`, program-wide and in both directions; `jsonrepair` **11 -> 4**
 
 **THE DEFECT, AND THE PART THE QUEUE ITEM DID NOT SAY.** `init:mergeSharedKeepNames` seeded
@@ -181,6 +329,8 @@ pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
   * `twofile` — the obvious cross-file pin — is VACUOUS: this checker does not report a
     missing member on the real DOM `Date`/`Text` interface at all (a separate pre-existing
     gap), so both arms agree on an empty list. The discriminating shape is an ASSIGNMENT.
+    **CORRECTED BY (CHK.51): `Date` DID report and `Text` did not — the axis is HERITAGE,
+    and the lib half is now closed. What is still vacuous is listed under (CHK.52).**
 
 ### Round (CHK.32) — a primitive now relates to an ANONYMOUS object target through its wrapper; and the item's own premise was wrong about `jsonrepair`, whose 7 rows are a **DOM name collision**
 
@@ -1125,128 +1275,6 @@ a3 and a4 **partition** the return family by LAYER rather than by shape — a4 t
 half (TS7006) and leaves every hover green, a3 takes the TYPE half and leaves three of the
 four suppression pins green — which is the same two-call-site structure (CHK.39) found, seen
 from the other side. No arm was dead and none was redundant.
-
-### Round (CHK.39) — contextual typing supplied an **ARITY**, not a **TYPE**: every contextually-typed parameter in this checker was `any`, and a hover on one said `any` for every codebase
-
-**THE DEFECT.** `spineIanyFnExprEnter` / `spineIanyObjLitMethodEnter` decide TS7006 from the
-contextual signature's parameter COUNT (B224), so a covered parameter went QUIET — and nothing
-entered it into the scope the assignability walkers read, so it stayed `any` to every reader of
-a type. Measured against `tools/tsgo-7.0.2/lib/tsc` on the item's own six-shape probe: **0 of 6
-reported here, 6 of 6 under tsc**. It is a false-NEGATIVE family the whole (CHK.30) arc sat on
-top of, and it is what made a hover on a callback parameter answer `any` in every project.
-
-**WHAT LANDED.** `pullContextualTypeAt` — tsc's `getContextualType`, restricted to the positions
-a function-like node can occupy and PULLED from the parent chain. The pull is the design decision:
-the CTA family runs on the INV.4 spine, which arrives at a function body carrying **no contextual
-ambient at all** (round 911 — the anchors install-and-restore per dispatch), and the parent chain
-is a function of the AST alone, so it cannot drift from the tree the way a second threaded stack
-would. Deliberately partial — a `return`, an array literal, an `as`/`satisfies` and a `=`
-assignment answer null, which leaves the parameter `any` exactly as before rather than giving it
-a wrong type ((CHK.40)).
-
-**TWO CALL SITES, AND THE ABLATION SAYS NEITHER IS REDUNDANT — this is the round's structural
-finding.** `checkFunctionBody` is the EMITTING half and `ctaFnBodyFrame` is the CAPTURE half,
-because **a statement nested in a function body is EMISSION-OWNED by the legacy walk: the spine's
-own anchor runs `recordOnly` for it and truncates every diagnostic.** So the first version of the
-fix — the spine frame alone, which is the obvious place — was correct and *completely invisible*,
-and only a `(walker, currentLocalTypes["node"], initType)` print at `checkVarDeclAssignabilityCore`
-showed it: the same declaration is visited TWICE, `legacy-walkFnBodies-arrowblock` with the
-parameter ABSENT and `anchor(recordOnly=true)` with it typed. Both sites sit OUTSIDE the
-function's own TP scope, on purpose in both directions: a contextual type is written outside the
-function, and INV.5(c) bypasses its cache under a non-empty instantiation context.
-
-**B85.1a IS LOAD-BEARING HERE, AND IT WAS THE ROUND'S ONE MEASURED FALSE POSITIVE.** An OPTIONAL
-contextual parameter is `T | undefined` inside the body; the bare type reported `base = undefined`
-as TS2322 on three dashboard profiles (`findAllReferences.ts`'s `baseSymbol?: Symbol`). Both other
-contextual-typing sites already carried the rule — **a new one has to be written with it.**
-
-**A KIR SOUNDNESS DEFECT SURFACED, AND IT IS THE ONLY THING IN THE SUITE THAT WENT RED.** Typing
-the parameter turned both `mitt` corpus tests into a runtime `ClassCastException`:
-`lowerFunctionValueCall` coerced the callee to `types.function(arity)` and emitted a direct
-`FunctionN.invoke`, and **TypeScript's function assignability accepts a function of FEWER
-parameters** — mitt's driver registers a one-parameter wildcard handler against a two-parameter
-`WildcardHandler` and `emit` calls it with two arguments. The repo already knew this for a BAG
-member; it is the same fact about a function VALUE, invisible only because such a callee used to
-be `any`. The call now goes through `adaptingCall` (`jsCallN`), the same specialized shape.
-
-**(CHK.39b): AN OBJECT-LITERAL METHOD'S BODY WAS NOT CHECKED AT ALL IN A `.ts` FILE.**
-`walkFunctionBodiesInExpr`'s `MethodDeclaration` arm was `if (jsLike)` — a gate about whether
-`this` is the literal's type (which in TypeScript it is not, TS2683) that was **silently deciding
-whether the body reaches the assignability walker**. Combined with the `recordOnly` truncation
-above, every statement in every `{ m(node) {…} }` in every `.ts` file was unchecked. Walking it
-(with `this` cleared, B101) costs nothing measurable — `cost_gate.py` PASSES with the largest
-movement `mapped.hits` +0.72% — and it completes the probe's assignability half.
-
-**(CHK.39c): REFUSED, AND THE REFUSAL IS THE ROUND'S MOST TRANSFERABLE RESULT.** The
-property-access family reads its contextual type from its OWN source (`cpaCtxAt` plus the spine
-anchor's `checkPropertyAccessInExpr(decl.initializer, …)`) and has two holes there: a declaration
-ANNOTATION is not a contextual type for its initializer, and an object-literal METHOD's body is
-not walked at all. **Both fixes were written; both are reverted.** With them the four probes read
-FULL PARITY WITH tsgo (7/7, 10/10, 5/5, 5/5) **and all 8 dashboard profiles stay `added=0
-removed=0`** — and knip goes **66 -> 79**. Every added row is a parameter whose contextual type is
-a UNION that the body narrows by ASSIGNMENT (`if (typeof localConfig === 'function') localConfig =
-localConfig()`, then `localConfig.files`), tsgo silent at every one; the objlit-method arm costs
-one more of the same kind at `inlineVariable.ts:102`. **The property-access family has no
-assignment/`typeof` narrowing for a parameter, so handing it a union contextual type manufactures
-TS2339 — and the 8-profile grid is structurally blind to it**, because that is one codebase and
-tsc's own sources do not write the shape. Queued as (CHK.41), blocked on that narrowing.
-
-**A DEAD LEG WAS FOUND AND NOT SHIPPED (round 902 / the (CHK.30) precedent).** A
-`VariableDeclaration`/`PropertyDeclaration` arm added to `cpaCtxAt` computed the right contextual
-type and reached the arrow's frame — `XP arrowframe ctx=(n: N) => void` — and changed **nothing**:
-the emitter runs under the ANCHOR's ambient through the legacy `cpaExprArrowFunction`, which makes
-its own scope. Ablated: probes identical, all pins green. Removed.
-
-**GATES.** Suite **15,905 / 0 / 3** (+22 pins over the 15,883 baseline: 18 core + 4 `-project`),
-**zero corpus baselines moved**. `cost_gate.py` — `output.errors` **46** throughout, and this was
-a real gate rather than a control (it caught the optional-parameter FP as three profile rows).
-**Rebaselined for one counter: `typeNode.bypassed` +31.26% (110,901 -> 145,570)**, ~17.7k per call
-site, essentially all of it `cpaComputeArgCtxTypes` — the inference-aware resolver, which is what
-makes a GENERIC callee's `xs.map(x => …)` work. Round 716 priced the whole context-bypassed
-population at 68 ms for 110,901 calls, so this is **~+21 ms, ~0.4% of a warm rebuild**,
-corroborated by `typeOfExpr.calls` +0.35% and `narrow.walks` +0.11%. **The unspent lever: the two
-sites ask the SAME question about the same node, so a per-node memo halves it.**
-`huge_methods.py --fail-over 0` exit 0, **783 classes scanned**. `partition-equivalence.sh`
-**EQUIVALENT, all 78 files**, floor **61 ms** [61, 54, 78, 61] (one draw; the arm spans 49-83 ms
-across this round's three runs, so read the spread, not the median). `capture-equivalence.sh`
-**1,005 spans / 43 of 76 files / `narrowRendersMoreAny` = 0**; **both digests MOVED, which is the
-expected direction** — a parameter that now has a real type renders differently, and
-`definitions` rose 360,152 -> 360,336. BEFORE/AFTER 8-profile grid against a rebuilt parent
-(positive control: `javap` finds `applyPulledContextualParamTypes` **0** times before and **1**
-after): `added=0 removed=0` on all eight.
-
-**knip, measured with a rebuilt BEFORE arm in the same session: 66 -> 66, every row identical.**
-The cached checkout had lost its `node_modules`, so the 20 dependencies were re-fetched from the
-npm registry (no `node` on this box; `urllib` + `tarfile`) and BOTH arms were run against the same
-set — a run without them reads 305 errors, of which 147 are `process`/`__dirname`, i.e. it
-measures the missing packages. So the change is knip-NEUTRAL: no new false positives on a 498-file
-real library, and none of its remaining 66 belongs to this family.
-
-**ABLATION — one mistake per arm, each diffed against its OWN snapshot (round 922), each with a
-positive control that it was reached (round 902).**
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a1 | `applyPulledContextualParamTypes` returns immediately | **10** — 7 core positives + all 3 hovers |
-| a2 | the `checkFunctionBody` site (the EMITTING half) removed | **7** — every core positive, no hover |
-| a3 | the `ctaFnBodyFrame` site (the CAPTURE half) removed | **3** — every hover, no core pin |
-| a4 | the pull's `CallExpression` arm answers null | **6** — the 3 call-argument positives, both optional pins, the call-argument hover |
-| a5 | the optional-parameter `\| undefined` union dropped | **1** — uniquely the `accepts undefined` pin |
-| a6 | the object-literal METHOD arm of the pull answers null | **1** — uniquely the objlit-method hover |
-| a7 | the (CHK.39b) `.ts` objlit-method body walk removed | **2** — uniquely its two pins |
-
-a2 and a3 PARTITION a1 exactly (7 + 3 = 10), which is what says the two call sites are separately
-load-bearing rather than one being a copy of the other. Two pins are deliberately
-NON-discriminating and recorded as such rather than claimed (round 807): `an ANNOTATED variable's
-arrow parameter …` is green in every arm because that shape already worked through
-`contextualizeFnExprFromAnnotation`, so it is a regression pin and not coverage; the three KNOWN
-GAP pins are green by construction.
-
-**Pins**: `ContextualParameterTypeTest` (18, core) and `ProjectContextualParamHoverTest` (4,
-`-project`), whose three expectations are READ OUT of tsc 7.0.2's own language server
-(`--lsp -stdio` via `scripts/lsp_hover.py`) rather than hand-written — round 924's rule.
-
-
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
@@ -2971,14 +2999,40 @@ GAP pins are green by construction.
   `CONTROL - a declare global block in a module still merges into the lib globals` pins the
   half that works and deliberately does NOT pin the half that does not (round 765).
 
-- [ ] **(CHK.51) A MISSING MEMBER ON A *REAL LIB* INTERFACE IS NOT REPORTED — `declare const
-  t: Date; t.zzzNope` IS SILENT WHERE tsgo SAYS TS2339** (found 2026-08-26 while writing
-  (CHK.49)'s cross-file pin, which had to be re-pointed at an ASSIGNMENT because of it;
-  pre-existing, identical on both binaries). A hand-written interface of the same shape IS
-  reported, so this is about the lib types specifically — plausibly the
-  `LIB_MIN_TARGET_PROPS` / `builtinLibDecls` firewall (round 792) or the heritage-chain
-  member collection, unmeasured. It makes every "does the receiver have this member" pin
-  written against a lib type VACUOUS, which is worth knowing before the next one is written.
+- [x] **(CHK.51) DONE 2026-08-26 — THE AXIS IS **HERITAGE**, NOT "LIB", AND THE FIREWALL THAT
+  HIDES IT IS WORTH **43 ROWS** ON THE COMPILER PROFILE.** The item's own repro (`Date`) already
+  reported, as did `Map`, `Set`, `Promise`, `RegExp`, `Error`, `JSON`, `Math`, `Symbol`,
+  `Iterable`, `ArrayBuffer`, `EventTarget` and every primitive — all heritage-free — while a
+  HAND-WRITTEN `interface D1 extends B1` was as silent as `Text`. What refuses is
+  `cmamCheckResolvedObjectType`'s "skip if class/interface has base types", and deleting it
+  outright measures **89 against 46** on the compiler profile, every new row a NARROWING gap
+  (`canHaveSymbol(e) && e.symbol`). So the relaxation demands POSITIVE evidence: a new predicate
+  requires every type in the transitive base closure to be an interface whose declarations are
+  ALL lib declarations, none named by a `declare global { interface … }` block, each with a
+  resolved member table. `Text`, `Node`, `Element`, `HTMLElement`, `CustomEvent<number>` now
+  match tsgo 7.0.2 on code, message and column. Pins: `LibHeritageMissingMemberTest` (6, with
+  `@useRealLibs` + `@lib: es2020,dom` — the embedded lib has no DOM and every one of them would
+  otherwise pass vacuously). Residue queued as (CHK.52).
+  ORIGINAL ENTRY: A MISSING MEMBER ON A *REAL LIB* INTERFACE IS NOT REPORTED — `declare const
+  t: Date; t.zzzNope` IS SILENT WHERE tsgo SAYS TS2339 (found 2026-08-26 while writing
+  (CHK.49)'s cross-file pin, which had to be re-pointed at an ASSIGNMENT because of it).
+
+- [ ] **(CHK.52) A MISSING MEMBER IS *STILL* UNREPORTED ON FOUR RECEIVER FAMILIES, AND THEY ARE
+  FOUR DIFFERENT MECHANISMS — (CHK.51)'s measured residue, tsgo reports all of them.**
+  (a) a **PROGRAM interface with heritage** and (b) a **MIXED closure**
+  (`interface Mine extends HTMLElement`) are both the heritage firewall still standing, and
+  both are blocked on the same thing: the 43 rows a naive removal adds are the checker's
+  NARROWING gaps, above all the INTERSECTION narrow tsc performs when a type predicate names a
+  SIBLING rather than a subtype (`canHaveSymbol(node: Node): node is Declaration` on an
+  `e: Expression`). **Those 43 rows are a free, already-captured map of that gap** — start
+  there, not at the firewall. (c) an **ARRAY or any numeric-index receiver** (`number[]`,
+  `Array<T>`, `ReadonlyArray<T>`, `Uint8Array`) is `cmamEmitMissingProperty`'s
+  `if (numberIndexInfo != null) … return`, which is over-broad: a NUMERIC index signature does
+  not cover a non-numeric name, and tsc reports `arr.zzzNope`. (d) a bare **FUNCTION type**
+  (`() => void`) has no properties and a non-empty `callSignatures`, so it falls out of the
+  `{}` emitter's gate and returns. And a **CLASS instance with a base** is silent even with the
+  firewall removed entirely, i.e. a FIFTH mechanism this round did not locate. (c) and (d) look
+  independently closable and cheap; (a)/(b) are the expensive half.
 
 - [ ] **(CHK.33) A DESTRUCTURING PARAMETER BREAKS ARITY, AND THE MESSAGE PROVES IT: `Expected
   1-0 arguments, but got 1` — 8 ROWS IN `marked`, ON A LIBRARY tsgo REPORTS ZERO ERRORS FOR.**

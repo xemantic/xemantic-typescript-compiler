@@ -1,3 +1,52 @@
+**A PROPERTY MISSING ON *EVERY* UNION CONSTITUENT WAS WHITELISTED TO TWO MEMBER SHAPES — AND
+THREE OF (CHK.44)'s FOUR "BLOCK-SCOPED" POPULATIONS ARE NOT ABOUT BLOCK SCOPING AT ALL
+(2026-08-26, (CHK.45)).** The union elaboration's two verdicts differ in soundness: PARTIAL
+coverage has a WITNESS (some member answered "yes", so its table resolved) and fires on any
+member set; ALL-MISSING has none, so it was gated to `allWellResolved` / `allAnonPlainObjects`.
+Measured against tsgo 7.0.2, that dropped every union carrying a FUNCTION type, a CONSTRUCTOR
+type, a PRIMITIVE, a TUPLE or a TYPE LITERAL beside a named interface — for a PARAMETER and a
+FILE-LEVEL `const` exactly as much as for a body-local, which is why (CHK.44) filed it as "a
+different emitter". It is the same emitter.
+
+**THE 3x5 MAP IS THE ROUND'S MOST TRANSFERABLE OUTPUT.** (a) a member on NO constituent —
+the whitelist, **FIXED**; (b) an un-annotated local — **SPLITS**, its file-level half is (a) and
+is fixed, its body-local half is B83.5; (c) a DESTRUCTURED binding — silent for a destructured
+PARAMETER too, i.e. a binding-element name is typed as a receiver nowhere; (d) a NESTED access
+with a single-OBJECT leaf — silent at every declaration site, while a UNION leaf already
+reports. (b)-body-local, (c) and (d) are three INDEPENDENT gaps, queued as **(CHK.46)** and
+recorded in the note rather than pinned (round 765: a known-gap pin is a countdown — (CHK.44)'s
+own failed this round, the law's third instance).
+
+**THE CALIBRATION IS TWO ROWS ON knip AND NOTHING ELSE.** Deleting the gate ENTIRELY is
+`added=0 removed=0` on all eight profiles and moves ZERO corpus baselines, and still costs **2
+false positives on knip** — `walk.ts`'s `item.members` / `item.jsDocTags` on `Export |
+undefined`, both a CROSS-FILE interface WITH a heritage clause (B153 arriving exactly where the
+shipped predicate already refused it). So the widening is a per-member trust predicate whose
+Interface arm keeps the shipped rule verbatim; everything it adds is OUTSIDE the named-interface
+world. Seven refusals are pinned as refusals with their reason — tsc reports all of them.
+
+**GATES.** Suite **15,998 / 0 / 3** (+19), **zero corpus baselines moved**. `cost_gate.py`
+**PASSES with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest
+movement `typeNode.cacheHits` **+1.96%**, i.e. the same three counters at the same values
+(CHK.44) recorded: an emission gate costs no counter. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**, floor
+**56 ms** [56, 53, 56, 69] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
+`definitions` **360,376** — the standing state, both digests unmoved. 8-profile grid vs a parent
+rebuilt at session start: **`added=0 removed=0` on all eight**. **knip 66 -> 66, every row
+byte-identical, BEFORE arm rebuilt in this session** (parent re-verified by a probe reading 2
+rows where the fixed binary reads 7).
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT.** a1 (the trust
+predicate always false) **11 RED — every positive**; a2 (always true) **6 — every refusal**; a3
+(drop the heritage check) 1; a4 (drop the `Type.Reference` refusal) 1; a6 (drop the chain) 1; a7
+(revert the index-signature precision) 1 — the TUPLE, which a naive "any index signature
+provides the property" refusal loses. **a9 (relax the `InterfaceDeclaration` requirement) reddens
+the CLASS pin ONLY, which is the finding**: an ENUM is refused not by `isEnumFlavoredObjectType`
+but by the LAST clause, because an enum-flavoured type resolves to no members and no signatures
+(CLAUDE.md: an enum's members live on `Symbol.exports` and on no type at all). So a5 and a8 read
+**0 RED and are REDUNDANT GUARDS, recorded as such rather than claimed** (round 807) — and the
+enum pin is NOT blind, since a2 reddens it.
+
 **A BLOCK-SCOPED LOCAL WITH A UNION ANNOTATION WAS NOT A RECEIVER AT ALL — `function f() {
 const c: A | F = u; c.files }` REPORTED **NOTHING** WHERE tsc 7.0.2 REPORTS TS2339 (2026-08-26,
 (CHK.44)).** CLAUDE.md's B83.5 is the whole cause: `Binder.bindStatement` binds no declaration

@@ -1,3 +1,123 @@
+### Round (CHK.39) — contextual typing supplied an **ARITY**, not a **TYPE**: every contextually-typed parameter in this checker was `any`, and a hover on one said `any` for every codebase
+
+**THE DEFECT.** `spineIanyFnExprEnter` / `spineIanyObjLitMethodEnter` decide TS7006 from the
+contextual signature's parameter COUNT (B224), so a covered parameter went QUIET — and nothing
+entered it into the scope the assignability walkers read, so it stayed `any` to every reader of
+a type. Measured against `tools/tsgo-7.0.2/lib/tsc` on the item's own six-shape probe: **0 of 6
+reported here, 6 of 6 under tsc**. It is a false-NEGATIVE family the whole (CHK.30) arc sat on
+top of, and it is what made a hover on a callback parameter answer `any` in every project.
+
+**WHAT LANDED.** `pullContextualTypeAt` — tsc's `getContextualType`, restricted to the positions
+a function-like node can occupy and PULLED from the parent chain. The pull is the design decision:
+the CTA family runs on the INV.4 spine, which arrives at a function body carrying **no contextual
+ambient at all** (round 911 — the anchors install-and-restore per dispatch), and the parent chain
+is a function of the AST alone, so it cannot drift from the tree the way a second threaded stack
+would. Deliberately partial — a `return`, an array literal, an `as`/`satisfies` and a `=`
+assignment answer null, which leaves the parameter `any` exactly as before rather than giving it
+a wrong type ((CHK.40)).
+
+**TWO CALL SITES, AND THE ABLATION SAYS NEITHER IS REDUNDANT — this is the round's structural
+finding.** `checkFunctionBody` is the EMITTING half and `ctaFnBodyFrame` is the CAPTURE half,
+because **a statement nested in a function body is EMISSION-OWNED by the legacy walk: the spine's
+own anchor runs `recordOnly` for it and truncates every diagnostic.** So the first version of the
+fix — the spine frame alone, which is the obvious place — was correct and *completely invisible*,
+and only a `(walker, currentLocalTypes["node"], initType)` print at `checkVarDeclAssignabilityCore`
+showed it: the same declaration is visited TWICE, `legacy-walkFnBodies-arrowblock` with the
+parameter ABSENT and `anchor(recordOnly=true)` with it typed. Both sites sit OUTSIDE the
+function's own TP scope, on purpose in both directions: a contextual type is written outside the
+function, and INV.5(c) bypasses its cache under a non-empty instantiation context.
+
+**B85.1a IS LOAD-BEARING HERE, AND IT WAS THE ROUND'S ONE MEASURED FALSE POSITIVE.** An OPTIONAL
+contextual parameter is `T | undefined` inside the body; the bare type reported `base = undefined`
+as TS2322 on three dashboard profiles (`findAllReferences.ts`'s `baseSymbol?: Symbol`). Both other
+contextual-typing sites already carried the rule — **a new one has to be written with it.**
+
+**A KIR SOUNDNESS DEFECT SURFACED, AND IT IS THE ONLY THING IN THE SUITE THAT WENT RED.** Typing
+the parameter turned both `mitt` corpus tests into a runtime `ClassCastException`:
+`lowerFunctionValueCall` coerced the callee to `types.function(arity)` and emitted a direct
+`FunctionN.invoke`, and **TypeScript's function assignability accepts a function of FEWER
+parameters** — mitt's driver registers a one-parameter wildcard handler against a two-parameter
+`WildcardHandler` and `emit` calls it with two arguments. The repo already knew this for a BAG
+member; it is the same fact about a function VALUE, invisible only because such a callee used to
+be `any`. The call now goes through `adaptingCall` (`jsCallN`), the same specialized shape.
+
+**(CHK.39b): AN OBJECT-LITERAL METHOD'S BODY WAS NOT CHECKED AT ALL IN A `.ts` FILE.**
+`walkFunctionBodiesInExpr`'s `MethodDeclaration` arm was `if (jsLike)` — a gate about whether
+`this` is the literal's type (which in TypeScript it is not, TS2683) that was **silently deciding
+whether the body reaches the assignability walker**. Combined with the `recordOnly` truncation
+above, every statement in every `{ m(node) {…} }` in every `.ts` file was unchecked. Walking it
+(with `this` cleared, B101) costs nothing measurable — `cost_gate.py` PASSES with the largest
+movement `mapped.hits` +0.72% — and it completes the probe's assignability half.
+
+**(CHK.39c): REFUSED, AND THE REFUSAL IS THE ROUND'S MOST TRANSFERABLE RESULT.** The
+property-access family reads its contextual type from its OWN source (`cpaCtxAt` plus the spine
+anchor's `checkPropertyAccessInExpr(decl.initializer, …)`) and has two holes there: a declaration
+ANNOTATION is not a contextual type for its initializer, and an object-literal METHOD's body is
+not walked at all. **Both fixes were written; both are reverted.** With them the four probes read
+FULL PARITY WITH tsgo (7/7, 10/10, 5/5, 5/5) **and all 8 dashboard profiles stay `added=0
+removed=0`** — and knip goes **66 -> 79**. Every added row is a parameter whose contextual type is
+a UNION that the body narrows by ASSIGNMENT (`if (typeof localConfig === 'function') localConfig =
+localConfig()`, then `localConfig.files`), tsgo silent at every one; the objlit-method arm costs
+one more of the same kind at `inlineVariable.ts:102`. **The property-access family has no
+assignment/`typeof` narrowing for a parameter, so handing it a union contextual type manufactures
+TS2339 — and the 8-profile grid is structurally blind to it**, because that is one codebase and
+tsc's own sources do not write the shape. Queued as (CHK.41), blocked on that narrowing.
+
+**A DEAD LEG WAS FOUND AND NOT SHIPPED (round 902 / the (CHK.30) precedent).** A
+`VariableDeclaration`/`PropertyDeclaration` arm added to `cpaCtxAt` computed the right contextual
+type and reached the arrow's frame — `XP arrowframe ctx=(n: N) => void` — and changed **nothing**:
+the emitter runs under the ANCHOR's ambient through the legacy `cpaExprArrowFunction`, which makes
+its own scope. Ablated: probes identical, all pins green. Removed.
+
+**GATES.** Suite **15,905 / 0 / 3** (+22 pins over the 15,883 baseline: 18 core + 4 `-project`),
+**zero corpus baselines moved**. `cost_gate.py` — `output.errors` **46** throughout, and this was
+a real gate rather than a control (it caught the optional-parameter FP as three profile rows).
+**Rebaselined for one counter: `typeNode.bypassed` +31.26% (110,901 -> 145,570)**, ~17.7k per call
+site, essentially all of it `cpaComputeArgCtxTypes` — the inference-aware resolver, which is what
+makes a GENERIC callee's `xs.map(x => …)` work. Round 716 priced the whole context-bypassed
+population at 68 ms for 110,901 calls, so this is **~+21 ms, ~0.4% of a warm rebuild**,
+corroborated by `typeOfExpr.calls` +0.35% and `narrow.walks` +0.11%. **The unspent lever: the two
+sites ask the SAME question about the same node, so a per-node memo halves it.**
+`huge_methods.py --fail-over 0` exit 0, **783 classes scanned**. `partition-equivalence.sh`
+**EQUIVALENT, all 78 files**, floor **61 ms** [61, 54, 78, 61] (one draw; the arm spans 49-83 ms
+across this round's three runs, so read the spread, not the median). `capture-equivalence.sh`
+**1,005 spans / 43 of 76 files / `narrowRendersMoreAny` = 0**; **both digests MOVED, which is the
+expected direction** — a parameter that now has a real type renders differently, and
+`definitions` rose 360,152 -> 360,336. BEFORE/AFTER 8-profile grid against a rebuilt parent
+(positive control: `javap` finds `applyPulledContextualParamTypes` **0** times before and **1**
+after): `added=0 removed=0` on all eight.
+
+**knip, measured with a rebuilt BEFORE arm in the same session: 66 -> 66, every row identical.**
+The cached checkout had lost its `node_modules`, so the 20 dependencies were re-fetched from the
+npm registry (no `node` on this box; `urllib` + `tarfile`) and BOTH arms were run against the same
+set — a run without them reads 305 errors, of which 147 are `process`/`__dirname`, i.e. it
+measures the missing packages. So the change is knip-NEUTRAL: no new false positives on a 498-file
+real library, and none of its remaining 66 belongs to this family.
+
+**ABLATION — one mistake per arm, each diffed against its OWN snapshot (round 922), each with a
+positive control that it was reached (round 902).**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | `applyPulledContextualParamTypes` returns immediately | **10** — 7 core positives + all 3 hovers |
+| a2 | the `checkFunctionBody` site (the EMITTING half) removed | **7** — every core positive, no hover |
+| a3 | the `ctaFnBodyFrame` site (the CAPTURE half) removed | **3** — every hover, no core pin |
+| a4 | the pull's `CallExpression` arm answers null | **6** — the 3 call-argument positives, both optional pins, the call-argument hover |
+| a5 | the optional-parameter `\| undefined` union dropped | **1** — uniquely the `accepts undefined` pin |
+| a6 | the object-literal METHOD arm of the pull answers null | **1** — uniquely the objlit-method hover |
+| a7 | the (CHK.39b) `.ts` objlit-method body walk removed | **2** — uniquely its two pins |
+
+a2 and a3 PARTITION a1 exactly (7 + 3 = 10), which is what says the two call sites are separately
+load-bearing rather than one being a copy of the other. Two pins are deliberately
+NON-discriminating and recorded as such rather than claimed (round 807): `an ANNOTATED variable's
+arrow parameter …` is green in every arm because that shape already worked through
+`contextualizeFnExprFromAnnotation`, so it is a regression pin and not coverage; the three KNOWN
+GAP pins are green by construction.
+
+**Pins**: `ContextualParameterTypeTest` (18, core) and `ProjectContextualParamHoverTest` (4,
+`-project`), whose three expectations are READ OUT of tsc 7.0.2's own language server
+(`--lsp -stdio` via `scripts/lsp_hover.py`) rather than hand-written — round 924's rule.
+
 ### Round (CHK.30) — the 89 TS7006 were never a contextual-typing defect: **a type imported from a `node_modules` package resolved to `any`**. knip **156 -> 66**, TS7006 **89 -> 1**
 
 **THE ENTRY'S DIAGNOSIS WAS WRONG, AND ITS OWN EXAMPLE WAS A VICTIM RATHER THAN AN

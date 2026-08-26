@@ -1,6 +1,57 @@
 # Status
 
 
+**THE AXIS WAS *HERITAGE*, NOT "LIB" — A MISSING MEMBER ON ANYTHING WITH AN `extends` WAS
+SILENT, AND THE FIREWALL THAT HIDES IT IS WORTH **43 ROWS** ON THE COMPILER PROFILE
+(2026-08-26, (CHK.51)).** The queue item's own repro (`Date`) already reported, as did `Map`,
+`Set`, `Promise`, `RegExp`, `Error`, `JSON`, `Math`, `Symbol`, `Iterable`, `ArrayBuffer`,
+`EventTarget` and every primitive — all heritage-free — while a HAND-WRITTEN
+`interface D1 extends B1` was as silent as `Text`. What refuses is
+`cmamCheckResolvedObjectType`'s "skip if class/interface has base types", and **deleting it
+outright measures 89 diagnostics on the compiler profile against 46**: every one of the 43 new
+rows is a NARROWING gap, above all the INTERSECTION narrow tsc performs when a predicate names a
+SIBLING (`canHaveSymbol(node: Node): node is Declaration` applied to an `e: Expression`). **The
+firewall has been standing in for flow narrowing this checker does not do.**
+
+**SO THE HOLE PUNCHED IN IT DEMANDS POSITIVE EVIDENCE ((CHK.45)'s RULE).** A new predicate
+answers true only when every type in the receiver's transitive base closure is an interface with
+a symbol, with declarations, with every declaration in `builtinLibDecls`, not named by any
+`declare global { interface … }` block, and with a member table that resolved. `Text`, `Node`,
+`Element`, `HTMLElement` and `CustomEvent<number>` now match tsgo 7.0.2 on **code, message and
+column**, read out of `tools/tsgo-7.0.2/lib/tsc` rather than hand-written.
+
+**THE `declare global` SET IS THE LOAD-BEARING HALF AND EXISTS BECAUSE OF AN *OPEN* DEFECT.**
+(CHK.50) is that a `declare global { interface X { … } }` in a module never reaches `globals`, so
+the lib symbol's declaration list still reads "all lib" after such an augmentation — without a
+separate name set this change would have turned (CHK.50)'s silent false NEGATIVE into a false
+POSITIVE on the shape every `@types` package is written in. Cost, named: in a file that writes
+one, `el.zzzNotThere` is TS2339 in tsgo and silent here, and that goes away when (CHK.50) lands.
+
+**GATES.** Suite **16,107 / 0 / 3** (+6, exactly the new class), **zero corpus baselines moved**
+(the generated corpus compiles against the EMBEDDED lib, which has no DOM). `cost_gate.py`
+**PASSES with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest
+movements `narrow.memoServed` **+0.69%** / `typeOfExpr.calls` **+0.59%**, digit-for-digit
+(CHK.49)'s, i.e. this round contributes 0.00%. `huge_methods --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT, all 78**, floor **59 ms**
+[89, 56, 57, 59] — one draw, the leading 89 the documented ramp. `capture-equivalence`
+**1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — the standing state, unmoved.
+8-profile grid with both arms built in this session and a `javap` positive control (0 vs 3):
+**`added=0 removed=0` on all eight**. **`jsonrepair` 3.13.1 4 -> 4 byte-identical, and its
+tsconfig loads `dom` — a real no-false-positive arm, not a control; `knip` 49 -> 49
+byte-identical IS a control (its `"lib": ["esnext"]` excludes DOM).**
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EACH
+`Checker.class` md5 CHECKED.** a0 (whole change reverted) **3 RED — every positive**; a1 (drop
+the all-lib test) **1 RED + profile 89**; a2 (drop the `declare global` refusal) **1**; a6 (drop
+its COLLECTOR instead) **1, the same pin** — a round-927 pair; a7 (revert the `Type.Reference`
+leg) **1, uniquely the generic pin**. **a3/a4a/a4b/a5 read 0 RED and are recorded as
+UNDISCRIMINATED and KEPT** — not redundant and not dead: each is unreachable only because of what
+the shipped libs happen to CONTAIN today, and the libs are input this repo does not author.
+
+**THE OBVIOUS FALSE-POSITIVE PIN WAS BLIND AND ONLY AN ARM SAW IT.** Written with a predicate
+type that is a SUBTYPE of the receiver's, it is green on the ablated binary too — a1 read
+**0 RED with the profile at 89** (round 902's law). A type-guard FP fixture must name a SIBLING.
+
 **A MODULE FILE'S OWN `interface Text` WAS MERGED *INTO* THE DOM `Text` — PROGRAM-WIDE,
 IN BOTH DIRECTIONS, AND SILENTLY (2026-08-26, (CHK.49)).** `mergeSingleSymbol` ADOPTS
 (round 884: `globals[name]` IS the binder's object), so one module's declaration grew the
@@ -242,52 +293,3 @@ PRE-EXISTING and independent; `fileLocalTypeMapFor` / `lookupPerFileForNode` win
 this round's helpers is consulted. The (b)+(d) and (b)+(c) COMPOSITIONS are also still silent
 (`const c = h; c.inner.zzznope`): the root answers `any`, so the chain never reaches the nested
 emission. Recorded here rather than pinned (round 765).
-
-**A PROPERTY MISSING ON *EVERY* UNION CONSTITUENT WAS WHITELISTED TO TWO MEMBER SHAPES — AND
-THREE OF (CHK.44)'s FOUR "BLOCK-SCOPED" POPULATIONS ARE NOT ABOUT BLOCK SCOPING AT ALL
-(2026-08-26, (CHK.45)).** The union elaboration's two verdicts differ in soundness: PARTIAL
-coverage has a WITNESS (some member answered "yes", so its table resolved) and fires on any
-member set; ALL-MISSING has none, so it was gated to `allWellResolved` / `allAnonPlainObjects`.
-Measured against tsgo 7.0.2, that dropped every union carrying a FUNCTION type, a CONSTRUCTOR
-type, a PRIMITIVE, a TUPLE or a TYPE LITERAL beside a named interface — for a PARAMETER and a
-FILE-LEVEL `const` exactly as much as for a body-local, which is why (CHK.44) filed it as "a
-different emitter". It is the same emitter.
-
-**THE 3x5 MAP IS THE ROUND'S MOST TRANSFERABLE OUTPUT.** (a) a member on NO constituent —
-the whitelist, **FIXED**; (b) an un-annotated local — **SPLITS**, its file-level half is (a) and
-is fixed, its body-local half is B83.5; (c) a DESTRUCTURED binding — silent for a destructured
-PARAMETER too, i.e. a binding-element name is typed as a receiver nowhere; (d) a NESTED access
-with a single-OBJECT leaf — silent at every declaration site, while a UNION leaf already
-reports. (b)-body-local, (c) and (d) are three INDEPENDENT gaps, queued as **(CHK.46)** and
-recorded in the note rather than pinned (round 765: a known-gap pin is a countdown — (CHK.44)'s
-own failed this round, the law's third instance).
-
-**THE CALIBRATION IS TWO ROWS ON knip AND NOTHING ELSE.** Deleting the gate ENTIRELY is
-`added=0 removed=0` on all eight profiles and moves ZERO corpus baselines, and still costs **2
-false positives on knip** — `walk.ts`'s `item.members` / `item.jsDocTags` on `Export |
-undefined`, both a CROSS-FILE interface WITH a heritage clause (B153 arriving exactly where the
-shipped predicate already refused it). So the widening is a per-member trust predicate whose
-Interface arm keeps the shipped rule verbatim; everything it adds is OUTSIDE the named-interface
-world. Seven refusals are pinned as refusals with their reason — tsc reports all of them.
-
-**GATES.** Suite **15,998 / 0 / 3** (+19), **zero corpus baselines moved**. `cost_gate.py`
-**PASSES with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest
-movement `typeNode.cacheHits` **+1.96%**, i.e. the same three counters at the same values
-(CHK.44) recorded: an emission gate costs no counter. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**, floor
-**56 ms** [56, 53, 56, 69] (one draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
-`definitions` **360,376** — the standing state, both digests unmoved. 8-profile grid vs a parent
-rebuilt at session start: **`added=0 removed=0` on all eight**. **knip 66 -> 66, every row
-byte-identical, BEFORE arm rebuilt in this session** (parent re-verified by a probe reading 2
-rows where the fixed binary reads 7).
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT.** a1 (the trust
-predicate always false) **11 RED — every positive**; a2 (always true) **6 — every refusal**; a3
-(drop the heritage check) 1; a4 (drop the `Type.Reference` refusal) 1; a6 (drop the chain) 1; a7
-(revert the index-signature precision) 1 — the TUPLE, which a naive "any index signature
-provides the property" refusal loses. **a9 (relax the `InterfaceDeclaration` requirement) reddens
-the CLASS pin ONLY, which is the finding**: an ENUM is refused not by `isEnumFlavoredObjectType`
-but by the LAST clause, because an enum-flavoured type resolves to no members and no signatures
-(CLAUDE.md: an enum's members live on `Symbol.exports` and on no type at all). So a5 and a8 read
-**0 RED and are REDUNDANT GUARDS, recorded as such rather than claimed** (round 807) — and the
-enum pin is NOT blind, since a2 reddens it.
