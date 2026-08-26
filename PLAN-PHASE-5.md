@@ -24,7 +24,7 @@ material for the M3 items below; do not work its queue.
 
 **WHAT LANDED.** `Checker.cmamLexicalValueShadow` + `cmamShadowReadingWins`,
 `spineExBindingNameShadows`, round 512's bail relaxed, and `cmamBlockScopedPathType`
-— commits `6a56f165` / `cb9d7bb9` / `b8966d18` / `3bd9e6ad`. New pins:
+— commits `9693c7f4` / `80790a44` / `77ddcc56` / `de327d76`. New pins:
 `ShadowedReceiverTypeTest` (9), `BlockScopedPathReceiverTest` (8).
 
 **THE ROUND'S HEADLINE, AND IT IS THE FOURTH ROUND RUNNING TO PRODUCE ONE OF THIS
