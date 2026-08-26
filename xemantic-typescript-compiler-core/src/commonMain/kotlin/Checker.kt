@@ -36768,16 +36768,43 @@ class Checker(
      *  test: param names + TOP-LEVEL body var/fn/class declaration names
      *  (a nested-block local never shadows — frozen). */
     private fun spineExFnShadows(name: String, params: List<Parameter>, body: Node?): Boolean {
-        for (p in params) if ((p.name as? Identifier)?.text == name) return true
+        for (p in params) if (spineExBindingNameShadows(name, p.name)) return true
         val stmts = (body as? Block)?.statements ?: return false
         for (st in stmts) when (st) {
             is VariableStatement -> for (d in st.declarationList.declarations)
-                if ((d.name as? Identifier)?.text == name) return true
+                if (spineExBindingNameShadows(name, d.name)) return true
             is FunctionDeclaration -> if (st.name?.text == name) return true
             is ClassDeclaration -> if (st.name?.text == name) return true
             else -> {}
         }
         return false
+    }
+
+    /**
+     * (CHK.47) Does a binding NAME — an identifier or any nesting of binding
+     * PATTERNS — bind [name]?
+     *
+     * The two `(x.name as? Identifier)?.text == name` tests this replaces were blind
+     * to every destructuring form, so a parameter or a body-local `const` written as
+     * a PATTERN did not shadow an expando-function candidate. Measured against
+     * `tools/tsgo-7.0.2/lib/tsc`, `function alpha() {}` beside
+     * `function f({ alpha }: Inner) { alpha.zzznope }` reported
+     * `Property 'zzznope' does not exist on type 'typeof alpha'` where tsc says
+     * `string` — a confidently WRONG type at a position tsc also errors, which is the
+     * same failure this round's [cmamLexicalValueShadow] repairs one walker over.
+     *
+     * The recursion is over binding patterns ONLY. It deliberately does not widen
+     * `spineExFnShadows`' other frozen boundary — a nested-block local still never
+     * shadows (round 625's rare-anchor rule keeps this test allocation-free and
+     * memo-free, and a nested block is a reach question this anchor does not ask).
+     */
+    private fun spineExBindingNameShadows(name: String, bindingName: Node?): Boolean = when (bindingName) {
+        is Identifier -> bindingName.text == name
+        is ObjectBindingPattern -> bindingName.elements.any { spineExBindingNameShadows(name, it.name) }
+        is ArrayBindingPattern -> bindingName.elements.any {
+            it is BindingElement && spineExBindingNameShadows(name, it.name)
+        }
+        else -> false
     }
 
     /** Memoized reach classifier — ascends to the first memoized/terminal
@@ -144462,7 +144489,19 @@ interface DataView {
             // corePublic `const version: string` → FP `.compareTo` on string;
             // pre-retire the merged symbol's polluted flags dodged the string-var
             // branch by accident). Suppression-only.
-            if (localType === anyType) return
+            // (CHK.47) …UNLESS a block-scoped helper can name the inner binding's
+            // type after all. Round 512's premise is that the receiver is unknowable;
+            // (CHK.46)'s two helpers read the INNER declaration syntactically through
+            // the INV.2(c) lexical tables, so where one of them answers, the premise
+            // is false and suppressing costs a diagnostic tsc reports (`const cc: Deep`
+            // at file level beside a body-local `const cc = h.inner` was SILENT for
+            // `cc.zzznope`, where tsc says `Inner`). Where neither answers the bail
+            // stands — which is the `deprecate.ts` population it was written for.
+            if (localType === anyType) {
+                if (cmamDestructuredReceiverType(objectExpr, shadowed = true) == null &&
+                    cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true) == null
+                ) return
+            }
             if (localType != null && localType !== errorType) {
                 val app = getApparentType(localType)
                 if (getPropertyOfType(app, propName) != null) return
@@ -145491,11 +145530,15 @@ interface DataView {
      * Everything it supplies still passes under [checkMemberAccessMissing]'s deferred
      * flow suppression, which is what keeps an ordinary type-guard narrow silent.
      */
-    private fun cmamUnannotatedLocalReceiverType(objectExpr: Identifier, propName: String): Type? {
+    private fun cmamUnannotatedLocalReceiverType(
+        objectExpr: Identifier,
+        propName: String,
+        shadowed: Boolean = false,
+    ): Type? {
         val name = objectExpr.text
-        if (currentLocalTypes.containsKey(name)) return null
+        if (!shadowed && currentLocalTypes.containsKey(name)) return null
         if (name in currentParamBindingNames) return null
-        if (name in currentShadowedNames) return null
+        if (!shadowed && name in currentShadowedNames) return null
         val sym = lexicalScopeSymbol(objectExpr, name) ?: return null
         if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
         if (sym.declarations.size != 1) return null
@@ -145582,10 +145625,10 @@ interface DataView {
      *    verdict rather than routing round it.
      *  - an unresolved type parameter anywhere in the source or the member type.
      */
-    private fun cmamDestructuredReceiverType(objectExpr: Identifier): Type? {
+    private fun cmamDestructuredReceiverType(objectExpr: Identifier, shadowed: Boolean = false): Type? {
         val name = objectExpr.text
-        if (currentLocalTypes.containsKey(name)) return null
-        if (name in currentShadowedNames) return null
+        if (!shadowed && currentLocalTypes.containsKey(name)) return null
+        if (!shadowed && name in currentShadowedNames) return null
         val element = cmamBindingElementDeclaration(objectExpr, name) ?: return null
         if (element.dotDotDotToken) return null
         val memberName = (element.propertyName ?: element.name) as? Identifier ?: return null
@@ -145601,6 +145644,81 @@ interface DataView {
         if (typeHasNullishConstituent(t)) return null
         if (t is Type.Interface && t.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return null
         return t
+    }
+
+    /**
+     * (CHK.47) DOES AN **INNER LEXICAL VALUE BINDING** SHADOW THE FILE-LEVEL NAME?
+     *
+     * `lookupPerFileForNode` is keyed by the FILE, so for a receiver identifier it
+     * answers the file-level declaration of that spelling however deeply the
+     * reference is nested. That is right only while nothing nearer declares the
+     * name — and CLAUDE.md's B83.5 leaves every block-scoped declaration out of the
+     * binder tables, so the shadowing declaration is invisible to `lookupPerFileForNode`
+     * and to `getTypeOfSymbol` alike. Measured against `tools/tsgo-7.0.2/lib/tsc`,
+     * four shapes were wrong on the SHIPPED binary, and three of them are wrong in
+     * the worst direction — a confident message naming the OUTER type:
+     *
+     * | shape | ours | tsgo |
+     * |---|---|---|
+     * | `const inner: Deep` + `const { inner } = h; inner.zzznope` | `Deep` | `Inner` |
+     * | `function alpha()` + `function f({ alpha }: Inner) { alpha.zzznope }` | `typeof alpha` | `string` |
+     * | `const cc: Deep` + `const cc = h.inner; cc.zzznope` | SILENT | `Inner` |
+     * | `const dd: Deep` + `const dd: Inner = h.inner; dd.zzznope` | `Deep` | `Inner` |
+     *
+     * Refusing the per-file symbol here routes all four into the `else` branch, which
+     * reads `currentLocalTypes` and — at its `any` bail — (CHK.46)'s two block-scoped
+     * receiver helpers. Nothing new has to type anything: the machinery for every one
+     * of the four already existed and was simply never reached.
+     *
+     * ### Why the INV.2(c) tables answer this and a name table cannot
+     *
+     * Round 748's `symbols`-only rule is what makes a non-null answer here MEAN
+     * "shadow": [LexicalScope.symbols] holds only names the main binder did **not**
+     * bind in that container, so a file-level `const` the binder owns is absent from
+     * the file scope's own `symbols` and cannot match. A hit therefore always comes
+     * from a strictly inner scope on the reference's parent chain, which is exactly
+     * the shadowing relation. And `lexicalScopeSymbol` walks innermost-first, so no
+     * ordering question arises.
+     *
+     * ### The refusals
+     *
+     *  - a MULTI-declaration symbol — a merged symbol cannot say which declaration a
+     *    given reference means ([cmamBindingElementDeclaration]'s rule).
+     *  - anything whose `valueDeclaration` is not a VARIABLE, a BINDING ELEMENT or a
+     *    PARAMETER. The lexical tables also carry type parameters, block-scoped
+     *    enums/interfaces/classes and imports; refusing the per-file VALUE symbol for
+     *    one of those would delete a working emission rather than correct it, and the
+     *    type-side gates below (`cmamCheckIdentSymbolTypeGates` and its value twin)
+     *    are precisely the consumers that need the per-file symbol intact.
+     *  - an `enclosingNsShadow` hit, which is left alone at the call site: that is
+     *    B69.12's own coarser shadow mechanism and it has its own measured population.
+     */
+    private fun cmamLexicalValueShadow(objectExpr: Identifier, name: String): Boolean {
+        val sym = lexicalScopeSymbol(objectExpr, name) ?: return false
+        if (sym.declarations.size != 1) return false
+        return when (sym.valueDeclaration) {
+            is VariableDeclaration, is BindingElement, is Parameter -> true
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.47) MAY THE **INNER** BINDING'S OWN READING REPLACE WHAT THE NAME TABLES SAY?
+     *
+     * Only where the tables say nothing useful. Two entries qualify, and both are
+     * recorded *because* the compiler could not type the inner binding:
+     *  - NO `currentLocalTypes` entry at all — B83.5's block-scoped population;
+     *  - an entry of exactly `anyType`, which is round 512's UN-INFERABLE shadow
+     *    registration (`applyBodyLocalShadowing`) or round 429's blanket for a
+     *    destructured parameter name. Both are suppressions, not measurements.
+     *
+     * Any other entry is the inner binding's OWN recorded type (an annotated
+     * body-local `const`), and it must keep winning — the whole point of refusing the
+     * per-file symbol is to reach that reading, not to route round it.
+     */
+    private fun cmamShadowReadingWins(name: String): Boolean {
+        val recorded = currentLocalTypes[name] ?: return true
+        return recorded === anyType
     }
 
     /**
@@ -145859,7 +145977,21 @@ interface DataView {
                 }
             }
         } else null
-        val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
+        // (CHK.47) …unless an INNER lexical VALUE binding SHADOWS the name. The
+        // per-file table is keyed by the FILE, so it answers for a file-level
+        // declaration however deeply the reference is nested — and B83.5 leaves the
+        // shadowing block-scoped declaration out of that table entirely, so nothing
+        // below this line could ever have noticed. See [cmamLexicalValueShadow].
+        // `perFileIdentSymbol != null` is part of the CONDITION, not a mere
+        // optimisation: where the file tables hold nothing for the name there is no
+        // outer declaration to lose to, and `getTypeOfIdentifier`'s reading below is
+        // the inner binding's own. Measured — without it, a `catch (error)` whose
+        // member is reached through an `in` guard went SILENT on knip for a reason
+        // that has nothing to do with shadowing.
+        val lexicalShadow = enclosingNsShadow == null && perFileIdentSymbol != null &&
+            cmamLexicalValueShadow(objectExpr, identName)
+        val identSymbol = if (lexicalShadow) null
+        else enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
         CpaSections.atR(CpaSections.R_OT_IDENT)
         val otT0 = CpaSections.t()
@@ -145998,7 +146130,25 @@ interface DataView {
             return Pair(exprType, displayTypeOverride)
         } else {
             // Fallback: try resolving from currentLocalTypes (function params, local vars)
-            val rawType = getTypeOfIdentifier(objectExpr)
+            //
+            // (CHK.47) …except when an inner lexical binding SHADOWS the name, where
+            // `getTypeOfIdentifier` is no safer than the per-file symbol just refused:
+            // it consults the same file and global tables and so answers about the
+            // OUTER declaration (`function alpha()` beside
+            // `function f({ alpha }: Inner)` read `typeof alpha` for a `string`). Ask
+            // the block-scoped helpers instead, and where neither can name the inner
+            // binding STOP — falling through would restore the wrong answer, and a
+            // confidently wrong type in a message is worse than silence. The answer
+            // then re-enters the SAME tail as any other reading, which is what
+            // supplies the apparent type for a primitive member.
+            //
+            // `currentLocalTypes` is exempt because an entry there IS the inner
+            // binding's own recorded type (an ANNOTATED body-local `const`).
+            val rawType = if (lexicalShadow && cmamShadowReadingWins(identName)) {
+                cmamDestructuredReceiverType(objectExpr, shadowed = true)
+                    ?: cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true)
+                    ?: return null
+            } else getTypeOfIdentifier(objectExpr)
             if (rawType === anyType || rawType === errorType || rawType === unknownType) {
                 // (NARROW.2)(c) round 852 — the function-local twin of the bail above
                 // (a catch parameter, an un-annotated local). See
