@@ -288,6 +288,39 @@ class DeclareGlobalAugmentationTest {
     }
 
     /**
+     * TWO blocks in one file share ONE `global` carrier symbol, and
+     * [Checker.mergeSingleSymbol] does `declarations.addAll` with NO membership
+     * test — so a per-BLOCK merge appends every augmented declaration as many
+     * times as the file has blocks. The dedupe is by symbol id.
+     *
+     * THIS PIN WAS WRITTEN TO FALSIFY THAT DEDUPE AND DOES NOT: arm a5 (the
+     * `seen` test dropped) reads **0 RED** with this fixture in the suite, because
+     * a member table is keyed by NAME and a doubled declaration list resolves to
+     * the same members. Recorded honestly rather than claimed as coverage
+     * (round 813 — the purpose-built retry was tried, and it answered). The
+     * dedupe is kept: `addAll` on a shared, binder-owned list is a contract, not
+     * a preference. What the pin DOES assert is that two blocks in one file both
+     * apply, which is a fact about the merge and is red under a1.
+     */
+    @Test
+    fun `two declare global blocks in one file each augment exactly once`() {
+        val diagnostics = diagnose(
+            """
+            export {}
+            declare global { interface Date { zzzA: number } }
+            declare global { interface Date { zzzB: number } }
+            declare const zzzD: Date
+            export const zzzS1: string = zzzD.zzzA
+            export const zzzS2: string = zzzD.zzzB
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.none { it.code == 2300 })
+        assert(diagnostics.none { it.code == 2339 })
+        assert(diagnostics.filter { it.code == 2322 }.size == 2)
+    }
+
+    /**
      * REFUSAL 1 — a top-level `declare global` in a global SCRIPT file is TS2669
      * and contributes NOTHING. Measured: tsgo reports TS2669 at the block AND
      * TS2304 at every use of the names it holds, so publishing them would be a
