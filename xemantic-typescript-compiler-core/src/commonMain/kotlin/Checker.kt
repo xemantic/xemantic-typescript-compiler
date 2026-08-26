@@ -127047,7 +127047,13 @@ interface DataView {
      *  * it refuses a `Type.TypeParam` outright. The relation deliberately has no
      *    "TypeParam source via its constraint" rule ((INC.30)); reaching a constraint
      *    from here would open that route as a side effect of a primitive fix, which is
-     *    exactly the confinement (INC.42) had to apply one arc earlier;
+     *    exactly the confinement (INC.42) had to apply one arc earlier. Ablated, that
+     *    refusal reddens NOTHING in the full 15,103-test core suite (class-checksum
+     *    positive control taken), so it is a REDUNDANT guard by round 807's definition
+     *    — kept, because what it is redundant WITH is another path that already relates
+     *    a constrained type parameter, and removing a refusal that keeps a
+     *    deliberately-closed route closed buys nothing measurable in exchange for a
+     *    widening no gate here would notice;
      *  * it covers `bigint` and `symbol`, which [getApparentType] does not. Widening
      *    THAT function is a change to member lookup, narrowing and display all at once;
      *    widening this one is a change to one relation leg.
@@ -127087,9 +127093,15 @@ interface DataView {
      * enum-flavoured type is a member-less `Type.Object` ((REL.1)(b)), so a
      * structural comparison against one passes VACUOUSLY — the `Number` wrapper
      * "related" to a numeric enum target and seven `EnumValueDomainRelationTest` pins
-     * plus `enumAssignmentCompat5` went red. The `Enum`/`EnumLiteral` flag test beside
-     * this call states that intent; this test is what makes the leg sound for every
-     * OTHER member-less object as well, including one this repo has not met yet.
+     * plus `enumAssignmentCompat5` went red.
+     *
+     * IT AND THE `Enum`/`EnumLiteral` FLAG TEST BESIDE THE CALL ARE A ROUND-927 PAIR,
+     * MEASURED: dropping either ALONE reddens **nothing** in 1,410 tests, and dropping
+     * BOTH reddens **13** — each layer refuses exactly what the other would get wrong,
+     * so neither has a uniquely-its-own failure and they are ONE observable. Read the
+     * flag test as the statement of intent and this test as the general rule, which is
+     * what covers a member-less object this repo has not met yet; do not delete either
+     * on the strength of its own arm reading zero.
      *
      * A genuinely empty `{}` target is not a loss: the round-430 rule ~30 lines above
      * has already accepted every non-nullish source against it, so it never reaches
@@ -127101,6 +127113,10 @@ interface DataView {
         // sit BELOW the resolve or the verdict depends on whether an earlier line in
         // the file happened to resolve this type.
         resolveStructuredTypeMembers(target)
+        // Measured: this line's uniquely-its-own population is a target carrying BOTH
+        // members and an index signature (`{ length: number; [k: string]: any }`). A
+        // PURE index-signature target declares nothing, so the rule below refuses it
+        // anyway — which is why dropping this line reddens exactly one pin.
         if (target.stringIndexInfo != null || target.numberIndexInfo != null) return false
         return !target.members.isNullOrEmpty() ||
             !target.callSignatures.isNullOrEmpty() ||
