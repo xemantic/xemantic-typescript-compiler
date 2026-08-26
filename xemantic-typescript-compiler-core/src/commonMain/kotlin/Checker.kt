@@ -3160,6 +3160,17 @@ class Checker(
                             checkReturnAssignability(stmt, frame.returnType ?: "", spineSource, spineFileName, frame.varTypes, frame.typeParams, frame.returnTypeNode)
                             CtaSections.atA(CtaSections.A_DISPATCH)
                         }
+                        // (CHK.42) see the legacy twin in checkTypeAssignabilityInStatements.
+                        // Both arms are needed: this anchor runs `recordOnly` for a nested
+                        // statement and truncates, so the legacy arm is what EMITS.
+                        stmt.expression?.let {
+                            CtaSections.atA(CtaSections.A_WALKFN)
+                            val ctxFn = contextualizeFnExprFromAnnotation(frame.returnTypeNode, it)
+                            CtaSections.enterWalkFn()
+                            walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            CtaSections.exitWalkFn()
+                            CtaSections.atA(CtaSections.A_DISPATCH)
+                        }
                         stmt.expression?.let { retExpr ->
                             if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
                                 CtaSections.atA(CtaSections.A_ASSIGN)
@@ -98383,6 +98394,17 @@ interface DataView {
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }
+                    // (CHK.42) A function body nested in a `return` expression is checked
+                    // here and nowhere else — this was the ONE expression position that
+                    // did not reach the walker, so `return (node) => { … }` / `return
+                    // { m(node) { … } }` had no diagnostic of any kind inside the body,
+                    // in either direction. The var-decl arm's annotation contextualizer
+                    // is reused with the RETURN annotation, which is the same contextual
+                    // source (CHK.40)'s `pullCtxReturnTypeAt` reads.
+                    stmt.expression?.let {
+                        val ctxFn = contextualizeFnExprFromAnnotation(returnTypeNode, it)
+                        walkFunctionBodiesInExpr(ctxFn ?: it, source, fileName, varTypes, typeParams)
+                    }
                     // 16.0: Recurse into assignment expressions inside return value
                     // to catch `return obj = { excess }` TS2353 patterns.
                     stmt.expression?.let { retExpr ->
@@ -99761,6 +99783,31 @@ interface DataView {
     private fun ctaTypeParamsIntoLocals(
         parameters: List<Parameter>, innerTypes: MutableMap<String, String>,
     ) {
+        // (CHK.42) A PARAMETER ALWAYS INTRODUCES A BINDING, whether or not this
+        // checker can work out its type. [currentLocalTypes] is a FLAT COPY of the
+        // enclosing scope (see [EpochMap]), so a parameter that nothing registers is
+        // not merely untyped — the enclosing scope's same-named entry is still
+        // sitting there, and every read of the name inside the body resolves to it.
+        // That is the `flatMap(exportInfo, (exportInfo, i) => …)` shape in tsc's own
+        // importFixes.ts, where the callback parameter deliberately shadows the
+        // enclosing function's `exportInfo` and the shorthand read came back as the
+        // OUTER array — a TS2322 tsc 7.0.2 does not have, on the shipped binary.
+        //
+        // `anyType` is the value round 475 already uses for exactly this purpose on a
+        // binding-pattern parameter: "a strictly-suppression fallback that stops the
+        // name falling through to a same-named merged-globals binding". It is also
+        // the correct type — an un-annotated parameter with no contextual type IS
+        // implicitly `any` (that is what TS7006 says about it).
+        //
+        // It is a PRE-pass, so every later write wins: the annotated arm below, round
+        // 464's initializer-sibling arm, and [applyPulledContextualParamTypes]'s
+        // contextual write all overwrite it. Nothing whose type is knowable is
+        // affected — this only fills the hole where the answer was the wrong scope.
+        for (param in parameters) {
+            if (param.type != null) continue
+            val n = (param.name as? Identifier)?.text ?: continue
+            currentLocalTypes[n] = anyType
+        }
         for (param in parameters) {
             val paramType = param.type
             val paramName = param.name
