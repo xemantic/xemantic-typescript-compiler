@@ -209,7 +209,7 @@ class OverloadWeakParamDiagnosticTest {
      * silently diverge from every `Overload N of M` baseline in the corpus.
      */
     @Test
-    fun `three weak overloads contribute three sublines, not a collapsed last-overload one`() {
+    fun `three weak overloads contribute three sublines - not a collapsed last-overload one`() {
         val d = diagnose("""
             declare function zzzGg(o: { zzzA?: null }): number
             declare function zzzGg(o: { zzzB?: null }): string

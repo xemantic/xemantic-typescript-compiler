@@ -1,6 +1,62 @@
 # Status
 
 
+**THE TS2769 *DIAGNOSTIC* PATH DID NOT ASK THE WEAK-TYPE RULE — AND THE ITEM'S "HARD
+PART" WAS A **tsgo RENDERING**, NOT tsc's (2026-08-27, (CHK.56)).** (CHK.54) gave overload
+SELECTION the weak rule and left the diagnostic path alone, so `allArgumentsMatch`
+accepted what `signatureAcceptsArgs` refused and a call whose every overload has a
+disjoint all-optional parameter was SILENT. The queue item recorded the elaboration as the
+work — `getFirstArgumentError` walks the plain relation, which ACCEPTS the argument, finds
+no failing argument and drops the overload out of the chain. Half of that is right: the
+subline really is TS2559's *no properties in common* wording and is now minted beside the
+walk, on the path where the relation SUCCEEDED. **The other half is not.** tsgo 7.0.2
+prints `The last overload gave the following error.` for **2, 3 and 4** candidates alike;
+PRISTINE tsc prints `Overload N of M, '<sig>', gave the following error.` per candidate —
+**42** `typescript-repo` baselines against **4** — and
+`tsxStatelessFunctionComponentOverload4.errors.txt` carries a *no properties in common*
+subline inside exactly that chain. Our chain has had the pristine shape since B418, so no
+"which overload" policy was needed at all and the item's "a TS2769 naming the wrong
+overload is worse than silence" risk never arose. Round 938's law, paid again.
+
+**TWO THINGS MEASURED RATHER THAN GUESSED.** A UNION parameter names a CONSTITUENT only
+when exactly one survives dropping `null`/`undefined` (`ZzzWk | null` -> `'ZzzWk'`); two or
+more take the ordinary assignability wording naming the whole union — the verdict is a
+refusal either way, only the sentence differs. And an OBJECT-LITERAL argument is refused
+outright, because tsc's freshness/excess check runs ABOVE the weak check and a fresh
+literal sharing no property name has EVERY property excess: `f({ zzzZ: 1 })` is
+`Object literal may only specify known properties…` at the PROPERTY, one column right of
+where the weak wording would sit. That shape stays SILENT rather than acquiring a
+diagnostic at the wrong span; the NON-fresh source of the identical type is the weak
+wording and is pinned.
+
+**A SECOND HOLE MEASURED AND QUEUED AS (CHK.57).** The bare weak target is correct and
+byte-identical to tsc in every position; a weak target reached through a **UNION** is
+silent here in BOTH the single-signature call and the var-decl positions
+(`(o: { zzzA?: null } | null)` with `123`, `const v: {…} | null = "utf8"`) where tsc says
+TS2559. Different mechanism — the B482 walkers, not the overload helpers — so it is queued
+rather than folded in.
+
+**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class), no corpus baseline
+moved. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, and the table is
+**digit-for-digit the PARENT's** (a0 binary, same session) — this change costs 0.00% on
+the compiler profile, the expected control for a question asked only after the relation
+ACCEPTED. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
+session-built binaries (`javap` control 0 vs 2): capture md5 `503774c2…` on both,
+**`added=0 removed=0` on all eight**. `partition-equivalence` **EQUIVALENT, all 78**, floor
+**58 ms** [79, 58, 55, 56] — one draw. `capture-equivalence` **1,005 / 43 of 76 /
+moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved.
+**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, byte-identical** — the queue
+item's "it ADDS rows" is measured FALSE on every corpus this repo has.
+
+**EIGHT ABLATION ARMS, ONE MISTAKE EACH, ALL EIGHT CLASS md5s DISTINCT.** a0 (whole change
+reverted, parent rebuilt this session) **6 RED — exactly the six positives**; a1 (the
+object-literal guard dropped) **1**, uniquely its own pin; a6 (display target always the
+whole parameter) **2**, uniquely the two union pins; a7 (a union never names a constituent)
+**1**, uniquely the one-constituent pin. **a2/a3/a4 each read 6 and are a ROUND-927 TRIPLE**
+— each alone deletes the diagnostic, so none is redundant, but no pin separates which layer
+failed. **a5 reads 0 and is recorded as UNDISCRIMINATED, not provably unobservable**: it can
+only matter through B418's tie-break, which nothing here exercises.
+
 **AN OBJECT LITERAL'S LITERAL PROPERTIES WIDEN, AND THAT ONE FACT BIT AT *BOTH*
 OVERLOAD SITES — A FALSE TS2769 AT THE DIAGNOSTIC AND A **WRONG TYPE** AT SELECTION
 (2026-08-27, (CHK.55)).** The queue item carried (b) an object-literal FP and a third
@@ -227,113 +283,3 @@ the shipped libs happen to CONTAIN today, and the libs are input this repo does 
 **THE OBVIOUS FALSE-POSITIVE PIN WAS BLIND AND ONLY AN ARM SAW IT.** Written with a predicate
 type that is a SUBTYPE of the receiver's, it is green on the ablated binary too — a1 read
 **0 RED with the profile at 89** (round 902's law). A type-guard FP fixture must name a SIBLING.
-
-**A MODULE FILE'S OWN `interface Text` WAS MERGED *INTO* THE DOM `Text` — PROGRAM-WIDE,
-IN BOTH DIRECTIONS, AND SILENTLY (2026-08-26, (CHK.49)).** `mergeSingleSymbol` ADOPTS
-(round 884: `globals[name]` IS the binder's object), so one module's declaration grew the
-LIB symbol's declaration list and every OTHER file then saw the fusion — a file that never
-mentions the shadow included. The dangerous direction is the quiet one: the module-local
-interface ANSWERED the lib type's members, so a wrong member read went unreported.
-**Measured population: every lib global name — 185 for a plain `es2020` project, 2,242 with
-`dom`** — and every declaration form is affected (`interface`, `type`, `class`, `enum`,
-`const`), which retires the queue item's own claim that a `type` alias was correct.
-**`jsonrepair` 3.13.1: 11 -> 4 rows**, all 7 of its TS2345 gone; they are its
-`export interface Text { charCodeAt }` colliding with the DOM global, exactly as (CHK.32)
-predicted when it withdrew its own attribution.
-
-**THE TWO HALVES ARE ONE OBSERVABLE, AND EACH ALONE IS *WORSE* THAN THE PAIR.** Retiring
-the merge alone is round 510's 861-FP disaster re-measured as **969 errors on the compiler
-profile**; routing the name per-file alone changes nothing, because the merge still
-corrupts the lib symbol. Together: **46**, unmoved. The per-file half needed no new
-machinery — `perFileScope` already seeds every file with the lib symbol and lets the
-declaring file's own local override it.
-
-**THE VALUE MEANING SURVIVES A TYPE-ONLY SHADOW, AND *WHERE* THAT SECOND CHANCE SITS IS THE
-WHOLE OF IT.** `interface Map<K,V>` in a module hides the lib TYPE and leaves
-`declare var Map: MapConstructor` reachable. The first cut asked below
-`fileLocalTypeMapFor` — a map keyed by the file's own declarations, i.e. by the shadow —
-so both sites measured **DEAD** (arm a3: 0 red of 11 pins, profile 46) while `Date.now()`
-grew a fresh TS2339. Hoisted above it, and the dead lower site deleted; that also closed a
-false positive the PARENT had (`zzzTakes(Date)` against a `DateConstructor` was TS2345 on
-both binaries before, silent now, matching tsgo).
-
-**AND ONE PRE-EXISTING GAP FELL OUT: `resolveHeritageBaseSymbol`'s Identifier root was a
-raw `globals` consult**, so `class Promise<R> implements Promise.Thenable<R>` resolved
-ONLY because the name collided with a lib global and the merge fused the two — the
-identical shape spelled `Zromise` found nothing, on the parent binary. Node-keyed now, like
-the three heritage sites that call it.
-
-**GATES.** Suite **16,101 / 0 / 3** (+14, exactly the new class), **zero corpus baselines
-moved**. `cost_gate.py` **PASSES with NO rebaseline**, exit 0 — `output.errors` **46**,
-`spine.nodes` +0.00%, largest movement `narrow.memoServed` **+0.69%** and
-`typeOfExpr.calls` +0.59%, both identical to (CHK.32)'s, i.e. this change contributes
-0.00% on that profile. `huge_methods.py --fail-over 0` exit 0, **783** classes scanned.
-`partition-equivalence` **EQUIVALENT, all 78**, floor **55 ms** [50, 55, 50, 60] (one
-draw). `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** —
-the standing state, unmoved. 8-profile grid, both arms from binaries built this session
-with a `javap` positive control: **`added=0 removed=0` on all eight**. **knip @ `dc7aca5`
-49 -> 49, byte-identical — and that is a CONFIGURATION fact, not an absence**: knip shadows
-five lib names (`File`, `Performance`, `Plugin`, `Report`, `caches`) and its tsconfig says
-`"lib": ["esnext"]`, so none of them is a global there.
-
-**EIGHT ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST ITS OWN SNAPSHOT AND EACH
-CLASS-CHECKSUM VERIFIED.** a0 (the whole change reverted; parent rebuilt this session,
-`javap` 0 vs 2) **5 RED — every positive pin**. a1 (merge not retired) **5**; a2 (no
-per-file routing) **5 + profile 969**; a3 (the value second chance back below the type map)
-**1**; a3b (deleted outright) **1**; a4 (drop the callee-position chance) **2**; a5 (revert
-the heritage root) **2**; a6 (drop the alias hop) **1 uniquely its own**; a7 (drop the
-value-meaning refusals) **2**. **a8 (`lib === local`) read 0 RED and is DELETED rather than
-shipped un-gateable** — it is provably unobservable, and the proof is in the KDoc.
-
-**A PRIMITIVE SOURCE NOW RELATES TO AN *ANONYMOUS* OBJECT TARGET THROUGH ITS WRAPPER
-INTERFACE — 8 OURS-ONLY ROWS OF A 14-ROW tsgo MATRIX, GONE (2026-08-26, (CHK.32)).**
-`string` carries `charCodeAt`/`length`/`substring` because `String` declares them, so
-`scan(s)` against `(text: { charCodeAt(i: number): number })` is legal. A round-B69.8 leg
-has handled a NAMED interface target all along; it is scoped `target is Type.Interface` and
-RETURNS, so every anonymous structural target refused every primitive, in argument, return
-and annotation position and for `string`/`number`/`boolean`/`symbol`/`bigint` alike. The
-matrix now agrees with tsgo 7.0.2 **row for row in both directions** — the 6 rows tsgo
-reports are still reported, at its own message and column.
-
-**THE ITEM'S OWN PREMISE WAS WRONG ABOUT `jsonrepair`, AND THE FIX PROVES IT: 11 -> 11 ROWS,
-BYTE-IDENTICAL.** (CHK.32) attributed all 7 of that library's TS2345 to this gap, on a repro
-whose interface is named `Text`. That is a **NAME COLLISION with the DOM `Text` global**:
-rename it `Chars` and the row vanishes on the UNFIXED binary, and `t.wholeText` against the
-module-local `Text` is SILENT for us where tsgo says TS2339 — the module-local interface has
-been merged into the lib symbol in both directions. Queued as **(CHK.49)**; `Text` joins
-`top`/`name`/`files` on the collision list. Fifth round running in which the item's framing
-was measurably wrong.
-
-**THE TWO GUARDS WERE FORCED BY A RED SUITE, NOT BY READING.** The first cut cost **13
-tests** — every enum-flavoured type is a member-less `Type.Object` ((REL.1)(b)), so a
-structural comparison passes VACUOUSLY and the `Number` wrapper "related" to a numeric enum
-target. The second cut then cost `assignmentCompat1`: an index-signature target is B418's,
-because a `string`'s apparent type has a NUMERIC indexer and no string one while an ordinary
-structural comparison of the `String` wrapper against `{ [k: string]: any }` PASSES. The leg
-is placed AFTER the round-430 `{}` rule and after B418 so it is strictly a fallback and can
-only turn a rejection into an acceptance.
-
-**GATES.** Suite **16,087 / 0 / 3** (+20, exactly the new class), **zero corpus baselines
-moved in the landed shape**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors`
-**46**, `spine.nodes` +0.00%, largest movement `narrow.memoServed` **+0.69%**, identical to
-(CHK.47)'s, i.e. this change contributes 0.00% on the compiler profile, the expected control
-for a leg reached only after a failure. `huge_methods.py --fail-over 0` exit 0, **783**
-classes scanned, 0 over limit. 8-profile grid against a parent rebuilt this session
-(`javap` control 0 -> 2): **`added=0 removed=0` on all eight**. `partition-equivalence`
-**EQUIVALENT 78/78**, floor **69 ms** [80, 69, 60, 60] — one draw, the leading 80 the ramp.
-`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both
-digests unmoved. **knip @ `dc7aca5` 49 -> 49 and `jsonrepair` 3.13.1 11 -> 11, every row
-byte-identical, BEFORE arms rebuilt in the same session.**
-
-**SIX ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT.** a0 (the
-whole leg removed) **8 RED** — every positive pin, over byte-identical source. a5 (a missing
-wrapper answers `anyType` as `getApparentType` does) **2 RED**, this round's dedicated pin and
-`elaboratedErrorsOnNullableTargets01`. a3 (drop the index-signature refusal) **1 RED**, and it
-names a narrower population than the guard reads — a PURE index target declares nothing, so
-only a target with BOTH members and an indexer needs that line. **a1 and a2 each read `0 RED`
-in 1,410 tests and a12 — both dropped — reads 13: a ROUND-927 PAIR**, one observable, neither
-deletable on the strength of its own arm. **a4 (let a `Type.TypeParam` through) read `0 RED`
-over the FULL 15,103-test core suite with a class-checksum positive control, and is recorded
-as a REDUNDANT guard and KEPT** — the shipped binary already relates a constrained
-`T extends string` through another path, so removing a refusal that keeps (INC.30)'s closed
-route closed buys nothing measurable.
