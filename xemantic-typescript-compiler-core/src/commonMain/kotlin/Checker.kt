@@ -118913,9 +118913,37 @@ interface DataView {
      * doesn't resolve, the property isn't a method, or the property is not
      * directly declared on the receiver's interface/class.
      */
+    /**
+     * (CHK.62b) The declared instance type of the class a bare `this` receiver
+     * denotes, or null when there is no enclosing class in the checking ambient
+     * (a `this` in an object-literal method, a free function, a static member).
+     *
+     * NOT a general `this` typing: it exists so the FLOW resolvers can reach a
+     * `this.m()` callee's declaration. A wrong answer here can only fail to
+     * narrow.
+     */
+    private fun thisFlowReceiverType(recv: Expression): Type? {
+        if (recv !is Identifier || recv.text != "this") return null
+        return currentClassForThis?.let { resolveUncalledThisType(it) }
+    }
+
     private fun resolvePropertyMethodDecl(access: PropertyAccessExpression): Node? {
         var recvType = getTypeOfExpression(access.expression)
-        if (recvType === anyType || recvType === errorType) return null
+        if (recvType === anyType || recvType === errorType) {
+            // (CHK.62b) A `this` RECEIVER CARRIES NO TYPE HERE, so every flow
+            // consumer of a `this.m()` callee resolved NOTHING and the narrowing
+            // silently did not happen: `let p = zzzFindFree(); p ??= this.zzzCreate();
+            // return { p }` reported `p: T | undefined` where tsc is silent, because
+            // [rhsIsDefinitelyNonNullish]'s call arm could not reach the method's
+            // `: T` return annotation. [getTypeOfExpression] answers `any` for
+            // `Identifier("this")` — the (CHK.61)(a) defect — so the carrier is
+            // [currentClassForThis], the enclosing class the checking ambient already
+            // threads. Confined to this FLOW-ONLY resolver (both callers are narrowing
+            // resolvers, so a resolution can only ever SUPPRESS), which is why it is
+            // separable from (CHK.61)(a)'s general `computeRawTypeOfPropertyAccess`
+            // change and its dashboard price.
+            recvType = thisFlowReceiverType(access.expression) ?: return null
+        }
         // Round 470: a nullish-containing UNION receiver resolves through its SOLE
         // non-nullish member — `type.isUnion()` where `type: Type | undefined` (the
         // declared type; reaching the call means the receiver was non-nullish, and the
