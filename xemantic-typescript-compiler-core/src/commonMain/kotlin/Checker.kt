@@ -124269,10 +124269,14 @@ interface DataView {
         // Unwrap value-preserving wrappers before classifying the callee.
         // `(fn)()`, `fn!()`, and `(fn satisfies T)()` should resolve like `fn()`.
         var callee: Expression = expr.expression
+        // (CHK.61d) the unwrap DISCARDS the `!`, so a `T | undefined` callee reached the
+        // classification below as a UNION, which answers `anyType` — the call's return
+        // type was never resolved and every check over it was silently vacuous.
+        var calleeAsserted = false
         while (true) {
             callee = when (callee) {
                 is ParenthesizedExpression -> if (callee.instantiationEnd == null) callee.expression else break
-                is NonNullExpression -> callee.expression
+                is NonNullExpression -> { calleeAsserted = true; callee.expression }
                 is SatisfiesExpression -> callee.expression
                 else -> break
             }
@@ -124321,7 +124325,7 @@ interface DataView {
                 }
             }
         }
-        val calleeType = when (callee) {
+        val calleeTypeRaw = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
             // B149: `c['foo'](args)` — an element-access callee with a literal key
@@ -124332,6 +124336,13 @@ interface DataView {
             is ElementAccessExpression -> getTypeOfElementAccess(callee)
             else -> return anyType
         }
+        // (CHK.61d) restore what the discarded `!` asserted: without this a
+        // `T | undefined` callee stays a UNION and the classification below answers
+        // `anyType`, so the call's return type is never resolved.
+        val calleeType =
+            if (calleeAsserted && calleeTypeRaw is Type.Union)
+                narrowByExcludingNullUndefined(calleeTypeRaw)
+            else calleeTypeRaw
         if (calleeType === anyType || calleeType === errorType) {
             // Round 464: a BARREL-imported namespace member call in the
             // checkDefined SHAPE (`Debug.checkDefined(program.getSourceFileByPath(…))`
@@ -154458,7 +154469,10 @@ interface DataView {
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
             is ElementAccessExpression -> getTypeOfElementAccess(expr)
             is ParenthesizedExpression -> getCalleeType(expr.expression)
-            is NonNullExpression -> getCalleeType(expr.expression)
+            // (CHK.61d) `f!()` — the ASSERTION must reach the callee type, or a
+            // `T | undefined` callee stays a union and TS2349 fires where tsc is
+            // silent. Mirrors [getTypeOfExpression]'s own NonNullExpression arm.
+            is NonNullExpression -> narrowByExcludingNullUndefined(getCalleeType(expr.expression))
             is SatisfiesExpression -> getCalleeType(expr.expression)
             is CallExpression -> getReturnTypeOfCallExpression(expr)
             is NewExpression -> getReturnTypeOfNewExpression(expr)
