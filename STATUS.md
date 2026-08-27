@@ -1,6 +1,66 @@
 # Status
 
 
+**AN OBJECT LITERAL'S LITERAL PROPERTIES WIDEN, AND THAT ONE FACT BIT AT *BOTH*
+OVERLOAD SITES — A FALSE TS2769 AT THE DIAGNOSTIC AND A **WRONG TYPE** AT SELECTION
+(2026-08-27, (CHK.55)).** The queue item carried (b) an object-literal FP and a third
+"mechanism this round did not locate" (matrix row H) as separate holes. Measured: they
+are ONE. `getTypeOfExpression` types `{ encoding: "utf8" }` as `{ encoding: string }`
+— there is no fresh-literal machinery — so a target property with a literal type
+rejects. The DIAGNOSTIC path had round 728's rescue but refused a target INTERFACE with
+heritage and a UNION with >1 non-nullish constituent; SELECTION had **no rescue at
+all**, so every candidate was passed over and `resolveCallOverload`'s `arityMatches[0]`
+fallback answered. **One fixture shows both at once** — a false TS2769 *and* the first
+overload's return type where tsc gives the second's — and that co-occurrence is what
+identifies them as one mechanism.
+
+**THE HERITAGE REFUSAL WAS NEVER NEEDED.** Round 728 refused a target with base types
+because "an inherited required property would not be enumerated below"; measured, that
+is not true here — `resolveInterfaceMembersCore` folds base members into the derived
+type's own `members` and sets `properties = members.values.toList()`, so both
+enumerations already saw them. That refusal was `knip`'s last overload row.
+
+**A THIRD INTERACTION, FOUND BY TRYING TO FALSIFY AN ABLATION ARM RATHER THAN BY READING
+CODE.** Round 728 put the rescue on the REJECTING path so the happy path pays nothing —
+but a weak constituent accepts any non-nullish value structurally, so for
+`{ zzzA?: 0 } | { zzzE: "u" }` the relation SUCCEEDS through the weak constituent, the
+rejecting path is never taken, and (CHK.54)'s weak rule refuses the signature having
+never asked about the OTHER constituent. Guarded, short-circuit, costing nothing on the
+compiler profile. **Its by-product is a retraction**: the `continue` beside the rescue
+was documented as load-bearing and its ablation reads **0 RED** once the guard exists —
+recorded as PROVABLY UNOBSERVABLE, not as coverage.
+
+**GATES.** Suite **16,144 / 0 / 3** (+11, exactly the one new class); **no corpus
+baseline moved by any of the three edits**. `cost_gate.py` exit 0 unrebaselined,
+`output.errors` **46**, the largest counter move **+0.59%** (`typeOfExpr.calls`) — the
+rescue being consulted on the rejecting path — and the third edit is digit-for-digit
+identical to the second, i.e. it costs 0.00% on this profile.
+`huge_methods --fail-over 0` exit 0, **783** classes, 0 over limit. 8-profile grid over
+a parent rebuilt in this session (md5 `86ec37c3…`, reproducing (CHK.54)'s recorded
+landed digest) with a `javap` control of **0 vs 2**: **`added=0 removed=0` on all
+eight**, capture md5 `503774c2…` unmoved. `partition-equivalence` **EQUIVALENT 78/78**,
+floor **61 ms** [54, 61, 74, 60] — one draw. `capture-equivalence` **1,005 / 43 of 76 /
+moreAny 0**, `definitions` **360,376**, digests `full=-3735929574989657502
+narrow=-2075467818767010709`.
+
+**LIBRARIES: `knip` @ `dc7aca5` 49 -> 48**, exactly `src/util/git.ts:17:55`
+(`execSync(cmd, { encoding: 'utf8', stdio: [...] })`) and nothing added;
+**`jsonrepair` 3.13.1 4 -> 4 byte-identical**. BEFORE arms captured on the rebuilt
+parent and byte-identical to the session-start capture.
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0 (the whole
+change reverted — the parent, rebuilt) **4 RED**, exactly the four positives; a1
+(heritage refusal restored) **2**; a2 (union back to `singleOrNull`) **1**, uniquely the
+union pin; a3 (SELECTION no longer asks) **2**, uniquely row H; a4 (the union fold
+accepts unconditionally) **2**, uniquely the union-refusal pin; a6 (the weak-rule guard
+reverted) **1**, uniquely its own pin. **a5 (`continue` -> fall-through) 0 RED and
+recorded as provably unobservable, not as coverage.**
+
+**(CHK.55)(a) IS DELIBERATELY NOT CLOSED** — the TS2769 path still does not ask the weak
+rule, so `zzzU(123)` is silent where tsc says `Type '123' has no properties in common
+with type '{ … }'`. That is a MISSING error, the least damaging of the three, and its
+elaboration needs its own design; re-queued with tsc's exact message.
+
 **OVERLOAD SELECTION IGNORED THE WEAK-TYPE RULE, SO AN ALL-OPTIONAL PARAMETER ACCEPTED
 *ANY* ARGUMENT — `readFileSync(p, 'utf8')` PICKED THE `Buffer` OVERLOAD, AND THAT WAS
 FIVE OF `knip`'s ROWS (2026-08-26, (CHK.54)).** The queue item read it as "an OPTIONAL

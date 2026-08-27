@@ -1,5 +1,110 @@
 ### Round (CHK.42)+(CHK.43) — the three grid rows that blocked the return-position walk were ALL false positives we already shipped; the walk is in, `added=0 removed=0` on all eight
 
+### Round (CHK.41) — the guarded reassignment `c = c()` now reduces the DECLARED union; and (CHK.41)'s own premise was two-fifths right — the 15 knip rows are **five** mechanisms, not one
+
+**WHAT LANDED.** `narrowByAssignmentRhs` gained the two right-hand sides no arm of it could
+type, both of them tsc's `getAssignmentReducedType` and both written by real code where tsc's
+own 78 sources write neither:
+
+```ts
+if (typeof c === 'function') c = c();               // knip plugins/ava/index.ts
+if (typeof c === 'function') c = (await c(x)) as T; // knip plugins/eleventy/index.ts
+```
+
+The CALL form is unreachable for every neighbouring arm **because the callee IS the walked
+reference**: `getTypeOfExpression` never narrows (CLAUDE.md), so typing `c()` there asks about
+the whole declared union, and `resolvedCallReturnTypeForFlow` reads a `FunctionDeclaration`'s
+return annotation, which a parameter never is. The ANTECEDENT is exactly the callee's type at
+that point — the guard has already narrowed it — so the assigned type is its call signatures'
+return, needing no resolution the walk has not already paid for. The ASSERTION form states its
+own type syntactically ((CHK.43)), so the `await` and the parens around it are irrelevant.
+
+**THE REDUCTION IS OF THE *DECLARED* UNION, NEVER THE ANTECEDENT — and that is the single
+decision the round's pins are sharpest about (arm a4b, 5 RED).** Round 416 wrote the rule for
+the non-nullish arm and the identifier/property arms below still predate it: in the
+then-branch the antecedent IS the constituent the assignment replaces, so filtering it answers
+`never` or itself and the branch join re-mints the declared union — which is precisely why the
+shape read as "no narrowing at all".
+
+**THE ITEM'S PREMISE WAS TWO-FIFTHS RIGHT, AND THE CORRECTION IS THE ROUND'S MOST USEFUL
+OUTPUT.** (CHK.41) records the +15 knip rows the two reverted contextual sources cost as
+"**every one** a parameter whose contextual type is a UNION the body then narrows by
+ASSIGNMENT". Recovered from (CHK.39)'s own captures at zero cost (`knip-c3.txt` 79 vs
+`knip-before.txt` 66) and reproduced one by one with an **annotated** parameter — which needs
+none of the contextual work — they are FIVE mechanisms:
+
+| rows | file | mechanism | reproduces from an annotated parameter |
+|---|---|---|---|
+| 3 | `plugins/ava/index.ts` | guarded reassignment, CALL rhs | yes — **FIXED this round** |
+| 3 | `plugins/eleventy/index.ts` | guarded reassignment, ASSERTION rhs | yes — **FIXED this round** |
+| 2 | `plugins/release-it/index.ts` | `typeof x.y?.z === 'string'` must narrow **`x.y`** to non-`undefined` (TS18048) | yes |
+| 2+2 | `plugins/mdxlint`, `plugins/remark` | the `flatMap` callback's return-type INFERENCE — `plugin` reads as possibly `null` (TS18047) | yes |
+| 1 | `plugins/graphql-codegen/index.ts` | TS2339 `extensions`: `isCfg(config)` in a nested ternary does not narrow (the union reads `CodegenT \| ConfigT`, so the OUTER predicate did narrow) | yes, in the FULL shape only |
+| 2 | `plugins/yarn/index.ts` | TS2339 `path` **on type `Plugin`** — the message names knip's OWN imported `Plugin`, i.e. a resolution/collision, not narrowing | **no** |
+
+Also removed by those sources: 2 rows (`plugins/netlify/index.ts:32`, `plugins/tsdown/index.ts:69`)
+— so the true arithmetic is 66 + 15 − 2 = 79. **The two sources stay reverted**: 9 rows across
+four mechanisms remain, and none of them is one line of contextual plumbing away.
+
+Three reductions of the graphql-codegen row that do NOT fire, recorded so nobody repeats them:
+a type-predicate in a plain ternary condition; a predicate ternary nested in another predicate
+ternary's false arm; the same with an arrow function in the outer true arm. All three are
+silent, i.e. correct.
+
+**A SECOND, LARGER FINDING, MEASURED WHILE ISOLATING THE FIRST: THE PROPERTY-ACCESS FAMILY
+ONLY REACHES A *PARAMETER*.** `const c: A | F = x; c.files` and `let c: A | F = x; c.files` are
+**silent** where tsgo reports TS2339 — 3 of 4 shapes (file-level `const`, `let`, and the same
+inside an arrow) are false negatives; only `function f(c: A | F) { c.files }` is checked. That
+is why the item, and this session's first four probes, read "a LOCAL narrows and a PARAMETER
+does not": the local was never checked at all. It is a bigger hole than (CHK.41) and it is NOT
+this round's — it is queued as (CHK.44).
+
+**GATES.** Suite **15,959 / 0 / 3** (+9, exactly the new class), **zero corpus baselines
+moved**. `cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes`
++0.00%, largest movement `mapped.hits` **+1.46%** (then `globals.misses` +0.93%,
+`mapped.keyed` +0.40%): the new `getTypeOfExpression` on an assertion rhs and the
+`getCallSignaturesOfType` on the antecedent, both behind a `declaredType is Type.Union` gate.
+`huge_methods.py --fail-over 0` exit 0, **783** classes scanned. `partition-equivalence`
+**EQUIVALENT, all 78 files**, floor **56 ms** [56, 66, 51, 53] (one draw). `capture-equivalence`
+**1,005 spans / 43 of 76 files / `narrowRendersMoreAny` 0**, `definitions` **360,376** — the
+standing state, both digests unmoved. 8-profile grid against a REBUILT parent, `javap`
+positive control (`assignedTypeOfGuardedReassignment` **0** before, **1** after):
+**`added=0 removed=0` on all eight** — which is a CONTROL and not evidence, because that is one
+codebase and it does not write the shape. **knip, BEFORE arm rebuilt in the same session:
+66 -> 66, every row byte-identical**, and byte-identical to the standing 66 capture as well.
+
+**ABLATION — one mistake per arm, each restored from its own snapshot, each anchor asserted to
+occur exactly once.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | `assignedTypeOfGuardedReassignment` returns null | **6** — every positive |
+| a2 | the CALL arm answers null | **3** — the call-form pins only |
+| a3 | the ASSERTION arm answers null | **3** — the assertion pins only |
+| a4 | reduce `antecedent` **when it is a union**, else declared | **0 — A DEAD ARM** |
+| a4b | reduce the ANTECEDENT, whatever its kind (round 416's real mistake) | **5** |
+| a5 | drop the un-callable-union refusal | **1** — uniquely the UNGUARDED control |
+| a6 | drop the `any`/`error`/`unknown`/`never` refusal | **0 — a REDUNDANT GUARD** |
+
+a2 and a3 partition a1 exactly (3 + 3 = 6). **a4 is round 902 in its own right and the fix for
+it is round 902's own advice**: the guarded substitution `((antecedent as? Type.Union) ?:
+declaredType)` reproduces the original wherever the antecedent is NOT a union — which in the
+then-branch of a `typeof` guard it never is — so the edit compiled, produced a real diff
+against its snapshot, and could not be reached. Asking *what shape only this arm can serve*
+gave a4b, which reddens 5. **a6 is recorded as a redundant guard rather than claimed** (round
+807): `any`/`never`/`error` keep EVERY member so the call site's `kept.size < declared.size`
+test refuses, and `unknown` keeps NONE so `kept.isNotEmpty()` refuses. It is kept as defence
+against the relation's known leniencies and its KDoc says so.
+
+**Pins**: `GuardedReassignmentNarrowingTest` (9). Every positive is paired with the negative
+half a silencing fix cannot satisfy — after the reassignment a member on NEITHER constituent
+must still report, **against the REDUCED type** (`Property 'nope' does not exist on type 'A'.`,
+not `'A | F'`) — and three are negative controls green by construction. 6 of the 9 are RED
+against the rebuilt parent. Every expectation, including both refusals, is read off
+`tools/tsgo-7.0.2/lib/tsc --noEmit` over the same source; all nine shapes are at full parity
+with tsc 7.0.2 bar one PRE-EXISTING display divergence (`A | (F)` for `A | F`).
+
+
 **THE ROUND'S SHAPE.** (CHK.40) measured the two-line return-position walk at FULL parity with
 tsgo and refused to land it on one number: the 8-profile grid gained **3 rows**. This round
 diagnosed each row rather than accepting or overriding the number, and **none of the three is a
