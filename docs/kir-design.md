@@ -710,3 +710,52 @@ The instrument for the first two is one command and it belongs in any future KIR
 performance work: `javap -p -c -cp <out> program.MainKt | grep -c 'jsGet\|jsSet'`
 must be **0** for a program in which every receiver has a declared class type.
 A wall-clock A/B cannot find these — 30.7 s and 0.94 s are both "it works".
+
+### 10.8 Are those native numbers release numbers? — checked, 2026-08-27
+
+Asked of § 10.4 and worth answering in the document, because a debug binary
+would invalidate every native figure in it.
+
+**Yes.** `kirNativeCompile` passes `-opt` for the program case (`build.gradle.kts`:
+`if (project.hasProperty("kirLibrary")) listOf("-produce", "library") else
+listOf("-opt")`), and every `.kexe` in § 10.4 went through the `else` branch.
+
+**`transitiveExport` has no target here.** It is an Apple-FRAMEWORK setting, and
+this repository declares no framework: `grep` over every `.kts` finds zero
+occurrences of `transitiveExport` and zero `binaries.framework { }`; the only
+native binaries are `binaries.executable` (the thin client) and the KIR path,
+which bypasses the Kotlin Gradle plugin entirely and calls `konanc -produce
+program`. Nothing is disabling dead-code elimination that way.
+
+**And DCE was measured rather than argued.** The floor is a bare Kotlin/Native
+`fun main() { println(...) }` built with the same compiler and `-opt`:
+
+| binary | bytes | `__text` | code vs floor |
+|---|---:|---:|---:|
+| bare Kotlin/Native hello | 494,224 | 231,532 | — |
+| xtsc hello | 576,592 | 264,152 | **+32,620** |
+| xtsc, one class + a 20M-iteration field loop | 576,720 | 264,436 | +32,904 |
+| …the same plus one `number[]` literal and an index read | 583,296 | 275,068 | +43,536 |
+| xtsc n-body | 1,161,408 | 576,984 | +345,452 |
+
+**A 2,434-line runtime with a regular-expression engine in it adds 32 KB of code
+to a hello world**, so nothing retains the runtime wholesale — corroborated
+independently by string constants: `RegExp`, `JSON`, `sort` and `toUpperCase`
+appear in NONE of these binaries. Adding an array costs 10.6 KB, so `JsArray` is
+not a DCE root either. **The 494 KB floor is Kotlin/Native's own**, which is most
+of the gap to scriptc's 388 KB hello — that difference is a runtime comparison,
+not a code-generation one.
+
+**One thing is genuinely not release and is measured INERT**: the runtime klib is
+built `-produce library` with no `-opt`. Kotlin/Native stores IR in a klib and
+does code generation at program link, so `-opt` there should be a no-op, and it
+is — 5 interleaved reps of the n-body, same sink: **2,060.4 ms against 2,057.0**
+(0.17%, ranges overlapping) and **+568 bytes**. Left as it is; the reason is now
+recorded so the next reader does not have to re-run it.
+
+**What is NOT explained: the n-body carries +313 KB of code over this backend's
+own hello, for 100 lines of TypeScript.** Three candidates are ruled out above
+(wholesale runtime retention, `JsArray`, and the ~16 KB Objective-C bridging
+layer, which is present identically in the bare floor binary and only *looked*
+n-body-specific because its symbols carry the binary's name). Whatever it is, it
+is code rather than data, and it is the one open question on the size axis.
