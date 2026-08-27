@@ -1,4 +1,62 @@
 
+
+**THE TS2769 *DIAGNOSTIC* PATH DID NOT ASK THE WEAK-TYPE RULE — AND THE ITEM'S "HARD
+PART" WAS A **tsgo RENDERING**, NOT tsc's (2026-08-27, (CHK.56)).** (CHK.54) gave overload
+SELECTION the weak rule and left the diagnostic path alone, so `allArgumentsMatch`
+accepted what `signatureAcceptsArgs` refused and a call whose every overload has a
+disjoint all-optional parameter was SILENT. The queue item recorded the elaboration as the
+work — `getFirstArgumentError` walks the plain relation, which ACCEPTS the argument, finds
+no failing argument and drops the overload out of the chain. Half of that is right: the
+subline really is TS2559's *no properties in common* wording and is now minted beside the
+walk, on the path where the relation SUCCEEDED. **The other half is not.** tsgo 7.0.2
+prints `The last overload gave the following error.` for **2, 3 and 4** candidates alike;
+PRISTINE tsc prints `Overload N of M, '<sig>', gave the following error.` per candidate —
+**42** `typescript-repo` baselines against **4** — and
+`tsxStatelessFunctionComponentOverload4.errors.txt` carries a *no properties in common*
+subline inside exactly that chain. Our chain has had the pristine shape since B418, so no
+"which overload" policy was needed at all and the item's "a TS2769 naming the wrong
+overload is worse than silence" risk never arose. Round 938's law, paid again.
+
+**TWO THINGS MEASURED RATHER THAN GUESSED.** A UNION parameter names a CONSTITUENT only
+when exactly one survives dropping `null`/`undefined` (`ZzzWk | null` -> `'ZzzWk'`); two or
+more take the ordinary assignability wording naming the whole union — the verdict is a
+refusal either way, only the sentence differs. And an OBJECT-LITERAL argument is refused
+outright, because tsc's freshness/excess check runs ABOVE the weak check and a fresh
+literal sharing no property name has EVERY property excess: `f({ zzzZ: 1 })` is
+`Object literal may only specify known properties…` at the PROPERTY, one column right of
+where the weak wording would sit. That shape stays SILENT rather than acquiring a
+diagnostic at the wrong span; the NON-fresh source of the identical type is the weak
+wording and is pinned.
+
+**A SECOND HOLE MEASURED AND QUEUED AS (CHK.57).** The bare weak target is correct and
+byte-identical to tsc in every position; a weak target reached through a **UNION** is
+silent here in BOTH the single-signature call and the var-decl positions
+(`(o: { zzzA?: null } | null)` with `123`, `const v: {…} | null = "utf8"`) where tsc says
+TS2559. Different mechanism — the B482 walkers, not the overload helpers — so it is queued
+rather than folded in.
+
+**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class), no corpus baseline
+moved — run twice, the first reading 16,155 / 3 / 3 on three of this round's own
+hand-derived `character` assertions, since replaced by tsc's own coordinates. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, and the table is
+**digit-for-digit the PARENT's** (a0 binary, same session) — this change costs 0.00% on
+the compiler profile, the expected control for a question asked only after the relation
+ACCEPTED. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
+session-built binaries (`javap` control 0 vs 2): capture md5 `503774c2…` on both,
+**`added=0 removed=0` on all eight**. `partition-equivalence` **EQUIVALENT, all 78**, floor
+**58 ms** [79, 58, 55, 56] — one draw. `capture-equivalence` **1,005 / 43 of 76 /
+moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved.
+**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, byte-identical** — the queue
+item's "it ADDS rows" is measured FALSE on every corpus this repo has.
+
+**EIGHT ABLATION ARMS, ONE MISTAKE EACH, ALL EIGHT CLASS md5s DISTINCT.** a0 (whole change
+reverted, parent rebuilt this session) **6 RED — exactly the six positives**; a1 (the
+object-literal guard dropped) **1**, uniquely its own pin; a6 (display target always the
+whole parameter) **2**, uniquely the two union pins; a7 (a union never names a constituent)
+**1**, uniquely the one-constituent pin. **a2/a3/a4 each read 6 and are a ROUND-927 TRIPLE**
+— each alone deletes the diagnostic, so none is redundant, but no pin separates which layer
+failed. **a5 reads 0 and is recorded as UNDISCRIMINATED, not provably unobservable**: it can
+only matter through B418's tie-break, which nothing here exercises.
+
 **AN OBJECT LITERAL'S LITERAL PROPERTIES WIDEN, AND THAT ONE FACT BIT AT *BOTH*
 OVERLOAD SITES — A FALSE TS2769 AT THE DIAGNOSTIC AND A **WRONG TYPE** AT SELECTION
 (2026-08-27, (CHK.55)).** The queue item carried (b) an object-literal FP and a third

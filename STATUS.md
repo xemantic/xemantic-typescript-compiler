@@ -1,5 +1,61 @@
 # Status
 
+**THE TWO DEFECTS (CHK.61) NAMED WERE BUILT, PRICED AND **REFUSED** — EACH UNMASKS
+PRE-EXISTING ENGINE GAPS AS DASHBOARD FALSE POSITIVES — AND THE PRICING TURNED UP TWO OTHER
+DEFECTS THAT WERE FREE TO FIX (2026-08-27, (CHK.61c)+(CHK.61d), two fixes).** (a) taking
+`currentClassForThis` as the receiver type when `this` types `any` is ONE line and closes
+**every** row (CHK.60) measured — `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to all
+7 — at a price of **+4 harness / +2 server** profile rows (compiler profile 46 -> 46, corpus
+GREEN, both libraries byte-identical). (b) `| undefined` on an optional property access is
+one line and prints tsc's exact text, at **3** compiler-profile rows. Every one of those 9
+rows is a FALSE POSITIVE from a pre-existing gap the `any` was hiding, so under this arc's
+own convention ((CHK.51) kept a firewall "worth 43 rows"; (INC.42) narrowed rather than
+shipping FPs) both are refused, mapped cause by cause with `this`-free repros, and queued.
+
+**(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST** —
+`getTypeFromTypeReference` asked the enclosing namespace only as a FALLBACK, so a namespace
+member whose name ALSO exists globally resolved to the outer declaration. Silent in the
+dangerous direction: the outer type is a REAL type, so the annotation is judged against the
+wrong shape rather than against none. It is the CAUSE of (a)'s only corpus regression —
+`variableDeclaratorResolvedDuringContextualTyping`, where `namespace WinJS { declare class
+Promise { then(): Promise } }` resolved `Promise` to the LIB `Promise<T>` and whose PRISTINE
+baseline reports nothing at that line.
+
+**(CHK.61d) `f!()` DISCARDED THE ASSERTION AT BOTH SITES THAT CLASSIFY A CALLEE** —
+`getCalleeType`'s NonNull arm and `getReturnTypeOfCallExpression`'s unwrap loop — so a
+`T | undefined` callee arrived as a UNION and failed twice: TS2349 where tsc is silent, AND
+`if (calleeType !is Type.Object) return anyType`, so the call's RETURN TYPE was never
+resolved and `const s: string = f!()` reported NOTHING. **It is the gate on (b)**: with (b)
+applied and this present the compiler profile gains **19** rows of which **17** are this one
+class (`host.readDirectory!(…)`, `resolutionHost.realpath!(…)`); with it fixed, 3.
+
+**THE MOST TRANSFERABLE FINDING IS A REVERTED FIX.** An acceptance leg for the merged
+INTERSECTION SOURCE — consulted only after "some constituent relates" has already answered
+false — closes its row and ADDS `'parent' does not exist on type 'never'` on two profiles,
+because an acceptance feeds `typeGuardMemberDisjoint` and narrows to `never`. **"Acceptance
+only, so it cannot introduce a diagnostic" is true of the RELATION and false of the
+COMPILER.**
+
+**GATES.** Suite **16,243 / 0 / 3** (+9, exactly the two new classes), **no corpus baseline
+moved**. `cost_gate.py` `output.errors` **46**, all 20 counters digit-identical to
+(CHK.60)'s reading. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+**8-profile grid md5 `503774c23b4535130ffdebabef430cf0`**, `added=0 removed=0` on all eight
+— unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **56 ms**
+[55, 56, 57, 54] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
+`definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 and
+`jsonrepair` 3.13.1 4, EVERY ROW BYTE-IDENTICAL.**
+
+**FIVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.** a0 (both
+changes reverted, parent rebuilt) **5 RED — every positive**; a1 (the namespace reorder
+reverted) **2**, uniquely the namespace positives; a2 (`getCalleeType`'s NonNull arm
+reverted) **1**; a3 (the return-type restore reverted) **2**; a4 (the `SymbolFlags.Type`
+filter dropped) **1**, uniquely the value-export control. **TWO DRAFTS OF ONE PIN WERE BLIND
+AND a1 IS WHAT SAID SO** — asserting the ABSENCE of a TS2339 reads GREEN against the ablated
+binary in BOTH shapes of the shadowed global, so only a DIFFERING RETURN TYPE discriminates.
+**AND THE FIRST a4 WAS A DEAD ARM**: a class's own type parameter does not reach the checker
+through `currentTypeParamScope` at all, so that control has no discriminating arm and is not
+claimed as coverage.
+
 **AN ENUM MEMBER IS A STRING OR NUMBER **LITERAL** IN tsc, SO ITS APPARENT TYPE IS THE
 `String` / `Number` WRAPPER — AND WE WERE REPORTING **13** FALSE POSITIVES BECAUSE OF IT
 (2026-08-27, (CHK.60), one fix).** tsc's `TypeFlags.StringLike` is
@@ -268,60 +324,3 @@ dropped) **1**, each uniquely its own pin; a4 (argument site removed) **6**, a5 
 branch removed) **2**; a6 (the verdict not asked) **0 — a redundant guard**. Residue —
 the RETURN and ASSIGNMENT positions have no weak walker at all, and the 2559/2560 split —
 queued as (CHK.58) with a fixture apiece.
-
-**THE TS2769 *DIAGNOSTIC* PATH DID NOT ASK THE WEAK-TYPE RULE — AND THE ITEM'S "HARD
-PART" WAS A **tsgo RENDERING**, NOT tsc's (2026-08-27, (CHK.56)).** (CHK.54) gave overload
-SELECTION the weak rule and left the diagnostic path alone, so `allArgumentsMatch`
-accepted what `signatureAcceptsArgs` refused and a call whose every overload has a
-disjoint all-optional parameter was SILENT. The queue item recorded the elaboration as the
-work — `getFirstArgumentError` walks the plain relation, which ACCEPTS the argument, finds
-no failing argument and drops the overload out of the chain. Half of that is right: the
-subline really is TS2559's *no properties in common* wording and is now minted beside the
-walk, on the path where the relation SUCCEEDED. **The other half is not.** tsgo 7.0.2
-prints `The last overload gave the following error.` for **2, 3 and 4** candidates alike;
-PRISTINE tsc prints `Overload N of M, '<sig>', gave the following error.` per candidate —
-**42** `typescript-repo` baselines against **4** — and
-`tsxStatelessFunctionComponentOverload4.errors.txt` carries a *no properties in common*
-subline inside exactly that chain. Our chain has had the pristine shape since B418, so no
-"which overload" policy was needed at all and the item's "a TS2769 naming the wrong
-overload is worse than silence" risk never arose. Round 938's law, paid again.
-
-**TWO THINGS MEASURED RATHER THAN GUESSED.** A UNION parameter names a CONSTITUENT only
-when exactly one survives dropping `null`/`undefined` (`ZzzWk | null` -> `'ZzzWk'`); two or
-more take the ordinary assignability wording naming the whole union — the verdict is a
-refusal either way, only the sentence differs. And an OBJECT-LITERAL argument is refused
-outright, because tsc's freshness/excess check runs ABOVE the weak check and a fresh
-literal sharing no property name has EVERY property excess: `f({ zzzZ: 1 })` is
-`Object literal may only specify known properties…` at the PROPERTY, one column right of
-where the weak wording would sit. That shape stays SILENT rather than acquiring a
-diagnostic at the wrong span; the NON-fresh source of the identical type is the weak
-wording and is pinned.
-
-**A SECOND HOLE MEASURED AND QUEUED AS (CHK.57).** The bare weak target is correct and
-byte-identical to tsc in every position; a weak target reached through a **UNION** is
-silent here in BOTH the single-signature call and the var-decl positions
-(`(o: { zzzA?: null } | null)` with `123`, `const v: {…} | null = "utf8"`) where tsc says
-TS2559. Different mechanism — the B482 walkers, not the overload helpers — so it is queued
-rather than folded in.
-
-**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class), no corpus baseline
-moved — run twice, the first reading 16,155 / 3 / 3 on three of this round's own
-hand-derived `character` assertions, since replaced by tsc's own coordinates. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, and the table is
-**digit-for-digit the PARENT's** (a0 binary, same session) — this change costs 0.00% on
-the compiler profile, the expected control for a question asked only after the relation
-ACCEPTED. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
-session-built binaries (`javap` control 0 vs 2): capture md5 `503774c2…` on both,
-**`added=0 removed=0` on all eight**. `partition-equivalence` **EQUIVALENT, all 78**, floor
-**58 ms** [79, 58, 55, 56] — one draw. `capture-equivalence` **1,005 / 43 of 76 /
-moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved.
-**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, byte-identical** — the queue
-item's "it ADDS rows" is measured FALSE on every corpus this repo has.
-
-**EIGHT ABLATION ARMS, ONE MISTAKE EACH, ALL EIGHT CLASS md5s DISTINCT.** a0 (whole change
-reverted, parent rebuilt this session) **6 RED — exactly the six positives**; a1 (the
-object-literal guard dropped) **1**, uniquely its own pin; a6 (display target always the
-whole parameter) **2**, uniquely the two union pins; a7 (a union never names a constituent)
-**1**, uniquely the one-constituent pin. **a2/a3/a4 each read 6 and are a ROUND-927 TRIPLE**
-— each alone deletes the diagnostic, so none is redundant, but no pin separates which layer
-failed. **a5 reads 0 and is recorded as UNDISCRIMINATED, not provably unobservable**: it can
-only matter through B418's tie-break, which nothing here exercises.

@@ -1,5 +1,170 @@
 ### Round (CHK.32) — a primitive now relates to an ANONYMOUS object target through its wrapper; and the item's own premise was wrong about `jsonrepair`, whose 7 rows are a **DOM name collision**
 
+### Round (CHK.49) — a module file's own `interface Text` was merged INTO the DOM `Text`, program-wide and in both directions; `jsonrepair` **11 -> 4**
+
+**THE DEFECT, AND THE PART THE QUEUE ITEM DID NOT SAY.** `init:mergeSharedKeepNames` seeded
+itself with `globals.keys` — i.e. with every LIB global name — so a MODULE file's top-level
+declaration of any of them merged into `globals`. Because `mergeSingleSymbol` **ADOPTS**
+(round 884: `globals[name]` IS the binder's object, and the clone half is off by default),
+the merge mutated the LIB symbol itself, so the fusion was visible **program-wide** and not
+only in the declaring file: a file that never mentions `Text` still saw `zzzUnique` on the
+DOM `Text`. That is the sharper statement of the defect and it is what the new
+`a foreign module's shadow does not leak into another file's lib type` pin measures.
+
+**POPULATION CENSUS (measured, not argued).** Lib global names at column 0 of the resolved
+lib set: **132 (es5), 185 (es2020), 207 (esnext), 2,188 (dom), 2,242 (esnext.full)**. Every
+declaration form is affected — measured against tsgo 7.0.2 on a five-way matrix:
+
+| form in a MODULE file | before | tsgo | after |
+|---|---|---|---|
+| `interface Text { zzzUnique }` | TS2345 on its own shape, SILENT on `t.wholeText` | TS2339 on `t.wholeText` | TS2339, matching |
+| `type Text = { zzzUnique }` | TS2353 | TS2339 | TS2339, matching |
+| `class Text { … }` | SILENT on `t.wholeText` | TS2339 | TS2339, matching |
+| `enum Text { A, B }` | ours-only TS2322 `Type 'Text.A' is not assignable to type 'Text'` | silent | silent |
+| `const Text = { zzzUnique }` | `Text` resolved to the DOM **constructor** | `{ zzzUnique: number }` | matching |
+
+**So the item's "it is `interface`-SPECIFIC — a `type` alias of the same name is correct" is
+measured WRONG**; all five forms collide, and the value-space one (`const`) resolves the
+identifier to the lib's `declare var`. Script files are unaffected in both arms, which is
+correct: a global script file's locals ARE the global namespace (INV.3(d)).
+
+**PROFILE CENSUS.** All eight dashboard profiles collide on exactly **`Symbol`**
+(`compiler/types.ts`'s `export interface Symbol`) — the very name the pre-existing comment
+cited as the reason the SHARED merge could not be retired. `services/transpile.ts`'s
+`interface Object` / `interface Array` &c. read as collisions to a naive census and are
+inside a TEMPLATE LITERAL (`barebonesLibContent`), so they are not.
+
+**THE FIX IS TWO EDITS THAT ARE *ONE OBSERVABLE* (round 927), AND EACH ALONE IS WORSE THAN
+THE PAIR.**
+
+  1. `init:mergeSharedKeepNames` no longer seeds itself with the lib key set.
+  2. `computePerFileVisibility` no longer seeds `nonModuleVisible` with `libGlobals.keys`,
+     which drops such a name into `moduleOnlyGlobalNames` and routes it through
+     `perFileScope`.
+
+Measured: **(1) alone = 969 errors on the compiler profile** — round 510's recorded "861 FPs
+when retired naively", reproduced 439 rounds later — and **(2) alone changes nothing**,
+because the merge still corrupts the lib symbol. **Together: 46, unmoved.** No new machinery
+was needed for (2): `buildPerFileScopes` has always seeded every file with the lib globals
+and let the file's own locals override them; only the gate was missing.
+
+**THE HALF THAT IS NOT A SET OPERATION: THE *VALUE* MEANING SURVIVES A TYPE-ONLY SHADOW.**
+tsc resolves a name per MEANING, so `export interface Map<K, V>` hides the lib TYPE and
+leaves `declare var Map: MapConstructor` reachable; this checker has one symbol per name per
+file. `libValueBehindTypeOnlyShadow` restores the value half as a SECOND CHANCE on the
+rejecting path (round 744's discipline — it can only turn a failure into the lib's answer),
+guarded by a normally-EMPTY `libValueShadowNames` set so the ~2 M-identifier path is
+untouched (`cost_gate` reads +0.00% where this round contributes anything).
+
+**AND *WHERE* THAT SECOND CHANCE SITS IS THE WHOLE OF IT — THE FIRST CUT WAS DEAD AND THE
+ABLATION IS WHAT SAID SO.** It was asked inside `getTypeOfIdentifier`'s `currentFileLocals`
+branch, which is BELOW `fileLocalTypeMapFor` — a map keyed by the file's own declarations,
+i.e. by the shadow itself. Arm a3 (both sites removed) read **0 RED of 11 pins and profile
+46**, while `Date.now()` in a module declaring `interface Date` had grown a fresh TS2339 no
+pin covered. Hoisted to just below `currentLocalTypes` / `currentParamBindingNames` — which
+carry genuine inner bindings that DO shadow in both meanings — and the dead lower site
+deleted. That also closed a false positive the PARENT had: `zzzTakes(Date)` against a
+`DateConstructor` was TS2345 on both binaries and is silent now, matching tsgo.
+
+**A PRE-EXISTING GAP FELL OUT OF THE SAME SEAM.** `resolveHeritageBaseSymbol`'s
+`is Identifier -> globals[expr.text]` is a RAW consult, so `class Promise<R> implements
+Promise.Thenable<R>` (bluebirdStaticThis) resolved **only because the name collided with a
+lib global and the merge fused the two**; the identical shape spelled `Zromise` found
+nothing — measured on the PARENT binary, so it was never this round's regression. Node-keyed
+now, like the three heritage sites that call it, and both spellings work.
+
+**GATES.** Suite **16,101 / 0 / 3** (+14, exactly the new class), **zero corpus baselines
+moved in the landed shape**. `cost_gate.py` **PASSES with NO rebaseline**, exit 0:
+`output.errors` **46**, `spine.nodes` +0.00%, `globals.conflated` 0, largest movements
+`narrow.memoServed` **+0.69%** and `typeOfExpr.calls` **+0.59%** — both identical to
+(CHK.32)'s, i.e. this change contributes 0.00% on the compiler profile.
+`huge_methods.py --fail-over 0` exit 0, **783** classes scanned, 0 over limit.
+`partition-equivalence` **EQUIVALENT, all 78**, floor **55 ms** [50, 55, 50, 60] — ONE draw,
+and unlike (CHK.32)'s it carries no leading ramp. `capture-equivalence`
+**1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376** — the
+standing state, unmoved. 8-profile grid, BOTH arms from binaries built in this session, with
+a `javap` positive control (after=1 / before=0 occurrences of `libValueBehindTypeOnlyShadow`):
+**`added=0 removed=0` on all eight**.
+
+**LIBRARIES.** **`jsonrepair` 3.13.1: 11 -> 4 rows**, and the 7 that go are exactly the
+TS2345 `parameter of type 'Text'` family — `export interface Text { charCodeAt }` in
+`src/utils/stringUtils.ts` colliding with the DOM global. The 4 that remain are a
+tsconfig-option row, a TS2366 and two `node:stream` TS2591. **`knip` @ `dc7aca5`: 49 -> 49,
+byte-identical — and that is a CONFIGURATION fact rather than an absence.** knip shadows
+five lib names (`File`, `Performance`, `Plugin`, `Report`, `caches`), every one of them
+DOM-only, and its tsconfig says `"lib": ["esnext"]`; so the defect's population is a
+function of the project's `lib` setting, and knip's exclusion of `dom` is exactly why it was
+immune. That the arm is byte-identical is therefore a control that we honour `lib`, not a
+statement that nothing was wrong.
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT, EACH
+PATCH ANCHOR ASSERTED UNIQUE, AND EACH ARM'S `Checker.class` md5 CHECKED AGAINST THE LANDED
+`c6436bf1…`.**
+
+| arm | injected mistake | RED | profile |
+|---|---|---|---|
+| a0 | the whole change reverted (parent, rebuilt this session; `javap` 0 vs 2) | **5** — every positive pin | 46 |
+| a1 | the lib key set back in the MERGE keep predicate | **5** | 46 |
+| a2 | the lib key set back in `nonModuleVisible` | **5** | **969** |
+| a3 | the value second chance moved back BELOW the file-level type map | **1** | 46 |
+| a3b | the identifier-position second chance deleted outright | **1** | 46 |
+| a4 | the callee-position second chance deleted | **2** — both value pins, uniquely their own | 46 |
+| a5 | the heritage root back to a raw `globals` consult | **2** | 46 |
+| a6 | the alias hop inside the helper dropped | **1** — the IMPORTED value shadow, uniquely its own | 46 |
+| a7 | the helper's two value-meaning refusals dropped | **2** | 46 |
+| a8 | `if (lib === local) return null` dropped | **0** | 46 |
+
+Three readings that are not "all guards discriminate". **a1/a2 are a round-927 PAIR in an
+unusually strong form** — not merely "neither reddens alone" but "each alone is worse than
+the pair", 969 profile errors one way and no fix at all the other; they are ONE observable
+and are documented as such in `mergeSharedKeepNames`' KDoc. **a3/a3b are the same
+observable** (the site is either above the type map or it is nothing), which is why the
+first cut's two sites were deleted rather than kept. **a8 read 0 RED and is DELETED rather
+than shipped un-gateable**: it is provably unobservable — at the identifier site `local`
+comes from a `BinderResult`'s own locals, which never holds the lib symbol, and at the
+callee site the two coincide only for a file that does NOT declare the name, where both
+branches go on to call `getTypeOfSymbol(lib)`. The proof is in the KDoc, not in a claim.
+
+**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **six** positive pins (the two shadow
+directions, the DOM generalisation, the cross-file leak, the per-file heritage root, and the
+argument-position `DateConstructor` row) were run against a parent binary REBUILT IN THIS
+SESSION over byte-identical test source and **all six reported**: parent `Checker.class` md5
+`2ce9dad0…` against the landed `c6436bf1…`, `javap` reading 0 occurrences of the new members
+on the parent and 2 after. The four refusal-direction pins (two value shadows, two
+lib-value-reachable) are green on the parent by construction and their falsifying arms are
+a3/a4/a6/a7 above, each of which names which pin it reddens. **The three pins labelled
+CONTROL are green on every arm and are NOT counted as coverage.**
+
+**A CONTROL THAT WAS NOT A CONTROL, AND HOW IT WAS CAUGHT.** The first draft's
+must-still-merge pin asserted that `declare global { interface Date { zzzUnique } }` in a
+module keeps merging. It FAILED — and it fails identically on the PARENT binary, in the same
+file and across files, so it is a pre-existing gap this round neither causes nor closes.
+Probed three ways: `declare global { var X }` works on both; `declare global { interface Date
+{ … } }` reports TS2339 on both; `declare global { interface ZzzBrandNew { … } }` reports
+TS2304 on both, i.e. a `declare global` INTERFACE does not reach `globals` at all. The pin
+was re-pointed at the `var` form and the interface half is QUEUED as (CHK.50) rather than
+pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * The merge retire alone (arm a1's inverse) is the obvious first cut and it is a **969-FP**
+    catastrophe; the recorded round-510 refusal was right about the number and wrong about
+    the remedy — what was missing was not "per-file resolution at every lib-name consumer"
+    but ONE set seed, because `perFileScope` had done the work all along.
+  * The value second chance was written in the wrong place and every instrument in this
+    repo except the ablation said it was fine.
+  * The `bluebirdStaticThis` corpus failure looked like this round's regression for an hour
+    and was a pre-existing gap the merge had been papering over. **The tell was renaming the
+    colliding identifier**: an identical shape with a non-colliding name failed on the
+    parent too. That test is the second time this session a name collision has been the
+    diagnosis rather than the mechanism.
+  * `twofile` — the obvious cross-file pin — is VACUOUS: this checker does not report a
+    missing member on the real DOM `Date`/`Text` interface at all (a separate pre-existing
+    gap), so both arms agree on an empty list. The discriminating shape is an ASSIGNMENT.
+    **CORRECTED BY (CHK.51): `Date` DID report and `Text` did not — the axis is HERITAGE,
+    and the lib half is now closed. What is still vacuous is listed under (CHK.52).**
+
+
 **THE ITEM WAS TWO DEFECTS WEARING ONE NAME, AND THE NAMED-INTERFACE HALF WAS ALREADY
 WORKING.** (CHK.32) attributes all 7 of `jsonrepair`'s TS2345 rows to a missing
 `getApparentType` consult, on a repro whose interface is called `Text`. Measured, that

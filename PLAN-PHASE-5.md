@@ -20,6 +20,131 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.61c)+(CHK.61d) — the two defects (CHK.61) named were BUILT, PRICED and REFUSED for the same reason, and the pricing turned up **two other defects that were free to fix**
+
+**BOTH QUEUED ITEMS WORK, AND NEITHER IS LANDABLE.** (a) — take `currentClassForThis` as the
+receiver type when `this` types `any` — is ONE line and closes **every** row (CHK.60)
+measured: `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to all 7. (b) — `| undefined`
+at `computeRawTypeOfPropertyAccess`'s `prop != null` returns — is one line and produces
+tsc's exact `'number | undefined'` text. Both were built, both were run over the 8-profile
+grid, both libraries and the whole suite. **Each ADDS false positives to the dashboard**,
+and the FPs are not theirs: they are pre-existing engine gaps the `any` was masking. Under
+this arc's own convention ((CHK.51) measured a firewall as "worth 43 rows" and kept it;
+(INC.42) narrowed rather than shipping dashboard FPs) that is a refusal — so what landed is
+the two defects the pricing turned up on the way, each of which is free.
+
+**(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST.**
+`getTypeFromTypeReference` asked `resolveTypeNameToSymbol` first and the enclosing namespace
+only as a FALLBACK, so a namespace member whose name ALSO exists globally resolved to the
+outer declaration — the opposite of TypeScript's rule, and silent in the dangerous
+direction: the outer type is a REAL type, so the annotation is judged against the wrong
+shape rather than against none. Four lines reproduce it with no `this` in them
+(`build/chk61/p6/a.ts`). **It was found as the CAUSE of (a)'s only corpus regression**:
+`variableDeclaratorResolvedDuringContextualTyping` gained `Type 'Promise<T>' is missing …
+from type 'TPromise<IUploadResult>': done, cancel` because `namespace WinJS { declare class
+Promise { then(): Promise } }` resolved `Promise` to the LIB `Promise<T>`. That case's
+PRISTINE baseline reports nothing at that line, so the pristine oracle — not tsgo — is what
+settles this one. With it fixed, (a)'s corpus cost is **ZERO**.
+
+**(CHK.61d) `f!()` DISCARDED THE ASSERTION AT BOTH SITES THAT CLASSIFY A CALLEE.**
+`getCalleeType`'s `is NonNullExpression -> getCalleeType(expr.expression)` and
+`getReturnTypeOfCallExpression`'s unwrap loop both drop the `!`, so a `T | undefined` callee
+arrives as a UNION and fails in two directions at once: TS2349 where tsc is silent, AND
+`if (calleeType !is Type.Object) return anyType`, so the call's RETURN TYPE was never
+resolved and every check over the result was silently vacuous — `const s: string = f!()`
+reported NOTHING. **This is the gate on (b)**: with (b) applied and this present the
+compiler profile gains **19** rows of which **17** are this class (`host.readDirectory!(…)`,
+`resolutionHost.realpath!(…)`, `host.writeFile!(…)` — tsc's own sources use the idiom
+everywhere); with it fixed, (b)'s cost is **3**. Nobody would have found it from its own
+shape; it fell out of pricing (b).
+
+**THE PRICED MAP OF (a): 6 ROWS, 4 CAUSES, EVERY ONE `this`-FREE.** Compiler profile
+**46 -> 46**, corpus GREEN, `knip` 48 and `jsonrepair` 4 **byte-identical**; +4 harness,
++2 server. The causes are an INTERSECTION SOURCE that is never merged (`client.ts:356`), a
+SHORTHAND object-literal property that does not flow-narrow (`editorServices.ts:4449`), a
+FUNCTION-TYPE property whose parameters are compared covariantly where the METHOD form is
+already bivariant (`project.ts:2277`), and an object literal that loses a SPREAD's members
+(`client.ts:242`). All four are in the queue with repros.
+
+**AN ACCEPTANCE LEG FOR THE FIRST OF THOSE WAS BUILT AND REVERTED, AND ITS FAILURE IS THE
+ROUND'S MOST TRANSFERABLE FINDING.** `intersectionMergedSatisfiesTarget` — the symmetric
+twin of the existing `intersectionMergedContradictsTarget`, consulted only AFTER "some
+constituent relates" has already answered false — closes `client.ts:356` exactly, and ADDS
+`callHierarchy.ts:199 'parent' does not exist on type 'never'` on two profiles. **An
+acceptance in the relation is NOT diagnostic-free: it feeds `typeGuardMemberDisjoint`, so a
+type that now relates gets SUBTRACTED by a narrowing and the reference collapses to
+`never`.** Round 784's "a second chance can only turn a rejection into an acceptance, so
+nothing that already passed can start failing" is true of the RELATION and false of the
+COMPILER.
+
+**THE PRICED MAP OF (b): 3 ROWS ON THE COMPILER PROFILE AFTER (CHK.61d), ALL NARROWING.**
+`checker.ts:30269:86` (an `&&` chain `a && x.p !== undefined && x.p < 0`),
+`moduleNameResolver.ts:824` (an outer `if (host.f && host.g)` surviving into a nested `for`
++ inner `if`), `moduleNameResolver.ts:2265` (a three-deep chain), plus `project.ts:502`/`528`
+and `vfsUtil.ts:1034` off-profile. Every one is a property-access reference, so they may
+share a cause. Two shapes are already CORRECT and need nothing: `?.` and an `if (o.p)`
+guard. **And (b)'s tempting display-only confinement is NOT free** — hover for
+`zzzInst.zzzOpt` says `number` where tsc says `number | undefined`, but adding the
+constituent in the capture path alone renders `number | undefined` INSIDE an
+`if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type that
+is ALREADY a union.
+
+**GATES, all foreground, one at a time.** Suite **16,243 / 0 / 3** (+9, exactly the two new
+classes), **no corpus baseline moved**. `cost_gate.py` `output.errors` **46** and all 20
+counters digit-identical to (CHK.60)'s reading (the standing `typeOfExpr.calls +1.42%` is
+inherited drift against a baseline last recorded at (CHK.46)). `huge_methods --fail-over 0`
+exit 0, **783** classes, 0 over. **8-profile grid md5
+`503774c23b4535130ffdebabef430cf0`**, per-profile diff **`added=0 removed=0` on all eight**
+— the standing value, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all
+78**, floor **56 ms** [55, 56, 57, 54] — one draw. `capture-equivalence` **1,005 span(s) in
+43 of 76, types=1005 definitions=0, moreAny 0**, `definitions` **360,376**, ARM DIGESTs
+`full=-3735929574989657502 narrow=-2075467818767010709` — the standing state to the digit.
+**`knip` @ `dc7aca5` 48 and `jsonrepair` 3.13.1 4, EVERY ROW BYTE-IDENTICAL.** Shipped
+binary md5 `92799538`, reproduced before and after the ablation sweep; parent `854a0209`.
+
+**FIVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS IN THE FINAL
+SWEEP.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | both changes reverted (the parent, rebuilt this session) | `854a0209` | **5** — every positive |
+| a1 | the namespace reorder reverted | `9384f409` | **2** — uniquely the namespace positives |
+| a2 | `getCalleeType`'s NonNull arm reverted | `21555705` | **1** — uniquely the callability positive |
+| a3 | the return-type restore reverted | `e40c15de` | **2** — uniquely the return-type positives |
+| a4 | the `SymbolFlags.Type` filter dropped | `56d5c06a` | **1** — uniquely the value-export control |
+
+**TWO DRAFTS OF ONE PIN WERE BLIND AND a1 IS WHAT SAID SO.** Asserting the ABSENCE of
+`TS2339: Property 'zzzB' does not exist` reads GREEN against the ablated binary in BOTH
+shapes of the shadowed global — written GENERIC the wrong resolution answers `errorType`
+through TS2314 and no member is ever looked up; written NON-generic the member lookup is
+still not what reports. Only a DIFFERING RETURN TYPE discriminates, so the two `zzzA`
+declarations disagree on purpose (`number` in the namespace, `boolean` globally).
+**AND THE FIRST a4 WAS A DEAD ARM**: injecting the namespace lookup ABOVE
+`currentTypeParamScope` read 0 RED, because a class's own type parameter does not reach the
+checker through that map at all — so the type-parameter control has NO discriminating arm
+and is not claimed as coverage. The a4 that shipped drops the `SymbolFlags.Type` filter,
+which IS reachable and reddens exactly one pin, making the value-export control
+load-bearing.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The dashboard's FP metric and the "close a missing-diagnostic hole" goal are in
+    tension by construction.** tsc's own sources compile with ZERO errors, so a NEW correct
+    check can never REMOVE a row from a profile — it can only surface our own gaps. Every
+    unmasking fix therefore reads as a dashboard regression, whatever its correctness value.
+  * **The acceptance-only argument (above) is the single most surprising result** — I wrote
+    "can only turn a rejection into an acceptance, so it cannot introduce a diagnostic" into
+    the KDoc before building it, and the grid refuted it in one run.
+  * **The `this` hover already works**, so (a) is a DIAGNOSTICS defect and not a
+    language-service one: `typeCapturePropertyAccessType` has carried a `this`/`super` leg
+    since (BUG.4). What DOES lie in hover is (b) — an optional member renders without its
+    `| undefined`.
+  * **A scripted PLAN-PHASE-5.md trim keyed on "the next `### ` heading" DESTROYED THE WHOLE
+    QUEUE** (441 KB -> 106 KB) — the oldest live note is the LAST `###` in the file and the
+    queue below it carries no heading of its own, so the slice ran to EOF. Recovered by
+    `git checkout --` because the file was committed. CLAUDE.md's `open(p,'w').write(<expr>)`
+    entry now has a sibling.
+
 ### Round (CHK.60) — an enum member is a string or number **LITERAL** in tsc, so its apparent type is the wrapper: **13** false positives removed; and item 2's blast radius mapped and found to be neither the weak rule nor optionality
 
 **THE FP, AND WHY IT IS NOT THE WEAK RULE.** tsc's `TypeFlags.StringLike` is
@@ -1308,171 +1433,6 @@ instance with a base, an ARRAY or any numeric-index receiver, and a bare functio
 reports a missing member on all of them and we do not. The first two are the same object as
 the 43 rows and are blocked on narrowing; the last three are mechanisms (2), (3) and the
 unlocated fourth. Queued as **(CHK.52)**.
-
-### Round (CHK.49) — a module file's own `interface Text` was merged INTO the DOM `Text`, program-wide and in both directions; `jsonrepair` **11 -> 4**
-
-**THE DEFECT, AND THE PART THE QUEUE ITEM DID NOT SAY.** `init:mergeSharedKeepNames` seeded
-itself with `globals.keys` — i.e. with every LIB global name — so a MODULE file's top-level
-declaration of any of them merged into `globals`. Because `mergeSingleSymbol` **ADOPTS**
-(round 884: `globals[name]` IS the binder's object, and the clone half is off by default),
-the merge mutated the LIB symbol itself, so the fusion was visible **program-wide** and not
-only in the declaring file: a file that never mentions `Text` still saw `zzzUnique` on the
-DOM `Text`. That is the sharper statement of the defect and it is what the new
-`a foreign module's shadow does not leak into another file's lib type` pin measures.
-
-**POPULATION CENSUS (measured, not argued).** Lib global names at column 0 of the resolved
-lib set: **132 (es5), 185 (es2020), 207 (esnext), 2,188 (dom), 2,242 (esnext.full)**. Every
-declaration form is affected — measured against tsgo 7.0.2 on a five-way matrix:
-
-| form in a MODULE file | before | tsgo | after |
-|---|---|---|---|
-| `interface Text { zzzUnique }` | TS2345 on its own shape, SILENT on `t.wholeText` | TS2339 on `t.wholeText` | TS2339, matching |
-| `type Text = { zzzUnique }` | TS2353 | TS2339 | TS2339, matching |
-| `class Text { … }` | SILENT on `t.wholeText` | TS2339 | TS2339, matching |
-| `enum Text { A, B }` | ours-only TS2322 `Type 'Text.A' is not assignable to type 'Text'` | silent | silent |
-| `const Text = { zzzUnique }` | `Text` resolved to the DOM **constructor** | `{ zzzUnique: number }` | matching |
-
-**So the item's "it is `interface`-SPECIFIC — a `type` alias of the same name is correct" is
-measured WRONG**; all five forms collide, and the value-space one (`const`) resolves the
-identifier to the lib's `declare var`. Script files are unaffected in both arms, which is
-correct: a global script file's locals ARE the global namespace (INV.3(d)).
-
-**PROFILE CENSUS.** All eight dashboard profiles collide on exactly **`Symbol`**
-(`compiler/types.ts`'s `export interface Symbol`) — the very name the pre-existing comment
-cited as the reason the SHARED merge could not be retired. `services/transpile.ts`'s
-`interface Object` / `interface Array` &c. read as collisions to a naive census and are
-inside a TEMPLATE LITERAL (`barebonesLibContent`), so they are not.
-
-**THE FIX IS TWO EDITS THAT ARE *ONE OBSERVABLE* (round 927), AND EACH ALONE IS WORSE THAN
-THE PAIR.**
-
-  1. `init:mergeSharedKeepNames` no longer seeds itself with the lib key set.
-  2. `computePerFileVisibility` no longer seeds `nonModuleVisible` with `libGlobals.keys`,
-     which drops such a name into `moduleOnlyGlobalNames` and routes it through
-     `perFileScope`.
-
-Measured: **(1) alone = 969 errors on the compiler profile** — round 510's recorded "861 FPs
-when retired naively", reproduced 439 rounds later — and **(2) alone changes nothing**,
-because the merge still corrupts the lib symbol. **Together: 46, unmoved.** No new machinery
-was needed for (2): `buildPerFileScopes` has always seeded every file with the lib globals
-and let the file's own locals override them; only the gate was missing.
-
-**THE HALF THAT IS NOT A SET OPERATION: THE *VALUE* MEANING SURVIVES A TYPE-ONLY SHADOW.**
-tsc resolves a name per MEANING, so `export interface Map<K, V>` hides the lib TYPE and
-leaves `declare var Map: MapConstructor` reachable; this checker has one symbol per name per
-file. `libValueBehindTypeOnlyShadow` restores the value half as a SECOND CHANCE on the
-rejecting path (round 744's discipline — it can only turn a failure into the lib's answer),
-guarded by a normally-EMPTY `libValueShadowNames` set so the ~2 M-identifier path is
-untouched (`cost_gate` reads +0.00% where this round contributes anything).
-
-**AND *WHERE* THAT SECOND CHANCE SITS IS THE WHOLE OF IT — THE FIRST CUT WAS DEAD AND THE
-ABLATION IS WHAT SAID SO.** It was asked inside `getTypeOfIdentifier`'s `currentFileLocals`
-branch, which is BELOW `fileLocalTypeMapFor` — a map keyed by the file's own declarations,
-i.e. by the shadow itself. Arm a3 (both sites removed) read **0 RED of 11 pins and profile
-46**, while `Date.now()` in a module declaring `interface Date` had grown a fresh TS2339 no
-pin covered. Hoisted to just below `currentLocalTypes` / `currentParamBindingNames` — which
-carry genuine inner bindings that DO shadow in both meanings — and the dead lower site
-deleted. That also closed a false positive the PARENT had: `zzzTakes(Date)` against a
-`DateConstructor` was TS2345 on both binaries and is silent now, matching tsgo.
-
-**A PRE-EXISTING GAP FELL OUT OF THE SAME SEAM.** `resolveHeritageBaseSymbol`'s
-`is Identifier -> globals[expr.text]` is a RAW consult, so `class Promise<R> implements
-Promise.Thenable<R>` (bluebirdStaticThis) resolved **only because the name collided with a
-lib global and the merge fused the two**; the identical shape spelled `Zromise` found
-nothing — measured on the PARENT binary, so it was never this round's regression. Node-keyed
-now, like the three heritage sites that call it, and both spellings work.
-
-**GATES.** Suite **16,101 / 0 / 3** (+14, exactly the new class), **zero corpus baselines
-moved in the landed shape**. `cost_gate.py` **PASSES with NO rebaseline**, exit 0:
-`output.errors` **46**, `spine.nodes` +0.00%, `globals.conflated` 0, largest movements
-`narrow.memoServed` **+0.69%** and `typeOfExpr.calls` **+0.59%** — both identical to
-(CHK.32)'s, i.e. this change contributes 0.00% on the compiler profile.
-`huge_methods.py --fail-over 0` exit 0, **783** classes scanned, 0 over limit.
-`partition-equivalence` **EQUIVALENT, all 78**, floor **55 ms** [50, 55, 50, 60] — ONE draw,
-and unlike (CHK.32)'s it carries no leading ramp. `capture-equivalence`
-**1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376** — the
-standing state, unmoved. 8-profile grid, BOTH arms from binaries built in this session, with
-a `javap` positive control (after=1 / before=0 occurrences of `libValueBehindTypeOnlyShadow`):
-**`added=0 removed=0` on all eight**.
-
-**LIBRARIES.** **`jsonrepair` 3.13.1: 11 -> 4 rows**, and the 7 that go are exactly the
-TS2345 `parameter of type 'Text'` family — `export interface Text { charCodeAt }` in
-`src/utils/stringUtils.ts` colliding with the DOM global. The 4 that remain are a
-tsconfig-option row, a TS2366 and two `node:stream` TS2591. **`knip` @ `dc7aca5`: 49 -> 49,
-byte-identical — and that is a CONFIGURATION fact rather than an absence.** knip shadows
-five lib names (`File`, `Performance`, `Plugin`, `Report`, `caches`), every one of them
-DOM-only, and its tsconfig says `"lib": ["esnext"]`; so the defect's population is a
-function of the project's `lib` setting, and knip's exclusion of `dom` is exactly why it was
-immune. That the arm is byte-identical is therefore a control that we honour `lib`, not a
-statement that nothing was wrong.
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT, EACH
-PATCH ANCHOR ASSERTED UNIQUE, AND EACH ARM'S `Checker.class` md5 CHECKED AGAINST THE LANDED
-`c6436bf1…`.**
-
-| arm | injected mistake | RED | profile |
-|---|---|---|---|
-| a0 | the whole change reverted (parent, rebuilt this session; `javap` 0 vs 2) | **5** — every positive pin | 46 |
-| a1 | the lib key set back in the MERGE keep predicate | **5** | 46 |
-| a2 | the lib key set back in `nonModuleVisible` | **5** | **969** |
-| a3 | the value second chance moved back BELOW the file-level type map | **1** | 46 |
-| a3b | the identifier-position second chance deleted outright | **1** | 46 |
-| a4 | the callee-position second chance deleted | **2** — both value pins, uniquely their own | 46 |
-| a5 | the heritage root back to a raw `globals` consult | **2** | 46 |
-| a6 | the alias hop inside the helper dropped | **1** — the IMPORTED value shadow, uniquely its own | 46 |
-| a7 | the helper's two value-meaning refusals dropped | **2** | 46 |
-| a8 | `if (lib === local) return null` dropped | **0** | 46 |
-
-Three readings that are not "all guards discriminate". **a1/a2 are a round-927 PAIR in an
-unusually strong form** — not merely "neither reddens alone" but "each alone is worse than
-the pair", 969 profile errors one way and no fix at all the other; they are ONE observable
-and are documented as such in `mergeSharedKeepNames`' KDoc. **a3/a3b are the same
-observable** (the site is either above the type map or it is nothing), which is why the
-first cut's two sites were deleted rather than kept. **a8 read 0 RED and is DELETED rather
-than shipped un-gateable**: it is provably unobservable — at the identifier site `local`
-comes from a `BinderResult`'s own locals, which never holds the lib symbol, and at the
-callee site the two coincide only for a file that does NOT declare the name, where both
-branches go on to call `getTypeOfSymbol(lib)`. The proof is in the KDoc, not in a claim.
-
-**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **six** positive pins (the two shadow
-directions, the DOM generalisation, the cross-file leak, the per-file heritage root, and the
-argument-position `DateConstructor` row) were run against a parent binary REBUILT IN THIS
-SESSION over byte-identical test source and **all six reported**: parent `Checker.class` md5
-`2ce9dad0…` against the landed `c6436bf1…`, `javap` reading 0 occurrences of the new members
-on the parent and 2 after. The four refusal-direction pins (two value shadows, two
-lib-value-reachable) are green on the parent by construction and their falsifying arms are
-a3/a4/a6/a7 above, each of which names which pin it reddens. **The three pins labelled
-CONTROL are green on every arm and are NOT counted as coverage.**
-
-**A CONTROL THAT WAS NOT A CONTROL, AND HOW IT WAS CAUGHT.** The first draft's
-must-still-merge pin asserted that `declare global { interface Date { zzzUnique } }` in a
-module keeps merging. It FAILED — and it fails identically on the PARENT binary, in the same
-file and across files, so it is a pre-existing gap this round neither causes nor closes.
-Probed three ways: `declare global { var X }` works on both; `declare global { interface Date
-{ … } }` reports TS2339 on both; `declare global { interface ZzzBrandNew { … } }` reports
-TS2304 on both, i.e. a `declare global` INTERFACE does not reach `globals` at all. The pin
-was re-pointed at the `var` form and the interface half is QUEUED as (CHK.50) rather than
-pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-
-  * The merge retire alone (arm a1's inverse) is the obvious first cut and it is a **969-FP**
-    catastrophe; the recorded round-510 refusal was right about the number and wrong about
-    the remedy — what was missing was not "per-file resolution at every lib-name consumer"
-    but ONE set seed, because `perFileScope` had done the work all along.
-  * The value second chance was written in the wrong place and every instrument in this
-    repo except the ablation said it was fine.
-  * The `bluebirdStaticThis` corpus failure looked like this round's regression for an hour
-    and was a pre-existing gap the merge had been papering over. **The tell was renaming the
-    colliding identifier**: an identical shape with a non-colliding name failed on the
-    parent too. That test is the second time this session a name collision has been the
-    diagnosis rather than the mechanism.
-  * `twofile` — the obvious cross-file pin — is VACUOUS: this checker does not report a
-    missing member on the real DOM `Date`/`Text` interface at all (a separate pre-existing
-    gap), so both arms agree on an empty list. The discriminating shape is an ASSIGNMENT.
-    **CORRECTED BY (CHK.51): `Date` DID report and `Text` did not — the axis is HERITAGE,
-    and the lib half is now closed. What is still vacuous is listed under (CHK.52).**
-
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3388,29 +3348,56 @@ pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
      TS2559 `Type 'bigint'` at the key — [Checker.weakSourcePropertyNames]'s `BigIntLike` arm
      does not resolve to an object here. One line, deliberately not taken this round.
 
-- [ ] **(CHK.61) A `this.<MEMBER>` VALUE IS UNCHECKED AT THREE POSITIONS, AND AN OPTIONAL
-  PROPERTY'S `| undefined` IS DROPPED FOR *EVERY* RECEIVER — TWO INDEPENDENT DEFECTS,
-  MEASURED ROW BY ROW IN (CHK.60).** Fixtures `build/chk60/br/b1.ts`, `b2.ts`; oracle
-  tsc 7.0.2.
-  **(a) THE `this` RECEIVER.** `this` is `Identifier("this")` in this parser
-  (`Checker.kt:8090`), so `getTypeOfExpression` types it `any` and every `this.<member>`
-  with it. **It is NOT about optionality and NOT about the weak rule** — a REQUIRED
-  `this.zzzReq: number` assigned to a `string` variable is silent too — and it is per
-  POSITION: **silent** at a var-decl initializer, at an assignment RHS, at a `return` from
-  an annotated method, and for the nullish-access checks (TS2532, and a whole
-  `string | undefined -> string` row); **present** in ARGUMENT position and for TS2722.
-  The controls are in the same method body: a plain outer name and `zzzObj.zzzReq` both
-  report from inside the method and `zzzInst.zzzReq` reports at file level, so it is the
-  RECEIVER and not the method-body position. **The carrier already exists** —
-  `currentClassForThis` + `resolveUncalledThisType`, which (API.3d) built for
-  go-to-definition and which `typeCaptureVisit` reconstructs by ascent — so the work is
-  reaching it from `getTypeOfExpression`, not inventing it. **PRICE IT FIRST**: this ADDS
-  diagnostics, so the profiles, both libraries and the ~13k corpus are all at risk;
-  `this.<member>` in a checked position is everywhere in real code.
-  **(b) THE DROPPED `| undefined`, WHICH IS NOT `this`-SPECIFIC.** `zzzInst.zzzOpt` reports
-  `Type 'number'` where tsc says `'number | undefined'`, and `zzzInst.zzzOptStr` against a
-  `string` target goes MISSING entirely because `string -> string` then passes. Four rows
-  on an ORDINARY receiver, so closing (a) alone does not close it.
+- [ ] **(CHK.61) THE `this` RECEIVER AND THE DROPPED `| undefined` — BOTH **BUILT AND
+  PRICED** IN (CHK.61c/d), BOTH REFUSED ON THE SAME GROUND: EACH UNMASKS PRE-EXISTING
+  ENGINE GAPS AS **DASHBOARD FALSE POSITIVES**, AND EACH GAP IS NAMED BELOW WITH A
+  `this`-FREE REPRO.** Neither is a design question any more; what is left is the named
+  list. Probe patches: `build/chk61/patch_a.py`, `build/chk61/patch_b.py`.
+  **(a) THE `this` RECEIVER — one line, and it works.** `computeRawTypeOfPropertyAccess`'s
+  `getTypeOfExpression(expr.expression)` answers `any` for `Identifier("this")`; taking
+  `currentClassForThis?.let { resolveUncalledThisType(it) }` first closes **every** row
+  (CHK.60) measured — `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to **all 7**, and
+  `b1.ts` gains the three var-decl rows. **MEASURED PRICE: corpus GREEN (once (CHK.61c) is
+  in the tree), `knip` 48 and `jsonrepair` 4 BYTE-IDENTICAL, compiler profile 46 -> 46, and
+  +4 harness / +2 server rows** (grid `56c6b1e04100a8ae0bcfba9bff323865`). All six are
+  FALSE POSITIVES from FOUR pre-existing gaps the `any` was hiding, none `this`-specific:
+  1. **AN INTERSECTION SOURCE IS NEVER MERGED** (`client.ts:356`) —
+     `structuredTypeRelatedTo`'s rule is "SOME constituent relates", so
+     `ZzzBase & { zzzEndLine: number }` fails `ZzzFmt` where each half contributes.
+     Repro `build/chk61/p3/a.ts` line 4, no `this` in it. **AN ACCEPTANCE LEG WAS BUILT AND
+     REVERTED**: `intersectionMergedSatisfiesTarget` (the symmetric twin of
+     `intersectionMergedContradictsTarget`) closes that row and ADDS
+     `callHierarchy.ts:199 'parent' does not exist on type 'never'` on TWO profiles,
+     because an acceptance in the relation feeds `typeGuardMemberDisjoint` and narrows to
+     `never` — **so "acceptance-only cannot add a diagnostic" is FALSE in this codebase.**
+  2. **A SHORTHAND OBJECT-LITERAL PROPERTY DOES NOT FLOW-NARROW**
+     (`editorServices.ts:4449`, 2 profiles) — `return { project, … }` where `project` is
+     `T | undefined` narrowed to `T` by the enclosing `switch` + `Debug.assertNever`.
+  3. **A FUNCTION-TYPE PROPERTY'S PARAMETERS ARE COMPARED COVARIANTLY**
+     (`project.ts:2277`, 2 profiles) — `readDirectory: CompilerHost["readDirectory"]` is a
+     PROPERTY, not a method, and `include?: readonly string[] | undefined` vs
+     `includes: readonly string[]` relates only contravariantly. The METHOD form is
+     already correct (`build/chk61/p3/a.ts` lines 10-11 are silent).
+  4. **AN OBJECT LITERAL LOSES A SPREAD'S MEMBERS** (`client.ts:242`) —
+     `{ ...this.zzzM(), insertString }` reports TS2739 for the five the spread supplies.
+  **(b) THE DROPPED `| undefined` — also one line, and (CHK.61d) already removed 84% of its
+  price.** Adding `| undefined` at `computeRawTypeOfPropertyAccess`'s three `prop != null`
+  returns cost **19** rows on the compiler profile BEFORE (CHK.61d) and **3** after it; the
+  17 that vanished were all the `host.readDirectory!(…)` class. The residue is FIVE
+  NARROWING gaps, every one a property-access reference: `checker.ts:30269:86` (an `&&`
+  chain `a && x.p !== undefined && x.p < 0`), `moduleNameResolver.ts:824` (an outer
+  `if (host.f && host.g)` surviving into a nested `for` + inner `if`),
+  `moduleNameResolver.ts:2265` (a three-deep chain), `project.ts:502`/`528` and
+  `vfsUtil.ts:1034`. **DO NOT re-price (b) without (CHK.61d) in the tree** — that is the
+  difference between 19 and 3. Two shapes are already CORRECT and need nothing: `?.` and an
+  `if (o.p)` guard. **AND (b)'s DISPLAY-ONLY CONFINEMENT IS NOT FREE**: hover for
+  `zzzInst.zzzOpt` says `number` where tsc says `number | undefined`, but adding the
+  constituent in `typeCapturePropertyAccessType` alone renders `number | undefined` INSIDE
+  an `if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type
+  that is ALREADY a union — a confined fix must add the constituent and then re-run
+  `getNarrowedTypeForReference`, reproducing the checking path's order.
+  **SEQUENCING**: close 1-4 (each is `this`-free and has a repro), then land (a); (b) needs
+  its five narrowing gaps first, and they may share one cause.
 
 - [ ] **(CHK.61b) THE ENUM RESIDUE AFTER (CHK.60) — FIVE ITEMS, EACH WITH ITS MEASURED ROW.**
   1. **AN UNEVALUATED ENUM MEMBER IS STILL REFUSED**: `enum E { A = zzzNonConst }` against
