@@ -1474,6 +1474,43 @@ pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
     and the lib half is now closed. What is still vacuous is listed under (CHK.52).**
 
 
+- [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
+  ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
+  ONE n-BODY BY ADDING ONE ANNOTATION (2026-08-27, the scriptc head-to-head).** `const bi =
+  bodies[i]` where `bodies: Particle[]` gives the local a type the lowering reads as the bag,
+  so the hot loop compiles to **20 `jsGet` + 9 `jsSet`** per inner iteration — reflection on
+  the JVM — while `const bi: Particle = bodies[i]` compiles to 0 dynamic ops on the SAME
+  program with the SAME sink. The class already has real `double` fields; only the RECEIVER's
+  type is lost, so this is an oracle/lowering gap and not a representation one. **It is the
+  largest single KIR performance lever measured to date and no gate here can see it** — the
+  sink is identical, the corpus is untouched, `kir-bench.sh` gates output and not shape.
+  Instrument: `javap -p -c -cp <out> program.MainKt | grep -c 'jsGet\|jsSet'`, which must be
+  0 for a program whose every receiver has a declared class type. Ask whether
+  `ErasedTypes`/the oracle answers `JsArray<T>`'s element type at an `ElementAccessExpression`
+  at all, or whether `getTypeOfElementAccess` is the (CHK.30) narrowing gap one layer down.
+  Pin it as a SHAPE assertion (count the dynamic ops in the emitted bytecode), never as a
+  wall figure.
+
+- [ ] **(KIR.LOWER.4) `this.<member> = e` IN A CONSTRUCTOR LOWERS TO `jsSet`, WHICH IS
+  REFLECTION ON THE JVM AND **THROWS** ON KOTLIN/NATIVE — AND PARAMETER PROPERTIES ARE
+  REFUSED OUTRIGHT, WHERE `docs/kir-design.md` §7 SAYS THEY EXPAND TO A FIELD-ASSIGNMENT
+  PROLOGUE (2026-08-27).** Measured: `class Particle { x: number = 0; constructor(x: number)
+  { this.x = x } }` emits `jsSet(this, "x", box(x))` beside a real `public double x`, and the
+  native binary dies with `JsTypeError: dynamic member write 'x' is not supported on
+  Kotlin/Native` inside `<init>`. `constructor(public x: number)` fails the compile
+  (`KIR_SUCCESS=false`). This is design-doc contradiction (1) — "`this` types as `any`" —
+  never closed on the WRITE side; §7 fixed reads by taking the property's type on the CLASS
+  and the same answer is available here. **A class with a constructor is unrunnable on the
+  native arm until this lands**, which is why the n-body fixture needed a factory function.
+
+- [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
+  NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
+  `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,
+  so a user `main` makes it TWO and the `?: error(...)` reports absence where the truth is
+  ambiguity. The lowering already renames every generated top-level declaration
+  `f<index>_<name>` to avoid serializer collisions — the entry should be found by that
+  identity rather than by spelling, and the error message should name the collision.
+
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
   383+845 = 1,228; the +10 are entries distilled in place, full text archived). Moved: ~47

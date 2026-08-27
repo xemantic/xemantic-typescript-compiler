@@ -570,24 +570,80 @@ So §3.4's decision stands unchanged, and its reasoning is now corroborated from
 a fourth direction: the closure is an optimization over a total dynamic
 mechanism, never a totality requirement.
 
-### 10.4 The comparison that does not meet
+### 10.4 Measured, head to head — 2026-08-27
 
-The two projects publish numbers about different quantities, and it is worth
-saying so rather than implying a ranking:
+The first version of this section said the two projects' published numbers do not
+meet. They do now: both compilers were run on ONE box over ONE program.
 
-- scriptc quotes **deployment**: a ~320 KB hello-world binary starting in ~4 ms,
-  against Node's ~120 MB runtime and ~35 ms. No steady-state throughput figure
-  appears on the three pages read.
-- this backend quotes **throughput only**, within-round against `tsgo -> node`
-  (`docs/perf/kir-backend-levers.md` §§ 2b, 6):
+**Read the box first.** This was measured on a **Mac mini M1 (arm64, 8 cores,
+16 GB, macOS 25.5)**, which is NOT the Linux box every figure in
+`docs/perf/kir-backend-levers.md` comes from. Nothing here is comparable to a
+number in that document; everything here is comparable to the other arms of the
+same run. scriptc is **0.0.35** from npm, LLVM backend, default (static) tier.
+The harness is `bench.py`-shaped: arms INTERLEAVED rather than run in blocks, a
+warm-up discarded, and every arm's stdout compared — a faster arm that prints
+something different is refused, not reported.
 
-| | node | xtsc → JVM | xtsc → Kotlin/Native |
-|---|---:|---:|---:|
-| mitt, 4M emits | 82.25 ns/emit | **54.50** (1.54× faster) | 354.75 (4.31× slower) |
-| smol-toml, 20k parses | 22.20 µs/parse | 33.65 (1.52× slower) | 126.55 (5.70× slower) |
+**Fixture 1 — hello world, process startup.** All four arms print
+`hello 42 true`; 21 interleaved reps.
 
-On startup and binary size this backend is not in the same conversation, and on
-a managed runtime it does not need to be.
+| arm | median | min | max | binary |
+|---|---:|---:|---:|---:|
+| scriptc → native | **3.6 ms** | 3.0 | 4.5 | 397,576 B |
+| xtsc → Kotlin/Native | 6.4 ms | 5.5 | 7.6 | 576,592 B |
+| xtsc → JVM | 60.6 ms | 54.3 | 91.8 | — |
+| node 26.3 | 77.6 ms | 72.7 | 81.6 | — |
+
+scriptc's published "~320 KB, ~4 ms" REPLICATES — 388 KB and 3.6 ms here. Ours
+is the same order of magnitude on both: **1.8× its startup and 1.45× its size**,
+and both native arms are an order of magnitude under the JVM and under node.
+This is the axis where a native target is simply the right answer, and the
+distance between the two native arms is small.
+
+**Fixture 2 — n-body, 5 bodies, 2M steps, throughput.** Pure `Double`
+arithmetic, one class with seven number fields, a hand-written Newton `sqrt`
+(scriptc has no static `Math.sqrt` at 0.0.35 — it routes to the dynamic engine,
+`SC2012`, so a shared fixture cannot use it). All four arms print
+`-0.16659679037015981`; 5 interleaved reps.
+
+| arm | median | min | max | binary |
+|---|---:|---:|---:|---:|
+| node 26.3 | **883 ms** | 806 | 956 | — |
+| xtsc → JVM | 1,038 ms | 993 | 1,098 | — |
+| scriptc → native | 1,619 ms | 1,460 | 1,673 | 397,736 B |
+| xtsc → Kotlin/Native | 2,310 ms | 2,230 | 2,348 | 1,161,408 B |
+
+Ranges are disjoint between every neighbouring pair. Two readings, and the
+second is the one worth keeping:
+
+- **V8 wins this workload**, and a native binary is not automatically faster
+  than a JIT at steady state — scriptc's own native output is **1.83× slower
+  than node** here, on a fixture chosen to be as friendly to static compilation
+  as TypeScript gets. Their headline is deployment, and it is a real and
+  well-supported headline; it is not a throughput claim, and this measurement is
+  the reason not to read it as one.
+- **The JVM arm is 1.56× faster than scriptc's native arm**, which is § 10.6's
+  point stated as data rather than as an argument: on a managed runtime the
+  dynamic representation is affordable, and the same lowering emitted for a
+  native target costs 2.2× against its own JVM output.
+
+**Fixture 3 — a real library, and it is the sharpest result of the three.**
+`smol-toml` (1,082 lines, the same tree `kir-bench.sh` uses) compiles and runs
+on all four of this backend's arms. scriptc **refuses it**: `coverage` reports
+85% of statements static and `build` stops at **33 errors** — an intersection
+that "resolves to no runtime shape" (`SC2008`), a union whose `bigint` arm does
+not compile (`SC2009`), a `TomlTable` index signature "outside the supported
+shape" (`SC2006`), `extends Date` (`SC1090`), `Object.defineProperty` and
+`String.fromCodePoint` unlowered (`SC2020`), and compound assignment in
+expression position (`SC1090`).
+
+**And `--dynamic` does not rescue it — it reports the same 33 errors.** That
+corrects the reading of the tier model in § 10.2: the dynamic tier is for npm's
+shipped JavaScript and `any`-typed code, NOT a fallback for TypeScript source
+the static tier rejected. So tier 3 is a genuine refusal, and the static tier is
+a language SUBSET with representation constraints — index signatures and
+intersections among them, which is exactly the population § 3.4 declines to
+encode nominally and hands to the bag.
 
 ### 10.5 Where scriptc is ahead, plainly
 
@@ -620,3 +676,37 @@ dominates there.
 The direction scriptc structurally does not have is §9's: a checked TypeScript
 library's public API exported as a Kotlin metadata klib, so a Kotlin
 Multiplatform consumer can call it. A native binary has no such story to tell.
+
+### 10.7 What running both compilers found in THIS one
+
+Building a fixture two compilers would both accept is a differential in its own
+right, and it found four defects here — none of which any gate in this
+repository can see, because every one of them leaves the sink identical.
+
+1. **An element access loses the element type, and it is worth 33×.** `const bi
+   = bodies[i]` over `bodies: Particle[]` gives the local a type the lowering
+   reads as the bag, so the n-body hot loop compiled to **20 `jsGet` + 9 `jsSet`
+   per inner iteration** — reflection on the JVM. Adding ONE annotation, `const
+   bi: Particle = bodies[i]`, takes the same program from **30.7 s to 0.94 s**
+   with zero dynamic operations and a byte-identical sink. The class already had
+   real `double` fields; only the receiver's type was lost. Queued as
+   (KIR.LOWER.3), and every throughput figure in § 10.4 is measured AFTER it —
+   without the annotation this backend is 19× slower than scriptc rather than
+   1.56× faster.
+2. **`this.x = x` in a constructor lowers to `jsSet`**, beside the real field —
+   reflection on the JVM, and a hard `JsTypeError` on Kotlin/Native, so a class
+   with a constructor is unrunnable there. Parameter properties, which § 7 of
+   this document says expand to a field-assignment prologue, are refused
+   outright. (KIR.LOWER.4).
+3. **A program declaring its own `function main()` fails the native build** with
+   "the lowering produced no entry point" — `singleOrNull` finding two.
+   (KIR.NATIVE.2).
+4. **`class Body` merges with the DOM lib global `Body`**, so `const b: Body =
+   new Body()` reports TS2740 naming `bodyUsed`, `arrayBuffer`, `blob`. That is
+   the (CHK.49) family with a name nobody had tried; `Body` joins `top`, `name`,
+   `files`, `Text` and `Event` on the list of names a fixture must avoid.
+
+The instrument for the first two is one command and it belongs in any future KIR
+performance work: `javap -p -c -cp <out> program.MainKt | grep -c 'jsGet\|jsSet'`
+must be **0** for a program in which every receiver has a declared class type.
+A wall-clock A/B cannot find these — 30.7 s and 0.94 s are both "it works".
