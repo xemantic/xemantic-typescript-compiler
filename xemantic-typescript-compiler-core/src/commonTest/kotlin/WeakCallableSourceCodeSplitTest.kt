@@ -189,15 +189,23 @@ class WeakCallableSourceCodeSplitTest {
     }
 
     /**
-     * CONTROL — PRISTINE tsc's OWN `weakType.ts` SHAPE, an INFERRED return type this
-     * compiler does not resolve on the signature (which is why
-     * [Checker.weakFunctionDisplay] exists to render it). tsc 7.0.2 over `w8.ts`:
-     * TS2560 at `(6,7)`. An unresolved or `any` result answers TRUE, so the split can
-     * only ever narrow 2560 to 2559 where disjointness is PROVED — this is the pin that
-     * says the ACTIVE `weakType.errors.txt` rows cannot move.
+     * CONTROL — PRISTINE tsc's OWN `weakType.ts` SHAPE (`getDefaultSettings`), an
+     * INFERRED return type rather than an annotated one. tsc 7.0.2 over `w8.ts`:
+     * TS2560 at `(6,7)`, and this is the shape whose ACTIVE `weakType.errors.txt` rows
+     * the split must not move.
+     *
+     * **IT DOES NOT PIN WHAT ITS NAME FIRST CLAIMED, AND THAT WAS MEASURED**: arms b3
+     * (an unresolved result answers false) and b3b (an `any` result answers false) BOTH
+     * read 0 RED against it, because this compiler DOES resolve the inferred return type
+     * here — so the pin travels the same ordinary-relation path as the second test in
+     * this class. The two conservative legs of
+     * [Checker.weakCallResultSatisfiesTarget] are therefore UNDISCRIMINATED by every
+     * input in this class; they are kept as a fail-safe (they can only ever keep a
+     * TS2560 that this compiler already emitted) and are explicitly NOT claimed as pin
+     * coverage (round 807).
      */
     @Test
-    fun `an unresolved inferred return type keeps TS2560`() {
+    fun `the pristine inferred-return shape keeps TS2560`() {
         val d = diagnose("""
             interface ZzzS8 { zzzT?: number; zzzE?(): void }
             function zzzD8() {

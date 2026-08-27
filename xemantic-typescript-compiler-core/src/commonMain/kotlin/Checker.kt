@@ -114896,9 +114896,12 @@ interface DataView {
      * [weakParamRefusesArg] veto in front of it.
      *
      * An UNRESOLVED (`null`) or `any` return type answers TRUE — `any` is related to
-     * everything, and an unresolved one is exactly the pristine `weakType.ts`
-     * `getDefaultSettings` shape whose baseline row IS 2560 — so this can only ever
-     * narrow 2560 to 2559 where the disjointness is PROVED, never the other way.
+     * everything — so this can only ever narrow 2560 to 2559 where the disjointness is
+     * PROVED, never the other way. **Both of those legs are UNDISCRIMINATED**: arms b3
+     * and b3b (each making one of them answer false) read 0 RED, because the pristine
+     * `getDefaultSettings` shape they were written for RESOLVES its inferred return
+     * type here and travels the ordinary path. They are a fail-safe, kept and recorded
+     * as such rather than claimed as covered (round 807).
      */
     private fun weakCallResultSatisfiesTarget(
         callSigs: List<Signature>, constructSigs: List<Signature>, targetType: Type,
