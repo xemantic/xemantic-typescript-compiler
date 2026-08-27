@@ -115314,6 +115314,17 @@ interface DataView {
         // (2) enum-member access `E.A` (typed as anyType by getTypeOfExpression):
         // use the enum's primitive base for source-name enumeration, display the enum.
         enumMemberWeakSource(init)?.let { return it }
+        // (4) (CHK.58) `new C(...)`: the instance type, named by itself. Measured on
+        // tsc 7.0.2 (`build/chk58/ora4/y2.ts`), a class-instance source reports at a
+        // VAR DECL exactly as it already did at a call ARGUMENT — the two positions
+        // were asymmetric only because this classifier had no `new` branch.
+        // `weakSourcePropertyNames` answers null for a `Type.Reference`, so a GENERIC
+        // instantiation still bails rather than guessing at its members.
+        if (init is NewExpression) {
+            val st = getTypeOfExpression(init)
+            if (st === errorType || st === anyType) return null
+            return st to typeToString(st)
+        }
         // (3) a primitive literal: wrapper apparent type for names, literal for display.
         literalTypeOfExpression(init)?.let { lit ->
             val base: Type = when {
