@@ -123292,6 +123292,19 @@ interface DataView {
             resolveStructuredTypeMembers(t)
             (t.properties ?: emptyList()).filter { !isOptionalProperty(it) }.associateBy { it.name }
         }
+        // (CHK.62) An INTERSECTION spread contributes the UNION of its constituents'
+        // guaranteed props — `{ ...mk(), insertString }` where `mk(): FileLocationRequestArgs
+        // & { endLine: number; endOffset: number }` (tsc harness client.ts:242) supplied NONE
+        // of them, so the literal reported TS2739 for five properties the spread does provide.
+        // Dual of the `Type.Union` arm above: a union guarantees only what EVERY constituent
+        // has, an intersection guarantees what ANY constituent has. First-wins on a name two
+        // constituents both declare (tsc intersects the two member types; the presence half —
+        // which is all the TS2739/TS2783 consumers read — is the same either way).
+        is Type.Intersection -> {
+            val out = symbolTable()
+            for (c in t.types) for ((n, sym) in spreadGuaranteedProps(c)) if (out[n] == null) out[n] = sym
+            out
+        }
         else -> emptyMap()
     }
 
