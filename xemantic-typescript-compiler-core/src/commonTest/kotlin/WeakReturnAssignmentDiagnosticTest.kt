@@ -338,26 +338,27 @@ class WeakReturnAssignmentDiagnosticTest {
     }
 
     /**
-     * REFUSAL — an ENUM-MEMBER source. tsc 7.0.2 reports TS2559 naming the MEMBER
-     * (`q08.ts(2,54)` / `q08.ts(4,1)`: `Type 'ZzzQ08.A' has no properties in common
-     * with type '{ … }'`); [Checker.getTypeOfExpression] answers `any` for `E.A`, so
-     * the weak path never sees it and the pre-existing TS2322 — which already carries
-     * tsc's source and target DISPLAY and differs only in the CODE — survives
-     * unchanged. (CHK.58) item 4. This pin records the divergence; it is not coverage.
+     * (CHK.59) THE ENUM-MEMBER SOURCE, **CLOSED** — a refusal pin until this round.
+     * tsc 7.0.2 over `build/chk59/pin/q08.ts`: `(2,54)` at the `return` keyword and
+     * `(4,1)` at the LHS, TS2559 naming the MEMBER. The parent emitted TS2322 with the
+     * right display and the wrong code. The member-COUNT boundary and the CALL-ARGUMENT
+     * position live in [WeakEnumSourcePositionsTest].
      */
     @Test
-    fun `refusal - an enum member source keeps the pre-existing TS2322`() {
+    fun `an enum member source reports TS2559 in both positions`() {
         val d = diagnose("""
             enum ZzzQ08 { A = "a", B = "b" }
             function zzzQ08f(): { zzzA?: null; zzzF?: string } { return ZzzQ08.A; }
             let zzzQ08v: { zzzA?: null; zzzF?: string } = {}
             zzzQ08v = ZzzQ08.A
         """)
-        assert(d.map { it.code } == listOf(2322, 2322))
+        assert(d.map { it.code } == listOf(2559, 2559))
         assert(d.all {
-            it.message == "Type 'ZzzQ08.A' is not assignable to type " +
+            it.message == "Type 'ZzzQ08.A' has no properties in common with type " +
                 "'{ zzzA?: null | undefined; zzzF?: string | undefined; }'."
         })
+        assert(d.map { it.line } == listOf(2, 4))
+        assert(d.map { it.character } == listOf(54, 1))
     }
 
     /**

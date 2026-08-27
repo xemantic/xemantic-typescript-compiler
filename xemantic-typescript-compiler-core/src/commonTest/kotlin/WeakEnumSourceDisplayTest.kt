@@ -125,21 +125,55 @@ class WeakEnumSourceDisplayTest {
     }
 
     /**
-     * MEASURED RESIDUE, not coverage — an enum-member source at a CALL ARGUMENT is
-     * SILENT here where tsc 7.0.2 reports `e1.ts(10,6): error TS2559: Type 'ZzzE2.A'
-     * has no properties in common with type '{ zzzNope?: any; }'.` The argument walker
-     * types its argument through [Checker.getTypeOfExpression], which answers `any` for
-     * `E.A` and is skipped before the weak rule is reached; only the var-decl walker
-     * carries the AST-side classification. This pin records the hole so a future round
-     * that closes it is told by a red pin rather than by a moved baseline.
+     * (CHK.59) THE CALL-ARGUMENT POSITION, **CLOSED** — this was (CHK.58)'s residue pin
+     * and it did its job: the round that closed the hole was told by a red pin rather
+     * than by a moved baseline. tsc 7.0.2 over `build/chk59/pin/e5.ts`: `(3,7)`, TS2559
+     * naming `'ZzzE5.A'`.
+     *
+     * (CHK.58) attributed the silence to [Checker.getTypeOfExpression] answering `any`;
+     * measured, the real cause is one step further on — `E.A` arrives as a member-LESS
+     * [Type.Object] (every enum-flavoured type is one), so [Checker.weakSourcePropertyNames]
+     * enumerates it to the EMPTY set and [Checker.tryEmitWeakTypeAssignment]'s
+     * vacuous-`{}` guard refused it. The AST classifier is now consulted at that guard,
+     * which closes the argument, return and assignment positions in one place.
      */
     @Test
-    fun `residue - an enum member argument is silent where tsc reports TS2559`() {
+    fun `an enum member argument reports TS2559 naming the member`() {
         val d = diagnose("""
             enum ZzzE5 { A = "A", B = "B" }
-            declare function zzzF5(o: { zzzNope?: any }): void;
+            declare function zzzF5(o: { zzzNope?: string }): void;
             zzzF5(ZzzE5.A);
         """)
-        assert(d.none { it.code == 2559 || it.code == 2560 })
+        assert(d.map { it.code } == listOf(2559))
+        assert(d[0].message == "Type 'ZzzE5.A' has no properties in common with type " +
+            "'{ zzzNope?: string | undefined; }'.")
+        assert(d[0].line == 3)
+        assert(d[0].character == 7)
+    }
+
+    /**
+     * MEASURED RESIDUE, NOT COVERAGE, AND NOT THE WEAK RULE — an OPTIONAL `any`
+     * property renders `zzzNope?: any | undefined` where tsc renders `zzzNope?: any`,
+     * because `any` ABSORBS `undefined` in tsc's union construction and our
+     * [Checker.getUnionType] does not reduce that pair. It is a [Checker.typeToString]
+     * divergence visible from every position that renders a target through the TYPE
+     * rather than through the ANNOTATION — the var-decl pins above are byte-exact only
+     * because their walker renders `formatTypeForDisplay(ann)`, i.e. the annotation's
+     * own text. tsc 7.0.2 over `build/chk59/pin/e5.ts` line 5:
+     * `(5,7): Type 'ZzzE5.A' has no properties in common with type '{ zzzNope?: any; }'`.
+     * Left alone deliberately: union member text is pinned byte-for-byte across ~13k
+     * baselines, so reducing `any | undefined` is a logical-parity conversation of its
+     * own and not a weak-rule fix.
+     */
+    @Test
+    fun `residue - an optional any property renders any or undefined where tsc renders any`() {
+        val d = diagnose("""
+            enum ZzzE5 { A = "A", B = "B" }
+            declare function zzzF6(o: { zzzNope?: any }): void;
+            zzzF6(ZzzE5.A);
+        """)
+        assert(d.map { it.code } == listOf(2559))
+        assert(d[0].message == "Type 'ZzzE5.A' has no properties in common with type " +
+            "'{ zzzNope?: any | undefined; }'.")
     }
 }

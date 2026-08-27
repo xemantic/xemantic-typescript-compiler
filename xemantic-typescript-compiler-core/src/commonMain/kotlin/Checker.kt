@@ -114832,20 +114832,44 @@ interface DataView {
         source: String, fileName: String, displayType: Type = argType,
         targetDisplay: String? = null, srcDisplayOverride: String? = null,
         callAnchorStart: Int = -1, callAnchorLength: Int = 0,
+        srcNode: Expression? = null,
     ): Boolean {
         if (length <= 0) return false
         val tgtProps = weakTargetProperties(targetType) ?: return false
         if (tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) return false
         val tgtNames = tgtProps.map { it.name }.filter { it.isNotEmpty() }.toSet()
         if (tgtNames.isEmpty()) return false
-        val srcNames = weakSourcePropertyNames(argType) ?: return false
         // An EMPTY source (`{}`) is vacuously assignable to an all-optional weak
-        // target — tsc emits nothing (`var x: AllOptional = {}`). Guard against it.
-        if (srcNames.isEmpty()) return false
+        // target — tsc emits nothing (`var x: AllOptional = {}`) — and an
+        // UNENUMERABLE one (null) is the conservatism that keeps a missed property
+        // from becoming a false TS2559. **EXCEPT for an ENUM MEMBER.**
+        //
+        // (CHK.59) `E.A` reaches here as a member-LESS `Type.Object` (every enum-
+        // flavoured type is one), so it enumerates to the EMPTY set and this guard
+        // refused it — which is why the rule fired at a var DECL, whose walker carries
+        // the AST-side [enumMemberWeakSource], and at no other position. tsc types
+        // `E.A` by its enum-LITERAL type, whose apparent type is the `String`/`Number`
+        // wrapper, so the property set it compares is the wrapper's. Consulting the
+        // AST classifier HERE — after the target is known weak and the source has come
+        // back unusable — puts the cost where nothing else pays it and closes the
+        // argument, return and assignment positions in one place. The DISPLAY is
+        // (CHK.58)'s and unchanged: `E.A` for a multi-member enum, the enum's own name
+        // for a one-member one, because for one member the literal type IS the enum.
+        val srcNames0 = weakSourcePropertyNames(argType)
+        var effArg = argType
+        var srcOverride = srcDisplayOverride
+        var srcNames = srcNames0
+        if (srcNames.isNullOrEmpty()) {
+            val enumSrc = srcNode?.let { enumMemberWeakSource(it) } ?: return false
+            effArg = enumSrc.first
+            srcOverride = srcDisplayOverride ?: enumSrc.second
+            srcNames = weakSourcePropertyNames(effArg)
+            if (srcNames.isNullOrEmpty()) return false
+        }
         if (tgtNames.any { it in srcNames }) return false
-        val callSigs = getCallSignaturesOfType(argType)
-        val constructSigs = getConstructSignaturesOfType(argType)
-        val srcStr = srcDisplayOverride ?: weakFunctionDisplay(argType) ?: typeToString(displayType)
+        val callSigs = getCallSignaturesOfType(effArg)
+        val constructSigs = getConstructSignaturesOfType(effArg)
+        val srcStr = srcOverride ?: weakFunctionDisplay(effArg) ?: typeToString(displayType)
         val tgtStr = targetDisplay ?: typeToString(targetType)
         if (weakCallResultSatisfiesTarget(callSigs, constructSigs, targetType)) {
             // (CHK.59) THE ANCHOR MOVES WITH THE CODE, AND ONLY THE 2560 BRANCH MOVES.
@@ -115168,11 +115192,12 @@ interface DataView {
         val cLen = expressionTrueEnd(value) - cStart
         if (tryEmitWeakTypeAssignment(srcType, targetType, start, length,
                 source, fileName, displayType = display,
-                callAnchorStart = cStart, callAnchorLength = cLen)) return true
+                callAnchorStart = cStart, callAnchorLength = cLen,
+                srcNode = value)) return true
         val cons = weakUnionRefusalConstituent(srcType, targetType) ?: return false
         return tryEmitWeakTypeAssignment(srcType, cons, start, length,
             source, fileName, displayType = display,
-            callAnchorStart = cStart, callAnchorLength = cLen)
+            callAnchorStart = cStart, callAnchorLength = cLen, srcNode = value)
     }
 
     /**
@@ -157184,7 +157209,8 @@ interface DataView {
             ArgSections.at(ArgSections.L_WEAK)
             if (tryEmitWeakTypeAssignment(argType, weakTarget, arg.pos,
                     weakArgEnd - arg.pos, source, fileName,
-                    displayType = literalTypeOfExpression(arg) ?: argType)) {
+                    displayType = literalTypeOfExpression(arg) ?: argType,
+                    srcNode = arg)) {
                 continue
             }
             // (CHK.57): the same rule DISTRIBUTED over a union parameter
@@ -157197,7 +157223,8 @@ interface DataView {
                 val weakUnionCons = weakUnionRefusalConstituent(argType, weakTarget)
                 if (weakUnionCons != null && tryEmitWeakTypeAssignment(argType, weakUnionCons,
                         arg.pos, weakArgEnd - arg.pos, source, fileName,
-                        displayType = literalTypeOfExpression(arg) ?: argType)) {
+                        displayType = literalTypeOfExpression(arg) ?: argType,
+                        srcNode = arg)) {
                     continue
                 }
             }
