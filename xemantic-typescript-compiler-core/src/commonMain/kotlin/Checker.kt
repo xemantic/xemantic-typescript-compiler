@@ -115328,7 +115328,20 @@ interface DataView {
         return null
     }
 
-    /** B482: `E.A` where E is an enum → (string/number base for names, enum name). */
+    /**
+     * B482: `E.A` where E is an enum → (string/number base for names, the DISPLAY).
+     *
+     * (CHK.58) THE DISPLAY IS `E.A` FOR A MULTI-MEMBER ENUM AND `E` FOR A ONE-MEMBER
+     * ONE, AND BOTH ARE THE SAME tsc RULE. tsc names the enum-LITERAL type; when the
+     * enum declares exactly one member, that literal type IS the enum type and
+     * `typeToString` prints the enum's own name. This helper printed `E` always, which
+     * agreed with the only baseline that gates it — pristine's
+     * `nestedExcessPropertyChecking.errors.txt` line 17, `Type 'E'`, whose
+     * `enum E { A = "A" }` has exactly ONE member — and diverged silently everywhere
+     * else. Measured on tsc 7.0.2 over `build/chk58/ora3/e1.ts`: a two-member string
+     * enum and a two-member NUMERIC enum both render `E.A`, a one-member enum of
+     * either flavour renders `E`.
+     */
     private fun enumMemberWeakSource(init: Expression): Pair<Type, String>? {
         if (init !is PropertyAccessExpression) return null
         val baseId = init.expression as? Identifier ?: return null
@@ -115337,7 +115350,9 @@ interface DataView {
         val member = sym.exports?.get(init.name.text) ?: return null
         val memberDecl = member.declarations.firstOrNull { it is EnumMember } as? EnumMember
         val isString = memberDecl?.initializer is StringLiteralNode
-        return (if (isString) stringType else numberType) to baseId.text
+        val display = if ((sym.exports?.size ?: 0) <= 1) baseId.text
+        else baseId.text + "." + init.name.text
+        return (if (isString) stringType else numberType) to display
     }
 
     /**
