@@ -8325,9 +8325,54 @@ class Checker(
     private fun typeCapturePropertyAccessType(access: PropertyAccessExpression): Type {
         val receiver = access.expression
         if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
-            typeCaptureThisMemberType(receiver, access.name.text)?.let { return it }
+            typeCaptureThisMemberType(receiver, access.name.text)
+                ?.let { return typeCaptureOptionalMemberType(access, it) }
         }
-        return getTypeOfExpression(access)
+        return typeCaptureOptionalMemberType(access, getTypeOfExpression(access))
+    }
+
+    /**
+     * (CHK.61)(b), DISPLAY HALF — an OPTIONAL property's access type carries
+     * `| undefined`, and then narrows.
+     *
+     * [computeRawTypeOfPropertyAccess] answers a member's DECLARED type and nothing
+     * else, so `o.p` where `p?: number` types `number` everywhere: tsc says
+     * `number | undefined`, and a hover is therefore a confident wrong answer rather
+     * than a missing one. Adding the constituent at the resolution itself is
+     * MEASURED and REFUSED for this round — it is only sound together with opening
+     * `canUseTypeEngine`'s nullish-union-vs-primitive gate, whose own price is nine
+     * net false positives on the eight profiles (the session note carries the
+     * decomposition). This leg is confined to the CAPTURE, which production never
+     * computes, so no diagnostic anywhere can move.
+     *
+     * The constituent is added and the reference is then RE-NARROWED, which is the
+     * whole reason the widening is safe to show: inside `if (o.p)` the flow walk
+     * subtracts `undefined` again and the hover still reads `number`. Narrowing is
+     * the flow walk ([getNarrowedTypeForReference]), not the legacy if-arm machinery
+     * that the refused checking half trips over, so an `&&`-guarded read narrows
+     * here even where the assignability readers would not.
+     *
+     * Conservative by construction — it may decline to widen, it can never invent a
+     * constituent: a UNION or INTERSECTION receiver is refused (a member optional on
+     * one constituent only is not this rule's question, and `getPropertyOfType`'s
+     * union arm answers one constituent's symbol — round 916), and so is `super`,
+     * whose member symbol is resolved off the DERIVED table and may be an override
+     * whose optionality differs from the base declaration the caret names.
+     */
+    private fun typeCaptureOptionalMemberType(access: PropertyAccessExpression, captured: Type): Type {
+        if (!strictNullChecks) return captured
+        if (captured === anyType || captured === errorType || typeIncludesUndefined(captured)) return captured
+        val receiver = access.expression
+        if (receiver is Identifier && receiver.text == "super") return captured
+        val receiverType = thisReceiverCarrierType(receiver) ?: getTypeOfExpression(receiver)
+        if (receiverType === anyType || receiverType === errorType) return captured
+        val apparent = getApparentType(receiverType)
+        if (apparent is Type.Union || apparent is Type.Intersection) return captured
+        val prop = getPropertyOfType(apparent, access.name.text) ?: return captured
+        if (!isOptionalProperty(prop)) return captured
+        val widened = getUnionType(listOf(captured, undefinedType))
+        return if (getReferencePath(access) != null)
+            getNarrowedTypeForReference(widened, access) else widened
     }
 
     /**
