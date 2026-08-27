@@ -114952,6 +114952,50 @@ interface DataView {
     private fun weakOverloadArgRefuses(arg: Expression, argType: Type, paramType: Type): Boolean =
         arg !is ObjectLiteralExpression && weakParamRefusesArg(argType, paramType)
 
+    /**
+     * (CHK.57) THE WEAK RULE DISTRIBUTED OVER A **UNION** TARGET, FOR THE B482 WALKERS.
+     *
+     * [weakTargetProperties] answers null for a [Type.Union], so every B482 walker was
+     * blind to a weak type reached THROUGH one — and `T | null` / `T | undefined` is the
+     * commonest parameter and variable shape in real TypeScript (`readFileSync`'s
+     * `options?: { encoding?: null; flag?: string } | null` is exactly it). Measured on
+     * tsc 7.0.2, a weak union target reports the ordinary TS2559 *no properties in
+     * common* sentence naming the surviving CONSTITUENT, not the union:
+     * `zzzU1(123)` against `(o: { zzzA?: null; zzzF?: string } | null)` and
+     * `const v: { zzzA?: null; zzzF?: string } | null = "utf8"` both render
+     * `Type '123' has no properties in common with type
+     * '{ zzzA?: null | undefined; zzzF?: string | undefined; }'`.
+     *
+     * The VERDICT is (CHK.54)'s [weakParamRefusesArg] (tsc's `typeRelatedToSomeType`
+     * fold) and the DISPLAY is (CHK.56)'s [weakRefusalDisplayTarget]; this composes them
+     * and adds the two refusals the walkers need beyond the overload helpers':
+     *
+     *  * **TWO OR MORE non-nullish constituents are not ours.** [weakRefusalDisplayTarget]
+     *    answers null there, and tsc's answer is the ORDINARY assignability wording naming
+     *    the whole union (TS2345 at an argument, TS2322 at a var decl) — a different
+     *    mechanism, since it needs the RELATION to reject. Left open deliberately.
+     *  * **A CALLABLE source is not ours.** tsc splits TS2559 / TS2560 on whether CALLING
+     *    the source would produce something assignable to the target
+     *    (`() => number` against a weak object is TS**2559**; `() => { zzzA?: null }` is
+     *    TS2560 `Did you mean to call it?`), where [tryEmitWeakTypeAssignment] emits 2560
+     *    for every callable source. That split is a pre-existing bare-target divergence
+     *    with its own corpus surface (`weakType.errors.txt`), so a callable source stays
+     *    SILENT here rather than acquiring a row with the wrong CODE.
+     *
+     * An OBJECT-LITERAL argument is refused by the CALLER for (CHK.56)'s reason (tsc's
+     * freshness/excess check pre-empts the weak one and squiggles the property, one
+     * column right), which is why this helper takes a [Type] and not an [Expression].
+     *
+     * Returns the constituent to run [tryEmitWeakTypeAssignment] against, or null.
+     */
+    private fun weakUnionRefusalConstituent(argType: Type, targetType: Type): Type? {
+        if (targetType !is Type.Union) return null
+        val named = weakRefusalDisplayTarget(targetType) ?: return null
+        if (getCallSignaturesOfType(argType).isNotEmpty() ||
+            getConstructSignaturesOfType(argType).isNotEmpty()) return null
+        return if (weakParamRefusesArg(argType, targetType)) named else null
+    }
+
     /** B482: look up a property by name across an intersection's constituents. */
     private fun getPropertyAcrossType(type: Type, name: String): Symbol? = when (type) {
         is Type.Intersection -> type.types.firstNotNullOfOrNull { getPropertyAcrossType(it, name) }
@@ -115090,8 +115134,20 @@ interface DataView {
         val init = decl.initializer ?: return false
         val targetType = getTypeFromTypeNode(ann)
         if (targetType === errorType || targetType === anyType) return false
-        val tgtProps = weakTargetProperties(targetType) ?: return false
-        if (tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) return false
+        val tgtProps = weakTargetProperties(targetType)
+        if (tgtProps == null || tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) {
+            // (CHK.57): the target is not weak ITSELF, but a UNION may reach a weak type
+            // through exactly one non-nullish constituent — `{ zzzA?: null } | null = "utf8"`.
+            // Disjoint from the branch below (which requires a weak targetType), so the
+            // bare-target path is untouched. The constituent renders through
+            // `typeToString`, NOT through the annotation's own display: the annotation
+            // spells the WHOLE union.
+            val cU = topLevelWeakSource(init)?.let { (aT, sD) ->
+                weakUnionRefusalConstituent(aT, targetType)?.let { Triple(aT, sD, it) }
+            } ?: return false
+            return tryEmitWeakTypeAssignment(cU.first, cU.third, name.pos, name.text.length,
+                source, fileName, displayType = cU.first, srcDisplayOverride = cU.second)
+        }
         val (argType, srcDisplay) = topLevelWeakSource(init) ?: return false
         val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
         return tryEmitWeakTypeAssignment(argType, targetType, name.pos, name.text.length,
@@ -156850,6 +156906,20 @@ interface DataView {
                     weakArgEnd - arg.pos, source, fileName,
                     displayType = literalTypeOfExpression(arg) ?: argType)) {
                 continue
+            }
+            // (CHK.57): the same rule DISTRIBUTED over a union parameter
+            // (`o: { zzzA?: null; zzzF?: string } | null`) — [weakTargetProperties]
+            // answers null for a union, so the line above never fires for one. An
+            // OBJECT-LITERAL argument is excluded for (CHK.56)'s measured reason: tsc's
+            // freshness/excess check pre-empts the weak one and squiggles the offending
+            // PROPERTY, one column to the right.
+            if (arg !is ObjectLiteralExpression) {
+                val weakUnionCons = weakUnionRefusalConstituent(argType, weakTarget)
+                if (weakUnionCons != null && tryEmitWeakTypeAssignment(argType, weakUnionCons,
+                        arg.pos, weakArgEnd - arg.pos, source, fileName,
+                        displayType = literalTypeOfExpression(arg) ?: argType)) {
+                    continue
+                }
             }
             when (caasWalkerArgChecks(
                 arg, paramType, argType, isRestParam, params, i, sigIn, args,
