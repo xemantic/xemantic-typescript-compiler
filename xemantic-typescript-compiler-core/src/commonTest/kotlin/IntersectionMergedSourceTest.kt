@@ -102,7 +102,9 @@ class IntersectionMergedSourceTest {
     }
 
     @Test
-    fun `control - a required target property NO constituent supplies is still refused`() {
+    // COVERAGE, not a control: ablation arm b2 (drop the missing-required-property
+    // refusal) reddens this row and nothing else.
+    fun `a required target property NO constituent supplies is still refused`() {
         diagnose(
             prelude +
                 "interface ZzzMiss { zzzFile: string; zzzGone: number }\n" +

@@ -127367,8 +127367,11 @@ interface DataView {
 
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         // (CHK.61)(a) A bare `this` receiver carries no type — see
-        // [thisReceiverCarrierType]. Consulted FIRST because the fallback answers
-        // `any`, which is not a "no answer" any consumer can test for.
+        // [thisReceiverCarrierType]. Written FIRST for legibility; the ORDER is not
+        // observable on any shape this repo pins, because the fallback for a bare
+        // `this` is exactly `anyType` (ablation arm c1 — a redundant guard, recorded
+        // rather than claimed). What IS load-bearing is the `this` restriction: the
+        // carrier must not answer for another `any`-typed receiver in the same body.
         val rawObjectType = thisReceiverCarrierType(expr.expression)
             ?: getTypeOfExpression(expr.expression)
         // B1.1: Narrow Union receivers via flow-graph state. Inside

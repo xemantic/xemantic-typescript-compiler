@@ -126,10 +126,10 @@ class ThisMethodCallAssignmentNarrowTest {
     }
 
     @Test
-    fun `control - a this-method call whose return annotation ADMITS undefined must not narrow`() {
-        // Discriminates an over-broad fix that would treat any resolved `this.m()` as
-        // non-nullish. tsc 7.0.2 reports here too. No ablation arm reddens this - it is a
-        // CONTROL, not coverage.
+    fun `a this-method call whose return annotation ADMITS undefined must not narrow`() {
+        // COVERAGE, not a control: ablation arm a2 (treat any resolved `this.m()` as
+        // non-nullish regardless of its own return annotation) reddens this row and
+        // nothing else. tsc 7.0.2 reports here too.
         val rows = diagnose(
             inClass(
                 "  zzzC5(): ZzzRes | undefined {\n" +

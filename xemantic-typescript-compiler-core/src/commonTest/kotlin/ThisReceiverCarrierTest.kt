@@ -123,6 +123,24 @@ class ThisReceiverCarrierTest {
     }
 
     @Test
+    fun `an any-typed NON-this receiver inside a class method must NOT get the class's type`() {
+        // The `this` restriction is the rule, not decoration: the carrier fires only where
+        // the receiver ALREADY typed `any`, and inside a method body plenty of receivers
+        // do. Widening it to any identifier types `zzzP.zzzReq` as `number` and invents a
+        // TS2322 where tsc (and we) are silent.
+        diagnose(
+            """
+            class ZzzC5 {
+              zzzReq: number = 1
+              zzzM(zzzP: any) { const zzzA: string = zzzP.zzzReq; return zzzA }
+            }
+            """,
+        ) should {
+            have(none { it.code == 2322 })
+        }
+    }
+
+    @Test
     fun `control - a class member that genuinely IS a string is accepted`() {
         // The carrier must not manufacture a rejection either.
         diagnose(
