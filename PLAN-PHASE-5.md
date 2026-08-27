@@ -20,6 +20,135 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.59) — the weak-type anchor moves to the **EXPRESSION** exactly when the code is **TS2560**; an enum member is a source at every position, and the cause was the vacuous-`{}` guard; and a fresh object literal elaborates **into** the literal
+
+**THREE FIXES, ONE ARC, THREE COMMITS.** (CHK.58) left five measured residue items with a
+fixture each. Three are closed; two are scoped out with reasons, and three NEW residues were
+measured on the way.
+
+**1. THE CALLABLE SOURCE AT THE THREE NON-ARGUMENT POSITIONS — the largest piece, and the
+only thing left was the ANCHOR.** Read out of tsc 7.0.2 and corroborated by tsgo's own
+`relater.go`: `checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose
+first act is `elaborateDidYouMeanToCallOrConstruct` (construct signatures, then call ones).
+When some signature's return type is related to the target it RE-REPORTS with the error node
+set to the EXPRESSION and attaches the TS6213/TS6212 related row; otherwise the ordinary
+`checkTypeRelatedToEx` runs with the position's own error node. **That predicate is the SAME
+one [Checker.weakCallResultSatisfiesTarget] already used to choose TS2560 over TS2559**, so
+the two coincide *by construction* in this compiler and the emitter needed exactly one extra,
+CALL-ONLY anchor pair.
+
+| source | tsc code | var decl | return | assignment |
+|---|---|---|---|---|
+| `() => { zzzT: number }` (result related) | TS2560 | 3:22 EXPR | 4:34 EXPR | 6:9 EXPR |
+| `() => { zzzZ: string }` (result disjoint) | TS2559 | 3:7 NAME | 4:27 `return` | 6:1 LHS |
+| `() => number` | TS2559 | 8:7 NAME | 9:27 `return` | 11:1 LHS |
+| `new (s: string) => { zzzT: number }` | TS2560 | 13:22 EXPR | 14:34 EXPR | 16:9 EXPR |
+| `() => ({ zzzT: 1 })` (an ARROW) | TS2560 | 2:22 EXPR | 3:34 EXPR | 5:9 EXPR |
+
+**TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE.** [Checker.topLevelWeakSource] classifies a
+cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
+IDENTIFIER or ARROW source was silent at the VAR DECL while the return and assignment
+positions reported it; the var-decl walker now falls back to the shared value walker as its
+`?:`, which changes no shape that already reports (that branch renders the target through
+the ANNOTATION, the walker through `typeToString`). And the assignment site's outer
+`ArrowFunction` refusal comes out.
+
+**A FUNCTION EXPRESSION STAYS REFUSED, AND THAT IS MEASURED.** tsc's `getErrorSpanForNode`
+maps a `FunctionExpression` to its own NAME, so `= function zzzNamed(){}` anchors at
+`zzzNamed` (col 31) and the anonymous form lands back on the var name (col 7) — two anchors,
+neither of which is the expression. An `ArrowFunction` has no such mapping
+(`getErrorSpanForArrowFunction` starts at its first token), which is why the arrow half IS
+closed.
+
+**2. AN ENUM MEMBER IS A SOURCE AT EVERY POSITION — AND (CHK.58) HAD THE MECHANISM WRONG.**
+Its entry said [Checker.getTypeOfExpression] answers `any` for `E.A`. It does not: the type
+resolves fine and the pre-existing TS2345/TS2322 rows name it `ZzzE.A`. The refusal is one
+step further on — an enum-flavoured type is a member-LESS [Type.Object], so
+[Checker.weakSourcePropertyNames] enumerates it to the EMPTY set and
+[Checker.tryEmitWeakTypeAssignment]'s vacuous-`{}` guard (`var x: AllOptional = {}` is legal)
+refused it. tsc compares the enum LITERAL type's apparent type, i.e. the `String`/`Number`
+wrapper's property set, which is what the var-decl walker's AST-side
+[Checker.enumMemberWeakSource] had been reproducing all along. **Consulting that classifier
+AT THAT GUARD** — after the target is known weak and the source has come back empty or
+unenumerable — is the cheapest possible placement (nothing else reaches it: `globals.lookups`
+**+4** for the whole compiler profile) and closes the argument, return and assignment
+positions in one place. The DISPLAY rule is (CHK.58)'s, unchanged.
+
+**3. A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS IN ONE SHAPE.**
+(a) ORDER: [Checker.tryEmitNestedWeakVarDecl] (one level, TS2322 at the var NAME with a
+`Types of property … are incompatible` chain) ran BEFORE
+[Checker.tryEmitObjectLiteralWeakLeaves] (TS2559 at the property KEY + TS6500), so a fresh
+literal took the wrong walker; the two overlap ONLY for an object-literal initializer, since
+the nested one additionally serves an IDENTIFIER source (pristine's
+`let weak: Weak & Spoiler = propertiesWrong`) the leaf walker can never reach. (b) DISPLAY:
+a leaf reports the literal's OWN property type, i.e. the **WIDENED** one for a string or
+numeric literal and the literal itself for a boolean — `"utf8"` -> `string`, `12` ->
+`number`, a template literal -> `string`, `false` -> `false`, an enum member -> `ZzzEL.A`.
+**THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** (pristine's
+`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'`), because there the
+fresh literal reaches the relation directly — that asymmetry is why the widening lives in
+the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate the boolean half.
+
+**GATES.** Suite **16,223 / 0 / 3** (+24 over (CHK.58)'s 16,199: three new classes plus one
+residue pin), summed with `xml.etree` over the SEVEN-module glob (core 15,239 + project 704
++ kir 146 + daemon 66 + api 30 + client 20 + cli 18); **no corpus baseline moved at any of
+the three steps**, which is load-bearing for step 3 — the leaf/nested order swap is exactly
+what `nestedExcessPropertyChecking` and `weakType` gate. `cost_gate.py` exit 0
+unrebaselined, `output.errors` **46**, largest counter **+1.42%** against a baseline
+(CHK.58) already read **+1.40%** on, i.e. **+0.02% for this whole round** — the ordering
+(cheap AST refusals -> target-weakness gate -> type the value) is intact and the enum consult
+sits behind the weak-target gate by construction. `huge_methods --fail-over 0` exit 0,
+**783** classes, 0 over. **8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** after
+every step and per-profile `diff` clean: **`added=0 removed=0` on all eight**, unmoved since
+(CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **64 ms** [56, 63, 64, 66] —
+one draw. `capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0,
+moreAny 0**, `definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
+narrow=-2075467818767010709` — the standing state. **`knip` @ `dc7aca5` 48 -> 48 and
+`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session;
+that arm's `Checker.class` md5 `58e55fae…` reproduced the session's very first build exactly.
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
+AND NOT ONE ARM READ 0.** Each arm `cmp`-diffed against its OWN snapshot, each anchor
+asserted to occur exactly once (exit 3 otherwise), each build grepped for `e:`, restore
+verified OUTSIDE the driver's `finally` plus a `git diff --quiet`, binary rebuilt after every
+restore.
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the whole change reverted (the parent, rebuilt this session) | `58e55fae` | **21** — exactly the 21 positives added or converted |
+| a1 | the 2560 anchor never moves (`useCall = false`) | `43180b25` | **4** — uniquely the four expression-anchor pins |
+| a2 | the `FunctionExpression` refusal dropped | `9a5b1b87` | **1** — uniquely its refusal pin |
+| a3 | the var-decl fallback to the shared value walker dropped | `e19a390c` | **6** — every var-decl row |
+| a4 | the assignment site's `ArrowFunction` refusal restored | `1128de84` | **3** |
+| a5 | the enum consult at the vacuous-`{}` guard dropped | `3f8df9eb` | **8** — every enum pin |
+| a6 | the enum DISPLAY override dropped | `90c8eefd` | **2** — uniquely the one-member pins |
+| a7 | the leaf/nested walker order reverted | `8895315f` | **5** — every leaf pin |
+| a8 | the leaf literal WIDENING dropped | `51db3310` | **3 — and NOT the boolean pin** |
+| a9 | the enum consult in the LEAF walker dropped | `3635e013` | **1** |
+
+**a8 IS THE ARM WORTH READING**: it reddens the string, numeric and template pins and leaves
+the BOOLEAN one green, which is what makes "a leaf widens" a RULE rather than "literals
+widen" — the boolean pin is the control, and pristine's own two `Type 'false'` rows are the
+corpus half of it.
+
+**TWO DRIVER DEFECTS, BOTH CAUGHT BY THE BUILD AND NEITHER A DEAD ARM.** a5 and a9 were first
+written as `val x = null ?: return false`, which Kotlin rejects (`Function invocation
+'first()' expected`); the driver reported BUILD FAILED rather than 0 RED, which is the
+distinction that matters — a `null as Expression?` cast made both arms land. Recorded because
+"the arm did not build" and "the arm changed nothing" print identically in a careless driver.
+
+**THREE NEW RESIDUES, ALL MEASURED, RE-QUEUED AS (CHK.60).** (i) A `this.<member>` assignment
+target is silent for the weak rule at EVERY source shape, callable and not — so it is not the
+anchor change: [Checker.getTypeOfExpression] answers `any` for `this.<optional member>` (the
+probe `const p: string = this.zzzHandler` is silent here where tsc says
+`Type 'ZzzS9 | undefined' is not assignable to type 'string'`). (ii) An OPTIONAL `any`
+property renders `zzzNope?: any | undefined` where tsc renders `zzzNope?: any` — `any`
+absorbs `undefined` in tsc's union construction and our `getUnionType` does not reduce that
+pair; visible from every position that renders a target through the TYPE rather than the
+ANNOTATION, and pinned as residue. (iii) An enum member against a weak target it SHARES a
+property with (`{ length?: number }`) is SILENT in tsc and emits TS2345/TS2322 here, from the
+ordinary relation rather than the weak rule.
+
 ### Round (CHK.58) — the weak rule fired at a var decl and at a call argument and **nowhere else**; and TS2560 is *"calling it would have worked"*, not *"the source is callable"*
 
 **FOUR FIXES, ONE ARC.** The B482 walkers emitted TS2559/TS2560 at a var DECL and at a
@@ -1318,149 +1447,6 @@ nested conditional types. With the **13 runtime dependencies only**, hoisted to 
 monorepo root, plus `@types/node`, it reads exactly **49** and matches (CHK.47) row for
 row. A library baseline is a claim about a dependency SET, not about a library.
 
-### Round (CHK.47) — an OUTER binding of the same name defeated every block-scoped receiver, the message named the OUTER type, and it was **three** mechanisms; **knip 66 -> 49, seventeen false positives gone**
-
-**WHAT LANDED.** `Checker.cmamLexicalValueShadow` + `cmamShadowReadingWins`,
-`spineExBindingNameShadows`, round 512's bail relaxed, and `cmamBlockScopedPathType`
-— commits `9693c7f4` / `80790a44` / `77ddcc56` / `de327d76`. New pins:
-`ShadowedReceiverTypeTest` (9), `BlockScopedPathReceiverTest` (8).
-
-**THE ROUND'S HEADLINE, AND IT IS THE FOURTH ROUND RUNNING TO PRODUCE ONE OF THIS
-SHAPE: THE QUEUE ITEM'S (i) WAS *ONE* OF THREE MECHANISMS AND NAMED ONLY THE FIRST.**
-Measured through the CLI against `tools/tsgo-7.0.2/lib/tsc` over identical source:
-
-| # | shape | ours (parent) | tsgo | owned by |
-|---|---|---|---|---|
-| A | `const inner: Deep` + `const { inner } = h; inner.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
-| B | `function alpha()` + `f({ alpha }: Inner) { alpha.zzznope }` | `typeof alpha` | `string` | `spineExBindingNameShadows` |
-| C | `const cc: Deep` + `const cc = h.inner; cc.zzznope` | SILENT | `Inner` | round 512's bail + `cmamLexicalValueShadow` |
-| D | `const dd: Deep` + `const dd: Inner = h.inner; dd.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
-
-**D was not in the item at all** and is the plainest shape of the four — an ORDINARY
-annotated body-local `const` shadowing a file-level one. **B is not the property-access
-family at all**: `--passTiming`'s `emissions by pass` said `checkSpine`, and a
-`Diagnostic`-constructor hook (round 726's instrument) named `spineExEnterNode`, the
-B431 expando anchor, whose own `spineExFnShadows` compared
-`(x.name as? Identifier)?.text` and was therefore blind to every destructuring form.
-Reading the queue item as the diagnosis would have sent the round at one walker and
-left two.
-
-**THE MECHANISM IN ONE SENTENCE, AND IT IS THE TRANSFERABLE PART.**
-`lookupPerFileForNode` is keyed by the FILE, so for a receiver identifier it answers
-the file-level declaration of that spelling **however deeply the reference is
-nested** — and B83.5 leaves the shadowing block-scoped declaration out of the binder
-tables, so it is invisible to that lookup and to `getTypeOfSymbol` alike. Round 748's
-`symbols`-only rule is what makes the INV.2(c) tables able to answer: a name the main
-binder bound is absent from its container's `symbols`, so a non-null
-`lexicalScopeSymbol` hit on the reference's parent chain IS the shadowing relation, no
-ordering question attached.
-
-**`perFileIdentSymbol != null` IS PART OF THE CONDITION, NOT AN OPTIMISATION.** Without
-it `lexicalShadow` fires where there is no outer declaration to lose to, and a
-`catch (error)` reached through an `in` guard goes SILENT on knip — outcome-correct
-(tsgo is silent too) for a reason that has nothing to do with shadowing, while its
-sibling in `errors.ts` keeps reporting. That row is arm a2's only uniquely-its-own
-failure; **no pin sees it.**
-
-**(ii) THE COMPOSITIONS — HALF CLOSED.** `const c = h; c.zzznope` reported and
-`p.inner.zzznope` reported, but `const c = h; c.inner.zzznope` was silent, because the
-nested path asks `getTypeOfExpression` for the WHOLE chain and an `any` root makes the
-chain `any` before either (CHK.46) substitution point is reached.
-`cmamBlockScopedPathType` walks it by hand from a root type the two helpers can name;
-one hop and two hops both match tsgo exactly. **The DESTRUCTURING composition
-(`const c = h; const { inner } = c; inner.zzznope`) stays open** and is a different
-site: `typeCaptureDestructured`'s `VariableDeclaration` arm reads
-`getTypeOfExpression(initializer)`. That helper is SHARED with the (API.3d) capture
-channel, so the substitution must be local to `cmamDestructuredReceiverType` — and
-doing so opens a re-entrancy cycle (`cmamDestructuredReceiverType` -> the fallback ->
-`cmamBlockScopedPathType` -> `cmamDestructuredReceiverType`) needing a depth guard.
-
-**(iii) THE ELEVEN REFUSALS ARE FIVE MECHANISMS, AND ONE IS ALREADY CLOSED.** Triaged
-with three throwaway measurement arms (t1 = drop `cmamDestructuredReceiverType`'s own
-lines; t2 = `cmamAllMissingTrustedMember` unconditionally true; t3 = drop
-`cmamUnannotatedLocalReceiverType`'s `const` + whitelist), each run over one 11-shape
-CLI probe rather than by reading:
-
-| group | rows | who refuses | verdict |
-|---|---|---|---|
-| 1 | union source, class instance | `cmamDestructuredReceiverType`'s own lines | **the refusal is RIGHT** — lifting it yields a WRONG type (`Inner` for `Holder \| Inner`; `typeof Cls` for `Cls`). Needs type CONSTRUCTION, not a relaxed guard |
-| 2 | rest element, array pattern | the SHARED `typeCaptureDestructured` | a hard boundary — the (API.3d) capture channel reads it, so any change moves the capture digests |
-| 3 | heritage leaf, generic-instantiation leaf, tuple leaf | `cmamCheckResolvedObjectType`, downstream | B153 territory — the layer (CHK.45) measured as knip false positives when relaxed |
-| 4 | `let` binding | `cmamUnannotatedLocalReceiverType`'s `const` line | **the only one that wakes with the CORRECT type** (`Holder`) — and it is exactly (CHK.44)'s measured 3-false-positive population, so it needs the reaching-definition question answered |
-| 5 | call receiver | `narrowingEligible` | never reaches the family at all |
-
-`new X(…)` did NOT wake from t3, so the whitelist is not what owns it today (its
-measured cost was a corpus baseline, not this shape). **And the NULLISH refusal is half
-phantom**: `leaf?: Inner` was never refused and already matches tsgo's TS2339 —
-`typeHasNullishConstituent` only sees the explicit `Inner | undefined` form. So the
-list of eleven is really **ten**, in five groups, and only group 4 is cheap.
-
-**FOURTEEN ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST THE ARM'S OWN SNAPSHOT,
-EACH ANCHOR ASSERTED UNIQUE.**
-
-| arm | mistake | RED |
-|---|---|---|
-| a1 | `cmamLexicalValueShadow` returns false | 4 — A, B, C, D |
-| a2 | drop the `perFileIdentSymbol != null` conjunct | **0 pins**, −1 knip row |
-| a3 | `cmamShadowReadingWins` accepts any recorded type | 1 — D |
-| a4 | the shadow route falls through instead of refusing | 1 — G (after the pin was added) |
-| a5 | `spineExBindingNameShadows` handles only an Identifier | 3 — B, E, E2 |
-| a6 | only its ARRAY arm off | 2 — E, E2 |
-| a7 | round 512's bail restored unconditionally | 1 — C |
-| a8 | drop the single-declaration refusal | **0**, knip unchanged |
-| a9 | drop the declaration-KIND whitelist | **0**, knip unchanged |
-| a10 | `cmamDestructuredReceiverType` ignores `shadowed` | **0**, knip AND grid unchanged — **LEG DELETED** |
-| a11 | `cmamUnannotatedLocalReceiverType` ignores `shadowed` | 1 — C |
-| b1 | `cmamBlockScopedPathType` returns null | 3 — every path positive |
-| b2 | drop the `any`/`error`/`unknown` HOP refusal | **0**, knip unchanged |
-| b3 | drop the "the root must be UNTYPED" refusal | **0**, knip unchanged |
-
-**ARM a4 READ `0 RED` ON ITS FIRST RUN AND WAS NOT A DEAD LEG.** The shape that
-discriminates it is a REST element under a colliding file-level `const`: both helpers
-refuse it, `currentLocalTypes` does not carry the name, so the fall-through would
-resolve the outer `const inner: Deep` and report exactly the reading the round removes.
-Pin G took it to 1 RED. **Arm a10 by contrast IS a dead leg and was deleted** — inside
-round 512's bail that call is a constant null by construction, since the branch is
-entered only for a name already in `currentShadowedNames`, which is one of the two
-refusals the flag suppresses. a8/a9/b2/b3 are recorded as REDUNDANT GUARDS (round 807)
-with the layer that actually refuses; a8/a9's protected populations are ones no fixture
-here can build without asserting a wrong answer in BOTH arms.
-
-**GATES.** Suite **16,067 / 0 / 3** (+17, exactly the two new classes), **zero corpus
-baselines moved**. 8-profile grid **`added=0 removed=0` on all eight** against a parent
-rebuilt in this session (javap control: the three new methods read 0 in the before arm
-and 3 in the after). **knip 66 -> 49** with the BEFORE arm taken from that same rebuilt
-parent — seventeen removals, no additions, and all seventeen confirmed FALSE POSITIVES
-by running tsgo over the same package (it reports nothing at any of those positions).
-Fifteen are `Property '0' does not exist on type 'Plugin'`, where a
-`for (const plugin of config.plugins)` loop variable was resolving to the file's own
-`const plugin: Plugin` — the family `PLAN-PHASE-5.md` had already flagged as "a
-resolution/collision, not narrowing" and left uncharacterized — and two are the same
-shape for `Args` at a callback parameter in `tsdown/index.ts`. `cost_gate.py` **PASSES
-with NO rebaseline**, exit 0: `output.errors` **46**, `spine.nodes` +0.00%, largest
-movement `narrow.memoServed` **+0.69%**. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**,
-floor **57 ms** [57, 55, 59, 57] (one draw). `capture-equivalence` **1,005 spans / 43
-of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376**, both ARM DIGESTs
-unmoved.
-
-**WHAT DID NOT WORK.** A first cut let `lexicalShadow` fire without requiring a
-per-file symbol; it read knip **48** — one better than the shipped 49 — and the extra
-removal was the `catch (error)` row above, silenced by a mechanism that has nothing to
-do with shadowing while its sibling kept reporting. Tightened rather than kept: an
-inconsistent silence you cannot attribute is worse than a false positive you can.
-A first cut of the shadow route also returned the member type RAW, so a primitive
-member (`string`) was refused downstream — the route now re-enters the same tail as
-every other reading, which is what supplies the apparent type.
-
-**OPEN, recorded rather than pinned (round 765).**
- 1. The DESTRUCTURING composition, above, with its site and its recursion hazard.
- 2. The ten refusals in five groups, above. Group 4 (`let`) is the cheapest and is
-    blocked on (CHK.44)'s measurement, not on conservatism.
- 3. An ARRAY-pattern binding is typed as a receiver nowhere (pins E/E2 assert only that
-    we no longer name the OUTER type); tsgo reports `Inner`/`number` there.
- 4. TS18048 is not emitted beside our TS2339 for an optional destructured member, where
-    tsc emits both.
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
@@ -3268,44 +3254,64 @@ every other reading, which is what supplies the apparent type.
   DIFFERENT kind of zero (provably-unobservable, redundant, undiscriminated, DEAD ×2) —
   see the session note. Residue re-queued as (CHK.59).
 
-- [ ] **(CHK.59) THE WEAK-TYPE RESIDUE AFTER (CHK.58), ALL MEASURED, EACH WITH A FIXTURE.**
-  Fixtures under `build/chk58/ora`, `ora2`, `ora3`, `ora4`, `pinora`.
-  1. **A CALLABLE SOURCE AT THE VAR-DECL / RETURN / ASSIGNMENT POSITIONS IS THE LARGEST ONE
-     AND IT IS NOW UNBLOCKED** — (CHK.58) fixed the TS2559/TS2560 split that (CHK.57) and
-     (CHK.58) both refused it over, so the only thing left is the **ANCHOR**: measured on
-     `build/chk58/ora2/w7.ts`, tsc squiggles the **EXPRESSION** for a callable source
-     (3:22 at a var decl, 4:34 at a return, 6:9 at an assignment) where a non-callable one
-     is squiggled at the var NAME / the `return` keyword / the LHS. So
-     [Checker.tryEmitWeakValuePosition] needs a second span per call site, and the
-     `ArrowFunction`/`FunctionExpression` and signature refusals come out. Three rows on
-     one fixture. **Watch the FP surface**: `this.handler = () => {…}` against a weak
-     member is exactly the shape this would start reporting, and tsc reports it too.
-  2. **AN ENUM-MEMBER CALL ARGUMENT IS SILENT** where tsc reports TS2559 naming the member
-     (`build/chk58/ora3/e1.ts(10,6)` and `(11,6)`), because the argument walker types its
-     argument through [Checker.getTypeOfExpression], which answers `any` for `E.A` and is
-     skipped before the weak rule is reached; only the var-decl walker carries the AST-side
-     [Checker.enumMemberWeakSource]. `WeakEnumSourceDisplayTest`'s last pin records it.
-  3. **TWO OR MORE NON-NULLISH CONSTITUENTS** — unchanged and still a different mechanism:
-     tsc words them as ordinary assignability naming the WHOLE union, which needs the
-     RELATION to reject, where the weak rule lives in the walkers. **A second, separate hole
+- [x] **(CHK.59) DONE 2026-08-27 — THREE OF FIVE CLOSED; THE ANCHOR RULE IS "TS2560 MOVES TO
+  THE EXPRESSION", AND (CHK.58)'S DIAGNOSIS OF THE ENUM HOLE WAS WRONG IN A WAY THAT MATTERED.**
+  (1) The CALLABLE source at the var-decl / return / assignment positions is closed: tsc's
+  `elaborateDidYouMeanToCallOrConstruct` re-reports at the EXPRESSION exactly when the call
+  result is related to the target, which is the SAME predicate
+  [Checker.weakCallResultSatisfiesTarget] already used to pick TS2560 — so the emitter needed
+  one extra CALL-ONLY anchor and nothing else. The var-decl position additionally gained a
+  fallback to the shared value walker (an IDENTIFIER or ARROW source was silent there and
+  reported at the other two). A FUNCTION EXPRESSION stays refused, measured: tsc anchors one
+  at its own NAME. (2) The enum member is closed at all four positions — and NOT because
+  `getTypeOfExpression` answers `any` (it does not): an enum type is a member-LESS
+  [Type.Object], so it enumerated to the EMPTY set and the vacuous-`{}` guard refused it.
+  (4) The nested object-literal leaf is closed, as TWO defects: the walker ORDER, and the
+  WIDENING of a string/numeric leaf (a boolean leaf and the top-level position do not widen).
+  Suite **16,223 / 0 / 3** (+24), **no corpus baseline moved**, `output.errors` 46, grid
+  `503774c2…` unmoved, knip 48 -> 48 and jsonrepair 4 -> 4 byte-identical, ten ablation arms
+  and not one read 0. Items 3, 5 and 6 are re-queued with three new residues as (CHK.60).
+
+- [ ] **(CHK.60) THE WEAK-TYPE RESIDUE AFTER (CHK.59) — TWO INHERITED, ONE DELIBERATE, THREE
+  NEW, ALL MEASURED.** Fixtures under `build/chk59/ora`, `pin`, `dbg`.
+  1. **TWO OR MORE NON-NULLISH CONSTITUENTS** — unchanged since (CHK.56) and still a different
+     mechanism: tsc words them as ordinary assignability naming the WHOLE union, which needs
+     the RELATION to reject where the weak rule lives in the walkers. **A second, separate hole
      is beside it**: at the ASSIGNMENT position we are silent for that shape altogether
-     (`build/chk58/pinora/q16.ts(3,1)` and `q13.ts(3,1)`), which is the ordinary
-     assignability walk and not the weak rule. Price it before starting.
-  4. **THE NESTED OBJECT-LITERAL LEAF WALKER** misses `{ zzzIn: "utf8" }` against
-     `zzzIn?: W` and emits a whole-literal TS2322 at the var NAME where tsc emits TS2559 at
-     the VALUE (`build/chk58/ora4/y5.ts`: ours 2:7 TS2322, tsc 2:27 TS2559), bare and union
-     alike.
-  5. **A FRESH OBJECT LITERAL AGAINST A BARE WEAK ARGUMENT IS TS2559 HERE AND TS2353 IN
-     tsc** ((CHK.56) row r3). Closing it is what would let the object-literal refusal in
-     (CHK.56), (CHK.57) and (CHK.58) be dropped — one excess row for an argument the
-     relation ACCEPTED, at the property. Note the RETURN and ASSIGNMENT positions already
-     match tsc here (TS2353 at the property, both spans pinned), so this is argument-only.
-  6. **A GENERIC INSTANTIATION SOURCE IS SILENT IN EVERY POSITION** where tsc reports
-     (`build/chk58/ora4/y7.ts(3,23)` and `(4,7)`, naming `ZzzG7<number>`).
-     [Checker.weakSourcePropertyNames] answers null for a [Type.Reference] BY DESIGN — its
-     members are lazy and a missed property is a FALSE TS2559 — so this is a deliberate
-     conservatism to be re-priced rather than a defect, and it is now SYMMETRIC across
-     positions, which is what makes it safe to leave.
+     (`build/chk58/pinora/q16.ts(3,1)` and `q13.ts(3,1)`), which is the ordinary assignability
+     walk. Price it before starting.
+  2. **A FRESH OBJECT LITERAL AGAINST A BARE WEAK ARGUMENT IS TS2559 HERE AND TS2353 IN tsc**
+     ((CHK.56) row r3) — ARGUMENT-ONLY; the return and assignment positions already match tsc
+     (TS2353 at the property, both spans pinned). Closing it is what would let the
+     object-literal refusals in (CHK.56)/(CHK.57)/(CHK.58)/(CHK.59) be dropped.
+  3. **A GENERIC INSTANTIATION SOURCE IS SILENT IN EVERY POSITION** (`build/chk58/ora4/y7.ts`
+     `(3,23)` and `(4,7)`, naming `ZzzG7<number>`). [Checker.weakSourcePropertyNames] answers
+     null for a [Type.Reference] BY DESIGN — its members are lazy and a missed property is a
+     FALSE TS2559 — so this is a deliberate conservatism to be RE-PRICED, and it is SYMMETRIC
+     across positions, which is what makes it safe to leave. Do not break the symmetry.
+  4. **NEW — A `this.<member>` ASSIGNMENT TARGET IS SILENT FOR THE WEAK RULE AT EVERY SOURCE
+     SHAPE**, callable and not (`build/chk59/dbg/d1.ts`: tsc reports `(2,62)` for an arrow and
+     `(3,44)` for a plain `number`). Not the anchor change and not the weak rule:
+     [Checker.getTypeOfExpression] answers `any` for `this.<optional member>` — the probe
+     `const p: string = this.zzzHandler` is SILENT here where tsc says `Type 'ZzzS9 |
+     undefined' is not assignable to type 'string'`. That is a receiver-typing hole with a
+     surface far wider than TS2559. `WeakCallableSourceAnchorTest`'s refusal pin records it.
+  5. **NEW — AN OPTIONAL `any` PROPERTY RENDERS `p?: any | undefined` WHERE tsc RENDERS
+     `p?: any`.** `any` ABSORBS `undefined` in tsc's union construction and our
+     [Checker.getUnionType] does not reduce that pair, so it is a [Checker.typeToString]
+     divergence reachable from every position that renders a target through the TYPE rather
+     than the ANNOTATION (a var-decl row is byte-exact only because its walker renders
+     `formatTypeForDisplay(ann)`). Union member text is pinned byte-for-byte across ~13k
+     baselines, so this is a LOGICAL-PARITY conversation, not a display tweak.
+     `WeakEnumSourceDisplayTest`'s residue pin records it.
+  6. **NEW — AN ENUM MEMBER AGAINST A WEAK TARGET IT *SHARES* A PROPERTY WITH IS SILENT IN tsc
+     AND EMITS TS2345/TS2322 HERE** (`build/chk59/pin/qc.ts`: `zzzQ0Cg(ZzzQ0C.A)` against
+     `{ length?: number }`). The weak rule correctly declines both; what fires is the ORDINARY
+     relation, which does not relate a string-enum member to an object target through its
+     `String` apparent type. This is an FP class, not a missing row — sequence it above 1-3.
+  7. **A BIGINT LEAF** (`{ zzzIn: 12n }`) still falls through to TS2322 where tsc reports
+     TS2559 `Type 'bigint'` at the key — [Checker.weakSourcePropertyNames]'s `BigIntLike` arm
+     does not resolve to an object here. One line, deliberately not taken this round.
 
 - [ ] **(CHK.53) `namespace globalThis { … }` IS NOT A NAMESPACE DECLARATION AND WE MODEL IT
   AS ONE — (CHK.50)'s measured refusal.** tsc treats `declare global { namespace globalThis {

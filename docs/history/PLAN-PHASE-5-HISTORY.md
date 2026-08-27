@@ -1,5 +1,150 @@
 ### Round (CHK.46) — three mechanisms, and in TWO of them the type was never missing: a DESTRUCTURED name, a NESTED access and an un-annotated BODY-LOCAL were each unchecked as a RECEIVER
 
+### Round (CHK.47) — an OUTER binding of the same name defeated every block-scoped receiver, the message named the OUTER type, and it was **three** mechanisms; **knip 66 -> 49, seventeen false positives gone**
+
+**WHAT LANDED.** `Checker.cmamLexicalValueShadow` + `cmamShadowReadingWins`,
+`spineExBindingNameShadows`, round 512's bail relaxed, and `cmamBlockScopedPathType`
+— commits `9693c7f4` / `80790a44` / `77ddcc56` / `de327d76`. New pins:
+`ShadowedReceiverTypeTest` (9), `BlockScopedPathReceiverTest` (8).
+
+**THE ROUND'S HEADLINE, AND IT IS THE FOURTH ROUND RUNNING TO PRODUCE ONE OF THIS
+SHAPE: THE QUEUE ITEM'S (i) WAS *ONE* OF THREE MECHANISMS AND NAMED ONLY THE FIRST.**
+Measured through the CLI against `tools/tsgo-7.0.2/lib/tsc` over identical source:
+
+| # | shape | ours (parent) | tsgo | owned by |
+|---|---|---|---|---|
+| A | `const inner: Deep` + `const { inner } = h; inner.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
+| B | `function alpha()` + `f({ alpha }: Inner) { alpha.zzznope }` | `typeof alpha` | `string` | `spineExBindingNameShadows` |
+| C | `const cc: Deep` + `const cc = h.inner; cc.zzznope` | SILENT | `Inner` | round 512's bail + `cmamLexicalValueShadow` |
+| D | `const dd: Deep` + `const dd: Inner = h.inner; dd.zzznope` | `Deep` | `Inner` | `cmamLexicalValueShadow` |
+
+**D was not in the item at all** and is the plainest shape of the four — an ORDINARY
+annotated body-local `const` shadowing a file-level one. **B is not the property-access
+family at all**: `--passTiming`'s `emissions by pass` said `checkSpine`, and a
+`Diagnostic`-constructor hook (round 726's instrument) named `spineExEnterNode`, the
+B431 expando anchor, whose own `spineExFnShadows` compared
+`(x.name as? Identifier)?.text` and was therefore blind to every destructuring form.
+Reading the queue item as the diagnosis would have sent the round at one walker and
+left two.
+
+**THE MECHANISM IN ONE SENTENCE, AND IT IS THE TRANSFERABLE PART.**
+`lookupPerFileForNode` is keyed by the FILE, so for a receiver identifier it answers
+the file-level declaration of that spelling **however deeply the reference is
+nested** — and B83.5 leaves the shadowing block-scoped declaration out of the binder
+tables, so it is invisible to that lookup and to `getTypeOfSymbol` alike. Round 748's
+`symbols`-only rule is what makes the INV.2(c) tables able to answer: a name the main
+binder bound is absent from its container's `symbols`, so a non-null
+`lexicalScopeSymbol` hit on the reference's parent chain IS the shadowing relation, no
+ordering question attached.
+
+**`perFileIdentSymbol != null` IS PART OF THE CONDITION, NOT AN OPTIMISATION.** Without
+it `lexicalShadow` fires where there is no outer declaration to lose to, and a
+`catch (error)` reached through an `in` guard goes SILENT on knip — outcome-correct
+(tsgo is silent too) for a reason that has nothing to do with shadowing, while its
+sibling in `errors.ts` keeps reporting. That row is arm a2's only uniquely-its-own
+failure; **no pin sees it.**
+
+**(ii) THE COMPOSITIONS — HALF CLOSED.** `const c = h; c.zzznope` reported and
+`p.inner.zzznope` reported, but `const c = h; c.inner.zzznope` was silent, because the
+nested path asks `getTypeOfExpression` for the WHOLE chain and an `any` root makes the
+chain `any` before either (CHK.46) substitution point is reached.
+`cmamBlockScopedPathType` walks it by hand from a root type the two helpers can name;
+one hop and two hops both match tsgo exactly. **The DESTRUCTURING composition
+(`const c = h; const { inner } = c; inner.zzznope`) stays open** and is a different
+site: `typeCaptureDestructured`'s `VariableDeclaration` arm reads
+`getTypeOfExpression(initializer)`. That helper is SHARED with the (API.3d) capture
+channel, so the substitution must be local to `cmamDestructuredReceiverType` — and
+doing so opens a re-entrancy cycle (`cmamDestructuredReceiverType` -> the fallback ->
+`cmamBlockScopedPathType` -> `cmamDestructuredReceiverType`) needing a depth guard.
+
+**(iii) THE ELEVEN REFUSALS ARE FIVE MECHANISMS, AND ONE IS ALREADY CLOSED.** Triaged
+with three throwaway measurement arms (t1 = drop `cmamDestructuredReceiverType`'s own
+lines; t2 = `cmamAllMissingTrustedMember` unconditionally true; t3 = drop
+`cmamUnannotatedLocalReceiverType`'s `const` + whitelist), each run over one 11-shape
+CLI probe rather than by reading:
+
+| group | rows | who refuses | verdict |
+|---|---|---|---|
+| 1 | union source, class instance | `cmamDestructuredReceiverType`'s own lines | **the refusal is RIGHT** — lifting it yields a WRONG type (`Inner` for `Holder \| Inner`; `typeof Cls` for `Cls`). Needs type CONSTRUCTION, not a relaxed guard |
+| 2 | rest element, array pattern | the SHARED `typeCaptureDestructured` | a hard boundary — the (API.3d) capture channel reads it, so any change moves the capture digests |
+| 3 | heritage leaf, generic-instantiation leaf, tuple leaf | `cmamCheckResolvedObjectType`, downstream | B153 territory — the layer (CHK.45) measured as knip false positives when relaxed |
+| 4 | `let` binding | `cmamUnannotatedLocalReceiverType`'s `const` line | **the only one that wakes with the CORRECT type** (`Holder`) — and it is exactly (CHK.44)'s measured 3-false-positive population, so it needs the reaching-definition question answered |
+| 5 | call receiver | `narrowingEligible` | never reaches the family at all |
+
+`new X(…)` did NOT wake from t3, so the whitelist is not what owns it today (its
+measured cost was a corpus baseline, not this shape). **And the NULLISH refusal is half
+phantom**: `leaf?: Inner` was never refused and already matches tsgo's TS2339 —
+`typeHasNullishConstituent` only sees the explicit `Inner | undefined` form. So the
+list of eleven is really **ten**, in five groups, and only group 4 is cheap.
+
+**FOURTEEN ABLATION ARMS, ONE MISTAKE EACH, EACH DIFFED AGAINST THE ARM'S OWN SNAPSHOT,
+EACH ANCHOR ASSERTED UNIQUE.**
+
+| arm | mistake | RED |
+|---|---|---|
+| a1 | `cmamLexicalValueShadow` returns false | 4 — A, B, C, D |
+| a2 | drop the `perFileIdentSymbol != null` conjunct | **0 pins**, −1 knip row |
+| a3 | `cmamShadowReadingWins` accepts any recorded type | 1 — D |
+| a4 | the shadow route falls through instead of refusing | 1 — G (after the pin was added) |
+| a5 | `spineExBindingNameShadows` handles only an Identifier | 3 — B, E, E2 |
+| a6 | only its ARRAY arm off | 2 — E, E2 |
+| a7 | round 512's bail restored unconditionally | 1 — C |
+| a8 | drop the single-declaration refusal | **0**, knip unchanged |
+| a9 | drop the declaration-KIND whitelist | **0**, knip unchanged |
+| a10 | `cmamDestructuredReceiverType` ignores `shadowed` | **0**, knip AND grid unchanged — **LEG DELETED** |
+| a11 | `cmamUnannotatedLocalReceiverType` ignores `shadowed` | 1 — C |
+| b1 | `cmamBlockScopedPathType` returns null | 3 — every path positive |
+| b2 | drop the `any`/`error`/`unknown` HOP refusal | **0**, knip unchanged |
+| b3 | drop the "the root must be UNTYPED" refusal | **0**, knip unchanged |
+
+**ARM a4 READ `0 RED` ON ITS FIRST RUN AND WAS NOT A DEAD LEG.** The shape that
+discriminates it is a REST element under a colliding file-level `const`: both helpers
+refuse it, `currentLocalTypes` does not carry the name, so the fall-through would
+resolve the outer `const inner: Deep` and report exactly the reading the round removes.
+Pin G took it to 1 RED. **Arm a10 by contrast IS a dead leg and was deleted** — inside
+round 512's bail that call is a constant null by construction, since the branch is
+entered only for a name already in `currentShadowedNames`, which is one of the two
+refusals the flag suppresses. a8/a9/b2/b3 are recorded as REDUNDANT GUARDS (round 807)
+with the layer that actually refuses; a8/a9's protected populations are ones no fixture
+here can build without asserting a wrong answer in BOTH arms.
+
+**GATES.** Suite **16,067 / 0 / 3** (+17, exactly the two new classes), **zero corpus
+baselines moved**. 8-profile grid **`added=0 removed=0` on all eight** against a parent
+rebuilt in this session (javap control: the three new methods read 0 in the before arm
+and 3 in the after). **knip 66 -> 49** with the BEFORE arm taken from that same rebuilt
+parent — seventeen removals, no additions, and all seventeen confirmed FALSE POSITIVES
+by running tsgo over the same package (it reports nothing at any of those positions).
+Fifteen are `Property '0' does not exist on type 'Plugin'`, where a
+`for (const plugin of config.plugins)` loop variable was resolving to the file's own
+`const plugin: Plugin` — the family `PLAN-PHASE-5.md` had already flagged as "a
+resolution/collision, not narrowing" and left uncharacterized — and two are the same
+shape for `Args` at a callback parameter in `tsdown/index.ts`. `cost_gate.py` **PASSES
+with NO rebaseline**, exit 0: `output.errors` **46**, `spine.nodes` +0.00%, largest
+movement `narrow.memoServed` **+0.69%**. `huge_methods.py --fail-over 0` exit 0,
+**783** classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**,
+floor **57 ms** [57, 55, 59, 57] (one draw). `capture-equivalence` **1,005 spans / 43
+of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376**, both ARM DIGESTs
+unmoved.
+
+**WHAT DID NOT WORK.** A first cut let `lexicalShadow` fire without requiring a
+per-file symbol; it read knip **48** — one better than the shipped 49 — and the extra
+removal was the `catch (error)` row above, silenced by a mechanism that has nothing to
+do with shadowing while its sibling kept reporting. Tightened rather than kept: an
+inconsistent silence you cannot attribute is worse than a false positive you can.
+A first cut of the shadow route also returned the member type RAW, so a primitive
+member (`string`) was refused downstream — the route now re-enters the same tail as
+every other reading, which is what supplies the apparent type.
+
+**OPEN, recorded rather than pinned (round 765).**
+ 1. The DESTRUCTURING composition, above, with its site and its recursion hazard.
+ 2. The ten refusals in five groups, above. Group 4 (`let`) is the cheapest and is
+    blocked on (CHK.44)'s measurement, not on conservatism.
+ 3. An ARRAY-pattern binding is typed as a receiver nowhere (pins E/E2 assert only that
+    we no longer name the OUTER type); tsgo reports `Inner`/`number` there.
+ 4. TS18048 is not emitted beside our TS2339 for an optional destructured member, where
+    tsc emits both.
+
+
 **WHAT LANDED.** `Checker.cmamDestructuredReceiverType` + `cmamBindingElementDeclaration`
 (population (c)), `cmamCheckNestedObjectReceiver` + `cmamInGuardMayAddProperty` +
 `cmamConditionMentionsIn` (population (d)), and `cmamUnannotatedLocalReceiverType`

@@ -1,5 +1,81 @@
 # Status
 
+**THE WEAK-TYPE ANCHOR MOVES TO THE **EXPRESSION** EXACTLY WHEN THE CODE IS **TS2560** —
+AND THAT ONE RULE UNBLOCKED THE LARGEST PIECE OF (CHK.58)'S RESIDUE (2026-08-27, (CHK.59),
+three fixes).** A CALLABLE source was refused outright at the var-decl / return / assignment
+positions because it is not squiggled where a non-callable one is. tsc's
+`checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose first act is
+`elaborateDidYouMeanToCallOrConstruct`: when some signature's return type is related to the
+target it RE-REPORTS with the error node set to the EXPRESSION and attaches TS6213/TS6212;
+otherwise the position's own error node is used. **That predicate is the SAME one
+`weakCallResultSatisfiesTarget` already used to choose 2560 over 2559**, so the two coincide
+by construction and the emitter needed one extra, CALL-ONLY anchor. Fifteen missing tsc rows
+now land byte-exact over three positions x four source shapes.
+
+**AND TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE**: `topLevelWeakSource` classifies a
+cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
+IDENTIFIER or ARROW source was silent at the VAR DECL while the other two positions reported
+it — the var-decl walker now falls back to the shared value walker as its `?:`. A
+**FUNCTION EXPRESSION** stays refused and that is measured, not an oversight: tsc's
+`getErrorSpanForNode` maps one to its own NAME, so `= function zzzNamed(){}` anchors at
+`zzzNamed` and the anonymous form at the var name — two anchors, neither the expression.
+
+**AN ENUM MEMBER IS A WEAK-RULE SOURCE AT EVERY POSITION, AND (CHK.58) HAD THE MECHANISM
+WRONG.** It attributed the silence to `getTypeOfExpression` answering `any`; the type
+resolves fine (the pre-existing TS2345/TS2322 name it `ZzzE.A`). The refusal is one step on:
+an enum-flavoured type is a member-LESS `Type.Object`, so `weakSourcePropertyNames`
+enumerates it to the EMPTY set and the vacuous-`{}` guard (`var x: AllOptional = {}` is
+legal) refused it. Consulting the AST classifier AT THAT GUARD closes the argument, return,
+assignment and object-literal-leaf positions in one place, for **`globals.lookups` +4** on
+the whole compiler profile.
+
+**AND A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS, ONE SHAPE.** The
+one-level nested walker (TS2322 at the var NAME) ran BEFORE the leaf walker (TS2559 at the
+property KEY), so a fresh literal took the wrong one; and a leaf reports the literal's OWN
+property type, i.e. the **WIDENED** one for a string or numeric literal and the literal
+itself for a boolean (`"utf8"` -> `string`, `12` -> `number`, a template literal -> `string`,
+`false` -> `false`). **THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** — pristine's
+`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'` — which is why the
+widening lives in the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate
+the boolean half.
+
+**GATES.** Suite **16,223 / 0 / 3** (+24: three new classes plus one residue pin), **no
+corpus baseline moved at any of the three steps** — load-bearing, since the leaf/nested
+order swap is exactly what `nestedExcessPropertyChecking` and `weakType` gate.
+`cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, largest counter **+1.42%**
+against a baseline (CHK.58) already read **+1.40%** on — i.e. **+0.02% for this whole
+round**. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid md5
+**`503774c2…`** on every build and per-profile `diff` clean: **`added=0 removed=0` on all
+eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor
+**64 ms** [56, 63, 64, 66] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny
+0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 -> 48 and
+`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session
+(parent `Checker.class` md5 reproduced the session's first build exactly).
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
+AND NOT ONE ARM READ 0.** a0 (whole change reverted, parent rebuilt this session) **21 RED
+— exactly the 21 positives added or converted**; a1 (the 2560 anchor never moves) **4**,
+uniquely the four expression-anchor pins; a2 (the FunctionExpression refusal dropped) **1**;
+a3 (the var-decl fallback dropped) **6**; a4 (the assignment site's arrow refusal restored)
+**3**; a5 (the enum consult at the vacuous guard) **8**; a6 (the enum DISPLAY override)
+**2**, uniquely the one-member pins; a7 (the leaf/nested order reverted) **5**; a8 (the leaf
+widening dropped) **3 — and NOT the boolean pin**, which is the control that makes the
+widening a rule; a9 (the enum consult in the leaf walker) **1**.
+
+**ONE RESIDUE PINNED RATHER THAN FIXED**: an OPTIONAL `any` property renders
+`zzzNope?: any | undefined` where tsc renders `zzzNope?: any`, because `any` absorbs
+`undefined` in tsc's union construction and our `getUnionType` does not reduce that pair.
+It is a `typeToString` divergence reachable from every position that renders a target
+through the TYPE rather than the ANNOTATION, and union member text is pinned byte-for-byte
+across ~13k baselines — a logical-parity conversation of its own.
+
+**RESIDUE RE-QUEUED AS (CHK.60)**: two-or-more non-nullish constituents (needs the
+RELATION); the fresh-literal-vs-bare-weak-ARGUMENT TS2353 boundary; a GENERIC instantiation
+source (deliberate and SYMMETRIC); a `this.<member>` assignment target, silent for EVERY
+source shape and therefore not the anchor change — `getTypeOfExpression` answers `any` for
+`this.<optional member>`; and an enum member vs a weak target it SHARES a property with,
+where tsc is silent and we emit TS2345/TS2322 from the ordinary relation.
+
 **THE WEAK-TYPE RULE FIRED AT A VAR DECL AND AT A CALL ARGUMENT AND **NOWHERE ELSE** — SO
 `return v` AND `x = v`, TWO OF THE COMMONEST PLACES A DEVELOPER GETS A TYPE WRONG, REPORTED
 NOTHING (2026-08-27, (CHK.58), four fixes).** Not a union defect: the BARE target was silent
@@ -230,62 +306,3 @@ recorded as provably unobservable, not as coverage.**
 rule, so `zzzU(123)` is silent where tsc says `Type '123' has no properties in common
 with type '{ … }'`. That is a MISSING error, the least damaging of the three, and its
 elaboration needs its own design; re-queued with tsc's exact message.
-
-**OVERLOAD SELECTION IGNORED THE WEAK-TYPE RULE, SO AN ALL-OPTIONAL PARAMETER ACCEPTED
-*ANY* ARGUMENT — `readFileSync(p, 'utf8')` PICKED THE `Buffer` OVERLOAD, AND THAT WAS
-FIVE OF `knip`'s ROWS (2026-08-26, (CHK.54)).** The queue item read it as "an OPTIONAL
-parameter overload is selected without checking the argument"; measured over a 14-row
-matrix against tsc 7.0.2, **optionality is not the axis and the argument IS checked** —
-making the same parameter non-optional reproduces it identically, and the plain shape
-`(x, y?: null)` / `(x, y: "u")` called with `("a", "u")` already selected the second
-overload correctly on the parent. What decides it is that overload 1's parameter is a
-**weak type** (`{ encoding?: null; flag?: string } | null`) and our relation says a string
-literal IS assignable to one. That is deliberate — the weak rule lives in the B482
-*walkers*, which emit TS2559/TS2560 at named positions, where tsc puts it inside
-`checkTypeRelatedTo` so every consumer inherits it. `signatureAcceptsArgs` is a consumer
-that did not.
-
-**THE RULE IS ONE SENTENCE**: an argument sharing no property name with a weak parameter
-does not select that overload, and for a UNION parameter that is decided per constituent
-— tsc's `typeRelatedToSomeType`, where relating through a weak-and-disjoint constituent
-does not count. Deliberately NOT pushed into the relation (that moves every assignability
-verdict at once) and NOT into `allArgumentsMatch` (the TS2769 path ADDS rows — (CHK.55)).
-
-**A SECOND, INDEPENDENT RULE THE SAME MATRIX FOUND AND (CHK.54b) LANDED: tsc TRIES A
-*SPECIALIZED* OVERLOAD FIRST.** `f(x: string): A` before `f(x: "a"): B` answered `A` for
-`f("a")` where tsc answers `B` — `reorderCandidates` / GH#1133 hoists every signature with
-a **literal type NODE** parameter annotation ahead of the rest, stable within each group.
-**The test is SYNTACTIC and must stay so**: a literal UNION is a UnionType node and does
-NOT specialize (measured), so a rule derived from the resolved TYPE diverges the other way.
-The matrix goes from 10 to 12 of 14 rows at tsc parity.
-
-**GATES.** Suite **16,133 / 0 / 3** (+15, exactly the two new classes); **no corpus
-baseline moved by either change**. `cost_gate.py` passes unrebaselined, exit 0, and all
-**20 counters are DIGIT-FOR-DIGIT identical to the parent's** (parent rebuilt this session
-and its table captured) — `output.errors` **46**, so this round costs 0.00%.
-`huge_methods --fail-over 0` exit 0, **783** classes. `partition-equivalence` **EQUIVALENT,
-all 78**, floor **56 ms** [56, 54, 67, 56] — one draw. `capture-equivalence` **1,005 / 43
-of 76 / moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved. 8-profile grid
-with both arms built this session, md5s `2d907a1a…` / `c23ed851…` / `86ec37c3…` and a
-`javap` control (0 vs 2 vs 6): **`added=0 removed=0` on all eight**, capture md5
-`503774c2…` identical across all three binaries.
-
-**LIBRARIES: `knip` @ `dc7aca5` 54 -> 49**, exactly the five `Buffer<ArrayBuffer>` rows
-removed and nothing added — the family (CHK.50) surfaced is closed bar one row.
-**`jsonrepair` 3.13.1 4 -> 4 byte-identical.** The specialized-first rule moves NEITHER
-library and neither profile; its only observable effect anywhere is the hand-written matrix.
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH.** a0 (whole weak change reverted, parent rebuilt)
-**3 RED** — the three positives; a1/a2/a3 (empty-source guard, shared-property test,
-other-constituent relation test) **1 RED each and each uniquely its own**; a4/a5/a6
-**0 RED, KEPT** — a4 is additionally byte-identical on the compiler profile AND on knip's
-49 rows and on two purpose-built falsifiers, a5 and a6 are argued provably unobservable.
-b0 (reorder reverted) **4 of 7**; b1 (hoist by resolved type shape) **2** — uniquely the
-two "does not specialize" refusals; b2 (reverse within the group) **1**. b0 against the
-weak pins reads **0**, so the two changes are independent.
-
-**THE THREE REFUSAL PINS WERE BLIND ON THE FIRST WRITING AND ONLY AN ARM SAW IT.**
-`resolveCallOverload` falls back to `arityMatches[0]` when nothing accepts, so refusing a
-**first-declared** overload restores exactly the answer the refusal removes: a1/a2/a3 each
-demonstrably changed the selection and all three pins read **0 RED**. Declaring the weak
-overload SECOND makes the refusal observable.
