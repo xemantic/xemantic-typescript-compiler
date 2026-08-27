@@ -79,6 +79,10 @@ class ProjectOptionalMemberHoverTest {
         declare const zzzInst: ZzzShape;
         declare const zzzFlag: boolean;
         declare const zzzUn: { zzzMix?: number } | { zzzMix: string };
+        declare const zzzUn2: { zzzOrd: string } | { zzzOrd?: number };
+        declare const zzzIx: { zzzInt?: number } & { zzzOther: string };
+        interface ZzzBoth { zzzBoth?: number | undefined }
+        declare const zzzBi: ZzzBoth;
 
         class ZzzBase { zzzBaseOpt?: number }
         class ZzzDer extends ZzzBase {
@@ -101,6 +105,9 @@ class ProjectOptionalMemberHoverTest {
             if (zzzInst.zzzOpt !== undefined && zzzFlag) { zzzInst.zzzOpt; }
             if (zzzFlag && zzzInst.zzzOpt) { zzzInst.zzzOpt; }
             zzzUn.zzzMix;
+            zzzUn2.zzzOrd;
+            zzzIx.zzzInt;
+            zzzBi.zzzBoth;
         }
     """.trimIndent() + "\n"
 
@@ -169,6 +176,31 @@ class ProjectOptionalMemberHoverTest {
         // written FIRST and the required one second, and the sibling ordering is
         // covered by the ablation rather than by a second fixture.
         assert(hover(caret("zzzUn.zzzMix;", "zzzMix;")) == "string | number | undefined")
+    }
+
+    @Test
+    fun `a UNION receiver widens with the REQUIRED constituent written FIRST`() {
+        // The order sibling of the pin above, and the only thing that separates
+        // "scan the constituents" from "ask the union" — `getPropertyOfType`'s union
+        // arm happens to answer the FIRST constituent's symbol, so with the optional
+        // one first BOTH implementations agree. tsc: `string | number | undefined`.
+        assert(hover(caret("zzzUn2.zzzOrd;", "zzzOrd;")) == "string | number | undefined")
+    }
+
+    @Test
+    fun `an optional member already spelling undefined is unchanged`() {
+        // `zzzBoth?: number | undefined` — the widening must be idempotent. tsc:
+        // `number | undefined`.
+        assert(hover(caret("zzzBi.zzzBoth;", "zzzBoth;")) == "number | undefined")
+    }
+
+    @Test
+    fun `RESIDUE - an INTERSECTION receiver does not widen`() {
+        // tsc says `number | undefined`; we say `number`. An intersection member is
+        // the intersection of the declarations, which is a different question from
+        // the per-constituent ANY rule a union takes, so the leg refuses rather than
+        // guesses. Recorded with the value we answer.
+        assert(hover(caret("zzzIx.zzzInt;", "zzzInt;")) == "number")
     }
 
     @Test

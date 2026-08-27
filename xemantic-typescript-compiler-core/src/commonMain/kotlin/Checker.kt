@@ -8353,13 +8353,22 @@ class Checker(
      * here even where the assignability readers would not.
      *
      * Conservative by construction — it may decline to widen, it can never invent a
-     * constituent. An INTERSECTION receiver is refused (its member is the
-     * intersection of the declarations, a different question), and so is `super`,
-     * whose member symbol would be resolved off the DERIVED table and may be an
-     * override whose optionality differs from the base declaration the caret names
-     * — a documented residue, pinned with the value we answer. A UNION receiver is
-     * decided per constituent by [memberIsOptionalOnReceiver], never by asking the
-     * union itself (round 916).
+     * constituent. A UNION receiver is decided per constituent by
+     * [memberIsOptionalOnReceiver], never by asking the union itself (round 916):
+     * that arm's own ablation is green with the OPTIONAL constituent written first
+     * and reddens only with the REQUIRED one first, so both orders are pinned.
+     *
+     * The `super` and INTERSECTION refusals are MEASURED REDUNDANT and are recorded
+     * as such rather than claimed (last round's arm c1). Both shapes are pinned as
+     * RESIDUE with the value we answer — `number` where tsc says `number |
+     * undefined` — and BOTH keep answering it with the refusal removed, because the
+     * property lookup below already declines: `getPropertyOfType` has no
+     * Intersection branch, and a `super` receiver types to nothing it can resolve a
+     * member on (a two-mistake mechanism probe that also removed the `any`-receiver
+     * guard did not discriminate either). They are kept because each states the
+     * question this leg is NOT answering, and because giving `super` a carrier —
+     * exactly what (CHK.61)(a) did for `this` — would make the first one
+     * load-bearing overnight.
      */
     private fun typeCaptureOptionalMemberType(access: PropertyAccessExpression, captured: Type): Type {
         if (!strictNullChecks) return captured
