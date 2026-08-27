@@ -1,8 +1,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
-import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
@@ -45,10 +43,11 @@ import kotlin.test.Test
 class NamespaceTypeNameShadowingTest {
 
     private val prelude = """
-        interface ZzzColl<T> { zzzA(): T }
+        interface ZzzColl { zzzA(): boolean }
         interface ZzzOnlyGlobal { zzzG(): number }
         namespace ZzzNs {
           export declare class ZzzColl { zzzA(): number; zzzB(): string }
+          export declare const ZzzOnlyGlobal: number;
           export interface ZzzTp { zzzN: number }
           export declare class ZzzHolder {
             zzzM(): ZzzColl;
@@ -63,15 +62,22 @@ class NamespaceTypeNameShadowingTest {
     """.trimIndent() + "\n"
 
     /**
-     * POSITIVE — the namespace's own `ZzzColl` wins, so its `zzzB` exists and returns
-     * `string`. Before the fix the reference resolved to the GLOBAL `ZzzColl<T>`, which
-     * declares no `zzzB` at all, and the row was `TS2339: Property 'zzzB' does not exist`.
+     * POSITIVE — the namespace's own `ZzzColl` wins, so `zzzA()` returns `number` (the
+     * global's returns `boolean`) and both rows below are silent, as they are in tsc 7.0.2.
+     *
+     * TWO DRAFTS OF THIS PIN WERE BLIND AND THE ABLATION IS WHAT SAID SO. Asserting the
+     * ABSENCE of `TS2339: Property 'zzzB' does not exist` reads GREEN against an ablated
+     * binary in BOTH shapes of the global: written generic (`interface ZzzColl<T>`) the
+     * wrong resolution answers `errorType` through TS2314 and no member is ever looked
+     * up; written non-generic the member lookup is still not what reports. Only a
+     * DIFFERING RETURN TYPE discriminates, which is why the two declarations of `zzzA`
+     * disagree on purpose.
      */
     @Test
     fun `a namespace-local type wins over a same-named global`() {
-        val d = diagnose(prelude + "const zzzS1: string = zzzH.zzzM().zzzB()\n")
-        d should { have(none { it.code == 2339 }) }
+        val d = diagnose(prelude + "const zzzS0: number = zzzH.zzzM().zzzA()\n")
         assert(d.none { it.code == 2322 })
+        assert(d.none { it.code == 2339 })
     }
 
     /**
@@ -87,12 +93,14 @@ class NamespaceTypeNameShadowingTest {
     }
 
     /**
-     * CONTROL — a name the namespace does NOT export still resolves to the global, so the
-     * reorder cannot be a blanket "the namespace answers everything". tsc agrees on both
-     * halves; the second is what fails if the global stops being reachable.
+     * CONTROL — a name the namespace exports only as a VALUE (`export declare const
+     * ZzzOnlyGlobal: number`) does NOT shadow the global TYPE of that name, which is
+     * TypeScript's rule and is what [Checker.lookupTypeSymbolInInferenceNamespace]'s
+     * `SymbolFlags.Type` filter buys. Dropping that filter is ablation arm a4 and this
+     * is the only pin that sees it. tsc 7.0.2 agrees on both halves.
      */
     @Test
-    fun `control - a name the namespace does not export still resolves globally`() {
+    fun `control - a value-only namespace export does not shadow a global type`() {
         val ok = diagnose(prelude + "const zzzS3: number = zzzH.zzzO().zzzG()\n")
         assert(ok.none { it.code == 2322 || it.code == 2339 })
         val bad = diagnose(prelude + "const zzzS4: string = zzzH.zzzO().zzzG()\n")
