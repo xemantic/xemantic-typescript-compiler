@@ -299,21 +299,34 @@ class WeakReturnAssignmentDiagnosticTest {
 
     /**
      * REFUSAL — TWO OR MORE non-nullish constituents. tsc words those as ordinary
-     * assignability naming the WHOLE union (`q13.ts(1,48)` / `q13.ts(3,1)`: TS2322
-     * `Type 'number' is not assignable to type 'string | { zzzA?: null | undefined; }'`),
-     * which needs the RELATION to reject; no TS2559 may appear.
+     * assignability naming the WHOLE union, which needs the RELATION to reject; no
+     * TS2559 may appear. tsc 7.0.2 over `q16.ts`: `q16.ts(1,57)` and `q16.ts(3,1)`,
+     * `Type 'number' is not assignable to type '{ zzzA?: null | undefined; } |
+     * { zzzB?: null | undefined; }'` — the return row is byte-exact here already and
+     * the assignment row is a pre-existing hole in the ORDINARY assignability walk
+     * (silent), unrelated to the weak rule and untouched by it.
+     *
+     * **THE FIXTURE MUST CARRY TWO *WEAK* CONSTITUENTS**, which (CHK.57) measured the
+     * hard way: with a NON-weak one such as `{ zzzA?: null } | string`, dropping the
+     * single-survivor test hands [Checker.weakRefusalDisplayTarget] the `string`
+     * constituent (the resolved union's member ORDER is not its display order), on
+     * which every weak predicate bails anyway — so that shape is a DEAD arm and pins
+     * nothing. Verified: arm a5 (`singleOrNull` -> `firstOrNull`) reddens this pin and
+     * left the `| string` version green.
      */
     @Test
     fun `refusal - two non-nullish constituents do not take the weak wording`() {
         val d = diagnose("""
-            function zzzQ13f(): { zzzA?: null } | string { return 123; }
-            let zzzQ13v: { zzzA?: null } | string = "s"
-            zzzQ13v = 123
+            function zzzQ16f(): { zzzA?: null } | { zzzB?: null } { return 123; }
+            let zzzQ16v: { zzzA?: null } | { zzzB?: null } = {}
+            zzzQ16v = 123
         """)
         assert(d.none { it.code == 2559 || it.code == 2560 })
         assert(d.map { it.code } == listOf(2322))
+        assert(d[0].message == "Type 'number' is not assignable to type " +
+            "'{ zzzA?: null | undefined; } | { zzzB?: null | undefined; }'.")
         assert(d[0].line == 1)
-        assert(d[0].character == 48)
+        assert(d[0].character == 57)
     }
 
     /**
