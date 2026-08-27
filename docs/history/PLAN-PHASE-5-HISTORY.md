@@ -1,3 +1,152 @@
+### Round (CHK.46) — three mechanisms, and in TWO of them the type was never missing: a DESTRUCTURED name, a NESTED access and an un-annotated BODY-LOCAL were each unchecked as a RECEIVER
+
+**WHAT LANDED.** `Checker.cmamDestructuredReceiverType` + `cmamBindingElementDeclaration`
+(population (c)), `cmamCheckNestedObjectReceiver` + `cmamInGuardMayAddProperty` +
+`cmamConditionMentionsIn` (population (d)), and `cmamUnannotatedLocalReceiverType`
+(population (b)) — the three (CHK.45) measured and left open. Three commits,
+`7b8fe396` / `e915a0d6` / `e9ae5f50`, each with its own gate cycle.
+
+**THE ROUND'S MOST TRANSFERABLE OUTPUT, AND IT IS THE THIRD ROUND RUNNING TO PRODUCE
+ONE OF THIS SHAPE: IN (c) AND (d) THE *TYPE* WAS NEVER MISSING.** A write probe
+(`const p: number = inner`) answers `Inner` on the UNFIXED binary for a file-level
+destructured `const`, a body-local one, a destructured parameter and `p.inner`
+alike — five shapes, all matching tsgo 7.0.2 exactly. `cmamGeneralReceiverType`
+likewise already reads `Inner` for `h.inner`. What was missing is a CONSUMER, and
+only (b) is a block-scoping gap. Reading the queue item's framing as the diagnosis
+would have sent the round at the typing layer, which is correct in neither case.
+
+| population | why it was silent | the fix |
+|---|---|---|
+| (c) destructured, BOUND (file-level pattern) | `getTypeOfSymbol` has no `BindingElement` arm -> `anyType` | read the pattern's source + member syntactically |
+| (c) destructured, UNBOUND (body-local / ANY parameter pattern) | `getTypeOfIdentifier` -> `anyType`; `currentLocalTypes` does not carry it in this pass and `currentParamBindingNames` is a deliberate blanket `anyType` | same helper, lexical-scope route |
+| (d) nested access, single-OBJECT leaf | the union consumer accepts a `PropertyAccessExpression`; every NON-union receiver falls into the `!is Identifier` branch, whose three handlers are about `X.prototype` and namespaces | a single-Object emission behind (CHK.45)'s trust predicate |
+| (b) un-annotated body-local `const` | B83.5 leaves it unbound and no initializer is typed | read the INITIALIZER's type through the lexical tables |
+
+**(c) — AND WHY IT CANNOT RE-OPEN ROUND 429.** That round installed
+`currentParamBindingNames` as a blanket `anyType` because a destructured parameter
+name FALLING THROUGH resolved to a same-named FUNCTION in the merged globals (sys.ts's
+`useCaseSensitiveFileNames`, 9 self-compile false positives). This helper never falls
+through to any name table: it finds the `BindingElement` **syntactically**,
+innermost-first from the reference — the INV.2(c) lexical scopes for the unbound half
+(round 748's `symbols`-only rule, so a conventionally-bound name is untouched) and the
+reference's own per-file symbol for the bound one. Arms **a9 and a10 are exact
+COMPLEMENTS (1 RED / 11 RED)**, which is what says the two routes serve disjoint
+declaration sites rather than one shadowing the other. The UNION reading is substituted
+at `rawForNarrowing` and every other type at the two `any` bails — (CHK.44)'s measured
+split, because the union block consults the flow and the bail branches do not; a
+discriminant-narrowed destructured union therefore stays silent, matching tsgo row for
+row.
+
+**(d) — TWO REFUSALS THAT ARE MEASUREMENTS, AND ONE DEDICATED WALKER THAT NOW DEFERS.**
+Before the ARRAY-LIKE refusal the harness profile gained exactly ONE row:
+`fourslashImpl.ts`'s `options.description.slice(1)` on `[string, (string | number)[]]`
+— a tuple reaches `slice` through the global `Array`, which `getApparentType` does not
+supply here, and tsc is silent. And `if ('zzznope' in h.inner) { h.inner.zzznope }` is
+LEGAL: `narrowByInOperator`'s non-union arm deliberately answers the UNCHANGED type for
+it ("we just keep `t` (conservative)"), so the `narrowed !== raw` refusal is blind to
+it and a bounded backward walk over the flow antecedents was needed.
+**`checkMergeTypeMethodChain` then double-emitted** `o1.shape.p51` byte for byte — the
+corpus row went to two — and neither the call site's emptiness test nor an identity test
+on `diagnostics` from inside `checkSpine` can see that (both were built and measured),
+because that walker runs LATER; it now skips a row identical in (code, position, file,
+message).
+
+**(b) — TWO MEASURED REFUSALS AND ONE LINE DELETED AS DEAD.** `const` only: a `let` is
+exactly the population (CHK.44)'s three false positives came from. And a WHITELIST of
+initializer forms (a reference or an object literal), because a `new X(…)` costs
+`isolatedModulesShadowGlobalTypeNotValue` three baselines — `Date` there is a TYPE-ONLY
+import shadowing the global `Date` VALUE, so `getTypeOfExpression(new Date(…))` answers
+the imported INTERFACE and `b.getTime()` reads as missing. That is a value-vs-type
+resolution gap of its own and a receiver may not paper over it. (CHK.44)'s
+`typeHasNullishConstituent` line was DROPPED rather than shipped un-gateable: a nullish
+type is a union or an intrinsic, so `t !is Type.Object` — moved above it — decides every
+such reading (arm c7, 0 RED).
+
+**28 ABLATION ARMS ACROSS THE THREE MECHANISMS, ONE MISTAKE EACH, EACH DIFFED AGAINST THE
+ARM'S OWN SNAPSHOT, EACH ANCHOR ASSERTED UNIQUE.**
+
+| (c) | mistake | RED | | (d) | mistake | RED |
+|---|---|---|---|---|---|---|
+| a1 | helper returns null | 12 | | b1 | emission returns false | 8 |
+| a2 | drop the REST refusal | 1 | | b2 | drop the ARRAY-LIKE refusal | 1 |
+| a3 | `singleOrNull` -> `firstOrNull` | 1 | | b3 | drop the `in`-guard consult | 1 |
+| a4 | drop the NULLISH refusal | 1 | | b4 | `in` match ignores the NAME | 1 |
+| a5 | drop the CLASS refusal | 1 | | b5 | `in` match ignores the PATH | 1 |
+| a6 | drop the union substitution | 2 | | b6 | drop the trust predicate | 2 |
+| a7 | drop the localTypes refusals | **0** | | b7 | drop `narrowed !== raw` | **0** |
+| a8 | `name` for `propertyName ?: name` | 2 | | b8 | drop the emptiness guard | **0** |
+| a9 | drop the per-file (bound) route | 1 | | b9 | drop the walker dedupe | 1 |
+| a10 | drop the lexical (unbound) route | 11 | | b10 | b2 AND b6 together | 4 |
+
+and for (b): c1 (helper returns null) **7 — every positive, both CONTROLS green**;
+c2 (drop `const`) 1; c3 (drop the whitelist) **3 — the corpus baselines**; c4 (drop the
+`in` consult) 1; c5/c6/c7/c9 **0**.
+
+**TWO PINS WERE VACUOUS AND ONLY AN ARM SAW IT — BOTH FAILED IN THE REASSURING
+DIRECTION.** (1) A rest-element refusal written on the shape the refusal is ABOUT read
+0 RED: with the guard gone the member lookup finds nothing called `others` and
+`singleOrNull` refuses anyway. Re-pinned in the FALSE-POSITIVE direction — a rest
+element whose NAME is a member of the source (`const { other, ...inner } = h`) would
+adopt that member's type and report a LEGAL access — it reads 1 RED. **A refusal pin
+written on the shape the refusal is about is not automatically a pin on the refusal.**
+(2) An `in`-guard negative dressed with a cast to keep the fixture free of an unrelated
+error made the receiver the CAST rather than the path; written plainly it reads 1 RED.
+
+**AND THE GENERIC-INSTANTIATION REFUSAL IS A ROUND-927 PAIR.** It is guarded by the
+trust predicate's `Type.Reference` line AND by the array-like line — an array Reference
+carries a number index signature — and NEITHER is redundant, because each covers
+generic instantiations the other does not; only the combined arm b10 reddens it.
+Recorded as ONE observable. Six further arms read 0 RED and are recorded as redundant
+guards (round 807), each with the layer that actually refuses: a7 (the population it
+protects, (CHK.44)'s deliberate `anyType` entries, is one no fixture here can build),
+b7/b8, c5/c6/c7/c9 (every refusal shape this class can build is ALSO refused downstream
+by `cmamCheckResolvedObjectType`).
+
+**GATES, EACH RUN THREE TIMES — ONCE PER COMMIT.** Suite **16,050 / 0 / 3** (+52,
+exactly the three new classes), **zero corpus baselines moved**. 8-profile grid
+**`added=0 removed=0` on all eight** and **knip 66 -> 66 with every row byte-identical**,
+both against a parent binary **rebuilt in this session** (javap control: the six new
+methods read 0 in the before arm and 6 in the after; the knip before arm read 66 from
+that same rebuilt binary). `cost_gate.py` was **rebaselined once, in the (c) commit**:
+`typeNode.cacheHits` +2.09% against a baseline recorded 2026-08-25 of which (CHK.45) had
+already recorded **+1.96%**, so ~0.13pp is this round's — the type-node resolutions
+`typeCaptureDestructured` performs at the two `any` bails, which are cache HITS
+(`cacheable` +1.41%, `bypassed` +0.08%). (d) and (b) then PASS unrebaselined, largest
+movement `narrow.memoServed` **+0.57%**. `output.errors` **46** and `spine.nodes`
+**+0.00%** at every point. `huge_methods --fail-over 0` exit 0, **783** classes scanned,
+0 over limit. `partition-equivalence` **EQUIVALENT, all 78**, floor **60 ms**
+[73, 60, 58, 59] (one draw). `capture-equivalence` **1,005 spans / 43 of 76 /
+`narrowRendersMoreAny` 0**, `definitions` **360,376** — the standing state, both digests
+unmoved.
+
+**WHAT DID NOT WORK, AND WHAT IS LEFT.** Two designs were built and reverted inside (d):
+a positional/message dedupe at the new emission site (mine runs FIRST, so it cannot see
+the later walker) and a "refuse when the BASE is a `Type.Reference`" gate (`o1`'s type is
+an ALIAS instantiation, an anonymous object, so it never fired). The instrument that
+named the real producer was `--passTiming`'s `emissions by pass` table on a scratch
+project — two rows, `checkMergeTypeMethodChain 5` and `checkSpine 1` — which is worth
+reaching for first next time a duplicate appears.
+
+Three gaps stay OPEN and are recorded here rather than pinned (round 765):
+
+ 1. **An outer-binding COLLISION defeats the shadow.** A body-local `const { inner } = h`
+    under a file-level `const inner: Deep` reports `Deep` for an `Inner`, and a
+    destructured parameter named like a file-level function reports `typeof alpha` for a
+    `string`. **Measured on the PARENT binary too — it is pre-existing and independent**:
+    `fileLocalTypeMapFor` / `lookupPerFileForNode` answer before any (CHK.46) helper is
+    consulted, because `getTypeOfExpression` never returns `anyType` for such a name. It
+    is a wrong MESSAGE at a place tsc also errors, not a false positive.
+ 2. **The COMPOSITIONS.** `const c = h; c.inner.zzznope` and
+    `const c = h; const { inner } = c; inner.zzznope` are still silent: the root answers
+    `any`, so neither the nested emission nor the destructuring source ever sees a type.
+    Closing (b) for the *initializer* case does not compose, because (b)'s substitution
+    happens at the Identifier bail and the nested path reads `getTypeOfExpression` of the
+    whole chain.
+ 3. **Known false negatives, each pinned as a refusal with its reason**: a rest element,
+    an array/tuple pattern, a union source answering per constituent, a nullish member, a
+    class-instance member, a heritage-carrying leaf, a generic-instantiation leaf, a tuple
+    leaf, a call receiver, a `let` binding, and a `new X(…)` initializer.
+
 ### Round (CHK.42)+(CHK.43) — the three grid rows that blocked the return-position walk were ALL false positives we already shipped; the walk is in, `added=0 removed=0` on all eight
 
 ### Round (CHK.41) — the guarded reassignment `c = c()` now reduces the DECLARED union; and (CHK.41)'s own premise was two-fifths right — the 15 knip rows are **five** mechanisms, not one

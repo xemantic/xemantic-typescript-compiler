@@ -1,3 +1,61 @@
+
+**A `declare global { … }` BLOCK'S EXPORTS NEVER REACHED `globals` — THE CARRIER MERGED AND
+THE CONTENTS DID NOT, AND **SEVEN OF EIGHT** DECLARATION FORMS WERE WRONG (2026-08-26,
+(CHK.50)).** `declare global` parses as a ModuleDeclaration named `global`, so step 1 merged
+that symbol (INV.3(d)'s deliberate global contribution) and nothing merged its `exports`.
+**The queue item's "the `var` form works, so the value half is fine" is measured WRONG**: `var`
+was correct only in the DECLARING file — cross-file it was silently `any` — and
+`function`/`namespace`/`class` were `any` in BOTH scopes, TS2304-suppressed by
+`globalAugmentationNames` and typed by nothing; `interface`/`type`/`enum` were TS2304
+outright; and an `interface Date { … }` augmentation reported **TS2339 on the member it had
+just declared**. Only a WRITE probe sees any of that.
+
+**FOUR EDITS, THREE OF THEM FORCED BY THE FIRST.** `init:mergeGlobalAugmentations` merges each
+LEGAL block's exports (legality mirrors `spineCheckGlobalAugmentation`'s TS2669 predicate, so a
+global-SCRIPT block contributes nothing — as in tsgo); `buildPerFileScopes` seeds every file
+with the ADOPTED names, **without which the two halves disagree — the type resolves through
+`globals` while the unresolved-name family reports TS2304 on the name it just typed**;
+`isNameExportedFromNamespace` learns that a namespace ambient by CONTEXT implicitly exports
+(`declare global { namespace NodeJS { … } }`, a regression this round would otherwise have
+INTRODUCED); and `namespace globalThis` is refused, because it augments the global scope
+itself — publishing it reddened the corpus case `extendGlobalThis`, the only baseline this
+round moved and the only instrument that saw it. Queued as (CHK.53).
+
+**(CHK.51)'s NAMED COST IS PAID.** Its `globalAugmentedInterfaceNames` set existed only
+because such a block did not merge; the set and its collector are DELETED, the all-lib test
+admits a `declare global` InterfaceDeclaration, and `el.zzzNotThere` on an augmented
+`HTMLElement` is now TS2339 as tsgo says. Both matrices match tsgo 7.0.2 **row for row**.
+
+**GATES.** Suite **16,118 / 0 / 3** (+11, exactly the new class); the landed shape moves no
+corpus baseline. `cost_gate.py` **PASSES with NO rebaseline**, exit 0 — `output.errors` **46**,
+`spine.nodes` +0.00%, largest movements `narrow.memoServed` **+0.69%** / `typeOfExpr.calls`
+**+0.59%**, digit-for-digit (CHK.49)'s and (CHK.51)'s, i.e. this round contributes 0.00%.
+`huge_methods --fail-over 0` exit 0, **783** classes scanned. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **56 ms** [56, 56, 57, 52] — one draw, no leading ramp.
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — unmoved.
+8-profile BEFORE/AFTER grid, both arms built this session, md5s `b347a38a…` / `3163ffc4…` and a
+`javap` control (0 vs 3): **`added=0 removed=0` on all eight**.
+
+**THE knip ROW COUNT WENT *UP*, AND THAT IS THE HONEST RESULT: 49 -> 54.** One row GOES — a
+real fix, `TS2591 Cannot find name 'Buffer'`, since `@types/node` declares it in a
+`declare global` block. Six ARRIVE, and every one is a **pre-existing overload-selection
+defect that `any` had been hiding**: `readFileSync(p, 'utf8')` picks the `Buffer` overload
+whose parameter `"utf8"` is not assignable to. Proved pre-existing by MEASUREMENT — a six-line
+repro with the interface declared as a plain local, no `declare global` anywhere, emits the
+identical rows on the PARENT binary and the landed one. Queued as (CHK.54).
+**`jsonrepair` 3.13.1: 4 -> 4 byte-identical, and its tsconfig loads `dom` — a real arm.**
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, each `cmp`-diffed against its OWN snapshot with the
+restore verified OUTSIDE the driver, each anchor asserted unique, each `Checker.class` md5
+recorded.** a0 (whole change reverted, parent rebuilt this session) **9 RED**; a1 (the merge
+loop alone) **9 — the same set**, so a0/a1 are a NESTING and not a round-927 pair: edits 2-4
+are reachable only because the merge exists. a2 (per-file seed) **3**; a3 (legality gate) **1**;
+a6 (`globalThis`) **1**; a7 (ambient-by-context) **1**; a8 (the (CHK.51) allowance) **2**;
+a9 (ambient-module recursion) **1**. **a4 and a5 read 0 RED and are KEPT as UNDISCRIMINATED** —
+and a5 was given a PURPOSE-BUILT falsifier (two blocks in one file against a
+`declarations.addAll` with no membership test) which **still read 0**, because a member table
+is keyed by NAME (round 813: the retry was tried and it answered).
+
 **A MODULE FILE'S OWN `interface Text` WAS MERGED *INTO* THE DOM `Text` — PROGRAM-WIDE,
 IN BOTH DIRECTIONS, AND SILENTLY (2026-08-26, (CHK.49)).** `mergeSingleSymbol` ADOPTS
 (round 884: `globals[name]` IS the binder's object), so one module's declaration grew the

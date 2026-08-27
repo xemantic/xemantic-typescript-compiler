@@ -1,5 +1,66 @@
 # Status
 
+**THE WEAK-TYPE RULE FIRED AT A VAR DECL AND AT A CALL ARGUMENT AND **NOWHERE ELSE** — SO
+`return v` AND `x = v`, TWO OF THE COMMONEST PLACES A DEVELOPER GETS A TYPE WRONG, REPORTED
+NOTHING (2026-08-27, (CHK.58), four fixes).** Not a union defect: the BARE target was silent
+too, and the one row the return position DID have carried the wrong CODE (TS2322 naming the
+whole union where tsc names the surviving constituent). `tryEmitWeakValuePosition` is the
+shared emitter and `weakAssignmentTarget` reads the LHS's DECLARED type; the anchors were
+read off tsc 7.0.2 and CORROBORATED BY PRISTINE rather than by tsgo alone — a return
+squiggles the `return` keyword (`~~~~~~`), an assignment squiggles the LHS reference (one
+`~` under the `c` of `c = d` in `assignmentCompatWithObjectMembersOptionality2.errors.txt`).
+**Twelve tsc rows that were missing now land byte-exact; one wrong-code row is corrected.**
+
+**AND TS2560 IS "CALLING IT WOULD HAVE WORKED", NOT "THE SOURCE IS CALLABLE"** — four of six
+callable shapes carried the wrong code (`() => number`, `() => { zzzZ: string }`,
+`() => void` and a disjoint construct signature are all TS**2559**). **THE RELATION ASKED
+MUST CARRY THE WEAK RULE ITSELF**, which no reading of tsc's source produces: tsc's weak
+check lives INSIDE `isRelatedTo`, so `number` is not related to a weak object there where
+ours accepts it vacuously. The corpus is structurally blind — `weakType.errors.txt` is the
+only ACTIVE baseline with 2560 rows and every one of its sources has a related call result.
+
+**AND A WEAK MESSAGE NAMES THE ENUM *MEMBER*, EXCEPT WHERE THE ENUM HAS EXACTLY ONE — AND
+THE ONE BASELINE GATING IT AGREED WITH THE WRONG ANSWER.** Pristine's
+`nestedExcessPropertyChecking.errors.txt` says `Type 'E'` and its `enum E { A = "A" }` has
+ONE member, where the enum type and the member's literal type are the same type. Both
+flavours, both counts, measured: `{A="A",B="B"}` and `{A,B}` render `E.A`; `{A="A"}` and
+`{A}` render `E`. **AND a `new C()` var-decl initializer is now a source** —
+`topLevelWeakSource` had branches for a cast, an enum member and a literal but not for a
+`NewExpression`, so the same source reported at an argument and was silent at a var decl.
+
+**ORDER IS A COST DECISION.** Asking the VALUE's type before the TARGET's weakness measured
+**+6.89% `typeOfExpr.calls`**, and giving the return site its own `getTypeFromTypeNode`
+**+2.9% `typeNode.cacheable` / +11.2% `mapped.hits`** — both for BYTE-IDENTICAL output. As
+landed every counter is inside the band (largest **+1.40%**).
+
+**GATES.** Suite **16,199 / 0 / 3** (+30, exactly the four new classes), **no corpus baseline
+moved**. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**. `huge_methods
+--fail-over 0` exit 0, **783** classes. 8-profile grid over two session-built binaries:
+md5 `503774c2…` on the parent AND every ship, per-profile `diff` clean — **`added=0
+removed=0` on all eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all
+78**, floor **62 ms** [60, 61, 65, 62] — one draw. `capture-equivalence` **1,005 / 43 of 76
+/ moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5`
+48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to a parent arm built in
+this session.
+
+**TWELVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0 (whole change
+reverted) **8 RED — exactly the eight positives**; a1/a2 (return / assignment site removed)
+**5 / 6**, unique for the position-specific pins and a ROUND-927 PAIR for the three
+both-position ones; a3 (object-literal refusal) **1**, a4 (callable refusal) **1**, a5
+(single-survivor test) **3 in three classes = one observable**; b1 (2559/2560 split
+reverted) **4**, b2 (the weak veto dropped from the call-result relation) **3**; c1/c2 (the
+enum member-COUNT boundary dropped either way) **2 each, complementary**; d1 (the `new`
+branch) **2**. **THREE ARMS READ 0 AND ARE RECORDED, NOT CLAIMED**: a6 (the declared-type
+ladder replaced by `getTypeOfExpression`) and a7 (the target-weakness pre-gate) are cost
+choices no output can see, and b3/b3b are DEAD — the pristine `getDefaultSettings` shape
+they were written for RESOLVES its inferred return type here.
+
+**RESIDUE, ALL MEASURED, RE-QUEUED AS (CHK.59)**: two-or-more non-nullish constituents
+(needs the RELATION), a CALLABLE source at the three non-argument positions (unblocked by
+the code split, but tsc anchors those at the EXPRESSION and not at the name/keyword/LHS), an
+enum-member CALL ARGUMENT, a generic instantiation (the deliberate `Type.Reference` bail,
+now SYMMETRIC across positions), the nested object-literal LEAF walker, and the fresh
+object-literal-vs-bare-weak-argument TS2353 boundary.
 
 **THE WEAK-TYPE RULE DID NOT DISTRIBUTE OVER A **UNION** TARGET — SO IT WAS ABSENT FROM THE
 MAJORITY OF THE POSITIONS WHERE IT FIRES (2026-08-27, (CHK.57)).** `weakTargetProperties`
@@ -228,60 +289,3 @@ weak pins reads **0**, so the two changes are independent.
 **first-declared** overload restores exactly the answer the refusal removes: a1/a2/a3 each
 demonstrably changed the selection and all three pins read **0 RED**. Declaring the weak
 overload SECOND makes the refusal observable.
-
-**A `declare global { … }` BLOCK'S EXPORTS NEVER REACHED `globals` — THE CARRIER MERGED AND
-THE CONTENTS DID NOT, AND **SEVEN OF EIGHT** DECLARATION FORMS WERE WRONG (2026-08-26,
-(CHK.50)).** `declare global` parses as a ModuleDeclaration named `global`, so step 1 merged
-that symbol (INV.3(d)'s deliberate global contribution) and nothing merged its `exports`.
-**The queue item's "the `var` form works, so the value half is fine" is measured WRONG**: `var`
-was correct only in the DECLARING file — cross-file it was silently `any` — and
-`function`/`namespace`/`class` were `any` in BOTH scopes, TS2304-suppressed by
-`globalAugmentationNames` and typed by nothing; `interface`/`type`/`enum` were TS2304
-outright; and an `interface Date { … }` augmentation reported **TS2339 on the member it had
-just declared**. Only a WRITE probe sees any of that.
-
-**FOUR EDITS, THREE OF THEM FORCED BY THE FIRST.** `init:mergeGlobalAugmentations` merges each
-LEGAL block's exports (legality mirrors `spineCheckGlobalAugmentation`'s TS2669 predicate, so a
-global-SCRIPT block contributes nothing — as in tsgo); `buildPerFileScopes` seeds every file
-with the ADOPTED names, **without which the two halves disagree — the type resolves through
-`globals` while the unresolved-name family reports TS2304 on the name it just typed**;
-`isNameExportedFromNamespace` learns that a namespace ambient by CONTEXT implicitly exports
-(`declare global { namespace NodeJS { … } }`, a regression this round would otherwise have
-INTRODUCED); and `namespace globalThis` is refused, because it augments the global scope
-itself — publishing it reddened the corpus case `extendGlobalThis`, the only baseline this
-round moved and the only instrument that saw it. Queued as (CHK.53).
-
-**(CHK.51)'s NAMED COST IS PAID.** Its `globalAugmentedInterfaceNames` set existed only
-because such a block did not merge; the set and its collector are DELETED, the all-lib test
-admits a `declare global` InterfaceDeclaration, and `el.zzzNotThere` on an augmented
-`HTMLElement` is now TS2339 as tsgo says. Both matrices match tsgo 7.0.2 **row for row**.
-
-**GATES.** Suite **16,118 / 0 / 3** (+11, exactly the new class); the landed shape moves no
-corpus baseline. `cost_gate.py` **PASSES with NO rebaseline**, exit 0 — `output.errors` **46**,
-`spine.nodes` +0.00%, largest movements `narrow.memoServed` **+0.69%** / `typeOfExpr.calls`
-**+0.59%**, digit-for-digit (CHK.49)'s and (CHK.51)'s, i.e. this round contributes 0.00%.
-`huge_methods --fail-over 0` exit 0, **783** classes scanned. `partition-equivalence`
-**EQUIVALENT, all 78**, floor **56 ms** [56, 56, 57, 52] — one draw, no leading ramp.
-`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — unmoved.
-8-profile BEFORE/AFTER grid, both arms built this session, md5s `b347a38a…` / `3163ffc4…` and a
-`javap` control (0 vs 3): **`added=0 removed=0` on all eight**.
-
-**THE knip ROW COUNT WENT *UP*, AND THAT IS THE HONEST RESULT: 49 -> 54.** One row GOES — a
-real fix, `TS2591 Cannot find name 'Buffer'`, since `@types/node` declares it in a
-`declare global` block. Six ARRIVE, and every one is a **pre-existing overload-selection
-defect that `any` had been hiding**: `readFileSync(p, 'utf8')` picks the `Buffer` overload
-whose parameter `"utf8"` is not assignable to. Proved pre-existing by MEASUREMENT — a six-line
-repro with the interface declared as a plain local, no `declare global` anywhere, emits the
-identical rows on the PARENT binary and the landed one. Queued as (CHK.54).
-**`jsonrepair` 3.13.1: 4 -> 4 byte-identical, and its tsconfig loads `dom` — a real arm.**
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH, each `cmp`-diffed against its OWN snapshot with the
-restore verified OUTSIDE the driver, each anchor asserted unique, each `Checker.class` md5
-recorded.** a0 (whole change reverted, parent rebuilt this session) **9 RED**; a1 (the merge
-loop alone) **9 — the same set**, so a0/a1 are a NESTING and not a round-927 pair: edits 2-4
-are reachable only because the merge exists. a2 (per-file seed) **3**; a3 (legality gate) **1**;
-a6 (`globalThis`) **1**; a7 (ambient-by-context) **1**; a8 (the (CHK.51) allowance) **2**;
-a9 (ambient-module recursion) **1**. **a4 and a5 read 0 RED and are KEPT as UNDISCRIMINATED** —
-and a5 was given a PURPOSE-BUILT falsifier (two blocks in one file against a
-`declarations.addAll` with no membership test) which **still read 0**, because a member table
-is keyed by NAME (round 813: the retry was tried and it answered).
