@@ -159899,6 +159899,11 @@ interface DataView {
                 return false
             }
             if (source.types.any { checkTypeRelatedTo(it, target, relation) }) return true
+            // (CHK.61)(1) PROBE: the symmetric ACCEPTANCE twin.
+            if (target is Type.Object && target.tupleElementTypes == null &&
+                intersectionMergedSatisfiesTarget(source, target, relation)) {
+                return true
+            }
             // Round 744: `A & (B | C)` vs anything — see [intersectionSourceDistributes].
             return intersectionSourceDistributes(source, target, relation)
         }
@@ -165007,6 +165012,62 @@ interface DataView {
      * properties: a missing property is left to the constituent/structural path, so this
      * only ADDS failures for genuinely-incompatible present members (low FP surface).
      */
+    /**
+     * (CHK.61)(1) PROBE — the ACCEPTANCE twin of [intersectionMergedContradictsTarget]:
+     * every target property is supplied by SOME constituent of the merged intersection
+     * with a relating type. Deliberately conservative: it bails on anything the merge
+     * cannot decide.
+     */
+    private fun intersectionMergedSatisfiesTarget(
+        source: Type.Intersection, target: Type.Object, relation: Relation,
+    ): Boolean {
+        if (source.types.any { it !is Type.Object }) return false
+        val mergedMembers = mutableMapOf<String, MutableList<Symbol>>()
+        for (c in source.types) {
+            if (c is Type.Object) {
+                resolveStructuredTypeMembers(c)
+                val m = c.members ?: return false
+                m.forEach { (n, sy) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(sy) }
+                if (!c.callSignatures.isNullOrEmpty() || !c.constructSignatures.isNullOrEmpty()) return false
+            }
+        }
+        if (mergedMembers.isEmpty()) return false
+        resolveStructuredTypeMembers(target)
+        if (!target.callSignatures.isNullOrEmpty() || !target.constructSignatures.isNullOrEmpty()) return false
+        if (target.stringIndexInfo != null || target.numberIndexInfo != null) return false
+        val targetProps = target.properties ?: return false
+        if (targetProps.isEmpty()) return false
+        for (targetProp in targetProps) {
+            if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            val sourceProps = mergedMembers[targetProp.name]
+            if (sourceProps == null) {
+                if (isOptionalProperty(targetProp)) continue
+                return false
+            }
+            var ok = false
+            for (sourceProp in sourceProps) {
+                // The DECLARATION's own type, with the `?` SPELLED OUT. Without it the
+                // rule is unsound in this direction: `FunctionExpression & { name:
+                // undefined; … }` was accepted against `{ name: Identifier }` because
+                // `FunctionExpression`'s `name?: Identifier` is modelled here as plain
+                // `Identifier` ((CHK.61)(b)) and the "ANY declaration relates" step then
+                // picked it, where the real intersected member is `undefined`. Widened
+                // LOCALLY: this is a suppression rule, so being pessimistic about a
+                // source member can only decline to suppress.
+                var srcType = getTypeOfSymbol(sourceProp)
+                if (isOptionalProperty(sourceProp) && !typeIncludesUndefined(srcType)) {
+                    srcType = getUnionType(listOf(srcType, undefinedType))
+                }
+                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+                if (srcType === errorType || tgtType === errorType) return false
+                if (srcType === anyType || tgtType === anyType ||
+                    checkTypeRelatedTo(srcType, tgtType, relation)) { ok = true; break }
+            }
+            if (!ok) return false
+        }
+        return true
+    }
+
     private fun intersectionMergedContradictsTarget(
         source: Type.Intersection, target: Type.Object, relation: Relation,
     ): Boolean {
