@@ -1,6 +1,58 @@
 # Status
 
 
+**THE WEAK-TYPE RULE DID NOT DISTRIBUTE OVER A **UNION** TARGET — SO IT WAS ABSENT FROM THE
+MAJORITY OF THE POSITIONS WHERE IT FIRES (2026-08-27, (CHK.57)).** `weakTargetProperties`
+answers null for a `Type.Union`, so every B482 walker — the ones that EMIT TS2559/TS2560 at
+a named position — was blind to a weak type reached through one, while (CHK.54)'s SELECTION
+and (CHK.56)'s TS2769 path had folded over constituents all along. `T | null` /
+`T | undefined` is the commonest parameter and variable shape in real TypeScript.
+`weakUnionRefusalConstituent` composes the verdict (`weakParamRefusesArg`) and the display
+(`weakRefusalDisplayTarget`) into the single-signature CALL argument site and
+`tryEmitTopLevelWeakVarDecl`, as a branch DISJOINT from the bare-target one — so the bare
+path is byte-identical and its controls stay green under every arm.
+
+**BOTH POSITIONS NOW MATCH tsc 7.0.2 EXACTLY** — code, message, line and column, read off
+the compiler and never derived — as do the `| undefined`, interface-, alias- and
+`Partial<…>`-constituent, non-fresh-object-source and REST-parameter variants.
+**Three shapes refuse deliberately, each MEASURED**: two or more non-nullish constituents
+(tsc's TS2345/TS2322 naming the whole union needs the RELATION to reject); an object-literal
+ARGUMENT ((CHK.56)'s boundary — tsc's excess check squiggles the property two columns
+right); and a CALLABLE source, because tsc emits TS2560 only when CALLING the source yields
+an assignable value (`() => number` against a weak object is TS**2559**) where we emit 2560
+for every callable — a pre-existing BARE-target divergence that would have been inherited as
+a wrong-CODE row.
+
+**TWO ABLATION FINDINGS WORTH MORE THAN THE FIX.** The queue entry's own two-constituent
+example (`{ zzzA?: null } | string`) is a **DEAD ARM** — with a non-weak FIRST constituent,
+dropping the single-survivor test still emits nothing, because the emitter bails on a
+`string` target anyway; the discriminating shape is two WEAK object constituents, and with
+it the arm went 0 -> 1 RED (round 902). And the helper's `weakParamRefusesArg` call is a
+**REDUNDANT guard**, explicable term for term: for the single surviving constituent every
+test it makes is re-made by `tryEmitWeakTypeAssignment`. Recorded as such, not claimed as
+coverage (round 807).
+
+**GATES.** Suite **16,169 / 0 / 3** (+14, exactly the one new class), **no corpus baseline
+moved** — the 13k baselines carry no weak-union shape at all. `cost_gate.py` exit 0
+unrebaselined, `output.errors` **46**, the table the parent's to +0.006% on its largest
+counter. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
+session-built binaries (`javap` control 0 vs 1): capture md5 `503774c2…` on BOTH, per-profile
+`diff` clean — **`added=0 removed=0` on all eight**, unmoved since (CHK.54).
+`partition-equivalence` **EQUIVALENT, all 78**, floor **63 ms** [63, 62, 51, 81] — one draw.
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both ARM
+DIGESTs unmoved. **`knip` 48 -> 48 and `jsonrepair` 4 -> 4, EVERY ROW BYTE-IDENTICAL** — the
+queue item's "it ADDS rows … expect it to fire on real code" is measured FALSE, and (CHK.54)
+is why: selection already refuses these signatures, so `readFileSync` picks the `string`
+overload and the argument site never asks.
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, ALL SEVEN CLASS md5s DISTINCT.** a0 (whole change
+reverted, parent rebuilt this session) **7 RED — exactly the seven positives**; a1 (object-
+literal guard dropped) **1**, a2 (single-survivor test dropped) **1**, a3 (callable guard
+dropped) **1**, each uniquely its own pin; a4 (argument site removed) **6**, a5 (var-decl
+branch removed) **2**; a6 (the verdict not asked) **0 — a redundant guard**. Residue —
+the RETURN and ASSIGNMENT positions have no weak walker at all, and the 2559/2560 split —
+queued as (CHK.58) with a fixture apiece.
+
 **THE TS2769 *DIAGNOSTIC* PATH DID NOT ASK THE WEAK-TYPE RULE — AND THE ITEM'S "HARD
 PART" WAS A **tsgo RENDERING**, NOT tsc's (2026-08-27, (CHK.56)).** (CHK.54) gave overload
 SELECTION the weak rule and left the diagnostic path alone, so `allArgumentsMatch`
@@ -233,54 +285,3 @@ a9 (ambient-module recursion) **1**. **a4 and a5 read 0 RED and are KEPT as UNDI
 and a5 was given a PURPOSE-BUILT falsifier (two blocks in one file against a
 `declarations.addAll` with no membership test) which **still read 0**, because a member table
 is keyed by NAME (round 813: the retry was tried and it answered).
-
-**THE AXIS WAS *HERITAGE*, NOT "LIB" — A MISSING MEMBER ON ANYTHING WITH AN `extends` WAS
-SILENT, AND THE FIREWALL THAT HIDES IT IS WORTH **43 ROWS** ON THE COMPILER PROFILE
-(2026-08-26, (CHK.51)).** The queue item's own repro (`Date`) already reported, as did `Map`,
-`Set`, `Promise`, `RegExp`, `Error`, `JSON`, `Math`, `Symbol`, `Iterable`, `ArrayBuffer`,
-`EventTarget` and every primitive — all heritage-free — while a HAND-WRITTEN
-`interface D1 extends B1` was as silent as `Text`. What refuses is
-`cmamCheckResolvedObjectType`'s "skip if class/interface has base types", and **deleting it
-outright measures 89 diagnostics on the compiler profile against 46**: every one of the 43 new
-rows is a NARROWING gap, above all the INTERSECTION narrow tsc performs when a predicate names a
-SIBLING (`canHaveSymbol(node: Node): node is Declaration` applied to an `e: Expression`). **The
-firewall has been standing in for flow narrowing this checker does not do.**
-
-**SO THE HOLE PUNCHED IN IT DEMANDS POSITIVE EVIDENCE ((CHK.45)'s RULE).** A new predicate
-answers true only when every type in the receiver's transitive base closure is an interface with
-a symbol, with declarations, with every declaration in `builtinLibDecls`, not named by any
-`declare global { interface … }` block, and with a member table that resolved. `Text`, `Node`,
-`Element`, `HTMLElement` and `CustomEvent<number>` now match tsgo 7.0.2 on **code, message and
-column**, read out of `tools/tsgo-7.0.2/lib/tsc` rather than hand-written.
-
-**THE `declare global` SET IS THE LOAD-BEARING HALF AND EXISTS BECAUSE OF AN *OPEN* DEFECT.**
-(CHK.50) is that a `declare global { interface X { … } }` in a module never reaches `globals`, so
-the lib symbol's declaration list still reads "all lib" after such an augmentation — without a
-separate name set this change would have turned (CHK.50)'s silent false NEGATIVE into a false
-POSITIVE on the shape every `@types` package is written in. Cost, named: in a file that writes
-one, `el.zzzNotThere` is TS2339 in tsgo and silent here, and that goes away when (CHK.50) lands.
-
-**GATES.** Suite **16,107 / 0 / 3** (+6, exactly the new class), **zero corpus baselines moved**
-(the generated corpus compiles against the EMBEDDED lib, which has no DOM). `cost_gate.py`
-**PASSES with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest
-movements `narrow.memoServed` **+0.69%** / `typeOfExpr.calls` **+0.59%**, digit-for-digit
-(CHK.49)'s, i.e. this round contributes 0.00%. `huge_methods --fail-over 0` exit 0, **783**
-classes scanned. `partition-equivalence` **EQUIVALENT, all 78**, floor **59 ms**
-[89, 56, 57, 59] — one draw, the leading 89 the documented ramp. `capture-equivalence`
-**1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — the standing state, unmoved.
-8-profile grid with both arms built in this session and a `javap` positive control (0 vs 3):
-**`added=0 removed=0` on all eight**. **`jsonrepair` 3.13.1 4 -> 4 byte-identical, and its
-tsconfig loads `dom` — a real no-false-positive arm, not a control; `knip` 49 -> 49
-byte-identical IS a control (its `"lib": ["esnext"]` excludes DOM).**
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EACH
-`Checker.class` md5 CHECKED.** a0 (whole change reverted) **3 RED — every positive**; a1 (drop
-the all-lib test) **1 RED + profile 89**; a2 (drop the `declare global` refusal) **1**; a6 (drop
-its COLLECTOR instead) **1, the same pin** — a round-927 pair; a7 (revert the `Type.Reference`
-leg) **1, uniquely the generic pin**. **a3/a4a/a4b/a5 read 0 RED and are recorded as
-UNDISCRIMINATED and KEPT** — not redundant and not dead: each is unreachable only because of what
-the shipped libs happen to CONTAIN today, and the libs are input this repo does not author.
-
-**THE OBVIOUS FALSE-POSITIVE PIN WAS BLIND AND ONLY AN ARM SAW IT.** Written with a predicate
-type that is a SUBTYPE of the receiver's, it is green on the ablated binary too — a1 read
-**0 RED with the profile at 89** (round 902's law). A type-guard FP fixture must name a SIBLING.

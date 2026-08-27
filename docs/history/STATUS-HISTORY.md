@@ -2537,3 +2537,53 @@ which does not carry them verbatim): the same 6-file set costs **321-342 ms** as
 against **748-771 ms** asked per file. No Kotlin source touched; `jvmTest`/`cost_gate.py`/
 `huge_methods.py` not run (nothing to gate).
 
+**THE AXIS WAS *HERITAGE*, NOT "LIB" — A MISSING MEMBER ON ANYTHING WITH AN `extends` WAS
+SILENT, AND THE FIREWALL THAT HIDES IT IS WORTH **43 ROWS** ON THE COMPILER PROFILE
+(2026-08-26, (CHK.51)).** The queue item's own repro (`Date`) already reported, as did `Map`,
+`Set`, `Promise`, `RegExp`, `Error`, `JSON`, `Math`, `Symbol`, `Iterable`, `ArrayBuffer`,
+`EventTarget` and every primitive — all heritage-free — while a HAND-WRITTEN
+`interface D1 extends B1` was as silent as `Text`. What refuses is
+`cmamCheckResolvedObjectType`'s "skip if class/interface has base types", and **deleting it
+outright measures 89 diagnostics on the compiler profile against 46**: every one of the 43 new
+rows is a NARROWING gap, above all the INTERSECTION narrow tsc performs when a predicate names a
+SIBLING (`canHaveSymbol(node: Node): node is Declaration` applied to an `e: Expression`). **The
+firewall has been standing in for flow narrowing this checker does not do.**
+
+**SO THE HOLE PUNCHED IN IT DEMANDS POSITIVE EVIDENCE ((CHK.45)'s RULE).** A new predicate
+answers true only when every type in the receiver's transitive base closure is an interface with
+a symbol, with declarations, with every declaration in `builtinLibDecls`, not named by any
+`declare global { interface … }` block, and with a member table that resolved. `Text`, `Node`,
+`Element`, `HTMLElement` and `CustomEvent<number>` now match tsgo 7.0.2 on **code, message and
+column**, read out of `tools/tsgo-7.0.2/lib/tsc` rather than hand-written.
+
+**THE `declare global` SET IS THE LOAD-BEARING HALF AND EXISTS BECAUSE OF AN *OPEN* DEFECT.**
+(CHK.50) is that a `declare global { interface X { … } }` in a module never reaches `globals`, so
+the lib symbol's declaration list still reads "all lib" after such an augmentation — without a
+separate name set this change would have turned (CHK.50)'s silent false NEGATIVE into a false
+POSITIVE on the shape every `@types` package is written in. Cost, named: in a file that writes
+one, `el.zzzNotThere` is TS2339 in tsgo and silent here, and that goes away when (CHK.50) lands.
+
+**GATES.** Suite **16,107 / 0 / 3** (+6, exactly the new class), **zero corpus baselines moved**
+(the generated corpus compiles against the EMBEDDED lib, which has no DOM). `cost_gate.py`
+**PASSES with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest
+movements `narrow.memoServed` **+0.69%** / `typeOfExpr.calls` **+0.59%**, digit-for-digit
+(CHK.49)'s, i.e. this round contributes 0.00%. `huge_methods --fail-over 0` exit 0, **783**
+classes scanned. `partition-equivalence` **EQUIVALENT, all 78**, floor **59 ms**
+[89, 56, 57, 59] — one draw, the leading 89 the documented ramp. `capture-equivalence`
+**1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376** — the standing state, unmoved.
+8-profile grid with both arms built in this session and a `javap` positive control (0 vs 3):
+**`added=0 removed=0` on all eight**. **`jsonrepair` 3.13.1 4 -> 4 byte-identical, and its
+tsconfig loads `dom` — a real no-false-positive arm, not a control; `knip` 49 -> 49
+byte-identical IS a control (its `"lib": ["esnext"]` excludes DOM).**
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EACH
+`Checker.class` md5 CHECKED.** a0 (whole change reverted) **3 RED — every positive**; a1 (drop
+the all-lib test) **1 RED + profile 89**; a2 (drop the `declare global` refusal) **1**; a6 (drop
+its COLLECTOR instead) **1, the same pin** — a round-927 pair; a7 (revert the `Type.Reference`
+leg) **1, uniquely the generic pin**. **a3/a4a/a4b/a5 read 0 RED and are recorded as
+UNDISCRIMINATED and KEPT** — not redundant and not dead: each is unreachable only because of what
+the shipped libs happen to CONTAIN today, and the libs are input this repo does not author.
+
+**THE OBVIOUS FALSE-POSITIVE PIN WAS BLIND AND ONLY AN ARM SAW IT.** Written with a predicate
+type that is a SUBTYPE of the receiver's, it is green on the ablated binary too — a1 read
+**0 RED with the profile at 89** (round 902's law). A type-guard FP fixture must name a SIBLING.

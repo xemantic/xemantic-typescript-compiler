@@ -49861,3 +49861,242 @@ before-arm was run, deliberately, because the change cannot reach it** —
 scoping intact. **`capture-channel`'s DIVERGED count (1,262 / 64) has NO same-session
 before-arm and no claim is made about it** — which is the correct way to report a number
 you did not control for.
+
+### Round (CHK.45) — a property missing on **EVERY** union constituent was whitelisted to two member shapes, and **three of (CHK.44)'s four "block-scoped" populations are not about block scoping at all**
+
+**WHAT LANDED.** `Checker.cmamAllMissingTrustedMember` — a per-member trust predicate for
+the union elaboration's ALL-MISSING verdict — plus `cmamIndexSignatureProvides`, shared with
+the narrowed-single-Object emission below it.
+
+The union block has two verdicts with very different soundness requirements. PARTIAL coverage
+has a **witness**: some member answered "the property is there", so its table was resolved, and
+the diagnostic is tsc's whatever the other members are. ALL-MISSING has none — every member
+answered "no", and a "no" from an incompletely resolved member table is CLAUDE.md's B153 — so
+it was gated to `allWellResolved` (every member a string/number literal or a single-declaration
+heritage-free interface) or `allAnonPlainObjects`. Measured against `tools/tsgo-7.0.2/lib/tsc`,
+that whitelist dropped **every** union carrying a FUNCTION type, a CONSTRUCTOR type, a
+PRIMITIVE, a TUPLE, or a TYPE LITERAL beside a named interface.
+
+**THE QUEUE ITEM'S OWN FRAMING WAS WRONG IN THE SAME WAY (CHK.41)'s WAS, AND THAT IS THE
+ROUND'S MOST TRANSFERABLE OUTPUT.** The queue item listed four populations as block-scoped receiver
+gaps. Re-measured shape by shape, at three declaration sites each:
+
+| shape | parameter | file-level `const` | body-local | tsgo | mechanism |
+|---|---|---|---|---|---|
+| (a) member on NO constituent, `A \| Fn` | SILENT | SILENT | SILENT | reports | **the all-missing whitelist — FIXED** |
+| (b) un-annotated, `const c = uaf` | n/a | SILENT | SILENT | reports | **splits**: file-level is (a) and is FIXED; body-local is B83.5 |
+| (c) destructured, `const { inner } = h` | SILENT | SILENT | SILENT | reports | a binding-element name is typed as a receiver **nowhere** |
+| (d) nested access, `c.inner.zzznope`, single-object leaf | SILENT | SILENT | SILENT | reports | a NON-Identifier receiver has no single-Object emission |
+| (d') nested access, **UNION** leaf | reports | reports | reports | reports | already covered — the union block accepts a PropertyAccess receiver |
+
+So **only the body-local half of (b) is a block-scoping gap**; (a), (c) and (d) are silent for a
+parameter and a file-level `const` exactly as much as for a body-local. (CHK.44) reached (a)
+through a body-local, saw it stay silent after its own fix, and filed it as "a different
+emitter — the general receiver path". It is the SAME emitter; what refused it was this
+whitelist and the function type in `A | F`.
+
+**THE CALIBRATION IS TWO ROWS ON knip AND NOTHING ELSE.** Deleting the gate ENTIRELY —
+`if (missingMembers.isNotEmpty())`, no disjunct — is `added=0 removed=0` on all eight tsc
+profiles and moves **ZERO** corpus baselines, and still costs **2 false positives on knip**:
+`src/typescript/visitors/walk.ts:153:55` and `:159:41`, `item.members` / `item.jsDocTags` on
+`Export | undefined` inside `if (item) { … }`. Both are a CROSS-FILE interface WITH a heritage
+clause (`export interface Export extends Position`, and there are two same-named `Export`
+interfaces in different modules) whose member table we do not fully resolve — B153 arriving
+exactly where the shipped predicate already refused it. That is why the widening keeps
+`wellResolvedUnionMember`'s interface rule **verbatim** and everything it adds is OUTSIDE the
+named-interface world: function and constructor types, primitives, string/number/bigint
+literals, tuples, and anonymous type literals that resolved to some content.
+
+**REFUSALS, EACH A MEASURED FALSE NEGATIVE tsc REPORTS**: a heritage-carrying interface (the
+knip class), a class instance type, a `Type.Reference` (so also `number[]`), an intersection, a
+type parameter, an enum-flavoured object, and an anonymous object with no members and no call
+signature (`{}`, `Record<string, number>`, an index-signature-only literal). All seven are
+pinned as refusals with their reason.
+
+**THE CHAIN LINE.** tsc names the FIRST missing constituent for the all-missing case too
+(measured: `c: Alfa | Fn; c.zzznope` chains `Alfa`) — our code carried a comment saying it does
+not, which is true only of round 512's anonymous-plain-object path, whose baselines pin the
+chainless form and which this round does not re-open. The new population chains.
+
+**A BUG FOUND IN THE ROUND'S OWN FIRST CUT.** The naive index-signature refusal ("any index
+signature provides the property") loses a TUPLE, which is an anonymous object carrying a NUMBER
+index signature. Round 479's rule — a number index signature supplies only a numeric-literal
+name — was already written a few lines below, so the two are now one helper.
+
+**ABLATION — nine arms, one mistake each, each diffed against the arm's OWN snapshot, each
+anchor asserted to occur exactly once.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the trust predicate always false | **11** — every positive |
+| a2 | the trust predicate always true | **6** — every refusal |
+| a3 | drop the Interface heritage check | **1** — the heritage pin |
+| a4 | drop the `Type.Reference` refusal | **1** — the generic-instantiation pin |
+| a5 | drop `isEnumFlavoredObjectType` | **0 — REDUNDANT today** |
+| a5b | a5 + a8 together | **0** — still redundant |
+| a6 | drop the chain for the new population | **1** — the chain pin |
+| a7 | revert the index-signature precision | **1** — the tuple pin |
+| a8 | drop the named-object refusal | **0 — REDUNDANT today** |
+| a9 | relax the `InterfaceDeclaration` requirement | **1** — the CLASS pin ONLY |
+
+a9's single red is the finding: a CLASS instance is refused by the Interface arm and an ENUM is
+**not** — the enum is refused by the LAST clause, because an enum-flavoured type resolves to no
+members, no call and no construct signature (CLAUDE.md: an enum's members live on
+`Symbol.exports` and on no type at all). So `isEnumFlavoredObjectType` and `m.symbol != null`
+are redundant guards TODAY and are recorded as such (round 807) rather than claimed. **The enum
+pin is not blind** — a2 reddens it, i.e. it discriminates the predicate as a whole, which is the
+round-902 "was the injected mistake REACHED" question answered by a different arm.
+
+**VACUITY, PER PIN.** Every positive was measured SILENT on the parent binary over the
+identical source through the CLI (`p2` reads **2** rows on the parent and **7** after), and a1
+reddens all eleven. Every refusal's own arm is a2. The two shapes that were ALWAYS green
+(partial coverage, a member on every constituent) are in the class labelled as controls. Two
+name traps re-confirmed and avoided: no probe is named `top`/`name`/`files`, and every missing
+member is `zzznope`.
+
+**GATES.** Suite **15,998 / 0 / 3** (+19, exactly the new class plus (CHK.44)'s known-gap pin
+flipped from a refusal to a positive), **zero corpus baselines moved**. `cost_gate.py` **PASSES
+with NO rebaseline**, exit 0 — `output.errors` **46**, `spine.nodes` +0.00%, largest movement
+`typeNode.cacheHits` **+1.96%**, i.e. the same three counters at the same values (CHK.44)
+recorded: this change costs no measurable counter, being an emission gate. `huge_methods.py
+--fail-over 0` exit 0, **783** classes scanned, 0 over limit. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **56 ms** [56, 53, 56, 69] (one draw). `capture-equivalence`
+**1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions` **360,376** — the standing
+state, both digests unmoved. **8-profile grid `added=0 removed=0` on all eight** against a
+before-arm captured from a rebuilt parent at session start (`scripts/chk45-capture.sh` /
+`chk45-diff.sh`; a `SourceScanFilter` positive control on the class dir, a refusal below 8
+profiles, and a truncation refusal). **knip 66 -> 66 with every row byte-identical, before-arm
+rebuilt IN THIS SESSION** (parent binary re-verified by the p2 control reading 2 rows).
+
+**WHAT IS LEFT, AND IT IS NOT WHAT THE ITEM SAID.** (b)-body-local, (c) and (d) survive as
+three independent gaps, and per CLAUDE.md's round-765 law they are recorded HERE and not pinned
+— (CHK.44)'s own "known gap" pin failed this round for exactly that reason, which is the law's
+third instance. (d) is the largest and the most attractive: a nested receiver whose leaf type is
+a single object type is silent at every declaration site, and the missing piece is a
+single-Object emission for a non-Identifier receiver, which needs the same trust predicate this
+round built plus a decision about narrowing (an `in` guard can ADD a property, so the emission
+must consult the flow or refuse). (c) is a binding-element typing gap and touches
+`currentParamBindingNames`, which the property-access family currently uses as a blanket
+refusal. The two (CHK.44) REFUSALS — a nullish union and a non-union declared type — are
+untouched and remain the same missing mechanism: narrowing of a block-scoped REFERENCE.
+
+### Round (CHK.44) — the axis was **declared in a BLOCK**, not local-vs-parameter, and the queue item's own boundary was wrong in both directions
+
+**WHAT LANDED.** `Checker.cmamBlockScopedReceiverType` — the receiver of a member access, when
+`getTypeOfExpression` answers `anyType`, is looked up in the INV.2(c) lexical scope tables
+(round 748's `lexicalScopeSymbol`, `LexicalScope.symbols` ONLY) and typed from its declaration's
+annotation. CLAUDE.md's B83.5 is the cause end to end: `Binder.bindStatement` binds no
+declaration nested in a block, so `lookupPerFileForNode` answers null, `getTypeOfIdentifier`
+falls through to `anyType`, and every gate below it bails. Because `declareLexical` skips any
+name the main binder already bound, a hit is BY CONSTRUCTION a declaration the conventional
+tables do not have — so no bound name can resolve differently, and the chain walk is
+innermost-first from the REFERENCE, which gives shadowing for free.
+
+**THE MEASURED BOUNDARY IS NOT THE ONE THE ITEM STATES, AND THE CORRECTION IS THE ROUND'S MOST
+USEFUL OUTPUT.** (CHK.41) recorded "`const c: A | F = x`, `let c: A | F = x` and the same inside
+an arrow are ALL silent; only `function f(c: A | F)` is checked — 3 of 4". Re-measured shape by
+shape against `tools/tsgo-7.0.2/lib/tsc`:
+
+| shape | before | after | tsgo |
+|---|---|---|---|
+| file-level `const`/`let`, annotated union | **reports** | reports | reports |
+| parameter | reports | reports | reports |
+| body-local `const`/`let`/`var`, annotated union | **SILENT** | reports | reports |
+| method / arrow / nested function / nested block / **file-level block** | **SILENT** | reports | reports |
+| body-local, annotated NON-union (`A`) | reports (via flow recovery) | reports | reports |
+| body-local, member on **NO** constituent (`c.nope`) | SILENT | **still silent** | reports |
+| body-local, un-annotated (`const c = x`) | SILENT | **still silent** | reports |
+| body-local, destructured (`const { files } = x`) | SILENT | **still silent** | reports |
+| body-local, nested access (`c.files.nope`) | SILENT | **still silent** | reports |
+| body-local, NULLISH union (`A \| undefined`) | SILENT | **still silent, deliberately** | reports |
+
+So it is a FILE-LEVEL-vs-BLOCK axis, not a local-vs-parameter one. **The first probe that said
+otherwise named its receiver `top`, which collides with the DOM global `top: Window`** — the
+file-level shape read silent for a reason that had nothing to do with the item, and three
+follow-up probes inherited it. Rename the receiver before believing any resolution experiment.
+
+**TWO REFUSALS, BOTH MEASUREMENTS RATHER THAN ARGUMENTS.**
+* **A NULLISH union is refused.** Without that guard the 8-profile grid gains **11 rows on the
+  compiler profile and 16 on harness**, `removed=0`, and tsgo reports NONE of them. Every one is
+  a `let x: T | undefined` (or `| null`) the code narrows before use — `program.ts`'s
+  `automaticTypeDirectiveNames ??=`, `checker.ts`'s `if (!relatedInfo) … else
+  relatedInfo.push(info)`, `parser.ts`'s `!typeExpression || typeExpression.type`,
+  `visitorPublic.ts`'s `updated.push`, `esDecorators.ts`'s `top.classThis`,
+  `editorServices.ts`'s `false | WatchOptionsAndErrors | undefined`. A nullish annotation exists
+  in order to be narrowed, so handing the walker the declared type reports against a type the
+  code has already excluded. (CHK.39c)'s law with the population measured.
+* **A NON-union declared type is refused** — not for its shape but for its CONSUMER. A union is
+  decided by `cmamCheckUnionReceiverNarrowing`, which consults the flow before reporting;
+  everything else falls through to the `else` branch, which consults nothing. Supplying it there
+  costs **3 rows** on services/server/harness: `services/utilities.ts`'s `let next: Symbol =
+  symbol`, narrowed by `isTransientSymbol(next) && next.links.target` — a type-guard call inside
+  a `while` condition, which round 785's `if`-condition recorder does not reach.
+
+**`const`-NESS IS NOT A GUARD, MEASURED.** A first cut refused `let`/`var` on the argument that a
+reassignable local needs assignment narrowing. Dropping that guard measures `added=0 removed=0`
+on all eight profiles, so it was a redundant guard (round 807) and it cost the `let c: A | F`
+shape the item names. The declared type is an UPPER bound whatever the keyword.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S MOST TRANSFERABLE RESULT: WRITING THE ANNOTATION INTO
+`currentLocalTypes`.** The first implementation recorded it from `cpaApplyDeclRecordings` (the
+anchor) plus the legacy walk's VariableStatement arm. It closed the same population, passed the
+grid and knip, and cost **two corpus baselines**:
+* `discriminateWithOptionalProperty4` — `const zWorkAround: {a; b?} | {b; a?} = z` gained a
+  TS18048 from `emitTs18048ForOptionalPropertyAccessReceiver`, because we do not narrow a
+  discriminated union in a ternary;
+* `narrowingPastLastAssignment` — `const fooMap: Map<string, number[]>` suddenly let B136's
+  chaining arm type `fooMap.get("a")` as `number[] | undefined`, and the closure capture past
+  the last assignment is not narrowed either.
+Both are the SAME missing mechanism reached through consumers this round is not fixing. **The map
+is read by every consumer of the pass; the property-existence check is one call.** Reading the
+type AT that call is the smallest form of the change no other family can observe — and it also
+made the arrow case work for free, where the `currentLocalTypes` route needed a second call site
+because a nested arrow's statements are chain-excluded from anchoring.
+
+**THREE OF THE TWENTY PINS WERE VACUOUS AND ONLY A CONTROL PROBE PER SHAPE SAW IT.** This class
+IS the vacuity trap (CLAUDE.md, (CHK.41)), and it bit twice more inside the round:
+* **`c.nope` — a member on NEITHER constituent — is silent for a block-scoped local whatever this
+  round does**, because it is decided by the general receiver path and not by the union block.
+  Arm a3 read `0 RED` against a pin written that way. Every pin here now reads a member present
+  on SOME constituent and not all, and the `.nope` case is pinned as its own KNOWN GAP.
+* `const c: A | undefined = au; c.files` reports **TS18048**, not TS2339 — a second, independent
+  way for the nullish pin to be green against a broken binary.
+* the global-shadow suppression (`applyNestedGlobalShadow`) does not even FIRE on `const isNaN`
+  under the embedded lib, so that pin asserted nothing; the discriminating suppression is
+  `applyAmbiguousBlockScopedLocals`, which writes `currentLocalTypes` and NOT
+  `currentShadowedNames`.
+The two shapes that were ALWAYS green — a file-level declaration and a parameter — are in the
+class under names that say they are controls.
+
+**GATES.** Suite **15,979 / 0 / 3** (+20, exactly the new class), **zero corpus baselines moved**.
+`cost_gate.py` **PASSES with NO rebaseline** — `output.errors` **46**, `spine.nodes` +0.00%,
+largest movement `typeNode.cacheHits` **+1.96%** then `mapped.hits` +1.46% and `typeNode.cacheable`
++1.32% (one annotation resolution per reached block-scoped receiver). `huge_methods.py
+--fail-over 0` exit 0, **783** classes scanned. `partition-equivalence` **EQUIVALENT, all 78**,
+floor **65 ms** [79, 61, 65, 61] (one draw). `capture-equivalence` **1,005 spans / 43 of 76 /
+`narrowRendersMoreAny` 0**, `definitions` **360,376** — the standing state, both digests unmoved.
+8-profile grid against a REBUILT parent with a `javap` positive control:
+**`added=0 removed=0` on all eight**. **knip 66 -> 66, every row byte-identical**, before-arm
+capture recovered from (CHK.41)'s own run at zero build cost.
+
+**ABLATION — one mistake per arm, each diffed against the arm's OWN snapshot, each anchor
+asserted to occur exactly once.**
+
+| arm | injected mistake | RED |
+|---|---|---|
+| a1 | the helper answers null | **10** — every positive |
+| a2 | drop the `currentLocalTypes` suppression refusal | **1** — the ambiguous-block pin |
+| a3 | drop the nullish refusal | **1** — the nullish pin |
+| a4 | drop the `t !is Type.Union` refusal | **0 — REDUNDANT today** |
+| a4b | re-add the `else`-branch injection alone | **0** — the union refusal blocks it |
+| a4c | a4 + a4b together (the real (CHK.39c) mistake) | **1** — the while-guard pin |
+| a5 | drop the single-declaration refusal | **1** — the two-declarations pin |
+| a6 | drop the `SymbolFlags.Variable` refusal | **0 — REDUNDANT** |
+| a7 | drop the `currentShadowedNames` refusal | **0 — REDUNDANT given a2** |
+
+**a4/a4b are a round-927 PAIR**: the union refusal and the ABSENCE of a second injection point
+block the same 3-row services false positive, so neither reddens alone and only a4c attributes
+it — the union refusal is redundant WHILE the `else` branch does not consult the helper, and
+load-bearing the moment it does. a6 is refused a second time by `valueDeclaration as?
+VariableDeclaration`; a7 because every shadow registrar writes `currentLocalTypes` too. Both are
+recorded as redundant guards (round 807) rather than claimed.
