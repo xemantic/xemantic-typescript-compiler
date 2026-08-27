@@ -114848,7 +114848,7 @@ interface DataView {
         val srcStr = srcDisplayOverride ?: weakFunctionDisplay(argType) ?: typeToString(displayType)
         val tgtStr = targetDisplay ?: typeToString(targetType)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
-        if (callSigs.isNotEmpty() || constructSigs.isNotEmpty()) {
+        if (weakCallResultSatisfiesTarget(callSigs, constructSigs, targetType)) {
             val (relMsg, relCode) = if (constructSigs.isNotEmpty() && callSigs.isEmpty())
                 "Did you mean to use 'new' with this expression?" to 6213
             else "Did you mean to call this expression?" to 6212
@@ -114866,6 +114866,52 @@ interface DataView {
                 fileName = fileName, line = line, character = character, start = start, length = length))
         }
         return true
+    }
+
+    /**
+     * (CHK.58) TS2560 *Did you mean to call it?* IS NOT "THE SOURCE IS CALLABLE" —
+     * IT IS "CALLING IT WOULD HAVE WORKED".
+     *
+     * [tryEmitWeakTypeAssignment] used to emit 2560 for every callable source, which
+     * is wrong for four of the six shapes in `build/chk58/ora2`. tsc's
+     * `reportErrorResults` asks whether the FIRST call signature's return type — or,
+     * failing that, the first CONSTRUCT signature's — is related to the target, and
+     * only then offers the *did you mean to call it* wording; everything else takes
+     * the plain TS2559 *Type 'X' has no properties in common* sentence. Measured on
+     * tsc 7.0.2 against a weak `{ zzzT?: number; zzzE?(): void }`:
+     *
+     * | source | tsc |
+     * |---|---|
+     * | `() => number` | TS**2559** |
+     * | `() => { zzzT: number }` | TS2560 |
+     * | `() => { zzzZ: string }` | TS**2559** |
+     * | `() => void` | TS**2559** |
+     * | `new (s: string) => { zzzT: number }` | TS2560 |
+     * | `new (s: string) => { zzzZ: string }` | TS**2559** |
+     *
+     * **THE RELATION ASKED HERE MUST CARRY THE WEAK RULE ITSELF**, which is the whole
+     * subtlety: tsc's weak check lives INSIDE `isRelatedTo`, so `number` is *not*
+     * related to a weak object there, where our relation accepts it vacuously — ask
+     * [checkTypeRelatedTo] alone and `() => number` keeps the wrong code. Hence the
+     * [weakParamRefusesArg] veto in front of it.
+     *
+     * An UNRESOLVED (`null`) or `any` return type answers TRUE — `any` is related to
+     * everything, and an unresolved one is exactly the pristine `weakType.ts`
+     * `getDefaultSettings` shape whose baseline row IS 2560 — so this can only ever
+     * narrow 2560 to 2559 where the disjointness is PROVED, never the other way.
+     */
+    private fun weakCallResultSatisfiesTarget(
+        callSigs: List<Signature>, constructSigs: List<Signature>, targetType: Type,
+    ): Boolean {
+        for (sigs in listOf(callSigs, constructSigs)) {
+            val sig = sigs.firstOrNull() ?: continue
+            val ret = sig.resolvedReturnType ?: return true
+            if (ret === errorType || ret === anyType) return true
+            if (weakParamRefusesArg(ret, targetType)) continue
+            if (isSimpleTypeRelatedTo(ret, targetType) ||
+                checkTypeRelatedTo(ret, targetType, assignableRelation)) return true
+        }
+        return false
     }
 
     /**
