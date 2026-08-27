@@ -8353,11 +8353,13 @@ class Checker(
      * here even where the assignability readers would not.
      *
      * Conservative by construction — it may decline to widen, it can never invent a
-     * constituent: a UNION or INTERSECTION receiver is refused (a member optional on
-     * one constituent only is not this rule's question, and `getPropertyOfType`'s
-     * union arm answers one constituent's symbol — round 916), and so is `super`,
-     * whose member symbol is resolved off the DERIVED table and may be an override
-     * whose optionality differs from the base declaration the caret names.
+     * constituent. An INTERSECTION receiver is refused (its member is the
+     * intersection of the declarations, a different question), and so is `super`,
+     * whose member symbol would be resolved off the DERIVED table and may be an
+     * override whose optionality differs from the base declaration the caret names
+     * — a documented residue, pinned with the value we answer. A UNION receiver is
+     * decided per constituent by [memberIsOptionalOnReceiver], never by asking the
+     * union itself (round 916).
      */
     private fun typeCaptureOptionalMemberType(access: PropertyAccessExpression, captured: Type): Type {
         if (!strictNullChecks) return captured
@@ -8367,12 +8369,36 @@ class Checker(
         val receiverType = thisReceiverCarrierType(receiver) ?: getTypeOfExpression(receiver)
         if (receiverType === anyType || receiverType === errorType) return captured
         val apparent = getApparentType(receiverType)
-        if (apparent is Type.Union || apparent is Type.Intersection) return captured
-        val prop = getPropertyOfType(apparent, access.name.text) ?: return captured
-        if (!isOptionalProperty(prop)) return captured
+        if (apparent is Type.Intersection) return captured
+        if (!memberIsOptionalOnReceiver(apparent, access.name.text)) return captured
         val widened = getUnionType(listOf(captured, undefinedType))
         return if (getReferencePath(access) != null)
             getNarrowedTypeForReference(widened, access) else widened
+    }
+
+    /**
+     * (CHK.61)(b) Is [name] declared OPTIONAL on [receiver]?
+     *
+     * A UNION receiver is decided per CONSTITUENT and the rule is ANY, which is
+     * tsc's: `{ p?: number } | { p: string }` types `p` as
+     * `string | number | undefined`, and `{ p: number } | { p: string }` as
+     * `number | string`. It may NOT be asked of the union as a whole —
+     * `getPropertyOfType`'s union arm answers ONE constituent's symbol (round 916),
+     * so the verdict would be a function of constituent ORDER, which is not a
+     * property of the program.
+     *
+     * A constituent on which the name resolves to no property symbol at all (it
+     * arrived through an index signature, or through an intersection fold)
+     * contributes nothing rather than a verdict — this answers "is it optional",
+     * never "does it exist", and the caller has a type in hand either way.
+     */
+    private fun memberIsOptionalOnReceiver(receiver: Type, name: String): Boolean {
+        if (receiver is Type.Union) {
+            return receiver.types.any { constituent ->
+                getPropertyOfType(getApparentType(constituent), name)?.let { isOptionalProperty(it) } == true
+            }
+        }
+        return getPropertyOfType(receiver, name)?.let { isOptionalProperty(it) } == true
     }
 
     /**

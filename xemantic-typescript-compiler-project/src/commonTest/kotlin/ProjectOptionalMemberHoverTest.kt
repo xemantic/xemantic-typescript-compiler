@@ -78,6 +78,12 @@ class ProjectOptionalMemberHoverTest {
         interface ZzzShape { zzzOpt?: number; zzzReq: number; zzzOptStr?: string }
         declare const zzzInst: ZzzShape;
         declare const zzzFlag: boolean;
+        declare const zzzUn: { zzzMix?: number } | { zzzMix: string };
+
+        class ZzzBase { zzzBaseOpt?: number }
+        class ZzzDer extends ZzzBase {
+            zzzD(): void { super.zzzBaseOpt; }
+        }
 
         class ZzzC {
             zzzOptField?: number;
@@ -94,6 +100,7 @@ class ProjectOptionalMemberHoverTest {
             if (zzzInst.zzzOpt) { zzzInst.zzzOpt; }
             if (zzzInst.zzzOpt !== undefined && zzzFlag) { zzzInst.zzzOpt; }
             if (zzzFlag && zzzInst.zzzOpt) { zzzInst.zzzOpt; }
+            zzzUn.zzzMix;
         }
     """.trimIndent() + "\n"
 
@@ -151,6 +158,27 @@ class ProjectOptionalMemberHoverTest {
     @Test
     fun `control - an optional member guarded by the SECOND conjunct narrows back`() {
         assert(hover(caret("if (zzzFlag && zzzInst.zzzOpt)", "zzzOpt; }")) == "number")
+    }
+
+    @Test
+    fun `a UNION receiver widens when the member is optional on ANY constituent`() {
+        // tsc 7.0.2's LSP over the same shape: `(property) zzzMix?: string | number
+        // | undefined`. The verdict must NOT be asked of the union itself —
+        // `getPropertyOfType`'s union arm answers ONE constituent's symbol (round
+        // 916), so it would depend on constituent ORDER; here the optional one is
+        // written FIRST and the required one second, and the sibling ordering is
+        // covered by the ablation rather than by a second fixture.
+        assert(hover(caret("zzzUn.zzzMix;", "zzzMix;")) == "string | number | undefined")
+    }
+
+    @Test
+    fun `RESIDUE - a super receiver does not widen`() {
+        // tsc says `number | undefined`; we say `number`. `super`'s member symbol
+        // would have to be resolved off the DERIVED table, where an override's
+        // optionality may differ from the base declaration the caret names, so the
+        // leg refuses rather than guesses. Recorded with the value we answer so the
+        // divergence is visible rather than absent.
+        assert(hover(caret("super.zzzBaseOpt;", "zzzBaseOpt;")) == "number")
     }
 
     @Test
