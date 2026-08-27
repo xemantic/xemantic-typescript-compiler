@@ -114901,6 +114901,57 @@ interface DataView {
         }
     }
 
+    /**
+     * (CHK.56) THE DISPLAY HALF OF THE WEAK RULE: WHICH TYPE DOES tsc's MESSAGE NAME?
+     *
+     * [weakParamRefusesArg] is a pure VERDICT and says nothing about wording. Measured
+     * against tsc 7.0.2 over a union matrix, the wording is decided by how many
+     * constituents survive dropping `null`/`undefined`:
+     *
+     *  * exactly ONE survivor -> the TS2559 *no properties in common* wording, naming
+     *    that CONSTITUENT and not the union (`{ zzzA?: null } | null` renders
+     *    `'{ zzzA?: null | undefined; }'`; `ZzzUdB | null` renders `'ZzzUdB'`);
+     *  * TWO OR MORE survivors -> the ORDINARY assignability wording naming the WHOLE
+     *    union (`{ zzzA?: null } | string` with a `number` argument renders
+     *    `Argument of type 'number' is not assignable to parameter of type
+     *    'string | { zzzA?: null | undefined; }'`).
+     *
+     * The VERDICT is a refusal in both shapes; only the sentence differs. Returns the
+     * type to name, or null when the weak wording does not apply.
+     */
+    private fun weakRefusalDisplayTarget(paramType: Type): Type? =
+        if (paramType is Type.Union)
+            paramType.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }.singleOrNull()
+        else paramType
+
+    /**
+     * (CHK.56) The weak rule as the OVERLOAD helpers ask it.
+     *
+     * Asked ONLY after [checkTypeRelatedTo] has already ACCEPTED the argument, which
+     * is the whole point: a weak (all-optional, signature-free) parameter accepts any
+     * non-nullish value structurally, so nothing on the rejecting path can see it.
+     *
+     * **AN OBJECT-LITERAL ARGUMENT IS REFUSED OUTRIGHT, AND THAT IS tsc's ANSWER AND
+     * NOT A CONSERVATISM.** tsc runs the FRESHNESS / excess-property check ABOVE the
+     * weak check in `isRelatedTo`, and a fresh literal that shares NO property name
+     * with the target has EVERY property excess by construction — so for an object
+     * literal the excess error always pre-empts the weak one, at the offending
+     * PROPERTY rather than at the argument. Measured on tsc 7.0.2:
+     * `zzzP4({ zzzZ: 1 })` against two weak overloads reports
+     * `Object literal may only specify known properties, and 'zzzZ' does not exist in
+     * type '{ zzzB?: null | undefined; }'` at the property, where the weak wording
+     * would name the whole literal one column earlier. We do not emit that excess row
+     * for an argument the relation ACCEPTED (a separate, pre-existing hole), so this
+     * shape stays SILENT rather than acquiring a diagnostic at the wrong position.
+     *
+     * Consequence worth stating because it retires a (CHK.55) interaction: round 728's
+     * [objLitLiteralPropsSatisfyParam] rescue, which [signatureAcceptsArgs] must AND
+     * with the weak verdict, is unreachable here — it answers false for every
+     * non-object-literal argument, and an object-literal one never reaches this line.
+     */
+    private fun weakOverloadArgRefuses(arg: Expression, argType: Type, paramType: Type): Boolean =
+        arg !is ObjectLiteralExpression && weakParamRefusesArg(argType, paramType)
+
     /** B482: look up a property by name across an intersection's constituents. */
     private fun getPropertyAcrossType(type: Type, name: String): Symbol? = when (type) {
         is Type.Intersection -> type.types.firstNotNullOfOrNull { getPropertyAcrossType(it, name) }
@@ -152925,7 +152976,7 @@ interface DataView {
             return
         }
         for (sig in signatures) {
-            if (allArgumentsMatch(args, sig)) return // found a matching overload
+            if (allArgumentsMatch(args, sig, applyWeakRule = true)) return // found a matching overload
         }
         // None matched — emit TS2769 with errors from each overload
         // Collect the first argument mismatch per overload for the error chain
@@ -153173,6 +153224,20 @@ interface DataView {
                 val displayArgType = if (propTypeContainsLiteral(paramType)) argType else getWidenedLiteralType(argType)
                 return "Argument of type '${typeToString(displayArgType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
             }
+            // (CHK.56) THE WEAK-TYPE SUBLINE. The relation ACCEPTED this argument, so
+            // the walk above found no failing argument at all and this overload used to
+            // drop out of the chain entirely — which is why a call whose every overload
+            // has a disjoint weak parameter was SILENT. tsc's subline here is TS2559's
+            // *no properties in common* wording, not an assignability line, and it keeps
+            // the argument's LITERAL type (`Type '123' has …`) where the ordinary line
+            // widens it. [weakRefusalDisplayTarget] decides which of the two sentences.
+            if (weakOverloadArgRefuses(arg, argType, paramType)) {
+                val named = weakRefusalDisplayTarget(paramType)
+                return if (named != null)
+                    "Type '${typeToString(literalTypeOfExpression(arg) ?: argType)}' has no properties in common with type '${typeToString(named)}'."
+                else
+                    "Argument of type '${typeToString(getWidenedLiteralType(argType))}' is not assignable to parameter of type '${typeToString(paramType)}'."
+            }
         }
         return null
     }
@@ -153215,6 +153280,9 @@ interface DataView {
                 }
                 return 1
             }
+            // (CHK.56) The five overload arg-check helpers must agree with the MATCH
+            // verdict or the chain names an overload the match loop thought fine.
+            if (weakOverloadArgRefuses(arg, argType, paramType)) return 1
         }
         return 0
     }
@@ -153384,6 +153452,14 @@ interface DataView {
                 // For object/array literals, find the inner mismatched expression
                 val inner = findInnerMismatchPosition(arg, paramType)
                 if (inner != null) return inner
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) return Pair(start, length)
+            }
+            // (CHK.56) A weak-rule refusal anchors at the ARGUMENT, like every other
+            // failing argument — measured on tsc 7.0.2, which puts the squiggle on the
+            // argument and not on the callee for this family.
+            if (weakOverloadArgRefuses(arg, argType, paramType)) {
                 val start = arg.pos
                 val length = expressionTrueEnd(arg) - start
                 if (length > 0) return Pair(start, length)
@@ -153596,6 +153672,7 @@ interface DataView {
         args: List<Expression>,
         sig: Signature,
         bivariantFnParams: Boolean = false,
+        applyWeakRule: Boolean = false,
     ): Boolean {
         val params = sig.parameters
         // Check arity: too few arguments
@@ -153659,6 +153736,13 @@ interface DataView {
                 }
                 return false
             }
+            // (CHK.56) The relation has just ACCEPTED this argument; the weak-type rule
+            // is the part of tsc's answer our relation does not carry. Opt-in
+            // ([applyWeakRule]) so only the overload-MATCH loop in
+            // [checkArgumentsAgainstOverloads] asks it — the other four callers are
+            // TS2793 implementation-signature gates and a generic-instantiation probe,
+            // which this round did not measure.
+            if (applyWeakRule && weakOverloadArgRefuses(arg, argType, paramType)) return false
         }
         return true
     }
