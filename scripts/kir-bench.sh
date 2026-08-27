@@ -39,6 +39,16 @@
 #
 # USE:  scripts/kir-bench.sh [processes]      (default 5)
 #       KIR_BENCH_NATIVE=1 scripts/kir-bench.sh 3   (adds the Kotlin/Native arm)
+#       KIR_BENCH_WASM=1      scripts/kir-bench.sh 3   (adds WebAssembly under V8)
+#       KIR_BENCH_WASM_WASI=1 scripts/kir-bench.sh 1   (adds WebAssembly under wasmtime)
+#
+# THE TWO WASM ARMS ARE SEPARATE FLAGS BECAUSE THEY COST THREE ORDERS OF
+# MAGNITUDE APART. `wjs` is an ordinary arm. `wasi` runs `toml` at ~1.7 ms/parse
+# against Node's ~22 us, so ONE process of it is ~9 MINUTES where every other arm
+# is seconds, and a 3-process run is dominated by it for about an hour. That is a
+# property of the HOST, not of the lowering: the identical module under V8 is
+# 13.9x faster, and `-C collector=null` alone takes wasmtime 1,675 -> 790
+# us/parse, so over half of it is wasmtime's reference-counting GC.
 #
 set -uo pipefail
 
@@ -52,6 +62,12 @@ NODE="${KIR_BENCH_NODE:-$REPO/tools/node/bin/node}"
 BUN_ARM="${KIR_BENCH_BUN:-0}"
 BUN="${KIR_BENCH_BUN_BIN:-$REPO/tools/bun/bin/bun}"
 TSGO="${KIR_BENCH_TSGO:-$REPO/tools/tsgo-7.0.2/lib/tsc}"
+WASM_ARM="${KIR_BENCH_WASM:-0}"
+WASI_ARM="${KIR_BENCH_WASM_WASI:-0}"
+WASMTIME="${KIR_BENCH_WASMTIME:-wasmtime}"
+# Kotlin/Wasm emits GC types and the new exception proposal. A host without them
+# REFUSES the module rather than running it slowly, so these are not tuning.
+WASMTIME_FLAGS="-W gc=y,function-references=y,exceptions=y"
 
 die() { echo "kir-bench: $*" >&2; exit 2; }
 
@@ -70,6 +86,12 @@ if [ "$BUN_ARM" = "1" ]; then
   curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip
   python3 -c \"import zipfile; zipfile.ZipFile('/tmp/bun.zip').extractall('tools/bun-dl')\"
   mkdir -p tools/bun/bin && mv tools/bun-dl/bun-linux-x64/bun tools/bun/bin/bun && chmod +x tools/bun/bin/bun"
+fi
+if [ "$WASI_ARM" = "1" ]; then
+    command -v "$WASMTIME" > /dev/null \
+        || die "no wasmtime on PATH — set KIR_BENCH_WASMTIME. It is NOT in the repo:
+  curl https://wasmtime.dev/install.sh -sSf | bash
+The wasm-js arm additionally needs the node above, which already gates."
 fi
 [ -d "$PROJECTS/toml" ] || die "no acceptance projects at '$PROJECTS'"
 
@@ -175,13 +197,25 @@ J
 # `sed` below is a no-op on both arms and is kept only as a belt: the second one,
 # which invents an extension mitt's sources never wrote, is still a benchmark
 # expedient and no compiler's job.
+# `sed -i` WITHOUT a suffix is GNU-only: BSD sed reads the next argument as the
+# suffix and then fails on the script ("invalid command code"), which leaves the
+# emitted files UNREWRITTEN and shows up far away as a Node module-not-found.
+# `-i.bak` is the form both accept; the backups are removed, not left in a
+# directory whose `*.js` glob is read again.
 runnable_esm() {                               # runnable_esm <out-dir>
-    sed -i "s#\(from '\./[^']*\)\.ts'#\1.js'#g" "$1"/*.js
-    sed -i "s#\(from '\./[a-zA-Z0-9_-]*\)'#\1.js'#g" "$1"/*.js
+    sed -i.bak "s#\(from '\./[^']*\)\.ts'#\1.js'#g" "$1"/*.js
+    sed -i.bak "s#\(from '\./[a-zA-Z0-9_-]*\)'#\1.js'#g" "$1"/*.js
+    rm -f "$1"/*.js.bak
 }
 
 ARMS=(tsgo xtsc kir)
 [ "$NATIVE" = "1" ] && ARMS+=(nat)
+# TWO Wasm arms, because they answer different questions: `wasi` is a standalone
+# module under a WASI host — the "instead of a container" shape — and `wjs` is
+# the same lowering under V8, which is the Cloudflare-Worker shape. Holding the
+# compiler fixed and varying only the runtime is what separates the two.
+[ "$WASM_ARM" = "1" ] && ARMS+=(wjs)
+[ "$WASI_ARM" = "1" ] && ARMS+=(wasi)
 # The bun arms need NO build of their own: they run the files arms 1 and 3 emit.
 [ "$BUN_ARM" = "1" ] && ARMS+=(tbun xbun)
 
@@ -219,6 +253,21 @@ for lib in mitt toml; do
         [ -x "$WORK/native-$lib.kexe" ] \
             || die "no native binary for $lib — see $WORK/emit-nat-$lib.log"
     fi
+    # The WASM arms go through the same lowering again — `scripts/kir-wasm.sh`
+    # carries its own positive control that the plugin ran, so a module built
+    # from the empty seed cannot reach the gate below.
+    if [ "$WASM_ARM" = "1" ] || [ "$WASI_ARM" = "1" ]; then
+        targets=()
+        [ "$WASM_ARM" = "1" ] && targets+=(wasm-js)
+        [ "$WASI_ARM" = "1" ] && targets+=(wasm-wasi)
+        for target in "${targets[@]}"; do
+            rm -rf "$WORK/$target-$lib"
+            "$REPO/scripts/kir-wasm.sh" "$WORK/src-$lib" main.ts \
+                "$WORK/$target-$lib" "$lib" "$target" \
+                > "$WORK/emit-$target-$lib.log" 2>&1 \
+                || die "no $target module for $lib — see $WORK/emit-$target-$lib.log"
+        done
+    fi
 done
 
 # ---- arms ------------------------------------------------------------------
@@ -230,6 +279,8 @@ run_arm() {                                    # run_arm <arm> <lib>
         xbun) "$BUN"  "$WORK/xtsc-$2/out/main.js" ;;
         kir)  java -cp "$WORK/jvm-$2:$RUN_CP_TAIL" program.MainKt ;;
         nat)  "$WORK/native-$2.kexe" ;;
+        wasi) "$WASMTIME" $WASMTIME_FLAGS "$WORK/wasm-wasi-$2/$2.wasm" ;;
+        wjs)  "$NODE" "$WORK/wasm-js-$2/$2.mjs" ;;
     esac
 }
 
@@ -271,8 +322,9 @@ for line in open(sys.argv[1]):
 UNIT = {"mitt": (4_000_000, 1e6, "ns/emit"), "toml": (20_000, 1e3, "us/parse")}
 NAME = {"tsgo": "tsgo  -> JS     -> node", "xtsc": "xtsc  -> JS     -> node",
         "kir":  "xtsc  -> JVM    -> java", "nat": "xtsc  -> NATIVE -> kexe",
+        "wasi": "xtsc  -> WASM   -> wasmtime", "wjs": "xtsc  -> WASM   -> node",
         "tbun": "tsgo  -> JS     -> bun ", "xbun": "xtsc  -> JS     -> bun "}
-ORDER = [a for a in ("tsgo", "tbun", "xtsc", "xbun", "kir", "nat")
+ORDER = [a for a in ("tsgo", "tbun", "xtsc", "xbun", "kir", "nat", "wasi", "wjs")
          if (("mitt", a) in rows)]
 for lib in ("mitt", "toml"):
     ops, scale, unit = UNIT[lib]
@@ -283,6 +335,6 @@ for lib in ("mitt", "toml"):
         med = statistics.median(v)
         rel = med / base
         tag = "baseline" if arm == "tsgo" else (f"{1/rel:.2f}x faster" if rel < 1 else f"{rel:.2f}x slower")
-        print(f"  {NAME[arm]}  {med:7.0f} ms  {med*scale/ops:8.2f} {unit}  "
+        print(f"  {NAME[arm]:<26}  {med:7.0f} ms  {med*scale/ops:8.2f} {unit}  "
               f"[{v[0]}..{v[-1]}]  {tag}")
 PY
