@@ -1,5 +1,61 @@
 # Status
 
+**THREE OF (CHK.61)'s FOUR UNMASKED GAPS ARE CLOSED, **TWO OF ITS FOUR DIAGNOSES WERE
+WRONG**, AND THE `this`-RECEIVER PATCH NOW COSTS **3** DASHBOARD ROWS INSTEAD OF 6
+(2026-08-27, (CHK.62), three fixes).** Gap **4**: `spreadGuaranteedProps` had no
+`Type.Intersection` arm, so `{ ...mk(), insertString }` with an intersection-returning `mk`
+(harness `client.ts:242`) reported TS2739 for the five properties the spread supplies — a
+union guarantees what EVERY constituent has, an intersection what ANY does. Gap **3**: an
+optional source parameter's type is `T | undefined` (tsc's `addOptionality`) and we modelled
+it as `T`, so `(x?: string) => void` was not assignable to `(x: string | undefined) => void`
+— **not** the recorded "function-type properties are compared covariantly", which is false:
+our parameter contravariance was always correct and the METHOD form fails identically. Gap
+**2**: a call to a `: never` function now DIVERGES (tsc's `unreachableNeverType`), so
+`Debug.assertNever(kind);` in a switch `default:` no longer merges the pre-switch type back
+in — but the recorded "a SHORTHAND object-literal property does not flow-narrow" is also
+false, and **the row it was written for did not move**.
+
+**RE-BISECTING THE ROW THAT DID NOT MOVE FOUND A THIRD, `this`-MEDIATED GAP, QUEUED AS
+(CHK.62b)**: an assignment whose RHS is a **`this`-METHOD CALL** does not narrow the assigned
+reference — `let p = this.find(); p ??= this.create(); return { p }` reports
+`p: T | undefined` with NO switch in it, while the identical assignment with a free-function
+RHS is silent. It is invisible without the (a) patch, because `this.create()` types `any`
+today; closing it takes (a) from 3 rows to **1** (the un-merged intersection source alone).
+
+**THE PERF DESIGN OF THE DIVERGING-CALL PREDICATE IS THREE MEASURED GATES.** Resolving the
+callee on every flow call reads `typeOfExpr.calls` **+9.61%** / `globals.lookups` **+4.43%**
+(COST GATE FAILED) because `callHasNeverReturnAnnotation` reaches `resolvePropertyMethodDecl`,
+which **types the receiver**. Requiring an `ExpressionStatement` parent -> +3.19%/+2.22%;
+using the symbol-table-only `resolveNamespaceMemberFnDecl` -> `typeOfExpr.calls` **+1.42%,
+digit-identical to standing**; pre-gating the namespace receiver on `currentFileLocals` ->
+`globals.lookups` **+1.52%**, gate PASSES. A per-request memo measured **exactly zero** — the
+population is one ask per call per compile.
+
+**GATES, per commit.** Suite **16,247 / 16,252 / 16,257**, 0 failed, 3 skipped (+4/+5/+5,
+exactly the three new classes), **no corpus baseline moved on any of the three**.
+`cost_gate.py` PASSES on all three, `output.errors` **46**; `typeOfExpr.calls`,
+`narrow.walks`, `narrow.memoServed` and `spine.nodes` digit-identical to (CHK.61c/d).
+`huge_methods --fail-over 0` exit 0, **783** classes, 0 over. **8-profile grid
+`503774c23b4535130ffdebabef430cf0` on all three** — the standing value, per-profile
+`added=0 removed=0` on all eight. **`knip` 48 and `jsonrepair` 4, every row byte-identical.**
+`partition-equivalence` EQUIVALENT all 78. `capture-equivalence` **1,005 span(s) in 43 of 76,
+moreAny 0, definitions 360,376 — unchanged — but BOTH ARM DIGESTS MOVED on the gap-2 commit**
+(`full=-7560141526203174980 narrow=-5179824964953234569`), which is (INC.26)'s expected
+behaviour for a FULL-BUILD fix and is re-recorded, not read as a regression: commits 1 and 2
+reproduced the old digests exactly.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.** a0 (the
+intersection arm reverted, `8b85adc4`) 2 RED; a1 (the optional widening reverted, `d6a568d0`)
+3 RED; a2 (`flowCallDiverges` forced false, `d6e9f431`) 3 RED; a3 (only its namespace-member
+arm off, `957b605e`) **1** RED, uniquely the `Debug.assertNever` positive. The
+`currentFileLocals` pre-gate has NO arm and is NOT claimed as coverage — it is a perf guard
+with no observable behaviour, graded by `cost_gate.py`, both readings recorded.
+
+**AND `python3 scripts/cost_gate.py 2>&1 | grep …; echo "exit=$?"` READS THE *GREP's* STATUS**
+— a FAILING gate prints a plausible table and `exit=0`. Redirect to a file and read `$?` from
+the gate.
+
+
 **THE TWO DEFECTS (CHK.61) NAMED WERE BUILT, PRICED AND **REFUSED** — EACH UNMASKS
 PRE-EXISTING ENGINE GAPS AS DASHBOARD FALSE POSITIVES — AND THE PRICING TURNED UP TWO OTHER
 DEFECTS THAT WERE FREE TO FIX (2026-08-27, (CHK.61c)+(CHK.61d), two fixes).** (a) taking
@@ -273,55 +329,3 @@ the code split, but tsc anchors those at the EXPRESSION and not at the name/keyw
 enum-member CALL ARGUMENT, a generic instantiation (the deliberate `Type.Reference` bail,
 now SYMMETRIC across positions), the nested object-literal LEAF walker, and the fresh
 object-literal-vs-bare-weak-argument TS2353 boundary.
-
-**THE WEAK-TYPE RULE DID NOT DISTRIBUTE OVER A **UNION** TARGET — SO IT WAS ABSENT FROM THE
-MAJORITY OF THE POSITIONS WHERE IT FIRES (2026-08-27, (CHK.57)).** `weakTargetProperties`
-answers null for a `Type.Union`, so every B482 walker — the ones that EMIT TS2559/TS2560 at
-a named position — was blind to a weak type reached through one, while (CHK.54)'s SELECTION
-and (CHK.56)'s TS2769 path had folded over constituents all along. `T | null` /
-`T | undefined` is the commonest parameter and variable shape in real TypeScript.
-`weakUnionRefusalConstituent` composes the verdict (`weakParamRefusesArg`) and the display
-(`weakRefusalDisplayTarget`) into the single-signature CALL argument site and
-`tryEmitTopLevelWeakVarDecl`, as a branch DISJOINT from the bare-target one — so the bare
-path is byte-identical and its controls stay green under every arm.
-
-**BOTH POSITIONS NOW MATCH tsc 7.0.2 EXACTLY** — code, message, line and column, read off
-the compiler and never derived — as do the `| undefined`, interface-, alias- and
-`Partial<…>`-constituent, non-fresh-object-source and REST-parameter variants.
-**Three shapes refuse deliberately, each MEASURED**: two or more non-nullish constituents
-(tsc's TS2345/TS2322 naming the whole union needs the RELATION to reject); an object-literal
-ARGUMENT ((CHK.56)'s boundary — tsc's excess check squiggles the property two columns
-right); and a CALLABLE source, because tsc emits TS2560 only when CALLING the source yields
-an assignable value (`() => number` against a weak object is TS**2559**) where we emit 2560
-for every callable — a pre-existing BARE-target divergence that would have been inherited as
-a wrong-CODE row.
-
-**TWO ABLATION FINDINGS WORTH MORE THAN THE FIX.** The queue entry's own two-constituent
-example (`{ zzzA?: null } | string`) is a **DEAD ARM** — with a non-weak FIRST constituent,
-dropping the single-survivor test still emits nothing, because the emitter bails on a
-`string` target anyway; the discriminating shape is two WEAK object constituents, and with
-it the arm went 0 -> 1 RED (round 902). And the helper's `weakParamRefusesArg` call is a
-**REDUNDANT guard**, explicable term for term: for the single surviving constituent every
-test it makes is re-made by `tryEmitWeakTypeAssignment`. Recorded as such, not claimed as
-coverage (round 807).
-
-**GATES.** Suite **16,169 / 0 / 3** (+14, exactly the one new class), **no corpus baseline
-moved** — the 13k baselines carry no weak-union shape at all. `cost_gate.py` exit 0
-unrebaselined, `output.errors` **46**, the table the parent's to +0.006% on its largest
-counter. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
-session-built binaries (`javap` control 0 vs 1): capture md5 `503774c2…` on BOTH, per-profile
-`diff` clean — **`added=0 removed=0` on all eight**, unmoved since (CHK.54).
-`partition-equivalence` **EQUIVALENT, all 78**, floor **63 ms** [63, 62, 51, 81] — one draw.
-`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both ARM
-DIGESTs unmoved. **`knip` 48 -> 48 and `jsonrepair` 4 -> 4, EVERY ROW BYTE-IDENTICAL** — the
-queue item's "it ADDS rows … expect it to fire on real code" is measured FALSE, and (CHK.54)
-is why: selection already refuses these signatures, so `readFileSync` picks the `string`
-overload and the argument site never asks.
-
-**SEVEN ABLATION ARMS, ONE MISTAKE EACH, ALL SEVEN CLASS md5s DISTINCT.** a0 (whole change
-reverted, parent rebuilt this session) **7 RED — exactly the seven positives**; a1 (object-
-literal guard dropped) **1**, a2 (single-survivor test dropped) **1**, a3 (callable guard
-dropped) **1**, each uniquely its own pin; a4 (argument site removed) **6**, a5 (var-decl
-branch removed) **2**; a6 (the verdict not asked) **0 — a redundant guard**. Residue —
-the RETURN and ASSIGNMENT positions have no weak walker at all, and the 2559/2560 split —
-queued as (CHK.58) with a fixture apiece.

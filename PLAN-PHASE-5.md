@@ -20,6 +20,140 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.62) — THREE of (CHK.61)'s four unmasked gaps are CLOSED, and **two of its four diagnoses were wrong**; (a)'s price falls **6 rows -> 3**, and the last row's true cause is now located
+
+**THE HEADLINE IS THE RE-PRICING.** With gaps 3 and 4 closed, the `this`-receiver patch
+`build/chk61/patch_a.py` — the one line that closes **every** row (CHK.60) measured — costs
+**3** dashboard rows instead of 6 (grid `9c01ade7819f33aa30f5f7fb5a987e63`, per-profile
+`+2 harness / +1 server`, everything else `added=0 removed=0`). The three are **two** causes:
+`client.ts:356` (gap 1, the un-merged intersection source, still open) and
+`editorServices.ts:4449` on two profiles, whose cause is now located and is NOT what the
+predecessor named.
+
+**TWO OF THE FOUR DIAGNOSES WERE WRONG, AND BOTH FAILED THE SAME WAY: the named axis was a
+property the repro HAPPENED to have.** Gap 3 was recorded as "a function-type PROPERTY's
+parameters are compared covariantly, the METHOD form is already correct". Our general
+parameter contravariance is CORRECT (`(x: string) => void` is not assignable to
+`(x: string | undefined) => void`, byte-identical to tsc 7.0.2), and the method form fails
+identically once the shape is written out. The axis is **OPTIONALITY**: an optional source
+parameter's type is `T | undefined` (tsc's `addOptionality`) and we modelled it as `T`, so
+the target's `undefined` constituent had nowhere to go. Gap 2 was recorded as "a SHORTHAND
+object-literal property does not flow-narrow"; the shorthand is innocent —
+`{ zzzProj: zzzProj }` fails identically and so does a plain `const x: T = zzzProj` after the
+same switch. **Re-bisect a handed-down diagnosis before designing its fix**; each of these
+took two 20-second CLI runs to overturn and would have cost a wrong fix each.
+
+**(CHK.62) gap 4 — AN OBJECT LITERAL THAT SPREADS AN INTERSECTION LOST EVERY MEMBER.**
+`spreadGuaranteedProps` handled `Type.Union` and `Type.Object` and answered `emptyMap()` for
+`Type.Intersection`, so `{ ...mk(), insertString }` with
+`mk(): FileLocationRequestArgs & { endLine: number; endOffset: number }` (harness
+`client.ts:242`) reported TS2739 for the five properties the spread does supply. Dual of the
+union arm: a union guarantees what EVERY constituent has, an intersection what ANY does.
+`SpreadOfIntersectionTest`; the negative control pins tsc 7.0.2's TS2741 message
+byte-for-byte, whose SOURCE display names those five members.
+
+**(CHK.62) gap 3 — AN OPTIONAL SOURCE PARAMETER IS `T | undefined` IN THE CONTRAVARIANT
+TEST.** `signatureRelatedTo` now widens it. Measured over a six-cell matrix against tsc
+7.0.2: five cells now agree exactly. Deliberately SOURCE-side only — tsc's model widens the
+TARGET parameter too, which makes `(x: string) => void` NOT assignable to `(x?: string) =>
+void`; tsc reports that and we are still silent. That half is a REJECTION change, is
+RESIDUE, and is not pinned (round 765). `OptionalParamContravarianceTest`.
+
+**(CHK.62) gap 2 — A CALL TO A `: never` FUNCTION DIVERGES; THE ROW IT WAS SUPPOSED TO CLOSE
+IS STILL OPEN, AND THAT IS THE ROUND'S SECOND FINDING.** `Debug.assertNever(kind);` in a
+switch's `default:` fell THROUGH into the post-switch merge, so the merge re-introduced the
+pre-switch `T | undefined` and every narrow the other clauses established was lost. Fixed in
+both narrowing walkers (fast-forward loop AND recursive arm); tsgo agrees on every repro
+(`build/chk62/g2g`, `g2h`). **But re-pricing (a) shows `editorServices.ts:4449` UNMOVED.**
+Bisecting on the real shape with (a) in the tree found the actual cause, and it is a third,
+`this`-mediated gap: **an assignment whose RHS is a `this`-METHOD CALL does not narrow the
+assigned reference** — `let p = this.find(); p ??= this.create(); return { p }` reports
+`p: ZzzProj | undefined` where tsc is silent, with NO switch in it at all
+(`build/chk62/g2k`, functions `zzzC`/`zzzD`; the free-function RHS `zzzA` is silent and is
+the control). It is invisible without (a) because `this.create()` types `any` today. Queued.
+
+**THE PERF DESIGN OF `flowCallDiverges` IS THE THIRD FINDING, AND IT IS THREE MEASURED
+GATES, NOT ONE.** Resolving the callee on every flow call reads `typeOfExpr.calls`
+**+9.61%** and `globals.lookups` **+4.43%** — COST GATE FAILED — because
+`callHasNeverReturnAnnotation` reaches `resolvePropertyMethodDecl`, which **TYPES THE
+RECEIVER**: the round-385 hazard `flowCalleeMayHaveAssertEffects` was written to avoid, one
+predicate over. (i) requiring the parent to be an `ExpressionStatement` (a diverging call
+cannot be in value position) -> +3.19% / +2.22%; (ii) using the symbol-table-only
+`resolveNamespaceMemberFnDecl` instead -> `typeOfExpr.calls` **+1.42%, digit-identical to
+standing**, `globals.lookups` +2.14% (still failing); (iii) pre-gating the namespace RECEIVER
+on `currentFileLocals` (one map probe; a receiver that can name a `: never` function is an
+import or a file-level declaration, a parameter is not) -> `globals.lookups`
+**776189 -> 771524, +1.52%**, gate PASSES. A per-request memo keyed by `nodeKey` measured
+**ZERO** — each such call is asked about once per compile, so the cost was never repetition.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,247 / 16,252 / 16,257**,
+0 failed, 3 skipped — +4/+5/+5, exactly the three new classes; **no corpus baseline moved on
+any of the three**. `cost_gate.py` PASSES on all three (exit 0 read from the gate, not from a
+pipeline — see the gotcha); `output.errors` **46** throughout; `typeOfExpr.calls`,
+`narrow.walks`, `narrow.memoServed`, `spine.nodes` digit-identical to (CHK.61c/d)'s reading
+on all three. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over, on all three.
+**8-profile grid `503774c23b4535130ffdebabef430cf0` on all three** — the standing value,
+per-profile `added=0 removed=0` on all eight. `knip` **48** and `jsonrepair` **4**, EVERY ROW
+byte-identical on all three. `partition-equivalence` EQUIVALENT all 78 (floors 59 / 69 / 75
+ms, one draw each — the spread is the harness's own, not the change's).
+
+**`capture-equivalence` MOVED BOTH ARM DIGESTS ON THE GAP-2 COMMIT AND THAT IS EXPECTED.**
+`full=-7560141526203174980 narrow=-5179824964953234569` (was `-3735929574989657502` /
+`-2075467818767010709`), with **DIVERGED 1,005 span(s) in 43 of 76, types=1005
+definitions=0, moreAny 0, definitions 360,376 — every one unchanged**. Commits 1 and 2
+reproduced the OLD digests exactly, so the move is attributable to the diverging-call fix
+alone: it is a FULL-BUILD fix, so captured types after such a switch now render the narrowed
+type in BOTH arms and the full-vs-narrow relationship is untouched — (INC.26)'s rule,
+re-recorded rather than read as a regression.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the `Type.Intersection` arm of `spreadGuaranteedProps` reverted | `8b85adc4` | **2** — the gap-4 positive and its negative control |
+| a1 | the optional-source-parameter widening reverted | `d6a568d0` | **3** — exactly the gap-3 positives |
+| a2 | `flowCallDiverges` forced false | `d6e9f431` | **3** — exactly the gap-2 positives |
+| a3 | only the namespace-member arm of `flowCallDiverges` off | `957b605e` | **1** — uniquely the `Debug.assertNever` positive |
+
+Shipped classes `3fb8f92b` / `92f930ec` / `181c293e`. **The `currentFileLocals` pre-gate has
+NO ablation arm and is not claimed as coverage**: it is a PERF guard with no observable
+behaviour, so every pin is green with and without it — it is graded by `cost_gate.py`, and
+both readings (+2.14% without, +1.52% with) are recorded above. Every arm was `cmp`-diffed
+against its OWN snapshot before the build, and each restore was verified by `cmp` plus a
+rebuilt class md5 equal to the pre-ablation one.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every positive was first reproduced on the PARENT
+binary through the CLI against `tools/tsgo-7.0.2/lib/tsc` on the same fixture, then shown
+RED under the arm that names its rule. The gap-4 negative control was WRITTEN WRONG first
+(it asserted TS2739/TS2740 and the shipped answer is TS2741) and the failure is what
+produced the byte-exact message assertion. Two controls are labelled CONTROLS and not
+coverage because no arm reddens them: the plain-interface and plain-object spreads (gap 4)
+and the three already-relating variance directions (gap 3). The gap-2 controls DO
+discriminate — a rule that treated any statement call as diverging silences them — which is
+why they assert `rows.size == 1` and the `ZzzProj | undefined` text rather than a bare
+`none`.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **Four hand-written repros of the four gaps were all VACUOUS on the first attempt** —
+    every one compiled clean on both compilers. CLAUDE.md's "a hand-written approximation of
+    a tsc shape passes vacuously" cost four cycles here; what worked every time was reading
+    the REAL declarations out of `build/bench/tsc-*/src` and deleting ingredients.
+  * **`python3 scripts/cost_gate.py 2>&1 | grep …; echo "exit=$?"` reads the GREP's status**,
+    so a FAILING gate prints a plausible table and `exit=0`. Two of this round's readings
+    were taken that way before it was noticed; both were genuinely passing (no
+    `ROSE beyond` lines), and the third was failing. Redirect to a file and read `$?` from
+    the gate itself.
+  * **The per-request memo I added to make `flowCallDiverges` cheap measured EXACTLY zero**
+    (776825 vs 776826 lookups) — the population is one ask per call per compile, so there
+    was nothing to memoize. It is kept because it is free and bounds a pathological input,
+    but it is not what made the gate pass.
+  * **Gap 2's fix is right and does not close the row it was written for.** That is the
+    round's most transferable shape: a queue entry that names a row AND a mechanism can be
+    right about the mechanism, right about it being a defect, and wrong that the two are the
+    same thing — the only instrument that says so is re-pricing the unmasking patch.
+
+
 ### Round (CHK.61c)+(CHK.61d) — the two defects (CHK.61) named were BUILT, PRICED and REFUSED for the same reason, and the pricing turned up **two other defects that were free to fix**
 
 **BOTH QUEUED ITEMS WORK, AND NEITHER IS LANDABLE.** (a) — take `currentClassForThis` as the
@@ -1285,154 +1419,6 @@ without them `Date`/`HTMLElement` do not exist and every pin passes vacuously ((
   * knip going 49 -> 54 read as a regression for twenty minutes. It is one fix and six
     newly-visible pre-existing rows, and the thing that settled it was deleting the
     `declare global` from the repro — the defect stayed.
-
-### Round (CHK.51) — the axis was **HERITAGE**, not "lib": a missing member on anything with an `extends` was silent, and the firewall that hides it is worth **43 rows** on the compiler profile
-
-**THE QUEUE ITEM'S FRAMING WAS WRONG IN BOTH DIRECTIONS, AND A ONE-CASE-PER-FILE CENSUS
-SAYS SO IN ONE COMMAND.** The item said "a missing member on a REAL LIB interface is not
-reported"; measured against the (CHK.49) parent binary rebuilt in this session, `Date`,
-`Map<string, number>`, `Set<number>`, `Promise<number>`, `RegExp`, `Error`, `JSON`, `Math`,
-`Symbol`, `Iterable<number>`, `ArrayBuffer`, `EventTarget`, `new Date()` and every primitive
-(`string`, `number`, `boolean`) **already reported** — every one of them declares no
-`extends`. And a HAND-WRITTEN `interface D1 extends B1` was silent exactly like `Text`, so
-the item's "a hand-written interface of the same shape IS reported" is true only of a
-heritage-free one. The axis is heritage.
-
-**THREE MECHANISMS, ONE CLOSED.** Isolated per case, and each named rather than inferred:
-
-  1. **the heritage firewall** — `cmamCheckResolvedObjectType`'s
-     `if (objectType is Type.Interface && baseTypes non-empty) return`, plus its
-     `Type.Reference` twin reading `target.baseTypes`. This is `Text`, `Node`,
-     `CharacterData`, `Element`, `HTMLElement`, `D1 extends B1`, `class CD extends CB`.
-     **CLOSED for an all-lib closure.**
-  2. **the numeric index-signature bail** in `cmamEmitMissingProperty`
-     (`if (numberIndexInfo != null) { if (displayTypeOverride == null || …) return }`) —
-     `number[]`, `Array<number>`, `ReadonlyArray<number>`, `Uint8Array`. NOT closed.
-  3. **the empty-`properties` early return** — a bare function type (`() => void`) has no
-     properties and a non-empty `callSignatures`, so it misses the `{}` emitter's gate and
-     returns. NOT closed.
-  A **CLASS instance with a base** stays silent even with (1) removed entirely, i.e. there
-  is a FOURTH mechanism which this round did not locate.
-
-**WHY (1) COULD NOT SIMPLY GO, MEASURED BEFORE ANY DESIGN.** Deleting both its legs and
-running the 8-profile grid reads **89 diagnostics on the compiler profile against 46** —
-**+43**, and every one of them is a NARROWING gap rather than a member-table gap:
-`canHaveSymbol(e) && e.symbol` at `checker.ts:32231`, `if (!isIdentifier(node.expression))
-return Debug.fail(); … node.expression.escapedText` at `:38034`, `node.argument.literal`
-nine times. tsc's own sources are written in that style throughout, so **the firewall has
-been standing in for flow narrowing this checker does not do** — which is the most
-transferable thing this round learned.
-
-**SO THE RELAXATION DEMANDS POSITIVE EVIDENCE ((CHK.45)'s RULE), AND THE EVIDENCE IS
-"EVERY TYPE IN THE TRANSITIVE BASE CLOSURE IS A LIB TYPE".** `cmamLibHeritageMembersComplete`
-answers true only when each type in the closure is an interface with a symbol, with at least
-one declaration, with every declaration in `builtinLibDecls`, not named by any
-`declare global { interface … }` block, and with a member table that resolved. A lib
-interface's members are fully declared in files this compiler ships and parses in one piece,
-so "absent from the resolved table" is a WITNESSED verdict; a program interface's table
-depends on the receiver having been narrowed, which is exactly failure (1) exists for.
-
-**THE `declare global` SET IS THE LOAD-BEARING HALF AND IT EXISTS BECAUSE OF AN *OPEN*
-DEFECT.** (CHK.50) — queued by (CHK.49) and measured on its parent — is that a
-`declare global { interface X { … } }` in a module does not reach `globals` at all. So the
-lib symbol's declaration list still reads "all lib" after such an augmentation, and the
-all-lib test cannot see it: without a separate `globalAugmentedInterfaceNames` set this
-relaxation would have converted (CHK.50)'s silent false NEGATIVE into a false POSITIVE on
-the shape every `@types` package is written in. It is a SECOND set beside
-`globalAugmentationNames` deliberately — that one is a value-space suppression list and
-adding type names to it would silence unrelated diagnostics. A GLOBAL-SCRIPT augmentation
-needs nothing: it merges, so the symbol carries a non-lib declaration and the all-lib test
-refuses on its own.
-
-**COST: ONE TRUE POSITIVE, NAMED.** In a file that writes
-`declare global { interface HTMLElement { … } }`, `el.zzzNotThere` is TS2339 in tsgo and
-silent here. That is the conservative direction and it goes away when (CHK.50) lands.
-
-**AGREEMENT WITH tsgo 7.0.2 IS EXACT** — code, message and column — for `Text`,
-`HTMLElement`, `Node`, `Element` and `CustomEvent<number>`, read out of
-`tools/tsgo-7.0.2/lib/tsc` on the same source rather than hand-written.
-
-**GATES.** Suite **16,107 / 0 / 3** (+6, exactly the new class), **zero corpus baselines
-moved** — expected, since the generated corpus compiles against the EMBEDDED lib, which has
-no DOM. `cost_gate.py` **PASSES with NO rebaseline**, exit 0: `output.errors` **46**,
-`spine.nodes` **+0.00%**, `globals.conflated` 0, largest movements `narrow.memoServed`
-**+0.69%** and `typeOfExpr.calls` **+0.59%** — digit-for-digit (CHK.49)'s, i.e. this round
-contributes 0.00% on the compiler profile. `huge_methods.py --fail-over 0` exit 0, **783**
-classes scanned, 0 over limit. `partition-equivalence` **EQUIVALENT, all 78**, floor
-**59 ms** [89, 56, 57, 59] — ONE draw, the leading 89 the documented ramp.
-`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions`
-**360,376** — the standing state, unmoved. 8-profile grid with BOTH arms built in this
-session and a `javap` positive control (before = 0 occurrences of
-`cmamLibHeritageMembersComplete`, after = 3): **`added=0 removed=0` on all eight**.
-
-**LIBRARIES — ONE REAL ARM AND ONE CONTROL.** **`jsonrepair` 3.13.1: 4 -> 4 rows,
-byte-identical**, and its tsconfig says `"lib": ["es2020", "dom"]` — so that is a genuine
-no-false-positive measurement over a DOM-loading project rather than a control.
-**`knip` @ `dc7aca5`: 49 -> 49, byte-identical**, and that one IS a pure control:
-(CHK.49) established that knip's `"lib": ["esnext"]` excludes DOM, so it has no lib-heritage
-receiver to report about.
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT, EACH
-ANCHOR ASSERTED UNIQUE, AND EACH ARM'S `Checker.class` md5 CHECKED AGAINST THE LANDED
-`b347a38a…`.**
-
-| arm | injected mistake | RED | profile |
-|---|---|---|---|
-| a0 | the whole change reverted (parent rebuilt this session, `javap` 0 vs 3) | **3** — every positive | 46 |
-| a1 | the all-lib-declarations test dropped | **1** | **89** |
-| a2 | the `declare global` refusal dropped | **1** | 46 |
-| a3 | the resolved-member-table test dropped | **0** | 46 |
-| a4a | a null symbol treated as complete | **0** | 46 |
-| a4b | the empty-declarations refusal dropped | **0** | 46 |
-| a5 | a non-interface base skipped instead of refused | **0** | 46 |
-| a6 | the `declare global` interface COLLECTOR dropped | **1** — the same pin as a2 | 46 |
-| a7 | the `Type.Reference` leg reverted to a bare `return` | **1** — uniquely the generic pin | 46 |
-
-a2/a6 are a **round-927 pair** — one observable reachable from either end. a3/a4a/a4b/a5 are
-recorded as **UNDISCRIMINATED and KEPT**, which is not the same as redundant and not the same
-as dead: each is unreachable only because of what the shipped libs happen to CONTAIN today
-(every lib interface is bound, has declarations, resolves its members, and extends only other
-interfaces). (CHK.49)'s delete-the-un-gateable-guard precedent does not apply, because none of
-them is PROVABLY unobservable — the libs are input this repo does not author.
-
-**THE OBVIOUS FALSE-POSITIVE PIN IS BLIND, AND ONLY AN ARM SAW IT.** The first draft of the
-"a narrowed member is not reported missing" pin used a guard whose predicate type is a
-SUBTYPE of the receiver's (`x is ZzzSub` for an `x: ZzzBase`). That narrows correctly here, so
-the pin was green on the ablated binary too: **arm a1 read `0 RED` with the profile at 89** —
-round 902's law, a blind pin rather than a redundant guard. What this checker cannot do is the
-INTERSECTION narrow tsc performs when the predicate names a SIBLING
-(`canHaveSymbol(node: Node): node is Declaration` applied to an `e: Expression`), and rewriting
-the fixture that way takes a1 to 1 RED. **A type-guard FP fixture must name a sibling, not a
-subtype.**
-
-**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **three** positives were run against the
-(CHK.49) parent binary rebuilt in this session (`Checker.class` md5 `093544ff…`, `javap`
-reading 0 occurrences of the new members) over byte-identical test source, and **all three
-reported RED**. The two refusal pins are green on the parent by construction and their
-falsifying arms are a2/a6 and a1 above. The one pin labelled CONTROL (12 inherited members
-across three DOM types and a generic instantiation) is green on every arm and is NOT counted
-as coverage. The fixtures carry `@useRealLibs` + `@lib: es2020,dom`: with the embedded lib
-none of these types exists and every one of them would have passed vacuously.
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-
-  * Deleting the firewall — the obvious first cut, and a 43-row catastrophe. Its 43 rows are
-    a free map of this checker's narrowing gaps and are worth mining as a queue item.
-  * The subtype-guard FP pin, above.
-  * The helper was first written with an early `if (root.baseTypes.isNullOrEmpty()) return
-    false` and the caller consulting it unconditionally. Moving the heritage test back to the
-    caller (where it already lived) made that guard unreachable, so it was DELETED rather
-    than shipped un-gateable, and it keeps the closure walk off every base-less receiver.
-  * **A batch of ablation arms timed out mid-arm and left the tree ABLATED** — round 805's
-    hazard, caught by a `cmp` against the snapshot before anything else was run. Any driver
-    whose `finally` restores the tree needs the restore VERIFIED from outside it.
-
-**WHAT IS LEFT, MAPPED AND NOT PINNED (round 765).** A PROGRAM interface with heritage
-(`interface D1 extends B1`), a MIXED closure (`interface Mine extends HTMLElement`), a CLASS
-instance with a base, an ARRAY or any numeric-index receiver, and a bare function type: tsgo
-reports a missing member on all of them and we do not. The first two are the same object as
-the 43 rows and are blocked on narrowing; the last three are mechanisms (2), (3) and the
-unlocated fourth. Queued as **(CHK.52)**.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3348,7 +3334,31 @@ unlocated fourth. Queued as **(CHK.52)**.
      TS2559 `Type 'bigint'` at the key — [Checker.weakSourcePropertyNames]'s `BigIntLike` arm
      does not resolve to an object here. One line, deliberately not taken this round.
 
-- [ ] **(CHK.61) THE `this` RECEIVER AND THE DROPPED `| undefined` — BOTH **BUILT AND
+- [ ] **(CHK.62b) AN ASSIGNMENT WHOSE RHS IS A `this`-METHOD CALL DOES NOT NARROW THE
+  ASSIGNED REFERENCE — THE REAL CAUSE OF (CHK.61)(a)'s LAST TWO ROWS, AND IT HAS NO SWITCH IN
+  IT (2026-08-27, located by (CHK.62)).** `let p = this.zzzFind(); p ??= this.zzzCreate();
+  return { p }` inside a class reports `p: ZzzProj | undefined` where tsc 7.0.2 is silent, and
+  so does the `if (!p) { p = this.zzzCreate() }` form. **The control is in the same fixture and
+  is silent**: the identical assignment with a FREE function RHS (`p ??= zzzCreateFree()`)
+  narrows correctly, as does `??=` inside a switch clause with a free RHS. Repro
+  `build/chk62/g2k` (`zzzC`/`zzzD` fail, `zzzA` is the control) — **it reproduces ONLY with
+  `build/chk61/patch_a.py` applied**, because without (a) `this.zzzCreate()` types `any` and
+  an `any` RHS is silently assignable. Almost certainly the same root cause as (a) itself —
+  `getTypeOfExpression` answers `any` for `Identifier("this")` — reached through the CALL path
+  (`getCalleeType` / `getReturnTypeOfCallExpression`) rather than through
+  `computeRawTypeOfPropertyAccess`, so extending (a) to that path is the first thing to try.
+  Closing it takes (a) from 3 rows to **1** (gap 1 alone).
+
+- [ ] **(CHK.61) — **RE-PRICED 2026-08-27 BY (CHK.62): (a) NOW COSTS 3 ROWS, NOT 6.** Gaps
+  **3** (an optional source parameter is `T | undefined` in the contravariant test) and **4**
+  (an object literal spreading an INTERSECTION lost every member) are CLOSED and their rows
+  are gone; the (a) grid is now `9c01ade7819f33aa30f5f7fb5a987e63` = `+2 harness / +1 server`.
+  **The 3 surviving rows are TWO causes**: gap **1** below (`client.ts:356`, unchanged, still
+  the hardest — its acceptance leg adds `never` rows), and `editorServices.ts:4449` on two
+  profiles, whose cause is NOT gap 2 as recorded. (CHK.62) fixed gap 2's named mechanism —
+  a call to a `: never` function now DIVERGES, tsgo-confirmed — and the row did not move;
+  bisecting the real shape with (a) in the tree located the true cause, **(CHK.62b) below**.
+  Gap 2's entry stands only as history. ORIGINAL ENTRY: BOTH **BUILT AND
   PRICED** IN (CHK.61c/d), BOTH REFUSED ON THE SAME GROUND: EACH UNMASKS PRE-EXISTING
   ENGINE GAPS AS **DASHBOARD FALSE POSITIVES**, AND EACH GAP IS NAMED BELOW WITH A
   `this`-FREE REPRO.** Neither is a design question any more; what is left is the named
@@ -3361,7 +3371,7 @@ unlocated fourth. Queued as **(CHK.52)**.
   in the tree), `knip` 48 and `jsonrepair` 4 BYTE-IDENTICAL, compiler profile 46 -> 46, and
   +4 harness / +2 server rows** (grid `56c6b1e04100a8ae0bcfba9bff323865`). All six are
   FALSE POSITIVES from FOUR pre-existing gaps the `any` was hiding, none `this`-specific:
-  1. **AN INTERSECTION SOURCE IS NEVER MERGED** (`client.ts:356`) —
+  1. **[STILL OPEN] AN INTERSECTION SOURCE IS NEVER MERGED** (`client.ts:356`) —
      `structuredTypeRelatedTo`'s rule is "SOME constituent relates", so
      `ZzzBase & { zzzEndLine: number }` fails `ZzzFmt` where each half contributes.
      Repro `build/chk61/p3/a.ts` line 4, no `this` in it. **AN ACCEPTANCE LEG WAS BUILT AND
@@ -3370,15 +3380,19 @@ unlocated fourth. Queued as **(CHK.52)**.
      `callHierarchy.ts:199 'parent' does not exist on type 'never'` on TWO profiles,
      because an acceptance in the relation feeds `typeGuardMemberDisjoint` and narrows to
      `never` — **so "acceptance-only cannot add a diagnostic" is FALSE in this codebase.**
-  2. **A SHORTHAND OBJECT-LITERAL PROPERTY DOES NOT FLOW-NARROW**
+  2. **[MISDIAGNOSED — the shorthand is innocent; see (CHK.62b) for the real cause]
+     A SHORTHAND OBJECT-LITERAL PROPERTY DOES NOT FLOW-NARROW**
      (`editorServices.ts:4449`, 2 profiles) — `return { project, … }` where `project` is
      `T | undefined` narrowed to `T` by the enclosing `switch` + `Debug.assertNever`.
-  3. **A FUNCTION-TYPE PROPERTY'S PARAMETERS ARE COMPARED COVARIANTLY**
+  3. **[CLOSED (CHK.62) — and MISDIAGNOSED: the axis is OPTIONALITY, not
+     method-vs-property; our parameter contravariance was always correct]
+     A FUNCTION-TYPE PROPERTY'S PARAMETERS ARE COMPARED COVARIANTLY**
      (`project.ts:2277`, 2 profiles) — `readDirectory: CompilerHost["readDirectory"]` is a
      PROPERTY, not a method, and `include?: readonly string[] | undefined` vs
      `includes: readonly string[]` relates only contravariantly. The METHOD form is
      already correct (`build/chk61/p3/a.ts` lines 10-11 are silent).
-  4. **AN OBJECT LITERAL LOSES A SPREAD'S MEMBERS** (`client.ts:242`) —
+  4. **[CLOSED (CHK.62) — `spreadGuaranteedProps` had no `Type.Intersection` arm]
+     AN OBJECT LITERAL LOSES A SPREAD'S MEMBERS** (`client.ts:242`) —
      `{ ...this.zzzM(), insertString }` reports TS2739 for the five the spread supplies.
   **(b) THE DROPPED `| undefined` — also one line, and (CHK.61d) already removed 84% of its
   price.** Adding `| undefined` at `computeRawTypeOfPropertyAccess`'s three `prop != null`
@@ -3398,8 +3412,10 @@ unlocated fourth. Queued as **(CHK.52)**.
   an `if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type
   that is ALREADY a union — a confined fix must add the constituent and then re-run
   `getNarrowedTypeForReference`, reproducing the checking path's order.
-  **SEQUENCING**: close 1-4 (each is `this`-free and has a repro), then land (a); (b) needs
-  its five narrowing gaps first, and they may share one cause.
+  **SEQUENCING, UPDATED 2026-08-27**: 3 and 4 are CLOSED. What is left before (a) can land
+  is **gap 1** and **(CHK.62b)** — take (CHK.62b) first: it is one mechanism, it has a
+  discriminating control in its own fixture, and it is worth 2 of the 3 remaining rows. (b)
+  still needs its five narrowing gaps, which remain unstarted.
 
 - [ ] **(CHK.61b) THE ENUM RESIDUE AFTER (CHK.60) — FIVE ITEMS, EACH WITH ITS MEASURED ROW.**
   1. **AN UNEVALUATED ENUM MEMBER IS STILL REFUSED**: `enum E { A = zzzNonConst }` against

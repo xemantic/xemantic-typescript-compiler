@@ -1,3 +1,55 @@
+**THE WEAK-TYPE RULE DID NOT DISTRIBUTE OVER A **UNION** TARGET — SO IT WAS ABSENT FROM THE
+MAJORITY OF THE POSITIONS WHERE IT FIRES (2026-08-27, (CHK.57)).** `weakTargetProperties`
+answers null for a `Type.Union`, so every B482 walker — the ones that EMIT TS2559/TS2560 at
+a named position — was blind to a weak type reached through one, while (CHK.54)'s SELECTION
+and (CHK.56)'s TS2769 path had folded over constituents all along. `T | null` /
+`T | undefined` is the commonest parameter and variable shape in real TypeScript.
+`weakUnionRefusalConstituent` composes the verdict (`weakParamRefusesArg`) and the display
+(`weakRefusalDisplayTarget`) into the single-signature CALL argument site and
+`tryEmitTopLevelWeakVarDecl`, as a branch DISJOINT from the bare-target one — so the bare
+path is byte-identical and its controls stay green under every arm.
+
+**BOTH POSITIONS NOW MATCH tsc 7.0.2 EXACTLY** — code, message, line and column, read off
+the compiler and never derived — as do the `| undefined`, interface-, alias- and
+`Partial<…>`-constituent, non-fresh-object-source and REST-parameter variants.
+**Three shapes refuse deliberately, each MEASURED**: two or more non-nullish constituents
+(tsc's TS2345/TS2322 naming the whole union needs the RELATION to reject); an object-literal
+ARGUMENT ((CHK.56)'s boundary — tsc's excess check squiggles the property two columns
+right); and a CALLABLE source, because tsc emits TS2560 only when CALLING the source yields
+an assignable value (`() => number` against a weak object is TS**2559**) where we emit 2560
+for every callable — a pre-existing BARE-target divergence that would have been inherited as
+a wrong-CODE row.
+
+**TWO ABLATION FINDINGS WORTH MORE THAN THE FIX.** The queue entry's own two-constituent
+example (`{ zzzA?: null } | string`) is a **DEAD ARM** — with a non-weak FIRST constituent,
+dropping the single-survivor test still emits nothing, because the emitter bails on a
+`string` target anyway; the discriminating shape is two WEAK object constituents, and with
+it the arm went 0 -> 1 RED (round 902). And the helper's `weakParamRefusesArg` call is a
+**REDUNDANT guard**, explicable term for term: for the single surviving constituent every
+test it makes is re-made by `tryEmitWeakTypeAssignment`. Recorded as such, not claimed as
+coverage (round 807).
+
+**GATES.** Suite **16,169 / 0 / 3** (+14, exactly the one new class), **no corpus baseline
+moved** — the 13k baselines carry no weak-union shape at all. `cost_gate.py` exit 0
+unrebaselined, `output.errors` **46**, the table the parent's to +0.006% on its largest
+counter. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two
+session-built binaries (`javap` control 0 vs 1): capture md5 `503774c2…` on BOTH, per-profile
+`diff` clean — **`added=0 removed=0` on all eight**, unmoved since (CHK.54).
+`partition-equivalence` **EQUIVALENT, all 78**, floor **63 ms** [63, 62, 51, 81] — one draw.
+`capture-equivalence` **1,005 / 43 of 76 / moreAny 0**, `definitions` **360,376**, both ARM
+DIGESTs unmoved. **`knip` 48 -> 48 and `jsonrepair` 4 -> 4, EVERY ROW BYTE-IDENTICAL** — the
+queue item's "it ADDS rows … expect it to fire on real code" is measured FALSE, and (CHK.54)
+is why: selection already refuses these signatures, so `readFileSync` picks the `string`
+overload and the argument site never asks.
+
+**SEVEN ABLATION ARMS, ONE MISTAKE EACH, ALL SEVEN CLASS md5s DISTINCT.** a0 (whole change
+reverted, parent rebuilt this session) **7 RED — exactly the seven positives**; a1 (object-
+literal guard dropped) **1**, a2 (single-survivor test dropped) **1**, a3 (callable guard
+dropped) **1**, each uniquely its own pin; a4 (argument site removed) **6**, a5 (var-decl
+branch removed) **2**; a6 (the verdict not asked) **0 — a redundant guard**. Residue —
+the RETURN and ASSIGNMENT positions have no weak walker at all, and the 2559/2560 split —
+queued as (CHK.58) with a fixture apiece.
+
 
 
 **THE TS2769 *DIAGNOSTIC* PATH DID NOT ASK THE WEAK-TYPE RULE — AND THE ITEM'S "HARD
