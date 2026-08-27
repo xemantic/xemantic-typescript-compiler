@@ -2915,7 +2915,16 @@ internal class KirFileLowering(
                         "not a member this backend gives a runtime function"
                 )
             return scope.irCall(target).apply {
-                arguments[0] = lowerExpression(callee.expression)
+                // COERCED, exactly as the `Number` branch above coerces to
+                // `Double`. `isStringReceiver` asks the CHECKER, which answers
+                // yes for a receiver NARROWED to `string` out of a union — and
+                // such a receiver's erasure is `Any`, so lowering it raw hands a
+                // `String` parameter an `Any` and produces IR that is simply not
+                // well typed. The JVM and Native backends accept it; the Wasm
+                // one validates and rejects the module.
+                arguments[0] = coerce(
+                    callee.expression, lowerExpression(callee.expression), types.string
+                )
                 val regular = target.owner.parameters.filter { it.kind == IrParameterKind.Regular }
                 node.arguments.forEachIndexed { index, argument ->
                     arguments[index + 1] =
@@ -3200,7 +3209,11 @@ internal class KirFileLowering(
                     "'String.${node.name.text}' is not a property this backend gives a " +
                         "runtime function"
                 )
-            return scope.irCall(target).apply { arguments[0] = lowerExpression(node.expression) }
+            return scope.irCall(target).apply {
+                arguments[0] = coerce(
+                    node.expression, lowerExpression(node.expression), types.string
+                )
+            }
         }
         if (isPropertyBag(node.expression)) return lowerBagRead(node)
         instanceOwnerOf(node)?.let { owner ->
@@ -4161,7 +4174,9 @@ internal class KirFileLowering(
             val charAt = intrinsics.stringMember("charAt", 1)
                 ?: refuse(tsFile, node, "String.charAt is missing from the runtime")
             return scope.irCall(charAt).apply {
-                arguments[0] = lowerExpression(node.expression)
+                arguments[0] = coerce(
+                    node.expression, lowerExpression(node.expression), types.string
+                )
                 arguments[1] = elementIndex(node)
             }
         }
