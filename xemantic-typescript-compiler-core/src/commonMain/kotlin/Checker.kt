@@ -124284,6 +124284,25 @@ interface DataView {
             var acceptedType = argType
             if (!isSimpleTypeRelatedTo(argType, constrainedParamType) &&
                 !checkTypeRelatedTo(argType, constrainedParamType, assignableRelation)) {
+                // (CHK.55) SECOND CHANCE for an OBJECT-LITERAL argument whose only
+                // failure is a WIDENED literal property. [getTypeOfExpression] types
+                // `{ encoding: "utf8" }` as `{ encoding: string }` — we have no fresh
+                // -literal machinery — so a target property with a literal type rejects
+                // it and this signature is passed over. The DIAGNOSTIC path has asked
+                // [objLitLiteralPropsSatisfyParam] since round 728; SELECTION never did,
+                // so the two disagreed and the answer came from `resolveCallOverload`'s
+                // `arityMatches[0]` fallback: `zzzH({ e: "u" })` against
+                // `(o: { e?: null }): number` / `(o: ZH1): string` answered `number`
+                // where tsc answers `string`. A WRONG TYPE, with no diagnostic anywhere.
+                //
+                // `continue` — NOT a fall-through to [weakParamRefusesArg] below — and
+                // that is load-bearing rather than cosmetic. A rescue may succeed
+                // through one union constituent while a DIFFERENT, weak constituent
+                // shares no name with the literal; the weak rule would then find no
+                // sharing weak constituent, offer the rescued one to the plain relation
+                // (which is exactly what just failed), and refuse the signature it was
+                // never meant to judge.
+                if (objLitLiteralPropsSatisfyParam(arg, argType, constrainedParamType)) continue
                 // Round 743: SECOND CHANCE against the FLOW-narrowed type.
                 // [getTypeOfIdentifier] answers from `currentLocalTypes` and the
                 // declaration tables — so an `if (isFoo(x))` narrow is visible here
@@ -153656,21 +153675,40 @@ interface DataView {
         if (arg !is ObjectLiteralExpression) return false
         val src = argType as? Type.Object ?: return false
         if (src is Type.Interface || src is Type.Reference) return false
-        // An optional parameter is `T | undefined`: take the single non-nullish object
-        // constituent, exactly as the object-literal contextual-type selection does.
-        val tgt: Type.Object = when (paramType) {
-            is Type.Union -> (paramType.types
+        // (CHK.55) A UNION parameter is satisfied by SOME constituent — tsc's
+        // `typeRelatedToSomeType` — so EVERY non-nullish object constituent is offered
+        // the rescue, not only a lone one. `readFileSync`'s second overload takes
+        // `{ encoding: BufferEncoding; flag?: string } | BufferEncoding`, which has two
+        // non-nullish constituents, and the round-728 `singleOrNull` refused it outright.
+        val targets: List<Type.Object> = when (paramType) {
+            is Type.Union -> paramType.types
                 .filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-                .singleOrNull() as? Type.Object) ?: return false
-            is Type.Object -> paramType
+                .filterIsInstance<Type.Object>()
+            is Type.Object -> listOf(paramType)
             else -> return false
         }
-        if (tgt is Type.Reference) return false
-        // An inherited required property would not be enumerated below, so a target with
-        // base types is left to the plain relation.
-        if (tgt is Type.Interface && !tgt.baseTypes.isNullOrEmpty()) return false
-        resolveStructuredTypeMembers(tgt)
+        if (targets.isEmpty()) return false
         resolveStructuredTypeMembers(src)
+        return targets.any { objLitLiteralPropsSatisfyObjectTarget(src, it) }
+    }
+
+    /**
+     * (CHK.55) One target of [objLitLiteralPropsSatisfyParam]'s per-constituent fold.
+     *
+     * A TARGET WITH BASE TYPES IS NO LONGER REFUSED. Round 728 refused one on the
+     * grounds that "an inherited required property would not be enumerated below";
+     * measured, that is not true of this compiler — [resolveInterfaceMembersCore]
+     * folds every base type's `members` into the derived type's own table and then
+     * sets `properties = members.values.toList()`, so BOTH enumerations here (the
+     * excess-property lookup and the required-property loop) already see inherited
+     * members. The refusal was `knip`'s last overload row: `execSync(cmd, { encoding:
+     * 'utf8', stdio: [...] })` against `ExecSyncOptionsWithStringEncoding extends
+     * ExecSyncOptions`. The negative direction is pinned — a target whose required
+     * property is INHERITED and absent from the literal still rejects.
+     */
+    private fun objLitLiteralPropsSatisfyObjectTarget(src: Type.Object, tgt: Type.Object): Boolean {
+        if (tgt is Type.Reference) return false
+        resolveStructuredTypeMembers(tgt)
         var anyLiteralRescue = false
         for (p in src.properties ?: return false) {
             val tp = getPropertyOfType(tgt, p.name) ?: return false  // excess property still rejects
