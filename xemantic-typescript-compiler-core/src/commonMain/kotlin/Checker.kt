@@ -111862,6 +111862,40 @@ interface DataView {
      * default [isNumericEnumObjectType] applies, since an enum member without a
      * computed value is an implicitly-numbered one.
      */
+    /**
+     * (CHK.60) The APPARENT PRIMITIVE of an enum MEMBER type — `stringType` for a
+     * string-valued member, `numberType` for a numeric one — or `null` for anything
+     * else.
+     *
+     * tsc has no need of this: an enum literal type there IS a `StringLiteral` /
+     * `NumberLiteral` type carrying `EnumLiteral` beside it, so `getApparentType`
+     * answers `String` / `Number` without asking anyone. (REL.1)(b) mints a member-LESS
+     * [Type.Object] instead, and this is what recovers the flavour the flags no longer
+     * carry.
+     *
+     * **POSITIVE EVIDENCE ONLY, WHICH IS WHY THIS IS NOT
+     * [isStringEnumObjectType]/[isNumericEnumObjectType].** Those two answer a
+     * three-valued question with two values — `isNumericEnumObjectType` defaults an
+     * UNEVALUATED member to numeric, which is right for its arithmetic caller (tsc's
+     * own default for a member with no initializer) and wrong here: in a RELATION that
+     * default would relate an enum member of unknown value to every target `Number`
+     * satisfies, i.e. it would answer in the FALSE-NEGATIVE direction, which has no
+     * gate. A member whose value did not evaluate keeps the rejection it has today.
+     *
+     * The WHOLE enum type answers `null` by construction — it carries [TypeFlags.Enum],
+     * not [TypeFlags.EnumLiteral], and has no member name to look up.
+     */
+    private fun enumLiteralApparentPrimitive(source: Type): Type? {
+        if (source.flags.hasNone(TypeFlags.EnumLiteral)) return null
+        val memberSym = (source as? Type.Object)?.symbol ?: return null
+        val owner = memberSym.parent ?: return null
+        return when (enumValues[canonicalEnumSymbol(owner).id]?.get(memberSym.name)) {
+            is ConstantValue.StringValue -> stringType
+            is ConstantValue.NumberValue -> numberType
+            else -> null
+        }
+    }
+
     private fun enumMemberTypeIsStringValued(type: Type): Boolean? {
         if (type.flags.hasNone(TypeFlags.EnumLiteral)) return null
         val memberSym = (type as? Type.Object)?.symbol ?: return null
@@ -159849,7 +159883,48 @@ interface DataView {
         }
         // Object types: structural comparison
         if (source is Type.Object && target is Type.Object) {
-            return objectTypeRelatedTo(source, target, relation)
+            if (objectTypeRelatedTo(source, target, relation)) return true
+            // (CHK.60) AN ENUM MEMBER IS A STRING OR NUMBER LITERAL IN tsc, SO IT MUST
+            // REACH THE APPARENT-TYPE LEGS BELOW. tsc's `TypeFlags.StringLike` is
+            // `String | StringLiteral | TemplateLiteral | StringMapping` and an enum
+            // literal type carries `StringLiteral | EnumLiteral`, so
+            // `getApparentType(E.A)` is `globalStringType`; a numeric member carries
+            // `NumberLiteral | EnumLiteral` and answers `globalNumberType`. (REL.1)(b)
+            // mints a member-LESS `Type.Object` here instead, which
+            // [propertiesRelatedTo] rejects against any target declaring a property —
+            // INCLUDING AN ALL-OPTIONAL (weak) ONE, since its `source.members == null`
+            // arm answers `targetProps.isEmpty()`. So `zzzG(E.A)` against
+            // `{ length?: number }` was a FALSE POSITIVE at every position, and the
+            // weak rule is not what fired: it correctly DECLINES a target the source
+            // shares a property with.
+            //
+            // RETRYING AS THE PRIMITIVE — rather than reaching for a wrapper here —
+            // is what routes the source through EXACTLY the legs a `string`/`number`
+            // source already takes, each with its own measured guards intact: B69.8's
+            // wrapper/named-interface leg (which is why `String`, `Object` and a plain
+            // `interface I { length?: number }` target accept), round 430's empty-`{}`
+            // rule, B418's index-signature rule and (CHK.32)'s anonymous-object leg.
+            // Nothing here can turn an ACCEPTANCE into a rejection: it runs only after
+            // the structural comparison has already answered false.
+            //
+            // POSITIVE EVIDENCE ONLY. The member's flavour is read off its COMPUTED
+            // VALUE, so a member whose value did not evaluate keeps today's rejection
+            // — the FP-safe direction. A MIXED enum needs no special case: the answer
+            // is per MEMBER, and tsc agrees (`{ A = 1, B = "b" }` accepts `E.B`
+            // against `{ length?: number }` and `E.A` against `{ toFixed?() }`).
+            //
+            // OUT OF SCOPE, DELIBERATELY: the WHOLE enum type as a source. It carries
+            // no `EnumLiteral` flag, and this repo accepts it against every object
+            // target VACUOUSLY (member-less source, so `propertiesRelatedTo` is not
+            // even consulted for an empty target) — a standing FALSE NEGATIVE tsc does
+            // not share, and a different arc.
+            //
+            // IDENTITY is excluded exactly as tsc excludes it (`structuredTypeRelatedTo`
+            // guards its apparent-source work with `relation !== identityRelation`): an
+            // enum member is not IDENTICAL to anything the `String` wrapper is.
+            if (relation === identityRelation) return false
+            val enumPrimitive = enumLiteralApparentPrimitive(source) ?: return false
+            return checkTypeRelatedTo(enumPrimitive, target, relation)
         }
         // Primitive source vs Object target: use the source's apparent (wrapper) type
         // and recurse. `string` → `Object` is assignable because `String` (wrapper)
