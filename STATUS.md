@@ -7,7 +7,8 @@ DEFECTS THAT WERE FREE TO FIX (2026-08-27, (CHK.61c)+(CHK.61d), two fixes).** (a
 **every** row (CHK.60) measured — `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to all
 7 — at a price of **+4 harness / +2 server** profile rows (compiler profile 46 -> 46, corpus
 GREEN, both libraries byte-identical). (b) `| undefined` on an optional property access is
-one line and prints tsc's exact text, at **3** compiler-profile rows. Every one of those 9
+one line and prints tsc's exact text, at **3** compiler-profile rows (its corpus and
+library price is UNMEASURED — only the grid was run for (b)). Every one of those 9
 rows is a FALSE POSITIVE from a pre-existing gap the `any` was hiding, so under this arc's
 own convention ((CHK.51) kept a firewall "worth 43 rows"; (INC.42) narrowed rather than
 shipping FPs) both are refused, mapped cause by cause with `this`-free repros, and queued.

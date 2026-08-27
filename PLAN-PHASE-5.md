@@ -3389,7 +3389,9 @@ unlocated fourth. Queued as **(CHK.52)**.
   `if (host.f && host.g)` surviving into a nested `for` + inner `if`),
   `moduleNameResolver.ts:2265` (a three-deep chain), `project.ts:502`/`528` and
   `vfsUtil.ts:1034`. **DO NOT re-price (b) without (CHK.61d) in the tree** — that is the
-  difference between 19 and 3. Two shapes are already CORRECT and need nothing: `?.` and an
+  difference between 19 and 3. **(b)'s CORPUS and LIBRARY price is UNMEASURED** — only the
+  8-profile grid was run for it, so `knip`/`jsonrepair`/the ~13k baselines are an open
+  question, not a zero. Two shapes are already CORRECT and need nothing: `?.` and an
   `if (o.p)` guard. **AND (b)'s DISPLAY-ONLY CONFINEMENT IS NOT FREE**: hover for
   `zzzInst.zzzOpt` says `number` where tsc says `number | undefined`, but adding the
   constituent in `typeCapturePropertyAccessType` alone renders `number | undefined` INSIDE
