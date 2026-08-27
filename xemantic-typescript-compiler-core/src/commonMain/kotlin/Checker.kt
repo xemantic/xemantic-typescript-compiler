@@ -110961,8 +110961,8 @@ interface DataView {
         // names declared inside an enclosing `namespace M { interface I {} }`
         // context — required for lazy variable type-resolution where the var's
         // annotation references a namespace-local interface.
-        val symbol = resolveTypeNameToSymbol(node.typeName)
-            ?: (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
+        val symbol = (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
+            ?: resolveTypeNameToSymbol(node.typeName)
             // Round 444 last-segment fallback for a QUALIFIED name whose
             // resolution failed (`NS.Base` through an unresolvable namespace
             // alias). QualifiedName-ONLY since INV.3(c)(iv): for an Identifier
