@@ -9787,6 +9787,13 @@ class Checker(
      *  to no declaration" — test membership with containsKey. */
     private val narrowWalkDeclCache: MutableMap<Long, Node?> = mutableMapOf()
 
+    /** (CHK.62) [flowCallDiverges]'s verdict, memoized for the duration of ONE outermost
+     *  narrowing request beside [narrowWalkDeclCache] and cleared with it. Keyed by
+     *  [nodeKey], which is `(pos, end)` and so only collision-free WITHIN one file — sound
+     *  here for exactly the reason it is sound there: a request walks one file's flow
+     *  graph. Declared before `init` (init runs the check pipeline). */
+    private val flowCallDivergesCache: MutableMap<Long, Boolean> = mutableMapOf()
+
     /** Round 426 (faithful TS2563, replacing the B399 per-file node-count proxy):
      *  per-file container RANGES where a flow walk tripped the 2000-recursion depth
      *  limit (tsc checker.ts `getTypeAtFlowNode`: `flowDepth === 2000` → set
@@ -116847,6 +116854,56 @@ interface DataView {
      * callees (resolving those types the RECEIVER, the round-385 services-perf
      * hazard — they keep the old consume-depth behavior).
      */
+    /**
+     * (CHK.62) Does this [FlowCall] DIVERGE — i.e. is it a call to a function declared
+     * `: never`, so the flow past it is unreachable? tsc's `getTypeAtFlowCall` answers
+     * `unreachableNeverType` there and the enclosing branch label drops the antecedent.
+     *
+     * PERF PRE-GATE, and it is load-bearing: [callHasNeverReturnAnnotation] resolves the
+     * callee, and for a PropertyAccess callee (`Debug.assertNever(kind)`) that TYPES THE
+     * RECEIVER — the round-385 hazard [flowCalleeMayHaveAssertEffects] exists to avoid.
+     * Running it on every flow call measured `typeOfExpr.calls` +9.61% and
+     * `globals.lookups` +4.43% on the compiler profile. A diverging call is a STATEMENT
+     * (its value cannot be used — it never returns one), so the parent test refuses the
+     * value-position population for one field read. FN-safe: a missed position only
+     * drops a narrowing, never adds a diagnostic.
+     */
+    private fun flowCallDiverges(node: CallExpression): Boolean {
+        if (node.parent !is ExpressionStatement) return false
+        val key = nodeKey(node)
+        flowCallDivergesCache[key]?.let { return it }
+        val callee = unwrapParensExpr(node.expression)
+        val decl = when (callee) {
+            is Identifier -> resolveFlowCalleeDecl(node, callee)
+            // NOT [callHasNeverReturnAnnotation], which reaches
+            // [resolvePropertyMethodDecl] and so TYPES THE RECEIVER — measured
+            // `typeOfExpr.calls` +1.8pp on the compiler profile for the ~10.4k
+            // statement-position member calls in tsc's own sources. The namespace
+            // resolver is symbol-table-only and is the shape that matters
+            // (`Debug.assertNever(kind)`, `Debug.fail(...)`).
+            // …and the receiver is pre-gated on the FILE's own locals, which is a plain
+            // map probe: [resolveNamespaceMemberFnDecl] otherwise falls back to
+            // [lookupPerFileForNode] for EVERY `x.f();` statement (measured
+            // `globals.lookups` +1.25pp on the compiler profile, ~15.1k probes). A
+            // namespace receiver that can name a `: never` function is an import or a
+            // file-level declaration, so it is in `currentFileLocals` by construction;
+            // a parameter/local receiver (`host.foo()`) is not, and is refused here for
+            // one map probe. FN-safe: a missed position only drops a narrowing.
+            is PropertyAccessExpression ->
+                if ((callee.expression as? Identifier)?.let { currentFileLocals?.get(it.text) } != null)
+                    resolveNamespaceMemberFnDecl(callee) else null
+            else -> null
+        }
+        val ret = when (decl) {
+            is FunctionDeclaration -> decl.type
+            is MethodDeclaration -> decl.type
+            else -> null
+        }
+        val r = ret is KeywordTypeNode && ret.kind == SyntaxKind.NeverKeyword
+        flowCallDivergesCache[key] = r
+        return r
+    }
+
     private fun flowCallMightNarrow(node: CallExpression, name: String): Boolean =
         // Perf: test the cheap, per-walk-MEMOIZED callee-effects predicate FIRST — a
         // non-assert callee (the vast majority of flow calls) short-circuits and skips
@@ -116937,6 +116994,7 @@ interface DataView {
         if (narrowLiveDepth == 0) {
             narrowVisitsLeft = NARROW_VISIT_BUDGET
             narrowWalkDeclCache.clear()
+            flowCallDivergesCache.clear()
         }
         // M3.4 (round 413) — tsc-faithful budget consumption (checker.ts
         // `getTypeAtFlowNode`'s `while(true)` loop): follow LINEAR pass-through
@@ -117006,7 +117064,12 @@ interface DataView {
             val ante = when (val fn = flowNode) {
                 is FlowArrayMutation -> fn.antecedent
                 is FlowAssignment -> if (flowAssignmentMightNarrow(fn.node, name)) null else fn.antecedent
-                is FlowCall -> if (flowCallMightNarrow(fn.node, name)) null else fn.antecedent
+                // (CHK.62) a call to a `never`-returning function DIVERGES, so the flow
+                // past it is unreachable — break out of the fast-forward loop so the
+                // recursive arm below answers `never` instead of following the
+                // antecedent. tsc's `getTypeAtFlowCall` -> `unreachableNeverType`.
+                is FlowCall -> if (flowCallMightNarrow(fn.node, name) ||
+                    flowCallDiverges(fn.node)) null else fn.antecedent
                 else -> null
             } ?: break
             flowNode = ante
@@ -117077,7 +117140,16 @@ interface DataView {
                 NarrowSections.close(NarrowSections.S_ASSIGN, tA)
                 r
             }
-            is FlowCall -> {
+            is FlowCall -> if (flowCallDiverges(node.node)) {
+                // (CHK.62) `Debug.assertNever(kind);` in a switch's `default` clause
+                // DIVERGES, so that clause's fallthrough into the post-switch merge
+                // contributes nothing — without this the merge kept the pre-switch
+                // `T | undefined` and every narrow the other clauses established was
+                // lost (tsc server `editorServices.ts:4449`). `never` is absorbed by
+                // [getUnionType] at the branch label, exactly as [FlowUnreachable] is.
+                // FP-safe: only an EXPLICIT `: never` return annotation qualifies.
+                neverType
+            } else {
                 val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
                 // round 43 iter3: assert-function narrowing — when the call's callee is
                 // `function assertX(x): asserts x is T`, after the call returns, x is
@@ -144519,6 +144591,7 @@ interface DataView {
         if (narrowLiveDepth == 0) {
             narrowVisitsLeft = NARROW_VISIT_BUDGET
             narrowWalkDeclCache.clear()
+            flowCallDivergesCache.clear()
         }
         var flowNode = flowNodeIn
         while (true) {
@@ -144553,7 +144626,12 @@ interface DataView {
             val ante = when (val fn = flowNode) {
                 is FlowArrayMutation -> fn.antecedent
                 is FlowAssignment -> if (flowAssignmentMightNarrow(fn.node, name)) null else fn.antecedent
-                is FlowCall -> if (flowCallMightNarrow(fn.node, name)) null else fn.antecedent
+                // (CHK.62) a call to a `never`-returning function DIVERGES, so the flow
+                // past it is unreachable — break out of the fast-forward loop so the
+                // recursive arm below answers `never` instead of following the
+                // antecedent. tsc's `getTypeAtFlowCall` -> `unreachableNeverType`.
+                is FlowCall -> if (flowCallMightNarrow(fn.node, name) ||
+                    flowCallDiverges(fn.node)) null else fn.antecedent
                 else -> null
             } ?: break
             flowNode = ante
@@ -144612,7 +144690,9 @@ interface DataView {
                 )
                 narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
             }
-            is FlowCall -> {
+            is FlowCall -> if (flowCallDiverges(node.node)) {
+                neverType  // (CHK.62) the diverging-call mirror — see narrowTypeFromFlowCore
+            } else {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
                     declaredType, node.antecedent, name, seen, depth + 1, memo,
                 )
