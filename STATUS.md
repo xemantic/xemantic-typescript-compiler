@@ -37,7 +37,8 @@ TS2559. Different mechanism — the B482 walkers, not the overload helpers — s
 rather than folded in.
 
 **GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class), no corpus baseline
-moved. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, and the table is
+moved — run twice, the first reading 16,155 / 3 / 3 on three of this round's own
+hand-derived `character` assertions, since replaced by tsc's own coordinates. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, and the table is
 **digit-for-digit the PARENT's** (a0 binary, same session) — this change costs 0.00% on
 the compiler profile, the expected control for a question asked only after the relation
 ACCEPTED. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid over two

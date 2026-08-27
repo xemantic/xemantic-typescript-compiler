@@ -125,7 +125,10 @@ both built in this session.
 | r2 | NON-fresh object source, ONE sig | TS2559 3:22 | — | same ✓ | same ✓ |
 | r3 | FRESH literal `{zzzZ:1}`, ONE sig | **TS2353** 2:24 excess | — | TS2559 2:22 (pre-existing divergence) | unchanged |
 
-**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class), summed with
+**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class) — run TWICE, and the
+first run read 16,155 / **3** / 3 because three of this round's own pins asserted a
+`character` I had derived by hand instead of reading off tsc; the three failures were
+mine, not a baseline's, and the second run is the recorded one. Summed with
 `xml.etree` over the SEVEN-module glob (core 15,171 + project 704 + kir 146 + daemon 66 +
 api 30 + client 20 + cli 18); **no corpus baseline moved.** `cost_gate.py` exit 0
 unrebaselined, `output.errors` **46** — and this round's table is **DIGIT-FOR-DIGIT the
