@@ -1,4 +1,81 @@
+**THE WEAK-TYPE ANCHOR MOVES TO THE **EXPRESSION** EXACTLY WHEN THE CODE IS **TS2560** —
+AND THAT ONE RULE UNBLOCKED THE LARGEST PIECE OF (CHK.58)'S RESIDUE (2026-08-27, (CHK.59),
+three fixes).** A CALLABLE source was refused outright at the var-decl / return / assignment
+positions because it is not squiggled where a non-callable one is. tsc's
+`checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose first act is
+`elaborateDidYouMeanToCallOrConstruct`: when some signature's return type is related to the
+target it RE-REPORTS with the error node set to the EXPRESSION and attaches TS6213/TS6212;
+otherwise the position's own error node is used. **That predicate is the SAME one
+`weakCallResultSatisfiesTarget` already used to choose 2560 over 2559**, so the two coincide
+by construction and the emitter needed one extra, CALL-ONLY anchor. Fifteen missing tsc rows
+now land byte-exact over three positions x four source shapes.
+
+**AND TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE**: `topLevelWeakSource` classifies a
+cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
+IDENTIFIER or ARROW source was silent at the VAR DECL while the other two positions reported
+it — the var-decl walker now falls back to the shared value walker as its `?:`. A
+**FUNCTION EXPRESSION** stays refused and that is measured, not an oversight: tsc's
+`getErrorSpanForNode` maps one to its own NAME, so `= function zzzNamed(){}` anchors at
+`zzzNamed` and the anonymous form at the var name — two anchors, neither the expression.
+
+**AN ENUM MEMBER IS A WEAK-RULE SOURCE AT EVERY POSITION, AND (CHK.58) HAD THE MECHANISM
+WRONG.** It attributed the silence to `getTypeOfExpression` answering `any`; the type
+resolves fine (the pre-existing TS2345/TS2322 name it `ZzzE.A`). The refusal is one step on:
+an enum-flavoured type is a member-LESS `Type.Object`, so `weakSourcePropertyNames`
+enumerates it to the EMPTY set and the vacuous-`{}` guard (`var x: AllOptional = {}` is
+legal) refused it. Consulting the AST classifier AT THAT GUARD closes the argument, return,
+assignment and object-literal-leaf positions in one place, for **`globals.lookups` +4** on
+the whole compiler profile.
+
+**AND A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS, ONE SHAPE.** The
+one-level nested walker (TS2322 at the var NAME) ran BEFORE the leaf walker (TS2559 at the
+property KEY), so a fresh literal took the wrong one; and a leaf reports the literal's OWN
+property type, i.e. the **WIDENED** one for a string or numeric literal and the literal
+itself for a boolean (`"utf8"` -> `string`, `12` -> `number`, a template literal -> `string`,
+`false` -> `false`). **THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** — pristine's
+`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'` — which is why the
+widening lives in the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate
+the boolean half.
+
+**GATES.** Suite **16,223 / 0 / 3** (+24: three new classes plus one residue pin), **no
+corpus baseline moved at any of the three steps** — load-bearing, since the leaf/nested
+order swap is exactly what `nestedExcessPropertyChecking` and `weakType` gate.
+`cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, largest counter **+1.42%**
+against a baseline (CHK.58) already read **+1.40%** on — i.e. **+0.02% for this whole
+round**. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid md5
+**`503774c2…`** on every build and per-profile `diff` clean: **`added=0 removed=0` on all
+eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor
+**64 ms** [56, 63, 64, 66] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny
+0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 -> 48 and
+`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session
+(parent `Checker.class` md5 reproduced the session's first build exactly).
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
+AND NOT ONE ARM READ 0.** a0 (whole change reverted, parent rebuilt this session) **21 RED
+— exactly the 21 positives added or converted**; a1 (the 2560 anchor never moves) **4**,
+uniquely the four expression-anchor pins; a2 (the FunctionExpression refusal dropped) **1**;
+a3 (the var-decl fallback dropped) **6**; a4 (the assignment site's arrow refusal restored)
+**3**; a5 (the enum consult at the vacuous guard) **8**; a6 (the enum DISPLAY override)
+**2**, uniquely the one-member pins; a7 (the leaf/nested order reverted) **5**; a8 (the leaf
+widening dropped) **3 — and NOT the boolean pin**, which is the control that makes the
+widening a rule; a9 (the enum consult in the leaf walker) **1**.
+
+**ONE RESIDUE PINNED RATHER THAN FIXED**: an OPTIONAL `any` property renders
+`zzzNope?: any | undefined` where tsc renders `zzzNope?: any`, because `any` absorbs
+`undefined` in tsc's union construction and our `getUnionType` does not reduce that pair.
+It is a `typeToString` divergence reachable from every position that renders a target
+through the TYPE rather than the ANNOTATION, and union member text is pinned byte-for-byte
+across ~13k baselines — a logical-parity conversation of its own.
+
+**RESIDUE RE-QUEUED AS (CHK.60)**: two-or-more non-nullish constituents (needs the
+RELATION); the fresh-literal-vs-bare-weak-ARGUMENT TS2353 boundary; a GENERIC instantiation
+source (deliberate and SYMMETRIC); a `this.<member>` assignment target, silent for EVERY
+source shape and therefore not the anchor change — `getTypeOfExpression` answers `any` for
+`this.<optional member>`; and an enum member vs a weak target it SHARES a property with,
+where tsc is silent and we emit TS2345/TS2322 from the ordinary relation.
+
 **THE WEAK-TYPE RULE FIRED AT A VAR DECL AND AT A CALL ARGUMENT AND **NOWHERE ELSE** — SO
+
 `return v` AND `x = v`, TWO OF THE COMMONEST PLACES A DEVELOPER GETS A TYPE WRONG, REPORTED
 NOTHING (2026-08-27, (CHK.58), four fixes).** Not a union defect: the BARE target was silent
 too, and the one row the return position DID have carried the wrong CODE (TS2322 naming the

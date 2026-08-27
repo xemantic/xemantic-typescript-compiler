@@ -1,5 +1,72 @@
 # Status
 
+**(CHK.61)(b) — THE DISPLAY HALF **LANDED**; THE CHECKING HALF IS **REFUSED WITH ITS PRICE
+FINALLY MEASURED**, AND THE REFUSAL UNCOVERED A SYSTEMATIC **FALSE NEGATIVE** THAT IS NOT (b)
+(2026-08-27, three commits).** An optional member's hover now carries `| undefined` and then
+RE-NARROWS — `zzzInst.zzzOpt` reads `number | undefined`, and inside `if (o.p)` or an `&&`
+chain in either operand position it still reads `number`, all at tsc 7.0.2's own LSP answers.
+A UNION receiver is decided PER CONSTITUENT (`memberIsOptionalOnReceiver`), because
+`getPropertyOfType`'s union arm answers ONE constituent's symbol (round 916) and the verdict
+would otherwise depend on constituent ORDER. Confined to the CAPTURE, which production never
+computes, so **every diagnostic gate is byte-identical**.
+
+**THE CHECKING HALF IS NOT SOUND ALONE, AND THE QUEUE'S "3 rows" WAS THE WRONG ARM.**
+`build/chk61/patch_b.py` DELETES a true positive on the round's own four-line repro
+(`const a: string = o.optNum` reports `Type 'number' …` on the shipped binary and NOTHING
+with it) because the source becomes a nullish union and `canUseTypeEngine` refuses those
+against a primitive target. Measured on the 8 profiles against a parent capture taken in the
+same session: **the gate opened alone is 11 ours-only rows; patch_b AND the gate is 15**
+(patch_b FIXES two of the gate's own). `armBG` reproduces tsc EXACTLY on the repro — that is
+what the refusal costs, and it is now on record instead of asserted.
+
+**THE SUPPRESSOR HIDES A LARGE FALSE NEGATIVE: `T | undefined` IS SILENTLY ASSIGNABLE TO `T`
+at a DECLARATION, an ASSIGNMENT and a RETURN whenever the target is a PRIMITIVE.** Six-line
+fixture: tsc 6 rows, us 2 (only the ARGUMENT position and a UNION target work), for
+`| undefined` and `| null` alike. Queued as **(CHK.63)** with all 11 rows.
+
+**AND THE FIVE NARROWING GAPS ARE FIVE MECHANISMS, NOT ONE — every one reproduces on the
+SHIPPED binary with an EXPLICIT `| undefined` member, no patch and no build.** The `&&`
+diagnosis was wrong twice before it was right: the FLOW walk handles `&&` correctly (member
+access and argument are both fine), and a DECLARATION with a primitive target narrows. What
+does not is an ASSIGNMENT or a RETURN — round 784's gate confines their narrowing block to an
+object-ish/union target, so they fall back to `currentLocalTypes`, filled by the legacy
+`extractNullNarrowing`, which returns ONE `(name, type)` pair and cannot decompose an `&&`.
+**What varies is the READER, not the condition.** Queued as **(CHK.64)**.
+
+**GATES, per commit, all foreground.** Suite **16,281 / 16,283 / 16,286**, 0 failed, 3
+skipped (+8/+2/+3, exactly the new subtests), **no corpus baseline moved on any of the
+three**. `cost_gate.py` exit 0 on all three, `output.errors` **46**, every counter
+digit-identical to (CHK.62)'s standing residual. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on both code commits,
+byte-identical PER PROFILE** against a parent capture rebuilt here (`Checker.class`
+`e7963e28`). `knip` **48**, `jsonrepair` **4**, EVERY ROW byte-identical against a parent arm
+rebuilt in this session. `partition-equivalence` EQUIVALENT all 78 (floors 72 / 66 ms, one
+draw each).
+
+**`capture-equivalence` IS THE ONE GATE THAT MOVED, AND EVERY MOVED SPAN WAS CLASSIFIED.**
+`DIVERGED` **1,005 -> 985 -> 968** in 43 of 76, `definitions` **360,414 UNCHANGED**,
+`narrowRendersMoreAny` 0; both ARM DIGESTs re-recorded per commit (final
+`full=2642712547047802314 narrow=6791141519233628706`). Enumerated at
+`XTSC_CAPEQ_PRINT=200000`: **all 38 moved spans are the alias-display first-wins family**
+((INC.27)) shuffled by a changed first-touch order — not one is an optionality rendering, and
+the second commit added ZERO new divergences.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH (d8 excepted and labelled), EVERY CLASS md5 DISTINCT.**
+d0 (widening removed) **4 RED**; **d1 (widened but never RE-NARROWED) 4 — uniquely the four
+guarded controls, which is the confinement's own proof**; d2 (optionality gate dropped) **1**,
+uniquely the REQUIRED control; d3 (a union decided by ALL not ANY) **1**, uniquely the union
+row. **d4 (ask the union ITSELF) READ 0 AND WAS UNPINNED, THEN FIXED** — the fixture wrote
+the OPTIONAL constituent first, where `getPropertyOfType` happens to agree; the ORDER
+SIBLING makes it **1 RED, uniquely that row** (last round's c2, one round on). **d5/d6/d7
+(the `super`, INTERSECTION and already-`undefined` guards) READ 0 AND ARE MEASURED
+REDUNDANT** — each has a fixture exercising its shape and each stays green with the guard
+removed, because a lower layer already declines; the KDoc now says so instead of claiming a
+deliberate refusal, and a two-mistake MECHANISM probe (d8) failed to locate the `super` one
+and is reported as a non-result.
+
+**RESIDUE, PINNED WITH THE VALUE WE ANSWER**: `super.<opt>` and an INTERSECTION receiver both
+hover `number` where tsc says `number | undefined`.
+
 **(CHK.61)(a) — THE ONE LINE THAT CLOSES THE WHOLE `this`-RECEIVER FAMILY — **LANDED**, AT
 **ZERO** DASHBOARD ROWS, AFTER THREE ROUNDS OF REFUSALS (2026-08-27, (CHK.62b) +
 (CHK.61)(1) + (CHK.61)(a), four commits).** `computeRawTypeOfPropertyAccess` typed its
@@ -254,79 +321,3 @@ The same fixture also isolates a SECOND, independent defect that is NOT `this`-s
 OPTIONAL property's `| undefined` is dropped for ANY receiver (`zzzInst.zzzOpt` reports
 `Type 'number'` where tsc says `'number | undefined'`, and `string | undefined -> string`
 goes missing entirely). Both re-queued with the row-by-row map.
-
-**THE WEAK-TYPE ANCHOR MOVES TO THE **EXPRESSION** EXACTLY WHEN THE CODE IS **TS2560** —
-AND THAT ONE RULE UNBLOCKED THE LARGEST PIECE OF (CHK.58)'S RESIDUE (2026-08-27, (CHK.59),
-three fixes).** A CALLABLE source was refused outright at the var-decl / return / assignment
-positions because it is not squiggled where a non-callable one is. tsc's
-`checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose first act is
-`elaborateDidYouMeanToCallOrConstruct`: when some signature's return type is related to the
-target it RE-REPORTS with the error node set to the EXPRESSION and attaches TS6213/TS6212;
-otherwise the position's own error node is used. **That predicate is the SAME one
-`weakCallResultSatisfiesTarget` already used to choose 2560 over 2559**, so the two coincide
-by construction and the emitter needed one extra, CALL-ONLY anchor. Fifteen missing tsc rows
-now land byte-exact over three positions x four source shapes.
-
-**AND TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE**: `topLevelWeakSource` classifies a
-cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
-IDENTIFIER or ARROW source was silent at the VAR DECL while the other two positions reported
-it — the var-decl walker now falls back to the shared value walker as its `?:`. A
-**FUNCTION EXPRESSION** stays refused and that is measured, not an oversight: tsc's
-`getErrorSpanForNode` maps one to its own NAME, so `= function zzzNamed(){}` anchors at
-`zzzNamed` and the anonymous form at the var name — two anchors, neither the expression.
-
-**AN ENUM MEMBER IS A WEAK-RULE SOURCE AT EVERY POSITION, AND (CHK.58) HAD THE MECHANISM
-WRONG.** It attributed the silence to `getTypeOfExpression` answering `any`; the type
-resolves fine (the pre-existing TS2345/TS2322 name it `ZzzE.A`). The refusal is one step on:
-an enum-flavoured type is a member-LESS `Type.Object`, so `weakSourcePropertyNames`
-enumerates it to the EMPTY set and the vacuous-`{}` guard (`var x: AllOptional = {}` is
-legal) refused it. Consulting the AST classifier AT THAT GUARD closes the argument, return,
-assignment and object-literal-leaf positions in one place, for **`globals.lookups` +4** on
-the whole compiler profile.
-
-**AND A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS, ONE SHAPE.** The
-one-level nested walker (TS2322 at the var NAME) ran BEFORE the leaf walker (TS2559 at the
-property KEY), so a fresh literal took the wrong one; and a leaf reports the literal's OWN
-property type, i.e. the **WIDENED** one for a string or numeric literal and the literal
-itself for a boolean (`"utf8"` -> `string`, `12` -> `number`, a template literal -> `string`,
-`false` -> `false`). **THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** — pristine's
-`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'` — which is why the
-widening lives in the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate
-the boolean half.
-
-**GATES.** Suite **16,223 / 0 / 3** (+24: three new classes plus one residue pin), **no
-corpus baseline moved at any of the three steps** — load-bearing, since the leaf/nested
-order swap is exactly what `nestedExcessPropertyChecking` and `weakType` gate.
-`cost_gate.py` exit 0 unrebaselined, `output.errors` **46**, largest counter **+1.42%**
-against a baseline (CHK.58) already read **+1.40%** on — i.e. **+0.02% for this whole
-round**. `huge_methods --fail-over 0` exit 0, **783** classes. 8-profile grid md5
-**`503774c2…`** on every build and per-profile `diff` clean: **`added=0 removed=0` on all
-eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor
-**64 ms** [56, 63, 64, 66] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny
-0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 -> 48 and
-`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session
-(parent `Checker.class` md5 reproduced the session's first build exactly).
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
-AND NOT ONE ARM READ 0.** a0 (whole change reverted, parent rebuilt this session) **21 RED
-— exactly the 21 positives added or converted**; a1 (the 2560 anchor never moves) **4**,
-uniquely the four expression-anchor pins; a2 (the FunctionExpression refusal dropped) **1**;
-a3 (the var-decl fallback dropped) **6**; a4 (the assignment site's arrow refusal restored)
-**3**; a5 (the enum consult at the vacuous guard) **8**; a6 (the enum DISPLAY override)
-**2**, uniquely the one-member pins; a7 (the leaf/nested order reverted) **5**; a8 (the leaf
-widening dropped) **3 — and NOT the boolean pin**, which is the control that makes the
-widening a rule; a9 (the enum consult in the leaf walker) **1**.
-
-**ONE RESIDUE PINNED RATHER THAN FIXED**: an OPTIONAL `any` property renders
-`zzzNope?: any | undefined` where tsc renders `zzzNope?: any`, because `any` absorbs
-`undefined` in tsc's union construction and our `getUnionType` does not reduce that pair.
-It is a `typeToString` divergence reachable from every position that renders a target
-through the TYPE rather than the ANNOTATION, and union member text is pinned byte-for-byte
-across ~13k baselines — a logical-parity conversation of its own.
-
-**RESIDUE RE-QUEUED AS (CHK.60)**: two-or-more non-nullish constituents (needs the
-RELATION); the fresh-literal-vs-bare-weak-ARGUMENT TS2353 boundary; a GENERIC instantiation
-source (deliberate and SYMMETRIC); a `this.<member>` assignment target, silent for EVERY
-source shape and therefore not the anchor change — `getTypeOfExpression` answers `any` for
-`this.<optional member>`; and an enum member vs a weak target it SHARES a property with,
-where tsc is silent and we emit TS2345/TS2322 from the ordinary relation.
