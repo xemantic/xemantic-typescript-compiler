@@ -20,6 +20,140 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.60) — an enum member is a string or number **LITERAL** in tsc, so its apparent type is the wrapper: **13** false positives removed; and item 2's blast radius mapped and found to be neither the weak rule nor optionality
+
+**THE FP, AND WHY IT IS NOT THE WEAK RULE.** tsc's `TypeFlags.StringLike` is
+`String | StringLiteral | TemplateLiteral | StringMapping`; an enum literal type carries
+`StringLiteral | EnumLiteral`, so `getApparentType(E.A)` is `globalStringType`, and a
+numeric member carries `NumberLiteral | EnumLiteral` and answers `globalNumberType`
+(`checker.ts:15542`, read on the box). (REL.1)(b) mints a member-LESS `Type.Object` here
+instead, and `propertiesRelatedTo`'s `source.members == null` arm answers
+`targetProps.isEmpty()` — which rejects **every** target declaring a property, including an
+all-optional one. The weak walker correctly DECLINES a target the source shares a property
+with, so what emitted was the ordinary relation, exactly as the (CHK.59) entry said.
+
+**THE FIX IS A RETRY, NOT A WIDENING.** `structuredTypeRelatedTo`'s object/object leg was
+`return objectTypeRelatedTo(...)`; it is now "if that says true, true — otherwise, for an
+enum-literal source, retry as the apparent PRIMITIVE". Retrying as the PRIMITIVE rather
+than reaching for a wrapper here is the whole design: it routes the source through exactly
+the legs a `string`/`number` source already takes — B69.8's wrapper/named-interface leg,
+round 430's empty-`{}` rule, B418's index-signature rule and (CHK.32)'s anonymous-object
+leg — each with its own measured guards intact. That is why a NAMED interface, a class with
+an optional member, `Object` and the `String` wrapper itself all come right for free, and
+why the INDEX-SIGNATURE target's answer is untouched (`objectTypeRelatedTo` accepts it
+before the retry is reached, and would accept it after — measured, see arm a5).
+
+**THE 30-ROW MATRIX IS THE INSTRUMENT** (`build/chk60/mx/m1.ts`, `m2.ts`; both arms
+`tools/tsgo-7.0.2/lib/tsc --noEmit --strict --target es2020 --lib es2020`). 13 ours-only
+rows removed. What it also settled, none of which reading the code produces:
+
+  * the boundary is per **MEMBER**, not per enum — tsc accepts a MIXED enum's string
+    member against `{ length?: … }` and its numeric member against `{ toFixed?() }`, and
+    rejects the WHOLE mixed enum against both;
+  * a **required** target member is accepted too (`{ length: number }`), which is the row
+    that separates "the weak walker declined" from "the relation accepts";
+  * an **index-signature** target REJECTS in tsc (`m1.ts(19,6)`) where we accept, and a
+    **whole enum** source against a target sharing nothing reports TS2559 in tsc
+    (`m1.ts(25,6)`, `m1.ts(29,6)`) where we are silent — three standing FALSE NEGATIVES
+    this round does not touch and does not worsen. The whole-enum one is (REL.1)(b)'s
+    vacuity: a member-less source against a member-less target passes both ways.
+
+**NO PRISTINE BASELINE CARRIES THE SHAPE.** Every `.errors.txt` mentioning TS2559 was
+searched and none has an enum member as an object-target source, so tsgo is the only
+oracle — which is acceptable here precisely because the answer being asserted is
+*nothing*, and wording cannot diverge from silence. The pristine oracle WAS consulted and
+did settle one thing: `enumAssignmentCompat5` pins the enum as a TARGET, not a source, so
+nothing in the corpus was at risk.
+
+**GATES.** Suite **16,234 / 0 / 3** (+11, exactly the one new class), **no corpus baseline
+moved**. `cost_gate.py` `output.errors` **46**; the run was repeated against the a0 parent
+binary via `--from-log` and **all 20 counters are DIGIT-IDENTICAL** — the standing
+`typeOfExpr.calls +1.42%` is inherited drift against a baseline last recorded at (CHK.46),
+not this round's cost. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+**8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** and per-profile `diff` clean
+against the rebuilt parent: **`added=0 removed=0` on all eight**. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **56 ms** [54, 59, 52, 56] — one draw.
+`capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0, moreAny 0**,
+`definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
+narrow=-2075467818767010709` — the standing state to the digit, so no captured type moved.
+**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL**
+against an a0 arm rebuilt in this session. Binary md5 `96e0db8d` reproduced three times
+(first build, post-a0 rebuild, post-a5 restore); parent `089f7b6f`.
+
+**SIX ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, each `cmp`-diffed against
+the driver's own snapshot, each anchor asserted to occur exactly once (exit 3 otherwise),
+each build grepped for BUILD SUCCESSFUL, the restore verified OUTSIDE the driver by
+`git status --porcelain` + an md5 compare.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the whole change reverted (the parent, rebuilt this session) | `089f7b6f` | **6** — exactly the six positives |
+| a1 | the IDENTITY guard dropped | `e1f48932` | **0** |
+| a2 | positive evidence dropped (an UNEVALUATED member defaults to numeric) | `a75f1f59` | **0** |
+| a3 | the (CHK.32) leg's anonymous-target scope wrongly inherited | `f5d160d4` | **2** — uniquely the named-interface and String-wrapper pins |
+| a4 | the flavour collapsed to `string` | `c0ee90aa` | **1** — uniquely the numeric-vs-`String` control |
+| a5 | the retry promoted from a FALLBACK to a SUBSTITUTION | `baaf0e2d` | **0** |
+
+**a4 IS THE ARM WORTH READING**: it reddens ONE pin and **not** the two numeric positives,
+because an ALL-OPTIONAL target cannot discriminate a flavour (`String` simply lacks
+`toFixed`, and an optional target member a source lacks is legal). That is what makes the
+two wrapper CONTROLS load-bearing rather than decorative, and it is why the positives alone
+would have been a blind pin set for the flavour rule.
+
+**THE THREE ZEROS ARE THREE DIFFERENT KINDS.**
+
+  * **a1 — UNDISCRIMINATED, NOT REDUNDANT.** Under `identityRelation` the retry can only
+    reach a target the structural comparison already refused, and `stringType` is an
+    `Type.Intrinsic`; the route by which it WOULD matter is B69.8's wrapper arm, which is
+    not relation-gated — so dropping the guard would let an enum member be declared
+    IDENTICAL to `String`. Nothing in 16,234 tests asks. Kept because tsc guards the same
+    work the same way (`structuredTypeRelatedTo`'s `relation !== identityRelation`).
+  * **a2 — A DELIBERATE REFUSAL, AND THE ONE PLACE THIS ROUND CHOSE THE CONSERVATIVE
+    ANSWER.** Defaulting an unevaluated member to numeric (what `isNumericEnumObjectType`
+    does for its arithmetic caller) reddens nothing AND would fix one further measured FP:
+    `enum E { A = zzzNonConst }` against `{ toFixed?() }` is silent in tsc and TS2345 here
+    (`build/chk60/ue/u2.ts(6,8)`). It was refused because the neighbouring probe shows the
+    hazard is real and not hypothetical: an enum whose first member is a TEMPLATE
+    literal and whose second is a plain string (`build/chk60/ue/u3.ts`) — a
+    TEMPLATE-valued string member — does not fold in our evaluator, so a numeric default
+    would relate a STRING member to `Number`-shaped targets. That is a false NEGATIVE, the
+    direction with no gate. Both rows re-queued.
+  * **a5 — INDISTINGUISHABLE FROM REDUNDANT ON TODAY'S EVIDENCE.** 0 RED in the suite, and
+    re-run against the 30-row matrix the output is BYTE-IDENTICAL to HEAD. The prediction
+    written before building it — that the substitution order would flip the
+    index-signature row `m1.ts(19,6)` — is **REFUTED**: `checkTypeRelatedTo(string,
+    { [k: string]: any })` accepts by some route above B418. So "a fallback, not a
+    substitution" is a claim about blast radius that this repo currently cannot
+    demonstrate; it is kept as the strictly weaker change and recorded as undemonstrated.
+
+**ITEM 2 (`this.<member>`) WAS MAPPED, NOT FIXED — AND THE QUEUE ENTRY'S DIAGNOSIS IS RIGHT
+AT THE ROOT AND WRONG ABOUT THE SURFACE.** `this` is `Identifier("this")` in this parser
+(`Checker.kt:8090`), so `getTypeOfExpression` types it `any` and every `this.<member>` with
+it. But it is **not about optionality and not about the weak rule**: measured over
+`build/chk60/br/b1.ts` and `b2.ts` against tsc 7.0.2, a **REQUIRED** `this.zzzReq: number`
+assigned to a `string` variable is silent too. The hole is per POSITION:
+
+  * **SILENT**: a var-decl initializer (`const s: string = this.zzzReq`), an assignment RHS
+    (`s = this.zzzReq`), a `return` from an annotated method, and the nullish-access checks
+    (TS2532 for `this.zzzOpt.toFixed()`, and the whole `string | undefined -> string` row);
+  * **PRESENT**: ARGUMENT position (`zzzTake(this.zzzHandler)` reports) and TS2722.
+
+The controls that make that a measurement rather than a guess are in the same method body:
+a plain outer name and `zzzObj.zzzReq` both report from inside the method, and
+`zzzInst8.zzzReq` reports at file level — so it is the RECEIVER, not the position in a
+method.
+
+**AND THE SAME FIXTURE ISOLATED A SECOND DEFECT THAT IS NOT `this`-SPECIFIC**: an OPTIONAL
+property's `| undefined` is dropped for ANY receiver. `zzzInst.zzzOpt` reports
+`Type 'number'` where tsc says `'number | undefined'`, and `zzzInst.zzzOptStr` against a
+`string` target goes MISSING entirely because `string -> string` then passes. Four rows on
+an ordinary receiver, so a `this` fix alone would not close it.
+
+**SCOPED OUT, DELIBERATELY**, each already refused with a reason by (CHK.59) and untouched
+here: two-or-more non-nullish constituents, the TS2353 argument boundary, the generic
+instantiation source (symmetric by design), and the `p?: any | undefined` display residue.
+The bigint leaf (item 7) was also not taken.
+
 ### Round (CHK.59) — the weak-type anchor moves to the **EXPRESSION** exactly when the code is **TS2560**; an enum member is a source at every position, and the cause was the vacuous-`{}` guard; and a fresh object literal elaborates **into** the literal
 
 **THREE FIXES, ONE ARC, THREE COMMITS.** (CHK.58) left five measured residue items with a
@@ -1338,114 +1472,6 @@ pinned — round 765: a pin on a known-open gap is a countdown, not a guard.
     gap), so both arms agree on an empty list. The discriminating shape is an ASSIGNMENT.
     **CORRECTED BY (CHK.51): `Date` DID report and `Text` did not — the axis is HERITAGE,
     and the lib half is now closed. What is still vacuous is listed under (CHK.52).**
-
-### Round (CHK.32) — a primitive now relates to an ANONYMOUS object target through its wrapper; and the item's own premise was wrong about `jsonrepair`, whose 7 rows are a **DOM name collision**
-
-**THE ITEM WAS TWO DEFECTS WEARING ONE NAME, AND THE NAMED-INTERFACE HALF WAS ALREADY
-WORKING.** (CHK.32) attributes all 7 of `jsonrepair`'s TS2345 rows to a missing
-`getApparentType` consult, on a repro whose interface is called `Text`. Measured, that
-repro is a **NAME COLLISION with the DOM `Text` global** — the same file with the
-interface renamed `Chars` is silent on the UNFIXED binary, and a `t.wholeText` read
-against the module-local `Text` is silent for us where tsgo says TS2339, i.e. the
-module-local interface has been MERGED INTO the lib global in both directions. A
-round-B69.8 leg has handled `target is Type.Interface` all along, so the genuine gap is
-the **ANONYMOUS** target. Queued as **(CHK.49)** with the four-line repro; `Text` joins
-`top`/`name`/`files` on the collision list.
-
-**WHAT THE GAP ACTUALLY IS, MEASURED AGAINST tsgo 7.0.2.** A hand-written 14-row matrix
-over (source primitive x target shape x position) had **8 ours-only rows**, all of them
-anonymous targets, spanning argument / return / annotation position and
-`string`/`number`/`boolean`/`symbol`/`bigint`, plus a string-literal source. After the
-fix the matrix agrees with tsgo **row for row**, in both directions — the 6 rows where
-tsgo reports are still reported, at tsgo's own message and position.
-
-**THE FIX IS A FALLBACK LEG, NOT A WIDENING OF B69.8's.** It sits AFTER the round-430
-empty-`{}` rule and after B418's index-signature rule, so every earlier acceptance path
-has already had its turn and it can only turn a rejection into an acceptance (round
-744's discipline). Widening B69.8's own `target is Type.Interface` test instead would
-have put a `return false` in front of both of those rules.
-`primitiveApparentWrapper` is deliberately NOT `getApparentType` — whose 72 call sites
-reach member lookup, narrowing and display — and diverges from it three ways, each
-measured: it answers **null** rather than `anyType` for a missing wrapper, it refuses a
-`Type.TypeParam`, and it covers `bigint`/`symbol`, which `getApparentType` does not.
-
-**THE TWO GUARDS WERE BOTH FORCED BY A RED SUITE, NOT BY READING.** The first cut cost
-**13 tests** (7 `EnumValueDomainRelationTest`, `enumAssignmentCompat5`,
-`FunctionScopedEnumTypePositionTest` x2, and three more): every enum-flavoured type is
-a member-less `Type.Object` ((REL.1)(b)), so a structural comparison against one passes
-VACUOUSLY and the `Number` wrapper "related" to a numeric enum target. The second cut
-then cost `assignmentCompat1`: `y = "foo"` against `{ [index: string]: any }` is TS2322
-because a `string`'s apparent type has a NUMERIC index signature and no string one, and
-an ordinary structural comparison of the `String` wrapper against such a target PASSES
-(every property conforms to an `any`-typed indexer). An index-signature target is
-B418's; it has already answered and this leg must not overturn it. Both tables are read
-BELOW `resolveStructuredTypeMembers` (round 833).
-
-**ABLATION — one mistake per arm, each arm `cmp`-diffed against its OWN snapshot, each
-patch anchor asserted unique.**
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a0 | the whole leg removed (parent binary, rebuilt this session, javap control 0 vs 2) | **8** — every positive pin, over byte-identical source |
-| a1 | drop the `Enum`/`EnumLiteral` flag test | **0** of 1,410 |
-| a2 | drop the "the target must DECLARE something" test | **0** of 1,410 |
-| a12 | drop **both** | **13** — 7 enum pins, 2 corpus baselines, 3 others, and this round's own enum pin |
-| a3 | drop the index-signature refusal | **1** — `an index signature beside a member still refuses`, uniquely its own |
-| a4 | let a `Type.TypeParam` source through | **0** of the FULL 15,103-test core suite |
-| a5 | a missing wrapper answers `anyType` | **2** — this round's dedicated pin **and** `elaboratedErrorsOnNullableTargets01` |
-
-Three readings that are not "all guards discriminate". **a1/a2 are a round-927 PAIR** —
-each layer refuses exactly what the other would get wrong, so neither has a
-uniquely-its-own failure and they are ONE observable; recorded in the KDoc, and neither
-is deleted on the strength of its own arm reading zero. **a3's uniquely-its-own
-population is narrower than the guard reads** — a PURE index-signature target declares
-nothing, so the vacuity rule already refuses it, and only a target carrying BOTH members
-and an index signature needs the line. **a4 is a REDUNDANT guard by round 807's
-definition and is KEPT anyway**: the shipped binary already relates a constrained
-`T extends string` to `{ charCodeAt(i: number): number }` through another path (measured
-— the two binaries agree on that shape), so what the refusal is redundant WITH is that
-path, and removing a refusal that keeps (INC.30)'s deliberately-closed constraint route
-closed buys nothing measurable in exchange for a widening no gate here would notice.
-a4's arm carries a **class-checksum positive control** (`Checker.class` md5
-`3305443e…` against the shipped `01419f2f…`), because its build read `BUILD SUCCESSFUL
-in 1s` from Gradle's cache and round 947 says a success message is not evidence.
-
-**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **8** positive pins were run against a
-parent binary rebuilt in this session over byte-identical source and **all 8 reported**;
-the parent's `javap` control reads 0 occurrences of `primitiveApparentWrapper` against
-the after-arm's 2. The 8 refusal pins and the `bigint` pin are green on the parent by
-construction — they are the refusal direction — and their falsifying arms are a3/a5/a12
-above, each of which names which pin it reddens. The 3 pins labelled `CONTROL` are green
-on every arm and are **not** counted as coverage.
-
-**GATES.** Suite **16,087 / 0 / 3** (+20, exactly the new class), **zero corpus
-baselines moved in the landed shape**. `cost_gate.py` PASSES with NO rebaseline, exit 0:
-`output.errors` **46**, `spine.nodes` +0.00%, largest movement `narrow.memoServed`
-**+0.69%** and `typeOfExpr.calls` +0.58% — both identical to (CHK.47)'s, i.e. this
-change contributes 0.00% on the compiler profile, which is the expected control for a
-fallback leg reached only after a failure. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned, 0 over limit. 8-profile grid **`added=0 removed=0` on all
-eight**, both arms from binaries built in this session. `partition-equivalence`
-**EQUIVALENT, all 78**, floor **69 ms [80, 69, 60, 60]** — ONE draw, and the leading 80
-is the ramp (CHK.47)'s note describes; the three settled draws bracket its 57 ms.
-`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**,
-`definitions` **360,376**, both ARM DIGESTs unmoved.
-
-**LIBRARIES.** **`jsonrepair` 3.13.1: 11 -> 11 rows, every row byte-identical** — which
-is the round's most important negative result, because it is the receipt that the item's
-7 TS2345 rows are (CHK.49)'s collision and not this defect. **knip @ `dc7aca5`: 49 -> 49,
-every row byte-identical**, BEFORE arm from the same rebuilt parent. Reproducing that 49
-took most of an hour and the recipe is not the obvious one — see the gotcha below.
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.** The first cut put the consult inside
-B69.8's own leg by widening its target test; that is what would have shadowed the
-round-430 and B418 rules, and it is why the leg is a separate fallback. The knip arm
-**could not be reproduced at first and the failure was not this change**: `webpro-nl/knip`
-installed with its devDependencies present (`@types/bun`, `@types/webpack`, `@jest/types`)
-OOMs the checker at **8 GB on the PARENT binary**, in `getTypeFromTypeLiteral` under
-nested conditional types. With the **13 runtime dependencies only**, hoisted to the
-monorepo root, plus `@types/node`, it reads exactly **49** and matches (CHK.47) row for
-row. A library baseline is a claim about a dependency SET, not about a library.
 
 
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
@@ -3272,8 +3298,20 @@ row. A library baseline is a claim about a dependency SET, not about a library.
   `503774c2…` unmoved, knip 48 -> 48 and jsonrepair 4 -> 4 byte-identical, ten ablation arms
   and not one read 0. Items 3, 5 and 6 are re-queued with three new residues as (CHK.60).
 
-- [ ] **(CHK.60) THE WEAK-TYPE RESIDUE AFTER (CHK.59) — TWO INHERITED, ONE DELIBERATE, THREE
-  NEW, ALL MEASURED.** Fixtures under `build/chk59/ora`, `pin`, `dbg`.
+- [x] **(CHK.60) PARTLY DONE 2026-08-27 — ITEM 6 (THE ENUM FALSE POSITIVE) CLOSED AND ITEM 4
+  MAPPED; ITEMS 1, 2, 3, 5, 7 RE-QUEUED AS (CHK.61).** An enum MEMBER is a string or number
+  LITERAL in tsc, so its apparent type is the `String`/`Number` wrapper; (REL.1)(b)'s
+  member-LESS `Type.Object` made `propertiesRelatedTo` reject **every** target declaring a
+  property, weak or not. `structuredTypeRelatedTo`'s object/object leg now retries an
+  enum-literal source as its apparent PRIMITIVE **after** the structural comparison has
+  answered false, which routes it through the legs a `string`/`number` source already takes.
+  **13 ours-only rows removed** over a 30-row matrix against tsc 7.0.2; suite 16,234 / 0 / 3,
+  no baseline moved, all 20 cost counters digit-identical to the rebuilt parent, grid
+  `503774c2…` unmoved, knip 48 -> 48 and jsonrepair 4 -> 4 byte-identical, six ablation arms.
+  Item 4 (`this.<member>`) was MEASURED rather than fixed and the queue's own diagnosis
+  corrected — see the session note and (CHK.61) below.
+  ORIGINAL ENTRY: **THE WEAK-TYPE RESIDUE AFTER (CHK.59) — TWO INHERITED, ONE DELIBERATE,
+  THREE NEW, ALL MEASURED.** Fixtures under `build/chk59/ora`, `pin`, `dbg`.
   1. **TWO OR MORE NON-NULLISH CONSTITUENTS** — unchanged since (CHK.56) and still a different
      mechanism: tsc words them as ordinary assignability naming the WHOLE union, which needs
      the RELATION to reject where the weak rule lives in the walkers. **A second, separate hole
@@ -3312,6 +3350,55 @@ row. A library baseline is a claim about a dependency SET, not about a library.
   7. **A BIGINT LEAF** (`{ zzzIn: 12n }`) still falls through to TS2322 where tsc reports
      TS2559 `Type 'bigint'` at the key — [Checker.weakSourcePropertyNames]'s `BigIntLike` arm
      does not resolve to an object here. One line, deliberately not taken this round.
+
+- [ ] **(CHK.61) A `this.<MEMBER>` VALUE IS UNCHECKED AT THREE POSITIONS, AND AN OPTIONAL
+  PROPERTY'S `| undefined` IS DROPPED FOR *EVERY* RECEIVER — TWO INDEPENDENT DEFECTS,
+  MEASURED ROW BY ROW IN (CHK.60).** Fixtures `build/chk60/br/b1.ts`, `b2.ts`; oracle
+  tsc 7.0.2.
+  **(a) THE `this` RECEIVER.** `this` is `Identifier("this")` in this parser
+  (`Checker.kt:8090`), so `getTypeOfExpression` types it `any` and every `this.<member>`
+  with it. **It is NOT about optionality and NOT about the weak rule** — a REQUIRED
+  `this.zzzReq: number` assigned to a `string` variable is silent too — and it is per
+  POSITION: **silent** at a var-decl initializer, at an assignment RHS, at a `return` from
+  an annotated method, and for the nullish-access checks (TS2532, and a whole
+  `string | undefined -> string` row); **present** in ARGUMENT position and for TS2722.
+  The controls are in the same method body: a plain outer name and `zzzObj.zzzReq` both
+  report from inside the method and `zzzInst.zzzReq` reports at file level, so it is the
+  RECEIVER and not the method-body position. **The carrier already exists** —
+  `currentClassForThis` + `resolveUncalledThisType`, which (API.3d) built for
+  go-to-definition and which `typeCaptureVisit` reconstructs by ascent — so the work is
+  reaching it from `getTypeOfExpression`, not inventing it. **PRICE IT FIRST**: this ADDS
+  diagnostics, so the profiles, both libraries and the ~13k corpus are all at risk;
+  `this.<member>` in a checked position is everywhere in real code.
+  **(b) THE DROPPED `| undefined`, WHICH IS NOT `this`-SPECIFIC.** `zzzInst.zzzOpt` reports
+  `Type 'number'` where tsc says `'number | undefined'`, and `zzzInst.zzzOptStr` against a
+  `string` target goes MISSING entirely because `string -> string` then passes. Four rows
+  on an ORDINARY receiver, so closing (a) alone does not close it.
+
+- [ ] **(CHK.61b) THE ENUM RESIDUE AFTER (CHK.60) — FIVE ITEMS, EACH WITH ITS MEASURED ROW.**
+  1. **AN UNEVALUATED ENUM MEMBER IS STILL REFUSED**: `enum E { A = zzzNonConst }` against
+     `{ toFixed?() }` is silent in tsc and TS2345 here (`build/chk60/ue/u2.ts(6,8)`).
+     `enumLiteralApparentPrimitive` demands POSITIVE evidence of the member's computed
+     value, and ablation arm a2 measured that defaulting to numeric fixes this row and
+     reddens nothing. **It was refused because a neighbouring shape shows the hazard**: a
+     TEMPLATE-valued string member (`build/chk60/ue/u3.ts`) does not fold in our evaluator,
+     so a numeric default would relate a STRING member to `Number`-shaped targets — a false
+     NEGATIVE. **The sound version is to fix the FOLD first**, or to default to numeric only
+     when no member of the owning enum evaluated to a string.
+  2. **THE WHOLE ENUM TYPE AS A SOURCE IS ACCEPTED VACUOUSLY** — `zzzX(zzzse)` against
+     `{ zzzNope?: number }` is TS2559 in tsc (`build/chk60/mx/m1.ts(25,6)`) and silent here,
+     as is a MIXED enum against `{ length?: … }` (`m1.ts(29,6)`). Both are (REL.1)(b): a
+     member-less source against a member-less comparison passes both ways. tsc models a
+     literal enum AS the union of its members, which is the thing this repo does not have.
+  3. **AN INDEX-SIGNATURE TARGET ACCEPTS AN ENUM SOURCE** — `zzzI(ZzzSE.A)` against
+     `{ [k: string]: any }` is TS2345 in tsc (`m1.ts(19,6)`) and silent here, before and
+     after (CHK.60): `objectTypeRelatedTo` answers true for an empty-`properties` target
+     before the retry is reached, and arm a5 measured that reordering does not change it.
+  4. **`object`, `() => void`, `Promise<T>` AND `T[]` TARGETS** reject an enum source in tsc
+     (`m2.ts(20..23)`) and are silent here — a fourth face of the same vacuity.
+  5. **A BIGINT LEAF** (`{ zzzIn: 12n }`) still falls through to TS2322 where tsc reports
+     TS2559 `Type 'bigint'` at the key — `weakSourcePropertyNames`' `BigIntLike` arm does
+     not resolve to an object here. Inherited from (CHK.60) item 7, one line.
 
 - [ ] **(CHK.53) `namespace globalThis { … }` IS NOT A NAMESPACE DECLARATION AND WE MODEL IT
   AS ONE — (CHK.50)'s measured refusal.** tsc treats `declare global { namespace globalThis {
