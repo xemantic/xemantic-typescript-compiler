@@ -163381,7 +163381,23 @@ interface DataView {
             }
             // Standard contravariant: target param must be assignable to source param.
             // Under bivariantParams (method members), also accept the covariant direction.
-            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation) &&
+            // (CHK.62) An OPTIONAL source parameter accepts `undefined`, so its type in the
+            // contravariant test is `T | undefined` — tsc's `addOptionality`, applied when the
+            // parameter symbol's type is computed. Without it `(x?: string) => void` was not
+            // assignable to `(x: string | undefined) => void`: the target's `undefined`
+            // constituent had nowhere to go. Measured on the server profile at
+            // `project.ts:2277` (`ServerHost` -> `GetPackageJsonEntrypointsHost`, whose
+            // `readDirectory: CompilerHost["readDirectory"]` has required `extensions` /
+            // `includes` where `System.readDirectory`'s are optional). Deliberately SOURCE-side
+            // only: widening the TARGET side too is the other half of tsc's model and would
+            // REJECT `(x: string) => void` against `(x?: string) => void` — a rejection change
+            // measured separately, see the (CHK.62) session note.
+            val sourceParamCmp =
+                if ((sourceParams[i].valueDeclaration as? Parameter)?.questionToken == true &&
+                    sourceParamType !== anyType && sourceParamType !== errorType &&
+                    !typeIncludesUndefined(sourceParamType)
+                ) getUnionType(listOf(sourceParamType, undefinedType)) else sourceParamType
+            if (!checkTypeRelatedTo(targetParamType, sourceParamCmp, relation) &&
                 !(bivariantParams && checkTypeRelatedTo(sourceParamType, targetParamType, relation))) return false
         }
         // B63.29 continuation: Source has MORE params than target.size — target's rest
