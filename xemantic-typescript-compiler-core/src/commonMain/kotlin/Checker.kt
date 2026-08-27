@@ -114986,6 +114986,19 @@ interface DataView {
      * freshness/excess check pre-empts the weak one and squiggles the property, one
      * column right), which is why this helper takes a [Type] and not an [Expression].
      *
+     * **THE [weakParamRefusesArg] CALL BELOW IS A REDUNDANT GUARD, MEASURED (arm a6:
+     * replacing it with `true` leaves all 14 pins GREEN) AND EXPLAINED**: for the ONE
+     * shape this helper permits — exactly one non-nullish constituent — every term of
+     * that verdict is re-tested by [tryEmitWeakTypeAssignment] on the constituent it
+     * returns. Its weak-name fold reduces to that constituent's own
+     * [weakTargetProperties] + all-optional + non-empty test; its `others.none { … }`
+     * relation escape is vacuous (`others` is empty whenever the survivor is weak, and
+     * `weakNames` is empty otherwise, so it answers false); and its
+     * [weakSourcePropertyNames] null / empty / overlap tests are the emitter's own,
+     * term for term. It is KEPT because it is the sentence that says what the rule IS
+     * (round 807: a signal with no uniquely-its-own failure is recorded as a redundant
+     * guard, never claimed as pin coverage), not because any input can observe it.
+     *
      * Returns the constituent to run [tryEmitWeakTypeAssignment] against, or null.
      */
     private fun weakUnionRefusalConstituent(argType: Type, targetType: Type): Type? {

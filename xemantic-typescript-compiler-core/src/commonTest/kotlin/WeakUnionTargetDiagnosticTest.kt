@@ -258,7 +258,15 @@ class WeakUnionTargetDiagnosticTest {
      */
     @Test
     fun `refusal - two non-nullish constituents do not take the weak wording`() {
+        // BOTH constituents WEAK is the discriminating shape and `| string` is not:
+        // with a non-weak first constituent, dropping the single-survivor test still
+        // emits nothing, because `tryEmitWeakTypeAssignment` bails on a `string`
+        // target anyway — round 902's dead arm. tsc 7.0.2 over the identical file:
+        // `p16.ts(2,24)` TS2345 and `p16.ts(3,7)` TS2322, both naming the WHOLE union.
         val d = diagnose("""
+            declare function zzzP16(o: { zzzA?: null } | { zzzB?: string }): number
+            const zzzP16r = zzzP16(123)
+            const zzzP16v: { zzzA?: null } | { zzzB?: string } = 123
             declare function zzzP12(o: { zzzA?: null } | string): number
             const zzzP12r = zzzP12(123)
             const zzzP12v: { zzzA?: null } | string = 123
