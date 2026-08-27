@@ -268,6 +268,10 @@ Scala.js does not support `isInstanceOf` for a `js.Any` trait at all — both
 priced the runtime shape question and removed it from the language. Here it
 never needed pricing, because TypeScript does not pose it.
 
+A third system reached it later and from the opposite direction again — see
+§10, where a native TypeScript compiler removes structural width from the
+source language rather than encoding it.
+
 **So: the mechanism is name-keyed, and the closure is demoted to an
 optimization.** Four pieces, the first three taken from Static TypeScript, which
 is the closest thing to this project that ever shipped:
@@ -497,3 +501,122 @@ writer lives in the compiler. §8.5's constraint is exactly why the two halves
 are still separate — IR-generated declarations are invisible to Kotlin source
 downstream, so a metadata artifact is how a Kotlin consumer learns what a
 compiled TypeScript library offers.
+
+## 10. Prior art: scriptc, and the same bet with the opposite residue decision
+
+`scriptc` (scriptc.dev, read 2026-08-27: the landing page, `/introduction` and
+`/limitations`) compiles standard TypeScript to a native binary that "links
+against nothing but libSystem". It is the closest living relative this design has,
+and it is worth recording because it made the SAME central bet and then split
+from us on the one decision that follows from it.
+
+**Provenance rule for this section.** Everything attributed to scriptc is its
+own published claim; no scriptc binary was run on this box and nothing here is a
+measurement of it. Everything attributed to this backend is a measurement, with
+its home document named. The two must not be quoted as if they were the same
+kind of statement.
+
+### 10.1 The shared bet
+
+Four things are common ground, and their agreement is the interesting part:
+
+- **A real type checker's proofs are the input, not a shadow type system.** It
+  uses TypeScript's own checker against the real `es2025` lib; we use this
+  repository's, through the §4 capture seam.
+- **Refuse, never degrade.** Its rejected tier emits "a specific error code, a
+  code frame, and usually a rewrite hint"; §7 of `docs/kir-lowering.md` is the
+  same rule, and `KirFileLowering` carries ~45 distinct refusal sites that name
+  the file, the position and the construct. Both projects state the same reason:
+  a construct that quietly widens produces a program that compiles and
+  misbehaves, which is the one outcome from which nothing can be learned.
+- **Generics are monomorphized rather than erased at runtime.** That is §8.3
+  here, still a hypothesis; there it is claimed as shipped.
+- **Differential testing against Node is the gate.** Its corpus runs under Node
+  and as a native binary with stdout, stderr and exit codes compared byte for
+  byte; `scripts/kir-bench.sh` gates every arm's `sink=` against the Node arms
+  before any timing is read.
+
+### 10.2 Where it splits: what happens to the dynamic residue
+
+Given a static lowering and a conformant checker, the whole design question is
+what to do with the part the checker cannot make static. scriptc **partitions**
+it out; this backend **absorbs** it.
+
+| | scriptc (claimed) | this backend (measured) |
+|---|---|---|
+| residue mechanism | tier 2: an embedded quickjs-ng, ~620 KB, opt-in with `--dynamic` | no second engine — the `JsObject` property bag, always present |
+| boundary | values crossing back into static code are validated at run time | there is no crossing: a §2b shape instance IS a bag, so an unshaped reader calls the same virtual `get` |
+| `any` | rejected without `--dynamic`; also banned in class fields, array elements and union arms | the dominant case by measurement — 2,753 `any`-sourced closed obligations against the closure's own 220 (`docs/kir-structural-typing.md` §7) |
+| structural width | "record shapes are exact structs": passing `{a, b}` where `{a}` is expected FAILS, and width subtyping COPIES the record | total and free: every object type erases to the bag, so width subtyping needs no witness, no coercion and no copy |
+| memory | reference counting, cycles uncollectable across boundaries, deterministic collection points replacing concurrent GC | whatever the backend gives — a tracing GC on both JVM and Native, so cycles are JS-faithful without being designed for |
+| arrays | dense; out-of-bounds access TRAPS | `JsArray`, chosen over `ArrayList` precisely because JS arrays are sparse, growable, and an out-of-range read is `undefined` (§3) |
+| strings | UTF-8 storage; relational comparison in code-point order | UTF-16 `String`, "the one genuinely free mapping" (§3) |
+| `==` / `!=` | rejected except between identical types or against `null` | full abstract equality, pinned by `KirEqualitySemanticsTest` (`1 == true`, `null == undefined`, `NaN !== NaN`, `0 === -0`, `'0'` truthy) |
+
+### 10.3 The one finding this contributes to §3.4
+
+§3.4 rejected the whole-program nominal closure on three objections, of which
+the second was "some of it is not expressible as a JVM interface at all" and the
+first was that separate compilation becomes impossible. **scriptc is the same
+objection paid for in a different currency, and it is independent evidence for
+it**: a compiler that commits to struct-shaped records cannot express TypeScript
+width subtyping, so it does not encode it — it CHANGES THE LANGUAGE and rejects
+the assignment, or copies the record and loses aliasing. Kotlin/JS and Scala.js
+removed the runtime shape question from the language (§3.4); scriptc removed
+structural width from the SOURCE language. Three systems, three removals, none
+of them an encoding.
+
+So §3.4's decision stands unchanged, and its reasoning is now corroborated from
+a fourth direction: the closure is an optimization over a total dynamic
+mechanism, never a totality requirement.
+
+### 10.4 The comparison that does not meet
+
+The two projects publish numbers about different quantities, and it is worth
+saying so rather than implying a ranking:
+
+- scriptc quotes **deployment**: a ~320 KB hello-world binary starting in ~4 ms,
+  against Node's ~120 MB runtime and ~35 ms. No steady-state throughput figure
+  appears on the three pages read.
+- this backend quotes **throughput only**, within-round against `tsgo -> node`
+  (`docs/perf/kir-backend-levers.md` §§ 2b, 6):
+
+| | node | xtsc → JVM | xtsc → Kotlin/Native |
+|---|---:|---:|---:|
+| mitt, 4M emits | 82.25 ns/emit | **54.50** (1.54× faster) | 354.75 (4.31× slower) |
+| smol-toml, 20k parses | 22.20 µs/parse | 33.65 (1.52× slower) | 126.55 (5.70× slower) |
+
+On startup and binary size this backend is not in the same conversation, and on
+a managed runtime it does not need to be.
+
+### 10.5 Where scriptc is ahead, plainly
+
+Coverage, and it is not close. It claims `async`/`await` with JS-exact
+scheduling, exceptions, regular expressions, closures with JS capture semantics,
+single-inheritance classes with dynamic dispatch, and a large slice of Node's
+API surface (`fs`, `path`, `process`, `child_process`, `crypto`, `net`, `http`,
+`https`, `tls`), plus npm packages through the dynamic tier and a
+statement-level `coverage` command that reports the static/dynamic split. This
+lowering has **no `async`/`await` at all**, no `.d.ts`-driven interop, refuses
+`var`, and its native dynamic-member fallback throws. What it has instead is two
+real npm libraries compiling end to end on four arms with an equivalence gate.
+
+### 10.6 What it changes here
+
+One thing, and it is uncomfortable rather than surprising.
+
+**The Kotlin/Native arm competes on scriptc's home ground with a representation
+chosen for the JVM's.** §6 of `docs/perf/kir-backend-levers.md` prices that
+directly: Kotlin/Native has no escape analysis, so `jsAdd(Any?, Any?)` is
+0.95 ns on the JVM and **28.05 ns** native, and boxing one `Double` is 0.86
+against **8.61** — which is the whole 4–7× gap and is a property of the dynamic
+representation, not of the backend phase. On the JVM a tracing GC and a JIT make
+that representation affordable; on a native target the design that pays is
+closer to scriptc's, and the only lever here that moves toward it is the NOMINAL
+half, (KIR.PERF.1) — whose first slice already measured mitt at −10.7% on the
+JVM and **flat** on Native (§2b), i.e. it has not yet reached the boxing that
+dominates there.
+
+The direction scriptc structurally does not have is §9's: a checked TypeScript
+library's public API exported as a Kotlin metadata klib, so a Kotlin
+Multiplatform consumer can call it. A native binary has no such story to tell.
