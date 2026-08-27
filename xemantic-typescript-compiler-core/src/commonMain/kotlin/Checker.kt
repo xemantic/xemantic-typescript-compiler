@@ -106532,8 +106532,7 @@ interface DataView {
             // where `x: { zzzA?: null }`. tsc anchors it at the LHS reference (pristine
             // `assignmentCompatWithObjectMembersOptionality2.errors.txt` squiggles the
             // one-character `c` of `c = d`) and reports nothing else, so it pre-empts.
-            if (expr.right !is ObjectLiteralExpression && expr.right !is ArrowFunction &&
-                expr.right !is FunctionExpression) {
+            if (expr.right !is ObjectLiteralExpression && expr.right !is FunctionExpression) {
                 weakAssignmentTarget(target)?.let { (wt, wStart, wLen) ->
                     if (tryEmitWeakValuePosition(expr.right, wt, wStart, wLen, source, fileName)) return
                 }
@@ -114832,6 +114831,7 @@ interface DataView {
         argType: Type, targetType: Type, start: Int, length: Int,
         source: String, fileName: String, displayType: Type = argType,
         targetDisplay: String? = null, srcDisplayOverride: String? = null,
+        callAnchorStart: Int = -1, callAnchorLength: Int = 0,
     ): Boolean {
         if (length <= 0) return false
         val tgtProps = weakTargetProperties(targetType) ?: return false
@@ -114847,19 +114847,31 @@ interface DataView {
         val constructSigs = getConstructSignaturesOfType(argType)
         val srcStr = srcDisplayOverride ?: weakFunctionDisplay(argType) ?: typeToString(displayType)
         val tgtStr = targetDisplay ?: typeToString(targetType)
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
         if (weakCallResultSatisfiesTarget(callSigs, constructSigs, targetType)) {
+            // (CHK.59) THE ANCHOR MOVES WITH THE CODE, AND ONLY THE 2560 BRANCH MOVES.
+            // tsc's `checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError`
+            // first, whose first act is `elaborateDidYouMeanToCallOrConstruct`: when
+            // some signature's return type is related to the target it RE-REPORTS with
+            // the error node set to the EXPRESSION and attaches the TS6212/TS6213 row;
+            // otherwise the position's own error node is used. That predicate is this
+            // very `if`, so the two coincide by construction. Callers that already
+            // anchor at the expression (every CALL-ARGUMENT site) pass nothing.
+            val useCall = callAnchorStart >= 0 && callAnchorLength > 0
+            val aStart = if (useCall) callAnchorStart else start
+            val aLen = if (useCall) callAnchorLength else length
+            val (aLine, aChar) = getLineAndCharacterOfPosition(source, aStart)
             val (relMsg, relCode) = if (constructSigs.isNotEmpty() && callSigs.isEmpty())
                 "Did you mean to use 'new' with this expression?" to 6213
             else "Did you mean to call this expression?" to 6212
             diagnostics.add(Diagnostic(
                 message = "Value of type '$srcStr' has no properties in common with type '$tgtStr'. Did you mean to call it?",
                 category = DiagnosticCategory.Error, code = 2560,
-                fileName = fileName, line = line, character = character, start = start, length = length,
+                fileName = fileName, line = aLine, character = aChar, start = aStart, length = aLen,
                 relatedInformation = mutableListOf(Diagnostic(
                     message = relMsg, category = DiagnosticCategory.Message, code = relCode,
-                    fileName = fileName, line = line, character = character, start = start, length = length))))
+                    fileName = fileName, line = aLine, character = aChar, start = aStart, length = aLen))))
         } else {
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
                 message = "Type '$srcStr' has no properties in common with type '$tgtStr'.",
                 category = DiagnosticCategory.Error, code = 2559,
@@ -115137,18 +115149,30 @@ interface DataView {
         // Asking the value first measured +6.89% `typeOfExpr.calls` on the compiler
         // profile for the identical output.
         if (value is ObjectLiteralExpression) return false
-        if (value is ArrowFunction || value is FunctionExpression) return false
+        // (CHK.59) A **FUNCTION EXPRESSION** IS STILL REFUSED AND THAT IS MEASURED, NOT
+        // AN OVERSIGHT: tsc's `getErrorSpanForNode` maps a `FunctionExpression` to its
+        // own NAME, so `= function zzzNamed() {…}` anchors at `zzzNamed` and the
+        // anonymous form lands back on the var name — two anchors, neither of which is
+        // the expression. An ARROW has no such mapping, which is why the arrow half is
+        // closed. `build/chk59/ora/wa.ts` carries both rows.
+        if (value is FunctionExpression) return false
         if (weakPositionTarget(targetType) == null) return false
         val argType = getTypeOfExpression(value)
         if (argType === anyType || argType === errorType) return false
-        if (getCallSignaturesOfType(argType).isNotEmpty() ||
-            getConstructSignaturesOfType(argType).isNotEmpty()) return false
-        val display = literalTypeOfExpression(value) ?: argType
-        if (tryEmitWeakTypeAssignment(argType, targetType, start, length,
-                source, fileName, displayType = display)) return true
-        val cons = weakUnionRefusalConstituent(argType, targetType) ?: return false
-        return tryEmitWeakTypeAssignment(argType, cons, start, length,
-            source, fileName, displayType = display)
+        val srcType = argType
+        val display = literalTypeOfExpression(value) ?: srcType
+        // (CHK.59) The 2560 anchor: the EXPRESSION's own span. Computed here rather than
+        // in the emitter because only a caller knows where its value node is; the
+        // emitter uses it ONLY on the 2560 branch.
+        val cStart = value.pos
+        val cLen = expressionTrueEnd(value) - cStart
+        if (tryEmitWeakTypeAssignment(srcType, targetType, start, length,
+                source, fileName, displayType = display,
+                callAnchorStart = cStart, callAnchorLength = cLen)) return true
+        val cons = weakUnionRefusalConstituent(srcType, targetType) ?: return false
+        return tryEmitWeakTypeAssignment(srcType, cons, start, length,
+            source, fileName, displayType = display,
+            callAnchorStart = cStart, callAnchorLength = cLen)
     }
 
     /**
@@ -115390,11 +115414,21 @@ interface DataView {
             // spells the WHOLE union.
             val cU = topLevelWeakSource(init)?.let { (aT, sD) ->
                 weakUnionRefusalConstituent(aT, targetType)?.let { Triple(aT, sD, it) }
-            } ?: return false
+            } ?: return tryEmitWeakValuePosition(
+                init, targetType, name.pos, name.text.length, source, fileName)
             return tryEmitWeakTypeAssignment(cU.first, cU.third, name.pos, name.text.length,
                 source, fileName, displayType = cU.first, srcDisplayOverride = cU.second)
         }
-        val (argType, srcDisplay) = topLevelWeakSource(init) ?: return false
+        // (CHK.59) [topLevelWeakSource] classifies a CAST, an enum member, a `new` and a
+        // primitive literal and nothing else, so an ordinary IDENTIFIER or ARROW source
+        // was silent HERE while the return and assignment positions reported it. Falling
+        // back to the shared value walker closes the asymmetry and brings the 2560
+        // expression anchor with it; placed as the `?:` so no shape that already reports
+        // changes its display (this branch renders the target through the ANNOTATION,
+        // the walker through `typeToString`).
+        val (argType, srcDisplay) = topLevelWeakSource(init)
+            ?: return tryEmitWeakValuePosition(
+                init, targetType, name.pos, name.text.length, source, fileName)
         val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
         return tryEmitWeakTypeAssignment(argType, targetType, name.pos, name.text.length,
             source, fileName, displayType = argType, targetDisplay = tgtDisplay,

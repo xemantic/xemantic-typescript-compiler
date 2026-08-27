@@ -281,20 +281,28 @@ class WeakReturnAssignmentDiagnosticTest {
     }
 
     /**
-     * REFUSAL — a CALLABLE source. tsc 7.0.2 reports TS**2559** here (`q12.ts(1,54)`
-     * and `q12.ts(3,1)`) because CALLING `() => 1` yields `number`, which is not
-     * assignable to the weak target; [Checker.tryEmitWeakTypeAssignment] would emit
-     * TS2560 for every callable source, so the new positions refuse one outright
-     * rather than acquiring a row with the wrong CODE. (CHK.58) item 2.
+     * (CHK.59) THE CALLABLE SOURCE, **CLOSED** — this was a refusal pin until (CHK.59)
+     * gave [Checker.tryEmitWeakValuePosition] the second, CALL-ONLY anchor it needed.
+     * `() => 1` returns `number`, which is not assignable to the weak target, so the
+     * code is TS**2559** and the anchors are the ordinary ones. tsc 7.0.2 over
+     * `build/chk59/pin/q12.ts`: `(1,54)` at the `return` keyword and `(3,1)` at the LHS.
+     * The 2560 half — where the anchor moves to the EXPRESSION — lives in
+     * [WeakCallableSourceAnchorTest].
      */
     @Test
-    fun `refusal - a callable source stays silent rather than emitting the wrong code`() {
+    fun `a callable source whose result is disjoint reports TS2559 at the ordinary anchors`() {
         val d = diagnose("""
             function zzzQ12f(): { zzzA?: null; zzzF?: string } { return () => 1; }
             let zzzQ12v: { zzzA?: null; zzzF?: string } = {}
             zzzQ12v = () => 1
         """)
-        assert(d.none { it.code == 2559 || it.code == 2560 })
+        assert(d.map { it.code } == listOf(2559, 2559))
+        assert(d.all {
+            it.message == "Type '() => number' has no properties in common with type " +
+                "'{ zzzA?: null | undefined; zzzF?: string | undefined; }'."
+        })
+        assert(d.map { it.line } == listOf(1, 3))
+        assert(d.map { it.character } == listOf(54, 1))
     }
 
     /**
