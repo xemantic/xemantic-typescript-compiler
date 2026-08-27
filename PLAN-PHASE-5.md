@@ -20,6 +20,133 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.62b)+(CHK.61)(1)+(CHK.61)(a) — the price of the `this`-receiver line fell **1 -> 0** and **it landed**: three defects closed, and the reverted intersection leg was UNSOUND rather than unmasking
+
+**THE HEADLINE: (CHK.61)(a) IS IN, AT `added=0 removed=0` ON ALL EIGHT PROFILES.** Its price
+was 6 dashboard rows at (CHK.61), 3 after (CHK.62), **1** after this round's (CHK.62b), and
+**0** after this round's (CHK.61)(1). All six were false positives from pre-existing gaps the
+`any` was hiding; not one of them was `this`-specific, which is exactly what the refusals
+predicted and what took four rounds to prove one gap at a time.
+
+**(CHK.62b) — AN ASSIGNMENT WHOSE RHS IS A `this`-METHOD CALL DID NOT NARROW THE ASSIGNED
+REFERENCE, AND IT IS A SHIPPED DEFECT, NOT A PATCH ARTEFACT.** `rhsIsDefinitelyNonNullish`'s
+CALL arm reads the callee's return ANNOTATION, so it resolves the callee through
+`resolvePropertyMethodDecl`, which TYPES THE RECEIVER and bails at `recvType === anyType`.
+The queue recorded it as visible only under `patch_a`; that is true of `build/chk62/g2k`,
+whose declared unions all come from `this.zzzFind()` — but the moment the reference's union
+comes from anything else the row is on the SHIPPED binary:
+`let p = zzzFindFree(); p ??= this.zzzCreate(); return { p }` reported
+`p: ZzzProj | undefined` where tsc 7.0.2 is silent. The carrier is confined to that
+FLOW-ONLY resolver (both callers are narrowing resolvers, so a resolution can only ever
+SUPPRESS), which is what made it separable from (a).
+
+**THE OBSERVABLE IS THE OBJECT-LITERAL MEMBER AND *ONLY* IT, WHICH A WRITE PROBE CANNOT
+SEE.** At the same flow point `const q: ZzzProj = p` is SILENT on the broken binary while
+`return { p }` is a TS2322 — so CLAUDE.md's standing advice ("assert the narrowed type with a
+write probe") is the wrong instrument here, and a write-probe pin would have been VACUOUS.
+The value pin that works is a deliberately WRONG target: `return { zzzProj }` against
+`{ zzzProj: string }` makes the checker NAME the member type it built —
+`{ zzzProj: ZzzProj | undefined; }` before, `{ zzzProj: ZzzProj; }` after, and tsc agrees the
+member is `ZzzProj`.
+
+**(CHK.61)(1) — THE REVERTED ACCEPTANCE LEG WAS *UNSOUND*, NOT UNMASKING A DEFECT
+ELSEWHERE, AND A CENSUS OF THE NEWLY ACCEPTED PAIRS SAID SO IN ONE RUN.** The prior round
+recorded `callHierarchy.ts:199 'parent' does not exist on type 'never'` as "an acceptance in
+the relation feeds `typeGuardMemberDisjoint`". Printing every pair the new rule accepts on
+the services profile named exactly FOUR, all one shape:
+`FunctionExpression & { name: undefined; parent: … }` accepted against `{ name: Identifier }`.
+The merge rule is "the intersected member is a subtype of EVERY declaration, so ANY relating
+declaration suffices" — sound only when each declaration's type is spelled out INCLUDING its
+optionality. We model an optional member as plain `T` ((CHK.61)(b)), so `FunctionExpression`'s
+`name?: Identifier` was picked as the relating declaration where the real intersected member
+is `undefined`; the next negative type-predicate narrow then subtracted that constituent and
+left `never`. Widening the SOURCE declaration to `T | undefined` LOCALLY inside the rule
+fixes it — it is a suppression rule, so pessimism about a source member can only decline to
+suppress. **Ablation arm b1 is exactly the earlier attempt's mistake and it reddens exactly
+one pin.**
+
+**(CHK.61)(a) — LANDED.** `thisReceiverCarrierType` (`currentClassForThis`'s declared
+instance type) is consulted at `computeRawTypeOfPropertyAccess` and at
+`resolvePropertyMethodDecl`, only where the receiver already typed `any`/`error`. On
+`build/chk60/br/b2.ts`: **3 of tsc 7.0.2's 7 rows before, all 7 after, at tsc's own
+positions** (5,11) (6,11) (8,20). It also converts `WeakCallableSourceAnchorTest`'s
+`this`-member REFUSAL pin into a positive one at tsc's `(2,62)` / `(3,44)` — round 765's law
+firing in the useful direction, and the only suite failure the whole round produced.
+
+**AND IT IS A LANGUAGE-SERVICE WIN, WHICH ONLY `capture-equivalence` SEES**: `definitions`
+**360,376 -> 360,414**, i.e. go-to-definition on a `this.<member>` caret now RESOLVES. Both
+ARM DIGESTs moved (`full=5591703872112101713 narrow=704838071822341252`) with `DIVERGED`
+UNCHANGED at 1,005 spans in 43 of 76 (types=1005, definitions=0, moreAny 0) — a FULL-BUILD
+fix, so the full-vs-narrow relationship is untouched; (INC.26)'s rule, re-recorded rather
+than read as a regression.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,262 / 16,267 / 16,272 /
+16,273**, 0 failed, 3 skipped (+5/+5/+5/+1, exactly the new classes) — **no corpus baseline
+moved on any of the four.** `cost_gate.py` PASSES on all (exit read from the gate, not a
+pipeline), `output.errors` **46**, every counter within a hundredth of a percent of
+(CHK.62)'s standing residual (`typeOfExpr.calls` +1.42%/+1.41%, `globals.lookups` +1.52%,
+`globals.misses` +1.75%/+1.74%). `huge_methods --fail-over 0` exit 0, **783** classes, 0
+over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on all three code commits,
+INCLUDING the one that lands (a) — `added=0 removed=0` on all eight**, verified by a
+per-profile `diff` against a parent capture taken in this session. `knip` **48** and
+`jsonrepair` **4**, EVERY ROW byte-identical. `partition-equivalence` EQUIVALENT all 78
+(floors 56 / 57 / 66 ms, one draw each — the spread is the harness's).
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, EACH `cmp`-DIFFED AGAINST
+ITS OWN SNAPSHOT AND EACH RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the (CHK.62b) carrier removed from the flow resolver | `77222597` | **3** — the three (CHK.62b) positives |
+| a1 | the carrier present but answering null | `4d268baa` | **3** — the same three (a ROUND-927 PAIR with a0) |
+| a2 | any resolved `this.m()` treated as non-nullish | `ac22c4c7` | **1** — uniquely the nullable-return row |
+| b0 | `intersectionMergedSatisfiesTarget` removed | `ca09ebe3` | **2** — the two gap-1 positives |
+| b1 | the source-side `| undefined` dropped (the earlier attempt's exact mistake) | `30b3908a` | **1** — uniquely the optional-vs-`undefined` row |
+| b2 | the missing-required-property refusal dropped | `62244808` | **1** — uniquely that row |
+| c0 | the (a) carrier removed from `computeRawTypeOfPropertyAccess` | `20b9f09f` | **3** — the three (a) positives |
+| c1 | the carrier consulted SECOND instead of first | `103f0a7d` | **0 — REDUNDANT** |
+| c2 | the carrier answers for EVERY identifier receiver | `532c340f` | **0 — UNPINNED, then fixed** |
+
+**c1 IS A REDUNDANT GUARD AND c2 WAS A HOLE.** The fallback for a bare `this` is exactly
+`anyType`, so consulting the carrier first or second is observationally identical — the KDoc
+claiming the order is load-bearing was an over-claim and now says what is. c2 is the
+opposite: widening the carrier from `this` to any identifier receiver is plainly wrong (an
+`any`-typed parameter in the same body would acquire the class's type) and NOTHING pinned it.
+The round added the fixture that does (`zzzM(zzzP: any) { const zzzA: string = zzzP.zzzReq }`)
+and re-ran c2 against it: **1 RED, uniquely that row** (class `0ae9232b`). Two rows were also
+relabelled from CONTROL to COVERAGE, because an arm reddens each uniquely.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every positive was measured on the PARENT binary,
+rebuilt in this session (`Checker.class` md5 `181c293e` — the exact digest (CHK.62) recorded
+as its landed binary), through the CLI, against `tools/tsgo-7.0.2/lib/tsc` on byte-identical
+source; then shown RED under the arm naming its rule. **One candidate pin was DROPPED for
+vacuity before it was written**: the write probe `const zzzQ: ZzzProj = zzzProj` after the
+`this`-method assignment is silent on the parent, so it would have measured nothing. Two rows
+are labelled CONTROL and are NOT counted as coverage (no arm reddens them): the free-function
+RHS, and the merged-member CONTRADICTION direction.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The first two bisection matrices concluded the wrong axis.** `m8` in the second
+    (`let zzzProj: ZzzProj | undefined = zzzCreateFree(); zzzProj ??= this.zzzCreate()`) was
+    silent, which read as "the DECLARATION's initializer is the axis" — it is silent because
+    `zzzCreateFree(): ZzzProj` is already non-nullish, so the `??=` never mattered. A matrix
+    cell that is silent for a TRIVIAL reason is indistinguishable from one that is silent for
+    the reason you are testing; the third matrix, which held the declaration fixed, is what
+    named the receiver.
+  * **A `getNarrowedTypeForReference` debug diagnostic settled in one run what two matrices
+    could not.** Printing `raw`/`narrowed` at the object-literal member showed
+    `ZzzProj | undefined -> ZzzProj` for the free-function RHS and `-> ZzzProj | undefined`
+    for the `this` one, which located the defect in the walk rather than in the reader.
+  * **The (CHK.61)(1) revert note's diagnosis was inherited and wrong**, exactly like two of
+    (CHK.62)'s four. "An acceptance in the relation feeds `typeGuardMemberDisjoint`" reads as
+    a statement about someone else's code; the rule was simply unsound. **Censusing what a
+    new rule ACCEPTS is a one-run instrument and it should have been the first move**, not
+    the last.
+  * **A KDoc-only edit was proven inert rather than re-gated**: `javap -c -p` minus `line N:`
+    is byte-identical across it over 1,026,164 lines of disassembly, while the class md5
+    moves (`da1d4552` -> `e7963e28`) because the LineNumberTable shifts.
+
 ### Round (CHK.62) — THREE of (CHK.61)'s four unmasked gaps are CLOSED, and **two of its four diagnoses were wrong**; (a)'s price falls **6 rows -> 3**, and the last row's true cause is now located
 
 **THE HEADLINE IS THE RE-PRICING.** With gaps 3 and 4 closed, the `this`-receiver patch
@@ -1261,164 +1388,6 @@ Both are KEPT — a5 as a cost guard (it saves a relation call per nullish const
 `{X} | null | undefined` is the commonest weak-param shape), a6 because `acceptedType` is
 simply the correct variable and writing `argType` there would be a latent trap.
 
-### Round (CHK.50) — a `declare global { … }` block's EXPORTS never reached `globals`: the CARRIER merged and the contents did not, so **seven of eight declaration forms were wrong**
-
-**THE QUEUE ITEM'S FRAMING WAS WRONG IN THE SAME DIRECTION AS (CHK.49)'s AND (CHK.51)'s, AND
-ONE WRITE-PROBE MATRIX SAYS SO.** The item said `declare global { var X }` works, "so the
-value half is fine and the TYPE half is not". Measured against `tools/tsgo-7.0.2/lib/tsc` on
-byte-identical source, on the (CHK.51) parent binary rebuilt in this session (`Checker.class`
-md5 `b347a38a…` — the very digest (CHK.51) recorded as ITS landed binary, an independent
-confirmation the parent reproduced), over all eight declaration forms in BOTH scopes:
-
-| form inside `declare global` | same file | cross-file | tsgo |
-|---|---|---|---|
-| `var` | correct | **silently `any`** | typed |
-| `function` | `any` | `any` | typed |
-| `namespace` | `any` | `any` | typed |
-| `class` | `any` | `any` | typed |
-| `interface` (new name) | **TS2304** | TS2304 | typed |
-| `type` alias | **TS2304** | TS2304 | typed |
-| `enum` | **TS2304** | TS2304 | typed |
-| `interface X` AUGMENTING a lib type | **TS2339 on the member it just declared** | TS2339 | typed |
-
-So exactly ONE of eight forms was observable at all, and only in the declaring file. The
-`function`/`namespace`/`class` rows are the dangerous half: `globalAugmentationNames`
-suppressed their TS2304 and NOTHING typed them, so they were `any` — legal everywhere.
-**A READ PROBE CANNOT SEE ANY OF THIS**; every row above is a write probe
-(`const s: string = <it>`), which is why the item had it backwards.
-
-**THE MECHANISM, IN ONE SENTENCE.** `declare global` parses as a `ModuleDeclaration` whose
-name is the Identifier `global`, so `init:mergeFileLocalsIntoGlobals` merged the CARRIER
-symbol — `moduleLocalContributesGlobally` answers true for that name, INV.3(d)'s deliberate
-global contribution — and nothing ever merged its `exports`, which is where every augmented
-name lives.
-
-**FOUR EDITS, AND THREE OF THEM ARE FORCED BY THE FIRST RATHER THAN CHOSEN.**
-
-  1. `init:mergeGlobalAugmentations` merges each LEGAL block's exports into `globals`, after
-     the step-1b snapshot so the names classify as augmentation-ADDED in
-     `computePerFileVisibility`. **Legality is positive evidence, not a name test**: the walk
-     mirrors `spineCheckGlobalAugmentation`'s TS2669 predicate by descending only through
-     ambient-module bodies, so a top-level block in a global SCRIPT contributes nothing —
-     measured, that is what tsgo does too (its names stay TS2304 there). Second half of the
-     evidence is a declaration-IDENTITY test (`it === stmt`, never `in`: AST nodes are data
-     classes and `in` deep-compares).
-  2. `buildPerFileScopes` seeds every file with the names the merge ADOPTED. Without it the
-     two halves DISAGREE: the type resolves through `globals` while the unresolved-name
-     family, whose file root is `perFileScope`, reports TS2304 on the very name it just
-     typed. That seed is arm a2 — **3 RED**.
-  3. `isNameExportedFromNamespace` now treats a namespace that is ambient by CONTEXT as
-     implicitly exporting. `declare global { namespace NodeJS { interface ProcessEnv … } }` —
-     the shape every `@types` package uses — gives the inner `namespace` no `declare` of its
-     own, so the binder types it `ValueModule` and the existing flag test missed. **This is a
-     regression THIS round would have introduced**, not a pre-existing defect: before the
-     merge the receiver typed `any` and nothing asked.
-  4. An export named `globalThis` is REFUSED. `namespace globalThis { … }` is tsc's syntax
-     for augmenting the GLOBAL SCOPE ITSELF, not a namespace declaration; publishing it as an
-     ordinary symbol made `globalThis.<undeclared>` a TS2339 that pristine tsc does not
-     report, and it reddened the corpus case `extendGlobalThis` — **the only corpus baseline
-     this round moved, and it was caught by the suite, not by any profile**. Queued as
-     (CHK.53).
-
-**AND (CHK.51)'s NAMED COST IS PAID.** That round had to refuse the heritage relaxation for
-any name a `declare global` block declared, via a `globalAugmentedInterfaceNames` NAME set,
-precisely BECAUSE the block did not merge — and it recorded the price: in such a file
-`el.zzzNotThere` was TS2339 in tsgo and silent here. The block merges now, so the lib symbol
-carries a non-lib declaration and `cmamLibHeritageMembersComplete`'s all-lib test admits
-exactly that declaration (`cmamIsGlobalAugmentation`). **The set and its collector are
-DELETED**; the two spellings are ONE observable, and this direction is the one that reports.
-Cross-file and same-file matrices over all eight forms now match tsgo 7.0.2 **row for row**.
-
-**GATES.** Suite **16,118 / 0 / 3** (+11, exactly the new class). **ONE corpus baseline moved
-and was restored within the round** (`extendGlobalThis`, edit 4 above); the landed shape moves
-none. `cost_gate.py` **PASSES with NO rebaseline**, exit 0: `output.errors` **46**,
-`spine.nodes` **+0.00%**, `globals.conflated` 0, largest movements `narrow.memoServed`
-**+0.69%** and `typeOfExpr.calls` **+0.59%** — digit-for-digit (CHK.49)'s and (CHK.51)'s, i.e.
-this round contributes 0.00% on the compiler profile. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned. `partition-equivalence` **EQUIVALENT, all 78**, floor **56 ms**
-[56, 56, 57, 52] — ONE draw, and unlike (CHK.51)'s it carries no leading ramp.
-`capture-equivalence` **1,005 spans / 43 of 76 / `narrowRendersMoreAny` 0**, `definitions`
-**360,376** — the standing state, unmoved. 8-profile BEFORE/AFTER grid, both arms built in
-this session, distinct `Checker.class` md5s (`b347a38a…` / `3163ffc4…`) and a `javap` positive
-control (0 vs 3 occurrences of the new members): **`added=0 removed=0` on all eight**.
-
-**LIBRARIES — AND THE knip ROW COUNT WENT *UP*, WHICH IS THE HONEST RESULT.**
-**`jsonrepair` 3.13.1: 4 -> 4, byte-identical**, and its tsconfig loads `dom`, so that is a
-real no-false-positive arm. **`knip` @ `dc7aca5`: 49 -> 54**, decomposed exactly:
-
-  * **−1, a genuine FIX** — `src/util/watch.ts:186 TS2591 Cannot find name 'Buffer'` is gone.
-    `@types/node` declares `Buffer` in a `declare global` block, and it now resolves. (knip's
-    `"lib": ["esnext"]` excludes DOM, so (CHK.49)/(CHK.51) used it as a CONTROL; for THIS
-    round it is a real arm, because `@types/node` augments regardless of `lib`.)
-  * **+6, every one a PRE-EXISTING overload-selection defect that `any` had been hiding.**
-    Five `Buffer<ArrayBuffer>` TS2322/TS2345 rows plus a TS2769, all on
-    `readFileSync(p, 'utf8')` / `execSync(…, {encoding:'utf8'})` — calls whose STRING-returning
-    overload we decline in favour of the `Buffer` one. **Proved pre-existing by measurement,
-    not by argument**: a six-line repro with the interface declared as a PLAIN LOCAL (no
-    `declare global` anywhere) emits the identical three rows on the PARENT binary and on the
-    landed one, and tsgo is silent on both. Queued as **(CHK.54)**.
-
-That is round 789's shape at library scale: **making a type REAL surfaces the defects `any`
-was suppressing**, so a rising row count on a library arm is not automatically a regression —
-but it must be decomposed per row and each row attributed to a binary, which is what the
-plain-local repro does here.
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH, each `cmp`-diffed against its OWN snapshot with the
-restore verified OUTSIDE the driver, each patch anchor asserted UNIQUE (exit 3 otherwise),
-each arm's build grepped for `e:` before its result was read, and each arm's `Checker.class`
-md5 recorded and distinct from the landed `3163ffc4…`.**
-
-| arm | injected mistake | RED | profile |
-|---|---|---|---|
-| a0 | the whole change reverted (parent, rebuilt this session; `javap` 0 vs 3) | **9** | 46 |
-| a1 | the merge loop iterates no carriers | **9** — the same set as a0 | 46 |
-| a2 | the per-file-scope seed of the ADOPTED names dropped | **3** | 46 |
-| a3 | the TS2669 legality gate dropped | **1** — uniquely the script refusal | 46 |
-| a4 | the declaration-IDENTITY evidence test dropped | **0** | 46 |
-| a5 | the per-carrier dedupe dropped | **0** | 46 |
-| a6 | the `globalThis` refusal dropped | **1** — uniquely its own pin | 46 |
-| a7 | the ambient-BY-CONTEXT namespace export rule reverted | **1** | 46 |
-| a8 | `cmamIsGlobalAugmentation` reverted to a bare all-lib test | **2** | 46 |
-| a9 | the ambient-module recursion dropped | **1** — uniquely the nested pin | 46 |
-
-**a0 and a1 are not a round-927 pair, they are a NESTING**, and saying which matters: a1
-disables only the merge and reddens everything a0 does, i.e. edits 2-4 are reachable ONLY
-because the merge exists. **a4 and a5 read 0 RED and are KEPT and recorded as
-UNDISCRIMINATED.** a5 was given a purpose-built falsifier — two `declare global` blocks in one
-file, which share ONE carrier symbol, against a `declarations.addAll` with no membership
-test — and **it still reads 0 RED**, because a member table is keyed by NAME and a doubled
-declaration list resolves to the same members (round 813: the retry was tried and it
-answered). The pin is kept for what it DOES assert, and the dedupe is kept because `addAll`
-on a shared binder-owned list is a contract. a4 is not shown dead either: I could not prove
-it unobservable the way (CHK.49)'s a8 was proven, so (CHK.49)'s delete-it precedent does not
-apply.
-
-**HOW VACUITY WAS RULED OUT, PIN BY PIN.** All **8** positives in `DeclareGlobalAugmentationTest`
-plus the re-pointed (CHK.51) pin and the upgraded `LibGlobalNameShadowTest` control — **9
-RED** — were run against the parent binary rebuilt in this session over byte-identical test
-source. The **two refusal pins** (script-file, `globalThis`) are green on the parent by
-construction and their falsifying arms are a3 and a6. The **one pin labelled CONTROL** (a
-module's plain top-level `interface Date` still does not merge — (CHK.49)'s direction, which
-this round pulls the OPPOSITE way on the same seam) is green on every arm and is NOT counted
-as coverage; (CHK.49)'s own 14 pins all stayed green throughout, so that hole was not
-re-opened. Every fixture carries `@useRealLibs` and an explicit `@lib` where DOM is involved —
-without them `Date`/`HTMLElement` do not exist and every pin passes vacuously ((CHK.51)).
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-
-  * The first cut was the merge alone, and it looked complete: every write probe typed
-    correctly. It still emitted TS2304 for `interface`/`type`/`enum` — the type resolved and
-    the name-existence family said the name did not exist, in the same compile. **Two
-    resolvers over one question, disagreeing, with neither of them wrong on its own inputs.**
-  * The `globalThis` case was found ONLY by the corpus, not by any profile, any library or
-    any hand-written probe — I did not know `namespace globalThis` was a distinct language
-    feature until a baseline moved.
-  * `class` inside `declare global` was the form I would have bet was fine (it produces no
-    TS2304), and it was `any`. `globalAugmentationNames` is a SUPPRESSION list, so a form on
-    it looks healthier than one that is not, and is in fact worse.
-  * knip going 49 -> 54 read as a regression for twenty minutes. It is one fix and six
-    newly-visible pre-existing rows, and the thing that settled it was deleting the
-    `declare global` from the repro — the defect stayed.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3334,88 +3303,53 @@ without them `Date`/`HTMLElement` do not exist and every pin passes vacuously ((
      TS2559 `Type 'bigint'` at the key — [Checker.weakSourcePropertyNames]'s `BigIntLike` arm
      does not resolve to an object here. One line, deliberately not taken this round.
 
-- [ ] **(CHK.62b) AN ASSIGNMENT WHOSE RHS IS A `this`-METHOD CALL DOES NOT NARROW THE
-  ASSIGNED REFERENCE — THE REAL CAUSE OF (CHK.61)(a)'s LAST TWO ROWS, AND IT HAS NO SWITCH IN
-  IT (2026-08-27, located by (CHK.62)).** `let p = this.zzzFind(); p ??= this.zzzCreate();
-  return { p }` inside a class reports `p: ZzzProj | undefined` where tsc 7.0.2 is silent, and
-  so does the `if (!p) { p = this.zzzCreate() }` form. **The control is in the same fixture and
-  is silent**: the identical assignment with a FREE function RHS (`p ??= zzzCreateFree()`)
-  narrows correctly, as does `??=` inside a switch clause with a free RHS. Repro
-  `build/chk62/g2k` (`zzzC`/`zzzD` fail, `zzzA` is the control) — **it reproduces ONLY with
-  `build/chk61/patch_a.py` applied**, because without (a) `this.zzzCreate()` types `any` and
-  an `any` RHS is silently assignable. Almost certainly the same root cause as (a) itself —
-  `getTypeOfExpression` answers `any` for `Identifier("this")` — reached through the CALL path
-  (`getCalleeType` / `getReturnTypeOfCallExpression`) rather than through
-  `computeRawTypeOfPropertyAccess`, so extending (a) to that path is the first thing to try.
-  Closing it takes (a) from 3 rows to **1** (gap 1 alone).
+- [x] **(CHK.62b) DONE 2026-08-27 — AN ASSIGNMENT WHOSE RHS IS A `this`-METHOD CALL DID
+  NOT NARROW THE ASSIGNED REFERENCE, AND IT WAS A **SHIPPED** DEFECT, NOT A PATCH ARTEFACT.**
+  `rhsIsDefinitelyNonNullish`'s CALL arm resolves the callee through
+  `resolvePropertyMethodDecl`, which TYPES THE RECEIVER and bails at `recvType === anyType`;
+  `thisReceiverCarrierType` supplies `currentClassForThis`. The entry's "invisible without
+  patch_a" is true only of `build/chk62/g2k`, whose declared unions all come from
+  `this.zzzFind()` — `let p = zzzFindFree(); p ??= this.zzzCreate(); return { p }` reproduces
+  on the shipped binary. Took (a) from 3 rows to **1**. `ThisMethodCallAssignmentNarrowTest`.
+  RESIDUE: a PROPERTY-access RHS (`p ??= o.zzzFld`) still does not narrow — measured NOT
+  `this`-shaped (`zzzObj.zzzFld` fails identically), so it is a separate item.
 
-- [ ] **(CHK.61) — **RE-PRICED 2026-08-27 BY (CHK.62): (a) NOW COSTS 3 ROWS, NOT 6.** Gaps
-  **3** (an optional source parameter is `T | undefined` in the contravariant test) and **4**
-  (an object literal spreading an INTERSECTION lost every member) are CLOSED and their rows
-  are gone; the (a) grid is now `9c01ade7819f33aa30f5f7fb5a987e63` = `+2 harness / +1 server`.
-  **The 3 surviving rows are TWO causes**: gap **1** below (`client.ts:356`, unchanged, still
-  the hardest — its acceptance leg adds `never` rows), and `editorServices.ts:4449` on two
-  profiles, whose cause is NOT gap 2 as recorded. (CHK.62) fixed gap 2's named mechanism —
-  a call to a `: never` function now DIVERGES, tsgo-confirmed — and the row did not move;
-  bisecting the real shape with (a) in the tree located the true cause, **(CHK.62b) below**.
-  Gap 2's entry stands only as history. ORIGINAL ENTRY: BOTH **BUILT AND
-  PRICED** IN (CHK.61c/d), BOTH REFUSED ON THE SAME GROUND: EACH UNMASKS PRE-EXISTING
-  ENGINE GAPS AS **DASHBOARD FALSE POSITIVES**, AND EACH GAP IS NAMED BELOW WITH A
-  `this`-FREE REPRO.** Neither is a design question any more; what is left is the named
-  list. Probe patches: `build/chk61/patch_a.py`, `build/chk61/patch_b.py`.
-  **(a) THE `this` RECEIVER — one line, and it works.** `computeRawTypeOfPropertyAccess`'s
-  `getTypeOfExpression(expr.expression)` answers `any` for `Identifier("this")`; taking
-  `currentClassForThis?.let { resolveUncalledThisType(it) }` first closes **every** row
-  (CHK.60) measured — `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to **all 7**, and
-  `b1.ts` gains the three var-decl rows. **MEASURED PRICE: corpus GREEN (once (CHK.61c) is
-  in the tree), `knip` 48 and `jsonrepair` 4 BYTE-IDENTICAL, compiler profile 46 -> 46, and
-  +4 harness / +2 server rows** (grid `56c6b1e04100a8ae0bcfba9bff323865`). All six are
-  FALSE POSITIVES from FOUR pre-existing gaps the `any` was hiding, none `this`-specific:
-  1. **[STILL OPEN] AN INTERSECTION SOURCE IS NEVER MERGED** (`client.ts:356`) —
-     `structuredTypeRelatedTo`'s rule is "SOME constituent relates", so
-     `ZzzBase & { zzzEndLine: number }` fails `ZzzFmt` where each half contributes.
-     Repro `build/chk61/p3/a.ts` line 4, no `this` in it. **AN ACCEPTANCE LEG WAS BUILT AND
-     REVERTED**: `intersectionMergedSatisfiesTarget` (the symmetric twin of
-     `intersectionMergedContradictsTarget`) closes that row and ADDS
-     `callHierarchy.ts:199 'parent' does not exist on type 'never'` on TWO profiles,
-     because an acceptance in the relation feeds `typeGuardMemberDisjoint` and narrows to
-     `never` — **so "acceptance-only cannot add a diagnostic" is FALSE in this codebase.**
-  2. **[MISDIAGNOSED — the shorthand is innocent; see (CHK.62b) for the real cause]
-     A SHORTHAND OBJECT-LITERAL PROPERTY DOES NOT FLOW-NARROW**
-     (`editorServices.ts:4449`, 2 profiles) — `return { project, … }` where `project` is
-     `T | undefined` narrowed to `T` by the enclosing `switch` + `Debug.assertNever`.
-  3. **[CLOSED (CHK.62) — and MISDIAGNOSED: the axis is OPTIONALITY, not
-     method-vs-property; our parameter contravariance was always correct]
-     A FUNCTION-TYPE PROPERTY'S PARAMETERS ARE COMPARED COVARIANTLY**
-     (`project.ts:2277`, 2 profiles) — `readDirectory: CompilerHost["readDirectory"]` is a
-     PROPERTY, not a method, and `include?: readonly string[] | undefined` vs
-     `includes: readonly string[]` relates only contravariantly. The METHOD form is
-     already correct (`build/chk61/p3/a.ts` lines 10-11 are silent).
-  4. **[CLOSED (CHK.62) — `spreadGuaranteedProps` had no `Type.Intersection` arm]
-     AN OBJECT LITERAL LOSES A SPREAD'S MEMBERS** (`client.ts:242`) —
-     `{ ...this.zzzM(), insertString }` reports TS2739 for the five the spread supplies.
-  **(b) THE DROPPED `| undefined` — also one line, and (CHK.61d) already removed 84% of its
-  price.** Adding `| undefined` at `computeRawTypeOfPropertyAccess`'s three `prop != null`
-  returns cost **19** rows on the compiler profile BEFORE (CHK.61d) and **3** after it; the
-  17 that vanished were all the `host.readDirectory!(…)` class. The residue is FIVE
-  NARROWING gaps, every one a property-access reference: `checker.ts:30269:86` (an `&&`
-  chain `a && x.p !== undefined && x.p < 0`), `moduleNameResolver.ts:824` (an outer
-  `if (host.f && host.g)` surviving into a nested `for` + inner `if`),
-  `moduleNameResolver.ts:2265` (a three-deep chain), `project.ts:502`/`528` and
-  `vfsUtil.ts:1034`. **DO NOT re-price (b) without (CHK.61d) in the tree** — that is the
-  difference between 19 and 3. **(b)'s CORPUS and LIBRARY price is UNMEASURED** — only the
-  8-profile grid was run for it, so `knip`/`jsonrepair`/the ~13k baselines are an open
-  question, not a zero. Two shapes are already CORRECT and need nothing: `?.` and an
-  `if (o.p)` guard. **AND (b)'s DISPLAY-ONLY CONFINEMENT IS NOT FREE**: hover for
+- [ ] **(CHK.61)(b) THE DROPPED `| undefined` — THE LAST HALF OF THE `this`-RECEIVER ARC.
+  (a) AND ITS FOUR UNMASKED GAPS ARE ALL CLOSED AND (a) IS **LANDED** (2026-08-27, price
+  6 -> 3 -> 1 -> **0**).** History, for the record: gap **1** (the un-merged intersection
+  source) was closed as (CHK.61)(1) — the earlier acceptance leg was *unsound*, not
+  unmasking, and needed a source-side `| undefined`; gaps **3**/**4** by (CHK.62); gap **2**
+  was MISDIAGNOSED and its real cause was (CHK.62b). With all four in, `build/chk61/patch_a.py`
+  measures `added=0 removed=0` on all eight profiles and it shipped as
+  `thisReceiverCarrierType`.
+  **WHAT IS LEFT IS (b): one line, and (CHK.61d) already removed 84% of its price.** Adding
+  `| undefined` at `computeRawTypeOfPropertyAccess`'s three `prop != null` returns cost **19**
+  rows on the compiler profile BEFORE (CHK.61d) and **3** after it; the 17 that vanished were
+  all the `host.readDirectory!(…)` class. **DO NOT re-price (b) without (CHK.61d) in the
+  tree.** The residue is FIVE NARROWING gaps, every one a property-access reference:
+  `checker.ts:30269:86` (an `&&` chain `a && x.p !== undefined && x.p < 0`),
+  `moduleNameResolver.ts:824` (an outer `if (host.f && host.g)` surviving into a nested `for`
+  + inner `if`), `moduleNameResolver.ts:2265` (a three-deep chain), `project.ts:502`/`528`
+  and `vfsUtil.ts:1034`. Two shapes are already CORRECT and need nothing: `?.` and an
+  `if (o.p)` guard. **(b)'s CORPUS and LIBRARY price is UNMEASURED** — only the 8-profile
+  grid was ever run for it. **AND (b)'s DISPLAY-ONLY CONFINEMENT IS NOT FREE**: hover for
   `zzzInst.zzzOpt` says `number` where tsc says `number | undefined`, but adding the
-  constituent in `typeCapturePropertyAccessType` alone renders `number | undefined` INSIDE
-  an `if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type
-  that is ALREADY a union — a confined fix must add the constituent and then re-run
-  `getNarrowedTypeForReference`, reproducing the checking path's order.
-  **SEQUENCING, UPDATED 2026-08-27**: 3 and 4 are CLOSED. What is left before (a) can land
-  is **gap 1** and **(CHK.62b)** — take (CHK.62b) first: it is one mechanism, it has a
-  discriminating control in its own fixture, and it is worth 2 of the 3 remaining rows. (b)
-  still needs its five narrowing gaps, which remain unstarted.
+  constituent in `typeCapturePropertyAccessType` alone renders `number | undefined` INSIDE an
+  `if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type that
+  is ALREADY a union — a confined fix must add the constituent and then re-run
+  `getNarrowedTypeForReference`. **(b) is ALSO now the last thing between us and tsc on the
+  (a) rows**: `this.zzzOpt` reads `Type 'number'` where tsc reads `Type 'number | undefined'`
+  (`ThisReceiverCarrierTest` records it as residue). Probe patch: `build/chk61/patch_b.py`.
+
+- [ ] **(CHK.62c) A PROPERTY-ACCESS ASSIGNMENT RHS DOES NOT NARROW THE ASSIGNED REFERENCE
+  (2026-08-27, measured while closing (CHK.62b)).** `let p = zzzFindFree(); p ??= zzzObj.zzzFld;
+  return { p }` reports `p: ZzzProj | undefined` where tsc 7.0.2 is silent, and `this.zzzFld`
+  behaves identically — so this is NOT the `this` axis (CHK.62b) closed.
+  `rhsIsDefinitelyNonNullish`'s `PropertyAccessExpression` arm classifies only an ENUM member
+  and a literal; everything else falls through to no-narrowing. The obvious generalisation
+  (resolve the member and test it for nullishness) is the round-385/(CHK.62) hazard — it types
+  the receiver on the flow hot path — so it needs the same three-gate treatment
+  `flowCallDiverges` got. Repro `build/chk62b/p4`.
 
 - [ ] **(CHK.61b) THE ENUM RESIDUE AFTER (CHK.60) — FIVE ITEMS, EACH WITH ITS MEASURED ROW.**
   1. **AN UNEVALUATED ENUM MEMBER IS STILL REFUSED**: `enum E { A = zzzNonConst }` against

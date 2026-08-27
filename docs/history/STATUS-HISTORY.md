@@ -1,3 +1,65 @@
+**THE WEAK-TYPE RULE FIRED AT A VAR DECL AND AT A CALL ARGUMENT AND **NOWHERE ELSE** — SO
+`return v` AND `x = v`, TWO OF THE COMMONEST PLACES A DEVELOPER GETS A TYPE WRONG, REPORTED
+NOTHING (2026-08-27, (CHK.58), four fixes).** Not a union defect: the BARE target was silent
+too, and the one row the return position DID have carried the wrong CODE (TS2322 naming the
+whole union where tsc names the surviving constituent). `tryEmitWeakValuePosition` is the
+shared emitter and `weakAssignmentTarget` reads the LHS's DECLARED type; the anchors were
+read off tsc 7.0.2 and CORROBORATED BY PRISTINE rather than by tsgo alone — a return
+squiggles the `return` keyword (`~~~~~~`), an assignment squiggles the LHS reference (one
+`~` under the `c` of `c = d` in `assignmentCompatWithObjectMembersOptionality2.errors.txt`).
+**Twelve tsc rows that were missing now land byte-exact; one wrong-code row is corrected.**
+
+**AND TS2560 IS "CALLING IT WOULD HAVE WORKED", NOT "THE SOURCE IS CALLABLE"** — four of six
+callable shapes carried the wrong code (`() => number`, `() => { zzzZ: string }`,
+`() => void` and a disjoint construct signature are all TS**2559**). **THE RELATION ASKED
+MUST CARRY THE WEAK RULE ITSELF**, which no reading of tsc's source produces: tsc's weak
+check lives INSIDE `isRelatedTo`, so `number` is not related to a weak object there where
+ours accepts it vacuously. The corpus is structurally blind — `weakType.errors.txt` is the
+only ACTIVE baseline with 2560 rows and every one of its sources has a related call result.
+
+**AND A WEAK MESSAGE NAMES THE ENUM *MEMBER*, EXCEPT WHERE THE ENUM HAS EXACTLY ONE — AND
+THE ONE BASELINE GATING IT AGREED WITH THE WRONG ANSWER.** Pristine's
+`nestedExcessPropertyChecking.errors.txt` says `Type 'E'` and its `enum E { A = "A" }` has
+ONE member, where the enum type and the member's literal type are the same type. Both
+flavours, both counts, measured: `{A="A",B="B"}` and `{A,B}` render `E.A`; `{A="A"}` and
+`{A}` render `E`. **AND a `new C()` var-decl initializer is now a source** —
+`topLevelWeakSource` had branches for a cast, an enum member and a literal but not for a
+`NewExpression`, so the same source reported at an argument and was silent at a var decl.
+
+**ORDER IS A COST DECISION.** Asking the VALUE's type before the TARGET's weakness measured
+**+6.89% `typeOfExpr.calls`**, and giving the return site its own `getTypeFromTypeNode`
+**+2.9% `typeNode.cacheable` / +11.2% `mapped.hits`** — both for BYTE-IDENTICAL output. As
+landed every counter is inside the band (largest **+1.40%**).
+
+**GATES.** Suite **16,199 / 0 / 3** (+30, exactly the four new classes), **no corpus baseline
+moved**. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**. `huge_methods
+--fail-over 0` exit 0, **783** classes. 8-profile grid over two session-built binaries:
+md5 `503774c2…` on the parent AND every ship, per-profile `diff` clean — **`added=0
+removed=0` on all eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all
+78**, floor **62 ms** [60, 61, 65, 62] — one draw. `capture-equivalence` **1,005 / 43 of 76
+/ moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5`
+48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to a parent arm built in
+this session.
+
+**TWELVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0 (whole change
+reverted) **8 RED — exactly the eight positives**; a1/a2 (return / assignment site removed)
+**5 / 6**, unique for the position-specific pins and a ROUND-927 PAIR for the three
+both-position ones; a3 (object-literal refusal) **1**, a4 (callable refusal) **1**, a5
+(single-survivor test) **3 in three classes = one observable**; b1 (2559/2560 split
+reverted) **4**, b2 (the weak veto dropped from the call-result relation) **3**; c1/c2 (the
+enum member-COUNT boundary dropped either way) **2 each, complementary**; d1 (the `new`
+branch) **2**. **THREE ARMS READ 0 AND ARE RECORDED, NOT CLAIMED**: a6 (the declared-type
+ladder replaced by `getTypeOfExpression`) and a7 (the target-weakness pre-gate) are cost
+choices no output can see, and b3/b3b are DEAD — the pristine `getDefaultSettings` shape
+they were written for RESOLVES its inferred return type here.
+
+**RESIDUE, ALL MEASURED, RE-QUEUED AS (CHK.59)**: two-or-more non-nullish constituents
+(needs the RELATION), a CALLABLE source at the three non-argument positions (unblocked by
+the code split, but tsc anchors those at the EXPRESSION and not at the name/keyword/LHS), an
+enum-member CALL ARGUMENT, a generic instantiation (the deliberate `Type.Reference` bail,
+now SYMMETRIC across positions), the nested object-literal LEAF walker, and the fresh
+object-literal-vs-bare-weak-argument TS2353 boundary.
+
 **THE WEAK-TYPE RULE DID NOT DISTRIBUTE OVER A **UNION** TARGET — SO IT WAS ABSENT FROM THE
 MAJORITY OF THE POSITIONS WHERE IT FIRES (2026-08-27, (CHK.57)).** `weakTargetProperties`
 answers null for a `Type.Union`, so every B482 walker — the ones that EMIT TS2559/TS2560 at

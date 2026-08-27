@@ -1,5 +1,68 @@
 # Status
 
+**(CHK.61)(a) — THE ONE LINE THAT CLOSES THE WHOLE `this`-RECEIVER FAMILY — **LANDED**, AT
+**ZERO** DASHBOARD ROWS, AFTER THREE ROUNDS OF REFUSALS (2026-08-27, (CHK.62b) +
+(CHK.61)(1) + (CHK.61)(a), four commits).** `computeRawTypeOfPropertyAccess` typed its
+receiver with `getTypeOfExpression`, which answers `any` for `Identifier("this")` — and
+`any` is legal everywhere, so the entire family failed in the FALSE-NEGATIVE direction with
+nothing to see. `thisReceiverCarrierType` supplies `currentClassForThis`'s declared instance
+type, only where the receiver already typed `any`/`error`. Measured on
+`build/chk60/br/b2.ts`: **3 of tsc 7.0.2's 7 rows before, all 7 after, at tsc's own
+positions** — and **`definitions` 360,376 -> 360,414**, i.e. go-to-definition on a
+`this.<member>` caret now RESOLVES.
+
+**THE PRICE FELL 6 -> 3 -> 1 -> 0 ACROSS FOUR ROUNDS, AND EVERY STEP WAS A DIFFERENT,
+PRE-EXISTING DEFECT THE `any` WAS HIDING.** (CHK.62) closed gaps 3 and 4 (6 -> 3);
+**(CHK.62b)** closed the third — an assignment whose RHS is a **`this`-method call** did not
+narrow the assigned reference, because `rhsIsDefinitelyNonNullish`'s CALL arm resolves the
+callee through `resolvePropertyMethodDecl`, which TYPES THE RECEIVER and bails on `any`
+(3 -> 1) — and it reproduces on the SHIPPED binary whenever the reference's declared union
+comes from something other than `this`; **(CHK.61)(1)** closed the last, merging an
+INTERSECTION source in the ACCEPTING direction (1 -> 0).
+
+**THE REVERTED (CHK.61)(1) ATTEMPT WAS THIS RULE BEING *UNSOUND*, NOT AN UNMASKED DEFECT
+ELSEWHERE — AND A CENSUS OF THE NEWLY ACCEPTED PAIRS SAID SO IN ONE RUN.** All four were
+one shape: `FunctionExpression & { name: undefined; parent: … }` accepted against
+`{ name: Identifier }`. The merge rule is "the intersected member is a subtype of EVERY
+declaration, so ANY relating declaration suffices" — valid only when each declaration's type
+is spelled out INCLUDING its optionality. We model an optional member as plain `T`
+((CHK.61)(b)), so `FunctionExpression`'s `name?: Identifier` was picked where the real
+intersected member is `undefined`, and the next negative type-predicate narrow then
+subtracted that constituent and left `never` — `callHierarchy.ts:199`. A source-side
+`| undefined`, LOCAL to the rule, fixes it.
+
+**GATES, per commit, all foreground.** Suite **16,262 / 16,267 / 16,272 / 16,273**, 0
+failed, 3 skipped (+5/+5/+5/+1, exactly the new classes), **no corpus baseline moved on any
+of the four.** `cost_gate.py` PASSES on all, `output.errors` **46**, every counter within a
+hundredth of a percent of (CHK.62)'s standing reading (`typeOfExpr.calls` +1.41/+1.42%,
+`globals.lookups` +1.52%). `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+**8-profile grid `503774c23b4535130ffdebabef430cf0` — the standing value — on all three
+code commits INCLUDING the one that lands (a): `added=0 removed=0` on all eight.** `knip`
+**48** and `jsonrepair` **4**, every row byte-identical. `partition-equivalence` EQUIVALENT
+all 78 (floors 56 / 57 / 66 ms, one draw each).
+
+**`capture-equivalence` MOVED BOTH ARM DIGESTS ON THE (a) COMMIT AND THAT IS THE POINT.**
+`full=5591703872112101713 narrow=704838071822341252`, `definitions` **360,376 -> 360,414**,
+with `DIVERGED` UNCHANGED at 1,005 spans in 43 of 76 (types=1005, definitions=0, moreAny 0)
+— a full-build fix, so the full-vs-narrow relationship is untouched; (INC.26)'s rule.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0/a1 (the (CHK.62b)
+carrier removed / present-but-inert) **3 RED each — a ROUND-927 PAIR, one observable**;
+a2 (any resolved `this.m()` treated as non-nullish) **1, uniquely the nullable-return row**;
+b0 (the acceptance leg) **2**, b1 (the source-side `| undefined` — the earlier attempt's
+exact mistake) **1**, b2 (the missing-required-property refusal) **1**; c0 (the (a) carrier)
+**3**. **TWO ARMS READ 0 AND ARE RECORDED, NOT CLAIMED**: c1 (consult the carrier SECOND) is
+a REDUNDANT guard — the fallback for a bare `this` is exactly `anyType`, so the two orders
+are observationally identical — and **c2 (the carrier answers for EVERY identifier receiver)
+was UNPINNED**, which the round fixed rather than excused: the added
+`zzzM(zzzP: any) { zzzP.zzzReq }` control makes c2 red uniquely.
+
+**RESIDUE, RE-QUEUED**: (CHK.61)(b), the dropped `| undefined` at
+`computeRawTypeOfPropertyAccess`'s three `prop != null` returns — still 3 rows, still five
+narrowing gaps, and now the reason `this.zzzOpt` reads `Type 'number'` where tsc reads
+`Type 'number | undefined'`; and a PROPERTY-access assignment RHS (`p ??= o.zzzFld`) does
+not narrow at all, which is not `this`-shaped.
+
 **THREE OF (CHK.61)'s FOUR UNMASKED GAPS ARE CLOSED, **TWO OF ITS FOUR DIAGNOSES WERE
 WRONG**, AND THE `this`-RECEIVER PATCH NOW COSTS **3** DASHBOARD ROWS INSTEAD OF 6
 (2026-08-27, (CHK.62), three fixes).** Gap **4**: `spreadGuaranteedProps` had no
@@ -267,65 +330,3 @@ source (deliberate and SYMMETRIC); a `this.<member>` assignment target, silent f
 source shape and therefore not the anchor change — `getTypeOfExpression` answers `any` for
 `this.<optional member>`; and an enum member vs a weak target it SHARES a property with,
 where tsc is silent and we emit TS2345/TS2322 from the ordinary relation.
-
-**THE WEAK-TYPE RULE FIRED AT A VAR DECL AND AT A CALL ARGUMENT AND **NOWHERE ELSE** — SO
-`return v` AND `x = v`, TWO OF THE COMMONEST PLACES A DEVELOPER GETS A TYPE WRONG, REPORTED
-NOTHING (2026-08-27, (CHK.58), four fixes).** Not a union defect: the BARE target was silent
-too, and the one row the return position DID have carried the wrong CODE (TS2322 naming the
-whole union where tsc names the surviving constituent). `tryEmitWeakValuePosition` is the
-shared emitter and `weakAssignmentTarget` reads the LHS's DECLARED type; the anchors were
-read off tsc 7.0.2 and CORROBORATED BY PRISTINE rather than by tsgo alone — a return
-squiggles the `return` keyword (`~~~~~~`), an assignment squiggles the LHS reference (one
-`~` under the `c` of `c = d` in `assignmentCompatWithObjectMembersOptionality2.errors.txt`).
-**Twelve tsc rows that were missing now land byte-exact; one wrong-code row is corrected.**
-
-**AND TS2560 IS "CALLING IT WOULD HAVE WORKED", NOT "THE SOURCE IS CALLABLE"** — four of six
-callable shapes carried the wrong code (`() => number`, `() => { zzzZ: string }`,
-`() => void` and a disjoint construct signature are all TS**2559**). **THE RELATION ASKED
-MUST CARRY THE WEAK RULE ITSELF**, which no reading of tsc's source produces: tsc's weak
-check lives INSIDE `isRelatedTo`, so `number` is not related to a weak object there where
-ours accepts it vacuously. The corpus is structurally blind — `weakType.errors.txt` is the
-only ACTIVE baseline with 2560 rows and every one of its sources has a related call result.
-
-**AND A WEAK MESSAGE NAMES THE ENUM *MEMBER*, EXCEPT WHERE THE ENUM HAS EXACTLY ONE — AND
-THE ONE BASELINE GATING IT AGREED WITH THE WRONG ANSWER.** Pristine's
-`nestedExcessPropertyChecking.errors.txt` says `Type 'E'` and its `enum E { A = "A" }` has
-ONE member, where the enum type and the member's literal type are the same type. Both
-flavours, both counts, measured: `{A="A",B="B"}` and `{A,B}` render `E.A`; `{A="A"}` and
-`{A}` render `E`. **AND a `new C()` var-decl initializer is now a source** —
-`topLevelWeakSource` had branches for a cast, an enum member and a literal but not for a
-`NewExpression`, so the same source reported at an argument and was silent at a var decl.
-
-**ORDER IS A COST DECISION.** Asking the VALUE's type before the TARGET's weakness measured
-**+6.89% `typeOfExpr.calls`**, and giving the return site its own `getTypeFromTypeNode`
-**+2.9% `typeNode.cacheable` / +11.2% `mapped.hits`** — both for BYTE-IDENTICAL output. As
-landed every counter is inside the band (largest **+1.40%**).
-
-**GATES.** Suite **16,199 / 0 / 3** (+30, exactly the four new classes), **no corpus baseline
-moved**. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**. `huge_methods
---fail-over 0` exit 0, **783** classes. 8-profile grid over two session-built binaries:
-md5 `503774c2…` on the parent AND every ship, per-profile `diff` clean — **`added=0
-removed=0` on all eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all
-78**, floor **62 ms** [60, 61, 65, 62] — one draw. `capture-equivalence` **1,005 / 43 of 76
-/ moreAny 0**, `definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5`
-48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to a parent arm built in
-this session.
-
-**TWELVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0 (whole change
-reverted) **8 RED — exactly the eight positives**; a1/a2 (return / assignment site removed)
-**5 / 6**, unique for the position-specific pins and a ROUND-927 PAIR for the three
-both-position ones; a3 (object-literal refusal) **1**, a4 (callable refusal) **1**, a5
-(single-survivor test) **3 in three classes = one observable**; b1 (2559/2560 split
-reverted) **4**, b2 (the weak veto dropped from the call-result relation) **3**; c1/c2 (the
-enum member-COUNT boundary dropped either way) **2 each, complementary**; d1 (the `new`
-branch) **2**. **THREE ARMS READ 0 AND ARE RECORDED, NOT CLAIMED**: a6 (the declared-type
-ladder replaced by `getTypeOfExpression`) and a7 (the target-weakness pre-gate) are cost
-choices no output can see, and b3/b3b are DEAD — the pristine `getDefaultSettings` shape
-they were written for RESOLVES its inferred return type here.
-
-**RESIDUE, ALL MEASURED, RE-QUEUED AS (CHK.59)**: two-or-more non-nullish constituents
-(needs the RELATION), a CALLABLE source at the three non-argument positions (unblocked by
-the code split, but tsc anchors those at the EXPRESSION and not at the name/keyword/LHS), an
-enum-member CALL ARGUMENT, a generic instantiation (the deliberate `Type.Reference` bail,
-now SYMMETRIC across positions), the nested object-literal LEAF walker, and the fresh
-object-literal-vs-bare-weak-argument TS2353 boundary.
