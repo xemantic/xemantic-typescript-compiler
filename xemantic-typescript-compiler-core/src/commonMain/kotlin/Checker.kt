@@ -102893,11 +102893,18 @@ interface DataView {
         // B470: `const x: { [k:string]: typeof v } = {...}` inside a block narrowing `v`.
         if (tryEmitTypeofIndexSigNarrowing(decl, source, fileName)) return true
 
-        // B482: nested weak-type mismatch (`let weak: Weak & Spoiler = propertiesWrong`).
-        CtaSections.atB(CtaSections.B_WEAK)
-        if (tryEmitNestedWeakVarDecl(decl, name, source, fileName)) return true
         // B482: deep object-literal-leaf weak mismatch (`{ variables: { overrides: false } }`).
+        // (CHK.59) ORDERED **BEFORE** THE ONE-LEVEL NESTED WALKER, WHICH IS WHAT tsc DOES:
+        // a FRESH object literal elaborates INTO the literal (`elaborateObjectLiteral`)
+        // and reports at the offending PROPERTY, so `const x: Out = { zzzIn: "utf8" }`
+        // against `zzzIn?: W` is TS2559 at `zzzIn` and not TS2322 at the var name.
+        // The two walkers overlap only for an object-literal initializer — the nested
+        // one additionally serves an IDENTIFIER source (pristine's
+        // `let weak: Weak & Spoiler = propertiesWrong`), which this can never reach.
+        CtaSections.atB(CtaSections.B_WEAK)
         if (tryEmitObjectLiteralWeakLeaves(decl, source, fileName)) return true
+        // B482: nested weak-type mismatch (`let weak: Weak & Spoiler = propertiesWrong`).
+        if (tryEmitNestedWeakVarDecl(decl, name, source, fileName)) return true
         // B482: top-level weak target (`let x: { nope?: any } = "A"` / `= E.A` / `= {} as C2`).
         if (tryEmitTopLevelWeakVarDecl(decl, name, source, fileName)) return true
 
@@ -115546,11 +115553,35 @@ interface DataView {
             if (tInner.isEmpty() || !tInner.all { isOptionalProperty(it) }) continue
             val tInnerNames = tInner.map { it.name }.filter { it.isNotEmpty() }.toSet()
             if (tInnerNames.isEmpty()) continue
-            val vType = literalTypeOfExpression(v)
-                ?: getTypeOfExpression(v)
-            if (vType === anyType || vType === errorType) continue
-            val srcNames = weakSourcePropertyNames(vType) ?: continue
-            if (srcNames.isEmpty()) continue
+            val vLit = literalTypeOfExpression(v)
+            var vType = vLit ?: getTypeOfExpression(v)
+            if (vType === errorType) continue
+            // (CHK.59) AT A LEAF tsc REPORTS THE OBJECT LITERAL'S OWN PROPERTY TYPE,
+            // WHICH IS THE **WIDENED** ONE FOR A STRING OR NUMERIC LITERAL AND THE
+            // LITERAL ITSELF FOR A BOOLEAN — `elaborateObjectLiteral` reads
+            // `getTypeOfPropertyOfType(<the literal's type>, …)`, where a mutable
+            // location has already widened the string and number cases. Measured on
+            // tsc 7.0.2 over `build/chk59/dbg/d3.ts` / `d4.ts`: `"utf8"` -> `string`,
+            // `12` -> `number`, a template literal -> `string`, `false` -> `false`,
+            // `12n` -> `bigint`. The TOP-LEVEL var-decl position does NOT widen
+            // (pristine's `nestedExcessPropertyChecking.errors.txt` line 18 reports
+            // `Type '"A"'`), because there the fresh literal reaches the relation
+            // directly — so this belongs here and nowhere else.
+            var vDisplay: String? = when (vLit) {
+                is Type.StringLiteral -> "string"
+                is Type.NumberLiteral -> "number"
+                else -> null
+            }
+            var srcNames = if (vType === anyType) null else weakSourcePropertyNames(vType)
+            if (srcNames.isNullOrEmpty()) {
+                // (CHK.59) an ENUM MEMBER leaf, for the same reason as at every other
+                // position: it enumerates to the EMPTY set (a member-less `Type.Object`).
+                val enumSrc = enumMemberWeakSource(v) ?: continue
+                vType = enumSrc.first
+                vDisplay = enumSrc.second
+                srcNames = weakSourcePropertyNames(vType)
+                if (srcNames.isNullOrEmpty()) continue
+            }
             if (tInnerNames.any { it in srcNames }) continue
             val (kl, kc) = getLineAndCharacterOfPosition(source, pn.pos)
             // TS6500: point at the property's declaration name, naming the ENCLOSING
@@ -115568,7 +115599,7 @@ interface DataView {
                 )
             }
             diagnostics.add(Diagnostic(
-                message = "Type '${typeToString(vType)}' has no properties in common with type '${typeToString(tPropType)}'.",
+                message = "Type '${vDisplay ?: typeToString(vType)}' has no properties in common with type '${typeToString(tPropType)}'.",
                 category = DiagnosticCategory.Error, code = 2559,
                 fileName = fileName, line = kl, character = kc,
                 start = pn.pos, length = pn.text.length,
