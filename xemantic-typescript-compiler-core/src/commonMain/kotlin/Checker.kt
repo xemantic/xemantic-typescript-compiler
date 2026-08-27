@@ -124295,13 +124295,14 @@ interface DataView {
                 // `(o: { e?: null }): number` / `(o: ZH1): string` answered `number`
                 // where tsc answers `string`. A WRONG TYPE, with no diagnostic anywhere.
                 //
-                // `continue` — NOT a fall-through to [weakParamRefusesArg] below — and
-                // that is load-bearing rather than cosmetic. A rescue may succeed
-                // through one union constituent while a DIFFERENT, weak constituent
-                // shares no name with the literal; the weak rule would then find no
-                // sharing weak constituent, offer the rescued one to the plain relation
-                // (which is exactly what just failed), and refuse the signature it was
-                // never meant to judge.
+                // `continue` rather than a fall-through to [weakParamRefusesArg]
+                // below. That was written as load-bearing — a rescue succeeding through
+                // one union constituent while a DIFFERENT, weak constituent shares no
+                // name with the literal would otherwise be refused — and the ablation
+                // that injected the fall-through read **0 RED**, because the guard now
+                // on that very check makes the two forms equivalent. Recorded as
+                // PROVABLY UNOBSERVABLE, not as coverage; `continue` is kept because it
+                // saves recomputing the rescue.
                 if (objLitLiteralPropsSatisfyParam(arg, argType, constrainedParamType)) continue
                 // Round 743: SECOND CHANCE against the FLOW-narrowed type.
                 // [getTypeOfIdentifier] answers from `currentLocalTypes` and the
@@ -124328,7 +124329,19 @@ interface DataView {
             // all-optional parameter accepts any value at all. Asked about whichever
             // type was actually accepted, so the round-743 second chance keeps its
             // one-way property.
-            if (weakParamRefusesArg(acceptedType, constrainedParamType)) return false
+            //
+            // (CHK.55) …AND THE OBJECT-LITERAL RESCUE MUST GUARD IT, BECAUSE FOR A
+            // UNION PARAMETER THE TWO RULES ARE CONSULTED IN THE WRONG ORDER. The
+            // rescue above sits on the REJECTING path (round 728 put it there so the
+            // happy path pays nothing), but a weak constituent accepts ANY non-nullish
+            // value structurally — so for `{ zzzA?: 0 } | { zzzE: "u" }` the relation
+            // SUCCEEDS through the weak constituent, the rejecting path is never
+            // taken, and the weak rule then refuses the signature having never asked
+            // whether the literal satisfies the OTHER constituent. It does, and tsc
+            // selects it. Short-circuit `&&`, so the rescue is computed only on the
+            // path the weak rule was already going to refuse.
+            if (weakParamRefusesArg(acceptedType, constrainedParamType) &&
+                !objLitLiteralPropsSatisfyParam(arg, argType, constrainedParamType)) return false
         }
         return true
     }
