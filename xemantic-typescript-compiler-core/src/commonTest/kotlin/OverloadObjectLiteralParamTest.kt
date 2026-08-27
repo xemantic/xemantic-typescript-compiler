@@ -229,6 +229,55 @@ class OverloadObjectLiteralParamTest {
     }
 
     /**
+     * THE THIRD INTERACTION, AND IT WAS FOUND BY TRYING TO FALSIFY AN ABLATION ARM
+     * RATHER THAN BY READING THE CODE. For a UNION parameter the rescue and (CHK.54)'s
+     * weak-type rule are consulted in the wrong order: `{ zzzA?: 0 }` is weak and
+     * accepts ANY non-nullish value structurally, so `checkTypeRelatedTo` SUCCEEDS,
+     * the rejecting path where round 728's rescue lives is never taken, and the weak
+     * rule then refuses the signature having never asked whether the literal satisfies
+     * the OTHER constituent. It does — tsc selects this overload and answers `string`;
+     * before the guard we answered `number`.
+     *
+     * The rescued overload is declared FIRST here, so a wrong refusal is observable as
+     * the SECOND overload's `number` rather than being restored by the
+     * `arityMatches[0]` fallback.
+     */
+    @Test
+    fun `a literal satisfying one union constituent cancels a weak refusal from another`() {
+        val d = diagnose("""
+            declare function zzzA7(o: { zzzA?: 0 } | { zzzE: "u" }): string
+            declare function zzzA7(o: { zzzE: string }): number
+            const zzzOut: boolean = zzzA7({ zzzE: "u" })
+        """)
+        assert(d.map { it.code to it.message } == listOf(
+            2322 to "Type 'string' is not assignable to type 'boolean'."
+        ))
+    }
+
+    /**
+     * REFUSAL, and the pair of the pin above on the SAME fixture shape: when the
+     * literal does NOT satisfy the other constituent (`"zzz"` is not `"u"`), (CHK.54)'s
+     * weak refusal must still stand and the SECOND overload must be selected. Without
+     * it the guard would be an unconditional cancellation of the weak rule.
+     *
+     * Deliberately built so that both compilers give a definite, AGREEING answer — the
+     * obvious version of this refusal (drop the second overload) leaves tsc reporting a
+     * TS2769 we do not yet produce, and pinning that would be a countdown on
+     * (CHK.55)(a) rather than a control (round 765).
+     */
+    @Test
+    fun `a literal satisfying NO constituent leaves the weak refusal standing`() {
+        val d = diagnose("""
+            declare function zzzA7(o: { zzzA?: 0 } | { zzzE: "u" }): string
+            declare function zzzA7(o: { zzzE: string }): number
+            const zzzOut: boolean = zzzA7({ zzzE: "zzz" })
+        """)
+        assert(d.map { it.code to it.message } == listOf(
+            2322 to "Type 'number' is not assignable to type 'boolean'."
+        ))
+    }
+
+    /**
      * CONTROL — green before and after. The same shape with the heritage FLATTENED was
      * already handled by round 728, and must stay byte-identical: this is what says the
      * change WIDENS the rescue rather than replacing it.
