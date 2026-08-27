@@ -118914,15 +118914,25 @@ interface DataView {
      * directly declared on the receiver's interface/class.
      */
     /**
-     * (CHK.62b) The declared instance type of the class a bare `this` receiver
+     * (CHK.61)(a) The declared instance type of the class a bare `this` receiver
      * denotes, or null when there is no enclosing class in the checking ambient
      * (a `this` in an object-literal method, a free function, a static member).
      *
-     * NOT a general `this` typing: it exists so the FLOW resolvers can reach a
-     * `this.m()` callee's declaration. A wrong answer here can only fail to
-     * narrow.
+     * `getTypeOfExpression` answers `any` for `Identifier("this")` — there is no
+     * `this` binding in `currentLocalTypes` for an ordinary method body — so every
+     * consumer that types a receiver saw `any` and silently gave up. `any` is legal
+     * everywhere, so the whole family failed in the FALSE-NEGATIVE direction:
+     * `this.zzzNum` assigned to a `string` was accepted, `this.zzzOpt` was never
+     * possibly-undefined, and a `this.m()` right-hand side could not be classified
+     * for flow narrowing ((CHK.62b)).
+     *
+     * The carrier is [currentClassForThis], which the checking ambient already
+     * threads for instance members. It is consulted at exactly two places — this
+     * file's [computeRawTypeOfPropertyAccess] and the flow resolver
+     * [resolvePropertyMethodDecl] — and only where the receiver already typed
+     * `any`/`error`, so nothing that resolved before can resolve differently.
      */
-    private fun thisFlowReceiverType(recv: Expression): Type? {
+    private fun thisReceiverCarrierType(recv: Expression): Type? {
         if (recv !is Identifier || recv.text != "this") return null
         return currentClassForThis?.let { resolveUncalledThisType(it) }
     }
@@ -118942,7 +118952,7 @@ interface DataView {
             // resolvers, so a resolution can only ever SUPPRESS), which is why it is
             // separable from (CHK.61)(a)'s general `computeRawTypeOfPropertyAccess`
             // change and its dashboard price.
-            recvType = thisFlowReceiverType(access.expression) ?: return null
+            recvType = thisReceiverCarrierType(access.expression) ?: return null
         }
         // Round 470: a nullish-containing UNION receiver resolves through its SOLE
         // non-nullish member — `type.isUnion()` where `type: Type | undefined` (the
@@ -127356,7 +127366,11 @@ interface DataView {
     }
 
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
-        val rawObjectType = getTypeOfExpression(expr.expression)
+        // (CHK.61)(a) A bare `this` receiver carries no type — see
+        // [thisReceiverCarrierType]. Consulted FIRST because the fallback answers
+        // `any`, which is not a "no answer" any consumer can test for.
+        val rawObjectType = thisReceiverCarrierType(expr.expression)
+            ?: getTypeOfExpression(expr.expression)
         // B1.1: Narrow Union receivers via flow-graph state. Inside
         // `if (x && x.foo)`, the binder records the receiver `x` of `x.foo`
         // (RHS of `&&`) at a FlowCondition that asserts `x` is truthy — so

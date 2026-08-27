@@ -225,24 +225,29 @@ class WeakCallableSourceAnchorTest {
     }
 
     /**
-     * REFUSAL, AND A **PRE-EXISTING** ONE THIS ROUND ONLY MEASURED — a `this.<member>`
-     * assignment target is silent for the weak rule at every source shape, callable and
-     * not. tsc 7.0.2 over `build/chk59/dbg/d1.ts` reports `(2,62)` for the arrow AND
-     * `(3,44)` for a plain `number` source, so this is not the anchor change: the cause
-     * is one layer down, in [Checker.weakAssignmentTarget]'s property-access leg, where
-     * [Checker.getTypeOfExpression] answers `any` for `this.<optional member>` — the
-     * same probe reads `const zzzProbe: string = this.zzzHandler` as silent, where tsc
-     * says `Type 'ZzzS9 | undefined' is not assignable to type 'string'`.
-     * **THIS IS A REFUSAL PIN RECORDING A DIVERGENCE, NOT COVERAGE.**
+     * CLOSED BY (CHK.61)(a) — was a REFUSAL pin recording that a `this.<member>`
+     * assignment target was silent for the weak rule at every source shape. The cause
+     * was one layer down, in [Checker.weakAssignmentTarget]'s property-access leg,
+     * where [Checker.getTypeOfExpression] answered `any` for `this.<member>`;
+     * [Checker.thisReceiverCarrierType] supplies the receiver, and both rows now land
+     * at tsc 7.0.2's own positions (`build/chk59/dbg/d1.ts`: `(2,62)` for the arrow,
+     * `(3,44)` for a plain `number` source).
      */
     @Test
-    fun `refusal - a this member assignment target stays silent`() {
+    fun `a this member assignment target reports the weak rule at tsc's positions`() {
         val d = diagnose("""
             interface ZzzS9 { zzzT?: number; zzzE?(): void }
             class ZzzK9 { zzzHandler?: ZzzS9; zzzM() { this.zzzHandler = () => ({ zzzT: 1 }); } }
             class ZzzK8 { zzzHandler?: ZzzS9; zzzM() { this.zzzHandler = 12 as unknown as number; } }
         """)
-        assert(d.none { it.code == 2559 || it.code == 2560 })
+        val rows = d.filter { it.code == 2559 || it.code == 2560 }
+        assert(rows.size == 2)
+        assert(rows[0].code == 2560)
+        assert(rows[0].line == 2)
+        assert(rows[0].character == 62)
+        assert(rows[1].code == 2559)
+        assert(rows[1].line == 3)
+        assert(rows[1].character == 44)
     }
 
     /**
