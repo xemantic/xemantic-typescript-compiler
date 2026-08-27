@@ -105560,6 +105560,20 @@ interface DataView {
             }
             CtaSections.atC(CtaSections.C_TARGET)
             val targetType = getTypeFromTypeNode(returnTypeNode)
+            // (CHK.58) B482 weak-type rule at the RETURN position. tsc reports TS2559
+            // at the `return` KEYWORD (six characters — pristine squiggles `~~~~~~`
+            // for a return-type error, and the TS2322 further down already uses that
+            // span) and reports NOTHING else for that return, so this pre-empts
+            // everything below, INCLUDING the union case, where we used to emit TS2322
+            // naming the whole union where tsc names the surviving constituent.
+            // Placed HERE, sharing the engine's own [getTypeFromTypeNode], rather than
+            // above the block with a resolution of its own: an independent one charged
+            // +2.9% `typeNode.cacheable` / +11.2% `mapped.hits` on the compiler profile
+            // for output that is byte-identical either way.
+            if (expr != null &&
+                tryEmitWeakValuePosition(expr, targetType, stmt.pos, 6, source, fileName)) {
+                return
+            }
             // B69.1: Per-branch conditional return-expression checking. Must run
             // BEFORE the standard aggregated check so per-branch positions land
             // instead of one outer error.
@@ -106514,6 +106528,16 @@ interface DataView {
             }
             CtaSections.atE(CtaSections.E_FIRE1)
             val target = expr.left
+            // (CHK.58) B482 weak-type rule at the ASSIGNMENT position — `x = "utf8"`
+            // where `x: { zzzA?: null }`. tsc anchors it at the LHS reference (pristine
+            // `assignmentCompatWithObjectMembersOptionality2.errors.txt` squiggles the
+            // one-character `c` of `c = d`) and reports nothing else, so it pre-empts.
+            if (expr.right !is ObjectLiteralExpression && expr.right !is ArrowFunction &&
+                expr.right !is FunctionExpression) {
+                weakAssignmentTarget(target)?.let { (wt, wStart, wLen) ->
+                    if (tryEmitWeakValuePosition(expr.right, wt, wStart, wLen, source, fileName)) return
+                }
+            }
             // interfaceAssignmentCompat piece 1: `<lhs> = <arr>.sort(<comparatorIdent>)` where the
             // comparator's parameter type is contravariantly incompatible with the array's element
             // type → TS2345. Hooked in the assignment walk (the call-types walk sees the array local
@@ -115007,6 +115031,140 @@ interface DataView {
         if (getCallSignaturesOfType(argType).isNotEmpty() ||
             getConstructSignaturesOfType(argType).isNotEmpty()) return null
         return if (weakParamRefusesArg(argType, targetType)) named else null
+    }
+
+    /**
+     * (CHK.58) THE WEAK-TYPE RULE AT THE **RETURN** AND **ASSIGNMENT** POSITIONS.
+     *
+     * Before this, the B482 walkers emitted TS2559 at a var DECL and at a CALL
+     * ARGUMENT and **nowhere else** — so the two commonest places a developer gets a
+     * type wrong, `function f(): W { return v }` and `x = v`, reported nothing at all
+     * for a weak target, and a UNION weak target additionally reported the ORDINARY
+     * TS2322 naming the whole union where tsc reports TS2559 naming the constituent.
+     * The hole was not a union defect: the BARE target was silent too.
+     *
+     * **EVERY ROW BELOW WAS READ OUT OF tsc 7.0.2, NOT DERIVED** (fixtures under
+     * `build/chk58/pinora`, and pristine's own
+     * `assignmentCompatWithObjectMembersOptionality2.errors.txt` carries the
+     * assignment shape with a `~` under the LHS, which is where the anchors come
+     * from):
+     *
+     *  * a RETURN is anchored at the **`return` KEYWORD**, six characters — pristine
+     *    squiggles `~~~~~~` for every return-type error, and our own TS2322 already
+     *    uses [ReturnStatement.pos] + 6, so the two agree on the shapes where both fire;
+     *  * an ASSIGNMENT is anchored at the **LHS reference**, its own length.
+     *
+     * THREE SOURCE SHAPES ARE REFUSED, each measured against tsc rather than chosen:
+     *
+     *  * an **OBJECT LITERAL** — tsc's freshness/excess check runs ABOVE the weak one,
+     *    so a disjoint fresh literal is TS2353 at the offending PROPERTY, which this
+     *    compiler ALREADY emits byte-exactly in both positions; routing it through the
+     *    weak path would replace a correct row with one at the wrong span;
+     *  * a **CALLABLE** source — tsc splits TS2559 / TS2560 on whether CALLING the
+     *    source yields something assignable to the target (`() => number` against a weak
+     *    object is TS**2559**), where [tryEmitWeakTypeAssignment] emits 2560 for every
+     *    callable source; that is a pre-existing BARE-target divergence with its own
+     *    corpus surface (`weakType.errors.txt`), queued as (CHK.58) item 2, so a
+     *    callable source stays SILENT here rather than acquiring a row with the wrong
+     *    CODE;
+     *  * **two or more non-nullish constituents** — [weakRefusalDisplayTarget] answers
+     *    null and tsc's answer is the ordinary assignability wording naming the WHOLE
+     *    union, which needs the RELATION to reject.
+     *
+     * Returns true when a diagnostic was emitted, in which case the caller must not
+     * fall through to its own TS2322 (tsc reports exactly one row per position).
+     */
+    private fun tryEmitWeakValuePosition(
+        value: Expression, targetType: Type, start: Int, length: Int,
+        source: String, fileName: String,
+    ): Boolean {
+        if (length <= 0) return false
+        if (targetType === errorType || targetType === anyType) return false
+        // ORDER IS A COST DECISION, NOT A STYLE ONE. The discriminating test is the
+        // TARGET's weakness and a weak target is rare, while [getTypeOfExpression] is
+        // the single most-called routine in the checker (`cost_gate.py`'s largest
+        // counter) — so the cheap AST refusals run first, the target gate second, and
+        // the value is typed ONLY for a target that can actually carry the rule.
+        // Asking the value first measured +6.89% `typeOfExpr.calls` on the compiler
+        // profile for the identical output.
+        if (value is ObjectLiteralExpression) return false
+        if (value is ArrowFunction || value is FunctionExpression) return false
+        if (weakPositionTarget(targetType) == null) return false
+        val argType = getTypeOfExpression(value)
+        if (argType === anyType || argType === errorType) return false
+        if (getCallSignaturesOfType(argType).isNotEmpty() ||
+            getConstructSignaturesOfType(argType).isNotEmpty()) return false
+        val display = literalTypeOfExpression(value) ?: argType
+        if (tryEmitWeakTypeAssignment(argType, targetType, start, length,
+                source, fileName, displayType = display)) return true
+        val cons = weakUnionRefusalConstituent(argType, targetType) ?: return false
+        return tryEmitWeakTypeAssignment(argType, cons, start, length,
+            source, fileName, displayType = display)
+    }
+
+    /**
+     * (CHK.58) Is [targetType] a weak type, or a union reaching exactly one? The
+     * SAME predicate [tryEmitWeakTypeAssignment] and [weakUnionRefusalConstituent]
+     * apply, hoisted so that it can be asked BEFORE the value is typed — it consults
+     * only already-resolved member tables, where typing the value walks an expression.
+     * Returns the type the message would name, or null.
+     */
+    private fun weakPositionTarget(targetType: Type): Type? {
+        val direct = weakTargetProperties(targetType)
+        if (direct != null && direct.isNotEmpty() && direct.all { isOptionalProperty(it) }) {
+            return targetType
+        }
+        if (targetType !is Type.Union) return null
+        val named = weakRefusalDisplayTarget(targetType) ?: return null
+        val props = weakTargetProperties(named) ?: return null
+        if (props.isEmpty() || !props.all { isOptionalProperty(it) }) return null
+        return named
+    }
+
+    /**
+     * (CHK.58) A SYNTACTIC pre-gate for the RETURN position: can this annotation
+     * possibly denote a weak type? A weak type is an object shape, so a keyword, an
+     * array, a function/constructor type, a tuple, a literal type and a `typeof` query
+     * are all refused WITHOUT resolving the node — which is what keeps the rule from
+     * charging a [getTypeFromTypeNode] to every `: void` / `: boolean` return in the
+     * program. A [TypeReference] cannot be decided syntactically (it may alias
+     * anything), so it passes.
+     */
+    private fun weakCandidateTypeNode(node: TypeNode): Boolean = when (node) {
+        is ParenthesizedType -> weakCandidateTypeNode(node.type)
+        is TypeLiteral -> true
+        is TypeReference -> true
+        is IntersectionType -> true
+        is UnionType -> node.types.any { weakCandidateTypeNode(it) }
+        else -> false
+    }
+
+    /**
+     * (CHK.58) The ASSIGNMENT position's target type: the reference's DECLARED type,
+     * never its narrowed one. For an identifier the annotation on its declaration is
+     * consulted first (the same ladder the round-155 `typeof import` walker uses) and
+     * [currentLocalTypes] second; for a property access the receiver's member type is
+     * the answer and [getTypeOfExpression] gives it directly. Returns
+     * `(targetType, start, length)`, or null for a target shape we do not resolve
+     * (element access, destructuring, `this`), so those stay exactly as they were.
+     */
+    private fun weakAssignmentTarget(target: Expression): Triple<Type, Int, Int>? {
+        if (target is Identifier) {
+            val sym = currentFileLocals?.get(target.text) ?: globals[target.text]
+            val decl = sym?.valueDeclaration ?: sym?.declarations?.firstOrNull()
+            val ann = (decl as? VariableDeclaration)?.type
+                ?: (decl as? Parameter)?.type
+                ?: (decl as? PropertyDeclaration)?.type
+            var t: Type? = ann?.takeIf { weakCandidateTypeNode(it) }?.let { getTypeFromTypeNode(it) }
+            if (t == null || t === anyType || t === errorType) t = currentLocalTypes[target.text]
+            val tt = t ?: return null
+            return Triple(tt, target.pos, target.text.length)
+        }
+        if (target is PropertyAccessExpression) {
+            val tt = getTypeOfExpression(target)
+            return Triple(tt, target.pos, expressionTrueEnd(target) - target.pos)
+        }
+        return null
     }
 
     /** B482: look up a property by name across an intersection's constituents. */
