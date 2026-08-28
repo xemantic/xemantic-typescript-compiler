@@ -2806,7 +2806,7 @@ class Checker(
      *  narrowedDeclared copy + declared entry) — the copy IS the legacy
      *  discard semantics, so recordings AND emissions inside are correct.
      *  Per-file reset. */
-    private val ctaM3NarrowThen = HashMap<Int, Pair<String, Type>>()
+    private val ctaM3NarrowThen = HashMap<Int, List<Pair<String, Type>>>()
 
     /** (cta-m3e): true while a recordOnly reproduction runs — suppresses the
      *  TS2563 trip REPORT (emission + flowDisabledRanges registration) inside
@@ -3446,11 +3446,12 @@ class Checker(
         if (node is IfStatement && !spineIsDts) {
             val thenId = (node.thenStatement as NodeBase).nodeId
             if (thenId >= 0) {
-                var narrowed: Pair<String, Type>? = null
+                // (CHK.64) a LIST, so an `&&` condition narrows every operand.
+                var narrowed: List<Pair<String, Type>> = emptyList()
                 withCtaFrameLocals(ctaFrames.last()) {
-                    narrowed = extractNullNarrowing(node.expression)
+                    narrowed = extractNarrowingsFromCondition(node.expression)
                 }
-                narrowed?.let { ctaM3NarrowThen[thenId] = it }
+                if (narrowed.isNotEmpty()) ctaM3NarrowThen[thenId] = narrowed
             }
         }
         // (CHK.29) a `for…of` BINDING's element type, scoped to the loop body by
@@ -3463,7 +3464,7 @@ class Checker(
         // resolved on `any`, i.e. not at all.
         if (node is ForOfStatement && !spineIsDts) {
             val bodyId = (node.statement as NodeBase).nodeId
-            if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = it }
+            if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = listOf(it) }
         }
         // (cta-m3i): a registered then node gets the NARROWING frame — the
         // legacy wrapper's localTypes copy + write + narrowedDeclared entry.
@@ -3478,14 +3479,18 @@ class Checker(
                 SpineDispatch.work()
                 ctaM3NarrowFramePushed = true
                 val top = ctaFrames.last()
-                val (varName, narrowedType) = narrowing
                 FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0)
                 // (WARM.18) round 891 — the then-BLOCK's copy becomes a scope; a
                 // BARE then still SHARES, which is exactly "open no scope".
                 val narrowVarScoped = node is Block
                 if (narrowVarScoped) ctaVarScope.push()
                 val nd = top.narrowedDeclared.toMutableMap()
-                top.localTypes[varName]?.let { nd[varName] = it }
+                // (CHK.64) read every pre-narrow type BEFORE any write — `lt` below is
+                // the LIVE map `top.localTypes` also points at (round 892), so an
+                // interleaved write would make a later read see a narrowed value.
+                for ((varName, _) in narrowing) {
+                    top.localTypes[varName]?.let { nd[varName] = it }
+                }
                 // (WARM.18b) round 892 — the wrapper's `EpochMap(top.localTypes)`
                 // copy becomes a scope on the SAME stack the fn-body frames use.
                 // It must be the same stack: a fn declared inside this then-branch
@@ -3496,7 +3501,9 @@ class Checker(
                 FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, 0)
                 ctaLocalTypeScope.push()
                 val lt = ctaLocalTypeScope.view
-                lt[varName] = narrowedType
+                for ((varName, narrowedType) in narrowing) {
+                    lt[varName] = narrowedType
+                }
                 ctaFrames.addLast(CtaFrame(node,
                     ctaVarScope.view,
                     top.returnType, top.returnTypeNode, top.typeParams,
@@ -98756,16 +98763,19 @@ interface DataView {
                     // B201: apply null-narrowing in the then-branch (mirrors the nested
                     // dispatcher's IfStatement arm) — `if (match !== null) { … }` at file
                     // level narrows currentLocalTypes["match"] for the block walk.
-                    val narrowedNN = extractNullNarrowing(stmt.expression)
-                    if (narrowedNN != null) {
+                    // (CHK.64) a LIST, so an `&&` condition narrows every operand.
+                    val narrowedNN = extractNarrowingsFromCondition(stmt.expression)
+                    if (narrowedNN.isNotEmpty()) {
                         val savedLocalTypesNN = currentLocalTypes
                         currentLocalTypes = EpochMap(currentLocalTypes)
                         // M1.9: record the DECLARED type so assignment TARGETS inside the
                         // then-branch check against it, not the narrowed read type.
                         val savedDeclaredNN = narrowedDeclaredTypes
                         narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
-                        currentLocalTypes[narrowedNN.first]?.let { narrowedDeclaredTypes[narrowedNN.first] = it }
-                        currentLocalTypes[narrowedNN.first] = narrowedNN.second
+                        for ((nnName, nnType) in narrowedNN) {
+                            currentLocalTypes[nnName]?.let { narrowedDeclaredTypes[nnName] = it }
+                            currentLocalTypes[nnName] = nnType
+                        }
                         try {
                             checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                         } finally {
@@ -100834,17 +100844,19 @@ interface DataView {
                 // (cta-m3j): truncated when the spine anchored this If.
                 checkFlowNoOverlapCondition(stmt.expression, source, fileName)
                 // Apply control flow narrowing in then-branch
-                val narrowed = extractNullNarrowing(stmt.expression)
-                if (narrowed != null) {
+                // (CHK.64) a LIST, so an `&&` condition narrows every operand.
+                val narrowed = extractNarrowingsFromCondition(stmt.expression)
+                if (narrowed.isNotEmpty()) {
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = EpochMap(currentLocalTypes)
-                    val (varName, narrowedType) = narrowed
                     // M1.9: record the DECLARED type so assignment TARGETS inside the
                     // then-branch check against it, not the narrowed read type.
                     val savedDeclared = narrowedDeclaredTypes
                     narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
-                    currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
-                    currentLocalTypes[varName] = narrowedType
+                    for ((varName, narrowedType) in narrowed) {
+                        currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
+                        currentLocalTypes[varName] = narrowedType
+                    }
                     try {
                         checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                     } finally {
@@ -100984,6 +100996,61 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * (CHK.64) Decompose an `&&` if-condition into SEVERAL narrowings.
+     *
+     * [extractNullNarrowing] answers ONE `(name, type)` pair and has no arm for
+     * `&&` at all, so `if (a !== undefined && b !== undefined) { p = a }` used to
+     * narrow NEITHER operand — while `if (a !== undefined) { p = a }` narrows
+     * correctly one line away. That asymmetry is invisible at a MEMBER-ACCESS or
+     * ARGUMENT reader (both consult the flow walk, which handles `&&` fine) and
+     * shows only at the ASSIGNMENT and RETURN readers, which round 784's gate
+     * confines to an object-ish/union target and which therefore fall back to
+     * reading [currentLocalTypes] — the map this helper fills.
+     *
+     * The `&&` spine is left-nested (`a && b && c` is `(a && b) && c`), so it is
+     * flattened ITERATIVELY: a long conjunction is a deep left spine and a
+     * recursive walk would overflow on the corpus's binary-expression stress
+     * shapes. Each conjunct is extracted INDEPENDENTLY, against the un-narrowed
+     * map — a conjunct that narrows a LATER conjunct's subject
+     * (`x !== undefined && typeof x === "number"`) is therefore only as good as
+     * its own arm, which is deliberate: chaining would need the narrowings
+     * installed between conjuncts and is a separate mechanism.
+     *
+     * At most one entry per name survives (last conjunct wins), so a caller may
+     * read the pre-narrow type out of its own map while applying the list.
+     * Widening is impossible: every entry is a narrowing that
+     * [extractNullNarrowing] itself produced, and today's answer for a non-`&&`
+     * condition is returned verbatim.
+     */
+    private fun extractNarrowingsFromCondition(expr: Expression): List<Pair<String, Type>> {
+        val single = extractNullNarrowing(expr)
+        if (single != null) return listOf(single)
+        if (expr !is BinaryExpression || expr.operator != SyntaxKind.AmpersandAmpersand) return emptyList()
+        val conjuncts = ArrayList<Expression>()
+        var cur: Expression = expr
+        while (cur is BinaryExpression && cur.operator == SyntaxKind.AmpersandAmpersand) {
+            conjuncts.add(cur.right)
+            cur = cur.left
+        }
+        conjuncts.add(cur)
+        conjuncts.reverse()
+        val out = ArrayList<Pair<String, Type>>()
+        for (c in conjuncts) {
+            val n = extractNullNarrowing(c) ?: continue
+            // A "narrowing" to `any` is a WIDENING and must never be installed here.
+            // [typeofTypeGuardToType] answers `anyType` for `"object"` and `"function"`
+            // ("too broad to narrow precisely"), so `typeof x === "object" && x !== null`
+            // would type a parameter declared `object`/`unknown` as `any` — measured on
+            // tsc's own sources as 13 hovers going from tsc's `object` to `any`. Skipping
+            // the conjunct restores exactly the pre-decomposition answer for that name.
+            if (n.second === anyType) continue
+            out.removeAll { it.first == n.first }
+            out.add(n)
+        }
+        return out
     }
 
     /** Map typeof type guard string to the corresponding Type. */
