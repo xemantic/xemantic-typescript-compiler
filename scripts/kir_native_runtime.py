@@ -121,6 +121,24 @@ private fun civilFromDays(days: Long): Triple<Int, Int, Int> {
     return Triple((if (m <= 2) y + 1 else y).toInt(), m.toInt(), d.toInt())
 }
 
+/**
+ * The broken-down calendar fields [JsDate.local] answers, in UTC.
+ *
+ * A data holder rather than a calendar object: Kotlin/Native has no
+ * `java.time`, and everything the getters need is already computed by
+ * [civilFromDays] plus three divisions.
+ */
+private class CivilTime(
+    val year: Int,
+    val month: Int,
+    val day: Int,
+    /** `0` is Sunday, as JavaScript numbers the week. */
+    val weekday: Int,
+    val hour: Int,
+    val minute: Int,
+    val second: Int,
+)
+
 private fun pad(value: Int, width: Int): String = value.toString().padStart(width, '0')
 
 private fun formatIso(millis: Long): String {
@@ -225,7 +243,34 @@ sub('''    public fun exec(input: String): JsArray? {
             if (match == null) input
             else input.substring(0, match.range.first) + replacement +
                 input.substring(match.range.last + 1)
-        }''')
+        }
+
+    /**
+     * `String.prototype.replace` with a REPLACER FUNCTION.
+     *
+     * [build] is handed the match and its capture groups (index 0 is the whole
+     * match, exactly as `Matcher.group` numbers them) together with the offset,
+     * which is what the JVM form reads off its `Matcher`.
+     */
+    internal fun replaceInBy(
+        input: String,
+        build: (List<Any?>, Int) -> String
+    ): String {
+        val out = StringBuilder()
+        var last = 0
+        var match = regex.find(input)
+        while (match != null) {
+            out.append(input, last, match.range.first)
+            val groups = ArrayList<Any?>(match.groupValues.size)
+            for (index in match.groupValues.indices) groups.add(match.groups[index]?.value)
+            out.append(build(groups, match.range.first))
+            last = if (match.range.isEmpty()) match.range.first else match.range.last + 1
+            if (!global) break
+            match = match.next()
+        }
+        out.append(input, last, input.length)
+        return out.toString()
+    }''')
 # The fast matcher's own cache: pure Kotlin apart from the concurrent map.
 sub('''private val compiledRegexPrograms =
     java.util.concurrent.ConcurrentHashMap<String, Any>()''',
@@ -279,7 +324,159 @@ src = src.rstrip() + "\n" + CIVIL
 sub("public constructor() : this(kotlin.system.getTimeMillis().toDouble())",
     "public constructor() : this(nowMillis())")
 
-sub('    else String.format("%.${digits.toInt()}f", value)',
+# ---- Date COMPONENTS: java.time -> the civil arithmetic already here --------
+#
+# `new Date(y, m, …)` and the `getFullYear`/`getMonth`/… family are LOCAL time in
+# JavaScript, and the JVM runtime honours that through `ZoneId.systemDefault()`.
+# Kotlin/Native's standard library has NO TIMEZONE DATABASE, so the native side
+# computes them in UTC.
+#
+# THAT IS A STATED DIVERGENCE, not an oversight: the two runtimes agree exactly
+# when the host is UTC and differ by the host's offset otherwise. It is recorded
+# here, in the generated source, and in `docs/perf/kir-backend-levers.md`. The
+# alternative — refusing on native, as the reflect fallback does — was rejected
+# because the shape that reaches this is a YEAR round trip
+# (`new Date(parseInt(s), 1).getFullYear()`, cronstrue), which no offset moves.
+sub("""    private fun local(): java.time.LocalDateTime? =
+        if (millis.isNaN()) null else java.time.LocalDateTime.ofInstant(
+            java.time.Instant.ofEpochMilli(millis.toLong()),
+            java.time.ZoneId.systemDefault()
+        )""",
+    """    /**
+     * The calendar fields, in UTC — Kotlin/Native has no timezone database.
+     *
+     * The JVM runtime uses the host's zone here, as JavaScript does, so the two
+     * agree when the host is UTC and differ by its offset otherwise.
+     */
+    private fun local(): CivilTime? {
+        if (millis.isNaN()) return null
+        var days = millis.toLong() / 86_400_000L
+        var rest = millis.toLong() % 86_400_000L
+        if (rest < 0) { rest += 86_400_000L; days -= 1 }
+        val (year, month, day) = civilFromDays(days)
+        val seconds = rest / 1000L
+        return CivilTime(
+            year, month, day,
+            ((days % 7 + 11) % 7).toInt(),
+            (seconds / 3600L).toInt(),
+            ((seconds / 60L) % 60L).toInt(),
+            (seconds % 60L).toInt()
+        )
+    }""")
+
+sub("    public fun getFullYear(): Double = local()?.year?.toDouble() ?: Double.NaN",
+    "    public fun getFullYear(): Double = local()?.year?.toDouble() ?: Double.NaN")
+sub("    public fun getMonth(): Double = local()?.monthValue?.minus(1)?.toDouble() ?: Double.NaN",
+    "    public fun getMonth(): Double = local()?.month?.minus(1)?.toDouble() ?: Double.NaN")
+sub("    public fun getDate(): Double = local()?.dayOfMonth?.toDouble() ?: Double.NaN",
+    "    public fun getDate(): Double = local()?.day?.toDouble() ?: Double.NaN")
+sub("""    public fun getDay(): Double =
+        local()?.dayOfWeek?.value?.rem(7)?.toDouble() ?: Double.NaN""",
+    """    public fun getDay(): Double = local()?.weekday?.toDouble() ?: Double.NaN""")
+sub("    public fun getHours(): Double = local()?.hour?.toDouble() ?: Double.NaN",
+    "    public fun getHours(): Double = local()?.hour?.toDouble() ?: Double.NaN")
+sub("    public fun getMinutes(): Double = local()?.minute?.toDouble() ?: Double.NaN",
+    "    public fun getMinutes(): Double = local()?.minute?.toDouble() ?: Double.NaN")
+sub("    public fun getSeconds(): Double = local()?.second?.toDouble() ?: Double.NaN",
+    "    public fun getSeconds(): Double = local()?.second?.toDouble() ?: Double.NaN")
+
+sub("""            return try {
+                // The components are ADDED rather than passed to a constructor,
+                // so an out-of-range one rolls over as JavaScript's do —
+                // `new Date(2020, 12)` is January 2021, not an error.
+                java.time.LocalDateTime.of(fullYear, 1, 1, 0, 0, 0)
+                    .plusMonths(month.toLong())
+                    .plusDays(day.toLong() - 1)
+                    .plusHours(hour.toLong())
+                    .plusMinutes(minute.toLong())
+                    .plusSeconds(second.toLong())
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+                    .toDouble() + millisecond
+            } catch (_: Exception) {
+                Double.NaN
+            }""",
+    """            // The month is ADDED rather than passed to a constructor, so an
+            // out-of-range one rolls over as JavaScript's does — `new Date(2020,
+            // 12)` is January 2021, not an error. UTC, see `local()`.
+            val totalMonths = fullYear.toLong() * 12L + month.toLong()
+            val y = totalMonths.floorDiv(12L).toInt()
+            val m = totalMonths.mod(12L).toInt() + 1
+            val days = daysFromCivil(y, m, 1) + (day.toLong() - 1L)
+            return (days * 86_400_000L +
+                hour.toLong() * 3_600_000L +
+                minute.toLong() * 60_000L +
+                second.toLong() * 1000L).toDouble() + millisecond""")
+
+# ---- locale-sensitive case mapping -----------------------------------------
+#
+# Kotlin/Native has no locale database, so `toLocaleUpperCase` maps exactly as
+# `toUpperCase` does. Every JavaScript engine without ICU behaves the same way,
+# and the difference is confined to the handful of languages whose case mapping
+# is not the default one (Turkish `i` above all).
+sub("""public fun jsStrToLocaleUpperCase(value: String): String =
+    value.uppercase(java.util.Locale.getDefault())
+
+public fun jsStrToLocaleLowerCase(value: String): String =
+    value.lowercase(java.util.Locale.getDefault())""",
+    """public fun jsStrToLocaleUpperCase(value: String): String = value.uppercase()
+
+public fun jsStrToLocaleLowerCase(value: String): String = value.lowercase()""")
+
+# ---- stderr ----------------------------------------------------------------
+sub("""public fun consoleError(vararg values: Any?) {
+    System.err.println(values.joinToString(" ") { jsToString(it) })
+}""",
+    """public fun consoleError(vararg values: Any?) {
+    printErr(values.joinToString(" ") { jsToString(it) })
+}""")
+
+# ---- the REPLACER-callback overload ----------------------------------------
+#
+# The JVM form walks a `java.util.regex.Matcher` for the groups and the offset;
+# the native side has `kotlin.text.Regex`, whose `replace` hands the same three
+# things to a lambda.
+sub("""public fun jsStrReplace(value: String, expression: JsRegExp, replacer: Any?): String {
+    val matcher = expression.matcherFor(value)
+    val out = StringBuilder()
+    var last = 0
+    while (matcher.find()) {
+        out.append(value, last, matcher.start())
+        val arguments = ArrayList<Any?>(matcher.groupCount() + 3)
+        arguments.add(matcher.group())
+        for (group in 1..matcher.groupCount()) arguments.add(matcher.group(group))
+        // The offset is a NUMBER, i.e. a `Double` here — a replacer that
+        // returns it would otherwise print an `Int`, which JavaScript has not.
+        arguments.add(matcher.start().toDouble())
+        arguments.add(value)
+        out.append(jsToString(jsCall(replacer, *arguments.toTypedArray())))
+        last = matcher.end()
+        // Without `g` only the FIRST match is replaced, which is the whole
+        // difference the flag makes.
+        if (!expression.global) break
+    }
+    out.append(value, last, value.length)
+    return out.toString()
+}""",
+    """public fun jsStrReplace(value: String, expression: JsRegExp, replacer: Any?): String =
+    expression.replaceInBy(value) { groups, offset ->
+        val arguments = ArrayList<Any?>(groups.size + 2)
+        for (group in groups) arguments.add(group)
+        // The offset is a NUMBER, i.e. a `Double` here — a replacer that returns
+        // it would otherwise print an `Int`, which JavaScript has not.
+        arguments.add(offset.toDouble())
+        arguments.add(value)
+        jsToString(jsCall(replacer, *arguments.toTypedArray()))
+    }""")
+
+
+# The JVM side takes `Locale.ROOT` deliberately (a locale-sensitive `toFixed`
+# answered "2,0" on a comma-locale box); `formatFixed` is locale-free by
+# construction, so the native side needs no equivalent — but the ANCHOR has to
+# carry the locale argument or it stops matching, which is what this assertion
+# is for.
+sub('    else String.format(java.util.Locale.ROOT, "%.${digits.toInt()}f", value)',
     "    else formatFixed(value, digits.toInt())")
 
 sub("""            else -> if (ch < ' ') out.append("\\\\u%04x".format(ch.code)) else out.append(ch)""",
@@ -339,6 +536,20 @@ HELPERS = r'''
 // What the JVM runtime gets from java.lang / java.util and Kotlin/Native does not.
 // ---------------------------------------------------------------------------
 
+/**
+ * `console.warn` / `console.error`'s stream.
+ *
+ * Kotlin/Native has no `System.err`, so stderr is libc's. Writing these to
+ * STDOUT instead would be the one thing that must not happen: a library that
+ * warns would then corrupt the output of any program whose answer is piped,
+ * which is the whole reason the JVM side routes them away from stdout.
+ */
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+private fun printErr(line: String) {
+    platform.posix.fprintf(platform.posix.stderr, "%s\n", line)
+    platform.posix.fflush(platform.posix.stderr)
+}
+
 @OptIn(kotlin.time.ExperimentalTime::class)
 private fun nowMillis(): Double =
     kotlin.time.Clock.System.now().toEpochMilliseconds().toDouble()
@@ -395,7 +606,14 @@ private fun formatFixed(value: Double, digits: Int): String {
     if (magnitude >= 1e15) return jsNumberToString(value)
     var scale = 1L
     repeat(digits) { scale *= 10L }
-    val scaled = kotlin.math.round(magnitude * scale).toLong()
+    // TIES AWAY FROM ZERO, spelled out rather than left to `kotlin.math.round`,
+    // whose tie behaviour is not the same on every target: `(0.5).toFixed(0)`
+    // answered "0" natively against "1" on Node and on the JVM, which is what
+    // ECMAScript requires — of the two integers equally close, `toFixed` takes
+    // the LARGER. The magnitude is already absolute, so larger IS away from zero.
+    val exact = magnitude * scale
+    val floor = kotlin.math.floor(exact)
+    val scaled = (if (exact - floor >= 0.5) floor + 1.0 else floor).toLong()
     val whole = (scaled / scale).toString()
     val sign = if (value < 0 && scaled != 0L) "-" else ""
     if (digits == 0) return sign + whole

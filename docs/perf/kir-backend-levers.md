@@ -707,3 +707,63 @@ a check on the path handed to `-PkirOutput` is a check on a file that never
 exists — and `kirNativeCompile` exits 0, since it verified the plugin's own
 announcement rather than the file. The task's closing line says `.kexe` and was
 the answer all along.
+
+## 2026-08-28 — the four-arm benchmark on a second host, and what asking for it found
+
+`KIR_BENCH_NATIVE=1 scripts/kir-bench.sh 3` on macOS/aarch64 (8 cores, 16 GB),
+konanc 2.4.10. **Equivalence gate green on all FOUR arms for both libraries**
+before any timing (`mitt:sink=128000000`, `toml:sink=-5440000`).
+
+| | mitt (4 M emits/round) | | toml (20 k parses/round) | |
+|---|---:|---|---:|---|
+| tsgo -> JS -> node | 184 ms | baseline | 195 ms | baseline |
+| xtsc -> JS -> node | 184 ms | 1.00x | 194 ms | 1.01x faster |
+| xtsc -> JVM -> java | **179 ms** | **1.03x faster** | 382 ms | 1.96x slower |
+| xtsc -> NATIVE -> kexe | 972 ms | 5.28x slower | 1058 ms | 5.43x slower |
+
+Native against the JVM is **5.43x** (mitt) and **2.77x** (toml), which reproduces
+this page's § 6 "4-29x per primitive, 4-7x whole-program" on a different host OS
+and CPU. The JS control sits on tsgo's in both libraries, which is what licenses
+reading the other two rows as BACKEND numbers.
+
+### Asking for the native arm found three defects, two of them mine
+
+The native runtime is GENERATED from the JVM one by `scripts/kir_native_runtime.py`,
+and **nothing in `jvmTest` exercises it** — native targets are off by default and
+the bench arm is opt-in. So a JVM-side runtime change can break it silently, and
+this is the first run since (LIB.4) landed thirteen capabilities:
+
+1. **The generator REFUSED** — `toFixed`'s `Locale.ROOT` fix changed a line the
+   generator rewrites by anchor. That is the anchor assertion doing its job: a
+   generator that skipped the rewrite would have produced a native runtime that
+   still compiled and quietly meant something else.
+2. **Four JVM-only APIs had no native rule** and reached konanc verbatim —
+   `java.time` (the `Date` component constructor and getters), `java.util.Locale`
+   (`toLocale*Case`), `System.err` (`console.warn`/`error`) and
+   `java.util.regex.Matcher` (the replacer-callback overload). Rules added; the
+   Date one carries a STATED divergence, below.
+3. **`formatFixed` rounded ties the wrong way, and that one predates the arc.**
+   `(0.5).toFixed(0)` answered `"0"` natively against `"1"` on Node and the JVM.
+   `kotlin.math.round`'s tie behaviour is not the same on every target, and
+   ECMAScript is explicit: of the two integers equally close, `toFixed` takes the
+   LARGER. Spelled out now rather than delegated.
+
+### The one STATED divergence
+
+`new Date(y, m, …)` and the `getFullYear`/`getMonth`/… family are LOCAL time in
+JavaScript, and the JVM runtime honours that. **Kotlin/Native's standard library
+has no timezone database, so the native side computes them in UTC** — the two
+agree exactly when the host is UTC and differ by its offset otherwise. Refusing
+on native (the precedent the reflect fallback sets) was rejected because the
+shape that reaches it is a YEAR round trip, `new Date(parseInt(s), 1)
+.getFullYear()`, which no offset moves.
+
+### The check that found (3), and how to repeat it
+
+Corpus programs 20, 24 and 25 concatenated into one project, compiled with
+`scripts/kir-native.sh`, run, and DIFFED against `node` running the same `.ts`.
+21 lines, byte-identical after the fix, with the `warn`/`error` lines correctly
+on stderr and absent from stdout. **That differential is the only thing here that
+tests the generated runtime's ANSWERS rather than its ability to compile** — the
+bench's own gate covers only what mitt and smol-toml exercise, and neither
+touches any of the four rules above.
