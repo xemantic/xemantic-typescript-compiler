@@ -118615,7 +118615,16 @@ interface DataView {
      * Every other antecedent keeps the pass-through, deliberately: with a
      * non-nullish antecedent the reduction would WIDEN a live narrowing back to the
      * declaration (`let n: Node; if (isIdent(n)) { n = otherIdent; n.escapedText }`),
-     * which is a false positive in the other direction.
+     * which is a false positive in the other direction. That bound is REASONED, not
+     * measured: its ablation is green on the suite AND byte-identical on all eight
+     * profiles, so it is recorded as undiscriminated rather than claimed.
+     *
+     * A NULLISH assigned type is NOT excluded, and the exclusion it used to carry was
+     * measured wrong: `if (id === undefined) { id = aNull }` over `string | null |
+     * undefined` kept the antecedent, so `undefined` survived the overwrite and the
+     * branch join re-minted the whole declaration. Reducing the DECLARED type by
+     * `null` answers `null`, which is what tsc answers, and the reduction can never
+     * exceed the declaration.
      */
     private fun assignmentReduceBase(antecedent: Type, declaredType: Type, assigned: Type): Type {
         val antecedentIsNullishOnly = if (antecedent is Type.Union) {
@@ -118624,7 +118633,6 @@ interface DataView {
             isNullishConstituent(antecedent)
         }
         if (!antecedentIsNullishOnly) return antecedent
-        if (typeHasNullishConstituent(assigned)) return antecedent
         return declaredType
     }
 

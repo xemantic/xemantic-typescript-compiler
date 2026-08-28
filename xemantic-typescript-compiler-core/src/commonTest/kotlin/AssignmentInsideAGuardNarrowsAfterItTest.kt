@@ -159,6 +159,26 @@ class AssignmentInsideAGuardNarrowsAfterItTest {
     }
 
     /**
+     * POSITIVE — a NULLISH assigned type reduces from the declaration too. The first
+     * cut of [Checker.assignmentReduceBase] refused one, and that refusal was measured
+     * wrong here: assigning a `null`-typed value inside an `=== undefined` guard left
+     * `undefined` alive through the overwrite, so the branch join re-minted the whole
+     * declaration and the CALL-ARGUMENT reader reported a union tsc does not.
+     */
+    @Test
+    fun `a nullish value assigned inside a nullish guard still overwrites`() {
+        diagnose(
+            prelude +
+                "declare function zzzTakeSN(zzzS: string | null): void;\n" +
+                "declare const zzzNul: null;\n" +
+                "function zzzP5(zzzId: string | undefined | null): void {\n" +
+                "  if (zzzId === undefined) { zzzId = zzzNul; }\n" +
+                "  zzzTakeSN(zzzId);\n" +
+                "}",
+        ) should { have(none { it.code == 2345 }) }
+    }
+
+    /**
      * CONTROL — a NON-nullish antecedent must keep the pass-through: reducing from the
      * DECLARED type there would widen a live type-guard narrowing back to the whole union
      * and re-report the very argument the guard made legal. Labelled a control because it
