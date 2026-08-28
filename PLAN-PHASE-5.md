@@ -20,6 +20,145 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.66) — the loop join's blocker is a **SHIPPED four-line divergence at a plain BRANCH label**, it lands, and the loop join re-prices **3 rows -> 1**
+
+**THE HEADLINE.** The queue said the loop join's residue was `getUnionType`'s missing
+subtype reduction, and named the site set as "downstream of the label, at a branch
+join". Measured, that is exactly right — and the branch-join defect is **reachable on
+the SHIPPED binary in four lines with no loop, no partition and no gate**:
+
+```ts
+const x = zzzMk();            // string | number
+if (x === "a") { zzzSink(x); }
+const p: boolean = x;         // ours: string | number | "a"
+                              // tsc 7.0.2: string | number
+```
+
+So the census that the round's first move should be — what does the rule RENDER? — put
+the whole item on a one-second CLI loop instead of a grid. `flowJoinUnion` landed as
+**`ad888740`** and the loop join was then re-priced on top of it.
+
+**THE SITE SET, AND WHY IT IS TWO LINES AND NOT `getUnionType`.** tsc reduces at
+`getTypeAtFlowBranchLabel` / `getTypeAtFlowLoopLabel` with `UnionReduction.Subtype` and
+NOWHERE ELSE that matters here; INV.5(a) interns our unions by member-id list alone and
+union member ORDER is pinned byte-for-byte across ~13k baselines, so a reduction inside
+`getUnionType` was refused on sight. The shipped change routes the TWO flow joins in
+`narrowTypeFromFlowCore` through one helper and touches nothing else.
+
+**TWO CONSERVATISMS AGAINST tsc, BOTH DELIBERATE AND BOTH PINNED.**
+
+  * **Only a member the DECLARATION does not itself contain may be dropped.** Every arm
+    of this walk filters DOWNWARD from the declaration, so a "foreign" member is exactly
+    one some narrowing step INTRODUCED — which is the whole defect class. It also makes
+    the reduction free on the overwhelming majority of joins (an id-set membership test,
+    no relation query at all), and it means a union the USER wrote is never re-shaped.
+    tsc would also reduce `type T = string | "a"` at a join; we do not. Pinned by C2,
+    which is the arm-a2 separating control.
+  * **The drop needs a STRICT subtype** (`m` assignable to `o` AND `o` NOT assignable to
+    `m`). **This repo has no subtype relation at all — `subtypeRelation` is declared at
+    `CheckerState` and has ZERO readers** — so assignability is what there is, and it is
+    bidirectional for pairs a subtype relation separates.
+
+**THE LOOP JOIN, RE-PRICED: 3 ROWS -> 1.** `build/chk65/loop.py baseR` re-applied on top
+of the reduction, with BOTH joins routed through `flowJoinUnion`, costs exactly **ONE**
+ours-only row on every one of the 8 profiles (added=1 removed=0, the same row each
+time): `checker.ts:43282:21`. **Both `utilities.ts` rows are GONE** — `11586:63` and
+`11704:47`, the `ConditionalTypeNode | Node | undefined` family the queue named, are
+closed by the reduction exactly as predicted. The survivor is a DIFFERENT mechanism and
+its shape says so: `previousDeclaration = node` reports
+`SignatureDeclaration's own 14 constituents | ClassDeclaration | ClassExpression`, i.e.
+our narrowing leaves two CLASS kinds in a union tsc has filtered to `SignatureDeclaration`
+— a discriminant/`isFunctionLike` filter gap over a loop-carried state, not a reduction
+one. Re-queued as **(CHK.66)** at 1 row; the built tree is
+`build/chk66/snap/Checker.kt.loopR` and it regenerates as
+`python3 build/chk65/loop.py baseR` + the two `flowJoinUnion` routings (note that
+`loop.py` REWRITES the region holding the reduction helper, so the helper must be
+re-inserted after it — `build/chk66/red.py` carries the text).
+
+**THE GATE ((CHK.63)) WAS NOT RE-MEASURED THIS ROUND** — `armBGR`'s grid was not re-run
+on top of the landed reduction, so its 6-row list stands as (CHK.65) measured it. What
+changed is what it is blocked on: (CHK.66)'s standalone price fell 3 -> 1, so the gate
+now needs one loop row plus (CHK.67). Re-taking `armBGR` is the next round's first move,
+and it is cheap — one build plus one grid.
+
+**GATES, PER COMMIT (`ad888740`).** Suite **16,348** / 0 failed / 3 skipped (+9, exactly
+the new subtests) and **NO corpus baseline moved** — which is the number this round was
+most exposed on, union display being byte-pinned there. 8-profile grid
+**`503774c23b4535130ffdebabef430cf0`**, `added=0 removed=0` on all eight, i.e. BYTE-
+IDENTICAL to the recorded parent capture; parent verified by rebuilding `184832b1` in
+this session (`Checker.class d0997340`, the same digest the (CHK.65) note recorded).
+`cost_gate.py` exit 0, `output.errors` **46**; the counters are the standing residual
+moved in the third decimal (`typeOfExpr.calls` +1.42%, `typeOfExpr.distinct` +0.97%,
+`narrow.walks` +0.84 -> +0.87%, `typeNode.cacheable` +0.39 -> +0.49%, `globals.lookups`
++1.53 -> +1.54%, `globals.misses` +1.75 -> +1.77%) — the relation queries the reduction
+adds are below a tenth of a percent. `huge_methods --fail-over 0` exit 0, **783** classes
+scanned, 0 over. `partition-equivalence` EQUIVALENT all 78, floor **54 ms**
+[75, 54, 54, 54] (one draw). `capture-equivalence` DIVERGED **968** in 43 of 76,
+`types=968 definitions=0 narrowRendersMoreAny=0 absentInNarrow=0 absentInFull=0` —
+UNCHANGED in every field; both arm digests moved (`full=446836089224869508`
+`narrow=-3963031488196695014`), which is expected of a change that re-renders a narrowed
+join, and is NOT classified per element this round (see the residue below). knip **48**
+and jsonrepair **4** — jsonrepair byte-identical to the last stored capture.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `184832b1` rebuilt in this session:
+**7 of 9 RED**, and they are exactly the 7 positives. Each names its reader — P1/P2/P3
+the DECLARATION reader (a deliberate mis-assignment, the only instrument that PRINTS the
+flow type; a `zzzTake(r)` fixture is vacuous for a local, and a NULLISH union is vacuous
+a second time under (CHK.63)'s own gate, so every fixture here is `string | number` or a
+non-nullish object union), P4/P5 the CALL-ARGUMENT reader (live only for a PARAMETER
+source), P6 a two-function differential (the narrowed join must render exactly like the
+un-narrowed one), P7 the ORDER of the survivors of a REAL drop in a 3-member union. The
+2 controls are green on BOTH binaries.
+
+**THREE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`19b32bf2`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the reduction never fires | `30820166` | **7** — every positive | — |
+| a2 | the FOREIGN gate removed (every member a drop candidate) | `45a0b283` | **1** — C2, uniquely | — |
+| a3 | the drop needs only plain ASSIGNABILITY | `ddd51425` | **0** | **UNDISCRIMINATED, not redundant** |
+
+**a3's zero is named and was chased.** It is not "measured redundant": the strictness
+clause can only REFUSE a drop, so it cannot introduce a wrong answer, and it is what
+stops `any` (mutually assignable with everything) being deleted from a join. I could not
+construct an input on which it fires — the two candidate shapes both collapse for another
+reason (`ZzzD` structurally identical to `ZzzA`, and `ZzzE` differing only by an OPTIONAL
+member, are BOTH already absent from the join on the fixed binary, and **tsc 7.0.2 also
+answers `ZzzA | ZzzC` for both**, so a "must keep" control there would have pinned a
+divergence). It is also profile-inert: the a3 binary is ROW-IDENTICAL to the parent on
+`tsc-project`, `tsc-services` and `tsc-harness`. Kept as a documented conservatism.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's decomposition was right for the first time in six rounds, and the
+    surprise was in the other direction**: the blocker it named for a LOOP item is a
+    defect of the plain BRANCH join, present on the shipped binary, needing no loop at
+    all. The instrument that found it in ninety seconds was the round's first move —
+    census what the rule RENDERS, on four lines, against `tsgo --noEmit`.
+  * **`P6`'s first form was a false pin.** It asserted the reduced join renders its ALIAS
+    name (`ZzzAl`); measured, the UN-narrowed control renders structurally too, so the
+    alias loss is the pre-existing (INC.27)/(INC.29) family and nothing to do with this
+    change. Rewritten as a two-function differential, which is discriminating.
+  * **`C4`'s first form pinned a KNOWN-OPEN gap** (inside the then-branch we say `string`
+    where tsc says `"a"`) and was deleted rather than pinned — CLAUDE.md's rule that an
+    open gap belongs in a session note, not in a control.
+  * **`loop.py` silently REVERTS an edit inside the region it rewrites.** Its patch spans
+    the `FlowBranchLabel` arm and the KDoc above `assignmentReduceBase`, so applying it
+    on top of the landed reduction deleted the helper AND un-routed the branch join; the
+    build's `Unresolved reference 'flowJoinUnion'` is the only reason it was noticed.
+  * **The capture-equivalence ARM DIGESTS moved and are NOT classified per element this
+    round.** The (CHK.64) `XTSC_CAPEQ_DUMP` comparison needs a dump from the PARENT
+    binary as well, i.e. a second full sweep plus a rebuild; the evidence carried instead
+    is that every classified field of the divergence is unchanged (968 / 43 of 76 /
+    definitions=0 / moreAny=0), the grid is byte-identical and no corpus baseline moved.
+    Say so rather than implying it was checked.
+  * **knip's stored BEFORE arm is three rounds stale** (Aug 26, 49 rows) and no 48-row
+    capture was on disk; my capture reads **48**, the count the (CHK.65) note records for
+    the parent, and the one row that differs from the stale capture
+    (`src/util/git.ts:17:55 TS2769`) was removed by a round between them, not by this
+    one. A parent library arm was NOT rebuilt this session — flagged, not claimed.
+
 ### Round (CHK.65) — the four residues are **ONE mechanism at TWO readers**, it is a **SHIPPED false positive**, and it lands; the gate re-prices **7 rows -> 6**, and the loop join re-prices **8 -> 3** with its blocker finally named
 
 **THE HEADLINE.** The queue said (CHK.63) needed two things: (CHK.61)(b)'s checking
@@ -1359,288 +1498,6 @@ pair; visible from every position that renders a target through the TYPE rather 
 ANNOTATION, and pinned as residue. (iii) An enum member against a weak target it SHARES a
 property with (`{ length?: number }`) is SILENT in tsc and emits TS2345/TS2322 here, from the
 ordinary relation rather than the weak rule.
-
-### Round (CHK.58) — the weak rule fired at a var decl and at a call argument and **nowhere else**; and TS2560 is *"calling it would have worked"*, not *"the source is callable"*
-
-**FOUR FIXES, ONE ARC.** The B482 walkers emitted TS2559/TS2560 at a var DECL and at a
-CALL ARGUMENT and at no other position, so `function f(): W { return v }` and `x = v`
-reported NOTHING for a weak target. **This is not a union defect** — (CHK.57) closed the
-union half of the two positions that DID report, and the bare target was silent in these
-two all along; the only row the return position had, it had with the wrong CODE (TS2322
-naming the whole union, where tsc names the surviving constituent).
-
-**THE FOUR, IN THE ORDER THEY LANDED** (each its own commit, each with the full gate set):
-
-1. **The RETURN and ASSIGNMENT positions.** [Checker.tryEmitWeakValuePosition] is the
-   shared emitter; [Checker.weakAssignmentTarget] reads the LHS's DECLARED type
-   (annotation ladder first, `currentLocalTypes` second; a property access answers through
-   `getTypeOfExpression`). **Twelve missing tsc rows now land byte-exact and one wrong-code
-   row is corrected.**
-2. **The TS2559 / TS2560 split.** [Checker.weakCallResultSatisfiesTarget] asks whether the
-   FIRST call signature's return type — or failing that the first CONSTRUCT signature's —
-   is related to the target, which is tsc's `reportErrorResults`. **Four of six callable
-   shapes carried the wrong code.**
-3. **The enum-member DISPLAY.** `E.A` for a multi-member enum, `E` for a one-member one.
-4. **A `new C()` var-decl initializer** is a weak-rule source ([Checker.topLevelWeakSource]
-   had a cast, an enum member and a literal branch and no `NewExpression` one).
-
-**THE ANCHORS WERE CORROBORATED BY PRISTINE, NOT TAKEN FROM tsgo ALONE** (round 938). A
-return squiggles the `return` KEYWORD — pristine puts `~~~~~~` under `return null;` for a
-return-type TS2322 and [Checker.checkReturnAssignabilityCore] already used `stmt.pos` + 6 —
-and an assignment squiggles the LHS REFERENCE, one `~` under the `c` of `c = d` in
-`assignmentCompatWithObjectMembersOptionality2.errors.txt`, which is *this diagnostic* in
-*that position*.
-
-**THE ONE INSIGHT NO READING OF tsc's SOURCE PRODUCES.** tsc's weak check lives INSIDE
-`isRelatedTo`, so when `reportErrorResults` asks "is the call RESULT related to the target"
-it gets a weak-aware answer; ours does not, and a weak all-optional target accepts every
-non-nullish source vacuously. Ask [Checker.checkTypeRelatedTo] alone and `() => number`
-keeps TS2560. The veto is [Checker.weakParamRefusesArg] in front of the relation, and arm
-b2 (drop it) reddens exactly the three shapes it decides.
-
-**AND THE ORACLE OVERRULED THE QUEUE ON ITEM 3.** The entry read `enumMemberWeakSource`'s
-`Type 'E'` as wrong and pristine's agreeing baseline as a coincidence of a one-member enum.
-Measured on tsc 7.0.2, it is **one rule and both answers are right**: the enum-literal type
-of a single-member enum IS the enum type, so `typeToString` prints the enum's name. The
-boundary is the member COUNT, not the flavour — `{A="A",B="B"}` and `{A,B}` render `E.A`,
-`{A="A"}` and `{A}` render `E`. Arms c1 and c2 redden the two sides complementarily.
-
-**ORDER IS A COST DECISION, AND IT WAS MEASURED TWICE.** The first implementation asked the
-VALUE's type before the TARGET's weakness: **+6.89% `typeOfExpr.calls`**. Giving the return
-site its own `getTypeFromTypeNode` instead of sharing the engine's: **+2.9%
-`typeNode.cacheable` / +11.2% `mapped.hits`**. **Both produced BYTE-IDENTICAL output** (the
-pin-fixture capture `diff`s clean across all three builds), so no gate but `cost_gate.py`
-could have seen either. As landed the largest counter move is **+1.40%**.
-
-| # | shape | tsc 7.0.2 | parent `45eb6d07` | ship |
-|---|---|---|---|---|
-| q01 | RETURN, bare weak, literal source | TS2559 1:54 at `return` | **SILENT** | ✓ exact |
-| q02 | ASSIGNMENT, bare weak | TS2559 2:1 at the LHS | **SILENT** | ✓ |
-| q03 | RETURN, weak UNION | TS2559 1:61 naming the CONSTITUENT | **TS2322**, whole union | ✓ |
-| q04 | ASSIGNMENT, weak UNION | TS2559 2:1 | **SILENT** | ✓ |
-| q05 | INTERFACE target, both positions | TS2559 2:30 + 4:1 naming `'ZzzQ05'` | **SILENT** | ✓ both |
-| q06 | identifier source (pristine's `c = d`) | TS2559 5:1 + 6:31 | **SILENT** | ✓ both |
-| q07 | property-access assignment target | TS2559 3:1 | **SILENT** | ✓ |
-| q15 | `new K()` source, both positions | TS2559 2:54 + 4:1 | **SILENT** | ✓ both |
-| w1 | `() => number` argument | TS**2559** | TS2560 | ✓ |
-| w2 | `() => { zzzT: number }` | TS2560 + TS6212 | ✓ | ✓ |
-| w3 | `() => { zzzZ: string }` | TS**2559** | TS2560 | ✓ |
-| w4 | `new (s) => { zzzT: number }` | TS2560 + TS6213 | ✓ | ✓ |
-| w5 | `new (s) => { zzzZ: string }` | TS**2559**, no related | TS2560 | ✓ |
-| w6 | `() => void` | TS**2559** | TS2560 | ✓ |
-| e1 | `{A="A",B="B"}.A` / `{A,B}.A` at a var decl | `Type 'E.A'` | `Type 'E'` | ✓ |
-| e1 | `{A="A"}.A` / `{A}.A` | `Type 'E'` | ✓ | ✓ |
-| y2 | `new C()` at a VAR DECL | TS2559 4:7 | **SILENT** | ✓ |
-| q11 | object-literal source, both positions | TS2353 at the PROPERTY | ✓ | ✓ unchanged |
-| q16 | two WEAK constituents | TS2322, whole union | ✓ (return) | ✓ unchanged |
-| q12 | callable source at return/assignment | TS2559 | SILENT | **SILENT — open** |
-| y7 | GENERIC instantiation, both positions | TS2559 | SILENT | **SILENT — deliberate** |
-| e1 | enum member at a CALL ARGUMENT | TS2559 | SILENT | **SILENT — open** |
-
-**GATES.** Suite **16,199 / 0 / 3** (+30, exactly the four new classes: 15 + 7 + 5 + 3),
-summed with `xml.etree` over the SEVEN-module glob (core 15,230 + project 704 + kir 146 +
-daemon 66 + api 30 + client 20 + cli 18); **no corpus baseline moved** at any step, and
-that is the load-bearing one — three of the four fixes CHANGE an existing row's code or
-text. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**. `huge_methods
---fail-over 0` exit 0, **783** classes, 0 over. **8-profile grid over two session-built
-binaries**: md5 **`503774c23b4535130ffdebabef430cf0`** on the parent AND on every ship
-build, per-profile `diff` clean — **`added=0 removed=0` on all eight**, unmoved since
-(CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **62 ms** [60, 61, 65, 62]
-— one draw. `capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0,
-moreAny 0**, `definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
-narrow=-2075467818767010709` — the standing state. **`knip` @ `dc7aca5` 48 -> 48 and
-`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to a parent arm built in this
-session (`diff` clean both).
-
-**TWELVE ABLATION ARMS, ONE MISTAKE EACH**, each `cmp`-diffed against its OWN snapshot,
-each anchor asserted unique (exit 3 otherwise), each build grepped for `e:`, each
-`Checker.class` md5 recorded and all distinct, restore verified OUTSIDE the driver and the
-binary rebuilt after every restore.
-
-| arm | injected mistake | class | RED |
-|---|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | `f3190558` | **8** — exactly the eight positives |
-| a1 | the RETURN site removed | `30dbdf39` | **5** — q01/q03 uniquely, plus the three both-position pins |
-| a2 | the ASSIGNMENT site removed | `36afe255` | **6** — q02/q04/q07 uniquely, plus the same three |
-| a3 | the object-literal refusal dropped | `90277509` | **1** — uniquely q11 |
-| a4 | the callable refusal dropped | `56be4f82` | **1** — uniquely q12 |
-| a4b | ONLY the cheap AST callable pre-gate dropped | `cc335973` | **0** — redundant with the signature test, kept for cost |
-| a5 | the single-survivor test dropped | `b197de0e` | **3** in three classes — ONE observable |
-| a6 | the assignment target read NARROWED, not DECLARED | `9f60802c` | **0** — undiscriminated (see below) |
-| a7 | the target-weakness pre-gate removed | `517e872e` | **0** — the COST reorder, provably output-neutral |
-| b1 | the 2559/2560 split reverted | `d1ff3af8` | **4** — the four wrong-code shapes |
-| b2 | the WEAK veto dropped from the call-result relation | `80a14e56` | **3** — w1/w3/w5, and NOT w6 |
-| b3 / b3b | an unresolved / `any` call result answers false | `d58ec2a3` / `e79768e6` | **0** — DEAD arms |
-| c1 | the enum member-COUNT boundary dropped (always `E.A`) | `68f31eb6` | **2** — the one-member pins |
-| c2 | the enum display reverted (always `E`) | `15bf37a5` | **2** — the multi-member pins |
-| d1 | the `new` branch removed | `8e3374f4` | **2** — exactly its two positives |
-
-**FIVE ARMS READ 0 AND EACH IS A DIFFERENT KIND OF ZERO** — the distinction round 927 asks
-for, and getting it wrong in either direction is how a guard gets deleted or credited.
-**a7 is provably unobservable**: the pre-gate's every term is re-tested by
-[Checker.tryEmitWeakTypeAssignment] and the pin-fixture capture is byte-identical with and
-without it — it exists to keep `typeOfExpr.calls` off the value, and the counter table is
-its evidence. **a4b is redundant** with the signature test one line down, kept for the same
-reason. **a6 is undiscriminated, not redundant**: for an IDENTIFIER target `getTypeOfExpression`
-reads `currentLocalTypes`, which holds the DECLARED type and never flow-narrows, so the two
-ladders agree on every shape here; the annotation ladder is kept because it avoids a
-`getTypeOfExpression` per assignment. **b3 / b3b are DEAD** — the pristine
-`getDefaultSettings` shape they were written for RESOLVES its inferred return type in this
-compiler, so both legs are unreached and the pin travels the ordinary path; recorded in the
-pin's KDoc rather than claimed (round 807).
-
-**AND THE PIN THE ARMS REPAIRED, FOR THE SECOND ROUND RUNNING.** The two-constituent
-refusal shipped with `{ zzzA?: null } | string` and arm a5 read **0 RED** against it — a
-resolved union's member ORDER is not its display order, so `firstOrNull` hands the helper
-`string`, on which every weak predicate bails. With TWO WEAK constituents the arm goes RED.
-(CHK.57) found the identical thing one position over; the OBVIOUS union fixture is the one
-that cannot see it.
-
-**ONE PROCESS ACCIDENT WORTH RECORDING.** A `python3 build/chk58/ablate.py 2>&1 | head -0`
-typed with no arm argument ran the driver over EVERY arm; `head -0` closed the pipe, the
-tool timed out at 2 minutes and killed it mid-arm, leaving the PARENT `Checker.kt` in the
-tree with no marker — round 805's hazard, caught by `git status --porcelain` before the
-next build. Recovered with `git checkout --` because the work was already committed
-(round 789's law), and the rebuilt class md5 came back to `fda5e367`, the recorded value.
-
-**RESIDUE, ALL MEASURED, RE-QUEUED AS (CHK.59).** Two-or-more non-nullish constituents
-(needs the RELATION); a CALLABLE source at the var-decl / return / assignment positions —
-**the code split UNBLOCKED it, and what is left is the ANCHOR**, since tsc squiggles the
-EXPRESSION there (`w7.ts` 3:22 / 4:34 / 6:9) and not the name / `return` / LHS; an
-enum-member CALL ARGUMENT (the argument walker types through `getTypeOfExpression`, which
-answers `any` for `E.A`); a GENERIC instantiation source (the deliberate `Type.Reference`
-bail — now SYMMETRIC across positions, which is the point); the nested object-literal LEAF
-walker; and the fresh-object-literal-vs-bare-weak-ARGUMENT TS2353 boundary.
-
-
-### Round (CHK.57) — the weak rule now distributes over a **UNION** target in both walker positions; the queue's own two-constituent shape was a **dead** ablation arm, and the verdict call it names is a **redundant** guard
-
-**THE DEFECT WAS ONE `when` ARM WIDE.** [Checker.weakTargetProperties] answers null for a
-[Type.Union], so every B482 walker — the ones that actually EMIT TS2559/TS2560 at a named
-position — was blind to a weak type reached through one, while (CHK.54)'s SELECTION and
-(CHK.56)'s TS2769 path had folded over constituents all along. `T | null` / `T | undefined`
-is the commonest parameter and variable shape in real TypeScript, so this was the rule
-absent from the majority of the positions where it fires.
-[Checker.weakUnionRefusalConstituent] composes the two helpers the queue named — the
-verdict [Checker.weakParamRefusesArg] and the display [Checker.weakRefusalDisplayTarget] —
-and is wired into the single-signature CALL argument site and
-[Checker.tryEmitTopLevelWeakVarDecl] as a branch **disjoint** from the bare-target one
-(the bare branch's own condition is its guard, which is why the bare path is byte-identical
-and arm a0's controls stay green).
-
-**BOTH POSITIONS CLOSED, EVERY ROW BYTE-EXACT AGAINST tsc 7.0.2**, read off the compiler
-rather than derived (fixtures kept per pin under `build/chk57/pinora`). Parent `fdab56c0`,
-ship `f3190558`, both built in this session; `Diagnostic.character` is the CLI's **1-based**
-column verbatim — (CHK.56)'s note said 1-based and I re-derived it as 0-based, which
-reddened nine pins on the first run, so that fact now sits in the pin class's own KDoc.
-
-| # | shape | tsc 7.0.2 | parent `fdab56c0` | ship `f3190558` |
-|---|---|---|---|---|
-| p01 | ONE sig, param `{zzzA?;zzzF?} \| null`, arg `123` | TS2559 2:24 naming the CONSTITUENT | **SILENT** | ✓ exact |
-| p02 | var decl `{zzzA?;zzzF?} \| null = "utf8"` | TS2559 1:7 at the var NAME | **SILENT** | ✓ exact |
-| p03 | ditto with `\| undefined` | TS2559 2:24 | **SILENT** | ✓ |
-| p04 | INTERFACE constituent | TS2559 3:25 naming `'ZzzP04'` | **SILENT** | ✓ |
-| p05 | NON-fresh object source `{zzzZ:1}` | TS2559 3:24 naming `'{ zzzZ: number; }'` | **SILENT** | ✓ |
-| p06 | REST param `...o: (W \| null)[]` | TS2559 2:24 | **SILENT** | ✓ |
-| p07 | ALIAS constituent, call AND var decl | TS2559 3:25 + 4:7 naming `'ZzzP07'` | **SILENT** | ✓ both |
-| — | `Partial<{zzzA:number}> \| null`, both positions | TS2559 naming `'Partial<{ zzzA: number; }>'` | **SILENT** | ✓ both |
-| — | rest/class-instance source at the ARGUMENT | TS2559 | **SILENT** | ✓ |
-| p08 | source SHARES a property | (no error) | ✓ | ✓ |
-| p09 | `{}` arg / explicit `null` | (no error) | ✓ | ✓ |
-| p11 | OBJECT-LITERAL argument | **TS2353** 2:26 at the PROPERTY | SILENT | **SILENT — deliberate** |
-| p16 | TWO WEAK constituents | TS2345 2:24 / TS2322 3:7, WHOLE union | **SILENT** | **SILENT — open** |
-| p13 | CALLABLE source `() => 1` | TS2559 2:24 | SILENT | **SILENT — deliberate** |
-| p14 | BARE weak target, both positions | TS2559 2:24 + 3:7 | ✓ | ✓ unchanged |
-| p15 | object-literal INITIALIZER | TS2353 1:58 | ✓ | ✓ unchanged |
-
-**THREE REFUSALS, EACH MEASURED RATHER THAN CHOSEN.**
-
-* **Two or more non-nullish constituents are a DIFFERENT MECHANISM, not a conservatism.**
-  tsc words them as ordinary assignability naming the WHOLE union — TS2345 at an argument,
-  TS2322 at a var decl — which needs the RELATION to reject, where the weak rule lives in
-  the walkers. Emitting TS2559 there would be the right verdict with the wrong sentence.
-* **An OBJECT-LITERAL argument keeps (CHK.56)'s boundary.** tsc's freshness/excess check
-  runs above the weak one and squiggles the offending PROPERTY (`p11.ts(2,26)` TS2353),
-  two columns right of where the weak wording sits; we do not emit that excess row for an
-  argument the relation ACCEPTED, so the shape stays silent rather than acquiring a row at
-  the wrong span. The var-decl twin needs no guard and has a pin saying so:
-  [Checker.topLevelWeakSource] answers null for an object literal, and `p15` — which this
-  compiler ALREADY matched byte for byte — is unmoved.
-* **A CALLABLE source is refused because our TS2559/TS2560 SPLIT is wrong at the BARE
-  target, and I measured that rather than inheriting it.** tsc emits 2560
-  (*Did you mean to call it?*) only when CALLING the source yields something assignable to
-  the target — `() => number` against a weak object is **TS2559**, `() => { zzzA?: null }`
-  is TS2560 — where [Checker.tryEmitWeakTypeAssignment] emits 2560 for **every** callable
-  source. Distributing uniformly would have added a row with the wrong CODE, so the union
-  path refuses; the bare divergence is queued as (CHK.58).
-
-**TWO ABLATION FINDINGS WORTH MORE THAN THE FIX.**
-
-* **The queue's own two-constituent shape (`{ zzzA?: null } | string`) is a DEAD ARM.**
-  Arm a2 (single-survivor test dropped) read **0 RED** against it, and not because the pin
-  was blind: with a NON-weak first constituent `firstOrNull` hands
-  [Checker.tryEmitWeakTypeAssignment] a `string` target, on which it bails anyway. The
-  discriminating shape is **two WEAK object constituents**; with `p16` carrying it the arm
-  went to **1 RED, uniquely that pin**. Round 902's law, and the queue entry's own example
-  was the shape that cannot see it.
-* **`weakUnionRefusalConstituent`'s verdict call is a REDUNDANT GUARD.** Arm a6 (replace it
-  with `true`) read **0 RED**, and this one IS explicable term for term: for the single
-  surviving constituent, [Checker.weakParamRefusesArg]'s weak-name fold reduces to that
-  constituent's own [Checker.weakTargetProperties] + all-optional + non-empty test, its
-  `others.none { … }` relation escape is vacuous (`others` is empty whenever the survivor
-  is weak, and `weakNames` is empty otherwise), and its source-enumerability and overlap
-  tests ARE the emitter's. Kept as the sentence that says what the rule is, recorded in the
-  KDoc as redundant, and **not claimed as pin coverage** (round 807).
-
-**GATES.** Suite **16,169 / 0 / 3** (+14, exactly the one new class), summed with
-`xml.etree` over the SEVEN-module glob (core 15,185 + project 704 + kir 146 + daemon 66 +
-api 30 + client 20 + cli 18); **no corpus baseline moved** — the 13k baselines carry no
-weak-union shape at all. `cost_gate.py` exit 0 unrebaselined, `output.errors` **46**; the
-table is the parent's to within 35 calls on the largest counter (`typeOfExpr.calls`
-590,782 -> 590,817 = +0.006%, `globals.lookups` +19), i.e. the union fold costs nothing on
-tsc's own sources because nothing there reaches it. `huge_methods.py --fail-over 0` exit 0,
-**783** classes scanned, 0 over limit. **8-profile grid over two session-built binaries**
-with a `javap` control of **0 vs 1** occurrences of the new helper: capture md5
-**`503774c23b4535130ffdebabef430cf0`** on the parent AND the ship, per-profile `diff` clean,
-i.e. **`added=0 removed=0` on all eight** and identical to the digest (CHK.54)/(CHK.55)/
-(CHK.56) recorded. `partition-equivalence` **EQUIVALENT, all 78**, floor **63 ms**
-[63, 62, 51, 81] — one draw. `capture-equivalence` **1,005 span(s) in 43 of 76 file(s),
-types=1005 definitions=0, moreAny 0**, `definitions` **360,376**, ARM DIGESTs
-`full=-3735929574989657502 narrow=-2075467818767010709` — the standing state, unmoved.
-The last two were taken on `c1970110`, which is the ship binary's bytecode: the only later
-edit was a KDoc, and `javap -c -p` minus the `LineNumberTable` is **byte-identical** across
-the two builds (1,024,524 lines each). **Checker.kt is ONE class, so an inserted comment
-line shifts every later line number and the class md5 moves for a comment** — do not read
-that as a code change, and do not read a stable md5 as proof of one either.
-
-**LIBRARIES: `knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW
-BYTE-IDENTICAL** (`diff` clean, parent and ship arms both built in this session).
-The queue item predicted "it ADDS rows … the `readFileSync` family is exactly this shape —
-expect it to fire on real code": **measured FALSE, and (CHK.54) is why.** Selection already
-refuses a weak-union parameter for a disjoint argument, so `readFileSync(p, 'utf8')` picks
-the `string` overload and the argument site never asks. The shape that reaches the new code
-is a SINGLE signature (or a var decl) with a weak union — which neither library and none of
-the eight profiles contains.
-
-**SEVEN ABLATION ARMS, ONE MISTAKE EACH**, each `cmp`-diffed against its OWN snapshot, each
-anchor asserted unique (exit 3 otherwise), each build grepped for `e:`, each `Checker.class`
-md5 recorded and all seven distinct, restore verified OUTSIDE the driver and the binary
-rebuilt after every restore (the class dir returns to `c1970110` each time, printed per arm).
-
-| arm | injected mistake | class | RED of 14 |
-|---|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | `fdab56c0` | **7** — exactly the seven positives |
-| a1 | the object-literal guard dropped | `d25ef27d` | **1** — uniquely the object-literal pin |
-| a2 | the single-survivor test dropped (`singleOrNull` -> `firstOrNull`) | `19fce64d` | **1** — uniquely the two-constituent pin (**0** before its fixture was repaired) |
-| a3 | the callable-source guard dropped | `07f884ad` | **1** — uniquely the callable pin |
-| a4 | the ARGUMENT site's union retry removed | `a2ce04b6` | **6** — every call-position positive |
-| a5 | the VAR-DECL site's union branch removed | `6ae581a2` | **2** — the two var-decl positives |
-| a6 | the weak VERDICT not asked (always refuse) | `3bf59b3d` | **0** — a REDUNDANT guard, explained above |
-
-**WHAT IS MEASURED AND STILL OPEN — queued as (CHK.58).** Six shapes, all read off tsc
-7.0.2 this round and all recorded with the fixture that shows them; the largest is that
-**a weak union is still silent in the RETURN and ASSIGNMENT positions** and that our
-**TS2560 is emitted for every callable source** where tsc splits on the return type.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3615,7 +3472,11 @@ rebuilt after every restore (the class dir returns to `c1970110` each time, prin
   distinct rows on the 8 profiles, and ALL SIX ARE THE LOOP JOIN:**
   `checker.ts:35649:17`, `moduleNameResolver.ts:824:26`, `moduleNameResolver.ts:2265:17`,
   `harness/tsserverLogger.ts:28:5`, `server/project.ts:502:33`, `server/project.ts:528:37`.
-  **So (CHK.63) needs exactly ONE thing now: (CHK.66).** The arm regenerates with
+  **NOT RE-MEASURED 2026-08-28 — the `armBGR` grid was not re-run after (CHK.66)(a), so
+  the 6-row list above still stands as last measured. What DID change is the thing it is
+  blocked on: (CHK.66)'s standalone price fell 3 rows -> 1, so the gate now needs
+  (CHK.66)(b)'s remaining ONE row plus (CHK.67), and re-taking `armBGR` on top of the
+  landed reduction is the first move of the next round.** The arm regenerates with
   `python3 build/chk65/arm.py 1234` (parts: 1 = the gate, 2 = the RETURN reader, 3 = the
   ASSIGNMENT reader, 4 = (b)'s checking half); grid tag `chk65_bgr2`.
 
@@ -3631,31 +3492,34 @@ rebuilt after every restore (the class dir returns to `c1970110` each time, prin
   nullish union that `canUseTypeEngine` refuses against a primitive target), and it is
   therefore part of (CHK.63)'s single commit, not an item of its own.
 
-- [ ] **(CHK.66) THE LOOP JOIN — BUILT, PRICED AT **3** ROWS (down from (CHK.63)(b)'s 8),
-  AND ITS BLOCKER IS `getUnionType`, NOT A FLAG (2026-08-28).** `narrowTypeFromFlowCore`
-  answers `declaredType` at every `FlowLoopLabel`, so **every loop erases every narrowing
-  established before it** — `r = ""; while (…) { } take(r)` is a false positive even when
-  the loop never mentions `r`. The design unions the label like a branch label with its
-  own id in `narrowLoopCut`, a back edge that re-enters it contributing `never`; that is
-  EXACT for this flow algebra (every back edge is either a monotone narrowing, or it
-  passes an assignment whose post-state comes from the DECLARED type and cuts the
-  recursion itself). Ported onto (CHK.65)'s HEAD with `narrowLoopCutUsed` separated from
-  `narrowWalkTruncated` it matches tsc 7.0.2 on **14 of 15** loop shapes and costs **3**
-  ours-only rows per profile, all of one family:
-  `checker.ts:43282:21`, `utilities.ts:11586:63`, `utilities.ts:11704:47`, each reading a
-  union like `ConditionalTypeNode | Node | undefined` — **a narrowed SUBTYPE beside the
-  declaration's own constituents.** tsc's `getTypeAtFlowLoopLabel` unions with
-  `UnionReduction.Subtype`; **INV.5(a) interns our unions by member-id list and performs
-  NO subtype reduction**, so `A | B` with `A ⊆ B` survives and a later discriminant test
-  can no longer filter it. Three refusals AT THE LABEL were measured and only the first
-  does anything — refuse a `never` join (8 -> 3), refuse a join with a `declaredType`
-  antecedent (no effect), refuse a join that is not a STRICT SUBSET of the declaration's
-  constituents (no effect) — which PROVES the offending union is built downstream, at a
-  branch join over states the label has only just made reachable. **So the next attempt
-  is a subtype reduction at the flow joins, not another label policy.** Regenerate with
-  `python3 build/chk65/loop.py baseR`. Fixture `build/chk65/f4` (15 shapes, graded by a
-  deliberate mis-assignment — see the (CHK.65) note for why a `zzzTake(r)` fixture is
-  vacuous); residue P11, where tsc says `string` and the arm says `string | number`.
+- [x] **(CHK.66)(a) DONE 2026-08-28 — A FLOW JOIN REDUCES SUBTYPES; `string | number | "a"`
+  WAS A SHIPPED DIVERGENCE AT A PLAIN BRANCH LABEL.** [Checker.getUnionType] performs no
+  subtype reduction (INV.5(a) interns by member-id list alone), so
+  [Checker.narrowTypeFromFlowCore]'s `FlowBranchLabel` arm kept a narrowed member beside
+  the declaration's own — four lines, no loop, no partition, confirmed against tsc 7.0.2.
+  `flowJoinUnion` applies tsc's `UnionReduction.Subtype` at the TWO flow joins only, gated
+  on a member the DECLARATION does not itself contain and requiring a STRICT subtype
+  (`subtypeRelation` is declared here with ZERO readers, so only assignability exists).
+  `AFlowJoinReducesANarrowedSubtypeTest` (7 positives naming their reader, 2 controls).
+  Grid byte-identical, suite +9, no baseline moved.
+
+- [ ] **(CHK.66)(b) THE LOOP JOIN — RE-PRICED 2026-08-28 FROM **3** ROWS TO **1**, AND THE
+  SURVIVOR IS NOT A REDUCTION PROBLEM.** With (a) landed and BOTH joins routed through
+  `flowJoinUnion`, `build/chk65/loop.py baseR` costs exactly ONE ours-only row on every
+  one of the 8 profiles (`added=1 removed=0`, the same row each time):
+  **`checker.ts:43282:21`**. The two `utilities.ts` rows the queue named
+  (`11586:63`, `11704:47`, the `ConditionalTypeNode | Node | undefined` family) are
+  **CLOSED by (a)**. The survivor is `previousDeclaration = node` reporting
+  `<SignatureDeclaration's own 14 constituents> | ClassDeclaration | ClassExpression`,
+  i.e. our narrowing leaves two CLASS kinds in a union tsc has filtered to
+  `SignatureDeclaration` — a discriminant / `isFunctionLike` filter gap over a
+  loop-carried state, NOT a subtype-reduction one. Built tree
+  `build/chk66/snap/Checker.kt.loopR`; regenerate with `python3 build/chk65/loop.py baseR`
+  plus the two `flowJoinUnion` routings — **`loop.py` REWRITES the region holding the
+  reduction helper, so re-insert it from `build/chk66/red.py` afterwards or the build
+  fails on `Unresolved reference 'flowJoinUnion'`**. Fixture `build/chk65/f4` (15 shapes,
+  graded by a deliberate mis-assignment); residue P11, where tsc says `string` and the arm
+  says `string | number`.
 
 - [ ] **(CHK.67) `checker.ts:35649` IS NOT THE LOOP JOIN — AN ASSIGNMENT-RHS
   CLASSIFICATION GAP (2026-08-28, measured on the combined arm).** With the gate, the

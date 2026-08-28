@@ -1,5 +1,40 @@
 # Status
 
+**(CHK.66) — A FLOW JOIN NOW REDUCES SUBTYPES: `string | number | "a"` WAS A **SHIPPED**
+DIVERGENCE AT A PLAIN BRANCH LABEL, AND THE LOOP JOIN RE-PRICES **3 ROWS -> 1**
+(2026-08-28, one commit `ad888740`).** The queue named the loop join's blocker as
+`getUnionType`'s missing subtype reduction and located the offending union "downstream, at
+a branch join". Measured, that defect needs no loop at all:
+`const x = zzzMk(); if (x === "a") { } const p: boolean = x` reported
+`string | number | "a"` where tsc 7.0.2 reports `string | number` — four lines, no
+partition, no gate. It is not only display: the extra member survives a later DISCRIMINANT
+test that would have filtered the supertype away. `flowJoinUnion` applies tsc's
+`UnionReduction.Subtype` at the TWO flow joins in `narrowTypeFromFlowCore` and NOWHERE
+else — INV.5(a) interns unions by member-id list and union member ORDER is pinned
+byte-for-byte across ~13k baselines, so reducing inside `getUnionType` was refused on
+sight. Two conservatisms, both pinned: only a member the DECLARATION does not itself
+contain may be dropped, and the drop needs a STRICT subtype (**`subtypeRelation` is
+declared in this repo and has ZERO readers** — only assignability exists).
+
+**THE LOOP JOIN, RE-PRICED ON TOP OF IT: 3 -> 1.** With both joins routed through the
+helper, the loop arm costs exactly ONE ours-only row on every one of the 8 profiles
+(`checker.ts:43282:21`); **both `utilities.ts` rows are CLOSED**. The survivor is a
+different mechanism — `SignatureDeclaration`'s own 14 constituents plus
+`ClassDeclaration | ClassExpression`, i.e. a discriminant/`isFunctionLike` filter gap over
+a loop-carried state. (CHK.63)'s own `armBGR` grid was NOT re-run and its 6-row list
+stands as last measured.
+
+**GATES.** Suite **16,348** / 0 / 3 (+9, exactly the new subtests); **no corpus baseline
+moved**. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0 on all eight — byte
+identical to the parent rebuilt this session (`Checker.class d0997340`). `cost_gate` exit
+0, `output.errors` 46, every counter the standing residual moved in the third decimal.
+`huge_methods` 783 classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floor
+**54 ms**, one draw). `capture-equivalence` DIVERGED 968 in 43 of 76, definitions=0,
+moreAny=0 — unchanged in every field; both arm digests moved and were NOT classified per
+element this round. knip 48, jsonrepair 4. Vacuity: **7 of 9 pins RED on the parent**,
+exactly the 7 positives. Three ablation arms — a1 **7 RED**, a2 **1 RED** uniquely (its
+separating control), a3 **0** and named **UNDISCRIMINATED rather than redundant**.
+
 **(CHK.65) — A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS **EMPTY**: A SECOND
 `!== undefined` GUARD ON THE SAME PROPERTY PATH DID NOT NARROW, AT **TWO** READERS, AND IT
 WAS **SHIPPED** (2026-08-28, one commit).** `if (s.p !== undefined) { return s.p; }` twice
@@ -236,135 +271,3 @@ and is reported as a non-result.
 
 **RESIDUE, PINNED WITH THE VALUE WE ANSWER**: `super.<opt>` and an INTERSECTION receiver both
 hover `number` where tsc says `number | undefined`.
-
-**(CHK.61)(a) — THE ONE LINE THAT CLOSES THE WHOLE `this`-RECEIVER FAMILY — **LANDED**, AT
-**ZERO** DASHBOARD ROWS, AFTER THREE ROUNDS OF REFUSALS (2026-08-27, (CHK.62b) +
-(CHK.61)(1) + (CHK.61)(a), four commits).** `computeRawTypeOfPropertyAccess` typed its
-receiver with `getTypeOfExpression`, which answers `any` for `Identifier("this")` — and
-`any` is legal everywhere, so the entire family failed in the FALSE-NEGATIVE direction with
-nothing to see. `thisReceiverCarrierType` supplies `currentClassForThis`'s declared instance
-type, only where the receiver already typed `any`/`error`. Measured on
-`build/chk60/br/b2.ts`: **3 of tsc 7.0.2's 7 rows before, all 7 after, at tsc's own
-positions** — and **`definitions` 360,376 -> 360,414**, i.e. go-to-definition on a
-`this.<member>` caret now RESOLVES.
-
-**THE PRICE FELL 6 -> 3 -> 1 -> 0 ACROSS FOUR ROUNDS, AND EVERY STEP WAS A DIFFERENT,
-PRE-EXISTING DEFECT THE `any` WAS HIDING.** (CHK.62) closed gaps 3 and 4 (6 -> 3);
-**(CHK.62b)** closed the third — an assignment whose RHS is a **`this`-method call** did not
-narrow the assigned reference, because `rhsIsDefinitelyNonNullish`'s CALL arm resolves the
-callee through `resolvePropertyMethodDecl`, which TYPES THE RECEIVER and bails on `any`
-(3 -> 1) — and it reproduces on the SHIPPED binary whenever the reference's declared union
-comes from something other than `this`; **(CHK.61)(1)** closed the last, merging an
-INTERSECTION source in the ACCEPTING direction (1 -> 0).
-
-**THE REVERTED (CHK.61)(1) ATTEMPT WAS THIS RULE BEING *UNSOUND*, NOT AN UNMASKED DEFECT
-ELSEWHERE — AND A CENSUS OF THE NEWLY ACCEPTED PAIRS SAID SO IN ONE RUN.** All four were
-one shape: `FunctionExpression & { name: undefined; parent: … }` accepted against
-`{ name: Identifier }`. The merge rule is "the intersected member is a subtype of EVERY
-declaration, so ANY relating declaration suffices" — valid only when each declaration's type
-is spelled out INCLUDING its optionality. We model an optional member as plain `T`
-((CHK.61)(b)), so `FunctionExpression`'s `name?: Identifier` was picked where the real
-intersected member is `undefined`, and the next negative type-predicate narrow then
-subtracted that constituent and left `never` — `callHierarchy.ts:199`. A source-side
-`| undefined`, LOCAL to the rule, fixes it.
-
-**GATES, per commit, all foreground.** Suite **16,262 / 16,267 / 16,272 / 16,273**, 0
-failed, 3 skipped (+5/+5/+5/+1, exactly the new classes), **no corpus baseline moved on any
-of the four.** `cost_gate.py` PASSES on all, `output.errors` **46**, every counter within a
-hundredth of a percent of (CHK.62)'s standing reading (`typeOfExpr.calls` +1.41/+1.42%,
-`globals.lookups` +1.52%). `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
-**8-profile grid `503774c23b4535130ffdebabef430cf0` — the standing value — on all three
-code commits INCLUDING the one that lands (a): `added=0 removed=0` on all eight.** `knip`
-**48** and `jsonrepair` **4**, every row byte-identical. `partition-equivalence` EQUIVALENT
-all 78 (floors 56 / 57 / 66 ms, one draw each).
-
-**`capture-equivalence` MOVED BOTH ARM DIGESTS ON THE (a) COMMIT AND THAT IS THE POINT.**
-`full=5591703872112101713 narrow=704838071822341252`, `definitions` **360,376 -> 360,414**,
-with `DIVERGED` UNCHANGED at 1,005 spans in 43 of 76 (types=1005, definitions=0, moreAny 0)
-— a full-build fix, so the full-vs-narrow relationship is untouched; (INC.26)'s rule.
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0/a1 (the (CHK.62b)
-carrier removed / present-but-inert) **3 RED each — a ROUND-927 PAIR, one observable**;
-a2 (any resolved `this.m()` treated as non-nullish) **1, uniquely the nullable-return row**;
-b0 (the acceptance leg) **2**, b1 (the source-side `| undefined` — the earlier attempt's
-exact mistake) **1**, b2 (the missing-required-property refusal) **1**; c0 (the (a) carrier)
-**3**. **TWO ARMS READ 0 AND ARE RECORDED, NOT CLAIMED**: c1 (consult the carrier SECOND) is
-a REDUNDANT guard — the fallback for a bare `this` is exactly `anyType`, so the two orders
-are observationally identical — and **c2 (the carrier answers for EVERY identifier receiver)
-was UNPINNED**, which the round fixed rather than excused: the added
-`zzzM(zzzP: any) { zzzP.zzzReq }` control makes c2 red uniquely.
-
-**RESIDUE, RE-QUEUED**: (CHK.61)(b), the dropped `| undefined` at
-`computeRawTypeOfPropertyAccess`'s three `prop != null` returns — still 3 rows, still five
-narrowing gaps, and now the reason `this.zzzOpt` reads `Type 'number'` where tsc reads
-`Type 'number | undefined'`; and a PROPERTY-access assignment RHS (`p ??= o.zzzFld`) does
-not narrow at all, which is not `this`-shaped.
-
-**THREE OF (CHK.61)'s FOUR UNMASKED GAPS ARE CLOSED, **TWO OF ITS FOUR DIAGNOSES WERE
-WRONG**, AND THE `this`-RECEIVER PATCH NOW COSTS **3** DASHBOARD ROWS INSTEAD OF 6
-(2026-08-27, (CHK.62), three fixes).** Gap **4**: `spreadGuaranteedProps` had no
-`Type.Intersection` arm, so `{ ...mk(), insertString }` with an intersection-returning `mk`
-(harness `client.ts:242`) reported TS2739 for the five properties the spread supplies — a
-union guarantees what EVERY constituent has, an intersection what ANY does. Gap **3**: an
-optional source parameter's type is `T | undefined` (tsc's `addOptionality`) and we modelled
-it as `T`, so `(x?: string) => void` was not assignable to `(x: string | undefined) => void`
-— **not** the recorded "function-type properties are compared covariantly", which is false:
-our parameter contravariance was always correct and the METHOD form fails identically. Gap
-**2**: a call to a `: never` function now DIVERGES (tsc's `unreachableNeverType`), so
-`Debug.assertNever(kind);` in a switch `default:` no longer merges the pre-switch type back
-in — but the recorded "a SHORTHAND object-literal property does not flow-narrow" is also
-false, and **the row it was written for did not move**.
-
-**RE-BISECTING THE ROW THAT DID NOT MOVE FOUND A THIRD, `this`-MEDIATED GAP, QUEUED AS
-(CHK.62b)**: an assignment whose RHS is a **`this`-METHOD CALL** does not narrow the assigned
-reference — `let p = this.find(); p ??= this.create(); return { p }` reports
-`p: T | undefined` with NO switch in it, while the identical assignment with a free-function
-RHS is silent. It is invisible without the (a) patch, because `this.create()` types `any`
-today; closing it takes (a) from 3 rows to **1** (the un-merged intersection source alone).
-
-**THE PERF DESIGN OF THE DIVERGING-CALL PREDICATE IS THREE MEASURED GATES.** Resolving the
-callee on every flow call reads `typeOfExpr.calls` **+9.61%** / `globals.lookups` **+4.43%**
-(COST GATE FAILED) because `callHasNeverReturnAnnotation` reaches `resolvePropertyMethodDecl`,
-which **types the receiver**. Requiring an `ExpressionStatement` parent -> +3.19%/+2.22%;
-using the symbol-table-only `resolveNamespaceMemberFnDecl` -> `typeOfExpr.calls` **+1.42%,
-digit-identical to standing**; pre-gating the namespace receiver on `currentFileLocals` ->
-`globals.lookups` **+1.52%**, gate PASSES. A per-request memo measured **exactly zero** — the
-population is one ask per call per compile.
-
-**GATES, per commit.** Suite **16,247 / 16,252 / 16,257**, 0 failed, 3 skipped (+4/+5/+5,
-exactly the three new classes), **no corpus baseline moved on any of the three**.
-`cost_gate.py` PASSES on all three, `output.errors` **46**; `typeOfExpr.calls`,
-`narrow.walks`, `narrow.memoServed` and `spine.nodes` digit-identical to (CHK.61c/d).
-`huge_methods --fail-over 0` exit 0, **783** classes, 0 over. **8-profile grid
-`503774c23b4535130ffdebabef430cf0` on all three** — the standing value, per-profile
-`added=0 removed=0` on all eight. **`knip` 48 and `jsonrepair` 4, every row byte-identical.**
-`partition-equivalence` EQUIVALENT all 78. `capture-equivalence` **1,005 span(s) in 43 of 76,
-moreAny 0, definitions 360,376 — unchanged — but BOTH ARM DIGESTS MOVED on the gap-2 commit**
-(`full=-7560141526203174980 narrow=-5179824964953234569`), which is (INC.26)'s expected
-behaviour for a FULL-BUILD fix and is re-recorded, not read as a regression: commits 1 and 2
-reproduced the old digests exactly.
-
-**FOUR ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.** a0 (the
-intersection arm reverted, `8b85adc4`) 2 RED; a1 (the optional widening reverted, `d6a568d0`)
-3 RED; a2 (`flowCallDiverges` forced false, `d6e9f431`) 3 RED; a3 (only its namespace-member
-arm off, `957b605e`) **1** RED, uniquely the `Debug.assertNever` positive. The
-`currentFileLocals` pre-gate has NO arm and is NOT claimed as coverage — it is a perf guard
-with no observable behaviour, graded by `cost_gate.py`, both readings recorded.
-
-**AND `python3 scripts/cost_gate.py 2>&1 | grep …; echo "exit=$?"` READS THE *GREP's* STATUS**
-— a FAILING gate prints a plausible table and `exit=0`. Redirect to a file and read `$?` from
-the gate.
-
-
-**THE TWO DEFECTS (CHK.61) NAMED WERE BUILT, PRICED AND **REFUSED** — EACH UNMASKS
-PRE-EXISTING ENGINE GAPS AS DASHBOARD FALSE POSITIVES — AND THE PRICING TURNED UP TWO OTHER
-DEFECTS THAT WERE FREE TO FIX (2026-08-27, (CHK.61c)+(CHK.61d), two fixes).** (a) taking
-`currentClassForThis` as the receiver type when `this` types `any` is ONE line and closes
-**every** row (CHK.60) measured — `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to all
-7 — at a price of **+4 harness / +2 server** profile rows (compiler profile 46 -> 46, corpus
-GREEN, both libraries byte-identical). (b) `| undefined` on an optional property access is
-one line and prints tsc's exact text, at **3** compiler-profile rows (its corpus and
-library price is UNMEASURED — only the grid was run for (b)). Every one of those 9
-rows is a FALSE POSITIVE from a pre-existing gap the `any` was hiding, so under this arc's
-own convention ((CHK.51) kept a firewall "worth 43 rows"; (INC.42) narrowed rather than
-shipping FPs) both are refused, mapped cause by cause with `this`-free repros, and queued.
