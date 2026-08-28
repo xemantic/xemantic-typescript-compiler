@@ -116165,8 +116165,18 @@ interface DataView {
                     // realizeDiagnostic; the historical object-literal member-precision
                     // hazard is covered by the M3.1/M3.4 machinery landed since — full
                     // 8-profile A/B verified strictly-removals).
-                    (expr.expression is CallExpression || expr.expression is Identifier ||
-                        expr.expression is PropertyAccessExpression) &&
+                    // (CHK.63)(c) The operand is read THROUGH parentheses, and a
+                    // LOGICAL operand (`&&` / `||` / `??`) joins the list. `(x)!` is `x!`
+                    // — a parenthesis is not a shape — and it was measured to keep the
+                    // whole union: `return (t)!` against `string | number` was a false
+                    // TS2322 on the shipped binary. The logical arm is what tsc's own
+                    // `server/project.ts:746` needs (`return (info &&
+                    // info.getLatestVersion())!`), and it is the same question one
+                    // operator up: every constituent of `a && a.b()` is a constituent of
+                    // one of its operands, so the all-CONCRETE gate below still decides
+                    // it. `,` is deliberately NOT included — a comma's value is its LAST
+                    // operand and [CommaListExpression] is a different node here.
+                    nonNullOperandStrips(expr.expression) &&
                         t.types.none { typeContainsUnresolvedTypeParam(it) } ->
                         narrowByExcludingNullUndefined(t)
                     else -> t
@@ -118616,6 +118626,29 @@ interface DataView {
         if (!antecedentIsNullishOnly) return antecedent
         if (typeHasNullishConstituent(assigned)) return antecedent
         return declaredType
+    }
+
+    /**
+     * (CHK.63)(c) Does a `!` over [operand] strip nullish from a UNION operand type?
+     *
+     * The historical list is CallExpression / Identifier / PropertyAccess (rounds
+     * 439/456/479), each admitted separately with an 8-profile A/B; a `.x!` on an object
+     * literal and a type-parameter-carrying operand are the two hazards the round-407
+     * note defers, and the second is still refused by the caller's
+     * `typeContainsUnresolvedTypeParam` gate. This adds the two spellings that are the
+     * SAME operand written differently: through parentheses, and through a logical
+     * operator whose value is one of its own operands.
+     */
+    private fun nonNullOperandStrips(operand: Expression): Boolean = when (operand) {
+        is CallExpression, is Identifier, is PropertyAccessExpression -> true
+        is ParenthesizedExpression ->
+            operand.jsdocCastType == null && nonNullOperandStrips(operand.expression)
+        is BinaryExpression -> when (operand.operator) {
+            SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                nonNullOperandStrips(operand.left) && nonNullOperandStrips(operand.right)
+            else -> false
+        }
+        else -> false
     }
 
     private fun narrowUnionByRhsAssignment(declared: Type, rhsType: Type): Type {
