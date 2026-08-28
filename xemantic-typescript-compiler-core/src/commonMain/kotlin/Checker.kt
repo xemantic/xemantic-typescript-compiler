@@ -117496,6 +117496,35 @@ interface DataView {
     }
 
     /**
+     * (CHK.67) The value a CHAINED assignment ultimately assigns: `x = y = z` gives `x`
+     * the value of `z`, because the type of an assignment EXPRESSION is the type of its
+     * right operand. Every arm of [narrowByAssignmentRhs] below classifies the right-hand
+     * side SYNTACTICALLY, so an un-unwrapped `y = z` matches none of them (it is a
+     * `BinaryExpression` whose operator IS `=`, which the (CHK.33) computed-primitive arm
+     * excludes by construction) and the walk falls through to the conservative antecedent
+     * pass-through — leaving `number | undefined` where tsc says `number`.
+     *
+     * Measured as a SHIPPED false positive at the union-target declaration reader, needing
+     * no gate and no loop: `let i: number | undefined; i = c = xs.length;` then
+     * `const p: number | string = i` is ours-only against tsc 7.0.2. The corresponding
+     * `x = y` and `x = a + b` spellings of the same idiom already worked, so the three
+     * spellings disagreed — round 833's shape, one helper over.
+     *
+     * Parenthesised chains unwrap too (`x = (y = z)`); a COMPOUND assignment (`y += z`)
+     * is deliberately NOT unwrapped, because its value is a function of `y`'s prior type
+     * rather than of `z` (the same reason [getLiteralRhsTypeForAssignment] skips them).
+     */
+    private fun unwrapAssignmentChainRhs(expr: Expression?): Expression? {
+        var e: Expression = expr ?: return null
+        var guard = 0
+        while (guard++ < 32) {
+            val inner = unwrapParensExpr(e)
+            if (inner is BinaryExpression && inner.operator == SyntaxKind.Equals) e = inner.right else return inner
+        }
+        return e
+    }
+
+    /**
      * M1.4-prep (round 386): the full assignment-effect narrowing applied at a
      * [FlowAssignment] node, shared by BOTH walker mirrors. Two layers:
      *
@@ -117550,7 +117579,7 @@ interface DataView {
                 return antecedent
             }
         }
-        val rhs: Expression? = when (node) {
+        val rhs: Expression? = unwrapAssignmentChainRhs(when (node) {
             is VariableDeclaration ->
                 if ((node.name as? Identifier)?.text == name) node.initializer else null
             is BinaryExpression -> {
@@ -117580,7 +117609,7 @@ interface DataView {
                 }
             }
             else -> null
-        }
+        })
         // Round 477 (tsc getAssignmentReducedType — the fourslash reassignment idiom):
         // `expected = typeof expected === "string" ? { name: expected } : expected` —
         // the RHS can no longer be the tested primitive, so the post-assignment type
