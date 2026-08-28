@@ -131,6 +131,7 @@ import org.jetbrains.kotlin.ir.builders.irDelegatingConstructorCall
 import org.jetbrains.kotlin.ir.builders.irElseBranch
 import org.jetbrains.kotlin.ir.builders.irEqualsNull
 import org.jetbrains.kotlin.ir.builders.irGet
+import org.jetbrains.kotlin.ir.builders.irInt
 import org.jetbrains.kotlin.ir.builders.irIs
 import org.jetbrains.kotlin.ir.builders.irNull
 import org.jetbrains.kotlin.ir.builders.irReturn
@@ -173,6 +174,7 @@ import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.classifierOrNull
 import org.jetbrains.kotlin.ir.types.makeNullable
+import org.jetbrains.kotlin.ir.types.typeWith
 import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.createThisReceiverParameter
 import org.jetbrains.kotlin.ir.util.defaultType
@@ -227,6 +229,7 @@ internal class KirFileLowering(
     private val constructorsByDeclaration get() = tables.constructorsByDeclaration
     private val fields get() = tables.fields
     private val optionalParameters get() = tables.optionalParameters
+    private val restParameters get() = tables.restParameters
 
     private val types = ErasedTypes(
         irBuiltIns,
@@ -981,8 +984,9 @@ internal class KirFileLowering(
      */
     private fun addParameters(function: IrFunction, parameters: List<Parameter>) {
         parameters.forEachIndexed { index, parameter ->
-            if (parameter.dotDotDotToken) {
-                refuse(tsFile, parameter, "rest parameters are out of the spike subset")
+            val rest = parameter.dotDotDotToken
+            if (rest && index != parameters.lastIndex) {
+                refuse(tsFile, parameter, "a rest parameter must be the last one")
             }
             // A DESTRUCTURING parameter has no name of its own — the pattern is
             // its own binding list — so the slot gets a synthetic one and the
@@ -992,16 +996,27 @@ internal class KirFileLowering(
                 pos = parameter.pos,
                 end = parameter.pos,
             )
-            val type = facts.typeOf(parameter)
-                ?: refuse(tsFile, parameter, "the checker gave no type for parameter '${name.text}'")
-            val optional = parameter.questionToken || parameter.initializer != null
-            val erased = erase(parameter, type).let { if (optional) it.makeNullable() else it }
+            val optional = !rest && (parameter.questionToken || parameter.initializer != null)
+            // A REST slot is the runtime array the call site BUILDS, and its
+            // type is taken from the runtime rather than from the checker: the
+            // declared `...args: T[]` erases to the same `JsArray` anyway, and
+            // reading it here keeps the slot right even where the checker gave
+            // the parameter no type at all (a `...args` with no annotation).
+            val erased = if (rest) {
+                intrinsics.jsArrayType
+            } else {
+                val type = facts.typeOf(parameter) ?: refuse(
+                    tsFile, parameter, "the checker gave no type for parameter '${name.text}'"
+                )
+                erase(parameter, type).let { if (optional) it.makeNullable() else it }
+            }
             val irParameter = function.addValueParameter(
                 kotlinName(name.text),
                 erased,
                 builder.generatedOrigin
             )
             if (optional) optionalParameters.add(irParameter)
+            if (rest) restParameters.add(irParameter)
         }
     }
 
@@ -3336,9 +3351,13 @@ internal class KirFileLowering(
             if (parameter.name !is Identifier) {
                 refuse(tsFile, parameter, "a destructuring parameter is out of the spike subset")
             }
-            if (parameter.dotDotDotToken) {
-                refuse(tsFile, parameter, "a rest parameter is out of the spike subset")
+        }
+        val restIndex = parameters.indexOfFirst { it.dotDotDotToken }
+        if (restIndex >= 0) {
+            if (restIndex != parameters.lastIndex) {
+                refuse(tsFile, parameters[restIndex], "a rest parameter must be the last one")
             }
+            return lowerVariadicFunctionValue(parameters, body, inheritThis, restIndex)
         }
         val lambda = builder.irFactory.buildFun {
             name = SpecialNames.ANONYMOUS
@@ -3367,6 +3386,122 @@ internal class KirFileLowering(
             lambda,
             IrStatementOrigin.LAMBDA
         )
+    }
+
+    /**
+     * A function value with a rest parameter — the one whose arity is not static.
+     *
+     * It cannot be a `FunctionN`, because `N` is the CALLER's choice: the
+     * replacer `cronstrue` hands to `String.replace` is called with as many
+     * arguments as the match produced, and picking an arity from the
+     * declaration would drop the surplus silently. So the body is compiled to
+     * take every actual argument as ONE array, and the declared names are read
+     * back out of it in the prologue — the fixed ones by index, the rest one as
+     * the remainder. The carrier is the runtime's `JsVarargFunction`, which
+     * `jsCall` unpacks where the actual count is known.
+     *
+     * The parameters become LOCALS rather than IR parameters, which also makes
+     * assignment to one of them ordinary (a JavaScript parameter is mutable,
+     * and [bindParameters] copies to a local for exactly that reason).
+     */
+    private fun lowerVariadicFunctionValue(
+        parameters: List<Parameter>,
+        body: Node,
+        inheritThis: Boolean,
+        fixed: Int
+    ): IrExpression {
+        parameters.forEach { parameter ->
+            if (parameter.initializer != null) {
+                refuse(
+                    tsFile, parameter,
+                    "a default value on a parameter of a variadic function value is out of " +
+                        "the spike subset"
+                )
+            }
+        }
+        val lambda = builder.irFactory.buildFun {
+            name = SpecialNames.ANONYMOUS
+            returnType = types.anyNullable
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+        }
+        lambda.parent = frame.irFunction
+        val packed = lambda.addValueParameter(
+            Name.identifier("\$arguments"),
+            intrinsics.jsArrayType,
+            builder.generatedOrigin
+        )
+        val thisReceiver = if (inheritThis) frame.thisReceiver else null
+        val ownerClass = if (inheritThis) frame.ownerClass else null
+        inFunction(lambda, types.anyNullable, thisReceiver, ownerClass) {
+            lambda.body = variadicLambdaBody(parameters, body, packed, fixed)
+        }
+        val implType = irBuiltIns.functionN(1).symbol
+            .typeWith(intrinsics.jsArrayType, types.anyNullable)
+        return scope.irCall(intrinsics.jsVarargFunction).apply {
+            arguments[0] = scope.irInt(fixed)
+            arguments[1] = IrFunctionExpressionImpl(
+                UNDEFINED,
+                UNDEFINED,
+                implType,
+                lambda,
+                IrStatementOrigin.LAMBDA
+            )
+        }
+    }
+
+    /** [lowerVariadicFunctionValue]'s body: the prologue that unpacks, then the statements. */
+    private fun variadicLambdaBody(
+        parameters: List<Parameter>,
+        body: Node,
+        packed: IrValueParameter,
+        fixed: Int
+    ): org.jetbrains.kotlin.ir.expressions.IrBlockBody {
+        scopes.addLast(HashMap())
+        val lowered = mutableListOf<IrStatement>()
+        parameters.forEachIndexed { index, parameter ->
+            val text = (parameter.name as Identifier).text
+            val rest = index >= fixed
+            val local = buildVariable(
+                frame.irFunction as IrDeclarationParent,
+                UNDEFINED,
+                UNDEFINED,
+                builder.generatedOrigin,
+                Name.identifier(kotlinName(text)),
+                if (rest) intrinsics.jsArrayType else types.anyNullable,
+                isVar = true,
+            )
+            local.initializer = if (rest) {
+                scope.irCall(intrinsics.jsVarargRest).apply {
+                    arguments[0] = scope.irGet(packed)
+                    arguments[1] = scope.irInt(fixed)
+                }
+            } else {
+                scope.irCall(intrinsics.jsVarargFixed).apply {
+                    arguments[0] = scope.irGet(packed)
+                    arguments[1] = scope.irInt(index)
+                }
+            }
+            lowered.add(local)
+            scopes.last()[text] = local
+        }
+        if (body is Block) {
+            body.statements.forEach { lowerStatement(it, lowered) }
+            if (body.statements.lastOrNull() !is ReturnStatement) {
+                lowered.add(scope.irReturn(scope.irNull()))
+            }
+        } else {
+            val expression = body as? Expression
+                ?: refuse(tsFile, body, "cannot lower this function body")
+            lowered.add(
+                scope.irReturn(
+                    coerce(expression, lowerExpression(expression), types.anyNullable)
+                )
+            )
+        }
+        scopes.removeLast()
+        return blockBodyOf(lowered)
     }
 
     /**
@@ -4354,6 +4489,41 @@ internal class KirFileLowering(
         offset: Int
     ) {
         val regular = parameters.filter { it.kind == IrParameterKind.Regular }
+        // A REST slot absorbs every argument from its own position on, so the
+        // callee's arity stops being an upper bound and the surplus is not an
+        // error — it is the array. Built HERE rather than in the callee because
+        // this is the only place that knows how many arguments there are.
+        val restIndex = regular.indexOfFirst { it in restParameters }
+        if (restIndex >= 0) {
+            if (node.arguments.size < restIndex) {
+                refuse(
+                    tsFile, node,
+                    "expected at least $restIndex argument(s) but found ${node.arguments.size}"
+                )
+            }
+            val collected = node.arguments.drop(restIndex).map { argument ->
+                coerce(argument, lowerExpression(argument), types.anyNullable)
+            }
+            val restArray = scope.irCall(intrinsics.jsArrayOf).apply {
+                arguments[0] = scope.irVararg(irBuiltIns.anyNType, collected)
+            }
+            regular.take(restIndex).forEachIndexed { index, parameter ->
+                val argument = node.arguments.getOrNull(index)
+                arguments[offset + index] = if (argument != null) {
+                    coerce(argument, lowerExpression(argument), parameter.type)
+                } else if (parameter in optionalParameters) {
+                    scope.irNull()
+                } else {
+                    refuse(
+                        tsFile, node,
+                        "expected at least $restIndex argument(s) but found " +
+                            "${node.arguments.size}"
+                    )
+                }
+            }
+            arguments[offset + restIndex] = restArray
+            return
+        }
         if (node.arguments.size > regular.size) {
             refuse(
                 tsFile, node,

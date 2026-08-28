@@ -153,6 +153,18 @@ internal class KirProgramTables(
         Collections.newSetFromMap(IdentityHashMap())
 
     /**
+     * The REST parameter slots, remembered for the same reason [optionalParameters]
+     * is: nothing on the `IrValueParameter` says it collects the caller's
+     * trailing arguments rather than taking one of them.
+     *
+     * Its erased type is the runtime array — indistinguishable from a parameter
+     * genuinely declared `T[]`, which is exactly the pair a call site must tell
+     * apart: one takes an array the caller built, the other builds one.
+     */
+    val restParameters: MutableSet<IrValueParameter> =
+        Collections.newSetFromMap(IdentityHashMap())
+
+    /**
      * Is [node] part of THIS program, rather than of a lib `.d.ts`?
      *
      * Asked of a declaration reached through a type, and answered by walking

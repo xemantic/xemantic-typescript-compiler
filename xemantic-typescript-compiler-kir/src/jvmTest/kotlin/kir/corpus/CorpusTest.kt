@@ -149,6 +149,11 @@ class CorpusTest {
         assertCorpusProgram("16-inheritance")
     }
 
+    @Test
+    fun `17 rest parameters`() {
+        assertCorpusProgram("17-rest-params")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

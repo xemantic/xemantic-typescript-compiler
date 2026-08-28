@@ -25,7 +25,18 @@
 
 package com.xemantic.typescript.compiler.kir.lower
 
+import com.xemantic.typescript.compiler.ArrowFunction
+import com.xemantic.typescript.compiler.Constructor
+import com.xemantic.typescript.compiler.ConstructorType
+import com.xemantic.typescript.compiler.FunctionDeclaration
+import com.xemantic.typescript.compiler.FunctionExpression
+import com.xemantic.typescript.compiler.FunctionType
+import com.xemantic.typescript.compiler.GetAccessor
+import com.xemantic.typescript.compiler.IndexSignature
+import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.Parameter
+import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeFlags
 import org.jetbrains.kotlin.ir.IrBuiltIns
@@ -272,6 +283,12 @@ internal class ErasedTypes(
      */
     private fun mapCallable(type: Type.Object): IrType? {
         val signature = type.callSignatures?.firstOrNull() ?: return null
+        // A VARIADIC signature has no arity to erase to: `...rest` hands the
+        // count to the caller, so no `FunctionN` is the right shape and the
+        // value stays dynamic. Every call of it then goes through `jsCall`,
+        // which is where the actual argument count is known and where the
+        // runtime's `JsVarargFunction` is unpacked.
+        if (isVariadic(signature.declaration)) return anyNullable
         return function(signature.parameters.size)
     }
 
@@ -342,3 +359,38 @@ internal fun coercionFor(from: IrType, target: IrType, irBuiltIns: IrBuiltIns): 
 /** Convenience for the common `(expression, target)` shape. */
 internal fun coercionOf(value: IrExpression, target: IrType, irBuiltIns: IrBuiltIns): Coercion =
     coercionFor(value.type, target, irBuiltIns)
+
+/**
+ * The declared parameter list of a function-like node, or null when [node] is
+ * not one.
+ *
+ * There is no common supertype to ask — each function-like AST class declares
+ * its own `parameters` — so the arms are enumerated here ONCE and every
+ * consumer shares them. A missing arm reads as "not function-like", i.e. as a
+ * non-variadic signature, which is the safe direction: the lowering then keeps
+ * its existing `FunctionN` erasure rather than inventing a dynamic one.
+ */
+internal fun functionLikeParameters(node: Node?): List<Parameter>? = when (node) {
+    is FunctionDeclaration -> node.parameters
+    is FunctionExpression -> node.parameters
+    is ArrowFunction -> node.parameters
+    is MethodDeclaration -> node.parameters
+    is Constructor -> node.parameters
+    is GetAccessor -> node.parameters
+    is SetAccessor -> node.parameters
+    is IndexSignature -> node.parameters
+    is FunctionType -> node.parameters
+    is ConstructorType -> node.parameters
+    else -> null
+}
+
+/**
+ * Does [node] declare a rest parameter?
+ *
+ * `Signature` carries no such flag — [com.xemantic.typescript.compiler.Signature]
+ * has `parameters` and `minArgumentCount` and nothing that separates `f(a, b)`
+ * from `f(a, ...b)` — so the fact is read back off the declaration, which is the
+ * only place it exists.
+ */
+internal fun isVariadic(node: Node?): Boolean =
+    functionLikeParameters(node)?.lastOrNull()?.dotDotDotToken == true

@@ -134,6 +134,30 @@ internal class KirIntrinsics(
     /** An array literal's constructor: `jsArrayOf(vararg Any?)`. */
     val jsArrayOf: IrSimpleFunctionSymbol by lazy { runtime("jsArrayOf") }
 
+    /**
+     * The runtime carrier for a function value whose arity is NOT static — one
+     * declared with a rest parameter, see `JsRuntime.JsVarargFunction`.
+     *
+     * It is deliberately not a `FunctionN`: there is no `N` to pick, because the
+     * CALLER decides how many arguments there are. Every call of such a value
+     * therefore goes through `jsCall`, which is the one place that knows the
+     * actual count.
+     */
+    val jsVarargFunctionClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsVarargFunction")
+    }
+
+    val jsVarargFunctionType: IrType by lazy { jsVarargFunctionClass.owner.defaultType }
+
+    /** `jsVarargFunction(fixed, impl)` — builds one. */
+    val jsVarargFunction: IrSimpleFunctionSymbol by lazy { runtime("jsVarargFunction") }
+
+    /** `jsVarargFixed(arguments, i)` — one NAMED parameter of a variadic body. */
+    val jsVarargFixed: IrSimpleFunctionSymbol by lazy { runtime("jsVarargFixed") }
+
+    /** `jsVarargRest(arguments, from)` — the REST parameter of a variadic body. */
+    val jsVarargRest: IrSimpleFunctionSymbol by lazy { runtime("jsVarargRest") }
+
     /** The runtime's property bag — what an interface or object type erases to. */
     val jsObjectClass: IrClassSymbol by lazy {
         builder.referenceClass(irFile, "$runtimePackage.JsObject")

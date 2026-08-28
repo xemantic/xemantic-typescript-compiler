@@ -746,6 +746,67 @@ public class JsSet {
 }
 
 /**
+ * A function value whose arity is NOT fixed — one declared with a rest parameter.
+ *
+ * Every other function value erases to a `kotlin.FunctionN`, which is possible
+ * only because the arity is a static fact. `...rest` removes that fact: the
+ * caller decides how many arguments there are, so there is no `N` to pick, and
+ * a `FunctionN` chosen from the DECLARATION would silently drop the surplus —
+ * `cronstrue`'s replacer callback would then be handed one capture group where
+ * the match produced three.
+ *
+ * So such a value carries its arguments as an array instead, and [fixed] says
+ * how many of them the declaration named before the rest: the body reads
+ * `arguments[0 until fixed]` as its own parameters and the remainder as the
+ * rest array. The packing happens in [jsCall] and its specializations, which is
+ * the one place that knows the ACTUAL argument count.
+ *
+ * @property fixed the number of parameters declared before the rest parameter.
+ * @property impl the body, taking every actual argument as one array.
+ */
+public class JsVarargFunction(
+    public val fixed: Int,
+    public val impl: (JsArray) -> Any?,
+) {
+
+    public operator fun invoke(arguments: JsArray): Any? = impl(arguments)
+
+    override fun toString(): String = "function"
+
+}
+
+/** Builds a [JsVarargFunction]; what the lowering emits for `function (a, ...rest)`. */
+public fun jsVarargFunction(fixed: Int, impl: (JsArray) -> Any?): JsVarargFunction =
+    JsVarargFunction(fixed, impl)
+
+/**
+ * One NAMED parameter of a [JsVarargFunction], read out of the packed arguments.
+ *
+ * Out of range is `null`, which is what an omitted argument is everywhere else
+ * in this runtime — a variadic function called with fewer arguments than it
+ * named is ordinary JavaScript, not an error.
+ */
+public fun jsVarargFixed(arguments: JsArray, index: Int): Any? =
+    arguments[index.toDouble()]
+
+/**
+ * The REST parameter of a [JsVarargFunction]: every argument from [from] on.
+ *
+ * Always a fresh array, never a view — the body may push to it, and JavaScript's
+ * rest parameter is a genuine new array rather than a slice of `arguments`.
+ */
+public fun jsVarargRest(arguments: JsArray, from: Int): JsArray {
+    val rest = JsArray()
+    var index = from
+    val length = arguments.length.toInt()
+    while (index < length) {
+        rest.push(arguments[index.toDouble()])
+        index++
+    }
+    return rest
+}
+
+/**
  * Calling a value whose static type did not say how many parameters it takes.
  *
  * The dynamic arm of the call lowering, and it exists because a UNION of
@@ -781,6 +842,7 @@ public fun jsCall0(callee: Any?): Any? = when (callee) {
     is Function1<*, *> -> (callee as Function1<Any?, Any?>)(null)
     is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(null, null)
     is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(null, null, null)
+    is JsVarargFunction -> callee.impl(JsArray())
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
@@ -791,6 +853,7 @@ public fun jsCall1(callee: Any?, a0: Any?): Any? = when (callee) {
     is Function0<*> -> callee()
     is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, null)
     is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, null, null)
+    is JsVarargFunction -> callee.impl(jsArrayOf(a0))
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
@@ -801,6 +864,7 @@ public fun jsCall2(callee: Any?, a0: Any?, a1: Any?): Any? = when (callee) {
     is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
     is Function0<*> -> callee()
     is Function3<*, *, *, *> -> (callee as Function3<Any?, Any?, Any?, Any?>)(a0, a1, null)
+    is JsVarargFunction -> callee.impl(jsArrayOf(a0, a1))
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
@@ -811,6 +875,7 @@ public fun jsCall3(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? = when (cal
     is Function2<*, *, *> -> (callee as Function2<Any?, Any?, Any?>)(a0, a1)
     is Function1<*, *> -> (callee as Function1<Any?, Any?>)(a0)
     is Function0<*> -> callee()
+    is JsVarargFunction -> callee.impl(jsArrayOf(a0, a1, a2))
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
@@ -849,6 +914,10 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
                 argument(0), argument(1), argument(2), argument(3), argument(4)
             )
         }
+        // The one callee whose arity is decided HERE rather than at its
+        // declaration: every actual argument is packed, so nothing is dropped
+        // and nothing is invented.
+        is JsVarargFunction -> callee.impl(JsArray(arguments.toList()))
         null -> throw JsTypeError("undefined is not a function")
         else -> throw JsTypeError("${jsToString(callee)} is not a function")
     }
