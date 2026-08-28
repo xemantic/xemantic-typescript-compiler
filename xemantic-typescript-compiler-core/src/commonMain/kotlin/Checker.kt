@@ -117685,7 +117685,15 @@ interface DataView {
      */
     private fun narrowByAssignmentRhs(node: Node, name: String, antecedent: Type, declaredType: Type): Type {
         if (flowAssignmentTargetsName(node, name)) {
-            getLiteralRhsTypeForAssignment(node)?.let { return narrowUnionByRhsAssignment(antecedent, it) }
+            // (CHK.70)(c) The LITERAL arm is the THIRD arm of this function and the only
+            // one (CHK.63)(a) did not route through [assignmentReduceBase]. Without it
+            // `let r: string | undefined = undefined; r = ""` answers `undefined` — the
+            // `""` cannot restore a member the pre-assignment narrowing had already lost,
+            // although an assignment OVERWRITES — and tsc's own `harness/tsserverLogger.ts`
+            // `replaceAll` then reported at its `return result`.
+            getLiteralRhsTypeForAssignment(node)?.let {
+                return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, it), it)
+            }
         }
         // Round 460: a destructuring ASSIGNMENT `({ pos, end } = refs(i))` OVERWRITES each
         // pattern name (tsc program.ts getReferencedFileLocation's switch cases assign
@@ -118762,8 +118770,9 @@ interface DataView {
      */
     /**
      * (CHK.63)(a) The type an assignment's post-state must be REDUCED FROM, for the
-     * two arms of [narrowByAssignmentRhs] that resolve their right-hand side's type
-     * (a bare Identifier — round 463 — and a PropertyAccess — round 464). Those arms
+     * three arms of [narrowByAssignmentRhs] that resolve their right-hand side's type
+     * (a bare Identifier — round 463 —, a PropertyAccess — round 464 — and the LITERAL
+     * arm, which (CHK.70)(c) found had been left out). Those arms
      * filter the ANTECEDENT, which is right for a union antecedent and a NO-OP when
      * the antecedent is nullish-only: [narrowUnionByRhsAssignment] answers a
      * non-union receiver unchanged, and an antecedent union of `null | undefined`
