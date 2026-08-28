@@ -100089,7 +100089,7 @@ interface DataView {
     private fun registerNestedGlobalShadowDecls(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
         for (d in declarations) {
             when (val declName = d.name) {
-                is Identifier -> registerNestedGlobalShadowName(declName.text, paramNames)
+                is Identifier -> registerNestedGlobalShadowName(declName.text, paramNames, d.type)
                 // Round 460: a nested DESTRUCTURED const's binding names shadow a global
                 // the same way — tsc checker.ts `const { start, length } =
                 // getDiagnosticSpanForCallNode(…)` inside an if-block: the bare-RHS read
@@ -100109,13 +100109,42 @@ interface DataView {
         }
     }
 
-    private fun registerNestedGlobalShadowName(nm: String, paramNames: Set<String>) {
+    private fun registerNestedGlobalShadowName(
+        nm: String, paramNames: Set<String>, ann: TypeNode? = null,
+    ) {
         if (nm in paramNames) return
         // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
         val outerBound = globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true
         if (outerBound && !currentLocalTypes.containsKey(nm)) {
             currentShadowedNames.add(nm)
             currentLocalTypes[nm] = anyType
+            return
+        }
+        // (CHK.71) THE INHERITED-LOCAL sibling of the round-455 global shadow. This
+        // function runs BEFORE the body walk on a freshly COPIED scope, so every entry
+        // standing in `currentLocalTypes` here belongs to an ENCLOSING function (or to the
+        // top-level shadow pass that just ran) — never to this block. A block-scoped
+        // declaration inside a NESTED function therefore shadows it, and without this the
+        // flat first-decl-wins map keeps the enclosing function's binding: tsc's
+        // `moduleNameResolver.ts` `secondaryLookup`'s own
+        // `let result: Resolved | undefined` inside an `if` block resolved to
+        // `resolveTypeReferenceDirective`'s `result`, and both assignments to it reported
+        // TS2322 against the WRONG declaration's type (ours-only, on every profile).
+        //
+        // Three shapes, and only the third was open: an inner declaration at the nested
+        // function's TOP level is round 351's [applyBodyLocalShadowing] arm, two
+        // declarations in ONE body are round 460's [applyAmbiguousBlockScopedLocals], and
+        // a nested function's BLOCK-scoped one was neither.
+        //
+        // An ANNOTATED declaration records its own annotation (the flat map's best
+        // approximation, and exactly what the top-level arm does); an un-annotated one
+        // records `anyType`, i.e. suppression, because a block-scoped inferred type must
+        // not be claimed for reads outside the block.
+        if (!outerBound && currentLocalTypes.containsKey(nm)) {
+            currentShadowedNames.add(nm)
+            val t = ann?.let { getTypeFromTypeNode(it) }
+            currentLocalTypes[nm] =
+                if (t != null && t !== anyType && t !== errorType) t else anyType
         }
     }
 

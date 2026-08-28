@@ -20,6 +20,97 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.71) — B83.5 was the WRONG NAME for the blocker, the real one is a **fourth shadow shape** and it LANDS; the receiver half is refused again, on a *different* row
+
+**THE HEADLINE.** (CHK.71) was queued as "blocked on nested-function shadowing (B83.5)".
+The blocker reduced to twelve lines, turned out to be a **fourth, uncovered shadow shape**
+rather than an unbound declaration, and is **landed on its own** — it is a shipped false
+positive with no optional chain anywhere near it. The optional-chain receiver half is
+**still refused**, but its price has moved: `moduleNameResolver.ts:706/710` are **gone**,
+and what remains is **one knip row** needing a narrowing nobody had named.
+
+**THE FOURTH SHADOW SHAPE.** `currentLocalTypes` is flat and first-decl-wins, and a
+function body enters on a COPY of its enclosing scope, so three mechanisms keep a
+shadowing declaration from reading the inherited binding: round 351's
+`applyBodyLocalShadowing` (a declaration at the nested function's TOP level), round 460's
+`applyAmbiguousBlockScopedLocals` (two declarations of one name in ONE body) and round
+455's `applyNestedGlobalShadow` (a BLOCK-scoped declaration shadowing a GLOBAL or
+file-level binding). The fourth combination — **a BLOCK-scoped declaration inside a NESTED
+function shadowing an ENCLOSING FUNCTION's local** — was none of them, and
+`registerNestedGlobalShadowName`'s condition says so literally:
+`outerBound && !currentLocalTypes.containsKey(nm)`, i.e. it fires only when the name is
+*not* already bound, which is exactly the inherited case inverted.
+
+The reduction separates all four in one file, and only the fourth fires:
+
+```
+function m1() {            // FIRES on the parent, tsgo silent
+  let result = mkO();
+  function inner(): Inner | undefined {
+    if (flag) { let result: Inner | undefined; result = mkI(); return result; }
+    return undefined;
+  }
+  inner(); return result;
+}
+function m2() { …nested fn, TOP-level decl… }   // silent — round 351
+function m3() { …same fn, plain inner block… }  // silent — round 460
+```
+
+**WHY IT IS SAFE TO WRITE, AND WHAT MAKES IT NOT BLANKET SUPPRESSION.** This function runs
+BEFORE the body walk on a freshly copied scope, so every entry standing in
+`currentLocalTypes` at that moment belongs to an ENCLOSING function — the test needs no
+new bookkeeping. An ANNOTATED declaration records **its own annotation** (the flat map's
+best approximation, and exactly what the top-level arm does), an un-annotated one records
+`anyType`, because a block-scoped inferred type must not be claimed for reads outside the
+block. Ablation arms b2/b3 are two spellings of "ignore the annotation" and reddened
+exactly the pin that asserts a wrong assignment is still caught against the INNER type.
+
+**THE RECEIVER HALF, RE-PRICED.** Re-derived and re-measured on top of (CHK.72)(a):
+
+  * **the two `moduleNameResolver.ts` rows are gone** — they were the fourth shadow shape,
+    and it is now fixed, so `added=0 removed=0` with BOTH halves in place (grid digest
+    `790c337141b167657e4f1f3a219474aa`, identical to HEAD);
+  * **knip goes 49 -> 50**, a NEW row and an ours-only false positive:
+    `compilers/compilers.ts:60:49 TS18047 'match' is possibly 'null'` in
+    `return match?.[1] ? [\`… ${match[1]} …\`] : []`. tsc narrows `match` to non-null in the
+    true branch of a truthy test on `match?.[1]`; we do not, and the row was invisible only
+    because `match?.[1]` used to answer `any`. **An optional-chain condition narrowing its
+    RECEIVER is the blocker now — not B83.5, which is closed.**
+  * the capture channel gains **236 definitions** in both arms, and exactly **one** of them
+    is order-dependent: `resolutionCache.ts @39543..39549` resolves in the FULL arm and is
+    ABSENT in the narrowed one, taking that gate's standing `definitions=0` to 1. The
+    (INC.2) first-touch family, in a population that did not exist on the parent.
+
+So the receiver half remains **built, measured and NOT landed** — a strictly better price
+than last round (two profile rows -> one knip row plus one capture definition), with a
+named, reducible blocker. Requeued as (CHK.71)(a).
+
+**ABLATIONS — three arms, one mistake each, each `cmp`-diffed against its own snapshot,
+each restore verified by `cmp` plus a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| b1 | the whole inherited-local shadow reverted | `ff21e8f6` | **3** | — |
+| b2 | register `anyType` instead of the declaration's annotation | `80e1a0a3` | **1** | — |
+| b3 | stop THREADING the annotation (the decl arm passes null) | `ff73fa00` | **1** | — identical red set to b2; ONE observable in two spellings |
+
+**A PIN WRITTEN AS A CONTROL MEASURED AS A POSITIVE.** `m4` asserts that the ENCLOSING
+function's binding still catches its own wrong assignment; b1 reddens it, because on the
+parent the FIRST TS2322 in that file is the INNER assignment reported against the OUTER
+type (`Type 'Inner' is not assignable to type 'Outer'`). Relabelled as a positive rather
+than left claiming control coverage. Two of my first four pin EXPECTATIONS were also wrong
+— the message strips nullish (`… to type 'Inner'`, not `'Inner | undefined'`) — and tsgo
+7.0.2 prints ours verbatim, which is now recorded in the pin.
+
+**GATES.** Suite **16,422 / 0 / 3** (+5, exactly the new pins; **no corpus baseline
+moved**), grid `790c337141b167657e4f1f3a219474aa` with `added=0 removed=0` on all eight,
+`cost_gate.py` exit **0** with `output.errors` **46** and no counter over +-2%,
+`huge_methods.py --fail-over 0` **783 scanned / 0 over**, partition-equivalence EQUIVALENT
+all 78 with floor **65 ms** [55, 81, 65, 58] (one draw), capture-equivalence DIVERGED
+**964** in 43 of 76 with `definitions=0 moreAny=0` — the standing state exactly — and knip
+**49** / jsonrepair **4**, unchanged.
+
+
 ### Round (CHK.72)(a) — the queue's attribution was wrong a TENTH time: `statSync` is not an overload-resolution gap, the flow walk's call shortcut is, and knip's row is a **default/namespace import typing as `any`**
 
 **THE HEADLINE.** Two independent findings, one landed. (1) `resolveFlowCalleeDecl`
@@ -3624,22 +3715,35 @@ RHS, and the merged-member CONTRADICTION direction.
 - [ ] **(CHK.70)(b) IS STILL OPEN — an IDENTIFIER subject's narrow is loop-blind at the
   DECLARATION reader with a PRIMITIVE target.** Unchanged by this round: the gate opened the
   RETURN and ASSIGNMENT readers, not the declaration one's `currentLocalTypes` path.
-- [ ] **(CHK.71) THE OPTIONAL-CHAIN RECEIVER HALF — BUILT, MEASURED, REFUSED ON *TWO ROWS
-  PER PROFILE*, AND THE TWO ROWS ARE B83.5.** `a?.b` looks its member up on `a` WITH its
-  nullish constituents, so every optional chain over a `T | undefined` receiver answers
-  `any` — measured on a plainly declared `number[] | undefined`, no optional member needed.
-  Since (CHK.61)(b) gave an optional member's access its `| undefined` this is **611 capture
-  spans of 742,265** rendering `any` that did not before. The fix is four lines (an
-  `optionalChainReceiverType` helper applied in `computeRawTypeOfPropertyAccess` and
-  `getTypeOfElementAccess`; the patch was scratch-only, re-derive it): it restores all 611,
-  turns **8 measured false negatives into true positives** (tsgo reports them, we do not),
-  and adds `moduleNameResolver.ts:706:21` and `710:21` on EVERY profile. Those two are
-  B83.5: `secondaryLookup`'s own `let result: Resolved | undefined` resolves to the
-  ENCLOSING function's `result` (line 546, inferred
-  `ResolvedTypeReferenceDirectiveWithFailedLookupLocations | undefined`), and it was
-  invisible only because that outer initializer is itself an optional chain and answered
-  `any`. **So this item is blocked on nested-function shadowing, not on optional chains.**
-  The RESULT half (`a?.b` is `typeof a.b | undefined`) is a separate, much larger change.
+- [x] **(CHK.71)(b) DONE 2026-08-28 — THE BLOCKER WAS NOT B83.5 BUT A *FOURTH* SHADOW
+  SHAPE, AND IT LANDS ON ITS OWN.** A BLOCK-scoped declaration inside a NESTED function
+  shadowing an ENCLOSING FUNCTION's local was covered by none of round 351
+  ([Checker.applyBodyLocalShadowing], top-level decls), round 460
+  ([Checker.applyAmbiguousBlockScopedLocals], two decls in one body) or round 455
+  ([Checker.applyNestedGlobalShadow], a GLOBAL/file-level collision) — whose condition is
+  literally `outerBound && !currentLocalTypes.containsKey(nm)`, i.e. the inherited case
+  inverted. A shipped ours-only TS2322 at every assignment to the inner name, reported
+  against the WRONG declaration's type, with no optional chain anywhere near it; twelve
+  lines reproduce it and tsgo 7.0.2 is silent. `added=0 removed=0`, suite 16,422/0/3,
+  cost_gate exit 0, knip 49 / jsonrepair 4 unchanged.
+- [ ] **(CHK.71)(a) THE OPTIONAL-CHAIN RECEIVER HALF — RE-DERIVED, RE-MEASURED, REFUSED
+  AGAIN, ON A *DIFFERENT* ROW.** `a?.b` looks its member up on `a` WITH its nullish
+  constituents, so every optional chain over a `T | undefined` receiver answers `any`; the
+  fix is an `optionalChainReceiverType` strip in `computeRawTypeOfPropertyAccess` and
+  `getTypeOfElementAccess` (four lines plus a helper — scratch only, re-derive it; a copy of
+  the measured tree is `build/chk71/Checker-both.kt`). **The two `moduleNameResolver.ts`
+  rows that refused it last round are GONE** — they were (CHK.71)(b) — and with both halves
+  the 8-profile grid is `added=0 removed=0` at the standing digest. What refuses it now:
+  **knip 49 -> 50**, an ours-only FP at `compilers/compilers.ts:60:49` (TS18047
+  `'match' is possibly 'null'` in `return match?.[1] ? [\`… ${match[1]} …\`] : []`) — tsc
+  narrows a receiver to non-null in the TRUE branch of a truthy test on an optional chain
+  and we do not, which was invisible while `match?.[1]` answered `any`. **So the blocker is
+  now OPTIONAL-CHAIN TRUTHINESS NARROWING, a nameable and reducible mechanism, not B83.5.**
+  Second, smaller cost: the capture channel gains **236 definitions** in both arms and
+  exactly one is order-dependent (`resolutionCache.ts @39543..39549`, present in FULL and
+  absent in NARROW), taking `capture-equivalence.sh`'s standing `definitions=0` to 1 — the
+  (INC.2) first-touch family, in a population that did not exist before. The RESULT half
+  (`a?.b` is `typeof a.b | undefined`) is still a separate, much larger change.
 - [ ] **(CHK.73) A DEFAULT OR NAMESPACE IMPORT TYPES AS `any` — AND THAT, NOT `statSync`,
   IS THE ONE knip ROW THE GATE ADDED (48 -> 49).** Measured inside knip's own project with a
   probe file, three spellings of the SAME function: `import { statSync } from 'node:fs'`
