@@ -2,7 +2,7 @@
 
 **(CHK.68) — `x = y = z` WAS A **SHIPPED** FALSE POSITIVE AND IT LANDS; THE GATE RE-PRICES
 **6 ROWS -> 5** AND THE COMBINED ARM IS **EXACTLY 1 ROW** — BUT THE LOOP JOIN IT NEEDS IS A
-**~20x COST BLOWUP NOBODY HAD PRICED** (2026-08-28, one commit `5fd79098`).** `armBGR` was
+**~20x COST BLOWUP NOBODY HAD PRICED** (2026-08-28, one commit `2cbb3847`).** `armBGR` was
 re-measured on top of (CHK.66)(a) and is UNCHANGED at 6 rows — the subtype reduction closes
 none of them. (CHK.67) was then diagnosed and the queue's description of it was half wrong
 in the useful direction: of its two named shapes, `index = index! + 1` was ALREADY handled

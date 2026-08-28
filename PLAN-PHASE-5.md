@@ -28,7 +28,7 @@ subtype reduction closes none of them. (CHK.67) was then diagnosed, and the queu
 description of it was half wrong in the useful direction: of its two named shapes, the
 `index = index! + 1` BinaryExpression RHS was **already handled** by the (CHK.33)
 computed-primitive arm, and the CHAINED assignment is the whole gap. It landed
-(`5fd79098`) and the gate re-prices **6 -> 5**. The COMBINED arm — gate + RETURN/ASSIGNMENT
+(`2cbb3847`) and the gate re-prices **6 -> 5**. The COMBINED arm — gate + RETURN/ASSIGNMENT
 readers + (CHK.61)(b)'s checking half + (CHK.67) + the loop join — then measures
 **`added=1 removed=0` on all eight profiles**, the single row being (CHK.66)(b)'s known
 residue `checker.ts:43282:21`.
@@ -82,7 +82,7 @@ Reachable with NO gate and NO loop at the UNION-target declaration reader:
 the object-typed sibling. `unwrapAssignmentChainRhs` descends the `=` chain through parens
 before the arms classify; a COMPOUND assignment is deliberately not unwrapped.
 
-**GATES, PER COMMIT (`5fd79098`).** Suite **16,356** / 0 / 3 (+8, exactly the new subtests)
+**GATES, PER COMMIT (`2cbb3847`).** Suite **16,356** / 0 / 3 (+8, exactly the new subtests)
 and **NO corpus baseline moved**. Grid `503774c23b4535130ffdebabef430cf0`,
 `added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
 rebuilt parent (`Checker.class 19b32bf2`, the digest the (CHK.66) note recorded).
@@ -3680,7 +3680,7 @@ ordinary relation rather than the weak rule.
   says `string | number`.
 
 - [x] **(CHK.67) DONE 2026-08-28 — A CHAINED ASSIGNMENT NARROWS TO ITS RIGHTMOST OPERAND;
-  `x = y = z` WAS A SHIPPED FALSE POSITIVE (`5fd79098`).** The queue named TWO unclassified
+  `x = y = z` WAS A SHIPPED FALSE POSITIVE (`2cbb3847`).** The queue named TWO unclassified
   shapes at `checker.ts:35649`; a six-shape census against tsc 7.0.2 shows
   `index = index! + 1` was ALREADY handled by the (CHK.33) computed-primitive arm, and the
   chained `index = cutoffIndex = result.length` is the whole gap. Every arm of
