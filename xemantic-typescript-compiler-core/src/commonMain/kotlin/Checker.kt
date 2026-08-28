@@ -117097,25 +117097,54 @@ interface DataView {
      * A [FlowCondition] / [FlowCall] / [FlowSwitchClause] is NOT a reason to refuse: each
      * only ever narrows, so with no assignment on any back edge the fixpoint over the
      * label is exactly its entry state — see the call site.
+     *
+     * (CHK.70)(a) The answer is now THREE-valued, because one assignment shape has a
+     * post-state that is a function of the DECLARATION alone and therefore needs no
+     * back-edge walk either:
+     *
+     *  * [LOOP_EFFECT_NONE] — no back edge assigns [name]; the fixpoint is the entry state.
+     *  * [LOOP_EFFECT_COMPOUND] — EVERY assignment to [name] reachable backward from a
+     *    back edge is a non-nullish COMPOUND assignment ([isNonNullishCompoundAssignmentTo]).
+     *    Each stores a primitive, so a path that assigns has a post-state bounded by
+     *    `declaredType` minus nullish, and a path that does not contributes a narrowing of
+     *    the label itself — a PARTIAL fixpoint: `E union nonNullish(declared)`, still with
+     *    no back edge traversed and so still fully memoizable. tsc's own rule is the
+     *    ANTECEDENT's base type (`getTypeAtFlowAssignment`'s Compound arm), which for
+     *    `while (…) { r = maybeUndefined(); r += s }` is `string | undefined` where the
+     *    run-time value is a string; requiring EVERY assignment to be compound is what
+     *    keeps us on tsc's side of that difference rather than one step past it.
+     *  * [LOOP_EFFECT_UNKNOWN] — anything else; today's conservative `declaredType`.
      */
-    private fun loopBodyMayAffectName(label: FlowLoopLabel, name: String): Boolean {
-        if (label.antecedents.size < 2) return false
+    private fun loopBodyEffectOnName(label: FlowLoopLabel, name: String): Int {
+        if (label.antecedents.size < 2) return LOOP_EFFECT_NONE
         var budget = 4096
+        var sawCompound = false
         val visited = NarrowSeen()
         val stack = ArrayDeque<FlowNode>()
         for (i in 1 until label.antecedents.size) stack.addLast(label.antecedents[i])
         while (stack.isNotEmpty()) {
-            if (--budget < 0) return true
+            if (--budget < 0) return LOOP_EFFECT_UNKNOWN
             val fn = stack.removeLast()
             if (fn === label) continue
             if (!visited.add(fn.id)) continue
             when (fn) {
-                is FlowStart -> return true
+                is FlowStart -> return LOOP_EFFECT_UNKNOWN
                 is FlowUnreachable -> {}
-                is FlowArrayMutation -> return true
+                is FlowArrayMutation -> return LOOP_EFFECT_UNKNOWN
                 is FlowAssignment -> {
-                    if (flowAssignmentMightNarrow(fn.node, name)) return true
-                    stack.addLast(fn.antecedent)
+                    if (flowAssignmentMightNarrow(fn.node, name)) {
+                        if (!isNonNullishCompoundAssignmentTo(fn.node, name)) return LOOP_EFFECT_UNKNOWN
+                        // Keep scanning PAST it. Stopping here would be sound for THIS
+                        // path — a compound assignment overwrites, so what the path held
+                        // before it is dead — but it would answer COMPOUND for a body that
+                        // also holds a plain nullish assignment, wherever the scan happened
+                        // to meet the compound one first; the verdict would then depend on
+                        // the order two `if` arms are written in. The condition this
+                        // function reports is the ORDER-FREE one: EVERY assignment to
+                        // [name] anywhere under the back edges is a non-nullish compound.
+                        sawCompound = true
+                        stack.addLast(fn.antecedent)
+                    } else stack.addLast(fn.antecedent)
                 }
                 is FlowCondition -> stack.addLast(fn.antecedent)
                 is FlowCall -> stack.addLast(fn.antecedent)
@@ -117124,7 +117153,36 @@ interface DataView {
                 is FlowLoopLabel -> for (a in fn.antecedents) stack.addLast(a)
             }
         }
-        return false
+        return if (sawCompound) LOOP_EFFECT_COMPOUND else LOOP_EFFECT_NONE
+    }
+
+    /**
+     * (CHK.70)(a) Is [node] a compound assignment to [name] whose stored value cannot be
+     * `null`/`undefined`?
+     *
+     * `+= -= *= /= %= **= <<= >>= >>>= &= |= ^=` all store the result of a numeric or
+     * string operation, which is a primitive by the language's own semantics — so the
+     * post-state of such an assignment is [declaredType] with the nullish constituents
+     * removed, WITHOUT resolving either operand. The three LOGICAL compound operators are
+     * deliberately absent: `&&=` stores the LHS unchanged when it is falsy (so a nullish
+     * LHS stays nullish), and `||=`/`??=` store the RHS, whose type is not decided here —
+     * they are already handled, per-assignment, by [narrowByAssignmentRhs].
+     *
+     * Identifier targets only. A property-path compound assignment (`o.p += 1`) is claimed
+     * by neither [flowAssignmentTargetsName] nor [flowAssignmentMightNarrow]'s
+     * `BinaryExpression` arm, so it never reaches [loopBodyEffectOnName]'s decision at all.
+     */
+    private fun isNonNullishCompoundAssignmentTo(node: Node, name: String): Boolean {
+        if (node !is BinaryExpression) return false
+        if ((node.left as? Identifier)?.text != name) return false
+        return when (node.operator) {
+            SyntaxKind.PlusEquals, SyntaxKind.MinusEquals, SyntaxKind.AsteriskEquals,
+            SyntaxKind.AsteriskAsteriskEquals, SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+            SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
+            SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
+            SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals -> true
+            else -> false
+        }
     }
 
     private fun flowAssignmentMightNarrow(node: Node, name: String): Boolean {
@@ -117456,10 +117514,13 @@ interface DataView {
             // today's conservative `declaredType`.
             // (ENGINE.2d)(a): THE one arm where the FollowLoopEntry mirror differs —
             // that mirror follows `antecedents[0]` UNCONDITIONALLY, which is this arm
-            // without the [loopBodyMayAffectName] gate and measures 5 ours-only rows.
+            // without the [loopBodyEffectOnName] gate and measures 5 ours-only rows.
             is FlowLoopLabel -> {
                 narrowRetryRelevantObs++
-                if (node.antecedents.isEmpty() || loopBodyMayAffectName(node, name)) declaredType
+                val effect =
+                    if (node.antecedents.isEmpty()) LOOP_EFFECT_UNKNOWN
+                    else loopBodyEffectOnName(node, name)
+                if (effect == LOOP_EFFECT_UNKNOWN) declaredType
                 else {
                     val entry = narrowTypeFromFlowCore(
                         declaredType, node.antecedents[0], name, seen, depth + 1, memo,
@@ -117471,7 +117532,17 @@ interface DataView {
                     // tsc's own `emitter.ts` into
                     // `Property … does not exist on type 'never'` (measured — those five
                     // ARE the entire diff of the ungated arm on all eight profiles).
-                    if (entry === neverType) declaredType else entry
+                    if (entry === neverType) declaredType
+                    else if (effect == LOOP_EFFECT_NONE) entry
+                    // (CHK.70)(a) `let r: string | undefined = …; r = ""; while (…) { r += s }`
+                    // — tsc's fixpoint unions the entry state with the back edge's compound
+                    // post-state and answers `string`; we answered `string | undefined` and
+                    // the RETURN reader then reported tsc's own `harness/tsserverLogger.ts`
+                    // clean function. The compound post-state is bounded by the DECLARATION,
+                    // so this union costs no traversal.
+                    else flowJoinUnion(
+                        listOf(entry, narrowByExcludingNullUndefined(declaredType)), declaredType,
+                    )
                 }
             }
             is FlowAssignment -> {
@@ -189448,6 +189519,17 @@ private const val LATE_BIND_ALIAS_HOPS = 8
 private const val CAAS_CONTINUE = 1
 private const val CAAS_BREAK = 2
 private const val CAAS_RETURN = 3
+
+/**
+ * (CHK.70)(a) [Checker.loopBodyEffectOnName]'s verdict: what the back edges of a loop
+ * label do to the walked reference. `NONE` — nothing assigns it, so the fixpoint is the
+ * loop's ENTRY state; `COMPOUND` — every back-edge assignment to it is a non-nullish
+ * compound one, so the fixpoint is bounded by `entry union nonNullish(declaredType)`;
+ * `UNKNOWN` — anything the scan cannot rule out, which keeps `declaredType`.
+ */
+private const val LOOP_EFFECT_NONE = 0
+private const val LOOP_EFFECT_COMPOUND = 1
+private const val LOOP_EFFECT_UNKNOWN = 2
 
 // ---------------------------------------------------------------------------
 // (JIT.1)(e) round 820 — companion-constant builders hoisted out of
