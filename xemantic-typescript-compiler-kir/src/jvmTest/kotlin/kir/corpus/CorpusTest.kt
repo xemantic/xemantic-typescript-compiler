@@ -154,6 +154,11 @@ class CorpusTest {
         assertCorpusProgram("17-rest-params")
     }
 
+    @Test
+    fun `18 var scoping`() {
+        assertCorpusProgram("18-var-scoping")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

@@ -307,7 +307,29 @@ internal class KirFileLowering(
         val returnType: IrType,
         val thisReceiver: IrValueParameter?,
         val ownerClass: ClassDeclaration?,
-    )
+        /** The enclosing frame, so a closure can see an outer function's `var`. */
+        val parent: FunctionFrame?,
+    ) {
+
+        /**
+         * This function's `var` bindings, by name — the FUNCTION scope.
+         *
+         * `var` is scoped to the function and not to the block, so its binding
+         * cannot live in [scopes], which is pushed and popped per block: a
+         * `var` declared inside an `if` is still readable after it. It is
+         * consulted by [lookup] only after the block chain has missed, which
+         * is what lets an inner `let` of the same name shadow it.
+         */
+        val hoisted: MutableMap<String, IrVariable> = HashMap()
+
+        /**
+         * The same variables as DECLARATIONS, to be emitted at the top of the
+         * body — which is where JavaScript hoists them, and why reading one
+         * before its assignment yields `undefined` rather than failing.
+         */
+        val hoistedDeclarations: MutableList<IrStatement> = mutableListOf()
+
+    }
 
     private val frame: FunctionFrame
         get() = current ?: error("no function frame — the lowering is out of order")
@@ -1147,12 +1169,15 @@ internal class KirFileLowering(
         inFunction(constructor, irBuiltIns.unitType, constructor.parameters.firstOrNull(), declaration) {
             // A constructor has no dispatch receiver parameter; `this` inside it
             // is the class's own thisReceiver.
+            // The frame [inFunction] just installed is replaced, not nested, so
+            // it inherits that frame's PARENT rather than becoming its child.
             current = FunctionFrame(
                 constructor,
                 DeclarationIrBuilder(builder.pluginContext, constructor.symbol),
                 irBuiltIns.unitType,
                 irClass.thisReceiver,
-                declaration
+                declaration,
+                current?.parent
             )
             val statements = mutableListOf<IrStatement>()
             scopes.addLast(HashMap())
@@ -1272,7 +1297,8 @@ internal class KirFileLowering(
             DeclarationIrBuilder(builder.pluginContext, function.symbol),
             returnType,
             thisReceiver,
-            ownerClass
+            ownerClass,
+            saved
         )
         try {
             block()
@@ -1295,13 +1321,24 @@ internal class KirFileLowering(
         return blockBodyOf(lowered)
     }
 
-    /** `IrFactory.createBlockBody` takes no statements; they are added after. */
+    /**
+     * `IrFactory.createBlockBody` takes no statements; they are added after.
+     *
+     * Every function body in this lowering is built here, which is what makes
+     * it the place `var` HOISTING happens: the declarations collected while the
+     * body was lowered are emitted before its first statement, and the frame's
+     * list is cleared so a second body cannot inherit them.
+     */
     private fun blockBodyOf(
         statements: List<IrStatement>
-    ): org.jetbrains.kotlin.ir.expressions.IrBlockBody =
-        builder.irFactory.createBlockBody(UNDEFINED, UNDEFINED).apply {
-            this.statements.addAll(statements)
+    ): org.jetbrains.kotlin.ir.expressions.IrBlockBody {
+        val hoisted = current?.hoistedDeclarations
+        val all = if (hoisted.isNullOrEmpty()) statements else hoisted + statements
+        hoisted?.clear()
+        return builder.irFactory.createBlockBody(UNDEFINED, UNDEFINED).apply {
+            this.statements.addAll(all)
         }
+    }
 
     /**
      * Binds each parameter's name, aliasing the ASSIGNED ones to a local.
@@ -1508,16 +1545,22 @@ internal class KirFileLowering(
             }
             return
         }
-        if (list.flags == SyntaxKind.VarKeyword) {
-            refuse(
-                tsFile, statement,
-                "`var` is out of the spike subset — its function scoping is not modelled"
-            )
-        }
+        // `var` is FUNCTION-scoped and hoisted: the binding belongs to the
+        // enclosing function however deeply the statement is nested, and it
+        // exists — holding `undefined` — from the function's first instruction.
+        // So the declaration moves to the top of the body ([blockBodyOf]) and
+        // only the ASSIGNMENT stays here, which is exactly what JavaScript does.
+        val hoist = list.flags == SyntaxKind.VarKeyword
         val mutable = list.flags != SyntaxKind.ConstKeyword
         for (declaration in list.declarations) {
             val pattern = declaration.name
             if (pattern is ObjectBindingPattern || pattern is ArrayBindingPattern) {
+                if (hoist) {
+                    refuse(
+                        tsFile, declaration,
+                        "a destructuring `var` is out of the spike subset"
+                    )
+                }
                 val initializer = declaration.initializer
                     ?: refuse(tsFile, declaration, "a destructuring declaration needs a value")
                 bindPattern(pattern, lowerExpression(initializer), out)
@@ -1525,6 +1568,21 @@ internal class KirFileLowering(
             }
             val name = pattern as? Identifier
                 ?: refuse(tsFile, declaration, "cannot lower this declaration name")
+            if (hoist) {
+                val variable = hoistedVariable(
+                    name,
+                    erase(declaration, variableType(declaration.name, declaration.initializer))
+                )
+                declaration.initializer?.let { initializer ->
+                    out.add(
+                        scope.irSet(
+                            variable,
+                            coerce(initializer, lowerExpression(initializer), variable.type)
+                        )
+                    )
+                }
+                continue
+            }
             // `let k: string` with no initializer holds `undefined` until it is
             // assigned — which is `null` here — so the SLOT is nullable whatever
             // the annotation said. TypeScript's definite-assignment analysis is
@@ -1550,6 +1608,35 @@ internal class KirFileLowering(
             out.add(variable)
             scopes.last()[name.text] = variable
         }
+    }
+
+    /**
+     * The FUNCTION-scoped slot for a `var`, created once per name.
+     *
+     * Always nullable and always mutable: a hoisted binding holds `undefined`
+     * until its assignment runs, and `var` may be re-declared — `var x = 1; var
+     * x = 2` is two assignments to one slot, not two slots, so a second
+     * declaration of the same name answers the first one's variable.
+     *
+     * Re-declaration is also why the type is the FIRST declaration's: the two
+     * may erase differently, and a slot that changed shape half way through a
+     * function would be a different variable.
+     */
+    private fun hoistedVariable(name: Identifier, declaredType: IrType): IrVariable {
+        frame.hoisted[name.text]?.let { return it }
+        val variable = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier(kotlinName(name.text)),
+            declaredType.makeNullable(),
+            isVar = true,
+        )
+        variable.initializer = scope.irNull()
+        frame.hoisted[name.text] = variable
+        frame.hoistedDeclarations.add(variable)
+        return variable
     }
 
     /**
@@ -1612,13 +1699,33 @@ internal class KirFileLowering(
     private fun lowerFor(statement: ForStatement): IrExpression {
         scopes.addLast(HashMap())
         val outer = mutableListOf<IrStatement>()
-        when (val initializer = statement.initializer) {
-            null -> {}
-            is VariableStatement -> lowerVariables(initializer, outer)
-            is com.xemantic.typescript.compiler.VariableDeclarationList ->
-                lowerVariables(VariableStatement(initializer), outer)
-            is Expression -> outer.add(lowerExpression(initializer))
+        val initializerList = when (val initializer = statement.initializer) {
+            null -> null
+            is VariableStatement -> initializer.declarationList
+            is com.xemantic.typescript.compiler.VariableDeclarationList -> initializer
+            is Expression -> {
+                outer.add(lowerExpression(initializer))
+                null
+            }
             else -> refuse(tsFile, initializer, "cannot lower this `for` initializer")
+        }
+        initializerList?.let { lowerVariables(VariableStatement(it), outer) }
+        // A `let` loop variable is a FRESH binding per iteration, and a `var`
+        // one is a single binding shared by the whole loop. The difference is
+        // observable only through a closure — `for (let i…) fns.push(() => i)`
+        // answers 0,1,2 where the `var` spelling answers 3,3,3 — so the copy is
+        // made only where the body builds one, and the loop is otherwise
+        // emitted exactly as before.
+        val perIteration = if (
+            initializerList != null &&
+            initializerList.flags != SyntaxKind.VarKeyword &&
+            buildsAClosure(statement.statement)
+        ) {
+            initializerList.declarations
+                .mapNotNull { (it.name as? Identifier)?.text }
+                .mapNotNull { name -> lookup(name)?.let { name to it } }
+        } else {
+            emptyList()
         }
         val loop = IrWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null)
         loop.condition = statement.condition?.let { condition(it) } ?: scope.irBoolean(true)
@@ -1629,21 +1736,69 @@ internal class KirFileLowering(
         } else {
             null
         }
+        val inner = mutableListOf<IrStatement>()
+        // The fresh copies are declared, the body is lowered against THEM, and
+        // the values are written back before the incrementor runs — which is
+        // what makes an assignment inside the body still reach the next
+        // iteration. `continue` lands after the trampoline, so it reaches the
+        // write-back too.
+        scopes.addLast(HashMap())
+        val copies = perIteration.map { (name, carrier) ->
+            val copy = buildVariable(
+                frame.irFunction as IrDeclarationParent,
+                UNDEFINED,
+                UNDEFINED,
+                builder.generatedOrigin,
+                Name.identifier(kotlinName(name)),
+                carrier.type,
+                isVar = true,
+            )
+            copy.initializer = scope.irGet(carrier)
+            inner.add(copy)
+            scopes.last()[name] = copy
+            carrier to copy
+        }
         loops.addLast(LoopFrame(loop, trampoline ?: loop))
         val body = statementExpression(statement.statement)
         loops.removeLast()
-        val inner = mutableListOf<IrStatement>()
         if (trampoline != null) {
             trampoline.body = body
             inner.add(trampoline)
         } else {
             inner.add(body)
         }
+        copies.forEach { (carrier, copy) ->
+            inner.add(scope.irSet(carrier, scope.irGet(copy)))
+        }
+        scopes.removeLast()
+        // The incrementor is lowered with the COPIES out of scope, so it moves
+        // the carrier — the next iteration then copies the moved value.
         statement.incrementor?.let { inner.add(lowerExpression(it)) }
         loop.body = IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, inner)
         outer.add(loop)
         scopes.removeLast()
         return IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, outer)
+    }
+
+    /**
+     * Does [node] build a function value — the only way a loop variable's
+     * per-iteration identity becomes observable?
+     *
+     * Without one, every read of the variable happens during its own iteration
+     * and a shared binding is indistinguishable from a fresh one, which is why
+     * the copy is not made unconditionally.
+     */
+    private fun buildsAClosure(node: Node): Boolean {
+        var found = false
+        fun visit(current: Node) {
+            if (found) return
+            when (current) {
+                is ArrowFunction, is FunctionExpression, is FunctionDeclaration -> found = true
+                else -> forEachChild(current) { visit(it) }
+            }
+        }
+        visit(node)
+        return found
     }
 
     /** Does [node] contain a `continue` bound to the loop it is the body of? */
@@ -2052,6 +2207,15 @@ internal class KirFileLowering(
     private fun lookup(name: String): IrValueDeclaration? {
         for (index in scopes.indices.reversed()) {
             scopes[index][name]?.let { return it }
+        }
+        // AFTER the block chain, deliberately: a `let` in an enclosing block
+        // shadows a function-scoped `var` of the same name, and asking the
+        // blocks first is what gives it precedence. Walking OUT through the
+        // enclosing frames is how a closure reaches an outer function's `var`.
+        var frame = current
+        while (frame != null) {
+            frame.hoisted[name]?.let { return it }
+            frame = frame.parent
         }
         return null
     }
