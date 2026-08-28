@@ -1,3 +1,82 @@
+**AN ENUM MEMBER IS A STRING OR NUMBER **LITERAL** IN tsc, SO ITS APPARENT TYPE IS THE
+`String` / `Number` WRAPPER — AND WE WERE REPORTING **13** FALSE POSITIVES BECAUSE OF IT
+(2026-08-27, (CHK.60), one fix).** tsc's `TypeFlags.StringLike` is
+`String | StringLiteral | TemplateLiteral | StringMapping` and an enum literal type carries
+`StringLiteral | EnumLiteral`, so `getApparentType(E.A)` answers `globalStringType`; a
+numeric member carries `NumberLiteral | EnumLiteral` and answers `globalNumberType`.
+(REL.1)(b) mints a member-LESS `Type.Object` here instead, and `propertiesRelatedTo`'s
+`source.members == null` arm answers `targetProps.isEmpty()` — which rejects EVERY target
+that declares a property, **including an all-optional (weak) one**. So `zzzG(E.A)` against
+`{ length?: number }` was a false positive at the argument AND the assignment position.
+
+**THE WEAK RULE WAS NOT WHAT FIRED, AND THE QUEUE ENTRY SAID SO** — it correctly DECLINES a
+target the source shares a property with; the ordinary relation is what emitted. The fix is
+in `structuredTypeRelatedTo`'s object/object leg, which — **only after the structural
+comparison has already answered false** — retries an enum-literal source as its apparent
+PRIMITIVE. Retrying as the PRIMITIVE rather than reaching for a wrapper here is the whole
+design: it routes the source through exactly the legs a `string`/`number` source already
+takes (B69.8's wrapper/named-interface leg, round 430's empty-`{}` rule, B418's
+index-signature rule, (CHK.32)'s anonymous-object leg), each with its own measured guards
+intact — which is why a NAMED interface, the `String` wrapper itself and `Object` all come
+right for free, and why an INDEX-SIGNATURE target's answer is untouched.
+
+**MEASURED OVER A 30-ROW SOURCE/TARGET MATRIX AGAINST tsc 7.0.2** (`build/chk60/mx`): 13
+ours-only rows removed, every remaining row byte-exact, and the three correct refusals
+unmoved (a target sharing nothing -> TS2559; string-member-vs-`Number` and
+numeric-member-vs-`String` -> TS2345). The matrix is also what showed the boundary is per
+MEMBER and not per enum: tsc accepts a MIXED enum's string member against `{ length?: … }`
+and its numeric member against `{ toFixed?() }`, and rejects the WHOLE mixed enum against
+both — which our per-member value lookup reproduces with no special case.
+
+**GATES.** Suite **16,234 / 0 / 3** (+11, exactly the one new class), **no corpus baseline
+moved**. `cost_gate.py` **`output.errors` 46** and — measured against the a0 parent rebuilt
+in this session — **all 20 counters DIGIT-IDENTICAL**; the standing +1.42% on
+`typeOfExpr.calls` is inherited drift against a baseline last recorded at (CHK.46), not this
+round's. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over. **8-profile grid**
+md5 **`503774c23b4535130ffdebabef430cf0`**, per-profile `diff` clean: **`added=0 removed=0`
+on all eight**, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor
+**56 ms** [54, 59, 52, 56] — one draw. `capture-equivalence` **1,005 span(s) in 43 of 76,
+types=1005 definitions=0, moreAny 0**, `definitions` **360,376**, ARM DIGESTs
+`full=-3735929574989657502 narrow=-2075467818767010709` — the standing state, so the fix
+moved no captured type. **`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY
+ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session.
+
+**SIX ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT.** a0 (the whole change
+reverted — the parent, rebuilt) **6 RED**, exactly the six positives; a3 (the (CHK.32) leg's
+anonymous-target scope wrongly inherited) **2**, uniquely the named-interface and
+String-wrapper pins; a4 (the flavour collapsed to `string`) **1**, uniquely the
+numeric-member-vs-`String` control — and NOT the two numeric positives, because an
+ALL-OPTIONAL target cannot discriminate a flavour, which is what makes the wrapper controls
+load-bearing. **a1 (the IDENTITY guard dropped) 0** and recorded as UNDISCRIMINATED, not
+redundant: B69.8's wrapper arm is not relation-gated, so dropping it would let an enum
+member be declared IDENTICAL to `String` — a widening nothing here reaches, and tsc guards
+the same work the same way. **a5 (the retry promoted from a FALLBACK to a SUBSTITUTION) 0**,
+and re-run against the 30-row matrix it is BYTE-IDENTICAL too — so the "fallback, not
+substitution" framing is a claim about blast radius that this repo currently cannot
+demonstrate, and it is recorded as such.
+
+**a2 IS THE ARM WORTH READING, AND ITS ZERO IS A DELIBERATE REFUSAL.** Dropping the
+positive-evidence rule (defaulting an UNEVALUATED member to numeric, the way
+`isNumericEnumObjectType` does for its arithmetic caller) reddens nothing — and it would
+fix one further measured FP, `enum E { A = zzzNonConst }` against `{ toFixed?() }`, where
+tsc is silent and we say TS2345. It was refused because the neighbouring shape shows the
+hazard: an enum whose first member is a TEMPLATE literal and whose second is a plain
+string (`build/chk60/ue/u3.ts`) does not fold
+here, so a numeric default would relate a STRING member to `Number`-shaped targets, a false
+NEGATIVE with no gate. Both rows are re-queued.
+
+**ITEM 2 WAS MAPPED, NOT FIXED, AND THE MAP IS BIGGER THAN THE QUEUE ENTRY.** `this` is
+`Identifier("this")` in this parser, so `getTypeOfExpression` types it `any` and every
+`this.<member>` with it. The queue read that as a weak-rule/optionality gap; measured
+(`build/chk60/br`), **it is neither**: a REQUIRED `this.zzzReq: number` assigned to a
+`string` variable is silent too, and the hole is per POSITION rather than per member —
+**silent** at a var-decl initializer, at an assignment RHS, at a `return`, and for the
+nullish-access checks (TS2532/TS18048); **present** in ARGUMENT position and for TS2722.
+The same fixture also isolates a SECOND, independent defect that is NOT `this`-specific: an
+OPTIONAL property's `| undefined` is dropped for ANY receiver (`zzzInst.zzzOpt` reports
+`Type 'number'` where tsc says `'number | undefined'`, and `string | undefined -> string`
+goes missing entirely). Both re-queued with the row-by-row map.
+
 **THE WEAK-TYPE ANCHOR MOVES TO THE **EXPRESSION** EXACTLY WHEN THE CODE IS **TS2560** —
 AND THAT ONE RULE UNBLOCKED THE LARGEST PIECE OF (CHK.58)'S RESIDUE (2026-08-27, (CHK.59),
 three fixes).** A CALLABLE source was refused outright at the var-decl / return / assignment

@@ -20,6 +20,193 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.64)(i)+(ii) — the five "narrowing gaps" are **two gaps at ONE reader**, both landed; (CHK.63)'s price falls **11 rows -> 6**
+
+**THE HEADLINE.** (CHK.64)'s queue entry lists five mechanisms. Measured, the
+first two are **one reader** and two different things its filler could not do:
+round 784's gate sends the ASSIGNMENT and RETURN readers to
+[Checker.currentLocalTypes] for a primitive target, and that map is filled by the
+legacy if-arm helper [Checker.extractNullNarrowing], which (i) answers ONE
+`(name, type)` pair and has no `&&` arm, and (ii) is only ever asked about a
+THEN-branch. Everything else about those shapes was already right: a MEMBER
+ACCESS, a CALL ARGUMENT and a DECLARATION after an `&&` guard *or* after an early
+exit are all correct on the parent binary, because they consult the flow walk.
+Both are now closed, and **`scripts/pristine_oracle.py` was not needed: every
+positive was checked against tsc 7.0.2 directly.**
+
+**THE PRICE OF (CHK.63), RE-TAKEN.** The `armG` arm (the nullish-union gate
+opened, nothing else) measured **11** ours-only rows on the eight profiles last
+round. On this round's binary it measures **6**:
+
+| row | cause | status |
+|---|---|---|
+| `sourcemap.ts:164/165/166` | (i) the `&&` condition | **GONE** |
+| `core.ts:2191`, `path.ts:585` | (ii) the early exit | **GONE** |
+| `emitter.ts:1479`, `organizeImports.ts:862` | (CHK.61)(b)'s absence | fixed by (b) |
+| `parser.ts:2642` | (iii) an assignment inside the guarded branch | open |
+| `checker.ts:35649` | (iv) definite assignment across an if/else | open |
+| `tsserverLogger.ts:28` | (iv family) an assignment narrow that must survive a LOOP | open |
+| `server/project.ts:746` | **(vi), NOT IN THE QUEUE** — a NON-NULL ASSERTION `!` is not respected at the return reader | open |
+
+So (CHK.64)'s own residue is **4 rows**, and a SIXTH mechanism turned up that the
+queue never listed. (CHK.63) is now worth opening for 6 rows, 2 of which (b) pays
+back.
+
+**WHAT (i) IS.** [Checker.extractNarrowingsFromCondition] flattens the
+(left-nested) `&&` spine ITERATIVELY and returns a LIST, at most one entry per
+name; `||` is not decomposed. All three consumers take the list — the two
+`checkTypeAssignabilityInStmt` dispatchers and the spine's `ctaM3NarrowThen`,
+whose value type becomes a `List`. **A "narrowing" to `any` is refused**:
+`typeofTypeGuardToType` answers `anyType` for `"object"`/`"function"`, so
+decomposing `typeof x === "object" && x !== null` installed `any` — 13 captured
+hovers went from tsc's own `object`/`unknown` to `any`, and it would DELETE a
+true positive. **The single-condition path still installs `any` and that is a
+shipped false NEGATIVE** (`if (typeof zzzO === "object") { zzzQs = zzzO }` is
+silent here and TS2322 in tsc), recorded as residue and not touched.
+
+**WHAT (ii) IS.** At the IfStatement's spine LEAVE, an `if` with no `else` whose
+then-branch DEFINITELY EXITS installs the NEGATED condition's narrowings for the
+rest of the enclosing frame. `ctaAlwaysExits` is conservative;
+`negateCondition` is syntactic. The install is REFUSED unless the enclosing frame
+opened its own `localTypes` scope, which is what bounds it — a statement-position
+block SHARES its parent's map and has no pop to revert a write.
+
+**THREE THINGS THE GATES FOUND THAT READING THE CODE DID NOT.**
+
+  * **`narrowedDeclared` is shared down the frame chain with NO undo log.**
+    Recording the declared type into it added **21 ours-only rows PER PROFILE**,
+    every one an assignment whose TARGET was read as another function's
+    same-named binding (`type` as `Type`, `source` as a `Map<…>`). The frame now
+    takes a COPY of its own at the first such write. Dropping the record instead
+    left **4** rows — an assignment BACK to the narrowed reference.
+  * **The last row standing was a SHIPPED defect this change made reachable.**
+    With NESTED narrows on one name the narrowing frame wrote `narrowedDeclared`
+    UNCONDITIONALLY, recording the OUTER narrow's result as if it were the
+    declaration, so `if (b) { if (isNs(b)) { b = undefined } }` was a false
+    TS2322 — reproducible with no early exit anywhere (`build/chk64/cb`). All
+    three writers are now FIRST-WINS.
+  * **A negated TYPE-GUARD CALL is refused.** `if (!some(components)) return []`
+    negates to `some(components)`, whose predicate is generic
+    (`array is readonly T[]`) and whose `T` we do not infer, so the narrow was
+    LESS precise than the declaration and `const reduced = [components[0]]`
+    hovered `any` — **20** captured spans in `path.ts`/`utilities.ts`, **3** with
+    it refused.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,296** then
+**16,308**, 0 failed, 3 skipped (+10 and +12 — exactly the new subtests);
+**no corpus baseline moved on either.** 8-profile grid
+`503774c23b4535130ffdebabef430cf0` on BOTH code commits, byte-identical PER
+PROFILE against a parent capture taken in this session (parent `Checker.class`
+md5 `d0f72b51`, rebuilt here). `cost_gate.py` exit 0 both times, `output.errors`
+**46**; the change costs `narrow.walks` **+0.84%**, `typeOfExpr.distinct`
++0.97%, `typeNode.cacheable` +0.43% over the recorded baseline — it installs
+narrowings where there were none — on top of the standing residual
+(`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses` +1.75%);
+all far inside the +-2% gate. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floors 75 ms
+[53, 93, 75, 58] and 64 ms [88, 64, 61, 56] — one draw each). knip **48** and
+jsonrepair **4**, EVERY ROW byte-identical against a parent arm rebuilt in this
+session.
+
+**`capture-equivalence` IS AGAIN THE ONE GATE THAT MOVED, AND THE MOVE IS
+CLASSIFIED PER ELEMENT AGAINST A PARENT DUMP TAKEN IN THIS SESSION.** DIVERGED
+**968** in 43 of 76, `types=968 definitions=0 narrowRendersMoreAny=0` —
+unchanged. Both ARM DIGESTs moved; the new instrument `XTSC_CAPEQ_DUMP`
+(committed first, round 789's rule) makes that classifiable, because the digest
+answers *whether* and only a per-span dump answers *which*. Whole round:
+**0 rows lost**, **+174 definitions gained** (spans that resolved to nothing now
+navigate), **2,137** type rows changed — **1,274** drop a spurious `| undefined`,
+**300** go `any` -> concrete, **485** render a narrower/named type (12 of 12
+sampled agree with tsc 7.0.2's LSP where the parent did not), **1** GAINS
+`| undefined` where tsc agrees with us (`ClassLikeDeclarationBase.name?`), and
+**3** go to `any` — all three a member access on a CORRECTLY narrowed receiver
+whose further `&&`-conjunct guard (`isNamedDeclaration(child) &&
+isPropertyName(child.name)`) we do not apply, i.e. the queue's own gap (v).
+Final digests `full=7848756790733502552 narrow=5188741781646622612`.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every pin was run against a PARENT binary
+rebuilt in this session with the fixture already in place. `AndCondition…Test`:
+**5 of 9 RED** on `d0f72b51` — the two multi-operand pins, the right-conjunct
+pin, the return-reader pin and the VALUE pin; the 4 green are labelled CONTROLS
+and count as coverage only for the arms that redden them.
+`EarlyExit…Test`: **8 of 12 RED** on `a8d4e445` (the (i) commit). Of the 4 green,
+three are labelled controls/residue and the fourth is labelled a CONTROL for a
+reason worth keeping: **the `!` arm of `negateCondition` is structurally
+unobservable today** — truthiness narrowing only removes `null`/`undefined`, so
+its subject is a nullish union, which `canUseTypeEngine` refuses against the
+primitive target this whole leg exists for; against a UNION target round 784's
+gate hands the read to the flow walk, which was always right. It starts
+discriminating the moment (CHK.63) opens.
+
+**TWELVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, EACH
+`cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EVERY RESTORE VERIFIED BY `cmp` PLUS A
+REBUILT md5** (`eec8ea8f` / `a8d4e445`).
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | no `&&` decomposition at all | `bb62d106` | **5** — exactly the five (i) positives |
+| a2 | only the FIRST conjunct survives | `a6cf1e22` | **2** — uniquely the two multi-operand pins |
+| a3 | `\|\|` decomposed as well | `4cf051a8` | **1** — uniquely the `\|\|` negative control |
+| a4 | the `anyType` refusal dropped | `56d36769` | **1** — uniquely the `typeof … "object"` guard |
+| a5 | the SPINE site takes only the first entry | `8583305a` | **2** — the spine is the load-bearing consumer |
+| a6 | the two DISPATCHER sites take only the first | `2424930f` | **0 — UNDISCRIMINATED** (see below) |
+| b1 | the whole early-exit install removed | `0568e654` | **7** |
+| b2 | `ctaAlwaysExits` accepts ANY then-branch | `225225e3` | **1** — uniquely the does-not-exit control |
+| b3 | a `Block`'s last statement is not looked into | `7b17469d` | **7** |
+| b4 | the `localScoped` refusal dropped | `eed8e3a0` | **1** — uniquely the while/nested-block RESIDUE pin |
+| b5 | the declared type not recorded | `870f5189` | **1** — uniquely the assign-back pin |
+| b6 | recorded into the SHARED map (no own copy) | `fe114f78` | **0 -> 1** — UNPINNED, then fixed |
+| b7 | `narrowedDeclared` back to LAST-wins | `0c0d8b5a` | **1** — uniquely the nested-narrows pin |
+| b8 | the call-predicate refusal dropped | `4f9f4c6b` | **0 — UNDISCRIMINATED, capture-only** |
+| b9 | the `!==` flip made a no-op | `6b97cbfd` | **7** |
+| b10 | an `if … else` allowed to narrow after it | `8f37e002` | **1** — uniquely the if/else RESIDUE pin |
+
+**THE KINDS OF ZERO, NAMED.** **a6 is UNDISCRIMINATED and NOT shown redundant**:
+the two `checkTypeAssignabilityInStmt` sites were reverted to a single narrowing
+and nothing moved, and a direct CLI probe of that arm over the round's own
+censuses (`build/chk64/c2`, `c5`) produced no row either — the spine anchors
+every `IfStatement` I could construct, function-body and FILE-level alike, so the
+legacy arms are truncated ((cta-m3j)) and are consistency insurance, not measured
+coverage. **b6 was UNPINNED, not redundant** — the third consecutive round with
+that pattern; the fixture is two same-named bindings in one file and the arm now
+reddens uniquely on it. **b8 is UNDISCRIMINATED and its effect is real but lives
+on the CAPTURE channel**; two diagnostic fixtures were built (a non-generic and a
+generic predicate) and under the embedded lib BOTH narrow precisely, so no
+diagnostic pin in this suite can reach it — recorded in the test's own KDoc
+rather than claimed. **b4 and b10 redden a RESIDUE pin**, which is the useful
+shape: they prove those two residues are REFUSALS with a price, not inabilities.
+**b1/b3/b9 share a 7-pin red set** and are not separated by these fixtures; both
+are load-bearing (b3's mistake makes every braced exit invisible), recorded as
+one observable in round 927's sense.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's "five mechanisms, not one" is half right and the useful half is
+    the other one.** (i) and (ii) share a READER, which is why closing (ii) took
+    twenty minutes once (i) was in: the same `currentLocalTypes` install, at a
+    different position. The census that showed it costs one fixture — put the
+    same guard in front of a member access, an argument, a declaration, an
+    assignment and a return, and read which columns are already right.
+  * **`build/chk61b/n1`, the round's inherited repro, is SILENT on both
+    compilers** — its `&&` operands are `string | undefined` against primitive
+    targets, i.e. the (CHK.63) gate hides the gap the fixture was built to show.
+    A NON-NULLISH union (`number | string` + `typeof`) makes all four rows appear
+    on the shipped binary with no patch at all, and that is how (i) and (ii) were
+    both found. **A nullish fixture is the wrong instrument for anything below
+    that gate.**
+  * **Two of the three real defects this round fixed were found by a GATE, not by
+    reading.** The `narrowedDeclared` leak (21 rows/profile) and the last-wins
+    nested-narrow defect (1 row, and a shipped FP class) were both invisible in
+    the source and obvious in an 8-profile diff. The `anyType` widening and the
+    generic-predicate degradation were both found by the CAPTURE sweep and by
+    nothing else.
+  * **`capture-equivalence`'s ARM DIGEST is a yes/no answer to a question that
+    needs a list.** Classifying its move meant adding `XTSC_CAPEQ_DUMP` and
+    diffing two binaries span by span; the classification is what turned "both
+    digests moved" into "0 lost, +174 definitions, 1,274 spurious `| undefined`
+    dropped, 3 regressions". Committed first, so the ablations could not delete
+    it (round 789).
+
 ### Round (CHK.61)(b) — the display half **LANDED**; the checking half is **REFUSED with its price finally taken**, and the refusal turned up a **systematic FALSE NEGATIVE** that is not (b)
 
 **THE HEADLINE, IN TWO PARTS.** (b)'s DISPLAY half is in: an optional member's
@@ -3398,31 +3585,49 @@ driver and the binary rebuilt after every restore.
   alike. **Opening it is measured: 11 ours-only rows on the 8 profiles** —
   `checker.ts:35649`, `core.ts:2191`, `emitter.ts:1479`, `parser.ts:2642`, `path.ts:585`,
   `sourcemap.ts:164/165/166`, `harness/tsserverLogger.ts:28`, `server/project.ts:746`,
-  `services/organizeImports.ts:862` (`build/chk61/pricing/armG-added.txt`). Two of them are
-  (CHK.61)(b)'s absence and vanish when (b) lands; the rest are (CHK.64). So the order is
-  (CHK.64) -> (CHK.63) -> (CHK.61)(b)'s checking half, and NOT one of them alone.
+  `services/organizeImports.ts:862` (`build/chk61/pricing/armG-added.txt`).
+  **RE-PRICED 2026-08-28 AFTER (CHK.64)(i)+(ii): the arm is now **6** rows, captured at
+  `build/chk61/grid/chk64_armG2` — the three `sourcemap.ts` rows went with (i) and
+  `core.ts:2191` + `path.ts:585` with (ii).** Of the 6, `emitter.ts:1479` and
+  `organizeImports.ts:862` are (CHK.61)(b)'s absence and (b) pays them back, so opening
+  this gate now costs **4** genuinely new rows, all four listed as (CHK.64)'s residue. The
+  order stands: finish (CHK.64)'s residue -> (CHK.63) -> (CHK.61)(b)'s checking half.
 
-- [ ] **(CHK.64) THE ASSIGNMENT AND RETURN READERS DO NOT CONSULT THE FLOW WALK FOR A
-  PRIMITIVE TARGET, SO THEY FALL BACK TO A LEGACY IF-ARM HELPER THAT CANNOT READ AN `&&`
-  (2026-08-27).** Measured: the FLOW walk handles `&&` correctly (`if (a && b) { a.length }`
-  and `if (a && b) { take(a) }` are both right), and a DECLARATION with a primitive target
-  narrows. What does not is `zzzP = zzzA` / `return zzzA` under an `&&` — round 784's
-  documented gate confines `checkReturnAssignabilityCore`'s narrowing block to an
-  object-ish/union target, so those readers see only `currentLocalTypes`, filled by
-  `extractNullNarrowing`, which returns ONE `(name, type)` pair and does not decompose
-  `&&` at all. **Five mechanisms, each with its measured row** (all reproduce on the
-  SHIPPED binary with an explicit `| undefined` member, `build/chk61b/n1`): (i) an `&&`
-  if-condition narrows NEITHER operand into the then-branch (`sourcemap.ts:164/165/166`);
-  (ii) `if (x === undefined) continue;` does not narrow the rest of a loop body
-  (`core.ts:2191`, `path.ts:585`); (iii) an assignment inside the guarded branch does not
-  narrow after the `if` (`parser.ts:2642`); (iv) definite assignment across an if/else does
-  not narrow (`checker.ts:35649`); (v) the optional-METHOD shapes — an outer
-  `if (h.a && h.b)` surviving into a nested `for`+`if` (`moduleNameResolver.ts:824`,
-  `project.ts:502/528`), a three-deep chain (`moduleNameResolver.ts:2265`) and an `&&`
-  chain whose earlier conjunct narrows a later one (`checker.ts:30269`, TS18048).
-  Extending `extractNullNarrowing` to decompose `&&` into SEVERAL narrowings is
-  monotone-safe by construction (more narrowing only ever SUPPRESSES), and is the cheapest
-  of the five; it is worth doing first and re-pricing (CHK.63) after it.
+- [x] **(CHK.64)(i)+(ii) DONE 2026-08-28 — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE
+  READER**, AND BOTH ARE CLOSED; (CHK.63)'s PRICE FALLS **11 ROWS -> 6**.** Round 784's gate
+  sends the ASSIGNMENT and RETURN readers to [Checker.currentLocalTypes] for a primitive
+  target, and the legacy filler [Checker.extractNullNarrowing] could neither read an `&&`
+  (i) nor look anywhere but a then-branch (ii). Everything else about those shapes was
+  already right — a MEMBER ACCESS, a CALL ARGUMENT and a DECLARATION are correct on the
+  parent binary in BOTH families, which is the census that collapsed five mechanisms into
+  two. `AndConditionNarrowsEveryOperandTest`, `EarlyExitNarrowsTheRestOfTheBlockTest`.
+  Three defects the GATES found and reading did not: a `typeof x === "object"` conjunct
+  installed `any` (a WIDENING, 13 captured hovers); recording the declared type into the
+  frame's SHARED `narrowedDeclared` leaked across FUNCTIONS (21 ours-only rows per
+  profile); and a negated GENERIC type-guard call degraded the element type (20 captured
+  spans to `any`). One SHIPPED defect fell out and is fixed: nested narrows on one name
+  recorded `narrowedDeclared` LAST-wins, so `if (b) { if (isNs(b)) { b = undefined } }` was
+  a false TS2322.
+  **RESIDUE — (CHK.64) is now worth exactly 4 rows on the 8 profiles, and a SIXTH
+  mechanism turned up that the queue never listed:**
+  1. `parser.ts:2642` — (iii) an assignment INSIDE the guarded branch
+     (`if (id === undefined) { m.set(t, id = t) }`) does not narrow after the `if`.
+  2. `checker.ts:35649` — (iv) definite assignment across an if/else.
+  3. `tsserverLogger.ts:28` — (iv family) an assignment narrow that must survive a LOOP
+     (`let r: string | undefined; r = ""; while (…) { r += … } return r`).
+  4. `server/project.ts:746` — **(vi), NOT IN THE OLD LIST**: a NON-NULL ASSERTION `!`
+     (`return (info && info.getLatestVersion())!`) is not respected at the RETURN reader.
+     Probably the cheapest of the four.
+  Plus (v), the optional-METHOD `&&` chains, which are a DIFFERENT mechanism: an `&&`
+  whose EARLIER conjunct narrows a LATER one (`isNamedDeclaration(child) &&
+  isPropertyName(child.name)`). It has no measured armG row of its own and it IS the cause
+  of the round's 3 remaining capture regressions, so it is the next one to take.
+  Smaller residues, each pinned with our own answer: a `while`/`do` body and a plain
+  nested `{ … }` block share their parent frame's `localTypes` map, so an early exit
+  inside one does not narrow; an `if … else` is refused even when the then-branch exits;
+  a PARENTHESISED `!` operand is not unwrapped; and the SINGLE-condition
+  `typeof x === "object"` path still installs `any`, a shipped false NEGATIVE
+  (`build/chk64/c4`).
 
 - [ ] **(CHK.62c) A PROPERTY-ACCESS ASSIGNMENT RHS DOES NOT NARROW THE ASSIGNED REFERENCE
   (2026-08-27, measured while closing (CHK.62b)).** `let p = zzzFindFree(); p ??= zzzObj.zzzFld;
