@@ -93,6 +93,8 @@ fun main(args: Array<String>) {
     // divergence is the finding, not its count, and 40 rows truncated at 140 characters
     // is not a classification of a few thousand — so both caps are liftable for an
     // investigation WITHOUT changing anything the gate measures.
+    val armDump: java.io.Writer? = System.getenv("XTSC_CAPEQ_DUMP")
+        ?.let { java.io.BufferedWriter(java.io.FileWriter(it)) }
     val printCap = System.getenv("XTSC_CAPEQ_PRINT")?.toIntOrNull() ?: 40
     val rowCap = System.getenv("XTSC_CAPEQ_ROWCHARS")?.toIntOrNull() ?: 140
     val vfs = SystemVfs
@@ -221,6 +223,18 @@ fun main(args: Array<String>) {
         val narrowDefinitions = definitionRows(narrow, file)
         capturedTypes += fullTypes.size
         capturedDefinitions += fullDefinitions.size
+
+        // (CHK.64) ARM DUMP — `XTSC_CAPEQ_DUMP=<path>` appends the FULL arm's own rows so
+        // two BINARIES can be diffed per span. The ARM DIGEST answers "did anything
+        // move"; only this answers "which spans, and how", which is what classifying a
+        // digest move per element needs. Off by default and read once per process.
+        armDump?.let { out ->
+            for ((span, t) in fullTypes) out.append("T\t").append(file).append('\t')
+                .append(span.toString()).append('\t').append(t).append('\n')
+            for ((span, d) in fullDefinitions) out.append("D\t").append(file).append('\t')
+                .append(span.toString()).append('\t').append(d).append('\n')
+            out.flush()
+        }
 
         // (INC.24) Folded per file and in `programFiles` order, so the whole-program
         // digest is a function of the program rather than of the sweep's scheduling.
