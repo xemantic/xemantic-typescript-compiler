@@ -48,6 +48,7 @@ import com.xemantic.typescript.compiler.ContinueStatement
 import com.xemantic.typescript.compiler.ElementAccessExpression
 import com.xemantic.typescript.compiler.EnumDeclaration
 import com.xemantic.typescript.compiler.EnumMember
+import com.xemantic.typescript.compiler.ExportAssignment
 import com.xemantic.typescript.compiler.ExportDeclaration
 import com.xemantic.typescript.compiler.EmptyStatement
 import com.xemantic.typescript.compiler.Expression
@@ -948,6 +949,56 @@ internal class KirFileLowering(
         return null
     }
 
+    /** The STATIC method [name] declares anywhere in [from]'s chain, if any. */
+    private fun staticMethodInChain(from: ClassDeclaration, name: String): IrSimpleFunction? {
+        tables.classChain(from).forEach { current ->
+            current.members.filterIsInstance<MethodDeclaration>().firstOrNull { candidate ->
+                (candidate.name as? Identifier)?.text == name &&
+                    ModifierFlag.Static in candidate.modifiers
+            }?.let { return methods[it] }
+        }
+        return null
+    }
+
+    /** `C.m` as a value: a lambda of `m`'s arity that forwards to it. */
+    private fun staticMethodValue(target: IrSimpleFunction): IrExpression {
+        val parameters = target.parameters.filter { it.kind == IrParameterKind.Regular }
+        val lambda = builder.irFactory.buildFun {
+            name = SpecialNames.ANONYMOUS
+            returnType = types.anyNullable
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+        }
+        lambda.parent = frame.irFunction
+        val forwarded = parameters.mapIndexed { index, parameter ->
+            lambda.addValueParameter(
+                Name.identifier("p$index"),
+                types.anyNullable,
+                builder.generatedOrigin
+            ) to parameter
+        }
+        inFunction(lambda, types.anyNullable, null, null) {
+            val call = scope.irCall(target.symbol).apply {
+                forwarded.forEachIndexed { index, (slot, parameter) ->
+                    arguments[index] = coerceErased(
+                        tsFile, scope.irGet(slot), parameter.type
+                    )
+                }
+            }
+            lambda.body = blockBodyOf(
+                listOf(scope.irReturn(coerceErased(tsFile, call, types.anyNullable)))
+            )
+        }
+        return IrFunctionExpressionImpl(
+            UNDEFINED,
+            UNDEFINED,
+            types.function(parameters.size),
+            lambda,
+            IrStatementOrigin.LAMBDA
+        )
+    }
+
     private fun declareConstructor(
         owner: ClassDeclaration,
         irClass: IrClass,
@@ -1275,7 +1326,7 @@ internal class KirFileLowering(
             bodyStatements.drop(maxOf(superIndex, 0) + if (superCall != null) 1 else 0)
                 .forEach { statement -> lowerStatement(statement, statements) }
             scopes.removeLast()
-            constructor.body = blockBodyOf(statements)
+            constructor.body = functionBodyOf(statements)
         }
     }
 
@@ -1320,26 +1371,37 @@ internal class KirFileLowering(
         bindParameters(function, parameters, body, lowered)
         statements.forEach { lowerStatement(it, lowered) }
         scopes.removeLast()
-        return blockBodyOf(lowered)
+        return functionBodyOf(lowered)
     }
 
-    /**
-     * `IrFactory.createBlockBody` takes no statements; they are added after.
-     *
-     * Every function body in this lowering is built here, which is what makes
-     * it the place `var` HOISTING happens: the declarations collected while the
-     * body was lowered are emitted before its first statement, and the frame's
-     * list is cleared so a second body cannot inherit them.
-     */
+    /** `IrFactory.createBlockBody` takes no statements; they are added after. */
     private fun blockBodyOf(
+        statements: List<IrStatement>
+    ): org.jetbrains.kotlin.ir.expressions.IrBlockBody =
+        builder.irFactory.createBlockBody(UNDEFINED, UNDEFINED).apply {
+            this.statements.addAll(statements)
+        }
+
+    /**
+     * The body of a TypeScript function, which is where `var` HOISTING happens.
+     *
+     * Deliberately NOT [blockBodyOf]: that one also builds bodies this lowering
+     * SYNTHESIZES — a shape class's constructor, an accessor — and those are
+     * created in the middle of lowering an expression, so the frame's pending
+     * declarations are not theirs. Putting the hoisting there emitted a
+     * function's `var` into a shape constructor built by its own initializer
+     * (`var days = { SUN: 0, … }` in `cronstrue`'s parser), which the IR
+     * validator rejects as a declaration with the wrong parent.
+     *
+     * The list is cleared, so a second body cannot inherit what this one took.
+     */
+    private fun functionBodyOf(
         statements: List<IrStatement>
     ): org.jetbrains.kotlin.ir.expressions.IrBlockBody {
         val hoisted = current?.hoistedDeclarations
-        val all = if (hoisted.isNullOrEmpty()) statements else hoisted + statements
+        val all = if (hoisted.isNullOrEmpty()) statements else hoisted.toList() + statements
         hoisted?.clear()
-        return builder.irFactory.createBlockBody(UNDEFINED, UNDEFINED).apply {
-            this.statements.addAll(all)
-        }
+        return blockBodyOf(all)
     }
 
     /**
@@ -1513,6 +1575,23 @@ internal class KirFileLowering(
             is FunctionDeclaration, is ClassDeclaration, is EnumDeclaration,
             is InterfaceDeclaration, is TypeAliasDeclaration,
             is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> {}
+            // `export default X` where X is a NAME emits nothing: the importing
+            // file's `import X from "./m"` is resolved by the CHECKER to the
+            // declaration this names, so the reference already reaches it and a
+            // runtime binding would be a second, unread copy.
+            //
+            // Any other expression is refused rather than dropped — `export
+            // default compute()` has an effect, and emitting nothing for it
+            // would silently lose it.
+            is ExportAssignment -> {
+                if (statement.expression !is Identifier) {
+                    refuse(
+                        tsFile, statement,
+                        "`export default <expression>` is out of the spike subset; only a NAME " +
+                            "is lowered, because anything else has an effect to run"
+                    )
+                }
+            }
             else -> refuse(
                 tsFile, statement,
                 "cannot lower this ${statement::class.simpleName}"
@@ -3353,6 +3432,17 @@ internal class KirFileLowering(
         facts.typeOf(node)?.let { types.map(it) }?.let { intrinsics.runtimeClassOf(it) }
             ?.let { owner ->
                 val given = node.arguments ?: emptyList()
+                // `new Array(…)` is not a constructor call: its ONE-ARGUMENT
+                // numeric form means a LENGTH rather than an element, which no
+                // arity-resolved constructor can express.
+                if (owner == intrinsics.jsArrayClass) {
+                    return scope.irCall(intrinsics.jsArrayNew, intrinsics.jsArrayType).apply {
+                        arguments[0] = scope.irVararg(
+                            irBuiltIns.anyNType,
+                            given.map { coerce(it, lowerExpression(it), types.anyNullable) }
+                        )
+                    }
+                }
                 val constructor = intrinsics.runtimeConstructorOfArity(owner, given.size)
                     ?: refuse(
                         tsFile, node,
@@ -3479,6 +3569,12 @@ internal class KirFileLowering(
                     )
                 }
             }
+            // A static METHOD read as a VALUE — `let f = C.m` — is a function
+            // value, and JavaScript makes one by capturing the method. There is
+            // no receiver to capture for a static, so the lambda is a plain
+            // forwarder of the same arity, which is what every other function
+            // value in this backend already is.
+            staticMethodInChain(owner, node.name.text)?.let { return staticMethodValue(it) }
             refuse(
                 tsFile, node,
                 "class '${owner.name?.text}' declares no static '${node.name.text}'"
@@ -3769,7 +3865,7 @@ internal class KirFileLowering(
             )
         }
         scopes.removeLast()
-        return blockBodyOf(lowered)
+        return functionBodyOf(lowered)
     }
 
     /**
@@ -3794,7 +3890,7 @@ internal class KirFileLowering(
             if (body.statements.lastOrNull() !is ReturnStatement) {
                 lowered.add(scope.irReturn(scope.irNull()))
             }
-            return blockBodyOf(lowered)
+            return functionBodyOf(lowered)
         }
         val expression = body as? Expression
             ?: refuse(tsFile, body, "cannot lower this function body")
@@ -3803,7 +3899,7 @@ internal class KirFileLowering(
         bindParameters(lambda, parameters, expression, prologue)
         val value = coerce(expression, lowerExpression(expression), types.anyNullable)
         scopes.removeLast()
-        return blockBodyOf(prologue + scope.irReturn(value))
+        return functionBodyOf(prologue + scope.irReturn(value))
     }
 
     /**

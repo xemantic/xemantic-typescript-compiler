@@ -708,6 +708,30 @@ public fun jsObjectOf(vararg entries: Any?): JsObject {
 public fun jsArrayOf(vararg elements: Any?): JsArray = JsArray(elements.toList())
 
 /**
+ * `new Array(…)`, whose ONE-ARGUMENT form is not the others.
+ *
+ * `new Array(5)` is an array of LENGTH five holding holes, while
+ * `new Array("5")` and `new Array(1, 2)` hold their arguments. That single
+ * special case is why this is a function rather than a constructor overload:
+ * `JsArray(List)` and a hypothetical `JsArray(Double)` are both one argument,
+ * and the lowering resolves a `new` by ARITY.
+ *
+ * A hole reads as `undefined`, which is `null` here — the same unification the
+ * rest of this runtime makes.
+ */
+public fun jsArrayNew(vararg arguments: Any?): JsArray {
+    if (arguments.size == 1) {
+        val only = arguments[0]
+        if (only is Double) {
+            val array = JsArray()
+            array.length = only
+            return array
+        }
+    }
+    return JsArray(arguments.toList())
+}
+
+/**
  * The keys `for (k in subject)` walks, as an array of STRINGS.
  *
  * `for…in` is lowered as an indexed walk over this, which is what makes it the

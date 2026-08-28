@@ -24,7 +24,7 @@ debugger.
 | 16 | CLASSES 2: `extends` with `super(…)` and `super.m()`, an override dispatched through a BASE-typed reference, field initializers, `instanceof`, `static` fields and methods, and `get`/`set` accessors |
 | 14 | STRINGS: every `string` member goes through a runtime function, never Kotlin's same-named one — `length` is a NUMBER, `charAt` out of range is `""`, `slice` counts a negative index from the end and `substring` swaps a reversed pair — plus template literals |
 | 17 | REST PARAMETERS in all three positions: a declared function and a static method collecting trailing arguments (the array is built at the CALL site), and a function VALUE whose arity is not static — it cannot be a `FunctionN`, so it is the runtime's `JsVarargFunction` and `jsCall` unpacks it |
-| 18 | `var`: FUNCTION scoping and hoisting — a binding declared in a block and read after it, one name declared twice, a `var` loop variable SHARED by every closure the loop makes (`3,3,3`) against a `let` one that is FRESH per iteration (`0,1,2`) |
+| 18 | `var`: FUNCTION scoping and hoisting — a binding declared in a block and read after it, one name declared twice, a `var` loop variable SHARED by every closure the loop makes (`3,3,3`) against a `let` one that is FRESH per iteration (`0,1,2`), and a `var` whose initializer builds an object literal — the shape class's constructor is synthesized mid-statement and must not receive the hoisted declaration |
 | 19 | `??`: nullish coalescing, pinned against `||` on the FALSY-but-present values — an empty string is KEPT where `||` replaces it — plus the once-only evaluation of the left operand |
 | 20 | the REPLACER CALLBACK overload of `String.replace`: the argument list is `(match, …groups, offset, whole)`, so its LENGTH is a property of the pattern — which is why this and the variadic carrier of 17 are one piece of work |
 | 21 | `for…in`: an indexed walk over the subject's KEYS, which are STRINGS (an array enumerates `"0"`, `"1"`, … not `0`, `1`), a `var` in the head binding the FUNCTION's slot so it outlives the loop, and `continue`/`break` inside it |
@@ -35,6 +35,7 @@ debugger.
 | 26 | CALLBACK ARITY: a function value may be stored in a slot declared for a different arity, reshaped by the same padding-and-dropping `jsCall` does at the call side |
 | 27 | the array members that take a CALLBACK, and the arguments JavaScript gives it — `(element, index, array)`, not the element alone; plus `find`/`findIndex`/`some`/`every`/`at`/`reverse`, where `at(-1)` counts from the end and `every` is true for an empty array |
 | 28 | a member call on a GUARDED receiver whose recorded type is still the nullish union — `getTypeOfExpression` never flow-narrows, so the receiver's member table is chosen from its NON-NULLISH shape |
+| 29 | `new Array(…)`, whose ONE-ARGUMENT numeric form is a LENGTH and not an element — `new Array(5)` has five holes where `new Array("5")` has one string |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
@@ -50,6 +51,6 @@ use site instead, where union erasure already pays it.
 Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.
 
-Programs 17 to 28 take their `.expected` from `node`, which runs a `.ts`
+Programs 17 to 29 take their `.expected` from `node`, which runs a `.ts`
 file directly — so the oracle is a JavaScript engine rather than this
 author's reading of the specification.

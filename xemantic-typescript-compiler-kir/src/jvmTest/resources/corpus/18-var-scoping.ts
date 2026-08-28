@@ -76,6 +76,16 @@ function nested(): string {
   return innerFn() + outer;
 }
 
+// A `var` whose INITIALIZER builds an object literal. The literal becomes a
+// generated shape class whose constructor is synthesized in the middle of
+// lowering this very statement, so the hoisted declaration must not be emitted
+// into THAT body — which is a wrong-parent IR error rather than a wrong answer.
+function varHoldingAnObjectLiteral(): string {
+  var table: { [key: string]: number } = { SUN: 0, MON: 1 };
+  var second: { [key: string]: number } = { TUE: 2 };
+  return String(table["SUN"]) + String(table["MON"]) + String(second["TUE"]);
+}
+
 console.log(blockScoped(true));
 console.log(blockScoped(false));
 console.log(declaredInsideBlock());
@@ -84,3 +94,4 @@ console.log(shadowedByLet());
 console.log(loopCapture());
 console.log(letLoopCapture());
 console.log(nested());
+console.log(varHoldingAnObjectLiteral());

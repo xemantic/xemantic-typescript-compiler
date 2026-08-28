@@ -209,6 +209,11 @@ class CorpusTest {
         assertCorpusProgram("28-guarded-receiver")
     }
 
+    @Test
+    fun `29 array construction`() {
+        assertCorpusProgram("29-array-construction")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

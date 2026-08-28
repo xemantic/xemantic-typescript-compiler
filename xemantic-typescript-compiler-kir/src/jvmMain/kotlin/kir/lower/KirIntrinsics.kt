@@ -138,6 +138,9 @@ internal class KirIntrinsics(
     /** `jsForInKeys(subject)` — the keys `for…in` walks, as an array of strings. */
     val jsForInKeys: IrSimpleFunctionSymbol by lazy { runtime("jsForInKeys") }
 
+    /** `new Array(…)` — see `JsRuntime.jsArrayNew` for why it is not a constructor. */
+    val jsArrayNew: IrSimpleFunctionSymbol by lazy { runtime("jsArrayNew") }
+
     /**
      * `jsAdaptN(callee)` — a function value reshaped to the arity a slot wants.
      *
