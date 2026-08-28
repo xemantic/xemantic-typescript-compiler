@@ -49,10 +49,14 @@ import kotlin.test.Test
  * is what bounds the narrowing to the block: a statement-position block SHARES its
  * parent's map and has no pop to revert a write.
  *
- * RESIDUE, pinned below with the value we answer rather than tsc's: a `while`/`do` body
- * and a plain nested `{ … }` block share their parent's map, so an early exit inside one
- * does not narrow; and an `if … else` is refused outright, because an else branch may
- * assign to the very reference the negation is about.
+ * THREE RESIDUES THIS CLASS RECORDED — a `while`/`do` body, a plain nested `{ … }` block
+ * and an `if … else` — ARE CLOSED as of (CHK.70), and none of them by this install. The
+ * install is still refused in all three (they share their parent's map, and an else may
+ * assign to the very reference the negation is about); what changed is that (CHK.63)
+ * opened `canUseTypeEngine`'s nullish-union-versus-primitive gate, so the ASSIGNMENT
+ * reader reaches the FLOW walk, which has always handled an early exit. The two pins are
+ * kept and INVERTED rather than deleted, because they are now the only thing that would
+ * notice that gate closing again.
  */
 class EarlyExitNarrowsTheRestOfTheBlockTest {
 
@@ -301,12 +305,17 @@ class EarlyExitNarrowsTheRestOfTheBlockTest {
     }
 
     /**
-     * RESIDUE — an `if … else` is refused even when the then-branch exits, because the
-     * ELSE may assign to the very reference the negation is about. tsc 7.0.2 is SILENT
-     * here; the row below is OUR answer, recorded as a divergence, not endorsed.
+     * WAS A RESIDUE — an `if … else` is still refused by the install (the ELSE may assign
+     * to the very reference the negation is about), and the read is nevertheless correct
+     * now, through the flow walk. tsc 7.0.2 is SILENT and so are we.
      */
     @Test
-    fun `residue - an if with an else does not narrow after it`() {
+    fun `an if with an else narrows after it too`() {
+        // Was a RESIDUE pin recording OUR row where tsc 7.0.2 is silent. (CHK.63)
+        // closed it: the ASSIGNMENT reader now consults the flow walk for a
+        // PRIMITIVE target, and the flow walk has always handled an early exit —
+        // it was `canUseTypeEngine`'s nullish-union gate that kept the
+        // `currentLocalTypes` answer in play. Confirmed silent under tsgo 7.0.2.
         val rows = diagnose(
             prelude +
                 "function zzzEc(zzzX: number | string): void {\n" +
@@ -314,17 +323,20 @@ class EarlyExitNarrowsTheRestOfTheBlockTest {
                 "  zzzP1 = zzzX;\n" +
                 "}",
         ).filter { it.code == 2322 }
-        assert(rows.size == 1)
-        assert(rows[0].message == "Type 'string | number' is not assignable to type 'number'.")
+        assert(rows.isEmpty())
     }
 
     /**
-     * RESIDUE — a `while` body and a plain nested `{ … }` block SHARE their parent
-     * frame's `localTypes` map, so the install is refused there and the early exit does
-     * not narrow. tsc 7.0.2 is SILENT on both; these are OUR answers.
+     * WAS A RESIDUE — a `while` body and a plain nested `{ … }` block SHARE their parent
+     * frame's `localTypes` map, so the install is still refused there; the read is
+     * nevertheless correct now, through the flow walk. tsc 7.0.2 is SILENT on both.
      */
     @Test
-    fun `residue - a while body and a plain nested block are not reached`() {
+    fun `a while body and a plain nested block are reached too`() {
+        // The other half of the same residue, and closed the same way — the
+        // `localTypes`-sharing install these two shapes refuse is no longer what
+        // decides the read, because the ASSIGNMENT reader reaches the flow walk.
+        // tsc 7.0.2 is silent on both.
         val rows = diagnose(
             prelude +
                 "function zzzEd(zzzXs: (number | string)[]): void {\n" +
@@ -342,7 +354,6 @@ class EarlyExitNarrowsTheRestOfTheBlockTest {
                 "  }\n" +
                 "}",
         ).filter { it.code == 2322 }
-        assert(rows.size == 2)
-        assert(rows.all { it.message == "Type 'string | number' is not assignable to type 'number'." })
+        assert(rows.isEmpty())
     }
 }

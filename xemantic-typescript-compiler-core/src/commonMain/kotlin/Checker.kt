@@ -98432,10 +98432,7 @@ interface DataView {
         if (sourceIsPrimitive && targetType is Type.Object && targetType.symbol == null) return true
         // Union source → primitive target (safe: primitives don't need control flow narrowing)
         // Skip Union → Object/Interface targets since those often need narrowing we don't implement
-        if (sourceType is Type.Union && targetIsPrimitive) {
-            val hasNullish = sourceType.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-            if (!hasNullish) return true
-        }
+        if (sourceType is Type.Union && targetIsPrimitive) return true
         if (sourceType is Type.Intersection) return true
         // Anything → Union/Intersection target
         if (targetType is Type.Union || targetType is Type.Intersection) return true
@@ -105947,7 +105944,7 @@ interface DataView {
             val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
                 (targetType is Type.Interface || targetType is Type.Reference ||
                     targetType is Type.Object || targetType is Type.Union ||
-                    targetType is Type.Intersection)) {
+                    targetType is Type.Intersection || isNarrowableTarget(targetType))) {
                 // Round 438: a UNION return target (`SourceFile | undefined`) is the
                 // symmetric partner of the assignment-path union gate — a returned
                 // reference guard-narrowed to a subtype of a union member must relate
@@ -105967,7 +105964,9 @@ interface DataView {
                     checkTypeRelatedTo(sourceTypeRaw, targetType, assignableRelation)) {
                     sourceNarrowVerified = true
                 }
-                if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) {
+                if (narrowed !== sourceTypeRaw && narrowed !== neverType &&
+                    checkTypeRelatedTo(narrowed, targetType, assignableRelation)
+                ) {
                     sourceNarrowVerified = true; narrowed
                 } else if (expr is PropertyAccessExpression &&
                     !checkTypeRelatedTo(sourceTypeRaw, targetType, assignableRelation)
@@ -107008,7 +107007,7 @@ interface DataView {
                     val ttIsEnumObject = tt is Type.Object && isEnumFlavoredObjectType(tt)
                     val sourceType = if ((narrowRef is Identifier || narrowRef is PropertyAccessExpression) &&
                         (tt is Type.Interface || tt is Type.Reference || tt is Type.Union ||
-                            tt is Type.Intersection || ttIsEnumObject)) {
+                            tt is Type.Intersection || ttIsEnumObject || isNarrowableTarget(tt))) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, narrowRef)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
@@ -115570,7 +115569,11 @@ interface DataView {
             return Triple(tt, target.pos, target.text.length)
         }
         if (target is PropertyAccessExpression) {
-            val tt = getTypeOfExpression(target)
+            // (CHK.70)(d) An OPTIONAL member's access type carries `| undefined`, and the
+            // weak rule needs the object half: tsc reaches it by DISTRIBUTING the relation
+            // over the union, and a nullish constituent can never accept a weak source, so
+            // stripping it here is that distribution for the only shape it can differ on.
+            val tt = narrowByExcludingNullUndefined(getTypeOfExpression(target))
             return Triple(tt, target.pos, expressionTrueEnd(target) - target.pos)
         }
         return null
@@ -117992,6 +117995,27 @@ interface DataView {
                 }
                 (rhs as? Identifier)?.let { id ->
                     val t = getTypeOfIdentifier(id)
+                    if (t !== anyType && t !== errorType && t !== unknownType &&
+                        t !is Type.Union
+                    ) {
+                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
+                    }
+                }
+                // (CHK.70)(f) A CONDITIONAL RHS is the third resolving arm, and the two
+                // above cannot stand in for it: its arms are property accesses that no
+                // STRUCTURAL test can prove non-nullish ([rhsIsDefinitelyNonNullish]
+                // refuses a member read, because a member may be optional), while
+                // [getTypeOfExpression] answers the ternary EXACTLY — measured against
+                // tsc 7.0.2, `stat ? stat.mtimeMs : Number.NaN` is `number` on both,
+                // including through the `stat?.isDirectory()` condition. knip's
+                // `util/glob-cache.ts statDirMtime` is the shape: a `T | undefined`
+                // defaulted inside its own `=== undefined` guard by a ternary, where the
+                // antecedent is nullish-only and the assignment plainly overwrites it.
+                // Same gates as the two arms above — no `any`/`error`/`unknown`, and a
+                // NON-UNION resolved type only (round 463's lenient-member-relation
+                // lesson), so a nullish resolved type is refused by construction.
+                (rhs as? ConditionalExpression)?.let { tern ->
+                    val t = getTypeOfExpression(tern)
                     if (t !== anyType && t !== errorType && t !== unknownType &&
                         t !is Type.Union
                     ) {
@@ -127977,6 +128001,12 @@ interface DataView {
         return null
     }
 
+    /** (CHK.61)(b) checking half: an optional property's access type carries `| undefined`. */
+    private fun optionalMemberAccessType(prop: Symbol, t: Type): Type =
+        if (strictNullChecks && isOptionalProperty(prop) && !typeIncludesUndefined(t) &&
+            t !== anyType && t !== errorType)
+            getUnionType(listOf(t, undefinedType)) else t
+
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         // (CHK.61)(a) A bare `this` receiver carries no type — see
         // [thisReceiverCarrierType]. Written FIRST for legibility; the ORDER is not
@@ -128101,7 +128131,7 @@ interface DataView {
                 // instantiate the property's type with the target's type params mapped to
                 // the reference's type args. Reuses the helper used by assignment checking.
                 if (apparentType is Type.Reference) {
-                    resolveGenericPropertyType(apparentType, prop)?.let { return it }
+                    resolveGenericPropertyType(apparentType, prop)?.let { return optionalMemberAccessType(prop, it) }
                 }
                 // B82.1: Inherited-method type-substitution. When receiver is a
                 // class instance (Type.Interface, not Reference) and the resolved
@@ -128117,11 +128147,11 @@ interface DataView {
                     val propParent = prop.parent
                     if (propParent != null && propParent !== apparentType.symbol) {
                         findInheritedBaseRef(apparentType, propParent)?.let { baseRef ->
-                            resolveGenericPropertyType(baseRef, prop)?.let { return it }
+                            resolveGenericPropertyType(baseRef, prop)?.let { return optionalMemberAccessType(prop, it) }
                         }
                     }
                 }
-                return getTypeOfSymbol(prop)
+                return optionalMemberAccessType(prop, getTypeOfSymbol(prop))
             }
         }
         // Fallback: try namespace/module lookup for property access

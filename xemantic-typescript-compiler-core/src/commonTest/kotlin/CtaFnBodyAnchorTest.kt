@@ -307,13 +307,15 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
-    fun `narrowing-discarded then-branch recording adds no emissions`() {
-        // (cta-m3e) negative control: the then-branch runs under the legacy
-        // narrowing wrapper (recordings discarded — the spine reproduction
-        // skips the region), and recordOnly truncates every diagnostic — the
-        // shape must stay exactly as silent as it is on the legacy path (the
-        // param-source nullish var-decl is currently unchecked; the discard
-        // rule's behavioral pins are the corpus narrowing shapes).
+    fun `narrowing-discarded then-branch recording emits the declaration reader's row once`() {
+        // (cta-m3e): the then-branch runs under the legacy narrowing wrapper
+        // (recordings discarded — the spine reproduction skips the region), and
+        // recordOnly truncates every diagnostic, so the SHAPE of this pin is that
+        // the then-branch adds nothing of its own. Its count moved 0 -> 1 when
+        // (CHK.63) opened `canUseTypeEngine`'s nullish-union-versus-primitive gate:
+        // the `const c: number = a` after the `if` had been a shipped FALSE
+        // NEGATIVE, and tsc 7.0.2 reports it at `(3,11)` with exactly this message.
+        // The one row is the DECLARATION reader's; the then-branch still adds none.
         val n = countTs2322("""
             function h(a: number | undefined) {
                 if (a !== undefined) {
@@ -322,7 +324,7 @@ class CtaFnBodyAnchorTest {
                 const c: number = a;
             }
         """)
-        assert(n == 0)
+        assert(n == 1)
     }
 
     @Test

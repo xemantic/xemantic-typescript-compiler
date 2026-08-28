@@ -46,7 +46,13 @@ import kotlin.test.Test
  *    for. The positive control is a reference the checker demonstrably narrows.
  *  * **The container axis** — the number the decision rests on is the share of
  *    the minting WALK inside containers nothing reads, so a fixture with one
- *    read and one unread function must report both.
+ *    read and one unread function must report both. Since (CHK.63) opened
+ *    `canUseTypeEngine`'s nullish-union-versus-primitive gate, an ENTIRELY UNREAD
+ *    container is much harder to write: the declaration, assignment and return
+ *    readers all consult the flow walk for a primitive target now, so `untouched`
+ *    below may hold no assignment to a local, no `return` of a reference and no
+ *    initialisation from one — only branches whose operands are `number`, which
+ *    `arithOperandType` refuses to flow-consult because its base is not a union.
  *  * **Non-vacuity** — with the flag off nothing may be recorded at all, or the
  *    "probe-gated, behaviour-free" claim is untested.
  */
@@ -87,19 +93,28 @@ class FlowNodeCensusTest {
             if (x === undefined) {
                 return 0;
             }
+            let n = 0;
+            while (n < x.length) {
+                n = n + 1;
+            }
             return x.length;
         }
 
-        function untouched(a: number, b: number): number {
-            let total = 0;
-            for (let i = 0; i < a; i++) {
-                if (i % 2 === 0) {
-                    total = total + b;
-                } else {
-                    total = total - b;
-                }
+        declare function sink(v: number): void;
+
+        function untouched(a: number, b: number): void {
+            if (a > b) {
+                sink(1);
+            } else {
+                sink(2);
             }
-            return total;
+            if (a < b) {
+                sink(3);
+            } else if (b < a) {
+                sink(4);
+            } else {
+                sink(5);
+            }
         }
     """.trimIndent()
 
