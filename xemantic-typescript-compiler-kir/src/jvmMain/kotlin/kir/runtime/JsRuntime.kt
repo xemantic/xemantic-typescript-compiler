@@ -393,6 +393,44 @@ public class JsArray private constructor(
         return JsArray(removed)
     }
 
+    /**
+     * `Array.prototype.sort` — IN PLACE, stable, and answering this same array.
+     *
+     * Two things about it are JavaScript rather than intuition. The DEFAULT
+     * comparison is by the elements' STRING form, so `[10, 9].sort()` answers
+     * `[10, 9]` and not `[9, 10]` — which is why a program that means numbers
+     * must pass a comparator, as `cronstrue` does. And `undefined` sorts to the
+     * END regardless of the comparator, which is never even called for it.
+     *
+     * The comparator's result is read by SIGN, through `jsToNumber`, because a
+     * JavaScript comparator returns any number and a `NaN` means "equal".
+     */
+    public fun sort(): JsArray = sortWith(null)
+
+    public fun sort(comparator: Any?): JsArray = sortWith(comparator)
+
+    private fun sortWith(comparator: Any?): JsArray {
+        val present = ArrayList<Any?>(backing.size)
+        var absent = 0
+        for (element in backing) if (element == null) absent++ else present.add(element)
+        val ordered = if (comparator == null) {
+            present.sortedWith(compareBy { jsToString(it) })
+        } else {
+            present.sortedWith { left, right ->
+                val verdict = jsToNumber(jsCall(comparator, left, right))
+                when {
+                    verdict.isNaN() || verdict == 0.0 -> 0
+                    verdict < 0.0 -> -1
+                    else -> 1
+                }
+            }
+        }
+        backing.clear()
+        backing.addAll(ordered)
+        repeat(absent) { backing.add(null) }
+        return this
+    }
+
     public fun join(separator: String): String = joinToJsString(separator)
 
     /**
@@ -699,9 +737,73 @@ public open class JsDate {
 
     public constructor() : this(System.currentTimeMillis().toDouble())
 
+    /**
+     * `new Date(year, monthIndex, …)` — the COMPONENT constructor, in LOCAL time.
+     *
+     * Three things it is easy to get wrong, all of them JavaScript's own rules:
+     * the month is ZERO-BASED (`new Date(2020, 1)` is February), a year of 0-99
+     * means 1900 + year, and the components are interpreted in the host's time
+     * zone rather than in UTC — which is why the getters below are local too,
+     * and why a round trip through them is stable.
+     */
+    // Spelled as SIX constructors rather than one with defaults: the lowering
+    // resolves a `new` by the call's exact ARITY, and a defaulted parameter is
+    // one JVM constructor plus a synthetic bridge — which that lookup does not
+    // see. `new Date(2020, 1, 15)` is a three-argument call.
+    public constructor(year: Double, month: Double) :
+        this(componentMillis(year, month, 1.0, 0.0, 0.0, 0.0, 0.0))
+
+    public constructor(year: Double, month: Double, day: Double) :
+        this(componentMillis(year, month, day, 0.0, 0.0, 0.0, 0.0))
+
+    public constructor(year: Double, month: Double, day: Double, hour: Double) :
+        this(componentMillis(year, month, day, hour, 0.0, 0.0, 0.0))
+
+    public constructor(
+        year: Double, month: Double, day: Double, hour: Double, minute: Double
+    ) : this(componentMillis(year, month, day, hour, minute, 0.0, 0.0))
+
+    public constructor(
+        year: Double, month: Double, day: Double, hour: Double, minute: Double, second: Double
+    ) : this(componentMillis(year, month, day, hour, minute, second, 0.0))
+
+    public constructor(
+        year: Double,
+        month: Double,
+        day: Double,
+        hour: Double,
+        minute: Double,
+        second: Double,
+        millisecond: Double,
+    ) : this(componentMillis(year, month, day, hour, minute, second, millisecond))
+
     public fun getTime(): Double = millis
 
     public fun valueOf(): Double = millis
+
+    /** The LOCAL calendar fields, as JavaScript's own getters report them. */
+    public fun getFullYear(): Double = local()?.year?.toDouble() ?: Double.NaN
+
+    /** ZERO-BASED, as `getMonth` is in JavaScript. */
+    public fun getMonth(): Double = local()?.monthValue?.minus(1)?.toDouble() ?: Double.NaN
+
+    public fun getDate(): Double = local()?.dayOfMonth?.toDouble() ?: Double.NaN
+
+    /** `0` is Sunday, as JavaScript numbers the week. */
+    public fun getDay(): Double =
+        local()?.dayOfWeek?.value?.rem(7)?.toDouble() ?: Double.NaN
+
+    public fun getHours(): Double = local()?.hour?.toDouble() ?: Double.NaN
+
+    public fun getMinutes(): Double = local()?.minute?.toDouble() ?: Double.NaN
+
+    public fun getSeconds(): Double = local()?.second?.toDouble() ?: Double.NaN
+
+    private fun local(): java.time.LocalDateTime? =
+        if (millis.isNaN()) null else java.time.LocalDateTime.ofInstant(
+            java.time.Instant.ofEpochMilli(millis.toLong()),
+            java.time.ZoneId.systemDefault()
+        )
 
     /** `toISOString`, which JavaScript spells with milliseconds and a `Z`. */
     public open fun toISOString(): String {
@@ -716,6 +818,40 @@ public open class JsDate {
     override fun toString(): String = if (millis.isNaN()) "Invalid Date" else toISOString()
 
     private companion object {
+
+        /** `new Date(y, m, …)`'s epoch milliseconds, in the host's time zone. */
+        fun componentMillis(
+            year: Double,
+            month: Double,
+            day: Double,
+            hour: Double,
+            minute: Double,
+            second: Double,
+            millisecond: Double,
+        ): Double {
+            if (listOf(year, month, day, hour, minute, second, millisecond).any { it.isNaN() }) {
+                return Double.NaN
+            }
+            val fullYear = year.toInt().let { if (it in 0..99) 1900 + it else it }
+            return try {
+                // The components are ADDED rather than passed to a constructor,
+                // so an out-of-range one rolls over as JavaScript's do —
+                // `new Date(2020, 12)` is January 2021, not an error.
+                java.time.LocalDateTime.of(fullYear, 1, 1, 0, 0, 0)
+                    .plusMonths(month.toLong())
+                    .plusDays(day.toLong() - 1)
+                    .plusHours(hour.toLong())
+                    .plusMinutes(minute.toLong())
+                    .plusSeconds(second.toLong())
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+                    .toDouble() + millisecond
+            } catch (_: Exception) {
+                Double.NaN
+            }
+        }
+
         /**
          * The subset of date strings JavaScript's `Date` accepts that this
          * runtime does: ISO-8601, with or without a time, with or without an
@@ -902,6 +1038,35 @@ public fun jsCall3(callee: Any?, a0: Any?, a1: Any?, a2: Any?): Any? = when (cal
     null -> throw JsTypeError("undefined is not a function")
     else -> throw JsTypeError("${jsToString(callee)} is not a function")
 }
+
+/**
+ * A function value RESHAPED to the arity a slot wants.
+ *
+ * JavaScript lets a callback of any arity sit in a slot declared for another —
+ * `cronstrue` hands `(s) => s` to a `(t: string, form?: number) => string`
+ * parameter — and the erasure cannot express that, because `Function1` is not a
+ * `Function2` on the JVM. The CALL side has always adapted ([jsCall]); this is
+ * the same adaptation at the ASSIGNMENT side, and it delegates to `jsCall` so
+ * there is one place where padding and dropping are decided.
+ *
+ * A wrapper is only built where the arities actually differ — see the lowering's
+ * `coerce`, which passes the value through untouched otherwise.
+ */
+public fun jsAdapt0(callee: Any?): Function0<Any?> = { jsCall0(callee) }
+
+public fun jsAdapt1(callee: Any?): Function1<Any?, Any?> = { a -> jsCall1(callee, a) }
+
+public fun jsAdapt2(callee: Any?): Function2<Any?, Any?, Any?> =
+    { a, b -> jsCall2(callee, a, b) }
+
+public fun jsAdapt3(callee: Any?): Function3<Any?, Any?, Any?, Any?> =
+    { a, b, c -> jsCall3(callee, a, b, c) }
+
+public fun jsAdapt4(callee: Any?): Function4<Any?, Any?, Any?, Any?, Any?> =
+    { a, b, c, d -> jsCall(callee, a, b, c, d) }
+
+public fun jsAdapt5(callee: Any?): Function5<Any?, Any?, Any?, Any?, Any?, Any?> =
+    { a, b, c, d, e -> jsCall(callee, a, b, c, d, e) }
 
 public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
     fun argument(index: Int): Any? = if (index < arguments.size) arguments[index] else null
@@ -1409,6 +1574,45 @@ public fun jsStrToUpperCase(value: String): String = value.uppercase()
 
 public fun jsStrToLowerCase(value: String): String = value.lowercase()
 
+/**
+ * `toLocaleUpperCase` / `toLocaleLowerCase` with no explicit locale.
+ *
+ * JavaScript maps with the HOST's current locale, whose JVM analogue is
+ * `Locale.getDefault()` — the difference from the plain forms is real and
+ * shows on Turkish `i`, which is why the two are separate functions rather
+ * than aliases.
+ */
+public fun jsStrToLocaleUpperCase(value: String): String =
+    value.uppercase(java.util.Locale.getDefault())
+
+public fun jsStrToLocaleLowerCase(value: String): String =
+    value.lowercase(java.util.Locale.getDefault())
+
+/**
+ * `String.prototype.substr` — deprecated in JavaScript and still written.
+ *
+ * NOT `substring`: the second argument is a LENGTH rather than an end index,
+ * and a negative start counts from the end of the string. Both differences are
+ * silent if the two are confused, which is why it is its own function.
+ */
+public fun jsStrSubstr(value: String, from: Double): String {
+    val start = substrStart(value, from)
+    return value.substring(start)
+}
+
+public fun jsStrSubstr(value: String, from: Double, length: Double): String {
+    val start = substrStart(value, from)
+    if (length.isNaN() || length <= 0.0) return ""
+    val end = minOf(value.length.toLong(), start.toLong() + length.toLong()).toInt()
+    return value.substring(start, end)
+}
+
+private fun substrStart(value: String, from: Double): Int {
+    if (from.isNaN()) return 0
+    val raw = from.toInt()
+    return if (raw < 0) maxOf(value.length + raw, 0) else minOf(raw, value.length)
+}
+
 public fun jsStrTrim(value: String): String = value.trim()
 
 public fun jsStrTrimStart(value: String): String = value.trimStart()
@@ -1857,6 +2061,18 @@ private fun reflectiveInvoke(receiver: Any, name: String, arguments: Array<out A
 /** `console.log`: space-separated `ToString` of every argument, then a newline. */
 public fun consoleLog(vararg values: Any?) {
     println(values.joinToString(" ") { jsToString(it) })
+}
+
+/**
+ * `console.warn` and `console.error`, which write to STDERR as Node does.
+ *
+ * The distinction is not cosmetic: a library that warns — `cronstrue` does, on
+ * a deprecated option and on an unknown locale — must not put that line in the
+ * output its caller is reading. Routing it to stdout would corrupt the answer
+ * of every program that pipes one.
+ */
+public fun consoleError(vararg values: Any?) {
+    System.err.println(values.joinToString(" ") { jsToString(it) })
 }
 
 // ---------------------------------------------------------------------------

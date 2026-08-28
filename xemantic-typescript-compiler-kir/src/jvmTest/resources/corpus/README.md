@@ -29,6 +29,10 @@ debugger.
 | 20 | the REPLACER CALLBACK overload of `String.replace`: the argument list is `(match, …groups, offset, whole)`, so its LENGTH is a property of the pattern — which is why this and the variadic carrier of 17 are one piece of work |
 | 21 | `for…in`: an indexed walk over the subject's KEYS, which are STRINGS (an array enumerates `"0"`, `"1"`, … not `0`, `1`), a `var` in the head binding the FUNCTION's slot so it outlives the loop, and `continue`/`break` inside it |
 | 22 | `Object.entries`/`values` and a DESTRUCTURING binding in a loop head — `for (const [k, v] of Object.entries(t))`, which is both in one statement |
+| 23 | `<T>expr` — the older spelling of `expr as T` and the SAME operation; its `.expected` comes from the `as`-spelled twin, because node's type stripper will not parse the angle-bracket form |
+| 24 | `console` beyond `log`, and WHICH STREAM each member writes to — `warn`/`error` to stderr as node does, pinned by their ABSENCE from the expected stdout |
+| 25 | the library members whose JavaScript rule is not the intuitive one: `substr`'s second argument is a LENGTH, `sort()` with no comparator compares STRING forms (`[10,9]` stays `10,9`), `new Date(y, m)` takes a ZERO-BASED month in LOCAL time and a two-digit year means 19xx |
+| 26 | CALLBACK ARITY: a function value may be stored in a slot declared for a different arity, reshaped by the same padding-and-dropping `jsCall` does at the call side |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
@@ -44,6 +48,6 @@ use site instead, where union erasure already pays it.
 Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.
 
-Programs 17 to 22 take their `.expected` from `node`, which runs a `.ts`
+Programs 17 to 26 take their `.expected` from `node`, which runs a `.ts`
 file directly — so the oracle is a JavaScript engine rather than this
 author's reading of the specification.

@@ -89,6 +89,7 @@ import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.TemplateExpression
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.TypeAssertionExpression
 import com.xemantic.typescript.compiler.TypeFlags
 import com.xemantic.typescript.compiler.TypeLiteral
 import com.xemantic.typescript.compiler.TypeOfExpression
@@ -2232,6 +2233,10 @@ internal class KirFileLowering(
         // whole of their runtime meaning.
         is NonNullExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
         is AsExpression -> coerceToRecordedType(node, lowerExpression(node.expression))
+        // `<T>expr` is `expr as T` in the older syntax and the SAME operation —
+        // the checker records one type for both, so both read it back.
+        is TypeAssertionExpression ->
+            coerceToRecordedType(node, lowerExpression(node.expression))
         // `typeof x` on its own: the runtime answers the STRING, which is what
         // the operator is. The `typeof x === "…"` pattern below is an
         // optimization of this, not a substitute for it.
@@ -4885,8 +4890,26 @@ internal class KirFileLowering(
         return classes.entries.firstOrNull { it.value.symbol == classifier }?.key
     }
 
-    private fun coerceErased(node: Node, value: IrExpression, target: IrType): IrExpression =
-        when (coercionOf(value, target, irBuiltIns)) {
+    private fun coerceErased(node: Node, value: IrExpression, target: IrType): IrExpression {
+        // TypeScript lets a callback of ANY arity sit in a slot declared for
+        // another — `cronstrue` hands `(s) => s` to a `(t, form?) => string`
+        // parameter — and the JVM does not: `Function1` is not a `Function2`.
+        // The call side has adapted since mitt (`jsCall` pads and drops); this
+        // is the same adaptation where the value is STORED, and it is applied
+        // only when the two arities actually differ.
+        val wanted = types.functionArity(target)
+        if (wanted != null && types.functionArity(value.type).let { it != null && it != wanted }) {
+            val adapter = intrinsics.functionAdapter(wanted)
+                ?: refuse(
+                    tsFile, node,
+                    "cannot reshape a function value to $wanted parameter(s) — this backend " +
+                        "adapts up to 5"
+                )
+            return scope.irCall(adapter, target).apply {
+                arguments[0] = value
+            }
+        }
+        return when (coercionOf(value, target, irBuiltIns)) {
             Coercion.NONE -> value
             Coercion.CAST -> scope.irAs(value, target)
             Coercion.IMPOSSIBLE -> refuse(
@@ -4894,6 +4917,7 @@ internal class KirFileLowering(
                 "cannot coerce ${value.type.render()} to ${target.render()}"
             )
         }
+    }
 
     /**
      * A value in a condition position.

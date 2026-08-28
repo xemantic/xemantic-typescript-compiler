@@ -1,0 +1,5 @@
+log goes to stdout
+info goes to stdout
+debug goes to stdout
+two arguments 3
+after the warnings

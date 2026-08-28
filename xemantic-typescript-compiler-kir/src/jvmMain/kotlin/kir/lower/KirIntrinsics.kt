@@ -139,6 +139,16 @@ internal class KirIntrinsics(
     val jsForInKeys: IrSimpleFunctionSymbol by lazy { runtime("jsForInKeys") }
 
     /**
+     * `jsAdaptN(callee)` — a function value reshaped to the arity a slot wants.
+     *
+     * Null above arity 5, which is where `jsCall`'s own chain stops: a slot
+     * wanting more refuses loudly rather than being served a wrapper whose
+     * calls would throw.
+     */
+    fun functionAdapter(arity: Int): IrSimpleFunctionSymbol? =
+        if (arity in 0..5) runtime("jsAdapt$arity") else null
+
+    /**
      * The runtime carrier for a function value whose arity is NOT static — one
      * declared with a rest parameter, see `JsRuntime.JsVarargFunction`.
      *
@@ -507,7 +517,13 @@ internal class KirIntrinsics(
          */
         val GLOBAL_MEMBERS = mapOf(
             "Console.log" to "consoleLog",
-            "Console.error" to "consoleLog",
+            // Node sends `info` and `debug` to stdout and `warn`/`error` to
+            // stderr, and a warning printed on stdout would corrupt the output
+            // of any program whose answer is piped.
+            "Console.info" to "consoleLog",
+            "Console.debug" to "consoleLog",
+            "Console.warn" to "consoleError",
+            "Console.error" to "consoleError",
             "Math.floor" to "jsMathFloor",
             "Math.ceil" to "jsMathCeil",
             "Math.round" to "jsMathRound",
@@ -563,6 +579,9 @@ internal class KirIntrinsics(
             "substring" to "jsStrSubstring",
             "toUpperCase" to "jsStrToUpperCase",
             "toLowerCase" to "jsStrToLowerCase",
+            "toLocaleUpperCase" to "jsStrToLocaleUpperCase",
+            "toLocaleLowerCase" to "jsStrToLocaleLowerCase",
+            "substr" to "jsStrSubstr",
             "trim" to "jsStrTrim",
             "trimStart" to "jsStrTrimStart",
             "trimEnd" to "jsStrTrimEnd",

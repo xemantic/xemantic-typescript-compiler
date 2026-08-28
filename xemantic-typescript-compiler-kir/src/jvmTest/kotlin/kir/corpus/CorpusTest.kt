@@ -179,6 +179,26 @@ class CorpusTest {
         assertCorpusProgram("22-entries-destructuring")
     }
 
+    @Test
+    fun `23 type assertion`() {
+        assertCorpusProgram("23-type-assertion")
+    }
+
+    @Test
+    fun `24 console channels`() {
+        assertCorpusProgram("24-console-channels")
+    }
+
+    @Test
+    fun `25 library members`() {
+        assertCorpusProgram("25-library-members")
+    }
+
+    @Test
+    fun `26 callback arity`() {
+        assertCorpusProgram("26-callback-arity")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")
