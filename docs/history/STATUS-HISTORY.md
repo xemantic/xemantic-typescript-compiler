@@ -1,3 +1,47 @@
+**(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST** —
+`getTypeFromTypeReference` asked the enclosing namespace only as a FALLBACK, so a namespace
+member whose name ALSO exists globally resolved to the outer declaration. Silent in the
+dangerous direction: the outer type is a REAL type, so the annotation is judged against the
+wrong shape rather than against none. It is the CAUSE of (a)'s only corpus regression —
+`variableDeclaratorResolvedDuringContextualTyping`, where `namespace WinJS { declare class
+Promise { then(): Promise } }` resolved `Promise` to the LIB `Promise<T>` and whose PRISTINE
+baseline reports nothing at that line.
+
+**(CHK.61d) `f!()` DISCARDED THE ASSERTION AT BOTH SITES THAT CLASSIFY A CALLEE** —
+`getCalleeType`'s NonNull arm and `getReturnTypeOfCallExpression`'s unwrap loop — so a
+`T | undefined` callee arrived as a UNION and failed twice: TS2349 where tsc is silent, AND
+`if (calleeType !is Type.Object) return anyType`, so the call's RETURN TYPE was never
+resolved and `const s: string = f!()` reported NOTHING. **It is the gate on (b)**: with (b)
+applied and this present the compiler profile gains **19** rows of which **17** are this one
+class (`host.readDirectory!(…)`, `resolutionHost.realpath!(…)`); with it fixed, 3.
+
+**THE MOST TRANSFERABLE FINDING IS A REVERTED FIX.** An acceptance leg for the merged
+INTERSECTION SOURCE — consulted only after "some constituent relates" has already answered
+false — closes its row and ADDS `'parent' does not exist on type 'never'` on two profiles,
+because an acceptance feeds `typeGuardMemberDisjoint` and narrows to `never`. **"Acceptance
+only, so it cannot introduce a diagnostic" is true of the RELATION and false of the
+COMPILER.**
+
+**GATES.** Suite **16,243 / 0 / 3** (+9, exactly the two new classes), **no corpus baseline
+moved**. `cost_gate.py` `output.errors` **46**, all 20 counters digit-identical to
+(CHK.60)'s reading. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+**8-profile grid md5 `503774c23b4535130ffdebabef430cf0`**, `added=0 removed=0` on all eight
+— unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **56 ms**
+[55, 56, 57, 54] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
+`definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 and
+`jsonrepair` 3.13.1 4, EVERY ROW BYTE-IDENTICAL.**
+
+**FIVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.** a0 (both
+changes reverted, parent rebuilt) **5 RED — every positive**; a1 (the namespace reorder
+reverted) **2**, uniquely the namespace positives; a2 (`getCalleeType`'s NonNull arm
+reverted) **1**; a3 (the return-type restore reverted) **2**; a4 (the `SymbolFlags.Type`
+filter dropped) **1**, uniquely the value-export control. **TWO DRAFTS OF ONE PIN WERE BLIND
+AND a1 IS WHAT SAID SO** — asserting the ABSENCE of a TS2339 reads GREEN against the ablated
+binary in BOTH shapes of the shadowed global, so only a DIFFERING RETURN TYPE discriminates.
+**AND THE FIRST a4 WAS A DEAD ARM**: a class's own type parameter does not reach the checker
+through `currentTypeParamScope` at all, so that control has no discriminating arm and is not
+claimed as coverage.
+
 **AN ENUM MEMBER IS A STRING OR NUMBER **LITERAL** IN tsc, SO ITS APPARENT TYPE IS THE
 `String` / `Number` WRAPPER — AND WE WERE REPORTING **13** FALSE POSITIVES BECAUSE OF IT
 (2026-08-27, (CHK.60), one fix).** tsc's `TypeFlags.StringLike` is

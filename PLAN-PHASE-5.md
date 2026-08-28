@@ -20,6 +20,152 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.65) — the four residues are **ONE mechanism at TWO readers**, it is a **SHIPPED false positive**, and it lands; the gate re-prices **7 rows -> 6**, and the loop join re-prices **8 -> 3** with its blocker finally named
+
+**THE HEADLINE.** The queue said (CHK.63) needed two things: (CHK.61)(b)'s checking
+half and the loop join. Measured, **(b)'s checking half is CORRECT and complete** — the
+five-shape census fixture matches tsc 7.0.2 EXACTLY, code for code, message for
+message, at the 1-based column — and what it costs is four MORE rows, of which
+**three are the loop family and one was a mechanism nobody had seen**. That fourth one
+turned out to be reachable on the SHIPPED binary with an explicit `| undefined`
+member, at TWO readers, and it is what landed.
+
+**THE DEFECT: A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS EMPTY.**
+
+```ts
+if (s.p !== undefined) { return s.p; }   // fine
+if (s.p !== undefined) { return s.p; }   // SHIPPED FALSE POSITIVE
+```
+
+The first guard's ELSE branch narrows the path to exactly `undefined`;
+[Checker.narrowUnionByLiteral]'s NON-union `keep = false` arm then answered its input
+UNCHANGED, on reasoning that is right for an INFINITE primitive domain and wrong when
+the input IS the literal being subtracted. tsc's `filterType` is ONE function for the
+union and non-union cases; here they are two branches and only the union one
+subtracted. **An IDENTIFIER subject goes through the M1.9 if-arm machinery and was
+always correct, which is exactly what hid it — every hand-written narrowing fixture in
+this repo uses a local.** It needs a PROPERTY PATH plus a preceding guard that leaves
+the else state behind: a `return`, a `throw`, or an earlier `&&` conjunct.
+
+**AND CLOSING THE FIRST READER LEAVES THE SECOND.** The assignment/return reader
+(TS2322) reads the flow walk and was fixed by the one line above; the
+ARITHMETIC/RELATIONAL OPERAND reader (TS18048) reads [Checker.arithOperandType], whose
+flow consult is gated on a UNION base **and refuses a `never` answer**, so it never saw
+the re-narrowing. [Checker.operandFlowNarrowsToNever] is the suppression there, and it
+must **CLAIM** the operand (return true, caller emits nothing) rather than merely
+decline — the first cut returned false and the TS18048 simply became a TS2365 about
+`number | undefined` one line down. Census on the parent, 5 false positives over 11
+shapes; after the first line 1 remained; after the second, 0.
+
+**THE GATE, RE-PRICED — AND IT NOW NEEDS EXACTLY ONE THING.** `armBGR` (the
+`canUseTypeEngine` nullish-union gate opened, the RETURN and ASSIGNMENT readers given
+the flow consult for a primitive target, AND (CHK.61)(b)'s checking half — an optional
+member's access type carrying `| undefined`) measures **6 distinct rows on the 8
+profiles**, down from 7 before this round's fix removed `checker.ts:30269`. **All six
+are the LOOP JOIN**, and (b)'s own two rows (`emitter.ts:1479`,
+`organizeImports.ts:862`) are GONE:
+
+| row | shape |
+|---|---|
+| `checker.ts:35649:17` | a `let index: number \| undefined` assigned on every path of an if/else INSIDE a `for` |
+| `moduleNameResolver.ts:824:26` | `if (host.f && host.g) { for (…) { host.f(x) } }` |
+| `moduleNameResolver.ts:2265:17` | `if (… && p.a.b.exports) { for (…) { use(p.a.b.exports) } }` |
+| `tsserverLogger.ts:28:5` | an assignment narrow that must survive `while (true)` |
+| `project.ts:502:33`, `:528:37` | `Debug.assertIsDefined(host.require)` before a `for` |
+
+**THE LOOP JOIN RE-PRICES 8 ROWS -> 3, AND THE BLOCKER IS `getUnionType`, NOT A FLAG.**
+(CHK.63)(b) refused it at 8 ours-only rows and predicted that "refusing a `never` join
+removes all five" and that the other three needed `narrowWalkTruncated` and the cut to
+be separate flags. Ported onto today's HEAD with the flags separated, the `never`
+family is **CLOSED** — 8 rows -> 3 — and the surviving three are NOT a flag problem:
+
+  * `checker.ts:43282:21`, `utilities.ts:11586:63`, `utilities.ts:11704:47`, all reading
+    `ConditionalTypeNode | Node | undefined` / `ClassExpression | Node | undefined`,
+    i.e. **a narrowed SUBTYPE beside the declaration's own constituents**. tsc's
+    `getTypeAtFlowLoopLabel` unions with `UnionReduction.Subtype`; **INV.5(a) interns
+    our unions by member-id list and performs NO subtype reduction**, so `A | B` with
+    `A ⊆ B` survives and a later discriminant test can no longer filter it. Once the
+    label explores back edges at all, branch states from a PREVIOUS iteration's body
+    reach a join that today never sees them.
+  * Three refusals were built and measured against it, one per attempt, and **none of
+    them is the answer**: refuse a `never` join (works, keeps 3), refuse a join with an
+    antecedent that IS `declaredType` by identity (no effect), and refuse a join that is
+    not a STRICT SUBSET of the declaration's constituents (no effect). The last two
+    prove the offending union is built DOWNSTREAM of the label, at a branch join over
+    the newly-reachable states — which is why no policy AT the label can fix it.
+  * The design regenerates from HEAD with `python3 build/chk65/loop.py baseR`;
+    `build/chk65/snap/Checker.kt.loopbase` is the built tree.
+
+**AND THE COMBINED ARM SPLITS THE REMAINDER CLEANLY.** gate + readers + (b) + the loop
+join measures **4 distinct rows** (6 of 8 profiles captured — the two missing ones carry
+only compiler rows already present): the 3 subtype-reduction rows above, plus
+`checker.ts:35649`, which the loop join does **not** close. That last one is an
+assignment-RHS classification gap (`index = index! + 1`, `index = cutoffIndex =
+result.length`), not a loop one.
+
+**GATES.** Suite **16,339** / 0 failed / 3 skipped (+13, exactly the new subtests);
+**no corpus baseline moved.** 8-profile grid `503774c23b4535130ffdebabef430cf0`,
+byte-identical PER PROFILE to the recorded parent capture, added=0 removed=0.
+`cost_gate.py` exit 0, `output.errors` **46**, every counter the standing residual to
+the digit (`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses`
++1.75%, `narrow.walks` +0.84%, `typeOfExpr.distinct` +0.97%, `typeNode.cacheable`
++0.39%). `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+`partition-equivalence` EQUIVALENT all 78 (floor **56 ms**, one draw).
+`capture-equivalence` DIVERGED **968** in 43 of 76, `types=968 definitions=0
+narrowRendersMoreAny=0` — unchanged; both ARM DIGESTS moved and the dump against
+(CHK.63)'s is **0 lost, 0 gained, exactly 1 changed**: `checker.ts @1803172..1803191`
+(`checker.ts:30269`, the `symbol.lastAssignmentPos` of the `&&` chain) goes `undefined`
+-> `never`, which is tsc's own answer for that state. knip **48** and jsonrepair **4**,
+every row byte-identical against (CHK.63)'s third-commit capture.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `3c6a8e33`, rebuilt in this session,
+with the fixtures already in place: **7 of 13 RED**, and they are exactly the 7
+positives. Each names its reader — P1/P2/P3/P4 the RETURN reader (TS2322), P5 the
+RELATIONAL operand reader and P6 the ARITHMETIC one (TS18048), P7 the `&&`-conjunct
+form of the same. The 6 controls are green on BOTH binaries and every one of them
+reports identically on tsc 7.0.2 where it is meant to report.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`d0997340` both times).**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | the non-union subtraction never fires | `6635a19a` | **7** — every positive, both readers |
+| a2 | the operand suppression DECLINES instead of claiming | `781b93fc` | **3** — the three operand pins, on their `2365` assertion |
+| a3 | the operand suppression removed entirely | `3902f0e4` | the same 3 tests, on their `18048` assertion |
+| a4 | the suppression widened from `never` to ANY narrowing | `7039d1e3` | **0 -> 1** after the separating control was added |
+
+**THE KINDS OF ZERO, NAMED.** **a4 was UNPINNED, not redundant** — the fourth
+consecutive round with that shape. The separating fixture is an operand that IS
+narrowed and is STILL nullish (`number | null | undefined` minus `null`), which no
+other pin here contains; with it, a4 is a unique RED. **a2 and a3 are a round-927 pair
+at TEST granularity and are separated at ASSERTION granularity**: both redden the same
+three tests, a2 on `have(none { it.code == 2365 })` and a3 on
+`have(none { it.code == 18048 })`, so they are two observables and the pins say which.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's decomposition was wrong for the fifth round running, and this time in
+    the encouraging direction**: (b)'s checking half is not "refused", it is DONE and
+    exact, and its 4-row price is 3 loop rows plus one defect that had nothing to do
+    with it. What found the defect was the ARM, not reading — the census that isolates
+    it (11 shapes over one interface) took ten minutes once the arm's grid named a file
+    and a column.
+  * **A loop-join fixture graded through `zzzTake(r)` is VACUOUS**: the CALL-ARGUMENT
+    reader is live only when the source is a PARAMETER, so a fixture built on a local
+    `let` reads 0 rows on a broken AND a fixed binary. The instrument that works is a
+    deliberate mis-assignment (`const p: boolean = r`), which PRINTS the flow type; on
+    it the loop arm matches tsc on 14 of 15 shapes.
+  * **A nullish-union loop fixture is vacuous for a SECOND reason** — it sits under
+    (CHK.63)'s own gate, so both arms are silent. Use `string | number`.
+  * **Three refusals for the loop join's residue, three no-ops, and the third one is
+    what named the mechanism**: a rule that refuses any join that is not a strict subset
+    of the declaration's constituents changed NOTHING, which proves the offending union
+    is not the label's. That is a negative result worth more than the two arms before it.
+  * `bash script.sh & tail --pid=$!` inside a `run_in_background` Bash call is the
+    round-831 double-detach: the harness reaped it, the grid died at profile 1, and the
+    output directory was EMPTY with an exit status of 0 on the wrapper.
+
 ### Round (CHK.63)(a)(c) — the four residues are **ONE reader gap plus TWO flow-walk defects**, three of which were SHIPPED false positives; the gate re-prices **6 rows -> 4**, and the loop join is **REFUSED with its price and its blocker named**
 
 **THE HEADLINE.** (CHK.64) left four residue rows and the queue read them as four
@@ -3442,33 +3588,82 @@ rebuilt after every restore (the class dir returns to `c1970110` each time, prin
   binary with an EXPLICIT `| undefined` member — they are (CHK.64), and the gate is
   (CHK.63). Re-open (b)'s checking half only after those.
 
-- [ ] **(CHK.63) `T | undefined` IS SILENTLY ASSIGNABLE TO `T` AT A DECLARATION, AN
-  ASSIGNMENT AND A RETURN WHENEVER THE TARGET IS A PRIMITIVE — A SYSTEMATIC FALSE NEGATIVE,
-  AND ITS SINGLE SUPPRESSOR IS ONE `if` (2026-08-27, found while pricing (CHK.61)(b)).**
-  `canUseTypeEngine`'s `if (sourceType is Type.Union && targetIsPrimitive) { … if
-  (!hasNullish) return true }` refuses a NULLISH union source against a primitive target,
-  with the comment "narrowing we don't implement". On a six-line fixture tsc emits 6 rows
-  and we emit 2: the ARGUMENT position and a UNION target are the two that work; the
-  DECLARATION, the ASSIGNMENT and the RETURN are silent, for `| undefined` and `| null`
-  alike. **Opening it is measured: 11 ours-only rows on the 8 profiles** —
-  `checker.ts:35649`, `core.ts:2191`, `emitter.ts:1479`, `parser.ts:2642`, `path.ts:585`,
-  `sourcemap.ts:164/165/166`, `harness/tsserverLogger.ts:28`, `server/project.ts:746`,
-  `services/organizeImports.ts:862` (`build/chk61/pricing/armG-added.txt`).
-  **RE-PRICED AGAIN 2026-08-28 AFTER (CHK.63)(a)(c): `armG` ALONE is still **6** rows —
-  opening the gate is not enough, because the RETURN and ASSIGNMENT readers never consult
-  the flow walk for a PRIMITIVE target. `armGR` (the gate PLUS that consultation, added to
-  both readers' target-kind lists; measured on the 8 profiles, NOT landed) is **4 distinct
-  rows**, and each is owned:**
-  - `parser.ts:2642` — **GONE**, (CHK.63)(a) plus the reader consultation;
-  - `server/project.ts:746` — **GONE**, (CHK.63)(c);
-  - `emitter.ts:1479`, `organizeImports.ts:862` — **(CHK.61)(b)'s checking half**;
-  - `checker.ts:35649`, `tsserverLogger.ts:28` — **the REFUSED loop join**; both reads sit
-    inside a loop whose earlier iteration assigns the reference, and
-    `narrowTypeFromFlowCore` answers `declaredType` at every `FlowLoopLabel`.
+- [x] **(CHK.65) DONE 2026-08-28 — A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL,
+  IS **EMPTY**; A SECOND `!== undefined` GUARD ON THE SAME PROPERTY PATH DID NOT NARROW,
+  AT TWO READERS, AND IT WAS SHIPPED.** [Checker.narrowUnionByLiteral]'s NON-union
+  `keep = false` arm answered its input unchanged — right for an INFINITE primitive
+  domain, wrong when the input IS the literal being subtracted, which is exactly what a
+  preceding guard's ELSE branch leaves on a property path. An IDENTIFIER subject goes
+  through the M1.9 if-arm machinery and was always correct, which is what hid it. The
+  second reader is the ARITHMETIC/RELATIONAL operand one ([Checker.arithOperandType]'s
+  flow consult is gated on a UNION base and refuses a `never` answer);
+  [Checker.operandFlowNarrowsToNever] must CLAIM the operand or the TS18048 merely
+  becomes a TS2365. `ASecondGuardOnAPropertyPathNarrowsAgainTest` (7 positives naming
+  their reader, 6 controls). Grid byte-identical, suite +13, no baseline moved. It also
+  removes the gate's `checker.ts:30269` row — see (CHK.63).
 
-  **So (CHK.63) needs exactly two things: (CHK.61)(b)'s checking half and the loop join
-  — and the reader consultation must land WITH the gate, since it is unobservable
-  without it.**
+- [ ] **(CHK.63) `T | undefined` IS SILENTLY ASSIGNABLE TO `T` AT A DECLARATION, AN
+  ASSIGNMENT AND A RETURN WHENEVER THE TARGET IS A PRIMITIVE — A SYSTEMATIC FALSE
+  NEGATIVE, AND ITS SINGLE SUPPRESSOR IS ONE `if`.** `canUseTypeEngine`'s
+  `if (sourceType is Type.Union && targetIsPrimitive) { … if (!hasNullish) return true }`
+  refuses a NULLISH union source against a primitive target, with the comment "narrowing
+  we don't implement". On a six-line fixture tsc emits 6 rows and we emit 2: the ARGUMENT
+  position and a UNION target are the two that work.
+  **RE-PRICED 2026-08-28 AFTER (CHK.65). THE ARM IS `armBGR` = the gate opened PLUS the
+  RETURN/ASSIGNMENT readers given the flow consult for a primitive target (both
+  unobservable without the gate) PLUS (CHK.61)(b)'s CHECKING half. It measures 6
+  distinct rows on the 8 profiles, and ALL SIX ARE THE LOOP JOIN:**
+  `checker.ts:35649:17`, `moduleNameResolver.ts:824:26`, `moduleNameResolver.ts:2265:17`,
+  `harness/tsserverLogger.ts:28:5`, `server/project.ts:502:33`, `server/project.ts:528:37`.
+  **So (CHK.63) needs exactly ONE thing now: (CHK.66).** The arm regenerates with
+  `python3 build/chk65/arm.py 1234` (parts: 1 = the gate, 2 = the RETURN reader, 3 = the
+  ASSIGNMENT reader, 4 = (b)'s checking half); grid tag `chk65_bgr2`.
+
+- [x] **(CHK.61)(b)'s CHECKING HALF — MEASURED CORRECT AND COMPLETE 2026-08-28, WAITING
+  ONLY ON THE GATE.** Part `4` of `build/chk65/arm.py` gives
+  [Checker.computeRawTypeOfPropertyAccess] a `| undefined` constituent for an OPTIONAL
+  member at its three return sites. On the five-reader census fixture
+  (`build/chk65/f1`) it reproduces tsc 7.0.2 **EXACTLY** — five rows, same codes, same
+  messages, same 1-based columns — and it REMOVES the gate's own `emitter.ts:1479` and
+  `services/organizeImports.ts:862` (a `var` whose initializer is an optional member, so
+  tsc infers `T | undefined` for the variable and we inferred `T`). It CANNOT land alone:
+  without the gate it deletes a true positive (`const a: string = o.optNum` becomes a
+  nullish union that `canUseTypeEngine` refuses against a primitive target), and it is
+  therefore part of (CHK.63)'s single commit, not an item of its own.
+
+- [ ] **(CHK.66) THE LOOP JOIN — BUILT, PRICED AT **3** ROWS (down from (CHK.63)(b)'s 8),
+  AND ITS BLOCKER IS `getUnionType`, NOT A FLAG (2026-08-28).** `narrowTypeFromFlowCore`
+  answers `declaredType` at every `FlowLoopLabel`, so **every loop erases every narrowing
+  established before it** — `r = ""; while (…) { } take(r)` is a false positive even when
+  the loop never mentions `r`. The design unions the label like a branch label with its
+  own id in `narrowLoopCut`, a back edge that re-enters it contributing `never`; that is
+  EXACT for this flow algebra (every back edge is either a monotone narrowing, or it
+  passes an assignment whose post-state comes from the DECLARED type and cuts the
+  recursion itself). Ported onto (CHK.65)'s HEAD with `narrowLoopCutUsed` separated from
+  `narrowWalkTruncated` it matches tsc 7.0.2 on **14 of 15** loop shapes and costs **3**
+  ours-only rows per profile, all of one family:
+  `checker.ts:43282:21`, `utilities.ts:11586:63`, `utilities.ts:11704:47`, each reading a
+  union like `ConditionalTypeNode | Node | undefined` — **a narrowed SUBTYPE beside the
+  declaration's own constituents.** tsc's `getTypeAtFlowLoopLabel` unions with
+  `UnionReduction.Subtype`; **INV.5(a) interns our unions by member-id list and performs
+  NO subtype reduction**, so `A | B` with `A ⊆ B` survives and a later discriminant test
+  can no longer filter it. Three refusals AT THE LABEL were measured and only the first
+  does anything — refuse a `never` join (8 -> 3), refuse a join with a `declaredType`
+  antecedent (no effect), refuse a join that is not a STRICT SUBSET of the declaration's
+  constituents (no effect) — which PROVES the offending union is built downstream, at a
+  branch join over states the label has only just made reachable. **So the next attempt
+  is a subtype reduction at the flow joins, not another label policy.** Regenerate with
+  `python3 build/chk65/loop.py baseR`. Fixture `build/chk65/f4` (15 shapes, graded by a
+  deliberate mis-assignment — see the (CHK.65) note for why a `zzzTake(r)` fixture is
+  vacuous); residue P11, where tsc says `string` and the arm says `string | number`.
+
+- [ ] **(CHK.67) `checker.ts:35649` IS NOT THE LOOP JOIN — AN ASSIGNMENT-RHS
+  CLASSIFICATION GAP (2026-08-28, measured on the combined arm).** With the gate, the
+  readers, (b) and the loop join all applied, this row SURVIVES. `let index: number |
+  undefined` is assigned on every path of an if/else inside a `for`, but two of those
+  assignments are shapes [Checker.narrowByAssignmentRhs] does not classify: `index =
+  index! + 1` (a BinaryExpression RHS) and `index = cutoffIndex = result.length` (a
+  chained assignment whose ultimate RHS is a property access). Same family as (CHK.62c).
 
 - [x] **(CHK.64)(i)+(ii) DONE 2026-08-28 — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE
   READER**, AND BOTH ARE CLOSED; (CHK.63)'s PRICE FALLS **11 ROWS -> 6**.** Round 784's gate

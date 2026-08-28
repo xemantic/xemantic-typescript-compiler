@@ -1,5 +1,39 @@
 # Status
 
+**(CHK.65) — A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS **EMPTY**: A SECOND
+`!== undefined` GUARD ON THE SAME PROPERTY PATH DID NOT NARROW, AT **TWO** READERS, AND IT
+WAS **SHIPPED** (2026-08-28, one commit).** `if (s.p !== undefined) { return s.p; }` twice
+over `p: number | undefined` was a false positive on the second read: the first guard's
+ELSE branch narrows the path to exactly `undefined`, and [Checker.narrowUnionByLiteral]'s
+NON-union `keep = false` arm answered its input UNCHANGED — right for an INFINITE primitive
+domain, wrong when the input IS the literal being subtracted. tsc's `filterType` is ONE
+function for the union and non-union cases. **An IDENTIFIER subject goes through the M1.9
+if-arm machinery and was always correct, which is what hid it — every hand-written
+narrowing fixture in this repo uses a local.** Closing the flow walk left a SECOND reader:
+the arithmetic/relational operand one, whose flow consult is gated on a UNION base AND
+refuses a `never` answer; its suppression must CLAIM the operand or the TS18048 becomes a
+TS2365 one line down.
+
+**THE GATE RE-PRICES 7 ROWS -> 6, AND (CHK.63) NOW NEEDS EXACTLY ONE THING.** `armBGR`
+(the `canUseTypeEngine` gate + the RETURN/ASSIGNMENT reader consultation +
+**(CHK.61)(b)'s checking half, which is MEASURED CORRECT and reproduces tsc 7.0.2 exactly
+on a five-reader census**) is 6 rows, **all six the LOOP JOIN**. The loop join itself is
+built and re-priced **8 rows -> 3** — the `never` family is closed — and its blocker is
+named: **`getUnionType` performs no SUBTYPE reduction**, so a loop join legitimately
+produces `ConditionalTypeNode | Node | undefined` where tsc's `UnionReduction.Subtype`
+gives `Node | undefined`. Three refusals AT the label were measured; only one does
+anything, which proves the offending union is built downstream at a branch join.
+
+**GATES.** Suite **16,339** / 0 / 3 (+13, exactly the new subtests); no corpus baseline
+moved. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0. `cost_gate` exit 0,
+`output.errors` 46, every counter the standing residual. `huge_methods` 783 classes, 0
+over. `partition-equivalence` EQUIVALENT all 78 (floor 56 ms). `capture-equivalence`
+DIVERGED 968 / definitions=0 / moreAny=0, and the arm dump is **0 lost, 0 gained, 1
+changed** — `checker.ts:30269` going `undefined` -> `never`, tsc's own answer. knip 48,
+jsonrepair 4, byte-identical. Vacuity: **7 of 13 pins RED on the parent rebuilt this
+session**, exactly the 7 positives. Four ablation arms; a4 read **0 RED until its
+separating control existed**, then a unique RED.
+
 **(CHK.63)(a)(c) — THE FOUR RESIDUES ARE **ONE READER GAP PLUS TWO FLOW-WALK DEFECTS**,
 AND THREE OF THEM WERE SHIPPED FALSE POSITIVES; THE GATE RE-PRICES **6 ROWS -> 4**
 (2026-08-28, three commits).** A per-READER census over PARAMETER sources — the first cut
@@ -334,47 +368,3 @@ library price is UNMEASURED — only the grid was run for (b)). Every one of tho
 rows is a FALSE POSITIVE from a pre-existing gap the `any` was hiding, so under this arc's
 own convention ((CHK.51) kept a firewall "worth 43 rows"; (INC.42) narrowed rather than
 shipping FPs) both are refused, mapped cause by cause with `this`-free repros, and queued.
-
-**(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST** —
-`getTypeFromTypeReference` asked the enclosing namespace only as a FALLBACK, so a namespace
-member whose name ALSO exists globally resolved to the outer declaration. Silent in the
-dangerous direction: the outer type is a REAL type, so the annotation is judged against the
-wrong shape rather than against none. It is the CAUSE of (a)'s only corpus regression —
-`variableDeclaratorResolvedDuringContextualTyping`, where `namespace WinJS { declare class
-Promise { then(): Promise } }` resolved `Promise` to the LIB `Promise<T>` and whose PRISTINE
-baseline reports nothing at that line.
-
-**(CHK.61d) `f!()` DISCARDED THE ASSERTION AT BOTH SITES THAT CLASSIFY A CALLEE** —
-`getCalleeType`'s NonNull arm and `getReturnTypeOfCallExpression`'s unwrap loop — so a
-`T | undefined` callee arrived as a UNION and failed twice: TS2349 where tsc is silent, AND
-`if (calleeType !is Type.Object) return anyType`, so the call's RETURN TYPE was never
-resolved and `const s: string = f!()` reported NOTHING. **It is the gate on (b)**: with (b)
-applied and this present the compiler profile gains **19** rows of which **17** are this one
-class (`host.readDirectory!(…)`, `resolutionHost.realpath!(…)`); with it fixed, 3.
-
-**THE MOST TRANSFERABLE FINDING IS A REVERTED FIX.** An acceptance leg for the merged
-INTERSECTION SOURCE — consulted only after "some constituent relates" has already answered
-false — closes its row and ADDS `'parent' does not exist on type 'never'` on two profiles,
-because an acceptance feeds `typeGuardMemberDisjoint` and narrows to `never`. **"Acceptance
-only, so it cannot introduce a diagnostic" is true of the RELATION and false of the
-COMPILER.**
-
-**GATES.** Suite **16,243 / 0 / 3** (+9, exactly the two new classes), **no corpus baseline
-moved**. `cost_gate.py` `output.errors` **46**, all 20 counters digit-identical to
-(CHK.60)'s reading. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
-**8-profile grid md5 `503774c23b4535130ffdebabef430cf0`**, `added=0 removed=0` on all eight
-— unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **56 ms**
-[55, 56, 57, 54] — one draw. `capture-equivalence` **1,005 / 43 of 76 / moreAny 0**,
-`definitions` **360,376**, both ARM DIGESTs unmoved. **`knip` @ `dc7aca5` 48 and
-`jsonrepair` 3.13.1 4, EVERY ROW BYTE-IDENTICAL.**
-
-**FIVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.** a0 (both
-changes reverted, parent rebuilt) **5 RED — every positive**; a1 (the namespace reorder
-reverted) **2**, uniquely the namespace positives; a2 (`getCalleeType`'s NonNull arm
-reverted) **1**; a3 (the return-type restore reverted) **2**; a4 (the `SymbolFlags.Type`
-filter dropped) **1**, uniquely the value-export control. **TWO DRAFTS OF ONE PIN WERE BLIND
-AND a1 IS WHAT SAID SO** — asserting the ABSENCE of a TS2339 reads GREEN against the ablated
-binary in BOTH shapes of the shadowed global, so only a DIFFERING RETURN TYPE discriminates.
-**AND THE FIRST a4 WAS A DEAD ARM**: a class's own type parameter does not reach the checker
-through `currentTypeParamScope` at all, so that control has no discriminating arm and is not
-claimed as coverage.
