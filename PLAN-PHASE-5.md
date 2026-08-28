@@ -20,6 +20,48 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (LIB.4) — `cronstrue` **COMPILES TO JVM BYTECODE**; the queue's five rungs were half the ladder, and four of the five defects found were SILENT wrong answers
+
+**The deliverable.** `cronstrue`'s English entry point — 11 files of published source,
+unmodified — reads `successful=true` through `compileTypeScriptProjectToJvm`, with the checker
+at **0 errors agreeing with tsgo 7.0.2 exactly**. It then fails at RUN time on the
+nominal/structural boundary, twice for one reason ((LIB.6)). Thirteen capabilities landed as
+corpus 17-29, in six commits, each gated on a green full suite (16,339 / 0 at the last).
+
+**The method, and the one thing it corrected about the queue.** The queue named five rungs; the
+ladder is thirteen. Its list was short because the earlier session peeled it *by patching a
+throwaway copy*, which walks past whatever the patch removed. Re-probing the UNMODIFIED library
+after each fix — `LibraryProbe`, read the one refusal, close it, re-probe — found the other
+eight. **Order matters too: the refusals arrive in the lowering's own file order, not the
+queue's**, so rung 2 arrived tenth.
+
+**Every `.expected` in 17-29 is `node`'s own stdout** (it runs a `.ts` directly), and each
+program is written so the INTUITIVE implementation fails it: `[10, 9].sort()` is `10,9`,
+`new Date(99, 0, 1)` is 1999, `substr`'s second argument is a length, `every` is true for an
+empty array. Program 23 is the single exception — node's stripper will not parse `<T>expr`, so
+its oracle is the `as`-spelled twin, which IS the claim under test.
+
+**The five defects, four of them silent.** None was a missing capability:
+
+1. **`for (let j …)` had no per-iteration binding** — every closure the loop made shared one
+   variable (`3,3,3` where JavaScript says `0,1,2`). Found ONLY because corpus 18 runs the `var`
+   and `let` spellings side by side: the `var` answer is correct and the `let` answer is not, and
+   neither alone shows it.
+2. **`toFixed` used the machine's LOCALE** — `"2,0"` on this box. Invisible on en-US, so CI could
+   never catch it, and it appeared on a plain `number` receiver, so it predates this arc.
+3. **The array callbacks were typed `Function1`**, truncating JavaScript's
+   `(element, index, array)`. Before the arc `map((v, i) => …)` was refused; with the new arity
+   adapter it would have begun dropping the index SILENTLY — the same defect with no diagnostic.
+4. **This arc's own `var` hoisting emitted into the wrong body** — `blockBodyOf` is the funnel for
+   SYNTHESIZED bodies too, so `var days = { … }` put its hoisted declaration into the constructor
+   of the shape class its own initializer had just built. Only the IR validator saw it; corpus 18
+   now carries the shape.
+5. **A checker FP, still open ((CHK.69))**: an assignment before a `var`'s declaration does not
+   count toward definite assignment. The mirror is silent, so it is that direction specifically.
+
+**What is left is one architectural milestone, not a queue.** (LIB.6), with a cheaper candidate
+named and priced against `docs/kir-structural-typing.md`'s measured 158-edge closure.
+
 ### Round (CHK.68) — `x = y = z` was a **SHIPPED** false positive and it LANDS; the gate re-prices **6 rows -> 5**, the COMBINED arm is **exactly 1 row** — and the loop join it needs is a **~20x cost blowup nobody had priced**
 
 **THE HEADLINE, AND IT IS A REFUSAL WITH A NEW REASON.** `armBGR` was re-measured on top
@@ -3298,23 +3340,54 @@ ordinary relation rather than the weak rule.
   (`Uint8Array`×167) against a runtime with none, plus 14 `Worker` references. Do not start
   there; revisit after typed arrays exist.
 
-- [ ] **(LIB.4) `cronstrue` IS THE NEXT BACKEND DRIVER — 0 CHECKER ERRORS ON 8,812 LINES AND
-  FIVE NAMED RUNGS TO A RUNNING PROGRAM.** The probe reads `typeErrors=0` over all 52 files
-  (it AGREES with tsgo exactly, the only library in the screen that does) and the lowering then
-  runs to a first refusal. Walking it by patching a throwaway copy and re-probing gives the
-  whole ladder, in order:
-  1. `rest parameters are out of the spike subset` — `stringUtilities.ts:10`, **2 sites**
-  2. `destructuring in for…of` — `expressionDescriptor.ts:734`, **1 site**
-  3. `` `var` is out of the spike subset — its function scoping is not modelled `` — **18 sites in 4 files**
-  4. `cannot lower this binary operator` (`??`) — **2 sites**
-  5. `cannot coerce Function1 to String` — `String.replace(re, fn)`, i.e. the replacer-CALLBACK
-     overload, a RUNTIME gap rather than a language one
-  **The count stayed flat as the rungs were peeled — it is not opening into a tail**, which is
-  what makes this a bounded piece of work rather than an open-ended one. It is 8x `smol-toml`,
-  zero dependencies, zero non-relative imports, and a real CLI (`cronstrue "*/5 * * * *"`), so
-  landing it extends `scripts/kir-bench.sh` with a third library and a third workload shape.
-  **Rung 3 is the one to price first**: `var`'s function scoping is a real semantic difference,
-  not a syntax rewrite, and 18 sites is enough that refusing it keeps blocking libraries.
+- [x] **(LIB.4 — the LOWERING half DONE 2026-08-28) `cronstrue` COMPILES TO JVM BYTECODE; WHAT
+  STOPS IT RUNNING IS THE NOMINAL HALF.** Its English entry point (11 files, published source
+  unmodified) reads `successful=true` with the checker at **0 errors, agreeing with tsgo 7.0.2
+  exactly**, and then fails at RUN time on one thing, twice: `Can not set JsObject field
+  ExpressionDescriptor.i18n to program.en` — a generated CLASS instance cannot flow into an
+  INTERFACE-typed slot. See (LIB.6). **THE QUEUE'S FIVE RUNGS WERE HALF THE LADDER: thirteen
+  capabilities were needed** (corpus 17-29), and the reason the list was short is that the
+  earlier session peeled it *by patching a throwaway copy*, which walks past whatever the patch
+  removed — re-probing the UNMODIFIED library after each fix is what found the other eight.
+  `docs/kir-library-readiness.md` § "UPDATE 2026-08-28" has the table and the five defects the
+  arc surfaced, four of them silent wrong answers invisible to every gate in this repo.
+
+- [ ] **(LIB.6) THE NOMINAL HALF — A CLASS INSTANCE CANNOT REACH AN INTERFACE-TYPED SLOT, AND IT
+  IS THE ONLY THING BETWEEN `cronstrue` AND A RUNNING PROGRAM.** An `interface` erases to the
+  property bag and a `class` is a nominal JVM class, so `i18n: Locale = new en()` fails at run
+  time with an `IllegalArgumentException` from `reflectiveSet`. `docs/kir-structural-typing.md`
+  already MEASURED the plan — candidate (1), each interface a JVM interface and each class
+  implementing every interface it is structurally assignable to, **158 closure edges on tsc's own
+  sources, max fan-out 9** — and it was never built because § 7 priced the dynamic half at 12x
+  and it was taken first. **A cheaper shape exists and should be priced against it before
+  starting**: make a generated class EXTEND `JsObject` (it is `open`, has a no-arg constructor,
+  and the shape classes already do exactly this) and route a bag-receiver METHOD call through
+  `jsInvoke`, whose reflective fallback already finds a real JVM method. That is two changes
+  rather than a whole-program closure, and it changes what `instanceof` and the spill machinery
+  see — which is why it is a decision rather than a rung.
+
+- [ ] **(LIB.7) A NAMESPACE IMPORT HAS NO RUNTIME OBJECT — `import * as ns from "./m"` refuses
+  with `cannot lower the reference 'ns'`.** `cronstrue`'s ALL-LOCALES entry point
+  (`cronstrue-i18n.ts`) needs it: `allLocalesLoader.ts` does `for (var property in allLocales)`
+  and `new (allLocales as any)[property]()`. The English entry point does not, which is why
+  (LIB.4) got past it. Needs a module NAMESPACE object — a `JsObject` whose properties are the
+  module's exports — built once per imported module and reachable as a value.
+
+- [ ] **(CHK.69) AN ASSIGNMENT *BEFORE* A `var`'s DECLARATION DOES NOT COUNT TOWARD DEFINITE
+  ASSIGNMENT — a two-function repro, ours-only against tsgo 7.0.2.**
+  ```ts
+  export function assignedBeforeDeclaration(): number {
+    probe = 7;
+    var probe: number;
+    return probe;      // TS2454 here, tsgo silent
+  }
+  export function assignedAfterDeclaration(): number {
+    var other: number; other = 7; return other;   // silent BOTH sides — the control
+  }
+  ```
+  The mirror is silent, so it is that direction specifically. `var` has no TDZ, so an assignment
+  above the declaration is ordinary and the binding is definitely assigned at the `return`.
+  Found while writing corpus 18, which had to route around it.
 
 - [x] **(CHK.31 — DONE, round (CHK.31)) `// @ts-ignore` AND `// @ts-expect-error` DO NOT SUPPRESS ANYTHING — MEASURED
   IN BOTH DIRECTIONS, AND THIS IS THE HIGHEST-BLAST-RADIUS ITEM IN THE SCREEN.** A four-file

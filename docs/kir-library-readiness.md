@@ -373,3 +373,85 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.
+
+## UPDATE 2026-08-28 — `cronstrue` COMPILES; what stops it is the nominal half
+
+(LIB.4) was worked to its end. **`cronstrue`'s English entry point — 11 files,
+its own published source unmodified — now lowers and compiles to JVM bytecode**
+(`successful=true`), with the checker at **0 errors agreeing with tsgo 7.0.2
+exactly**. It fails at RUN time, twice for one reason, and that reason is not on
+any ladder:
+
+```
+Can not set JsObject field program.ExpressionDescriptor.i18n to program.en
+```
+
+A generated **class** instance cannot flow into an **interface**-typed slot: an
+interface erases to the property bag while a class is a nominal JVM class. That
+is `docs/kir-structural-typing.md`'s candidate (1) — measured there at **158
+`implements` edges** on tsc's own sources with a max fan-out of 9, and never
+built, because § 7 priced the dynamic half at 12x the nominal one and it was
+taken first. **So the remaining work for this library is one named architectural
+milestone, not a queue of small gaps.**
+
+### The ladder was twice as long as the queue's five, and its own list was stale
+
+The queue named five rungs. Thirteen capabilities were needed, and the five it
+named were rungs 1, 3, 4, 5 and (out of order) 2:
+
+| # | capability | corpus |
+|---|---|---|
+| 1 | rest parameters, in all three positions | 17 |
+| 3 | `var` FUNCTION scoping and hoisting | 18 |
+| 4 | `??` | 19 |
+| 5 | the replacer-CALLBACK overload of `String.replace` | 20 |
+| — | `for…in` | 21 |
+| 2 | `Object.entries`/`values`, destructuring in a loop head | 22 |
+| — | `<T>expr` | 23 |
+| — | `console.warn`/`info`/`debug`, and WHICH STREAM each writes to | 24 |
+| — | `substr`, `sort`, `new Date(y, m, …)`, `toLocale*Case` | 25 |
+| — | callback ARITY at the STORAGE side | 26 |
+| — | the array callbacks' `(element, index, array)` argument list | 27 |
+| — | a member call on a receiver whose recorded type is the nullish union | 28 |
+| — | `new Array(n)`, `export default X`, a static method as a VALUE | 29, 18 |
+
+**Why the queue's list was short: it was peeled by patching a throwaway copy,
+which walks past whatever the patch removed.** Re-probing the UNMODIFIED library
+after each fix is what found the other eight.
+
+### Five defects, none of them a missing capability
+
+Every one is a silent wrong answer, and four were invisible to every gate here:
+
+1. **`for (let j …)` had no per-iteration binding.** Every closure the loop made
+   shared one variable, so `fns[0]()` answered `3` where JavaScript answers `0`.
+   Found because corpus 18 runs the `var` and `let` spellings SIDE BY SIDE — the
+   `var` answer (`3,3,3`) is correct and the `let` answer is not, and only the
+   pair shows it.
+2. **`toFixed` used the machine's locale.** `(2).toFixed(1)` answered `"2,0"` on
+   a comma-locale box where JavaScript defines `.` everywhere. Invisible on
+   en-US, so CI could never have caught it; it appeared on a PLAIN `number`
+   receiver, so it predates this arc entirely.
+3. **The array callbacks were typed to take a `Function1`**, truncating
+   JavaScript's `(element, index, array)`. Before this arc `map((v, i) => …)` was
+   REFUSED; with the new arity adapter it would have started dropping the index
+   SILENTLY — the same defect with no diagnostic.
+4. **This arc's own `var` hoisting emitted into the wrong body.** `blockBodyOf`
+   is the funnel for every body the lowering builds, including the ones it
+   SYNTHESIZES mid-expression, so `var days = { SUN: 0, … }` put the hoisted
+   declaration into the constructor of the shape class its own initializer had
+   just created. Only the IR validator saw it.
+5. **A checker false positive**, still open: `probe = 7; var probe: number;
+   return probe;` draws TS2454 here and nothing from tsgo — an assignment BEFORE
+   a `var`'s declaration does not count toward definite assignment. The mirror
+   (assignment after) is silent, so it is that direction specifically.
+
+### The method, restated
+
+`node` runs a `.ts` file directly, so **every corpus `.expected` in 17-29 is a
+JavaScript engine's own output** rather than a reading of the specification —
+and each program is written so that the INTUITIVE implementation fails it
+(`[10, 9].sort()` is `10,9`; `new Date(99, 0, 1)` is 1999; `substr`'s second
+argument is a length). The one exception is 23, whose oracle is the `as`-spelled
+twin, because node's type stripper will not parse `<T>expr`; deriving it that
+way IS the claim under test.

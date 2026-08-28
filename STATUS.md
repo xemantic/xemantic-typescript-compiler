@@ -1,5 +1,23 @@
 # Status
 
+**(LIB.4) — `cronstrue` COMPILES TO JVM BYTECODE; WHAT STOPS IT RUNNING IS THE NOMINAL
+HALF (2026-08-28, six commits, corpus 17-29).** Its English entry point — 11 files of
+published source, unmodified — reads `successful=true` with the checker at **0 errors,
+agreeing with tsgo 7.0.2 exactly**, and fails at RUN time on one thing, twice: a generated
+CLASS instance cannot flow into an INTERFACE-typed slot, because an interface erases to the
+property bag. That is `docs/kir-structural-typing.md`'s measured-but-unbuilt candidate (1),
+now queued as (LIB.6) with a cheaper alternative priced against it.
+
+**THE QUEUE'S FIVE RUNGS WERE HALF THE LADDER — THIRTEEN CAPABILITIES WERE NEEDED**, because
+the earlier session peeled its list by patching a throwaway copy, which walks past whatever
+the patch removed. Re-probing the UNMODIFIED library after each fix found the other eight.
+**Four of the five defects the arc surfaced are SILENT wrong answers**: `for (let j …)` had
+no per-iteration binding (every closure shared one variable — `3,3,3` where JavaScript says
+`0,1,2`); `toFixed` used the machine's LOCALE (`"2,0"` here, invisible on en-US CI); the
+array callbacks were typed `Function1` and truncated JavaScript's `(element, index, array)`;
+and this arc's own `var` hoisting emitted into a shape class's synthesized constructor. Every
+corpus `.expected` in 17-29 is `node`'s own stdout. Full suite **16,339 / 0**.
+
 **(CHK.68) — `x = y = z` WAS A **SHIPPED** FALSE POSITIVE AND IT LANDS; THE GATE RE-PRICES
 **6 ROWS -> 5** AND THE COMBINED ARM IS **EXACTLY 1 ROW** — BUT THE LOOP JOIN IT NEEDS IS A
 **~20x COST BLOWUP NOBODY HAD PRICED** (2026-08-28, one commit `2cbb3847`).** `armBGR` was
