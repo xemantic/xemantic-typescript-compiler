@@ -123244,6 +123244,20 @@ interface DataView {
                 literalType.flags.hasAny(TypeFlags.EnumLiteral) &&
                 enumMemberTypesAreSameMember(t, literalType)
             ) return neverType
+            // (CHK.65) A domain of exactly ONE literal, MINUS that literal, is EMPTY.
+            // The `keep=false` comment above is right that subtracting a literal from an
+            // INFINITE primitive domain is a no-op — but [t] here may BE the literal, and
+            // that is precisely the state a PRECEDING guard leaves behind: after
+            // `if (s.p !== undefined) { return … }` the else branch narrows the path to
+            // `undefined`, and the NEXT `s.p !== undefined` on the same path then answered
+            // `undefined` UNCHANGED, so its own then-branch read the property as
+            // possibly-undefined. Shipped false positives (TS18048 at a member access,
+            // TS2322 at a return) for a PROPERTY PATH only — an IDENTIFIER subject is
+            // answered by the M1.9 if-arm machinery and was always correct, which is what
+            // hid this: every hand-written narrowing fixture uses a local.
+            // This is `filterType` in tsc, where the union and non-union cases are one
+            // function; here they are two branches and only the union one subtracted.
+            if (!keep && areLiteralTypesEquivalent(t, literalType)) return neverType
             return t
         }
         return if (keep) {
@@ -181387,9 +181401,31 @@ interface DataView {
      * Deliberately narrow: strictNullChecks only (without it `undefined` is not in the
      * type), a plain reference so there is a name to report, and `any`/`unknown`
      * excluded — [typeIncludesUndefined] answers true for those and neither is "possibly
-     * undefined" in tsc's sense. Returns whether it reported, so the caller skips its own
-     * diagnostic.
+     * undefined" in tsc's sense. Returns whether the caller must skip its own diagnostic
+     * — true when this one REPORTED, and (CHK.65) also when the flow proves the operand
+     * `never`, which owes no operand diagnostic of any kind.
      */
+    /**
+     * (CHK.65) Does the flow graph narrow [ref] — whose type is already [base] — to
+     * `never` at this position?
+     *
+     * Narrowing only ever SHRINKS, so a `never` answer means the reference has no value
+     * here and no possibly-undefined diagnostic is owed. Deliberately separate from
+     * [arithFlowNarrowedNonNullish], which is gated on a UNION base and REFUSES `never`
+     * (it exists to prove an operand numeric, not to prove it empty).
+     */
+    private fun operandFlowNarrowsToNever(ref: Expression, base: Type): Boolean {
+        if (base === neverType) return true
+        val graph = currentArithmeticFlowGraph ?: currentFlowGraph ?: return false
+        if (getReferencePath(ref) == null) return false
+        if (graph.flowAt(ref) == null) return false
+        val saved = currentFlowGraph
+        currentFlowGraph = graph
+        return try {
+            getNarrowedTypeForReference(base, ref) === neverType
+        } finally { currentFlowGraph = saved }
+    }
+
     private fun emitPossiblyUndefinedOperand(
         operand: Expression, type: Type, source: String, fileName: String,
     ): Boolean {
@@ -181401,6 +181437,19 @@ interface DataView {
         // reference path — but "'undefined' is possibly 'undefined'" is nonsense, and
         // tsc reports TS18050 for those operands instead.
         if (path == "undefined" || path == "null") return false
+        // (CHK.65) A nullish operand type is what a PRECEDING guard's ELSE branch leaves
+        // on a property path (`if (s.p !== undefined) { return … }` records `undefined`
+        // for the rest of the function), and a SECOND guard on the same path then
+        // re-narrows it to `never` — an operand with no values at all, which is not
+        // "possibly undefined". This reader takes its operand type from
+        // [arithOperandType], whose flow consult is gated on a UNION and on a
+        // non-`never` answer, so it never saw the re-narrowing and reported a shipped
+        // false TS18048 next to a silent assignment of the same reference. Consulting
+        // the walk here is SUPPRESSION-ONLY — it can answer `never` or nothing.
+        // Answering TRUE (the caller then emits nothing of its own) is the point: a
+        // `never` operand owes no diagnostic AT ALL, and without it the TS18048 merely
+        // becomes a TS2365 about `number | undefined` one line down.
+        if (operandFlowNarrowsToNever(operand, type)) return true
         val start = operand.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
