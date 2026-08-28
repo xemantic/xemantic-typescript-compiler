@@ -44,6 +44,14 @@ function monthRollsOver(): string {
   return d.getFullYear() + "-" + d.getMonth();
 }
 
+// `toFixed` produces a `.` in EVERY locale — JavaScript defines it that way,
+// and `String.format` without an explicit locale does not. This line answered
+// "2,0" on a machine whose locale uses a comma, and is invisible on an en-US
+// one, which is a property of who RUNS the program rather than of the program.
+function toFixedIsLocaleIndependent(): string {
+  return (2).toFixed(1) + "/" + (1234.5678).toFixed(2) + "/" + (0.5).toFixed(0);
+}
+
 function localeCase(): string {
   return "straße".toLocaleUpperCase() + "/" + "ABC".toLocaleLowerCase();
 }
@@ -55,4 +63,5 @@ console.log(sortIsInPlace());
 console.log(dateComponents());
 console.log(twoDigitYearIsNineteenHundred());
 console.log(monthRollsOver());
+console.log(toFixedIsLocaleIndependent());
 console.log(localeCase());

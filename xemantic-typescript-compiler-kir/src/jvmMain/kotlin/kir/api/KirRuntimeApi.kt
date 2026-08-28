@@ -150,9 +150,22 @@ internal object KirRuntimeApi {
                     function("slice", emptyList(), jsArray),
                     function("concat", listOf("other" to jsArray), jsArray),
                     function("join", listOf("separator" to string), string),
-                    function("forEach", listOf("callback" to callback), unit),
-                    function("map", listOf("callback" to callback), jsArray),
-                    function("filter", listOf("callback" to callback), jsArray),
+                    // The callback is `Any?` rather than a one-parameter
+                    // function type: JavaScript passes `(element, index, array)`
+                    // to every one of these, and a `Function1` slot would drop
+                    // the index silently. The runtime calls through `jsCall`,
+                    // which adapts whatever arity the callback declares.
+                    function("forEach", listOf("callback" to any), unit),
+                    function("map", listOf("callback" to any), jsArray),
+                    function("filter", listOf("callback" to any), jsArray),
+                    function("find", listOf("callback" to any), any),
+                    function("findIndex", listOf("callback" to any), double),
+                    function("some", listOf("callback" to any), boolean),
+                    function("every", listOf("callback" to any), boolean),
+                    function("at", listOf("index" to double), any),
+                    function("reverse", emptyList(), jsArray),
+                    function("sort", emptyList(), jsArray),
+                    function("sort", listOf("comparator" to any), jsArray),
                 ),
                 origin = ORIGIN,
             ),

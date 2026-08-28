@@ -3827,12 +3827,17 @@ internal class KirFileLowering(
      * callee used to be `any` — the checker did not type a contextually-typed
      * parameter until (CHK.39), so this branch was never reached for one.
      *
-     * The declared arity survives as the ARGUMENT-COUNT check alone, which is a
-     * statement about the call SITE (something the checker also rejects) rather
-     * than about the value that arrives.
+     * The declared arity survives as an UPPER BOUND only. It cannot be an
+     * equality: the erased arity counts OPTIONAL parameters — `(t: string,
+     * form?: number) => string` erases to a `Function2` — and calling such a
+     * value with one argument is ordinary TypeScript that the checker accepts,
+     * which `cronstrue` does six times over. Passing MORE arguments than the
+     * type declares is something the checker rejects (TS2554), so a call that
+     * arrives here with too many is a fact about this lowering rather than
+     * about the program, and stays a refusal.
      */
     private fun lowerFunctionValueCall(node: CallExpression, arity: Int): IrExpression {
-        if (node.arguments.size != arity) {
+        if (node.arguments.size > arity) {
             refuse(
                 tsFile, node,
                 "a function value of arity $arity called with ${node.arguments.size} argument(s)"
@@ -4362,15 +4367,31 @@ internal class KirFileLowering(
     }
 
     /** Does this expression's checked type erase to a `Double`? */
-    private fun isNumberReceiver(node: Expression): Boolean {
-        val type = facts.typeOf(node) ?: return false
-        return types.map(type) == types.double
-    }
+    private fun isNumberReceiver(node: Expression): Boolean = receiverErasesTo(node, types.double)
 
     /** Does this expression's checked type erase to a `String`? */
-    private fun isStringReceiver(node: Expression): Boolean {
+    private fun isStringReceiver(node: Expression): Boolean = receiverErasesTo(node, types.string)
+
+    /**
+     * Does [node]'s checked type erase to [primitive], IGNORING nullability?
+     *
+     * The nullish part is dropped deliberately. `facts.typeOf` answers
+     * `getTypeOfExpression`, which NEVER flow-narrows — narrowing in this
+     * checker is opt-in per emission site — so a receiver the program has
+     * plainly guarded still arrives typed `string | null`:
+     * `if (s && s.startsWith(", "))` is `cronstrue`'s own line, and both
+     * compilers agree it is well typed.
+     *
+     * Reading past the null is sound for exactly that reason: the program
+     * type-checked, so the receiver is not nullish HERE, and a member access on
+     * a nullish receiver is a `TypeError` in JavaScript rather than something
+     * this backend must model. What it must not do is silently pick the WRONG
+     * member table, and it does not — the non-nullish part is compared exactly.
+     */
+    private fun receiverErasesTo(node: Expression, primitive: IrType): Boolean {
         val type = facts.typeOf(node) ?: return false
-        return types.map(type) == types.string
+        val erased = types.map(type) ?: return false
+        return erased == primitive || erased == primitive.makeNullable()
     }
 
     /** Does this expression's checked type erase to the runtime's property bag? */

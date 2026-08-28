@@ -199,6 +199,16 @@ class CorpusTest {
         assertCorpusProgram("26-callback-arity")
     }
 
+    @Test
+    fun `27 array callbacks`() {
+        assertCorpusProgram("27-array-callbacks")
+    }
+
+    @Test
+    fun `28 guarded receiver`() {
+        assertCorpusProgram("28-guarded-receiver")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

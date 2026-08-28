@@ -33,6 +33,8 @@ debugger.
 | 24 | `console` beyond `log`, and WHICH STREAM each member writes to — `warn`/`error` to stderr as node does, pinned by their ABSENCE from the expected stdout |
 | 25 | the library members whose JavaScript rule is not the intuitive one: `substr`'s second argument is a LENGTH, `sort()` with no comparator compares STRING forms (`[10,9]` stays `10,9`), `new Date(y, m)` takes a ZERO-BASED month in LOCAL time and a two-digit year means 19xx |
 | 26 | CALLBACK ARITY: a function value may be stored in a slot declared for a different arity, reshaped by the same padding-and-dropping `jsCall` does at the call side |
+| 27 | the array members that take a CALLBACK, and the arguments JavaScript gives it — `(element, index, array)`, not the element alone; plus `find`/`findIndex`/`some`/`every`/`at`/`reverse`, where `at(-1)` counts from the end and `every` is true for an empty array |
+| 28 | a member call on a GUARDED receiver whose recorded type is still the nullish union — `getTypeOfExpression` never flow-narrows, so the receiver's member table is chosen from its NON-NULLISH shape |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
@@ -48,6 +50,6 @@ use site instead, where union erasure already pays it.
 Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.
 
-Programs 17 to 26 take their `.expected` from `node`, which runs a `.ts`
+Programs 17 to 28 take their `.expected` from `node`, which runs a `.ts`
 file directly — so the oracle is a JavaScript engine rather than this
 author's reading of the specification.

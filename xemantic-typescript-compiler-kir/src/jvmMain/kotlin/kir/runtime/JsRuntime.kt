@@ -443,36 +443,100 @@ public class JsArray private constructor(
      * diagnostic naming the position and a `ClassCastException` inside the
      * runtime.
      */
-    public fun forEach(callback: (Any?) -> Any?) {
+    public fun forEach(callback: Any?) {
         // Indexed rather than iterator-based: a callback may push or splice,
         // and JS visits the elements the array HAD when the walk reached them.
         var index = 0
         while (index < backing.size) {
-            callback(backing[index])
+            visit(callback, index)
             index++
         }
     }
 
-    public fun map(callback: (Any?) -> Any?): JsArray {
+    public fun map(callback: Any?): JsArray {
         val result = ArrayList<Any?>(backing.size)
         var index = 0
         while (index < backing.size) {
-            result.add(callback(backing[index]))
+            result.add(visit(callback, index))
             index++
         }
         return JsArray(result)
     }
 
-    public fun filter(callback: (Any?) -> Any?): JsArray {
+    public fun filter(callback: Any?): JsArray {
         val result = ArrayList<Any?>()
         var index = 0
         while (index < backing.size) {
             val element = backing[index]
-            if (jsTruthy(callback(element))) result.add(element)
+            if (jsTruthy(visit(callback, index))) result.add(element)
             index++
         }
         return JsArray(result)
     }
+
+    /** `Array.prototype.find` — the ELEMENT, or `undefined`. */
+    public fun find(callback: Any?): Any? {
+        var index = 0
+        while (index < backing.size) {
+            if (jsTruthy(visit(callback, index))) return backing[index]
+            index++
+        }
+        return null
+    }
+
+    /** `Array.prototype.findIndex` — the index, or `-1`. */
+    public fun findIndex(callback: Any?): Double {
+        var index = 0
+        while (index < backing.size) {
+            if (jsTruthy(visit(callback, index))) return index.toDouble()
+            index++
+        }
+        return -1.0
+    }
+
+    public fun some(callback: Any?): Boolean {
+        var index = 0
+        while (index < backing.size) {
+            if (jsTruthy(visit(callback, index))) return true
+            index++
+        }
+        return false
+    }
+
+    /** `every` answers TRUE for an empty array, as JavaScript specifies. */
+    public fun every(callback: Any?): Boolean {
+        var index = 0
+        while (index < backing.size) {
+            if (!jsTruthy(visit(callback, index))) return false
+            index++
+        }
+        return true
+    }
+
+    /** `Array.prototype.at` — a NEGATIVE index counts from the end. */
+    public fun at(index: Double): Any? {
+        if (index.isNaN()) return backing.getOrNull(0)
+        val raw = index.toInt()
+        val slot = if (raw < 0) backing.size + raw else raw
+        return if (slot in backing.indices) backing[slot] else null
+    }
+
+    /** `Array.prototype.reverse` — IN PLACE, answering this same array. */
+    public fun reverse(): JsArray {
+        backing.reverse()
+        return this
+    }
+
+    /**
+     * One callback invocation, with the arguments JAVASCRIPT passes.
+     *
+     * `(element, index, array)` — not the element alone. A callback declared
+     * with fewer parameters simply ignores the rest, which is what [jsCall]
+     * already arranges, and one that WANTS the index gets it: a runtime member
+     * typed to take a `Function1` would have dropped it silently.
+     */
+    private fun visit(callback: Any?, index: Int): Any? =
+        jsCall3(callback, backing[index], index.toDouble(), this)
 
     /** `Array.prototype.join` with the default separator, as `toString` uses it. */
     public fun joinToJsString(separator: String = ","): String =
@@ -1523,9 +1587,19 @@ public fun jsNumToString(value: Double, radix: Double): String {
     return value.toLong().toString(base)
 }
 
+/**
+ * `Number.prototype.toFixed`.
+ *
+ * `Locale.ROOT`, and that is the whole point of the argument: `String.format`
+ * without one uses the HOST's locale, so `(2).toFixed(1)` answered `"2,0"` on a
+ * machine whose locale uses a comma — while JavaScript's `toFixed` is defined
+ * to produce a `.` everywhere. The failure is invisible on an en-US box, which
+ * is how it survived: it is a property of who runs the program, not of the
+ * program.
+ */
 public fun jsNumToFixed(value: Double, digits: Double): String =
     if (value.isNaN() || value.isInfinite()) jsNumberToString(value)
-    else String.format("%.${digits.toInt()}f", value)
+    else String.format(java.util.Locale.ROOT, "%.${digits.toInt()}f", value)
 
 public fun jsStrLength(value: String): Double = value.length.toDouble()
 

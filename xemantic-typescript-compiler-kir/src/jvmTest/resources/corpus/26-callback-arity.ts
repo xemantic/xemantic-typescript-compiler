@@ -48,8 +48,18 @@ function throughAVariable(): string {
   return stored("v", 1);
 }
 
+// The mirror of `fewer`: the VALUE's type declares two parameters, one of them
+// optional, and the CALL supplies one. The erased arity counts the optional, so
+// an equality check on it would refuse what the checker accepts.
+function callsWithFewerArguments(): string {
+  const stored: (t: string, form?: number) => string = (s, form) =>
+    s + "/" + String(form === undefined);
+  return stored("only");
+}
+
 console.log(fewer());
 console.log(exact());
 console.log(more());
 console.log(droppedArgumentIsNotEvaluatedAway());
 console.log(throughAVariable());
+console.log(callsWithFewerArguments());
