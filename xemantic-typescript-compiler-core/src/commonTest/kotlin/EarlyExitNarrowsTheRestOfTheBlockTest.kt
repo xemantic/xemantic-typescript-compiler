@@ -218,6 +218,51 @@ class EarlyExitNarrowsTheRestOfTheBlockTest {
     }
 
     /**
+     * POSITIVE — the declared type recorded for the early exit must NOT escape the
+     * FUNCTION. `CtaFrame.narrowedDeclared` is shared down the chain with no undo log, so
+     * writing into it directly leaks to every later same-named binding in the file: here
+     * `zzzLv` would carry `string | number` into `zzzL2`, whose own `zzzLv` is a
+     * `string[]`. Measured on the profiles as 21 ours-only rows; this is the fixture that
+     * makes it visible to the suite. tsc 7.0.2 is silent.
+     */
+    @Test
+    fun `the recorded declared type does not escape the function`() {
+        diagnose(
+            prelude +
+                "function zzzL1(zzzLv: number | string): void {\n" +
+                "  if (typeof zzzLv !== \"number\") { return; }\n" +
+                "  zzzP1 = zzzLv;\n" +
+                "}\n" +
+                "function zzzL2(zzzLv: string[]): void {\n" +
+                "  zzzLv = [\"x\"];\n" +
+                "}",
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    /**
+     * DOCUMENTED SHAPE, **NOT a discriminating pin** — say so rather than claim it. The
+     * negated TYPE-GUARD CALL is refused because on tsc's own sources it narrowed through
+     * a GENERIC predicate whose `T` we do not infer and 20 captured spans in
+     * `path.ts`/`utilities.ts` then hovered `any`. That effect lives on the CAPTURE
+     * channel, and the ablation arm that drops the refusal leaves this suite GREEN: two
+     * fixtures were built for it, a non-generic and the generic one below, and under the
+     * embedded lib BOTH narrow precisely, so the diagnostic face never appears. The row
+     * below fires on either arm; it is here to record the shape and the refusal.
+     */
+    @Test
+    fun `a negated type-guard call - the refusal is capture-only and this does not discriminate`() {
+        val rows = diagnose(
+            prelude +
+                "declare function zzzSome<T>(zzzA: readonly T[] | undefined): zzzA is readonly T[];\n" +
+                "function zzzM1(zzzC: readonly string[] | undefined): void {\n" +
+                "  if (!zzzSome(zzzC)) { return; }\n" +
+                "  const zzzQ: number = zzzC[0];\n" +
+                "}",
+        ).filter { it.code == 2322 }
+        assert(rows.size == 1)
+    }
+
+    /**
      * NEGATIVE CONTROL — a then-branch that does NOT exit must not narrow after the
      * `if`. tsc 7.0.2 reports this row.
      */
