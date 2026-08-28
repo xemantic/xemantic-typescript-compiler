@@ -2288,7 +2288,8 @@ internal class KirFileLowering(
             }
             SyntaxKind.EqualsEqualsEquals -> strictEquals(node, negated = false)
             SyntaxKind.ExclamationEqualsEquals -> strictEquals(node, negated = true)
-            SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar -> shortCircuit(node)
+            SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar,
+            SyntaxKind.QuestionQuestion -> shortCircuit(node)
             SyntaxKind.GreaterThanGreaterThanGreaterThan ->
                 scope.irCall(intrinsics.jsUnsignedShiftRight, types.double).apply {
                     arguments[0] = coerce(
@@ -2606,8 +2607,19 @@ internal class KirFileLowering(
         temporary.initializer = leftValue
         val kept = { coerce(node.left, scope.irGet(temporary), type) }
         val right = coerce(node.right, lowerExpression(node.right), type)
-        val test = truthy(scope.irGet(temporary))
-        val branches = if (node.operator == SyntaxKind.AmpersandAmpersand) {
+        // `??` differs from `||` in its TEST and in nothing else: it asks
+        // whether the left operand is NULLISH rather than whether it is falsy,
+        // which is the whole reason the operator exists — `"" ?? f` keeps the
+        // empty string where `"" || f` replaces it. `undefined` and `null` are
+        // one JVM value here (design §3.1), so one null test covers both, which
+        // is exactly the pair JavaScript's own `??` tests for.
+        val nullish = node.operator == SyntaxKind.QuestionQuestion
+        val test = if (nullish) {
+            scope.irEqualsNull(scope.irGet(temporary))
+        } else {
+            truthy(scope.irGet(temporary))
+        }
+        val branches = if (node.operator == SyntaxKind.AmpersandAmpersand || nullish) {
             listOf(scope.irBranch(test, right), scope.irElseBranch(kept()))
         } else {
             listOf(scope.irBranch(test, kept()), scope.irElseBranch(right))

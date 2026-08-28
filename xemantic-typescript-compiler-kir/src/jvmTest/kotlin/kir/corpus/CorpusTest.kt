@@ -159,6 +159,11 @@ class CorpusTest {
         assertCorpusProgram("18-var-scoping")
     }
 
+    @Test
+    fun `19 nullish coalescing`() {
+        assertCorpusProgram("19-nullish")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")
