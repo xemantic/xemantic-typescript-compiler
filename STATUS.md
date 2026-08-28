@@ -1,5 +1,49 @@
 # Status
 
+**(CHK.68) — `x = y = z` WAS A **SHIPPED** FALSE POSITIVE AND IT LANDS; THE GATE RE-PRICES
+**6 ROWS -> 5** AND THE COMBINED ARM IS **EXACTLY 1 ROW** — BUT THE LOOP JOIN IT NEEDS IS A
+**~20x COST BLOWUP NOBODY HAD PRICED** (2026-08-28, one commit `5fd79098`).** `armBGR` was
+re-measured on top of (CHK.66)(a) and is UNCHANGED at 6 rows — the subtype reduction closes
+none of them. (CHK.67) was then diagnosed and the queue's description of it was half wrong
+in the useful direction: of its two named shapes, `index = index! + 1` was ALREADY handled
+by the (CHK.33) arm and the CHAINED assignment is the whole gap. It is reachable with NO
+gate and NO loop at the UNION-target declaration reader
+(`let i: number|undefined; i = c = o.len; const p: number|string = i`), because every arm
+of `narrowByAssignmentRhs` classifies the RHS syntactically and `y = z` matches none of
+them — a `BinaryExpression` whose operator IS `=`, which (CHK.33) excludes by construction.
+
+**THE GATE IS ONE ROW AWAY IN DIAGNOSTICS AND NOWHERE NEAR IT IN COST.** The COMBINED arm
+(gate + RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half + (CHK.67) + the loop join)
+measures `added=1 removed=0` on all eight profiles, the row being (CHK.66)(b)'s known
+`checker.ts:43282:21`; the five `armBGR` survivors were read individually and are ONE
+mechanism (a narrow established OUTSIDE a loop, lost inside or after it), all five removed
+by the loop join. **But the loop join ALONE measures `globals.lookups` +1,891%,
+`typeNode.cacheable` +5,951% (99.45% of them cache HITS), `typeOfExpr.calls` +116%,
+`narrow.memoServed` +1,276%, `narrow.walks` +37% and ~3.5x wall, with `spine.nodes` +0.00%
+and `typeOfExpr.distinct` +0.98%** — the population is unchanged and the same questions are
+re-asked ~20x. It was priced in ROWS for three rounds (8 -> 3 -> 1) and never in counters.
+**The gate is refused again, on a reason no earlier round had.**
+
+**GATES.** Suite **16,356** / 0 / 3 (+8, exactly the new subtests); **no corpus baseline
+moved**. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0 on all eight against a
+parent capture taken this session from a rebuilt parent (`Checker.class 19b32bf2`).
+`cost_gate` exit 0, `output.errors` **46**, counters the standing residual to the third
+decimal. `huge_methods` 783 classes, 0 over. `partition-equivalence` EQUIVALENT all 78
+(floor **61 ms**, one draw). `capture-equivalence` DIVERGED 968 in 43 of 76, definitions=0,
+moreAny=0, **both arm digests UNCHANGED**. knip **48**, jsonrepair **4**, byte-identical to
+arms from the rebuilt parent. Vacuity: **6 of 8 pins RED on the rebuilt parent**, exactly
+the 6 positives. Three ablation arms, **all three uniquely discriminating** (a1 6 RED, a2 1
+RED = P5, a3 1 RED = P6) — no zero of any kind to report.
+
+**LAST ROUND'S TWO GAPS ARE CLOSED.** (CHK.66)'s capture digest move, classified per
+ELEMENT against the pre-(CHK.66) parent rebuilt to `Checker.class d0997340`: **67 spans of
+742,254 moved — 0.009% — and NOT ONE GAINED A MEMBER.** 57 are pure DROPS of a strict
+subtype of a survivor, 3 collapse to the alias the source itself spells (better), 3 are
+member REORDERINGS, and the two non-improvements are named — one alias NAME lost to the
+first-wins (INC.29) family, and 3 go-to-definition location lists that lost the dropped
+constituent's own declaration. And a genuine parent library arm was rebuilt: knip 48,
+jsonrepair 4, byte-for-byte identical.
+
 **(CHK.66) — A FLOW JOIN NOW REDUCES SUBTYPES: `string | number | "a"` WAS A **SHIPPED**
 DIVERGENCE AT A PLAIN BRANCH LABEL, AND THE LOOP JOIN RE-PRICES **3 ROWS -> 1**
 (2026-08-28, one commit `ad888740`).** The queue named the loop join's blocker as
@@ -203,71 +247,3 @@ recorded in the test's KDoc rather than claimed.
 NON-NULLISH union (`number | string` + `typeof`) makes all four rows appear on the shipped
 binary with no patch — **a nullish fixture is the wrong instrument for anything below that
 gate.**
-
-
-**(CHK.61)(b) — THE DISPLAY HALF **LANDED**; THE CHECKING HALF IS **REFUSED WITH ITS PRICE
-FINALLY MEASURED**, AND THE REFUSAL UNCOVERED A SYSTEMATIC **FALSE NEGATIVE** THAT IS NOT (b)
-(2026-08-27, three commits).** An optional member's hover now carries `| undefined` and then
-RE-NARROWS — `zzzInst.zzzOpt` reads `number | undefined`, and inside `if (o.p)` or an `&&`
-chain in either operand position it still reads `number`, all at tsc 7.0.2's own LSP answers.
-A UNION receiver is decided PER CONSTITUENT (`memberIsOptionalOnReceiver`), because
-`getPropertyOfType`'s union arm answers ONE constituent's symbol (round 916) and the verdict
-would otherwise depend on constituent ORDER. Confined to the CAPTURE, which production never
-computes, so **every diagnostic gate is byte-identical**.
-
-**THE CHECKING HALF IS NOT SOUND ALONE, AND THE QUEUE'S "3 rows" WAS THE WRONG ARM.**
-`build/chk61/patch_b.py` DELETES a true positive on the round's own four-line repro
-(`const a: string = o.optNum` reports `Type 'number' …` on the shipped binary and NOTHING
-with it) because the source becomes a nullish union and `canUseTypeEngine` refuses those
-against a primitive target. Measured on the 8 profiles against a parent capture taken in the
-same session: **the gate opened alone is 11 ours-only rows; patch_b AND the gate is 15**
-(patch_b FIXES two of the gate's own). `armBG` reproduces tsc EXACTLY on the repro — that is
-what the refusal costs, and it is now on record instead of asserted.
-
-**THE SUPPRESSOR HIDES A LARGE FALSE NEGATIVE: `T | undefined` IS SILENTLY ASSIGNABLE TO `T`
-at a DECLARATION, an ASSIGNMENT and a RETURN whenever the target is a PRIMITIVE.** Six-line
-fixture: tsc 6 rows, us 2 (only the ARGUMENT position and a UNION target work), for
-`| undefined` and `| null` alike. Queued as **(CHK.63)** with all 11 rows.
-
-**AND THE FIVE NARROWING GAPS ARE FIVE MECHANISMS, NOT ONE — every one reproduces on the
-SHIPPED binary with an EXPLICIT `| undefined` member, no patch and no build.** The `&&`
-diagnosis was wrong twice before it was right: the FLOW walk handles `&&` correctly (member
-access and argument are both fine), and a DECLARATION with a primitive target narrows. What
-does not is an ASSIGNMENT or a RETURN — round 784's gate confines their narrowing block to an
-object-ish/union target, so they fall back to `currentLocalTypes`, filled by the legacy
-`extractNullNarrowing`, which returns ONE `(name, type)` pair and cannot decompose an `&&`.
-**What varies is the READER, not the condition.** Queued as **(CHK.64)**.
-
-**GATES, per commit, all foreground.** Suite **16,281 / 16,283 / 16,286**, 0 failed, 3
-skipped (+8/+2/+3, exactly the new subtests), **no corpus baseline moved on any of the
-three**. `cost_gate.py` exit 0 on all three, `output.errors` **46**, every counter
-digit-identical to (CHK.62)'s standing residual. `huge_methods --fail-over 0` exit 0, **783**
-classes, 0 over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on both code commits,
-byte-identical PER PROFILE** against a parent capture rebuilt here (`Checker.class`
-`e7963e28`). `knip` **48**, `jsonrepair` **4**, EVERY ROW byte-identical against a parent arm
-rebuilt in this session. `partition-equivalence` EQUIVALENT all 78 (floors 72 / 66 ms, one
-draw each).
-
-**`capture-equivalence` IS THE ONE GATE THAT MOVED, AND EVERY MOVED SPAN WAS CLASSIFIED.**
-`DIVERGED` **1,005 -> 985 -> 968** in 43 of 76, `definitions` **360,414 UNCHANGED**,
-`narrowRendersMoreAny` 0; both ARM DIGESTs re-recorded per commit (final
-`full=2642712547047802314 narrow=6791141519233628706`). Enumerated at
-`XTSC_CAPEQ_PRINT=200000`: **all 38 moved spans are the alias-display first-wins family**
-((INC.27)) shuffled by a changed first-touch order — not one is an optionality rendering, and
-the second commit added ZERO new divergences.
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH (d8 excepted and labelled), EVERY CLASS md5 DISTINCT.**
-d0 (widening removed) **4 RED**; **d1 (widened but never RE-NARROWED) 4 — uniquely the four
-guarded controls, which is the confinement's own proof**; d2 (optionality gate dropped) **1**,
-uniquely the REQUIRED control; d3 (a union decided by ALL not ANY) **1**, uniquely the union
-row. **d4 (ask the union ITSELF) READ 0 AND WAS UNPINNED, THEN FIXED** — the fixture wrote
-the OPTIONAL constituent first, where `getPropertyOfType` happens to agree; the ORDER
-SIBLING makes it **1 RED, uniquely that row** (last round's c2, one round on). **d5/d6/d7
-(the `super`, INTERSECTION and already-`undefined` guards) READ 0 AND ARE MEASURED
-REDUNDANT** — each has a fixture exercising its shape and each stays green with the guard
-removed, because a lower layer already declines; the KDoc now says so instead of claiming a
-deliberate refusal, and a two-mistake MECHANISM probe (d8) failed to locate the `super` one
-and is reported as a non-result.
-
-**RESIDUE, PINNED WITH THE VALUE WE ANSWER**: `super.<opt>` and an INTERSECTION receiver both
-hover `number` where tsc says `number | undefined`.

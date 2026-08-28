@@ -1,3 +1,70 @@
+**(CHK.61)(b) — THE DISPLAY HALF **LANDED**; THE CHECKING HALF IS **REFUSED WITH ITS PRICE
+FINALLY MEASURED**, AND THE REFUSAL UNCOVERED A SYSTEMATIC **FALSE NEGATIVE** THAT IS NOT (b)
+(2026-08-27, three commits).** An optional member's hover now carries `| undefined` and then
+RE-NARROWS — `zzzInst.zzzOpt` reads `number | undefined`, and inside `if (o.p)` or an `&&`
+chain in either operand position it still reads `number`, all at tsc 7.0.2's own LSP answers.
+A UNION receiver is decided PER CONSTITUENT (`memberIsOptionalOnReceiver`), because
+`getPropertyOfType`'s union arm answers ONE constituent's symbol (round 916) and the verdict
+would otherwise depend on constituent ORDER. Confined to the CAPTURE, which production never
+computes, so **every diagnostic gate is byte-identical**.
+
+**THE CHECKING HALF IS NOT SOUND ALONE, AND THE QUEUE'S "3 rows" WAS THE WRONG ARM.**
+`build/chk61/patch_b.py` DELETES a true positive on the round's own four-line repro
+(`const a: string = o.optNum` reports `Type 'number' …` on the shipped binary and NOTHING
+with it) because the source becomes a nullish union and `canUseTypeEngine` refuses those
+against a primitive target. Measured on the 8 profiles against a parent capture taken in the
+same session: **the gate opened alone is 11 ours-only rows; patch_b AND the gate is 15**
+(patch_b FIXES two of the gate's own). `armBG` reproduces tsc EXACTLY on the repro — that is
+what the refusal costs, and it is now on record instead of asserted.
+
+**THE SUPPRESSOR HIDES A LARGE FALSE NEGATIVE: `T | undefined` IS SILENTLY ASSIGNABLE TO `T`
+at a DECLARATION, an ASSIGNMENT and a RETURN whenever the target is a PRIMITIVE.** Six-line
+fixture: tsc 6 rows, us 2 (only the ARGUMENT position and a UNION target work), for
+`| undefined` and `| null` alike. Queued as **(CHK.63)** with all 11 rows.
+
+**AND THE FIVE NARROWING GAPS ARE FIVE MECHANISMS, NOT ONE — every one reproduces on the
+SHIPPED binary with an EXPLICIT `| undefined` member, no patch and no build.** The `&&`
+diagnosis was wrong twice before it was right: the FLOW walk handles `&&` correctly (member
+access and argument are both fine), and a DECLARATION with a primitive target narrows. What
+does not is an ASSIGNMENT or a RETURN — round 784's gate confines their narrowing block to an
+object-ish/union target, so they fall back to `currentLocalTypes`, filled by the legacy
+`extractNullNarrowing`, which returns ONE `(name, type)` pair and cannot decompose an `&&`.
+**What varies is the READER, not the condition.** Queued as **(CHK.64)**.
+
+**GATES, per commit, all foreground.** Suite **16,281 / 16,283 / 16,286**, 0 failed, 3
+skipped (+8/+2/+3, exactly the new subtests), **no corpus baseline moved on any of the
+three**. `cost_gate.py` exit 0 on all three, `output.errors` **46**, every counter
+digit-identical to (CHK.62)'s standing residual. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on both code commits,
+byte-identical PER PROFILE** against a parent capture rebuilt here (`Checker.class`
+`e7963e28`). `knip` **48**, `jsonrepair` **4**, EVERY ROW byte-identical against a parent arm
+rebuilt in this session. `partition-equivalence` EQUIVALENT all 78 (floors 72 / 66 ms, one
+draw each).
+
+**`capture-equivalence` IS THE ONE GATE THAT MOVED, AND EVERY MOVED SPAN WAS CLASSIFIED.**
+`DIVERGED` **1,005 -> 985 -> 968** in 43 of 76, `definitions` **360,414 UNCHANGED**,
+`narrowRendersMoreAny` 0; both ARM DIGESTs re-recorded per commit (final
+`full=2642712547047802314 narrow=6791141519233628706`). Enumerated at
+`XTSC_CAPEQ_PRINT=200000`: **all 38 moved spans are the alias-display first-wins family**
+((INC.27)) shuffled by a changed first-touch order — not one is an optionality rendering, and
+the second commit added ZERO new divergences.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH (d8 excepted and labelled), EVERY CLASS md5 DISTINCT.**
+d0 (widening removed) **4 RED**; **d1 (widened but never RE-NARROWED) 4 — uniquely the four
+guarded controls, which is the confinement's own proof**; d2 (optionality gate dropped) **1**,
+uniquely the REQUIRED control; d3 (a union decided by ALL not ANY) **1**, uniquely the union
+row. **d4 (ask the union ITSELF) READ 0 AND WAS UNPINNED, THEN FIXED** — the fixture wrote
+the OPTIONAL constituent first, where `getPropertyOfType` happens to agree; the ORDER
+SIBLING makes it **1 RED, uniquely that row** (last round's c2, one round on). **d5/d6/d7
+(the `super`, INTERSECTION and already-`undefined` guards) READ 0 AND ARE MEASURED
+REDUNDANT** — each has a fixture exercising its shape and each stays green with the guard
+removed, because a lower layer already declines; the KDoc now says so instead of claiming a
+deliberate refusal, and a two-mistake MECHANISM probe (d8) failed to locate the `super` one
+and is reported as a non-result.
+
+**RESIDUE, PINNED WITH THE VALUE WE ANSWER**: `super.<opt>` and an INTERSECTION receiver both
+hover `number` where tsc says `number | undefined`.
+
 **(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST** —
 `getTypeFromTypeReference` asked the enclosing namespace only as a FALLBACK, so a namespace
 member whose name ALSO exists globally resolved to the outer declaration. Silent in the

@@ -20,6 +20,148 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.68) — `x = y = z` was a **SHIPPED** false positive and it LANDS; the gate re-prices **6 rows -> 5**, the COMBINED arm is **exactly 1 row** — and the loop join it needs is a **~20x cost blowup nobody had priced**
+
+**THE HEADLINE, AND IT IS A REFUSAL WITH A NEW REASON.** `armBGR` was re-measured on top
+of (CHK.66)(a) — the round's assigned first move — and is **UNCHANGED at 6 rows**: the
+subtype reduction closes none of them. (CHK.67) was then diagnosed, and the queue's
+description of it was half wrong in the useful direction: of its two named shapes, the
+`index = index! + 1` BinaryExpression RHS was **already handled** by the (CHK.33)
+computed-primitive arm, and the CHAINED assignment is the whole gap. It landed
+(`5fd79098`) and the gate re-prices **6 -> 5**. The COMBINED arm — gate + RETURN/ASSIGNMENT
+readers + (CHK.61)(b)'s checking half + (CHK.67) + the loop join — then measures
+**`added=1 removed=0` on all eight profiles**, the single row being (CHK.66)(b)'s known
+residue `checker.ts:43282:21`.
+
+**SO THE GATE IS ONE ROW AWAY IN DIAGNOSTICS AND NOWHERE NEAR IT IN COST.** The loop join
+was priced in ROWS for three consecutive rounds (8 -> 3 -> 1) and never once in COUNTERS.
+Measured this round, **alone**, on the compiler profile:
+
+| counter | baseline | loop join alone | delta |
+|---|---|---|---|
+| `globals.lookups` | 759,945 | 15,128,215 | **+1,891%** |
+| `globals.misses` | 742,400 | 15,111,247 | **+1,935%** |
+| `typeNode.cacheable` | 178,997 | 10,831,464 | **+5,951%** |
+| `typeNode.cacheHits` | 119,618 | 10,772,084 | **+8,905%** |
+| `typeOfExpr.calls` | 587,332 | 1,269,016 | **+116%** |
+| `narrow.memoServed` | 43,133 | 593,709 | **+1,276%** |
+| `narrow.walks` | 32,154 | 44,048 | **+37%** |
+
+`spine.nodes` and `typeOfExpr.distinct` are FLAT (+0.00% / +0.98%) against `calls` +116%,
+so the population is unchanged and **the same questions are simply re-asked ~20x**; 99.45%
+of the 10.8 M type-node resolutions are cache HITS and 99.9% of the 15.1 M globals lookups
+are MISSES, i.e. the cost is the ASKING, not the answering. On the wall it is ~3.5x: the
+8-profile grid went from ~25 s to ~90 s per profile and the harness killed it at 6 of 8.
+The mechanism is the shape of the arm — a loop label now walks EVERY antecedent including
+the back edges, and nothing computed under `narrowLoopCut` may be memoized
+(`narrowLoopCutUsed`), so each loop body is re-walked per query. **Stated as a hypothesis
+supported by the counters, not as a measured attribution** — no probe was built for it.
+
+**THE GATE IS THEREFORE REFUSED AGAIN, ON A REASON NO EARLIER ROUND HAD.** Its dependency
+is not one diagnostic away from clean; it needs a cost redesign. (CHK.66)(b) is re-queued
+with the counters attached and the direction named (memoize under the cut, keyed by the
+in-progress label set, or hoist the per-antecedent resolutions).
+
+**THE FIVE SURVIVING `armBGR` ROWS WERE READ INDIVIDUALLY AND ARE ALL ONE MECHANISM** — a
+narrow established OUTSIDE a loop, lost inside or after it. `moduleNameResolver.ts:824`
+(`if (host.directoryExists && host.getDirectories)` outside, the call inside the `for`),
+`moduleNameResolver.ts:2265` (guard outside, use inside `for (const conditions of …)`),
+`server/project.ts:502` and `:528` (`Debug.assertIsDefined(host.require)` outside, the
+call inside the loop), `harness/tsserverLogger.ts:28` (a `while (true)` join re-adding
+`undefined` before the `return`). The loop join removes all five, which is why the combined
+arm nets to +1.
+
+**(CHK.67), MEASURED AND LANDED.** A six-shape census against tsc 7.0.2 (`build/chk68/f2`,
+graded by a deliberate mis-assignment — the only instrument that PRINTS the flow type)
+isolated it: `x = a + b`, `x = y` and `x = o.p` all already matched tsc, in and out of a
+loop; only `x = y = z` did not, in BOTH regimes. Every arm of `narrowByAssignmentRhs`
+classifies the right-hand side SYNTACTICALLY, and `y = z` matches none of them — it is a
+`BinaryExpression` whose operator IS `=`, which the (CHK.33) arm excludes by construction.
+Reachable with NO gate and NO loop at the UNION-target declaration reader:
+`let i: number|undefined; i = c = o.len; const p: number|string = i` is ours-only, as is
+the object-typed sibling. `unwrapAssignmentChainRhs` descends the `=` chain through parens
+before the arms classify; a COMPOUND assignment is deliberately not unwrapped.
+
+**GATES, PER COMMIT (`5fd79098`).** Suite **16,356** / 0 / 3 (+8, exactly the new subtests)
+and **NO corpus baseline moved**. Grid `503774c23b4535130ffdebabef430cf0`,
+`added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
+rebuilt parent (`Checker.class 19b32bf2`, the digest the (CHK.66) note recorded).
+`cost_gate` exit 0, `output.errors` **46**; counters are the standing residual to the
+third decimal (`typeOfExpr.calls` +1.42%, `globals.lookups` +1.54%, `globals.misses`
++1.77%, `narrow.walks` +0.87%, `typeNode.cacheable` +0.49 -> +0.50%). `huge_methods` exit
+0, **783** classes. `partition-equivalence` EQUIVALENT all 78, floor **61 ms**
+[58, 69, 61, 50] (one draw). `capture-equivalence` DIVERGED **968** in 43 of 76,
+`definitions=0 moreAny=0`, and **both arm digests UNCHANGED** from (CHK.66)'s
+(`full=446836089224869508 narrow=-3963031488196695014`). knip **48** and jsonrepair **4**,
+byte-identical to arms taken from the parent rebuilt this session.
+
+**LAST ROUND'S TWO HONEST GAPS ARE BOTH CLOSED.**
+
+  * **(CHK.66)'s capture digest move, classified per ELEMENT.** Both binaries dumped with
+    `XTSC_CAPEQ_DUMP` (the pre-(CHK.66) parent rebuilt to `Checker.class d0997340`, the
+    digest that note records). **67 spans of 742,254 moved — 0.009% — and NOT ONE GAINED A
+    MEMBER.** 57 are pure DROPS, every dropped member a strict subtype of a survivor
+    (`JsxEmit | JsxEmit.ReactJSX | undefined` -> `JsxEmit | undefined`,
+    `Expression | BinaryExpression | undefined` -> `Expression | undefined`,
+    `TypeFlags | TypeFlags.Intersection | undefined` -> `TypeFlags | undefined`); 3 collapse
+    to the alias the source itself spells (`PropertyName`, `ForInitializer`) and are
+    strictly better; 3 are member REORDERINGS inside a captured type; and **the two rows
+    that are not improvements are named**: one loses an alias NAME to the known first-wins
+    (INC.29) family (`ModuleKind | ModuleKind.None` -> the 13 members spelled out, where
+    the sibling caret two spans away keeps `ModuleKind`), and **3 are go-to-definition
+    location lists that lost the dropped constituent's own declaration** — (API.5)'s
+    "complete enough to highlight, not to edit" one mechanism over. Zero spans were added
+    or removed from the population.
+  * **A genuine parent library arm was rebuilt and both libraries re-taken.** knip **48**
+    and jsonrepair **4** on the rebuilt parent, byte-for-byte identical to (CHK.67)'s. The
+    stale 49-row capture the last round flagged is superseded.
+
+**THREE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`b2675304`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the chain is never unwrapped | `04502d1e` | **6** — every positive | — |
+| a2 | the unwrap does not see through parens | `b7c8cd6f` | **1** — P5, uniquely | — |
+| a3 | the unwrap descends exactly ONE link | `99f095d0` | **1** — P6, uniquely | — |
+
+No arm read 0; every one is uniquely discriminating, so there is no undiscriminated, dead
+or unpinned zero to report this round.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `f7fc33a1` rebuilt in this session
+(`Checker.class 19b32bf2`): **6 of 8 RED**, exactly the 6 positives, the 2 controls green
+on both binaries. Each positive names its reader — P1/P2/P5/P6 the DECLARATION reader with
+a UNION target (live with no gate, so the row simply disappears), P3/P4 the DECLARATION
+reader with a PRIMITIVE target graded by a deliberate mis-assignment, P4 inside a `for`.
+A nullish-source fixture is NOT vacuous here because the union target keeps it outside
+(CHK.63)'s own gate — which is why every positive uses `number | string` or an object
+union rather than a primitive target, and why P3/P4 assert on the MESSAGE's type rather
+than on silence.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The 43282 residue did not reproduce.** Three hand-written shapes of it (a 4-way
+    `.kind ===` disjunction over `Sig | Cls`, with and without an `as` assertion, in and
+    out of a loop) are all silent on the combined arm AND on tsc 7.0.2. The real site
+    additionally carries an enum discriminant, a `previousDeclaration = undefined` reset
+    in a sibling branch and a long body; the reduction was not attempted. Reported as an
+    unreproduced residue, not as a diagnosis.
+  * **The 8-profile grid on the loop arm exceeded the harness's 10-minute ceiling and was
+    killed at 6 of 8 profiles.** The two survivors were run directly with grid.sh's own
+    command; the capture is complete and the per-profile diff is over all eight. That the
+    grid TIMED OUT is itself the first evidence of the cost finding above — a wall-clock
+    tell noticed before any counter was read.
+  * **My first placement of the (CHK.67) helper put its KDoc BETWEEN
+    `narrowByAssignmentRhs`'s own KDoc and the function**, silently detaching the latter's
+    documentation. Relocated and proved inert the way the brief prescribes: `javap -c -p`
+    minus `line N:` is byte-identical across the move (diff exit 0, 0 lines) while
+    `Checker.class` md5 moves `bc643b95` -> `b2675304`.
+  * **`loop.py` still reverts edits inside the region it rewrites**, as the last round
+    recorded; on the current head it leaves `flowJoinUnion` DEFINED and the loop join
+    un-routed (2 references instead of 3), which builds cleanly and measures the wrong
+    arm. The routing must be re-applied by hand after it — `build/chk68/snap/Checker.kt.loopR`
+    is the correct composed tree.
+
 ### Round (CHK.66) — the loop join's blocker is a **SHIPPED four-line divergence at a plain BRANCH label**, it lands, and the loop join re-prices **3 rows -> 1**
 
 **THE HEADLINE.** The queue said the loop join's residue was `getUnionType`'s missing
@@ -3466,19 +3608,24 @@ ordinary relation rather than the weak rule.
   refuses a NULLISH union source against a primitive target, with the comment "narrowing
   we don't implement". On a six-line fixture tsc emits 6 rows and we emit 2: the ARGUMENT
   position and a UNION target are the two that work.
-  **RE-PRICED 2026-08-28 AFTER (CHK.65). THE ARM IS `armBGR` = the gate opened PLUS the
-  RETURN/ASSIGNMENT readers given the flow consult for a primitive target (both
-  unobservable without the gate) PLUS (CHK.61)(b)'s CHECKING half. It measures 6
-  distinct rows on the 8 profiles, and ALL SIX ARE THE LOOP JOIN:**
-  `checker.ts:35649:17`, `moduleNameResolver.ts:824:26`, `moduleNameResolver.ts:2265:17`,
+  **RE-MEASURED 2026-08-28 ON TOP OF (CHK.66)(a) AND AGAIN AFTER (CHK.67). `armBGR` (the
+  gate + the RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half) was 6 rows before
+  (CHK.66)(a) and 6 rows after it — the subtype reduction closes NONE of them — and is
+  **5 rows** after (CHK.67) closed `checker.ts:35649:17`.** The five survivors were read
+  individually and are ONE mechanism, a narrow established OUTSIDE a loop and lost inside
+  or after it: `moduleNameResolver.ts:824:26`, `moduleNameResolver.ts:2265:17`,
   `harness/tsserverLogger.ts:28:5`, `server/project.ts:502:33`, `server/project.ts:528:37`.
-  **NOT RE-MEASURED 2026-08-28 — the `armBGR` grid was not re-run after (CHK.66)(a), so
-  the 6-row list above still stands as last measured. What DID change is the thing it is
-  blocked on: (CHK.66)'s standalone price fell 3 rows -> 1, so the gate now needs
-  (CHK.66)(b)'s remaining ONE row plus (CHK.67), and re-taking `armBGR` on top of the
-  landed reduction is the first move of the next round.** The arm regenerates with
-  `python3 build/chk65/arm.py 1234` (parts: 1 = the gate, 2 = the RETURN reader, 3 = the
-  ASSIGNMENT reader, 4 = (b)'s checking half); grid tag `chk65_bgr2`.
+  **THE COMBINED ARM — gate + readers + (b) + (CHK.67) + the loop join — MEASURES
+  `added=1 removed=0` ON ALL EIGHT PROFILES, the single row being (CHK.66)(b)'s residue
+  `checker.ts:43282:21`.** So in DIAGNOSTICS the gate is one row away.
+  **IT IS REFUSED ON COST INSTEAD, AND THAT IS NEW.** The loop join alone measures
+  `globals.lookups` **+1,891%**, `typeNode.cacheable` **+5,951%**, `typeOfExpr.calls`
+  **+116%**, `narrow.walks` **+37%** and ~3.5x wall, with `spine.nodes` and
+  `typeOfExpr.distinct` FLAT — the same questions re-asked ~20x. See (CHK.66)(b).
+  Regenerate `armBGR` with `python3 build/chk68/arm2.py 1234` against
+  `build/chk68/snap/Checker.kt.head2`; the combined tree is
+  `build/chk68/snap/Checker.kt.loopR` + `python3 build/chk68/arm3.py 1234`. Grid tags
+  `chk68_bgr2` (5 rows) and `chk68_comb` (1 row), parent capture `chk68_parent`.
 
 - [x] **(CHK.61)(b)'s CHECKING HALF — MEASURED CORRECT AND COMPLETE 2026-08-28, WAITING
   ONLY ON THE GATE.** Part `4` of `build/chk65/arm.py` gives
@@ -3503,8 +3650,19 @@ ordinary relation rather than the weak rule.
   `AFlowJoinReducesANarrowedSubtypeTest` (7 positives naming their reader, 2 controls).
   Grid byte-identical, suite +9, no baseline moved.
 
-- [ ] **(CHK.66)(b) THE LOOP JOIN — RE-PRICED 2026-08-28 FROM **3** ROWS TO **1**, AND THE
-  SURVIVOR IS NOT A REDUCTION PROBLEM.** With (a) landed and BOTH joins routed through
+- [ ] **(CHK.66)(b) THE LOOP JOIN — 1 ROW, AND A **~20x COST BLOWUP** MEASURED 2026-08-28
+  THAT THREE ROUNDS OF ROW-PRICING NEVER SAW; COST IS NOW THE BLOCKER, NOT THE ROW.**
+  Alone on the compiler profile: `globals.lookups` 759,945 -> **15,128,215 (+1,891%)**,
+  `typeNode.cacheable` 178,997 -> **10,831,464 (+5,951%)** of which 99.45% are cache
+  HITS, `typeOfExpr.calls` **+116%**, `narrow.memoServed` **+1,276%**, `narrow.walks`
+  **+37%** — while `spine.nodes` is +0.00% and `typeOfExpr.distinct` +0.98%, i.e. the
+  population is unchanged and the same questions are re-asked ~20x. ~3.5x wall (the
+  8-profile grid went 25 s -> 90 s per profile). Hypothesis, supported by the counters
+  and NOT probed: a loop label now walks every antecedent including the back edges and
+  nothing computed under `narrowLoopCut` may be memoized (`narrowLoopCutUsed`), so each
+  loop body is re-walked per query — so the direction is to memoize under the cut,
+  keyed by the in-progress label set, or to hoist the per-antecedent resolutions.
+  **THE REMAINING ROW, unchanged:** With (a) landed and BOTH joins routed through
   `flowJoinUnion`, `build/chk65/loop.py baseR` costs exactly ONE ours-only row on every
   one of the 8 profiles (`added=1 removed=0`, the same row each time):
   **`checker.ts:43282:21`**. The two `utilities.ts` rows the queue named
@@ -3521,13 +3679,18 @@ ordinary relation rather than the weak rule.
   graded by a deliberate mis-assignment); residue P11, where tsc says `string` and the arm
   says `string | number`.
 
-- [ ] **(CHK.67) `checker.ts:35649` IS NOT THE LOOP JOIN — AN ASSIGNMENT-RHS
-  CLASSIFICATION GAP (2026-08-28, measured on the combined arm).** With the gate, the
-  readers, (b) and the loop join all applied, this row SURVIVES. `let index: number |
-  undefined` is assigned on every path of an if/else inside a `for`, but two of those
-  assignments are shapes [Checker.narrowByAssignmentRhs] does not classify: `index =
-  index! + 1` (a BinaryExpression RHS) and `index = cutoffIndex = result.length` (a
-  chained assignment whose ultimate RHS is a property access). Same family as (CHK.62c).
+- [x] **(CHK.67) DONE 2026-08-28 — A CHAINED ASSIGNMENT NARROWS TO ITS RIGHTMOST OPERAND;
+  `x = y = z` WAS A SHIPPED FALSE POSITIVE (`5fd79098`).** The queue named TWO unclassified
+  shapes at `checker.ts:35649`; a six-shape census against tsc 7.0.2 shows
+  `index = index! + 1` was ALREADY handled by the (CHK.33) computed-primitive arm, and the
+  chained `index = cutoffIndex = result.length` is the whole gap. Every arm of
+  [Checker.narrowByAssignmentRhs] classifies the RHS syntactically and `y = z` matches
+  none of them — a `BinaryExpression` whose operator IS `=`, which (CHK.33) excludes by
+  construction. Reachable with NO gate and NO loop at the UNION-target declaration reader.
+  `unwrapAssignmentChainRhs` descends the `=` chain through parens; a COMPOUND assignment
+  is deliberately not unwrapped. `AChainedAssignmentNarrowsToItsUltimateRhsTest` (6
+  positives naming their reader, all RED on the rebuilt parent; 2 controls green on both).
+  Removes `checker.ts:35649:17` from (CHK.63)'s `armBGR`, 6 rows -> 5.
 
 - [x] **(CHK.64)(i)+(ii) DONE 2026-08-28 — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE
   READER**, AND BOTH ARE CLOSED; (CHK.63)'s PRICE FALLS **11 ROWS -> 6**.** Round 784's gate
