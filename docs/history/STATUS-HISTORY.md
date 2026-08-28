@@ -1,3 +1,20 @@
+**(CHK.65) — A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS **EMPTY**: A SECOND
+`!== undefined` GUARD ON THE SAME PROPERTY PATH DID NOT NARROW, AT **TWO** READERS, AND IT
+WAS **SHIPPED** (2026-08-28, one commit).** `if (s.p !== undefined) { return s.p; }` twice
+over `p: number | undefined` was a false positive on the second read: the first guard's
+ELSE branch narrows the path to exactly `undefined`, and [Checker.narrowUnionByLiteral]'s
+NON-union `keep = false` arm answered its input UNCHANGED — right for an INFINITE primitive
+domain, wrong when the input IS the literal being subtracted. tsc's `filterType` is ONE
+function for the union and non-union cases. **An IDENTIFIER subject goes through the M1.9
+if-arm machinery and was always correct, which is what hid it — every hand-written
+narrowing fixture in this repo uses a local.** Closing the flow walk left a SECOND reader:
+the arithmetic/relational operand one, whose flow consult is gated on a UNION base AND
+refuses a `never` answer; its suppression must CLAIM the operand or the TS18048 becomes a
+TS2365 one line down.
+
+**THE GATE RE-PRICES 7 ROWS -> 6, AND (CHK.63) NOW NEEDS EXACTLY ONE THING.** `armBGR`
+(the `canUseTypeEngine` gate + the RETURN/ASSIGNMENT reader consultation +
+
 **(CHK.61)(b)'s checking half, which is MEASURED CORRECT and reproduces tsc 7.0.2 exactly
 on a five-reader census**) is 6 rows, **all six the LOOP JOIN**. The loop join itself is
 built and re-priced **8 rows -> 3** — the `never` family is closed — and its blocker is

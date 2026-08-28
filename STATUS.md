@@ -1,5 +1,52 @@
 # Status
 
+**(CHK.70) + (CHK.63) — THE GATE IS **OPEN**: `T | undefined` IS NO LONGER SILENTLY
+ASSIGNABLE TO `T` AT A PRIMITIVE TARGET, AND THE 8-PROFILE GRID IS `added=0 removed=0`
+FOR THE FIRST TIME (2026-08-28, three commits `e39e3d13` / `bb41ed96` / `2726021b`).**
+Eight rounds refused this on measurement; this one closed the last row and opened it.
+**Its cause was NOT the one the queue named.** (CHK.70)(a) — a loop whose back edges only
+COMPOUND-assign is bounded by `entry union nonNullish(declaredType)`, no back edge walked
+— landed and did NOT move the row: `harness/tsserverLogger.ts:28:5` was **(CHK.70)(c)**,
+the LITERAL arm of `narrowByAssignmentRhs`, the one arm (CHK.63)(a) had not routed through
+`assignmentReduceBase`. `let r: string | undefined = undefined; r = ""` answered
+`undefined`, because a literal cannot restore a member the ANTECEDENT had already lost —
+and an assignment OVERWRITES. Both are shipped FALSE POSITIVES in their own right (five and
+four, each confirmed against tsgo 7.0.2 through round 784's UNION-target return reader) and
+both are grid-identical alone.
+
+**THE GATE NEEDED THREE MORE FIXES, ALL FOUND BY THE SUITE AND NONE BY THE DASHBOARD.**
+The RETURN reader must REFUSE a `never` flow answer (its substitution is suppression-only,
+so an UNREACHABLE `return undefined` suppressed itself — the corpus baseline
+`functionReturn.ts` is the instrument); the weak-type ASSIGNMENT target must see through
+the `| undefined` an optional member now carries (tsc distributes the relation over the
+union), or TS2559/TS2560 is lost; and `narrowByAssignmentRhs` needed a CONDITIONAL
+right-hand-side arm, which no structural test can stand in for. **Three pins INVERTED**,
+each a shipped defect the gate closes: two `EarlyExit` RESIDUES recording OUR rows where
+tsc is silent, and a `CtaFnBodyAnchorTest` `n == 0` that was a FALSE NEGATIVE tsc reports.
+
+**BOTH REMAINING COSTS ARE NAMED, NOT ABSORBED, AND BOTH ARE PRE-EXISTING GAPS THE GATE
+MERELY MAKES VISIBLE.** knip **48 -> 49**: `glob-cache.ts:62:3`, reduced inside knip's own
+project to `fs.statSync(dir, { throwIfNoEntry: false })` resolving to `any` for us where
+tsc gives `Stats | undefined` — a TYPE-RESOLUTION gap, not a narrowing one (jsonrepair
+unchanged at 4). And the capture channel loses **611 of 742,265 spans (0.08%)** from a real
+type to `any`, against **451** that correctly GAIN the `| undefined` an optional member has
+and 63 that improve: `x?.y` over a `T | undefined` receiver has ALWAYS answered `any` here,
+with no optional member needed to show it. **The receiver-half fix was BUILT and MEASURED
+and deliberately NOT landed** — it restores all 611 and turns 8 measured false negatives
+into true positives, and it costs **2 ours-only rows per profile** at
+`moduleNameResolver.ts:706/710`, where it unmasks B83.5 (a nested function's own
+`let result: Resolved | undefined` resolving to the ENCLOSING function's `result`).
+
+**GATES.** Suite **16,411 / 0 / 3** (+31 over the round, exactly the new pins), no corpus
+baseline moved. Grid `790c337141b167657e4f1f3a219474aa` on all three commits,
+`added=0 removed=0` against a parent captured this session from a rebuilt parent binary —
+an identical digest. cost_gate rebaselined ONCE, in the gate commit and justified:
+`narrow.walks` **+11.17%**, `narrow.memoServed` **+6.61%**, `globals.*` +1.0%, everything
+else <= 0.3%, `output.errors` 46, cold self-compile 26,660 ms against the parent's
+26.4-26.9 s band (one draw each). huge_methods 783 classes, 0 over.
+partition-equivalence EQUIVALENT all 78, floor **62 ms** [62, 60, 52, 73] (one draw).
+capture-equivalence DIVERGED **964** in 43 of 76 (from 967), `definitions=0 moreAny=0`.
+
 **(CHK.69) — THE LOOP JOIN'S ~20x IS **MEMOIZATION BEING SWITCHED OFF**, A *SOUND* CUT-KEYED
 MEMO RECOVERS **0.003%**, AND THE PRIZE TURNS OUT TO NEED **NO BACK EDGE AT ALL**
 (2026-08-28, one commit `92598fb0`).** (CHK.66)(b)'s cost was reproduced digit-for-digit,
@@ -151,20 +198,3 @@ moreAny=0 — unchanged in every field; both arm digests moved and were NOT clas
 element this round. knip 48, jsonrepair 4. Vacuity: **7 of 9 pins RED on the parent**,
 exactly the 7 positives. Three ablation arms — a1 **7 RED**, a2 **1 RED** uniquely (its
 separating control), a3 **0** and named **UNDISCRIMINATED rather than redundant**.
-
-**(CHK.65) — A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS **EMPTY**: A SECOND
-`!== undefined` GUARD ON THE SAME PROPERTY PATH DID NOT NARROW, AT **TWO** READERS, AND IT
-WAS **SHIPPED** (2026-08-28, one commit).** `if (s.p !== undefined) { return s.p; }` twice
-over `p: number | undefined` was a false positive on the second read: the first guard's
-ELSE branch narrows the path to exactly `undefined`, and [Checker.narrowUnionByLiteral]'s
-NON-union `keep = false` arm answered its input UNCHANGED — right for an INFINITE primitive
-domain, wrong when the input IS the literal being subtracted. tsc's `filterType` is ONE
-function for the union and non-union cases. **An IDENTIFIER subject goes through the M1.9
-if-arm machinery and was always correct, which is what hid it — every hand-written
-narrowing fixture in this repo uses a local.** Closing the flow walk left a SECOND reader:
-the arithmetic/relational operand one, whose flow consult is gated on a UNION base AND
-refuses a `never` answer; its suppression must CLAIM the operand or the TS18048 becomes a
-TS2365 one line down.
-
-**THE GATE RE-PRICES 7 ROWS -> 6, AND (CHK.63) NOW NEEDS EXACTLY ONE THING.** `armBGR`
-(the `canUseTypeEngine` gate + the RETURN/ASSIGNMENT reader consultation +

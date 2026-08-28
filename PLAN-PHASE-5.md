@@ -20,6 +20,144 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.70) + (CHK.63) — **THE GATE IS OPEN**, the last row was *not* the loop, and both remaining costs are pre-existing gaps the gate merely makes visible
+
+**THE HEADLINE.** `canUseTypeEngine`'s nullish-union-versus-primitive refusal is gone and
+the 8-profile grid is `added=0 removed=0` — the first time in the (CHK.61)-(CHK.69) arc.
+Three commits: `e39e3d13` (CHK.70)(a), `bb41ed96` (CHK.70)(c), `2726021b` the gate.
+
+**THE QUEUE'S DECOMPOSITION WAS WRONG A NINTH TIME, AND THE MEASUREMENT SAID SO IN ONE
+BUILD.** (CHK.70)(a) is real and landed — a loop whose back edges only COMPOUND-assign the
+reference has a fixpoint bounded by `entry union nonNullish(declaredType)`, which is a
+function of the DECLARATION and so costs no back-edge traversal — and it did **NOT** move
+`harness/tsserverLogger.ts:28:5`. Rebuilding the combined arm on top of it read `added=1`
+on `tsc-harness`, byte-identical to the arm without it. The row was **(CHK.70)(c)**: the
+LITERAL arm of `narrowByAssignmentRhs` is the one arm (CHK.63)(a) did not route through
+`assignmentReduceBase`, so `let r: string | undefined = undefined; r = ""` answered
+`undefined` — a literal cannot restore a member the ANTECEDENT has already lost, and an
+assignment OVERWRITES. Both halves are shipped FALSE POSITIVES in their own right, five and
+four, every one confirmed silent under tsgo 7.0.2 through round 784's UNION-target return
+reader, and both are 8-profile-grid-identical on their own.
+
+**(CHK.70)(a)'s RULE IS THE *ORDER-FREE* ONE, AND THAT WAS A CORRECTION MADE BY AN
+ABLATION.** The first version stopped the scan at the first compound assignment — sound for
+that path, since it overwrites. Arm a2 (return COMPOUND at the first sighting) read **0
+RED**, and the reason was that the c2 control's two `if` arms happened to be written in the
+order that makes the stack meet the PLAIN assignment first: with the arms swapped the arm
+is silent where tsgo reports. Fixing the fixture would have pinned an order-dependent rule;
+the rule was changed instead to "EVERY assignment to the name reachable backward from a back
+edge is a non-nullish compound one", which also keeps us on tsc's side of a second
+difference (tsc's compound arm takes the ANTECEDENT's base type, so
+`while (…) { r = maybeUndefined(); r += s }` is `string | undefined` there and a string at
+run time). Two controls, `c2b` and `c2d`, exist for exactly that and are what arm a2 turns
+green.
+
+**THE GATE NEEDED THREE MORE FIXES AND THE SUITE FOUND ALL THREE — THE DASHBOARD FOUND
+NONE.** With E1-E4 applied the grid was already `added=0 removed=0`, and the suite had
+**seven** failures:
+
+  * `functionReturn.ts` — a corpus baseline LOST a row. The return reader's flow answer at
+    an UNREACHABLE node is `never`, which relates to everything, and its substitution is
+    suppression-only: `return ''; return undefined;` suppressed itself. Pristine tsc
+    reports it. The fix is (CHK.69)'s own `never` refusal, one reader over.
+  * `WeakCallableSourceAnchorTest` x2 — TS2559/TS2560 lost at `o.weakMember = …`, because
+    an optional member's ASSIGNMENT TARGET now carries `| undefined` and the weak rule
+    wants the object half. tsc reaches it by DISTRIBUTING the relation over the union, and
+    a nullish constituent can never accept a weak source, so the target strips nullish.
+  * `EarlyExitNarrowsTheRestOfTheBlockTest` x2 and `CtaFnBodyAnchorTest` x1 — pins that
+    recorded OUR OLD answer. The two RESIDUES are rows tsc is silent on and the
+    `CtaFnBody` `n == 0` was a FALSE NEGATIVE tsc reports at `(3,11)`; all three
+    re-confirmed against tsgo and INVERTED rather than deleted, because they are now the
+    only thing that would notice the gate closing again.
+  * `FlowNodeCensusTest` — an instrument pin, not a behaviour one. Under this gate an
+    entirely UNREAD container is much harder to write (the declaration, assignment and
+    return readers all consult the flow walk for a primitive target now), so its
+    `untouched` function is rewritten to hold no assignment to a local, no `return` of a
+    reference and no initialisation from one.
+
+**AND A FOURTH, FOUND BY knip.** `narrowByAssignmentRhs` has resolving arms for a bare
+Identifier and for a PropertyAccess and had none for a ConditionalExpression, and no
+STRUCTURAL test can stand in — a ternary's arms are member reads and a member may be
+optional — while `getTypeOfExpression` answers the ternary EXACTLY (measured: the same
+`number` tsc gives, including through a `?.` condition). (CHK.70)(f).
+
+**BOTH REMAINING COSTS, NAMED.**
+
+  * **knip 48 -> 49** (jsonrepair 4, unchanged, byte-identical). The row is
+    `util/glob-cache.ts:62:3`, and it was reduced INSIDE knip's own project with a probe
+    file: `fs.statSync(dir, { throwIfNoEntry: false })` resolves to `any` for us where tsc
+    gives `Stats | undefined`, so the ternary defaulting `mtime` is `any` and (f)'s arm
+    correctly refuses it (accepting `any` would not match tsc either — tsc is silent only
+    because IT resolves the call). A TYPE-RESOLUTION gap, queued as (CHK.72).
+  * **The capture channel loses 611 of 742,265 spans (0.08%) from a real type to `any`**,
+    against **451** that correctly GAIN the `| undefined` an optional member has, 63 that
+    improve from `any`, 68 other, 114 absent and 26 new. `x?.y` over a `T | undefined`
+    receiver has ALWAYS answered `any` here — measured on the parent with a plainly
+    declared `number[] | undefined`, no optional member involved — so the gate only
+    enlarges the population. **The receiver half was BUILT and MEASURED and deliberately
+    NOT landed**: it restores all 611 and turns 8 measured false negatives into true
+    positives, and it costs **2 ours-only rows per profile** at
+    `moduleNameResolver.ts:706/710`. Those two are B83.5: a nested function's own
+    `let result: Resolved | undefined` resolves to the ENCLOSING function's `result`
+    (inferred `ResolvedTypeReferenceDirectiveWithFailedLookupLocations | undefined`), which
+    was invisible only because the outer initializer is itself an optional chain and
+    answered `any`. (CHK.71).
+
+**ABLATIONS — eleven arms, one mistake each, each `cmp`-diffed against its own snapshot,
+each restore verified by `cmp` PLUS a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the whole of (CHK.70)(a) reverted | `dcaf1594` | **5** | — |
+| a2 | the scan stops at the first compound assignment | `1bf146a5` | **0** | BLIND FIXTURE — the arm IS reached, with the `if` arms swapped; the rule and the controls were changed |
+| c1 | (CHK.70)(c) reverted | `191927d4` | **4** | — (disjoint from a1's set) |
+| c2 | (CHK.63)(a)'s nullish-only bound dropped | `9aefa0ba` | **0** | UNDISCRIMINATED — full suite green AND grid byte-identical, recorded not claimed |
+| g0 | the whole gate reverted | `855d0eab` | **4** | — |
+| g1 | `canUseTypeEngine`'s nullish gate restored | `ea1a2535` | **5** | — |
+| g2 | the RETURN reader's flow admission removed | `f3059cb7` | **1** | — (a pre-existing switch-clause pin) |
+| g3 | the ASSIGNMENT reader's flow admission removed | `d726ede8` | **2** | — (exactly the two inverted residues) |
+| g4 | an optional member loses its `| undefined` | `7e2b7d1f` | **1** | — |
+| g5 | the `never` refusal dropped | `557b6990` | **1** | — |
+| g6 | the weak target keeps the `| undefined` | `5e0dcea6` | **3** | — |
+| g7 | the CONDITIONAL right-hand-side arm removed | `61f84d6b` | **1** | after de-vacuuming; **0** as first written |
+
+**g7's FIRST ZERO WAS A VACUOUS PIN AND NOTHING ELSE SAID SO.** The (f) pin's ternary had a
+LITERAL false arm (`: 0`), which some other mechanism already reaches, so it passed against
+a binary with the arm deleted. Written with a bare `number` identifier it goes red. Round
+902's law, and the only instrument was the ablation reading zero.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **(CHK.70)(a) alone buys nothing on the dashboard**, and its whole visible value is
+    five hand-written false positives. It was still worth landing (it is the loop half of
+    the same defect class) but the queue's claim that it was "the single remaining row" was
+    wrong.
+  * **Four of my first pin fixtures were vacuous or wrong-reader** — a `.length` and an
+    argument-position probe over the same loop shape read identically on both binaries, and
+    the ARGUMENT reader's gate pin turned out GREEN on the parent (it never went through
+    `canUseTypeEngine` at all) and is recorded as a CONTROL rather than as coverage.
+  * **The optional-chain receiver fix looked free and was not.** It is a strict improvement
+    on every instrument except the dashboard, where it adds two rows — and those two rows
+    are a DIFFERENT defect (B83.5) that it merely unmasks. Refusing it is the brief's rule
+    applied to my own work.
+  * **I re-committed the round-(CHK.62b) PLAN-PHASE-5.md trim mistake**, keyed on "the next
+    `###` heading", and deleted the whole queue (452 KB -> 102 KB). Caught by grepping for
+    the queue immediately afterwards and recovered by `git checkout --`; the note that
+    warns about it is four rounds up in this same file.
+
+**GATES, PER COMMIT.** `e39e3d13`: suite 16,391/0/3, grid `790c3371…` `added=0 removed=0`,
+cost_gate exit 0 (`globals.*` +0.02%, everything else +0.00%), huge_methods 783/0.
+`bb41ed96`: suite 16,398/0/3, same grid digest, cost_gate exit 0 with NO counter moved at
+all, huge_methods 783/0. `2726021b`: suite **16,411 / 0 / 3**, same grid digest,
+`added=0 removed=0` on all eight, cost_gate REBASELINED (`narrow.walks` +11.17%,
+`narrow.memoServed` +6.61%, `globals.*` +1.0%, everything else <= 0.3%, `output.errors` 46,
+cold self-compile 26,660 ms against the parent's 26.4-26.9 s band — one draw each),
+huge_methods 783/0, partition-equivalence EQUIVALENT all 78 with floor **62 ms**
+[62, 60, 52, 73] (one draw), capture-equivalence DIVERGED **964** in 43 of 76 (from 967),
+`definitions=0 moreAny=0`, both arm digests re-recorded
+(`full=6075298610392249308 narrow=-9054794969403683490`). **No corpus baseline moved in any
+of the three** — the suite delta is exactly the pins added.
+
 ### Round (CHK.69) — the loop join's ~20x is **MEMOIZATION BEING SWITCHED OFF**, a SOUND cut-keyed memo recovers **0.003%**, and the whole prize turns out to need **no back edge at all**
 
 **THE HEADLINE, AND IT IS A REFUSAL THAT PAID FOR ITSELF.** (CHK.66)(b)'s back-edge
@@ -1306,265 +1444,6 @@ RHS, and the merged-member CONTRADICTION direction.
   * **A KDoc-only edit was proven inert rather than re-gated**: `javap -c -p` minus `line N:`
     is byte-identical across it over 1,026,164 lines of disassembly, while the class md5
     moves (`da1d4552` -> `e7963e28`) because the LineNumberTable shifts.
-
-### Round (CHK.62) — THREE of (CHK.61)'s four unmasked gaps are CLOSED, and **two of its four diagnoses were wrong**; (a)'s price falls **6 rows -> 3**, and the last row's true cause is now located
-
-**THE HEADLINE IS THE RE-PRICING.** With gaps 3 and 4 closed, the `this`-receiver patch
-`build/chk61/patch_a.py` — the one line that closes **every** row (CHK.60) measured — costs
-**3** dashboard rows instead of 6 (grid `9c01ade7819f33aa30f5f7fb5a987e63`, per-profile
-`+2 harness / +1 server`, everything else `added=0 removed=0`). The three are **two** causes:
-`client.ts:356` (gap 1, the un-merged intersection source, still open) and
-`editorServices.ts:4449` on two profiles, whose cause is now located and is NOT what the
-predecessor named.
-
-**TWO OF THE FOUR DIAGNOSES WERE WRONG, AND BOTH FAILED THE SAME WAY: the named axis was a
-property the repro HAPPENED to have.** Gap 3 was recorded as "a function-type PROPERTY's
-parameters are compared covariantly, the METHOD form is already correct". Our general
-parameter contravariance is CORRECT (`(x: string) => void` is not assignable to
-`(x: string | undefined) => void`, byte-identical to tsc 7.0.2), and the method form fails
-identically once the shape is written out. The axis is **OPTIONALITY**: an optional source
-parameter's type is `T | undefined` (tsc's `addOptionality`) and we modelled it as `T`, so
-the target's `undefined` constituent had nowhere to go. Gap 2 was recorded as "a SHORTHAND
-object-literal property does not flow-narrow"; the shorthand is innocent —
-`{ zzzProj: zzzProj }` fails identically and so does a plain `const x: T = zzzProj` after the
-same switch. **Re-bisect a handed-down diagnosis before designing its fix**; each of these
-took two 20-second CLI runs to overturn and would have cost a wrong fix each.
-
-**(CHK.62) gap 4 — AN OBJECT LITERAL THAT SPREADS AN INTERSECTION LOST EVERY MEMBER.**
-`spreadGuaranteedProps` handled `Type.Union` and `Type.Object` and answered `emptyMap()` for
-`Type.Intersection`, so `{ ...mk(), insertString }` with
-`mk(): FileLocationRequestArgs & { endLine: number; endOffset: number }` (harness
-`client.ts:242`) reported TS2739 for the five properties the spread does supply. Dual of the
-union arm: a union guarantees what EVERY constituent has, an intersection what ANY does.
-`SpreadOfIntersectionTest`; the negative control pins tsc 7.0.2's TS2741 message
-byte-for-byte, whose SOURCE display names those five members.
-
-**(CHK.62) gap 3 — AN OPTIONAL SOURCE PARAMETER IS `T | undefined` IN THE CONTRAVARIANT
-TEST.** `signatureRelatedTo` now widens it. Measured over a six-cell matrix against tsc
-7.0.2: five cells now agree exactly. Deliberately SOURCE-side only — tsc's model widens the
-TARGET parameter too, which makes `(x: string) => void` NOT assignable to `(x?: string) =>
-void`; tsc reports that and we are still silent. That half is a REJECTION change, is
-RESIDUE, and is not pinned (round 765). `OptionalParamContravarianceTest`.
-
-**(CHK.62) gap 2 — A CALL TO A `: never` FUNCTION DIVERGES; THE ROW IT WAS SUPPOSED TO CLOSE
-IS STILL OPEN, AND THAT IS THE ROUND'S SECOND FINDING.** `Debug.assertNever(kind);` in a
-switch's `default:` fell THROUGH into the post-switch merge, so the merge re-introduced the
-pre-switch `T | undefined` and every narrow the other clauses established was lost. Fixed in
-both narrowing walkers (fast-forward loop AND recursive arm); tsgo agrees on every repro
-(`build/chk62/g2g`, `g2h`). **But re-pricing (a) shows `editorServices.ts:4449` UNMOVED.**
-Bisecting on the real shape with (a) in the tree found the actual cause, and it is a third,
-`this`-mediated gap: **an assignment whose RHS is a `this`-METHOD CALL does not narrow the
-assigned reference** — `let p = this.find(); p ??= this.create(); return { p }` reports
-`p: ZzzProj | undefined` where tsc is silent, with NO switch in it at all
-(`build/chk62/g2k`, functions `zzzC`/`zzzD`; the free-function RHS `zzzA` is silent and is
-the control). It is invisible without (a) because `this.create()` types `any` today. Queued.
-
-**THE PERF DESIGN OF `flowCallDiverges` IS THE THIRD FINDING, AND IT IS THREE MEASURED
-GATES, NOT ONE.** Resolving the callee on every flow call reads `typeOfExpr.calls`
-**+9.61%** and `globals.lookups` **+4.43%** — COST GATE FAILED — because
-`callHasNeverReturnAnnotation` reaches `resolvePropertyMethodDecl`, which **TYPES THE
-RECEIVER**: the round-385 hazard `flowCalleeMayHaveAssertEffects` was written to avoid, one
-predicate over. (i) requiring the parent to be an `ExpressionStatement` (a diverging call
-cannot be in value position) -> +3.19% / +2.22%; (ii) using the symbol-table-only
-`resolveNamespaceMemberFnDecl` instead -> `typeOfExpr.calls` **+1.42%, digit-identical to
-standing**, `globals.lookups` +2.14% (still failing); (iii) pre-gating the namespace RECEIVER
-on `currentFileLocals` (one map probe; a receiver that can name a `: never` function is an
-import or a file-level declaration, a parameter is not) -> `globals.lookups`
-**776189 -> 771524, +1.52%**, gate PASSES. A per-request memo keyed by `nodeKey` measured
-**ZERO** — each such call is asked about once per compile, so the cost was never repetition.
-
-**GATES, per commit, all foreground, one at a time.** Suite **16,247 / 16,252 / 16,257**,
-0 failed, 3 skipped — +4/+5/+5, exactly the three new classes; **no corpus baseline moved on
-any of the three**. `cost_gate.py` PASSES on all three (exit 0 read from the gate, not from a
-pipeline — see the gotcha); `output.errors` **46** throughout; `typeOfExpr.calls`,
-`narrow.walks`, `narrow.memoServed`, `spine.nodes` digit-identical to (CHK.61c/d)'s reading
-on all three. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over, on all three.
-**8-profile grid `503774c23b4535130ffdebabef430cf0` on all three** — the standing value,
-per-profile `added=0 removed=0` on all eight. `knip` **48** and `jsonrepair` **4**, EVERY ROW
-byte-identical on all three. `partition-equivalence` EQUIVALENT all 78 (floors 59 / 69 / 75
-ms, one draw each — the spread is the harness's own, not the change's).
-
-**`capture-equivalence` MOVED BOTH ARM DIGESTS ON THE GAP-2 COMMIT AND THAT IS EXPECTED.**
-`full=-7560141526203174980 narrow=-5179824964953234569` (was `-3735929574989657502` /
-`-2075467818767010709`), with **DIVERGED 1,005 span(s) in 43 of 76, types=1005
-definitions=0, moreAny 0, definitions 360,376 — every one unchanged**. Commits 1 and 2
-reproduced the OLD digests exactly, so the move is attributable to the diverging-call fix
-alone: it is a FULL-BUILD fix, so captured types after such a switch now render the narrowed
-type in BOTH arms and the full-vs-narrow relationship is untouched — (INC.26)'s rule,
-re-recorded rather than read as a regression.
-
-**FOUR ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS.**
-
-| arm | injected mistake | class | RED |
-|---|---|---|---|
-| a0 | the `Type.Intersection` arm of `spreadGuaranteedProps` reverted | `8b85adc4` | **2** — the gap-4 positive and its negative control |
-| a1 | the optional-source-parameter widening reverted | `d6a568d0` | **3** — exactly the gap-3 positives |
-| a2 | `flowCallDiverges` forced false | `d6e9f431` | **3** — exactly the gap-2 positives |
-| a3 | only the namespace-member arm of `flowCallDiverges` off | `957b605e` | **1** — uniquely the `Debug.assertNever` positive |
-
-Shipped classes `3fb8f92b` / `92f930ec` / `181c293e`. **The `currentFileLocals` pre-gate has
-NO ablation arm and is not claimed as coverage**: it is a PERF guard with no observable
-behaviour, so every pin is green with and without it — it is graded by `cost_gate.py`, and
-both readings (+2.14% without, +1.52% with) are recorded above. Every arm was `cmp`-diffed
-against its OWN snapshot before the build, and each restore was verified by `cmp` plus a
-rebuilt class md5 equal to the pre-ablation one.
-
-**HOW VACUITY WAS RULED OUT, PER PIN.** Every positive was first reproduced on the PARENT
-binary through the CLI against `tools/tsgo-7.0.2/lib/tsc` on the same fixture, then shown
-RED under the arm that names its rule. The gap-4 negative control was WRITTEN WRONG first
-(it asserted TS2739/TS2740 and the shipped answer is TS2741) and the failure is what
-produced the byte-exact message assertion. Two controls are labelled CONTROLS and not
-coverage because no arm reddens them: the plain-interface and plain-object spreads (gap 4)
-and the three already-relating variance directions (gap 3). The gap-2 controls DO
-discriminate — a rule that treated any statement call as diverging silences them — which is
-why they assert `rows.size == 1` and the `ZzzProj | undefined` text rather than a bare
-`none`.
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-
-  * **Four hand-written repros of the four gaps were all VACUOUS on the first attempt** —
-    every one compiled clean on both compilers. CLAUDE.md's "a hand-written approximation of
-    a tsc shape passes vacuously" cost four cycles here; what worked every time was reading
-    the REAL declarations out of `build/bench/tsc-*/src` and deleting ingredients.
-  * **`python3 scripts/cost_gate.py 2>&1 | grep …; echo "exit=$?"` reads the GREP's status**,
-    so a FAILING gate prints a plausible table and `exit=0`. Two of this round's readings
-    were taken that way before it was noticed; both were genuinely passing (no
-    `ROSE beyond` lines), and the third was failing. Redirect to a file and read `$?` from
-    the gate itself.
-  * **The per-request memo I added to make `flowCallDiverges` cheap measured EXACTLY zero**
-    (776825 vs 776826 lookups) — the population is one ask per call per compile, so there
-    was nothing to memoize. It is kept because it is free and bounds a pathological input,
-    but it is not what made the gate pass.
-  * **Gap 2's fix is right and does not close the row it was written for.** That is the
-    round's most transferable shape: a queue entry that names a row AND a mechanism can be
-    right about the mechanism, right about it being a defect, and wrong that the two are the
-    same thing — the only instrument that says so is re-pricing the unmasking patch.
-
-
-### Round (CHK.61c)+(CHK.61d) — the two defects (CHK.61) named were BUILT, PRICED and REFUSED for the same reason, and the pricing turned up **two other defects that were free to fix**
-
-**BOTH QUEUED ITEMS WORK, AND NEITHER IS LANDABLE.** (a) — take `currentClassForThis` as the
-receiver type when `this` types `any` — is ONE line and closes **every** row (CHK.60)
-measured: `build/chk60/br/b2.ts` goes from 3 of tsc's 7 rows to all 7. (b) — `| undefined`
-at `computeRawTypeOfPropertyAccess`'s `prop != null` returns — is one line and produces
-tsc's exact `'number | undefined'` text. Both were built, both were run over the 8-profile
-grid, both libraries and the whole suite. **Each ADDS false positives to the dashboard**,
-and the FPs are not theirs: they are pre-existing engine gaps the `any` was masking. Under
-this arc's own convention ((CHK.51) measured a firewall as "worth 43 rows" and kept it;
-(INC.42) narrowed rather than shipping dashboard FPs) that is a refusal — so what landed is
-the two defects the pricing turned up on the way, each of which is free.
-
-**(CHK.61c) A TYPE REFERENCE INSIDE A `namespace` BODY RESOLVED THE *OUTER* SCOPE FIRST.**
-`getTypeFromTypeReference` asked `resolveTypeNameToSymbol` first and the enclosing namespace
-only as a FALLBACK, so a namespace member whose name ALSO exists globally resolved to the
-outer declaration — the opposite of TypeScript's rule, and silent in the dangerous
-direction: the outer type is a REAL type, so the annotation is judged against the wrong
-shape rather than against none. Four lines reproduce it with no `this` in them
-(`build/chk61/p6/a.ts`). **It was found as the CAUSE of (a)'s only corpus regression**:
-`variableDeclaratorResolvedDuringContextualTyping` gained `Type 'Promise<T>' is missing …
-from type 'TPromise<IUploadResult>': done, cancel` because `namespace WinJS { declare class
-Promise { then(): Promise } }` resolved `Promise` to the LIB `Promise<T>`. That case's
-PRISTINE baseline reports nothing at that line, so the pristine oracle — not tsgo — is what
-settles this one. With it fixed, (a)'s corpus cost is **ZERO**.
-
-**(CHK.61d) `f!()` DISCARDED THE ASSERTION AT BOTH SITES THAT CLASSIFY A CALLEE.**
-`getCalleeType`'s `is NonNullExpression -> getCalleeType(expr.expression)` and
-`getReturnTypeOfCallExpression`'s unwrap loop both drop the `!`, so a `T | undefined` callee
-arrives as a UNION and fails in two directions at once: TS2349 where tsc is silent, AND
-`if (calleeType !is Type.Object) return anyType`, so the call's RETURN TYPE was never
-resolved and every check over the result was silently vacuous — `const s: string = f!()`
-reported NOTHING. **This is the gate on (b)**: with (b) applied and this present the
-compiler profile gains **19** rows of which **17** are this class (`host.readDirectory!(…)`,
-`resolutionHost.realpath!(…)`, `host.writeFile!(…)` — tsc's own sources use the idiom
-everywhere); with it fixed, (b)'s cost is **3**. Nobody would have found it from its own
-shape; it fell out of pricing (b).
-
-**THE PRICED MAP OF (a): 6 ROWS, 4 CAUSES, EVERY ONE `this`-FREE.** Compiler profile
-**46 -> 46**, corpus GREEN, `knip` 48 and `jsonrepair` 4 **byte-identical**; +4 harness,
-+2 server. The causes are an INTERSECTION SOURCE that is never merged (`client.ts:356`), a
-SHORTHAND object-literal property that does not flow-narrow (`editorServices.ts:4449`), a
-FUNCTION-TYPE property whose parameters are compared covariantly where the METHOD form is
-already bivariant (`project.ts:2277`), and an object literal that loses a SPREAD's members
-(`client.ts:242`). All four are in the queue with repros.
-
-**AN ACCEPTANCE LEG FOR THE FIRST OF THOSE WAS BUILT AND REVERTED, AND ITS FAILURE IS THE
-ROUND'S MOST TRANSFERABLE FINDING.** `intersectionMergedSatisfiesTarget` — the symmetric
-twin of the existing `intersectionMergedContradictsTarget`, consulted only AFTER "some
-constituent relates" has already answered false — closes `client.ts:356` exactly, and ADDS
-`callHierarchy.ts:199 'parent' does not exist on type 'never'` on two profiles. **An
-acceptance in the relation is NOT diagnostic-free: it feeds `typeGuardMemberDisjoint`, so a
-type that now relates gets SUBTRACTED by a narrowing and the reference collapses to
-`never`.** Round 784's "a second chance can only turn a rejection into an acceptance, so
-nothing that already passed can start failing" is true of the RELATION and false of the
-COMPILER.
-
-**THE PRICED MAP OF (b): 3 ROWS ON THE COMPILER PROFILE AFTER (CHK.61d), ALL NARROWING.**
-`checker.ts:30269:86` (an `&&` chain `a && x.p !== undefined && x.p < 0`),
-`moduleNameResolver.ts:824` (an outer `if (host.f && host.g)` surviving into a nested `for`
-+ inner `if`), `moduleNameResolver.ts:2265` (a three-deep chain), plus `project.ts:502`/`528`
-and `vfsUtil.ts:1034` off-profile. Every one is a property-access reference, so they may
-share a cause. Two shapes are already CORRECT and need nothing: `?.` and an `if (o.p)`
-guard. **And (b)'s tempting display-only confinement is NOT free** — hover for
-`zzzInst.zzzOpt` says `number` where tsc says `number | undefined`, but adding the
-constituent in the capture path alone renders `number | undefined` INSIDE an
-`if (zzzInst.zzzOpt)` guard too, because `getTypeOfPropertyAccess` narrows only a type that
-is ALREADY a union.
-
-**GATES, all foreground, one at a time.** Suite **16,243 / 0 / 3** (+9, exactly the two new
-classes), **no corpus baseline moved**. `cost_gate.py` `output.errors` **46** and all 20
-counters digit-identical to (CHK.60)'s reading (the standing `typeOfExpr.calls +1.42%` is
-inherited drift against a baseline last recorded at (CHK.46)). `huge_methods --fail-over 0`
-exit 0, **783** classes, 0 over. **8-profile grid md5
-`503774c23b4535130ffdebabef430cf0`**, per-profile diff **`added=0 removed=0` on all eight**
-— the standing value, unmoved since (CHK.54). `partition-equivalence` **EQUIVALENT, all
-78**, floor **56 ms** [55, 56, 57, 54] — one draw. `capture-equivalence` **1,005 span(s) in
-43 of 76, types=1005 definitions=0, moreAny 0**, `definitions` **360,376**, ARM DIGESTs
-`full=-3735929574989657502 narrow=-2075467818767010709` — the standing state to the digit.
-**`knip` @ `dc7aca5` 48 and `jsonrepair` 3.13.1 4, EVERY ROW BYTE-IDENTICAL.** Shipped
-binary md5 `92799538`, reproduced before and after the ablation sweep; parent `854a0209`.
-
-**FIVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, NO ZEROS IN THE FINAL
-SWEEP.**
-
-| arm | injected mistake | class | RED |
-|---|---|---|---|
-| a0 | both changes reverted (the parent, rebuilt this session) | `854a0209` | **5** — every positive |
-| a1 | the namespace reorder reverted | `9384f409` | **2** — uniquely the namespace positives |
-| a2 | `getCalleeType`'s NonNull arm reverted | `21555705` | **1** — uniquely the callability positive |
-| a3 | the return-type restore reverted | `e40c15de` | **2** — uniquely the return-type positives |
-| a4 | the `SymbolFlags.Type` filter dropped | `56d5c06a` | **1** — uniquely the value-export control |
-
-**TWO DRAFTS OF ONE PIN WERE BLIND AND a1 IS WHAT SAID SO.** Asserting the ABSENCE of
-`TS2339: Property 'zzzB' does not exist` reads GREEN against the ablated binary in BOTH
-shapes of the shadowed global — written GENERIC the wrong resolution answers `errorType`
-through TS2314 and no member is ever looked up; written NON-generic the member lookup is
-still not what reports. Only a DIFFERING RETURN TYPE discriminates, so the two `zzzA`
-declarations disagree on purpose (`number` in the namespace, `boolean` globally).
-**AND THE FIRST a4 WAS A DEAD ARM**: injecting the namespace lookup ABOVE
-`currentTypeParamScope` read 0 RED, because a class's own type parameter does not reach the
-checker through that map at all — so the type-parameter control has NO discriminating arm
-and is not claimed as coverage. The a4 that shipped drops the `SymbolFlags.Type` filter,
-which IS reachable and reddens exactly one pin, making the value-export control
-load-bearing.
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-
-  * **The dashboard's FP metric and the "close a missing-diagnostic hole" goal are in
-    tension by construction.** tsc's own sources compile with ZERO errors, so a NEW correct
-    check can never REMOVE a row from a profile — it can only surface our own gaps. Every
-    unmasking fix therefore reads as a dashboard regression, whatever its correctness value.
-  * **The acceptance-only argument (above) is the single most surprising result** — I wrote
-    "can only turn a rejection into an acceptance, so it cannot introduce a diagnostic" into
-    the KDoc before building it, and the grid refuted it in one run.
-  * **The `this` hover already works**, so (a) is a DIAGNOSTICS defect and not a
-    language-service one: `typeCapturePropertyAccessType` has carried a `this`/`super` leg
-    since (BUG.4). What DOES lie in hover is (b) — an optional member renders without its
-    `| undefined`.
-  * **A scripted PLAN-PHASE-5.md trim keyed on "the next `### ` heading" DESTROYED THE WHOLE
-    QUEUE** (441 KB -> 106 KB) — the oldest live note is the LAST `###` in the file and the
-    queue below it carries no heading of its own, so the slice ran to EOF. Recovered by
-    `git checkout --` because the file was committed. CLAUDE.md's `open(p,'w').write(<expr>)`
-    entry now has a sibling.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3622,8 +3501,39 @@ load-bearing.
   their reader, 6 controls). Grid byte-identical, suite +13, no baseline moved. It also
   removes the gate's `checker.ts:30269` row — see (CHK.63).
 
-- [ ] **(CHK.70) TWO NARROWING GAPS THE (CHK.69) MEASUREMENT ISOLATED, AND THE FIRST IS
-  THE *ONLY* THING BETWEEN (CHK.63) AND `added=0`.**
+- [x] **(CHK.70)(a) DONE 2026-08-28 (`e39e3d13`) — AND IT WAS *NOT* THE GATE'S LAST ROW.**
+  Landed as the ORDER-FREE rule (EVERY assignment reachable backward from a back edge is a
+  non-nullish compound one), which is what keeps it on tsc's side of the compound arm's own
+  antecedent-base-type rule; five shipped false positives, tsgo-confirmed. Rebuilding the
+  combined arm on top of it left `harness/tsserverLogger.ts:28:5` UNMOVED — that row was
+  (CHK.70)(c), the LITERAL arm of `narrowByAssignmentRhs` (`bb41ed96`). The original text
+  is kept below because its DESIGN was right and its ATTRIBUTION was wrong.
+- [ ] **(CHK.70)(b) IS STILL OPEN — an IDENTIFIER subject's narrow is loop-blind at the
+  DECLARATION reader with a PRIMITIVE target.** Unchanged by this round: the gate opened the
+  RETURN and ASSIGNMENT readers, not the declaration one's `currentLocalTypes` path.
+- [ ] **(CHK.71) THE OPTIONAL-CHAIN RECEIVER HALF — BUILT, MEASURED, REFUSED ON *TWO ROWS
+  PER PROFILE*, AND THE TWO ROWS ARE B83.5.** `a?.b` looks its member up on `a` WITH its
+  nullish constituents, so every optional chain over a `T | undefined` receiver answers
+  `any` — measured on a plainly declared `number[] | undefined`, no optional member needed.
+  Since (CHK.61)(b) gave an optional member's access its `| undefined` this is **611 capture
+  spans of 742,265** rendering `any` that did not before. The fix is four lines (an
+  `optionalChainReceiverType` helper applied in `computeRawTypeOfPropertyAccess` and
+  `getTypeOfElementAccess`; the patch was scratch-only, re-derive it): it restores all 611,
+  turns **8 measured false negatives into true positives** (tsgo reports them, we do not),
+  and adds `moduleNameResolver.ts:706:21` and `710:21` on EVERY profile. Those two are
+  B83.5: `secondaryLookup`'s own `let result: Resolved | undefined` resolves to the
+  ENCLOSING function's `result` (line 546, inferred
+  `ResolvedTypeReferenceDirectiveWithFailedLookupLocations | undefined`), and it was
+  invisible only because that outer initializer is itself an optional chain and answered
+  `any`. **So this item is blocked on nested-function shadowing, not on optional chains.**
+  The RESULT half (`a?.b` is `typeof a.b | undefined`) is a separate, much larger change.
+- [ ] **(CHK.72) `fs.statSync(dir, { throwIfNoEntry: false })` RESOLVES TO `any` — THE ONE
+  knip ROW THE GATE ADDED (48 -> 49).** `util/glob-cache.ts:62:3`; reduced inside knip's own
+  project with a probe file (the same shape with hand-written declarations is SILENT, so it
+  is not a narrowing gap). tsc answers `Stats | undefined`; ours answers `any`, so the
+  ternary defaulting `mtime` is `any` and (CHK.70)(f)'s conditional-RHS arm correctly refuses
+  it. An overload-resolution / `@types/node` question, not a flow one.
+- [ ] **(CHK.70) — THE ORIGINAL TEXT, KEPT FOR ITS DESIGN.**
   **(a) A COMPOUND ASSIGNMENT INSIDE A LOOP HAS NO POST-STATE RULE.**
   `harness/tsserverLogger.ts` is `let result: string | undefined = …; result = "";
   while (true) { … result += source; } return result` — tsc's loop fixpoint unions the
@@ -3645,7 +3555,16 @@ load-bearing.
   can see the loop. It is also why an identifier fixture is VACUOUS for every loop-narrowing
   pin — use a PROPERTY PATH (see `ALoopThatCannotAffectAReferenceKeepsItsNarrowTest`).
 
-- [ ] **(CHK.63) `T | undefined` IS SILENTLY ASSIGNABLE TO `T` AT A DECLARATION, AN
+- [x] **(CHK.63) OPENED 2026-08-28 (`2726021b`) — `added=0 removed=0` ON ALL EIGHT
+  PROFILES.** Six edits, six distinct ablation red sets: the source gate, the RETURN and
+  ASSIGNMENT readers' flow admission, (CHK.61)(b)'s checking half, a `never` refusal at the
+  return reader (an UNREACHABLE `return undefined` suppressed itself — the corpus baseline
+  `functionReturn.ts` caught it), a nullish strip at the weak-type assignment target, and
+  (CHK.70)(f)'s conditional-RHS arm. Suite 16,411/0/3, no corpus baseline moved, cost_gate
+  rebaselined at `narrow.walks` +11.17% / `narrow.memoServed` +6.61%. Two costs are named
+  and queued rather than absorbed: knip 48 -> 49 ((CHK.72)) and 611 capture spans to `any`
+  ((CHK.71)). ORIGINAL TEXT:
+- [x] **(CHK.63) `T | undefined` IS SILENTLY ASSIGNABLE TO `T` AT A DECLARATION, AN
   ASSIGNMENT AND A RETURN WHENEVER THE TARGET IS A PRIMITIVE — A SYSTEMATIC FALSE
   NEGATIVE, AND ITS SINGLE SUPPRESSOR IS ONE `if`.** `canUseTypeEngine`'s
   `if (sourceType is Type.Union && targetIsPrimitive) { … if (!hasNullish) return true }`
