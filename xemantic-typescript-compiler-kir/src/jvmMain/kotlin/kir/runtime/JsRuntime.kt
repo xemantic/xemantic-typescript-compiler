@@ -606,6 +606,29 @@ public fun jsObjectOf(vararg entries: Any?): JsObject {
 public fun jsArrayOf(vararg elements: Any?): JsArray = JsArray(elements.toList())
 
 /**
+ * The keys `for (k in subject)` walks, as an array of STRINGS.
+ *
+ * `for…in` is lowered as an indexed walk over this, which is what makes it the
+ * same loop `for…of` already is. JavaScript enumerates own enumerable string
+ * keys plus the prototype chain's; nothing this backend builds has an
+ * enumerable prototype, so own keys is the whole answer.
+ *
+ * An ARRAY enumerates its INDICES — as strings, which is the part a program
+ * notices: `for (i in [7,8]) s += i` builds `"01"`, not `15`. `null` and
+ * `undefined` enumerate nothing rather than throwing, which is `for…in`'s own
+ * exception to JavaScript's usual treatment of them.
+ */
+public fun jsForInKeys(subject: Any?): JsArray = when (subject) {
+    null, Undefined -> JsArray()
+    is JsObject -> subject.keys()
+    is JsArray -> JsArray((0 until subject.length.toInt()).map { it.toString() })
+    is String -> JsArray(subject.indices.map { it.toString() })
+    // A `Map`'s entries are not properties, and neither are a `Set`'s — JS
+    // enumerates nothing for either, which is why iterating one needs `for…of`.
+    else -> JsArray()
+}
+
+/**
  * A JavaScript `Map`.
  *
  * Key equality is the JVM's `equals`, which coincides with SameValueZero for
@@ -1243,6 +1266,59 @@ public fun jsStrReplace(value: String, expression: JsRegExp, replacement: String
 }
 
 /**
+ * `String.prototype.replace` with a REPLACER FUNCTION.
+ *
+ * The argument list is `(match, p1, …, pn, offset, whole)`, so its LENGTH is a
+ * property of the pattern rather than of the call site — which is why this and
+ * the variadic function carrier are one piece of work: `cronstrue`'s own
+ * replacer is declared `function (substring, ...args)` and would otherwise be
+ * handed one argument where the match produced four.
+ *
+ * The call goes through [jsCall] for that reason too: the replacer may be an
+ * arrow of any arity, and JavaScript pads and drops rather than refusing.
+ *
+ * A group that did not participate is `null` in `java.util.regex` and
+ * `undefined` in JavaScript, which are one value here — so it needs no
+ * translation. The result is `ToString`-ed, not required to be a string:
+ * `replace(re, () => 1)` substitutes `"1"`.
+ */
+public fun jsStrReplace(value: String, expression: JsRegExp, replacer: Any?): String {
+    val matcher = expression.matcherFor(value)
+    val out = StringBuilder()
+    var last = 0
+    while (matcher.find()) {
+        out.append(value, last, matcher.start())
+        val arguments = ArrayList<Any?>(matcher.groupCount() + 3)
+        arguments.add(matcher.group())
+        for (group in 1..matcher.groupCount()) arguments.add(matcher.group(group))
+        // The offset is a NUMBER, i.e. a `Double` here — a replacer that
+        // returns it would otherwise print an `Int`, which JavaScript has not.
+        arguments.add(matcher.start().toDouble())
+        arguments.add(value)
+        out.append(jsToString(jsCall(replacer, *arguments.toTypedArray())))
+        last = matcher.end()
+        // Without `g` only the FIRST match is replaced, which is the whole
+        // difference the flag makes.
+        if (!expression.global) break
+    }
+    out.append(value, last, value.length)
+    return out.toString()
+}
+
+/**
+ * `String.prototype.replace` with a STRING pattern and a REPLACER FUNCTION.
+ *
+ * One match, at the first occurrence, and the argument list is the same shape
+ * with no capture groups: `(match, offset, whole)`.
+ */
+public fun jsStrReplace(value: String, search: String, replacer: Any?): String {
+    val at = value.indexOf(search)
+    if (at < 0) return value
+    val replacement = jsToString(jsCall(replacer, search, at.toDouble(), value))
+    return value.substring(0, at) + replacement + value.substring(at + search.length)
+}
+
+/**
  * `String.prototype.split` with a regular expression.
  *
  * The limit is `-1` because JavaScript keeps a trailing empty field and Java's
@@ -1502,6 +1578,38 @@ public fun jsObjectKeys(value: Any?): JsArray = when (value) {
     is JsObject -> value.keys()
     is JsArray -> JsArray((0 until value.length.toInt()).map { it.toString() })
     else -> JsArray()
+}
+
+/**
+ * `Object.entries` — the same keys as [jsObjectKeys], each paired with its value.
+ *
+ * Each entry is a two-element array, which is what makes
+ * `for (const [k, v] of Object.entries(o))` an ordinary destructuring walk.
+ */
+public fun jsObjectEntries(value: Any?): JsArray {
+    val entries = JsArray()
+    val keys = jsObjectKeys(value)
+    var index = 0
+    val length = keys.length.toInt()
+    while (index < length) {
+        val key = keys[index.toDouble()]
+        entries.push(jsArrayOf(key, jsGet(value, jsToString(key))))
+        index++
+    }
+    return entries
+}
+
+/** `Object.values` — [jsObjectEntries] without the keys. */
+public fun jsObjectValues(value: Any?): JsArray {
+    val values = JsArray()
+    val keys = jsObjectKeys(value)
+    var index = 0
+    val length = keys.length.toInt()
+    while (index < length) {
+        values.push(jsGet(value, jsToString(keys[index.toDouble()])))
+        index++
+    }
+    return values
 }
 
 /**

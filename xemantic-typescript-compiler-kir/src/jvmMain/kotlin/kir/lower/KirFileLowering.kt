@@ -96,6 +96,7 @@ import com.xemantic.typescript.compiler.VariableStatement
 import com.xemantic.typescript.compiler.CaseClause
 import com.xemantic.typescript.compiler.DefaultClause
 import com.xemantic.typescript.compiler.DoStatement
+import com.xemantic.typescript.compiler.ForInStatement
 import com.xemantic.typescript.compiler.ForOfStatement
 import com.xemantic.typescript.compiler.SwitchStatement
 import com.xemantic.typescript.compiler.ThrowStatement
@@ -1462,6 +1463,7 @@ internal class KirFileLowering(
             is WhileStatement -> out.add(lowerWhile(statement))
             is ForStatement -> out.add(lowerFor(statement))
             is ForOfStatement -> out.add(lowerForOf(statement))
+            is ForInStatement -> out.add(lowerForIn(statement))
             is DoStatement -> out.add(lowerDoWhile(statement))
             is SwitchStatement -> out.add(lowerSwitch(statement))
             is ThrowStatement -> out.add(lowerThrow(statement))
@@ -1845,14 +1847,52 @@ internal class KirFileLowering(
         }
         val list = statement.initializer as? VariableDeclarationList
             ?: refuse(tsFile, statement, "`for…of` needs a `const`/`let` binding")
+        return indexedWalk(statement, statement.statement, list, lowerExpression(subject), null)
+    }
+
+    /**
+     * `for (k in subject) body` — an indexed walk over the subject's KEYS.
+     *
+     * The keys are computed ONCE, before the loop, which is where this differs
+     * from `for…of`'s live `length` read: JavaScript leaves the effect of adding
+     * a property DURING a `for…in` unspecified, and a snapshot is the only
+     * answer that is the same on every run.
+     */
+    private fun lowerForIn(statement: ForInStatement): IrExpression {
+        val list = statement.initializer as? VariableDeclarationList
+            ?: refuse(tsFile, statement, "`for…in` needs a `var`/`const`/`let` binding")
+        val keys = scope.irCall(intrinsics.jsForInKeys).apply {
+            arguments[0] = coerce(
+                statement.expression,
+                lowerExpression(statement.expression),
+                types.anyNullable
+            )
+        }
+        // The binding is a STRING whatever the checker made of it: `for…in`
+        // enumerates property NAMES, so an array's indices arrive as `"0"`,
+        // `"1"`, … rather than as numbers.
+        return indexedWalk(statement, statement.statement, list, keys, types.string)
+    }
+
+    /**
+     * The walk `for…of` and `for…in` share: a temporary array, an index, and a
+     * body binding one element per iteration.
+     */
+    private fun indexedWalk(
+        statement: Statement,
+        bodyStatement: Statement,
+        list: VariableDeclarationList,
+        arrayValue: IrExpression,
+        elementTypeOverride: IrType?
+    ): IrExpression {
         val declaration = list.declarations.singleOrNull()
-            ?: refuse(tsFile, statement, "`for…of` needs exactly one binding")
-        val name = declaration.name as? Identifier
-            ?: refuse(tsFile, declaration, "destructuring in `for…of` is out of the spike subset")
+            ?: refuse(tsFile, statement, "this loop needs exactly one binding")
+        val pattern = declaration.name
+        val name = pattern as? Identifier
 
         val outer = mutableListOf<IrStatement>()
         scopes.addLast(HashMap())
-        val array = temporary("array", intrinsics.jsArrayType, lowerExpression(subject))
+        val array = temporary("array", intrinsics.jsArrayType, arrayValue)
         val index = temporary("index", types.double, scope.irDouble(0.0), mutable = true)
         outer.add(array)
         outer.add(index)
@@ -1873,7 +1913,7 @@ internal class KirFileLowering(
         // a `continue` that jumped to the loop head would skip it and spin
         // forever. Inside a one-iteration `do { … } while (false)`, `continue`
         // is a BREAK of that inner loop, which lands exactly on the increment.
-        val trampoline = if (hasOwnContinue(statement.statement)) {
+        val trampoline = if (hasOwnContinue(bodyStatement)) {
             IrDoWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null).also {
                 it.condition = scope.irBoolean(false)
             }
@@ -1881,23 +1921,65 @@ internal class KirFileLowering(
         loops.addLast(LoopFrame(loop, trampoline ?: loop))
         val body = mutableListOf<IrStatement>()
         scopes.addLast(HashMap())
-        val elementType = facts.typeOf(declaration.name)?.let { erase(declaration, it) }
+        val elementType = elementTypeOverride
+            ?: facts.typeOf(declaration.name)?.let { erase(declaration, it) }
             ?: types.anyNullable
-        val element = temporary(
-            kotlinName(name.text),
-            elementType,
-            coerce(
-                declaration,
-                scope.irCall(get).apply {
-                    arguments[0] = scope.irGet(array)
-                    arguments[1] = scope.irGet(index)
-                },
-                elementType
+        val read = {
+            scope.irCall(get).apply {
+                arguments[0] = scope.irGet(array)
+                arguments[1] = scope.irGet(index)
+            }
+        }
+        // `for (const [k, v] of entries)` — the element is destructured by the
+        // same binder a `const [k, v] = e` declaration uses, so the two cannot
+        // disagree about what a pattern means.
+        // A `var` in the loop HEAD is the function's binding, not a fresh one
+        // per iteration — `for (var k in t) {}; return k` answers the LAST key,
+        // and `var seen = "none"` above such a loop is the same slot the loop
+        // writes. So the element is ASSIGNED there rather than declared here.
+        val hoistTarget = if (name != null && list.flags == SyntaxKind.VarKeyword) {
+            hoistedVariable(name, elementType)
+        } else {
+            null
+        }
+        when {
+            hoistTarget != null -> body.add(
+                scope.irSet(hoistTarget, coerce(declaration, read(), hoistTarget.type))
             )
-        )
-        body.add(element)
-        scopes.last()[name.text] = element
-        lowerStatement(statement.statement, body)
+            name != null -> {
+                val element = temporary(
+                    kotlinName(name.text),
+                    elementType,
+                    coerce(declaration, read(), elementType)
+                )
+                body.add(element)
+                scopes.last()[name.text] = element
+            }
+            // `for (const [k, v] of entries)` — bound by the same binder a
+            // `const [k, v] = e` declaration uses, so the two cannot disagree
+            // about what a pattern means.
+            pattern is ObjectBindingPattern || pattern is ArrayBindingPattern -> {
+                if (list.flags == SyntaxKind.VarKeyword) {
+                    refuse(
+                        tsFile, declaration,
+                        "a destructuring `var` in a loop head is out of the spike subset"
+                    )
+                }
+                // An ARRAY pattern destructures by INDEX, which `readElementOfValue`
+                // only does for a value statically typed as the runtime array —
+                // and the checker gives a binding PATTERN no type of its own, so
+                // `elementType` here is `Any?`. The subject is what is being
+                // destructured, so its shape is known from the pattern.
+                val subjectType = if (pattern is ArrayBindingPattern) {
+                    intrinsics.jsArrayType
+                } else {
+                    elementType
+                }
+                bindPattern(pattern, coerce(declaration, read(), subjectType), body)
+            }
+            else -> refuse(tsFile, declaration, "cannot lower this loop binding")
+        }
+        lowerStatement(bodyStatement, body)
         body.add(
             scope.irSet(
                 index,
@@ -3097,8 +3179,13 @@ internal class KirFileLowering(
         if (callee is PropertyAccessExpression && isStringReceiver(callee.expression)) {
             val firstIsRegExp = node.arguments.firstOrNull()
                 ?.let { runtimeClassOf(it) } == intrinsics.jsRegExpClass
+            // `replace(re, fn)` is a different runtime function from
+            // `replace(re, "s")`, and the argument's own erased type is what
+            // says which — a function value is a `FunctionN`, or the variadic
+            // carrier where its arity is not static.
+            val lastIsFunction = node.arguments.lastOrNull()?.let { isFunctionValued(it) } == true
             val target = intrinsics.stringMember(
-                callee.name.text, node.arguments.size, firstIsRegExp
+                callee.name.text, node.arguments.size, firstIsRegExp, lastIsFunction
             )
                 ?: refuse(
                     tsFile, node,
@@ -4564,6 +4651,25 @@ internal class KirFileLowering(
     }
 
     /** The runtime class this expression's checked type erases to, or null. */
+    /**
+     * Is [expression] a function VALUE — of static arity, or the variadic carrier?
+     *
+     * The erasure alone cannot answer it: a VARIADIC signature erases to `Any?`
+     * BECAUSE it has no arity to erase to ([ErasedTypes.mapCallable]), so the
+     * shape that most needs recognising is the one the erased type hides. The
+     * declaration is therefore asked directly where the argument is written as
+     * a function, and the type's own call signature otherwise.
+     */
+    private fun isFunctionValued(expression: Expression): Boolean {
+        if (expression is ArrowFunction || expression is FunctionExpression) return true
+        val type = facts.typeOf(expression) ?: return false
+        val erased = types.map(type) ?: return false
+        if (types.functionArity(erased) != null) return true
+        if (erased.classifierOrNull == intrinsics.jsVarargFunctionClass) return true
+        return (type as? Type.Object)?.callSignatures?.firstOrNull()
+            ?.let { isVariadic(it.declaration) } == true
+    }
+
     private fun runtimeClassOf(receiver: Expression): IrClassSymbol? {
         val type = facts.typeOf(receiver) ?: return null
         val erased = types.map(type) ?: return null

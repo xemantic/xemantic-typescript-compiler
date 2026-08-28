@@ -40,6 +40,7 @@ import org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.platform.jvm.isJvm
 import org.jetbrains.kotlin.ir.types.classifierOrNull
+import org.jetbrains.kotlin.ir.types.isNullableAny
 import org.jetbrains.kotlin.ir.util.defaultType
 
 /**
@@ -133,6 +134,9 @@ internal class KirIntrinsics(
 
     /** An array literal's constructor: `jsArrayOf(vararg Any?)`. */
     val jsArrayOf: IrSimpleFunctionSymbol by lazy { runtime("jsArrayOf") }
+
+    /** `jsForInKeys(subject)` — the keys `for…in` walks, as an array of strings. */
+    val jsForInKeys: IrSimpleFunctionSymbol by lazy { runtime("jsForInKeys") }
 
     /**
      * The runtime carrier for a function value whose arity is NOT static — one
@@ -345,19 +349,28 @@ internal class KirIntrinsics(
     fun stringMember(
         name: String,
         argumentCount: Int,
-        firstArgumentIsRegExp: Boolean = false
+        firstArgumentIsRegExp: Boolean = false,
+        lastArgumentIsFunction: Boolean = false
     ): IrSimpleFunctionSymbol? {
         val function = STRING_MEMBERS[name] ?: return null
         return try {
             builder.referenceFunction(irFile, runtimePackage, function) {
                 val parameters = it.owner.parameters
                 if (parameters.size != argumentCount + 1) return@referenceFunction false
+                if (argumentCount == 0) return@referenceFunction true
                 // `match`, `replace` and `split` each have a STRING form and a
                 // REGEXP form of the same arity, so the argument's own erased
                 // type is what tells them apart.
                 val second = parameters.getOrNull(1)?.type?.classifierOrNull
-                if (argumentCount == 0) true
-                else (second == jsRegExpClass) == firstArgumentIsRegExp
+                if ((second == jsRegExpClass) != firstArgumentIsRegExp) {
+                    return@referenceFunction false
+                }
+                // `replace` has a further pair at the SAME arity and the same
+                // pattern kind: a replacement STRING and a replacer FUNCTION,
+                // which the runtime distinguishes by taking the latter as
+                // `Any?`. No other member in `STRING_MEMBERS` ends in `Any?`,
+                // so this test is inert for all of them.
+                parameters.last().type.isNullableAny() == lastArgumentIsFunction
             }
         } catch (_: IllegalStateException) {
             // The member exists at another arity — a `slice(a, b, c)` say. A
@@ -514,6 +527,8 @@ internal class KirIntrinsics(
             "NumberConstructor.isNaN" to "jsNumberIsNaN",
             "NumberConstructor.parseFloat" to "jsParseFloat",
             "ObjectConstructor.keys" to "jsObjectKeys",
+            "ObjectConstructor.entries" to "jsObjectEntries",
+            "ObjectConstructor.values" to "jsObjectValues",
             "ObjectConstructor.hasOwn" to "jsObjectHasOwn",
             "ObjectConstructor.defineProperty" to "jsObjectDefineProperty",
             "JSON.stringify" to "jsJsonStringify",

@@ -25,6 +25,10 @@ debugger.
 | 14 | STRINGS: every `string` member goes through a runtime function, never Kotlin's same-named one — `length` is a NUMBER, `charAt` out of range is `""`, `slice` counts a negative index from the end and `substring` swaps a reversed pair — plus template literals |
 | 17 | REST PARAMETERS in all three positions: a declared function and a static method collecting trailing arguments (the array is built at the CALL site), and a function VALUE whose arity is not static — it cannot be a `FunctionN`, so it is the runtime's `JsVarargFunction` and `jsCall` unpacks it |
 | 18 | `var`: FUNCTION scoping and hoisting — a binding declared in a block and read after it, one name declared twice, a `var` loop variable SHARED by every closure the loop makes (`3,3,3`) against a `let` one that is FRESH per iteration (`0,1,2`) |
+| 19 | `??`: nullish coalescing, pinned against `||` on the FALSY-but-present values — an empty string is KEPT where `||` replaces it — plus the once-only evaluation of the left operand |
+| 20 | the REPLACER CALLBACK overload of `String.replace`: the argument list is `(match, …groups, offset, whole)`, so its LENGTH is a property of the pattern — which is why this and the variadic carrier of 17 are one piece of work |
+| 21 | `for…in`: an indexed walk over the subject's KEYS, which are STRINGS (an array enumerates `"0"`, `"1"`, … not `0`, `1`), a `var` in the head binding the FUNCTION's slot so it outlives the loop, and `continue`/`break` inside it |
+| 22 | `Object.entries`/`values` and a DESTRUCTURING binding in a loop head — `for (const [k, v] of Object.entries(t))`, which is both in one statement |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
@@ -40,6 +44,6 @@ use site instead, where union erasure already pays it.
 Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.
 
-Programs 17 and 18 take their `.expected` from `node`, which runs a `.ts`
+Programs 17 to 22 take their `.expected` from `node`, which runs a `.ts`
 file directly — so the oracle is a JavaScript engine rather than this
 author's reading of the specification.

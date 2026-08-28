@@ -164,6 +164,21 @@ class CorpusTest {
         assertCorpusProgram("19-nullish")
     }
 
+    @Test
+    fun `20 replacer callback`() {
+        assertCorpusProgram("20-replacer")
+    }
+
+    @Test
+    fun `21 for in`() {
+        assertCorpusProgram("21-for-in")
+    }
+
+    @Test
+    fun `22 object entries and destructuring`() {
+        assertCorpusProgram("22-entries-destructuring")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")
