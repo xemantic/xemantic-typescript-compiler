@@ -2,7 +2,7 @@
 
 **(CHK.70) + (CHK.63) — THE GATE IS **OPEN**: `T | undefined` IS NO LONGER SILENTLY
 ASSIGNABLE TO `T` AT A PRIMITIVE TARGET, AND THE 8-PROFILE GRID IS `added=0 removed=0`
-FOR THE FIRST TIME (2026-08-28, three commits `e39e3d13` / `bb41ed96` / `2726021b`).**
+FOR THE FIRST TIME (2026-08-28, three commits `2ed1779b` / `acb6d92b` / `7a488783`).**
 Eight rounds refused this on measurement; this one closed the last row and opened it.
 **Its cause was NOT the one the queue named.** (CHK.70)(a) — a loop whose back edges only
 COMPOUND-assign is bounded by `entry union nonNullish(declaredType)`, no back edge walked

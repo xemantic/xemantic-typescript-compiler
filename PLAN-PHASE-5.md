@@ -24,7 +24,7 @@ material for the M3 items below; do not work its queue.
 
 **THE HEADLINE.** `canUseTypeEngine`'s nullish-union-versus-primitive refusal is gone and
 the 8-profile grid is `added=0 removed=0` — the first time in the (CHK.61)-(CHK.69) arc.
-Three commits: `e39e3d13` (CHK.70)(a), `bb41ed96` (CHK.70)(c), `2726021b` the gate.
+Three commits: `2ed1779b` (CHK.70)(a), `acb6d92b` (CHK.70)(c), `7a488783` the gate.
 
 **THE QUEUE'S DECOMPOSITION WAS WRONG A NINTH TIME, AND THE MEASUREMENT SAID SO IN ONE
 BUILD.** (CHK.70)(a) is real and landed — a loop whose back edges only COMPOUND-assign the
@@ -145,10 +145,10 @@ a binary with the arm deleted. Written with a bare `number` identifier it goes r
     the queue immediately afterwards and recovered by `git checkout --`; the note that
     warns about it is four rounds up in this same file.
 
-**GATES, PER COMMIT.** `e39e3d13`: suite 16,391/0/3, grid `790c3371…` `added=0 removed=0`,
+**GATES, PER COMMIT.** `2ed1779b`: suite 16,391/0/3, grid `790c3371…` `added=0 removed=0`,
 cost_gate exit 0 (`globals.*` +0.02%, everything else +0.00%), huge_methods 783/0.
-`bb41ed96`: suite 16,398/0/3, same grid digest, cost_gate exit 0 with NO counter moved at
-all, huge_methods 783/0. `2726021b`: suite **16,411 / 0 / 3**, same grid digest,
+`acb6d92b`: suite 16,398/0/3, same grid digest, cost_gate exit 0 with NO counter moved at
+all, huge_methods 783/0. `7a488783`: suite **16,411 / 0 / 3**, same grid digest,
 `added=0 removed=0` on all eight, cost_gate REBASELINED (`narrow.walks` +11.17%,
 `narrow.memoServed` +6.61%, `globals.*` +1.0%, everything else <= 0.3%, `output.errors` 46,
 cold self-compile 26,660 ms against the parent's 26.4-26.9 s band — one draw each),
@@ -3501,12 +3501,12 @@ RHS, and the merged-member CONTRADICTION direction.
   their reader, 6 controls). Grid byte-identical, suite +13, no baseline moved. It also
   removes the gate's `checker.ts:30269` row — see (CHK.63).
 
-- [x] **(CHK.70)(a) DONE 2026-08-28 (`e39e3d13`) — AND IT WAS *NOT* THE GATE'S LAST ROW.**
+- [x] **(CHK.70)(a) DONE 2026-08-28 (`2ed1779b`) — AND IT WAS *NOT* THE GATE'S LAST ROW.**
   Landed as the ORDER-FREE rule (EVERY assignment reachable backward from a back edge is a
   non-nullish compound one), which is what keeps it on tsc's side of the compound arm's own
   antecedent-base-type rule; five shipped false positives, tsgo-confirmed. Rebuilding the
   combined arm on top of it left `harness/tsserverLogger.ts:28:5` UNMOVED — that row was
-  (CHK.70)(c), the LITERAL arm of `narrowByAssignmentRhs` (`bb41ed96`). The original text
+  (CHK.70)(c), the LITERAL arm of `narrowByAssignmentRhs` (`acb6d92b`). The original text
   is kept below because its DESIGN was right and its ATTRIBUTION was wrong.
 - [ ] **(CHK.70)(b) IS STILL OPEN — an IDENTIFIER subject's narrow is loop-blind at the
   DECLARATION reader with a PRIMITIVE target.** Unchanged by this round: the gate opened the
@@ -3555,7 +3555,7 @@ RHS, and the merged-member CONTRADICTION direction.
   can see the loop. It is also why an identifier fixture is VACUOUS for every loop-narrowing
   pin — use a PROPERTY PATH (see `ALoopThatCannotAffectAReferenceKeepsItsNarrowTest`).
 
-- [x] **(CHK.63) OPENED 2026-08-28 (`2726021b`) — `added=0 removed=0` ON ALL EIGHT
+- [x] **(CHK.63) OPENED 2026-08-28 (`7a488783`) — `added=0 removed=0` ON ALL EIGHT
   PROFILES.** Six edits, six distinct ablation red sets: the source gate, the RETURN and
   ASSIGNMENT readers' flow admission, (CHK.61)(b)'s checking half, a `never` refusal at the
   return reader (an UNREACHABLE `return undefined` suppressed itself — the corpus baseline
