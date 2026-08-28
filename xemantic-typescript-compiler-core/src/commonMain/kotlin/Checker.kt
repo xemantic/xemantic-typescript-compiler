@@ -117796,7 +117796,7 @@ interface DataView {
                     if (t !== anyType && t !== errorType && t !== unknownType &&
                         t !is Type.Union
                     ) {
-                        return narrowUnionByRhsAssignment(antecedent, t)
+                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                     }
                 }
                 (rhs as? Identifier)?.let { id ->
@@ -117804,7 +117804,7 @@ interface DataView {
                     if (t !== anyType && t !== errorType && t !== unknownType &&
                         t !is Type.Union
                     ) {
-                        return narrowUnionByRhsAssignment(antecedent, t)
+                        return narrowUnionByRhsAssignment(assignmentReduceBase(antecedent, declaredType, t), t)
                     }
                 }
             }
@@ -118577,6 +118577,47 @@ interface DataView {
      * RHS narrowing only refines unions; collapsing a flat type to a more
      * precise literal would risk over-narrowing in downstream assignability.
      */
+    /**
+     * (CHK.63)(a) The type an assignment's post-state must be REDUCED FROM, for the
+     * two arms of [narrowByAssignmentRhs] that resolve their right-hand side's type
+     * (a bare Identifier — round 463 — and a PropertyAccess — round 464). Those arms
+     * filter the ANTECEDENT, which is right for a union antecedent and a NO-OP when
+     * the antecedent is nullish-only: [narrowUnionByRhsAssignment] answers a
+     * non-union receiver unchanged, and an antecedent union of `null | undefined`
+     * filters to the empty set and is likewise returned unchanged. So
+     *
+     *     if (id === undefined) { id = text }   // `text: string`
+     *     take(id)                              // FALSE TS2345 before this
+     *
+     * kept `undefined` for the whole then-branch and the branch join re-minted
+     * `string | undefined` — the SHIPPED false positive tsc's own
+     * `parser.ts internIdentifier` is written on, and the commonest spelling of
+     * "default it if it is missing" in TypeScript.
+     *
+     * The rule is round 416's, which the neighbouring [rhsIsDefinitelyNonNullish]
+     * branch already applies one arm up: an assignment OVERWRITES the reference, so
+     * its post-state comes from the DECLARED type (tsc's
+     * `getAssignmentReducedType(declaredType, assignedType)`), never from the
+     * pre-assignment narrowing. It is applied here ONLY where that branch's purely
+     * STRUCTURAL non-nullish test cannot see the answer and the resolved type can —
+     * i.e. exactly when the antecedent is nullish-only and the assigned type is not.
+     *
+     * Every other antecedent keeps the pass-through, deliberately: with a
+     * non-nullish antecedent the reduction would WIDEN a live narrowing back to the
+     * declaration (`let n: Node; if (isIdent(n)) { n = otherIdent; n.escapedText }`),
+     * which is a false positive in the other direction.
+     */
+    private fun assignmentReduceBase(antecedent: Type, declaredType: Type, assigned: Type): Type {
+        val antecedentIsNullishOnly = if (antecedent is Type.Union) {
+            antecedent.types.isNotEmpty() && antecedent.types.all { isNullishConstituent(it) }
+        } else {
+            isNullishConstituent(antecedent)
+        }
+        if (!antecedentIsNullishOnly) return antecedent
+        if (typeHasNullishConstituent(assigned)) return antecedent
+        return declaredType
+    }
+
     private fun narrowUnionByRhsAssignment(declared: Type, rhsType: Type): Type {
         if (declared !is Type.Union) return declared
         val filtered = declared.types.filter {
