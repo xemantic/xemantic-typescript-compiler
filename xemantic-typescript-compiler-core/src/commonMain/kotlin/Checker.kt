@@ -117392,7 +117392,7 @@ interface DataView {
                         t
                     }
                     val tU = NarrowSections.t()
-                    val r = getUnionType(branchTypes)
+                    val r = flowJoinUnion(branchTypes, declaredType)
                     NarrowSections.close(NarrowSections.S_UNION, tU)
                     r
                 }
@@ -118626,6 +118626,77 @@ interface DataView {
      * `null` answers `null`, which is what tsc answers, and the reduction can never
      * exceed the declaration.
      */
+    /**
+     * (CHK.66) Join two or more flow states the way tsc's `getTypeAtFlowBranchLabel`
+     * does — with `UnionReduction.Subtype`, i.e. dropping any constituent that is a
+     * STRICT subtype of another constituent of the same join.
+     *
+     * [getUnionType] performs no subtype reduction (INV.5(a) interns a union by its
+     * member-id list and by nothing else), so a join whose one arm was narrowed by a
+     * guard keeps the narrowed member BESIDE the declaration's own: on a plain
+     * `let x = zzzMk(); if (x === "a") { } x` we answered `string | number | "a"`
+     * where tsc 7.0.2 answers `string | number`. That is not merely a display
+     * divergence — the extra member survives a later DISCRIMINANT test that would have
+     * filtered the supertype away, which is what makes `location.trueType` an error on
+     * `ConditionalTypeNode | Node | undefined` where it is legal on `Node | undefined`
+     * (tsc's own `utilities.ts resolveNameHelper`, twice).
+     *
+     * TWO deliberate narrowings against tsc, both conservative:
+     *
+     *  * only a member that is NOT one of [declaredType]'s own constituents may be
+     *    dropped. Every arm of this walk filters DOWNWARD from the declaration, so a
+     *    "foreign" member is exactly one some narrowing step INTRODUCED — which is the
+     *    whole defect class. It also makes the reduction free on the overwhelming
+     *    majority of joins (an id-set membership test and no relation query at all),
+     *    and it means a union the USER wrote is never re-shaped. tsc would also reduce
+     *    `type T = string | "a"` at a join; we do not.
+     *  * the drop needs a STRICT subtype: `m` assignable to `o` and `o` NOT assignable
+     *    to `m`. This repo has no subtype relation ([subtypeRelation] is declared and
+     *    unused), and assignability is bidirectional for pairs a subtype relation
+     *    separates (optional members, our own leniencies) — dropping either half of
+     *    such a pair would be an arbitrary choice that moves display.
+     *
+     * The reduction can never change what the union MEANS (a strict subtype adds
+     * nothing to a union already containing its supertype); it changes its SHAPE, and
+     * the shape is what a later filter reads.
+     */
+    private fun flowJoinUnion(branchTypes: List<Type>, declaredType: Type): Type {
+        val joined = getUnionType(branchTypes)
+        val members = (joined as? Type.Union)?.types ?: return joined
+        if (members.size < 2) return joined
+        val declared = (declaredType as? Type.Union)?.types
+        var anyForeign = false
+        for (m in members) {
+            if (!flowJoinMemberIsDeclared(m, declared, declaredType)) { anyForeign = true; break }
+        }
+        if (!anyForeign) return joined
+        var kept: MutableList<Type>? = null
+        for (i in members.indices) {
+            val m = members[i]
+            var drop = false
+            if (!flowJoinMemberIsDeclared(m, declared, declaredType)) {
+                for (j in members.indices) {
+                    if (j == i) continue
+                    val o = members[j]
+                    if (o.id == m.id) continue
+                    if (isTypeAssignableTo(m, o) && !isTypeAssignableTo(o, m)) { drop = true; break }
+                }
+            }
+            if (drop) {
+                if (kept == null) {
+                    kept = ArrayList(members.size)
+                    for (k in 0 until i) kept.add(members[k])
+                }
+            } else kept?.add(m)
+        }
+        val k = kept ?: return joined
+        if (k.isEmpty()) return joined
+        return getUnionType(k)
+    }
+
+    private fun flowJoinMemberIsDeclared(m: Type, declared: List<Type>?, declaredType: Type): Boolean =
+        if (declared != null) declared.any { it.id == m.id } else m.id == declaredType.id
+
     private fun assignmentReduceBase(antecedent: Type, declaredType: Type, assigned: Type): Type {
         val antecedentIsNullishOnly = if (antecedent is Type.Union) {
             antecedent.types.isNotEmpty() && antecedent.types.all { isNullishConstituent(it) }
