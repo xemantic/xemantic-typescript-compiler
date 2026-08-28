@@ -2732,7 +2732,16 @@ class Checker(
         /** (cta-m3i): the narrowedDeclaredTypes ambient — SHARED down the
          *  frame chain except at narrowing frames (the legacy wrapper's
          *  copy-plus-declared-entry). */
-        val narrowedDeclared: MutableMap<String, Type> = mutableMapOf(),
+        var narrowedDeclared: MutableMap<String, Type> = mutableMapOf(),
+        /** (CHK.64)(ii) has this frame REPLACED the shared [narrowedDeclared] with a
+         *  copy of its own? The early-exit narrowing must record a declared type, and
+         *  that map is shared down the chain with NO undo log — writing into it escapes
+         *  the block, the function and the file (measured: 21 ours-only rows per profile,
+         *  every one an assignment whose target was read as another function's
+         *  same-named binding). Replacing it with a copy at the FIRST such write confines
+         *  it to this frame, which is discarded at the pop; frames pushed afterwards
+         *  inherit the copy, which is the pre-existing sharing semantics. */
+        var narrowedDeclaredOwned: Boolean = false,
         var fnTpScope: Map<String, Type.TypeParam>? = null,
         var fnTpDecls: Map<String, TypeParameter>? = null,
         // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
@@ -3489,6 +3498,16 @@ class Checker(
                 // the LIVE map `top.localTypes` also points at (round 892), so an
                 // interleaved write would make a later read see a narrowed value.
                 for ((varName, _) in narrowing) {
+                    // (CHK.64) FIRST-WINS. `narrowedDeclared` holds the DECLARED type so
+                    // an assignment TARGET inside the then-branch checks against it; with
+                    // NESTED narrows on one name an unconditional write records the OUTER
+                    // narrow's result as if it were the declaration, and
+                    // `if (b) { if (isNs(b)) { b = undefined } }` then reports a false
+                    // TS2322 against `ZzzNb` — a SHIPPED defect, reproducible with no
+                    // narrowing above it at all (`build/chk64/cb`). The outermost frame in
+                    // the chain is the one closest to the declaration, and each frame's
+                    // map is a COPY discarded at its pop, so "first" is per chain.
+                    if (nd.containsKey(varName)) continue
                     top.localTypes[varName]?.let { nd[varName] = it }
                 }
                 // (WARM.18b) round 892 — the wrapper's `EpochMap(top.localTypes)`
@@ -3711,7 +3730,85 @@ class Checker(
         return out
     }
 
+    /**
+     * (CHK.64)(ii) Is this then-branch a DEFINITE exit? Conservative by construction: a
+     * bare `return`/`throw`/`continue`/`break`, or a block whose LAST statement is one
+     * (if control reaches the end of a block it runs that last statement, so the block
+     * exits; if it does not reach the end, something earlier already exited).
+     */
+    private fun ctaAlwaysExits(stmt: Statement?): Boolean = when (stmt) {
+        is ReturnStatement, is ThrowStatement, is ContinueStatement, is BreakStatement -> true
+        is Block -> ctaAlwaysExits(stmt.statements.lastOrNull())
+        else -> false
+    }
+
+    /**
+     * (CHK.64)(ii) The SYNTACTIC negation of an if-condition, or null when this helper
+     * cannot express it. The result is fed to [extractNarrowingsFromCondition], so the
+     * negation never has to agree with a second copy of the narrowing rules — it only
+     * has to be the same QUESTION asked the other way round.
+     *
+     * `&&` is deliberately absent: De Morgan turns it into a `||`, which narrows nothing.
+     * `||` is absent too, for a reason worth stating — its negation IS a conjunction and
+     * would be sound, but a long `||` chain is a deep LEFT spine and a recursive negation
+     * would overflow on it, so it is left to a round that needs it. A `!` unwraps to its
+     * operand, which is what makes `if (!x) continue` and `if (!isFoo(x)) return` work,
+     * and the latter reaches [extractNullNarrowing]'s type-guard-call arm with the
+     * ORIGINAL call node (no `copy`), so its nodeId is intact.
+     */
+    private fun negateCondition(expr: Expression): Expression? = when {
+        expr is PrefixUnaryExpression && expr.operator == SyntaxKind.Exclamation -> expr.operand
+        expr is BinaryExpression -> when (expr.operator) {
+            SyntaxKind.ExclamationEquals -> expr.copy(operator = SyntaxKind.EqualsEquals)
+            SyntaxKind.ExclamationEqualsEquals -> expr.copy(operator = SyntaxKind.EqualsEqualsEquals)
+            SyntaxKind.EqualsEquals -> expr.copy(operator = SyntaxKind.ExclamationEquals)
+            SyntaxKind.EqualsEqualsEquals -> expr.copy(operator = SyntaxKind.ExclamationEqualsEquals)
+            else -> null
+        }
+        else -> null
+    }
+
     private fun ctaSpineLeave(node: Node) {
+        // (CHK.64)(ii) EARLY-EXIT narrowing: `if (x === undefined) continue;` /
+        // `{ return; }` / `{ break; }` narrows the REST of the enclosing statement list
+        // by the NEGATED condition. The flow walk already does this — a member access, a
+        // call argument and a DECLARATION after such a guard are all correct today — so
+        // this is only about the ASSIGNMENT and RETURN readers, which round 784's gate
+        // sends to [currentLocalTypes] for a primitive target. Same READER as (i).
+        //
+        // Scoped by the enclosing frame's own undo log, which is why it is REFUSED unless
+        // that frame opened a localTypes scope: a frame that SHARES its parent's map has
+        // no pop to revert the write, and the narrowing would outlive its block.
+        if (node is IfStatement && node.elseStatement == null && !spineIsDts &&
+            ctaFrames.size > 1 && ctaAlwaysExits(node.thenStatement)
+        ) {
+            val top = ctaFrames.last()
+            val neg = if (top.localScoped) negateCondition(node.expression) else null
+            if (neg != null) {
+                SpineDispatch.work()
+                var narrowings: List<Pair<String, Type>> = emptyList()
+                withCtaFrameLocals(top) {
+                    narrowings = extractNarrowingsFromCondition(neg, allowCallPredicate = false)
+                }
+                for ((varName, narrowedType) in narrowings) {
+                    if (narrowedType === anyType) continue
+                    // The DECLARED type has to be recorded or an assignment BACK to the
+                    // reference (`currentFileContent = undefined` after
+                    // `if (currentFileContent === undefined) return`) checks against the
+                    // NARROWED type — measured as 4 ours-only rows across the profiles.
+                    // It may only be recorded into a map this FRAME owns: see
+                    // [CtaFrame.narrowedDeclaredOwned].
+                    if (!top.narrowedDeclaredOwned) {
+                        top.narrowedDeclared = HashMap(top.narrowedDeclared)
+                        top.narrowedDeclaredOwned = true
+                    }
+                    if (!top.narrowedDeclared.containsKey(varName)) {
+                        top.localTypes[varName]?.let { top.narrowedDeclared[varName] = it }
+                    }
+                    top.localTypes[varName] = narrowedType
+                }
+            }
+        }
         if (ctaFrames.size > 1 && ctaFrames.last().owner === node) {
             SpineDispatch.work()
             // (WARM.18) round 891 — the pop MUST mirror the push: a frame that
@@ -98773,7 +98870,10 @@ interface DataView {
                         val savedDeclaredNN = narrowedDeclaredTypes
                         narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
                         for ((nnName, nnType) in narrowedNN) {
-                            currentLocalTypes[nnName]?.let { narrowedDeclaredTypes[nnName] = it }
+                            // (CHK.64) FIRST-WINS — see the spine's narrowing frame.
+                            if (!narrowedDeclaredTypes.containsKey(nnName)) {
+                                currentLocalTypes[nnName]?.let { narrowedDeclaredTypes[nnName] = it }
+                            }
                             currentLocalTypes[nnName] = nnType
                         }
                         try {
@@ -100854,7 +100954,10 @@ interface DataView {
                     val savedDeclared = narrowedDeclaredTypes
                     narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
                     for ((varName, narrowedType) in narrowed) {
-                        currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
+                        // (CHK.64) FIRST-WINS — see the spine's narrowing frame.
+                        if (!narrowedDeclaredTypes.containsKey(varName)) {
+                            currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
+                        }
                         currentLocalTypes[varName] = narrowedType
                     }
                     try {
@@ -101025,7 +101128,19 @@ interface DataView {
      * [extractNullNarrowing] itself produced, and today's answer for a non-`&&`
      * condition is returned verbatim.
      */
-    private fun extractNarrowingsFromCondition(expr: Expression): List<Pair<String, Type>> {
+    private fun extractNarrowingsFromCondition(
+        expr: Expression,
+        allowCallPredicate: Boolean = true,
+    ): List<Pair<String, Type>> {
+        // (CHK.64)(ii) `allowCallPredicate = false` refuses (NARROW.1)'s type-guard-CALL
+        // arm. The early-exit install needs it: `if (!some(components)) return []` negates
+        // to `some(components)`, whose predicate is GENERIC (`array is readonly T[]`) and
+        // whose `T` we do not infer, so the narrow is LESS precise than the declared type
+        // and `const reduced = [components[0]]` then hovers `any`. Measured: 20 captured
+        // spans went to `any` in tsc's own `path.ts`/`utilities.ts` with it allowed, and
+        // ZERO with it refused. The syntactic guards (`typeof`, `!== undefined`,
+        // truthiness) carry both real rows this leg was built for.
+        if (!allowCallPredicate && expr is CallExpression) return emptyList()
         val single = extractNullNarrowing(expr)
         if (single != null) return listOf(single)
         if (expr !is BinaryExpression || expr.operator != SyntaxKind.AmpersandAmpersand) return emptyList()
@@ -101039,6 +101154,7 @@ interface DataView {
         conjuncts.reverse()
         val out = ArrayList<Pair<String, Type>>()
         for (c in conjuncts) {
+            if (!allowCallPredicate && c is CallExpression) continue
             val n = extractNullNarrowing(c) ?: continue
             // A "narrowing" to `any` is a WIDENING and must never be installed here.
             // [typeofTypeGuardToType] answers `anyType` for `"object"` and `"function"`
