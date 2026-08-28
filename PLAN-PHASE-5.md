@@ -1603,6 +1603,71 @@ load-bearing.
   `f<index>_<name>` to avoid serializer collisions — the entry should be found by that
   identity rather than by spelling, and the error message should name the collision.
 
+- [ ] **(BENCH.2) THE KIR BENCH HAS NO CPU AFFINITY AND NO PRINTED PLACEMENT STRATEGY, AND
+  ROUND 824 SAYS WHY THAT IS NOT A ONE-LINE FIX: A "SINGLE-THREADED" xtsc RUN CONSUMES
+  ~4.17 OF THIS BOX'S 8 CORES BECAUSE `CICompilerCountPerCPU` IS TRUE.** Perry's harness
+  (`benchmarks/README.md`, reviewed 2026-08-28) pins with `taskset -c 0` on Linux /
+  `taskpolicy -t 0 -l 0` on macOS and **prints which strategy was applied at the top of each
+  invocation** — a positive control on the instrument, which is the part worth copying
+  whatever the pinning decision turns out to be. **THE TWO HALVES DIVERGE HERE AND MUST BE
+  DECIDED SEPARATELY.** The arms that are single-threaded AOT workloads (`nat`, `wasi`, and
+  the node/bun arms' own timed loops) are the shape pinning was designed for. The JVM arms
+  are NOT: pinning `java` to one core serialises C1/C2 against the compile thread and
+  measures a different program — round 824 measured `-XX:CICompilerCount=2` taking a run
+  4.20 -> 2.55 cores, i.e. the JIT threads are a real part of the arm. **So the deliverable
+  is an OPTION plus a banner, never a silent default**, and the grading is an A/A at fixed
+  arms: pinning is worth taking only if the per-arm spread FALLS, measured per arm, and it
+  must be reported per arm because it can plausibly fall for `nat` and rise for `kir`.
+  **AND IT RESTARTS THE SERIES**: a pinning change is a recipe change, so every pre-change
+  `kir-bench` figure quoted in this file becomes incomparable exactly as `BENCH-ROWS-V2` did
+  for the dashboard — bank the decision with a paired before/after in ONE round or not at all.
+
+- [ ] **(BENCH.3) `kir-bench.sh` PRINTS ITS TABLE TO A TERMINAL AND NOTHING COMMITS IT, SO
+  EVERY KIR NUMBER IN THIS FILE IS HAND-TYPED PROSE — WHICH IS THE EXACT FAILURE MODE FOUND
+  IN THE HARNESS WE ARE COPYING FROM (2026-08-28, measured by reading Perry's own artifacts).**
+  Perry's README quotes convolution at **Perry 354 ms / Rust 392 ms** and cites
+  `benchmarks/honest_bench/REPORT.md` for that row; that report's PROSE says **268 ms /
+  Rust 567 ms** on different hardware (M1 8 GB, not the README's M1 Max), its header names
+  `v0.5.81` while its own hardware table says `perry 0.5.1355`, and **its tables are broken
+  outright — every wall median in all three workloads reads `0.0`/`-0.0` ms with sigma 0.0-0.1,
+  and the ratio lines contradict both the table and themselves** (`rust = 18.48x, zig = 1.00x,
+  perry = 40.67x` over a column of zeros; the convolution table prints `bun = 1.00x` under a
+  bottom line claiming Perry won). A regeneration zeroed the artifact and the hand-written
+  prose survived it, unnoticed. **Their ONE self-consistent table is the one generated between
+  `<!-- public-node-bun:start -->` markers from a versioned JSON at a named commit — and it is
+  also the only one that publishes the rows they LOSE** (`prime_sieve` 28 ms against node's 6,
+  `matrix_multiply` 85 against 33). Round 930's law with someone else paying for it.
+  **WHAT TO BUILD:** `kir-bench.sh` writes a versioned JSON (arms, per-process samples,
+  median/sigma/min/max, the `sink=` verdict PER ROW, the commit, the box, the arm set it
+  actually ran) and a generator emits the markdown between markers in `docs/perf/`, losses
+  included and labelled. **THE GENERATOR MUST REFUSE ITSELF**: a table whose medians are zero,
+  whose ratio column disagrees with its own medians, or whose row count is below the arm count
+  is not printed at all — that is precisely the artifact Perry shipped, and rounds 853/873/895
+  say a generator that emits quietly where it cannot see is the thing that keeps being wrong
+  here. Cheap and separable from (BENCH.2); do this one first.
+
+- [ ] **(BENCH.4) THE TS-TO-NATIVE CATEGORY HAS EXACTLY ONE ARM THAT COULD TAKE OUR FIXTURES
+  UNMODIFIED, AND IT IS PERRY ITSELF — NOT AssemblyScript (2026-08-28).** Perry's own peer
+  classification (`benchmarks/README.md`) is worth adopting verbatim in our table header:
+  **runtime peers** (same input language, same job — for them node/bun, for us tsgo),
+  **TS-to-native peers**, and **calibration** (hand-written compiled code, "NOT peers ... they
+  show the floor"), with each row labelled so a reader who is not us can tell which is which.
+  It also records that of the three TS-to-native candidates, **porffor 0.61.13 and Static
+  Hermes were not bench-ready** and only AssemblyScript-with-`json-as` ran their workload to
+  completion. **THE RANKING FOR US IS THE OPPOSITE OF THE ONE I FIRST GAVE, AND THE
+  EQUIVALENCE GATE IS WHY**: `mitt` and `smol-toml` are plain TypeScript, Perry is MIT and
+  installs with `npm install -g @perryts/perry`, so it can compile OUR fixture bytes and print
+  OUR `sink=` — an arm the existing gate can hold. AssemblyScript cannot: it is a TS-SYNTAX
+  subset with its own semantics, so the fixture would have to be PORTED, and a ported program
+  is a different program that the gate can only wave through. **So: Perry as a real arm behind
+  its own opt-in flag (the `KIR_BENCH_NATIVE` shape — REFUSE, never skip, when the toolchain
+  is absent); AssemblyScript only as CALIBRATION and only with the port's divergences written
+  down; and if the fixtures do not compile under either, the item CLOSES with what refused
+  them recorded** — Perry has no type checker (SWC parses, LLVM codegens; no conformance
+  claim anywhere in its docs), so a refusal there is a fact about its lowering coverage and is
+  worth having next to (LIB.4)'s thirteen rungs. Note the scale that sets: Perry's runtime
+  completeness is ~97% of Node's own suite across 53 `node:*` modules plus ~50 npm packages.
+
 - [x] **(DOC.1) DONE 2026-08-24 — `CLAUDE.md` 427 -> 320 KB (-25.1%) by MOVING 107 entries
   to the archive, nothing deleted, conservation PROVEN mechanically** (490+728 = 1,218 ->
   383+845 = 1,228; the +10 are entries distilled in place, full text archived). Moved: ~47
