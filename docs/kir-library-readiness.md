@@ -455,3 +455,43 @@ and each program is written so that the INTUITIVE implementation fails it
 argument is a length). The one exception is 23, whose oracle is the `as`-spelled
 twin, because node's type stripper will not parse `<T>expr`; deriving it that
 way IS the claim under test.
+
+### The benchmark, with the arm that is missing named
+
+The KIR runtime benchmark's **arm 2 (xtsc -> JVM bytecode -> java) does not exist
+for this library**: it needs a program that RUNS, which is what (LIB.6) blocks.
+What was measured is arms 1 and 3 — tsgo's JavaScript and OURS, on the same
+engine — which is `kir-bench.sh`'s own CONTROL, and the arm that separates the
+front end from the backend.
+
+Workload: one description of each of twelve cron expressions (parser plus the
+whole description pipeline), 24,000 descriptions per round, best of 10 rounds
+after 6 warm-up rounds. Driver `scripts/kir-bench/drivers/cronstrue-main.ts`.
+**The equivalence gate passed in every process — `sink=11904000`, the accumulated
+description lengths, identical across all 24.**
+
+| batch | rotation | tsgo -> JS -> node | xtsc -> JS -> node | ratio |
+|---|---|---:|---:|---:|
+| 1 | tsgo leads | 126.0 ms | 127.0 ms | 1.008x |
+| 2 | xtsc leads (mirrored) | 126.5 ms | 126.5 ms | 1.000x |
+
+Six processes per arm per batch; per-arm sd 0.8-1.5%, so the two ratios sit
+inside each other's noise and the honest reading is **parity**, not "0.8%
+slower". That is a third library agreeing with the 1.01x/1.02x already recorded
+for `mitt` and `smol-toml`, on a different workload shape — cron parsing and
+string formatting rather than event dispatch or scanning. **5.25 us per
+description** on this box.
+
+**Compile time, same library (52 files, 8,812 lines, `--noEmit`):**
+
+| | median | n | note |
+|---|---:|---:|---|
+| tsgo 7.0.2 | **42.2 ms** | 15 | native Go binary, INCLUDES its own process startup |
+| xtsc, warm | **153 ms** | 10 after 6 warm-ups | in-process rebuild, EXCLUDES JVM startup |
+| xtsc, cold one-shot | 1.54 s | 5 | the JVM-startup story, not a throughput one |
+
+**3.6x on the warm pair, and the comparison is generous to us** — tsgo's number
+carries its startup and the warm xtsc number does not. It sits beside the
+dashboard's 3.09x for warm check-only on tsc's own sources, i.e. this codebase is
+slightly worse for us than the corpus one, which is the direction § "Why this is
+not a contradiction of the dashboard" predicts.
