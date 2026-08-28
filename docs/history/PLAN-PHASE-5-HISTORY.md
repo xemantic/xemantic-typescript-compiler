@@ -1,3 +1,266 @@
+### Round (CHK.60) — an enum member is a string or number **LITERAL** in tsc, so its apparent type is the wrapper: **13** false positives removed; and item 2's blast radius mapped and found to be neither the weak rule nor optionality
+
+**THE FP, AND WHY IT IS NOT THE WEAK RULE.** tsc's `TypeFlags.StringLike` is
+`String | StringLiteral | TemplateLiteral | StringMapping`; an enum literal type carries
+`StringLiteral | EnumLiteral`, so `getApparentType(E.A)` is `globalStringType`, and a
+numeric member carries `NumberLiteral | EnumLiteral` and answers `globalNumberType`
+(`checker.ts:15542`, read on the box). (REL.1)(b) mints a member-LESS `Type.Object` here
+instead, and `propertiesRelatedTo`'s `source.members == null` arm answers
+`targetProps.isEmpty()` — which rejects **every** target declaring a property, including an
+all-optional one. The weak walker correctly DECLINES a target the source shares a property
+with, so what emitted was the ordinary relation, exactly as the (CHK.59) entry said.
+
+**THE FIX IS A RETRY, NOT A WIDENING.** `structuredTypeRelatedTo`'s object/object leg was
+`return objectTypeRelatedTo(...)`; it is now "if that says true, true — otherwise, for an
+enum-literal source, retry as the apparent PRIMITIVE". Retrying as the PRIMITIVE rather
+than reaching for a wrapper here is the whole design: it routes the source through exactly
+the legs a `string`/`number` source already takes — B69.8's wrapper/named-interface leg,
+round 430's empty-`{}` rule, B418's index-signature rule and (CHK.32)'s anonymous-object
+leg — each with its own measured guards intact. That is why a NAMED interface, a class with
+an optional member, `Object` and the `String` wrapper itself all come right for free, and
+why the INDEX-SIGNATURE target's answer is untouched (`objectTypeRelatedTo` accepts it
+before the retry is reached, and would accept it after — measured, see arm a5).
+
+**THE 30-ROW MATRIX IS THE INSTRUMENT** (`build/chk60/mx/m1.ts`, `m2.ts`; both arms
+`tools/tsgo-7.0.2/lib/tsc --noEmit --strict --target es2020 --lib es2020`). 13 ours-only
+rows removed. What it also settled, none of which reading the code produces:
+
+  * the boundary is per **MEMBER**, not per enum — tsc accepts a MIXED enum's string
+    member against `{ length?: … }` and its numeric member against `{ toFixed?() }`, and
+    rejects the WHOLE mixed enum against both;
+  * a **required** target member is accepted too (`{ length: number }`), which is the row
+    that separates "the weak walker declined" from "the relation accepts";
+  * an **index-signature** target REJECTS in tsc (`m1.ts(19,6)`) where we accept, and a
+    **whole enum** source against a target sharing nothing reports TS2559 in tsc
+    (`m1.ts(25,6)`, `m1.ts(29,6)`) where we are silent — three standing FALSE NEGATIVES
+    this round does not touch and does not worsen. The whole-enum one is (REL.1)(b)'s
+    vacuity: a member-less source against a member-less target passes both ways.
+
+**NO PRISTINE BASELINE CARRIES THE SHAPE.** Every `.errors.txt` mentioning TS2559 was
+searched and none has an enum member as an object-target source, so tsgo is the only
+oracle — which is acceptable here precisely because the answer being asserted is
+*nothing*, and wording cannot diverge from silence. The pristine oracle WAS consulted and
+did settle one thing: `enumAssignmentCompat5` pins the enum as a TARGET, not a source, so
+nothing in the corpus was at risk.
+
+**GATES.** Suite **16,234 / 0 / 3** (+11, exactly the one new class), **no corpus baseline
+moved**. `cost_gate.py` `output.errors` **46**; the run was repeated against the a0 parent
+binary via `--from-log` and **all 20 counters are DIGIT-IDENTICAL** — the standing
+`typeOfExpr.calls +1.42%` is inherited drift against a baseline last recorded at (CHK.46),
+not this round's cost. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+**8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** and per-profile `diff` clean
+against the rebuilt parent: **`added=0 removed=0` on all eight**. `partition-equivalence`
+**EQUIVALENT, all 78**, floor **56 ms** [54, 59, 52, 56] — one draw.
+`capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0, moreAny 0**,
+`definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
+narrow=-2075467818767010709` — the standing state to the digit, so no captured type moved.
+**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL**
+against an a0 arm rebuilt in this session. Binary md5 `96e0db8d` reproduced three times
+(first build, post-a0 rebuild, post-a5 restore); parent `089f7b6f`.
+
+**SIX ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, each `cmp`-diffed against
+the driver's own snapshot, each anchor asserted to occur exactly once (exit 3 otherwise),
+each build grepped for BUILD SUCCESSFUL, the restore verified OUTSIDE the driver by
+`git status --porcelain` + an md5 compare.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the whole change reverted (the parent, rebuilt this session) | `089f7b6f` | **6** — exactly the six positives |
+| a1 | the IDENTITY guard dropped | `e1f48932` | **0** |
+| a2 | positive evidence dropped (an UNEVALUATED member defaults to numeric) | `a75f1f59` | **0** |
+| a3 | the (CHK.32) leg's anonymous-target scope wrongly inherited | `f5d160d4` | **2** — uniquely the named-interface and String-wrapper pins |
+| a4 | the flavour collapsed to `string` | `c0ee90aa` | **1** — uniquely the numeric-vs-`String` control |
+| a5 | the retry promoted from a FALLBACK to a SUBSTITUTION | `baaf0e2d` | **0** |
+
+**a4 IS THE ARM WORTH READING**: it reddens ONE pin and **not** the two numeric positives,
+because an ALL-OPTIONAL target cannot discriminate a flavour (`String` simply lacks
+`toFixed`, and an optional target member a source lacks is legal). That is what makes the
+two wrapper CONTROLS load-bearing rather than decorative, and it is why the positives alone
+would have been a blind pin set for the flavour rule.
+
+**THE THREE ZEROS ARE THREE DIFFERENT KINDS.**
+
+  * **a1 — UNDISCRIMINATED, NOT REDUNDANT.** Under `identityRelation` the retry can only
+    reach a target the structural comparison already refused, and `stringType` is an
+    `Type.Intrinsic`; the route by which it WOULD matter is B69.8's wrapper arm, which is
+    not relation-gated — so dropping the guard would let an enum member be declared
+    IDENTICAL to `String`. Nothing in 16,234 tests asks. Kept because tsc guards the same
+    work the same way (`structuredTypeRelatedTo`'s `relation !== identityRelation`).
+  * **a2 — A DELIBERATE REFUSAL, AND THE ONE PLACE THIS ROUND CHOSE THE CONSERVATIVE
+    ANSWER.** Defaulting an unevaluated member to numeric (what `isNumericEnumObjectType`
+    does for its arithmetic caller) reddens nothing AND would fix one further measured FP:
+    `enum E { A = zzzNonConst }` against `{ toFixed?() }` is silent in tsc and TS2345 here
+    (`build/chk60/ue/u2.ts(6,8)`). It was refused because the neighbouring probe shows the
+    hazard is real and not hypothetical: an enum whose first member is a TEMPLATE
+    literal and whose second is a plain string (`build/chk60/ue/u3.ts`) — a
+    TEMPLATE-valued string member — does not fold in our evaluator, so a numeric default
+    would relate a STRING member to `Number`-shaped targets. That is a false NEGATIVE, the
+    direction with no gate. Both rows re-queued.
+  * **a5 — INDISTINGUISHABLE FROM REDUNDANT ON TODAY'S EVIDENCE.** 0 RED in the suite, and
+    re-run against the 30-row matrix the output is BYTE-IDENTICAL to HEAD. The prediction
+    written before building it — that the substitution order would flip the
+    index-signature row `m1.ts(19,6)` — is **REFUTED**: `checkTypeRelatedTo(string,
+    { [k: string]: any })` accepts by some route above B418. So "a fallback, not a
+    substitution" is a claim about blast radius that this repo currently cannot
+    demonstrate; it is kept as the strictly weaker change and recorded as undemonstrated.
+
+**ITEM 2 (`this.<member>`) WAS MAPPED, NOT FIXED — AND THE QUEUE ENTRY'S DIAGNOSIS IS RIGHT
+AT THE ROOT AND WRONG ABOUT THE SURFACE.** `this` is `Identifier("this")` in this parser
+(`Checker.kt:8090`), so `getTypeOfExpression` types it `any` and every `this.<member>` with
+it. But it is **not about optionality and not about the weak rule**: measured over
+`build/chk60/br/b1.ts` and `b2.ts` against tsc 7.0.2, a **REQUIRED** `this.zzzReq: number`
+assigned to a `string` variable is silent too. The hole is per POSITION:
+
+  * **SILENT**: a var-decl initializer (`const s: string = this.zzzReq`), an assignment RHS
+    (`s = this.zzzReq`), a `return` from an annotated method, and the nullish-access checks
+    (TS2532 for `this.zzzOpt.toFixed()`, and the whole `string | undefined -> string` row);
+  * **PRESENT**: ARGUMENT position (`zzzTake(this.zzzHandler)` reports) and TS2722.
+
+The controls that make that a measurement rather than a guess are in the same method body:
+a plain outer name and `zzzObj.zzzReq` both report from inside the method, and
+`zzzInst8.zzzReq` reports at file level — so it is the RECEIVER, not the position in a
+method.
+
+**AND THE SAME FIXTURE ISOLATED A SECOND DEFECT THAT IS NOT `this`-SPECIFIC**: an OPTIONAL
+property's `| undefined` is dropped for ANY receiver. `zzzInst.zzzOpt` reports
+`Type 'number'` where tsc says `'number | undefined'`, and `zzzInst.zzzOptStr` against a
+`string` target goes MISSING entirely because `string -> string` then passes. Four rows on
+an ordinary receiver, so a `this` fix alone would not close it.
+
+**SCOPED OUT, DELIBERATELY**, each already refused with a reason by (CHK.59) and untouched
+here: two-or-more non-nullish constituents, the TS2353 argument boundary, the generic
+instantiation source (symmetric by design), and the `p?: any | undefined` display residue.
+The bigint leaf (item 7) was also not taken.
+
+### Round (CHK.59) — the weak-type anchor moves to the **EXPRESSION** exactly when the code is **TS2560**; an enum member is a source at every position, and the cause was the vacuous-`{}` guard; and a fresh object literal elaborates **into** the literal
+
+**THREE FIXES, ONE ARC, THREE COMMITS.** (CHK.58) left five measured residue items with a
+fixture each. Three are closed; two are scoped out with reasons, and three NEW residues were
+measured on the way.
+
+**1. THE CALLABLE SOURCE AT THE THREE NON-ARGUMENT POSITIONS — the largest piece, and the
+only thing left was the ANCHOR.** Read out of tsc 7.0.2 and corroborated by tsgo's own
+`relater.go`: `checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose
+first act is `elaborateDidYouMeanToCallOrConstruct` (construct signatures, then call ones).
+When some signature's return type is related to the target it RE-REPORTS with the error node
+set to the EXPRESSION and attaches the TS6213/TS6212 related row; otherwise the ordinary
+`checkTypeRelatedToEx` runs with the position's own error node. **That predicate is the SAME
+one [Checker.weakCallResultSatisfiesTarget] already used to choose TS2560 over TS2559**, so
+the two coincide *by construction* in this compiler and the emitter needed exactly one extra,
+CALL-ONLY anchor pair.
+
+| source | tsc code | var decl | return | assignment |
+|---|---|---|---|---|
+| `() => { zzzT: number }` (result related) | TS2560 | 3:22 EXPR | 4:34 EXPR | 6:9 EXPR |
+| `() => { zzzZ: string }` (result disjoint) | TS2559 | 3:7 NAME | 4:27 `return` | 6:1 LHS |
+| `() => number` | TS2559 | 8:7 NAME | 9:27 `return` | 11:1 LHS |
+| `new (s: string) => { zzzT: number }` | TS2560 | 13:22 EXPR | 14:34 EXPR | 16:9 EXPR |
+| `() => ({ zzzT: 1 })` (an ARROW) | TS2560 | 2:22 EXPR | 3:34 EXPR | 5:9 EXPR |
+
+**TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE.** [Checker.topLevelWeakSource] classifies a
+cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
+IDENTIFIER or ARROW source was silent at the VAR DECL while the return and assignment
+positions reported it; the var-decl walker now falls back to the shared value walker as its
+`?:`, which changes no shape that already reports (that branch renders the target through
+the ANNOTATION, the walker through `typeToString`). And the assignment site's outer
+`ArrowFunction` refusal comes out.
+
+**A FUNCTION EXPRESSION STAYS REFUSED, AND THAT IS MEASURED.** tsc's `getErrorSpanForNode`
+maps a `FunctionExpression` to its own NAME, so `= function zzzNamed(){}` anchors at
+`zzzNamed` (col 31) and the anonymous form lands back on the var name (col 7) — two anchors,
+neither of which is the expression. An `ArrowFunction` has no such mapping
+(`getErrorSpanForArrowFunction` starts at its first token), which is why the arrow half IS
+closed.
+
+**2. AN ENUM MEMBER IS A SOURCE AT EVERY POSITION — AND (CHK.58) HAD THE MECHANISM WRONG.**
+Its entry said [Checker.getTypeOfExpression] answers `any` for `E.A`. It does not: the type
+resolves fine and the pre-existing TS2345/TS2322 rows name it `ZzzE.A`. The refusal is one
+step further on — an enum-flavoured type is a member-LESS [Type.Object], so
+[Checker.weakSourcePropertyNames] enumerates it to the EMPTY set and
+[Checker.tryEmitWeakTypeAssignment]'s vacuous-`{}` guard (`var x: AllOptional = {}` is legal)
+refused it. tsc compares the enum LITERAL type's apparent type, i.e. the `String`/`Number`
+wrapper's property set, which is what the var-decl walker's AST-side
+[Checker.enumMemberWeakSource] had been reproducing all along. **Consulting that classifier
+AT THAT GUARD** — after the target is known weak and the source has come back empty or
+unenumerable — is the cheapest possible placement (nothing else reaches it: `globals.lookups`
+**+4** for the whole compiler profile) and closes the argument, return and assignment
+positions in one place. The DISPLAY rule is (CHK.58)'s, unchanged.
+
+**3. A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS IN ONE SHAPE.**
+(a) ORDER: [Checker.tryEmitNestedWeakVarDecl] (one level, TS2322 at the var NAME with a
+`Types of property … are incompatible` chain) ran BEFORE
+[Checker.tryEmitObjectLiteralWeakLeaves] (TS2559 at the property KEY + TS6500), so a fresh
+literal took the wrong walker; the two overlap ONLY for an object-literal initializer, since
+the nested one additionally serves an IDENTIFIER source (pristine's
+`let weak: Weak & Spoiler = propertiesWrong`) the leaf walker can never reach. (b) DISPLAY:
+a leaf reports the literal's OWN property type, i.e. the **WIDENED** one for a string or
+numeric literal and the literal itself for a boolean — `"utf8"` -> `string`, `12` ->
+`number`, a template literal -> `string`, `false` -> `false`, an enum member -> `ZzzEL.A`.
+**THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** (pristine's
+`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'`), because there the
+fresh literal reaches the relation directly — that asymmetry is why the widening lives in
+the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate the boolean half.
+
+**GATES.** Suite **16,223 / 0 / 3** (+24 over (CHK.58)'s 16,199: three new classes plus one
+residue pin), summed with `xml.etree` over the SEVEN-module glob (core 15,239 + project 704
++ kir 146 + daemon 66 + api 30 + client 20 + cli 18); **no corpus baseline moved at any of
+the three steps**, which is load-bearing for step 3 — the leaf/nested order swap is exactly
+what `nestedExcessPropertyChecking` and `weakType` gate. `cost_gate.py` exit 0
+unrebaselined, `output.errors` **46**, largest counter **+1.42%** against a baseline
+(CHK.58) already read **+1.40%** on, i.e. **+0.02% for this whole round** — the ordering
+(cheap AST refusals -> target-weakness gate -> type the value) is intact and the enum consult
+sits behind the weak-target gate by construction. `huge_methods --fail-over 0` exit 0,
+**783** classes, 0 over. **8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** after
+every step and per-profile `diff` clean: **`added=0 removed=0` on all eight**, unmoved since
+(CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **64 ms** [56, 63, 64, 66] —
+one draw. `capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0,
+moreAny 0**, `definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
+narrow=-2075467818767010709` — the standing state. **`knip` @ `dc7aca5` 48 -> 48 and
+`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session;
+that arm's `Checker.class` md5 `58e55fae…` reproduced the session's very first build exactly.
+
+**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
+AND NOT ONE ARM READ 0.** Each arm `cmp`-diffed against its OWN snapshot, each anchor
+asserted to occur exactly once (exit 3 otherwise), each build grepped for `e:`, restore
+verified OUTSIDE the driver's `finally` plus a `git diff --quiet`, binary rebuilt after every
+restore.
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the whole change reverted (the parent, rebuilt this session) | `58e55fae` | **21** — exactly the 21 positives added or converted |
+| a1 | the 2560 anchor never moves (`useCall = false`) | `43180b25` | **4** — uniquely the four expression-anchor pins |
+| a2 | the `FunctionExpression` refusal dropped | `9a5b1b87` | **1** — uniquely its refusal pin |
+| a3 | the var-decl fallback to the shared value walker dropped | `e19a390c` | **6** — every var-decl row |
+| a4 | the assignment site's `ArrowFunction` refusal restored | `1128de84` | **3** |
+| a5 | the enum consult at the vacuous-`{}` guard dropped | `3f8df9eb` | **8** — every enum pin |
+| a6 | the enum DISPLAY override dropped | `90c8eefd` | **2** — uniquely the one-member pins |
+| a7 | the leaf/nested walker order reverted | `8895315f` | **5** — every leaf pin |
+| a8 | the leaf literal WIDENING dropped | `51db3310` | **3 — and NOT the boolean pin** |
+| a9 | the enum consult in the LEAF walker dropped | `3635e013` | **1** |
+
+**a8 IS THE ARM WORTH READING**: it reddens the string, numeric and template pins and leaves
+the BOOLEAN one green, which is what makes "a leaf widens" a RULE rather than "literals
+widen" — the boolean pin is the control, and pristine's own two `Type 'false'` rows are the
+corpus half of it.
+
+**TWO DRIVER DEFECTS, BOTH CAUGHT BY THE BUILD AND NEITHER A DEAD ARM.** a5 and a9 were first
+written as `val x = null ?: return false`, which Kotlin rejects (`Function invocation
+'first()' expected`); the driver reported BUILD FAILED rather than 0 RED, which is the
+distinction that matters — a `null as Expression?` cast made both arms land. Recorded because
+"the arm did not build" and "the arm changed nothing" print identically in a careless driver.
+
+**THREE NEW RESIDUES, ALL MEASURED, RE-QUEUED AS (CHK.60).** (i) A `this.<member>` assignment
+target is silent for the weak rule at EVERY source shape, callable and not — so it is not the
+anchor change: [Checker.getTypeOfExpression] answers `any` for `this.<optional member>` (the
+probe `const p: string = this.zzzHandler` is silent here where tsc says
+`Type 'ZzzS9 | undefined' is not assignable to type 'string'`). (ii) An OPTIONAL `any`
+property renders `zzzNope?: any | undefined` where tsc renders `zzzNope?: any` — `any`
+absorbs `undefined` in tsc's union construction and our `getUnionType` does not reduce that
+pair; visible from every position that renders a target through the TYPE rather than the
+ANNOTATION, and pinned as residue. (iii) An enum member against a weak target it SHARES a
+property with (`{ length?: number }`) is SILENT in tsc and emits TS2345/TS2322 here, from the
+ordinary relation rather than the weak rule.
+
 ### Round (CHK.56) — the TS2769 diagnostic path did not ask the weak-type rule; the item's "hard part" was a **tsgo rendering** and not tsc's, and the fix ADDS **no** row on any corpus here
 
 **THE ITEM'S OWN DESIGN LEAD WAS HALF RIGHT AND HALF A tsgo ARTEFACT.** (CHK.55)

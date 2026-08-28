@@ -1,5 +1,59 @@
 # Status
 
+**(CHK.69) — THE LOOP JOIN'S ~20x IS **MEMOIZATION BEING SWITCHED OFF**, A *SOUND* CUT-KEYED
+MEMO RECOVERS **0.003%**, AND THE PRIZE TURNS OUT TO NEED **NO BACK EDGE AT ALL**
+(2026-08-28, one commit `77164d41`).** (CHK.66)(b)'s cost was reproduced digit-for-digit,
+then ATTRIBUTED. Removing the `narrowLoopCutUsed` suppression from the memo-store gate
+(unsound — the CEILING of what any memo can return) takes `globals.lookups`
+15,128,215 -> **1,630,952** and `typeNode.cacheable` 10,831,464 -> **885,424** (-89.2% /
+-91.8%) and the cold wall 91.7 s -> 44.1 s: **~90% of the blowup is the suppression**, so
+the loop body's paths are ENUMERATED instead of folded. **A SOUND repair of it measures
+ZERO** — giving `NarrowFlowMemo` a `cuts: LongArray` (a rolling hash of the in-progress
+label set as an extra equality field) reads 15,127,750, i.e. **0.003%**, because the cycle
+almost never closes ON the loop label; it closes on the walk's OWN PREFIX, which is
+path-dependent by construction. **And the ceiling is still +115% globals lookups, +395%
+type-node resolutions and 44.1 s against a parent 26.7 s — refused in its BEST case.**
+
+**WHAT LANDS IS THE LOOP JOIN'S OWN FIXPOINT ARGUMENT USED FORWARD.** `L = E union (union
+of narrow_i(L))`; when no back edge ASSIGNS the reference every back edge is a pure
+NARROWING, so **the fixpoint IS the entry state** and the label can be answered by
+FOLLOWING ITS ENTRY — no traversal, no cut, no suppression. `loopBodyMayAffectName` decides
+it by pure graph reachability and answers conservatively on anything it cannot rule out.
+**Plus a shipped BINDER false negative:** `bindForInStatement`/`bindForOfStatement` joined
+the PRE-loop flow to the post-loop label instead of the LOOP LABEL (tsc sets
+`currentFlow = preLoopLabel` first), so a `for-in`/`for-of` body was unreachable BACKWARD
+from any read after the loop and `for (const n of xs) { h.req = 1 }` did not invalidate a
+narrow. One commit, because each half alone regresses the other's shape. **On 14
+hand-written shapes the parent has 5 shipped FALSE POSITIVES and 2 shipped FALSE NEGATIVES
+and the shipped binary reproduces tsc 7.0.2 EXACTLY.**
+
+**(CHK.63) IS RE-PRICED TO *ONE ROW ON ONE PROFILE* AND IS NOW AFFORDABLE — AND IS STILL
+NOT OPENED.** The combined arm is `added=0 removed=0` on seven profiles and `added=1` on
+`tsc-harness` (`tsserverLogger.ts:28:5`); (CHK.66)(b)'s residue `checker.ts:43282:21` is
+GONE. Cost: `narrow.walks` +11.2%, `narrow.memoServed` +6.6%, everything else <= 1%, wall
+flat. One ours-only row on a dashboard whose v1 exit is zero FPs is a decision to take at
+0 — the cause is named and queued as (CHK.70)(a): a COMPOUND assignment (`result += …`)
+inside a loop has no post-state rule.
+
+**GATES.** Suite **16,367** / 0 / 3 (+11, exactly the new pins); **no corpus baseline
+moved**. Grid `790c337141b167657e4f1f3a219474aa` (a NEW recipe — not comparable to
+(CHK.68)'s `503774c2…`), `added=0 removed=0` on all eight against a parent capture taken
+this session from a rebuilt parent (`Checker.class b2675304`), and the digest is IDENTICAL
+to the parent's. `cost_gate` **REBASELINED** — +0.43 pp on `globals.misses` over the
+standing residual pushed it to +2.20%, and the rebaseline also absorbs the residual
+accumulated before this round. `huge_methods` 783 classes, 0 over. `partition-equivalence`
+EQUIVALENT all 78 (floor **63 ms**, one draw). `capture-equivalence` DIVERGED **967** in 43
+of 76 (from 968), definitions=0, moreAny=0, both arm digests re-recorded — classified per
+element, **168 of 742,255 spans change, 0 LOST and 11 GAINED**, of which 66 are `any` -> a
+real type and 29 are `X | undefined` -> `X`. knip **48**, jsonrepair **4**, byte-identical.
+Vacuity: **8 of 11 pins RED on the rebuilt parent**, exactly the 8 positives, 3 controls
+green on both. Four ablation arms, one mistake each: a1 **9 RED**, a2 **4 RED** (distinct
+sets), a4 **5 RED**; **a3 (the `never` refusal) is 0 RED and UNPINNED — but MEASURED**, the
+arm adding exactly the five `emitter.ts` `never` rows on the grid. My first a2 was a **DEAD
+ARM** that read 0 RED and looked redundant while passing the `cmp`-against-its-own-snapshot
+check, and my first pin family was **vacuous in both directions** because an IDENTIFIER
+subject is answered from `currentLocalTypes`, which is loop-blind.
+
 **(LIB.4) — `cronstrue` COMPILES TO JVM BYTECODE; WHAT STOPS IT RUNNING IS THE NOMINAL
 HALF (2026-08-28, six commits, corpus 17-29).** Its English entry point — 11 files of
 published source, unmodified — reads `successful=true` with the checker at **0 errors,
@@ -17,6 +71,7 @@ no per-iteration binding (every closure shared one variable — `3,3,3` where Ja
 array callbacks were typed `Function1` and truncated JavaScript's `(element, index, array)`;
 and this arc's own `var` hoisting emitted into a shape class's synthesized constructor. Every
 corpus `.expected` in 17-29 is `node`'s own stdout. Full suite **16,339 / 0**.
+
 
 **(CHK.68) — `x = y = z` WAS A **SHIPPED** FALSE POSITIVE AND IT LANDS; THE GATE RE-PRICES
 **6 ROWS -> 5** AND THE COMBINED ARM IS **EXACTLY 1 ROW** — BUT THE LOOP JOIN IT NEEDS IS A
@@ -113,155 +168,3 @@ TS2365 one line down.
 
 **THE GATE RE-PRICES 7 ROWS -> 6, AND (CHK.63) NOW NEEDS EXACTLY ONE THING.** `armBGR`
 (the `canUseTypeEngine` gate + the RETURN/ASSIGNMENT reader consultation +
-**(CHK.61)(b)'s checking half, which is MEASURED CORRECT and reproduces tsc 7.0.2 exactly
-on a five-reader census**) is 6 rows, **all six the LOOP JOIN**. The loop join itself is
-built and re-priced **8 rows -> 3** — the `never` family is closed — and its blocker is
-named: **`getUnionType` performs no SUBTYPE reduction**, so a loop join legitimately
-produces `ConditionalTypeNode | Node | undefined` where tsc's `UnionReduction.Subtype`
-gives `Node | undefined`. Three refusals AT the label were measured; only one does
-anything, which proves the offending union is built downstream at a branch join.
-
-**GATES.** Suite **16,339** / 0 / 3 (+13, exactly the new subtests); no corpus baseline
-moved. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0. `cost_gate` exit 0,
-`output.errors` 46, every counter the standing residual. `huge_methods` 783 classes, 0
-over. `partition-equivalence` EQUIVALENT all 78 (floor 56 ms). `capture-equivalence`
-DIVERGED 968 / definitions=0 / moreAny=0, and the arm dump is **0 lost, 0 gained, 1
-changed** — `checker.ts:30269` going `undefined` -> `never`, tsc's own answer. knip 48,
-jsonrepair 4, byte-identical. Vacuity: **7 of 13 pins RED on the parent rebuilt this
-session**, exactly the 7 positives. Four ablation arms; a4 read **0 RED until its
-separating control existed**, then a unique RED.
-
-**(CHK.63)(a)(c) — THE FOUR RESIDUES ARE **ONE READER GAP PLUS TWO FLOW-WALK DEFECTS**,
-AND THREE OF THEM WERE SHIPPED FALSE POSITIVES; THE GATE RE-PRICES **6 ROWS -> 4**
-(2026-08-28, three commits).** A per-READER census over PARAMETER sources — the first cut
-used a `const` initialised from a call and was VACUOUS, silent on our side even for its own
-control — showed that (iii) and the loop family are live FALSE POSITIVES at the
-CALL-ARGUMENT reader today, while (iv) and (vi) are correct in the flow walk and were only
-ever the READER.
-
-**(a) AN ASSIGNMENT INSIDE A NULLISH GUARD MUST OVERWRITE THAT GUARD'S OWN NARROWING.**
-`if (id === undefined) { id = text }` left `id` reading `undefined` for the whole branch —
-`narrowByAssignmentRhs`'s resolved-RHS arms FILTER the antecedent and
-`narrowUnionByRhsAssignment` answers a non-union receiver unchanged, so the assignment was a
-no-op and the join re-minted `string | undefined`. `assignmentReduceBase` applies round 416's
-rule there: an assignment OVERWRITES, so the post-state is reduced from the DECLARED type.
-**(a2)** its own ablation read **0 RED** and a byte-identical grid, and was UNPINNED rather
-than redundant — the separating fixture needs a THREE-member declaration — so the "a nullish
-assigned type keeps the antecedent" refusal was deleted too.
-
-**(c) A `!` IS NOT RESPECTED THROUGH PARENTHESES.** `return (t)!` against `string | number`
-was a false TS2322 while `return t!` one line away was silent: the operand is admitted by
-KIND and a ParenthesizedExpression is not one. `nonNullOperandStrips` reads through parens
-and adds the LOGICAL operators — the `server/project.ts:746` shape.
-
-**(b) THE LOOP JOIN IS REFUSED, WITH ITS PRICE AND ITS BLOCKER NAMED.** Every loop erases
-every assignment narrowing established before it (`declaredType` at each `FlowLoopLabel`).
-The union-with-back-edge-cut was BUILT, makes all ten loop shapes agree with tsc exactly, and
-**costs 8 ours-only rows per profile**: **5 are a `never` the loop label was MASKING** (a
-negated GENERIC type-guard call), 3 a join over a TRUNCATED antecedent that is LESS reducible
-than the declaration. Reverted; the design is kept at
-`build/chk63/snap/Checker.kt.gapB-refused`.
-
-**(CHK.63) RE-PRICED: `armG` ALONE is still 6** — the RETURN/ASSIGNMENT readers never consult
-the flow walk for a primitive target. **`armGR` (the gate PLUS that consultation; measured,
-NOT landed) is 4 distinct rows**: `emitter.ts:1479` + `organizeImports.ts:862` are
-**(CHK.61)(b)'s checking half**, and `checker.ts:35649` + `tsserverLogger.ts:28` are **the
-refused loop join** (both reads sit inside a loop whose earlier iteration assigns the
-reference). So (CHK.63) needs exactly those two things and nothing else.
-
-**GATES.** Suite **16,318 / 16,325 / 16,326**, 0 failed, 3 skipped (+8/+7/+1 — exactly the
-new subtests), **no corpus baseline moved on any of the three**. 8-profile grid
-`503774c23b4535130ffdebabef430cf0` on all three, byte-identical PER PROFILE against the
-recorded parent capture (parent `Checker.class` md5 `eec8ea8f`, rebuilt in this session).
-`cost_gate.py` exit 0 three times, `output.errors` **46**, every counter the standing
-residual to the digit — the round costs nothing measurable. `huge_methods --fail-over 0`
-exit 0, **783** classes. `partition-equivalence` EQUIVALENT all 78 (floors 79 / 63 / 56 ms,
-one draw each). knip **48**, jsonrepair **4**, EVERY ROW byte-identical across all three.
-
-**`capture-equivalence` MOVED TWICE AND BOTH MOVES ARE CLASSIFIED PER ELEMENT** with
-(CHK.64)'s `XTSC_CAPEQ_DUMP`. DIVERGED **968** in 43 of 76, `definitions=0`, `moreAny=0` —
-unchanged throughout. Commit 1: **0 lost, 0 gained, 2 changed**, both DROPPING a spurious
-`| undefined`. Commit 2: **0/0/1**, a hover `any` -> the concrete union, and tsc 7.0.2's LSP
-answers that same constituent set. Commit 3: **nothing moved**.
-
-**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY RESTORE `cmp`-VERIFIED PLUS A REBUILT md5.**
-a1 (the reduce base never consulted) **4 RED — exactly the (a) positives**; a3 (the nullish-
-assigned refusal restored) **1, uniquely the (a2) pin**; b1 (parens not read through) **4**;
-b2 (a logical operand does not strip) **3, uniquely the logical pins**; b3 (COMMA admitted)
-**1, uniquely the residue pin**. **a2 (the nullish-only antecedent guard dropped) is
-UNDISCRIMINATED and NOT shown redundant** — 0 RED and a byte-identical 8-profile grid, so its
-KDoc says the bound is REASONED rather than measured. **b4 is UNDISCRIMINATED.** a4 was
-WITHDRAWN: its call site belonged to the refused (b) work.
-
-**A KILLED RESTORE LEAVES NO CLASS FILE AND A SCRATCH RUN THEN PRINTS ZERO ROWS**, which
-reads exactly like a clean fixture — the 10-minute tool timeout killed an ablation grid
-mid-rebuild and the next probe measured a classpath with no `Checker.class` in it.
-
-**(CHK.64)(i)+(ii) — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE READER**, BOTH LANDED;
-(CHK.63)'s PRICE FALLS **11 ROWS -> 6** (2026-08-28, three commits).** Round 784's gate sends
-the ASSIGNMENT and RETURN readers to `currentLocalTypes` for a primitive target, and the
-legacy filler `extractNullNarrowing` could neither read an `&&` (i) nor look anywhere but a
-then-branch (ii). A MEMBER ACCESS, a CALL ARGUMENT and a DECLARATION were already correct in
-BOTH families — that census is what collapsed five mechanisms into two, and it is the round's
-most transferable finding. `extractNarrowingsFromCondition` now flattens the (left-nested)
-`&&` spine ITERATIVELY into a LIST at most one entry per name, and an `if` with no `else`
-whose then-branch DEFINITELY EXITS installs the NEGATED condition for the rest of the
-enclosing frame — refused unless that frame owns its `localTypes` scope, which is what bounds
-it to the block.
-
-**THREE DEFECTS THE GATES FOUND AND READING THE SOURCE DID NOT.** A
-`typeof x === "object"` conjunct installed `any` — a WIDENING, 13 captured hovers went from
-tsc's own `object`/`unknown` to `any`, and it would DELETE a true positive. Recording the
-declared type into the frame's SHARED `narrowedDeclared` (no undo log) leaked across
-FUNCTIONS: **21 ours-only rows PER PROFILE**, every one an assignment whose TARGET was read
-as another function's same-named binding. And a negated GENERIC type-guard call degraded the
-element type — 20 captured spans hovered `any` in tsc's own `path.ts`/`utilities.ts`.
-
-**AND ONE SHIPPED DEFECT FELL OUT AND IS FIXED.** With NESTED narrows on one name the
-narrowing frame wrote `narrowedDeclared` UNCONDITIONALLY, recording the OUTER narrow's result
-as if it were the declaration, so `if (b) { if (isNs(b)) { b = undefined } }` was a false
-TS2322 — reproducible with no early exit anywhere. All three writers are now FIRST-WINS.
-
-**(CHK.63) RE-PRICED: the `armG` arm is 11 -> 6** (`sourcemap.ts:164/165/166` went with (i),
-`core.ts:2191` + `path.ts:585` with (ii)). Two of the 6 are (CHK.61)(b)'s absence and (b)
-pays them back, so (CHK.64)'s own residue is **4 rows** — and a **SIXTH mechanism the queue
-never listed** turned up in it: a NON-NULL ASSERTION `!` is not respected at the return
-reader (`server/project.ts:746`).
-
-**GATES.** Suite **16,296 / 16,308 / 16,310**, 0 failed, 3 skipped (+10/+12/+2 — exactly the
-new subtests), **no corpus baseline moved on any of the three**. 8-profile grid
-`503774c23b4535130ffdebabef430cf0` on both code commits, byte-identical PER PROFILE against a
-parent capture rebuilt in this session. `cost_gate.py` exit 0, `output.errors` **46**
-(`narrow.walks` +0.84%, well inside the gate). `huge_methods --fail-over 0` exit 0, **783**
-classes. `partition-equivalence` EQUIVALENT all 78. knip **48**, jsonrepair **4**, every row
-byte-identical against a parent arm rebuilt in this session.
-
-**`capture-equivalence` MOVED AND THE MOVE IS CLASSIFIED PER ELEMENT.** DIVERGED **968** in
-43 of 76, `definitions=0`, `moreAny=0` — unchanged. A new instrument (`XTSC_CAPEQ_DUMP`,
-committed FIRST) makes the ARM DIGEST's move classifiable, because the digest answers
-*whether* and only a per-span dump answers *which*: **0 rows lost**, **+174 definitions
-gained**, 2,137 type rows changed — **1,274 drop a spurious `| undefined`**, 300 go `any` ->
-concrete, 485 render a narrower/named type (12 of 12 sampled agree with tsc 7.0.2's LSP where
-the parent did not), 1 GAINS `| undefined` where tsc agrees with us, and **3 go to `any`** —
-all three a member access on a correctly narrowed receiver whose further `&&`-conjunct guard
-we do not apply, i.e. the queue's own gap (v).
-
-**SIXTEEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, EVERY RESTORE `cmp`-
-VERIFIED.** a1 (no decomposition) **5 RED**, a2 (first conjunct only) **2**, a3 (`||`
-decomposed) **1** uniquely the `||` control, a4 (`anyType` refusal dropped) **1** uniquely
-its guard, a5 (spine site reverted) **2** — the spine is the load-bearing consumer; b1/b3/b9
-**7** each, b2 **1**, b4 and b10 **1 each and they redden a RESIDUE pin**, which is what
-proves those residues are REFUSALS with a price rather than inabilities; b5 **1**, b7 **1**.
-**a6 (the two legacy DISPATCHER sites reverted) is UNDISCRIMINATED and NOT shown redundant** —
-a direct CLI probe of that arm produced no row either, because the spine anchors every
-`IfStatement` reachable here. **b6 READ 0 AND WAS UNPINNED, THEN FIXED** — two same-named
-bindings in one file make it **1 RED, uniquely that row** (the third consecutive round with
-that pattern). **b8 is UNDISCRIMINATED and its effect is real but CAPTURE-ONLY**: two
-diagnostic fixtures were built and under the embedded lib both narrow precisely, so it is
-recorded in the test's KDoc rather than claimed.
-
-**THE INHERITED REPRO WAS SILENT ON BOTH COMPILERS.** `build/chk61b/n1` uses
-`string | undefined` against primitive targets, i.e. exactly what the (CHK.63) gate hides. A
-NON-NULLISH union (`number | string` + `typeof`) makes all four rows appear on the shipped
-binary with no patch — **a nullish fixture is the wrong instrument for anything below that
-gate.**

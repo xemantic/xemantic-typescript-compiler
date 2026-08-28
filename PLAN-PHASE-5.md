@@ -20,6 +20,151 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.69) — the loop join's ~20x is **MEMOIZATION BEING SWITCHED OFF**, a SOUND cut-keyed memo recovers **0.003%**, and the whole prize turns out to need **no back edge at all**
+
+**THE HEADLINE, AND IT IS A REFUSAL THAT PAID FOR ITSELF.** (CHK.66)(b)'s back-edge
+union was reproduced digit-for-digit this session (`globals.lookups` 759,945 ->
+**15,128,215**, `output.errors` 47), then ATTRIBUTED, then refused — and the attribution
+handed over a change that delivers the same rows for nothing.
+
+**THE PRIZE, MEASURED BEFORE ANY FIX (the brief's first law).** One arm, `M1`, deletes the
+`narrowLoopCutUsed` term from the memo-store gate — unsound, and therefore exactly the
+CEILING of what any memoization scheme can return:
+
+| counter | parent | loop join | M1 (memo restored) | M1 vs loop join |
+|---|---|---|---|---|
+| `globals.lookups` | 771,681 | 15,128,215 | 1,630,952 | **-89.2%** |
+| `typeNode.cacheable` | 179,886 | 10,831,464 | 885,424 | **-91.8%** |
+| `typeOfExpr.calls` | 595,665 | 1,269,016 | 782,936 | -38.3% |
+| cold wall | 26,669 ms | 91,677 ms | 44,123 ms | -51.9% |
+
+So **~90% of the blowup is the suppression** — the loop body's paths are ENUMERATED
+instead of folded, because nothing computed under the cut may be stored and the flag
+propagates to the walk root. The (CHK.68) hypothesis is confirmed as to mechanism.
+
+**AND THE SOUND REPAIR OF IT IS MEASURED AT ZERO.** Arm `M2` gives `NarrowFlowMemo` a
+`cuts: LongArray` — a rolling hash of the in-progress label set as an extra equality field
+on every entry, so a cut answer is served only back to a walk standing in the SAME cut. It
+reads **15,127,750** against the loop join's 15,128,215: **0.003%**. The reason is
+structural and is the round's most transferable finding — **the cycle almost never closes
+ON the loop label; it closes on the walk's OWN PREFIX**, which happens whenever the query
+sits inside or after the loop, and that answer is a function of the PATH, not of the cut.
+**Even the unsound ceiling is +115% globals lookups, +395% type-node resolutions and
+44.1 s against 26.7 s cold, so the direction is refused in its BEST case.**
+
+**WHAT LANDS INSTEAD (`77164d41`), AND IT IS THE LOOP JOIN'S OWN KDoc ARGUMENT USED
+FORWARD.** A loop label's value is the least fixpoint `L = E union (union of narrow_i(L))`.
+When no back edge ASSIGNS the reference every back edge is a pure NARROWING of `L`, so
+iterating from `E` never grows past `E` and **the fixpoint IS `E`** — the label can be
+answered by FOLLOWING ITS ENTRY, with no back-edge traversal, no cut and no memo
+suppression. `loopBodyMayAffectName` decides that by pure graph reachability (it resolves
+no type and asks the binder nothing) and answers TRUE — today's conservative
+`declaredType` — on anything it cannot rule out. **`output.errors` 46, wall 26.9 s against
+26.7 s, counters +0.3-0.4 pp over the standing residual.**
+
+**AND THE BINDER HALF, WHICH IS A SHIPPED FALSE NEGATIVE NOBODY WAS LOOKING FOR.**
+`bindForInStatement` / `bindForOfStatement` joined the **PRE-loop flow** to the post-loop
+label instead of the **LOOP LABEL**; tsc's `bindForInOrForOfStatement` sets
+`currentFlow = preLoopLabel` BEFORE `addAntecedent(postLoopLabel, currentFlow)`. So a
+`for-in`/`for-of` body was unreachable BACKWARD from any read after the loop and
+`for (const n of xs) { h.req = 1 }` did not invalidate a narrow established before it.
+`while` / `do` / `for(;;)` never had it — they exit through their condition, which carries
+the label. It also blinded the new back-edge scan whenever such a loop sat inside another
+one, which is why the two halves are ONE commit: each alone regresses the other's shape
+(measured — `while (cond()) { for (const n of xs) { h.req = 1 } }` is a lost diagnostic
+with only the checker half).
+
+**GROUND TRUTH, 14 HAND-WRITTEN SHAPES AGAINST tsc 7.0.2.** The parent has **5 shipped
+FALSE POSITIVES** (a narrow lost across a loop that cannot touch it: a `while` read inside
+and after, a `for-of`, a `do`/`while`, and a loop assigning a DIFFERENT member of the same
+object) and **2 shipped FALSE NEGATIVES** (the `for-of` exit). The shipped binary
+reproduces tsc **EXACTLY** on all 14.
+
+**THE GATE ((CHK.63)) IS RE-PRICED AND IT IS NOW *ONE ROW ON ONE PROFILE*.** The combined
+arm — gate + RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half + (CHK.67) + this
+round — measures `added=0 removed=0` on **seven** profiles and `added=1` on `tsc-harness`:
+`harness/tsserverLogger.ts:28:5`. **(CHK.66)(b)'s own residue `checker.ts:43282:21` is
+GONE** — the capture dump shows that site (`getSignaturesOfSymbol`'s `decl`/`previous`
+loop) going from `any` to a real type with four go-to-definition rows GAINED. And the gate
+is now AFFORDABLE: `narrow.walks` **+11.2%**, `narrow.memoServed` +6.6%, everything else
+<= 1%, wall flat. **It is still NOT opened** — 1 ours-only row on a dashboard whose v1 exit
+is zero, with a named and tractable cause, is a decision to take at 0 rows.
+
+**GATES, PER COMMIT (`77164d41`).** Suite **16,367** / 0 / 3 (+11, exactly the new pins)
+and **NO corpus baseline moved**. Grid `790c337141b167657e4f1f3a219474aa`,
+`added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
+rebuilt parent (`Checker.class b2675304`) — the digest is IDENTICAL to the parent's. NOTE
+the recipe: this round's `build/chk69/cap.sh` concatenates the eight per-profile sorted
+files in glob order, which is a FIFTH lineage and is not comparable to (CHK.68)'s
+`503774c2…`; the row counts (46/95/46x6) are identical. `cost_gate` REBASELINED — the
+round adds +0.43 pp on `globals.misses`/`globals.lookups` and +0.34 pp on
+`typeNode.cacheable` over the standing residual, which pushed `globals.misses` to +2.20%;
+**the rebaseline also absorbs the residual accumulated before this round, so the next
+round's gate is exact against `dcaf1594`**. `huge_methods` exit 0, **783** classes.
+`partition-equivalence` EQUIVALENT all 78, floor **63 ms** [63, 60, 71, 62] (one draw).
+`capture-equivalence` DIVERGED **967** in 43 of 76 (from 968), `definitions=0 moreAny=0`;
+**both arm digests move and are re-recorded** (`full=2052686027637998102`
+`narrow=-2628066049853121726`). knip **48** and jsonrepair **4**, byte-identical to arms
+taken from a parent class dir this session.
+
+**THE CAPTURE DIGEST MOVE, CLASSIFIED PER ELEMENT** (`XTSC_CAPEQ_DUMP` on both binaries).
+**168 of 742,255 spans change (0.023%), 0 LOST and 11 GAINED.** By direction: **66 are
+`any` -> a real type** (a member on a receiver that had washed at a loop), **29 are
+`X | undefined` -> `X`**, 63 are reformulations, 4 are narrower and **6 are WIDER** — the
+last group being the post-loop invalidation the binder half restores, one of which
+additionally loses an alias name to the known first-wins (INC.29) family. The 11 gained
+are go-to-definition rows that now resolve (`forEach` on a narrowed receiver reaching
+`lib.es5.d.ts`). The six wideners were NOT individually verified against tsc.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`dcaf1594`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the soundness gate deleted (the loop is ALWAYS answered by its entry) | `fcdb566c` | **9** | — |
+| a2 | the `for-in`/`for-of` exit goes AROUND the label again | `dcaf1594` (Flow.kt) | **4** | — |
+| a3 | the `never` refusal dropped | `9cd7d51a` | **0** | UNPINNED, but MEASURED — see below |
+| a4 | the whole arm dead (every label answers `declaredType`) | `e017e684` | **5** | — |
+
+a1 and a2 have DISTINCT red sets (a1 additionally reddens the two loop-assign controls and
+all four verifier controls), so they are two observables, not a round-927 pair. a4 is the
+arm-is-live control and reddens exactly the five "survives" positives.
+
+**a3's ZERO IS AN UNPINNED GUARD AND ITS INSTRUMENT IS THE GRID, NOT A PIN.** Run over the
+compiler profile the a3 binary adds **exactly the five `emitter.ts` `never` rows**
+(`4472:38`, `4473:40`, `4487:60`, `4488:39`, `4488:77`), so the refusal is load-bearing and
+measured — it just has no fixture. Four attempts to reduce it (a negated GENERIC
+type-guard call on an object union and on a primitive union, identifier and property-path
+subjects) produced **identical output on both arms** and all four are a SEPARATE shipped
+divergence: a negated generic type guard does not narrow at all here, where tsc is silent.
+Reported as an unpinned-but-measured observable, not as coverage.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The cut-keyed memo (M2) is a complete, sound design that buys nothing.** It is kept
+    only as a measurement (`build/chk69/m2.py`). Writing it was the only way to learn WHY
+    the suppression cannot be lifted — the cycle closes on the prefix, not on the label.
+  * **My first `a2` was a DEAD ARM that read RED=0 and looked like a redundant guard.** The
+    patch inserted the pre-(CHK.69) `joinAntecedent(postLoop, currentFlow)` without
+    REMOVING the new one, so `postLoop` got both antecedents and the label was still
+    reachable. **The `cmp`-against-its-own-snapshot check PASSED** (the file really did
+    differ), which is round 855/922's law shown to be necessary and not sufficient: a diff
+    proves the edit landed, never that it removes the thing under test.
+  * **My first pin family was VACUOUS in both directions and the controls hid it.** An
+    IDENTIFIER subject (`if (typeof x === "string")` then a loop) is answered from
+    `currentLocalTypes`, which is statement-ordered and loop-BLIND, so the positives passed
+    on the parent AND the controls passed on a binary that had no gate at all — `x = 1`
+    inside a loop does not invalidate the pre-loop narrow on either arm (a separate shipped
+    false negative, queued as (CHK.70)). Only a PROPERTY PATH reaches the flow walk.
+  * **The two verifier CONTROL classes went red for the right reason.**
+    `LoopEntryRetryGateTest` and `UnionRetrySubstitutionTest` assert that the plain walk
+    DOES diverge from the FollowLoopEntry mirror over the loop-crossing population; since
+    this round the plain walk agrees with the mirror on those shapes, so `typeDiff` read
+    ZERO. Both classes get a `loopCrossing` fixture whose loops ASSIGN the guarded
+    reference, which still washes. **A control that goes vacuous because the compiler
+    improved is indistinguishable from a control that was always dead** — the tell was
+    that only the CONTROLS moved while every functional pin in those classes stayed green.
+
 ### Round (LIB.4) — `cronstrue` **COMPILES TO JVM BYTECODE**; the queue's five rungs were half the ladder, and four of the five defects found were SILENT wrong answers
 
 **The deliverable.** `cronstrue`'s English entry point — 11 files of published source,
@@ -61,6 +206,7 @@ its oracle is the `as`-spelled twin, which IS the claim under test.
 
 **What is left is one architectural milestone, not a queue.** (LIB.6), with a cheaper candidate
 named and priced against `docs/kir-structural-typing.md`'s measured 158-edge closure.
+
 
 ### Round (CHK.68) — `x = y = z` was a **SHIPPED** false positive and it LANDS; the gate re-prices **6 rows -> 5**, the COMBINED arm is **exactly 1 row** — and the loop join it needs is a **~20x cost blowup nobody had priced**
 
@@ -1419,269 +1565,6 @@ load-bearing.
     queue below it carries no heading of its own, so the slice ran to EOF. Recovered by
     `git checkout --` because the file was committed. CLAUDE.md's `open(p,'w').write(<expr>)`
     entry now has a sibling.
-
-### Round (CHK.60) — an enum member is a string or number **LITERAL** in tsc, so its apparent type is the wrapper: **13** false positives removed; and item 2's blast radius mapped and found to be neither the weak rule nor optionality
-
-**THE FP, AND WHY IT IS NOT THE WEAK RULE.** tsc's `TypeFlags.StringLike` is
-`String | StringLiteral | TemplateLiteral | StringMapping`; an enum literal type carries
-`StringLiteral | EnumLiteral`, so `getApparentType(E.A)` is `globalStringType`, and a
-numeric member carries `NumberLiteral | EnumLiteral` and answers `globalNumberType`
-(`checker.ts:15542`, read on the box). (REL.1)(b) mints a member-LESS `Type.Object` here
-instead, and `propertiesRelatedTo`'s `source.members == null` arm answers
-`targetProps.isEmpty()` — which rejects **every** target declaring a property, including an
-all-optional one. The weak walker correctly DECLINES a target the source shares a property
-with, so what emitted was the ordinary relation, exactly as the (CHK.59) entry said.
-
-**THE FIX IS A RETRY, NOT A WIDENING.** `structuredTypeRelatedTo`'s object/object leg was
-`return objectTypeRelatedTo(...)`; it is now "if that says true, true — otherwise, for an
-enum-literal source, retry as the apparent PRIMITIVE". Retrying as the PRIMITIVE rather
-than reaching for a wrapper here is the whole design: it routes the source through exactly
-the legs a `string`/`number` source already takes — B69.8's wrapper/named-interface leg,
-round 430's empty-`{}` rule, B418's index-signature rule and (CHK.32)'s anonymous-object
-leg — each with its own measured guards intact. That is why a NAMED interface, a class with
-an optional member, `Object` and the `String` wrapper itself all come right for free, and
-why the INDEX-SIGNATURE target's answer is untouched (`objectTypeRelatedTo` accepts it
-before the retry is reached, and would accept it after — measured, see arm a5).
-
-**THE 30-ROW MATRIX IS THE INSTRUMENT** (`build/chk60/mx/m1.ts`, `m2.ts`; both arms
-`tools/tsgo-7.0.2/lib/tsc --noEmit --strict --target es2020 --lib es2020`). 13 ours-only
-rows removed. What it also settled, none of which reading the code produces:
-
-  * the boundary is per **MEMBER**, not per enum — tsc accepts a MIXED enum's string
-    member against `{ length?: … }` and its numeric member against `{ toFixed?() }`, and
-    rejects the WHOLE mixed enum against both;
-  * a **required** target member is accepted too (`{ length: number }`), which is the row
-    that separates "the weak walker declined" from "the relation accepts";
-  * an **index-signature** target REJECTS in tsc (`m1.ts(19,6)`) where we accept, and a
-    **whole enum** source against a target sharing nothing reports TS2559 in tsc
-    (`m1.ts(25,6)`, `m1.ts(29,6)`) where we are silent — three standing FALSE NEGATIVES
-    this round does not touch and does not worsen. The whole-enum one is (REL.1)(b)'s
-    vacuity: a member-less source against a member-less target passes both ways.
-
-**NO PRISTINE BASELINE CARRIES THE SHAPE.** Every `.errors.txt` mentioning TS2559 was
-searched and none has an enum member as an object-target source, so tsgo is the only
-oracle — which is acceptable here precisely because the answer being asserted is
-*nothing*, and wording cannot diverge from silence. The pristine oracle WAS consulted and
-did settle one thing: `enumAssignmentCompat5` pins the enum as a TARGET, not a source, so
-nothing in the corpus was at risk.
-
-**GATES.** Suite **16,234 / 0 / 3** (+11, exactly the one new class), **no corpus baseline
-moved**. `cost_gate.py` `output.errors` **46**; the run was repeated against the a0 parent
-binary via `--from-log` and **all 20 counters are DIGIT-IDENTICAL** — the standing
-`typeOfExpr.calls +1.42%` is inherited drift against a baseline last recorded at (CHK.46),
-not this round's cost. `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
-**8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** and per-profile `diff` clean
-against the rebuilt parent: **`added=0 removed=0` on all eight**. `partition-equivalence`
-**EQUIVALENT, all 78**, floor **56 ms** [54, 59, 52, 56] — one draw.
-`capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0, moreAny 0**,
-`definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
-narrow=-2075467818767010709` — the standing state to the digit, so no captured type moved.
-**`knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL**
-against an a0 arm rebuilt in this session. Binary md5 `96e0db8d` reproduced three times
-(first build, post-a0 rebuild, post-a5 restore); parent `089f7b6f`.
-
-**SIX ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, each `cmp`-diffed against
-the driver's own snapshot, each anchor asserted to occur exactly once (exit 3 otherwise),
-each build grepped for BUILD SUCCESSFUL, the restore verified OUTSIDE the driver by
-`git status --porcelain` + an md5 compare.**
-
-| arm | injected mistake | class | RED |
-|---|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | `089f7b6f` | **6** — exactly the six positives |
-| a1 | the IDENTITY guard dropped | `e1f48932` | **0** |
-| a2 | positive evidence dropped (an UNEVALUATED member defaults to numeric) | `a75f1f59` | **0** |
-| a3 | the (CHK.32) leg's anonymous-target scope wrongly inherited | `f5d160d4` | **2** — uniquely the named-interface and String-wrapper pins |
-| a4 | the flavour collapsed to `string` | `c0ee90aa` | **1** — uniquely the numeric-vs-`String` control |
-| a5 | the retry promoted from a FALLBACK to a SUBSTITUTION | `baaf0e2d` | **0** |
-
-**a4 IS THE ARM WORTH READING**: it reddens ONE pin and **not** the two numeric positives,
-because an ALL-OPTIONAL target cannot discriminate a flavour (`String` simply lacks
-`toFixed`, and an optional target member a source lacks is legal). That is what makes the
-two wrapper CONTROLS load-bearing rather than decorative, and it is why the positives alone
-would have been a blind pin set for the flavour rule.
-
-**THE THREE ZEROS ARE THREE DIFFERENT KINDS.**
-
-  * **a1 — UNDISCRIMINATED, NOT REDUNDANT.** Under `identityRelation` the retry can only
-    reach a target the structural comparison already refused, and `stringType` is an
-    `Type.Intrinsic`; the route by which it WOULD matter is B69.8's wrapper arm, which is
-    not relation-gated — so dropping the guard would let an enum member be declared
-    IDENTICAL to `String`. Nothing in 16,234 tests asks. Kept because tsc guards the same
-    work the same way (`structuredTypeRelatedTo`'s `relation !== identityRelation`).
-  * **a2 — A DELIBERATE REFUSAL, AND THE ONE PLACE THIS ROUND CHOSE THE CONSERVATIVE
-    ANSWER.** Defaulting an unevaluated member to numeric (what `isNumericEnumObjectType`
-    does for its arithmetic caller) reddens nothing AND would fix one further measured FP:
-    `enum E { A = zzzNonConst }` against `{ toFixed?() }` is silent in tsc and TS2345 here
-    (`build/chk60/ue/u2.ts(6,8)`). It was refused because the neighbouring probe shows the
-    hazard is real and not hypothetical: an enum whose first member is a TEMPLATE
-    literal and whose second is a plain string (`build/chk60/ue/u3.ts`) — a
-    TEMPLATE-valued string member — does not fold in our evaluator, so a numeric default
-    would relate a STRING member to `Number`-shaped targets. That is a false NEGATIVE, the
-    direction with no gate. Both rows re-queued.
-  * **a5 — INDISTINGUISHABLE FROM REDUNDANT ON TODAY'S EVIDENCE.** 0 RED in the suite, and
-    re-run against the 30-row matrix the output is BYTE-IDENTICAL to HEAD. The prediction
-    written before building it — that the substitution order would flip the
-    index-signature row `m1.ts(19,6)` — is **REFUTED**: `checkTypeRelatedTo(string,
-    { [k: string]: any })` accepts by some route above B418. So "a fallback, not a
-    substitution" is a claim about blast radius that this repo currently cannot
-    demonstrate; it is kept as the strictly weaker change and recorded as undemonstrated.
-
-**ITEM 2 (`this.<member>`) WAS MAPPED, NOT FIXED — AND THE QUEUE ENTRY'S DIAGNOSIS IS RIGHT
-AT THE ROOT AND WRONG ABOUT THE SURFACE.** `this` is `Identifier("this")` in this parser
-(`Checker.kt:8090`), so `getTypeOfExpression` types it `any` and every `this.<member>` with
-it. But it is **not about optionality and not about the weak rule**: measured over
-`build/chk60/br/b1.ts` and `b2.ts` against tsc 7.0.2, a **REQUIRED** `this.zzzReq: number`
-assigned to a `string` variable is silent too. The hole is per POSITION:
-
-  * **SILENT**: a var-decl initializer (`const s: string = this.zzzReq`), an assignment RHS
-    (`s = this.zzzReq`), a `return` from an annotated method, and the nullish-access checks
-    (TS2532 for `this.zzzOpt.toFixed()`, and the whole `string | undefined -> string` row);
-  * **PRESENT**: ARGUMENT position (`zzzTake(this.zzzHandler)` reports) and TS2722.
-
-The controls that make that a measurement rather than a guess are in the same method body:
-a plain outer name and `zzzObj.zzzReq` both report from inside the method, and
-`zzzInst8.zzzReq` reports at file level — so it is the RECEIVER, not the position in a
-method.
-
-**AND THE SAME FIXTURE ISOLATED A SECOND DEFECT THAT IS NOT `this`-SPECIFIC**: an OPTIONAL
-property's `| undefined` is dropped for ANY receiver. `zzzInst.zzzOpt` reports
-`Type 'number'` where tsc says `'number | undefined'`, and `zzzInst.zzzOptStr` against a
-`string` target goes MISSING entirely because `string -> string` then passes. Four rows on
-an ordinary receiver, so a `this` fix alone would not close it.
-
-**SCOPED OUT, DELIBERATELY**, each already refused with a reason by (CHK.59) and untouched
-here: two-or-more non-nullish constituents, the TS2353 argument boundary, the generic
-instantiation source (symmetric by design), and the `p?: any | undefined` display residue.
-The bigint leaf (item 7) was also not taken.
-
-### Round (CHK.59) — the weak-type anchor moves to the **EXPRESSION** exactly when the code is **TS2560**; an enum member is a source at every position, and the cause was the vacuous-`{}` guard; and a fresh object literal elaborates **into** the literal
-
-**THREE FIXES, ONE ARC, THREE COMMITS.** (CHK.58) left five measured residue items with a
-fixture each. Three are closed; two are scoped out with reasons, and three NEW residues were
-measured on the way.
-
-**1. THE CALLABLE SOURCE AT THE THREE NON-ARGUMENT POSITIONS — the largest piece, and the
-only thing left was the ANCHOR.** Read out of tsc 7.0.2 and corroborated by tsgo's own
-`relater.go`: `checkTypeRelatedToAndOptionallyElaborate` runs `elaborateError` first, whose
-first act is `elaborateDidYouMeanToCallOrConstruct` (construct signatures, then call ones).
-When some signature's return type is related to the target it RE-REPORTS with the error node
-set to the EXPRESSION and attaches the TS6213/TS6212 related row; otherwise the ordinary
-`checkTypeRelatedToEx` runs with the position's own error node. **That predicate is the SAME
-one [Checker.weakCallResultSatisfiesTarget] already used to choose TS2560 over TS2559**, so
-the two coincide *by construction* in this compiler and the emitter needed exactly one extra,
-CALL-ONLY anchor pair.
-
-| source | tsc code | var decl | return | assignment |
-|---|---|---|---|---|
-| `() => { zzzT: number }` (result related) | TS2560 | 3:22 EXPR | 4:34 EXPR | 6:9 EXPR |
-| `() => { zzzZ: string }` (result disjoint) | TS2559 | 3:7 NAME | 4:27 `return` | 6:1 LHS |
-| `() => number` | TS2559 | 8:7 NAME | 9:27 `return` | 11:1 LHS |
-| `new (s: string) => { zzzT: number }` | TS2560 | 13:22 EXPR | 14:34 EXPR | 16:9 EXPR |
-| `() => ({ zzzT: 1 })` (an ARROW) | TS2560 | 2:22 EXPR | 3:34 EXPR | 5:9 EXPR |
-
-**TWO FURTHER HOLES FELL OUT OF THE SAME CHANGE.** [Checker.topLevelWeakSource] classifies a
-cast, an enum member, a `new` and a primitive literal and nothing else, so an ordinary
-IDENTIFIER or ARROW source was silent at the VAR DECL while the return and assignment
-positions reported it; the var-decl walker now falls back to the shared value walker as its
-`?:`, which changes no shape that already reports (that branch renders the target through
-the ANNOTATION, the walker through `typeToString`). And the assignment site's outer
-`ArrowFunction` refusal comes out.
-
-**A FUNCTION EXPRESSION STAYS REFUSED, AND THAT IS MEASURED.** tsc's `getErrorSpanForNode`
-maps a `FunctionExpression` to its own NAME, so `= function zzzNamed(){}` anchors at
-`zzzNamed` (col 31) and the anonymous form lands back on the var name (col 7) — two anchors,
-neither of which is the expression. An `ArrowFunction` has no such mapping
-(`getErrorSpanForArrowFunction` starts at its first token), which is why the arrow half IS
-closed.
-
-**2. AN ENUM MEMBER IS A SOURCE AT EVERY POSITION — AND (CHK.58) HAD THE MECHANISM WRONG.**
-Its entry said [Checker.getTypeOfExpression] answers `any` for `E.A`. It does not: the type
-resolves fine and the pre-existing TS2345/TS2322 rows name it `ZzzE.A`. The refusal is one
-step further on — an enum-flavoured type is a member-LESS [Type.Object], so
-[Checker.weakSourcePropertyNames] enumerates it to the EMPTY set and
-[Checker.tryEmitWeakTypeAssignment]'s vacuous-`{}` guard (`var x: AllOptional = {}` is legal)
-refused it. tsc compares the enum LITERAL type's apparent type, i.e. the `String`/`Number`
-wrapper's property set, which is what the var-decl walker's AST-side
-[Checker.enumMemberWeakSource] had been reproducing all along. **Consulting that classifier
-AT THAT GUARD** — after the target is known weak and the source has come back empty or
-unenumerable — is the cheapest possible placement (nothing else reaches it: `globals.lookups`
-**+4** for the whole compiler profile) and closes the argument, return and assignment
-positions in one place. The DISPLAY rule is (CHK.58)'s, unchanged.
-
-**3. A FRESH OBJECT LITERAL ELABORATES *INTO* THE LITERAL — TWO DEFECTS IN ONE SHAPE.**
-(a) ORDER: [Checker.tryEmitNestedWeakVarDecl] (one level, TS2322 at the var NAME with a
-`Types of property … are incompatible` chain) ran BEFORE
-[Checker.tryEmitObjectLiteralWeakLeaves] (TS2559 at the property KEY + TS6500), so a fresh
-literal took the wrong walker; the two overlap ONLY for an object-literal initializer, since
-the nested one additionally serves an IDENTIFIER source (pristine's
-`let weak: Weak & Spoiler = propertiesWrong`) the leaf walker can never reach. (b) DISPLAY:
-a leaf reports the literal's OWN property type, i.e. the **WIDENED** one for a string or
-numeric literal and the literal itself for a boolean — `"utf8"` -> `string`, `12` ->
-`number`, a template literal -> `string`, `false` -> `false`, an enum member -> `ZzzEL.A`.
-**THE TOP-LEVEL VAR-DECL POSITION DOES NOT WIDEN** (pristine's
-`nestedExcessPropertyChecking.errors.txt` line 18 reports `Type '"A"'`), because there the
-fresh literal reaches the relation directly — that asymmetry is why the widening lives in
-the leaf walker and nowhere else, and lines 30/40 (`Type 'false'`) gate the boolean half.
-
-**GATES.** Suite **16,223 / 0 / 3** (+24 over (CHK.58)'s 16,199: three new classes plus one
-residue pin), summed with `xml.etree` over the SEVEN-module glob (core 15,239 + project 704
-+ kir 146 + daemon 66 + api 30 + client 20 + cli 18); **no corpus baseline moved at any of
-the three steps**, which is load-bearing for step 3 — the leaf/nested order swap is exactly
-what `nestedExcessPropertyChecking` and `weakType` gate. `cost_gate.py` exit 0
-unrebaselined, `output.errors` **46**, largest counter **+1.42%** against a baseline
-(CHK.58) already read **+1.40%** on, i.e. **+0.02% for this whole round** — the ordering
-(cheap AST refusals -> target-weakness gate -> type the value) is intact and the enum consult
-sits behind the weak-target gate by construction. `huge_methods --fail-over 0` exit 0,
-**783** classes, 0 over. **8-profile grid** md5 **`503774c23b4535130ffdebabef430cf0`** after
-every step and per-profile `diff` clean: **`added=0 removed=0` on all eight**, unmoved since
-(CHK.54). `partition-equivalence` **EQUIVALENT, all 78**, floor **64 ms** [56, 63, 64, 66] —
-one draw. `capture-equivalence` **1,005 span(s) in 43 of 76, types=1005 definitions=0,
-moreAny 0**, `definitions` **360,376**, ARM DIGESTs `full=-3735929574989657502
-narrow=-2075467818767010709` — the standing state. **`knip` @ `dc7aca5` 48 -> 48 and
-`jsonrepair` 3.13.1 4 -> 4, EVERY ROW BYTE-IDENTICAL** to an a0 arm rebuilt in this session;
-that arm's `Checker.class` md5 `58e55fae…` reproduced the session's very first build exactly.
-
-**TEN ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT AND EVERY RED SET DISTINCT —
-AND NOT ONE ARM READ 0.** Each arm `cmp`-diffed against its OWN snapshot, each anchor
-asserted to occur exactly once (exit 3 otherwise), each build grepped for `e:`, restore
-verified OUTSIDE the driver's `finally` plus a `git diff --quiet`, binary rebuilt after every
-restore.
-
-| arm | injected mistake | class | RED |
-|---|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | `58e55fae` | **21** — exactly the 21 positives added or converted |
-| a1 | the 2560 anchor never moves (`useCall = false`) | `43180b25` | **4** — uniquely the four expression-anchor pins |
-| a2 | the `FunctionExpression` refusal dropped | `9a5b1b87` | **1** — uniquely its refusal pin |
-| a3 | the var-decl fallback to the shared value walker dropped | `e19a390c` | **6** — every var-decl row |
-| a4 | the assignment site's `ArrowFunction` refusal restored | `1128de84` | **3** |
-| a5 | the enum consult at the vacuous-`{}` guard dropped | `3f8df9eb` | **8** — every enum pin |
-| a6 | the enum DISPLAY override dropped | `90c8eefd` | **2** — uniquely the one-member pins |
-| a7 | the leaf/nested walker order reverted | `8895315f` | **5** — every leaf pin |
-| a8 | the leaf literal WIDENING dropped | `51db3310` | **3 — and NOT the boolean pin** |
-| a9 | the enum consult in the LEAF walker dropped | `3635e013` | **1** |
-
-**a8 IS THE ARM WORTH READING**: it reddens the string, numeric and template pins and leaves
-the BOOLEAN one green, which is what makes "a leaf widens" a RULE rather than "literals
-widen" — the boolean pin is the control, and pristine's own two `Type 'false'` rows are the
-corpus half of it.
-
-**TWO DRIVER DEFECTS, BOTH CAUGHT BY THE BUILD AND NEITHER A DEAD ARM.** a5 and a9 were first
-written as `val x = null ?: return false`, which Kotlin rejects (`Function invocation
-'first()' expected`); the driver reported BUILD FAILED rather than 0 RED, which is the
-distinction that matters — a `null as Expression?` cast made both arms land. Recorded because
-"the arm did not build" and "the arm changed nothing" print identically in a careless driver.
-
-**THREE NEW RESIDUES, ALL MEASURED, RE-QUEUED AS (CHK.60).** (i) A `this.<member>` assignment
-target is silent for the weak rule at EVERY source shape, callable and not — so it is not the
-anchor change: [Checker.getTypeOfExpression] answers `any` for `this.<optional member>` (the
-probe `const p: string = this.zzzHandler` is silent here where tsc says
-`Type 'ZzzS9 | undefined' is not assignable to type 'string'`). (ii) An OPTIONAL `any`
-property renders `zzzNope?: any | undefined` where tsc renders `zzzNope?: any` — `any`
-absorbs `undefined` in tsc's union construction and our `getUnionType` does not reduce that
-pair; visible from every position that renders a target through the TYPE rather than the
-ANNOTATION, and pinned as residue. (iii) An enum member against a weak target it SHARES a
-property with (`{ length?: number }`) is SILENT in tsc and emits TS2345/TS2322 here, from the
-ordinary relation rather than the weak rule.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3674,31 +3557,46 @@ ordinary relation rather than the weak rule.
   their reader, 6 controls). Grid byte-identical, suite +13, no baseline moved. It also
   removes the gate's `checker.ts:30269` row — see (CHK.63).
 
+- [ ] **(CHK.70) TWO NARROWING GAPS THE (CHK.69) MEASUREMENT ISOLATED, AND THE FIRST IS
+  THE *ONLY* THING BETWEEN (CHK.63) AND `added=0`.**
+  **(a) A COMPOUND ASSIGNMENT INSIDE A LOOP HAS NO POST-STATE RULE.**
+  `harness/tsserverLogger.ts` is `let result: string | undefined = …; result = "";
+  while (true) { … result += source; } return result` — tsc's loop fixpoint unions the
+  entry (`string`) with the back edge's `+=` post-state (`string`) and answers `string`;
+  ours sees an assignment to the name on a back edge, so [Checker.loopBodyMayAffectName]
+  claims it and the label washes to `string | undefined`. (CHK.67) deliberately does not
+  unwrap a compound assignment, so [Checker.narrowByAssignmentRhs] has no arm for `+=`.
+  **The cheap shape is a PARTIAL fixpoint that still walks no back edge**: collect the
+  back-edge assignments the scan already finds (bounded), take each one's post-state from
+  the DECLARED type alone — which is what makes the (CHK.66)(b) KDoc's one-pass argument
+  true — and union them with the entry answer. That needs a `+=` arm first; without one
+  the union is `declaredType` and buys nothing.
+  **(b) AN IDENTIFIER SUBJECT'S NARROW IS LOOP-BLIND IN BOTH DIRECTIONS.** Measured on the
+  parent AND on `dcaf1594`: `function f(x: string|number) { if (typeof x === "string") {
+  while (cond()) { x = 1; } const p: string = x; } }` is SILENT where tsc 7.0.2 emits
+  TS2322 — a shipped FALSE NEGATIVE. Round 784's gate sends the DECLARATION/ASSIGNMENT/
+  RETURN readers to [Checker.currentLocalTypes] for a primitive target, and that map is
+  statement-ordered with no loop notion at all, so neither (CHK.69) nor anything before it
+  can see the loop. It is also why an identifier fixture is VACUOUS for every loop-narrowing
+  pin — use a PROPERTY PATH (see `ALoopThatCannotAffectAReferenceKeepsItsNarrowTest`).
+
 - [ ] **(CHK.63) `T | undefined` IS SILENTLY ASSIGNABLE TO `T` AT A DECLARATION, AN
   ASSIGNMENT AND A RETURN WHENEVER THE TARGET IS A PRIMITIVE — A SYSTEMATIC FALSE
   NEGATIVE, AND ITS SINGLE SUPPRESSOR IS ONE `if`.** `canUseTypeEngine`'s
   `if (sourceType is Type.Union && targetIsPrimitive) { … if (!hasNullish) return true }`
   refuses a NULLISH union source against a primitive target, with the comment "narrowing
-  we don't implement". On a six-line fixture tsc emits 6 rows and we emit 2: the ARGUMENT
-  position and a UNION target are the two that work.
-  **RE-MEASURED 2026-08-28 ON TOP OF (CHK.66)(a) AND AGAIN AFTER (CHK.67). `armBGR` (the
-  gate + the RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half) was 6 rows before
-  (CHK.66)(a) and 6 rows after it — the subtype reduction closes NONE of them — and is
-  **5 rows** after (CHK.67) closed `checker.ts:35649:17`.** The five survivors were read
-  individually and are ONE mechanism, a narrow established OUTSIDE a loop and lost inside
-  or after it: `moduleNameResolver.ts:824:26`, `moduleNameResolver.ts:2265:17`,
-  `harness/tsserverLogger.ts:28:5`, `server/project.ts:502:33`, `server/project.ts:528:37`.
-  **THE COMBINED ARM — gate + readers + (b) + (CHK.67) + the loop join — MEASURES
-  `added=1 removed=0` ON ALL EIGHT PROFILES, the single row being (CHK.66)(b)'s residue
-  `checker.ts:43282:21`.** So in DIAGNOSTICS the gate is one row away.
-  **IT IS REFUSED ON COST INSTEAD, AND THAT IS NEW.** The loop join alone measures
-  `globals.lookups` **+1,891%**, `typeNode.cacheable` **+5,951%**, `typeOfExpr.calls`
-  **+116%**, `narrow.walks` **+37%** and ~3.5x wall, with `spine.nodes` and
-  `typeOfExpr.distinct` FLAT — the same questions re-asked ~20x. See (CHK.66)(b).
-  Regenerate `armBGR` with `python3 build/chk68/arm2.py 1234` against
-  `build/chk68/snap/Checker.kt.head2`; the combined tree is
-  `build/chk68/snap/Checker.kt.loopR` + `python3 build/chk68/arm3.py 1234`. Grid tags
-  `chk68_bgr2` (5 rows) and `chk68_comb` (1 row), parent capture `chk68_parent`.
+  we don't implement". On a six-line fixture tsc emits 6 rows and we emit 2.
+  **RE-PRICED 2026-08-28 ON TOP OF (CHK.69): THE COMBINED ARM — gate + RETURN/ASSIGNMENT
+  readers + (CHK.61)(b)'s checking half + (CHK.67) + (CHK.69) — IS `added=0 removed=0` ON
+  SEVEN PROFILES AND `added=1` ON `tsc-harness`.** The single row is
+  `harness/tsserverLogger.ts:28:5`; (CHK.66)(b)'s residue `checker.ts:43282:21` and the
+  four `moduleNameResolver`/`server/project.ts` rows are all CLOSED. **And it is now
+  AFFORDABLE**: `narrow.walks` +11.2%, `narrow.memoServed` +6.6%, every other counter
+  <= 1%, wall flat (26.8 s against 26.9 s) — the ~20x blocker is gone.
+  **It is NOT opened**, because 1 ours-only row on a dashboard whose v1 exit is zero FPs
+  is a decision to take at 0; the remaining row's cause is named and queued as (CHK.70).
+  Rebuild the arm with `python3 build/chk69/arm3.py 1234` against
+  `build/chk69/snap/Checker.kt.ship`; grid tag `chk69_comb2`, parent `chk69_parent`.
 
 - [x] **(CHK.61)(b)'s CHECKING HALF — MEASURED CORRECT AND COMPLETE 2026-08-28, WAITING
   ONLY ON THE GATE.** Part `4` of `build/chk65/arm.py` gives
@@ -3723,34 +3621,20 @@ ordinary relation rather than the weak rule.
   `AFlowJoinReducesANarrowedSubtypeTest` (7 positives naming their reader, 2 controls).
   Grid byte-identical, suite +9, no baseline moved.
 
-- [ ] **(CHK.66)(b) THE LOOP JOIN — 1 ROW, AND A **~20x COST BLOWUP** MEASURED 2026-08-28
-  THAT THREE ROUNDS OF ROW-PRICING NEVER SAW; COST IS NOW THE BLOCKER, NOT THE ROW.**
-  Alone on the compiler profile: `globals.lookups` 759,945 -> **15,128,215 (+1,891%)**,
-  `typeNode.cacheable` 178,997 -> **10,831,464 (+5,951%)** of which 99.45% are cache
-  HITS, `typeOfExpr.calls` **+116%**, `narrow.memoServed` **+1,276%**, `narrow.walks`
-  **+37%** — while `spine.nodes` is +0.00% and `typeOfExpr.distinct` +0.98%, i.e. the
-  population is unchanged and the same questions are re-asked ~20x. ~3.5x wall (the
-  8-profile grid went 25 s -> 90 s per profile). Hypothesis, supported by the counters
-  and NOT probed: a loop label now walks every antecedent including the back edges and
-  nothing computed under `narrowLoopCut` may be memoized (`narrowLoopCutUsed`), so each
-  loop body is re-walked per query — so the direction is to memoize under the cut,
-  keyed by the in-progress label set, or to hoist the per-antecedent resolutions.
-  **THE REMAINING ROW, unchanged:** With (a) landed and BOTH joins routed through
-  `flowJoinUnion`, `build/chk65/loop.py baseR` costs exactly ONE ours-only row on every
-  one of the 8 profiles (`added=1 removed=0`, the same row each time):
-  **`checker.ts:43282:21`**. The two `utilities.ts` rows the queue named
-  (`11586:63`, `11704:47`, the `ConditionalTypeNode | Node | undefined` family) are
-  **CLOSED by (a)**. The survivor is `previousDeclaration = node` reporting
-  `<SignatureDeclaration's own 14 constituents> | ClassDeclaration | ClassExpression`,
-  i.e. our narrowing leaves two CLASS kinds in a union tsc has filtered to
-  `SignatureDeclaration` — a discriminant / `isFunctionLike` filter gap over a
-  loop-carried state, NOT a subtype-reduction one. Built tree
-  `build/chk66/snap/Checker.kt.loopR`; regenerate with `python3 build/chk65/loop.py baseR`
-  plus the two `flowJoinUnion` routings — **`loop.py` REWRITES the region holding the
-  reduction helper, so re-insert it from `build/chk66/red.py` afterwards or the build
-  fails on `Unresolved reference 'flowJoinUnion'`**. Fixture `build/chk65/f4` (15 shapes,
-  graded by a deliberate mis-assignment); residue P11, where tsc says `string` and the arm
-  says `string | number`.
+- [x] **(CHK.66)(b) THE LOOP JOIN — **REFUSED 2026-08-28 WITH ITS MECHANISM MEASURED**,
+  AND SUPERSEDED BY (CHK.69), WHICH DELIVERS ITS ROWS FOR NOTHING.** The ~20x is
+  MEMOIZATION being switched off: `narrowLoopCutUsed` forbids storing anything computed
+  under the cut and propagates to the walk root, so a loop body's paths are ENUMERATED
+  instead of folded. Deleting that term (unsound; the ceiling) returns **89.2%** of the
+  added `globals.lookups` and **91.8%** of `typeNode.cacheable`. A SOUND cut-keyed memo —
+  a rolling hash of the in-progress label set carried as an extra equality field on every
+  `NarrowFlowMemo` entry — recovers **0.003%**, because the cycle almost never closes ON
+  the loop label; it closes on the walk's OWN PREFIX, which is path-dependent. And the
+  ceiling itself is still +115% `globals.lookups`, +395% `typeNode.cacheable` and 44.1 s
+  against 26.7 s cold, so the direction is refused in its BEST case. **(CHK.69)** answers
+  the label by FOLLOWING ITS ENTRY whenever no back edge assigns the reference — the same
+  fixpoint, no traversal — and closes 4 of the gate's 5 rows plus the `checker.ts:43282`
+  residue. Arms kept at `build/chk69/m1.py` / `m2.py`.
 
 - [x] **(CHK.67) DONE 2026-08-28 — A CHAINED ASSIGNMENT NARROWS TO ITS RIGHTMOST OPERAND;
   `x = y = z` WAS A SHIPPED FALSE POSITIVE (`2cbb3847`).** The queue named TWO unclassified
