@@ -20,6 +20,188 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.63)(a)(c) — the four residues are **ONE reader gap plus TWO flow-walk defects**, three of which were SHIPPED false positives; the gate re-prices **6 rows -> 4**, and the loop join is **REFUSED with its price and its blocker named**
+
+**THE HEADLINE.** (CHK.64) left four residue rows and the queue read them as four
+mechanisms. Measured with a per-READER census, they are **two flow-walk defects and
+one reader gap**, and — the part that mattered for the round — **three of the four
+were reachable on the SHIPPED binary at the CALL-ARGUMENT reader, as FALSE
+POSITIVES.** Two are fixed and pinned there; the third is refused with a price. The
+gate itself is not opened: it now costs **4** rows, all four owned by work that is
+still open.
+
+**THE CENSUS THAT DECIDED THE ROUND, AND THE VACUITY THAT NEARLY KILLED IT.** The
+first census fixture built every residue shape over a `const` initialised from a call
+and read it at all four readers: **it reported nothing at all**, on our side, for
+every shape INCLUDING its own negative control. The argument reader is live for a
+nullish union only when the source is a **PARAMETER** — `const zzzU = zzzGet(k);
+zzzTake(zzzU)` is silent here and TS2345 in tsc, which is a separate gap. Re-cut
+against parameter sources, the same fixture answered immediately:
+
+| shape | ARGUMENT reader on the parent binary |
+|---|---|
+| (iii) an assignment inside the guarded branch | **FALSE POSITIVE** |
+| (iii) the plain `if (id === undefined) { id = t }` form | **FALSE POSITIVE** |
+| (iv) definite assignment across an if/else | correct |
+| (loop) an assignment narrow that must survive a loop | **FALSE POSITIVE** |
+| (vi) a non-null assertion | correct |
+
+So (iii) and the loop family are FLOW-WALK defects, live today, with nothing to do
+with the gate; (iv) and (vi) are correct in the walk and were only ever the READER.
+
+**(a) AN ASSIGNMENT INSIDE A NULLISH GUARD MUST OVERWRITE THAT GUARD'S OWN
+NARROWING.** [Checker.narrowByAssignmentRhs]'s two resolved-RHS arms (Identifier,
+round 463; PropertyAccess, round 464) FILTER the antecedent, and
+[Checker.narrowUnionByRhsAssignment] answers a non-union receiver unchanged — so
+inside the guard, where the antecedent is the bare `undefined` the condition just
+produced, the assignment was a **no-op** and the branch join re-minted
+`string | undefined`. [Checker.assignmentReduceBase] applies round 416's rule there:
+an assignment OVERWRITES, so the post-state is reduced from the DECLARED type. This
+is the commonest "default it if it is missing" idiom in TypeScript and it was a
+shipped false positive.
+
+**(a2) AND ITS OWN ABLATION FOUND THE SECOND HALF.** The arm that deletes the "a
+nullish assigned type keeps the antecedent" refusal read **0 RED** and a
+byte-identical 8-profile grid — the third consecutive round with an UNPINNED-not-
+redundant zero. The separating fixture needs a **THREE-member** declaration
+(`string | null | undefined` with a `null`-typed right-hand side): with
+`T | undefined` alone both bases answer the same type. The refusal was deleted.
+
+**(c) A `!` IS NOT RESPECTED THROUGH PARENTHESES.** `return (t)!` against
+`string | number` was a false TS2322 while `return t!` one line away was silent: the
+nullish-stripping arm admits its operand by KIND (Call / Identifier / PropertyAccess,
+rounds 439/456/479) and a ParenthesizedExpression is none of them.
+[Checker.nonNullOperandStrips] reads through parentheses and adds the LOGICAL
+operators, whose value is one of their own operands — which is the
+`server/project.ts:746` shape (`return (info && info.getLatestVersion())!`). `,` is
+excluded (a comma's value is its LAST operand) and that divergence from tsc is pinned
+as residue with the value we answer.
+
+**(b) THE LOOP JOIN IS REFUSED, AND ITS BLOCKER IS NAMED.** `narrowTypeFromFlowCore`
+answers `declaredType` at a `FlowLoopLabel`, so **every loop erases every assignment
+narrowing established before it** — `r = ""; while (…) { } take(r)` is a false
+positive even when the loop never mentions `r`. Built: the label unioned like a
+branch label, with a back edge that re-enters it contributing `never`
+(`narrowLoopCut`). That is EXACT for this flow algebra — every back edge is either a
+monotone narrowing, in which case iterating from the entry state never grows past it,
+or it passes an assignment, which computes its post-state from the DECLARED type and
+cuts the recursion itself — and it makes **all ten** loop shapes of the round's
+fixture agree with tsc 7.0.2 exactly, the `while (…) { r = undefined }` control
+included. **It costs 8 ours-only rows on every profile and is REVERTED.** The
+decomposition, which is the reusable part:
+
+  * **5 rows are a `never` the loop label was MASKING.** `emitter.ts` narrows
+    `modifiers` with `every(modifiers, isModifier)`, a GENERIC predicate we do not
+    infer; its NEGATION subtracts everything and answers `never`, and the loop label's
+    `declaredType` was resetting it. Propagating it correctly gives
+    `Property 'length' does not exist on type 'never'`. Refusing a `never` join back to
+    `declaredType` removes all five.
+  * **3 rows are a union that is LESS reducible than the declaration.** A join taken
+    over a TRUNCATED antecedent contains `declaredType` beside an already-narrowed
+    member, so a later kind test reads `ConditionalTypeNode | Node | undefined`
+    (`utilities.ts resolveNameHelper` x2, `checker.ts:43282`). Refusing a truncated
+    join needs `narrowWalkTruncated` and the CUT to be separate flags; a first cut of
+    that regressed the nested-loop shape and the attempt was stopped there under the
+    two-attempt rule.
+
+  The refusal is recorded rather than the mechanism deleted: `narrowLoopCut`'s design
+  and its fixpoint argument are in `build/chk63/snap/Checker.kt.gapB-refused`.
+
+**THE GATE, RE-PRICED — AND THE READER HALF IS WORTH 2 ROWS.** `armG` (the
+nullish-union gate opened, nothing else) still measures **6** rows on this round's
+binary: gap (a) does NOT remove `parser.ts:2642`, because the RETURN reader never
+consults the flow walk for a primitive target. Adding that consultation to the RETURN
+and ASSIGNMENT readers (`armGR`, measured, NOT landed) takes it to **4 distinct
+rows**, and every one is owned:
+
+| row | owner |
+|---|---|
+| `parser.ts:2642` | **GONE** — (a) plus the reader |
+| `server/project.ts:746` | **GONE** — (c) |
+| `emitter.ts:1479`, `organizeImports.ts:862` | (CHK.61)(b)'s checking half |
+| `checker.ts:35649`, `tsserverLogger.ts:28` | the REFUSED loop join — both reads sit inside a loop whose earlier iteration assigns the reference |
+
+So (CHK.63) now needs exactly two things and no more: **(b)'s checking half and the
+loop join**, and the reader consultation must land WITH the gate (it is unobservable
+without it).
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,318** / **16,325** /
+**16,326**, 0 failed, 3 skipped (+8, +7, +1 — exactly the new subtests); **no corpus
+baseline moved on any of the three.** 8-profile grid
+`503774c23b4535130ffdebabef430cf0` on all three, byte-identical PER PROFILE against
+the recorded parent capture (parent `Checker.class` md5 `eec8ea8f`, rebuilt in this
+session and used for every vacuity check). `cost_gate.py` exit 0 three times,
+`output.errors` **46**; every counter is the standing residual to the digit
+(`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses` +1.75%,
+`narrow.walks` +0.84%, `typeOfExpr.distinct` +0.97%, `typeNode.cacheable` +0.39%) —
+the round costs nothing measurable. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floors 79 / 63 / 56 ms,
+one draw each). knip **48** and jsonrepair **4**, EVERY ROW byte-identical across all
+three commits.
+
+**`capture-equivalence` MOVED TWICE AND BOTH MOVES ARE CLASSIFIED PER ELEMENT.**
+DIVERGED **968** in 43 of 76, `types=968 definitions=0 narrowRendersMoreAny=0` —
+unchanged throughout. Against last round's own dump (`build/chk64/arm-fix4.tsv`),
+commit 1 is **0 lost, 0 gained, 2 changed**, both DROPPING a spurious `| undefined`
+from a property-path assignment inside an `if (!x.p)` guard in `checker.ts`; commit 2
+is **0 lost, 0 gained, 1 changed**, a hover going `any` -> the concrete union, and tsc
+7.0.2's own LSP answers that same constituent set; commit 3 moves **nothing** (both
+digests unchanged).
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every pin was executed against a PARENT binary
+rebuilt in this session with the fixture already in place. `AssignmentInsideAGuard…`:
+**4 of 8 RED** on `eec8ea8f`, and the 9th pin (a2) **1 of 9 RED** on `0557ff4e`; the
+green ones are labelled controls. `NonNullAssertionThroughParensAndLogical…`: **4 of 7
+RED** on `40d1d6aa`. Every positive is at a reader the test names, and (c)'s four are
+at a UNION target deliberately — against a PRIMITIVE target the whole family is
+invisible, which is (CHK.63)'s own gate.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+EVERY RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | the reduce base is never consulted | `33dc9963` | **4** — exactly the four (a) positives |
+| a2 | the nullish-only antecedent guard dropped | `7124ee49` | **0 — UNDISCRIMINATED**, and the 8-profile grid is byte-identical too |
+| a3 | the nullish-ASSIGNED refusal restored | `1fb8b365` | **1** — uniquely the (a2) pin (it read 0 before that pin existed) |
+| a4 | *withdrawn* — that call site belonged to the refused (b) work | — | — |
+| b1 | parentheses are not read through | `3c6889d3` | **4** — all four (c) positives |
+| b2 | a logical operand does not strip | `864ecf3b` | **3** — uniquely the three logical pins |
+| b3 | the COMMA operator admitted as well | `7dade5d0` | **1** — uniquely the residue pin |
+| b4 | only the LEFT operand of a logical must strip | `555e4651` | **0 — UNDISCRIMINATED** |
+
+**THE KINDS OF ZERO, NAMED.** **a2 is UNDISCRIMINATED and NOT shown redundant** — its
+guard is the REASONED bound that a non-nullish antecedent must keep the pass-through
+(reducing from the declaration there would widen a live type-guard narrowing back to
+the declaration), and both instruments that could see it are silent, so the KDoc now
+says so instead of claiming coverage. **a3 was UNPINNED, not redundant**, and is the
+round's own instance of the pattern; it is now a unique RED. **b4 is UNDISCRIMINATED**:
+requiring the RIGHT operand to strip as well is a conservatism these fixtures cannot
+separate. a1/a2/b1..b4 were taken on the commit-2 tree and a3 on the commit-3 tree.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's four residues were not four mechanisms and were not even four
+    ITEMS — two of them are ONE refused change, and two were SHIPPED false
+    positives that had nothing to do with the gate.** The census that shows it is one
+    fixture with the same guard in front of five readers, which is (CHK.64)'s own
+    method reused; what it cost was noticing that the fixture must use PARAMETER
+    sources, because a `const` initialised from a call is silent at the argument
+    reader too — a second, unrelated gap.
+  * **A `never` can be MASKED by a conservative join, and making the join precise is
+    what exposes it.** Five of the loop change's eight rows are a pre-existing defect
+    (a negated GENERIC type-guard call answering `never`) that `declaredType` at every
+    loop label was resetting. That is the mirror of round 830's law: a conservative
+    answer is not only imprecise, it can be load-bearing for something else's bug.
+  * **A killed restore leaves NO class file and a scratch-project run then prints
+    ZERO ROWS, which reads exactly like a clean fixture.** The 10-minute tool timeout
+    killed an ablation grid mid-restore; the next probe answered "no diagnostics"
+    against a classpath with no `Checker.class` in it at all. Round 851's trap with a
+    new trigger — check the class file exists before believing any scratch run.
+  * **`ours.sh`'s exit status is the GREP's**, so a run with no rows exits 1 and a run
+    against a broken build also exits 1. The only reliable tell is the raw output's
+    `diagnostics: N error(s)` line.
+
 ### Round (CHK.64)(i)+(ii) — the five "narrowing gaps" are **two gaps at ONE reader**, both landed; (CHK.63)'s price falls **11 rows -> 6**
 
 **THE HEADLINE.** (CHK.64)'s queue entry lists five mechanisms. Measured, the
@@ -1313,320 +1495,6 @@ rebuilt after every restore (the class dir returns to `c1970110` each time, prin
 7.0.2 this round and all recorded with the fixture that shows them; the largest is that
 **a weak union is still silent in the RETURN and ASSIGNMENT positions** and that our
 **TS2560 is emitted for every callable source** where tsc splits on the return type.
-
-### Round (CHK.56) — the TS2769 diagnostic path did not ask the weak-type rule; the item's "hard part" was a **tsgo rendering** and not tsc's, and the fix ADDS **no** row on any corpus here
-
-**THE ITEM'S OWN DESIGN LEAD WAS HALF RIGHT AND HALF A tsgo ARTEFACT.** (CHK.55)
-re-queued this with tsc's exact answer — `No overload matches this call.` /
-`The last overload gave the following error.` / `Type '123' has no properties in
-common with type '{…}'` — and read the elaboration as the work, because
-[Checker.getFirstArgumentError] walks the plain relation, which ACCEPTS a
-disjoint argument against a weak parameter, finds no failing argument, and drops
-the overload out of the chain. Measured this round:
-
-* **the WORDING is confirmed**, and it really is TS2559's *no properties in
-  common* sentence rather than an assignability line — so the subline is minted
-  beside the existing walk, on the path where the relation SUCCEEDED;
-* **the "which overload" half is a tsgo RENDERING.** `tools/tsgo-7.0.2/lib/tsc`
-  prints `The last overload gave the following error.` for **2, 3 and 4**
-  candidates alike; PRISTINE tsc prints `Overload N of M, '<sig>', gave the
-  following error.` for every failing candidate — **42** `typescript-repo`
-  baselines carry `Overload 1 of 2,` against **4** carrying the last-overload
-  form, and `tsxStatelessFunctionComponentOverload4.errors.txt` carries a *no
-  properties in common* subline INSIDE exactly that per-candidate chain. Our
-  chain has had the pristine shape since B418, so **no "which overload" policy
-  was needed at all**: the weak verdict is simply one more per-overload error
-  string, and the queue item's "a TS2769 naming the wrong overload is worse than
-  silence" risk never arose. Round 938's law, paid on the diagnostic with the
-  most chain machinery in this repo.
-
-**THE CHANGE.** [Checker.weakOverloadArgRefuses] is the weak verdict as the
-overload helpers ask it, and ALL FOUR of them move together
-([Checker.allArgumentsMatch] behind an opt-in `applyWeakRule`, so only the
-overload-MATCH loop asks it and the four TS2793 implementation-signature gates are
-untouched; plus `getFirstArgumentError`, `countFailingArgDiagnostics` and
-`getFirstFailingArgPosition`) — a helper left behind would name an overload the
-match loop thought fine, or anchor the squiggle at the wrong argument.
-
-**TWO THINGS THAT HAD TO BE MEASURED RATHER THAN GUESSED.**
-
-* **Which type the message NAMES for a UNION parameter.** After dropping
-  `null`/`undefined`, exactly ONE surviving constituent takes the TS2559 wording
-  naming THAT CONSTITUENT (`ZzzWk | null` renders `'ZzzWk'`); TWO OR MORE take the
-  ordinary assignability wording naming the WHOLE union
-  (`{ zzzA?: null } | string` with a `number` argument renders
-  `'string | { zzzA?: null | undefined; }'` — our union order agrees byte for
-  byte). The VERDICT is a refusal either way, so [Checker.weakParamRefusesArg]
-  says nothing about the sentence; [Checker.weakRefusalDisplayTarget] is the
-  second question.
-* **An OBJECT-LITERAL argument is not the weak rule's, and that is tsc's answer
-  rather than a conservatism.** tsc runs the freshness/excess check ABOVE the weak
-  check in `isRelatedTo`, and a fresh literal sharing no property name with the
-  target has EVERY property excess by construction — so `f({ zzzZ: 1 })` against
-  two weak overloads is `Object literal may only specify known properties, and
-  'zzzZ' does not exist in type '{ zzzB?: null | undefined; }'` at the PROPERTY
-  (column 23), where the weak wording would name the whole literal at column 21.
-  We do not emit that excess row for an argument the relation accepted, so the
-  shape stays **silent** — deliberately, because a TS2769 at the wrong span is
-  worse than none. A NON-fresh source of the identical type (`const o = { zzzZ: 1
-  }; f(o)`) IS the weak wording and is pinned: freshness, not shape, is the axis.
-
-**WHAT IS MEASURED AND STILL OPEN — a second, separate hole, queued as (CHK.57).**
-The MUD's "is the non-overloaded case already correct here" question has a
-two-part answer. A bare weak target is correct and byte-identical to tsc (m1, m7,
-m8, n5, r2 below). A weak target reached through a **UNION** is not, and it is
-open in BOTH the call and the var-decl positions: `zzzM6(123)` against a single
-`(o: { zzzA?: null; zzzF?: string } | null)` signature and
-`const v: { zzzA?: null; zzzF?: string } | null = "utf8"` are TS2559 in tsc and
-**silent here**, because [Checker.weakTargetProperties] answers null for a union
-and the B482 walkers never distribute. That is the walkers, not the overload
-helpers — a different mechanism with its own FP surface — so it is queued rather
-than folded in, and NOT pinned (round 765).
-
-**THE MESSAGE-FAMILY MATRIX**, ours through the project CLI against
-`tools/tsgo-7.0.2/lib/tsc` on byte-identical source, plus the PRISTINE chain form
-read out of `typescript-repo`'s own baselines. Parent `313b0ddd`, ship `fdab56c0`,
-both built in this session.
-
-| # | shape | tsc 7.0.2 (tsgo) | pristine form | parent (313b0ddd) | after (fdab56c0) |
-|---|---|---|---|---|---|
-| m1 | ONE signature, weak param `{zzzA?;zzzF?}`, arg `123` | TS2559 2:21 `Type '123' has no properties in common with type '{ zzzA?: null \| undefined; zzzF?: string \| undefined; }'.` | — | same ✓ | same ✓ |
-| m2 | TWO weak overloads | TS2769 3:21, last-overload subline = the TS2559 wording naming ovl 2 | `Overload N of M` per candidate | **SILENT** | TS2769 3:21, both sublines ✓ |
-| m3 | THREE weak overloads | TS2769 4:21, subline names ovl 3 | per-candidate | **SILENT** | TS2769 4:21, three sublines ✓ |
-| n1 | FOUR weak overloads | TS2769 5:21, subline names ovl 4 | per-candidate | **SILENT** | TS2769 5:21, four sublines ✓ |
-| m4 | weak ovl FIRST, `string` ovl second, arg `"hi"` | (no error) | — | (no error) ✓ | (no error) ✓ |
-| m5 | `string` ovl first, weak ovl SECOND, arg `123` | TS2769 3:21, weak subline | per-candidate | **SILENT** | ✓ |
-| n2 | weak first, `string` second | TS2769 3:21, subline = assignability vs `string` | per-candidate | **SILENT** | ✓ (both sublines) |
-| n3 | `string` first, weak second | TS2769 3:21, weak subline | per-candidate | **SILENT** | ✓ |
-| n4 | `string`/weak/`boolean` | TS2769 4:21, subline vs `boolean` | per-candidate | **SILENT** | ✓ |
-| m10 | weak ovl + a NON-weak failing ovl | TS2769 3:23, subline vs `{ zzzB: string; }` | per-candidate | **SILENT** | ✓ |
-| n5 | two ovls, arity leaves ONE candidate | TS2559 3:21 (no TS2769 wrapper) | — | same ✓ | same ✓ |
-| n7 | weak param in the SECOND argument | TS2769 3:26 (the 2nd arg) | per-candidate | **SILENT** | ✓ 3:26 |
-| n8 | two IDENTICAL weak overloads | TS2769 3:21 | per-candidate | **SILENT** | ✓ |
-| n9 | METHOD overloads on an interface | TS2769 3:23 | per-candidate | **SILENT** | ✓ |
-| m7 | heritage interface param (`ZzzOpts7 extends ZzzBase7`), ONE sig | TS2559 4:21 naming `'ZzzOpts7'` | — | same ✓ | same ✓ |
-| p3 | ALIAS-typed weak param, two ovls | TS2769 4:21 naming `'ZzzAl3'` | per-candidate | **SILENT** | ✓ naming `'ZzzAl3'` |
-| m6 | ONE sig, union param `{…}\|null` | TS2559 2:21 naming the CONSTITUENT | — | **SILENT** | **SILENT — still open** |
-| m9 | var decl `{…}\|null = "utf8"` | TS2559 1:7 naming the CONSTITUENT | — | **SILENT** | **SILENT — still open** |
-| n6/q3/q4 | union param `{…}\|null` / `\|undefined` / `ZzzUdB\|null`, TWO ovls | TS2769, subline names the CONSTITUENT | per-candidate | **SILENT** | ✓ names the constituent |
-| p1/q1 | ONE sig, union param with TWO non-nullish constituents | TS2345 naming the WHOLE union | — | **SILENT** | **SILENT — still open** |
-| p2/q2 | ditto, TWO ovls | TS2769, subline = assignability naming the WHOLE union | per-candidate | **SILENT** | ✓ whole union, order identical |
-| q5 | weak params in BOTH args, first fails | TS2769 3:22 (arg 1) | per-candidate | **SILENT** | ✓ |
-| p4 | OBJECT-LITERAL arg `{zzzZ:1}`, two weak ovls | TS2769 **3:23** subline = `Object literal may only specify known properties…` | per-candidate | **SILENT** | **SILENT — deliberate** |
-| p5 | `{}` arg | (no error) | — | (no error) ✓ | (no error) ✓ |
-| p6 | arg shares a property | (no error) | — | (no error) ✓ | (no error) ✓ |
-| r1 | NON-fresh object source `{zzzZ:1}`, two weak ovls | TS2769 4:22, weak subline | per-candidate | **SILENT** | ✓ |
-| r2 | NON-fresh object source, ONE sig | TS2559 3:22 | — | same ✓ | same ✓ |
-| r3 | FRESH literal `{zzzZ:1}`, ONE sig | **TS2353** 2:24 excess | — | TS2559 2:22 (pre-existing divergence) | unchanged |
-
-**GATES.** Suite **16,155 / 0 / 3** (+11, exactly the one new class) — run TWICE, and the
-first run read 16,155 / **3** / 3 because three of this round's own pins asserted a
-`character` I had derived by hand instead of reading off tsc; the three failures were
-mine, not a baseline's, and the second run is the recorded one. Summed with
-`xml.etree` over the SEVEN-module glob (core 15,171 + project 704 + kir 146 + daemon 66 +
-api 30 + client 20 + cli 18); **no corpus baseline moved.** `cost_gate.py` exit 0
-unrebaselined, `output.errors` **46** — and this round's table is **DIGIT-FOR-DIGIT the
-PARENT's**, measured on the a0 binary in this session and kept at
-`build/chk56/costgate-parent.txt`, so the standing `typeOfExpr.calls` **+0.59%** /
-`narrow.memoServed` **+0.69%** are (CHK.55)'s and this change costs **0.00%** on the
-compiler profile. That is the expected control: the weak question is asked only after the
-relation has already ACCEPTED an argument, and nothing on tsc's own sources reaches it.
-`huge_methods.py --fail-over 0` exit 0, **783** classes scanned, 0 over limit.
-8-profile grid over two binaries BOTH built in this session (parent `313b0ddd`, ship
-`fdab56c0`) with a `javap` control of **0 vs 2** occurrences of the new helpers: capture
-md5 **`503774c23b4535130ffdebabef430cf0`** on both, i.e. **`added=0 removed=0` on all
-eight** and identical to the digest (CHK.54)/(CHK.55) recorded.
-`partition-equivalence` **EQUIVALENT, all 78**, floor **58 ms** [79, 58, 55, 56] — one
-draw, the leading 79 the ramp. `capture-equivalence` **1,005 span(s) in 43 of 76 file(s),
-types=1005 definitions=0, moreAny 0, absentInNarrow 0, absentInFull 0**, `definitions`
-**360,376**, ARM DIGESTs `full=-3735929574989657502 narrow=-2075467818767010709` — the
-standing state, unmoved.
-
-**LIBRARIES: `knip` @ `dc7aca5` 48 -> 48 and `jsonrepair` 3.13.1 4 -> 4, EVERY ROW
-BYTE-IDENTICAL** (`diff` clean in both directions), BEFORE arms captured on the parent
-rebuilt in this session. **The queue item's "it ADDS rows" is measured FALSE for every
-corpus this repo has** — which is itself a finding: (CHK.54) already made SELECTION refuse
-these signatures, and wherever a later overload accepts, the match loop still finds it and
-no TS2769 is produced. The shapes this closes are hand-written; the hole was real and the
-population is not in tsc's own sources, in knip or in jsonrepair.
-
-**EIGHT ABLATION ARMS, ONE MISTAKE EACH**, each `cmp`-diffed against its OWN snapshot,
-each anchor asserted unique (exit 3 otherwise), each build grepped for `e:`, each
-`Checker.class` md5 recorded and all eight distinct, restore verified OUTSIDE the driver
-and the binary rebuilt after every restore (the class dir returns to `fdab56c0` each time,
-printed per arm).
-
-| arm | injected mistake | class | RED of 19 |
-|---|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | `313b0ddd` | **6** — exactly the six positives |
-| a1 | the object-literal guard dropped | `05b2134d` | **1** — uniquely the object-literal pin |
-| a2 | the MATCH loop stops asking the weak rule | `d77db6e7` | **6** |
-| a3 | the SUBLINE is not minted | `57c76c79` | **6** |
-| a4 | the ANCHOR helper does not see the refusal | `e912398b` | **6** |
-| a5 | the per-overload failure COUNT does not see it | `90ec084f` | **0** — see below |
-| a6 | the display target is always the WHOLE parameter | `2ec4b282` | **2** — uniquely the two union pins |
-| a7 | a union never names a constituent | `e71aad11` | **1** — uniquely the one-constituent pin |
-
-**a2/a3/a4 ARE A ROUND-927 TRIPLE AND THE TABLE SHOULD BE READ THAT WAY.** Each alone
-deletes the diagnostic entirely — no match refusal, no subline, or no anchor each leave
-`checkArgumentsAgainstOverloads` with nothing to emit — so all three are load-bearing and
-NONE is redundant, but their red SETS coincide and no pin separates which layer failed.
-Recording them as three independent observables would credit the pins with discrimination
-they do not have.
-
-**a5 IS UNDISCRIMINATED, NOT PROVABLY UNOBSERVABLE, AND IS KEPT.** `countFailingArgDiagnostics`
-feeds B418's best-matching-overload collapse, which only fires when some overload has **≥2**
-per-element failures; a weak refusal answers 1, so dropping it to 0 cannot change
-`any { it > 1 }`. It CAN change `minByOrNull`'s pick in a tie — an overload set carrying
-both a multi-element array-literal failure and a weak refusal — which nothing here
-exercises and which I did not build a fixture for. Kept because the five overload
-arg-check helpers must agree with the match verdict (archive line 921), and a 0 there is
-simply the wrong count.
-
-### Round (CHK.55) — an object literal's literal properties widen, and that one fact bit at **both** overload sites: a false TS2769 at the diagnostic and a **wrong type** at selection; **knip 49 -> 48**
-
-**THE QUEUE ITEM CARRIED THREE HOLES AND MEASUREMENT SAYS THEY ARE ONE.** (CHK.55) was
-written as (a) a weak-type hole in the TS2769 path, (b) an object-literal FP, and "a
-third, separate row the same matrix found" — row H, "a mechanism this round did not
-locate". (b) and row H are the same mechanism at two different call sites, and the
-fixture that says so exhibits both symptoms at once.
-
-**THE ONE SENTENCE.** [Checker.getTypeOfExpression] types `{ encoding: "utf8" }` as
-`{ encoding: string }` — this compiler has no fresh-literal machinery — so a target
-property whose type is a literal (union) rejects the argument. tsc instead contextually
-types each candidate's arguments and a fresh literal keeps its literal type.
-
-**THE TWO SITES, AND WHY THEY LOOKED LIKE DIFFERENT DEFECTS.**
-
-* `allArgumentsMatch` (the TS2769 DIAGNOSTIC path) has had round 728's rescue,
-  `objLitLiteralPropsSatisfyParam`, all along — but it refused a target INTERFACE with
-  heritage and a UNION with more than one non-nullish constituent. Symptom: a **false
-  positive**, because selection had already picked the right overload.
-* `signatureAcceptsArgs` (SELECTION) had **no rescue at all**, so every candidate was
-  passed over and the answer came from `resolveCallOverload`'s `arityMatches[0]`
-  fallback. Symptom: a **wrong type, with no diagnostic anywhere** — a hover that lies.
-
-The 10-row matrix, ours against `tools/tsgo-7.0.2/lib/tsc` run directly on
-byte-identical source through the project CLI (the parent binary rebuilt in this session,
-`Checker.class` md5 `86ec37c3…`, which is the digest (CHK.54) recorded as ITS landed
-binary — an independent confirmation the parent reproduced):
-
-| # | shape | parent | tsc 7.0.2 | after |
-|---|---|---|---|---|
-| B1 | `execSync` reduced: heritage-interface param, `{ enc: 'utf8', stdio: [...] }` | `string` **+ TS2769** | `string` | `string` |
-| B2 | B1 with the heritage FLATTENED (round 728's own shape) | `string` | `string` | `string` |
-| B3 | union param `{ enc: Enc } \| Enc` (`readFileSync`) | **`number` + TS2769** | `string` | `string` |
-| H  | `({e?:null}):number` / `(ZH1{e:"u"}):string` — `f({e:"u"})` | **`number`** | `string` | `string` |
-| H2 | H with the target property NON-literal | `string` | `string` | `string` |
-| H3 | H with the two overloads REVERSED | `string` | `string` | `string` |
-| R1 | excess property | TS2769 | TS2769 | TS2769 |
-| R2 | missing INHERITED required property | TS2769 | TS2769 | TS2769 |
-| R3 | a property failing for a non-widening reason | TS2769 | TS2769 | TS2769 |
-| R4 | two identical heritage-param overloads, both should accept | `number` **+ TS2769** | `number` | `number` |
-
-**B3 IS THE ROW THAT IDENTIFIES THE TWO AS ONE**: it carries the false TS2769 *and*
-answers the first overload's return type, from a single root. **H3 is what proves H is
-the fallback and not an acceptance** — reversing the declarations makes the PARENT agree,
-i.e. nothing accepted and first-declared won.
-
-**THE HERITAGE REFUSAL WAS NEVER NECESSARY.** Round 728 refused a target with base types
-on the grounds that "an inherited required property would not be enumerated below".
-Measured, that is false of this compiler: `resolveInterfaceMembersCore` folds every base
-type's `members` into the derived type's own table and then sets
-`properties = members.values.toList()`, so both enumerations in the rescue (the
-excess-property lookup and the required-property loop) already saw inherited members.
-The negative direction is pinned (R2) and the refusal was `knip`'s last overload row.
-
-**A THIRD INTERACTION, AND IT WAS FOUND BY TRYING TO *FALSIFY AN ABLATION ARM*, NOT BY
-READING THE CODE.** Arm a5 (`continue` -> fall through to `weakParamRefusesArg`) read 0
-RED, so a falsifier was built for it — a union parameter `{ zzzA?: 0 } \| { zzzE: "u" }`
-whose weak constituent is disjoint from the literal. On the fixed binary it answered
-`number` where tsc answers `string`: round 728 put the rescue on the REJECTING path (so
-the happy path pays nothing), but **a weak constituent accepts any non-nullish value
-structurally**, so the relation SUCCEEDS through it, the rejecting path is never taken,
-and (CHK.54)'s weak rule then refuses the signature having never asked whether the
-literal satisfies the OTHER constituent. The weak refusal is now guarded by the rescue,
-short-circuit `&&` so it is computed only on the path the weak rule was already going to
-refuse. **Pinned as a discriminating PAIR on one fixture shape** — a literal that DOES
-satisfy cancels the refusal, one that does NOT leaves it standing — because the obvious
-refusal (drop the second overload) leaves tsc reporting a TS2769 we do not yet produce,
-which would be a countdown on (CHK.55)(a) rather than a control (round 765).
-
-**AND ITS BY-PRODUCT IS A RETRACTION.** The `continue` beside the rescue in
-`signatureAcceptsArgs` was documented as load-bearing on exactly the argument the
-falsifier tested. With the guard in place the two forms are equivalent and a5 re-run
-against ELEVEN pins still reads **0 RED**. It is recorded in the KDoc as **provably
-unobservable**, not as coverage; `continue` is kept only because it saves recomputing
-the rescue.
-
-**WHAT I SCOPED OUT, AND WHY.** (CHK.55)(a) — the TS2769 path does not ask
-`weakParamRefusesArg` — is confirmed still open by measurement, not assumed:
-`zzzU(123)` against a two-weak-overload set is silent here where tsc 7.0.2 says
-`Type '123' has no properties in common with type '{ zzzB?: null | undefined; zzzG?:
-string | undefined; }'`. It is a MISSING error (the least damaging of the three), it ADDS
-rows, and its elaboration genuinely needs its own design — `getFirstArgumentError` walks
-the plain relation and finds no failing argument for the overload the weak rule rejects,
-so the subline has to come from somewhere else. Re-queued as (CHK.56) with tsc's exact
-message, which is `no properties in common` (TS2559's wording) and not an assignability
-line — that is the design lead.
-
-**GATES.** Suite **16,144 / 0 / 3** (+11, exactly the one new class); **no corpus
-baseline moved by any of the three edits** (the suite was run twice — once after edits
-1+2 at 16,142/0/3, once after edit 3). `cost_gate.py` exit 0 unrebaselined,
-`output.errors` **46**; largest move `typeOfExpr.calls` **+0.59%** and
-`narrow.memoServed` **+0.69%**, both the rescue being consulted on the rejecting path,
-and the post-edit-3 table is DIGIT-FOR-DIGIT the post-edit-2 one, i.e. the guard costs
-0.00% on this profile. Left unrebaselined deliberately: the increase is inside the ±2%
-band and rebaselining would erase the one signal this change has in the counters.
-`huge_methods --fail-over 0` exit 0, **783** classes scanned, 0 over limit. 8-profile
-grid, both arms built in this session, `javap` control **0 vs 2** occurrences of the new
-helper: **`added=0 removed=0` on all eight**, capture md5 `503774c23b45…` on parent, on
-the edits-1+2 binary and on the ship binary alike. `partition-equivalence` **EQUIVALENT,
-all 78**, floor **61 ms** [54, 61, 74, 60] — one draw. `capture-equivalence` **1,005 span(s)
-in 43 of 76 file(s), moreAny 0, absentInNarrow 0, absentInFull 0**, `definitions`
-**360,376**, ARM DIGESTs `full=-3735929574989657502 narrow=-2075467818767010709`
-(recorded numerically here for the first time — earlier rounds only said "unmoved").
-
-**LIBRARIES. `knip` @ `dc7aca5` 49 -> 48** — exactly one row removed,
-`src/util/git.ts:17:55` (`execSync('git rev-parse --git-path hooks', { encoding: 'utf8',
-stdio: ['pipe','pipe','ignore'], cwd })`), nothing added. **`jsonrepair` 3.13.1 4 -> 4
-byte-identical.** Both BEFORE arms were captured on the parent rebuilt in this session
-and are byte-identical to the session-start capture. Edit 3 moves neither library — the
-shape it fixes is hand-written, which is worth saying plainly: it is a wrong TYPE with
-no library row behind it, kept because a language service that answers the wrong overload
-is the failure mode the owner directive names.
-
-**SEVEN ABLATION ARMS, ONE MISTAKE EACH**, each `cmp`-diffed against its OWN snapshot,
-each anchor asserted unique (exit 3 otherwise), each build grepped for `BUILD SUCCESSFUL`,
-each `Checker.class` md5 recorded and all seven distinct, restore verified OUTSIDE the
-driver and the binary rebuilt after every restore.
-
-| arm | injected mistake | RED |
-|---|---|---|
-| a0 | the whole change reverted (the parent, rebuilt this session) | **4** — exactly the four positives |
-| a1 | round 728's heritage refusal restored | **2** — the `knip` row and the both-accept/order pin |
-| a2 | the union arm back to `singleOrNull` | **1** — uniquely the union pin |
-| a3 | SELECTION no longer asks the rescue | **2** — uniquely row H, plus the union pin |
-| a4 | the per-constituent fold accepts a union unconditionally | **2** — uniquely the union-refusal pin |
-| a5 | `continue` -> fall through to the weak check | **0** — provably unobservable, see above |
-| a6 | the weak refusal no longer guarded by the rescue | **1** — uniquely its own pin |
-
-**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
-* **The first draft of the refusal pins asserted `[2769, 2322]` and every one failed** —
-  `diagnose()` returns the TS2322 FIRST. Four "refusals" reading red is indistinguishable
-  from four broken refusals until you read the actual list; the power-assert diagram is
-  what made it a ten-second fix rather than a hypothesis.
-* **My first B1 fixture had an illegal heritage** (`ZzzOptsStr extends ZzzOpts` narrowing
-  `encoding` to a value the base did not allow), which tsc reported as TS2430 and we did
-  not. The FP still reproduced, so it would have "worked" as a pin — over a fixture whose
-  premise tsc rejects. Run the oracle on the fixture before running it on the question.
-* **R4 was written as an always-green order control and is a POSITIVE**: two identical
-  heritage-param overloads, both of which should accept, carried a spurious TS2769 on the
-  parent. A control that reddens under a0 is a positive that was mislabelled, and only
-  running a0 says which it is.
-* **The `continue` claim was wrong in the KDoc I had just written.** I argued it was
-  load-bearing, the arm said otherwise, and the falsifier built to vindicate it found a
-  *different, real* defect instead. Both halves are recorded — the retraction and the fix.
 
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
@@ -3586,12 +3454,21 @@ driver and the binary rebuilt after every restore.
   `checker.ts:35649`, `core.ts:2191`, `emitter.ts:1479`, `parser.ts:2642`, `path.ts:585`,
   `sourcemap.ts:164/165/166`, `harness/tsserverLogger.ts:28`, `server/project.ts:746`,
   `services/organizeImports.ts:862` (`build/chk61/pricing/armG-added.txt`).
-  **RE-PRICED 2026-08-28 AFTER (CHK.64)(i)+(ii): the arm is now **6** rows, captured at
-  `build/chk61/grid/chk64_armG2` — the three `sourcemap.ts` rows went with (i) and
-  `core.ts:2191` + `path.ts:585` with (ii).** Of the 6, `emitter.ts:1479` and
-  `organizeImports.ts:862` are (CHK.61)(b)'s absence and (b) pays them back, so opening
-  this gate now costs **4** genuinely new rows, all four listed as (CHK.64)'s residue. The
-  order stands: finish (CHK.64)'s residue -> (CHK.63) -> (CHK.61)(b)'s checking half.
+  **RE-PRICED AGAIN 2026-08-28 AFTER (CHK.63)(a)(c): `armG` ALONE is still **6** rows —
+  opening the gate is not enough, because the RETURN and ASSIGNMENT readers never consult
+  the flow walk for a PRIMITIVE target. `armGR` (the gate PLUS that consultation, added to
+  both readers' target-kind lists; measured on the 8 profiles, NOT landed) is **4 distinct
+  rows**, and each is owned:**
+  - `parser.ts:2642` — **GONE**, (CHK.63)(a) plus the reader consultation;
+  - `server/project.ts:746` — **GONE**, (CHK.63)(c);
+  - `emitter.ts:1479`, `organizeImports.ts:862` — **(CHK.61)(b)'s checking half**;
+  - `checker.ts:35649`, `tsserverLogger.ts:28` — **the REFUSED loop join**; both reads sit
+    inside a loop whose earlier iteration assigns the reference, and
+    `narrowTypeFromFlowCore` answers `declaredType` at every `FlowLoopLabel`.
+
+  **So (CHK.63) needs exactly two things: (CHK.61)(b)'s checking half and the loop join
+  — and the reader consultation must land WITH the gate, since it is unobservable
+  without it.**
 
 - [x] **(CHK.64)(i)+(ii) DONE 2026-08-28 — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE
   READER**, AND BOTH ARE CLOSED; (CHK.63)'s PRICE FALLS **11 ROWS -> 6**.** Round 784's gate
@@ -3608,16 +3485,23 @@ driver and the binary rebuilt after every restore.
   spans to `any`). One SHIPPED defect fell out and is fixed: nested narrows on one name
   recorded `narrowedDeclared` LAST-wins, so `if (b) { if (isNs(b)) { b = undefined } }` was
   a false TS2322.
-  **RESIDUE — (CHK.64) is now worth exactly 4 rows on the 8 profiles, and a SIXTH
-  mechanism turned up that the queue never listed:**
-  1. `parser.ts:2642` — (iii) an assignment INSIDE the guarded branch
-     (`if (id === undefined) { m.set(t, id = t) }`) does not narrow after the `if`.
-  2. `checker.ts:35649` — (iv) definite assignment across an if/else.
-  3. `tsserverLogger.ts:28` — (iv family) an assignment narrow that must survive a LOOP
-     (`let r: string | undefined; r = ""; while (…) { r += … } return r`).
-  4. `server/project.ts:746` — **(vi), NOT IN THE OLD LIST**: a NON-NULL ASSERTION `!`
-     (`return (info && info.getLatestVersion())!`) is not respected at the RETURN reader.
-     Probably the cheapest of the four.
+  **RESIDUE — 2 of the 4 are CLOSED by (CHK.63)(a)(c) 2026-08-28, and the other 2 are
+  ONE refused change:**
+  1. `parser.ts:2642` — (iii) an assignment INSIDE the guarded branch. **CLOSED by
+     (CHK.63)(a)** — it was a SHIPPED false positive at the call-argument reader, not a
+     gate-only row.
+  2. `checker.ts:35649` — filed as "(iv) definite assignment across an if/else"; measured,
+     the if/else is CORRECT and the read is inside a `for` whose earlier iteration assigns
+     the reference. **It is the LOOP family**, i.e. the same item as 3.
+  3. `tsserverLogger.ts:28` — an assignment narrow that must survive a LOOP. **REFUSED
+     2026-08-28 with its price: the loop-join union costs 8 ours-only rows per profile**,
+     5 of them a `never` from a negated GENERIC type-guard call that the loop label's
+     `declaredType` was masking, 3 a join over a TRUNCATED antecedent that is LESS
+     reducible than the declaration. See the (CHK.63)(a)(c) session note and
+     `build/chk63/snap/Checker.kt.gapB-refused`.
+  4. `server/project.ts:746` — a NON-NULL ASSERTION `!`. **CLOSED by (CHK.63)(c)** — the
+     operand is read through PARENTHESES and over a LOGICAL operator; the same defect at a
+     UNION target was a shipped false positive.
   Plus (v), the optional-METHOD `&&` chains, which are a DIFFERENT mechanism: an `&&`
   whose EARLIER conjunct narrows a LATER one (`isNamedDeclaration(child) &&
   isPropertyName(child.name)`). It has no measured armG row of its own and it IS the cause

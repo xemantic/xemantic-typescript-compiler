@@ -1,5 +1,71 @@
 # Status
 
+**(CHK.63)(a)(c) — THE FOUR RESIDUES ARE **ONE READER GAP PLUS TWO FLOW-WALK DEFECTS**,
+AND THREE OF THEM WERE SHIPPED FALSE POSITIVES; THE GATE RE-PRICES **6 ROWS -> 4**
+(2026-08-28, three commits).** A per-READER census over PARAMETER sources — the first cut
+used a `const` initialised from a call and was VACUOUS, silent on our side even for its own
+control — showed that (iii) and the loop family are live FALSE POSITIVES at the
+CALL-ARGUMENT reader today, while (iv) and (vi) are correct in the flow walk and were only
+ever the READER.
+
+**(a) AN ASSIGNMENT INSIDE A NULLISH GUARD MUST OVERWRITE THAT GUARD'S OWN NARROWING.**
+`if (id === undefined) { id = text }` left `id` reading `undefined` for the whole branch —
+`narrowByAssignmentRhs`'s resolved-RHS arms FILTER the antecedent and
+`narrowUnionByRhsAssignment` answers a non-union receiver unchanged, so the assignment was a
+no-op and the join re-minted `string | undefined`. `assignmentReduceBase` applies round 416's
+rule there: an assignment OVERWRITES, so the post-state is reduced from the DECLARED type.
+**(a2)** its own ablation read **0 RED** and a byte-identical grid, and was UNPINNED rather
+than redundant — the separating fixture needs a THREE-member declaration — so the "a nullish
+assigned type keeps the antecedent" refusal was deleted too.
+
+**(c) A `!` IS NOT RESPECTED THROUGH PARENTHESES.** `return (t)!` against `string | number`
+was a false TS2322 while `return t!` one line away was silent: the operand is admitted by
+KIND and a ParenthesizedExpression is not one. `nonNullOperandStrips` reads through parens
+and adds the LOGICAL operators — the `server/project.ts:746` shape.
+
+**(b) THE LOOP JOIN IS REFUSED, WITH ITS PRICE AND ITS BLOCKER NAMED.** Every loop erases
+every assignment narrowing established before it (`declaredType` at each `FlowLoopLabel`).
+The union-with-back-edge-cut was BUILT, makes all ten loop shapes agree with tsc exactly, and
+**costs 8 ours-only rows per profile**: **5 are a `never` the loop label was MASKING** (a
+negated GENERIC type-guard call), 3 a join over a TRUNCATED antecedent that is LESS reducible
+than the declaration. Reverted; the design is kept at
+`build/chk63/snap/Checker.kt.gapB-refused`.
+
+**(CHK.63) RE-PRICED: `armG` ALONE is still 6** — the RETURN/ASSIGNMENT readers never consult
+the flow walk for a primitive target. **`armGR` (the gate PLUS that consultation; measured,
+NOT landed) is 4 distinct rows**: `emitter.ts:1479` + `organizeImports.ts:862` are
+**(CHK.61)(b)'s checking half**, and `checker.ts:35649` + `tsserverLogger.ts:28` are **the
+refused loop join** (both reads sit inside a loop whose earlier iteration assigns the
+reference). So (CHK.63) needs exactly those two things and nothing else.
+
+**GATES.** Suite **16,318 / 16,325 / 16,326**, 0 failed, 3 skipped (+8/+7/+1 — exactly the
+new subtests), **no corpus baseline moved on any of the three**. 8-profile grid
+`503774c23b4535130ffdebabef430cf0` on all three, byte-identical PER PROFILE against the
+recorded parent capture (parent `Checker.class` md5 `eec8ea8f`, rebuilt in this session).
+`cost_gate.py` exit 0 three times, `output.errors` **46**, every counter the standing
+residual to the digit — the round costs nothing measurable. `huge_methods --fail-over 0`
+exit 0, **783** classes. `partition-equivalence` EQUIVALENT all 78 (floors 79 / 63 / 56 ms,
+one draw each). knip **48**, jsonrepair **4**, EVERY ROW byte-identical across all three.
+
+**`capture-equivalence` MOVED TWICE AND BOTH MOVES ARE CLASSIFIED PER ELEMENT** with
+(CHK.64)'s `XTSC_CAPEQ_DUMP`. DIVERGED **968** in 43 of 76, `definitions=0`, `moreAny=0` —
+unchanged throughout. Commit 1: **0 lost, 0 gained, 2 changed**, both DROPPING a spurious
+`| undefined`. Commit 2: **0/0/1**, a hover `any` -> the concrete union, and tsc 7.0.2's LSP
+answers that same constituent set. Commit 3: **nothing moved**.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY RESTORE `cmp`-VERIFIED PLUS A REBUILT md5.**
+a1 (the reduce base never consulted) **4 RED — exactly the (a) positives**; a3 (the nullish-
+assigned refusal restored) **1, uniquely the (a2) pin**; b1 (parens not read through) **4**;
+b2 (a logical operand does not strip) **3, uniquely the logical pins**; b3 (COMMA admitted)
+**1, uniquely the residue pin**. **a2 (the nullish-only antecedent guard dropped) is
+UNDISCRIMINATED and NOT shown redundant** — 0 RED and a byte-identical 8-profile grid, so its
+KDoc says the bound is REASONED rather than measured. **b4 is UNDISCRIMINATED.** a4 was
+WITHDRAWN: its call site belonged to the refused (b) work.
+
+**A KILLED RESTORE LEAVES NO CLASS FILE AND A SCRATCH RUN THEN PRINTS ZERO ROWS**, which
+reads exactly like a clean fixture — the 10-minute tool timeout killed an ablation grid
+mid-rebuild and the next probe measured a classpath with no `Checker.class` in it.
+
 **(CHK.64)(i)+(ii) — THE FIVE "NARROWING GAPS" ARE **TWO GAPS AT ONE READER**, BOTH LANDED;
 (CHK.63)'s PRICE FALLS **11 ROWS -> 6** (2026-08-28, three commits).** Round 784's gate sends
 the ASSIGNMENT and RETURN readers to `currentLocalTypes` for a primitive target, and the
