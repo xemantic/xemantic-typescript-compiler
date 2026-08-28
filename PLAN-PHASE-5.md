@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.72)(a) — the queue's attribution was wrong a TENTH time: `statSync` is not an overload-resolution gap, the flow walk's call shortcut is, and knip's row is a **default/namespace import typing as `any`**
+
+**THE HEADLINE.** Two independent findings, one landed. (1) `resolveFlowCalleeDecl`
+answers ONE declaration and does **no overload selection at all**, so both consumers that
+read a RETURN ANNOTATION off it were answering about a signature the call does not select
+— a shipped WRONG TYPE and a shipped FALSE NEGATIVE, both reduced to four lines and both
+confirmed against tsgo 7.0.2. That is landed. (2) The knip row (CHK.72) was queued for is
+**not** about `statSync`'s overloads: `import fs from 'node:fs'` gives `fs` the type
+**`any`**, so every member access and call through it is `any`. Re-queued as (CHK.73) with
+the measurement.
+
+**THE REDUCTION TOOK SIX MINUTES AND KILLED THE QUEUE'S PREMISE TWICE.** The queue says
+`fs.statSync(dir, { throwIfNoEntry: false })` "resolves to `any` for us where tsc gives
+`Stats | undefined`", and calls it an overload-resolution / `@types/node` question. Neither
+half survived. With the seven `statSync` overloads hand-written, the DIRECT reader
+(`const q: number = statSync("x", …)`) answers `Stats | undefined` — the overload IS
+resolved, correctly, and `getReturnTypeOfCallExpression` had it right the whole time. What
+answered wrongly was a local whose type is INFERRED from the call. And inside knip's own
+project, three import spellings of the SAME function disagree:
+
+| spelling | our answer |
+|---|---|
+| `import { statSync } from 'node:fs'` | **`Stats \| undefined`** — correct, whole overload set present |
+| `import fs from 'node:fs'; fs.statSync(…)` | **`any`** |
+| `import * as fs from 'node:fs'; fs.statSync(…)` | **`any`** |
+
+`fs` ITSELF is `any` (probed directly: `const c = fs; const q: number = c` is silent), so
+this is not a member-lookup gap but the binding's type. `path.join(…)` and
+`fs.readFileSync(…)` are `any` for the same reason. knip's `glob-cache.ts:62` needs
+`stat?.isDirectory() ? stat.mtimeMs : Number.NaN` to type as `number`, which needs `stat`,
+which needs `fs.statSync` — so **no amount of narrowing or overload work closes that row**,
+and (CHK.70)(f)'s refusal of an `any` ternary is correct as written.
+
+**WHAT LANDED — (CHK.72)(a), the flow walk's call shortcut.** `resolveFlowCalleeDecl`
+answers `symbol.valueDeclaration ?: declarations.firstOrNull()`. For an overload set that
+is the FIRST signature, and its two return-annotation consumers then answer about it:
+
+  * `resolvedCallReturnTypeForFlow` (the post-overwrite reset) installed the **wrong
+    overload's return** — `const c = f("x")` where the string overload returns
+    `Stats | undefined` and the number one returns `Other | undefined` read
+    `Other | undefined` at every later use. A wrong type, not a lost narrow.
+  * `callRhsHasNonNullishReturnAnnotation` (behind `rhsIsDefinitelyNonNullish`) claimed
+    non-nullish off the first signature, so the caller took the OVERWRITE branch and
+    **stripped a `| undefined` the selected overload genuinely has** — silent at every
+    later read.
+
+Both now route through `getReturnTypeOfCallExpression`, i.e. the engine's own overload
+resolution, gated behind a BODYLESS resolved declaration (every overload signature is one,
+an ordinary implementation is not) so the common case asks nothing. It is universal, not a
+`declare function` curiosity: an implementation-bearing overload set, an interface method
+pair and a `declare namespace` member all read first-wins on the parent, and **arity alone
+did not discriminate** (`ff("x","y")` picked the 1-parameter overload).
+
+**THE "CONSERVATIVE" HALF WAS NOT FREE, AND ONLY THE GRID SAID SO.** The first version had
+`callRhsHasNonNullishReturnAnnotation` simply `return false` for an overload set — refusing
+a claim it could not justify, which reads as strictly safe. It cost **one ours-only TS2322
+on every profile** (`esDecorators.ts:1309`, `output.errors` 46 -> 47, the cost gate's only
+red): `factory.getGeneratedNameForNode` is **two overloads that BOTH return `Identifier`**,
+and declining it lost round 465's destructured-member non-nullish proof for
+`visitReferencedPropertyName`. **Conservatism is not free when the claim is what SUPPRESSES
+a diagnostic** — answering from the SELECTED overload instead restores it. The suite was
+green on the refused version; the grid was not.
+
+**ABLATIONS — three arms, one mistake each, each `cmp`-diffed against its own snapshot and
+each restore verified by `cmp` plus a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | both halves reverted | `be6aedf7` | **3** | — (p1, p2, p3) |
+| a2 | only the RESET half reverted | `5407d8db` | **4** | — p1/p2/p3 **plus the c3 CONTROL** |
+| a3 | only the NON-NULLISH half reverted | `afbdafe8` | **2** | — (p2, p3; p1 stays green) |
+
+a2 is the round-927 pair reading and is recorded as **ONE observable**: the non-nullish
+refusal is *unsound without* the precise reset — with the reset gone, `c3` (an overload set
+whose SELECTED overload is non-nullish) stops narrowing. a3 gives each half a uniquely-its-
+own failure, so neither is a redundant guard.
+
+**VACUITY, PER PIN.** Every positive names the DECLARATION reader with a PRIMITIVE target,
+which is the instrument that PRINTS the flow type in its TS2322 message — the pins assert
+the **source type string**, never the presence of a row, so a pin cannot pass by a
+different mechanism emitting the same code. The subject must be a local whose type is
+INFERRED from the call: a directly-read call is GREEN on both binaries (`c2`, recorded as a
+CONTROL) because that path was always right, and a fixture written that way would have been
+vacuous. `c3` is the control that stops "select the overload" from degenerating into
+"refuse to narrow" — it is the one a2 turns red.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * I spent two builds instrumenting before finding the site, and the FIRST probe was the
+    decisive one in the wrong direction: `cvdaRecordInferredLocalType` records
+    `Stats | undefined` **identically** for the overloaded and the non-overloaded callee.
+    The recording was never the problem; the flow READ was. A probe that prints the value
+    at the site you suspect is worth more than any amount of reading — and the value it
+    printed said "look elsewhere".
+  * The RETURN reader was correct while the DECLARATION reader was wrong on the same local
+    in the same function, which is what localised it to the flow shortcut rather than to
+    overload resolution.
+  * `narrowRendersMoreAny=0`, `definitions=0` and `DIVERGED 964 in 43 of 76` are all
+    unchanged, but **both capture ARM DIGESTS moved** (`full=3208853970728874912
+    narrow=-1697007308088931828`). That is expected for a change that alters a type in
+    BOTH arms and is re-recorded, not read as a regression.
+
+**GATES.** Suite **16,417 / 0 / 3** (16,411 + exactly the 6 new pins; **no corpus baseline
+moved**), grid `790c337141b167657e4f1f3a219474aa` — the standing fifth-lineage digest —
+`added=0 removed=0` on all eight against `chk70_gatefinal`, `cost_gate.py` exit **0** with
+`output.errors` **46** (largest move `narrow.memoServed` +1.55%, `typeOfExpr.calls` +0.54%
+— the overload asks, both inside +-2%), `huge_methods.py --fail-over 0` **783 classes
+scanned, 0 over**, partition-equivalence EQUIVALENT all 78 with floor **67 ms**
+[103, 67, 60, 57] (one draw), capture-equivalence DIVERGED **964** in 43 of 76 with
+`definitions=0 moreAny=0`, knip **49** and jsonrepair **4** — both unchanged, i.e. this
+lands with no library cost and does not close knip's row.
+
+
 ### Round (CHK.70) + (CHK.63) — **THE GATE IS OPEN**, the last row was *not* the loop, and both remaining costs are pre-existing gaps the gate merely makes visible
 
 **THE HEADLINE.** `canUseTypeEngine`'s nullish-union-versus-primitive refusal is gone and
@@ -3527,12 +3640,38 @@ RHS, and the merged-member CONTRADICTION direction.
   invisible only because that outer initializer is itself an optional chain and answered
   `any`. **So this item is blocked on nested-function shadowing, not on optional chains.**
   The RESULT half (`a?.b` is `typeof a.b | undefined`) is a separate, much larger change.
-- [ ] **(CHK.72) `fs.statSync(dir, { throwIfNoEntry: false })` RESOLVES TO `any` — THE ONE
-  knip ROW THE GATE ADDED (48 -> 49).** `util/glob-cache.ts:62:3`; reduced inside knip's own
-  project with a probe file (the same shape with hand-written declarations is SILENT, so it
-  is not a narrowing gap). tsc answers `Stats | undefined`; ours answers `any`, so the
-  ternary defaulting `mtime` is `any` and (CHK.70)(f)'s conditional-RHS arm correctly refuses
-  it. An overload-resolution / `@types/node` question, not a flow one.
+- [ ] **(CHK.73) A DEFAULT OR NAMESPACE IMPORT TYPES AS `any` — AND THAT, NOT `statSync`,
+  IS THE ONE knip ROW THE GATE ADDED (48 -> 49).** Measured inside knip's own project with a
+  probe file, three spellings of the SAME function: `import { statSync } from 'node:fs'`
+  answers `Stats | undefined` (correct, whole overload set present), while
+  `import fs from 'node:fs'; fs.statSync(…)` and `import * as fs from 'node:fs'` both answer
+  **`any`** — and `fs` ITSELF is `any` (`const c = fs; const q: number = c` is silent), so
+  it is the BINDING's type, not a member lookup. `path.join(…)` and `fs.readFileSync(…)` go
+  the same way. That is what makes `glob-cache.ts:62` unreachable: the ternary
+  `stat?.isDirectory() ? stat.mtimeMs : Number.NaN` cannot type as `number` while `stat` is
+  `any`, and (CHK.70)(f)'s refusal of an `any` ternary is correct as written — **no
+  narrowing or overload work closes that row**. `resolveAlias` deliberately never resolves a
+  NamespaceImport alias (round 444) and the flow path has its own resolver
+  ([Checker.resolveNamespaceMemberFnDecl], round 477) precisely because the TYPE path has
+  none. **The blast radius is the whole question**: tsc's own sources hold 23-147
+  `import * as ns from "./_namespaces/…"` sites per profile against only ~5-14 non-relative
+  ones, so a general fix re-opens round 409's TS2315-flood hazard. The containment worth
+  measuring FIRST is an AMBIENT-module-only second chance (`declare module "node:fs"`),
+  which excludes every relative barrel by construction and is the population a real library
+  actually uses.
+- [x] **(CHK.72)(a) DONE 2026-08-28 — THE FLOW WALK'S CALL SHORTCUT DID NO OVERLOAD
+  SELECTION.** [Checker.resolveFlowCalleeDecl] answers `valueDeclaration ?:
+  declarations.firstOrNull()`, so its two return-annotation consumers answered about the
+  FIRST signature: [Checker.resolvedCallReturnTypeForFlow] installed the wrong overload's
+  return (a WRONG TYPE) and [Checker.callRhsHasNonNullishReturnAnnotation] stripped a
+  `| undefined` the selected overload genuinely has (a FALSE NEGATIVE). Both now route
+  through [Checker.getReturnTypeOfCallExpression], gated on a BODYLESS resolved declaration.
+  Universal — an implementation-bearing overload set, an interface method pair and a
+  `declare namespace` member all read first-wins on the parent, and ARITY alone did not
+  discriminate. `added=0 removed=0`, suite 16,417/0/3, `output.errors` 46, knip 49 /
+  jsonrepair 4 unchanged. The first version merely REFUSED the non-nullish claim for an
+  overload set and cost one ours-only TS2322 on every profile (`esDecorators.ts:1309`) —
+  `factory.getGeneratedNameForNode` is two overloads that both return `Identifier`.
 - [ ] **(CHK.70) — THE ORIGINAL TEXT, KEPT FOR ITS DESIGN.**
   **(a) A COMPOUND ASSIGNMENT INSIDE A LOOP HAS NO POST-STATE RULE.**
   `harness/tsserverLogger.ts` is `let result: string | undefined = …; result = "";

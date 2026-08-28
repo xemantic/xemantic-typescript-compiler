@@ -1,5 +1,30 @@
 # Status
 
+**(CHK.72)(a) — THE FLOW WALK'S CALL SHORTCUT DID **NO OVERLOAD SELECTION**, AND knip's ROW
+IS A DEFAULT/NAMESPACE IMPORT TYPING AS `any` (2026-08-28).** The queue's attribution was
+wrong a tenth time. `resolveFlowCalleeDecl` answers `valueDeclaration ?:
+declarations.firstOrNull()`, so both consumers reading a RETURN ANNOTATION off it answered
+about the FIRST signature: the post-overwrite reset installed the **wrong overload's return**
+and the structural non-nullish claim **stripped a `| undefined` the selected overload
+genuinely has**. Universal, not a `declare function` curiosity — an implementation-bearing
+overload set, an interface method pair and a `declare namespace` member all read first-wins,
+and **arity alone did not discriminate**. Both now route through the engine's own overload
+resolution. **The "conservative" first version cost a row**: merely refusing the non-nullish
+claim lost round 465's destructured-member proof at `esDecorators.ts:1309` on every profile
+(`factory.getGeneratedNameForNode` is two overloads that BOTH return `Identifier`) —
+conservatism is not free when the claim is what SUPPRESSES a diagnostic, and only the grid
+said so. **knip's row is NOT `statSync`**: `import { statSync } from 'node:fs'` answers
+`Stats | undefined` correctly while `import fs from 'node:fs'` makes `fs` ITSELF `any`, so
+`glob-cache.ts:62` is unreachable by any narrowing or overload work. Re-queued as (CHK.73)
+with the blast radius measured (23-147 relative `import * as` sites per profile against ~5-14
+non-relative ones). **GATES.** Suite **16,417 / 0 / 3** (+6, exactly the new pins), no corpus
+baseline moved; grid `790c337141b167657e4f1f3a219474aa`, `added=0 removed=0` on all eight;
+cost_gate exit 0 with `output.errors` **46** (largest move `narrow.memoServed` +1.55%);
+huge_methods 783 scanned / 0 over; partition-equivalence EQUIVALENT all 78, floor 67 ms (one
+draw); capture-equivalence DIVERGED **964** in 43 of 76, `definitions=0 moreAny=0` (both arm
+digests moved and are re-recorded — expected for a change that alters a type in both arms);
+knip **49**, jsonrepair **4**, both unchanged.
+
 **(CHK.70) + (CHK.63) — THE GATE IS **OPEN**: `T | undefined` IS NO LONGER SILENTLY
 ASSIGNABLE TO `T` AT A PRIMITIVE TARGET, AND THE 8-PROFILE GRID IS `added=0 removed=0`
 FOR THE FIRST TIME (2026-08-28, three commits `2ed1779b` / `acb6d92b` / `7a488783`).**
@@ -118,83 +143,3 @@ no per-iteration binding (every closure shared one variable — `3,3,3` where Ja
 array callbacks were typed `Function1` and truncated JavaScript's `(element, index, array)`;
 and this arc's own `var` hoisting emitted into a shape class's synthesized constructor. Every
 corpus `.expected` in 17-29 is `node`'s own stdout. Full suite **16,339 / 0**.
-
-
-**(CHK.68) — `x = y = z` WAS A **SHIPPED** FALSE POSITIVE AND IT LANDS; THE GATE RE-PRICES
-**6 ROWS -> 5** AND THE COMBINED ARM IS **EXACTLY 1 ROW** — BUT THE LOOP JOIN IT NEEDS IS A
-**~20x COST BLOWUP NOBODY HAD PRICED** (2026-08-28, one commit `2cbb3847`).** `armBGR` was
-re-measured on top of (CHK.66)(a) and is UNCHANGED at 6 rows — the subtype reduction closes
-none of them. (CHK.67) was then diagnosed and the queue's description of it was half wrong
-in the useful direction: of its two named shapes, `index = index! + 1` was ALREADY handled
-by the (CHK.33) arm and the CHAINED assignment is the whole gap. It is reachable with NO
-gate and NO loop at the UNION-target declaration reader
-(`let i: number|undefined; i = c = o.len; const p: number|string = i`), because every arm
-of `narrowByAssignmentRhs` classifies the RHS syntactically and `y = z` matches none of
-them — a `BinaryExpression` whose operator IS `=`, which (CHK.33) excludes by construction.
-
-**THE GATE IS ONE ROW AWAY IN DIAGNOSTICS AND NOWHERE NEAR IT IN COST.** The COMBINED arm
-(gate + RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half + (CHK.67) + the loop join)
-measures `added=1 removed=0` on all eight profiles, the row being (CHK.66)(b)'s known
-`checker.ts:43282:21`; the five `armBGR` survivors were read individually and are ONE
-mechanism (a narrow established OUTSIDE a loop, lost inside or after it), all five removed
-by the loop join. **But the loop join ALONE measures `globals.lookups` +1,891%,
-`typeNode.cacheable` +5,951% (99.45% of them cache HITS), `typeOfExpr.calls` +116%,
-`narrow.memoServed` +1,276%, `narrow.walks` +37% and ~3.5x wall, with `spine.nodes` +0.00%
-and `typeOfExpr.distinct` +0.98%** — the population is unchanged and the same questions are
-re-asked ~20x. It was priced in ROWS for three rounds (8 -> 3 -> 1) and never in counters.
-**The gate is refused again, on a reason no earlier round had.**
-
-**GATES.** Suite **16,356** / 0 / 3 (+8, exactly the new subtests); **no corpus baseline
-moved**. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0 on all eight against a
-parent capture taken this session from a rebuilt parent (`Checker.class 19b32bf2`).
-`cost_gate` exit 0, `output.errors` **46**, counters the standing residual to the third
-decimal. `huge_methods` 783 classes, 0 over. `partition-equivalence` EQUIVALENT all 78
-(floor **61 ms**, one draw). `capture-equivalence` DIVERGED 968 in 43 of 76, definitions=0,
-moreAny=0, **both arm digests UNCHANGED**. knip **48**, jsonrepair **4**, byte-identical to
-arms from the rebuilt parent. Vacuity: **6 of 8 pins RED on the rebuilt parent**, exactly
-the 6 positives. Three ablation arms, **all three uniquely discriminating** (a1 6 RED, a2 1
-RED = P5, a3 1 RED = P6) — no zero of any kind to report.
-
-**LAST ROUND'S TWO GAPS ARE CLOSED.** (CHK.66)'s capture digest move, classified per
-ELEMENT against the pre-(CHK.66) parent rebuilt to `Checker.class d0997340`: **67 spans of
-742,254 moved — 0.009% — and NOT ONE GAINED A MEMBER.** 57 are pure DROPS of a strict
-subtype of a survivor, 3 collapse to the alias the source itself spells (better), 3 are
-member REORDERINGS, and the two non-improvements are named — one alias NAME lost to the
-first-wins (INC.29) family, and 3 go-to-definition location lists that lost the dropped
-constituent's own declaration. And a genuine parent library arm was rebuilt: knip 48,
-jsonrepair 4, byte-for-byte identical.
-
-**(CHK.66) — A FLOW JOIN NOW REDUCES SUBTYPES: `string | number | "a"` WAS A **SHIPPED**
-DIVERGENCE AT A PLAIN BRANCH LABEL, AND THE LOOP JOIN RE-PRICES **3 ROWS -> 1**
-(2026-08-28, one commit `ad888740`).** The queue named the loop join's blocker as
-`getUnionType`'s missing subtype reduction and located the offending union "downstream, at
-a branch join". Measured, that defect needs no loop at all:
-`const x = zzzMk(); if (x === "a") { } const p: boolean = x` reported
-`string | number | "a"` where tsc 7.0.2 reports `string | number` — four lines, no
-partition, no gate. It is not only display: the extra member survives a later DISCRIMINANT
-test that would have filtered the supertype away. `flowJoinUnion` applies tsc's
-`UnionReduction.Subtype` at the TWO flow joins in `narrowTypeFromFlowCore` and NOWHERE
-else — INV.5(a) interns unions by member-id list and union member ORDER is pinned
-byte-for-byte across ~13k baselines, so reducing inside `getUnionType` was refused on
-sight. Two conservatisms, both pinned: only a member the DECLARATION does not itself
-contain may be dropped, and the drop needs a STRICT subtype (**`subtypeRelation` is
-declared in this repo and has ZERO readers** — only assignability exists).
-
-**THE LOOP JOIN, RE-PRICED ON TOP OF IT: 3 -> 1.** With both joins routed through the
-helper, the loop arm costs exactly ONE ours-only row on every one of the 8 profiles
-(`checker.ts:43282:21`); **both `utilities.ts` rows are CLOSED**. The survivor is a
-different mechanism — `SignatureDeclaration`'s own 14 constituents plus
-`ClassDeclaration | ClassExpression`, i.e. a discriminant/`isFunctionLike` filter gap over
-a loop-carried state. (CHK.63)'s own `armBGR` grid was NOT re-run and its 6-row list
-stands as last measured.
-
-**GATES.** Suite **16,348** / 0 / 3 (+9, exactly the new subtests); **no corpus baseline
-moved**. Grid `503774c23b4535130ffdebabef430cf0`, added=0 removed=0 on all eight — byte
-identical to the parent rebuilt this session (`Checker.class d0997340`). `cost_gate` exit
-0, `output.errors` 46, every counter the standing residual moved in the third decimal.
-`huge_methods` 783 classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floor
-**54 ms**, one draw). `capture-equivalence` DIVERGED 968 in 43 of 76, definitions=0,
-moreAny=0 — unchanged in every field; both arm digests moved and were NOT classified per
-element this round. knip 48, jsonrepair 4. Vacuity: **7 of 9 pins RED on the parent**,
-exactly the 7 positives. Three ablation arms — a1 **7 RED**, a2 **1 RED** uniquely (its
-separating control), a3 **0** and named **UNDISCRIMINATED rather than redundant**.

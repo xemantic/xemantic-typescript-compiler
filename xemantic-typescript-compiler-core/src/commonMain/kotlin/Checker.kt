@@ -118079,6 +118079,51 @@ interface DataView {
      *  overwrite reset — the callee's return annotation, null when it mentions
      *  the callee's own type parameters (no inference here) or on anything
      *  unresolvable/`any`. */
+    /**
+     * (CHK.72) Does [call]'s callee name an OVERLOAD SET?
+     *
+     * [resolveFlowCalleeDecl] answers ONE declaration — `symbol.valueDeclaration ?:
+     * declarations.firstOrNull()` for an identifier callee — and performs no overload
+     * selection whatsoever, so for an overloaded callee the two consumers that read a
+     * RETURN ANNOTATION off that declaration ([resolvedCallReturnTypeForFlow] and
+     * [callRhsHasNonNullishReturnAnnotation]) read the FIRST signature's, whichever
+     * signature the call actually selects. Measured against tsc 7.0.2 on a two-overload
+     * `declare function`: `const c = f("x")` where the STRING overload returns
+     * `Stats | undefined` and the NUMBER one returns `Other | undefined` answered
+     * `Other | undefined` at every later read of `c` — a WRONG TYPE, not a lost narrow —
+     * and where the number overload returned a non-nullish `Other` the assignment took
+     * [rhsIsDefinitelyNonNullish]'s overwrite branch instead and stripped a `| undefined`
+     * the selected overload genuinely has, which is a shipped FALSE NEGATIVE at the
+     * declaration reader. The whole call path ([getReturnTypeOfCallExpression]) had the
+     * right answer the entire time — only the flow walk's declaration-annotation
+     * shortcut did not.
+     *
+     * The test is the callee TYPE's call-signature count rather than a sibling-declaration
+     * scan, because it is uniform over identifier / property-access / element-access
+     * callees and reuses resolution the engine has already memoized. Callers gate it
+     * behind a BODYLESS resolved declaration, which every overload signature is and an
+     * ordinary implementation is not — so nothing is asked for the common case.
+     */
+    private fun flowCalleeIsOverloaded(call: CallExpression): Boolean {
+        val t = when (val c = call.expression) {
+            is Identifier -> getTypeOfIdentifier(c)
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(c)
+            is ElementAccessExpression -> getTypeOfElementAccess(c)
+            else -> return false
+        }
+        if (t !is Type.Object) return false
+        resolveStructuredTypeMembers(t)
+        return (t.callSignatures?.size ?: 0) > 1
+    }
+
+    /** (CHK.72) Is [decl] a BODYLESS function-like — an overload signature, an ambient
+     *  declaration or an interface method? The cheap pre-gate for [flowCalleeIsOverloaded]. */
+    private fun flowCalleeDeclIsBodyless(decl: Node): Boolean = when (decl) {
+        is FunctionDeclaration -> decl.body == null
+        is MethodDeclaration -> decl.body == null
+        else -> false
+    }
+
     private fun resolvedCallReturnTypeForFlow(call: CallExpression): Type? {
         if (call.questionDotToken) return null
         // Round 470: an optional-chained CALLEE (`factory?.make(t)`) short-circuits to
@@ -118093,6 +118138,14 @@ interface DataView {
             }
         }
         val decl = resolveFlowCalleeDecl(call, call.expression) ?: return null
+        // (CHK.72) An OVERLOAD SET's first signature is not the selected one — ask the
+        // engine, which resolves the overload properly, instead of reading an annotation
+        // off whichever declaration [resolveFlowCalleeDecl] happened to answer.
+        if (flowCalleeDeclIsBodyless(decl) && flowCalleeIsOverloaded(call)) {
+            val t = getReturnTypeOfCallExpression(call)
+            return if (t !== errorType && t !== anyType && !typeContainsUnresolvedTypeParam(t)) t
+            else null
+        }
         val (ret, tps) = when (decl) {
             is FunctionDeclaration -> decl.type to decl.typeParameters
             is MethodDeclaration -> decl.type to decl.typeParameters
@@ -118270,6 +118323,20 @@ interface DataView {
         }
         val decl = resolveFlowCalleeDecl(call, call.expression)
             ?: return nullishMirrorOverloadNonNullish(call)
+        // (CHK.72) An OVERLOAD SET: the first signature's annotation says nothing about
+        // the SELECTED one, and claiming non-nullish off it takes the caller's overwrite
+        // branch, which strips a `| undefined` the selected overload may genuinely have.
+        // Answer from the SELECTED overload instead of refusing: refusing measured a real
+        // cost — `getGeneratedNameForNode` is two overloads that BOTH return `Identifier`,
+        // and declining it lost round 465's destructured-member non-nullish proof for
+        // `visitReferencedPropertyName`, i.e. one ours-only TS2322 on every profile
+        // (`esDecorators.ts:1309`). Conservatism is not free when the claim is what
+        // SUPPRESSES a diagnostic.
+        if (flowCalleeDeclIsBodyless(decl) && flowCalleeIsOverloaded(call)) {
+            val t = getReturnTypeOfCallExpression(call)
+            return t !== errorType && t !== anyType && t !== unknownType &&
+                !typeContainsUnresolvedTypeParam(t) && !typeHasNullishConstituent(t)
+        }
         val (ret, tps, params) = when (decl) {
             is FunctionDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
             is MethodDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
