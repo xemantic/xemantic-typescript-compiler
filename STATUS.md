@@ -2,7 +2,7 @@
 
 **(CHK.69) — THE LOOP JOIN'S ~20x IS **MEMOIZATION BEING SWITCHED OFF**, A *SOUND* CUT-KEYED
 MEMO RECOVERS **0.003%**, AND THE PRIZE TURNS OUT TO NEED **NO BACK EDGE AT ALL**
-(2026-08-28, one commit `77164d41`).** (CHK.66)(b)'s cost was reproduced digit-for-digit,
+(2026-08-28, one commit `92598fb0`).** (CHK.66)(b)'s cost was reproduced digit-for-digit,
 then ATTRIBUTED. Removing the `narrowLoopCutUsed` suppression from the memo-store gate
 (unsound — the CEILING of what any memo can return) takes `globals.lookups`
 15,128,215 -> **1,630,952** and `typeNode.cacheable` 10,831,464 -> **885,424** (-89.2% /
@@ -35,7 +35,7 @@ flat. One ours-only row on a dashboard whose v1 exit is zero FPs is a decision t
 0 — the cause is named and queued as (CHK.70)(a): a COMPOUND assignment (`result += …`)
 inside a loop has no post-state rule.
 
-**GATES.** Suite **16,367** / 0 / 3 (+11, exactly the new pins); **no corpus baseline
+**GATES.** Suite **16,367** / 0 / 3 (+11, exactly the new pins; **16,380** after the rebase onto the (LIB.4) arc, which does not touch the checker — `Checker.class dcaf1594` either side); **no corpus baseline
 moved**. Grid `790c337141b167657e4f1f3a219474aa` (a NEW recipe — not comparable to
 (CHK.68)'s `503774c2…`), `added=0 removed=0` on all eight against a parent capture taken
 this session from a rebuilt parent (`Checker.class b2675304`), and the digest is IDENTICAL

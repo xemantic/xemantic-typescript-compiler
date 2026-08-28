@@ -52,7 +52,7 @@ sits inside or after the loop, and that answer is a function of the PATH, not of
 **Even the unsound ceiling is +115% globals lookups, +395% type-node resolutions and
 44.1 s against 26.7 s cold, so the direction is refused in its BEST case.**
 
-**WHAT LANDS INSTEAD (`77164d41`), AND IT IS THE LOOP JOIN'S OWN KDoc ARGUMENT USED
+**WHAT LANDS INSTEAD (`92598fb0`), AND IT IS THE LOOP JOIN'S OWN KDoc ARGUMENT USED
 FORWARD.** A loop label's value is the least fixpoint `L = E union (union of narrow_i(L))`.
 When no back edge ASSIGNS the reference every back edge is a pure NARROWING of `L`, so
 iterating from `E` never grows past `E` and **the fixpoint IS `E`** — the label can be
@@ -90,7 +90,7 @@ is now AFFORDABLE: `narrow.walks` **+11.2%**, `narrow.memoServed` +6.6%, everyth
 <= 1%, wall flat. **It is still NOT opened** — 1 ours-only row on a dashboard whose v1 exit
 is zero, with a named and tractable cause, is a decision to take at 0 rows.
 
-**GATES, PER COMMIT (`77164d41`).** Suite **16,367** / 0 / 3 (+11, exactly the new pins)
+**GATES, PER COMMIT (`92598fb0`).** Suite **16,367** / 0 / 3 (+11, exactly the new pins; **16,380** after the rebase onto the (LIB.4) arc, which does not touch the checker — `Checker.class dcaf1594` either side)
 and **NO corpus baseline moved**. Grid `790c337141b167657e4f1f3a219474aa`,
 `added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
 rebuilt parent (`Checker.class b2675304`) — the digest is IDENTICAL to the parent's. NOTE
