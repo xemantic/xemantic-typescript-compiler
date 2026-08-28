@@ -1089,9 +1089,17 @@ class FlowGraphBuilder {
         val loopLabel = newLoopLabel()
         val postLoop = newBranchLabel()
         joinAntecedent(loopLabel, currentFlow)
-        // Empty-iteration path leads directly to postLoop.
-        joinAntecedent(postLoop, currentFlow)
         currentFlow = loopLabel
+        // (CHK.69) The zero-iteration path leaves through the LOOP LABEL, not around
+        // it — tsc's `bindForInOrForOfStatement` sets `currentFlow = preLoopLabel`
+        // BEFORE `addAntecedent(postLoopLabel, currentFlow)`. Joining the PRE-loop flow
+        // instead made the loop body unreachable BACKWARD from any read after the loop,
+        // so `for (const n of xs) { h.req = 1 }` did not invalidate a narrow established
+        // before it — a SHIPPED false negative for the `for-in`/`for-of` forms only
+        // (`while` / `do` / `for(;;)` exit through their condition, which carries the
+        // label). It also blinded [Checker.loopBodyMayAffectName]'s back-edge scan
+        // whenever such a loop sat inside another one.
+        joinAntecedent(postLoop, currentFlow)
 
         // B98.r124 (Blocker #1 substep): entering the for-in body implies the
         // iterated object is non-null/undefined (a nullish value yields no
@@ -1130,8 +1138,11 @@ class FlowGraphBuilder {
         val loopLabel = newLoopLabel()
         val postLoop = newBranchLabel()
         joinAntecedent(loopLabel, currentFlow)
-        joinAntecedent(postLoop, currentFlow)
         currentFlow = loopLabel
+        // (CHK.69) see [bindForInStatement] — the zero-iteration path leaves through
+        // the LOOP LABEL, which is what makes the body reachable backward from a read
+        // after the loop.
+        joinAntecedent(postLoop, currentFlow)
 
         when (val init = stmt.initializer) {
             is VariableDeclarationList -> {

@@ -96,6 +96,35 @@ class LoopEntryRetryGateTest {
         }
     """.trimIndent()
 
+    /**
+     * (CHK.69) The loop-crossing CONTROL population, which [source] no longer
+     * supplies. Since (CHK.69) a `FlowLoopLabel` whose body cannot affect the
+     * reference is answered by FOLLOWING ITS ENTRY, so the plain walk and the
+     * mirror agree on A and B and the control's `typeDiff > 0` read ZERO — a
+     * dead instrument wearing the same face as a passing gate. A loop that
+     * ASSIGNS the guarded reference still washes to the declared type in the
+     * plain walk (the assignment is on a back edge, so
+     * [Checker.loopBodyMayAffectName] claims it) while the mirror follows
+     * `antecedents[0]` regardless, which is the divergence the control needs.
+     */
+    private val loopCrossing = """
+        interface Base { kind: string }
+        interface Sub extends Base { extra: number }
+        declare function isSub(x: Base): x is Sub
+        declare function mkBase(): Base
+        declare function sink(v: unknown): void
+
+        function loopAssignsWhile(b: Base, n: number): void {
+            if (isSub(b)) {
+                while (n > 0) { sink(b.extra); b = mkBase(); n--; }
+            }
+        }
+        function loopAssignsFor(b: Base, n: number): void {
+            if (!isSub(b)) return;
+            for (let i = 0; i < n; i++) { sink(b.extra); b = mkBase(); }
+        }
+    """.trimIndent()
+
     /** [source] with A's and B's guards removed — the negative control. */
     private val unguarded = """
         interface Base { kind: string }
@@ -192,20 +221,21 @@ class LoopEntryRetryGateTest {
 
     @Test
     fun `the control - the verifier DOES diverge over the loop-crossing population`() {
-        val (skippable, verified, typeDiff, verdictDiff) = verify(all = true)
+        val (skippable, verified, typeDiff, verdictDiff) = verify(all = true, src = loopCrossing)
         // Strictly more calls are compared than in the skippable-only run, and the
         // extra ones are exactly the calls the gate never skips.
         assert(verified > skippable)
-        // A and B: the loop-entry walker reaches a different type AND suppresses
-        // where the plain walk did not. This is what proves the instrument fires.
+        // The two loop-ASSIGNING shapes: the loop-entry walker reaches a different
+        // type AND suppresses where the plain walk did not. This is what proves the
+        // instrument fires. See [loopCrossing] for why [source] no longer can.
         assert(typeDiff > 0L)
         assert(verdictDiff > 0L)
     }
 
     @Test
     fun `the loop-crossing divergences are exactly the calls the gate keeps`() {
-        val skippableRun = verify(all = false)
-        val allRun = verify(all = true)
+        val skippableRun = verify(all = false, src = loopCrossing)
+        val allRun = verify(all = true, src = loopCrossing)
         // Every divergence lives OUTSIDE the skipped population — which is the
         // arithmetic form of the equivalence claim.
         assert(allRun[1] - skippableRun[1] >= allRun[2])

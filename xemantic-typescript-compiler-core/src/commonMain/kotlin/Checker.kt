@@ -117082,6 +117082,51 @@ interface DataView {
      * Over-approximating (returning true when it wouldn't actually narrow) only costs a
      * depth level, never correctness.
      */
+    /**
+     * (CHK.69) Could any BACK EDGE of [label] change what [name] holds?
+     *
+     * A pure graph reachability question over the loop's own body — it resolves no type,
+     * builds no key and asks nothing of the binder, which is what separates it from the
+     * back-edge NARROWING walk (CHK.66)(b) built and (CHK.69) refused on cost. The scan
+     * starts at `antecedents[1..]` (the back edges), stops at [label] itself (which
+     * dominates the body, so the body's backward closure terminates there) and answers
+     * TRUE — conservative, i.e. today's `declaredType` — on anything it cannot rule out:
+     * an assignment [flowAssignmentMightNarrow] claims, an array mutation, a
+     * [FlowStart] (the scan left the loop), or an exhausted node budget.
+     *
+     * A [FlowCondition] / [FlowCall] / [FlowSwitchClause] is NOT a reason to refuse: each
+     * only ever narrows, so with no assignment on any back edge the fixpoint over the
+     * label is exactly its entry state — see the call site.
+     */
+    private fun loopBodyMayAffectName(label: FlowLoopLabel, name: String): Boolean {
+        if (label.antecedents.size < 2) return false
+        var budget = 4096
+        val visited = NarrowSeen()
+        val stack = ArrayDeque<FlowNode>()
+        for (i in 1 until label.antecedents.size) stack.addLast(label.antecedents[i])
+        while (stack.isNotEmpty()) {
+            if (--budget < 0) return true
+            val fn = stack.removeLast()
+            if (fn === label) continue
+            if (!visited.add(fn.id)) continue
+            when (fn) {
+                is FlowStart -> return true
+                is FlowUnreachable -> {}
+                is FlowArrayMutation -> return true
+                is FlowAssignment -> {
+                    if (flowAssignmentMightNarrow(fn.node, name)) return true
+                    stack.addLast(fn.antecedent)
+                }
+                is FlowCondition -> stack.addLast(fn.antecedent)
+                is FlowCall -> stack.addLast(fn.antecedent)
+                is FlowSwitchClause -> stack.addLast(fn.antecedent)
+                is FlowBranchLabel -> for (a in fn.antecedents) stack.addLast(a)
+                is FlowLoopLabel -> for (a in fn.antecedents) stack.addLast(a)
+            }
+        }
+        return false
+    }
+
     private fun flowAssignmentMightNarrow(node: Node, name: String): Boolean {
         if (flowAssignmentTargetsName(node, name)) return true
         return when (node) {
@@ -117397,10 +117442,38 @@ interface DataView {
                     r
                 }
             }
-            // Loop back-edge handling would require widening to declared on cycle —
-            // conservative: fall back to declared type at loop joins.
-            // (ENGINE.2d)(a): THE one arm where the FollowLoopEntry mirror differs.
-            is FlowLoopLabel -> { narrowRetryRelevantObs++; declaredType }
+            // (CHK.69) A loop label is a JOIN whose value is the least fixpoint
+            // `L = E union (union of narrow_i(L))` over its ENTRY state `E` and its back
+            // edges. When no back edge ASSIGNS [name], every back edge is a pure
+            // NARROWING of `L`, so iterating from `E` never grows past `E` and the
+            // fixpoint is exactly `E` — the loop can be answered by following the ENTRY
+            // antecedent alone, with NO back-edge traversal. That is the whole of
+            // (CHK.66)(b)'s prize at none of its price: walking the back edges makes
+            // every subtree entry-context-dependent and therefore unmemoizable, which
+            // measured 15.1 M globals lookups against 0.77 M and 3.4x wall
+            // ((CHK.69), and a SOUND cut-keyed memo recovers 0.003% of it).
+            // When some back edge does assign [name] the fixpoint is NOT `E` and we keep
+            // today's conservative `declaredType`.
+            // (ENGINE.2d)(a): THE one arm where the FollowLoopEntry mirror differs —
+            // that mirror follows `antecedents[0]` UNCONDITIONALLY, which is this arm
+            // without the [loopBodyMayAffectName] gate and measures 5 ours-only rows.
+            is FlowLoopLabel -> {
+                narrowRetryRelevantObs++
+                if (node.antecedents.isEmpty() || loopBodyMayAffectName(node, name)) declaredType
+                else {
+                    val entry = narrowTypeFromFlowCore(
+                        declaredType, node.antecedents[0], name, seen, depth + 1, memo,
+                    )
+                    // A `never` entry answer is REFUSED back to `declaredType`. That is
+                    // not soundness, it is a deliberate mask: the loop label's
+                    // `declaredType` has been hiding a pre-existing `never` that a NEGATED
+                    // generic type-guard call produces, and adopting it turns five reads in
+                    // tsc's own `emitter.ts` into
+                    // `Property … does not exist on type 'never'` (measured — those five
+                    // ARE the entire diff of the ungated arm on all eight profiles).
+                    if (entry === neverType) declaredType else entry
+                }
+            }
             is FlowAssignment -> {
                 // 17.30b + M1.4-prep: assignment-effect narrowing (literal-RHS union
                 // filtering for identifier targets; non-nullish-RHS exclusion for

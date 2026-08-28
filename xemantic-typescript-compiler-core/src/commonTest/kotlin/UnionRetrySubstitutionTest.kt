@@ -122,6 +122,42 @@ class UnionRetrySubstitutionTest {
         }
     """.trimIndent()
 
+    /**
+     * (CHK.69) The loop-crossing CONTROL population, which [source] no longer
+     * supplies. Since (CHK.69) a `FlowLoopLabel` whose body cannot affect the
+     * reference is answered by FOLLOWING ITS ENTRY, so on A-E the plain walk and
+     * the mirror now agree and the control's `instanceDiff > 0` read ZERO — a dead
+     * instrument wearing the same face as a passing gate. A loop that ASSIGNS the
+     * guarded reference still washes to the declared union in the plain walk while
+     * the mirror follows `antecedents[0]` regardless, which is the divergence.
+     */
+    private val loopCrossing = """
+        interface Cat { name: string; meow(): void }
+        interface Dog { name: string; bark(): void }
+        declare function isCat(x: Cat | Dog): x is Cat
+        declare function mk(): Cat | Dog
+        declare function sink(v: unknown): void
+
+        function assignsWhile(x: Cat | Dog, n: number): void {
+            if (isCat(x)) { while (n > 0) { sink(x.meow); x = mk(); n--; } }
+        }
+        function assignsFor(x: Cat | Dog, n: number): void {
+            if (!isCat(x)) return;
+            for (let i = 0; i < n; i++) { sink(x.meow); x = mk(); }
+        }
+        function assignsDoWhile(x: Cat | Dog, n: number): void {
+            if (!isCat(x)) return;
+            do { sink(x.meow); x = mk(); n--; } while (n > 0);
+        }
+        function assignsForOf(x: Cat | Dog, xs: number[]): void {
+            if (!isCat(x)) return;
+            for (const s of xs) { sink(x.meow); x = mk(); sink(s); }
+        }
+        function noLoopUnguarded(x: Cat | Dog): void {
+            x.alsoNotThere;
+        }
+    """.trimIndent()
+
     /** [source] with A-E's guards removed — the positive control for A-E. */
     private val unguarded = """
         interface Cat { name: string; meow(): void }
@@ -233,15 +269,16 @@ class UnionRetrySubstitutionTest {
 
     @Test
     fun `the control - the verifier DOES diverge over the loop-crossing complement`() {
-        val r = verify(all = true)
+        val r = verify(all = true, src = loopCrossing)
         val reached = r[0]; val loopFree = r[1]; val verified = r[2]
         val instanceDiff = r[3]; val memberDiff = r[4]; val verdictDiff = r[5]
         // Strictly more calls are compared than in the substituted-only run, and
         // the extra ones are exactly the calls the substitution never serves.
         assert(verified == reached)
         assert(reached > loopFree)
-        // A-E: the loop-entry walker reaches a different type AND suppresses where
-        // the plain walk did not. This is what proves the instrument can fire.
+        // The four loop-ASSIGNING shapes: the loop-entry walker reaches a different
+        // type AND suppresses where the plain walk did not. This is what proves the
+        // instrument can fire. See [loopCrossing] for why [source] no longer can.
         assert(instanceDiff > 0L)
         assert(memberDiff > 0L)
         assert(verdictDiff > 0L)
@@ -249,13 +286,13 @@ class UnionRetrySubstitutionTest {
 
     @Test
     fun `every divergence lives outside the substituted population`() {
-        val substitutedRun = verify(all = false)
-        val allRun = verify(all = true)
+        val substitutedRun = verify(all = false, src = loopCrossing)
+        val allRun = verify(all = true, src = loopCrossing)
         // The arithmetic form of the equivalence claim: the divergences fit
         // entirely inside the calls the control adds.
         assert(allRun[2] - substitutedRun[2] >= allRun[5])
-        // A-E, and only those.
-        assert(allRun[5] == 5L)
+        // The four loop-ASSIGNING shapes, and only those.
+        assert(allRun[5] == 4L)
     }
 
     @Test
