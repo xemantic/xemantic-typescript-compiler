@@ -200,6 +200,29 @@ private const val CAPTURE_MEMO_CARET_SPANS = 4
  */
 private const val CAPTURE_MEMO_CARET_ENTRIES = 4
 
+/**
+ * (INC.44) The name TypeScript gives a module's default export, and the one spelling
+ * a reference search may never close over.
+ *
+ * `export { foo as default }` links `foo` to it, and the far side of that edge is an
+ * `import d from …` whose local `d` is written nowhere near either — so a closure
+ * that reaches this name has left the region a syntactic scan can bound. See
+ * [Project.narrowedSweep].
+ */
+private const val DEFAULT_EXPORT_NAME = "default"
+
+/**
+ * (INC.44) How many times [Project.narrowedSweep] may re-select before giving up and
+ * sweeping the whole program.
+ *
+ * Each pass either terminates or adds at least one spelling, so the loop is finite
+ * without this; the cap is here because the alternative to a wrong bound is an
+ * editor query that never returns, and a chain of aliases four deep is already
+ * pathological. Exceeding it answers "sweep everything", which is correct and slow
+ * rather than fast and wrong.
+ */
+private const val MAX_ALIAS_CLOSURE_PASSES = 4
+
 public class Project private constructor(
     /** The project path as given to [open], normalized and absolute. */
     private val projectPath: String,
@@ -1583,15 +1606,22 @@ public class Project private constructor(
      *
      * TWO builds on a dirty project and ONE on a clean one: the file list is a
      * question about the program, so [files]' build runs first (cached when nothing
-     * has been edited), and the sweep itself is a single capture build carrying every
-     * identifier in every program file. That is the same trick [fileSemantics] plays,
-     * widened from one file to the program — a count of compiles, so it does not grow
-     * with the number of carets, only with the program.
+     * has been edited), and the sweep itself is a single capture build.
      *
-     * It is linear in the program and it is not cheap. `docs/language-service.md`
-     * carries the measured figure on this repo's own 78-file compiler profile. Use
-     * [documentHighlightsAt] for the per-caret case; this is the one a user asks for
-     * explicitly.
+     * **(INC.44) That build is no longer whole-program.** The sweep carries only the
+     * occurrences that SPELL a name this symbol can be reached by ([narrowedSweep]),
+     * and [captureIn] derives the check partition from the request — so a search for a
+     * name written in three files checks three files, not seventy-eight. The claim is
+     * unchanged and so is the answer; what changed is that the evidence is selected
+     * before it is typed rather than after. A symbol whose spellings cannot be bounded
+     * syntactically — anything reached through a default export, an `export =`, an
+     * `import x = require(…)` or a namespace binding — falls back to the
+     * whole-program sweep this member always did.
+     *
+     * So the cost is linear in the part of the program that MENTIONS the name, plus
+     * the floor. `docs/language-service.md` carries the measured figures on this
+     * repo's own 78-file compiler profile. [documentHighlightsAt] is still the one to
+     * wire to caret movement; this is the one a user asks for explicitly.
      */
     public fun referencesAt(fileName: String, offset: Int): List<ReferenceLocation> {
         val index = sourceIndexOf(fileName) ?: return emptyList()
@@ -1602,12 +1632,155 @@ public class Project private constructor(
         // The program's files are what a build computes, so this asks for them the
         // only way there is; `build()` is cached whenever nothing has been edited.
         val swept = build().programFiles.map { keyOf(it) }
-        // Whole-program, and deliberately so: see [captureIn]. This member's CLAIM is
-        // about every file, so there is nothing to narrow to.
+        // (INC.44) The CLAIM is still about every file; what narrows is the EVIDENCE.
+        // An occurrence of this symbol must SPELL one of its names, so a file with no
+        // such token can hold none — which turns the sweep from "type every identifier
+        // in the program" into "type the few that could possibly be an answer", and
+        // (through [captureIn]'s derived partition) the check with it. Null means the
+        // closure could not be bounded and today's whole-program sweep stands.
+        val narrowed = if (narrowReferenceSweeps) narrowedSweep(caret, swept) else null
         return referencesOf(
-            keyOf(fileName), caret, swept, restrictToQueryFile = false, narrow = false,
+            keyOf(fileName), caret,
+            sweptFiles = narrowed?.keys?.toList() ?: swept,
+            restrictToQueryFile = false,
+            narrow = narrowed != null,
+            sweptNodes = narrowed,
         )
     }
+
+    /**
+     * (INC.44) THE SPELLING-NARROWED SWEEP: every occurrence in the program that could
+     * possibly be an occurrence of [caret]'s symbol, by file — or null when it cannot
+     * be bounded and the caller must sweep everything.
+     *
+     * ## Why this is sound, and where the soundness actually lives
+     *
+     * An occurrence is an answer only if [definitionMeets] holds, i.e. only if its
+     * declaration set intersects the seed's. The population of nodes that can satisfy
+     * that is not "every identifier": it is every identifier SPELLED one of the names
+     * the symbol can be reached by. That set is normally one name, and it grows only
+     * through `import { p as q }` / `export { p as q }` — the two forms in which one
+     * symbol carries two written spellings ([SyntaxRoles.aliasLink]).
+     *
+     * **The closure is anchored by a fact about those two forms**: both names are
+     * tokens OF THE FILE THAT WRITES THE ALIAS, so a file that introduces an alias of
+     * a name already in the set necessarily contains that name — which is why
+     * iterating "select the files containing a name I am looking for, read the aliases
+     * they declare, repeat" reaches a fixed point without ever scanning a file the
+     * search had no other reason to open. Every form for which that is NOT true is
+     * refused outright by [SyntaxRoles.isAliasEscape] rather than approximated.
+     *
+     * `default` is the third refusal and it is not an escape SHAPE but a NAME:
+     * `export { foo as default }` links `foo` to a spelling whose importing side is an
+     * `import d from …`, and `d` is reachable from neither end. Any closure that
+     * reaches `default` therefore gives up.
+     *
+     * ## What a mistake here costs, and hence which way it is biased
+     *
+     * A name wrongly INCLUDED costs a file in the partition and some spans in the
+     * request — time, and nothing else, because the answer is still decided by
+     * resolution. A name wrongly EXCLUDED costs a MISSING REFERENCE, which is silent
+     * and which a rename would then leave stranded. So every uncertainty answers
+     * "sweep everything", and the file filter is a plain SUBSTRING test rather than a
+     * token one: it may only over-select.
+     */
+    /**
+     * (INC.44) THE IN-BINARY OFF ARM for [narrowedSweep] — `false` restores the
+     * whole-program reference sweep this API shipped before it.
+     *
+     * It exists because the narrowing's correctness is not an argument but a
+     * DIFFERENTIAL: the two arms answer the same question, so they must return the
+     * same list, element for element, at every caret — and a differential needs both
+     * arms in one binary or it is comparing two builds instead of two policies. The
+     * same shape `SourceIndex.of(…, useParseAsLexerOracle = false)` has (API.6).
+     *
+     * Internal, defaulting to the shipped behaviour, and read at exactly one site.
+     * `ReferenceNarrowingDifferentialMain` sweeps it over a real project;
+     * `ProjectReferenceNarrowingTest` pins the agreement per shape.
+     */
+    internal var narrowReferenceSweeps: Boolean = true
+
+    /**
+     * (INC.44) THE CONTROL for [narrowReferenceSweeps]: how many files a reference
+     * search at this caret would check, or **-1** when its spellings cannot be bounded
+     * and the whole-program sweep stands.
+     *
+     * It exists because a fallback agrees with itself. A differential over a project
+     * where every caret refused would print EQUIVALENT having compared the
+     * whole-program arm with itself at every row — round 790's "a verifier reads 0
+     * both when the skip is sound and when the instrument is dead" — so the number of
+     * carets that actually took the narrow path has to be observable from outside, and
+     * an over-selected partition has to be countable rather than inferred from a wall
+     * clock this box cannot hold still.
+     *
+     * Internal: a host is told the COST model in `docs/language-service.md`, not the
+     * partition, because the partition is an implementation detail that a later round
+     * may shrink further without changing any answer.
+     */
+    internal fun narrowedSweepFiles(fileName: String, offset: Int): Int {
+        val index = sourceIndexOf(fileName) ?: return -1
+        val caret = occurrenceCaret(index, offset) ?: return -1
+        val swept = build().programFiles.map { keyOf(it) }
+        return narrowedSweep(caret, swept)?.size ?: -1
+    }
+
+    private fun narrowedSweep(caret: Node, programFiles: List<String>): Map<String, List<Node>>? {
+        val caretText = SyntaxRoles.occurrenceText(caret)
+        if (caretText.isEmpty() || caretText == DEFAULT_EXPORT_NAME) return null
+        var names = setOf(caretText)
+        val texts = HashMap<String, String>(programFiles.size)
+        val occurrences = HashMap<String, List<Node>>(programFiles.size)
+        // Bounded by construction — each pass either stops or adds a name, and the
+        // program has finitely many — but the bound is stated anyway, because a
+        // non-terminating language-service query wedges an editor with no diagnosis.
+        repeat(MAX_ALIAS_CLOSURE_PASSES) {
+            val selected = LinkedHashMap<String, List<Node>>()
+            val grown = LinkedHashSet(names)
+            for (file in programFiles) {
+                val text = texts.getOrPut(file) { overlay.readText(file) ?: "" }
+                if (!mayHideAnEscapedName(text) && names.none { text.contains(it) }) continue
+                val index = sourceIndexOf(file) ?: continue
+                val found = occurrences.getOrPut(file) { index.occurrenceNodes() }
+                    .filter { SyntaxRoles.occurrenceText(it) in names }
+                if (found.isEmpty()) continue
+                for (node in found) {
+                    if (SyntaxRoles.isAliasEscape(node)) return null
+                    val linked = SyntaxRoles.aliasLink(node) ?: continue
+                    if (linked == DEFAULT_EXPORT_NAME) return null
+                    grown.add(linked)
+                }
+                selected[file] = found
+            }
+            if (grown.size == names.size) return selected
+            names = grown
+        }
+        return null
+    }
+
+    /**
+     * (INC.44) True when [text] may contain an occurrence whose NAME is not written in
+     * it — the one thing that stops a substring test from being an exact file filter.
+     *
+     * An occurrence's name is the COOKED value: `StringLiteralNode.text` is what the
+     * scanner built out of the escape sequences (`rawText` is the source), so
+     * `o["pl\ain"]` names the member `plain` while the file spells `pl\ain` — and an
+     * identity escape means ANY backslash inside a literal can do this, not only
+     * `\u`. An identifier written with a unicode escape is the same hazard one token
+     * class over.
+     *
+     * So the exact test is `occurrenceText(node) in names`, which needs the file's
+     * index, and the substring test is only allowed to SKIP a file it can prove has no
+     * such spelling — a file with no backslash in it at all. Measured on tsc's own 78
+     * compiler sources, that skips 49 of them (21.8% of the characters are in the
+     * other 29); the rest are opened and then contribute nothing unless a real
+     * occurrence survives the exact filter, so the PARTITION stays exact either way
+     * and only the indexing cost moves.
+     *
+     * Getting this wrong in the permissive direction would cost a missing reference,
+     * silently — which is why the rule is "no backslash anywhere" and not a smarter
+     * scan for `\u` alone.
+     */
+    private fun mayHideAnEscapedName(text: String): Boolean = text.contains('\\')
 
     /**
      * (API.5) Every place in THIS FILE that refers to the same thing as the caret —
@@ -1649,11 +1822,13 @@ public class Project private constructor(
      * The one build both reference queries perform, and the grouping of its answers.
      *
      * [sweptFiles] is the population whose identifiers become capture spans — the
-     * whole program for [referencesAt], the one queried file for
+     * files mentioning the name for [referencesAt] (INC.44), the one queried file for
      * [documentHighlightsAt] — and [restrictToQueryFile] additionally drops answers
      * outside [queryFile], which matters only for a DECLARATION the caret resolves to
-     * in a file that was never swept. [narrow] hands [sweptFiles] to the compiler as
-     * its check partition; see [captureIn] for why only the one-file caller sets it.
+     * in a file that was never swept. [sweptNodes], when given, is the already-selected
+     * occurrence list per file; without it every occurrence node in each swept file is
+     * asked about. [narrow] routes the build through [captureIn], which derives the
+     * check partition from the request's own spans.
      *
      * Note what is not done: no `Symbol` is asked for and none crosses the boundary.
      * The grouping key is a set of declaration SPANS, which is a value, which is what
@@ -1665,6 +1840,7 @@ public class Project private constructor(
         sweptFiles: List<String>,
         restrictToQueryFile: Boolean,
         narrow: Boolean,
+        sweptNodes: Map<String, List<Node>>? = null,
     ): List<ReferenceLocation> {
         val spans = ArrayList<TypeCaptureSpan>()
         // Every swept occurrence's REAL span and syntactic ROLE, by (file, pos). The
@@ -1682,7 +1858,11 @@ public class Project private constructor(
             // rebuilt here, because a one-file sweep's request must be EQUAL — as a
             // value, element for element — to the one [captureAround] builds, or the
             // hover that preceded this highlight does not share its build.
-            val occurrences = index.occurrenceNodes()
+            // (INC.44) …unless the caller has already SELECTED this file's
+            // occurrences by spelling, in which case the request is that selection and
+            // the memo it keys is a different (smaller) one on purpose. The one-file
+            // caller passes null and so keeps sharing [captureAround]'s request.
+            val occurrences = sweptNodes?.get(file) ?: index.occurrenceNodes()
             spans.addAll(occurrenceSpansOf(file, occurrences))
             for (id in occurrences) {
                 val span = index.occurrenceSpanOf(id)
@@ -1692,11 +1872,12 @@ public class Project private constructor(
         }
         if (spans.isEmpty()) return emptyList()
         val request = TypeCaptureRequest(spans)
-        // (INC.2b) [narrow] is the caller's statement about its own CLAIM, not about
-        // this sweep: both callers ask only about files they swept, so a derived
-        // partition would be correct for either — but for [referencesAt] it would
-        // name every file in the program, which buys nothing and takes a different
-        // code path to do it.
+        // (INC.2b)/(INC.44) [narrow] says the request's own spans bound what this
+        // answer can contain — which is true of the one-file sweep by construction and
+        // true of the spelling-narrowed one because an occurrence must spell a name in
+        // the closure. The un-narrowed branch below survives for the fallback, where
+        // the closure could not be bounded and the request really is every identifier
+        // in the program.
         val definitions = (
             // (INC.14) A prepared check carrying every swept span answers this
             // without building — which is what makes document highlights free in a
@@ -2745,12 +2926,16 @@ public class Project private constructor(
      *
      * ## What may NOT come through here
      *
-     * A query whose CLAIM is program-wide — [referencesAt], and the rename sweep and
-     * its verification — builds whole-program instead. Not because the capture would
-     * be lost (those sweep every file, so a derived partition would name every file
-     * anyway) but because a partition equal to the program is a different code path
-     * for no win, and because those two additionally read the build's DIAGNOSTICS,
-     * which a partition filters to its own files by design.
+     * A query that reads the build's DIAGNOSTICS may not come through here — the
+     * rename sweep and its verification do, and a partition filters diagnostics to its
+     * own files by design, so a narrowed "before" bag would be compared against a
+     * whole-program "after" one.
+     *
+     * **(INC.44) [referencesAt] now DOES come through here.** It reads captures only,
+     * and its request is no longer every identifier in the program: an occurrence must
+     * spell a name the symbol can be reached by, so the derived partition is the files
+     * that mention one. Where that closure cannot be bounded it falls back to the
+     * whole-program build, which is why the other branch still exists.
      *
      * Equivalence of the narrowed answer to the whole-program one is not assumed: it
      * is swept span for span over a real project by `scripts/capture-equivalence.sh`

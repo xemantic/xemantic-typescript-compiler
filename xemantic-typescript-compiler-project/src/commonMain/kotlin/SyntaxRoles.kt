@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.DoStatement
 import com.xemantic.typescript.compiler.ElementAccessExpression
 import com.xemantic.typescript.compiler.EnumDeclaration
 import com.xemantic.typescript.compiler.EnumMember
+import com.xemantic.typescript.compiler.ExportAssignment
 import com.xemantic.typescript.compiler.ExportSpecifier
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.ExpressionStatement
@@ -904,5 +905,100 @@ internal object SyntaxRoles {
             if (node is Block || node is CaseClause || node is DefaultClause) return false
         }
         return true
+    }
+
+    // --- (INC.44) the SPELLINGS one symbol can be reached by ------------------
+
+    /**
+     * (INC.44) The OTHER spelling this occurrence links its symbol to, or null.
+     *
+     * `import { p as q }` and `export { p as q }` are the only two forms in which one
+     * symbol carries two spellings that are BOTH written down — [Project.renameAt]
+     * has always known this (its `ALIASED_SYMBOL` refusal exists because the
+     * occurrence group can carry both), and a search narrowed by spelling has to know
+     * it too or it drops the far half of the alias silently.
+     *
+     * Both directions, because the caret may be on either end: given the `p` of
+     * `p as q` this answers `q`, and given the `q` it answers `p`.
+     *
+     * ## Why this is enough to CLOSE over, and where the closure is anchored
+     *
+     * A specifier's two names are both TOKENS OF THE FILE THAT WRITES IT, so a file
+     * introducing an alias of `p` necessarily contains the text `p` — which is what
+     * lets [Project] find every link by scanning only files it has already selected
+     * for containing a name it is looking for, and iterate to a fixed point without
+     * ever scanning the program. The forms where that is NOT true — a default import,
+     * an `export =`, an `import x = require(...)` — bind a symbol to a spelling that
+     * appears nowhere near the other one, and they are refused outright by
+     * [isAliasEscape] rather than approximated here.
+     */
+    fun aliasLink(node: Node): String? {
+        val parent = parentOf(node) ?: return null
+        return when (parent) {
+            is ImportSpecifier ->
+                if (parent.propertyName === node) parent.name.text
+                else if (parent.name === node) parent.propertyName?.text
+                else null
+            is ExportSpecifier ->
+                if (parent.propertyName === node) parent.name.text
+                else if (parent.name === node) parent.propertyName?.text
+                else null
+            else -> null
+        }
+    }
+
+    /**
+     * (INC.44) True when this occurrence's symbol can be spelled by a name NO
+     * syntactic scan starting from this one can name — so a spelling-narrowed search
+     * must give up and sweep the whole program.
+     *
+     * The escape hatch, and the reason a narrowed reference search is sound rather
+     * than nearly sound. Four forms bind a symbol across a module boundary WITHOUT
+     * writing both spellings anywhere:
+     *
+     * - `import d from "./m"` — `d` names `m`'s default export, whose own declaration
+     *   may be called anything at all;
+     * - `export default foo` / `export = foo` and an `export default` DECLARATION —
+     *   the other end of the same edge, seen from the exporting file;
+     * - `import x = require("./m")` and `import x = A.B` — an entity alias;
+     * - `import * as ns` / `export * as ns` — a namespace binding, admitted here for
+     *   conservatism rather than because a divergent spelling has been shown.
+     *
+     * Answering true costs the caller today's whole-program sweep, i.e. exactly the
+     * behaviour that shipped before this narrowing existed. Answering false wrongly
+     * would cost a MISSING reference, which is silent — so every form that cannot be
+     * closed over by [aliasLink] belongs here, and the bias is stated rather than
+     * assumed.
+     */
+    fun isAliasEscape(node: Node): Boolean {
+        val parent = parentOf(node) ?: return false
+        return when (parent) {
+            // `import d from "./m"` — the clause's own name is the default binding.
+            is ImportClause -> parent.name === node
+            is NamespaceImport -> parent.name === node
+            is NamespaceExport -> parent.name === node
+            is ImportEqualsDeclaration -> parent.name === node
+            // `export default foo` / `export = foo`: the expression names the symbol
+            // leaving the module under a spelling the importer never has to repeat.
+            is ExportAssignment -> parent.expression === node
+            // `export default function foo() {}` / `export default class C {}`.
+            else -> isDefaultExportedDeclarationName(node, parent)
+        }
+    }
+
+    /**
+     * The `foo` of `export default function foo() {}` — a declaration NAME whose
+     * modifiers carry `export` and `default`, which is the second half of
+     * [isAliasEscape]'s default-export edge.
+     */
+    private fun isDefaultExportedDeclarationName(node: Node, parent: Node): Boolean {
+        val modifiers = when (parent) {
+            is FunctionDeclaration -> if (parent.name === node) parent.modifiers else null
+            is ClassDeclaration -> if (parent.name === node) parent.modifiers else null
+            is InterfaceDeclaration -> if (parent.name === node) parent.modifiers else null
+            is EnumDeclaration -> if (parent.name === node) parent.modifiers else null
+            else -> null
+        } ?: return false
+        return ModifierFlag.Default in modifiers
     }
 }
