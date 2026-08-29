@@ -4509,7 +4509,72 @@ object FrontEnd {
     /** `spineTavIdentifier` — the whole TAV dispatch. INSIDE [CHECK]. */
     const val TAV = 38
 
-    const val N = 39
+    // ---- (INC.53) — the two halves of [CHECK], which no round had separated.
+    //
+    // [CHECK] is the largest phase of the INCREMENTAL FLOOR (32-44 ms of a
+    // 63-70 ms floor build on the compiler profile, 2026-08-29), and the
+    // `--passTimingRows` table inside it sums to only ~19 ms — so a THIRD of
+    // the floor was un-attributed, and the two candidate owners are different
+    // work with different levers: everything `Checker`'s `init` block does that
+    // is NOT wrapped in a `pass("…")` (the ~494 property initializers, the pass
+    // REGISTRATION itself, and any unwrapped setup), against the diagnostic
+    // assembly `getDiagnostics()` performs afterwards.
+    //
+    // ONE timestamp pair each, per compile, so the boundary cost is two pairs
+    // against a ~40 ms row — no differential calibration is needed and none is
+    // claimed. They are recorded on the SEQUENTIAL path only: under `--workers`
+    // the constructor IS the worker's whole check and the split would say
+    // nothing, which is why [CHECK]'s own KDoc already calls the constructor
+    // "this worker's work".
+    //
+    // Their sum is NOT asserted to exhaust [CHECK]: the sequential region also
+    // holds the bind-mutation census and the (INC.46) fingerprint probe, both
+    // opt-in and both off in the shipped compiler. The residue is printed.
+
+    /** `Checker(...)` — the constructor, in which the whole check runs. INSIDE [CHECK]. */
+    const val CHK_CTOR = 39
+    /** `Checker.getDiagnostics()` — the diagnostic assembly. INSIDE [CHECK]. */
+    const val CHK_DIAGS = 40
+    /**
+     * `Checker`'s `init` BLOCK — the pass dispatch. INSIDE [CHK_CTOR].
+     *
+     * Kotlin runs property initializers and `init` blocks in DECLARATION order and
+     * this class declares every field above its one `init` block (a CLAUDE.md
+     * invariant: a field declared below it is null while any pass runs), so
+     * `[CHK_CTOR] - [CHK_INIT]` is the ~494 property initializers and nothing else.
+     * That subtraction is the whole reason this row exists.
+     */
+    const val CHK_INIT = 41
+
+    // ---- (INC.53) the four field initializers that do WHOLE-PROGRAM or
+    // WHOLE-LIB work, INSIDE the `[CHK_CTOR] - [CHK_INIT]` field region.
+    //
+    // They are the reason that region is ~20 ms rather than the microseconds
+    // ~494 allocations would cost, and they were invisible to every instrument
+    // in this repo: a field initializer is not a `pass("…")`, so the
+    // `--passTiming` table, `cost_gate.py`'s counters and the pass-gating arc
+    // ((INC.7)/(INC.20)/(INC.21)) could not see them however carefully they
+    // swept the loops.
+
+    /** `parseBuiltinLib()` — a FRESH bind of the whole lib set, per checker. */
+    const val CHK_F_LIB = 42
+    /** `topLevelConstStringValues` — a whole-program top-level statement scan. */
+    const val CHK_F_TLC = 43
+    /** `enclosingImportIndex` — a whole-program import-specifier index. */
+    const val CHK_F_EII = 44
+    /** `localTypeAliasIndex` — a whole-program DFS through every function body. */
+    const val CHK_F_LTA = 45
+    /**
+     * `RealLibSnapshots.bindLibFiles` — the BINDS inside [CHK_F_LIB].
+     *
+     * The rest of [CHK_F_LIB] is the walk that fills `builtinLibDecls` /
+     * `builtinLibMemberDecls` / `realLibDeclFile`, which are keyed by AST NODE —
+     * i.e. by a Kotlin `data class`, whose `hashCode()` recurses the whole
+     * declaration subtree (round 471). This row is what says which half to fix.
+     */
+    const val CHK_F_LIBBIND = 46
+
+    const val N = 47
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4551,6 +4616,14 @@ object FrontEnd {
         "  of which the export-star barrel search",
         "  of which getTypeParamInfo MISSES",
         "  of which the TAV per-identifier dispatch",
+        "  of which Checker(...) construction",
+        "  of which Checker.getDiagnostics()",
+        "    of which the init-block pass dispatch",
+        "    of which parseBuiltinLib (field)",
+        "    of which topLevelConstStringValues (field)",
+        "    of which enclosingImportIndex (field)",
+        "    of which localTypeAliasIndex (field)",
+        "      of which RealLibSnapshots.bindLibFiles",
     )
 
     /**
@@ -4563,7 +4636,8 @@ object FrontEnd {
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
-        CHECK, STAR, TPI, TAV, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        CHECK, CHK_CTOR, CHK_INIT, CHK_F_LIB, CHK_F_LIBBIND, CHK_F_TLC, CHK_F_EII, CHK_F_LTA,
+        CHK_DIAGS, STAR, TPI, TAV, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
@@ -5306,6 +5380,19 @@ object FrontEnd {
     @Suppress("NOTHING_TO_INLINE")
     inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
 
+    /**
+     * (INC.53) Time [body] into [sec] and answer its value — the shape a FIELD
+     * INITIALIZER needs, since it is an expression and cannot be bracketed by two
+     * statements. Inlined, and [t] answers 0 when off, so the OFF path is the body
+     * plus two not-taken branches.
+     */
+    inline fun <T> section(sec: Int, body: () -> T): T {
+        val t0 = t()
+        val r = body()
+        close(sec, t0)
+        return r
+    }
+
     /** Close a span opened at [t0]. */
     @Suppress("NOTHING_TO_INLINE")
     inline fun close(sec: Int, t0: Long) {
@@ -5545,6 +5632,21 @@ object FrontEnd {
             appendLine(
                 "    SpineArgCtx lookups: hits $argLookupHits misses $argLookupMisses " +
                     "(total ${argLookupHits + argLookupMisses})"
+            )
+        }
+        // (INC.53) — the two CHECK halves, in MICROSECONDS because on an
+        // incremental FLOOR build the whole phase is tens of ms. Their residue is
+        // NOT asserted to be a rounding error: the sequential region also holds
+        // two opt-in probes, both off in the shipped compiler.
+        if (calls[CHK_CTOR] > 0) {
+            val sub = nanos[CHK_CTOR] + nanos[CHK_DIAGS]
+            appendLine(
+                "  check split (us): ctor ${nanos[CHK_CTOR] / 1000}" +
+                    " (fields ${(nanos[CHK_CTOR] - nanos[CHK_INIT]) / 1000}" +
+                    " + init ${nanos[CHK_INIT] / 1000})" +
+                    "  getDiagnostics ${nanos[CHK_DIAGS] / 1000}" +
+                    "  residue ${(nanos[CHECK] - sub) / 1000}" +
+                    "  of ${nanos[CHECK] / 1000}"
             )
         }
         // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION

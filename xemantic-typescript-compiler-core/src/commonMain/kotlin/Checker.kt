@@ -9095,7 +9095,9 @@ class Checker(
         // [RealLibSnapshots.prewarmParsedLibFiles], whose warmed key set is by construction
         // the key set the `--workers` partition checkers then read.
         realLibUnknownNames = RealLibResolver.resolve(libNames, options.defaultedTarget).unknownNames
-        val results = RealLibSnapshots.bindLibFiles(libNames, options.defaultedTarget, options)
+        val results = FrontEnd.section(FrontEnd.CHK_F_LIBBIND) {
+            RealLibSnapshots.bindLibFiles(libNames, options.defaultedTarget, options)
+        }
         val merged: SymbolTable = symbolTable()
         for (result in results) {
             val ast = result.sourceFile
@@ -9152,7 +9154,8 @@ class Checker(
     private var realLibUnknownNames: List<String> = emptyList()
 
     /** Retained lib-globals snapshot for [perFileScope] construction. */
-    private val libGlobals: SymbolTable = parseBuiltinLib()
+    private val libGlobals: SymbolTable =
+        FrontEnd.section(FrontEnd.CHK_F_LIB) { parseBuiltinLib() }
 
     /**
      * INV.3(b)(ii): names whose ONLY declarations are module-file top-level
@@ -9628,7 +9631,10 @@ class Checker(
      *  interfaces/type aliases — do not compete). Local shadows inside function bodies
      *  are not visible here (accepted risk, suite-gated). Built EAGERLY from the frozen
      *  [binderResults]; declared before `init` per the init-order trap. */
-    private val topLevelConstStringValues: Map<String, String> = run {
+    private val topLevelConstStringValues: Map<String, String>
+        by lazy(LazyThreadSafetyMode.NONE) {
+        FrontEnd.section(FrontEnd.CHK_F_TLC) {
+        EagerIndexCensus.topLevelConstBuilds++
         val values = HashMap<String, String>()
         val poisoned = HashSet<String>()
         for (result in binderResults) {
@@ -9701,6 +9707,7 @@ class Checker(
         }
         values
     }
+    }
 
     /** Perf (round 432, eager-immutable round 434): program-wide index ImportSpecifier →
      *  the (fileName, ImportDeclaration) statements whose NamedImports CONTAIN a
@@ -9714,16 +9721,22 @@ class Checker(
      *  [binderResults] and never mutated afterwards — read-only shareable across future
      *  parallel checker workers (Tier 1 in docs/parallel-caching.md). Declared before
      *  `init` per the init-order trap. */
-    private val enclosingImportIndex: Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>> =
-        buildMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>> {
-            for (result in binderResults) {
-                for (stmt in result.sourceFile.statements) {
-                    if (stmt !is ImportDeclaration) continue
-                    val bindings = stmt.importClause?.namedBindings as? NamedImports ?: continue
-                    for (el in bindings.elements) {
-                        val entries = getOrPut(el) { mutableListOf() }
-                        if (entries.lastOrNull()?.second !== stmt) {
-                            entries.add(result.sourceFile.fileName to stmt)
+    private val enclosingImportIndex: Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>>
+        by lazy(LazyThreadSafetyMode.NONE) {
+            FrontEnd.section(FrontEnd.CHK_F_EII) {
+                EagerIndexCensus.enclosingImportBuilds++
+                buildMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>> {
+                    for (result in binderResults) {
+                        for (stmt in result.sourceFile.statements) {
+                            if (stmt !is ImportDeclaration) continue
+                            val bindings =
+                                stmt.importClause?.namedBindings as? NamedImports ?: continue
+                            for (el in bindings.elements) {
+                                val entries = getOrPut(el) { mutableListOf() }
+                                if (entries.lastOrNull()?.second !== stmt) {
+                                    entries.add(result.sourceFile.fileName to stmt)
+                                }
+                            }
                         }
                     }
                 }
@@ -9736,14 +9749,37 @@ class Checker(
      *  never-destructure walker re-scanned the file for EVERY type-annotated parameter
      *  of every function). One DFS per file in exactly the scan's visit order
      *  (statements → function bodies → blocks → namespace blocks → if-branches),
-     *  first-wins per name, so lookups are byte-identical to the replaced scan. Built
-     *  EAGERLY from the frozen [binderResults] and never mutated afterwards — read-only
-     *  shareable across future parallel checker workers (Tier 1 in
-     *  docs/parallel-caching.md; do NOT make this lazily-extended). Declared before
-     *  `init` per the init-order trap. */
-    private val localTypeAliasIndex: Map<String, Map<String, TypeAliasDeclaration>> =
-        buildMap {
-            for (result in binderResults) {
+     *  first-wins per name, so lookups are byte-identical to the replaced scan.
+     *  (INC.53): built PER FILE ON FIRST ASK through [localTypeAliasesOf] — an entry
+     *  is still whole and immutable once built, and it is still a pure function of
+     *  the frozen [binderResults]; what is deferred is WHICH files get one. Declared
+     *  before `init` per the init-order trap. */
+    private val localTypeAliasIndex = HashMap<String, Map<String, TypeAliasDeclaration>>()
+
+    /**
+     * (INC.53) [localTypeAliasIndex]'s entry for [fileName], built on FIRST ASK.
+     *
+     * The eager form ran the DFS below for EVERY program file in a field
+     * initializer — ~5.4 ms of a 63-72 ms incremental floor, and invisible to every
+     * instrument here because a field initializer is not a `pass("…")`. There is
+     * exactly ONE read site ([findLocalTypeAlias]) and it names a file, so building
+     * per file is not an approximation: the scan is over that file's own statements
+     * and nothing else, in the same order, first-wins per name, so a lookup answers
+     * what the eager map answered.
+     *
+     * A file the program does not contain memoizes an EMPTY map, which is what the
+     * eager form's `if (index.isNotEmpty())` guard also produced on a lookup.
+     *
+     * Deliberately NOT lazily EXTENDED — the KDoc above forbids that and means
+     * something different: an entry is built ONCE, whole, from that file's frozen
+     * statements. What is deferred is WHICH files get one.
+     */
+    private fun localTypeAliasesOf(fileName: String): Map<String, TypeAliasDeclaration> =
+        localTypeAliasIndex.getOrPut(fileName) {
+            FrontEnd.section(FrontEnd.CHK_F_LTA) {
+                EagerIndexCensus.localTypeAliasFileScans++
+                val statements = fileResults[fileName]?.sourceFile?.statements
+                    ?: return@section emptyMap()
                 val index = HashMap<String, TypeAliasDeclaration>()
                 fun scan(stmts: List<Statement>) {
                     for (s in stmts) {
@@ -9760,8 +9796,8 @@ class Checker(
                         }
                     }
                 }
-                scan(result.sourceFile.statements)
-                if (index.isNotEmpty()) put(result.sourceFile.fileName, index)
+                scan(statements)
+                index
             }
         }
 
@@ -10022,6 +10058,9 @@ class Checker(
         // INV.0: opt-in pass-time instrumentation (see PassTiming.kt) — inert when
         // PassTiming.enabled is false (the default; only the --passTiming CLI turns it on).
         PassTiming.noteInitStart()
+        // (INC.53) the init BLOCK, so that [FrontEnd.CHK_CTOR] minus this row is the
+        // ~494 property initializers — see [FrontEnd.CHK_INIT].
+        val feInitT0 = FrontEnd.t()
         // (INC.17) install the witness BEFORE the first pass runs — see
         // [diagnosticsView]. Deliberately the first statement of the dispatch.
         if (retainForRecheck) {
@@ -10067,6 +10106,7 @@ class Checker(
                 state.nodeTypes.keys, tnkParallelTypes.entryCount, multiFileModuleTypeNames.size,
             )
         }
+        FrontEnd.close(FrontEnd.CHK_INIT, feInitT0)
         PassTiming.noteInitEnd()
         } catch (e: StackOverflowError) {
             // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
@@ -157479,13 +157519,13 @@ interface DataView {
     /**
      * A `type <name> = ...` declaration anywhere in the file (including function /
      * module / block bodies — the binder never binds those, B83.5), first match in
-     * DFS order, served from the eager [localTypeAliasIndex]. Used by
+     * DFS order, served from [localTypeAliasesOf]'s per-file index. Used by
      * [arrayElementUnionAlias] and [discUnionParamMembers] to resolve a function-local
      * discriminated-union alias. FP-safe because the consuming check requires the alias
      * body to be a literal-discriminated union with a matching array-literal assignment.
      */
     private fun findLocalTypeAlias(name: String, fileName: String): TypeAliasDeclaration? =
-        localTypeAliasIndex[fileName]?.get(name)
+        localTypeAliasesOf(fileName)[name]
 
     private fun tryEmitContraAliasUnionSigPropertyMismatch(
         sigIn: Signature, args: List<Expression>, source: String, fileName: String,

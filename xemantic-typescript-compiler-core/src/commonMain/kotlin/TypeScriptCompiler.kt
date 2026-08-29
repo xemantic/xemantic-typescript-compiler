@@ -2284,6 +2284,10 @@ class TypeScriptCompiler {
             // not the ones a grep found.
             val binderStateBefore =
                 if (BindMutationCheck.enabled) collectBinderSymbols(binderResults) else null
+            // (INC.53) the two halves of [FrontEnd.CHECK] — see its KDoc. The
+            // constructor is where the whole check runs, so this pair separates
+            // the `pass("…")` table from everything around it.
+            val feCtorT0 = FrontEnd.t()
             checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
                 assignedFileNames = recheckOnly,
                 allInputFileNames = allInputFileNames,
@@ -2302,10 +2306,14 @@ class TypeScriptCompiler {
                 // state a later [ProgramRecheck.recheck] re-enters. Only when a caller
                 // asked: it keeps every Type and Symbol of the build alive.
                 retainForRecheck = recheckHolder != null)
+            FrontEnd.close(FrontEnd.CHK_CTOR, feCtorT0)
             if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
             // (INC.16) hazard (a)'s instrument, at ONE fixed point of the pipeline.
             if (LexDefer.census) LexDefer.fingerprint(binderResults)
-            diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+            val feDiagsT0 = FrontEnd.t()
+            val checkerDiagnostics = checker.getDiagnostics()
+            FrontEnd.close(FrontEnd.CHK_DIAGS, feDiagsT0)
+            diagnostics.addAll(checkerDiagnostics.applySkipLibCheck(options))
             // (INC.46) AFTER the diagnostics deliberately: the fingerprint walk forces
             // type resolutions the check may not have needed, and doing it above would
             // make the probe able to ADD a diagnostic. Off in the shipped compiler.
