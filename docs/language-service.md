@@ -4,7 +4,129 @@ How to embed xtsc in a build tool, an IDE plugin, a test harness or an LSP
 server: open a TypeScript project, ask what is wrong with it, apply the buffers
 your user is typing into, and ask again — without the edits ever reaching disk.
 
-**Status (round 931, 2026-08-18).** Landed: diagnostics, in-memory edits,
+## 0. The whole surface, at a glance
+
+This section is the map: every call the API exposes, what it answers, and the
+properties that hold across all of them. Each row points at the section that
+documents it properly.
+
+### What it does
+
+**It is a compiler, driven as a service.** `Project.open` points at a
+`tsconfig.json`; every answer below comes from a real type-check of the real
+program, not from a heuristic index. There is no separate "language service"
+model to drift out of step with the compiler.
+
+- **Diagnostics** — the whole program, one file, or an arbitrary file set,
+  with the answer for a file identical however you ask for it.
+- **In-memory editing** — overlay a buffer, delete a file, add one that exists
+  nowhere on disk. Nothing is ever written; the on-disk tree is read-only input.
+- **Positions** — offset ↔ line/character, both directions, over a
+  terminator-exact line index (`\n`, `\r\n` and a lone `\r` each end one line).
+- **Syntax** — what node is at this offset, and its ancestor chain.
+- **Hover** — the type at a caret, including a member's own declaration name.
+- **Go to definition** — locals, imports, members (`o.p`, inherited, through a
+  union, a namespace, an enum, the lib), an element access `o["p"]`, a binding
+  element's property name, an object-literal key, and both shorthand forms.
+- **Completions** — members (accessibility-filtered) and free names, plus
+  keywords, with the replacement span the host should overwrite.
+- **Signature help** — every overload, the active one, the active parameter,
+  and the label offsets to underline.
+- **Find references and document highlights** — one population, with each
+  occurrence classified `READ` / `WRITE` / `READ_WRITE`, or `UNCLASSIFIED` where
+  the classification is not certain. That fourth state is the design: it does not
+  default to `READ`, so a host is never told "this is only read" about a span the
+  compiler could not place.
+- **Rename** — an edit plan that expands shorthands rather than corrupting
+  them, and that is **verified by applying it and compiling again**, so a
+  collision or a capture withdraws the plan instead of reaching your buffer.
+- **Batched semantics** — many carets, or a whole file, answered in one build.
+
+### The calls
+
+| call | answers | § |
+|---|---|---|
+| `Project.open(path, vfs = SystemVfs)` | opens a project; compiles nothing | § 2 |
+| `configPath` | the `tsconfig.json` this project is checked against, absolute; derived without compiling, and reported even when the file is absent | § 2 |
+| `files` | every file in the program — roots plus everything reachable through imports, plus declarations — in crawl order | § 4 |
+| `diagnostics()` | the whole program's diagnostics | § 4, § 4b |
+| `diagnostics(fileName)` | the rows for one file | § 4 |
+| `diagnosticsOf(fileNames)` | the rows for a file SET, checking only those files | § 4a |
+| `prepare(fileNames)` | pre-checks a working set so later semantic queries about any of them are free | § 3a |
+| `positionAt(fileName, offset)` | offset → 1-based line/character | § 6 |
+| `offsetAt(fileName, line, character)` | 1-based line/character → offset | § 6 |
+| `nodeInfoAt(fileName, offset)` | the narrowest node at the offset, and its ancestor kinds | § 7 |
+| `quickInfoAt(fileName, offset)` | the type at the caret, as display text | § 8 |
+| `definitionsAt(fileName, offset)` | where the thing at the caret is declared — a list, because a symbol may have several | § 9 |
+| `completionsAt(fileName, offset)` | the completion list and the span it replaces | § 10a |
+| `signatureHelpAt(fileName, offset)` | the overloads at a call, with the active one and the active argument | § 10c |
+| `semanticsAt(fileName, offsets)` | hover **and** definitions for many carets, in one build | § 10 |
+| `fileSemantics(fileName)` | the same for every identifier in a file | § 10 |
+| `referencesAt(fileName, offset)` | every occurrence of the symbol, program-wide | § 10b |
+| `documentHighlightsAt(fileName, offset)` | the same, restricted to one file | § 10b |
+| `renameAt(fileName, offset, newName)` | a verified edit plan, or a refusal that names its reason | § 10d |
+| `updateFile(path, text)` | overlays a buffer; marks the project dirty | § 5 |
+| `deleteFile(path)` | overlays a file as absent | § 5 |
+| `close()` | releases the overlay and the cached build; idempotent | § 11 |
+
+`LineMap` is the line index behind `positionAt` / `offsetAt`, exposed for a host
+that wants to hold one itself: `LineMap.of(text)`, then `positionAt(offset)`,
+`offsetAt(line, character)`, `lineStart(line)`, `lineCount`, `textLength`. It is
+immutable, retains no reference to the string it indexed, and is safe to share.
+
+### The value types
+
+| type | carries |
+|---|---|
+| `Diagnostic` (from the core) | `message`, `category`, `code`, `fileName`, `line`, `character`, `start`, `length`, `relatedInformation`, `messageChain` |
+| `TextPosition` | `line`, `character` — both **1-based** |
+| `NodeInfo` | `kind`, `start`, `end`, `ancestorKinds` |
+| `QuickInfo` | `kind`, `displayString`, `start`, `end` |
+| `DefinitionLocation` | `fileName`, `start`, `length`, `kind` |
+| `SemanticInfo` | `start`, `end`, `kind`, `quickInfo`, `definitions` |
+| `CompletionList` | `kind` (`MEMBER` / `FREE_NAME` / `NONE`), `prefix`, `replacementStart`, `replacementEnd`, `items`, `refusal` |
+| `CompletionItem` | `name`, `kind`, `typeText`, `optional`, `readonly`, `accessibility` |
+| `SignatureHelp` | `signatures`, `activeSignature`, `activeArgument` |
+| `SignatureInfo` | `label`, `parameters`, `returnTypeText`, `activeParameter` |
+| `ParameterInfo` | `name`, `typeText`, `optional`, `isRest`, `labelStart`, `labelEnd` |
+| `ReferenceLocation` | `fileName`, `start`, `end`, `isDeclaration`, `use` (`READ` / `WRITE` / `READ_WRITE` / `UNCLASSIFIED`) |
+| `RenamePlan` | `oldName`, `newName`, `files`, `refusal`, `conflicts`, and `isApplicable` — true exactly when there is no refusal and at least one file to edit, which is the one test a host needs before offering the rename |
+| `FileRename` / `RenameEdit` | `fileName` + `edits`; `start`, `end`, `newText` |
+| `RenameConflict` | `kind`, `fileName`, `start`, `end`, `detail` |
+
+Every span is a 0-based offset into the file's text, and every span is half-open
+— but the two families spell it differently, and mixing them up is silent:
+`DefinitionLocation` and `Diagnostic` carry `start` + **`length`**, while
+`QuickInfo`, `NodeInfo`, `ReferenceLocation` and `RenameEdit` carry `start` +
+**`end`**. `line` and `character` are always **1-based**. And a span is not always
+an identifier: a reference to a member named by a string literal covers the text
+*between* the quotes, so a host that assumes otherwise will mis-highlight it.
+
+### Three properties that hold everywhere
+
+**Nothing reaches disk.** Every build runs `noEmit`. `updateFile` overlays; the
+backing `Vfs` is never written through. A host may point the API at a user's
+checkout without owning the consequences.
+
+**Prove to offer.** Where the compiler cannot establish an answer it refuses and
+says why, rather than guessing — because a plausible wrong answer is worse than
+none: a go-to-definition that jumps to an unrelated same-spelled binding *looks
+like it worked*. Refusals are typed (`CompletionRefusal`, `RenameRefusal`,
+`RenameConflictKind`), and every position this API answers either answers
+correctly or refuses. The reasoning, and the full list of gaps, is § 14.
+
+**Cost is incremental, not per-query.** A caret-scoped query checks the buffer it
+is in, not the program; a whole-project error list after an edit is usually one
+narrowed build rather than a rebuild; and repeated or overlapping questions about
+one project state are free. § 3 is the table a host should design against, and it
+is worth reading before the first integration rather than after.
+
+---
+
+**Changelog — what each recent round changed, and what a host may already depend
+on.** The capability summary is § 0 above; this is the record of how it got
+there, kept because a host upgrading across these rounds needs to know which
+answers MOVED. Landed: diagnostics, in-memory edits,
 line/offset conversion, syntactic node lookup, quick info (hover),
 go-to-definition **including members** (`o.p`, inherited, imported, union,
 namespace, enum, lib), **batched semantics** — many positions, or a whole file,
@@ -163,6 +285,13 @@ project.close()
 first query compiles. That is deliberate: it lets you stage the buffers you
 already hold *before* the first build, so a host with unsaved state does not pay
 for a build of the on-disk truth it is about to discard.
+
+`configPath` tells you which `tsconfig.json` the project is checked against, as
+an absolute path, resolved exactly as the compiler resolves it — a directory
+argument gets `/tsconfig.json` appended, anything else IS the config. It is
+derived without compiling, so reading it is free, and it is reported even when
+the file is absent; a host that wants to distinguish "no config" from "a config
+I have not saved yet" can stage one through `updateFile` before its first query.
 
 `open` throws `IllegalArgumentException` if the path does not exist. That is a
 guard, not politeness — a project path that does not exist used to make the
@@ -398,45 +527,6 @@ about it must never scatter JavaScript through the user's tree as a side effect
 of a query, and with an editor overlay in play the output would correspond to
 unsaved buffers anyway. Emitting stays `ProjectCompiler`'s job.
 
-## 4b. Why `diagnostics()` is usually not a rebuild
-
-`diagnostics()` answers about the whole program, so for a long time it rebuilt the
-whole program — 4.9 s per edit on tsc's own 78 sources. It no longer does.
-
-After an edit, the project asks ONE question: **did the edit move what an importer
-of the edited file can observe?** An edit inside a function body leaves every
-exported signature intact, so no other file's diagnostics can have changed, and the
-answer is the previous build's rows with the edited file's rows replaced — one
-narrowed build. Only an edit that actually moves an exported TYPE forces a rebuild.
-
-This is deliberately **not** a reverse-dependency closure. Measured on tsc's own
-sources, both a file-level and a symbol-level use graph re-check 100% of the
-program's characters at the median edit — those files genuinely use symbols from
-most other files, and the relation is transitive. Asking whether the symbols MOVED
-collapses that to nothing, however dense the graph is.
-
-**What it costs you when the guess is wrong.** A signature-changing edit costs two
-builds instead of one: the narrowed build that discovers the surface moved, then the
-rebuild. Measured over 40 real commits to tsc's own `src/compiler`, 27 of 40 moved
-no signature — so the bet pays about two edits in three.
-
-**When it does not apply at all**, and each is checked rather than assumed: a config
-edit; an edit to a file that was not in the program (a new file changes what every
-importer resolves); an edit that changes the program's file set, such as adding an
-import; and an edit to a file whose export surface cannot be summarised exactly —
-a SCRIPT file (no module syntax, so its top-level names are program-wide), a global
-augmentation, or an export the summary cannot enumerate. Any of these is a plain
-rebuild.
-
-**The guarantee.** The incremental answer is the whole program's answer. It is
-graded as a differential over those 40 real commits — the answer after an edit
-against a project opened fresh on the edited text, row for row — and it agrees on
-all 40, with 27 of them actually answered incrementally rather than falling back.
-Row ORDER is preserved too: the edited file's new rows are spliced where its old
-rows were, not appended.
-
-You do not have to do anything to get this. It is what `diagnostics()` does.
-
 ## 4a. Narrowed diagnostics — the one an editor should wire to
 
 ```kotlin
@@ -645,6 +735,45 @@ it is the query an IDE actually makes, and the one whose cost falls with the siz
 of what the user is looking at rather than with the size of their project. Keep
 `diagnostics()` for the whole-project error list a host shows on demand, on a
 build, or in a background pass.
+
+## 4b. Why `diagnostics()` is usually not a rebuild
+
+`diagnostics()` answers about the whole program, so for a long time it rebuilt the
+whole program — 4.9 s per edit on tsc's own 78 sources. It no longer does.
+
+After an edit, the project asks ONE question: **did the edit move what an importer
+of the edited file can observe?** An edit inside a function body leaves every
+exported signature intact, so no other file's diagnostics can have changed, and the
+answer is the previous build's rows with the edited file's rows replaced — one
+narrowed build. Only an edit that actually moves an exported TYPE forces a rebuild.
+
+This is deliberately **not** a reverse-dependency closure. Measured on tsc's own
+sources, both a file-level and a symbol-level use graph re-check 100% of the
+program's characters at the median edit — those files genuinely use symbols from
+most other files, and the relation is transitive. Asking whether the symbols MOVED
+collapses that to nothing, however dense the graph is.
+
+**What it costs you when the guess is wrong.** A signature-changing edit costs two
+builds instead of one: the narrowed build that discovers the surface moved, then the
+rebuild. Measured over 40 real commits to tsc's own `src/compiler`, 27 of 40 moved
+no signature — so the bet pays about two edits in three.
+
+**When it does not apply at all**, and each is checked rather than assumed: a config
+edit; an edit to a file that was not in the program (a new file changes what every
+importer resolves); an edit that changes the program's file set, such as adding an
+import; and an edit to a file whose export surface cannot be summarised exactly —
+a SCRIPT file (no module syntax, so its top-level names are program-wide), a global
+augmentation, or an export the summary cannot enumerate. Any of these is a plain
+rebuild.
+
+**The guarantee.** The incremental answer is the whole program's answer. It is
+graded as a differential over those 40 real commits — the answer after an edit
+against a project opened fresh on the edited text, row for row — and it agrees on
+all 40, with 27 of them actually answered incrementally rather than falling back.
+Row ORDER is preserved too: the edited file's new rows are spliced where its old
+rows were, not appended.
+
+You do not have to do anything to get this. It is what `diagnostics()` does.
 
 ## 5. Editing in memory
 
