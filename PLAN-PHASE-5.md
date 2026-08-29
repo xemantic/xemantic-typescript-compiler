@@ -3000,6 +3000,95 @@ RHS, and the merged-member CONTRADICTION direction.
   `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
   selection must therefore carry.
 
+- [ ] **(INC.46) PROJECT-WIDE DIAGNOSTICS BY *EXPORTED-SIGNATURE STABILITY*, NOT BY A
+  DEPENDENCY CLOSURE — THE OWNER'S IDEA, AND IT DISSOLVES (INC.35)'s BLOCKER RATHER THAN
+  WORKING AROUND IT.** Owner, 2026-08-29: *"if we do `import *` in a certain file and then
+  recompile this file, don't we have the information of all the resolved imported symbols
+  this file is using?"* We do — `capturedDefinitions` is span -> declaration location, a
+  by-product of a build we already run. **But a symbol-level use graph was MEASURED THIS
+  SESSION AND IT DOES NOT HELP**, and that refutes the queue's own standing explanation as
+  well as the hypothesis:
+
+  | graph over tsc's 78 compiler sources | median edit re-checks |
+  |---|---|
+  | file-level (what round 772 measured) | 99% of files / **100% of chars** |
+  | **symbol-level** (94.9% of imported names placed to a declaring file) | 95% of files / **100% of chars** |
+
+  **The `export *` BARREL WAS NEVER THE CAUSE** — (INC.35) and round 772 both say or imply
+  it was, and both are wrong about the mechanism. `checker.ts` genuinely uses symbols from
+  `types.ts` / `core.ts` / `utilities.ts` / `debug.ts` / `parser.ts`, everyone uses `core.ts`
+  and `debug.ts`, and the relation is transitive. Knowing WHICH symbols a file imports buys
+  nothing when the answer is "most of them, from most files".
+
+  **WHAT DOES CRACK IT IS THE SECOND HALF OF THE IDEA: ask whether the symbols a file uses
+  have CHANGED, not which they are.** An edit to a function BODY leaves every exported
+  signature intact, so no dependent needs re-checking and the closure collapses to `{the
+  edited file}` however dense the graph is — transitivity fires only when an edit actually
+  moves an exported TYPE. **91.6% of the program's characters sit inside brace-delimited
+  bodies** (stripper length-preserving, positive control passed), so most edit POSITIONS
+  cannot change a signature. Read that as a proxy and not a rate: it is optimistic because an
+  INFERRED return type leaks a body change back into the signature, and pessimistic because
+  it counts `interface`/`type` bodies, which ARE signature, as body text. **The honest rate
+  needs an edit corpus and this checkout cannot supply one** (`typescript-repo` is a depth-1
+  shallow clone and is a build-pinned input — do not deepen it; fetch a separate clone).
+
+  **AND THIS IS WHY IT MATTERS MORE THAN (INC.35): A SIGNATURE HASH PAYS ON *DENSE* CODE
+  TOO.** (INC.35) is owner-closed because a closure only pays on LAYERED code and the
+  dashboard profile is the opposite; this mechanism can be built and graded on tsc's own
+  sources, i.e. **it needs no corpus choice and no owner call**.
+
+  **THE PRIZE IS ALREADY MEASURED AND NEEDS NO NEW RUN.** A body-only edit to file F would
+  cost a narrowed build of `{F}` plus a merge, against a full rebuild: **108-113 ms median
+  (p90 202-219) against 4,864-5,096 ms — a factor of 45** ((INC.31)/(INC.37), 2026-08-24,
+  `d018af0a`, § 14). `checker.ts`, the 31.6% file, is 1,744-1,763 ms against the same 4.9 s.
+
+  **THE COST HALF IS THE UNMEASURED ONE, AND ITS INPUT IS CENSUSED: 3,398 exported
+  declarations over the 78 files** (mean 44, median **6**, max **874** in `types.ts`). So the
+  per-build work is ~3,400 `getTypeOfSymbol` + fingerprint calls, against a rebuild that
+  already makes ~800 k `getTypeOfExpression` calls — almost certainly single-digit ms, but
+  **that is an argument and not a measurement; hook it and read it before building anything
+  downstream of it.**
+
+  **THE HAZARD THAT WOULD SINK IT, AND IT IS NOT THE OBVIOUS ONE.** The tempting hash source
+  is `typeToString(getTypeOfSymbol(exported))` — a resolved type rather than syntax, which is
+  the right SOUNDNESS instinct (a syntactic hash misses an inferred return type). **It is
+  still the wrong source, for two reasons this repo has already documented in another
+  context.** (i) `typeToString` is **not a pure function of the type**: `aliasDisplayMap` is a
+  FIRST-WINS global keyed by `Type.id` ((INC.11)/(INC.26)/(INC.41)), so the same type renders
+  differently depending on what was resolved first — spurious invalidation, which is SAFE but
+  may be frequent enough to eat the whole prize. (ii) B58.1 renders `errorType` as **`"any"`**,
+  so a type that DEGRADES to a resolution failure hashes identically to a genuine `any` —
+  **a missed invalidation, i.e. a stale diagnostic, silently**, which is the only direction
+  that matters. **The hash must therefore be an ID-FREE STRUCTURAL FINGERPRINT** (member names
+  + modifiers + recursively fingerprinted member types, cycle-guarded), never a display
+  string and never anything keyed on `Type.id`, which is a per-build sequence.
+  **(INC.16) already built exactly such a fingerprint for the INV.2(c) lexical tables — copy
+  its shape rather than inventing one.**
+
+  **WHAT ELSE MUST BE IN THE HASH, or the invalidation is unsound**: the SET of exported names
+  (an added or removed export changes resolution in every importer, with no type moving); the
+  targets of `export *`; and a whole-program escape for any file declaring GLOBALS or
+  augmenting a module — **5 of the 78 carry `declare global` / `declare module "…"` /
+  `export as namespace`** (regex-approximate; re-derive it from the binder, not from text).
+
+  **ORDER OF WORK, and it is measure-first by construction.**
+  (1) Hook the fingerprint cost on a full build and read it — if it is not single-digit ms on
+  `types.ts`'s 874 exports, stop.
+  (2) Measure the STABILITY RATE against a real edit corpus (a separate, deepened TypeScript
+  clone; sample commits touching `src/compiler` and ask what fraction move no exported
+  fingerprint). Under ~70% the 45x is diluted to nothing and the round should refuse.
+  (3) Only then wire the invalidation.
+  **GRADE IT AS A DIFFERENTIAL, which needs no baseline**: after an edit, incremental
+  project-wide diagnostics must equal a full rebuild's, row for row, over a SEQUENCE of edits
+  — and the sequence must contain a signature-CHANGING edit and a body-only one, or the gate
+  is vacuous in exactly the way (INC.45)'s arm b2 was (a clean fixture made a
+  diagnostic-multiset comparison compare empty against empty and pass).
+  **Note what it is NOT**: this is tsc's own `--incremental` design (a per-file signature in
+  `tsbuildinfo`, hashed from the declaration emit, with dependents skipped when it has not
+  moved). We have no declaration emitter — `declaration`/`emitDeclarationOnly` are parsed
+  options with no emitter behind them — which is *why* the fingerprint goes over resolved
+  types directly instead.
+
 - [x] **(INC.45) `renameAt` IS NARROWED TOO — LANDED 2026-08-29, AND ITS THREE OBSTACLES
   WERE ALL REAL.** The rename sweep performed the same whole-program capture (INC.44) removed
   from `referencesAt` and paid the same 20-26 s for it. It now takes the same spelling closure

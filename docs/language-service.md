@@ -2485,6 +2485,15 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
    the narrowed arm is the better answer.
 
+   **Project-wide `diagnostics()` is the one thing left, and `(INC.46)` is the route.**
+   Not a dependency closure — a symbol-level use graph was measured on tsc's own sources
+   and re-checks 100% of the program's characters at the median edit, the same as the
+   file-level one, so the `export *` barrels were never the cause. What collapses it is
+   asking whether an edit moved any EXPORTED SIGNATURE: a body-only edit moves none, so
+   no dependent re-checks and the cost is one narrowed build (108 – 113 ms against
+   4,864 – 5,096 ms). See the queue entry for the two hazards, of which the sharp one is
+   that `typeToString` is the wrong hash source in both directions.
+
    **`referencesAt` IS narrowed since `(INC.44)`, and `renameAt` since `(INC.45)`.**
    The sentence that used to stand here — "their claim is about every file, so there
    is nothing to narrow to" — confused the claim with the evidence: an occurrence of
