@@ -152,6 +152,24 @@ class ProjectReferenceNarrowingTest {
         return narrow to whole
     }
 
+    /**
+     * (INC.16)'s lesson, applied: every other pin in this class INSTALLS the mode it
+     * wants and restores it, which leaves the SHIPPED DEFAULT pinned by nothing — an
+     * ablation flipping it back would read 0 RED and look like a redundant change.
+     * This is the one pin with no mode install in it.
+     *
+     * It is also the honest limit of what can be pinned here. The narrowing is
+     * EQUIVALENCE-PRESERVING by construction, so an arm that simply never narrows
+     * cannot be caught by any assertion about an answer — only by this, and by the
+     * cost measurements, which are wall time and pinned by nothing.
+     */
+    @Test
+    fun `the shipped default narrows`() {
+        val project = projectWith()
+        assert(project.narrowReferenceSweeps)
+        assert(project.narrowedSweepFiles(mainFile, offsetOf("unrelated", 1)) == 1)
+    }
+
     // --- the ordinary case, which is what the narrowing is FOR ------------------
 
     /**

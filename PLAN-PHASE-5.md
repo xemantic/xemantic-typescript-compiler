@@ -3000,32 +3000,51 @@ RHS, and the merged-member CONTRADICTION direction.
   `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
   selection must therefore carry.
 
-- [ ] **(INC.45) NARROW `renameAt` THE SAME WAY — 20–26 s IS THE LAST WHOLE-PROGRAM
-  INTERACTIVE OPERATION, AND IT IS *NOT* A COPY OF (INC.44).** `renameSweep` performs the
-  same whole-program capture and would take the same spelling closure, but three things make
-  it a bigger change than the reference one, and all three are named here so nobody prices it
-  as free.
-  **(1) IT READS THE BUILD'S DIAGNOSTICS.** `verifyRename` compares a `(file, code)` MULTISET
-  before and after applying the plan; a partition filters diagnostics to its own files, so a
-  narrowed "before" bag against a whole-program "after" bag would report every unswept file's
-  rows as REMOVED. Both builds must take the SAME `recheckOnly`. The soundness argument for
-  narrowing it at all is available and must be written down rather than assumed: a rename
-  edits only files in the plan, and an unedited file's meaning can change only through a name
-  it imports — which it must then SPELL, so it is in the partition. That argument is what a
-  reviewer should attack first.
-  **(2) THE SELECTION MUST CARRY THE *NEW* NAME TOO.** `verifyRename`'s third check scans
-  `sweep.identifiers` for occurrences already spelling `newName` and asserts they still
-  resolve where they did — the check that catches a rename which compiles and means something
-  else. Narrowed to the old name's closure alone, that scan finds nothing and the check goes
-  VACUOUS, which is round 902's dead arm with the safety net as the victim.
-  **(3) `completenessConflicts` AND `DECLARED_IN_A_LIBRARY` READ `sweep.indexes`.** The first
-  is a spelling scan and stays sound under narrowing (a file outside the partition spells
-  neither name); the second refuses when a seed declaration is in no swept file, which under
-  narrowing must not start firing for a program file — a declaration spells the name, so it
-  should not, but that is a claim to PIN and not to assume.
-  **GRADE IT THE SAME WAY**: a `RenamePlan`-level differential against
-  `Project.narrowReferenceSweeps`' rename twin, comparing the plan's edits, refusal and
-  conflicts element for element, plus the control that says how many carets took the new path.
+- [x] **(INC.45) `renameAt` IS NARROWED TOO — LANDED 2026-08-29, AND ITS THREE OBSTACLES
+  WERE ALL REAL.** The rename sweep performed the same whole-program capture (INC.44) removed
+  from `referencesAt` and paid the same 20-26 s for it. It now takes the same spelling closure
+  and hands the resulting file set to the compiler as a check partition. The three things that
+  made it not a copy of the reference change were each answered rather than assumed:
+  **(1) THE DIAGNOSTIC MULTISET.** `verifyRename` compares `(file, code)` bags before and
+  after applying the plan; a partition filters diagnostics to its own files, so the two builds
+  must SHARE one. `RenameSweep.partition` carries it and the after-build takes it rather than
+  deriving its own from the spans it happens to ask about. The soundness argument is written
+  into `narrowedRenameSweep` and is the one a reviewer should attack first: a rename edits only
+  files the plan names, all of which are in the partition, and an unedited file's meaning can
+  change only through a name it imports — which it must then SPELL.
+  **(2) THE NEW NAME HAD TO WIDEN THE SELECTION.** `verifyRename`'s third check — the only one
+  that can see a rename which compiles and means something else — scans for occurrences ALREADY
+  spelling the new name. Selected on the old name's closure alone it finds nothing and passes
+  VACUOUSLY, i.e. the narrowing would have switched the safety net off rather than paying less
+  for it. The new name joins the SELECTION and not the CLOSURE: it is not a spelling of the
+  symbol being renamed, so letting it contribute alias links or escapes would make the
+  partition a function of a name that names something else.
+  **(3) AND A PLAN COMPARISON CANNOT SEE (2).** On a fixture whose new name is fresh both arms
+  agree with or without the widening, so the pin is a COUNT — `Project.narrowedRenameFiles`
+  reaches a file the reference partition at the same caret does not.
+  **THE ABLATION FOUND A BLIND PIN SET AND THE FIX IS IN THE FIXTURE, NOT THE ASSERTION.** Arm
+  b2 (the after-build forgets the sweep's partition) reddened **NOTHING** on the first run:
+  every fixture was a CLEAN program, so both bags were empty whatever either build walked and
+  the comparison was empty-against-empty. Adding one file that carries a diagnostic and spells
+  none of the renamed names takes b2 to **2 RED**. **Arm b3 — never narrow at all — is
+  UNDISCRIMINATED and is recorded as such**: the change is equivalence-preserving by
+  construction, so no assertion about an ANSWER can see it; what stands in its place is a
+  single pin on the shipped DEFAULT with no mode install in it ((INC.16)'s lesson), and the
+  cost measurements, which are wall time and pinned by nothing.
+  **GRADED** by `scripts/rename-narrowing-differential.sh`, which compares whole `RenamePlan`s
+  — a data class, so equality covers every edit's file, span and text, the refusal and the
+  conflict list — and prints `applicable=` beside `narrowed=` because two REFUSALS compare
+  equal and a run with no applicable plan in it has compared two empty edit lists.
+  **EQUIVALENT** — 8 carets by stride over all 381,775 occurrences, **7 narrowed**, **6
+  producing an APPLICABLE plan** (the second control), 1,691 edits compared plan for plan,
+  **0 diverged**; 56.5 s narrowed against 114.2 s whole-program (**2.02x** on a draw that
+  lands proportional to occurrence count, i.e. on the hottest names). **Draw few carets**:
+  a rename holds a whole-program sweep per arm and a 20-caret run at `-Xmx6g` was
+  OOM-KILLED — the tell is a harness that stops after its header with no verdict line.
+  **+6 pins** (`ProjectRenameNarrowingTest`, plus the shipped-default pin in
+  `ProjectReferenceNarrowingTest`); three ablation arms, b1 -> 1 RED, b2 -> 2 RED (after the
+  fixture repair), b3 undiscriminated with a reason. **Suite 16,440 / 0 / 3** (+18 over the
+  session's re-verified 16,422 baseline, exactly the new pins).
 
 - [ ] **(INC.43) THE 213 ROWS (INC.42) DID NOT CLOSE — AND THEY ARE NOT WHAT THE QUEUE HAS
   BEEN CALLING THEM.** Re-measured after (INC.42) landed: `Inc41ClassifyMain` reads **796 rows

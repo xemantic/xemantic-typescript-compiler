@@ -189,6 +189,7 @@ you call them.
 | `completionsAt(f, o)` | **one NARROWED build, every call** | 194 – 202 ms on tsc's own sources (2026-08-24). A DIFFERENT question (a receiver's members, or a scope chain), so it does not share — **not even with `prepare`, which is an open defect, see § 14 `(INC.32)`**; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
 | `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share; free in a `prepare`d file |
 | `referencesAt(f, o)` | ONE build clean, TWO dirty — **narrowed by SPELLING since (INC.44)**, whole-program only where the name closure cannot be bounded | § 10b has the measured figures |
+| `renameAt(f, o, n)` | TWO builds clean, THREE dirty — **narrowed the same way since (INC.45)**, with the population widened by the NEW name | § 10d |
 | `signatureHelpAt(f, o)` | **one NARROWED build, every call** | 190 – 214 ms on tsc's own sources (2026-08-24); shares nothing, same open defect as `completionsAt`; free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
@@ -197,10 +198,10 @@ you call them.
 narrows is the per-file CHECKING, which the compiler takes as a partition
 (`recheckOnly`, the INV.6 view `--workers` uses). Every caret-scoped query above
 hands it the buffer the caret is in, because an editor's question about one buffer
-claims nothing about the other files. `renameAt` does not, because its claim IS about
-every file; `referencesAt`'s claim is too, but since (INC.44) its EVIDENCE is not —
-it selects the occurrences that could possibly be answers and lets the partition
-follow from them (§ 10b). Measured warm and rotated in one process on tsc's
+claims nothing about the other files. `referencesAt` and `renameAt` claim something
+about EVERY file — but since (INC.44)/(INC.45) their EVIDENCE does not: they select
+the occurrences that could possibly be answers and let the partition follow from them
+(§§ 10b, 10d). Measured warm and rotated in one process on tsc's
 own 78 compiler sources (2026-08-24, commit d018af0a, two independent processes),
 a first capture of `binder.ts` (7,787 spans) is **290 – 306 ms** against a
 **4,864 – 5,096 ms** full rebuild, and the median over all 73 sweepable files is
@@ -1828,16 +1829,54 @@ On this repo's own compiler profile — tsc's 78 source files, 9,977,097 charact
 
 | query | builds | wall | moved since round 930? |
 |---|---|---|---|
-| `referencesAt`, for reference — **(INC.44)** narrowed it and left rename where it was | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
-| `renameAt` — `SyntaxKind`, clean | 2 | **20.0 – 21.3 s** | no |
-| `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | no |
+| `referencesAt`, for reference — **(INC.44)** | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
+| `renameAt` — `SyntaxKind`, clean, i.e. a name in 49 of 78 files | 2 | **20.0 – 21.3 s** | see (INC.45) |
+| `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | see (INC.45) |
 | a refusal decided on syntax alone | **0** | microseconds | — |
 
 Re-taken **2026-08-24 at commit d018af0a**, two independent processes;
-**unpinned by any test**, per § 14. **Nothing here moved, and nothing here can**:
-a rename's sweep and its verification are whole-program by CLAIM, so they never
-enter `captureIn`'s partition and no narrowing round reaches them (§ 10b's closing
-note).
+**unpinned by any test**, per § 14.
+
+### (INC.45) A rename is narrowed by the same closure, WIDENED by the new name
+
+The paragraph that stood here said "nothing here moved, and nothing here can: a
+rename's sweep and its verification are whole-program by CLAIM". Same category error
+as § 10b's, and it is retracted: the claim is program-wide, the evidence is not.
+`renameAt` takes (INC.44)'s closure and hands the resulting file set to the compiler as
+a check partition, so the `SyntaxKind` rows above are the WORST case (a name written in
+49 of 78 files) rather than the typical one.
+
+**Three things make it more than a copy of the reference change, and a host should know
+the second one exists.**
+
+1. **Both of a rename's builds share ONE partition.** `verifyRename` compares the
+   build's diagnostics as a `(file, code)` MULTISET before and after applying the plan;
+   a partition filters diagnostics to its own files, so a narrowed "before" against a
+   whole-program "after" would report every unswept file's rows as removed. What makes
+   narrowing that comparison sound: a rename edits only files the plan names, all of
+   which are in the partition, and an unedited file's meaning can change only through a
+   name it imports — which it must then SPELL.
+2. **The population is the closure UNION every occurrence of the NEW name.**
+   `verifyRename`'s third check — the only one that can see a rename which compiles and
+   means something else — scans for occurrences that already spell the new name and
+   asserts each still resolves where it did. Without the widening that scan finds
+   nothing and passes vacuously, which would make this a way of switching the safety
+   net off rather than of paying less for it.
+3. **The new name joins the SELECTION, not the CLOSURE.** It is not a spelling of the
+   symbol being renamed, so letting it contribute alias links or escapes would make the
+   partition a function of a name that names something else entirely.
+
+**What still renames through the whole-program sweep** is exactly § 10b's refusal list:
+a symbol reached through a default export, an `export =`, an `import x = require(…)` or
+a namespace binding.
+
+`scripts/rename-narrowing-differential.sh` is the gate — it compares whole
+`RenamePlan`s, and prints `applicable=` beside `narrowed=` because two REFUSALS compare
+equal and a run with no applicable plan in it has compared two empty edit lists. It
+reads **EQUIVALENT** over tsc's own sources: 8 carets, 7 narrowed, 6 applicable, 1,691
+edits compared plan for plan, 0 diverged, 56.5 s narrowed against 114.2 s. **Draw few
+carets** — a rename holds a whole-program sweep per arm, and a 20-caret run at `-Xmx6g`
+was OOM-killed.
 
 The second build is the verification, and it costs less than the first on a small rename
 (it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
@@ -2206,8 +2245,9 @@ every semantic query is a full rebuild". It is not: every caret-scoped query is 
 NARROWED build, and at the median file that is **108 – 113 ms against a 4.9 s rebuild,
 a factor of 45**. What is still a full rebuild is `diagnostics()`; **`referencesAt`
 moved in `(INC.44)`** and is narrowed by the SPELLINGS its answer can carry (§ 10b),
-falling back to the whole-program sweep only where that closure cannot be bounded;
-`renameAt` is the one interactive operation still whole-program in every case. The
+falling back to the whole-program sweep only where that closure cannot be bounded, and
+**`renameAt` moved with it in `(INC.45)`** (§ 10d), its population widened by the NEW
+name so that its verification's "nothing moved" check does not go vacuous. The
 "moved?" column says which is which, and that column is the half a host must design
 around. **The `referencesAt` rows below were taken this round (2026-08-29) and not on
 the 2026-08-24 provenance the rest of the table carries.**
@@ -2429,15 +2469,17 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
    the narrowed arm is the better answer.
 
-   **`referencesAt` IS narrowed since `(INC.44)` and `renameAt` is not.** The
-   sentence that used to stand here — "their claim is about every file, so there is
-   nothing to narrow to" — confused the claim with the evidence: an occurrence of a
-   symbol must SPELL a name that symbol is reachable by, so `referencesAt` selects
-   its population syntactically and lets `captureIn` derive the check partition from
-   it, while still answering about the whole program. What it cannot bound it
-   refuses, and then the old whole-program sweep runs unchanged. `renameAt` reads the
-   build's DIAGNOSTICS as well as its captures, and a partition filters those to its
-   own files, so it stays whole-program until that is dealt with separately.
+   **`referencesAt` IS narrowed since `(INC.44)`, and `renameAt` since `(INC.45)`.**
+   The sentence that used to stand here — "their claim is about every file, so there
+   is nothing to narrow to" — confused the claim with the evidence: an occurrence of
+   a symbol must SPELL a name that symbol is reachable by, so both select their
+   population syntactically and let `captureIn` derive the check partition from it,
+   while still answering about the whole program. What they cannot bound they refuse,
+   and then the old whole-program sweep runs unchanged. Rename needed two things
+   references did not: BOTH of its builds take the same partition (its verification
+   compares diagnostics as a multiset, which a partition filters), and its population
+   is the closure widened by the NEW name (its "nothing moved" check scans for
+   occurrences already spelling it, and would otherwise pass vacuously).
 
    **What the other three capture channels cost, stated rather than left to be found.**
    `scripts/capture-channel-equivalence.sh` sweeps members, scopes and signatures, which
