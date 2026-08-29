@@ -104,6 +104,7 @@ fun main(args: Array<String>) {
     var moved = 0
     var skipped = 0
     val movedBecauseEscaped = ArrayList<String>()
+    val touchedAnEscape = ArrayList<String>()
     println("cases=${cases.size}")
     for (case in cases) {
         val touched = File(case, "touched.txt").takeIf { it.isFile }?.readLines()
@@ -138,12 +139,27 @@ fun main(args: Array<String>) {
             println("${case.name} STABLE  touched=${touched.size}")
         } else {
             moved++
-            if (escaped) movedBecauseEscaped.add(case.name)
+            // (INC.47) TWO COUNTS, BECAUSE ONE OF THEM WAS MIS-READ AND COST A ROUND.
+            // `escaped` says only that SOME touched file could not be fingerprinted;
+            // the case may have moved for a reason of its own beside it. The number
+            // that bounds what removing the escape is WORTH is the second one — cases
+            // whose EVERY moved file is an escape — and (INC.46)(2) quoted the first
+            // under the second's name, reporting an 87.5% ceiling where the real one
+            // was 70%. (INC.47) then removed every escape and measured the rate
+            // UNCHANGED at 67%, with all 40 verdicts identical.
+            if (escaped) touchedAnEscape.add(case.name)
+            if (escaped && movedFiles.all { it.endsWith("(escape)") }) {
+                movedBecauseEscaped.add(case.name)
+            }
             println("${case.name} MOVED   touched=${touched.size} ${movedFiles.take(6)}")
         }
     }
     val decided = stable + moved
     println("---")
     println("STABILITY RATE: $stable stable / $decided decided (${if (decided == 0) 0 else stable * 100 / decided}%), skipped=$skipped")
-    println("of the MOVED, ${movedBecauseEscaped.size} were moved only because a touched file ESCAPES: $movedBecauseEscaped")
+    println("of the MOVED, ${touchedAnEscape.size} TOUCHED an escaping file: $touchedAnEscape")
+    println(
+        "of the MOVED, ${movedBecauseEscaped.size} moved ONLY because of an escape — " +
+            "i.e. what removing every escape could buy: $movedBecauseEscaped",
+    )
 }
