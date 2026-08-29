@@ -148,8 +148,27 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
         return delegate.isDirectory(k) || hasOverlayChildren(k)
     }
 
+    /**
+     * (INC.48) Every `.json` this Vfs was asked to read since [clearJsonReads] — the
+     * configuration inputs of the build in flight.
+     *
+     * Recorded here rather than derived, because which `.json` files a build depends on
+     * is not a function of the project path: a `tsconfig` may `extends` another, and
+     * under `nodenext` a file's module format comes from the nearest enclosing
+     * `package.json` ((CHK.29)). A snapshot that hashed only `tsconfig.json` would be
+     * validated against a fraction of what decided its answer. Mirrors what
+     * `TsBuildInfo`'s `RecordingVfs` does for the CLI's `.xtsbuildinfo`.
+     */
+    val jsonReads: MutableSet<String> = LinkedHashSet()
+
+    /** Drops [jsonReads], so the next build records its own inputs and not the last one's. */
+    fun clearJsonReads() {
+        jsonReads.clear()
+    }
+
     override fun readText(path: String): String? {
         val k = key(path)
+        if (k.endsWith(".json")) jsonReads.add(k)
         if (k in deleted) return null
         return contents[k] ?: delegate.readText(k)
     }

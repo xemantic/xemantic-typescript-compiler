@@ -60,6 +60,12 @@ internal object TsBuildInfo {
 
     // -- stored model -----------------------------------------------------------
 
+    /**
+     * (INC.48) Shared with [ProjectStateSnapshot], deliberately: a diagnostic's
+     * `relatedInformation` and `messageChain` are easy to drop in a second mapping, and
+     * a dropped chain is a diagnostic that reads differently after a restore than it did
+     * before it. One mapping, two persistence formats.
+     */
     @Serializable
     internal data class StoredDiagnostic(
         val message: String,
@@ -129,14 +135,14 @@ internal object TsBuildInfo {
 
     // -- conversions ------------------------------------------------------------
 
-    private fun toStored(d: Diagnostic): StoredDiagnostic = StoredDiagnostic(
+    internal fun toStored(d: Diagnostic): StoredDiagnostic = StoredDiagnostic(
         message = d.message, category = d.category.name, code = d.code,
         fileName = d.fileName, line = d.line, character = d.character,
         start = d.start, length = d.length,
         related = d.relatedInformation.map(::toStored), chain = d.messageChain,
     )
 
-    private fun toDiagnostic(s: StoredDiagnostic): Diagnostic = Diagnostic(
+    internal fun toDiagnostic(s: StoredDiagnostic): Diagnostic = Diagnostic(
         message = s.message,
         category = try { DiagnosticCategory.valueOf(s.category) } catch (_: Exception) { DiagnosticCategory.Error },
         code = s.code, fileName = s.fileName, line = s.line, character = s.character,

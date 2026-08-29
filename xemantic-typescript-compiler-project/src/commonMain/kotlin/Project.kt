@@ -33,6 +33,7 @@ import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.ImportClause
 import com.xemantic.typescript.compiler.ImportSpecifier
 import com.xemantic.typescript.compiler.NamespaceImport
+import com.xemantic.typescript.compiler.ProjectStateSnapshot
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.ParserFlags
@@ -517,6 +518,19 @@ public class Project private constructor(
     )
 
     private var surface: ExportSurface? = null
+
+    /**
+     * (INC.48) True while [surface] came from a SNAPSHOT and no build of this process
+     * has re-crawled the project yet.
+     *
+     * A snapshot's content hashes can tell which files CHANGED and cannot tell that one
+     * was ADDED — a new file matching the config's globs is in no hash and in no stored
+     * list, and it changes what every importer resolves. So a restored surface is not
+     * trusted until one build has produced the same program: until then the gate runs
+     * even when nothing changed, with an EMPTY partition, which is the ~110 ms floor
+     * rather than the ~5 s rebuild it replaces.
+     */
+    private var restoredUnverified: Boolean = false
 
     /**
      * (INC.46) The files edited since [surface] was established, or null when the
@@ -2931,6 +2945,127 @@ public class Project private constructor(
     }
 
     /**
+     * (INC.48) This project's incremental state, as text a host can store and hand to
+     * [restoreState] in a LATER PROCESS — or null when there is nothing to save.
+     *
+     * ## What it buys
+     *
+     * (INC.46) made project-wide diagnostics incremental within a process; all of that
+     * state is in memory, so an IDE restart, a plugin reload or a daemon recycle throws
+     * it away and the first query pays a whole-program build again. With a snapshot the
+     * next process instead pays the (INC.46) gate: one build narrowed to whatever
+     * changed while it was gone — and, when nothing changed, a build narrowed to
+     * NOTHING, which is the floor.
+     *
+     * ## What it does not do
+     *
+     * It writes no file. The host decides where its caches live, and an embedding API
+     * that dropped a file into somebody's source tree unasked would be making that
+     * decision for it; the CLI's `--incremental` (`tsconfig.xtsbuildinfo`, INV.7(d3))
+     * remains the convention for callers who want the other behaviour.
+     *
+     * ## When it answers null
+     *
+     * When no whole-program build has established a surface yet — call [diagnostics]
+     * first — and when this compiler build may not be reused across processes at all
+     * (`ProjectStateSnapshot.isReusableBuildId`: a `.dirty` or `unknown` build id names
+     * a tree with local changes, and two such trees share the id without sharing the
+     * behaviour). Refusing to WRITE such a snapshot is deliberate belt-and-braces: the
+     * restore refuses it too, and a snapshot that can never be adopted is a file a host
+     * would otherwise keep writing and never use.
+     */
+    public fun saveState(): String? {
+        checkOpen()
+        val base = surface ?: return null
+        if (!ProjectStateSnapshot.isReusableBuildId(ProjectStateSnapshot.compilerBuildId)) {
+            return null
+        }
+        val hashes = LinkedHashMap<String, String>()
+        // The program's own sources AND the `.json` inputs that decided what the program
+        // IS — see `ProjectStateSnapshot`'s validation contract for why the second half
+        // is not optional. Read through the overlay, so an unsaved buffer is hashed as
+        // what this project actually checked; a later process reading the on-disk text
+        // sees a different hash and re-checks that file, which is the right answer.
+        for (path in base.programFiles + overlay.jsonReads.filter { it !in base.programFiles }) {
+            val text = overlay.readText(path) ?: continue
+            hashes[path] = ProjectStateSnapshot.contentHash(text)
+        }
+        return ProjectStateSnapshot.of(
+            configPath = configPath,
+            fileHashes = hashes,
+            programFiles = base.programFiles,
+            exportSignatures = base.signatures,
+            exportEscapes = base.escapes,
+            diagnostics = base.diagnostics,
+        ).encode()
+    }
+
+    /**
+     * (INC.48) Adopts the state [text] encodes, so the first query narrows instead of
+     * rebuilding. True when it was adopted, false when it was refused — and a refusal
+     * is never an error, because the caller's fallback is the build it would have done
+     * anyway.
+     *
+     * ## Every reason it refuses, and why each one has to be checked
+     *
+     * Each of these produces a STALE ANSWER if skipped, which is the one failure this
+     * arc exists to prevent:
+     *
+     *  - **This project has already built or already restored.** A snapshot is a claim
+     *    about a project's starting point; adopting one over live state would replace
+     *    answers this process computed with answers it did not.
+     *  - **Unreadable, or another format version.** Nothing to adopt.
+     *  - **A different compiler build**, or one whose id may not be reused at all.
+     *  - **A different `tsconfig.json`.** The state describes one project.
+     *  - **Any recorded `.json` input changed or vanished.** A changed config does not
+     *    date one file's rows — it changes what the program is and which options apply,
+     *    so every stored row is suspect and narrowing cannot repair it.
+     *  - **A program file vanished.** Its removal changes what every importer resolves.
+     *
+     * A program file whose CONTENT changed is not a refusal: it is exactly what the
+     * (INC.46) gate is for, and it becomes this project's dirty set. Nor is an ADDED
+     * file — one cannot be seen in a content hash — which is why an adopted state stays
+     * unverified until a build has re-crawled the project and found the same program;
+     * until then even a clean project runs the gate with an empty partition rather than
+     * answering from the snapshot directly.
+     */
+    public fun restoreState(text: String): Boolean {
+        checkOpen()
+        if (cached != null || surface != null) return false
+        val snapshot = ProjectStateSnapshot.decode(text) ?: return false
+        if (!ProjectStateSnapshot.isReusableBuildId(snapshot.buildId)) return false
+        if (snapshot.buildId != ProjectStateSnapshot.compilerBuildId) return false
+        if (snapshot.configPath != configPath) return false
+        if (snapshot.programFiles.isEmpty()) return false
+        val programFiles = snapshot.programFiles.toHashSet()
+        val dirty = LinkedHashSet<String>()
+        for ((path, hash) in snapshot.fileHashes) {
+            val now = overlay.readText(path)
+            val isProgramFile = path in programFiles
+            if (now == null) {
+                // A vanished program file changes what every importer resolves; a
+                // vanished config input changes what the program IS. Neither narrows.
+                return false
+            }
+            if (ProjectStateSnapshot.contentHash(now) == hash) continue
+            if (!isProgramFile) return false
+            dirty.add(path)
+        }
+        // A program file the snapshot never hashed cannot be compared, so it cannot be
+        // proved unchanged.
+        if (snapshot.programFiles.any { it !in snapshot.fileHashes }) return false
+        surface = ExportSurface(
+            signatures = snapshot.exportSignatures,
+            escapes = snapshot.exportEscapes,
+            diagnostics = snapshot.diagnostics,
+            programFiles = snapshot.programFiles,
+        )
+        dirtyFiles = dirty
+        restoredUnverified = true
+        return true
+    }
+
+    /**
      * Releases the overlay and the cached build.
      *
      * Idempotent, so a host may close on every teardown path without tracking
@@ -3208,10 +3343,15 @@ public class Project private constructor(
         // NEXT edit has a baseline to be compared against. ~136 ms on tsc's own 78
         // sources against a 5.2 s rebuild — paid here, on the build the user already
         // waited for, and never on the incremental path.
+        // (INC.48) The build's own `.json` inputs, recorded for the snapshot: which of
+        // them a build reads is not a function of the project path (`extends`, and a
+        // `package.json` under `nodenext`).
+        overlay.clearJsonReads()
         val result = ProjectCompiler(overlay).build(
             projectPath, noEmit = true, exportSignatures = true,
         )
         cached = result
+        restoredUnverified = false
         surface = ExportSurface(
             signatures = result.exportSignatures,
             escapes = result.exportSignatureEscapes,
@@ -3262,7 +3402,12 @@ public class Project private constructor(
     private fun incrementalDiagnostics(): List<Diagnostic>? {
         val base = surface ?: return null
         val dirty = dirtyFiles ?: return null
-        if (dirty.isEmpty()) return null
+        // (INC.48) An EMPTY dirty set is normally nothing to do — `diagnostics` answers
+        // from the surface without reaching here. It reaches here only for a RESTORED
+        // surface, where "no file changed" is precisely the case that still has to be
+        // verified: a file ADDED while the process was down is in no content hash, and
+        // the check that sees it is this build's own re-crawl.
+        if (dirty.isEmpty() && !restoredUnverified) return null
         // A config edit changes what the program IS, so nothing about the previous one
         // survives it.
         if (dirty.any { it.endsWith(".json") }) return null
@@ -3309,6 +3454,10 @@ public class Project private constructor(
         // than the first one cheap and the rest full.
         surface = ExportSurface(base.signatures, base.escapes, answer, base.programFiles)
         dirtyFiles = null
+        // (INC.48) The re-crawl above agreed with the snapshot's program, so the restored
+        // state is now verified and a later query with nothing dirty may answer from it
+        // directly.
+        restoredUnverified = false
         incrementalAnswers++
         return answer
     }
