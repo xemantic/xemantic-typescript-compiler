@@ -56633,6 +56633,20 @@ class Checker(
      * `Parser.kt`'s missing-semicolon neighbourhood), so the only way to see it is
      * the source, and the scan goes through [srcHas] like every other whole-source
      * scan in this file (round 895).
+     *
+     * **AND A BARE SUBSTRING SCAN IS NOT GOOD ENOUGH, WHICH THE (INC.46) EDIT CORPUS
+     * FOUND RATHER THAN A FIXTURE.** `checker.ts` mentions `export as namespace`
+     * TWICE, both times in a `//` comment, so the whole file read as declaring a
+     * global surface and ESCAPED — and since `checker.ts` is the file tsc's own
+     * history edits most, that one false positive alone moved the measured stability
+     * rate from 32% to what it should be. The construct is a top-level STATEMENT, so
+     * the match must BEGIN ITS LINE; a comment or a message string is indented behind
+     * `//` or a quote and no longer matches.
+     *
+     * That is a heuristic and is documented as one. Its error direction is the safe
+     * one — a line that begins with those words inside a block comment or a template
+     * literal costs a spurious whole-program escape, never a missed one — and the
+     * honest fix is a parser node for the construct, which is out of scope here.
      */
     private fun declaresGlobalSurface(file: SourceFile): Boolean {
         for (stmt in file.statements) {
@@ -56641,7 +56655,24 @@ class Checker(
                 if ((stmt.name as? Identifier)?.text == "global") return true
             }
         }
-        return srcHas(file.text, "export as namespace")
+        // The n-gram-filtered scan first, so a file without the words at all is
+        // refused without touching its characters (round 895).
+        if (!srcHas(file.text, EXPORT_AS_NAMESPACE)) return false
+        val text = file.text
+        var at = text.indexOf(EXPORT_AS_NAMESPACE)
+        while (at >= 0) {
+            var i = at - 1
+            var beginsLine = true
+            while (i >= 0) {
+                val c = text[i]
+                if (c == '\n' || c == '\r') break
+                if (c != ' ' && c != '\t') { beginsLine = false; break }
+                i--
+            }
+            if (beginsLine) return true
+            at = text.indexOf(EXPORT_AS_NAMESPACE, at + 1)
+        }
+        return false
     }
 
     companion object {
@@ -56667,6 +56698,9 @@ class Checker(
 
         /** (INC.46) The fold's seed and step — [LexDefer]'s (INC.16) shape. */
         private const val FINGERPRINT_SEED = 1125899906842597L
+
+        /** (INC.46) See [declaresGlobalSurface] — a construct with no AST node. */
+        private const val EXPORT_AS_NAMESPACE = "export as namespace"
 
         /** (INC.46) See [FINGERPRINT_SEED]. */
         private fun mix(h: Long, v: Long): Long = h * 31 + v

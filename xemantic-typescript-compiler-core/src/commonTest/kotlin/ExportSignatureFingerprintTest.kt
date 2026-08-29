@@ -289,6 +289,33 @@ class ExportSignatureFingerprintTest {
         assert(broken[a] != healthy[a])
     }
 
+    /**
+     * A file that only MENTIONS `export as namespace` — in a comment, a string, a
+     * message — does NOT declare a global surface and must not escape.
+     *
+     * Found by the (INC.46) edit corpus, not by a fixture: `checker.ts` says those
+     * words twice in `//` comments, so a bare substring scan escaped the whole file —
+     * and since it is the file tsc's own history edits most, that ONE false positive
+     * took the measured stability rate from 67% down to 32%. The construct is a
+     * top-level STATEMENT, so the match must begin its line.
+     */
+    @Test
+    fun `mentioning export as namespace in a comment does not escape`() {
+        val escapes = escapesOf(
+            """
+            // @strict: true
+            // @Filename: m.ts
+            // export as namespace foo
+            export const marker: number = 1
+            const message = "  export as namespace bar"
+            // @Filename: b.ts
+            export const x: number = 1
+            """,
+        )
+        assert(escapes.none { it.endsWith("m.ts") })
+        assert(escapes.none { it.endsWith("b.ts") })
+    }
+
     /** The shipped default is OFF — nothing in an ordinary compile pays for this. */
     @Test
     fun `the fingerprint walk is off by default`() {

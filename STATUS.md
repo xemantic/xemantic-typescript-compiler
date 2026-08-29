@@ -1,5 +1,31 @@
 # Status
 
+**(INC.46)(2) — THE STABILITY RATE IS **67%** OVER 40 REAL tsc COMMITS, AND ONE TEXT SCAN
+WAS WORTH 35 POINTS OF IT (2026-08-29).** Step (2) is the one the queue said could refuse the
+whole mechanism ("under ~70% the 45x is diluted to nothing"). `scripts/inc46-stability.sh`
+fetches its OWN blob-filtered depth-3000 clone of microsoft/TypeScript — never
+`typescript-repo`, which is a depth-1 shallow clone AND a build-pinned input — and replays
+**40 real no-merge commits** touching `src/compiler`, materialising the WHOLE tree at the
+parent against the whole tree at the commit (a file from another era beside a tree from this
+one resolves against symbols that may not exist). **27 of 40 stable = 67%**, and **8 of the
+13 that moved did so ONLY because `types.ts` escapes** — so the band is a **67% floor and an
+87.5% ceiling** with one named lever between them. **THE FIRST READING WAS 32% AND WAS AN
+ARTIFACT OF MY OWN CODE**: `declaresGlobalSurface` scanned whole source for
+`export as namespace` — a construct with NO AST NODE in this parser — and `checker.ts` says
+those words **twice, both in `//` comments**; since it is the file tsc's history edits most,
+that single false positive cost **35 percentage points** and presented as a plausible
+refusal rather than as a defect. **No fixture would have found it** — nobody writes
+`// export as namespace foo` into a hand-written test — and the edit corpus found it in one
+run. **`types.ts`'s escape is STRUCTURAL and was measured rather than assumed**: it is a
+node-budget stop at 2,000,000 nodes (129.6 ms) AND still a stop at **12,000,000 (741 ms,
+whole budget burned)**, because the file-boundary cut cannot help INSIDE a file and
+`types.ts` declares ~874 mutually recursive interfaces in one. The lever is **SCC-aware
+hashing**, deliberately not attempted here; the budget stays bounded and the file is recorded
+in `ExportSignatures.whole` — a full rebuild, never a stale diagnostic. **GATES.** Suite
+**16,453 / 0 / 3** (+13 over 16,440: the 12 step-(1) pins plus the comment-mention pin this
+defect earned); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean. Step (3),
+wiring the invalidation into `Project.diagnostics()`, is now the only item left.
+
 **(INC.46)(1) — THE EXPORTED-SIGNATURE FINGERPRINT IS BUILT AND MEASURED, AND ITS WALK
 HAD TO BE FOUND BY MEASUREMENT THREE TIMES (2026-08-29).** The queue's step-(1) threshold
 ("single-digit ms on `types.ts`'s 874 exports, or stop") is met with room: **136 ms
@@ -104,26 +130,3 @@ four ablation arms, four DISTINCT red sets; `cost_gate.py` / `huge_methods.py` a
 touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
 (`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
 run-to-run residual), `huge_methods.py --fail-over 0` clean.
-
-**(CHK.71)(b) — THE BLOCKER WAS NOT B83.5 BUT A **FOURTH SHADOW SHAPE**, AND IT LANDS;
-THE RECEIVER HALF IS REFUSED AGAIN ON A *DIFFERENT* ROW (2026-08-28).** A BLOCK-scoped
-declaration inside a NESTED function shadowing an ENCLOSING FUNCTION's local was covered by
-none of round 351 (top-level decls), round 460 (two decls in one body) or round 455 (a
-GLOBAL/file-level collision) — whose condition is literally
-`outerBound && !currentLocalTypes.containsKey(nm)`, the inherited case inverted. A shipped
-ours-only TS2322 at every assignment to the inner name, judged against the WRONG
-declaration's type; twelve lines reproduce it, tsgo 7.0.2 is silent, and no optional chain
-is anywhere near it. **The optional-chain receiver half is re-priced, not re-refused for the
-same reason**: the two `moduleNameResolver.ts` rows are GONE (they were this shadow shape)
-and the grid is `added=0 removed=0` with both halves — what refuses it now is **one knip
-row**, `compilers.ts:60:49 TS18047`, because tsc narrows a receiver to non-null in the TRUE
-branch of a truthy test on an optional chain and we do not. **The blocker is now
-optional-chain truthiness narrowing, a nameable and reducible mechanism.** A pin written as
-a CONTROL measured as a POSITIVE (on the parent the first TS2322 is the inner assignment
-reported against the outer type), and two of four pin expectations were wrong because the
-message strips nullish — tsgo prints ours verbatim. **GATES.** Suite **16,422 / 0 / 3** (+5,
-exactly the new pins), no corpus baseline moved; grid `790c337141b167657e4f1f3a219474aa`,
-`added=0 removed=0`; cost_gate exit 0, `output.errors` **46**; huge_methods 783 / 0;
-partition-equivalence EQUIVALENT all 78, floor 65 ms (one draw); capture-equivalence
-DIVERGED **964** in 43 of 76, `definitions=0 moreAny=0` — the standing state exactly; knip
-**49**, jsonrepair **4**.

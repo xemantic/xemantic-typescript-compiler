@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.46)(2) — the STABILITY RATE against a real edit corpus: 67%, and one text scan was worth 35 points of it
+
+**WHAT THIS ANSWERS.** (INC.46) step (2), the one the queue said could still refuse the
+whole mechanism: *"sample commits touching `src/compiler` and ask what fraction move no
+exported fingerprint. Under ~70% the 45x is diluted to nothing and the round should
+refuse."* Step (1) had established the fingerprint is cheap, rebuild-stable and
+partition-stable; none of that says how OFTEN a real edit leaves it alone, which is where
+all of the value lives.
+
+**THE CORPUS IS REAL AND THE HARNESS MATERIALISES WHOLE TREES.**
+`scripts/inc46-stability.sh` fetches its OWN blob-filtered depth-3000 clone of
+microsoft/TypeScript under `build/bench` — never `typescript-repo`, which is a depth-1
+shallow clone AND a build-pinned input (`typeScriptCommit`) — and takes 40 no-merge
+commits touching `src/compiler`, newest-first from the profile's own base commit
+`637d5746`, restricted to MODIFIED `.ts` files (a rename or an addition changes the
+program's name set, which is a different question). Per case it materialises the FULL
+`src/compiler` at the parent and at the commit into a SCRATCH copy of the bench profile,
+builds each with fingerprints on, and asks whether any TOUCHED file's fingerprint moved.
+Whole trees rather than just the changed files: a file from another era beside a tree from
+this one resolves against symbols that may not exist, which degrades its exports to `any`
+in a way that is neither the before nor the after. `Inc46StabilityMain`.
+
+**THE FIRST READING WAS 13 STABLE OF 40 — 32% — AND IT WAS AN ARTIFACT OF MY OWN ESCAPE
+LOGIC.** **24 of the 27 MOVED cases moved ONLY because a touched file ESCAPED**, and there
+were just two escaping files. One of them, `checker.ts`, escaped because
+`declaresGlobalSurface` scanned the whole source for `export as namespace` — a construct
+with NO AST NODE in this parser — and `checker.ts` says those words **twice, both times
+inside a `//` comment**. Since `checker.ts` is the file tsc's own history edits most, that
+single false positive was worth **35 percentage points**. Requiring the match to BEGIN ITS
+LINE (the construct is a top-level statement) took the rate to:
+
+| arm | stable / 40 | rate | escaping files |
+|---|---|---|---|
+| bare substring scan | 13 | **32%** | `checker.ts`, `types.ts` |
+| **line-anchored scan** | **27** | **67%** | `types.ts` |
+
+**AND THE REMAINING GAP HAS ONE NAMED CAUSE: 8 of the 13 still-MOVED cases moved ONLY
+because `types.ts` escapes.** So the achievable band is **67% at the floor and 87.5% at the
+ceiling**, the ceiling being loose — a commit touching `types.ts` often really does move a
+declaration.
+
+**`types.ts`'s ESCAPE IS STRUCTURAL AND WAS MEASURED, NOT ASSUMED.** It is a node-budget
+stop, and raising the budget does not close it: at **2,000,000** nodes it costs 129.6 ms and
+stops, and at **12,000,000** it costs **741 ms and still stops**, having burned the entire
+budget. The file-boundary cut cannot help INSIDE a file, and `types.ts` declares tsc's
+whole type universe — ~874 mutually recursive interfaces in ONE file — so the closed-subtree
+memo has nothing to memoize there for the same reason it had nothing program-wide before the
+cut. **The lever is SCC-AWARE hashing** (Tarjan, then hash each strongly-connected component
+as a unit), which is real machinery and deliberately not attempted here. The budget stays at
+the bounded 2,000,000, and `types.ts` is recorded in `ExportSignatures.whole` — the
+conservative direction, which costs a full rebuild and never a stale diagnostic.
+
+**WHAT THIS MEANS FOR THE QUEUE'S THRESHOLD.** 67% is at the ~70% line, not clearly past it —
+and the honest reading is that the mechanism is NOT refused, because the one thing standing
+between the measured floor and the ceiling is a named, bounded piece of work rather than a
+property of real edits. **The measured floor already pays**: 67% of edits answered from a
+108-113 ms narrowed build instead of a 4,864-5,096 ms rebuild is a 45x saving on two edits
+in three.
+
+**A LESSON WORTH MORE THAN THE NUMBER.** A whole-source substring scan for a construct that
+has no AST node is not a test for that construct — it is a test for the WORDS, and a
+compiler's own sources talk about compiler constructs constantly. No fixture would have
+found this: nobody writes `// export as namespace foo` into a hand-written test. The edit
+corpus found it in one run, and it presented as a plausible refusal (32%, well under
+threshold) rather than as a defect.
+
+**GATES.** Suite **16,453 / 0 / 3** (+13 over 16,440: the 12 step-(1) pins plus the
+comment-mention pin this round's defect earned). `cost_gate.py` exit 0; `huge_methods.py
+--fail-over 0` clean. Step (3) — wiring the invalidation into `Project.diagnostics()` —
+remains the next item, and it is now the only one left.
+
+
 ### Round (INC.46)(1) — the exported-signature FINGERPRINT: step 1 landed, and the walk's shape had to be found by measurement three times
 
 **WHAT LANDED.** `ExportSignatures` (a census/mode object) plus
@@ -3198,9 +3270,22 @@ RHS, and the merged-member CONTRADICTION direction.
   (INC.46)(1) session note and `Checker.ExportFingerprinter`. **Escape set: 2 of 78** —
   `types.ts` (budget stop) and `checker.ts` (an exported name with no file-level symbol,
   UNDIAGNOSED and the first thing to look at, since it is the file an editor edits most).
-  (2) Measure the STABILITY RATE against a real edit corpus (a separate, deepened TypeScript
-  clone; sample commits touching `src/compiler` and ask what fraction move no exported
-  fingerprint). Under ~70% the 45x is diluted to nothing and the round should refuse.
+  (2) **DONE — 67% MEASURED, AND NOT REFUSED.** `scripts/inc46-stability.sh` fetches its own
+  blob-filtered depth-3000 clone of microsoft/TypeScript (never `typescript-repo`, which is
+  build-pinned) and replays **40 real no-merge commits** touching `src/compiler`, whole tree
+  at the parent against whole tree at the commit. **27 of 40 stable = 67%**, right at the
+  stated threshold — and **8 of the 13 that moved did so ONLY because `types.ts` ESCAPES**,
+  so the achievable band is **67% floor, 87.5% ceiling** with ONE named lever between them.
+  **THE FIRST READING WAS 32% AND WAS AN ARTIFACT**: `declaresGlobalSurface` scanned whole
+  source for `export as namespace` (a construct with no AST node), `checker.ts` says those
+  words twice IN COMMENTS, and since it is the most-edited file that one false positive was
+  worth **35 points**. Anchoring the match to the start of a line fixed it. **`types.ts`'s
+  escape is STRUCTURAL and measured**: a node-budget stop at 2,000,000 (129.6 ms) AND at
+  **12,000,000 (741 ms, still stopping)** — the file-boundary cut cannot help INSIDE a file,
+  and `types.ts` declares ~874 mutually recursive interfaces in one file. The lever is
+  **SCC-aware hashing** (Tarjan, hash each component as a unit); the budget stays bounded at
+  2,000,000 and the file is recorded in `ExportSignatures.whole`, which costs a full rebuild
+  and never a stale diagnostic.
   (3) Only then wire the invalidation.
   **GRADE IT AS A DIFFERENTIAL, which needs no baseline**: after an edit, incremental
   project-wide diagnostics must equal a full rebuild's, row for row, over a SEQUENCE of edits
