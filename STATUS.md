@@ -1,5 +1,32 @@
 # Status
 
+**(INC.44) — `referencesAt` IS NARROWED BY *SPELLING*, AND THE DOC CLAIM THAT IT "CANNOT
+BE" CONFUSED THE CLAIM WITH THE EVIDENCE (2026-08-29).** `docs/language-service.md` said in
+three places that find-references and rename "are NOT narrowed and will not be: their claim
+is about every file, so there is nothing to narrow to". The claim is program-wide; the
+EVIDENCE is not — an occurrence can only be an answer if it SPELLS a name the symbol is
+reachable by. `referencesAt` now selects that population before typing it and `captureIn`'s
+partition, which has always been DERIVED from the request's spans, narrows the check with
+it: **no new mechanism**. On tsc's own 78 sources an ordinary name costs **510–553 ms
+against 8.8–11.1 s (17–18x)**, `checker.ts`-only names 1,940 ms (4.8x), and the worst
+realistic case (`SyntaxKind`, 9,827 hits in 49 files) still wins at 4,904 ms; a repeat is
+free (119–150 ms) because the narrow path reaches a memo the whole-program one never did.
+The closure over `import { p as q }` / `export { p as q }` terminates because both spellings
+are tokens of the file DECLARING the alias; everything else — a default export, a default
+import's local, `export =`, `import x = require(…)`, a namespace binding, the spelling
+`default` — REFUSES and runs the old sweep. **The near-miss worth remembering**: the obvious
+substring file filter is not exact, because `StringLiteralNode.text` is the COOKED value and
+`\a` is an identity escape, so `o["pl\ain"]` names `plain` — a file may be skipped only if
+it holds no backslash at all (29 of 78 do, carrying 78.2% of the characters). **The
+ablation's honest half**: arm a3 reddens only the REFUSAL pins, so the escape guards are
+CONSERVATISM — kept because tsc answers **6** references where we answer **2** on a
+`export { renamed as default }` edge, which is now pinned so the day it closes is loud.
+**GATES.** Suite ****16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins)**; reference differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names);
+four ablation arms, four DISTINCT red sets; `cost_gate.py` / `huge_methods.py` are CONTROLS here (no `-core` source
+touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
+(`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
+run-to-run residual), `huge_methods.py --fail-over 0` clean.
+
 **(CHK.71)(b) — THE BLOCKER WAS NOT B83.5 BUT A **FOURTH SHADOW SHAPE**, AND IT LANDS;
 THE RECEIVER HALF IS REFUSED AGAIN ON A *DIFFERENT* ROW (2026-08-28).** A BLOCK-scoped
 declaration inside a NESTED function shadowing an ENCLOSING FUNCTION's local was covered by
@@ -121,30 +148,3 @@ from any read after the loop and `for (const n of xs) { h.req = 1 }` did not inv
 narrow. One commit, because each half alone regresses the other's shape. **On 14
 hand-written shapes the parent has 5 shipped FALSE POSITIVES and 2 shipped FALSE NEGATIVES
 and the shipped binary reproduces tsc 7.0.2 EXACTLY.**
-
-**(CHK.63) IS RE-PRICED TO *ONE ROW ON ONE PROFILE* AND IS NOW AFFORDABLE — AND IS STILL
-NOT OPENED.** The combined arm is `added=0 removed=0` on seven profiles and `added=1` on
-`tsc-harness` (`tsserverLogger.ts:28:5`); (CHK.66)(b)'s residue `checker.ts:43282:21` is
-GONE. Cost: `narrow.walks` +11.2%, `narrow.memoServed` +6.6%, everything else <= 1%, wall
-flat. One ours-only row on a dashboard whose v1 exit is zero FPs is a decision to take at
-0 — the cause is named and queued as (CHK.70)(a): a COMPOUND assignment (`result += …`)
-inside a loop has no post-state rule.
-
-**GATES.** Suite **16,367** / 0 / 3 (+11, exactly the new pins; **16,380** after the rebase onto the (LIB.4) arc, which does not touch the checker — `Checker.class dcaf1594` either side); **no corpus baseline
-moved**. Grid `790c337141b167657e4f1f3a219474aa` (a NEW recipe — not comparable to
-(CHK.68)'s `503774c2…`), `added=0 removed=0` on all eight against a parent capture taken
-this session from a rebuilt parent (`Checker.class b2675304`), and the digest is IDENTICAL
-to the parent's. `cost_gate` **REBASELINED** — +0.43 pp on `globals.misses` over the
-standing residual pushed it to +2.20%, and the rebaseline also absorbs the residual
-accumulated before this round. `huge_methods` 783 classes, 0 over. `partition-equivalence`
-EQUIVALENT all 78 (floor **63 ms**, one draw). `capture-equivalence` DIVERGED **967** in 43
-of 76 (from 968), definitions=0, moreAny=0, both arm digests re-recorded — classified per
-element, **168 of 742,255 spans change, 0 LOST and 11 GAINED**, of which 66 are `any` -> a
-real type and 29 are `X | undefined` -> `X`. knip **48**, jsonrepair **4**, byte-identical.
-Vacuity: **8 of 11 pins RED on the rebuilt parent**, exactly the 8 positives, 3 controls
-green on both. Four ablation arms, one mistake each: a1 **9 RED**, a2 **4 RED** (distinct
-sets), a4 **5 RED**; **a3 (the `never` refusal) is 0 RED and UNPINNED — but MEASURED**, the
-arm adding exactly the five `emitter.ts` `never` rows on the grid. My first a2 was a **DEAD
-ARM** that read 0 RED and looked redundant while passing the `cmp`-against-its-own-snapshot
-check, and my first pin family was **vacuous in both directions** because an IDENTIFIER
-subject is answered from `currentLocalTypes`, which is loop-blind.

@@ -20,6 +20,63 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.44) — `referencesAt` is narrowed by SPELLING; the doc claim that it "cannot be" confused the CLAIM with the EVIDENCE
+
+**THE HEADLINE.** `docs/language-service.md` said in three places, over three rounds,
+that `referencesAt` and `renameAt` "are NOT narrowed and will not be: their claim is
+about every file, so there is nothing to narrow to". The claim really is program-wide.
+The **evidence** is not: an occurrence can only be an answer if it SPELLS one of the
+names the caret's symbol is reachable by, so the population is selectable before it is
+typed. `referencesAt` now selects it, and `captureIn`'s partition — which has always
+been DERIVED from the request's own spans — narrows the check with it, using no new
+mechanism. On tsc's own 78 compiler sources a search for an ordinary name costs
+**510–553 ms against 8.8–11.1 s**, and the worst realistic case (`SyntaxKind`, 9,827
+hits in 49 files) still wins at 4,904 ms.
+
+**WHAT ANCHORS THE CLOSURE.** Two forms give one symbol two written spellings —
+`import { p as q }` and `export { p as q }` — and both write BOTH names in the file
+that declares the alias. So "select the files containing a name I am looking for, read
+the aliases they declare, repeat" is a fixed point that never opens a file the search
+had no other reason to open. Everything that binds a symbol to a spelling written
+nowhere near the other one is REFUSED and falls back to the old sweep: a default
+export, a default import's local, `export =`, `import x = require(…)`, a namespace
+binding, and any closure reaching the spelling `default`.
+
+**THE ONE THING THAT ALMOST MADE IT UNSOUND, AND IS THE ROUND'S TRANSFERABLE LESSON.**
+The obvious file filter — does the file's text contain the name — is not exact.
+`StringLiteralNode.text` is the **cooked** value, so `o["pl\ain"]` names the member
+`plain` while the file spells `pl\ain`; and `\a` is an IDENTITY escape, so it is not
+`\u` that is dangerous but ANY backslash inside a literal. Measured on the profile: 29
+of 78 files contain a backslash and they hold **78.2%** of the characters, so the rule
+is "skip only a file with no backslash at all", and the exact filter stays
+`occurrenceText(node) in names`. The partition is therefore exact either way; only the
+indexing cost moves. A pin (`a member spelled by an escape sequence…`) fails against
+the plain substring test and against nothing else.
+
+**WHAT THE ABLATION SAID, INCLUDING THE PART THAT DOES NOT FLATTER THE CHANGE.** Four
+arms, four distinct red sets. But **a3 — "nothing is an alias escape" — reddens only
+the three REFUSAL pins**, and the equivalence assertions above them pass: on every
+shape this round fixtures, the narrowed answer would be right without the escape guard
+at all. So the guard is CONSERVATISM, not a fix, and the round says so. It is kept
+because the gap it anticipates is **measured**: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`
+answers **6** references on a `export { renamed as default }` declaration — both `d`
+occurrences in the importing file included — where this API answers **2**. The day that
+divergence closes is the day the guard becomes load-bearing, and there is now a pin
+whose failure announces it.
+
+**WHAT COST A REPAIR.** The first alias pin was written expecting the specifier's
+`propertyName` span and the answer carries the specifier's **LOCAL** name — a search
+from the exporting end returns three `localAlias` spans and no `renamed` one. That is
+the fact the whole narrowing turns on and it had to be measured rather than assumed.
+And two ablation arms were lost to a second `gradlew` starting while the first was
+still running (`Unable to delete directory …/classes/kotlin/jvm/main`), which is
+CLAUDE.md's one-gradle-per-box rule collected again.
+
+**GATES.** Suite ****16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins)**; differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names); `cost_gate.py` and `huge_methods.py` are CONTROLS here, not gates — nothing in
+`-core` was touched — and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
+(`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
+run-to-run residual), `huge_methods.py --fail-over 0` clean.
+
 ### Round (CHK.71) — B83.5 was the WRONG NAME for the blocker, the real one is a **fourth shadow shape** and it LANDS; the receiver half is refused again, on a *different* row
 
 **THE HEADLINE.** (CHK.71) was queued as "blocked on nested-function shadowing (B83.5)".
@@ -2880,6 +2937,95 @@ RHS, and the merged-member CONTRADICTION direction.
   an improvement only if the BOTH-WRONG **element-pair** count falls ((INC.23)'s rule: count
   distinct pairs, not rows — 192 of the 796 rows carry more than one differing element).
   Any change to union or alias display touches ~13k pinned corpus baselines.
+
+- [x] **(INC.44) `referencesAt` IS NARROWED — LANDED 2026-08-29, AND THE CLAIM IT REPLACES
+  ("its claim is about every file, so there is nothing to narrow to", `docs/language-service.md`
+  § 10b and § 14's gap 1, written three times over three rounds) WAS A CATEGORY ERROR: THE
+  CLAIM IS PROGRAM-WIDE, THE **EVIDENCE** IS NOT.** Every reference search typed **381,672
+  spans** — every identifier plus every member-name literal in every program file — on a
+  whole-program check, and then discarded all but the ones whose declaration set met the
+  caret's. An occurrence can only be an answer if it SPELLS a name the symbol is reachable by,
+  so the population is selectable BEFORE it is typed; `captureIn` already derives the check
+  partition from the request's own spans, so narrowing the request narrows the build with no
+  new mechanism at all.
+  **THE CLOSURE IS ANCHORED BY A FACT ABOUT THE ONLY TWO ALIASING FORMS.** `import { p as q }`
+  and `export { p as q }` write BOTH spellings in the file that DECLARES the alias, so
+  iterating "select the files containing a name I am looking for, read the aliases they
+  declare, repeat" reaches a fixed point without ever opening a file the search had no other
+  reason to open. Everything else is REFUSED (`SyntaxRoles.isAliasEscape`) and falls back to
+  the whole-program sweep: a default export, the local a default import binds, an `export =`,
+  an `import x = require(…)`, a namespace binding, and any closure reaching the spelling
+  `default`.
+  **THE FILE FILTER MAY NOT BE A PLAIN SUBSTRING TEST, AND FINDING OUT WHY IS THE ROUND'S
+  TRANSFERABLE LESSON.** `StringLiteralNode.text` is the COOKED value (`rawText` is the
+  source), so `o["pl\ain"]` names the member `plain` while the file spells `pl\ain` — and
+  `\a` is an IDENTITY escape, so ANY backslash inside a literal can hide a name, not only
+  `\u`. A file may therefore be skipped only when it contains no backslash at all (49 of
+  tsc's 78; the other 29 hold 78.2% of the characters), and the exact filter stays
+  `occurrenceText(node) in names` — so the PARTITION is exact either way and only the
+  indexing cost moves.
+  **MEASURED, both arms interleaved in ONE process at the same caret** (`partition` is a
+  counter and is the column that transfers; the ms are wall time on one box):
+  `createTypeChecker` **2 of 78 files**, 5,359 ms first / 130 ms repeat against **11,112 ms**;
+  `emitFiles` 2 of 78, **553 ms** first / 141 repeat against **9,532**; `transformNodes` 3 of
+  78, **528 ms** / 135 against **9,320**; `checkSourceElement` **1 of 78** but that file is
+  `checker.ts` (31.6% of the program), **1,940 ms** against **9,291**; and the worst realistic
+  case, `SyntaxKind` at **49 of 78** and 9,827 hits, **4,904 ms** against **9,078** — so the
+  narrowing never loses, because a refusal is the old path exactly.
+  **POPULATION CENSUS, which is why this works**: over the 31,455 distinct names in tsc's own
+  compiler sources the MEDIAN name is written in **1 file** and occurs **3 times**; p90 is 5
+  files / 22 occurrences. Weighted by where a caret LANDS the median is 28 of 78 files —
+  `node`/`type`/`kind` dominate the occurrence count — so a search for a very common word
+  narrows little and a search for a name a user actually asks about narrows enormously.
+  **GRADED BY A DIFFERENTIAL, not by an argument.** `Project.narrowReferenceSweeps` is the
+  in-binary OFF arm ((API.6)'s shape) and `scripts/reference-narrowing-differential.sh` runs
+  both over a real project, element for element: **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names). `Project.narrowedSweepFiles` is the
+  CONTROL — a caret that refuses falls back and then agrees with itself, so without a count of
+  the carets that actually took the new path a run in which everything refused would print
+  EQUIVALENT having tested nothing (round 790's dead verifier).
+  **THE ESCAPE GUARDS ARE CONSERVATISM TODAY, AND THE ROUND SAYS SO RATHER THAN CLAIMING A
+  FIX.** Ablation a3 (nothing is an escape) reddens only the three REFUSAL pins; the
+  equivalence assertions above them pass, i.e. the narrowed answer would still be right on
+  every fixtured shape. They are kept because the gap they anticipate is **measured**: tsc
+  7.0.2's own language server answers **6** references on a `export { renamed as default }`
+  declaration — both `d` occurrences in the importing file included — where this API answers
+  **2** (`scripts/lsp_member_refs.py`). The day that divergence closes is the day the guard
+  becomes load-bearing, and `ProjectReferenceNarrowingTest` pins it so that day is loud.
+  **+12 pins, four-arm ablation, four DISTINCT red sets** (a1 alias closure -> the two alias
+  pins; a2 escape-aware file filter -> the escape pin; a3 `isAliasEscape` -> the three refusal
+  pins; a4 the `default` spelling -> the export-renamed-to-default pin).
+  **NEXT, and it is NOT free**: `renameAt` rides the same sweep and is 20-26 s, but it reads
+  the build's DIAGNOSTICS as well as its captures — a partition filters those to its own
+  files, so the before/after multiset comparison has to be narrowed on BOTH sides, and
+  `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
+  selection must therefore carry.
+
+- [ ] **(INC.45) NARROW `renameAt` THE SAME WAY — 20–26 s IS THE LAST WHOLE-PROGRAM
+  INTERACTIVE OPERATION, AND IT IS *NOT* A COPY OF (INC.44).** `renameSweep` performs the
+  same whole-program capture and would take the same spelling closure, but three things make
+  it a bigger change than the reference one, and all three are named here so nobody prices it
+  as free.
+  **(1) IT READS THE BUILD'S DIAGNOSTICS.** `verifyRename` compares a `(file, code)` MULTISET
+  before and after applying the plan; a partition filters diagnostics to its own files, so a
+  narrowed "before" bag against a whole-program "after" bag would report every unswept file's
+  rows as REMOVED. Both builds must take the SAME `recheckOnly`. The soundness argument for
+  narrowing it at all is available and must be written down rather than assumed: a rename
+  edits only files in the plan, and an unedited file's meaning can change only through a name
+  it imports — which it must then SPELL, so it is in the partition. That argument is what a
+  reviewer should attack first.
+  **(2) THE SELECTION MUST CARRY THE *NEW* NAME TOO.** `verifyRename`'s third check scans
+  `sweep.identifiers` for occurrences already spelling `newName` and asserts they still
+  resolve where they did — the check that catches a rename which compiles and means something
+  else. Narrowed to the old name's closure alone, that scan finds nothing and the check goes
+  VACUOUS, which is round 902's dead arm with the safety net as the victim.
+  **(3) `completenessConflicts` AND `DECLARED_IN_A_LIBRARY` READ `sweep.indexes`.** The first
+  is a spelling scan and stays sound under narrowing (a file outside the partition spells
+  neither name); the second refuses when a seed declaration is in no swept file, which under
+  narrowing must not start firing for a program file — a declaration spells the name, so it
+  should not, but that is a claim to PIN and not to assume.
+  **GRADE IT THE SAME WAY**: a `RenamePlan`-level differential against
+  `Project.narrowReferenceSweeps`' rename twin, comparing the plan's edits, refusal and
+  conflicts element for element, plus the control that says how many carets took the new path.
 
 - [ ] **(INC.43) THE 213 ROWS (INC.42) DID NOT CLOSE — AND THEY ARE NOT WHAT THE QUEUE HAS
   BEEN CALLING THEM.** Re-measured after (INC.42) landed: `Inc41ClassifyMain` reads **796 rows

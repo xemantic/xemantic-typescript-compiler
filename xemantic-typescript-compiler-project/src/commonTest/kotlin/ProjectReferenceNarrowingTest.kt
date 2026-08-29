@@ -256,10 +256,13 @@ class ProjectReferenceNarrowingTest {
         val text = "export default function exported(): number { return 1; }\n" +
             "export const alsoHere = exported;\n"
         val caret = text.indexOf("exported")
-        assert(project.narrowedSweepFiles(otherFile, caret) == -1)
+        // The equivalence FIRST and the refusal second, so an ablation of
+        // [SyntaxRoles.isAliasEscape] says which of the two the guard protects: a
+        // refusal pin alone cannot tell a load-bearing guard from a conservative one.
         val (narrow, whole) = bothArms(project, otherFile, caret)
         assert(places(narrow) == places(whole))
         assert(narrow.isNotEmpty())
+        assert(project.narrowedSweepFiles(otherFile, caret) == -1)
     }
 
     /** The other end of the same edge: the LOCAL a default import binds. */
@@ -276,10 +279,10 @@ class ProjectReferenceNarrowingTest {
         )
         val text = "import brandNew from \"./b\";\nexport const useDefault = brandNew;\n"
         val caret = text.indexOf("brandNew")
-        assert(project.narrowedSweepFiles(mainFile, caret) == -1)
         val (narrow, whole) = bothArms(project, mainFile, caret)
         assert(places(narrow) == places(whole))
         assert(narrow.isNotEmpty())
+        assert(project.narrowedSweepFiles(mainFile, caret) == -1)
     }
 
     /** `import * as ns` — a namespace binding, refused for conservatism. */
@@ -293,9 +296,9 @@ class ProjectReferenceNarrowingTest {
         )
         val text = "import * as ns from \"./b\";\nexport const useNs = ns.plain;\n"
         val caret = text.indexOf("ns")
-        assert(project.narrowedSweepFiles(mainFile, caret) == -1)
         val (narrow, whole) = bothArms(project, mainFile, caret)
         assert(places(narrow) == places(whole))
+        assert(project.narrowedSweepFiles(mainFile, caret) == -1)
     }
 
     /**
@@ -345,6 +348,55 @@ class ProjectReferenceNarrowingTest {
         val (narrow, whole) = bothArms(project, mainFile, caret)
         assert(places(narrow) == places(whole))
         assert(narrow.size == 2)
+    }
+
+    /**
+     * (INC.44) WHAT THE ESCAPE GUARDS ARE AND ARE NOT — measured, because a refusal
+     * pin alone cannot tell a load-bearing guard from a conservative one.
+     *
+     * This API does NOT cross the default-export edge: `export { renamed as default }`
+     * consumed by `import d from "./b"` answers `renamed`'s two occurrences in `b.ts`
+     * and nothing in `a.ts`, so `d` is a different symbol here. That is measured
+     * rather than assumed, and it has a consequence the round's own ablation showed:
+     * with [SyntaxRoles.isAliasEscape] disabled the narrowed arm still agrees with the
+     * whole-program one on every shape this class fixtures. **The escape guards are
+     * therefore CONSERVATISM TODAY** — they cost a fallback for symbols that touch a
+     * default export, an `export =`, an `import x = require(…)` or a namespace
+     * binding, and they buy nothing that this API's current answers can show.
+     *
+     * **They are kept because the gap they anticipate is REAL and MEASURED.** tsc
+     * 7.0.2's own language server answers **6** references at this caret — both `d`
+     * occurrences in `a.ts`, the two `renamed`s, and the `renamed`/`default` pair
+     * inside the export specifier — against the **2** below
+     * (`tools/tsgo-7.0.2/lib/tsc --lsp -stdio` via `scripts/lsp_member_refs.py`,
+     * measured this round). So the day this API closes that divergence is the day the
+     * escape guard becomes load-bearing, and a narrowing built without it would start
+     * under-reporting on the same day — silently, since a missing reference is not an
+     * error anywhere.
+     *
+     * The pin is here so that day is loud: whoever links the default edge will see
+     * this assertion fail and will know the guard above it has just become the thing
+     * holding the answer together.
+     */
+    @Test
+    fun `this API does not cross the default-export edge - so the escape guards are conservatism`() {
+        val project = projectWith(
+            mainText = """
+                import d from "./b";
+                export const useDefault = d;
+            """.trimIndent() + "\n",
+            otherText = """
+                const renamed: string = "r";
+                export const alsoHere = renamed;
+                export { renamed as default };
+            """.trimIndent() + "\n",
+        )
+        val text = "const renamed: string = \"r\";\nexport const alsoHere = renamed;\n" +
+            "export { renamed as default };\n"
+        project.narrowReferenceSweeps = false
+        val whole = project.referencesAt(otherFile, text.indexOf("renamed"))
+        assert(places(whole) == listOf("b.ts@6", "b.ts@53"))
+        assert(whole.none { it.fileName == mainFile })
     }
 
     // --- the population itself --------------------------------------------------

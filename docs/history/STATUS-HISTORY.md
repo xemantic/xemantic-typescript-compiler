@@ -1,3 +1,30 @@
+**(CHK.63) IS RE-PRICED TO *ONE ROW ON ONE PROFILE* AND IS NOW AFFORDABLE — AND IS STILL
+NOT OPENED.** The combined arm is `added=0 removed=0` on seven profiles and `added=1` on
+`tsc-harness` (`tsserverLogger.ts:28:5`); (CHK.66)(b)'s residue `checker.ts:43282:21` is
+GONE. Cost: `narrow.walks` +11.2%, `narrow.memoServed` +6.6%, everything else <= 1%, wall
+flat. One ours-only row on a dashboard whose v1 exit is zero FPs is a decision to take at
+0 — the cause is named and queued as (CHK.70)(a): a COMPOUND assignment (`result += …`)
+inside a loop has no post-state rule.
+
+**GATES.** Suite **16,367** / 0 / 3 (+11, exactly the new pins; **16,380** after the rebase onto the (LIB.4) arc, which does not touch the checker — `Checker.class dcaf1594` either side); **no corpus baseline
+moved**. Grid `790c337141b167657e4f1f3a219474aa` (a NEW recipe — not comparable to
+(CHK.68)'s `503774c2…`), `added=0 removed=0` on all eight against a parent capture taken
+this session from a rebuilt parent (`Checker.class b2675304`), and the digest is IDENTICAL
+to the parent's. `cost_gate` **REBASELINED** — +0.43 pp on `globals.misses` over the
+standing residual pushed it to +2.20%, and the rebaseline also absorbs the residual
+accumulated before this round. `huge_methods` 783 classes, 0 over. `partition-equivalence`
+EQUIVALENT all 78 (floor **63 ms**, one draw). `capture-equivalence` DIVERGED **967** in 43
+of 76 (from 968), definitions=0, moreAny=0, both arm digests re-recorded — classified per
+element, **168 of 742,255 spans change, 0 LOST and 11 GAINED**, of which 66 are `any` -> a
+real type and 29 are `X | undefined` -> `X`. knip **48**, jsonrepair **4**, byte-identical.
+Vacuity: **8 of 11 pins RED on the rebuilt parent**, exactly the 8 positives, 3 controls
+green on both. Four ablation arms, one mistake each: a1 **9 RED**, a2 **4 RED** (distinct
+sets), a4 **5 RED**; **a3 (the `never` refusal) is 0 RED and UNPINNED — but MEASURED**, the
+arm adding exactly the five `emitter.ts` `never` rows on the grid. My first a2 was a **DEAD
+ARM** that read 0 RED and looked redundant while passing the `cmp`-against-its-own-snapshot
+check, and my first pin family was **vacuous in both directions** because an IDENTIFIER
+subject is answered from `currentLocalTypes`, which is loop-blind.
+
 **(LIB.4) — `cronstrue` COMPILES TO JVM BYTECODE; WHAT STOPS IT RUNNING IS THE NOMINAL
 HALF (2026-08-28, six commits, corpus 17-29).** Its English entry point — 11 files of
 published source, unmodified — reads `successful=true` with the checker at **0 errors,

@@ -188,7 +188,7 @@ you call them.
 | `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again; free in a `prepare`d file |
 | `completionsAt(f, o)` | **one NARROWED build, every call** | 194 – 202 ms on tsc's own sources (2026-08-24). A DIFFERENT question (a receiver's members, or a scope chain), so it does not share — **not even with `prepare`, which is an open defect, see § 14 `(INC.32)`**; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
 | `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share; free in a `prepare`d file |
-| `referencesAt(f, o)` | **ONE FULL build clean, TWO dirty** | sweeps the whole program's, so it is not narrowed; § 10b has the measured figures |
+| `referencesAt(f, o)` | ONE build clean, TWO dirty — **narrowed by SPELLING since (INC.44)**, whole-program only where the name closure cannot be bounded | § 10b has the measured figures |
 | `signatureHelpAt(f, o)` | **one NARROWED build, every call** | 190 – 214 ms on tsc's own sources (2026-08-24); shares nothing, same open defect as `completionsAt`; free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
@@ -197,8 +197,10 @@ you call them.
 narrows is the per-file CHECKING, which the compiler takes as a partition
 (`recheckOnly`, the INV.6 view `--workers` uses). Every caret-scoped query above
 hands it the buffer the caret is in, because an editor's question about one buffer
-claims nothing about the other files; `referencesAt` and `renameAt` do not, because
-their claim IS about every file. Measured warm and rotated in one process on tsc's
+claims nothing about the other files. `renameAt` does not, because its claim IS about
+every file; `referencesAt`'s claim is too, but since (INC.44) its EVIDENCE is not —
+it selects the occurrences that could possibly be answers and lets the partition
+follow from them (§ 10b). Measured warm and rotated in one process on tsc's
 own 78 compiler sources (2026-08-24, commit d018af0a, two independent processes),
 a first capture of `binder.ts` (7,787 spans) is **290 – 306 ms** against a
 **4,864 – 5,096 ms** full rebuild, and the median over all 73 sweepable files is
@@ -1387,16 +1389,19 @@ rather than silently overwritten. **No number in this table is pinned by any tes
 | `documentHighlightsAt` — `binder.ts`, later caret | **0** | 19 ms | **10 – 18 ms** | no |
 | `documentHighlightsAt` — `checker.ts`, first caret | 1 | 6.0 – 7.2 s | **3.34 – 3.58 s** | **1.9x** |
 | `documentHighlightsAt` — `checker.ts`, later caret | **0** | — | **104 – 115 ms** | — |
-| `referencesAt` on a **clean** project | 1 | 8.3 – 9.9 s | **8.8 – 9.6 s** | **NO — by design** |
-| `referencesAt` on a **dirty** project | 2 | 13.0 – 13.5 s | **13.2 – 13.9 s** | **NO — by design** |
+| `referencesAt` on a **clean** project — the pre-(INC.44) whole-program sweep, still what a REFUSED closure costs | 1 | 8.3 – 9.9 s | **8.8 – 9.6 s** | see (INC.44) below |
+| `referencesAt` on a **dirty** project, same | 2 | 13.0 – 13.5 s | **13.2 – 13.9 s** | see (INC.44) below |
 
-**The last two rows are the load-bearing ones.** `documentHighlightsAt` moved because
-it goes through `captureIn`'s partition; `referencesAt` did not, and cannot, because
-its CLAIM is about every file — it builds whole-program on purpose (`captureIn`'s
-KDoc, "What may NOT come through here"). The same is true of `renameAt` (§ 10c) and
-of a plain `diagnostics()`. So an incremental round moves the narrowed queries and
-leaves these exactly where they are; a host must budget for them as whole-program
-operations forever.
+**The last two rows are the load-bearing ones, and the first of them MOVED in
+`(INC.44)` — the paragraph that used to stand here said it never could, and it was
+wrong.** `documentHighlightsAt` had moved already because it goes through
+`captureIn`'s partition. `referencesAt` was reported as unmovable "because its CLAIM
+is about every file", which conflates the claim with the EVIDENCE: an occurrence can
+only be an answer if it SPELLS a name the symbol is reachable by, so the population
+is selectable before it is typed even though the claim stays program-wide. See
+`(INC.44)` below for what it now costs and for the shapes that still fall back.
+`renameAt` (§ 10d) and a plain `diagnostics()` are unchanged and remain
+whole-program operations a host must budget for.
 
 **`(API.9)` cost nothing measurable, and the reason is a counter rather than a
 stopwatch.** Widening the swept population from identifiers to *identifiers plus the
@@ -1417,10 +1422,74 @@ rare in real TypeScript, and tsc's own sources are the extreme case of that. The
 here have **not** been re-taken, so read them as `(API.9)`'s measurement and not as
 today's.
 
-The sweep itself is 2.5 – 4 s on top of the rebuild it rides, whatever the caret:
-resolving 381,670 identifiers costs the same whether the answer is 168 hits in one
-file (a local of `createTypeChecker`) or **9,827 hits across 49 files**
-(`SyntaxKind`, imported nearly everywhere). The second build in the dirty row is
+### (INC.44) The sweep is narrowed by SPELLING — what it costs now, and what still falls back
+
+**The rule.** An occurrence can only be an answer if it SPELLS one of the names the
+caret's symbol is reachable by. So the population is selectable before it is typed:
+`referencesAt` computes that name set, selects the occurrences that carry one, and
+`captureIn` derives the check partition from the resulting request. The CLAIM is
+unchanged — the answer is still about every file — and the answer itself is unchanged,
+which is a differential rather than an argument (below).
+
+**The name set is normally one name.** It grows only through `import { p as q }` and
+`export { p as q }`, the two forms in which one symbol carries two written spellings,
+and it grows by a fixed point that never opens a file the search had no other reason
+to open: both names of a specifier are tokens of the file that DECLARES the alias, so
+a file introducing an alias of a name already in the set necessarily contains that
+name.
+
+**What still sweeps the whole program**, unchanged and by design, because these bind a
+symbol to a spelling written nowhere near the other one: a **default export** and the
+local a **default import** binds, an **`export =`**, an **`import x = require(…)`**, a
+**namespace import or export**, and any closure that reaches the spelling `default`
+(`export { foo as default }`). A refusal costs exactly the behaviour that shipped
+before this existed.
+
+**Measured on the compiler profile** (78 files, 9,977,097 characters, warm, both arms
+interleaved in ONE process at the same caret — the only comparison this box supports).
+`partition` is a COUNTER and is the column that transfers; the milliseconds are wall
+time on one box and are pinned by no test:
+
+| caret | hits | partition | narrowed, first ask | narrowed, repeat | whole-program |
+|---|---:|---|---|---|---|
+| `createTypeChecker` | 3 | **2 of 78** | 5,359 ms *(also the process's first sweep)* | 130 ms | 11,112 ms |
+| `emitFiles` | 4 | **2 of 78** | **553 ms** | 141 ms | 9,532 ms |
+| `transformNodes` | 6 | **3 of 78** | **528 ms** | 135 ms | 9,320 ms |
+| `forEachChild` | 1 | **1 of 78** | **510 ms** | 131 ms | 9,143 ms |
+| `checkSourceElement` | 71 | **1 of 78** — but that file is `checker.ts`, 31.6% of the program | **1,940 ms** | 119 ms | 9,291 ms |
+| `SyntaxKind` | 9,827 | **49 of 78** — the worst realistic case | **4,904 ms** | 150 ms | 9,078 ms |
+
+Read the FIRST-ask column as the per-query cost: **510 – 553 ms for a name written in
+one to three ordinary files (17 – 18x), 1,940 ms when the one file is `checker.ts`
+(4.8x), and 4,904 ms for a name imported nearly everywhere (1.85x)**. The narrowing
+never loses — the fallback is the old path exactly — and the first row's 5,359 ms is
+what a process's FIRST reference sweep costs however it is computed, not a property of
+the caret. The repeat column is `captureIn`'s memo, which the whole-program arm never
+reached: a second identical search at one program state is now free.
+
+**How it is graded, and how to re-take any of this.** Correctness is a DIFFERENTIAL and
+therefore needs no baseline: `Project.narrowReferenceSweeps` is the in-binary OFF arm and
+`scripts/reference-narrowing-differential.sh <projectDir> <carets>` runs both over a real
+project, comparing every answer element for element — **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names). Read its `narrowed=`
+column as well as `diverged=`: a caret that refuses falls back and then agrees with
+itself, so a run in which everything refused would print EQUIVALENT having tested
+nothing. The cost table above is `ReferenceNarrowingCostMainKt`, and per-shape behaviour
+is pinned by `ProjectReferenceNarrowingTest`.
+
+**The population census that says why this works, and where it does not.** Over every
+distinct name in tsc's own compiler sources, the MEDIAN name is written in **1** file
+and occurs **3** times in the program; p90 is 5 files and 22 occurrences. Weighted by
+where a caret actually lands the picture is much worse — the median caret's spelling is
+in 28 of 78 files, because `node`, `type` and `kind` dominate the occurrence count — so
+a search for a very common word narrows little, and a search for the name a user
+actually asks about narrows enormously.
+
+**In the FALLBACK** — a closure (INC.44) cannot bound — the sweep itself is 2.5 – 4 s
+on top of the rebuild it rides, whatever the caret: resolving 381,670 identifiers
+costs the same whether the answer is 168 hits in one file (a local of
+`createTypeChecker`) or **9,827 hits across 49 files** (`SyntaxKind`, imported nearly
+everywhere). That insensitivity to the answer's size is exactly what (INC.44) removed
+for every caret it can bound, and it is what the paragraph below was written about. The second build in the dirty row is
 `files`' — the program's file list is a question only a build answers — so a host
 that has just asked for `diagnostics()` pays one build, not two.
 
@@ -1759,7 +1828,7 @@ On this repo's own compiler profile — tsc's 78 source files, 9,977,097 charact
 
 | query | builds | wall | moved since round 930? |
 |---|---|---|---|
-| `referencesAt`, for reference | 1 | 8.8 – 9.6 s | no |
+| `referencesAt`, for reference — **(INC.44)** narrowed it and left rename where it was | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
 | `renameAt` — `SyntaxKind`, clean | 2 | **20.0 – 21.3 s** | no |
 | `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | no |
 | a refusal decided on syntax alone | **0** | microseconds | — |
@@ -2135,9 +2204,13 @@ in the narrowed rows.
 **The old headline is now false and is retracted.** This section used to open "almost
 every semantic query is a full rebuild". It is not: every caret-scoped query is a
 NARROWED build, and at the median file that is **108 – 113 ms against a 4.9 s rebuild,
-a factor of 45**. What is still a full rebuild is `diagnostics()`, and what is still
-whole-program are `referencesAt` and `renameAt` — the "moved?" column says which is
-which, and that column is the half a host must design around.
+a factor of 45**. What is still a full rebuild is `diagnostics()`; **`referencesAt`
+moved in `(INC.44)`** and is narrowed by the SPELLINGS its answer can carry (§ 10b),
+falling back to the whole-program sweep only where that closure cannot be bounded;
+`renameAt` is the one interactive operation still whole-program in every case. The
+"moved?" column says which is which, and that column is the half a host must design
+around. **The `referencesAt` rows below were taken this round (2026-08-29) and not on
+the 2026-08-24 provenance the rest of the table carries.**
 
 | query | builds | round 930 | **2026-08-24** | moved? |
 |---|---|---|---|---|
@@ -2157,7 +2230,10 @@ which, and that column is the half a host must design around.
 | `documentHighlightsAt(binder.ts)` cold / later caret | 1 / **0** | 5.0 – 5.5 s / 19 ms | **336 ms / 10 – 18 ms** | **≈15x** |
 | `prepare(6 mid-sized buffers)` | 1 | 674 – 698 ms | **466 – 468 ms** | 1.45x |
 | …then 6 hovers, 12 defs+highlights | **0** | 7 – 12 / 23 – 27 ms | **13 – 14 / 33 – 43 ms** | = |
-| `referencesAt` | 1 clean, 2 dirty | 8.3 – 10.2 / 13.2 – 14.8 s | **8.8 – 9.6 / 13.2 – 13.9 s** | **NO — whole-program by design** |
+| `referencesAt` — **(INC.44)**, a name written in 1–3 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **510 – 553 ms first ask, 119 – 141 repeat** | **≈17 – 18x** |
+| `referencesAt` — one file, but that file is `checker.ts` | 1 clean, 2 dirty | 8.3 – 10.2 s | **1,940 ms** | ≈4.8x |
+| `referencesAt` — `SyntaxKind`, imported into 49 of 78 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **4,904 ms** | ≈1.85x |
+| `referencesAt` — a spelling the closure cannot bound | 1 clean, 2 dirty | 8.3 – 10.2 / 13.2 – 14.8 s | **8.8 – 9.6 / 13.2 – 13.9 s** | NO — the fallback, unchanged |
 | `renameAt` (`SyntaxKind`, 9,827 edits) | 2, 3 dirty | 21.0 / 19.6 – 26.7 s | **20.0 – 21.3 / 25.0 – 26.0 s** | **NO — whole-program by design** |
 | a refusal decided on syntax alone | **0** | microseconds | microseconds | = |
 
@@ -2353,8 +2429,15 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
    the narrowed arm is the better answer.
 
-   **`referencesAt` and `renameAt` are NOT narrowed and will not be**: their claim is
-   about every file, so there is nothing to narrow to.
+   **`referencesAt` IS narrowed since `(INC.44)` and `renameAt` is not.** The
+   sentence that used to stand here — "their claim is about every file, so there is
+   nothing to narrow to" — confused the claim with the evidence: an occurrence of a
+   symbol must SPELL a name that symbol is reachable by, so `referencesAt` selects
+   its population syntactically and lets `captureIn` derive the check partition from
+   it, while still answering about the whole program. What it cannot bound it
+   refuses, and then the old whole-program sweep runs unchanged. `renameAt` reads the
+   build's DIAGNOSTICS as well as its captures, and a partition filters those to its
+   own files, so it stays whole-program until that is dealt with separately.
 
    **What the other three capture channels cost, stated rather than left to be found.**
    `scripts/capture-channel-equivalence.sh` sweeps members, scopes and signatures, which
