@@ -3703,9 +3703,35 @@ RHS, and the merged-member CONTRADICTION direction.
   `checkJsxImportResolutions` 1.2, `init:buildPerFileScopes` 1.0. These are `pass("…")`
   bodies, so unlike (INC.53)'s they ARE visible to `--passTiming` — the open question is
   whether an `init:` pass that builds a program-wide TABLE can be built on FIRST ASK the
-  way a field initializer could. **Check the read sites first**: (INC.53)'s three were
-  affordable precisely because each had exactly ONE, and round 609 forbids gating a
-  program-wide COLLECTOR onto the partition.
+  way a field initializer could.
+  **FOUR THINGS ABOUT THE TOP ROW, READ OUT OF THE SOURCE BY (INC.53) SO THE NEXT ROUND DOES
+  NOT RE-DERIVE THEM — AND THE SECOND REFUTES THE OBVIOUS PLAN.**
+  (i) Wiring a force is CHEAP: `enumValues` already has a SINGLE accessor funnel
+  (`Checker.kt:440`, round 904's (WARM.31) getter — "EVERY `enumValues[...]` expression
+  evaluates this accessor exactly once"), so all ~25 read sites are served by one hook.
+  (ii) **But DEFERRAL ALONE BUYS ONLY THE FLOOR, because the table is ALL-OR-NOTHING**:
+  `computeAllEnumValues` fills every enum in the program in one sweep, so the first asker
+  pays the whole 6.9 ms — and on tsc's own sources, where `SyntaxKind` is everywhere,
+  essentially every real query asks. That is materially weaker than (INC.53)'s case, whose
+  win came from `localTypeAliasIndex` becoming PARTIAL (per-file), not merely deferred.
+  (iii) **So the lever is PER-ENUM laziness, and it is structurally available**:
+  `computeEnumSymbolValues(symbol)` is already per-symbol, id-keyed and idempotent
+  (`if (enumValues.containsKey(symbol.id)) return`), so a keyed `enumValuesOf(id)` could
+  force one enum. The cost is that the ~25 read sites index the returned MAP, so each would
+  have to name its id — a wide change, which is why it is a round and not a patch. And the
+  pass is **MIXED** in exactly (INC.20)'s sense: its `blockScoped` / `blockScopedAliases`
+  census (feeding `lexicalTypeSymbolForNode` and `lexicalTypeAliasArity`) is program-wide
+  and must STAY eager, so only the value half moves.
+  (iv) **THE HAZARD IS ORDERING AND IT IS SILENT.** The pass runs at init step 2, AFTER
+  `init:mergeFileLocalsIntoGlobals`; forced lazily it runs wherever the first read is, and a
+  read from any pass BEFORE step 2 would compute enum values against un-merged globals —
+  wrong values, no diagnostic, and they feed `Transformer.transformEnum`, i.e. EMITTED BYTES.
+  The instrument exists in the shape (INC.16) used: record `PassTiming.currentPass` at the
+  first force (`LexDefer.forcedBy`) and assert on the compiler profile that it is never one
+  of the eleven pre-step-2 passes. The corpus is the real gate — enum coverage is heavy and
+  emits `.js`, so a wrong value reddens loudly.
+  **Check the read sites first**: (INC.53)'s three were affordable precisely because each had
+  exactly ONE, and round 609 forbids gating a program-wide COLLECTOR onto the partition.
   **(b) THE CRAWL RE-READS AND RE-DECODES EVERY FILE ON EVERY QUERY — 10-12 ms wall,
   **44-56 ms of CPU** across the crawl's workers, for 9,977,097 chars — although the PARSE
   is already fully content-cached (`78 reused / 0 fresh`).** The bytes are read only to
