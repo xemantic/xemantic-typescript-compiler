@@ -3146,10 +3146,16 @@ RHS, and the merged-member CONTRADICTION direction.
   closure reports `77/78` for a LEAF and buys nothing on the very profile every gate here
   uses. **The (LIB.\*) screened libraries (knip, jsonrepair, cronstrue) are the corpora that
   could grade it**, so the decision the owner would be making is which one, not whether the
-  mechanism works. Until then the named successors are (INC.39) (the per-handler spine cost
-  under a single-file partition, still unpriced on its own terms) and (INC.33)'s unmeasured
-  half — the PREPARE-AMORTISED case for wiring `completionsAt`/`signatureHelpAt` to
-  `prepared`, which neither (INC.32) nor (INC.33) measured.
+  mechanism works. **BUT (INC.46) SUPERSEDES THAT CHOICE ENTIRELY, AND ALSO MEASURES THE
+  BARREL EXPLANATION ABOVE TO BE WRONG**: a symbol-level use graph re-checks 100% of tsc's
+  characters at the median edit, exactly as the file-level one does, so those files' density
+  and not their `export *` is what defeats a closure. An exported-SIGNATURE hash pays on
+  DENSE code as well as layered, so it is gradable on the dashboard profile and needs no
+  corpus and no owner call — take it BEFORE re-opening this. The other named successors are
+  (INC.39) (the per-handler spine cost under a single-file partition, still unpriced on its
+  own terms) and (INC.33)'s unmeasured half — the PREPARE-AMORTISED case for wiring
+  `completionsAt`/`signatureHelpAt` to `prepared`, which neither (INC.32) nor (INC.33)
+  measured.
   **Suite 16,440 / 0 / 3** (+18 over the
   session's re-verified 16,422 baseline, exactly the new pins).
 

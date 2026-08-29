@@ -1,5 +1,28 @@
 # Status
 
+**(INC.46) QUEUED AND PRICED — AND MEASURING IT REFUTED THE QUEUE'S OWN EXPLANATION OF WHY
+PROJECT-WIDE DIAGNOSTICS CANNOT BE INCREMENTAL (2026-08-29, owner's idea).** The standing
+story, from round 772 and (INC.35), is that a dependency closure buys nothing on tsc because
+its sources are `export *` barrels. **The barrels were never the cause.** A SYMBOL-level use
+graph — which is free, since `capturedDefinitions` already records span -> declaration —
+re-checks **100% of the program's characters at the median edit, the same as the file-level
+graph** (94.9% of imported names placed, so not an under-count): those files genuinely use
+symbols from most other files and the relation is transitive. **What collapses it is asking
+whether an edit moved any EXPORTED SIGNATURE**, not which symbols a file uses: a body-only
+edit moves none, so no dependent re-checks and the cost is one narrowed build — **108-113 ms
+against 4,864-5,096 ms, a factor of 45**, already measured by (INC.31)/(INC.37). **91.6% of
+the program's characters are inside brace bodies** (a proxy for edit POSITION, optimistic
+because an inferred return type leaks, pessimistic because it counts `interface` bodies).
+**This needs no corpus and no owner call** — a signature hash pays on DENSE code too, so
+unlike (INC.35) it is gradable on the dashboard profile. **THE SHARP HAZARD IS RECORDED**:
+`typeToString` is the wrong hash source in BOTH directions — `aliasDisplayMap` is a
+first-wins global so it is not a pure function of the type (spurious invalidation), and B58.1
+renders `errorType` as `"any"` so a degraded resolution hashes as a genuine `any` (a MISSED
+invalidation, silently). The hash must be an id-free structural fingerprint; (INC.16) already
+built one to copy. Cost input censused: **3,398 exported declarations, mean 44/file, max 874
+in `types.ts`**; its runtime is the first thing to measure, with a stated refusal threshold.
+**No code landed — the entry is the deliverable.**
+
 **(INC.45) — `renameAt` IS NARROWED TOO, AND ITS ABLATION FOUND A BLIND PIN SET
 (2026-08-29).** The rename sweep took (INC.44)'s spelling closure and hands the resulting
 file set to the compiler as a check partition. Two things make it more than a copy.
