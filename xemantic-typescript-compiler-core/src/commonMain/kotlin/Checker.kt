@@ -56183,7 +56183,494 @@ class Checker(
         }
     }
 
+
+    // ------------------------------------------------------------------
+    // (INC.46) Exported-signature fingerprints
+    // ------------------------------------------------------------------
+
+    /**
+     * (INC.46) One `Long` per program file, summarising everything an IMPORTER of
+     * that file can observe: the SET of names it exports, what each of them means
+     * (value / type / namespace), and the STRUCTURE of each one's resolved type.
+     *
+     * See [ExportSignatures] for why this exists and why it may not be a display
+     * string. Called at ONE fixed point of the pipeline (after `getDiagnostics`), so
+     * the resolutions it forces cannot add a diagnostic this compiler would not
+     * otherwise emit.
+     */
+    internal fun exportedSignatureFingerprints() {
+        val fp = ExportFingerprinter()
+        // The PARTITION view, not `binderResults`: a narrowed build checked only its
+        // partition, so only those files' types are resolved by a walk that reflects
+        // this build — and fingerprinting the other 77 is the whole cost of the
+        // mechanism paid for nothing. Identical to `binderResults` on a whole-program
+        // build, where the partition is the program (INV.6(6d)).
+        for (result in checkedResultsAll) fp.fingerprintFile(result)
+    }
+
+    /**
+     * (INC.46) The walk, as an inner class so that its four pieces of state live
+     * together and are shared across every file of ONE build — the [memo] above all,
+     * whose whole point is that the program's type universe is walked once and not
+     * once per exporting file.
+     *
+     * ## The three properties a reader should hold this to
+     *
+     *  - **ID-FREE.** `Type.id` and `Symbol.id` are per-build, per-THREAD sequences
+     *    (INV.6(6c0)), so a fingerprint carrying one would differ across two builds
+     *    of identical text and invalidate everything, always. Nothing here mixes an
+     *    id; a recursive type closes on a PATH DISTANCE instead, so two structurally
+     *    equal recursive types hash equal. `Type.Intrinsic.intrinsicName` separates
+     *    `error` from `any`, which is what closes (INC.46)'s hazard (ii) — B58.1
+     *    renders a degraded resolution as `"any"`, and a display-string hash would
+     *    therefore MISS an invalidation.
+     *  - **DETERMINISTICALLY ORDERED.** Member tables are iterated by SORTED name,
+     *    never in map order: `SymbolTable` is a `LinkedHashMap`, so map order is
+     *    insertion order and insertion order is resolution order, which a partition
+     *    or a first-touch difference can move ((INC.19)). Positional lists —
+     *    signature parameters, union constituents, type arguments — keep their own
+     *    order, which is syntactic and therefore stable.
+     *  - **CONSERVATIVE WHERE IT CANNOT SEE.** A shape whose effect is not confined
+     *    to importers, a name this walk cannot enumerate exactly, or a file whose
+     *    walk exceeds [EXPORT_FINGERPRINT_NODE_BUDGET] puts the file into
+     *    [ExportSignatures.whole] rather than being silently omitted from its hash —
+     *    an omission is a MISSED invalidation, the one direction that costs a stale
+     *    diagnostic.
+     *
+     * ## Why the memo is the whole design, and what makes it sound
+     *
+     * The obvious walk keeps only a PATH set to break cycles and re-walks a type
+     * once per path that reaches it. Measured on tsc's own 78 sources that is
+     * **exponential in DAG width** and did not finish in 159 s on a single build —
+     * the resolved-type graph of a real program is a dense DAG, not a tree.
+     *
+     * So a completed subtree is CACHED — but only when it is CLOSED, i.e. when
+     * nothing inside it referred to a type strictly above it on the path. That is
+     * exactly the condition under which the subtree's hash is a function of the
+     * subtree alone: an open subtree's hash carries a path DISTANCE to an ancestor
+     * and would be wrong at any other depth. [minRef] carries that information back
+     * up — the shallowest ancestor depth the last completed subtree referred to —
+     * and a self-reference (`at == depth`) still counts as closed, which is what
+     * makes an ordinary recursive interface memoizable.
+     */
+    private inner class ExportFingerprinter {
+
+        /** Types on the CURRENT path, mapped to the depth they were entered at. */
+        private val path = HashMap<Type, Int>()
+
+        /**
+         * CLOSED subtree hashes — see the class KDoc for what closed means.
+         *
+         * Cleared per FILE, because a type's hash is a function of the file being
+         * fingerprinted: everything declared elsewhere is CUT (see [foreignKey]), and
+         * which types those are moves with the file.
+         */
+        private val memo = HashMap<Type, Long>()
+
+        /** The file whose surface is being summarised — the cut's other operand. */
+        private var currentFile: String = ""
+
+        /**
+         * The shallowest ancestor DEPTH the subtree just completed referred to, or
+         * [Int.MAX_VALUE] for a closed one. Written by every [typeHash] return and
+         * read by its caller immediately — a return channel, not state that outlives
+         * the call.
+         */
+        private var minRef: Int = Int.MAX_VALUE
+
+        /** Nodes visited for the file in flight, against the per-file budget. */
+        private var budget: Int = 0
+
+        fun fingerprintFile(result: BinderResult) {
+            val file = result.sourceFile
+            val fileName = file.fileName
+            val fileT0 = PassTiming.nowNanos()
+            val fileExports0 = ExportSignatures.exports
+            budget = 0
+            currentFile = fileName
+            memo.clear()
+            var h = FINGERPRINT_SEED
+
+            // A SCRIPT file's top-level names are program-wide, so an edit to one can
+            // reach a file that imports nothing from it — there is no export surface
+            // to summarise. Same for a file that augments the global scope or another
+            // module.
+            if (!isModuleFile(file.statements) || declaresGlobalSurface(file)) {
+                ExportSignatures.whole.add(fileName)
+            }
+
+            // The exported names, collected from the file's own top-level syntax, and
+            // SORTED below: `export { a, b }` and `export { b, a }` expose the same
+            // surface, so a reordering must not read as a change.
+            val names = LinkedHashSet<String>()
+            var exact = true
+            for (stmt in file.statements) {
+                when (stmt) {
+                    is FunctionDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            val n = stmt.name?.text
+                            if (n == null) exact = false else names.add(n)
+                        }
+                    is ClassDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            val n = stmt.name?.text
+                            if (n == null) exact = false else names.add(n)
+                        }
+                    is InterfaceDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                    is TypeAliasDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                    is EnumDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                    is ModuleDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            val n = (stmt.name as? Identifier)?.text
+                            if (n == null) exact = false else names.add(n)
+                        }
+                    is ImportEqualsDeclaration ->
+                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                    is VariableStatement ->
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            for (d in stmt.declarationList.declarations) {
+                                val n = (d.name as? Identifier)?.text
+                                // A binding pattern (`export const { a, b } = …`) exports
+                                // names this walk does not enumerate: refuse the file
+                                // rather than hash a surface that is missing some of it.
+                                if (n == null) exact = false else names.add(n)
+                            }
+                        }
+                    // `export default …` / `export = …` bind no file-level name here,
+                    // so their type cannot be reached through `locals`.
+                    is ExportAssignment -> exact = false
+                    is ExportDeclaration -> {
+                        val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                        val clause = stmt.exportClause
+                        if (spec != null) {
+                            // A re-export is an EDGE, not a surface of its own: mix the
+                            // specifier and the names it forwards, and let the TARGET
+                            // file's own fingerprint carry the types. A bare `export *`
+                            // forwards a name set this file does not spell, so a
+                            // consumer must follow the edge — which is why the edge is
+                            // in the hash and the forwarded types are not.
+                            h = mix(h, -101L); h = mix(h, spec.hashCode().toLong())
+                            if (clause is NamedExports) {
+                                for (e in clause.elements) {
+                                    h = mix(h, -102L)
+                                    h = mix(h, e.name.text.hashCode().toLong())
+                                    h = mix(h, (e.propertyName?.text ?: "").hashCode().toLong())
+                                    h = mix(h, if (e.isTypeOnly) 1L else 0L)
+                                }
+                            } else if (clause == null) {
+                                h = mix(h, -103L)
+                            } else {
+                                // `export * as ns from "…"` exposes only `ns`.
+                                exact = false
+                            }
+                        } else if (clause is NamedExports) {
+                            for (e in clause.elements) names.add(e.name.text)
+                        } else if (clause != null) {
+                            exact = false
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            if (!exact) ExportSignatures.whole.add(fileName)
+
+            for (name in names.sorted()) {
+                h = mix(h, -11L)
+                h = mix(h, name.hashCode().toLong())
+                val symbol = result.locals[name]
+                if (symbol == null) {
+                    // An exported name with no file-level symbol: an `export { a }`
+                    // whose `a` is block-scoped (B83.5), or a name the binder merged
+                    // elsewhere. Its spelling is in the hash; its TYPE is not, so the
+                    // file cannot be proved stable.
+                    h = mix(h, -12L)
+                    ExportSignatures.whole.add(fileName)
+                    continue
+                }
+                h = mix(h, symbol.flags.value.toLong())
+                ExportSignatures.exports++
+                // The VALUE meaning and the TYPE meaning are separate answers for one
+                // name (`class C` is both; `interface I` is only the second), and an
+                // importer can observe either — so both go in.
+                h = mix(h, typeHash(getTypeOfSymbol(symbol), 0))
+                if (symbol.flags.hasAny(
+                        SymbolFlags.Interface or SymbolFlags.TypeAlias or
+                            SymbolFlags.Class or SymbolFlags.Enum)) {
+                    h = mix(h, -13L)
+                    h = mix(h, typeHash(getDeclaredTypeOfSymbol(symbol), 0))
+                }
+                if (budget > EXPORT_FINGERPRINT_NODE_BUDGET) {
+                    // Out of budget: the surface is only PARTLY hashed, so the file
+                    // may not be proved stable. Recorded, never hidden.
+                    ExportSignatures.whole.add(fileName)
+                    ExportSignatures.budgetStops++
+                    break
+                }
+            }
+            ExportSignatures.fingerprints[fileName] = h
+            ExportSignatures.fileNanos[fileName] = PassTiming.nowNanos() - fileT0
+            ExportSignatures.fileExports[fileName] =
+                (ExportSignatures.exports - fileExports0).toInt()
+        }
+
+        /**
+         * The structural hash of [type] entered at [depth], setting [minRef] to the
+         * shallowest ancestor depth its subtree referred to.
+         */
+        private fun typeHash(type: Type?, depth: Int): Long {
+            ExportSignatures.typeNodes++
+            budget++
+            if (type == null) { minRef = Int.MAX_VALUE; return -1L }
+            memo[type]?.let { minRef = Int.MAX_VALUE; return it }
+            val at = path[type]
+            if (at != null) {
+                // A back edge: the DISTANCE up the path, never an id.
+                minRef = at
+                return mix(FINGERPRINT_SEED, -2L - (depth - at).toLong())
+            }
+            if (depth > EXPORT_FINGERPRINT_MAX_DEPTH || budget > EXPORT_FINGERPRINT_NODE_BUDGET) {
+                minRef = Int.MAX_VALUE
+                return -3L
+            }
+            // THE CUT. A type DECLARED IN ANOTHER FILE is unchanged by construction
+            // while only [currentFile] is edited, so it is keyed and not descended
+            // into. See [foreignKey] for why that is sound for the question this
+            // fingerprint is asked, and why it is the difference between a walk that
+            // terminates and one that does not.
+            val foreign = foreignKey(type)
+            if (foreign != null) {
+                memo[type] = foreign
+                minRef = Int.MAX_VALUE
+                return foreign
+            }
+            path[type] = depth
+            var h = FINGERPRINT_SEED
+            var lo = Int.MAX_VALUE
+            fun child(t: Type?) {
+                h = mix(h, typeHash(t, depth + 1))
+                if (minRef < lo) lo = minRef
+            }
+            when (type) {
+                is Type.Intrinsic -> {
+                    h = mix(h, 1L); h = mix(h, type.intrinsicName.hashCode().toLong())
+                }
+                is Type.StringLiteral -> {
+                    h = mix(h, 2L); h = mix(h, type.value.hashCode().toLong())
+                }
+                is Type.NumberLiteral -> { h = mix(h, 3L); h = mix(h, type.value.toRawBits()) }
+                is Type.BigIntLiteral -> {
+                    h = mix(h, 4L); h = mix(h, type.value.hashCode().toLong())
+                }
+                is Type.Union -> {
+                    h = mix(h, 5L); h = mix(h, type.types.size.toLong())
+                    for (t in type.types) child(t)
+                }
+                is Type.Intersection -> {
+                    h = mix(h, 6L); h = mix(h, type.types.size.toLong())
+                    for (t in type.types) child(t)
+                }
+                is Type.TypeParam -> {
+                    h = mix(h, 7L)
+                    h = mix(h, (type.symbol?.name ?: "").hashCode().toLong())
+                    child(type.constraint)
+                    child(type.default)
+                }
+                is Type.Reference -> {
+                    h = mix(h, 8L)
+                    child(type.target)
+                    val args = type.resolvedTypeArguments
+                    if (args == null) h = mix(h, -4L) else {
+                        h = mix(h, args.size.toLong())
+                        for (a in args) child(a)
+                    }
+                }
+                is Type.Object -> {
+                    h = mix(h, 9L)
+                    h = mix(h, (type.symbol?.name ?: "").hashCode().toLong())
+                    // `resolveStructuredTypeMembers` FIRST, always: both `members` and
+                    // the signature lists are lazy, so reading them without forcing
+                    // makes the answer a function of whether some earlier line
+                    // happened to resolve this type (round 833) — a fingerprint with
+                    // that property invalidates at random.
+                    resolveStructuredTypeMembers(type)
+                    if (type is Type.Interface) {
+                        val tps = type.typeParameters
+                        if (tps == null) h = mix(h, -5L) else {
+                            h = mix(h, tps.size.toLong())
+                            for (tp in tps) child(tp)
+                        }
+                        val bases = type.baseTypes
+                        if (bases == null) h = mix(h, -6L) else {
+                            h = mix(h, bases.size.toLong())
+                            for (b in bases) child(b)
+                        }
+                    }
+                    val members = type.members
+                    if (members == null) h = mix(h, -7L) else {
+                        h = mix(h, members.size.toLong())
+                        for (memberName in members.keys.sorted()) {
+                            val m = members[memberName] ?: continue
+                            h = mix(h, -8L)
+                            h = mix(h, memberName.hashCode().toLong())
+                            h = mix(h, m.flags.value.toLong())
+                            child(getTypeOfSymbol(m))
+                        }
+                    }
+                    for ((tag, sigs) in listOf(
+                        10L to type.callSignatures, 11L to type.constructSignatures,
+                    )) {
+                        if (sigs.isNullOrEmpty()) { h = mix(h, -9L); continue }
+                        h = mix(h, tag); h = mix(h, sigs.size.toLong())
+                        for (sig in sigs) {
+                            h = mix(h, sig.minArgumentCount.toLong())
+                            h = mix(h, if (sig.isAbstract) 1L else 0L)
+                            val tps = sig.typeParameters
+                            h = mix(h, (tps?.size ?: -1).toLong())
+                            if (tps != null) for (tp in tps) child(tp)
+                            // Parameter ORDER is syntactic, so it stays.
+                            h = mix(h, sig.parameters.size.toLong())
+                            for (p in sig.parameters) {
+                                h = mix(h, p.name.hashCode().toLong())
+                                child(getTypeOfSymbol(p))
+                            }
+                            child(sig.resolvedReturnType)
+                        }
+                    }
+                    for ((tag, info) in listOf(
+                        12L to type.stringIndexInfo, 13L to type.numberIndexInfo,
+                    )) {
+                        if (info == null) { h = mix(h, -10L); continue }
+                        h = mix(h, tag); h = mix(h, if (info.isReadonly) 1L else 0L)
+                        child(info.keyType)
+                        child(info.type)
+                    }
+                    val tuple = type.tupleElementTypes
+                    if (tuple != null) {
+                        h = mix(h, 14L); h = mix(h, tuple.size.toLong())
+                        for (t in tuple) child(t)
+                    }
+                }
+            }
+            path.remove(type)
+            // CLOSED — nothing inside referred to a type strictly above this one — so
+            // the hash is a function of the subtree alone and may be cached. A
+            // SELF-reference (`at == depth`) satisfies this, which is what makes an
+            // ordinary recursive interface memoizable.
+            if (lo >= depth) memo[type] = h
+            minRef = lo
+            return h
+        }
+
+        /**
+         * A stable key for a type DECLARED OUTSIDE [currentFile], or null when the
+         * type is this file's own (or has no declaration to place).
+         *
+         * ## Why the cut is sound, and why it is not a shortcut
+         *
+         * The fingerprint answers ONE question: *given that every other file is
+         * unchanged, did editing this file move what an importer of it can observe?*
+         * A type declared in another file is then unchanged BY CONSTRUCTION — so
+         * descending into its structure can only re-derive a constant, and the key
+         * below identifies it exactly.
+         *
+         * A change in that other file is not missed, because that file has a
+         * fingerprint of its own and the gate asks about EVERY edited file. What the
+         * cut gives up is transitivity — F's hash does not move when G's type
+         * changes — and transitivity is not wanted here: a moved signature ANYWHERE
+         * falls back to a whole-program build, which is the only answer a dependency
+         * closure could give on this program anyway ((INC.46) measured the closure at
+         * 100% of characters at the median edit).
+         *
+         * ## Why it is REQUIRED and not merely cheaper
+         *
+         * Measured on tsc's own 78 sources without it: the resolved-type graph is one
+         * enormous strongly-connected component (`Node.parent: Node`, and hundreds of
+         * mutually recursive interfaces), so the closed-subtree memo has NOTHING to
+         * memoize until the whole component completes — **6 of the 78 files, among
+         * them `checker.ts`, `binder.ts` and `emitter.ts`, did not finish inside a
+         * 2,000,000-node budget**, and the ones that did were carried by an already
+         * warm memo rather than by their own size. With the cut, a file's walk is
+         * bounded by its OWN declarations.
+         *
+         * ## The key
+         *
+         * The declaration's `(fileName, pos, end)`, which is stable across two builds
+         * of identical text and carries no id. It moves when the other file is
+         * edited, which is a SPURIOUS invalidation and never a missed one — and only
+         * for a batch in which that file is edited too, i.e. one already falling back.
+         */
+        private fun foreignKey(type: Type): Long? {
+            val symbol = when (type) {
+                is Type.Reference -> type.target.symbol
+                is Type.Object -> type.symbol
+                is Type.TypeParam -> type.symbol
+                else -> null
+            } ?: return null
+            val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
+            var node: Node? = decl
+            while (node != null && node !is SourceFile) node = (node as? NodeBase)?.parent
+            val file = node as? SourceFile ?: return null
+            if (file.fileName == currentFile) return null
+            var h = mix(FINGERPRINT_SEED, 15L)
+            h = mix(h, file.fileName.hashCode().toLong())
+            h = mix(h, decl.pos.toLong())
+            h = mix(h, decl.end.toLong())
+            h = mix(h, symbol.name.hashCode().toLong())
+            return h
+        }
+    }
+
+    /**
+     * (INC.46) True when [file] carries a declaration whose effect is PROGRAM-WIDE
+     * rather than confined to importers — `declare module "…"` (an ambient module
+     * or an augmentation), `declare global`, or `export as namespace`.
+     *
+     * Read off the tree rather than off text, except for the last: `export as
+     * namespace X` HAS NO AST NODE in this parser (a documented misparse — see
+     * `Parser.kt`'s missing-semicolon neighbourhood), so the only way to see it is
+     * the source, and the scan goes through [srcHas] like every other whole-source
+     * scan in this file (round 895).
+     */
+    private fun declaresGlobalSurface(file: SourceFile): Boolean {
+        for (stmt in file.statements) {
+            if (stmt is ModuleDeclaration) {
+                if (stmt.name is StringLiteralNode) return true
+                if ((stmt.name as? Identifier)?.text == "global") return true
+            }
+        }
+        return srcHas(file.text, "export as namespace")
+    }
+
     companion object {
+        /**
+         * (INC.46) Depth bound of [mixTypeFingerprint]'s structural walk.
+         *
+         * A CYCLE is handled by the path map and needs no bound; this catches the
+         * type that is merely DEEP (a long instantiation chain), which would
+         * otherwise make one export's hash cost unbounded. Truncating is safe in the
+         * only direction that matters — the prefix is still in the hash, so a change
+         * inside the truncated tail is missed only if the whole prefix is unchanged,
+         * which for a type this deep means the declaration was not edited at all.
+         */
+        private const val EXPORT_FINGERPRINT_MAX_DEPTH = 24
+
+        /**
+         * (INC.46) Per-FILE ceiling on structural nodes visited, so one pathological
+         * export cannot make a build's fingerprint cost unbounded. A file that hits
+         * it is put into [ExportSignatures.whole] — its surface is only partly
+         * hashed, so it may not be proved stable.
+         */
+        private const val EXPORT_FINGERPRINT_NODE_BUDGET = 2_000_000
+
+        /** (INC.46) The fold's seed and step — [LexDefer]'s (INC.16) shape. */
+        private const val FINGERPRINT_SEED = 1125899906842597L
+
+        /** (INC.46) See [FINGERPRINT_SEED]. */
+        private fun mix(h: Long, v: Long): Long = h * 31 + v
+
         /** (CHK.22) the canonical member name a `[Symbol.iterator]` key spells in
          *  this compiler's member tables (round 723's `"[<dotted>]"` scheme, minted
          *  by [getMemberName]'s well-known-symbol arm). */

@@ -20,6 +20,114 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.46)(1) — the exported-signature FINGERPRINT: step 1 landed, and the walk's shape had to be found by measurement three times
+
+**WHAT LANDED.** `ExportSignatures` (a census/mode object) plus
+`Checker.exportedSignatureFingerprints()` — one `Long` per program file summarising
+everything an IMPORTER can observe: the exported NAME SET, each name's meaning flags,
+and the STRUCTURE of its resolved type. OFF in the shipped compiler; nothing consults
+it yet. `scripts/inc46-fingerprint-cost.sh` + `Inc46FingerprintCostMain` are the
+runner; `ExportSignatureFingerprintTest` is 12 pins.
+
+**THE QUEUE'S THRESHOLD IS MET WITH ROOM.** (INC.46) said *"hook the fingerprint cost
+on a full build and read it — if it is not single-digit ms on `types.ts`'s 874 exports,
+stop."* Measured on tsc's own 78 sources, three ABBA-rotated rotations, one process:
+**136 ms whole-program** against a 5,215 ms rebuild (2.6%), and — the number that
+actually matters — **0 ms on 23 of 24 narrowed builds, 2 ms on the 24th**, because a
+narrowed build fingerprints only its own partition. So the per-EDIT cost of the gate is
+under a millisecond against the 108-113 ms narrowed build it rides on.
+
+**BUT THE SHAPE OF THE WALK IS THE WHOLE ROUND, AND IT WAS WRONG TWICE.**
+
+*(a) A PATH-ONLY CYCLE GUARD IS EXPONENTIAL, AND ITS SYMPTOM IS A HANG WITH NO
+DIAGNOSIS.* The first walk kept only a path set (the obvious way to break a cycle) and
+re-walked a type once per path reaching it. A real program's resolved-type graph is a
+dense DAG, not a tree: **159 s inside a single build and still running**, found only by
+`jcmd Thread.print` from an EXTERNAL process. Fixed by caching a completed subtree —
+but only when it is **CLOSED**, i.e. nothing inside it referred to a type strictly above
+it on the path (an open subtree's hash carries a path DISTANCE and is wrong at any other
+depth). `minRef` carries that back up; a SELF-reference still counts as closed, which is
+what makes an ordinary recursive interface memoizable.
+
+*(b) AND CLOSED-SUBTREE MEMOIZATION IS NOT ENOUGH, BECAUSE tsc's TYPE GRAPH IS ONE
+GIANT SCC.* With the memo, the whole program cost 200 ms — and **7 of 78 files did not
+finish inside a 400,000-node budget; raising it to 2,000,000 left 6 unfinished**, among
+them `checker.ts`, `binder.ts` and `emitter.ts`, i.e. the most-edited files. `Node.parent:
+Node` plus hundreds of mutually recursive interfaces put nearly everything in one
+strongly-connected component, so the memo has NOTHING to memoize until the component
+completes. **The cheap per-file numbers in that run were an artifact of a warm SHARED
+memo, not of the files' own size** — the same files measured from a cold memo (one
+narrowed build each) cost **115-146 ms** apiece.
+
+*(c) THE FIX IS TO CUT AT THE FILE BOUNDARY, AND IT FOLLOWS FROM WHAT THE GATE ACTUALLY
+ASKS.* The fingerprint answers one question: *given every other file is unchanged, did
+editing THIS file move what an importer can observe?* A type declared in another file is
+then unchanged BY CONSTRUCTION, so it is keyed by its declaration's
+`(fileName, pos, end)` — stable across two builds of identical text, id-free — and not
+descended into. `Checker.ExportFingerprinter.foreignKey`. What it gives up is
+transitivity, which is not wanted: a moved signature anywhere falls back to a
+whole-program build, the only answer a dependency closure could give on this program
+anyway ((INC.46)'s own measurement: a closure re-checks 100% of characters at the median
+edit).
+
+**THE THREE ARMS, SO THE PROGRESSION IS LEGIBLE** (same runner, same profile, one
+process each):
+
+| arm | whole-program fp | escapes | partition agreement | fp on a narrowed build |
+|---|---|---|---|---|
+| path memo, 400 k budget | 200 ms | 7/78 | 20/24 | (all 78 files) |
+| + partition-scoped, 2 M budget | 719 ms | 6/78 | **4/24** | 115-146 ms |
+| **+ foreign-declaration cut** | **136 ms** | **2/78** | **24/24** | **0 ms (23 of 24)** |
+
+**THE TWO CONTROLS THAT DECIDE FEASIBILITY, AND NEITHER IS A COST FIGURE.**
+(i) **STABILITY — 78/78 fingerprints identical across two builds of identical text.**
+This is the id-freedom claim under test: `Type.id`/`Symbol.id` are per-build,
+per-THREAD sequences (INV.6(6c0)), so a hash carrying one passes every structural test
+and then invalidates everything on every edit, which is indistinguishable from the
+mechanism not working. (ii) **PARTITION AGREEMENT — a narrowed build's fingerprint for a
+file must equal the whole-program build's, or the mechanism can never CONVERGE**: the
+baseline comes from a whole-program build and the edit's answer from a narrowed one, so
+a systematic disagreement means every first edit falls back, restores the whole-program
+baseline, and disagrees again forever. It read **4/24 with the transitive walk and 24/24
+with the cut** — i.e. the cut is not only cheaper, it is the thing that makes the
+mechanism converge at all, because the deep foreign structure is exactly where (INC.2)'s
+capture divergence lives.
+
+**WHAT THE QUEUE CENSUSED WAS THE WRONG QUANTITY.** (INC.46) priced the work as "~3,400
+`getTypeOfSymbol` + fingerprint calls" off a census of 3,398 exported declarations
+(mean 44/file, max 874 in `types.ts`). Cost does not track export COUNT — it tracks the
+transitive type CLOSURE, and the two are close to inversely related: with the cut,
+`utilities.ts`'s **692 exports cost 1.6 ms** while `types.ts` — which declares the SCC
+and therefore cuts nothing — is **129.6 ms and the round's one budget stop**. Before the
+cut the eight dearest files had **1 to 6 exports each**.
+
+**THE ESCAPE SET IS 2 OF 78** — `types.ts` (budget stop) and `checker.ts` (an exported
+name with no file-level symbol). Both are recorded in `ExportSignatures.whole`, never
+hidden: a file that cannot be fingerprinted exactly must invalidate the whole program,
+because an omission is a MISSED invalidation and that is the only direction that costs a
+stale diagnostic. `checker.ts`'s reason is undiagnosed and is the first thing the next
+round should look at — it is the file an editor edits most.
+
+**STEP (2) IS UNRUN AND SAYS SO.** The stability RATE against a real edit corpus needs a
+separate deepened TypeScript clone; `typescript-repo` here is a depth-1 shallow clone
+and is a build-pinned input. The 91.6%-of-characters-in-bodies proxy already in the
+queue entry is what stands in the meantime, and it is a proxy and not a rate. **Step (3),
+wiring the invalidation into `Project.diagnostics()`, is deliberately NOT in this
+commit** — the queue's order of work is measure-first and step (2) is the one that can
+still refuse the whole thing.
+
+**GATES.** Suite **16,452 / 0 / 3** (+12 over the 16,440 baseline, exactly the new pins).
+`cost_gate.py` **exit 0**, largest move **+0.08%** (`globals.lookups`/`globals.misses`,
+the profile's standing run-to-run residual) — the expected answer, since the walk is off
+by default and is a strict no-op then. `huge_methods.py --fail-over 0` clean.
+
+**A PROCESS TRAP WORTH ONE LINE.** An EMPTY `build/classes/kotlin/jvm/main` DURING a
+Kotlin compile is normal — the backend writes its output at the end — and reading it
+mid-build manufactures a convincing round-851 "the build was killed and wiped the class
+dir" diagnosis. It cost a redundant rebuild and a concurrent second Gradle invocation.
+Check `ps` for a live compile before reading an empty class dir as a wipe.
+
+
 ### Round (INC.44) — `referencesAt` is narrowed by SPELLING; the doc claim that it "cannot be" confused the CLAIM with the EVIDENCE
 
 **THE HEADLINE.** `docs/language-service.md` said in three places, over three rounds,
@@ -3072,8 +3180,24 @@ RHS, and the merged-member CONTRADICTION direction.
   `export as namespace`** (regex-approximate; re-derive it from the binder, not from text).
 
   **ORDER OF WORK, and it is measure-first by construction.**
-  (1) Hook the fingerprint cost on a full build and read it — if it is not single-digit ms on
-  `types.ts`'s 874 exports, stop.
+  (1) **DONE — the threshold is MET and the walk's SHAPE was the real question.** Built,
+  measured and pinned: **136 ms whole-program** on a 5,215 ms rebuild, and **0 ms on 23 of
+  24 narrowed builds** (a narrowed build fingerprints only its partition), so the per-EDIT
+  cost of the gate is under a millisecond. **Two controls decide feasibility and neither is
+  a cost figure**: two builds of identical text agree **78/78** (the id-freedom claim), and
+  a narrowed build's fingerprint equals the whole-program one **24/24** (the CONVERGENCE
+  claim — without it every first edit falls back forever). **THE COST INPUT CENSUSED ABOVE
+  IS THE WRONG QUANTITY**: cost tracks the transitive type CLOSURE, not the export COUNT,
+  and the two are near-inversely related — `utilities.ts`'s 692 exports are 1.6 ms and
+  `types.ts` is 129.6 ms. **AND THE OBVIOUS WALK DOES NOT TERMINATE**: a path-only cycle
+  guard is exponential in DAG width (159 s inside one build), and closed-subtree
+  memoization is still not enough because tsc's type graph is one giant SCC (6 of 78 files
+  unfinished inside a 2,000,000-node budget). What works is CUTTING at the file boundary —
+  a type declared elsewhere is unchanged by construction while only this file is edited, so
+  it is keyed by its declaration's `(fileName, pos, end)` and not descended into. See the
+  (INC.46)(1) session note and `Checker.ExportFingerprinter`. **Escape set: 2 of 78** —
+  `types.ts` (budget stop) and `checker.ts` (an exported name with no file-level symbol,
+  UNDIAGNOSED and the first thing to look at, since it is the file an editor edits most).
   (2) Measure the STABILITY RATE against a real edit corpus (a separate, deepened TypeScript
   clone; sample commits touching `src/compiler` and ask what fraction move no exported
   fingerprint). Under ~70% the 45x is diluted to nothing and the round should refuse.

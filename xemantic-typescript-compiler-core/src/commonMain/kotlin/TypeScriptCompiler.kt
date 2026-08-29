@@ -2306,6 +2306,14 @@ class TypeScriptCompiler {
             // (INC.16) hazard (a)'s instrument, at ONE fixed point of the pipeline.
             if (LexDefer.census) LexDefer.fingerprint(binderResults)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+            // (INC.46) AFTER the diagnostics deliberately: the fingerprint walk forces
+            // type resolutions the check may not have needed, and doing it above would
+            // make the probe able to ADD a diagnostic. Off in the shipped compiler.
+            if (ExportSignatures.enabled) {
+                val expSigT0 = PassTiming.nowNanos()
+                checker.exportedSignatureFingerprints()
+                ExportSignatures.nanos += PassTiming.nowNanos() - expSigT0
+            }
             // (INC.17) hand the LIVE program back. Deliberately after the diagnostics
             // are read, so a holder can never observe a half-built checker.
             recheckHolder?.recheck = CheckerRecheck(checker, options)
