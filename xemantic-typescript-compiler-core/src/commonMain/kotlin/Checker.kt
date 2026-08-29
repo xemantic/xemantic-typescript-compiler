@@ -56316,33 +56316,49 @@ class Checker(
             // The exported names, collected from the file's own top-level syntax, and
             // SORTED below: `export { a, b }` and `export { b, a }` expose the same
             // surface, so a reordering must not read as a change.
-            val names = LinkedHashSet<String>()
+            //
+            // (INC.51) EXPORTED NAME -> THE NAME THIS FILE DECLARES IT BY, which are the
+            // same for every form but `export { impl as api }`. They must not be
+            // conflated in either direction: the surface is keyed by what an IMPORTER
+            // sees, while the type is reachable only through `locals`, which the file
+            // keys by what it DECLARES. Looking the exported name up in `locals` misses
+            // for every renaming export and escapes the whole file.
+            //
+            // The local name is NOT hashed here — only the exported one — but renaming a
+            // local still moves the file's hash, because a function's or class's TYPE
+            // carries its declaration's name (the `Type.Object` arm below). That is
+            // deliberate and pinned: dropping declaration names would make two
+            // structurally identical classes hash equal, and a class with a `private`
+            // member is NOMINALLY typed, so they are not interchangeable. A spurious
+            // rebuild after a rename is the affordable direction; a stale diagnostic is
+            // not.
+            val names = LinkedHashMap<String, String>()
             var exact = true
             for (stmt in file.statements) {
                 when (stmt) {
                     is FunctionDeclaration ->
                         if (ModifierFlag.Export in stmt.modifiers) {
                             val n = stmt.name?.text
-                            if (n == null) exact = false else names.add(n)
+                            if (n == null) exact = false else names[n] = n
                         }
                     is ClassDeclaration ->
                         if (ModifierFlag.Export in stmt.modifiers) {
                             val n = stmt.name?.text
-                            if (n == null) exact = false else names.add(n)
+                            if (n == null) exact = false else names[n] = n
                         }
                     is InterfaceDeclaration ->
-                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                        if (ModifierFlag.Export in stmt.modifiers) names[stmt.name.text] = stmt.name.text
                     is TypeAliasDeclaration ->
-                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                        if (ModifierFlag.Export in stmt.modifiers) names[stmt.name.text] = stmt.name.text
                     is EnumDeclaration ->
-                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                        if (ModifierFlag.Export in stmt.modifiers) names[stmt.name.text] = stmt.name.text
                     is ModuleDeclaration ->
                         if (ModifierFlag.Export in stmt.modifiers) {
                             val n = (stmt.name as? Identifier)?.text
-                            if (n == null) exact = false else names.add(n)
+                            if (n == null) exact = false else names[n] = n
                         }
                     is ImportEqualsDeclaration ->
-                        if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+                        if (ModifierFlag.Export in stmt.modifiers) names[stmt.name.text] = stmt.name.text
                     is VariableStatement ->
                         if (ModifierFlag.Export in stmt.modifiers) {
                             for (d in stmt.declarationList.declarations) {
@@ -56350,7 +56366,7 @@ class Checker(
                                 // A binding pattern (`export const { a, b } = …`) exports
                                 // names this walk does not enumerate: refuse the file
                                 // rather than hash a surface that is missing some of it.
-                                if (n == null) exact = false else names.add(n)
+                                if (n == null) exact = false else names[n] = n
                             }
                         }
                     // `export default …` / `export = …` bind no file-level name here,
@@ -56381,7 +56397,11 @@ class Checker(
                                 exact = false
                             }
                         } else if (clause is NamedExports) {
-                            for (e in clause.elements) names.add(e.name.text)
+                            // (INC.51) `propertyName` is the LOCAL, `name` is what an
+                            // importer sees; they differ exactly for `x as y`.
+                            for (e in clause.elements) {
+                                names[e.name.text] = (e.propertyName ?: e.name).text
+                            }
                         } else if (clause != null) {
                             exact = false
                         }
@@ -56391,10 +56411,10 @@ class Checker(
             }
             if (!exact) ExportSignatures.whole.add(fileName)
 
-            for (name in names.sorted()) {
+            for (name in names.keys.sorted()) {
                 h = mix(h, -11L)
                 h = mix(h, name.hashCode().toLong())
-                val symbol = result.locals[name]
+                val symbol = result.locals[names.getValue(name)]
                 if (symbol == null) {
                     // An exported name with no file-level symbol: an `export { a }`
                     // whose `a` is block-scoped (B83.5), or a name the binder merged

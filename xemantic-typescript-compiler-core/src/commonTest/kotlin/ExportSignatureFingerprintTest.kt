@@ -396,6 +396,99 @@ class ExportSignatureFingerprintTest {
         assert(after[g] != before[g])
     }
 
+    /**
+     * (INC.51) A RENAMED LOCAL EXPORT — `export { impl as api }` — must not escape.
+     *
+     * The walk collects the name an importer sees (`api`) and then looks it up in the
+     * file's `locals`, which are keyed by the name the file DECLARES (`impl`): the miss
+     * read as "an exported name with no file-level symbol" and put the whole file into
+     * the escape set, so every edit to it fell back to a whole-program build forever.
+     *
+     * Found by the (INC.50) edit corpus, not by a fixture: it is `marked.ts`'s
+     * `export { useExtension as use }`, one line in a 13-file library, and it was the
+     * only escape in either library corpus. tsc's own 78 sources do not have the shape
+     * at all, so no dashboard profile could have shown it.
+     */
+    @Test
+    fun `a renamed local export does not escape`() {
+        val escapes = escapesOf(
+            """
+            // @strict: true
+            // @Filename: a.ts
+            function impl(n: number): string { return String(n) }
+            export { impl as api }
+            """,
+        )
+        assert(escapes.none { it.endsWith("a.ts") })
+    }
+
+    /**
+     * (INC.51) The soundness half: the renamed export's TYPE has to be IN the hash, not
+     * merely its spelling. An escape is conservative and costs only a rebuild; a name
+     * whose type is absent from the fingerprint is the other direction — a stale answer.
+     */
+    @Test
+    fun `a renamed local export carries its type into the fingerprint`() {
+        fun src(ret: String) = """
+            // @strict: true
+            // @Filename: a.ts
+            function impl(n: number): $ret { return null as never }
+            export { impl as api }
+        """
+        val before = fingerprintsOf(src("string"))
+        val after = fingerprintsOf(src("number"))
+        val a = before.keys.first { it.endsWith("a.ts") }
+        assert(before[a] != null)
+        assert(after[a] != before[a])
+    }
+
+    /**
+     * (INC.51) The ALIAS is part of the surface: what an importer can write is the
+     * EXPORTED name, so changing it must move the hash even though the local, the type
+     * and every other byte are untouched.
+     */
+    @Test
+    fun `the exported alias name is part of the surface`() {
+        fun src(alias: String) = """
+            // @strict: true
+            // @Filename: a.ts
+            function impl(n: number): string { return String(n) }
+            export { impl as $alias }
+        """
+        val before = fingerprintsOf(src("api"))
+        val after = fingerprintsOf(src("apiV2"))
+        val a = before.keys.first { it.endsWith("a.ts") }
+        assert(before[a] != null)
+        assert(after[a] != before[a])
+    }
+
+    /**
+     * (INC.51) AND RENAMING THE *LOCAL* MOVES IT TOO — deliberately conservative, pinned
+     * so that a future round does not "fix" it.
+     *
+     * A structural fingerprint that dropped declaration NAMES would be spuriously stable
+     * in the one direction that costs correctness: TypeScript classes with `private`
+     * members are NOMINALLY typed, so two structurally identical ones are not
+     * interchangeable, and their names are the only thing separating them. The cost of
+     * keeping the name is a rebuild after a rename that no dependent could observe; the
+     * cost of dropping it is a stale diagnostic. This repo's standing rule picks the
+     * first, and this pin records that it is a choice rather than an accident.
+     */
+    @Test
+    fun `renaming the local behind an export alias is conservatively a change`() {
+        fun src(local: String) = """
+            // @strict: true
+            // @Filename: a.ts
+            function $local(n: number): string { return String(n) }
+            export { $local as api }
+        """
+        val before = fingerprintsOf(src("impl"))
+        val after = fingerprintsOf(src("implementation"))
+        val a = before.keys.first { it.endsWith("a.ts") }
+        assert(before[a] != null)
+        assert(after[a] != before[a])
+    }
+
     /** The shipped default is OFF — nothing in an ordinary compile pays for this. */
     @Test
     fun `the fingerprint walk is off by default`() {
