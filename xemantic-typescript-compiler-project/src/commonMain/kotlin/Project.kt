@@ -2139,7 +2139,7 @@ public class Project private constructor(
         if (newName == oldName) {
             return refusedRename(oldName, newName, RenameRefusal.NEW_NAME_UNCHANGED)
         }
-        val sweep = renameSweep()
+        val sweep = renameSweep(caret, newName)
         val seed = referenceSeed(sweep.definitions, keyOf(fileName), caret)
             ?: return refusedRename(oldName, newName, RenameRefusal.NO_SYMBOL)
         return planRename(oldName, newName, sweep, seed)
@@ -2164,32 +2164,121 @@ public class Project private constructor(
      * duplication buys the same independent oracle `semanticsOf` documents: the
      * reference tests and the rename tests can disagree.
      */
-    private fun renameSweep(): RenameSweep {
+    private fun renameSweep(caret: Node, newName: String): RenameSweep {
         val files = build().programFiles.map { keyOf(it) }
+        // (INC.45) The same spelling closure [referencesAt] uses, widened by the NEW
+        // name — see [narrowedRenameSweep] for why the widening is not optional.
+        val narrowed =
+            if (narrowReferenceSweeps) narrowedRenameSweep(caret, newName, files) else null
         val spans = ArrayList<TypeCaptureSpan>()
         val indexes = LinkedHashMap<String, SourceIndex>(files.size)
         val identifiers = LinkedHashMap<String, List<Node>>(files.size)
-        for (file in files) {
+        for (file in narrowed?.keys ?: files) {
             val index = sourceIndexOf(file) ?: continue
             // (API.9) [SourceIndex.occurrenceNodes], not `identifiers()`: an `o["p"]`
             // is an occurrence a plan must EDIT, and one it cannot see is exactly what
             // used to refuse the whole rename.
-            val found = index.occurrenceNodes()
+            val found = narrowed?.get(file) ?: index.occurrenceNodes()
             indexes[file] = index
             identifiers[file] = found
             for (id in found) spans.add(TypeCaptureSpan(file, id.pos, id.end))
         }
-        val result = ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(spans))
-        return RenameSweep(indexes, identifiers, result.capturedDefinitions, result.diagnostics)
+        // (INC.45) The partition, carried on the SWEEP so [verifyRename]'s second build
+        // takes the same one: its diagnostic comparison is a MULTISET over both, and a
+        // narrowed "before" against a whole-program "after" would report every unswept
+        // file's rows as removed.
+        val partition = if (narrowed == null) null else indexes.keys.toSet()
+        val result = ProjectCompiler(overlay).build(
+            projectPath,
+            noEmit = true,
+            recheckOnly = partition,
+            typeCapture = TypeCaptureRequest(spans),
+        )
+        return RenameSweep(
+            indexes, identifiers, result.capturedDefinitions, result.diagnostics, partition,
+        )
     }
 
-    /** [renameSweep]'s answer — see it for why a rename needs all four. */
+    /**
+     * (INC.45) [narrowedSweep] widened by the NEW name — the population a RENAME needs,
+     * or null when the old name's closure could not be bounded.
+     *
+     * ## Why the new name has to be in it, and why it is not in the CLOSURE
+     *
+     * [verifyRename]'s third check scans for occurrences that ALREADY spell the new
+     * name and asserts each still resolves where it did — the only one of the three
+     * that can see a rename which compiles and means something else. Selected on the
+     * old name's closure alone, that scan finds nothing and the check passes
+     * vacuously, which would make this narrowing a way of switching the safety net off
+     * rather than of paying less for it.
+     *
+     * It is added to the SELECTION and not to the closure because it is not a spelling
+     * of the symbol being renamed: letting it contribute alias links or escapes would
+     * make the closure — and so the partition — a function of a name that names
+     * something else entirely.
+     *
+     * ## Why this is enough to keep the partition sound for the DIAGNOSTIC comparison
+     *
+     * A rename edits only files the plan names, all of which are here. An unedited
+     * file's meaning can change only through a name it imports, which it must then
+     * SPELL — as the old name (in the closure) or as the new one (added here) — so it
+     * is in the partition too. That argument is the load-bearing one for narrowing
+     * `renameAt` at all, and it is stated here rather than left implicit.
+     */
+    /**
+     * (INC.45) THE CONTROL for the rename narrowing: how many files a rename at this
+     * caret would check, or **-1** when it falls back.
+     *
+     * [narrowedSweepFiles]' twin, and it exists for one thing that member cannot show:
+     * the rename population is the reference closure WIDENED by the new name, so a
+     * file that spells only the new name belongs to this partition and to no reference
+     * one. A count is the only observable that says the widening happened — the plans
+     * agree with or without it on any fixture whose new name is genuinely fresh, which
+     * is what would make a pin written on the plan alone blind.
+     */
+    internal fun narrowedRenameFiles(fileName: String, offset: Int, newName: String): Int {
+        val index = sourceIndexOf(fileName) ?: return -1
+        val caret = occurrenceCaret(index, offset) ?: return -1
+        val files = build().programFiles.map { keyOf(it) }
+        return narrowedRenameSweep(caret, newName, files)?.size ?: -1
+    }
+
+    private fun narrowedRenameSweep(
+        caret: Node,
+        newName: String,
+        programFiles: List<String>,
+    ): Map<String, List<Node>>? {
+        val closure = narrowedSweep(caret, programFiles) ?: return null
+        val selected = LinkedHashMap<String, MutableList<Node>>(closure.size)
+        for ((file, nodes) in closure) selected[file] = ArrayList(nodes)
+        for (file in programFiles) {
+            val text = overlay.readText(file) ?: continue
+            if (!mayHideAnEscapedName(text) && !text.contains(newName)) continue
+            val index = sourceIndexOf(file) ?: continue
+            val already = index.occurrenceNodes()
+                .filter { SyntaxRoles.occurrenceText(it) == newName }
+            if (already.isEmpty()) continue
+            val into = selected.getOrPut(file) { ArrayList() }
+            // The new name may ALSO be a spelling the closure carries — renaming `p` to
+            // `q` where some file writes `import { p as q }` — so this is a union and
+            // not an append.
+            for (node in already) if (into.none { it === node }) into.add(node)
+        }
+        // [SourceIndex.occurrenceNodes]' own (sorted, total) order, which every
+        // consumer of a span list in this class assumes.
+        return selected.mapValues { (_, nodes) ->
+            nodes.sortedWith(compareBy({ it.pos }, { it.end }))
+        }
+    }
+
+    /** [renameSweep]'s answer — see it for why a rename needs all five. */
     private class RenameSweep(
         val indexes: Map<String, SourceIndex>,
         val identifiers: Map<String, List<Node>>,
         val definitions: List<CapturedDefinition>,
         val diagnostics: List<Diagnostic>,
+        /** (INC.45) The check partition both of a rename's builds must share, or null. */
+        val partition: Set<String>?,
     )
 
     /**
@@ -2562,8 +2651,16 @@ public class Project private constructor(
             }
         }
 
-        val after = ProjectCompiler(scratch)
-            .build(projectPath, noEmit = true, typeCapture = TypeCaptureRequest(asked))
+        val after = ProjectCompiler(scratch).build(
+            projectPath,
+            noEmit = true,
+            // (INC.45) The SWEEP's partition, not one derived from `asked`: check (2)
+            // below compares diagnostics as a multiset against the before-build's, so
+            // the two must have walked the same files or every unswept row reads as
+            // removed. Null on the fallback path, which is a whole-program build.
+            recheckOnly = sweep.partition,
+            typeCapture = TypeCaptureRequest(asked),
+        )
 
         // (2) no new diagnostic. Compared by (file, code) as a MULTISET: a rename
         // rewrites the names inside messages, so the message text moves for reasons
