@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.52) — the floor's dearest pass, and the measurement that says its price is unknowable
+
+**WHY THIS PASS.** With project diagnostics incremental ((INC.46)) and restart-proof
+((INC.48)), what an editor pays per keystroke is the FLOOR — the crawl, parse, bind and
+program-wide passes a narrowed build runs whatever it is checking. Decomposed this round
+(`scripts/floor-decomposition.sh`): a **68 ms** floor, of which the CHECKER is 42 ms (67%)
+with nothing to check, and the largest single pass in both draws is
+`init:computeAllEnumValues`.
+
+**WHAT LANDED.** That pass has two loops. (INC.16) gave the first a projection; the second
+still walked EVERY file's `locals` and recursed through every namespace's `exports` looking
+for `SymbolFlags.Enum`. `BinderResult.bindsEnum` answers the same question from the bind
+that already happened — an identity, not an approximation: `bindEnumDeclaration` is the one
+site minting a conventional enum symbol, `enumValues` is ID-keyed, and a merged symbol is
+one object shared by both files' tables (round 884), so a skipped file's enums are computed
+through the file that minted them.
+
+**MEASURED AS A POPULATION, FROM ONE BINARY.** The verify arm walks everything, so it *is*
+the before: **12,871 top-level symbol visits -> 8,676 (-32.6%)**, plus every namespace
+recursion beneath the **45 of 78** files skipped, with `localsSkipViolations = 0` over that
+non-empty skipped set (round 790's rule: a zero is evidence only beside a non-zero skip).
+
+**AND THE TIME IS NOT RESOLVABLE — WHICH IS THE PART WORTH KEEPING.** The row that motivated
+the round read **13.16 ms**, one draw. Two draws of the SAME binary read **13.16 and 8.42
+ms**; after the change, **7.27 and 9.66**. The floor wall reads 68 ms before and 74 after,
+with draws spanning **57-86 ms**. So the distributions overlap on both instruments and no
+millisecond is claimed: this is landed as a WORK REDUCTION with a control, not as a
+speed-up. **A single-draw per-pass row on a 68 ms floor is not a measurement**, and the
+floor's rows swing ~40% draw to draw — which is now a CLAUDE.md entry, because the next
+agent will read the same table and reach for the same row.
+
+**WHAT THE FLOOR IS MADE OF, for whoever prices the next lever** (68 ms, one draw, so read
+the shares and not the millisecond): config load + `@types` + root glob 9 ms, import-graph
+crawl 10 ms (80% of it read+decode), bind 4-6 ms, **checker construct + getDiagnostics 42
+ms**, post-checker 2 ms. Inside the checker, after this round, the largest rows are
+`init:computeAllEnumValues` ~7-10, `init:moduleTypeNameIndex` ~5.2,
+`checkModuleAugmentationReexportDuplicates` ~4.4-5.4, `init:computePerFileVisibility` ~1.6.
+**Nothing there is worth a round on its own** at this resolution; the honest next lever is
+either an amplified measurement (round 759's shape) or a structural one — reusing the BIND
+across queries, which CLAUDE.md records as blocked by `nodeToSymbol`'s cross-file `(pos,
+end)` collisions.
+
+**GATES.** Suite **16,485 / 0 / 3** (+2, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
 ### Round (INC.48) — the incremental state outlives the process, and a restart is 60x
 
 **WHAT LANDED.** `Project.saveState()` / `restoreState()`, plus `ProjectStateSnapshot` in
