@@ -4573,8 +4573,19 @@ object FrontEnd {
      * declaration subtree (round 471). This row is what says which half to fix.
      */
     const val CHK_F_LIBBIND = 46
+    /**
+     * The walk that fills `builtinLibDecls` / `builtinLibMemberDecls` /
+     * `realLibDeclFile` — INSIDE [CHK_F_LIB], beside [CHK_F_LIBBIND].
+     *
+     * Those three are keyed by AST NODE, i.e. by a Kotlin `data class`, whose
+     * `hashCode()` recurses the whole declaration subtree (round 471). CLAUDE.md
+     * records the sets as safe "because lib decl subtrees are small — not a
+     * licence"; with the DOM lib they are not small. This row separates that walk
+     * from the 45 `mergeSymbolTable` calls beside it.
+     */
+    const val CHK_F_LIBDECLS = 47
 
-    const val N = 47
+    const val N = 48
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4624,6 +4635,7 @@ object FrontEnd {
         "    of which enclosingImportIndex (field)",
         "    of which localTypeAliasIndex (field)",
         "      of which RealLibSnapshots.bindLibFiles",
+        "      of which the lib decl-set walk",
     )
 
     /**
@@ -4636,7 +4648,7 @@ object FrontEnd {
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
-        CHECK, CHK_CTOR, CHK_INIT, CHK_F_LIB, CHK_F_LIBBIND, CHK_F_TLC, CHK_F_EII, CHK_F_LTA,
+        CHECK, CHK_CTOR, CHK_INIT, CHK_F_LIB, CHK_F_LIBBIND, CHK_F_LIBDECLS, CHK_F_TLC, CHK_F_EII, CHK_F_LTA,
         CHK_DIAGS, STAR, TPI, TAV, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,

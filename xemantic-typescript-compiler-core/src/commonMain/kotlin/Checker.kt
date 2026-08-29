@@ -9103,6 +9103,7 @@ class Checker(
             val ast = result.sourceFile
             val distFile = ast.fileName
             if (builtinLibSourceFile == null) builtinLibSourceFile = ast
+            val feDeclsT0 = FrontEnd.t()
             ast.statements.forEach { stmt ->
                 builtinLibDecls.add(stmt)
                 realLibDeclFile[stmt] = distFile
@@ -9119,6 +9120,7 @@ class Checker(
                     else -> {}
                 }
             }
+            FrontEnd.close(FrontEnd.CHK_F_LIBDECLS, feDeclsT0)
             mergeSymbolTable(merged, result.locals)
         }
         return merged
