@@ -1,23 +1,27 @@
-**(CHK.71)(b) — THE BLOCKER WAS NOT B83.5 BUT A **FOURTH SHADOW SHAPE**, AND IT LANDS;
-THE RECEIVER HALF IS REFUSED AGAIN ON A *DIFFERENT* ROW (2026-08-28).** A BLOCK-scoped
-declaration inside a NESTED function shadowing an ENCLOSING FUNCTION's local was covered by
-none of round 351 (top-level decls), round 460 (two decls in one body) or round 455 (a
-GLOBAL/file-level collision) — whose condition is literally
-`outerBound && !currentLocalTypes.containsKey(nm)`, the inherited case inverted. A shipped
-ours-only TS2322 at every assignment to the inner name, judged against the WRONG
-declaration's type; twelve lines reproduce it, tsgo 7.0.2 is silent, and no optional chain
-is anywhere near it. **The optional-chain receiver half is re-priced, not re-refused for the
-same reason**: the two `moduleNameResolver.ts` rows are GONE (they were this shadow shape)
-and the grid is `added=0 removed=0` with both halves — what refuses it now is **one knip
-row**, `compilers.ts:60:49 TS18047`, because tsc narrows a receiver to non-null in the TRUE
-branch of a truthy test on an optional chain and we do not. **The blocker is now
-optional-chain truthiness narrowing, a nameable and reducible mechanism.** A pin written as
-a CONTROL measured as a POSITIVE (on the parent the first TS2322 is the inner assignment
-reported against the outer type), and two of four pin expectations were wrong because the
-message strips nullish — tsgo prints ours verbatim. **GATES.** Suite **16,422 / 0 / 3** (+5,
-exactly the new pins), no corpus baseline moved; grid `790c337141b167657e4f1f3a219474aa`,
-`added=0 removed=0`; cost_gate exit 0, `output.errors` **46**; huge_methods 783 / 0;
-partition-equivalence EQUIVALENT all 78, floor 65 ms (one draw); capture-equivalence
-DIVERGED **964** in 43 of 76, `definitions=0 moreAny=0` — the standing state exactly; knip
-**49**, jsonrepair **4**.
+**(INC.44) — `referencesAt` IS NARROWED BY *SPELLING*, AND THE DOC CLAIM THAT IT "CANNOT
+BE" CONFUSED THE CLAIM WITH THE EVIDENCE (2026-08-29).** `docs/language-service.md` said in
+three places that find-references and rename "are NOT narrowed and will not be: their claim
+is about every file, so there is nothing to narrow to". The claim is program-wide; the
+EVIDENCE is not — an occurrence can only be an answer if it SPELLS a name the symbol is
+reachable by. `referencesAt` now selects that population before typing it and `captureIn`'s
+partition, which has always been DERIVED from the request's spans, narrows the check with
+it: **no new mechanism**. On tsc's own 78 sources an ordinary name costs **510–553 ms
+against 8.8–11.1 s (17–18x)**, `checker.ts`-only names 1,940 ms (4.8x), and the worst
+realistic case (`SyntaxKind`, 9,827 hits in 49 files) still wins at 4,904 ms; a repeat is
+free (119–150 ms) because the narrow path reaches a memo the whole-program one never did.
+The closure over `import { p as q }` / `export { p as q }` terminates because both spellings
+are tokens of the file DECLARING the alias; everything else — a default export, a default
+import's local, `export =`, `import x = require(…)`, a namespace binding, the spelling
+`default` — REFUSES and runs the old sweep. **The near-miss worth remembering**: the obvious
+substring file filter is not exact, because `StringLiteralNode.text` is the COOKED value and
+`\a` is an identity escape, so `o["pl\ain"]` names `plain` — a file may be skipped only if
+it holds no backslash at all (29 of 78 do, carrying 78.2% of the characters). **The
+ablation's honest half**: arm a3 reddens only the REFUSAL pins, so the escape guards are
+CONSERVATISM — kept because tsc answers **6** references where we answer **2** on a
+`export { renamed as default }` edge, which is now pinned so the day it closes is loud.
+**GATES.** Suite **16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins); reference differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names);
+four ablation arms, four DISTINCT red sets; `cost_gate.py` / `huge_methods.py` are CONTROLS here (no `-core` source
+touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
+(`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
+run-to-run residual), `huge_methods.py --fail-over 0` clean.
 

@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.46)(3) — project-wide diagnostics ARE incremental now, and the gate is 40 real commits
+
+**WHAT LANDED.** `Project.diagnostics()` no longer rebuilds the whole program after every
+edit. When an edit moved no exported signature it answers the previous build's rows with
+the edited files' rows replaced, computed by ONE narrowed build. `Project.surface` +
+`Project.incrementalDiagnostics`, `ProjectCompiler.build(exportSignatures = …)` and its two
+new `Result` fields. This is the last interactive operation in the API that was
+whole-program in every case; with (INC.44)/(INC.45) it means **nothing an editor asks is
+whole-program by default any more.**
+
+**GRADED AS A DIFFERENTIAL OVER REAL EDITS, WHICH NEEDS NO BASELINE.**
+`scripts/inc46-incremental-differential.sh` replays (INC.46)(2)'s 40-commit corpus: build
+the parent tree, edit each touched file THROUGH THE OVERLAY (an editor's unsaved buffer),
+ask `diagnostics()`, and compare row for row against a project opened FRESH on the edited
+text. **EQUIVALENT — 40 agreed of 40 compared** — and the control that makes that mean
+something is `served=27`, i.e. 27 of the cases were actually answered incrementally rather
+than falling back. **A run with `served=0` is REFUSED by the harness**, because an
+implementation that always fell back would agree on every case and prove nothing (round
+790: a verifier reads 0 both when the skip is sound and when the instrument is dead). The
+27 is exactly (INC.46)(2)'s 67%, which is the two measurements corroborating each other on
+different instruments.
+
+**FIVE PRECONDITIONS, EACH CHECKED RATHER THAN ARGUED, EACH WITH ITS OWN PIN.** A baseline
+exists; every edited file was in that program; no edited file ESCAPES; the narrowed build
+finds the SAME program (so an edit that adds an import falls back — the crawl still runs in
+full, and a new file changes what every importer resolves); and no edited file's fingerprint
+moved. The last is sound because a narrowed build's fingerprint equals the whole-program
+build's, swept 24 of 24 in step (1) — the property that makes the mechanism CONVERGE instead
+of falling back on every first edit.
+
+**THE PIN SET IS A PAIR BY CONSTRUCTION.** A body-only edit must be SERVED and a signature
+edit must NOT: an implementation that always serves passes the first, one that never serves
+passes the second, and only both together say the gate discriminates. Both are pinned twice
+— once on the ANSWER (equal to a fresh build's) and once on the COST (builds counted at the
+`Vfs`), because without the cost family every pin passes against the pre-(INC.46) behaviour
+of rebuilding every time. **11 pins**, `ProjectIncrementalDiagnosticsTest`.
+
+**TWO THINGS THE PINS FOUND THAT REVIEW DID NOT.**
+**(a) THE INCREMENTAL ANSWER WAS NOT RETAINED.** `cached` cannot hold it — that field is a
+whole-program `ProjectCompiler.Result` and a narrowed build's is not one — so a second
+`diagnostics()` with no intervening edit fell through and REBUILT. An editor asks twice
+constantly (a project panel and a per-buffer annotator), so the mechanism would have paid
+for itself once and then thrown it away. The retention lives on the surface, which the
+accepted answer already updates.
+**(b) THE BUILD-COUNTING UNIT IS BLIND FOR AN EDITED CONFIG.** Every cost pin in this repo
+counts reads of `tsconfig.json` at the backing `Vfs`. An OVERLAID file is served from the
+overlay and never reaches the backing store — so after `updateFile("/proj/tsconfig.json", …)`
+the config's read count stops moving entirely, and a "did this rebuild" pin reads **0 builds
+for a build that certainly happened**. That is a general trap for every counted pin whose
+test edits the file it counts; the config pin now counts a SOURCE file with its own control.
+
+**ORDER IS PRESERVED, DELIBERATELY.** `diagnostics()` is documented as answering in the
+compiler's own order, so the edited files' fresh rows are SPLICED where their old rows were
+rather than appended — otherwise every edited file's rows would jump to the bottom of a
+project-wide list after an edit. A file that had no rows and now has some appends, which is
+the only case with no position to preserve.
+
+**COST, MEASURED ON THE SAME RUN.** The whole 40-case replay is **109,857 ms incremental
+against 211,271 ms full (1.92x)** — and that number is DILUTED on purpose: it includes the
+13 fallback cases, which pay a narrowed build AND a rebuild. The per-edit figure is the one
+from (INC.31)/(INC.37) that this mechanism now delivers on a served edit: **108-113 ms
+against 4,864-5,096 ms, a factor of 45.** A signature edit costs two builds instead of one,
+which is the price of the gate being wrong and is pinned as such.
+
+**GATES.** Suite **16,464 / 0 / 3** (+11 over the session's 16,453, exactly the new pins).
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; the differential EQUIVALENT
+40/40 with `served=27`. Build warning-clean (the round's one `No cast needed.` was fixed
+rather than left).
+
+**WHAT IS LEFT, NAMED.** `types.ts` still escapes — an in-file SCC that no budget closes
+(measured at 2 M and 12 M nodes), and it accounts for 8 of the 13 fallbacks, so **SCC-aware
+hashing is the one lever between the measured 67% and an 87.5% ceiling.** Second: the
+fingerprint is armed through a process-global that `ProjectCompiler.build` sets and restores
+around its own compile — sound for a single-threaded embedding API and stated in the code,
+but the right shape is a threaded parameter, which is a mechanical change through four
+layers.
+
+
 ### Round (INC.46)(2) — the STABILITY RATE against a real edit corpus: 67%, and one text scan was worth 35 points of it
 
 **WHAT THIS ANSWERS.** (INC.46) step (2), the one the queue said could still refuse the
@@ -3180,7 +3258,14 @@ RHS, and the merged-member CONTRADICTION direction.
   `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
   selection must therefore carry.
 
-- [ ] **(INC.46) PROJECT-WIDE DIAGNOSTICS BY *EXPORTED-SIGNATURE STABILITY*, NOT BY A
+- [x] **(INC.46) PROJECT-WIDE DIAGNOSTICS BY *EXPORTED-SIGNATURE STABILITY* — ALL THREE
+  STEPS LANDED 2026-08-29. Cost 136 ms whole-program / ~0 ms per edit; stability **67%**
+  over 40 real commits (floor; ceiling 87.5% once `types.ts`'s in-file SCC is hashed);
+  `Project.diagnostics()` graded **EQUIVALENT 40/40 with served=27**. The successor is
+  SCC-AWARE HASHING — Tarjan over the in-file type graph, hashing each strongly-connected
+  component as a unit — which is the one lever between the measured floor and the ceiling,
+  and it is the only thing standing between this and every edit being incremental.
+  ORIGINAL ENTRY: PROJECT-WIDE DIAGNOSTICS BY *EXPORTED-SIGNATURE STABILITY*, NOT BY A
   DEPENDENCY CLOSURE — THE OWNER'S IDEA, AND IT DISSOLVES (INC.35)'s BLOCKER RATHER THAN
   WORKING AROUND IT.** Owner, 2026-08-29: *"if we do `import *` in a certain file and then
   recompile this file, don't we have the information of all the resolved imported symbols
@@ -3286,7 +3371,15 @@ RHS, and the merged-member CONTRADICTION direction.
   **SCC-aware hashing** (Tarjan, hash each component as a unit); the budget stays bounded at
   2,000,000 and the file is recorded in `ExportSignatures.whole`, which costs a full rebuild
   and never a stale diagnostic.
-  (3) Only then wire the invalidation.
+  (3) **DONE — `Project.diagnostics()` IS INCREMENTAL.** `Project.surface` +
+  `incrementalDiagnostics`, `ProjectCompiler.build(exportSignatures = …)` and two new
+  `Result` fields. Five preconditions, each CHECKED rather than argued (a baseline exists;
+  every edited file was in that program; none ESCAPES; the narrowed build finds the same
+  program; no fingerprint moved), each with its own pin. **GRADED EQUIVALENT — 40 of 40
+  real commits agree row for row with a fresh whole-program build, `served=27`**, the
+  control that keeps the agreement from being vacuous (a harness whose `served` is 0
+  REFUSES). 11 pins in `ProjectIncrementalDiagnosticsTest`, paired ANSWER and COST families
+  because a cost-free pin set passes against the old always-rebuild behaviour.
   **GRADE IT AS A DIFFERENTIAL, which needs no baseline**: after an edit, incremental
   project-wide diagnostics must equal a full rebuild's, row for row, over a SEQUENCE of edits
   — and the sequence must contain a signature-CHANGING edit and a body-only one, or the gate

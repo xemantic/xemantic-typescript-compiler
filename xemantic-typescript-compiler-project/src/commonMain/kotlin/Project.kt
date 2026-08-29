@@ -498,6 +498,47 @@ public class Project private constructor(
         val result: ProjectCompiler.Result,
     )
 
+    /**
+     * (INC.46) What the last WHOLE-PROGRAM build established, kept across edits so that
+     * the next [diagnostics] can decide whether it must rebuild.
+     *
+     * Dropped only when it can no longer describe this project — a config edit, a
+     * change to the program's file set, or a build that could not be summarised.
+     */
+    private class ExportSurface(
+        /** Every program file's export fingerprint, from a whole-program build. */
+        val signatures: Map<String, Long>,
+        /** Files that may not be proved stable however they are edited. */
+        val escapes: Set<String>,
+        /** That build's whole-program diagnostics, kept row for row and in order. */
+        val diagnostics: List<Diagnostic>,
+        /** That build's program, so a crawl that finds a different one falls back. */
+        val programFiles: List<String>,
+    )
+
+    private var surface: ExportSurface? = null
+
+    /**
+     * (INC.46) The files edited since [surface] was established, or null when the
+     * project is clean.
+     *
+     * A `LinkedHashSet` rather than a single path: an editor saves several buffers at
+     * once, and the gate is no weaker for a batch — every edited file must clear it.
+     */
+    private var dirtyFiles: LinkedHashSet<String>? = null
+
+    /**
+     * (INC.46) How many [diagnostics] calls this project has answered INCREMENTALLY.
+     *
+     * Exposed for pinning and measurement, not for policy — and it is what keeps the
+     * differential in `scripts/inc46-incremental-differential.sh` from being vacuous:
+     * an implementation that always fell back would agree with a rebuild on every case
+     * and prove nothing (round 790 — a verifier reads 0 both when the skip is sound and
+     * when the instrument is dead).
+     */
+    internal var incrementalAnswers: Int = 0
+        private set
+
     private var closed: Boolean = false
 
     /**
@@ -519,7 +560,23 @@ public class Project private constructor(
      * is not an optimization detail a caller may ignore — a query is a full compile,
      * so a host that re-asks per keystroke without editing must not pay for it.
      */
-    public fun diagnostics(): List<Diagnostic> = build().diagnostics
+    public fun diagnostics(): List<Diagnostic> {
+        checkOpen()
+        cached?.let { return it.diagnostics }
+        // (INC.46) An incremental answer BECOMES this project's standing answer, so a
+        // host that asks twice pays once — `cached` cannot hold it (that field is a
+        // whole-program `Result`, and a narrowed build's is not one), so the retention
+        // lives on the surface, which the accepted answer already updated.
+        if (dirtyFiles == null) surface?.let { return it.diagnostics }
+        // (INC.46) An edit that moved no exported signature cannot change any other
+        // file's diagnostics, so the answer is the previous build's rows with the
+        // edited files' replaced — one narrowed build (108-113 ms on tsc's own 78
+        // sources) instead of a rebuild (4.9 s). Answers null, and falls through to a
+        // rebuild, whenever that cannot be justified; see [incrementalDiagnostics] for
+        // the five conditions and why each is checked rather than argued.
+        incrementalDiagnostics()?.let { return it }
+        return build().diagnostics
+    }
 
     /**
      * The diagnostics whose [Diagnostic.fileName] is [fileName].
@@ -535,7 +592,9 @@ public class Project private constructor(
         val key = keyOf(fileName)
         // `?.let` rather than a null check and a smart cast: `Diagnostic.fileName` is
         // a public property of another module, where Kotlin refuses to smart-cast.
-        return build().diagnostics.filter { d ->
+        // (INC.46) through [diagnostics], so the per-file question inherits the
+        // incremental answer instead of forcing the rebuild it exists to avoid.
+        return diagnostics().filter { d ->
             d.fileName?.let { PathUtil.normalize(it) } == key
         }
     }
@@ -2838,6 +2897,10 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
+        // about the files this edit did not touch, which is exactly what survives. The
+        // edited file joins the set the next [diagnostics] must clear.
+        (dirtyFiles ?: LinkedHashSet<String>().also { dirtyFiles = it }).add(key)
         invalidate(key)
     }
 
@@ -2860,6 +2923,10 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
+        // about the files this edit did not touch, which is exactly what survives. The
+        // edited file joins the set the next [diagnostics] must clear.
+        (dirtyFiles ?: LinkedHashSet<String>().also { dirtyFiles = it }).add(key)
         invalidate(key)
     }
 
@@ -2889,6 +2956,9 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INC.46) the export surface is a claim about a live project.
+        surface = null
+        dirtyFiles = null
         lineMaps.clear()
         sourceIndexes.clear()
         ownParses.clear()
@@ -3134,9 +3204,113 @@ public class Project private constructor(
     private fun build(): ProjectCompiler.Result {
         checkOpen()
         cached?.let { return it }
-        val result = ProjectCompiler(overlay).build(projectPath, noEmit = true)
+        // (INC.46) A whole-program build also establishes the export surface, so the
+        // NEXT edit has a baseline to be compared against. ~136 ms on tsc's own 78
+        // sources against a 5.2 s rebuild — paid here, on the build the user already
+        // waited for, and never on the incremental path.
+        val result = ProjectCompiler(overlay).build(
+            projectPath, noEmit = true, exportSignatures = true,
+        )
         cached = result
+        surface = ExportSurface(
+            signatures = result.exportSignatures,
+            escapes = result.exportSignatureEscapes,
+            diagnostics = result.diagnostics,
+            programFiles = result.programFiles,
+        )
+        dirtyFiles = null
         return result
+    }
+
+    /**
+     * (INC.46) The whole program's diagnostics after an edit, WITHOUT rebuilding the
+     * whole program — or null when that cannot be justified.
+     *
+     * ## The idea, and why it is not a dependency closure
+     *
+     * The standing plan for making project-wide diagnostics incremental was a
+     * reverse-dependency closure, and it is owner-closed as (INC.35) because a closure
+     * only pays on LAYERED code: measured, both a file-level and a SYMBOL-level graph
+     * re-check 100% of tsc's characters at the median edit. This asks a different
+     * question — not WHICH symbols a file's dependents use, but whether the symbols
+     * this file EXPORTS have moved. An edit inside a function body leaves every
+     * exported signature intact, so no dependent can observe it however dense the graph
+     * is, and the answer is the previous build's rows with the edited files' rows
+     * replaced. Measured over 40 real commits to tsc's own `src/compiler`, **67%** of
+     * them move no touched file's fingerprint.
+     *
+     * ## What must hold, and each one is checked rather than argued
+     *
+     *  - **A baseline exists** — some whole-program build established [surface].
+     *  - **Every edited file was in that program**, so a new or removed file falls back
+     *    (its arrival changes what every importer resolves).
+     *  - **No edited file ESCAPES.** A script file, a global augmentation, an export the
+     *    walk cannot enumerate or a walk that ran out of budget cannot be proved stable,
+     *    and an escape must never be read as "no exports".
+     *  - **The narrowed build finds the SAME program.** The crawl still runs in full, so
+     *    an edit that adds or removes an import shows up here as a different file list —
+     *    and that is a program change, not a signature one.
+     *  - **No edited file's fingerprint moved**, compared against the baseline. Sound
+     *    because a narrowed build's fingerprint for a file equals the whole-program
+     *    build's: swept 24 of 24 on the compiler profile, which is what makes the
+     *    mechanism CONVERGE rather than fall back on every first edit.
+     *
+     * Any of them failing answers null, and the caller rebuilds. Every failure costs a
+     * rebuild the caller was going to pay for anyway; the one thing that must never
+     * happen — answering with stale rows — is what all five exist to prevent.
+     */
+    private fun incrementalDiagnostics(): List<Diagnostic>? {
+        val base = surface ?: return null
+        val dirty = dirtyFiles ?: return null
+        if (dirty.isEmpty()) return null
+        // A config edit changes what the program IS, so nothing about the previous one
+        // survives it.
+        if (dirty.any { it.endsWith(".json") }) return null
+        val programFiles = base.programFiles.toHashSet()
+        if (dirty.any { it !in programFiles }) return null
+        if (dirty.any { it in base.escapes }) return null
+
+        val narrowed = ProjectCompiler(overlay).build(
+            projectPath, noEmit = true, recheckOnly = dirty, exportSignatures = true,
+        )
+        if (narrowed.programFiles != base.programFiles) return null
+        for (file in dirty) {
+            if (file in narrowed.exportSignatureEscapes) return null
+            val before = base.signatures[file] ?: return null
+            val after = narrowed.exportSignatures[file] ?: return null
+            if (before != after) return null
+        }
+
+        // Every edited file's export surface is unchanged, so no file outside `dirty`
+        // can have changed its own diagnostics: keep their rows verbatim and splice the
+        // edited files' fresh rows in.
+        //
+        // SPLICED IN PLACE, not appended: [diagnostics] is documented as answering in
+        // the compiler's own order, and a host that renders a project-wide list would
+        // otherwise see every edited file's rows jump to the bottom after an edit. Each
+        // edited file's replacement rows go where its FIRST old row was; a file that had
+        // none and has some now appends, which is the only case with no position to
+        // preserve.
+        val fresh = LinkedHashMap<String, MutableList<Diagnostic>>()
+        for (d in narrowed.diagnostics) {
+            val f = d.fileName?.let { PathUtil.normalize(it) } ?: continue
+            if (f in dirty) fresh.getOrPut(f) { ArrayList() }.add(d)
+        }
+        val answer = ArrayList<Diagnostic>(base.diagnostics.size)
+        val spliced = HashSet<String>()
+        for (d in base.diagnostics) {
+            val f = d.fileName?.let { PathUtil.normalize(it) }
+            if (f == null || f !in dirty) { answer.add(d); continue }
+            if (spliced.add(f)) fresh[f]?.let { answer.addAll(it) }
+        }
+        for ((f, rows) in fresh) if (f !in spliced) answer.addAll(rows)
+        // The surface is unchanged BY THE TEST ABOVE, so it carries forward — which is
+        // what makes a SEQUENCE of body-only edits each cost one narrowed build rather
+        // than the first one cheap and the rest full.
+        surface = ExportSurface(base.signatures, base.escapes, answer, base.programFiles)
+        dirtyFiles = null
+        incrementalAnswers++
+        return answer
     }
 
     /** [path] as this project keys it: normalized and absolute. */

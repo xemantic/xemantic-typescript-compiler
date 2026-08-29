@@ -92,6 +92,28 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** (API.6) Every signature the callees at the request's `signatureSpans`
          *  have, or empty — the signature-help answer. */
         val capturedSignatures: List<CapturedSignatures> = emptyList(),
+        /**
+         * (INC.46) `fileName -> fingerprint of everything an importer of it can
+         * observe`, or empty — which is every build that did not ask (`exportSignatures`
+         * false, the default).
+         *
+         * Covers the files this build's checker WALKED, so a narrowed build carries its
+         * partition and a whole-program one carries the program. See
+         * [ExportSignatures] for what the hash is and why it may not be a display
+         * string.
+         */
+        val exportSignatures: Map<String, Long> = emptyMap(),
+        /**
+         * (INC.46) The files whose export surface could NOT be summarised exactly and
+         * must therefore invalidate the whole program however they are edited: a SCRIPT
+         * file, a global augmentation, an export this walk cannot enumerate, or a walk
+         * that ran out of node budget.
+         *
+         * A consumer that ignores this is unsound in the SILENT direction — a stale
+         * diagnostic — so it is a separate field rather than an absence from
+         * [exportSignatures], which would read as "no exports".
+         */
+        val exportSignatureEscapes: Set<String> = emptySet(),
     ) {
         val errorCount: Int get() = diagnostics.count { it.category == DiagnosticCategory.Error }
     }
@@ -144,6 +166,18 @@ class ProjectCompiler(private val vfs: Vfs) {
          *  behind a valve that can ask for nothing else. Read [ProgramRecheck]'s
          *  banner before adding another. */
         recheckHolder: RecheckHolder? = null,
+        /**
+         * (INC.46) When true this build also summarises each walked file's EXPORT
+         * SURFACE into [Result.exportSignatures] / [Result.exportSignatureEscapes], so
+         * a caller can decide whether an edit to a file could have changed what an
+         * importer of it observes — which is what makes project-wide diagnostics
+         * incremental (see `Project.diagnostics`).
+         *
+         * Off by default and free when off. It costs ~136 ms on a whole-program build
+         * of tsc's own 78 sources and ~0 ms on a build narrowed to one file, which is
+         * the case that matters: the answer is needed per EDIT, not per program.
+         */
+        exportSignatures: Boolean = false,
     ): Result {
         // (INC.4) A partition may not EMIT. The Transformer queries the checker it is
         // handed (`isReferencedAliasDeclaration` and friends decide import elision),
@@ -269,12 +303,32 @@ class ProjectCompiler(private val vfs: Vfs) {
             else emitOptions.copy(packageJsonTypes = packageScopesOf(program.keys))
         val parsed = ParsedSource(coreOptions, files, hasExplicitFilenames = true, preParsed = preParsed,
             moduleResolutions = moduleResolutions)
-        val result = TypeScriptCompiler().compileParsed(
-            parsed, coreOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
-            typeCapture = typeCapture,
-            checkedSink = checkedSink,
-            recheckHolder = recheckHolder,
-        )
+        // (INC.46) The fingerprint walk is armed around THIS compile and disarmed
+        // again, and its answer is snapshotted immediately. The arming is a
+        // process-global rather than a threaded parameter deliberately: the walk hooks
+        // one fixed point deep inside `compileParsed` (right after the checker's
+        // diagnostics are read) and threading a flag through four layers to reach it
+        // would touch the whole compile path for a probe that is off in every build but
+        // this API's. The scope of the compromise is stated rather than hidden: one
+        // `build` is a synchronous whole-program compile, so a SECOND compile running
+        // concurrently in the same process would also pay the walk. `Project` is a
+        // single-threaded embedding API and does not do that.
+        val expSigWas = ExportSignatures.enabled
+        if (exportSignatures) { ExportSignatures.enabled = true; ExportSignatures.reset() }
+        val result = try {
+            TypeScriptCompiler().compileParsed(
+                parsed, coreOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
+                typeCapture = typeCapture,
+                checkedSink = checkedSink,
+                recheckHolder = recheckHolder,
+            )
+        } finally {
+            ExportSignatures.enabled = expSigWas
+        }
+        val expSigs =
+            if (exportSignatures) LinkedHashMap(ExportSignatures.fingerprints) else emptyMap()
+        val expEscapes =
+            if (exportSignatures) LinkedHashSet(ExportSignatures.whole) else emptySet<String>()
         // INV.7(d2): top-level declaration names per file (from the crawl parses)
         // for the shared-name full-rebuild bail.
         fun topLevelNames(path: String): List<String> =
@@ -354,6 +408,8 @@ class ProjectCompiler(private val vfs: Vfs) {
             capturedMembers = result.capturedMembers,
             capturedScopes = result.capturedScopes,
             capturedSignatures = result.capturedSignatures,
+            exportSignatures = expSigs,
+            exportSignatureEscapes = expEscapes,
         )
     }
 

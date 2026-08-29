@@ -152,10 +152,15 @@ class ProjectSemanticsTest {
         // the number of compiles.
         val (project, counting) = countedProject()
         assert(buildsIn(counting) { project.diagnostics() } == 1)
+        // (INC.46) each of these ADDS AN EXPORT, which moves the file's export surface,
+        // so each costs TWO builds: the narrowed one that discovers the signature moved
+        // and then the whole-program rebuild. `ProjectIncrementalDiagnosticsTest` pins
+        // the cost model itself; it is spelled out here because this is the control the
+        // two count pins below rest on.
         project.updateFile(mainFile, main + "export const extra = 1;\n")
-        assert(buildsIn(counting) { project.diagnostics() } == 1)
+        assert(buildsIn(counting) { project.diagnostics() } == 2)
         project.updateFile(mainFile, main + "export const extra2 = 2;\n")
-        assert(buildsIn(counting) { project.diagnostics() } == 1)
+        assert(buildsIn(counting) { project.diagnostics() } == 2)
         // And a query on a CLEAN project builds not at all.
         assert(buildsIn(counting) { project.diagnostics() } == 0)
     }

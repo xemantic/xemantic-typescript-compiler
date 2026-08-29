@@ -1,5 +1,37 @@
 # Status
 
+**(INC.46)(3) — PROJECT-WIDE DIAGNOSTICS ARE INCREMENTAL, AND WITH (INC.44)/(INC.45)
+NOTHING AN EDITOR ASKS IS WHOLE-PROGRAM BY DEFAULT ANY MORE (2026-08-29).**
+`Project.diagnostics()` no longer rebuilds after every edit: when the edit moved no
+exported signature it answers the previous build's rows with the edited files' rows
+replaced, from ONE narrowed build — **108-113 ms against 4,864-5,096 ms, a factor of 45**
+on a served edit. **GRADED AS A DIFFERENTIAL THAT NEEDS NO BASELINE**: over (INC.46)(2)'s
+40 real tsc commits, edited THROUGH THE OVERLAY as an editor's unsaved buffers, the answer
+must equal a project opened fresh on the edited text — **EQUIVALENT, 40 agreed of 40**,
+with `served=27` as the control that keeps the agreement from being vacuous (a run whose
+`served` is 0 is REFUSED — round 790: a verifier reads 0 both when the skip is sound and
+when the instrument is dead). The 27 is exactly step (2)'s 67%, two instruments
+corroborating. **Five preconditions, each CHECKED rather than argued** and each with its
+own pin; the pin set is a PAIR by construction (a body-only edit must be served and a
+signature edit must not — an implementation that always serves passes the first, one that
+never serves passes the second), and each is pinned twice, on the ANSWER and on the
+BUILD COUNT, because without the cost family every pin passes against the old
+always-rebuild behaviour. **TWO DEFECTS THE PINS FOUND THAT REVIEW DID NOT**: the
+incremental answer was NOT RETAINED (`cached` cannot hold it — that field is a
+whole-program `Result` — so a second `diagnostics()` with no intervening edit rebuilt, and
+an editor asks twice constantly); and **the build-counting unit every cost pin in this repo
+uses is BLIND for an edited config** — an overlaid file is served from the overlay and
+never reaches the backing `Vfs`, so the config's read count stops moving and "did this
+rebuild" reads 0 for a build that certainly happened. Two pre-existing control pins
+legitimately moved 1 -> 2 builds and were updated to state the new cost model rather than
+papered over: adding an export IS a signature change, and the gate being wrong costs the
+narrowed build plus the rebuild. **GATES.** Suite **16,464 / 0 / 3** (+11, exactly the new
+pins); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; build warning-clean.
+**THE SUCCESSOR IS SCC-AWARE HASHING**: `types.ts` still escapes on an in-file
+strongly-connected component that no budget closes (measured at 2 M and 12 M nodes) and it
+accounts for 8 of the 13 fallbacks, so Tarjan-per-component is the one lever between the
+measured **67%** floor and the **87.5%** ceiling.
+
 **(INC.46)(2) — THE STABILITY RATE IS **67%** OVER 40 REAL tsc COMMITS, AND ONE TEXT SCAN
 WAS WORTH 35 POINTS OF IT (2026-08-29).** Step (2) is the one the queue said could refuse the
 whole mechanism ("under ~70% the 45x is diluted to nothing"). `scripts/inc46-stability.sh`
@@ -103,30 +135,3 @@ lesson). **MEASURED**: an ordinary rename is **~1.0-1.3 s against ~15 s (12-14.5
 7 narrowed, 6 producing an APPLICABLE plan, 1,691 edits compared plan for plan, 0
 diverged, 56.5 s against 114.2 s; three ablation arms b1 **1 RED** / b2 **2 RED** / b3
 undiscriminated with a reason.
-
-**(INC.44) — `referencesAt` IS NARROWED BY *SPELLING*, AND THE DOC CLAIM THAT IT "CANNOT
-BE" CONFUSED THE CLAIM WITH THE EVIDENCE (2026-08-29).** `docs/language-service.md` said in
-three places that find-references and rename "are NOT narrowed and will not be: their claim
-is about every file, so there is nothing to narrow to". The claim is program-wide; the
-EVIDENCE is not — an occurrence can only be an answer if it SPELLS a name the symbol is
-reachable by. `referencesAt` now selects that population before typing it and `captureIn`'s
-partition, which has always been DERIVED from the request's spans, narrows the check with
-it: **no new mechanism**. On tsc's own 78 sources an ordinary name costs **510–553 ms
-against 8.8–11.1 s (17–18x)**, `checker.ts`-only names 1,940 ms (4.8x), and the worst
-realistic case (`SyntaxKind`, 9,827 hits in 49 files) still wins at 4,904 ms; a repeat is
-free (119–150 ms) because the narrow path reaches a memo the whole-program one never did.
-The closure over `import { p as q }` / `export { p as q }` terminates because both spellings
-are tokens of the file DECLARING the alias; everything else — a default export, a default
-import's local, `export =`, `import x = require(…)`, a namespace binding, the spelling
-`default` — REFUSES and runs the old sweep. **The near-miss worth remembering**: the obvious
-substring file filter is not exact, because `StringLiteralNode.text` is the COOKED value and
-`\a` is an identity escape, so `o["pl\ain"]` names `plain` — a file may be skipped only if
-it holds no backslash at all (29 of 78 do, carrying 78.2% of the characters). **The
-ablation's honest half**: arm a3 reddens only the REFUSAL pins, so the escape guards are
-CONSERVATISM — kept because tsc answers **6** references where we answer **2** on a
-`export { renamed as default }` edge, which is now pinned so the day it closes is loud.
-**GATES.** Suite **16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins); reference differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names);
-four ablation arms, four DISTINCT red sets; `cost_gate.py` / `huge_methods.py` are CONTROLS here (no `-core` source
-touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
-(`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
-run-to-run residual), `huge_methods.py --fail-over 0` clean.

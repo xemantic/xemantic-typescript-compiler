@@ -214,9 +214,24 @@ class ProjectNarrowDiagnosticsTest {
         // number of compiles.
         val (project, counting) = countedProject()
         assert(buildsIn(counting) { project.diagnostics() } == 1)
+        // (INC.46) ADDING AN EXPORT MOVES THE EXPORT SURFACE, so this edit costs TWO
+        // builds and not one: the narrowed build that discovers the signature moved,
+        // then the whole-program rebuild. That is the price of the incremental gate
+        // being wrong and it is pinned as such in `ProjectIncrementalDiagnosticsTest`;
+        // recorded here because this is the control every count pin below rests on,
+        // and a reader comparing them needs the cost model to be visible in both.
         project.updateFile(aFile, aText + "export const extra = 1;\n")
-        assert(buildsIn(counting) { project.diagnostics() } == 1)
+        assert(buildsIn(counting) { project.diagnostics() } == 2)
         assert(buildsIn(counting) { project.diagnostics() } == 0)
+        // And an edit whose export SURFACE is unchanged costs the one narrowed build,
+        // which is the whole of (INC.46). Built from the text now on the project — the
+        // `extra` export above included — because dropping it would be an export
+        // REMOVED, i.e. a surface change wearing a body edit's clothes.
+        project.updateFile(
+            aFile,
+            aText.replace("{ kind: 1 }", "{ kind: 1, }") + "export const extra = 1;\n",
+        )
+        assert(buildsIn(counting) { project.diagnostics() } == 1)
     }
 
     @Test

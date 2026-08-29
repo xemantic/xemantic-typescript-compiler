@@ -56612,7 +56612,8 @@ class Checker(
             val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
             var node: Node? = decl
             while (node != null && node !is SourceFile) node = (node as? NodeBase)?.parent
-            val file = node as? SourceFile ?: return null
+            // Smart-cast: the loop exits only on null or a `SourceFile`.
+            val file = node ?: return null
             if (file.fileName == currentFile) return null
             var h = mix(FINGERPRINT_SEED, 15L)
             h = mix(h, file.fileName.hashCode().toLong())
