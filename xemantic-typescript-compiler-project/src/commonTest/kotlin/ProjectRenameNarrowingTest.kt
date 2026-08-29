@@ -56,6 +56,7 @@ class ProjectRenameNarrowingTest {
     private val mainFile = "/proj/src/a.ts"
     private val otherFile = "/proj/src/b.ts"
     private val thirdFile = "/proj/src/c.ts"
+    private val erroringFile = "/proj/src/d.ts"
 
     private val main = """
         export const plain: string = "p";
@@ -76,6 +77,21 @@ class ProjectRenameNarrowingTest {
         export const readFresh = zzzFresh;
     """.trimIndent() + "\n"
 
+    /**
+     * A file that CARRIES A DIAGNOSTIC and spells none of the names any pin here
+     * renames — so it is outside every narrowed partition, and it is what makes the
+     * diagnostic comparison in `Project.verifyRename` discriminating.
+     *
+     * Without it every fixture is a clean program, the before-bag and the after-bag are
+     * both empty whatever partition either build walked, and an after-build that
+     * forgot the sweep's partition would compare empty against empty and pass. That
+     * was measured: the ablation arm which drops `recheckOnly` from the second build
+     * reddened NOTHING until this file existed.
+     */
+    private val erroring = """
+        export const zzzBroken: string = 1;
+    """.trimIndent() + "\n"
+
     private fun projectWith(
         mainText: String = main,
         otherText: String = other,
@@ -88,6 +104,7 @@ class ProjectRenameNarrowingTest {
                 mainFile to mainText,
                 otherFile to otherText,
                 thirdFile to thirdText,
+                erroringFile to erroring,
             ),
         ),
     )
@@ -122,6 +139,12 @@ class ProjectRenameNarrowingTest {
         // Both files that spell the name, and only those.
         assert(narrow.files.map { it.fileName }.sorted() == listOf(mainFile, otherFile))
         assert(narrow.files.sumOf { it.edits.size } == 4)
+        // THE PARTITION-AGREEMENT PIN. `d.ts` carries a diagnostic and is in neither
+        // build's partition, so the before- and after-bags agree and the rename is
+        // applicable. An after-build that walked the whole program would see that row
+        // as NEW and refuse `WOULD_NOT_COMPILE` — which is exactly what the ablation
+        // arm dropping `recheckOnly` from it does.
+        assert(project.diagnostics().any { it.fileName == erroringFile })
     }
 
     /**
@@ -135,6 +158,9 @@ class ProjectRenameNarrowingTest {
     fun `the rename partition is the reference one widened by the NEW name`() {
         val project = projectWith()
         val caret = main.indexOf("plain")
+        // Four files in the program; `d.ts` spells neither name and is in neither
+        // partition, which is what makes these counts a measurement.
+        assert(project.files.size == 4)
         assert(project.narrowedSweepFiles(mainFile, caret) == 2)
         assert(project.narrowedRenameFiles(mainFile, caret, "zzzFresh") == 3)
         // …and a new name nothing spells does NOT widen it, which is what makes the
