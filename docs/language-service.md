@@ -113,7 +113,7 @@ says why, rather than guessing — because a plausible wrong answer is worse tha
 none: a go-to-definition that jumps to an unrelated same-spelled binding *looks
 like it worked*. Refusals are typed (`CompletionRefusal`, `RenameRefusal`,
 `RenameConflictKind`), and every position this API answers either answers
-correctly or refuses. The reasoning, and the full list of gaps, is § 14.
+correctly or refuses. The reasoning, and the full list of gaps, is § 13.
 
 **Cost is incremental, not per-query.** A caret-scoped query checks the buffer it
 is in, not the program; a whole-project error list after an edit is usually one
@@ -123,104 +123,13 @@ is worth reading before the first integration rather than after.
 
 ---
 
-**Changelog — what each recent round changed, and what a host may already depend
-on.** The capability summary is § 0 above; this is the record of how it got
-there, kept because a host upgrading across these rounds needs to know which
-answers MOVED. Landed: diagnostics, in-memory edits,
-line/offset conversion, syntactic node lookup, quick info (hover),
-go-to-definition **including members** (`o.p`, inherited, imported, union,
-namespace, enum, lib), **batched semantics** — many positions, or a whole file,
-in one build — **completions**, both halves: members `(API.4a)` and free
-names `(API.4b)`, **find-references plus document highlights** `(API.5)`,
-**signature help** `(API.6)`, every overload, `(API.7)`'s three cashed refusals
-(**member completions enforce `private` / `protected`**, **keyword completions**,
-**read-versus-write on every reference**) — and `(API.8)`, **RENAME**: an edit
-plan that expands a `{ p }` shorthand instead of renaming the object's key, and
-that is **verified by applying it and compiling again**, so a collision or a
-capture withdraws it rather than reaching your buffer (§ 10d) — and `(API.9)`,
-**the member occurrence set**, which closes two of the three kinds round 925
-measured it short by: an **element access** `o["p"]` and a **binding element's
-property name** `const { p: local } = o` are now found, navigable and renamed,
-and a member's **implementors** join its group through a declared heritage edge —
-and `(API.10)`, **one span, two symbols**: a **contextually typed object-literal
-key** `{ p: v }` is an occurrence of the member its contextual type supplies, and
-both **shorthands** (`{ p }`, `const { p } = o`) belong to the member's group as well
-as the local's, expanding in whichever direction the rename came from — and `(API.11)`,
-**a member's own declaration name resolves to its own symbol**, so a member renames
-**from its declaration**, that name navigates and hovers, and a **merged** declaration,
-an **overload set** and an **accessor pair** are one group from any of their
-declaration names — `(API.15)`, **an enum member's declaration name reports the
-member's own type** rather than `any`, which was the last position in this surface
-answering a plausible WRONG type instead of nothing — and `(API.16)`, **a member named
-by a TEMPLATE element access** (`` o[`p`] ``) **is an ordinary occurrence**: found,
-highlighted, hovered, renamed and completed, where before it was missed in SILENCE —
-and `(API.17)`, **every literal that names a member is one population**, so a COMPUTED
-object-literal key (`{ ["p"]: v }`), a quoted key (`{ "p": v }`) and a computed member
-DECLARATION join it, and an object-literal key finally reports the MEMBER's type on
-hover instead of the enclosing scope's. **Nothing this API answers is silent any more**:
-what it cannot place, it names. Not yet: an object literal's own METHOD declaration is
-deliberately left alone.
-See the `(API.*)` items in `PLAN-PHASE-5.md`, and **§ 14 for where the whole API
-stands**.
-
-> **`(API.11)` changes what FIVE queries answer at ONE kind of caret — a member's own
-> DECLARATION name** (`p` in `interface I { p: string }`, a class field, a method, an
-> accessor, a static, a `#private`, a type-literal member, an enum member). It was bound
-> by nothing and resolved to nothing; it now resolves through its **owner**, and to the
-> whole SYMBOL rather than to the one declaration under the caret. So `definitionsAt`
-> answers there (it used to answer empty), `quickInfoAt` reports the member's type (it
-> used to report `any`, or the type of whatever unrelated binding shared the spelling),
-> `referencesAt` / `documentHighlightsAt` answer for a member that is **declared and
-> never used** and put a **merged** declaration, an **overload** set and an **accessor
-> pair** in one group, and `renameAt` no longer refuses because some *other* interface
-> declares the same member name. Two pins changed meaning and say so in place.
->
-> **`(API.10)` widens the same three queries again, and adds a field to a value
-> type.** An object-literal KEY and both SHORTHANDS are now occurrences of the member
-> a contextual type supplies, so `referencesAt`, `documentHighlightsAt` and `renameAt`
-> return more spans for a member and `renameAt` refuses in fewer places.
-> `definitionsAt` answers an object-literal key (the contextual member, or the key
-> itself where nothing types the literal) and answers a shorthand with **two**
-> locations, the local and the member. `CapturedDefinition` — the core-side capture,
-> not the `-project` surface — gained a third declaration set, `shorthand`; it is a
-> defaulted constructor parameter, so nothing that constructed one before has to
-> change.
->
-> **`(API.9)` changes what three queries ANSWER, and in the widening direction.**
-> `referencesAt`, `documentHighlightsAt` and `renameAt` now return more spans for a
-> MEMBER — an `o["p"]`, a `const { p: … }` and every implementor's own declaration —
-> and `renameAt` therefore refuses in fewer places. `definitionsAt` answers an
-> element access and a binding element's property name where it used to answer
-> nothing; it deliberately does **not** answer the base for an implementor's own
-> member (§ 9). A host that assumed every reference span is an identifier must handle
-> a string literal's span, which covers the text *between* the quotes.
->
-> **`(API.7)` changed two answers you may already depend on.** `completionsAt` at a
-> MEMBER caret no longer returns inaccessible members (§ 10a), and at a FREE_NAME
-> caret it now returns keyword items with `kind = "Keyword"` mixed into the list
-> (filter on the kind if you were treating every item as a symbol).
-> `ReferenceLocation` gained a `use` field (§ 10b).
-
-> **If you are on a version before round 920, upgrade before trusting any
-> position.** Two rounds of the same defect class, both fixed and both now covered
-> by an invariant gate that runs over real TypeScript rather than over fixtures:
->
-> - `(BUG.2)`, round 919: the token index de-synchronised at the first template
->   literal with a `${…}` substitution, and the damage ran to end of file — so
->   `nodeInfoAt`, `quickInfoAt`, `definitionsAt` and `completionsAt` all answered
->   about a huge enclosing node instead of the one at the caret. On tsc's own
->   `checker.ts`: 50,684 tokens for 3,151,772 characters, longest token 62,089.
-> - `(GATE.2)`, round 920: the same thing at a **backtick inside a regular
->   expression** (a shape tsc's own `utilities.ts` contains), and — separately — a
->   **parenthesis-less arrow parameter**, an index-signature parameter, a `catch`
->   variable, `declare global`'s `global`, a JSX tag name and a construct
->   signature's `new` all carried spans no lookup could enter, so a caret on any of
->   them answered about the enclosing construct. The arrow-parameter case alone is
->   **328 sites in tsc's 78 compiler sources**.
->
-> The gate is `TokenIndexInvariants` plus `TokenIndexGateTest`, and it now holds
-> over **1,327 files / 101,287,620 characters / 3,936,158 identifiers** with zero
-> violations.
+**Where the history went.** How each of these came to work the way it does — the
+changelog, the measurements behind every design decision, and the roadmap items
+that were priced and then shipped or refused — is in
+[`docs/history/language-service-history.md`](history/language-service-history.md).
+It is deliberately not on this page: a reader asking what the API can do is not
+helped by internal work-item numbers, and a reader tracking how an answer moved
+wants the opposite of a summary.
 
 **There is no `LanguageService` type.** The editor features hang off `Project`
 directly. A separate facade would be indirection with one implementation, and
@@ -308,18 +217,18 @@ you call them.
 | `open` | free | resolves the path; compiles nothing |
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
-| `diagnostics()` / `diagnostics(f)` | **ONE NARROWED build** after an edit that moved no exported signature; a **full build** otherwise (that costs two: the narrowed gate, then the rebuild); none when clean | (INC.46). 67% of real edits to tsc's own compiler move no signature, and a served edit is **108 – 113 ms against 4,864 – 5,096 ms — a factor of 45**. See § 4b |
+| `diagnostics()` / `diagnostics(f)` | **ONE NARROWED build** after an edit that moved no exported signature; a **full build** otherwise (that costs two: the narrowed gate, then the rebuild); none when clean | 67% of real edits to tsc's own compiler move no signature, and a served edit is **108 – 113 ms against 4,864 – 5,096 ms — a factor of 45**. See § 4b |
 | `files` | **full build** when dirty, else cached | a question about the PROGRAM, which is what a build computes |
-| `diagnosticsOf(files)` | **one NARROWED build** for the FIRST query of a project state; **none** when clean, repeated, a SUBSET of a set already asked about, or (INC.40) about any other file — a live re-entrant checker answers it | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 14 has the provenance) — see § 4a |
+| `diagnosticsOf(files)` | **one NARROWED build** for the FIRST query of a project state; **none** when clean, repeated, a SUBSET of a set already asked about, or about any other file — a live re-entrant checker answers it | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 13 has the full table) — see § 4a |
 | `prepare(files)` | **ONE NARROWED build**, whatever the file count | checks and captures a whole working set at once, so every later semantic query about any of them is free — see § 3a |
-| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — **129 – 137 ms at the median file, 38x a full rebuild** on tsc's own sources (2026-08-24); the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
+| `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — **129 – 137 ms at the median file, 38x a full rebuild** on tsc's own sources (2026-08-24); the question asked is the file's span set, so later carets are free (§ 13); free in a `prepare`d file |
 | `definitionsAt` | **one NARROWED build per BUFFER**, shared with `quickInfoAt` | same mechanism, same build — whichever of the two asks first pays; free in a `prepare`d file |
 | `semanticsAt(f, offsets)` | **ONE NARROWED build**, whatever the offset count | both answers, per span; the same build the three neighbours use; free in a `prepare`d file |
 | `fileSemantics(f)` | **ONE NARROWED build** | every identifier in the file; the same build again; free in a `prepare`d file |
-| `completionsAt(f, o)` | **one NARROWED build, every call** | 194 – 202 ms on tsc's own sources (2026-08-24). A DIFFERENT question (a receiver's members, or a scope chain), so it does not share — **not even with `prepare`, which is an open defect, see § 14 `(INC.32)`**; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
+| `completionsAt(f, o)` | **one NARROWED build, every call** | 194 – 202 ms on tsc's own sources (2026-08-24). A DIFFERENT question (a receiver's members, or a scope chain), so it does not share — **not even with `prepare`, which is an open defect, see § 13**; free at a caret that admits no completion — those do not build; keywords cost nothing extra |
 | `documentHighlightsAt(f, o)` | **ONE NARROWED build** per buffer | sweeps this file's identifiers and member-name literals — which is the population all four of these share; free in a `prepare`d file |
-| `referencesAt(f, o)` | ONE build clean, TWO dirty — **narrowed by SPELLING since (INC.44)**, whole-program only where the name closure cannot be bounded | § 10b has the measured figures |
-| `renameAt(f, o, n)` | TWO builds clean, THREE dirty — **narrowed the same way since (INC.45)**, with the population widened by the NEW name | § 10d |
+| `referencesAt(f, o)` | ONE build clean, TWO dirty — **narrowed by SPELLING**, whole-program only where the name closure cannot be bounded | § 10b has the measured figures |
+| `renameAt(f, o, n)` | TWO builds clean, THREE dirty — **narrowed the same way**, with the population widened by the NEW name | § 10d |
 | `signatureHelpAt(f, o)` | **one NARROWED build, every call** | 190 – 214 ms on tsc's own sources (2026-08-24); shares nothing, same open defect as `completionsAt`; free at a caret in no argument list — those do not build |
 | `renameAt(f, o, name)` | **TWO builds** (three dirty) | the sweep plus a verification build; § 10d has the measured figures. A refusal on syntax alone does not build |
 | `updateFile` / `deleteFile` | free | marks dirty |
@@ -329,14 +238,14 @@ narrows is the per-file CHECKING, which the compiler takes as a partition
 (`recheckOnly`, the INV.6 view `--workers` uses). Every caret-scoped query above
 hands it the buffer the caret is in, because an editor's question about one buffer
 claims nothing about the other files. `referencesAt` and `renameAt` claim something
-about EVERY file — but since (INC.44)/(INC.45) their EVIDENCE does not: they select
+about EVERY file — but their EVIDENCE does not: they select
 the occurrences that could possibly be answers and let the partition follow from them
 (§§ 10b, 10d). Measured warm and rotated in one process on tsc's
 own 78 compiler sources (2026-08-24, commit d018af0a, two independent processes),
 a first capture of `binder.ts` (7,787 spans) is **290 – 306 ms** against a
 **4,864 – 5,096 ms** full rebuild, and the median over all 73 sweepable files is
 **129 – 137 ms — 38x**. The figures this paragraph used to quote (4,581 -> 979 ms,
-4.7x) are round-930 history and are 5 – 15x stale; § 14 carries both columns.
+4.7x) are history and are 5 – 15x stale; § 13 carries both columns.
 That the narrowed answer is the whole-program answer is swept span for span rather
 than argued: `scripts/capture-equivalence.sh` for types and definitions,
 `scripts/capture-channel-equivalence.sh` for members, scopes and signatures.
@@ -363,9 +272,9 @@ Two consequences for a host:
 - **You no longer have to batch a buffer, and this advice is inverted from what it
   said before 2026-08-23.** It used to read "asking both about one caret is two
   compiles, so batch", with a measured 34x. Both halves are now closed:
-  hover-then-navigate at one caret is ONE compile (`(INC.12)` — the two members ask
+  hover-then-navigate at one caret is ONE compile (the two members ask
   an identical question and read different channels of the one answer), and every
-  caret in a buffer is one compile between them (`(INC.13)` — the question put to
+  caret in a buffer is one compile between them (the question put to
   the compiler is the FILE's occurrence set, not the caret's). Measured, the six
   carets that used to be six compiles are one, batched or not.
 - **`semanticsAt` and `fileSemantics` are still the members to reach for**, for a
@@ -407,13 +316,13 @@ file you ask about, against a median file's own checking of tens of ms. `N` buff
 therefore paid that floor `N` times. One `prepare` pays it once.
 
 **That floor has since collapsed, so `prepare`'s ratio is smaller than the table
-below** — it was ~345 ms when this section was written and `(INC.30)` reports 58 ms;
+below** — it was ~345 ms when this section was written and is now 58 ms;
 what this page measured itself on 2026-08-24 is the end-to-end consequence, a median
 narrowed query of **108 – 137 ms** where six unprepared hovers cost 920 ms and a
 `prepare` of the same six costs 466 ms. `prepare` is still the right call for a
 declared working set — it is the only way to make a query about a buffer the user has
 not touched free — but it is now roughly a 2x amortisation rather than a 7x one
-(§ 14, `(INC.14)`).
+(§ 13).
 
 Measured on those sources, one build answering `k` queries against `k` builds
 answering one each:
@@ -469,33 +378,33 @@ open set once on idle, then answer each buffer from it.
 
 ### Ask for the whole open set in one call — this is a rule, not a tip
 
-`(INC.37)` decomposed a narrowed query and found `Σ own(F)` over 78 files is
+Decomposing a narrowed query found that `Σ own(F)` over 78 files is
 6,841 ms against a 4,935 ms whole-program check — a **1.39x re-derivation tax**
 — even though the spine walk itself partitions exactly (node counts sum to the
 whole-program figure to the node). The extra 1,906 ms is shared type resolution
 (lib types, foreign declarations, instantiations) that one build resolves once
 and that every separate per-file query re-derives in its own fresh `Checker`
-(`(INC.38)`). Averaged over a 108 ms median query that is **~24 ms — 22% of it**,
+Averaged over a 108 ms median query that is **~24 ms — 22% of it**,
 the largest single lever this arc has named at the median case.
 
 The batching above is how a host collects that tax back: one `diagnosticsOf`
 call over `N` files pays the floor and the shared derivation **once**; `N`
 separate calls pay both **`N` times**. Measured on `docs/language-service.md`'s
-own six-buffer arm (§ 14, `2fa8a39f`, 2026-08-24): the same six-file set asked
+own six-buffer arm (§ 13, `2fa8a39f`, 2026-08-24): the same six-file set asked
 as **one call costs 321 – 342 ms**; asked **one file at a time it costs
-748 – 771 ms**. That is wall time and therefore pinned by nothing — see § 14's
+748 – 771 ms**. That is wall time and therefore pinned by nothing — see § 13's
 standing caveat — but the direction is arithmetic, not noise: one call always
 pays one floor and one derivation, `N` calls always pay `N` of each, so the gap
 between them can only widen with the size of the open set.
 
-What this does **not** remove: `(INC.40)`'s retained-checker replay collects the
+What this does **not** remove: the retained-checker replay collects the
 FLOOR across queries (a held `Checker` re-entered for later `diagnosticsOf`
 calls), but not the per-file re-derivation the 1.39x names — that tax is paid
 once per **build**, not once per **process**, so it still falls on a host that
 asks one file at a time even with the replay in play. The only way to collect it
 is to name the files together.
 
-**Automatic working-set growth is refused, deliberately.** `(INC.14)` priced
+**Automatic working-set growth is refused, deliberately.** It was priced:
 growing the partition to "the queried file plus whatever was recently queried"
 on every miss: it costs `k·floor + k(k+1)/2·perFile` against a cold
 `k·floor + k·perFile` — a **loss at every k** — because each growth step redoes
@@ -584,14 +493,14 @@ because there was nothing worth not doing. Neither case hurts a host that follow
 above (a clean project answers from the cached build and does not compile at all), but do
 not expect a ratio on a small project.
 
-### (INC.17)/(INC.40) A file the host never named — the RE-ENTRY, shipped for diagnostics and refused for everything else
+### A file the host never named — the re-entry, shipped for diagnostics and refused for everything else
 
 The three properties above are about a query the project has already answered, or
 one whose files are a subset of a set it has. The case they do not cover is the
 one an editor hits constantly: the user opens a file nobody declared, or the
 annotator asks about a buffer that was not in the last batch. That used to pay a
 whole narrowed build — the crawl, the parse, the bind and all ~417 checker `init`
-passes. **Since (INC.40) it does not.**
+passes. **It no longer does.**
 
 **What it does.** The checker that answered the previous `diagnosticsOf` is still
 alive, and ~110 of its 417 `init` rows never read the check partition at all: they
@@ -624,11 +533,11 @@ The ratio FALLS as the working set grows because the thing the replay deletes �
 incremental floor — is paid once per QUERY and not per file, so a host that batches
 its questions has already collected most of it (§ 4's subset rule). The row a user
 feels is `k = 1`. And the replay arm's TOTAL (4,728 ms) lands on the whole-program
-CHECK cost (~4,935 ms), which is (INC.37)'s **1.39x re-derivation tax** being
+CHECK cost (~4,935 ms), which is the **1.39x re-derivation tax** being
 collected rather than re-paid: 77 fresh checkers each re-derive the shared lib and
 foreign-declaration resolutions, one live checker does not.
 
-Note that this number is NOT comparable to (INC.17)'s original **3.06x** or to the
+Note that this number is NOT comparable to the original **3.06x** or to the
 **1.68x** the arc later recorded: both of those were measured with a whole-file
 CAPTURE request in both arms, which is +9-17 ms of common cost per query that
 dilutes the ratio. Measured that way at HEAD the same run reads **1.34x**
@@ -657,11 +566,11 @@ Every **diagnostic** row agrees, on both arms, and so does every one of the 352,
 **796 spans of 373,879 (0.213%)**, and note the units: 43 is a count of FILES, not of
 rows or of spans. (41 distinct basenames; tsc has three `utilities.ts`.)
 
-**(INC.41) classified those 796 spans against tsc 7.0.2's own LSP, and the arm that
+**Those 796 spans were classified against tsc 7.0.2's own LSP, and the arm that
 loses is the REPLAY.** An earlier revision of this page said the rows were the
 union-alias family "in which the fresh arm is not automatically the correct one" —
-an inference from (INC.26), never tested. Tested, **that clause is false for this
-population.** Reduced per ELEMENT and nesting-aware as (INC.23) requires (796 rows are
+an inference, never tested. Tested, **that clause is false for this
+population.** Reduced per ELEMENT and nesting-aware (796 rows are
 **37** distinct `(fresh, replay)` element pairs, and 192 rows carry more than one
 differing element, so a row count over-reports), with every one of the 37 causes
 sampled through `--lsp -stdio`:
@@ -681,7 +590,7 @@ essentially only the queried file; the replay carries the seed build **plus ever
 recheck**, so more aliases are registered and more unions get renamed. tsc and the fresh
 arm hover `Identifier | PrivateIdentifier`, which `utilitiesPublic.ts:857` literally
 writes; the replay hovers `MemberName`. **So this is not a different defect — it is more
-of (INC.26)'s, one type-former up, and it degrades with how much the session has already
+of the alias-display family's, one type-former up, and it degrades with how much the session has already
 resolved.** The remaining 20 are outright lost resolutions (`Connection[][]` read as
 `any[][]`, `Map<string, SeenPackageName>` as `Map<any, any>`), where tsc confirms the
 fresh arm. Both classes are silent in the dangerous direction: a plausible-looking type,
@@ -689,7 +598,7 @@ never an error.
 
 *The 375 BOTH-WRONG rows are neither arm's fault — they are an ordinary-build defect,
 led by 213 rows where `Visitor`/`VisitResult<T>` renders `(node: TIn) => any` and tsc
-renders `Visitor`. Queued separately as (INC.42).*
+renders `Visitor`. Tracked separately.*
 
 **And opening the valve was priced before it was refused**: one hover through the replay
 is **33 ms** against a fresh narrowed build's **121 ms** (3.67x, 88 ms), but only for the
@@ -705,13 +614,13 @@ the suite*: the channel counts and the 43/75 line (`scripts/replay-differential.
 realism`) and the classification (`Inc41ClassifyMain` + `scripts/inc41_classify.py`).
 *Pinned by NOTHING* — wall time on one box, re-take rather than quote: the 33 / 121 ms
 hover pair and every ratio derived from it. Do not inherit the verdict table without
-re-asking the oracle (`scripts/lsp_hover_project.py`); round 930 measured a doc section
+re-asking the oracle (`scripts/lsp_hover_project.py`); an audit once measured a doc section
 decaying at about one false claim per three rounds, which is exactly how the clause
 corrected above survived. Full derivation:
 `docs/inc41-replay-capture-classification.md`.
 
 A hover that quietly drops an inference is worse than a hover that took 500 ms —
-the same judgement (INC.2) made when it refused capture narrowing over 45 divergent
+the same judgement made when capture narrowing was refused over 45 divergent
 spans, a bar this population exceeds ninefold (0.11% against 0.012%). So the split is
 enforced by a TYPE and not by a comment: `Project` holds the
 handle only through a private one-way valve (`DiagnosticsOnlyRecheck`) whose single
@@ -829,9 +738,9 @@ deliberately do **not** — tsc splits there but this compiler does not, and a
 coordinate that no diagnostic of ours can ever carry is worse than none.
 
 All three terminators agree across the whole compiler, and that is pinned rather
-than assumed: `(BUG.1)` — a lone `\r` numbered by the parser and ignored by the
+than assumed: a lone `\r` numbered by the parser and ignored by the
 checker, so that a syntax diagnostic and a semantic one disagreed about the line —
-was closed in round 915, and `ProjectPositionTest`'s `a lone CR file's diagnostics
+has since been closed, and `ProjectPositionTest`'s `a lone CR file's diagnostics
 agree with this map too` fails on any compiler that reopens it.
 
 ## 7. Syntactic queries: what is at this position
@@ -864,8 +773,8 @@ Building the preference in would make two adjacent nodes both contain the
 boundary, and an ambiguous primitive cannot be layered on.
 
 A caret in whitespace or inside a comment belongs to no node, so the innermost
-*enclosing* node answers. **A caret on a real construct never should**, and until
-round 920 several did — see the box at the top; if you are writing a host, that is
+*enclosing* node answers. **A caret on a real construct never should**, and in older
+versions several did; if you are writing a host, that is
 the failure shape to test for, because an enclosing node is a plausible-looking
 answer rather than an obviously wrong one. An offset past end-of-file, a negative offset, or an
 unknown file returns `null` rather than throwing — "is there a node here" has a
@@ -914,13 +823,12 @@ outside the walk — and `any` is the one answer that is silent at every use sit
 so the wrong version *looks* plausible. The type at a position depends on
 walk-scoped state (`currentLocalTypes` and the surrounding frame) that only
 exists while the checker is at that position, so any new semantic feature must
-capture during the walk too. `(API.3)` in `PLAN-PHASE-5.md` has the full
-reasoning.
+capture during the walk too.
 
 ### A MEMBER name reports the member's type
 
-**(BUG.4)** The `p` of `o.p` is not a name any scope binds, so asking the compiler
-for "the type of `p`" is the wrong question — before round 924 that is what this
+The `p` of `o.p` is not a name any scope binds, so asking the compiler
+for "the type of `p`" is the wrong question — in older versions that is what this
 did, and the answer was `any` where nothing in the file shared the spelling and
 **the type of whatever unrelated binding did** where something shared it. Measured
 against tsc 7.0.2's own language server, twelve of fifteen member positions in a
@@ -945,21 +853,21 @@ no rule of its own —
 | `o["p"]` and `` o[`p`] ``, caret on the member-naming literal | the member's type |
 | `N.T`, a qualified type name | the declared type |
 
-`(API.11)` adds the row this table was missing — a member's own **declaration** name
+The table would be incomplete without one more row — a member's own **declaration** name
 (`p` in `interface Shape { p: string }`, a class field, a method, an accessor, a
 static, a `#private`, a type-literal member). It is bound by no scope either, so before
-round 928 it went through the same wrong question and reported `any`, or the type of
+an older version went through the same wrong question and reported `any`, or the type of
 whatever unrelated binding shared the spelling — the same collider shape, one position
 over. It now reports the member's own type, resolved through its **owner** (§ 9). An
 overload set reports the whole overloaded type rather than the signature under the
 caret, which is coarser than tsc and never wrong.
 
-`(API.15)` finishes that row with the one member declaration kind the owner leg could
+That row is finished by the one member declaration kind the owner leg could
 not reach — an **enum member's**. An enum's declared type is a member-LESS object here
 (this compiler mints one opaque type for the whole enum where tsc models it as the union
 of its members), so asking the owner for `Alpha` found nothing and the name fell through
 to the free-name path and reported **`any`**: not an absent answer but a wrong one, and
-until round 931 the one live violation of *prove to offer* on this page. It now reports
+until recently the one live violation of *prove to offer* on this page. It now reports
 the member's own type — the very instance its USE reports, minted only through the
 compiler's own interning helper — so `Alpha` in `enum Plain { Alpha }` reads
 `Plain.Alpha` at its declaration and at every use. tsc says `(enum member) Plain.Alpha =
@@ -976,11 +884,11 @@ whose `this` is `typeof C` and which this compiler does not model — the answer
 `any`: a non-answer, never a wrong name.
 
 **HOVER STILL PICKS ONE SUBJECT WHERE A SPAN NAMES TWO — but only for a SHORTHAND.**
-`(API.10)` gave go-to-definition, find-references and rename the contextual member
-behind an object-literal key and behind both shorthands (§ 9, § 10b), and left the
-TYPE alone on the ground that a contextual type is walk-scoped state a capture cannot
-read. That ground had already gone: `(API.10)`'s own contextual walk is purely
-syntactic. `(API.17)` cashed it — **an object-literal key, computed or not, reports the
+Go-to-definition, find-references and rename get the contextual member
+behind an object-literal key and behind both shorthands (§ 9, § 10b). The TYPE was
+left alone for a while, on the ground that a contextual type is walk-scoped state a
+capture cannot read. That ground had already gone — the contextual walk is purely
+syntactic — and hover now has it too: **an object-literal key, computed or not, reports the
 CONTEXTUAL member's type**, or its own value's type where nothing types the literal,
 which is what tsc reports in both shapes. Before it, every key answered `any`, or the
 type of whatever unrelated binding happened to share the spelling. What remains is the
@@ -1009,13 +917,15 @@ coarser, never wrong.
 
 ### Four mechanisms, because a member is not bound by any scope
 
-A **free name** is resolved through the lexical scope chain in force at that
-position. A **member name** — the `p` of `o.p` — is resolved through its
+Each mechanism exists because the one before it cannot reach the caret in question.
+
+**1. A free name** is resolved through the lexical scope chain in force at that
+position. **2. A member name** — the `p` of `o.p` — is resolved through its
 **receiver**: `o`'s type is computed and `p`'s property symbol on that type is the
-answer. `(API.11)` added the fourth, which is the receiver's exact dual: a member's own
-**declaration** name — the `p` of `interface Shape { p: string }` — has no receiver, and
-what it does have is the class, interface, type literal or enum it is declared **in**, so
-that **owner** is asked. And `(API.10)` added the third: an **object-literal key** and a
+answer. **3. A member's own declaration name** — the `p` of
+`interface Shape { p: string }` — is the receiver's exact dual: it has no receiver,
+and what it does have is the class, interface, type literal or enum it is declared
+**in**, so that **owner** is asked. **4. An object-literal key** and a
 **shorthand** are resolved through the literal's **contextual type**, found by walking
 *out* of the literal to whatever supplies it — an annotation, a call's parameter, a
 `satisfies`, a `return`, an enclosing literal's own key, an array element position,
@@ -1042,13 +952,13 @@ What answers, concretely:
 | a member declared by **merged** interfaces (overloads) | **one location per contributing declaration** |
 | a member of a **union** receiver | **one per constituent** that declares it, in constituent order |
 | `N.x` / `N.T` where `N` is a namespace, module alias or enum | the export's declaration |
-| `o["p"]` and `` o[`p`] ``, caret on the member-naming literal | the property declaration — `(API.9)`, `(API.16)` |
-| `const { p: local } = o`, caret on the `p` | the property declaration — `(API.9)` |
-| `{ p: v }` where something contextually types the literal | the **contextual** type's member — `(API.10)` |
+| `o["p"]` and `` o[`p`] ``, caret on the member-naming literal | the property declaration |
+| `const { p: local } = o`, caret on the `p` | the property declaration |
+| `{ p: v }` where something contextually types the literal | the **contextual** type's member |
 | `{ p: v }` where nothing does | the key **itself** — it is the declaration |
-| a member's own **declaration** name (`interface I { p }`, a field, a method, a static, a `#private`, a type-literal member, an enum member) | **itself** — and every other declaration of the same member: a merged block's, an overload's, an accessor pair's other half — `(API.11)` |
-| `{ p }` (object literal, contextually typed) | **both** the local and the member — `(API.10)` |
-| `const { p } = o` (binding shorthand) | the local and the property declaration — `(API.10)` |
+| a member's own **declaration** name (`interface I { p }`, a field, a method, a static, a `#private`, a type-literal member, an enum member) | **itself** — and every other declaration of the same member: a merged block's, an overload's, an accessor pair's other half |
+| `{ p }` (object literal, contextually typed) | **both** the local and the member |
+| `const { p } = o` (binding shorthand) | the local and the property declaration |
 | `"s".length`, `arr.push` | the **lib**'s declaration (see the lib note below) |
 
 **`this` is a receiver, and where it points is a property of the position.** An
@@ -1056,7 +966,7 @@ arrow function does not rebind `this` — TypeScript gives it whatever encloses 
 so a caret on `this.` inside an arrow, inside an arrow inside an arrow, or inside an
 arrow in a constructor, getter, setter or property initializer, answers with the
 enclosing class's members. `super.p` rides the same carrier and answers the **base's**
-declaration — the override's, never — which round 930 added and measured against tsc.
+declaration — the override's, never — measured against tsc.
 Everything that *does* rebind `this` answers **nothing**
 rather than guessing: a `function` expression or declaration at any depth (TypeScript
 types its `this` as `any`, and the compiler emits TS2683 for a member read there), an
@@ -1072,7 +982,7 @@ instance", never "lost".
 - the name resolves to a symbol with no declaration to point at;
 - **nothing declares the member** (`(o as any).absent`) — silence, never the
   nearest same-named anything;
-- **an object literal's own member declaration** (`{ om() { … } }`) — `(API.10)`'s key
+- **an object literal's own member declaration** (`{ om() { … } }`) — the contextual-key
   leg answers a `{ p: v }` key and its shorthands, and an object literal's METHOD is
   deliberately outside it: a contextually typed literal's method is an occurrence of the
   contextual type's member, and resolving it to itself would take it out of rename's
@@ -1131,12 +1041,12 @@ capture was always a *set*: the compiler is handed the spans before the build an
 records the type and the definition at each of them during the single walk it was
 going to perform anyway.
 
-**Since `(INC.13)`, so is asking one caret at a time**, which is an inversion of what
+**So is asking one caret at a time**, which is an inversion of what
 this section used to say and is worth reading as such. It measured a 34-identifier
 fixture at *one compile batched against 34 unbatched (34x), and 68 when each caret was
 asked both ways (62x)*, and told hosts to batch for that reason. `quickInfoAt` now names
 the whole BUFFER's span set rather than the caret's, so those 34 carets are **one
-compile** however they are asked, and asking both ways is **still one** (`(INC.12)`).
+compile** however they are asked, and asking both ways is **still one**.
 
 | what | compiles, before | compiles, now |
 |---|---|---|
@@ -1146,7 +1056,7 @@ compile** however they are asked, and asking both ways is **still one** (`(INC.1
 
 It is a count of compiles, so this holds at any project size. What the batch still buys
 is convenience — every answer at once, in one value — and what it costs is that the
-FIRST query in a buffer now types the whole buffer; § 14 prices both halves.
+FIRST query in a buffer now types the whole buffer; § 13 prices both halves.
 
 **What comes back.** One `SemanticInfo` per **distinct span**, sorted by
 `(start, end)` ascending — not one per offset. Several carets inside one
@@ -1214,11 +1124,11 @@ receiver is then recovered from the parse. What follows from that:
   comment or JSX text** answers `kind = NONE` / `refusal = NO_COMPLETION_CONTEXT`,
   **and does not compile**. A `.` inside a string or a comment is not a member
   anchor, and what a user types between two JSX tags is prose. (JSX text joined
-  that list in round 920, when the token index learned to see it at all.) **The one
+  that list when the token index learned to see it at all.) **The one
   exception is the member-naming literal of an `o["…"]`**, which is a member position —
   see below.
 - A caret inside the **member-naming literal of an element access** — `o["p"]` and,
-  since `(API.16)`, `` o[`p`] `` — is a MEMBER caret, and the receiver is the
+  `` o[`p`] `` — is a MEMBER caret, and the receiver is the
   expression before the `[`.
 - A caret at the very **end of the file** is a real position here, unlike
   `nodeInfoAt` (§ 7), whose spans are half-open and exclude it.
@@ -1234,8 +1144,8 @@ accepting an item must *replace*, and it covers the whole word the caret is in �
 so accepting in the middle of `o.fo|o` leaves no `o` behind. With no word under
 the caret the two offsets are equal and an accepted item is inserted.
 
-**Inside `o["`, which is a member caret** (`(API.12)`, and this is a change from
-round 928). `kind` is `MEMBER`, the receiver is the expression before the `[`, and
+**Inside `o["`, which is a member caret** (this is a change from
+an older version). `kind` is `MEMBER`, the receiver is the expression before the `[`, and
 the member list is the same one a dot gets — the same union rule, the same
 accessibility filter, the same `this` and export-table legs. Three things are
 particular to it, all measured against tsc 7.0.2:
@@ -1252,9 +1162,9 @@ particular to it, all measured against tsc 7.0.2:
   completion request is normally made in. `o["p"|]`, past the closing quote, is a
   free-name caret again.
 
-**Inside a `` o[`p`] `` TEMPLATE too, since `(API.16)`** — and the reason this
-changed is worth reading, because round 929 refused it for exactly one reason and
-round 931 removed that reason rather than overruling it: the refusal said "§ 10b's
+**Inside a `` o[`p`] `` TEMPLATE too** — and the reason this
+changed is worth reading, because it was once refused for exactly one reason and
+the reason was removed rather than overruled: the refusal said "§ 10b's
 occurrence sweep is string literals only, so a member written through a template is
 one a rename cannot find". The sweep now finds it, so the refusal has nothing left to
 protect. The two share ONE enumeration, which is what keeps them from drifting apart
@@ -1293,7 +1203,7 @@ Items are **deduplicated by name and sorted by name** — the order is imposed b
 the API, because a member table's own iteration order is an implementation
 property.
 
-**Accessibility is enforced** (`(API.7)`, and this is a change from round 917).
+**Accessibility is enforced** (this changed; earlier versions offered every member).
 A `private` member — including a `#name` field — is offered only inside its
 declaring class; a `protected` one only inside that class or a class deriving
 from it. Statics obey the same rule, and a caret in a nested arrow inside a
@@ -1348,7 +1258,7 @@ a whole query of 125–360 ms.) If you want the type of the item your user has
 highlighted, ask `quickInfoAt` for that one item — the shape an LSP server's
 `completionItem/resolve` already has.
 
-**Keywords are offered** (`(API.7)`, and this is a change from round 918), with
+**Keywords are offered** (this changed; earlier versions returned symbols only), with
 `kind = "Keyword"`. Round 918 refused them because a useful list is
 context-sensitive and the anchor knew what preceded the caret, not which grammar
 production it sat in. It knows now.
@@ -1393,10 +1303,10 @@ that build is not the `diagnostics()` build. Batching many carets is
 (2026-08-24, commit d018af0a, four rotations in each of two processes), a MEMBER
 completion is **194 – 202 ms** — essentially all of it the narrowed build, with the
 enumeration under a millisecond of it. The **5.3 – 8.9 s** this paragraph used to
-quote is round-930 history: it predates `(INC.2b)`, which narrowed the capture
+quote is history: it predates the narrowing of the capture
 path, and is **~24x stale**. **So debounce anyway** — 200 ms is not a
 per-keystroke budget on a project of that size, and it is paid on EVERY
-invocation, because this query shares its build with nothing (§ 14 `(INC.32)`).
+invocation, because this query shares its build with nothing (§ 13).
 
 ## 10b. Find references, and document highlights
 
@@ -1429,16 +1339,15 @@ None of the following is special-cased; all of it falls out of that rule:
 | a **member** (`o.p`) | its uses plus the declaration, in the declaring file |
 | an **inherited** or generically instantiated member | the base / uninstantiated declaration, so uses through both sides are one group |
 | an **overloaded** member | one group, both signatures flagged |
-| a member named by a **string literal** (`o["p"]`) or a **template** (`` o[`p`] ``) | that access, with the span covering the text *between* the delimiters — `(API.9)`, `(API.16)` |
-| a member named by a **binding element** (`const { p: local } = o`) | the `p`, and not the `local` it binds — `(API.9)` |
-| a member's **implementors** (`class C implements I`) | every class that declares it under a declared `implements`/`extends` — `(API.9)` |
-| an object-literal **key** a contextual type supplies (`{ p: v }`) | that key, from either side — `(API.10)` |
-| a **shorthand** (`{ p }`, `const { p } = o`) | the token is in the **member's** group; a caret *on* it answers the **local's** — `(API.10)` |
-| a member's own **declaration** name | the whole group, from either side, whether or not the member is ever used — `(API.11)` |
-| one declaration of a **merged**, **overloaded** or **accessor-paired** member | the other declarations too, all flagged — `(API.11)` |
+| a member named by a **string literal** (`o["p"]`) or a **template** (`` o[`p`] ``) | that access, with the span covering the text *between* the delimiters |
+| a member named by a **binding element** (`const { p: local } = o`) | the `p`, and not the `local` it binds |
+| a member's **implementors** (`class C implements I`) | every class that declares it under a declared `implements`/`extends` |
+| an object-literal **key** a contextual type supplies (`{ p: v }`) | that key, from either side |
+| a **shorthand** (`{ p }`, `const { p } = o`) | the token is in the **member's** group; a caret *on* it answers the **local's** |
+| a member's own **declaration** name | the whole group, from either side, whether or not the member is ever used |
+| one declaration of a **merged**, **overloaded** or **accessor-paired** member | the other declarations too, all flagged |
 
-**`(API.9)`: three kinds joined the population, and the third is not like the other
-two.** An element access and a binding element's property name are ordinary members
+**Three kinds joined the population, and the third is not like the other two.** An element access and a binding element's property name are ordinary members
 whose *name* is not an identifier after a dot; they resolve through a receiver like
 everything else, and the only new thing about them is where the receiver comes from
 (the access's own expression, and the type the pattern destructures).
@@ -1460,8 +1369,7 @@ all three were measured against tsc 7.0.2 rather than chosen:
   and two occurrences are the same thing when those sets meet; a transitive closure
   over the whole group would merge the two interfaces, and tsc does not.
 
-**`(API.10)`: ONE SPAN, TWO SYMBOLS — and the relation between them is not
-symmetric.** A `{ p }` is one token that names a *local* and a *property*, and so is
+**ONE SPAN, TWO SYMBOLS — and the relation between them is not symmetric.** A `{ p }` is one token that names a *local* and a *property*, and so is
 a `const { p } = o`. Measured on tsc 7.0.2, the two directions differ:
 
 - the **member's** group **contains** the token;
@@ -1492,7 +1400,7 @@ group. An **explicit** `takesGeneric<Shape>({ p: 1 })` is.
 A caret on `C`'s own `p` legitimately answers **both** groups, because that member
 really is both.
 
-**READ versus WRITE is reported** (`(API.7)`, and it was refused in round 919).
+**READ versus WRITE is reported** (an earlier version refused to classify).
 `use` is one of `READ`, `WRITE`, `READ_WRITE` or `UNCLASSIFIED`, and it is a fact
 about the *occurrence*, so one symbol's hits routinely carry several values.
 
@@ -1508,7 +1416,7 @@ about the *occurrence*, so one symbol's hits routinely carry several values.
   member name), an object-literal key being declared, a binding element's source
   property name, a label. It exists so that what the classifier does *not* place
   stays visible instead of being defaulted to a read — which is precisely what
-  round 919 refused to ship.
+  an earlier version refused to ship.
 
 **The declaration comes back, flagged.** `isDeclaration` marks the spans that *are*
 declarations rather than uses, the way tsc's `isDefinition` does — filter on it if
@@ -1518,7 +1426,7 @@ guess about which parent kinds declare a name.
 ### What is refused, and why
 
 - **A caret on a MEMBER's own declaration name is no longer a special case** —
-  `(API.11)`. Until round 928 such a name was bound by no scope and had no receiver, so
+  Such a name was once bound by no scope and had no receiver, so
   it resolved to nothing and the search had to recover it from the sweep's own evidence:
   if some occurrence resolved *to* that span, the caret was one of that symbol's
   declarations. That recovery answered an **empty** list for a member declared and never
@@ -1529,7 +1437,7 @@ guess about which parent kinds declare a name.
   it.
 - **Identifiers, and EVERY LITERAL IN A MEMBER-NAME POSITION** — the `"p"` of an
   `o["p"]`, of a `` o[`p`] ``, of a `{ ["p"]: v }`, of a `{ "p": v }`, of a
-  ``{ [`p`]: v }`` and of a class's or an interface's `["p"]`. `(API.17)` made that one
+  ``{ [`p`]: v }`` and of a class's or an interface's `["p"]`. That is one
   predicate rather than three, so the set a caret may land in, the set this sweep
   reports and the set a rename edits cannot drift apart. A keyword, any other literal,
   punctuation or trivia answers empty **and does not build**; and a literal is swept
@@ -1550,31 +1458,31 @@ On this repo's own compiler profile — tsc's 78 source files, 9,977,097 charact
 **381,670 identifiers**, real libs, warm. Re-taken **2026-08-24 at commit d018af0a**,
 two independent processes; the round-930 column is kept so the staleness is visible
 rather than silently overwritten. **No number in this table is pinned by any test**
-(§ 14 says why):
+(§ 13 says why):
 
-| query | builds | round 930 | 2026-08-24 | moved? |
+| query | builds | earlier | 2026-08-24 | moved? |
 |---|---|---|---|---|
 | a plain rebuild, for reference | 1 | 5.5 – 5.9 s | **4.86 – 5.10 s** | no |
 | `documentHighlightsAt` — `binder.ts`, first caret | 1 | — | **336 ms** | — |
 | `documentHighlightsAt` — `binder.ts`, later caret | **0** | 19 ms | **10 – 18 ms** | no |
 | `documentHighlightsAt` — `checker.ts`, first caret | 1 | 6.0 – 7.2 s | **3.34 – 3.58 s** | **1.9x** |
 | `documentHighlightsAt` — `checker.ts`, later caret | **0** | — | **104 – 115 ms** | — |
-| `referencesAt` on a **clean** project — the pre-(INC.44) whole-program sweep, still what a REFUSED closure costs | 1 | 8.3 – 9.9 s | **8.8 – 9.6 s** | see (INC.44) below |
-| `referencesAt` on a **dirty** project, same | 2 | 13.0 – 13.5 s | **13.2 – 13.9 s** | see (INC.44) below |
+| `referencesAt` on a **clean** project — the whole-program sweep, still what a REFUSED closure costs | 1 | 8.3 – 9.9 s | **8.8 – 9.6 s** | see below |
+| `referencesAt` on a **dirty** project, same | 2 | 13.0 – 13.5 s | **13.2 – 13.9 s** | see below |
 
-**The last two rows are the load-bearing ones, and the first of them MOVED in
-`(INC.44)` — the paragraph that used to stand here said it never could, and it was
+**The last two rows are the load-bearing ones, and the first of them has since
+MOVED — the paragraph that used to stand here said it never could, and it was
 wrong.** `documentHighlightsAt` had moved already because it goes through
 `captureIn`'s partition. `referencesAt` was reported as unmovable "because its CLAIM
 is about every file", which conflates the claim with the EVIDENCE: an occurrence can
 only be an answer if it SPELLS a name the symbol is reachable by, so the population
 is selectable before it is typed even though the claim stays program-wide. See
-`(INC.44)` below for what it now costs and for the shapes that still fall back.
+below for what it now costs and for the shapes that still fall back.
 `renameAt` (§ 10d) and a plain `diagnostics()` are unchanged and remain
 whole-program operations a host must budget for.
 
-**`(API.9)` cost nothing measurable, and the reason is a counter rather than a
-stopwatch.** Widening the swept population from identifiers to *identifiers plus the
+**Widening the population cost nothing measurable, and the reason is a counter
+rather than a stopwatch.** Widening the swept population from identifiers to *identifiers plus the
 string literals that name a member* takes it from **381,670 to 381,672** on that
 profile — tsc's own compiler sources contain exactly **two** `o["…"]` accesses in
 9,977,097 characters. The heritage edge is computed per member occurrence during the
@@ -1585,14 +1493,14 @@ whose contract did not change — and measures 5.6 – 10.6 s for `checker.ts`'s
 spans. Absolute milliseconds are only comparable within the run that took them; the
 **population** is the figure that transfers.
 
-`(API.17)` widened the population again — to identifiers plus every literal in a
+A later widening took it further — to identifiers plus every literal in a
 member-NAME position, which adds computed and quoted object-literal keys and computed
 member declarations — and the argument above is unchanged in shape: such literals are
 rare in real TypeScript, and tsc's own sources are the extreme case of that. The counts
-here have **not** been re-taken, so read them as `(API.9)`'s measurement and not as
+here have **not** been re-taken, so read them as that earlier measurement and not as
 today's.
 
-### (INC.44) The sweep is narrowed by SPELLING — what it costs now, and what still falls back
+### The sweep is narrowed by SPELLING — what it costs, and what still falls back
 
 **The rule.** An occurrence can only be an answer if it SPELLS one of the names the
 caret's symbol is reachable by. So the population is selectable before it is typed:
@@ -1654,11 +1562,11 @@ in 28 of 78 files, because `node`, `type` and `kind` dominate the occurrence cou
 a search for a very common word narrows little, and a search for the name a user
 actually asks about narrows enormously.
 
-**In the FALLBACK** — a closure (INC.44) cannot bound — the sweep itself is 2.5 – 4 s
+**In the FALLBACK** — a closure the sweep cannot bound — the sweep itself is 2.5 – 4 s
 on top of the rebuild it rides, whatever the caret: resolving 381,670 identifiers
 costs the same whether the answer is 168 hits in one file (a local of
 `createTypeChecker`) or **9,827 hits across 49 files** (`SyntaxKind`, imported nearly
-everywhere). That insensitivity to the answer's size is exactly what (INC.44) removed
+everywhere). That insensitivity to the answer's size is exactly what the narrowing removed
 for every caret it can bound, and it is what the paragraph below was written about. The second build in the dirty row is
 `files`' — the program's file list is a question only a build answers — so a host
 that has just asked for `diagnostics()` pays one build, not two.
@@ -1689,7 +1597,7 @@ in an IDE's JVM. **The program was parsed TWICE and both copies were kept** —
 the same 78 files, the same content, the same `computeParserFlags`, 217.7 of the
 264 MB between them (step 2 below removes one copy). **Every memo this API adds
 is free**: `cached`, `captures`, `prepared`, `narrowed`, `recheck` and
-`lineMaps` are **0.0 MB combined**, so (INC.32)'s weight-bounded capture lanes
+`lineMaps` are **0.0 MB combined**, so the weight-bounded capture lanes
 are doing their job and no further memo needs a budget line. And **the
 per-project MARGINAL figure is ~115 MB, not 264**: a second `Project` in the
 same process re-earned 105.9 MB of shared caches and then added 115.3 MB of its
@@ -1716,7 +1624,7 @@ and is why the table names files: `binder.ts` (7,787 occurrences) and `checker.t
 (125,289) differ by 10x in the first-caret row and by the same factor in the residue.
 The current runner is **`scripts/inc31-ls-cost.sh`** (it supersedes
 `scripts/round930-ls-cost.sh`, which cannot reach the completion, signature-help,
-prepare-vs-completion or per-pool-heap cells); § 14 carries the whole table.
+prepare-vs-completion or per-pool-heap cells); § 13 carries the whole table.
 
 **So: `documentHighlightsAt` is the one to wire to caret movement** (debounced —
 it still builds), and `referencesAt` is the one a user asks for explicitly.
@@ -1858,14 +1766,14 @@ API does deliberately:
 | source | renaming | becomes |
 |---|---|---|
 | `const o: I = { p }` | the local `p` | `{ p: newName }` |
-| `const o: I = { p }` | **`I.p`** | `{ newName: p }` — `(API.10)` |
+| `const o: I = { p }` | **`I.p`** | `{ newName: p }` |
 | `const { p } = o` | the local `p` | `const { p: newName } = o` |
-| `const { p } = o` | **the member** | `const { newName: p } = o` — `(API.10)` |
+| `const { p } = o` | **the member** | `const { newName: p } = o` |
 | `export { p }` | the local `p` | `export { newName }` — see below |
 | `import { p } from "./m"` | the symbol | `import { newName } from "./m"` |
 
 **The shorthand rows are the discriminator this feature is tested against**, and
-`(API.10)` doubled them. `{ newName }` compiles and it has renamed the object's KEY;
+The contextual-member work doubled them. `{ newName }` compiles and it has renamed the object's KEY;
 and *which* of the two expansions is correct depends on which of the token's two
 meanings the caret named. Both compile. Both are one edit at one span. No assertion
 about the number of edits can tell them apart, which is why every rename pin for this
@@ -1912,7 +1820,7 @@ of the code. That is also why this costs a second build.
 | `DECLARED_IN_A_LIBRARY` | some declaration is in a `lib.*.d.ts`, which has no path on disk. Renaming the uses alone does not compile. tsc refuses the same thing |
 | `ALIASED_SYMBOL` | the group spells the symbol two ways because an `import { a as b }` was crossed. One new name cannot be applied to both, and picking a side would be a guess |
 | `UNRESOLVED_IMPORT` | a declaration IS the import binding, i.e. the module did not resolve |
-| `OCCURRENCES_INCOMPLETE` | some occurrence spelling the old name could be one of this symbol's and could not be resolved. **The member-rename refusal** — since `(API.11)` that is a member on an `any` receiver (by `o.p` or by `o["p"]`), a shorthand in a literal nothing contextually types, or an object literal's own METHOD; a *second declaration of the same member name*, an implementor, an `o["p"]`, a contextually supplied key and — since `(API.17)` — a computed or quoted key are no longer among them |
+| `OCCURRENCES_INCOMPLETE` | some occurrence spelling the old name could be one of this symbol's and could not be resolved. **The member-rename refusal** — that is a member on an `any` receiver (by `o.p` or by `o["p"]`), a shorthand in a literal nothing contextually types, or an object literal's own METHOD; a *second declaration of the same member name*, an implementor, an `o["p"]`, a contextually supplied key, and a computed or quoted key are no longer among them |
 | `WOULD_NOT_COMPILE` | the verification build produced diagnostics the original did not |
 | `WOULD_CHANGE_MEANING` | the verification build resolved something somewhere else |
 
@@ -1926,15 +1834,15 @@ RESOLVED to something else; what is left is unresolved, and unresolved is not un
 | `RenameConflictKind` | what it is |
 |---|---|
 | `UNRESOLVED_OCCURRENCE` | an identifier spelling the old name in a position that could name this symbol, which the search could not resolve — a member on an `any` receiver, an object literal's own method |
-| `ELEMENT_ACCESS` | an `o["p"]` — or, since `(API.16)`, a `` o[`p`] `` — the search could not resolve, i.e. a member of an `any`. A resolvable one is an ordinary occurrence and is renamed *inside its delimiters* (`(API.9)`); the kind survives because an unplaceable bracket is a different report to a user than an unplaceable identifier |
-| `CONTEXTUAL_SHORTHAND` | a `{ p }` or a `const { p } = o` met while renaming a MEMBER whose property could NOT be placed — a literal nothing contextually types, an un-annotated destructured parameter. A placeable one is now an ordinary occurrence and is EXPANDED (`(API.10)`); the kind survives for `ELEMENT_ACCESS`'s reason |
+| `ELEMENT_ACCESS` | an `o["p"]` — or a `` o[`p`] `` — the search could not resolve, i.e. a member of an `any`. A resolvable one is an ordinary occurrence and is renamed *inside its delimiters* ; the kind survives because an unplaceable bracket is a different report to a user than an unplaceable identifier |
+| `CONTEXTUAL_SHORTHAND` | a `{ p }` or a `const { p } = o` met while renaming a MEMBER whose property could NOT be placed — a literal nothing contextually types, an un-annotated destructured parameter. A placeable one is now an ordinary occurrence and is EXPANDED ; the kind survives for `ELEMENT_ACCESS`'s reason |
 | `NEW_DIAGNOSTIC` | a diagnostic the renamed program has and the original did not |
 | `RESOLUTION_CHANGED` | a span that meant one thing before the rename and another after |
 
 The position split inside that net is load-bearing: a *member* rename is judged by the
 member positions and a *plain binding* rename by the free ones, so an
 `interface I { p: string }` somewhere in the program does not refuse renaming an
-unrelated local `p`. (Before `(API.11)` it was load-bearing for a second reason as well
+unrelated local `p`. (It was once load-bearing for a second reason as well
 — a member declaration name resolved to nothing at all — and that reason is gone.)
 
 ### What this means in practice
@@ -1945,14 +1853,14 @@ the scope chain, and the sweep covers every identifier of every program file, so
 is complete by construction.
 
 **A member rename works when it can be shown complete** and is refused loudly when it
-cannot — and since `(API.10)` "complete" covers considerably more again. An interface
+cannot — and "complete" covers considerably more again. An interface
 member renames across files together with **every implementor's own declaration**, every
 `o["p"]` and every `` o[`p`] `` that names it (inside the delimiters, leaving them
 alone), every
 `const { p: … } = o` that destructures it, every **object-literal key** a contextual
 type supplies, and both **shorthands**, each expanded the member's way.
 
-**Since `(API.11)` a member also renames FROM ITS OWN DECLARATION NAME**, and the
+**A member also renames FROM ITS OWN DECLARATION NAME**, and the
 largest refusal is gone with it: an `interface Other { p }` standing beside an
 `interface Shape { p }` used to block renaming either, because a declaration name
 resolved to nothing and the safety net could not rule it out. It resolves through its
@@ -1967,12 +1875,12 @@ Three things still refuse it, and each is a different sort of thing:
   types, an un-annotated destructured parameter;
 - **a member on an `any` receiver**, reached by `o.p` or by `o["p"]`;
 - **an object literal's own METHOD** (`{ om() { … } }`), which is deliberately outside
-  both this leg and `(API.10)`'s key leg — see § 9 — **once a contextual type supplies
+  both this leg and the key leg — see § 9 — **once a contextual type supplies
   it**: the key then spells the member's name and resolves to nothing, which is what the
   net cannot rule out. Round 930 measured the other half: in a literal nothing
   contextually types, the group is complete and the rename goes through.
 
-A **computed key** (`{ ["p"]: v }`) is rewritten since `(API.17)`, delimiters preserved,
+A **computed key** (`{ ["p"]: v }`) is rewritten, delimiters preserved,
 in every one of its three shapes — and it was the last SILENT one. Round 930 measured
 what its absence cost: where stranding it broke the program the apply-and-recheck stage
 refused with `WOULD_NOT_COMPILE`, where the literal had no contextual type the
@@ -1984,7 +1892,7 @@ SEES, and an occurrence it can see and cannot place is a stated conflict.
 
 A **template element access** (`` o[`p`] ``) was the silent one with no such saving
 grace — outside the population, refused by nothing, and left spelling the old name in a
-program that still compiled clean. `(API.16)` closed it in round 931: it is an ordinary
+program that still compiled clean. That is closed: it is an ordinary
 occurrence now, found by `referencesAt`, highlighted, hovered and rewritten, with the
 edit covering the text and **not the backticks** for the same reason it excludes the
 quotes. A template carrying a **substitution** (`` o[`p${x}`] ``) spells no fixed member
@@ -1996,23 +1904,23 @@ renames nothing, which is what tsc answers there too.
 On this repo's own compiler profile — tsc's 78 source files, 9,977,097 characters,
 381,670 identifiers, real libs, warm:
 
-| query | builds | wall | moved since round 930? |
+| query | builds | wall | moved? |
 |---|---|---|---|
-| `referencesAt`, for reference — **(INC.44)** | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
-| `renameAt` — an ordinary name, **(INC.45)** | 2 | **1.0 – 1.3 s** | **≈12 – 14.5x** |
-| `renameAt` — `SyntaxKind`, clean, i.e. a name in 49 of 78 files | 2 | **20.0 – 21.3 s** | see (INC.45) |
-| `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | see (INC.45) |
+| `referencesAt`, for reference — | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
+| `renameAt` — an ordinary name, | 2 | **1.0 – 1.3 s** | **≈12 – 14.5x** |
+| `renameAt` — `SyntaxKind`, clean, i.e. a name in 49 of 78 files | 2 | **20.0 – 21.3 s** | see below |
+| `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | see below |
 | a refusal decided on syntax alone | **0** | microseconds | — |
 
 Re-taken **2026-08-24 at commit d018af0a**, two independent processes;
-**unpinned by any test**, per § 14.
+**unpinned by any test**, per § 13.
 
-### (INC.45) A rename is narrowed by the same closure, WIDENED by the new name
+### A rename is narrowed by the same closure, WIDENED by the new name
 
 The paragraph that stood here said "nothing here moved, and nothing here can: a
 rename's sweep and its verification are whole-program by CLAIM". Same category error
 as § 10b's, and it is retracted: the claim is program-wide, the evidence is not.
-`renameAt` takes (INC.44)'s closure and hands the resulting file set to the compiler as
+`renameAt` takes the same spelling closure and hands the resulting file set to the compiler as
 a check partition, so the `SyntaxKind` rows above are the WORST case (a name written in
 49 of 78 files) rather than the typical one.
 
@@ -2066,12 +1974,12 @@ The second build is the verification, and it costs less than the first on a smal
 (it carries only the renamed occurrences as capture spans, against the sweep's 381,670)
 and roughly as much on a large one. Budget memory as `referencesAt`'s — the sweep is
 the same shape, and § 10b's corrected reading applies here too: **`-Xmx2g` is the
-floor**, ~1.1 GB peaks in old gen, **~177 MB actually retained since (INC.36)
+floor**, ~1.1 GB peaks in old gen, **~177 MB actually retained
 step 2** (was 264 before it), of which the process-global `CrawlParseCache` is
 103.0 MB and **0.0 MB is any memo this API keeps**. Attribution, the before/after
 ladder and the remaining ~28 MB: `docs/perf/language-service-retention.md`.
 
-The absolute numbers are a property of the run that took them; only the § 14 table is
+The absolute numbers are a property of the run that took them; only the § 13 table is
 kept current, and the runner is **`scripts/inc31-ls-cost.sh`**.
 
 **So: this is a query a user asks for explicitly.** Do not wire it to a keystroke, and
@@ -2113,7 +2021,7 @@ The shape that matters: **one compile per idle, not one per caret.** The host
 sweeps a file when it settles and answers every hover, and every go-to-definition,
 out of that one build's answers.
 
-Since `(INC.13)` the API does this for you — `quickInfoAt` asks the buffer's whole
+The API does this for you — `quickInfoAt` asks the buffer's whole
 span set, so a host that just calls it per caret gets the same compile count. This
 class is still worth having for the reason it was written: it keeps the ANSWERS in
 the host's own map, so a hover is a lookup rather than a call across the API, and it
@@ -2178,161 +2086,7 @@ edit. There is nothing to invalidate more cleverly, because a `SemanticInfo` is 
 value — it holds no AST, no `Symbol` and no `Type`, so a stale entry describes
 stale text and nothing worse.
 
-## 13. What is coming, and what would change
-
-- **completion inside `o["`** — hover, go-to-definition, references and rename all
-  answer an element access since `(BUG.4)` and `(API.9)`, but a caret inside a string
-  literal still answers `NO_COMPLETION_CONTEXT` (§ 10a). That refusal is about the
-  ANCHOR — a caret in a string is prose almost everywhere else — and lifting it means
-  a position classifier, not a resolution.
-- **an object literal's own METHOD** (`{ om() { … } }`) has no definition of its own: it
-  is outside `(API.10)`'s key leg (which takes `{ p: v }` and the shorthands) and
-  deliberately outside `(API.11)`'s owner leg, because a contextually typed literal's
-  method is an occurrence of the contextual type's member and resolving it to itself
-  would take it out of rename's completeness net without putting it in the group. Round
-  930 measured what that costs a rename, and it is not uniform: with no contextual type
-  the method still renames completely from either end, and with one the key becomes an
-  unresolved occurrence and the rename refuses (§ 10d).
-- **hover on a shorthand `{ p }` describes the LOCAL** (§ 8), where tsc describes the
-  contextual member for an object literal's form and the local for a binding pattern's.
-  References, go-to-definition and rename answer both since `(API.10)`; only the
-  one-line type summary picks a side, and it picks the one the caret means.
-- **member completion after an unparsable receiver** — a `.` the parse did not
-  turn into a member access answers an empty list rather than guessing a receiver
-  out of bracket-balanced text.
-
-None of these change what is documented above. The one thing that would is the
-architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) that makes the checker
-lazy and re-entrant, at which point a query stops being a full rebuild. The
-public surface here is deliberately value-typed — no AST, no `Symbol`, no `Type`
-crosses it — precisely so that change can happen underneath you without breaking
-your host.
-
-### (INC.12) What a query still redoes, priced
-
-Measured on the compiler profile, warm, one process (`scripts/warm-program-cost.sh`).
-A narrowed build decomposes into a FLOOR that is the same for every query and the
-queried file's own checking:
-
-| | ms | reusable when NOTHING changed? |
-|---|---:|---|
-| config + crawl + imports | ~12 | yes — parses are already content-cached |
-| BIND, all program files | **73 – 88** | wholesale yes for an all-module program; NOT per file |
-| CHECK, the ~190 program-wide `init` passes | **252 – 254** | only by reusing the `Checker` |
-| the queried file's own checking | 47 at the median file, 150 on `binder.ts`, ~1,650 on `checker.ts` | never |
-
-So **(P1) — a second query with the program unchanged — is worth the whole ~345 ms
-floor**, and (INC.12) stage 1 collects the part of it that needs no compiler change:
-the case where the *question* repeats. **(INC.13) then made far more questions repeat,
-by asking about the BUFFER rather than the caret** — so within one buffer (P1) is
-collected for hover, go-to-definition, semantics and highlights alike, and what is left
-of it is a query about a DIFFERENT file, or the first query after an edit. The rest
-needs the checker to become re-partitionable, which is the inversion above.
-
-**(P2) — a query after ONE buffer changed — is worth essentially nothing today, and
-that is a statement about structure rather than about effort.** Measured, it costs the
-same as (P1) (`diagnosticsOf` after editing the queried file: 2,001 ms against 1,999
-unedited; about another file: 498 against 505). The crawl is already 9 ms, so there is
-nothing there to save; the bind cannot be redone per file (every `BinderResult` from one
-`Binder` shares that binder's `(pos, end)`-keyed maps, whose keys collide across files
-and are last-wins in bind order); and the ~190 program-wide passes are program-wide by
-construction — round 609 measured a starved collector at 1,174 false positives. Making
-(P2) cheap means making those products per-file decomposable, one at a time.
-
-
-### (INC.14) Can one compiler answer many queries? Measured, then SHIPPED
-
-The item above says the remaining 63% needs "the checker to become re-partitionable".
-The question that gates that work is not the refactor but whether a `Checker` REUSED
-across queries still tells the truth: `symbolTypes` persists the FIRST resolution, so
-a surviving checker makes WHICH QUERY RAN FIRST observable — the mechanism that cost
-three rounds in `(INC.2)`/`(INC.5)`/`(INC.6)`.
-
-It is answerable today, with no checker surgery, because **a checker that has already
-answered `k − 1` queries and is asked a `k`-th IS a checker whose partition is those
-`k` files** — `recheckOnly` is a set and the spine walks it in program order either
-way. `scripts/checker-reuse-differential.sh` runs the two arms and compares captured
-types, captured definitions AND diagnostics, per file:
-
-| queries per checker | one build per query | shared | ratio | rows that differ |
-|---:|---:|---:|---:|---:|
-| 2 | 39,173 ms / 76 builds | 21,918 ms / 38 builds | **1.79x** | 1 |
-| 8 | 38,404 / 76 | 12,035 / 10 | **3.19x** | 1 |
-| 26 | 39,508 / 76 | 10,347 / 3 | **3.82x** | 1 |
-
-**One row of 741,864**, the same row in all three, and in it the SHARED arm is the
-better answer — the per-query arm renders a redundant self-intersection
-(`(fileName: string) => boolean & (fileName: string) => boolean`) that any sharing
-removes. It is already one of the five spans `scripts/capture-equivalence.sh` gates,
-so sharing introduces nothing new. No definition and no diagnostic moved.
-
-**The one thing that census did not model was ORDER** — it walked a set of queries in
-program order, where a host asks in whatever order the user touches buffers and comes
-BACK to a buffer some other checker already answered. The `editor` arm closes that: a
-deterministic shuffled query SEQUENCE with revisits, compared position by position,
-with the COLD arm run over the same sequence so that "is the reference arm itself
-order-dependent?" is a measured control rather than an assumption.
-
-| queries per build | one build per query | shared | ratio | rows that differ |
-|---:|---:|---:|---:|---:|
-| 3 | 51,996 ms / 101 builds | 24,088 / 34 | **2.16x** | 0 |
-| 8 | 50,771 / 101 | 13,080 / 13 | **3.88x** | 0 |
-| 26 | 51,728 / 101 | 9,992 / 4 | **5.18x** | 1 |
-
-101 queries over 76 files with 25 revisits, **1,070,012 compared rows per run**, and
-`coldSelfDiverged = sharedSelfDiverged = 0` in all three — a revisited file is
-answered identically by a fresh checker and by a reused one. The single k = 26 row is
-byte for byte the one program order already found. So editor order introduces nothing,
-and at two of three group sizes it is cleaner than program order.
-
-**That is what `prepare` (§ 3a) turns into an API**, and it is the one place this
-document's cost model changed as a result: the four caret-scoped semantic members are
-now ONE build across a declared working set, not one per buffer. The `diagnosticsOf`
-half needs no new call — its memo is keyed by the partition.
-
-### (INC.17) What a re-entrant checker would buy, and the count that decides it
-
-`prepare` (§ 3a) collects the floor for a working set the host NAMED. A query about a
-file it did not name still pays the whole floor. Closing that means a checker that can
-be asked about a new file without replaying its whole `init`, and the census that
-decides whether that is a classification or a rewrite has been taken
-(`scripts/partition-census.sh`, tsc's own 78 sources, six draws over three partition
-shapes). A pass whose loops iterate `binderResults` is partition-INVARIANT by
-construction; one that reaches the partition is partition-DEPENDENT and must replay:
-
-| bucket | rows | floor ms | one-file ms |
-|---|---:|---:|---:|
-| partition-INVARIANT | **211** | **350.89** | 375.44 |
-| partition-DEPENDENT | **205** | **15.59** | 55.05 |
-| total | 416 | 366.47 | 430.49 |
-
-**95.7% of the floor never looks at the partition**, and the replay's own fixed cost is
-smaller still: 204 of the 205 dependent passes cost **0.69 ms between them**, because
-201 of them read the partition exactly once — they are a single `for (result in
-checkedResults)` loop. (The 205th, `checkSubsequentVarTypes`, is 14.90 ms with an EMPTY
-partition, so it is a mixed pass doing program-wide work outside its loop.)
-
-The model this produced is smaller than the one § 13's (INC.14) entry priced: nothing
-has to be reset, because a program-wide pass already emitted the newly asked file's
-rows during the first build — `diagnostics` is filtered to the assigned files only at
-the very end.
-
-**SUPERSEDED for the diagnostics channel — (INC.40) landed it; see § 4a, which is the
-authority.** What follows is why it was held back, and it still governs the CAPTURE
-channel, which (INC.41) refused. On tsc's own sources the full build's 46 diagnostics are netted by exactly
-ONE pass, and all eight dashboard profiles are that same codebase — so the partition
-detector this repo grades such work with compares an essentially empty population, and
-a replay that produced nothing from 204 of those 205 passes would be invisible to it.
-Re-arming that gate is the prerequisite, not the checker surgery.
-
-**And reusing only the BIND is refused, with its number.** Bind is 66–74 ms of a
-359–407 ms floor — 10.7% of a first hover in a mid-size buffer, 3.1% of one in
-`checker.ts`, and **0** on the first query after an edit, because the program changed.
-A reused checker carries its own bind, so it subsumes this entirely.
-
----
-
-## 14. State of the API — the two-minute version
+## 13. State of the API — the two-minute version
 
 Rounds 909–932 built this in twenty-three increments, and the detail is spread across as
 many session notes. This section is the summary a next agent or a host author should
@@ -2347,21 +2101,6 @@ read instead.
 > the ceremony is the thing the audit found first: this section was three rounds old and
 > already listed a defect that had been fixed *before it was written*. A page of prose
 > about behaviour drifts within three rounds; the pins are what stop it.
->
-> **Amended by rounds 931 and 932**, which closed gaps 6, 7 and 2 and inverted the four
-> pins that asserted them; `(API.17)`'s own claims are defended by
-> `ProjectComputedKeyTest` and by `ProjectContextualKeyTest`. Round 932 additionally
-> corrected a claim this audit had passed as TRUE — hover on an object-literal key — by
-> the same method that found the rest: measuring it.
->
-> **Amended by round 933, one layer DOWN.** Round 932 left `ProjectComputedKeyTest`'s
-> fixture on OPTIONAL members because the CHECKER did not accept a backtick-quoted
-> computed key as supplying the member it names. That is now fixed in `Checker.kt`
-> (`computedLiteralKey` grew a no-substitution-template arm; `classMemberNameText` was
-> made to delegate to it rather than re-spell it), so all three literal key spellings —
-> `[2]`, `["p"]` and `` [`p`] `` — are one member name at every extraction site, in the
-> service and in the compiler alike. What remains open below this API is `{ [K]: v }`,
-> which needs the key's TYPE and is a late-binding gap, not a spelling one.
 
 ### What it answers
 
@@ -2370,12 +2109,12 @@ read instead.
 | diagnostics, whole program or one file | § 4 | complete |
 | in-memory edits, including files that exist nowhere but the overlay | § 5 | complete |
 | offset ⟷ (line, character) | § 6 | complete — `\n`, `\r\n` and a lone `\r` all agree with the compiler's own diagnostics |
-| what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (re-run round 930, 1,327 files, zero violations) |
-| hover | § 8 | complete for values, members, member declarations and object-literal KEYS — an enum member's since `(API.15)`, a key's own since `(API.17)` |
+| what node is at this position | § 7 | complete, gated over **101,287,620 characters** of real TypeScript (1,327 files, zero violations) |
+| hover | § 8 | complete for values, members, member declarations and object-literal KEYS — an enum member's included, a key's own included |
 | go to definition | § 9 | complete for free names, members, imports, `this`/`super`, object-literal keys and member declarations |
-| the two above for many carets, or a whole file, in ONE compile | § 10 | complete — and since `(INC.13)` the single-caret members cost the same, so this is now the convenient shape rather than the cheap one |
+| the two above for many carets, or a whole file, in ONE compile | § 10 | complete — and the single-caret members cost the same, so this is now the convenient shape rather than the cheap one |
 | completions, members and free names, with accessibility and keywords | § 10a | complete, `o["` and `` o[` `` included |
-| find references, document highlights, read-vs-write | § 10b | complete — the population is every identifier plus every literal in a member-NAME position (`(API.17)`) |
+| find references, document highlights, read-vs-write | § 10b | complete — the population is every identifier plus every literal in a member-NAME position |
 | signature help, every overload | § 10c | complete except tagged templates and `super(...)` |
 | rename, verified by recompiling | § 10d | complete for bindings; for members, complete except the gaps below |
 | checking a whole working set once, so every semantic query about it is free | § 3a | complete — `prepare(files)`, swept against one-build-per-query over 1.07 M rows in editor order |
@@ -2401,9 +2140,9 @@ principles are in the list below.
 claim, so it is worth saying exactly what it means.** Every position this API answers
 either answers correctly, or refuses and says why. Nothing is silently missed and
 nothing answers a plausible wrong thing. Three rounds took the last three exceptions:
-round 931 closed an enum member's declaration name answering `any` (gap 7 — a wrong
+one closed an enum member's declaration name answering `any` (gap 7 — a wrong
 answer, not a refusal) and a template element access being missed without a word (gap
-6), and round 932 closed the computed object-literal key (gap 2), whose OPTIONAL-member
+6), and another closed the computed object-literal key (gap 2), whose OPTIONAL-member
 shape was the last place a rename could complete while leaving an occurrence of the old
 name behind — with no diagnostic, no failing gate and nothing in any output to see it
 by. Round 932 also found, by measuring the neighbour, that hover on ANY object-literal
@@ -2420,32 +2159,32 @@ own 78 compiler sources (`build/bench/tsc-project-*`: 9,977,097 characters, 381,
 identifiers, real libs), warm, **six warm-up cycles**, four rotations, replicated in
 **two independent JVM processes** whose medians are quoted as a band. The runner is
 `scripts/inc31-ls-cost.sh`. The round-930 column is kept beside it as HISTORY: those
-figures predate `(INC.2b)`'s narrowing of the capture path and the `(INC.1)`–`(INC.30)`
+figures predate the narrowing of the capture path and the
 collapse of the incremental floor from 1,092 ms to 58 ms, and they are **10 – 24x stale**
 in the narrowed rows.
 
 **The old headline is now false and is retracted.** This section used to open "almost
 every semantic query is a full rebuild". It is not: every caret-scoped query is a
 NARROWED build, and at the median file that is **108 – 113 ms against a 4.9 s rebuild,
-a factor of 45**. **AND SINCE `(INC.46)` NOTHING IS A FULL REBUILD BY DEFAULT**: project-wide
+a factor of 45**. **AND NOTHING IS A FULL REBUILD BY DEFAULT ANY MORE**: project-wide
 `diagnostics()` was the last one, and an edit that moves no exported signature now answers
 from one narrowed build (§ 4b) — 67% of real edits to tsc's own compiler, graded EQUIVALENT
 over 40 of them. **`referencesAt`
-moved in `(INC.44)`** and is narrowed by the SPELLINGS its answer can carry (§ 10b),
+moved too** and is narrowed by the SPELLINGS its answer can carry (§ 10b),
 falling back to the whole-program sweep only where that closure cannot be bounded, and
-**`renameAt` moved with it in `(INC.45)`** (§ 10d), its population widened by the NEW
+**`renameAt` moved with it** (§ 10d), its population widened by the NEW
 name so that its verification's "nothing moved" check does not go vacuous. The
 "moved?" column says which is which, and that column is the half a host must design
 around. **The `referencesAt` rows below were taken this round (2026-08-29) and not on
 the 2026-08-24 provenance the rest of the table carries.**
 
-| query | builds | round 930 | **2026-08-24** | moved? |
+| query | builds | earlier | **2026-08-24** | moved? |
 |---|---|---|---|---|
-| a plain rebuild (`diagnostics()`), for reference | 1 | 5.0 – 5.5 s | **4,864 – 5,096 ms** | **`(INC.46)`: only when a signature MOVED — see § 4b** |
+| a plain rebuild (`diagnostics()`), for reference | 1 | 5.0 – 5.5 s | **4,864 – 5,096 ms** | **only when a signature MOVED — see § 4b** |
 | `diagnosticsOf(f)` — **median over all 78 files** | 1 narrowed | 1.1 – 1.2 s | **108 – 113 ms** (p90 202 – 219) | **≈10x** |
 | `diagnosticsOf(checker.ts)` — the 3.15 MB extreme | 1 narrowed | 2.7 s | **1,744 – 1,763 ms** | 1.5x |
 | `diagnosticsOf` repeated, or a SUBSET of a set already asked | **0** | 0 | **0 ms** | = |
-| `diagnosticsOf(g)` — **another file, same state** (INC.40) | **0** | 1 narrowed | **25 ms median** (re-entry, no build) | **≈4x on 2026-08-24's own row** |
+| `diagnosticsOf(g)` — **another file, same state** | **0** | 1 narrowed | **25 ms median** (re-entry, no build) | **≈4x on 2026-08-24's own row** |
 | `completionsAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **194 – 202 ms** | **≈24x** |
 | `signatureHelpAt` | 1, **every call** | ≈ 4.7 – 5.1 s | **190 – 214 ms** | **≈23x** |
 | `quickInfoAt` — first caret, **median file** | 1 per BUFFER | — | **129 – 137 ms** | — |
@@ -2457,11 +2196,11 @@ the 2026-08-24 provenance the rest of the table carries.**
 | `documentHighlightsAt(binder.ts)` cold / later caret | 1 / **0** | 5.0 – 5.5 s / 19 ms | **336 ms / 10 – 18 ms** | **≈15x** |
 | `prepare(6 mid-sized buffers)` | 1 | 674 – 698 ms | **466 – 468 ms** | 1.45x |
 | …then 6 hovers, 12 defs+highlights | **0** | 7 – 12 / 23 – 27 ms | **13 – 14 / 33 – 43 ms** | = |
-| `referencesAt` — **(INC.44)**, a name written in 1–3 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **510 – 553 ms first ask, 119 – 141 repeat** | **≈17 – 18x** |
+| `referencesAt`, a name written in 1–3 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **510 – 553 ms first ask, 119 – 141 repeat** | **≈17 – 18x** |
 | `referencesAt` — one file, but that file is `checker.ts` | 1 clean, 2 dirty | 8.3 – 10.2 s | **1,940 ms** | ≈4.8x |
 | `referencesAt` — `SyntaxKind`, imported into 49 of 78 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **4,904 ms** | ≈1.85x |
 | `referencesAt` — a spelling the closure cannot bound | 1 clean, 2 dirty | 8.3 – 10.2 / 13.2 – 14.8 s | **8.8 – 9.6 / 13.2 – 13.9 s** | NO — the fallback, unchanged |
-| `renameAt` — an ordinary name, **(INC.45)** | 2, 3 dirty | — | **1.0 – 1.3 s** | **≈12 – 14.5x** |
+| `renameAt` — an ordinary name, | 2, 3 dirty | — | **1.0 – 1.3 s** | **≈12 – 14.5x** |
 | `renameAt` (`SyntaxKind`, 9,827 edits) | 2, 3 dirty | 21.0 / 19.6 – 26.7 s | **20.0 – 21.3 / 25.0 – 26.0 s** | the worst case, and the fallback |
 | a refusal decided on syntax alone | **0** | microseconds | microseconds | = |
 
@@ -2473,7 +2212,7 @@ of one buffer after re-writing its own bytes is 212 ms, after an appended commen
 Every figure in the paragraph and the table above is **WALL TIME AND THEREFORE PINNED
 BY NO TEST** (see the note that closes this section).
 
-### Two open defects this table exposes — `(INC.32)`
+### Two open defects this table exposes
 
 Both are measured, both are in the table above, and neither is a gap in the
 architecture — they are bounds that are now the wrong size.
@@ -2494,7 +2233,7 @@ architecture — they are bounds that are now the wrong size.
    sound; the SIZE was chosen for "the buffer in front of the user plus the one in the
    other split" and predates completions and signature help asking their own questions.
 
-**(INC.12) A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
+**A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
 entries, dropped by every edit alongside the diagnostics cache), which changes the
 `builds` column in two places a host will actually hit:
 
@@ -2535,7 +2274,7 @@ that is the number any future proposal must be argued on. It is not a lever for
 `referencesAt` either: the same prologue over all 78 files is ~140 ms of a 9.3 s sweep
 (1.5%). `Inc31ResidueMain` is the instrument that would grade it.
 
-**(INC.13) …AND THE QUESTION ASKED IS THE FILE'S, NOT THE CARET'S**, which is what makes
+**…AND THE QUESTION ASKED IS THE FILE'S, NOT THE CARET'S**, which is what makes
 that memo hit for a caret nobody has visited yet. `quickInfoAt`, `definitionsAt`,
 `semanticsAt` and `fileSemantics` name the buffer's whole occurrence set —
 `SourceIndex.occurrenceNodes()`, deliberately the population `documentHighlightsAt`
@@ -2544,7 +2283,7 @@ buffer changes. Measured on the compiler profile, three rotations, the same bina
 the widening off and on (blocked arms, not interleaved — one arm's whole point is that
 some code does not run):
 
-| sequence | before | after (round 930) | **2026-08-24** |
+| sequence | before | earlier | **2026-08-24** |
 |---|---:|---:|---:|
 | first hover in `checker.ts` (3.15 MB, 125,289 spans) | 2,307 ms | 3,796 ms | **3,341 – 3,581 ms** |
 | a SECOND caret in `checker.ts` | 2,142 ms | 73 ms | **75 – 83 ms** |
@@ -2560,7 +2299,7 @@ is free. The reason it is not worse is that a narrowed build is mostly FLOOR (§
 ~345 ms), and the extra spans are cheap beside it: swept over all 78 files, a whole-file
 capture is **+9 to +17 ms at the median file** (372 → 381 and 373 → 390, the two draws).
 
-**(INC.14) …AND SINCE 2026-08-23 THE UNIT IS THE WORKING SET, IF A HOST ASKS FOR IT.**
+**…AND THE UNIT IS THE WORKING SET, IF A HOST ASKS FOR IT.**
 `prepare(files)` performs ONE narrowed build over a declared set of buffers and captures
 every one of them in that walk, so those four members answer about ANY of them without
 building. Measured on the compiler profile, three rotations, replicated in a second run,
@@ -2575,7 +2314,7 @@ whose 1.65 s of own checking would bury the floor the arm exists to show):
 
 The ratio shrank (7.1x → ~2.0x for the hover arm) and that is the arc working as
 intended rather than `prepare` regressing: the thing `prepare` amortises is the FLOOR,
-and `(INC.1)`–`(INC.30)` took the floor from 1,092 ms to 58 ms, so there is far less
+and later rounds took the floor from 1,092 ms to 58 ms, so there is far less
 left to amortise. `prepare` is still the right call for a declared working set, and it
 is still the only way to make a query about a buffer the user has not touched free.
 
@@ -2586,7 +2325,7 @@ the edit that dropped every cached answer and one taken after the prepared queri
 **That the two answers AGREE is measured, not assumed.** A capture types nodes the
 checker had no reason to type, and typing populates order-dependent caches, so a
 file-wide request could plausibly render a different type for the same span — which is
-the mechanism `(INC.10)` refused a 66 ms saving over. `scripts/caret-vs-file-capture.sh`
+the mechanism that was refused a 66 ms saving over. `scripts/caret-vs-file-capture.sh`
 is the differential and needs no baseline, because a span asked alone and the same span
 asked as part of its file are the same question: **904 sampled spans in 76 files, zero
 divergence in either channel — and a second sweep over 979 DIFFERENT positions reads
@@ -2604,20 +2343,19 @@ error anywhere. `completionsAt` and `signatureHelpAt` ask different questions
 `Vfs`, and `ProjectCaptureMemoTest` / `ProjectPreparedCheckTest` for the memo and the
 prepared check) and **EVERY WALL FIGURE ON THIS PAGE IS PINNED BY NOTHING** — it is a
 property of one box on one day, a timed assertion over a compile is a coin flip
-(CLAUDE.md round 868), and only figures taken in one run are comparable to each other.
+and only figures taken in one run are comparable to each other.
 That is why each is dated and stamped with the commit it was taken at, and why the
-round-930 column is kept beside the current one instead of being overwritten: four
-false claims were written into this page at round 930 and survived three readings,
+earlier column is kept beside the current one instead of being overwritten: false
+claims have been written into this page before and survived several readings,
 and a stale wall number is invisible to every gate in this repo. Re-take the table
-with `scripts/inc31-ls-cost.sh` rather than quoting a number from another round beside
-a fresh one. Memory is the other budget: a
+with `scripts/inc31-ls-cost.sh` rather than quoting an old number beside a fresh one. Memory is the other budget: a
 whole-program sweep holds a resolution per identifier and the default 512 MB of a plain
 JVM is nowhere near enough (§ 10b).
 
 A normal application project is far smaller, and the ratios are what transfer — but the
 ratio this paragraph used to quote is GONE, and its disappearance is the point. It read
 "batching 34 carets is **34 compiles cheaper** than asking one at a time"; since
-`(INC.13)` asking one at a time is **one compile too**, because the question put to the
+asking one at a time is **one compile too**, because the question put to the
 compiler is the buffer's and not the caret's. What is left, and is what a host should
 still do: **debounce, and wire `documentHighlightsAt` rather than `referencesAt` to
 caret movement.** Batching is now a convenience rather than a cost decision.
@@ -2636,28 +2374,28 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    agreeing row for row with the full build. The gap that remains is not the checking:
    a median file's own checking is tens of ms, and the rest is the FLOOR — the crawl,
    the parse, the bind and the program-wide passes, which run whatever is narrowed.
-   That floor was 1,092 ms when this gap was written and `(INC.30)` reports **58 ms**. So the
+   That floor was 1,092 ms when this gap was written and is now **58 ms**. So the
    architectural inversion (`docs/ARCHITECTURE-RETHINK.md`) is still what removes the
    floor, but it was never the prerequisite for narrowing the check. **The interactive
-   queries are narrowed too since 2026-08-22 (INC.2b)** — hover, go-to-definition,
+   queries are narrowed too, since 2026-08-22** — hover, go-to-definition,
    completion, signature help, the semantic sweep and document highlights each hand the
    compiler the queried buffer, and a capture build of `binder.ts` fell **4,581 -> 979 ms
-   (4.7x)** warm and rotated in one process when `(INC.2b)` landed. End to end through
+   (4.7x)** warm and rotated in one process when that landed. End to end through
    this API, and with `referencesAt`, `renameAt` and a plain rebuild flat across the two
    arms as controls: `quickInfoAt` **5,004 -> 1,015 ms**, `fileSemantics` 5,178 -> 1,185,
-   and `documentHighlightsAt` 5,050 -> 1,159. **Those are `(INC.2b)`-era figures and are
+   and `documentHighlightsAt` 5,050 -> 1,159. **Those are 2026-08-22-era figures and are
    now stale in the fast direction**: re-taken 2026-08-24, the same `binder.ts` capture
-   is **290 – 306 ms** and the median file's is **129 – 137 ms** (§ 14).
+   is **290 – 306 ms** and the median file's is **129 – 137 ms** (§ 13).
 
    It was REFUSED when first measured, at 45 divergent spans of 381,666, and the refusal
    is what found the defect: a type reference inside a foreign file's anonymous object
    type literal collapsed to `any`, which is a pre-existing first-touch order-dependence
    in the checker rather than a property of narrowing — in 5 of the 45 it was the
-   WHOLE-PROGRAM build showing `any`. `(INC.5)` and `(INC.6)` closed it; the sweep now
+   WHOLE-PROGRAM build showing `any`. That is closed; the sweep now
    reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
    the narrowed arm is the better answer.
 
-   **Project-wide `diagnostics()` WAS the one thing left, and `(INC.46)` CLOSED IT** —
+   **Project-wide `diagnostics()` WAS the one thing left, and it is CLOSED** —
    see § 4b. Not a dependency closure: a symbol-level use graph was measured on tsc's own
    sources and re-checks 100% of the program's characters at the median edit, the same as
    the file-level one, so the `export *` barrels were never the cause. What collapses it
@@ -2673,7 +2411,7 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    edit to it is a plain rebuild, and it accounts for 8 of the 13 fallbacks. **SCC-aware
    hashing is the one lever between the measured 67% and an 87.5% ceiling.**
 
-   **`referencesAt` IS narrowed since `(INC.44)`, and `renameAt` since `(INC.45)`.**
+   **`referencesAt` IS narrowed, and so is `renameAt`.**
    The sentence that used to stand here — "their claim is about every file, so there
    is nothing to narrow to" — confused the claim with the evidence: an occurrence of
    a symbol must SPELL a name that symbol is reachable by, so both select their
@@ -2697,7 +2435,7 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    the declared constraint, so both are wrong alike), and **one** signature parameter
    rendering `any` under the narrowed arm. That last row is the whole user-visible cost.
 2. ~~A computed object-literal key `{ ["p"]: v }` is outside the swept population.~~
-   **CLOSED round 932**, `(API.17)` — and it was the last SILENT shape anywhere in this
+   **CLOSED** — and it was the last SILENT shape anywhere in this
    API. Round 930 measured it as reported in two of its three shapes
    (`WOULD_NOT_COMPILE` where stranding the key breaks the program,
    `OCCURRENCES_INCOMPLETE` where the literal has no contextual type) and silent in the
@@ -2709,7 +2447,7 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    reference to the binding `K`, which is tsc's answer too. The number is kept so the
    round notes keep referring to the same gap.
 3. **An object literal's own METHOD** (`{ om() { … } }`) has no definition of its own —
-   `definitionsAt` on the declaration name answers empty, see § 9. *Corrected round 930*:
+   `definitionsAt` on the declaration name answers empty, see § 9. *Corrected*:
    it does **not** refuse a rename. A use of it resolves to the declaration, so the
    occurrence set is complete and `renameAt` rewrites both ends from either caret.
    *Round 932*: a computed or quoted METHOD key (`{ ["om"]() { … } }`) is SWEPT but
@@ -2719,11 +2457,11 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
 4. **A member on an `any` receiver** cannot be placed, so it refuses a member rename.
 5. **A shorthand in a literal nothing contextually types** likewise.
 6. ~~A member named by a TEMPLATE element access is silently missed.~~ **CLOSED round
-   931**, `(API.16)` — `` o[`p`] `` is an ordinary occurrence: found, highlighted,
+   931** — `` o[`p`] `` is an ordinary occurrence: found, highlighted,
    hovered, renamed (over the text, not the backticks) and completed. A template with a
    **substitution** (`` o[`p${x}`] ``) spells no fixed name and is deliberately out, as
    it is in tsc. The number is kept so the round notes keep referring to the same gap.
-7. ~~An enum member's declaration name reports `any`.~~ **CLOSED round 931**, `(API.15)`
+7. ~~An enum member's declaration name reports `any`.~~ **CLOSED**
    — it reports the member's own type (`Plain.Alpha`), the same instance its use
    reports, in all five enum shapes. tsc additionally decorates the answer with the
    member's VALUE (`(enum member) Plain.Alpha = 0`); this API renders types, so that
@@ -2735,27 +2473,3 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    here they are one symbol. Stated in § 10d, deliberate.
 10. **No LSP layer.** This is an embedding API; the protocol, its 0-based coordinates and
     its lifecycle are a host's job. § 12 is the shape. **(not pinnable)**
-
-### What the round-930 audit changed
-
-| claim as written | verdict | evidence |
-|---|---|---|
-| positions carry a lone-`\r` defect | **STALE** — closed in round 915, three rounds before this section was written | a `\r`-terminated fixture: TS2322 on line 3, TS1123 on line 3, `positionAt` line 3 |
-| `super.p` goes to the base's declaration (§ 9's table, and the row above) | **WRONG** — it answered nothing while hover at the same caret answered correctly | fixed this round: the receiver leg had a `this` carrier and no `super` one. tsc navigates to `Base.pb`; so does this now |
-| an enum member's declaration name "reports nothing" | **WRONG, and worse** — it reported `any`; **closed round 931** | four enum shapes, all `any`; tsc answers `(enum member) Plain.Alpha = 0`. `(API.15)` gave the leg its own mint; five shapes now report the member's type |
-| an object literal's method "refuses a rename loudly" | **HALF WRONG** — true only where the literal is contextually typed | with no contextual type the plan carries both occurrences from either caret and the applied text compiles; with one it is `OCCURRENCES_INCOMPLETE` at the key. Found by measuring the correction — this round's own lesson, applied to itself |
-| a computed key is "not reported either" | **OVERSTATED** — reported in two of its three shapes; **CLOSED round 932** | `WOULD_NOT_COMPILE` / `OCCURRENCES_INCOMPLETE` / silent-when-optional |
-| hover, everywhere the audit looked | **TRUE where it looked, and it did not look at an object-literal KEY** — round 932 found every one of them reporting `any`, or the type of an unrelated same-spelled binding | `{ p: 1 }` against `interface Shape { p: number }`, beside a file-level `const p: string`, reported `string`. An audit is only as wide as its caret list |
-| a template element access is silently missed | **TRUE**, proven end to end; **closed round 931** | the applied rename compiled clean with the old name still in the template. `(API.16)` widened the occurrence population to it, and the pin that asserted the silence now asserts the rewrite |
-| `documentHighlightsAt` costs 6.0 – 7.2 s | **TRUE of `checker.ts`** and unqualified — 5.0 – 5.5 s on `types.ts` | the row is a statement about a FILE; the table above says so now |
-| a plain rebuild is 5.5 – 5.9 s (§ 14) / ~5.2 s (§ 3) | **BOTH DRIFTED**, in opposite directions | re-taken: 5.0 – 5.5 s warm, ~9 s for the first rebuild in a process |
-| everything else in this section | **TRUE** | one fixture per claim, and the pins listed above |
-
-### How each of these was decided
-
-Every behaviour above was **read out of tsc 7.0.2's own language server** before it was
-written — `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, driven by `scripts/lsp_hover.py`,
-`scripts/lsp_definition.py`, `scripts/lsp_member_refs.py`, `scripts/lsp_rename.py` and
-`scripts/lsp_completion.py` — and where this API diverges,
-the divergence is stated rather than discovered. That is the standing method, and it is
-the cheapest thing a next round can reuse.
