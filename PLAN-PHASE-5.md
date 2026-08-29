@@ -20,6 +20,97 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.53) — the incremental floor's largest block was never in a pass
+
+**WHAT THIS ROUND BOUGHT.** ~13 ms off the per-keystroke FLOOR of every
+language-service query, a permanent instrument for a class of cost this repo could
+not previously see, and one measured refusal.
+
+**HOW IT WAS FOUND, because the route matters more than the fix.** (INC.52) left the
+floor decomposed to phases: 32-44 ms of a 63-72 ms floor is "checker construct +
+getDiagnostics", while the `--passTimingRows` table INSIDE it sums to ~19 ms. A third
+of the floor was therefore un-attributed and nobody had asked which of the two owners
+held it. Two `FrontEnd` rows answered it in one run: **`getDiagnostics()` is 2-3
+MICROSECONDS on a floor build**, so the entire phase is the CONSTRUCTOR. Splitting
+the constructor at its `init` block (Kotlin runs property initializers then init
+blocks in declaration order, and this class declares every field above its one init
+block — a CLAUDE.md invariant, which is what makes the subtraction exact) gave
+**~20 ms of ~494 PROPERTY INITIALIZERS**, and the decisive control is that the number
+is IDENTICAL on a 63 ms floor build and a 5.2 s full one (16.0-21.8 ms across eight
+draws either side). A constant that is 0.4% of a full compile and ~30% of a keystroke.
+
+**WHY NO INSTRUMENT HERE COULD SEE IT.** A field initializer is not a `pass("…")`.
+The `--passTiming` table is built BY `pass()`, `cost_gate.py` reads that table's
+counters, and the 8-profile grid compares diagnostics, which do not move. So the
+whole pass-gating arc — (INC.7)/(INC.20)/(INC.21), 189 walkers gated onto the check
+partition, four batches of loop-header sweeps — was structurally incapable of
+reaching this, however carefully it swept. **That is the transferable half of the
+round and it is now a CLAUDE.md entry: before pricing anything else in the floor,
+ask what runs OUTSIDE a pass.**
+
+**THE ARITHMETIC THAT NAMED THE CULPRITS, before any code was read.** 20 ms over ~494
+initializers is 40 us each, which is impossible for an allocation by ~3 orders of
+magnitude — the repo's own "a total is a LOCATION, not a price; divide it and refuse
+an impossible per-op cost" rule. So a handful had to be doing real work, and four
+were: `parseBuiltinLib` ~11.0 ms, `localTypeAliasIndex` ~5.4, `enclosingImportIndex`
+~3.4, `topLevelConstStringValues` ~3.1. The partition is exact — sum against measured
+field region reads 18.3/18.6, 25.2/25.4, 28.5/29.6, 29.7/30.2 — so the other ~490
+initializers are **0.2-1.2 ms between them**.
+
+**WHAT LANDED.** The three whole-program INDICES build on first ask. Each has exactly
+ONE read site, which is what makes this not an approximation: `localTypeAliasIndex`
+becomes a per-FILE index (`localTypeAliasesOf`) over that file's own frozen
+statements, in the same DFS order, first-wins per name; the other two are
+`lazy(NONE)` whole maps. Floor field region **18.6 / 25.4 / 29.6 / 30.2 ms -> 8.1 /
+12.6 / 8.4 / 11.2**, with all three rows reading 0.00 ms and 0 files on a floor build.
+A FULL build needs only **69 of 78** files' alias index, which was not predicted.
+
+**CLAIMED AS A WORK REDUCTION, NOT A MILLISECOND** — (INC.52)'s law, and it applies to
+this round's own rows: the floor's draws span 57-86 ms. `EagerIndexCensus` counts the
+population instead and `EagerIndexDeferralTest` pins it.
+
+**THE PIN THAT CAUGHT ITSELF, and it is the reusable lesson.** The per-file assertion
+(`fileScans < program size`) first passed as **0 < 3** — the fixture never reached
+`findLocalTypeAlias` at all, whose one caller needs a FUNCTION-LOCAL (B83.5-unbound)
+discriminated-union alias used as an array-literal element type. The vacuity guard
+written beside it ("an unpartitioned build still builds the indices it needs") is what
+went RED and exposed it. A count-based deferral pin needs a sibling asserting the
+mechanism is REACHED, or "it was not built" and "it is never built" are indistinguishable.
+
+**THE FOURTH IS REFUSED WITH ITS PRICE, and the tempting hypothesis is MEASURED WRONG.**
+`parseBuiltinLib` fills `builtinLibDecls`/`builtinLibMemberDecls`/`realLibDeclFile`,
+which are keyed by AST NODE — Kotlin data classes, whose `hashCode()` recurses the
+whole subtree (round 471) — and CLAUDE.md flags those very sets as safe only "because
+lib decl subtrees are small", which the DOM lib is not. Split, that walk is
+**1.9-2.8 ms** of 8-11: the binds are 3.2-5.3 and the lib-set resolution plus 45
+`mergeSymbolTable` calls 3.1-5.3. No part clears the floor for a round, and the two
+larger ones are per-checker BY REQUIREMENT — the checker merges into and mutates lib
+symbols (round 882: 406 adopts, 175 mutates, all on LIB symbols). **Named unblocker:
+round 884's `mergedSymbols` clone-on-write forwarding table.** The probe rows stay, so
+the next attempt starts from the split rather than from the refuted hypothesis.
+
+**WHAT WAS NOT ESTABLISHED, stated rather than left to be found.** `cost_gate.py`
+exits 0 with `output.errors` flat at 46, but two counters moved inside tolerance
+(`typeOfExpr.calls` +0.54%, `narrow.memoServed` +1.55%) — a first-touch ORDER shift,
+since the three indices are now built during the check rather than before it. **It is
+NOT separated from (INC.52)'s own drift**: the baseline was last recorded at
+`7a488783b` and (INC.52) is the only checker-touching commit since, and it quoted no
+per-counter deltas. Separating them needs a parent build and was not done.
+
+**GATES.** Suite **16,489 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` clean, and `Checker.<init>` shrank **5,538 -> 5,464**
+bytecodes, buying back (JIT.1)(d) headroom. Commits `af032b5e2`, `5f8390d3f`.
+
+**NAMED SUCCESSORS.** (1) The floor's next-largest block is now the pass table itself
+at ~19-24 ms, whose top rows are `init:computeAllEnumValues` 6.9 ms,
+`init:moduleTypeNameIndex` 2.6, `checkModulePreserve4Pin` 1.7,
+`init:computePerFileVisibility` 1.4, `checkJsxImportResolutions` 1.2,
+`init:buildPerFileScopes` 1.0 — the same "build it on first ask" question, now for
+`init:` passes rather than field initializers. (2) The crawl still READS AND DECODES
+every file on every query (10-12 ms wall, 44-56 ms of CPU) although the PARSE is
+already content-cached; for a host that owns its VFS that is redundant, and it is the
+largest remaining front-end row. (3) `parseBuiltinLib`, behind round 884.
+
 ### Round (CHK.73) — REFUSED with its price measured, and the entry it refutes is its own
 
 **WHAT THIS ROUND BOUGHT.** Not a fix: a diagnosis that replaces the queue's, and a
@@ -3597,6 +3688,39 @@ RHS, and the merged-member CONTRADICTION direction.
   program's file list or a config change serves a stale surface, and a version stamp must
   refuse a file written by a different build. **Measure the serialise/deserialise cost against
   the 136 ms it replaces before building the invalidation.**
+
+- [ ] **(INC.54) THE FLOOR AFTER (INC.53), IN PRIORITY ORDER — AND THE FIRST ONE IS THE
+  SAME QUESTION ONE LAYER UP.** (INC.53) took the `Checker` constructor's ~494 property
+  initializers from ~20 ms to ~10 by moving three whole-program indices onto first ask, and
+  refused the fourth with its price. What is left of a 63-72 ms floor, measured
+  2026-08-29 (`scripts/floor-decomposition.sh`, and read as a mean of two draws because a
+  single row on this floor swings ~40%):
+  **(a) THE PASS TABLE, ~19-24 ms — the largest block now.** Top rows:
+  `init:computeAllEnumValues` **6.9 ms** (already optimised once by (INC.52) and still
+  #1), `init:moduleTypeNameIndex` 2.6, `checkModulePreserve4Pin` 1.7 (a known (INC.21)
+  straggler — a whole-program `.contains` ABOVE the loop, so gating the loop banks ~0.02
+  and only a NAME PRE-GATE banks the ms), `init:computePerFileVisibility` 1.4,
+  `checkJsxImportResolutions` 1.2, `init:buildPerFileScopes` 1.0. These are `pass("…")`
+  bodies, so unlike (INC.53)'s they ARE visible to `--passTiming` — the open question is
+  whether an `init:` pass that builds a program-wide TABLE can be built on FIRST ASK the
+  way a field initializer could. **Check the read sites first**: (INC.53)'s three were
+  affordable precisely because each had exactly ONE, and round 609 forbids gating a
+  program-wide COLLECTOR onto the partition.
+  **(b) THE CRAWL RE-READS AND RE-DECODES EVERY FILE ON EVERY QUERY — 10-12 ms wall,
+  **44-56 ms of CPU** across the crawl's workers, for 9,977,097 chars — although the PARSE
+  is already fully content-cached (`78 reused / 0 fresh`).** The bytes are read only to
+  compute the content key. For a host that OWNS its VFS (an IDE) that is redundant, but
+  skipping a read is a soundness change (a file changed on disk without `updateFile` would
+  be missed) — so it is an opt-in `Project` policy, not a compiler default, and it is
+  (INC.48)'s "a content hash cannot see an ADDED file" hazard in a second costume. Largest
+  remaining FRONT-END row and it scales with project size, which is what an IntelliJ-sized
+  project would feel.
+  **(c) `parseBuiltinLib`, ~8-11 ms — REFUSED by (INC.53) with its split measured** (binds
+  3.2-5.3, decl-set walk 1.9-2.8, resolution + 45 `mergeSymbolTable` 3.1-5.3) and BLOCKED
+  on round 884's `mergedSymbols` clone-on-write: the checker merges into and mutates lib
+  symbols, so neither the bind nor the merged table is shareable across checkers today.
+  Do not re-open it before that lands, and do NOT re-open the data-class-keyed node sets —
+  that hypothesis is measured wrong.
 
 - [ ] **(INC.49) — NARROWED BY (INC.48): THE *RESTART* HALF IS CLOSED, AND WHAT IS LEFT IS
   THE FIRST-EVER OPEN.** With a snapshot restored, a cold process answers its first query in

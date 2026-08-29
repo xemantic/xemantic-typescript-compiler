@@ -2286,10 +2286,57 @@ of one buffer after re-writing its own bytes is 212 ms, after an appended commen
 Every figure in the paragraph and the table above is **WALL TIME AND THEREFORE PINNED
 BY NO TEST** (see the note that closes this section).
 
-### Two open defects this table exposes
+### What the floor is made of — and the ~20% (INC.53) took off it
 
-Both are measured, both are in the table above, and neither is a gap in the
-architecture — they are bounds that are now the wrong size.
+Every number in the table above rests on the FLOOR: what a build costs when the
+checker checks nothing. It is what an editor pays per keystroke, because an edit
+drops every cached answer. Decomposed on the compiler profile (2026-08-29, eight
+draws, `scripts/floor-decomposition.sh`): config + root glob 3-7 ms, crawl 10-12
+(read + decode of every file, 44-56 ms of CPU across the crawl's workers),
+`extractRelativeImports` 1-2, bind 6, **`Checker` construct + `getDiagnostics()`
+32-44**, post-checker 2-3.
+
+That last row is the phase, and it is **not** the pass table: `getDiagnostics()`
+is **2-3 microseconds** on a floor build, so the whole of it is the CONSTRUCTOR —
+of which ~20 ms was the class's ~494 **property initializers**, a constant that
+reads the same on a 63 ms floor build and a 5.2 s full one. On a full compile that
+is 0.4%, which is why no round had seen it; here it was about a third of the query.
+
+**Four initializers were essentially all of it** — the other ~490 are 0.2-1.2 ms
+between them — and three of them were whole-program indices with exactly one read
+site each. They are now built on first ask, so a floor build builds **none** of
+them, and even a full build needs only **69 of 78** files' nested-alias index:
+
+| field | was | now, floor build |
+|---|---:|---|
+| `localTypeAliasIndex` (a DFS through every function body) | ~5.4 ms | per FILE, on first ask |
+| `enclosingImportIndex` | ~3.4 ms | on first ask |
+| `topLevelConstStringValues` | ~3.1 ms | on first ask |
+| `parseBuiltinLib` | ~11.0 ms | unchanged — see below |
+
+Field region on a floor build, four draws each side: **18.6 / 25.4 / 29.6 / 30.2 ms
+-> 8.1 / 12.6 / 8.4 / 11.2**. It is claimed as a work reduction and not as a
+millisecond, because a per-pass row on a ~68 ms floor reads 13.16 ms in one draw
+and 8.42 in the next of the same binary; `EagerIndexCensus` counts the population
+instead and `EagerIndexDeferralTest` pins it.
+
+`parseBuiltinLib` is **refused with its price**: it splits three ways with no
+dominant part (binds 3.2-5.3 ms, the lib decl-set walk 1.9-2.8, lib-set resolution
+plus 45 `mergeSymbolTable` calls 3.1-5.3), and the two larger parts are per-checker
+by requirement — the checker merges into and mutates lib symbols, so neither the
+bind nor the merged table is shareable until round 884's `mergedSymbols`
+clone-on-write lands.
+
+### One open defect this table exposes
+
+It is measured, it is in the table above, and it is not a gap in the architecture —
+it is a bound that is now the wrong size.
+
+*(The second defect listed here until 2026-08-29 — the two-entry `captures` LRU
+thrashing on hover -> complete -> signature help -> hover — was CLOSED by (INC.32),
+which replaced the entry-count bound with two weight-based lanes that cannot evict
+each other. This page had not been updated; the text is kept out rather than left
+standing, since a stale claim here is invisible to every gate in this repo.)*
 
 1. **`completionsAt` and `signatureHelpAt` cannot reach a prepared check, at all.**
    Not a policy: `Project.kt:995` (free-name), `:1041` (member) and `:1162` (signature
@@ -2300,12 +2347,6 @@ architecture — they are bounds that are now the wrong size.
    `prepare(6 files)`**, **202 ms immediately after a hover in the same buffer**, and
    194 ms cold — the same build three ways. An *identical repeat* is free (0 – 1 ms),
    because `captureIn` still probes the LRU.
-2. **The two-entry `captures` LRU thrashes on an ordinary editor sequence.** Hover →
-   complete → signature-help → hover **rebuilds the hover at 257 – 285 ms**, against
-   **3 – 5 ms** when nothing evicted it: three channels in one buffer do not fit in two
-   entries. The bound exists for memory (`captures`' KDoc), and the memory argument is
-   sound; the SIZE was chosen for "the buffer in front of the user plus the one in the
-   other split" and predates completions and signature help asking their own questions.
 
 **A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
 entries, dropped by every edit alongside the diagnostics cache), which changes the
