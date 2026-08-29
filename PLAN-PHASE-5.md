@@ -20,6 +20,63 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.50)/(INC.51) — the stability rate is a property of the CODEBASE, not of layering; and one line of ordinary library code escaped the whole file
+
+**WHAT THIS ANSWERS.** (INC.47) closed the escape question and left one thing open: is
+**67%** a property of the mechanism or of tsc's own sources? tsc is one codebase's style —
+`export *` barrels, 78 files in a flat directory, one file declaring the whole type
+universe. (INC.50) said to refuse the per-hop closure *"unless the measured stability rate
+on a layered corpus is materially above the 67% measured here"*.
+
+**MEASURED ON THREE CORPORA, 40 real commits each, whole trees materialised per side:**
+
+| corpus | files | rate | escapes |
+|---|---|---|---|
+| tsc `src/compiler` | 78 | **67%** | 0 |
+| `cronstrue` (i18n locale layer, nested `src`) | 52 | **50%** | 0 |
+| `marked` (Lexer -> Tokenizer -> Parser -> Renderer) | 13 | **72%** | 1 -> **0** after (INC.51) |
+
+**SO (INC.50) IS REFUSED BY ITS OWN THRESHOLD.** Layered code is not materially above 67%
+— the two libraries BRACKET it, and the higher of the two carries a bias toward stability
+(18 ours-only diagnostics degrade some of its types to `any`, and a degraded type is
+artificially stable). The transferable statement is that the rate tracks **what a
+codebase's commits touch**, not how layered it is: cronstrue's edits are overwhelmingly to
+the ~44 locale classes that ARE its exported surface — measured, its MOVED cases are real
+signature changes such as `commaOnlyOnX0()` -> `commaOnlyOnX0(s?: string)` — where tsc's
+edits are mostly inside a compiler's function bodies.
+
+**cronstrue IS THE CONTROL ARM AND THAT IS WHY IT WAS CHOSEN.** It is the only library
+outside the corpus on which this checker agrees with tsgo 7.0.2 exactly (0 errors both
+sides) and it has no dependencies, so its fingerprints are computed from types that are
+actually resolved. A library we report errors on would read MORE stable, not less.
+
+**(INC.51) — AND POINTING IT AT REAL CODE FOUND A DEFECT IN ONE RUN.** `marked.ts` escaped,
+and the cause is `export { useExtension as use }`: the walk collected the name an IMPORTER
+sees and looked it up in `locals`, which the file keys by the name it DECLARES. Every
+renaming export missed, read as "an exported name with no file-level symbol", and escaped
+the WHOLE file — so every edit to it rebuilt the whole program forever, and the export's
+type was never hashed. tsc's own 78 sources never use the shape, so the eight dashboard
+profiles are structurally blind to it. Fixed by carrying the two names separately, with
+three pins; the third is the interesting one, because it pins a DELIBERATE conservatism:
+renaming the LOCAL still moves the hash (a function's type carries its declaration's name),
+and dropping declaration names would make two structurally identical classes hash equal —
+which is unsound, since a class with a `private` member is nominally typed.
+
+**AND THE SAME LAW APPEARED TWICE MORE: REMOVING AN ESCAPE BUYS NOTHING.** marked's escape
+went 1 -> 0 and its rate stayed at **72%**, exactly as `types.ts`'s removal left tsc's at
+67%. On both corpora the file that could not be summarised was also a file whose surface
+genuinely moved. An escape is a conservative label on a file that is *changing a lot* —
+which is why it looks like a cause and is not one.
+
+**WHAT THIS MEANS FOR THE ARC.** Two thirds of edits (67% / 72%) and half of cronstrue's are
+answered from a ~110 ms narrowed build instead of a ~5 s rebuild. The remaining third are
+commits that genuinely move an exported signature, and no refinement of the FINGERPRINT can
+serve them — only re-checking fewer dependents can, which is the closure (INC.35) measured
+at 100% of tsc's characters and this round refuses on the library corpora too.
+
+**GATES.** Suite **16,470 / 0 / 3** (+4 over 16,466 — exactly the (INC.51) pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
 ### Round (INC.47) — the fingerprint walk is now LINEAR and the escape class is empty; the 87.5% ceiling it was aimed at did not exist
 
 **WHAT LANDED.** The exported-signature walk no longer recurses. Every type reachable from
@@ -3387,8 +3444,16 @@ RHS, and the merged-member CONTRADICTION direction.
   checkpoint's working directory, which `SystemVfs.workingDirectory` can now re-install).
   **Decide which artifact the embedding API ships on, then re-take this one cell.**
 
-- [ ] **(INC.50) — PROMOTED BY (INC.47) TO THE ARC'S NEXT ITEM, AND ITS QUESTION IS NOW
-  SHARPER: THE 67% IS NOT IMPROVABLE ON *THIS* CORPUS BY ANY MECHANISM, SO THE ONLY OPEN
+- [x] **(INC.50) MEASURED AND REFUSED BY ITS OWN THRESHOLD 2026-08-29 — LAYERED CODE IS
+  **NOT** MATERIALLY ABOVE 67%: `cronstrue` reads **50%** and `marked` **72%**, bracketing
+  tsc's 67%, and the higher arm carries a bias TOWARD stability (18 ours-only rows degrade
+  some of its types to `any`).** The rate tracks what a codebase's commits TOUCH rather
+  than how layered it is — cronstrue's edits are to the locale classes that ARE its
+  surface. `scripts/inc50-stability-lib.sh` is the harness (any repo via LIB/REPO/TSCONFIG/
+  PKGJSON) and it found (INC.51) in one run. **The per-hop closure stays refused**: the
+  residual third are commits that genuinely move a signature, so only re-checking fewer
+  DEPENDENTS can serve them, which is what (INC.35) measured at 100% of tsc's characters.
+  ORIGINAL ENTRY, whose question is now answered: THE 67% IS NOT IMPROVABLE ON *THIS* CORPUS BY ANY MECHANISM, SO THE ONLY OPEN
   QUESTION IS WHETHER ORDINARY LAYERED CODE HAS A HIGHER RATE.** (INC.47) removed every
   escape and moved the rate by nothing, with all 40 verdicts identical — so the residual
   33% is 13 commits that each genuinely move an exported signature, and no fingerprint

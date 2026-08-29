@@ -2492,8 +2492,15 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    stability runner's own summary line (`if (escaped)` counts every case that TOUCHED an
    escaping file); the real ceiling was 70%. **So the residual 33% is 13 commits that each
    genuinely move a signature, and no refinement of the fingerprint can serve them** — the
-   only remaining question is whether ordinary LAYERED code has a higher rate than one
-   compiler's own sources (§ (INC.50)).
+   only remaining question was whether ordinary LAYERED code has a higher rate than one
+   compiler's own sources — **and it does not**. Measured on 40 real commits each:
+   `cronstrue` **50%**, tsc **67%**, `marked` **72%**, so the two libraries bracket the
+   compiler and (INC.50)'s per-hop closure is refused by its own threshold. The rate
+   tracks what a codebase's commits TOUCH, not how it is layered: cronstrue's edits are to
+   the locale classes that ARE its exported surface. `cronstrue` is the control arm
+   because it is the one library this checker agrees with tsgo on exactly — a library we
+   report errors on has types degraded to `any`, and a degraded type is artificially
+   stable.
 
    **What (INC.47) did buy is soundness.** The previous walk bounded its recursion with a
    depth cap of 24 and hashed everything below it as a single constant — a MISSED
