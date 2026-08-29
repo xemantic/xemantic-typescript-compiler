@@ -17,7 +17,10 @@ were empty whatever either build walked — one file carrying a diagnostic and s
 neither name takes it to **2 RED**. Arm b3 (never narrow) is **UNDISCRIMINATED and
 recorded as such**: the change is equivalence-preserving by construction, so what stands
 in its place is one pin on the shipped DEFAULT with no mode install in it ((INC.16)'s
-lesson). **GATES.** Suite ****16,440 / 0 / 3** (+18 over the session's 16,422 baseline, exactly the new pins)**; rename differential **EQUIVALENT** — 8 carets,
+lesson). **MEASURED**: an ordinary rename is **~1.0-1.3 s against ~15 s (12-14.5x)** —
+`emitFiles` 2 of 78 files at 1,304 ms, `transformNodes` 3 of 78 at 1,025,
+`checkSourceElement` 1 of 78 (but that file is `checker.ts`) at 4,725.
+**GATES.** Suite **16,440 / 0 / 3** (+18 over the session's 16,422 baseline, exactly the new pins); rename differential **EQUIVALENT** — 8 carets,
 7 narrowed, 6 producing an APPLICABLE plan, 1,691 edits compared plan for plan, 0
 diverged, 56.5 s against 114.2 s; three ablation arms b1 **1 RED** / b2 **2 RED** / b3
 undiscriminated with a reason.
@@ -43,7 +46,7 @@ it holds no backslash at all (29 of 78 do, carrying 78.2% of the characters). **
 ablation's honest half**: arm a3 reddens only the REFUSAL pins, so the escape guards are
 CONSERVATISM — kept because tsc answers **6** references where we answer **2** on a
 `export { renamed as default }` edge, which is now pinned so the day it closes is loud.
-**GATES.** Suite ****16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins)**; reference differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names);
+**GATES.** Suite **16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins); reference differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names);
 four ablation arms, four DISTINCT red sets; `cost_gate.py` / `huge_methods.py` are CONTROLS here (no `-core` source
 touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
 (`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing

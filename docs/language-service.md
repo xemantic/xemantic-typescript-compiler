@@ -1830,6 +1830,7 @@ On this repo's own compiler profile — tsc's 78 source files, 9,977,097 charact
 | query | builds | wall | moved since round 930? |
 |---|---|---|---|
 | `referencesAt`, for reference — **(INC.44)** | 1 | 0.5 – 4.9 s narrowed, 8.8 – 9.6 s in the fallback | § 10b |
+| `renameAt` — an ordinary name, **(INC.45)** | 2 | **1.0 – 1.3 s** | **≈12 – 14.5x** |
 | `renameAt` — `SyntaxKind`, clean, i.e. a name in 49 of 78 files | 2 | **20.0 – 21.3 s** | see (INC.45) |
 | `renameAt` — `SyntaxKind`, dirty | 3 | **25.0 – 26.0 s** | see (INC.45) |
 | a refusal decided on syntax alone | **0** | microseconds | — |
@@ -1869,6 +1870,20 @@ the second one exists.**
 **What still renames through the whole-program sweep** is exactly § 10b's refusal list:
 a symbol reached through a default export, an `export =`, an `import x = require(…)` or
 a namespace binding.
+
+**Measured**, both arms interleaved in one process at the same caret, renaming to a name
+the program does not contain (`RenameNarrowingCostMainKt`; `partition` is the counter
+that transfers, the milliseconds are wall time on one box and are pinned by nothing):
+
+| caret | edits | partition | narrowed | whole-program |
+|---|---:|---|---|---|
+| `emitFiles` | 4 | **2 of 78** | **1,304 ms** | 15,933 ms |
+| `transformNodes` | 6 | **3 of 78** | **1,025 ms** | 14,871 ms |
+| `checkSourceElement` | 71 | **1 of 78** — but that file is `checker.ts` | **4,725 ms** | 15,198 ms |
+
+So an ordinary rename is **~1.0 – 1.3 s against ~15 s (12 – 14.5x)**, and one confined to
+`checker.ts` is 3.2x. Both of a rename's builds are narrowed, which is why the ratios are
+close to the reference ones rather than half of them.
 
 `scripts/rename-narrowing-differential.sh` is the gate — it compares whole
 `RenamePlan`s, and prints `applicable=` beside `narrowed=` because two REFUSALS compare
@@ -2274,7 +2289,8 @@ the 2026-08-24 provenance the rest of the table carries.**
 | `referencesAt` — one file, but that file is `checker.ts` | 1 clean, 2 dirty | 8.3 – 10.2 s | **1,940 ms** | ≈4.8x |
 | `referencesAt` — `SyntaxKind`, imported into 49 of 78 files | 1 clean, 2 dirty | 8.3 – 10.2 s | **4,904 ms** | ≈1.85x |
 | `referencesAt` — a spelling the closure cannot bound | 1 clean, 2 dirty | 8.3 – 10.2 / 13.2 – 14.8 s | **8.8 – 9.6 / 13.2 – 13.9 s** | NO — the fallback, unchanged |
-| `renameAt` (`SyntaxKind`, 9,827 edits) | 2, 3 dirty | 21.0 / 19.6 – 26.7 s | **20.0 – 21.3 / 25.0 – 26.0 s** | **NO — whole-program by design** |
+| `renameAt` — an ordinary name, **(INC.45)** | 2, 3 dirty | — | **1.0 – 1.3 s** | **≈12 – 14.5x** |
+| `renameAt` (`SyntaxKind`, 9,827 edits) | 2, 3 dirty | 21.0 / 19.6 – 26.7 s | **20.0 – 21.3 / 25.0 – 26.0 s** | the worst case, and the fallback |
 | a refusal decided on syntax alone | **0** | microseconds | microseconds | = |
 
 **A REAL keystroke costs the narrowed path nothing extra**, which is the row an

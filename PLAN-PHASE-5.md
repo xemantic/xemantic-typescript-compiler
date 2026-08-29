@@ -72,7 +72,7 @@ And two ablation arms were lost to a second `gradlew` starting while the first w
 still running (`Unable to delete directory …/classes/kotlin/jvm/main`), which is
 CLAUDE.md's one-gradle-per-box rule collected again.
 
-**GATES.** Suite ****16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins)**; differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names); `cost_gate.py` and `huge_methods.py` are CONTROLS here, not gates — nothing in
+**GATES.** Suite **16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins); differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names); `cost_gate.py` and `huge_methods.py` are CONTROLS here, not gates — nothing in
 `-core` was touched — and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
 (`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
 run-to-run residual), `huge_methods.py --fail-over 0` clean.
@@ -3043,7 +3043,11 @@ RHS, and the merged-member CONTRADICTION direction.
   OOM-KILLED — the tell is a harness that stops after its header with no verdict line.
   **+6 pins** (`ProjectRenameNarrowingTest`, plus the shipped-default pin in
   `ProjectReferenceNarrowingTest`); three ablation arms, b1 -> 1 RED, b2 -> 2 RED (after the
-  fixture repair), b3 undiscriminated with a reason. **Suite 16,440 / 0 / 3** (+18 over the
+  fixture repair), b3 undiscriminated with a reason. **MEASURED per symbol**, both arms
+  interleaved in one process: `emitFiles` **2 of 78 files, 1,304 ms against 15,933**;
+  `transformNodes` 3 of 78, **1,025 ms against 14,871**; `checkSourceElement` 1 of 78 (but
+  that file is `checker.ts`), **4,725 ms against 15,198** — so an ordinary rename is
+  **~1.0-1.3 s against ~15 s (12-14.5x)**. **Suite 16,440 / 0 / 3** (+18 over the
   session's re-verified 16,422 baseline, exactly the new pins).
 
 - [ ] **(INC.43) THE 213 ROWS (INC.42) DID NOT CLOSE — AND THEY ARE NOT WHAT THE QUEUE HAS
