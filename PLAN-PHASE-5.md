@@ -3047,7 +3047,21 @@ RHS, and the merged-member CONTRADICTION direction.
   interleaved in one process: `emitFiles` **2 of 78 files, 1,304 ms against 15,933**;
   `transformNodes` 3 of 78, **1,025 ms against 14,871**; `checkSourceElement` 1 of 78 (but
   that file is `checker.ts`), **4,725 ms against 15,198** — so an ordinary rename is
-  **~1.0-1.3 s against ~15 s (12-14.5x)**. **Suite 16,440 / 0 / 3** (+18 over the
+  **~1.0-1.3 s against ~15 s (12-14.5x)**.
+  **SUCCESSOR, per the WORK ORDER note — a round must name one.** With (INC.44)/(INC.45)
+  landed, the ONLY interactive operation left that is whole-program in every case is
+  project-wide `diagnostics()` at 4,864-5,096 ms per edit, and it is **owner-closed as
+  (INC.35)** with a stated re-open condition this session's directive does not meet: "RE-
+  OPENABLE ONLY on an owner directive naming a LAYERED corpus to grade it on". Round 772's
+  measurement is why — tsc's own sources are `export *` barrels, so a reverse-dependency
+  closure reports `77/78` for a LEAF and buys nothing on the very profile every gate here
+  uses. **The (LIB.\*) screened libraries (knip, jsonrepair, cronstrue) are the corpora that
+  could grade it**, so the decision the owner would be making is which one, not whether the
+  mechanism works. Until then the named successors are (INC.39) (the per-handler spine cost
+  under a single-file partition, still unpriced on its own terms) and (INC.33)'s unmeasured
+  half — the PREPARE-AMORTISED case for wiring `completionsAt`/`signatureHelpAt` to
+  `prepared`, which neither (INC.32) nor (INC.33) measured.
+  **Suite 16,440 / 0 / 3** (+18 over the
   session's re-verified 16,422 baseline, exactly the new pins).
 
 - [ ] **(INC.43) THE 213 ROWS (INC.42) DID NOT CLOSE — AND THEY ARE NOT WHAT THE QUEUE HAS
