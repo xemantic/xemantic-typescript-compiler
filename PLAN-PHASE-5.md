@@ -20,6 +20,71 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.48) — the incremental state outlives the process, and a restart is 60x
+
+**WHAT LANDED.** `Project.saveState()` / `restoreState()`, plus `ProjectStateSnapshot` in
+core. (INC.46) made project-wide diagnostics incremental WITHIN a process and every bit of
+that state died with it: an IDE restart, a plugin reload or a daemon recycle paid a
+whole-program build for a tree nobody had touched. The snapshot carries what has to
+survive — export signatures, escapes, the program's file list, that build's diagnostics,
+and a content hash per input — so the next process starts at the (INC.46) gate instead of
+at a rebuild.
+
+**MEASURED on tsc's own 78 sources (`scripts/inc48-restart-cost.sh`), every arm asserted to
+agree ROW FOR ROW:**
+
+| arm | warm | COLD process |
+|---|---|---|
+| `cold-open` — what a host pays today on every restart | 5,855 ms | 9,625-9,844 ms |
+| `restored-clean` — snapshot restored, nothing changed | **94 ms (62x)** | **155-175 ms (~60x)** |
+| `restored-edited` — one file changed on disk since | 259 ms (23x) | — |
+
+The snapshot is **47 KB** for a 78-file project. **The cold column is the one that
+matters and it is nearly as good as the warm one**, which was not obvious: an IDE restart
+pays the JIT ramp, and (INC.49) measured ~18 s of a 23 s first query as exactly that. It
+barely touches the restored path, because that path never checks the whole program —
+there is no ramp to pay for work that is not done. (The 9.6-9.8 s cold-open here is not
+(INC.49)'s 23.3 s; the conditions differ and the difference is not decomposed.)
+
+**IT WRITES NO FILE, DELIBERATELY.** `encode`/`decode` answer and take a string, so the
+host decides where — and whether — its caches live. An embedding API that dropped a file
+into somebody's source tree unasked would be making that decision for it, and the CLI's
+`--incremental` (`tsconfig.xtsbuildinfo`, INV.7(d3)) already serves callers who want the
+other convention.
+
+**EVERY PART OF THE CLAIM A SNAPSHOT CARRIES IS CHECKED, because skipping any of it is a
+stale answer**: the compiler build id (and never a `.dirty`/`unknown` one — two dirty dev
+trees share an id without sharing behaviour), the config path, a CONTENT hash per file
+(never mtime — round 871), and **the `.json` INPUTS as well as the sources**. That last is
+not a nicety: a changed `tsconfig` or a `package.json` whose `type` decides a module
+format ((CHK.29)) makes every stored row suspect rather than one file's, so it refuses the
+restore rather than narrowing it. `OverlayVfs` records which `.json` files a build actually
+read, because that set is not a function of the project path (`extends`, nodenext scopes).
+
+**AND THE STALENESS CASE NO CONTENT HASH CAN SEE HAS ITS OWN MECHANISM.** A file ADDED
+while the process was down is in no stored hash and in no stored list, and it changes what
+every importer resolves. So a restored state is NOT TRUSTED until a build has re-crawled
+and found the same program: even a clean project runs the gate once, with an EMPTY
+partition, which is the 94-155 ms floor rather than the 5.9 s rebuild. **Ablated**: the
+naive "trust the snapshot when nothing changed" implementation reddens exactly two pins —
+`a file added while the process was down is not missed` and `a restored state answers its
+first query through the gate` — and nothing else.
+
+**A SEAM THAT EXISTS TO STOP A PIN SET BEING VACUOUS IN ONE ENVIRONMENT.** A development
+tree's build id ends in `.dirty` and is correctly refused, so without
+`allowUnstableBuildIdForTesting` every pin here would be vacuous locally and exercise the
+real path only in CI — a pin that passes for opposite reasons in two environments is worse
+than no pin. It is installed and restored per test, it does not weaken the id EQUALITY
+check (`a snapshot from a different compiler build is refused` is the pin that says so),
+and the shipped default is pinned by a test of its own ((INC.16)'s law: a mode every pin
+installs is a default pinned by nothing).
+
+**13 pins in three families** — value, cost, refusal — with value paired to cost by
+construction, because an implementation that restored nothing passes every value pin.
+
+**GATES.** Suite **16,483 / 0 / 3** (+13, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
 ### Round (INC.50)/(INC.51) — the stability rate is a property of the CODEBASE, not of layering; and one line of ordinary library code escaped the whole file
 
 **WHAT THIS ANSWERS.** (INC.47) closed the escape question and left one thing open: is
@@ -3419,7 +3484,14 @@ RHS, and the merged-member CONTRADICTION direction.
   `scripts/inc46-stability.sh` (the rate — the number that must move, and the refusal threshold
   is that it does not).
 
-- [ ] **(INC.48) THE EXPORT SURFACE DIES WITH THE PROCESS, AND tsgo's DOES NOT — an IDE
+- [x] **(INC.48) LANDED 2026-08-29 — `Project.saveState()`/`restoreState()`, and a restart
+  is **60x**: 155-175 ms against 9,625-9,844 ms in a COLD process, 94 ms against 5,855 warm,
+  with a 47 KB snapshot and every arm agreeing row for row.** It writes no file (the host
+  decides where its caches live); it validates the compiler build id, the config path, a
+  CONTENT hash per file AND per `.json` input; and a restored state is not trusted until
+  one build has re-crawled the project, because a file ADDED while the process was down is
+  in no content hash — ablated, that is the pin the naive implementation fails.
+  ORIGINAL ENTRY: THE EXPORT SURFACE DIES WITH THE PROCESS, AND tsgo's DOES NOT — an IDE
   restart pays a FULL build where tsgo pays a `.tsbuildinfo` read.** Ours is `Project.surface`,
   in-memory, dropped at `close()`. Theirs is serialised and re-read, which is what makes their
   **182 ms no-op** possible from a cold process at all. **The prize is bounded and known**: it
@@ -3431,8 +3503,14 @@ RHS, and the merged-member CONTRADICTION direction.
   refuse a file written by a different build. **Measure the serialise/deserialise cost against
   the 136 ms it replaces before building the invalidation.**
 
-- [ ] **(INC.49) COLD START IS THE LANGUAGE SERVICE'S WORST NUMBER BY FAR — 23,266 ms against
-  tsgo's 1,631 ms, and it is an ARTIFACT-STACK problem rather than a compiler one.** Measured
+- [ ] **(INC.49) — NARROWED BY (INC.48): THE *RESTART* HALF IS CLOSED, AND WHAT IS LEFT IS
+  THE FIRST-EVER OPEN.** With a snapshot restored, a cold process answers its first query in
+  **155-175 ms** rather than 9.6 s, because the JIT ramp barely touches a path that never
+  checks the whole program — so "cold start" is only the artifact-stack problem below for a
+  project this host has NEVER seen. Re-take the cell with that split before spending an
+  artifact decision on it. ORIGINAL ENTRY: COLD START IS THE LANGUAGE SERVICE'S WORST NUMBER
+  BY FAR — 23,266 ms against tsgo's 1,631 ms, and it is an ARTIFACT-STACK problem rather
+  than a compiler one.** Measured
   this round on tsc's own 78 sources: the first `diagnostics()` in a fresh JVM is **23.3 s**,
   the same build warm is **5,352 ms**, so **~18 s is JVM start plus the JIT ramp**. That is the
   first thing an integrator sees and it is 14x tsgo's whole cold check. **Nothing in the

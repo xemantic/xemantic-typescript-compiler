@@ -2502,6 +2502,18 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    report errors on has types degraded to `any`, and a degraded type is artificially
    stable.
 
+   **AND SINCE (INC.48) IT SURVIVES THE PROCESS.** `Project.saveState()` encodes the
+   signatures, the escapes, the program's file list, that build's diagnostics and a
+   content hash per input; `restoreState()` adopts them, so a reopened project starts at
+   the gate instead of at a rebuild. Measured on the same 78 sources, every arm agreeing
+   row for row: warm **5,855 -> 94 ms (62x)** with nothing changed and 259 ms with a file
+   changed on disk; in a COLD process — a real restart — **9,625-9,844 -> 155-175 ms**,
+   from a 47 KB snapshot. It writes no file: the host decides where its caches live. Every
+   part of the claim is validated (compiler build id, config path, a content hash per file
+   AND per `.json` input), and a restored state is not trusted until one build has
+   re-crawled the project, because a file ADDED while the process was down appears in no
+   content hash.
+
    **What (INC.47) did buy is soundness.** The previous walk bounded its recursion with a
    depth cap of 24 and hashed everything below it as a single constant — a MISSED
    invalidation, i.e. a stale project-wide diagnostic, for any exported type deeper than

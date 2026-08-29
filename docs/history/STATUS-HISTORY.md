@@ -1,3 +1,33 @@
+**(INC.46)(1) — THE EXPORTED-SIGNATURE FINGERPRINT IS BUILT AND MEASURED, AND ITS WALK
+HAD TO BE FOUND BY MEASUREMENT THREE TIMES (2026-08-29).** The queue's step-(1) threshold
+("single-digit ms on `types.ts`'s 874 exports, or stop") is met with room: **136 ms
+whole-program** on a 5,215 ms rebuild, and **0 ms on 23 of 24 narrowed builds** — a
+narrowed build fingerprints only its partition, so the per-EDIT cost of the gate is under
+a millisecond against the 108-113 ms build it rides on. **The two controls that decide
+feasibility are not cost figures**: two builds of identical text agree **78/78** (the
+id-freedom claim — a hash carrying a `Type.id` passes every structural test and then
+invalidates everything, always), and a narrowed build's fingerprint equals the
+whole-program one **24/24** (the CONVERGENCE claim — the baseline comes from a
+whole-program build and the edit's answer from a narrowed one, so a systematic
+disagreement means every first edit falls back forever). **THE WALK'S SHAPE WAS THE REAL
+QUESTION.** A path-only cycle guard is EXPONENTIAL in DAG width — 159 s inside one build,
+found by an external `jcmd Thread.print` — and closed-subtree memoization is still not
+enough, because tsc's resolved-type graph is one giant SCC (`Node.parent: Node` plus
+hundreds of mutually recursive interfaces): **6 of 78 files unfinished inside a
+2,000,000-node budget, among them `checker.ts`, `binder.ts` and `emitter.ts`**. What works
+is CUTTING at the file boundary — a type declared elsewhere is unchanged by construction
+while only this file is edited, so it is keyed by its declaration's `(fileName, pos, end)`
+and not descended into. That took the arm from 719 ms / 6 escapes / **4-of-24** agreement
+to **136 ms / 2 escapes / 24-of-24**. **AND THE QUEUE CENSUSED THE WRONG QUANTITY**: cost
+tracks the transitive type CLOSURE, not the export COUNT, and the two are near-inversely
+related — `utilities.ts`'s 692 exports are 1.6 ms where `types.ts`, which declares the
+SCC, is 129.6 ms. Steps (2) (the stability RATE, which needs a deepened TypeScript clone)
+and (3) (wiring the invalidation) are deliberately NOT in this commit — the order of work
+is measure-first and (2) can still refuse the whole thing. **GATES.** Suite **16,452 / 0 /
+3** (+12 over 16,440, exactly the new pins); `cost_gate.py` exit 0 with a largest move of
+**+0.08%** (the profile's standing residual — the expected answer, since the walk is off
+by default and a strict no-op then); `huge_methods.py --fail-over 0` **0 over limit**.
+
 **(INC.46) QUEUED AND PRICED — AND MEASURING IT REFUTED THE QUEUE'S OWN EXPLANATION OF WHY
 PROJECT-WIDE DIAGNOSTICS CANNOT BE INCREMENTAL (2026-08-29, owner's idea).** The standing
 story, from round 772 and (INC.35), is that a dependency closure buys nothing on tsc because

@@ -1,5 +1,34 @@
 # Status
 
+**(INC.48) — THE INCREMENTAL STATE OUTLIVES THE PROCESS, AND A RESTART IS **60x**
+(2026-08-29).** (INC.46) made project-wide diagnostics incremental within a process and
+every bit of that state died with it: an IDE restart, a plugin reload or a daemon recycle
+paid a whole-program build for a tree nobody had touched. `Project.saveState()` encodes
+what has to survive — export signatures, escapes, the program's file list, that build's
+diagnostics and a content hash per input — and `restoreState()` adopts it, so the next
+process starts at the (INC.46) gate instead of at a rebuild. **MEASURED on tsc's own 78
+sources, every arm asserted to agree ROW FOR ROW**: warm, **5,855 ms -> 94 ms (62x)**
+clean and 259 ms (23x) with a file changed on disk; in a **COLD process — which is what a
+restart actually is — 9,625-9,844 ms -> 155-175 ms (~60x)**, the snapshot being **47 KB**
+for a 78-file project. The cold column is the one that matters and it is nearly as good as
+the warm one, which was not obvious: an IDE restart pays the JIT ramp, and (INC.49)
+attributed ~18 s of a 23 s first query to exactly that — but the ramp barely touches a path
+that never checks the whole program. **IT WRITES NO FILE**: `encode`/`decode` answer and
+take a string, so the host decides where its caches live; the CLI's `--incremental`
+(`tsconfig.xtsbuildinfo`, INV.7(d3)) remains the convention for callers who want the other
+one. **EVERY PART OF THE CLAIM IS CHECKED, because skipping any of it is a stale answer**:
+the compiler build id (never a `.dirty`/`unknown` one — two dirty trees share an id without
+sharing behaviour), the config path, a CONTENT hash per file (never mtime — round 871), and
+the `.json` INPUTS as well as the sources, since a changed tsconfig or a `package.json`
+whose `type` decides a module format makes every stored row suspect rather than one file's.
+**AND THE STALENESS CASE NO HASH CAN SEE HAS ITS OWN MECHANISM**: a file ADDED while the
+process was down is in no stored hash and no stored list, so a restored state is not
+trusted until a build has re-crawled and found the same program — even a clean project runs
+the gate once, with an EMPTY partition. Ablated, the naive "trust the snapshot" version
+reddens exactly two pins and nothing else. **GATES.** Suite **16,483 / 0 / 3** (+13,
+exactly the new pins); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean;
+warning-clean.
+
 **(INC.50)/(INC.51) — THE STABILITY RATE IS A PROPERTY OF THE CODEBASE, NOT OF LAYERING;
 AND ONE LINE OF ORDINARY LIBRARY CODE ESCAPED THE WHOLE FILE (2026-08-29).** (INC.47) left
 one question: is 67% a property of the mechanism or of tsc's own sources? Measured on three
@@ -117,33 +146,3 @@ in `ExportSignatures.whole` — a full rebuild, never a stale diagnostic. **GATE
 **16,453 / 0 / 3** (+13 over 16,440: the 12 step-(1) pins plus the comment-mention pin this
 defect earned); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean. Step (3),
 wiring the invalidation into `Project.diagnostics()`, is now the only item left.
-
-**(INC.46)(1) — THE EXPORTED-SIGNATURE FINGERPRINT IS BUILT AND MEASURED, AND ITS WALK
-HAD TO BE FOUND BY MEASUREMENT THREE TIMES (2026-08-29).** The queue's step-(1) threshold
-("single-digit ms on `types.ts`'s 874 exports, or stop") is met with room: **136 ms
-whole-program** on a 5,215 ms rebuild, and **0 ms on 23 of 24 narrowed builds** — a
-narrowed build fingerprints only its partition, so the per-EDIT cost of the gate is under
-a millisecond against the 108-113 ms build it rides on. **The two controls that decide
-feasibility are not cost figures**: two builds of identical text agree **78/78** (the
-id-freedom claim — a hash carrying a `Type.id` passes every structural test and then
-invalidates everything, always), and a narrowed build's fingerprint equals the
-whole-program one **24/24** (the CONVERGENCE claim — the baseline comes from a
-whole-program build and the edit's answer from a narrowed one, so a systematic
-disagreement means every first edit falls back forever). **THE WALK'S SHAPE WAS THE REAL
-QUESTION.** A path-only cycle guard is EXPONENTIAL in DAG width — 159 s inside one build,
-found by an external `jcmd Thread.print` — and closed-subtree memoization is still not
-enough, because tsc's resolved-type graph is one giant SCC (`Node.parent: Node` plus
-hundreds of mutually recursive interfaces): **6 of 78 files unfinished inside a
-2,000,000-node budget, among them `checker.ts`, `binder.ts` and `emitter.ts`**. What works
-is CUTTING at the file boundary — a type declared elsewhere is unchanged by construction
-while only this file is edited, so it is keyed by its declaration's `(fileName, pos, end)`
-and not descended into. That took the arm from 719 ms / 6 escapes / **4-of-24** agreement
-to **136 ms / 2 escapes / 24-of-24**. **AND THE QUEUE CENSUSED THE WRONG QUANTITY**: cost
-tracks the transitive type CLOSURE, not the export COUNT, and the two are near-inversely
-related — `utilities.ts`'s 692 exports are 1.6 ms where `types.ts`, which declares the
-SCC, is 129.6 ms. Steps (2) (the stability RATE, which needs a deepened TypeScript clone)
-and (3) (wiring the invalidation) are deliberately NOT in this commit — the order of work
-is measure-first and (2) can still refuse the whole thing. **GATES.** Suite **16,452 / 0 /
-3** (+12 over 16,440, exactly the new pins); `cost_gate.py` exit 0 with a largest move of
-**+0.08%** (the profile's standing residual — the expected answer, since the walk is off
-by default and a strict no-op then); `huge_methods.py --fail-over 0` **0 over limit**.
