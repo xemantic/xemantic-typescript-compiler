@@ -77,12 +77,42 @@ object LexDefer {
     /** Files `computeAllEnumValues` did not walk (or, under [verifySkip], would not have). */
     var skippedFiles: Int = 0
 
+    /**
+     * (INC.52) Files whose FILE-LEVEL symbol table `computeAllEnumValues` did not walk —
+     * the second of its two loops, and the one that was still visiting every symbol of
+     * every file to find the program's enums.
+     *
+     * Counted separately from [skippedFiles] because the two loops are skipped by
+     * DIFFERENT predicates over different populations: that one asks whether a file's
+     * block-scoped declarations reach a fresh INV.2(c) scope, this one whether the file's
+     * bind minted any enum symbol at all.
+     */
+    var localsSkippedFiles: Int = 0
+
+    /** (INC.52) Enum symbols found in a file the [localsSkippedFiles] predicate skipped. */
+    var localsSkipViolations: Int = 0
+
+    /**
+     * (INC.52) Symbols the second loop of `computeAllEnumValues` VISITED — the
+     * deterministic instrument for what the skip removes.
+     *
+     * A per-pass TIME cannot decide a 6 ms change against a floor whose own draws span
+     * 30 ms (CLAUDE.md: counters decide, wall time confirms). This counts the population
+     * instead, and it needs no second binary: under [verifySkip] the loop walks
+     * everything, so one build reports both arms — the skip's population and the one it
+     * replaced.
+     */
+    var localsSymbolsVisited: Long = 0
+
     /** Scope-space Enum/TypeAlias symbols found in a file the skip passed over. */
     var skipViolations: Int = 0
 
     fun resetCounters() {
         skippedFiles = 0
         skipViolations = 0
+        localsSkippedFiles = 0
+        localsSkipViolations = 0
+        localsSymbolsVisited = 0
         lazyBuilds = 0
         eagerBuilds = 0
         forcedBy.clear()

@@ -57,6 +57,26 @@ class BinderResult(
      */
     val declaresScopeEnum: Boolean,
     /**
+     * (INC.52) Whether this file's bind minted any `enum` SYMBOL — the projection that
+     * lets `init:computeAllEnumValues` skip a file's whole symbol table instead of
+     * walking it to find out.
+     *
+     * Its second loop visits every file's `locals` and recurses through every namespace's
+     * `exports` looking for `SymbolFlags.Enum`, which on tsc's own 78 sources is the
+     * single most expensive pass of the incremental FLOOR — a cost every editor query
+     * pays whether or not it is checking anything.
+     *
+     * EXACT rather than syntactic: it is set at `bindEnumDeclaration`, the one site that
+     * mints a conventional enum symbol (the scope-space ones are the other loop's
+     * business, and [declaresScopeEnum] covers those). So a file this is false for binds
+     * no enum symbol, and every enum symbol in the program is minted by SOME file whose
+     * flag is therefore true — which is what makes the skip an identity rather than an
+     * approximation, since `enumValues` is keyed by symbol ID and a merged symbol is one
+     * object shared by both files' tables (round 884). `LexDefer.verifySkip` is the
+     * positive control: it keeps walking and counts what the skip would have missed.
+     */
+    val bindsEnum: Boolean,
+    /**
      * (INC.16) The names of this file's `type` declarations that reach a FRESH INV.2(c)
      * scope — exactly the names `declareLexical` will mint a `TypeAlias`-flagged scope
      * symbol for, read off the declarations instead of off the scopes.
@@ -211,9 +231,16 @@ class Binder(private val options: CompilerOptions) {
     /** The current container symbol (namespace/module/class) for setting parent references. */
     private var currentContainer: Symbol? = null
 
+    /**
+     * (INC.52) Set by [bindEnumDeclaration] for the file in flight — see
+     * [BinderResult.bindsEnum]. Reset per `bind`, like every other per-file field here.
+     */
+    private var bindsEnum: Boolean = false
+
     fun bind(sourceFile: SourceFile): BinderResult {
         val fileLocals = symbolTable()
         currentScope = fileLocals
+        bindsEnum = false
         // (INC.16) fresh per file — the deferred scope builder captures THIS one.
         val lexOwners = HashMap<Int, Symbol>()
         lexOwnerSymbols = lexOwners
@@ -232,6 +259,7 @@ class Binder(private val options: CompilerOptions) {
         val result = BinderResult(
             sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates,
             declaresScopeEnum = scopeTypes.first,
+            bindsEnum = bindsEnum,
             scopeTypeAliasNames = scopeTypes.second,
         ) {
             // The span stays [FrontEnd.BIND_LEX] wherever the build lands, so a
@@ -412,6 +440,9 @@ class Binder(private val options: CompilerOptions) {
     // -----------------------------------------------------------------------
 
     private fun bindEnumDeclaration(decl: EnumDeclaration) {
+        // (INC.52) The one site that mints a conventional enum symbol — see
+        // [BinderResult.bindsEnum].
+        bindsEnum = true
         val isConst = ModifierFlag.Const in decl.modifiers
         var flags = if (isConst) SymbolFlags.ConstEnum else SymbolFlags.RegularEnum
         if (ModifierFlag.Export in decl.modifiers) {

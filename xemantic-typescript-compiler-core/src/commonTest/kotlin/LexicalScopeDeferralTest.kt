@@ -227,4 +227,63 @@ class LexicalScopeDeferralTest {
             LexDefer.verifySkip = savedVerify
         }
     }
+
+    /**
+     * (INC.52) The SECOND loop's projection — `computeAllEnumValues` walked every file's
+     * whole symbol table, recursing through every namespace's `exports`, to find the
+     * program's enums. `BinderResult.bindsEnum` answers that from the bind that already
+     * happened, and on tsc's own 78 sources it skips 45 of them.
+     *
+     * The same positive control as the pin above, for the same reason: a zero violation
+     * count is evidence only beside a non-zero skipped count.
+     */
+    @Test
+    fun `the file-level enum skip fires and passes over no enum symbol`() {
+        val savedVerify = LexDefer.verifySkip
+        LexDefer.verifySkip = true
+        try {
+            diagnose(
+                """
+                // @Filename: noenum.ts
+                export type Top = string;
+                export function g(): number { return 1; }
+                // @Filename: withenum.ts
+                export const enum Direction { Up = 1, Down = 2 }
+                export namespace Nested { export const enum Inner { A = 7 } }
+                """,
+            )
+            assert(LexDefer.localsSkippedFiles > 0)
+            assert(LexDefer.localsSkipViolations == 0)
+        } finally {
+            LexDefer.verifySkip = savedVerify
+        }
+    }
+
+    /**
+     * (INC.52) …and the VALUES still arrive, which is what the skip could break and the
+     * counters above cannot see. A `const enum` member's value reaching a literal-typed
+     * slot is the sharp signal: without it the member is not the literal `1` and the
+     * assignment is an error.
+     *
+     * The NESTED case is the one a wrong predicate gets wrong — a projection that looked
+     * only at a file's top-level statements would skip a file whose only enum lives in a
+     * namespace, and the walk it replaces recurses into `exports` precisely for that.
+     */
+    @Test
+    fun `enum values survive the file-level skip - top-level and nested`() {
+        val diagnostics = diagnose(
+            """
+            // @Filename: noenum.ts
+            export const unrelated: string = "x";
+            // @Filename: e.ts
+            export const enum Direction { Up = 1 }
+            export namespace Nested { export const enum Inner { A = 7 } }
+            // @Filename: use.ts
+            import { Direction, Nested } from "./e";
+            export const top: 1 = Direction.Up;
+            export const nested: 7 = Nested.Inner.A;
+            """,
+        )
+        assert(diagnostics.none { it.code == 2322 })
+    }
 }

@@ -14663,10 +14663,44 @@ class Checker(
         }
         lexicalBlockScopedEnumNames = blockScoped
         lexicalBlockScopedTypeAliasNames = blockScopedAliases
+        // (INC.52) THE SECOND LOOP, and the expensive one: it visited every file's whole
+        // symbol table — recursing through every namespace's `exports` — to find the
+        // program's enums, which on tsc's own 78 sources made this the single dearest
+        // pass of the incremental FLOOR (13.16 ms of 68 ms, i.e. ~19% of what an editor
+        // query costs when it is checking nothing at all).
+        //
+        // `BinderResult.bindsEnum` answers the same question from the bind that already
+        // happened. It is an identity and not an approximation: every conventional enum
+        // symbol is minted at ONE site, `enumValues` is keyed by symbol ID, and a merged
+        // symbol is one object shared by both files' tables (round 884) — so a skipped
+        // file's enums, if it somehow held any, are computed through the file that minted
+        // them. `LexDefer.verifySkip` keeps walking and counts what the skip would have
+        // missed, which is the positive control (INC.16) established for the loop above.
         for (result in binderResults) {
+            if (!result.bindsEnum) {
+                LexDefer.localsSkippedFiles++
+                if (!LexDefer.verifySkip) continue
+            }
             for ((_, symbol) in result.locals) {
+                LexDefer.localsSymbolsVisited++
+                if (!result.bindsEnum) countEnumSkipViolations(symbol)
                 computeEnumValuesRecursive(symbol)
             }
+        }
+    }
+
+    /**
+     * (INC.52) The `--verifyLexSkip` control for the second loop: how many enum symbols a
+     * skipped file's table holds, which must be ZERO or the projection is unsound.
+     *
+     * Deliberately mirrors [computeEnumValuesRecursive]'s own traversal — the population
+     * it is checking is exactly the one that walk would have reached, and a control that
+     * walked a different set would answer a different question.
+     */
+    private fun countEnumSkipViolations(symbol: Symbol) {
+        if (symbol.flags.hasAny(SymbolFlags.Enum)) LexDefer.localsSkipViolations++
+        if (symbol.flags.hasAny(SymbolFlags.Module)) {
+            symbol.exports?.values?.forEach { countEnumSkipViolations(it) }
         }
     }
 

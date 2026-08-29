@@ -74,12 +74,18 @@ fun main(args: Array<String>) {
     LexDefer.resetCounters(); LexDefer.census = true
     val probeFull = full()
     println("COUNTS full  lazy=${LexDefer.lazyBuilds} eager=${LexDefer.eagerBuilds} " +
-        "skipped=${LexDefer.skippedFiles} violations=${LexDefer.skipViolations}")
+        "skipped=${LexDefer.skippedFiles} violations=${LexDefer.skipViolations} " +
+        "localsSkipped=${LexDefer.localsSkippedFiles} " +
+        "localsViolations=${LexDefer.localsSkipViolations} " +
+        "localsVisited=${LexDefer.localsSymbolsVisited}")
     for ((pass, n) in LexDefer.forcedBy) println("FORCEDBY full  $n $pass")
     LexDefer.resetCounters()
     val probeFloor = floor()
     println("COUNTS floor lazy=${LexDefer.lazyBuilds} eager=${LexDefer.eagerBuilds} " +
-        "skipped=${LexDefer.skippedFiles} violations=${LexDefer.skipViolations}")
+        "skipped=${LexDefer.skippedFiles} violations=${LexDefer.skipViolations} " +
+        "localsSkipped=${LexDefer.localsSkippedFiles} " +
+        "localsViolations=${LexDefer.localsSkipViolations} " +
+        "localsVisited=${LexDefer.localsSymbolsVisited}")
     for ((pass, n) in LexDefer.forcedBy) println("FORCEDBY floor $n $pass")
     LexDefer.census = false
 
