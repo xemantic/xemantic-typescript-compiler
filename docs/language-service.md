@@ -179,7 +179,8 @@ you call them.
 | `open` | free | resolves the path; compiles nothing |
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
-| `diagnostics()` / `diagnostics(f)` / `files` | **full build** when dirty, else cached | a second call with no edit in between is free |
+| `diagnostics()` / `diagnostics(f)` | **ONE NARROWED build** after an edit that moved no exported signature; a **full build** otherwise (that costs two: the narrowed gate, then the rebuild); none when clean | (INC.46). 67% of real edits to tsc's own compiler move no signature, and a served edit is **108 – 113 ms against 4,864 – 5,096 ms — a factor of 45**. See § 4b |
+| `files` | **full build** when dirty, else cached | a question about the PROGRAM, which is what a build computes |
 | `diagnosticsOf(files)` | **one NARROWED build** for the FIRST query of a project state; **none** when clean, repeated, a SUBSET of a set already asked about, or (INC.40) about any other file — a live re-entrant checker answers it | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 14 has the provenance) — see § 4a |
 | `prepare(files)` | **ONE NARROWED build**, whatever the file count | checks and captures a whole working set at once, so every later semantic query about any of them is free — see § 3a |
 | `quickInfoAt` | **one NARROWED build per BUFFER**, not per caret | checks only the queried file — **129 – 137 ms at the median file, 38x a full rebuild** on tsc's own sources (2026-08-24); the question asked is the file's span set, so later carets are free (§ 14, `(INC.13)`); free in a `prepare`d file |
@@ -396,6 +397,45 @@ Every build passes `noEmit = true`. A tool that opens a project to ask questions
 about it must never scatter JavaScript through the user's tree as a side effect
 of a query, and with an editor overlay in play the output would correspond to
 unsaved buffers anyway. Emitting stays `ProjectCompiler`'s job.
+
+## 4b. Why `diagnostics()` is usually not a rebuild
+
+`diagnostics()` answers about the whole program, so for a long time it rebuilt the
+whole program — 4.9 s per edit on tsc's own 78 sources. It no longer does.
+
+After an edit, the project asks ONE question: **did the edit move what an importer
+of the edited file can observe?** An edit inside a function body leaves every
+exported signature intact, so no other file's diagnostics can have changed, and the
+answer is the previous build's rows with the edited file's rows replaced — one
+narrowed build. Only an edit that actually moves an exported TYPE forces a rebuild.
+
+This is deliberately **not** a reverse-dependency closure. Measured on tsc's own
+sources, both a file-level and a symbol-level use graph re-check 100% of the
+program's characters at the median edit — those files genuinely use symbols from
+most other files, and the relation is transitive. Asking whether the symbols MOVED
+collapses that to nothing, however dense the graph is.
+
+**What it costs you when the guess is wrong.** A signature-changing edit costs two
+builds instead of one: the narrowed build that discovers the surface moved, then the
+rebuild. Measured over 40 real commits to tsc's own `src/compiler`, 27 of 40 moved
+no signature — so the bet pays about two edits in three.
+
+**When it does not apply at all**, and each is checked rather than assumed: a config
+edit; an edit to a file that was not in the program (a new file changes what every
+importer resolves); an edit that changes the program's file set, such as adding an
+import; and an edit to a file whose export surface cannot be summarised exactly —
+a SCRIPT file (no module syntax, so its top-level names are program-wide), a global
+augmentation, or an export the summary cannot enumerate. Any of these is a plain
+rebuild.
+
+**The guarantee.** The incremental answer is the whole program's answer. It is
+graded as a differential over those 40 real commits — the answer after an edit
+against a project opened fresh on the edited text, row for row — and it agrees on
+all 40, with 27 of them actually answered incrementally rather than falling back.
+Row ORDER is preserved too: the edited file's new rows are spliced where its old
+rows were, not appended.
+
+You do not have to do anything to get this. It is what `diagnostics()` does.
 
 ## 4a. Narrowed diagnostics — the one an editor should wire to
 
@@ -2258,7 +2298,10 @@ in the narrowed rows.
 **The old headline is now false and is retracted.** This section used to open "almost
 every semantic query is a full rebuild". It is not: every caret-scoped query is a
 NARROWED build, and at the median file that is **108 – 113 ms against a 4.9 s rebuild,
-a factor of 45**. What is still a full rebuild is `diagnostics()`; **`referencesAt`
+a factor of 45**. **AND SINCE `(INC.46)` NOTHING IS A FULL REBUILD BY DEFAULT**: project-wide
+`diagnostics()` was the last one, and an edit that moves no exported signature now answers
+from one narrowed build (§ 4b) — 67% of real edits to tsc's own compiler, graded EQUIVALENT
+over 40 of them. **`referencesAt`
 moved in `(INC.44)`** and is narrowed by the SPELLINGS its answer can carry (§ 10b),
 falling back to the whole-program sweep only where that closure cannot be bounded, and
 **`renameAt` moved with it in `(INC.45)`** (§ 10d), its population widened by the NEW
@@ -2269,7 +2312,7 @@ the 2026-08-24 provenance the rest of the table carries.**
 
 | query | builds | round 930 | **2026-08-24** | moved? |
 |---|---|---|---|---|
-| a plain rebuild (`diagnostics()`), for reference | 1 | 5.0 – 5.5 s | **4,864 – 5,096 ms** | **NO — full build by design** |
+| a plain rebuild (`diagnostics()`), for reference | 1 | 5.0 – 5.5 s | **4,864 – 5,096 ms** | **`(INC.46)`: only when a signature MOVED — see § 4b** |
 | `diagnosticsOf(f)` — **median over all 78 files** | 1 narrowed | 1.1 – 1.2 s | **108 – 113 ms** (p90 202 – 219) | **≈10x** |
 | `diagnosticsOf(checker.ts)` — the 3.15 MB extreme | 1 narrowed | 2.7 s | **1,744 – 1,763 ms** | 1.5x |
 | `diagnosticsOf` repeated, or a SUBSET of a set already asked | **0** | 0 | **0 ms** | = |
@@ -2485,14 +2528,21 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    reads **5 spans in 3 files with `narrowRendersMoreAny = 0`**, and in four of those five
    the narrowed arm is the better answer.
 
-   **Project-wide `diagnostics()` is the one thing left, and `(INC.46)` is the route.**
-   Not a dependency closure — a symbol-level use graph was measured on tsc's own sources
-   and re-checks 100% of the program's characters at the median edit, the same as the
-   file-level one, so the `export *` barrels were never the cause. What collapses it is
-   asking whether an edit moved any EXPORTED SIGNATURE: a body-only edit moves none, so
-   no dependent re-checks and the cost is one narrowed build (108 – 113 ms against
-   4,864 – 5,096 ms). See the queue entry for the two hazards, of which the sharp one is
-   that `typeToString` is the wrong hash source in both directions.
+   **Project-wide `diagnostics()` WAS the one thing left, and `(INC.46)` CLOSED IT** —
+   see § 4b. Not a dependency closure: a symbol-level use graph was measured on tsc's own
+   sources and re-checks 100% of the program's characters at the median edit, the same as
+   the file-level one, so the `export *` barrels were never the cause. What collapses it
+   is asking whether an edit moved any EXPORTED SIGNATURE — a body-only edit moves none,
+   so no dependent re-checks and the cost is one narrowed build (108 – 113 ms against
+   4,864 – 5,096 ms). **Measured: 67% of 40 real commits to tsc's own compiler move no
+   signature, and the path is graded EQUIVALENT on all 40 with 27 actually served.**
+
+   **What is left of it, stated:** `types.ts` — the file declaring tsc's whole type
+   universe — cannot be summarised within a bounded walk, because its own declarations
+   form one strongly-connected component that the file-boundary cut does not reach
+   (measured at both a 2 M and a 12 M node budget). It is recorded as an escape, so an
+   edit to it is a plain rebuild, and it accounts for 8 of the 13 fallbacks. **SCC-aware
+   hashing is the one lever between the measured 67% and an 87.5% ceiling.**
 
    **`referencesAt` IS narrowed since `(INC.44)`, and `renameAt` since `(INC.45)`.**
    The sentence that used to stand here — "their claim is about every file, so there
