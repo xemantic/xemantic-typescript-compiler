@@ -64,22 +64,36 @@ import java.io.File
  * Not a gate and not a pin — it asserts only its own non-vacuity.
  */
 fun main(args: Array<String>) {
-    require(args.size >= 2) { "usage: <corpusDir> <projectDir>" }
+    require(args.size >= 2) { "usage: <corpusDir> <projectDir> [srcSubdir]" }
     val corpus = File(args[0])
     val projectDir = File(args[1])
-    val srcCompiler = File(projectDir, "src/compiler")
-    require(srcCompiler.isDirectory) { "no src/compiler under $projectDir" }
+    // (INC.50) The source tree the corpus swaps. Defaults to tsc's own flat
+    // `src/compiler`; a library's is nested, which is why [materialize] recurses.
+    val srcRel = if (args.size > 2) args[2] else "src/compiler"
+    val srcCompiler = File(projectDir, srcRel)
+    require(srcCompiler.isDirectory) { "no $srcRel under $projectDir" }
 
     val cases = corpus.listFiles { f: File -> f.isDirectory }!!.sortedBy { it.name }
     require(cases.isNotEmpty()) { "REFUSED: no cases in $corpus" }
 
-    /** Replaces `src/compiler` wholesale with [tree]'s contents. */
+    /**
+     * Replaces the source tree wholesale with [tree]'s contents.
+     *
+     * (INC.50) RECURSIVE, because a library's sources are nested where tsc's
+     * `src/compiler` is flat — the flat case is unchanged by this, since a tree with
+     * no subdirectories walks the same way.
+     */
     fun materialize(tree: File) {
-        for (f in srcCompiler.listFiles() ?: emptyArray()) if (f.isFile) f.delete()
+        for (f in srcCompiler.walkBottomUp()) {
+            if (f.isFile) f.delete() else if (f != srcCompiler) f.delete()
+        }
         var n = 0
-        for (f in tree.listFiles() ?: emptyArray()) {
+        for (f in tree.walkTopDown()) {
             if (!f.isFile) continue
-            f.copyTo(File(srcCompiler, f.name), overwrite = true)
+            val rel = f.relativeTo(tree).path
+            val target = File(srcCompiler, rel)
+            target.parentFile?.mkdirs()
+            f.copyTo(target, overwrite = true)
             n++
         }
         require(n > 0) { "REFUSED: empty tree $tree" }
@@ -120,6 +134,23 @@ fun main(args: Array<String>) {
         val (fpBefore, escBefore) = fingerprints()
         materialize(after)
         val (fpAfter, escAfter) = fingerprints()
+        // (INC.50) NON-VACUITY, checked on the first case rather than assumed. A project
+        // the crawl does not find compiles to NO files, every touched file then reads
+        // `(absent)`, and the run prints a 0% rate — which looks like a refusal of the
+        // mechanism and is a dead instrument (round 790: a verifier reads 0 both when the
+        // skip is sound and when it is broken). Both halves matter: the program must have
+        // been fingerprinted at all, and the corpus's own paths must key into it.
+        if (stable + moved == 0) {
+            require(fpBefore.isNotEmpty()) {
+                "REFUSED: the build fingerprinted NO files — is $srcRel under $projectDir " +
+                    "actually in the program the tsconfig describes?"
+            }
+            require(touched.any { fpBefore.containsKey(File(srcCompiler, it).canonicalPath) }) {
+                "REFUSED: none of ${case.name}'s touched paths $touched key into the " +
+                    "fingerprint map (${fpBefore.size} files) — the corpus's paths and the " +
+                    "project's do not line up"
+            }
+        }
 
         // Only a file the commit TOUCHED can have moved; a file it did not touch is
         // byte-identical in both trees.
