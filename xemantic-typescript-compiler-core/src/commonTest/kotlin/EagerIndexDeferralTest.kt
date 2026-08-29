@@ -148,7 +148,7 @@ class EagerIndexDeferralTest {
     }
 
     @Test
-    fun `the nested-type-alias index is built per FILE, never for the whole program`() {
+    fun `the nested-type-alias index is built per FILE - never for the whole program`() {
         withCensus {
             val results = bind(*program)
             runWithDeepStack {
