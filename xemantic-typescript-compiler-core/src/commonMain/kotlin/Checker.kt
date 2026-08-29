@@ -56209,18 +56209,17 @@ class Checker(
     }
 
     /**
-     * (INC.46) The walk, as an inner class so that its four pieces of state live
-     * together and are shared across every file of ONE build — the [memo] above all,
-     * whose whole point is that the program's type universe is walked once and not
-     * once per exporting file.
+     * (INC.46) The walk, as an inner class so that its state lives together — the
+     * discovery table above all, which is what names a type inside one file's hash.
      *
      * ## The three properties a reader should hold this to
      *
      *  - **ID-FREE.** `Type.id` and `Symbol.id` are per-build, per-THREAD sequences
      *    (INV.6(6c0)), so a fingerprint carrying one would differ across two builds
      *    of identical text and invalidate everything, always. Nothing here mixes an
-     *    id; a recursive type closes on a PATH DISTANCE instead, so two structurally
-     *    equal recursive types hash equal. `Type.Intrinsic.intrinsicName` separates
+     *    id; a reference is hashed as the referent's DISCOVERY INDEX instead, so two
+     *    structurally equal recursive types hash equal. `Type.Intrinsic.intrinsicName`
+     *    separates
      *    `error` from `any`, which is what closes (INC.46)'s hazard (ii) — B58.1
      *    renders a degraded resolution as `"any"`, and a display-string hash would
      *    therefore MISS an invalidation.
@@ -56237,48 +56236,62 @@ class Checker(
      *    an omission is a MISSED invalidation, the one direction that costs a stale
      *    diagnostic.
      *
-     * ## Why the memo is the whole design, and what makes it sound
+     * ## (INC.47) Why the walk is a canonical SERIALIZATION and not a recursion
      *
-     * The obvious walk keeps only a PATH set to break cycles and re-walks a type
-     * once per path that reaches it. Measured on tsc's own 78 sources that is
-     * **exponential in DAG width** and did not finish in 159 s on a single build —
-     * the resolved-type graph of a real program is a dense DAG, not a tree.
+     * The obvious walk keeps a PATH set to break cycles and re-walks a type once per
+     * path that reaches it. Measured on tsc's own 78 sources that is **exponential in
+     * DAG width** and did not finish in 159 s on a single build — a real program's
+     * resolved-type graph is a dense DAG, not a tree. Memoizing CLOSED subtrees (a
+     * subtree that referred to nothing above it on the path, which is (INC.46)'s
+     * shape) fixes that for every file except the one that matters: `types.ts`
+     * declares ~874 mutually recursive interfaces, so its IN-FILE graph is one giant
+     * strongly-connected component, nothing closes until the whole component
+     * completes, and the walk was a node-budget STOP at 2,000,000 nodes and still a
+     * stop at 12,000,000 (741 ms, the whole budget burned). An escaping file must
+     * invalidate the whole program on every edit, and `types.ts` alone accounted for
+     * **8 of the 13 fallbacks** in (INC.46)'s 40-commit corpus.
      *
-     * So a completed subtree is CACHED — but only when it is CLOSED, i.e. when
-     * nothing inside it referred to a type strictly above it on the path. That is
-     * exactly the condition under which the subtree's hash is a function of the
-     * subtree alone: an open subtree's hash carries a path DISTANCE to an ancestor
-     * and would be wrong at any other depth. [minRef] carries that information back
-     * up — the shallowest ancestor depth the last completed subtree referred to —
-     * and a self-reference (`at == depth`) still counts as closed, which is what
-     * makes an ordinary recursive interface memoizable.
+     * (INC.47) drops the recursion rather than bounding it, which is stronger than
+     * the SCC-per-unit hashing the queue proposed and much simpler. Every reachable
+     * type is DISCOVERED exactly once, in a deterministic order, and named by its
+     * discovery INDEX; a reference — forward, back, or self — hashes as that index,
+     * and the file's hash folds each discovered type's own LOCAL structure in
+     * discovery order. That is a canonical serialization of the reachable subgraph:
+     * linear in nodes plus edges, cycles needing no special case at all, and no
+     * strongly-connected component to canonicalise. Two graphs serialize equal
+     * exactly when they are the same graph up to that traversal, which is the
+     * question the fingerprint asks.
+     *
+     * An INDEX IS NOT AN ID. It is a function of the traversal, and the traversal is a
+     * function of the text: exports sorted by name, member tables sorted by name,
+     * positional lists in syntactic order. Two builds of identical text therefore
+     * discover the same graph in the same order and fold the same hash — the property
+     * [ExportSignatures] calls id-freedom, which a `Type.id` would silently destroy.
      */
     private inner class ExportFingerprinter {
 
-        /** Types on the CURRENT path, mapped to the depth they were entered at. */
-        private val path = HashMap<Type, Int>()
+        /**
+         * (INC.47) The types DISCOVERED for the file in flight, mapped to the position
+         * they were discovered at — the only identity by which a reference to a type
+         * is hashed, and the reason the walk needs no cycle handling.
+         *
+         * Cleared per FILE, because an index is a position in THIS file's traversal:
+         * everything declared elsewhere is CUT (see [foreignKey]), and which types
+         * those are moves with the file.
+         */
+        private val index = HashMap<Type, Int>()
 
         /**
-         * CLOSED subtree hashes — see the class KDoc for what closed means.
-         *
-         * Cleared per FILE, because a type's hash is a function of the file being
-         * fingerprinted: everything declared elsewhere is CUT (see [foreignKey]), and
-         * which types those are moves with the file.
+         * (INC.47) Discovery order — the same types, in index order. [drain] walks it
+         * with a plain cursor while it is still GROWING, which is the whole worklist:
+         * expanding a type appends whatever it refers to that has not been seen.
          */
-        private val memo = HashMap<Type, Long>()
+        private val order = ArrayList<Type>()
 
         /** The file whose surface is being summarised — the cut's other operand. */
         private var currentFile: String = ""
 
-        /**
-         * The shallowest ancestor DEPTH the subtree just completed referred to, or
-         * [Int.MAX_VALUE] for a closed one. Written by every [typeHash] return and
-         * read by its caller immediately — a return channel, not state that outlives
-         * the call.
-         */
-        private var minRef: Int = Int.MAX_VALUE
-
-        /** Nodes visited for the file in flight, against the per-file budget. */
+        /** Nodes and edges visited for the file in flight, against the per-file budget. */
         private var budget: Int = 0
 
         fun fingerprintFile(result: BinderResult) {
@@ -56288,7 +56301,8 @@ class Checker(
             val fileExports0 = ExportSignatures.exports
             budget = 0
             currentFile = fileName
-            memo.clear()
+            index.clear()
+            order.clear()
             var h = FINGERPRINT_SEED
 
             // A SCRIPT file's top-level names are program-wide, so an edit to one can
@@ -56395,21 +56409,19 @@ class Checker(
                 // The VALUE meaning and the TYPE meaning are separate answers for one
                 // name (`class C` is both; `interface I` is only the second), and an
                 // importer can observe either — so both go in.
-                h = mix(h, typeHash(getTypeOfSymbol(symbol), 0))
+                h = mix(h, refOf(getTypeOfSymbol(symbol)))
                 if (symbol.flags.hasAny(
                         SymbolFlags.Interface or SymbolFlags.TypeAlias or
                             SymbolFlags.Class or SymbolFlags.Enum)) {
                     h = mix(h, -13L)
-                    h = mix(h, typeHash(getDeclaredTypeOfSymbol(symbol), 0))
-                }
-                if (budget > EXPORT_FINGERPRINT_NODE_BUDGET) {
-                    // Out of budget: the surface is only PARTLY hashed, so the file
-                    // may not be proved stable. Recorded, never hidden.
-                    ExportSignatures.whole.add(fileName)
-                    ExportSignatures.budgetStops++
-                    break
+                    h = mix(h, refOf(getDeclaredTypeOfSymbol(symbol)))
                 }
             }
+            // (INC.47) THE WALK ITSELF. Every root above contributed only an INDEX;
+            // the STRUCTURE arrives here, as each discovered type's own local hash
+            // folded in discovery order. Nothing above this line descends into a type,
+            // which is what makes the traversal linear and cycle-free.
+            h = drain(h, fileName)
             ExportSignatures.fingerprints[fileName] = h
             ExportSignatures.fileNanos[fileName] = PassTiming.nowNanos() - fileT0
             ExportSignatures.fileExports[fileName] =
@@ -56417,41 +56429,75 @@ class Checker(
         }
 
         /**
-         * The structural hash of [type] entered at [depth], setting [minRef] to the
-         * shallowest ancestor depth its subtree referred to.
+         * (INC.47) The index [type] is known by inside the file in flight, DISCOVERING
+         * it if this is its first sighting — which appends it to [order] for [drain]
+         * to expand later.
+         *
+         * This is the whole of the cycle handling. A reference to a type already on
+         * the traversal answers the index it was given, whether that type is an
+         * ancestor (a back edge), a sibling, or the referrer itself; no path is kept
+         * and no depth enters the hash, so nothing here can be wrong "at another
+         * depth" the way a path-distance encoding is.
+         *
+         * `null` — an unresolved return type, an absent constraint — is a value the
+         * hash must distinguish from every real type, and −1 is outside the index
+         * range by construction.
          */
-        private fun typeHash(type: Type?, depth: Int): Long {
+        private fun refOf(type: Type?): Long {
             ExportSignatures.typeNodes++
             budget++
-            if (type == null) { minRef = Int.MAX_VALUE; return -1L }
-            memo[type]?.let { minRef = Int.MAX_VALUE; return it }
-            val at = path[type]
-            if (at != null) {
-                // A back edge: the DISTANCE up the path, never an id.
-                minRef = at
-                return mix(FINGERPRINT_SEED, -2L - (depth - at).toLong())
+            if (type == null) return -1L
+            index[type]?.let { return it.toLong() }
+            val at = order.size
+            index[type] = at
+            order.add(type)
+            return at.toLong()
+        }
+
+        /**
+         * (INC.47) Expands every discovered type exactly once, folding its local hash
+         * into [seed] in discovery order, and returns the file's hash.
+         *
+         * The cursor walks [order] while [localHash] is still APPENDING to it, which
+         * is what makes this a worklist rather than a recursion: the traversal is
+         * breadth-first, terminates because a type is appended only on its first
+         * sighting, and costs one expansion per reachable type plus one lookup per
+         * edge.
+         *
+         * A file that exhausts [EXPORT_FINGERPRINT_NODE_BUDGET] has only PART of its
+         * surface in the fold, so it may not be proved stable and is recorded in
+         * [ExportSignatures.whole] — never silently truncated, because an omission is
+         * a MISSED invalidation.
+         */
+        private fun drain(seed: Long, fileName: String): Long {
+            var h = seed
+            var i = 0
+            while (i < order.size) {
+                if (budget > EXPORT_FINGERPRINT_NODE_BUDGET) {
+                    ExportSignatures.whole.add(fileName)
+                    ExportSignatures.budgetStops++
+                    return h
+                }
+                h = mix(h, localHash(order[i]))
+                i++
             }
-            if (depth > EXPORT_FINGERPRINT_MAX_DEPTH || budget > EXPORT_FINGERPRINT_NODE_BUDGET) {
-                minRef = Int.MAX_VALUE
-                return -3L
-            }
+            return h
+        }
+
+        /**
+         * (INC.47) The hash of [type]'s OWN structure, with every type it refers to
+         * standing in as its discovery index — one level deep, never recursive.
+         */
+        private fun localHash(type: Type): Long {
             // THE CUT. A type DECLARED IN ANOTHER FILE is unchanged by construction
-            // while only [currentFile] is edited, so it is keyed and not descended
-            // into. See [foreignKey] for why that is sound for the question this
-            // fingerprint is asked, and why it is the difference between a walk that
-            // terminates and one that does not.
-            val foreign = foreignKey(type)
-            if (foreign != null) {
-                memo[type] = foreign
-                minRef = Int.MAX_VALUE
-                return foreign
-            }
-            path[type] = depth
+            // while only [currentFile] is edited, so it is keyed and not expanded.
+            // See [foreignKey] for why that is sound for the question this fingerprint
+            // is asked, and why it is the difference between a walk bounded by this
+            // file's own declarations and one bounded by the program's.
+            foreignKey(type)?.let { return it }
             var h = FINGERPRINT_SEED
-            var lo = Int.MAX_VALUE
             fun child(t: Type?) {
-                h = mix(h, typeHash(t, depth + 1))
-                if (minRef < lo) lo = minRef
+                h = mix(h, refOf(t))
             }
             when (type) {
                 is Type.Intrinsic -> {
@@ -56554,13 +56600,6 @@ class Checker(
                     }
                 }
             }
-            path.remove(type)
-            // CLOSED — nothing inside referred to a type strictly above this one — so
-            // the hash is a function of the subtree alone and may be cached. A
-            // SELF-reference (`at == depth`) satisfies this, which is what makes an
-            // ordinary recursive interface memoizable.
-            if (lo >= depth) memo[type] = h
-            minRef = lo
             return h
         }
 
@@ -56678,22 +56717,18 @@ class Checker(
 
     companion object {
         /**
-         * (INC.46) Depth bound of [mixTypeFingerprint]'s structural walk.
-         *
-         * A CYCLE is handled by the path map and needs no bound; this catches the
-         * type that is merely DEEP (a long instantiation chain), which would
-         * otherwise make one export's hash cost unbounded. Truncating is safe in the
-         * only direction that matters — the prefix is still in the hash, so a change
-         * inside the truncated tail is missed only if the whole prefix is unchanged,
-         * which for a type this deep means the declaration was not edited at all.
-         */
-        private const val EXPORT_FINGERPRINT_MAX_DEPTH = 24
-
-        /**
          * (INC.46) Per-FILE ceiling on structural nodes visited, so one pathological
          * export cannot make a build's fingerprint cost unbounded. A file that hits
          * it is put into [ExportSignatures.whole] — its surface is only partly
          * hashed, so it may not be proved stable.
+         *
+         * (INC.47) The walk it bounds is now LINEAR — one expansion per reachable
+         * type, one lookup per edge — so this is a backstop against a program whose
+         * type universe is genuinely enormous, and no longer the thing that decides
+         * whether a large file can be fingerprinted at all. Before (INC.47) it was
+         * `types.ts`'s verdict: that file stopped at this ceiling AND at six times it,
+         * because a path-recursive walk over an in-file strongly-connected component
+         * is exponential in DAG width rather than large.
          */
         private const val EXPORT_FINGERPRINT_NODE_BUDGET = 2_000_000
 

@@ -316,6 +316,86 @@ class ExportSignatureFingerprintTest {
         assert(escapes.none { it.endsWith("b.ts") })
     }
 
+    /**
+     * (INC.47) A DENSE CYCLIC IN-FILE TYPE GRAPH — the shape that made `types.ts` the
+     * one file of tsc's 78 that could not be fingerprinted at all.
+     *
+     * Each level refers to the next THREE times and back to the ROOT, so every subtree
+     * is OPEN (it refers to a type strictly above it) and the (INC.46) closed-subtree
+     * memo can cache none of it: the path-recursive walk then re-walks a level once
+     * per path that reaches it, which is exponential in fan-out. Measured on the real
+     * file that was **122.5 ms for ONE export** and still a node-budget STOP at
+     * 2,000,000 nodes and at 12,000,000 — so the file ESCAPED, and an escaping file
+     * invalidates the whole program on every edit.
+     *
+     * The (INC.47) walk discovers each type ONCE and names it by its discovery index,
+     * so the same graph is a few dozen nodes. Pinned on the COUNTER rather than on a
+     * time (round 868: a timed assertion over a small region is a coin flip), and the
+     * counter is what separates the two implementations by three orders of magnitude.
+     */
+    @Test
+    fun `a dense cyclic in-file type graph is fingerprinted exactly`() {
+        val source = buildString {
+            appendLine("// @strict: true")
+            appendLine("// @Filename: g.ts")
+            appendLine("export interface Root { deep: L0 }")
+            for (i in 0 until 30) {
+                appendLine(
+                    "interface L$i { a: L${i + 1}; b: L${i + 1}; c: L${i + 1}; up: Root }",
+                )
+            }
+            appendLine("interface L30 { end: string; up: Root }")
+        }
+        val was = ExportSignatures.enabled
+        ExportSignatures.enabled = true
+        ExportSignatures.reset()
+        val nodes: Long
+        val escaped: Boolean
+        try {
+            TypeScriptCompiler().compile(source, "t.ts")
+            nodes = ExportSignatures.typeNodes
+            escaped = ExportSignatures.whole.any { it.endsWith("g.ts") }
+        } finally {
+            ExportSignatures.enabled = was
+        }
+        // The file's surface is hashed in full: no budget stop, so an edit to it can
+        // be PROVED stable instead of falling back to a whole-program build.
+        assert(!escaped)
+        assert(ExportSignatures.budgetStops == 0L)
+        // Linear, not exponential: the graph has ~32 declarations, so a walk that
+        // discovers each type once cannot visit thousands of nodes. The path-recursive
+        // walk visits the 2,000,000-node ceiling on exactly this shape.
+        assert(nodes < 10_000L)
+    }
+
+    /**
+     * (INC.47) The SOUNDNESS half of the pin above, and the one it cannot see: a
+     * change 30 levels down inside that cyclic graph must move the fingerprint.
+     *
+     * The path-recursive walk bounded its own recursion by a DEPTH CAP of 24 and hashed
+     * everything past it as one constant, so a moved type below the cap read as no
+     * change at all — a MISSED invalidation, i.e. a stale diagnostic, which is the only
+     * direction that costs correctness. Discovery indices need no depth cap, so there
+     * is nothing left to truncate.
+     */
+    @Test
+    fun `a change deep inside a cyclic type graph moves the fingerprint`() {
+        fun graph(leaf: String) = buildString {
+            appendLine("// @strict: true")
+            appendLine("// @Filename: g.ts")
+            appendLine("export interface Root { deep: L0 }")
+            for (i in 0 until 30) {
+                appendLine("interface L$i { a: L${i + 1}; up: Root }")
+            }
+            appendLine("interface L30 { end: $leaf; up: Root }")
+        }
+        val before = fingerprintsOf(graph("string"))
+        val after = fingerprintsOf(graph("number"))
+        val g = before.keys.first { it.endsWith("g.ts") }
+        assert(before[g] != null)
+        assert(after[g] != before[g])
+    }
+
     /** The shipped default is OFF — nothing in an ordinary compile pays for this. */
     @Test
     fun `the fingerprint walk is off by default`() {
