@@ -20,6 +20,56 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CHK.73) — REFUSED with its price measured, and the entry it refutes is its own
+
+**WHAT THIS ROUND BOUGHT.** Not a fix: a diagnosis that replaces the queue's, and a
+measured refusal with a named prerequisite. (CHK.73) said a default or namespace import
+"types as `any`" and priced a fix against round 409's TS2315 flood, with an
+ambient-module-only containment as the thing to try first. Built and measured, all three
+parts of that reading are wrong in a useful way.
+
+**FIRST, THE INSTRUMENT.** The bench profile's `node_modules/@types` is EMPTY, so
+CLAUDE.md's "only `build/bench/tsc-project-*` carries the real `@types/node`" is stale and
+the shape cannot be probed there at all — the tell is `unresolved imports: N (e.g. 'fs')`
+plus a TS2688, which reads exactly like the defect under investigation. A scratch project
+with `npm i @types/node@20` (network works; `tools/node/bin/npm` needs `node` ON THE PATH)
+gives a live repro against tsgo: **tsgo answers 3 rows where we answer 1**.
+
+**THREE DEFECTS, NOT ONE, AND NONE OF THEM IS THE ONE THE ENTRY NAMED.**
+
+ 1. `resolveAlias`'s `ImportDeclaration` arm has no `resolveImportTargetFallback` leg —
+    (CHK.30)'s standing rule for a BARE package specifier, applied to every other ladder.
+ 2. **`getTypeOfSymbolWorker` HAS NO `SymbolFlags.Module` ARM.** A fully resolved module
+    symbol with a populated `exports` table falls through to `anyType`. The alias
+    resolution the entry blamed has worked for a long time — `createModuleSymbol` even
+    digs a `.d.ts`'s single `declare module "…"` block out for exactly this case.
+ 3. `@types/node` is AMBIENT, so no FILE resolves and the crawl is right to report `fs`
+    unresolved. `import x = require("fs")` already takes a `globals[specifier]` second
+    chance; `import * as fs from "fs"` did not.
+
+**WITH ALL THREE, THE BINDING AND ITS MEMBERS TYPE EXACTLY AS tsgo** — `fsStar` -> the
+module, `fsStar.statSync` -> `StatSyncFn`, `fsStar.readFileSync('x')` ->
+`Buffer<ArrayBuffer>` — i.e. hover and completion on `fs.` work, which is the editor-facing
+half of the goal.
+
+**AND IT MAY NOT LAND, WHICH THE CORPUS SAID AND REVIEW DID NOT.** A general
+`SymbolFlags.Module` arm moves **21** baselines (the internal-module family:
+`aliasUsageIn*`, `typeValueConflict*`, `moduleAndInterfaceWithSameName`,
+`typeofInternalModules`). Containing it to an import alias's TARGET — so a bare `namespace
+N` value reference is untouched — takes that to **4**, and those four are ONE cause and a
+MEANING regression: a module object exposes an exported CLASS as its CONSTRUCTOR, and this
+checker types a class VALUE as its INSTANCE type, so a ctor-less class has no construct
+signature to match `new () => Model`. **The prerequisite is therefore the static side of a
+class value**, which is a checker-wide model change and not this round's business.
+
+**A THIRD THING THE PROBE SEPARATED.** The `statSync` silence that remains after all of
+this is not about namespaces: `statSync('x')` fails to type through a NAMED import too. It
+is a call whose callee type is a callable INTERFACE (`StatSyncFn`), which is its own gap.
+
+**NOTHING WAS LANDED AND THE TREE IS AT HEAD.** The queue entry now carries the
+decomposition, the four named tests, and the prerequisite; CLAUDE.md carries the two facts
+a future agent would otherwise re-derive (the missing Module arm, and the empty `@types`).
+
 ### Round (INC.52) — the floor's dearest pass, and the measurement that says its price is unknowable
 
 **WHY THIS PASS.** With project diagnostics incremental ((INC.46)) and restart-proof
@@ -4672,8 +4722,37 @@ RHS, and the merged-member CONTRADICTION direction.
   absent in NARROW), taking `capture-equivalence.sh`'s standing `definitions=0` to 1 — the
   (INC.2) first-touch family, in a population that did not exist before. The RESULT half
   (`a?.b` is `typeof a.b | undefined`) is still a separate, much larger change.
-- [ ] **(CHK.73) A DEFAULT OR NAMESPACE IMPORT TYPES AS `any` — AND THAT, NOT `statSync`,
-  IS THE ONE knip ROW THE GATE ADDED (48 -> 49).** Measured inside knip's own project with a
+- [ ] **(CHK.73) — DIAGNOSED AND PRICED 2026-08-29, AND IT IS NOT WHAT THIS ENTRY SAID.
+  THE BLOCKER IS THE STATIC SIDE OF A CLASS, NOT RESOLUTION, AND THE ROUND-409 TS2315
+  HAZARD IS NOT IN PLAY.** Built against a probe project with a REAL `@types/node`
+  (`npm i @types/node@20` under `tools/node/bin` — the bench profile's `@types` directory
+  is EMPTY, so CLAUDE.md's "the compiler profile carries the real @types/node" is stale).
+  Measured, tsgo answers 3 rows where we answer 1. **THREE separate defects, in order:**
+  **(i)** `resolveAlias`'s `ImportDeclaration` arm has no `resolveImportTargetFallback`
+  leg, which (CHK.30) states is mandatory for a BARE package specifier;
+  **(ii)** `getTypeOfSymbolWorker` has NO `SymbolFlags.Module` arm, so even a fully
+  resolved module symbol with a populated `exports` table falls through to `anyType` —
+  the alias resolution the entry blamed has worked for a long time
+  (`createModuleSymbol` even digs a `.d.ts`'s single `declare module "…"` out);
+  **(iii)** `@types/node` is AMBIENT (`declare module "fs"`), so no file resolves at all
+  and the crawl correctly reports `fs` unresolved — `import x = require("fs")` already
+  takes a `globals[specifier]` second chance and `import * as` did not.
+  **WITH (i)+(ii)+(iii) THE BINDING AND ITS MEMBERS TYPE EXACTLY AS tsgo**
+  (`fsStar.statSync` -> `StatSyncFn`, `fsStar.readFileSync('x')` -> `Buffer<ArrayBuffer>`),
+  i.e. hover and completion on `fs.` work — **but a general `SymbolFlags.Module` arm moves
+  21 corpus baselines** (the internal-module family: `aliasUsageIn*`, `typeValueConflict*`,
+  `moduleAndInterfaceWithSameName`, `typeofInternalModules`), and containing it to an
+  import alias's TARGET still leaves **4**: `aliasUsageInObjectLiteral`,
+  `aliasUsageInFunctionExpression`, `aliasUsageInTypeArgumentOfExtendsClause`,
+  `extendingClassFromAliasAndUsageInIndexer`. **All four are ONE cause and it is a
+  MEANING regression, so this may not land as it stands**: a module object exposes an
+  exported CLASS as its constructor (`new () => Model`), and this checker types a class
+  VALUE as its INSTANCE type — a ctor-less class has no construct signature to match.
+  **So the prerequisite is the static side of a class value**, and the `statSync` silence
+  that remains is a THIRD thing again — calling a value whose type is a callable
+  INTERFACE, which fails identically through a NAMED import and is therefore not about
+  namespaces at all. ORIGINAL ENTRY: A DEFAULT OR NAMESPACE IMPORT TYPES AS `any` — AND
+  THAT, NOT `statSync`, IS THE ONE knip ROW THE GATE ADDED (48 -> 49).** Measured inside knip's own project with a
   probe file, three spellings of the SAME function: `import { statSync } from 'node:fs'`
   answers `Stats | undefined` (correct, whole overload set present), while
   `import fs from 'node:fs'; fs.statSync(…)` and `import * as fs from 'node:fs'` both answer
