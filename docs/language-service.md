@@ -413,6 +413,80 @@ this layer does not, so the API will not guess a working set on the caller's
 behalf; batching the visible tabs into one call is the host's job, not
 something `Project` infers.
 
+## 3b. If you are choosing between this and a tsgo LSP integration
+
+Both answer editor questions from a real type-check. They differ in **where the
+incremental state lives**, and that difference decides more of the cost model than
+either compiler's speed does. Measured on tsc's own 78 compiler sources, same tree,
+same two edits to one file — a **body-only** edit (a local `const` inside an exported
+function) and a **signature** edit (one added `export const`):
+
+| | tsgo 7.0.2, `--incremental --noEmit`, fresh process | this API, in-session |
+|---|---|---|
+| full check, no prior state | **1,631 ms** | **5,352 ms** warm · **23,266 ms** cold JVM |
+| nothing edited | **182 ms** | **0 ms** |
+| after a body-only edit | **314 ms** | **232 ms** |
+| after a signature edit | **1,654 ms** | **5,694 ms** |
+
+**Read the caveats before the numbers.** On this project we report **46** diagnostics
+where tsgo reports **65** — we are doing less work, by a margin nobody has decomposed,
+and every ratio above flatters us by it. The two models are also not the same shape:
+tsgo's state is `.tsbuildinfo` on disk, so each of its cells is a fresh process that
+re-reads that state and re-stats the tree, while ours is a live object that pays
+neither. Medians of three, one machine, one day. Treat the table as a comparison of
+two ARCHITECTURES, not of two compilers.
+
+### What the shape difference buys, in both directions
+
+**In the edit loop, holding the program beats checking faster.** Their compiler is
+**3.3x faster than ours on a full check** and we still answer a body-only edit in less
+absolute time, because their 182 ms floor — process start, state read, re-stat — is
+paid on every query and is 79% of what that edit costs them. Ours is zero. If your host
+keeps a long-lived process, that floor is the number to compare, not the full check.
+
+**On first open, we lose badly and it is not close** — 23.3 s against 1.6 s, of which
+~18 s is JVM start and JIT warm-up rather than compilation. A host that opens a project
+and wants diagnostics immediately will feel that. It is an artifact-stack problem (a
+native image, an AOT cache, or a resident daemon) rather than a property of the checker,
+but today it is real and you should plan for it — for example by opening the project and
+running one query off the critical path, before the user asks anything.
+
+**Neither design gets anything from a dependency closure on a codebase like this one.**
+tsgo implements per-hop pruning — on a signature change it walks the reverse-reference
+graph and re-checks a dependent only if that dependent's own signature also moved — and
+on this project it bought nothing measurable (1,654 ms against a 1,631 ms cold check).
+We do not build the closure at all and fall back to a whole-program build, which costs
+the same here. On more layered code theirs should degrade more gracefully than ours;
+that is untested by both of us and is the honest limit of this comparison.
+
+### Two capability differences worth knowing before you design a host
+
+**There is a project-wide diagnostics call here, and it is incremental.**
+`diagnostics()` answers about the whole program and, after an edit that moved no
+exported signature, costs one narrowed build (§ 4b). tsgo's LSP has no equivalent
+request: it serves `textDocument/diagnostic` per file plus push for open files, and
+"what is wrong with my whole project" is answered by running `tsc --incremental` as a
+separate process. If your UI has a project error list, that difference is structural
+rather than a matter of tuning.
+
+**Repeated and overlapping questions about one project state are free here.** A second
+identical query builds nothing; so does a query about a subset of a set already asked
+about, and so does one about a file no set covered (§ 4a). tsgo re-creates its checker
+pool whenever the program is updated, so its per-file answers after an edit start from a
+fresh checker. Conversely their per-file first answer on a cold process will beat ours.
+
+### The honest summary
+
+Choose on your process model, not on the table. **A long-lived host that edits and
+re-asks** — an IDE, a language server, a watch task — is what this API's cost model is
+built for, and the numbers above are favourable there for architectural reasons that
+will not evaporate. **A short-lived invocation** — a CI step, a pre-commit hook, a
+one-shot check — is the case tsgo is built for and where it is straightforwardly
+better today.
+
+The measurements, the harnesses and the source reading behind this section are in
+[`docs/perf/incremental-vs-tsgo.md`](perf/incremental-vs-tsgo.md).
+
 ## 4. Diagnostics
 
 ```kotlin

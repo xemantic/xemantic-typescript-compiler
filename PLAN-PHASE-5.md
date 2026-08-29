@@ -3258,6 +3258,66 @@ RHS, and the merged-member CONTRADICTION direction.
   `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
   selection must therefore carry.
 
+- [ ] **(INC.47) SCC-AWARE HASHING — the one lever between the measured 67% and the 87.5%
+  ceiling, and (INC.46)'s named successor.** `types.ts` is the only file of the 78 that still
+  ESCAPES, and it accounts for **8 of the 13 fallbacks** in the 40-commit corpus. Its walk is a
+  node-budget stop that no budget closes: **129.6 ms at 2,000,000 nodes and 741 ms at
+  12,000,000, still stopping** — the file-boundary cut cannot help INSIDE a file, and `types.ts`
+  declares ~874 mutually recursive interfaces in one. **The mechanism is Tarjan over the in-file
+  type graph, hashing each strongly-connected component as a UNIT** rather than trying to
+  memoize closed subtrees that never close. **Grade it on the instruments that already exist**:
+  `scripts/inc46-fingerprint-cost.sh` (cost, stability 78/78, partition agreement 24/24) and
+  `scripts/inc46-stability.sh` (the rate — the number that must move, and the refusal threshold
+  is that it does not).
+
+- [ ] **(INC.48) THE EXPORT SURFACE DIES WITH THE PROCESS, AND tsgo's DOES NOT — an IDE
+  restart pays a FULL build where tsgo pays a `.tsbuildinfo` read.** Ours is `Project.surface`,
+  in-memory, dropped at `close()`. Theirs is serialised and re-read, which is what makes their
+  **182 ms no-op** possible from a cold process at all. **The prize is bounded and known**: it
+  turns a post-restart first query from a full build into the (INC.46) gate, i.e. ~5.2 s ->
+  ~230 ms whenever the tree has not moved under the editor. **The hazards are the ones the
+  fingerprint already documents** — it must be keyed on CONTENT (the crawl reads every file
+  anyway; an mtime/size key is round 871's trap), it must carry the compiler options and the
+  program's file list or a config change serves a stale surface, and a version stamp must
+  refuse a file written by a different build. **Measure the serialise/deserialise cost against
+  the 136 ms it replaces before building the invalidation.**
+
+- [ ] **(INC.49) COLD START IS THE LANGUAGE SERVICE'S WORST NUMBER BY FAR — 23,266 ms against
+  tsgo's 1,631 ms, and it is an ARTIFACT-STACK problem rather than a compiler one.** Measured
+  this round on tsc's own 78 sources: the first `diagnostics()` in a fresh JVM is **23.3 s**,
+  the same build warm is **5,352 ms**, so **~18 s is JVM start plus the JIT ramp**. That is the
+  first thing an integrator sees and it is 14x tsgo's whole cold check. **Nothing in the
+  (INC.\*) arc can move it** — the levers are the ones already priced elsewhere and never
+  pointed at this query: the GraalVM PGO image (**-21.2% check-only, and 1.93x FASTER than
+  tsc 6.0.3**, `docs/perf/aot-native-image.md` § 10), the JDK 25 AOT cache (1.64x, and its
+  fail-safe guard), and CRaC (a warmed checkpoint restoring in ~30 ms with the FIRST compile at
+  full warm speed — refused as unshippable only because the restored process keeps the
+  checkpoint's working directory, which `SystemVfs.workingDirectory` can now re-install).
+  **Decide which artifact the embedding API ships on, then re-take this one cell.**
+
+- [ ] **(INC.50) IS THE CLOSURE WORTH BUILDING ON *LAYERED* CODE? tsgo IMPLEMENTS PER-HOP
+  PRUNING AND IT BUYS THEM NOTHING HERE — 1,654 ms against a 1,631 ms COLD check.** That is an
+  independent corroboration, from another implementation, of the measurement that closed
+  (INC.35): on tsc's own sources a file-level AND a symbol-level use graph both re-check ~100%
+  of the program at the median edit. **But it is a claim about ONE codebase, and theirs is the
+  design that would pay if the claim does not generalise**: on a signature change they walk the
+  reverse-reference graph and re-check a dependent only if ITS signature also moved, where we
+  fall back to a whole-program build. **The (LIB.\*) screened libraries are the corpus that
+  could decide it** (`knip`, `jsonrepair`, `cronstrue` — layered, unlike the dashboard
+  profile). **Refuse it unless the measured stability rate on a layered corpus is materially
+  above the 67% measured here**; the point of the item is the measurement, not the mechanism.
+
+- [ ] **(BENCH.5) EVERY tsgo COMPARISON IS NON-LIKE-FOR-LIKE UNTIL THE 46-vs-65 DIAGNOSTIC GAP
+  IS DECOMPOSED, AND THIS REPO ALREADY HAS THE LAW.** `kir-bench.sh` runs an equivalence gate
+  BEFORE any timing, precisely because a wall-clock harness reads a program that does LESS as
+  the fastest arm. `docs/perf/incremental-vs-tsgo.md` does not satisfy it: on the compiler
+  profile we report **46** rows where tsgo 7.0.2 reports **65**, so every ratio in that page
+  flatters us by an undecomposed margin. **The deliverable is the 19-row decomposition** — how
+  many are genuine false negatives of ours, how many are tsgo-only divergences from pristine
+  tsc (round 938's law: tsgo is NOT pristine, and `scripts/pristine_oracle.py` is the arbiter),
+  and how many are a `lib`/options difference. Only then is a timing comparison between the two
+  compilers quotable as a compiler comparison rather than as an architecture one.
+
 - [x] **(INC.46) PROJECT-WIDE DIAGNOSTICS BY *EXPORTED-SIGNATURE STABILITY* — ALL THREE
   STEPS LANDED 2026-08-29. Cost 136 ms whole-program / ~0 ms per edit; stability **67%**
   over 40 real commits (floor; ceiling 87.5% once `types.ts`'s in-file SCC is hashed);
