@@ -2478,12 +2478,27 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    4,864 – 5,096 ms). **Measured: 67% of 40 real commits to tsc's own compiler move no
    signature, and the path is graded EQUIVALENT on all 40 with 27 actually served.**
 
-   **What is left of it, stated:** `types.ts` — the file declaring tsc's whole type
-   universe — cannot be summarised within a bounded walk, because its own declarations
-   form one strongly-connected component that the file-boundary cut does not reach
-   (measured at both a 2 M and a 12 M node budget). It is recorded as an escape, so an
-   edit to it is a plain rebuild, and it accounts for 8 of the 13 fallbacks. **SCC-aware
-   hashing is the one lever between the measured 67% and an 87.5% ceiling.**
+   **What is left of it, stated — and it is NOT the escape (INC.47).** `types.ts` used to
+   escape: the file declaring tsc's whole type universe is one strongly-connected component
+   that the file-boundary cut does not reach, and the walk was a node-budget stop at both
+   2 M and 12 M nodes. That is closed — the walk is now a canonical serialization
+   (discover each reachable type once, name it by its discovery INDEX, fold each one's own
+   local structure in discovery order), which is linear, needs no cycle case and leaves no
+   component to hash: `types.ts` is **6.21 ms for 871 exports** against 122.52 ms for one,
+   the whole-program cost is **16 ms** against 131, and **no file of the 78 escapes**.
+   **It bought no rate.** The same 40-commit corpus reads **67% on both arms with all 40
+   per-case verdicts identical**, because a commit touching `types.ts` really does move an
+   exported declaration. The 87.5% ceiling this page used to quote was a mis-read of the
+   stability runner's own summary line (`if (escaped)` counts every case that TOUCHED an
+   escaping file); the real ceiling was 70%. **So the residual 33% is 13 commits that each
+   genuinely move a signature, and no refinement of the fingerprint can serve them** — the
+   only remaining question is whether ordinary LAYERED code has a higher rate than one
+   compiler's own sources (§ (INC.50)).
+
+   **What (INC.47) did buy is soundness.** The previous walk bounded its recursion with a
+   depth cap of 24 and hashed everything below it as a single constant — a MISSED
+   invalidation, i.e. a stale project-wide diagnostic, for any exported type deeper than
+   that. Two pins hold it, and both are RED against the pre-(INC.47) binary.
 
    **`referencesAt` IS narrowed, and so is `renameAt`.**
    The sentence that used to stand here — "their claim is about every file, so there

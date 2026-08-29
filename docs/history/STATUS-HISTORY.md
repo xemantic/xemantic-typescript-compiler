@@ -1,3 +1,28 @@
+**(INC.45) — `renameAt` IS NARROWED TOO, AND ITS ABLATION FOUND A BLIND PIN SET
+(2026-08-29).** The rename sweep took (INC.44)'s spelling closure and hands the resulting
+file set to the compiler as a check partition. Two things make it more than a copy.
+**Both of a rename's builds must share ONE partition** — `verifyRename` compares
+diagnostics as a `(file, code)` MULTISET, which a partition filters, so a narrowed
+"before" against a whole-program "after" reports every unswept row as removed; the
+soundness argument for narrowing it at all is that a rename edits only files the plan
+names and an unedited file's meaning can change only through a name it imports, which it
+must then SPELL. **And the population is the closure UNION every occurrence of the NEW
+name**, because `verifyRename`'s third check — the only one that can see a rename which
+compiles and means something else — scans for occurrences already spelling it and would
+otherwise pass VACUOUSLY. **THE ABLATION'S FINDING**: arm b2 (the after-build forgets the
+partition) reddened **NOTHING**, because every fixture was a CLEAN program and both bags
+were empty whatever either build walked — one file carrying a diagnostic and spelling
+neither name takes it to **2 RED**. Arm b3 (never narrow) is **UNDISCRIMINATED and
+recorded as such**: the change is equivalence-preserving by construction, so what stands
+in its place is one pin on the shipped DEFAULT with no mode install in it ((INC.16)'s
+lesson). **MEASURED**: an ordinary rename is **~1.0-1.3 s against ~15 s (12-14.5x)** —
+`emitFiles` 2 of 78 files at 1,304 ms, `transformNodes` 3 of 78 at 1,025,
+`checkSourceElement` 1 of 78 (but that file is `checker.ts`) at 4,725.
+**GATES.** Suite **16,440 / 0 / 3** (+18 over the session's 16,422 baseline, exactly the new pins); rename differential **EQUIVALENT** — 8 carets,
+7 narrowed, 6 producing an APPLICABLE plan, 1,691 edits compared plan for plan, 0
+diverged, 56.5 s against 114.2 s; three ablation arms b1 **1 RED** / b2 **2 RED** / b3
+undiscriminated with a reason.
+
 **(INC.44) — `referencesAt` IS NARROWED BY *SPELLING*, AND THE DOC CLAIM THAT IT "CANNOT
 BE" CONFUSED THE CLAIM WITH THE EVIDENCE (2026-08-29).** `docs/language-service.md` said in
 three places that find-references and rename "are NOT narrowed and will not be: their claim

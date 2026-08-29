@@ -20,6 +20,72 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.47) — the fingerprint walk is now LINEAR and the escape class is empty; the 87.5% ceiling it was aimed at did not exist
+
+**WHAT LANDED.** The exported-signature walk no longer recurses. Every type reachable from
+a file's exports is DISCOVERED once, in a deterministic order, and named by its discovery
+INDEX; a reference — forward, back or self — hashes as that index, and the file's hash folds
+each discovered type's own LOCAL structure in discovery order. That is a canonical
+serialization of the reachable subgraph: linear in nodes plus edges, cycles needing no
+special case, and **no strongly-connected component to canonicalise** — which is why it is
+both simpler and stronger than the Tarjan-per-SCC machinery the queue named.
+
+**MEASURED, whole-program, on tsc's own 78 sources (`scripts/inc47-fingerprint-cost.sh`):**
+
+| | before | after |
+|---|---|---|
+| `types.ts` | **122.52 ms for ONE export**, node-budget STOP | **6.21 ms for 871 exports** |
+| whole-program fingerprint | 131 ms | **16 ms** |
+| structural nodes visited | 2,019,605 | **38,502** |
+| budget stops / escapes | 1 / `[types.ts]` | **0 / `[]`** |
+| exports hashed | 2,137 | **3,007** |
+| identical-text stability | 78/78 | **78/78** |
+| narrowed-vs-whole agreement | 24/24 | **24/24** |
+
+**AND THE PRIZE IT WAS BUILT FOR DOES NOT EXIST — MEASURED, NOT ARGUED.** (INC.46)(2)
+recorded *"8 of the 13 still-MOVED cases moved ONLY because `types.ts` escapes"* and derived
+from it a **67% floor with an 87.5% ceiling**, which is what made (INC.47) the named
+successor. Running the same 40-commit corpus on BOTH arms: **27 stable / 40 = 67% on each,
+and every one of the 40 per-case verdicts is IDENTICAL.** Removing every escape bought
+exactly nothing on this corpus.
+
+**THE CEILING WAS A MIS-READ LABEL ON THE INSTRUMENT'S OWN OUTPUT.** `Inc46StabilityMain`
+printed *"N were moved only because a touched file ESCAPES"* over the code
+`if (escaped) movedBecauseEscaped.add(case.name)` — which counts every case that TOUCHED an
+escaping file, whether or not it also moved for a reason of its own. Its own printed detail
+contradicted the summary in the same run: case `009-0208948c` reads
+`[checker.ts, commandLineParser.ts, core.ts, executeCommandLine.ts, types.ts(escape)]`, i.e.
+four files moved beside the escape. Re-derived properly, **exactly ONE of the 8 (`005`) had
+the escape as its only mover**, so the real ceiling was 70%, not 87.5% — and after (INC.47)
+even that one moves, because `types.ts`'s real fingerprint moves: it is a file of exported
+interface declarations, so an edit to it usually IS a surface change. The runner now prints
+BOTH counts, with the mis-read recorded beside them.
+
+**SO WHY IT LANDS ANYWAY, AND THE STRONGEST REASON IS NOT THE COST.** The old walk bounded
+its own recursion with a DEPTH CAP of 24 (`EXPORT_FINGERPRINT_MAX_DEPTH`) and hashed
+everything below it as one constant. That is a **MISSED INVALIDATION** — the direction that
+costs a stale diagnostic — and it is live in shipped code as of (INC.46)(3), which serves
+project-wide diagnostics from the previous build whenever no touched file's fingerprint
+moved. Pinned and ABLATED: `a change deep inside a cyclic type graph moves the fingerprint`
+is RED on the pre-(INC.47) binary and green after, as is `a dense cyclic in-file type graph
+is fingerprinted exactly`. Discovery indices need no depth cap, so there is nothing left to
+truncate.
+
+**AND THE ESCAPE CLASS IS EMPTY, WHICH IS A CLAIM ABOUT OTHER CODEBASES.** tsc's corpus
+cannot show what that is worth — its one escaping file is one whose edits genuinely move the
+surface — but a single-file library with a large cyclic type graph is ordinary in real
+TypeScript, and before this it would have escaped and forced a whole-program rebuild on
+every keystroke, forever. That is the population an editor integration lives in.
+
+**WHAT A NEXT ROUND SHOULD NOT REDO.** Do not re-open SCC-aware hashing: there is no SCC
+left to hash, and the rate it was supposed to move is measured flat on both arms. The
+stability rate's remaining 33% is 13 commits that each genuinely move an exported signature;
+the only mechanism that could serve those is the per-hop pruning of (INC.50), which is
+measured to buy tsgo nothing on this same codebase.
+
+**GATES.** Suite **16,466 / 0 / 3** (+2 over 16,464 — exactly the two new pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
 ### Round (INC.46)(3) — project-wide diagnostics ARE incremental now, and the gate is 40 real commits
 
 **WHAT LANDED.** `Project.diagnostics()` no longer rebuilds the whole program after every
@@ -138,6 +204,17 @@ LINE (the construct is a top-level statement) took the rate to:
 because `types.ts` escapes.** So the achievable band is **67% at the floor and 87.5% at the
 ceiling**, the ceiling being loose — a commit touching `types.ts` often really does move a
 declaration.
+
+> **RETRACTED 2026-08-29 BY (INC.47), WHICH MEASURED BOTH ARMS.** That sentence is this
+> runner's summary line read at face value, and the line was mislabelled: the code behind
+> it is `if (escaped)`, which counts every case that TOUCHED an escaping file whether or
+> not it also moved on its own. The same run's detail lines contradict it — case
+> `009-0208948c` prints four moved files beside `types.ts(escape)`. Re-derived, exactly
+> ONE of the 8 had the escape as its only mover, so the ceiling was **70%**, not 87.5%.
+> With every escape removed the rate is **67% on both arms and all 40 verdicts
+> identical**. The general law, now in CLAUDE.md: a derived attribution PRINTED by an
+> instrument must be re-derived from that instrument's own detail before it becomes a
+> queue item's threshold.
 
 **`types.ts`'s ESCAPE IS STRUCTURAL AND WAS MEASURED, NOT ASSUMED.** It is a node-budget
 stop, and raising the budget does not close it: at **2,000,000** nodes it costs 129.6 ms and
@@ -3258,7 +3335,22 @@ RHS, and the merged-member CONTRADICTION direction.
   `verifyRename` additionally scans for occurrences already spelling the NEW name, which the
   selection must therefore carry.
 
-- [ ] **(INC.47) SCC-AWARE HASHING — the one lever between the measured 67% and the 87.5%
+- [x] **(INC.47) LANDED 2026-08-29 AS A CANONICAL SERIALIZATION RATHER THAN SCC HASHING,
+  AND ITS PRIZE IS REFUTED — the walk is LINEAR and the escape class is EMPTY, but the
+  stability rate is 67% on BOTH arms with all 40 per-case verdicts IDENTICAL.** There was
+  no SCC left to hash: discovering each reachable type once and naming it by its discovery
+  INDEX makes a reference — forward, back or self — cost one lookup, so cycles need no
+  special case. `types.ts` went from **122.52 ms for ONE export and a node-budget STOP** to
+  **6.21 ms for 871 exports**; whole-program 131 -> **16 ms**; structural nodes 2,019,605 ->
+  **38,502**; escapes `[types.ts]` -> **[]**; both controls held (78/78, 24/24).
+  **THE 87.5% CEILING WAS A MIS-READ LABEL** on `Inc46StabilityMain`'s own summary line
+  (`if (escaped)` counts every case that TOUCHED an escaping file, not one that moved only
+  because of it) — exactly ONE of the 8 had the escape as its only mover, so the real
+  ceiling was 70%, and after this even that case moves. **IT LANDS ON SOUNDNESS**: the old
+  walk's DEPTH CAP of 24 hashed everything below it as one constant, i.e. a MISSED
+  invalidation live since (INC.46)(3) began serving stale-free project diagnostics; both
+  new pins are RED on the pre-(INC.47) binary. **DO NOT RE-OPEN SCC HASHING.**
+  ORIGINAL ENTRY: SCC-AWARE HASHING — the one lever between the measured 67% and the 87.5%
   ceiling, and (INC.46)'s named successor.** `types.ts` is the only file of the 78 that still
   ESCAPES, and it accounts for **8 of the 13 fallbacks** in the 40-commit corpus. Its walk is a
   node-budget stop that no budget closes: **129.6 ms at 2,000,000 nodes and 741 ms at
@@ -3295,7 +3387,15 @@ RHS, and the merged-member CONTRADICTION direction.
   checkpoint's working directory, which `SystemVfs.workingDirectory` can now re-install).
   **Decide which artifact the embedding API ships on, then re-take this one cell.**
 
-- [ ] **(INC.50) IS THE CLOSURE WORTH BUILDING ON *LAYERED* CODE? tsgo IMPLEMENTS PER-HOP
+- [ ] **(INC.50) — PROMOTED BY (INC.47) TO THE ARC'S NEXT ITEM, AND ITS QUESTION IS NOW
+  SHARPER: THE 67% IS NOT IMPROVABLE ON *THIS* CORPUS BY ANY MECHANISM, SO THE ONLY OPEN
+  QUESTION IS WHETHER ORDINARY LAYERED CODE HAS A HIGHER RATE.** (INC.47) removed every
+  escape and moved the rate by nothing, with all 40 verdicts identical — so the residual
+  33% is 13 commits that each genuinely move an exported signature, and no fingerprint
+  refinement can serve them. The `(LIB.*)` screened libraries (`knip`, `jsonrepair`,
+  `cronstrue`) are the corpus, `scripts/inc46-stability.sh` is the instrument (it takes a
+  corpus dir and a profile dir), and the deliverable is the RATE on code that is not one
+  compiler's own sources. ORIGINAL ENTRY: IS THE CLOSURE WORTH BUILDING ON *LAYERED* CODE? tsgo IMPLEMENTS PER-HOP
   PRUNING AND IT BUYS THEM NOTHING HERE — 1,654 ms against a 1,631 ms COLD check.** That is an
   independent corroboration, from another implementation, of the measurement that closed
   (INC.35): on tsc's own sources a file-level AND a symbol-level use graph both re-check ~100%

@@ -1,5 +1,36 @@
 # Status
 
+**(INC.47) — THE EXPORT FINGERPRINT IS A CANONICAL SERIALIZATION, THE ESCAPE CLASS IS
+EMPTY, AND THE 87.5% CEILING IT WAS AIMED AT DID NOT EXIST (2026-08-29).** The walk no
+longer recurses: every type reachable from a file's exports is DISCOVERED once, in a
+deterministic order, and named by its discovery INDEX, so a reference — forward, back or
+self — costs one lookup and cycles need no special case. There is no strongly-connected
+component left to hash, which is why this is simpler than the Tarjan machinery the queue
+named and strictly stronger. **MEASURED whole-program on tsc's own 78 sources**:
+`types.ts` **122.52 ms for ONE export and a node-budget STOP -> 6.21 ms for 871 exports**;
+whole-program **131 -> 16 ms**; structural nodes **2,019,605 -> 38,502**; budget stops
+1 -> **0**; escapes `[types.ts]` -> **[]**; exports hashed 2,137 -> **3,007**; both
+controls held (identical-text stability **78/78**, narrowed-vs-whole agreement **24/24**).
+**AND THE PRIZE IS REFUTED ON BOTH ARMS RATHER THAN ARGUED**: the 40-commit stability
+corpus reads **27/40 = 67% before AND after, with every one of the 40 per-case verdicts
+identical**. (INC.46)(2)'s ceiling came from its runner printing *"N moved only because a
+touched file ESCAPES"* over the code `if (escaped)` — which counts every case that
+TOUCHED an escaping file — while its own detail lines showed four other movers in the same
+case; re-derived, exactly ONE of the 8 qualified, so the ceiling was **70%**, and after
+this even that one moves, because `types.ts` is a file of exported declarations and an
+edit to it really does move the surface. **IT LANDS ON SOUNDNESS, NOT ON THE RATE**: the
+old walk bounded its recursion with a DEPTH CAP of 24 and hashed everything below it as
+one constant — a MISSED invalidation, i.e. a stale diagnostic, live since (INC.46)(3)
+began answering project-wide diagnostics from the previous build. Both new pins are RED
+against the pre-(INC.47) binary and green after, one for the mechanism (pinned on the node
+COUNTER, not a time) and one for the soundness half. **The escape class being empty is a
+claim about OTHER codebases** — a single-file library with a large cyclic type graph is
+ordinary in real TypeScript and would have forced a whole-program rebuild on every
+keystroke forever. **GATES.** Suite **16,466 / 0 / 3** (+2, exactly the new pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; build warning-clean.
+**SUCCESSOR: (INC.50)** — the 67% is not improvable on this corpus by any mechanism, so
+the live question is the rate on ordinary LAYERED code (`knip`, `jsonrepair`, `cronstrue`).
+
 **(INC.46)(3) — PROJECT-WIDE DIAGNOSTICS ARE INCREMENTAL, AND WITH (INC.44)/(INC.45)
 NOTHING AN EDITOR ASKS IS WHOLE-PROGRAM BY DEFAULT ANY MORE (2026-08-29).**
 `Project.diagnostics()` no longer rebuilds after every edit: when the edit moved no
@@ -110,28 +141,3 @@ invalidation, silently). The hash must be an id-free structural fingerprint; (IN
 built one to copy. Cost input censused: **3,398 exported declarations, mean 44/file, max 874
 in `types.ts`**; its runtime is the first thing to measure, with a stated refusal threshold.
 **No code landed — the entry is the deliverable.**
-
-**(INC.45) — `renameAt` IS NARROWED TOO, AND ITS ABLATION FOUND A BLIND PIN SET
-(2026-08-29).** The rename sweep took (INC.44)'s spelling closure and hands the resulting
-file set to the compiler as a check partition. Two things make it more than a copy.
-**Both of a rename's builds must share ONE partition** — `verifyRename` compares
-diagnostics as a `(file, code)` MULTISET, which a partition filters, so a narrowed
-"before" against a whole-program "after" reports every unswept row as removed; the
-soundness argument for narrowing it at all is that a rename edits only files the plan
-names and an unedited file's meaning can change only through a name it imports, which it
-must then SPELL. **And the population is the closure UNION every occurrence of the NEW
-name**, because `verifyRename`'s third check — the only one that can see a rename which
-compiles and means something else — scans for occurrences already spelling it and would
-otherwise pass VACUOUSLY. **THE ABLATION'S FINDING**: arm b2 (the after-build forgets the
-partition) reddened **NOTHING**, because every fixture was a CLEAN program and both bags
-were empty whatever either build walked — one file carrying a diagnostic and spelling
-neither name takes it to **2 RED**. Arm b3 (never narrow) is **UNDISCRIMINATED and
-recorded as such**: the change is equivalence-preserving by construction, so what stands
-in its place is one pin on the shipped DEFAULT with no mode install in it ((INC.16)'s
-lesson). **MEASURED**: an ordinary rename is **~1.0-1.3 s against ~15 s (12-14.5x)** —
-`emitFiles` 2 of 78 files at 1,304 ms, `transformNodes` 3 of 78 at 1,025,
-`checkSourceElement` 1 of 78 (but that file is `checker.ts`) at 4,725.
-**GATES.** Suite **16,440 / 0 / 3** (+18 over the session's 16,422 baseline, exactly the new pins); rename differential **EQUIVALENT** — 8 carets,
-7 narrowed, 6 producing an APPLICABLE plan, 1,691 edits compared plan for plan, 0
-diverged, 56.5 s against 114.2 s; three ablation arms b1 **1 RED** / b2 **2 RED** / b3
-undiscriminated with a reason.
