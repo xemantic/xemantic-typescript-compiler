@@ -31,6 +31,15 @@ emit **byte-identical to the PRE-SESSION binary**, 78 files.
 (early) and 256 -> 116 (late), -37% / -55%**, across (INC.63), (INC.64)(a)/(b) and (INC.65) —
 and **UNDERSTATED**, because the box drifted ~10% slower over the session (`full` median
 3,944 -> 4,335), so the floor's SHARE of a full build fell 6.1% -> 3.5%.
+**AND THE NUMBER THE HOST ACTUALLY FEELS, measured through the `Project` API itself
+(`scripts/incremental-cost.sh`, 2,401 files, 3 rotations):** a body edit re-answers in
+**170-248 ms** (warm rotations 159-192), a comment-only edit 164-192, introducing an error
+166-193 with the TS2322 correctly found, and a re-query with NO edit is **0 ms** — the memo
+serves it. The narrowed build is **149-204 ms against a full build of 4,140-5,897**, i.e.
+**~25-30x**, and the partition's answer agrees with the full build's row for row on every
+rotation. The floor is the dominant term of that latency, which is what makes this arc the
+right one for an editor host.
+
 **SUCCESSOR (INC.66):** checker construct 38-70 (the init pass dispatch, flat — an (INC.7)
 partition question), crawl WALL 34-44 (its READ half is (INC.56), the only row costing a
 soundness promise), config+glob 13-29 (co-largest on some draws, NO promise attached, and
