@@ -20,6 +20,82 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.63) — every keystroke re-derived the whole lib, and the half the refusal named was 3% of it
+
+**(INC.62) SAID RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS. DONE,
+AND THE RANKING IT PREDICTED WAS WRONG IN THE ONE PLACE THAT MATTERED.** Its forecast was
+"crawl WALL 55 ms (27%), checker construct 83 — of which the pass table 42 and the FIELD
+initializers 41". Measured on `build/bench/many-small-2400-dom` (three arms, 2,401 files):
+checker construct **84-99 ms (42-44%)**, crawl WALL 55-69 (27-30%), config+glob 15-30,
+`extractRelativeImports` 14-18, post-checker 10, bind 7-10. The field half is right — and
+**essentially ALL of it is ONE field**: `parseBuiltinLib` reads **46.2 / 47.1 / 50.1 ms**,
+the largest single addressable row on the floor, and *stable to ~1% across draws* where
+every other row swings 40%. It is also **O(1) in program size**, so it is a LARGER share
+the smaller the project — i.e. exactly what an IDE-hosted application project pays per
+keystroke, and the reason it hid: at `"lib": ["es2020"]` the same row is 8-11 ms.
+
+**THE ROW WAS REFUSED, AND THE REFUSAL WAS RIGHT ABOUT A MECHANISM THAT OWNS 3% OF IT.**
+(INC.54)(c) reads: *"`parseBuiltinLib`, ~8-11 ms — REFUSED by (INC.53) with its split
+measured (binds 3.2-5.3, decl-set walk 1.9-2.8, resolution + 45 `mergeSymbolTable`
+3.1-5.3) and BLOCKED on round 884's `mergedSymbols` clone-on-write"*. The block is real
+and still stands — `mergeSymbolTable` MUTATES the merged-in symbols, so a bound lib table
+cannot be shared. But the bind measures **1.4 ms**. The recorded split mis-attributed the
+cost because `RealLibResolver.resolve` sits INSIDE the `bindLibFiles` section, and it is
+not a bind at all: `bindLibFiles` **17.4 -> 1.4 ms** is that resolve being memoized.
+
+**SO THE 46-50 ms IS TWO THINGS, BOTH PURE FUNCTIONS OF THE SHARED PARSES, NEITHER OF THEM
+THE BLOCKED ONE.**
+**(1) ~32 ms is `RealLibResolver.resolve`, CALLED TWICE PER CONSTRUCTION.** Its
+`/// <reference lib=…/>` closure runs a regex over the CONTENT of every included file —
+~3.7 MB for a `dom` set — and `bindRealLibs` asks for it once itself (for `unknownNames`)
+and once more through `parsedLibFiles`. It is a pure function of `(libNames, target)` over
+compile-time-constant text; memoized.
+**(2) ~15 ms is the B85.2/M2.2 decl-set walk**, which fills `builtinLibDecls` /
+`builtinLibMemberDecls` / `realLibDeclFile` — ~30k insertions into containers keyed by
+**data-class AST nodes**, i.e. round 471's deep `hashCode`. **The arithmetic is what names
+the mechanism, before any build**: ~15 ms over ~30k insertions is **~500 ns per put**,
+20-40x a `HashMap` put with a `String` value and physically impossible for the container
+alone — (INC.62)'s own instrument, and the fifth defect it has found. Hoisted VERBATIM
+(same order, same containers — a `Set<Node>` dedupes STRUCTURALLY, so a different container
+would silently change which declarations the sets hold) into
+`RealLibSnapshots.libDeclIndex`, built once per process and per lib set. It belongs there
+for the same reason the PARSE does: the walk reads the shared, immutable AST and mutates
+nothing.
+
+**MEASURED.** `parseBuiltinLib` 47.12 -> 1.65, 50.09 -> 1.69, 46.23 -> 1.46 ms; the
+decl-set walk 12.0-15.9 -> **0.01**; checker construct 99 -> 55, 97 -> 44, 84 -> 43; and
+the **PLAIN floor median 241 -> 189 ms (early) and 256 -> 166 (late)**, the early arm's
+ranges not overlapping (236-247 against 176-195). The wall corroborates the row here, as
+it did for (INC.61) and unlike (INC.60), because the effect is far outside the +-40%
+single-draw band.
+
+**GATES.** Suite **16,528 / 0 / 3** (+5, exactly the new pins). `cost_gate.py` exit 0 with
+all 20 counters +0.00% — the EXPECTED answer, since a CLI compile constructs one checker
+and a hoist within one construction is a strict no-op there. `huge_methods.py --fail-over
+0` clean. 8-profile before/after BINARY grid `added=0 removed=0` on all eight
+(`scripts/inc63-grid.sh`) — **run as a CONTROL and labelled one in its own header**: the
+index is a function of the LIB SET alone and all eight profiles carry one lib
+configuration, so profiles 2..8 cannot say anything profile 1 did not. What actually
+discriminates the sharing is the CORPUS, which runs thousands of compiles in one JVM.
+
+**PINS AND THEIR ABLATION.** The claim each pin makes is a COUNT, not a time (round 868:
+a millisecond assertion over a sub-10-ms region is a coin flip, and this saving sits under
+the spread of a whole compile); both counters are process-global, so every pin reads a
+DELTA. a1 (never consult the index cache) reddens both count pins; a2 (drop the resolve
+memo) reddens the resolve pin; a3 (the two identity sets swapped in the returned index)
+reddens ONLY the coverage pin — which is the receipt that the count pins cannot see a
+wrong-table wiring and that the coverage pin can. The negative control — the embedded-lib
+path must build its own tables and never be served the real-lib index — stays green in all
+three, which is what stops a "share everything" implementation reading green.
+
+**SUCCESSOR, per the WORK ORDER note.** The dom floor after this round is: **init-block
+pass dispatch 40-53 ms** (now the largest checker row, and FLAT — top pass
+`init:computePerFileVisibility` 5.8 ms, then 3.8 / 2.7 / 2.5 / 2.1, a ~400-pass tail with
+no one to make cheaper, so it needs the (INC.7)-style question "which of these can be
+partition-scoped or built on first ask", not a micro-optimisation), **crawl WALL 51-57 ms**
+((INC.56), the only row costing a soundness promise and now co-largest), config+glob 17-30,
+`extractRelativeImports` 15-23, post-checker 10-21. Filed as **(INC.64)**.
+
 ### Round (INC.61) — the arc had been measuring the cheap `lib`, and the floor's largest pass is 45x smaller now
 
 **FOUND BY RE-READING THE FLOOR AFTER (INC.60), WHICH IS (INC.59)'s OWN LESSON APPLIED
@@ -4306,7 +4382,10 @@ RHS, and the merged-member CONTRADICTION direction.
   334 -> 42, checker construct 393 -> 83, floor phase total 503 -> 200, and the PLAIN
   floor median 385 -> 202 ms.**
 
-- [ ] **(INC.62) RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS —
+- [x] **(INC.62) DONE 2026-08-30 — the floor IS re-taken on `dom`, and the row it exposed
+  ((INC.63), `parseBuiltinLib` 46-50 -> 1.5-1.7 ms, floor 241 -> 189 / 256 -> 166) had
+  been REFUSED WHOLE by (INC.54)(c) on a blocker that owns 3% of it. The successor
+  ranking is in (INC.64) below. ORIGINAL ENTRY:** RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS —
   AND TREAT THAT AS THE DEFAULT SHAPE FROM HERE (2026-08-30, (INC.61)).** Every floor
   figure in this arc was taken on a fixture pinning `"lib": ["es2020"]`, and (INC.61)
   measured the SAME program's largest pass at **13x** with `dom` added. The ranking at
@@ -4319,6 +4398,28 @@ RHS, and the merged-member CONTRADICTION direction.
   unchanged and it is the one that has now found five defects: divide a row by its own
   population, at two program sizes, and refuse an implied per-op cost that is physically
   impossible.**
+
+- [ ] **(INC.64) THE dom FLOOR AFTER (INC.63) — TWO CO-LARGEST ROWS, AND ONLY ONE OF THEM
+  IS A MICRO-OPTIMISATION QUESTION (2026-08-30).** Measured on
+  `build/bench/many-small-2400-dom`, 2,401 files, three arms, PLAIN floor median 166-189 ms:
+  **(a) the init-block pass dispatch, 40-53 ms** — now the largest checker row, and it is
+  FLAT in exactly (INC.3)'s sense: `init:computePerFileVisibility` 5.8 ms, then
+  `init:buildPerFileScopes` 3.8 (already fixed once by (INC.61)),
+  `init:moduleTypeNameIndex` 2.7, `init:collectUmdGlobalsAndModuleFiles` 2.5,
+  `init:mergeFileLocalsIntoGlobals` 2.1, and a ~400-pass tail carrying the rest. There is
+  no row to make cheaper; the question is (INC.7)'s — which of these can be
+  PARTITION-SCOPED or built on FIRST ASK — and (INC.20)'s MIXED-pass split is the shape
+  that has worked. Note `init:computePerFileVisibility` and `init:buildPerFileScopes` are
+  the (CHK.49) PAIR: they are one observable and must move together or not at all.
+  **(b) crawl WALL, 51-57 ms** — (INC.56), unchanged, and the only row that costs a
+  SOUNDNESS PROMISE, which is why it stays ranked behind anything that does not. It is
+  also the row an IntelliJ-class host can simply hand us, so it is the one to open once
+  the plugin exists to promise it.
+  **(c) config+glob 17-30, `extractRelativeImports` 15-23, post-checker 10-21, bind 7-10.**
+  **BEFORE OPENING ANY OF THEM, RE-TAKE THE TABLE**: this arc has now re-ranked itself
+  four times ((INC.58), (INC.59), (INC.61), (INC.63)) and each new top row was one no queue
+  item had named. And keep dividing by the population — that instrument has found five
+  defects and cost nothing.
 
 - [ ] **(CHK.74) A CROSS-FILE DUPLICATE GLOBAL IS SILENT — `declare const VERSION: string;`
   IN TWO SCRIPT FILES IS **TS2451 TWICE** IN tsgo 7.0.2 AND NOTHING HERE (2026-08-30,
@@ -4486,7 +4587,15 @@ RHS, and the merged-member CONTRADICTION direction.
   (INC.48)'s "a content hash cannot see an ADDED file" hazard in a second costume. Largest
   remaining FRONT-END row and it scales with project size, which is what an IntelliJ-sized
   project would feel.
-  **(c) `parseBuiltinLib`, ~8-11 ms — REFUSED by (INC.53) with its split measured** (binds
+  **(c) `parseBuiltinLib` — ~~REFUSED~~ **LANDED (INC.63) 2026-08-30, 46-50 -> 1.5-1.7 ms on
+  a `dom` lib set, AND THE SPLIT BELOW IS WHAT KEPT IT SHUT FOR SEVEN ROUNDS.** The bind
+  really is blocked by round 884 and really does measure 1.4 ms — 3% of the row. The other
+  97% was `RealLibResolver.resolve` (called TWICE per construction, a regex over ~3.7 MB of
+  lib text) and the decl-set walk (~30k puts into data-class-node-keyed containers); both
+  are pure functions of the SHARED parses and neither is the blocked one. The recorded
+  split mis-attributed the resolve because it sits INSIDE the `bindLibFiles` section.
+  **A REFUSAL THAT NAMES A BLOCKER MUST CHECK THE BLOCKED HALF IS WHERE THE COST IS.**
+  ORIGINAL: ~8-11 ms — REFUSED by (INC.53) with its split measured** (binds
   3.2-5.3, decl-set walk 1.9-2.8, resolution + 45 `mergeSymbolTable` 3.1-5.3) and BLOCKED
   on round 884's `mergedSymbols` clone-on-write: the checker merges into and mutates lib
   symbols, so neither the bind nor the merged table is shareable across checkers today.
