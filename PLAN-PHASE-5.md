@@ -20,6 +20,83 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.55) — cancellation, and what changes when the goal is named "IntelliJ"
+
+**WHY THIS ROUND EXISTS.** The owner rephrased the goal from "truly incremental" to
+"the best support one could get inside an IntelliJ platform-based IDE". That is not
+a restatement: it re-ranks the list, and the new top item is one no latency work
+reaches. Verified rather than assumed — **ZERO** cancellation or interrupt sites
+existed anywhere in the compiler or the `Project` API (the only `cancel` match in
+the surface is a comment about algebra).
+
+**THE ARGUMENT, because it is what justifies jumping the queue.** A build runs on
+the compiler's own deep-stack thread and `Project` JOINS it, so the calling thread
+is blocked for the whole build and cannot abandon it from outside.
+`DaemonCodeAnalyzer` restarts analysis on every write action. So without
+cooperative cancellation an editor has only bad options: block a pooled thread
+producing an answer it has already discarded — and delay the next, wanted one
+behind it — or not run the analysis in a highlighting pass at all. It is a
+CAPABILITY gap; narrowing the check does not touch it.
+
+**WHAT LANDED.** `Project.cancellation: CancellationSignal?`, threaded into all 8
+build sites, installed and restored around one build by `ProjectCompiler.build`
+(which now delegates to a private `buildCore` so every `return` in the body is
+covered by the `finally` without the body knowing about cancellation).
+
+**POLLED IN TWO PLACES AND THE SECOND IS THE POINT.** `pass("…")` gives ~480
+boundaries spread through the dispatch, but `checkSpine` is ONE pass — so a single
+large buffer's walk, 1.65 s on tsc's own `checker.ts`, would still be
+uncancellable. The spine loop therefore polls too, and since that loop's own
+comment refuses interleaved work it polls behind a counter: an increment, a mask
+and a predictable branch per node, with the volatile read taken once per 1024
+nodes (837 for the compiler profile's 856,962). `spine.nodes` is UNCHANGED at
+856,962 and `output.errors` flat at 46, i.e. the poll is inert unarmed.
+
+**IT IS AN `Error`, AND THAT IS THE DESIGN DECISION OF THE ROUND.** The checker,
+the crawl and the `Vfs` carry defensive `catch (Exception)` guards; a cancellation
+modelled as a `RuntimeException` would be swallowed by whichever guard it was
+thrown inside and the build would carry on with a missing file — silently wrong,
+which is worse than not cancelling. `Error` is safe for a checkable reason: the
+2026-07-04 sweep left NO `catch (Throwable)` and NO `catch (Error)` in
+`commonMain`, and `Checker`'s one boundary guard catches `StackOverflowError`
+alone; `runWithDeepStack` transfers it faithfully because it uses `runCatching`.
+**A future `catch (Throwable)` re-opens this silently, so the TYPE is pinned.**
+
+**STATE SAFETY IS BY CONSTRUCTION AND WAS CHECKED ANYWAY.** Every cache assignment
+in `Project` happens after `build` returns, so a throw skips all of them. Pinned
+twice — cancelling at the FIRST poll, and cancelling MID-flight (after 300 polls),
+which is the case a half-written cache would actually show up in.
+
+**THE PIN THAT ALMOST DIDN'T DISCRIMINATE, and the reusable lesson.** The
+spine-poll pin first compared a 3-file fixture against a 1-file one and went RED. I
+took that as "the mechanism is dead" and went looking — bytecode positive control
+(`javap -c -p | grep spineCancelTick`) said the poll WAS compiled into the
+production loop, and a `--passTiming` run said the file really does walk 8,401
+nodes. The premise was the bug: **the `pass()` poll count is NOT constant across
+programs** (405 against 418 here), which swamped the ~12 the spine contributed.
+Holding the file count and shapes fixed and varying only SIZE — one file at 400 and
+4,000 functions — reads ~417 against ~526. Now a CLAUDE.md entry, because it is the
+general form for any "does the fine-grained hook fire" question.
+
+**WHAT ELSE THE REFRAMING CHANGES, recorded so the queue reflects it.** (1) The
+host-owned VFS item moves UP: under the platform the IDE is authoritative for file
+content, so the "skipping a read is a soundness change" hedge largely dissolves,
+and re-reading + re-decoding every non-open file per query (44-56 ms of CPU, O(project))
+is the largest remaining front-end row. (2) **(INC.49)'s artifact question is NOT
+APPLICABLE** to in-process hosting — a plugin runs on the IDE's own JVM, so the
+GraalVM PGO image, the JDK 25 AOT cache and CRaC are all unavailable; what survives
+is the JIT ramp (amortised over a long session) and (INC.48)'s snapshot restore,
+which is exactly the IDE-restart case. (3) The threading rule needs to ship as a
+CONFINEMENT recipe, not a sentence: `Symbol`/`Type` ids are thread-local sequences
+handed off by `runWithDeepStack`, so two threads on one `Project` corrupt an id
+space with no diagnostic.
+
+**GATES.** Suite **16,496 / 0 / 3** (+7, exactly the new pins); `cost_gate.py` exit
+0; `huge_methods.py --fail-over 0` clean. Commits `c5462c3df`, `f3b63fb84`.
+
+**NAMED SUCCESSORS.** (INC.56) below — the host-owned VFS, now the top latency item
+— and (INC.54)'s pass table. Neither is blocked.
+
 ### Round (INC.53) — the incremental floor's largest block was never in a pass
 
 **WHAT THIS ROUND BOUGHT.** ~13 ms off the per-keystroke FLOOR of every
@@ -3688,6 +3765,30 @@ RHS, and the merged-member CONTRADICTION direction.
   program's file list or a config change serves a stale surface, and a version stamp must
   refuse a file written by a different build. **Measure the serialise/deserialise cost against
   the 136 ms it replaces before building the invalidation.**
+
+- [ ] **(INC.56) LET AN IntelliJ-CLASS HOST SKIP THE RE-READ — THE LARGEST REMAINING
+  FRONT-END ROW, AND THE REFRAMED GOAL MOVES IT UP.** Every query re-reads and re-decodes
+  every NON-OVERLAID file: **10-12 ms wall and 44-56 ms of CPU** across the crawl's workers
+  for tsc's 78 sources, although the PARSE is already fully content-cached (`78 reused /
+  0 fresh`) — the bytes are read only to compute the content key. It is O(PROJECT), not
+  O(edit), so it is what a monorepo feels on every keystroke, and it is the largest
+  front-end row left after (INC.53).
+  **WHY THE OBJECTION IS WEAKER THAN IT LOOKS UNDER THE PLATFORM.** The hedge recorded in
+  (INC.54)(b) was that skipping a read is a soundness change: a file changed on disk without
+  `updateFile` would be missed. On the IntelliJ platform the IDE's VFS is AUTHORITATIVE and
+  guarantees change notification, so a host CAN promise it — which makes this an opt-in
+  `Project` policy rather than a compiler default. It must stay opt-in: a `Vfs` whose
+  backing store changes underneath is exactly what the promise excludes.
+  **WHAT TO MEASURE FIRST, per this repo's own law.** The 44-56 ms is CPU across parallel
+  crawl workers and only **10-12 ms of WALL** — so the prize is the wall figure, not the CPU
+  one, and it must be re-taken on a project with MANY SMALL files rather than tsc's 78 huge
+  ones, because that is the shape an application project has and the per-file overhead is
+  what would dominate there. `scripts/floor-decomposition.sh` prints both.
+  **AND IT INTERACTS WITH (INC.48)**: a content hash cannot see an ADDED file, which is why
+  a restored snapshot is untrusted until one build has re-crawled. A "trust the host" mode
+  inherits that hazard in a second costume — the host must also promise to report ADDITIONS,
+  and the pin is a file added behind the promise being MISSED (i.e. the pin asserts the
+  documented limit, not that it magically works).
 
 - [ ] **(INC.54) THE FLOOR AFTER (INC.53), IN PRIORITY ORDER — AND THE FIRST ONE IS THE
   SAME QUESTION ONE LAYER UP.** (INC.53) took the `Checker` constructor's ~494 property

@@ -1,3 +1,34 @@
+**(INC.47) — THE EXPORT FINGERPRINT IS A CANONICAL SERIALIZATION, THE ESCAPE CLASS IS
+EMPTY, AND THE 87.5% CEILING IT WAS AIMED AT DID NOT EXIST (2026-08-29).** The walk no
+longer recurses: every type reachable from a file's exports is DISCOVERED once, in a
+deterministic order, and named by its discovery INDEX, so a reference — forward, back or
+self — costs one lookup and cycles need no special case. There is no strongly-connected
+component left to hash, which is why this is simpler than the Tarjan machinery the queue
+named and strictly stronger. **MEASURED whole-program on tsc's own 78 sources**:
+`types.ts` **122.52 ms for ONE export and a node-budget STOP -> 6.21 ms for 871 exports**;
+whole-program **131 -> 16 ms**; structural nodes **2,019,605 -> 38,502**; budget stops
+1 -> **0**; escapes `[types.ts]` -> **[]**; exports hashed 2,137 -> **3,007**; both
+controls held (identical-text stability **78/78**, narrowed-vs-whole agreement **24/24**).
+**AND THE PRIZE IS REFUTED ON BOTH ARMS RATHER THAN ARGUED**: the 40-commit stability
+corpus reads **27/40 = 67% before AND after, with every one of the 40 per-case verdicts
+identical**. (INC.46)(2)'s ceiling came from its runner printing *"N moved only because a
+touched file ESCAPES"* over the code `if (escaped)` — which counts every case that
+TOUCHED an escaping file — while its own detail lines showed four other movers in the same
+case; re-derived, exactly ONE of the 8 qualified, so the ceiling was **70%**, and after
+this even that one moves, because `types.ts` is a file of exported declarations and an
+edit to it really does move the surface. **IT LANDS ON SOUNDNESS, NOT ON THE RATE**: the
+old walk bounded its recursion with a DEPTH CAP of 24 and hashed everything below it as
+one constant — a MISSED invalidation, i.e. a stale diagnostic, live since (INC.46)(3)
+began answering project-wide diagnostics from the previous build. Both new pins are RED
+against the pre-(INC.47) binary and green after, one for the mechanism (pinned on the node
+COUNTER, not a time) and one for the soundness half. **The escape class being empty is a
+claim about OTHER codebases** — a single-file library with a large cyclic type graph is
+ordinary in real TypeScript and would have forced a whole-program rebuild on every
+keystroke forever. **GATES.** Suite **16,466 / 0 / 3** (+2, exactly the new pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; build warning-clean.
+**SUCCESSOR: (INC.50)** — the 67% is not improvable on this corpus by any mechanism, so
+the live question is the rate on ordinary LAYERED code (`knip`, `jsonrepair`, `cronstrue`).
+
 **(INC.46)(3) — PROJECT-WIDE DIAGNOSTICS ARE INCREMENTAL, AND WITH (INC.44)/(INC.45)
 NOTHING AN EDITOR ASKS IS WHOLE-PROGRAM BY DEFAULT ANY MORE (2026-08-29).**
 `Project.diagnostics()` no longer rebuilds after every edit: when the edit moved no

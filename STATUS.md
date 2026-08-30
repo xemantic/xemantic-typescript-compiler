@@ -1,5 +1,35 @@
 # Status
 
+**(INC.55) — A HOST CAN NOW CANCEL A BUILD, WHICH IS THE CAPABILITY AN IntelliJ PLUGIN
+NEEDS AND NO LATENCY WORK CAN REPLACE (2026-08-30).** Asked to judge the language service
+as "the best support one could get inside an IntelliJ platform IDE" rather than as
+"incremental", the top of the list changes: there was **ZERO cancellation** anywhere in
+the compiler or the `Project` API. A build runs on the compiler's own deep-stack thread and
+`Project` JOINS it, so the caller is blocked for its whole duration and cannot abandon it
+from outside — while `DaemonCodeAnalyzer` restarts analysis on every write action. Without
+this an editor must either block a pooled thread producing an answer it has already
+discarded, delaying the next one behind it, or not run the analysis in a highlighting pass
+at all. `Project.cancellation` takes a `CancellationSignal` (on the platform,
+`{ indicator.isCanceled }`), polled at every `pass("…")` boundary AND every **1024 spine
+nodes** — the second is what keeps a large buffer's walk (1.65 s on tsc's own `checker.ts`)
+interruptible, and the hot loop's own comment refuses interleaved work, so the poll sits
+behind a counter (837 volatile reads for 856,962 nodes). **IT IS AN `Error` DELIBERATELY**:
+the checker, crawl and `Vfs` carry defensive `catch (Exception)` guards, and a cancellation
+they could swallow would let the build continue with a missing file — silently wrong, worse
+than not cancelling; `Error` is safe because the 2026-07-04 sweep left no `catch (Throwable)`
+anywhere, which is pinned rather than trusted to a KDoc. **STATE SAFETY IS BY CONSTRUCTION**
+— every cache assignment in `Project` happens after `build` returns, so a throw skips all of
+them — pinned both at the first poll and MID-flight. **THE PIN THAT ALMOST DIDN'T
+DISCRIMINATE**: the spine-poll test first compared a 3-file fixture with a 1-file one and
+FAILED, because the `pass()` poll count is not constant across programs (405 vs 418) and
+swamped the spine's ~12; holding file count and shape fixed and varying only SIZE reads ~417
+against ~526. **GATES.** Suite **16,496 / 0 / 3** (+7, exactly the new pins); `cost_gate.py`
+exit 0 with **`spine.nodes` UNCHANGED at 856,962** and `output.errors` flat at 46 — the poll
+is inert when unarmed; `huge_methods.py --fail-over 0` clean. Also documented: the threading
+rule is a CONFINEMENT rule (Symbol/Type ids are thread-local, so two threads on one
+`Project` corrupt an id space with no diagnostic), and the GraalVM/AOT/CRaC artifact levers
+do NOT apply to a plugin running in-process on the IDE's own JVM.
+
 **(INC.53) — THE INCREMENTAL FLOOR'S LARGEST BLOCK WAS NEVER IN A PASS, AND ~950 ROUNDS OF
 INSTRUMENTS COULD NOT SEE IT (2026-08-29).** The floor is what an editor pays per keystroke,
 and 32-44 ms of its 63-72 ms is "checker construct + getDiagnostics". Split for the first
@@ -106,34 +136,3 @@ rate unchanged at 72%, exactly as `types.ts` left tsc's at 67%. On both, the fil
 could not be summarised was also one whose surface genuinely moved. **GATES.** Suite
 **16,470 / 0 / 3** (+4, exactly the (INC.51) pins); `cost_gate.py` exit 0;
 `huge_methods.py --fail-over 0` clean; warning-clean.
-
-**(INC.47) — THE EXPORT FINGERPRINT IS A CANONICAL SERIALIZATION, THE ESCAPE CLASS IS
-EMPTY, AND THE 87.5% CEILING IT WAS AIMED AT DID NOT EXIST (2026-08-29).** The walk no
-longer recurses: every type reachable from a file's exports is DISCOVERED once, in a
-deterministic order, and named by its discovery INDEX, so a reference — forward, back or
-self — costs one lookup and cycles need no special case. There is no strongly-connected
-component left to hash, which is why this is simpler than the Tarjan machinery the queue
-named and strictly stronger. **MEASURED whole-program on tsc's own 78 sources**:
-`types.ts` **122.52 ms for ONE export and a node-budget STOP -> 6.21 ms for 871 exports**;
-whole-program **131 -> 16 ms**; structural nodes **2,019,605 -> 38,502**; budget stops
-1 -> **0**; escapes `[types.ts]` -> **[]**; exports hashed 2,137 -> **3,007**; both
-controls held (identical-text stability **78/78**, narrowed-vs-whole agreement **24/24**).
-**AND THE PRIZE IS REFUTED ON BOTH ARMS RATHER THAN ARGUED**: the 40-commit stability
-corpus reads **27/40 = 67% before AND after, with every one of the 40 per-case verdicts
-identical**. (INC.46)(2)'s ceiling came from its runner printing *"N moved only because a
-touched file ESCAPES"* over the code `if (escaped)` — which counts every case that
-TOUCHED an escaping file — while its own detail lines showed four other movers in the same
-case; re-derived, exactly ONE of the 8 qualified, so the ceiling was **70%**, and after
-this even that one moves, because `types.ts` is a file of exported declarations and an
-edit to it really does move the surface. **IT LANDS ON SOUNDNESS, NOT ON THE RATE**: the
-old walk bounded its recursion with a DEPTH CAP of 24 and hashed everything below it as
-one constant — a MISSED invalidation, i.e. a stale diagnostic, live since (INC.46)(3)
-began answering project-wide diagnostics from the previous build. Both new pins are RED
-against the pre-(INC.47) binary and green after, one for the mechanism (pinned on the node
-COUNTER, not a time) and one for the soundness half. **The escape class being empty is a
-claim about OTHER codebases** — a single-file library with a large cyclic type graph is
-ordinary in real TypeScript and would have forced a whole-program rebuild on every
-keystroke forever. **GATES.** Suite **16,466 / 0 / 3** (+2, exactly the new pins);
-`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; build warning-clean.
-**SUCCESSOR: (INC.50)** — the 67% is not improvable on this corpus by any mechanism, so
-the live question is the rate on ordinary LAYERED code (`knip`, `jsonrepair`, `cronstrue`).
