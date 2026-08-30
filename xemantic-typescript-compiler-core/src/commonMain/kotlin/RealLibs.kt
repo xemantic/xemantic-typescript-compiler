@@ -221,7 +221,33 @@ object RealLibResolver {
      * [target]'s default lib; expands `/// <reference lib="…" />` closures; dedupes;
      * orders by tsc's default-lib priority.
      */
-    fun resolve(libNames: List<String>?, target: ScriptTarget): Resolution {
+    fun resolve(libNames: List<String>?, target: ScriptTarget): Resolution =
+        resolutionCache.getOrPut(ResolutionKey(libNames, target)) { resolveCore(libNames, target) }
+
+    /**
+     * (INC.63): `resolve` is a pure function of two arguments over COMPILE-TIME CONSTANT
+     * content, and its `/// <reference lib=…/>` closure runs [libReferenceRegex] over
+     * every included file — ~3.7 MB of lib text for a `dom` set, which (INC.53) measured
+     * at 3.1-5.3 ms and which every [Checker] construction paid again. Memoized here
+     * rather than at the call sites because there are several and they must agree
+     * (CLAUDE.md (CHK.17): the lib set must stay in step with `prewarmParsedLibFiles`).
+     *
+     * Not thread-safe, like [RealLibSnapshots.parsedLibFile] and for the same reason —
+     * `prewarmParsedLibFiles` resolves on the calling thread before any worker spawns.
+     */
+    private data class ResolutionKey(val libNames: List<String>?, val target: ScriptTarget)
+
+    private val resolutionCache = HashMap<ResolutionKey, Resolution>()
+
+    /**
+     * (INC.63) census — lib-set resolutions this process has COMPUTED, as opposed to
+     * served from [resolutionCache]. Read as a DELTA by its pin: the cache is
+     * process-global and outlives any one test.
+     */
+    var resolutions: Int = 0
+        private set
+
+    private fun resolveCore(libNames: List<String>?, target: ScriptTarget): Resolution {
         val includedFiles = LinkedHashSet<String>() // dist file names, discovery order
         val unknown = mutableListOf<String>()
         val unavailable = mutableListOf<String>()
@@ -253,6 +279,7 @@ object RealLibResolver {
             .filter { distFileNameToKey(it) in RealLibFiles.files }
             .sortedBy { libFilePriority(it) } // stable: ties keep discovery order
             .map { distFileNameToKey(it) }
+        resolutions++
         return Resolution(ordered, unknown, unavailable)
     }
 
@@ -374,5 +401,94 @@ object RealLibSnapshots {
     fun prewarmParsedLibFiles(options: CompilerOptions) {
         if (!options.useRealLibs) return
         parsedLibFiles(options.lib.ifEmpty { null }, options.defaultedTarget)
+        libDeclIndex(options.lib.ifEmpty { null }, options.defaultedTarget)
+    }
+
+    /**
+     * (INC.63): the three lib DECLARATION tables [Checker] used to rebuild per
+     * construction — a pure function of the SHARED parses, and therefore exactly as
+     * shareable as they are.
+     *
+     * [decls] / [memberDecls] are the B85.2 identity sets (top-level lib statements,
+     * and the members of lib interfaces/classes); [declFile] is the M2.2 map from a
+     * real-lib declaration node to its DISTRIBUTED file name, which TS2728's
+     * "declared here" renders. Nothing writes to them after construction — the
+     * read-only types are what keeps that true — and they key on nodes of the
+     * process-wide [parseCache], so one index serves every program with that lib set.
+     *
+     * NOT the bind: [bindLibFiles] stays per-consumer because `mergeSymbolTable`
+     * MUTATES the merged-in symbols (see this object's KDoc). The walk does not
+     * mutate anything, which is the whole reason this half separates.
+     */
+    class LibDeclIndex(
+        val decls: Set<Node>,
+        val memberDecls: Set<Node>,
+        val declFile: Map<Node, String>,
+    )
+
+    private val declIndexCache = HashMap<String, LibDeclIndex>()
+
+    /**
+     * (INC.63) census — how many indexes this process has BUILT (as opposed to
+     * served). A pin reads it as a DELTA across two builds rather than as an
+     * absolute, because the cache is process-global and outlives any one test.
+     */
+    var declIndexBuilds: Int = 0
+        private set
+
+    /** (INC.63) census — total entries written by the last index BUILD, so a
+     *  measurement can divide the row by its own population. */
+    var declIndexEntries: Int = 0
+        private set
+
+    /**
+     * The [LibDeclIndex] for a lib set, built once per process and then served.
+     *
+     * Keyed by the RESOLVED ordered key list, not by the requested names: two
+     * projects spelling the same lib set differently (an explicit `"es2020"`
+     * against an unset `lib` on an es2020 target) resolve to one key list and
+     * share the index.
+     */
+    fun libDeclIndex(libNames: List<String>?, target: ScriptTarget): LibDeclIndex {
+        val keys = RealLibResolver.resolve(libNames, target).orderedKeys
+        return declIndexCache.getOrPut(keys.joinToString("\u0000")) {
+            buildLibDeclIndex(keys.map { parsedLibFile(it) })
+        }
+    }
+
+    /**
+     * The walk itself, verbatim from [Checker.bindRealLibs] where it used to run once
+     * per checker. Order and containers are unchanged on purpose: a `Set<Node>` over
+     * data-class nodes dedupes STRUCTURALLY, so a different container would silently
+     * change which declarations the sets contain.
+     */
+    private fun buildLibDeclIndex(files: List<SourceFile>): LibDeclIndex {
+        val decls = HashSet<Node>()
+        val memberDecls = HashSet<Node>()
+        val declFile = HashMap<Node, String>()
+        var entries = 0
+        for (ast in files) {
+            val distFile = ast.fileName
+            ast.statements.forEach { stmt ->
+                decls.add(stmt)
+                declFile[stmt] = distFile
+                entries += 2
+                when (stmt) {
+                    is InterfaceDeclaration -> stmt.members.forEach {
+                        memberDecls.add(it); declFile[it] = distFile; entries += 2
+                    }
+                    is ClassDeclaration -> stmt.members.forEach {
+                        memberDecls.add(it); declFile[it] = distFile; entries += 2
+                    }
+                    is VariableStatement -> stmt.declarationList.declarations.forEach {
+                        decls.add(it); declFile[it] = distFile; entries += 2
+                    }
+                    else -> {}
+                }
+            }
+        }
+        declIndexBuilds++
+        declIndexEntries = entries
+        return LibDeclIndex(decls, memberDecls, declFile)
     }
 }

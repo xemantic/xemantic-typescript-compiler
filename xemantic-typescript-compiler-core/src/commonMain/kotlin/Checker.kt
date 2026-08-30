@@ -9025,13 +9025,13 @@ class Checker(
      *  Declared BEFORE [parseBuiltinLib]/[libGlobals] so it's initialized when
      *  `parseBuiltinLib()` runs (Kotlin property init order — properties after the call
      *  site have default values during the call). */
-    private val builtinLibDecls: MutableSet<Node> = mutableSetOf()
+    private var builtinLibDecls: Set<Node> = emptySet()
     /** Member-declaration nodes (methods/props/accessors) inside built-in lib
      *  interfaces/classes — used by the TS2403 structural-identity comparator to
      *  distinguish user-declared members from lib-merged ones (Blocker #3 workaround:
      *  a user `interface Promise<T>` merges with the lib `Promise<T>`, polluting its
      *  member set; the comparator filters those out to compare only user members). */
-    private val builtinLibMemberDecls: MutableSet<Node> = mutableSetOf()
+    private var builtinLibMemberDecls: Set<Node> = emptySet()
 
     /**
      * M2.2 (round 391): under [CompilerOptions.useRealLibs] the default library is
@@ -9045,7 +9045,7 @@ class Checker(
      * declaration) to its DISTRIBUTED file name so the TS2728 builders can resolve
      * lib-declared names directly, node-first, and render `<distName>:--:--`. Empty under
      * the embedded lib (single file) → the embedded path is unchanged. */
-    private val realLibDeclFile: MutableMap<Node, String> = mutableMapOf()
+    private var realLibDeclFile: Map<Node, String> = emptyMap()
 
     /**
      * Parse and bind the built-in type declarations, returning the symbol table.
@@ -9064,21 +9064,25 @@ class Checker(
         // from `interface Array<T>` when `@target: es2015`). User-defined `interface
         // Array<T> extends ...` declarations are NOT in this set and pass through
         // unfiltered.
+        val embeddedDecls = HashSet<Node>()
+        val embeddedMemberDecls = HashSet<Node>()
         ast.statements.forEach { stmt ->
-            builtinLibDecls.add(stmt)
+            embeddedDecls.add(stmt)
             // Collect member-declaration nodes of lib interfaces/classes so the TS2403
             // comparator can ignore them when a user interface of the same name merges.
             when (stmt) {
-                is InterfaceDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
-                is ClassDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                is InterfaceDeclaration -> stmt.members.forEach { embeddedMemberDecls.add(it) }
+                is ClassDeclaration -> stmt.members.forEach { embeddedMemberDecls.add(it) }
                 // B237: a `declare var Map: MapConstructor` lib statement binds its
                 // SYMBOL declarations to the inner VariableDeclaration nodes, not the
                 // statement — add them so "is this symbol user-declared?" identity
                 // checks (`decl !in builtinLibDecls`) see lib var declarations too.
-                is VariableStatement -> stmt.declarationList.declarations.forEach { builtinLibDecls.add(it) }
+                is VariableStatement -> stmt.declarationList.declarations.forEach { embeddedDecls.add(it) }
                 else -> {}
             }
         }
+        builtinLibDecls = embeddedDecls
+        builtinLibMemberDecls = embeddedMemberDecls
         return Binder(options).bind(ast).locals
     }
 
@@ -9147,29 +9151,21 @@ class Checker(
         val results = FrontEnd.section(FrontEnd.CHK_F_LIBBIND) {
             RealLibSnapshots.bindLibFiles(libNames, options.defaultedTarget, options)
         }
+        // (INC.63): the decl-set walk is a pure function of the SHARED parses, so it is
+        // built once per process and per lib set rather than once per checker. It was
+        // 12-16 ms of a ~205 ms incremental floor on a `dom` lib set — ~30k insertions
+        // into containers keyed by DATA-CLASS nodes, i.e. round 471's deep `hashCode`
+        // at a scale the es2020-only fixtures could not express. The bind below stays
+        // per-consumer: `mergeSymbolTable` MUTATES its inputs, the walk mutates nothing.
+        val feDeclsT0 = FrontEnd.t()
+        val declIndex = RealLibSnapshots.libDeclIndex(libNames, options.defaultedTarget)
+        builtinLibDecls = declIndex.decls
+        builtinLibMemberDecls = declIndex.memberDecls
+        realLibDeclFile = declIndex.declFile
+        FrontEnd.close(FrontEnd.CHK_F_LIBDECLS, feDeclsT0)
         val merged: SymbolTable = symbolTable()
         for (result in results) {
-            val ast = result.sourceFile
-            val distFile = ast.fileName
-            if (builtinLibSourceFile == null) builtinLibSourceFile = ast
-            val feDeclsT0 = FrontEnd.t()
-            ast.statements.forEach { stmt ->
-                builtinLibDecls.add(stmt)
-                realLibDeclFile[stmt] = distFile
-                when (stmt) {
-                    is InterfaceDeclaration -> stmt.members.forEach {
-                        builtinLibMemberDecls.add(it); realLibDeclFile[it] = distFile
-                    }
-                    is ClassDeclaration -> stmt.members.forEach {
-                        builtinLibMemberDecls.add(it); realLibDeclFile[it] = distFile
-                    }
-                    is VariableStatement -> stmt.declarationList.declarations.forEach {
-                        builtinLibDecls.add(it); realLibDeclFile[it] = distFile
-                    }
-                    else -> {}
-                }
-            }
-            FrontEnd.close(FrontEnd.CHK_F_LIBDECLS, feDeclsT0)
+            if (builtinLibSourceFile == null) builtinLibSourceFile = result.sourceFile
             mergeSymbolTable(merged, result.locals)
         }
         return merged
