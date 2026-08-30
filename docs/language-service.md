@@ -2475,6 +2475,50 @@ compiler is the buffer's and not the caret's. What is left, and is what a host s
 still do: **debounce, and wire `documentHighlightsAt` rather than `referencesAt` to
 caret movement.** Batching is now a convenience rather than a cost decision.
 
+### Hosting this inside an IntelliJ platform IDE
+
+The platform imposes two requirements that are not latency questions, and one of
+them is now met.
+
+**Cancellation — met since (INC.55).** `DaemonCodeAnalyzer` restarts analysis on
+every write action, and the platform contract is that background work polls
+`ProgressManager.checkCanceled()`. A build here runs on the compiler's own
+deep-stack thread and this API JOINS it, so the calling thread is blocked for the
+whole build and cannot abandon it from outside. Set `Project.cancellation` to a
+`CancellationSignal` — on the platform, `{ indicator.isCanceled }` — and the build
+polls it at every `pass("…")` boundary and every 1024 spine nodes, which is what
+keeps a large buffer's walk interruptible.
+
+A cancelled build throws `CompilationCancelledError` out of the call that asked for
+it and produces no result. **Nothing in `Project` is left half-updated**, by
+construction rather than by care: every cache assignment happens after the build
+returns, so a throw skips all of them. The work of the abandoned build is lost —
+there is no partial answer to keep — so cancel because the answer is unwanted, not
+to poll.
+
+It is an `Error` and not an `Exception` on purpose: the checker, the crawl and the
+`Vfs` carry defensive `catch (Exception)` guards, and a cancellation they could
+swallow would let the build carry on with a missing file — silently wrong, which is
+worse than not cancelling.
+
+**Threading — a confinement rule, not a lock.** One `Project` belongs to one thread
+at a time (§ 11). That is compatible with running analysis under read actions on
+pooled background threads, but it must be *confined* — one single-thread executor
+per project, the way the compile server already serialises its requests — because
+`Symbol` and `Type` ids are thread-local sequences that `runWithDeepStack` hands
+off (INV.6(6c0)). Calling one `Project` from two threads is not merely racy; it
+corrupts an id space, and no diagnostic says so.
+
+**What does NOT apply.** A plugin runs in-process on the IDE's own long-lived JVM,
+so none of the artifact levers this repo has measured — the GraalVM PGO image, the
+JDK 25 AOT cache, CRaC — is available to it. What remains relevant is the JIT ramp
+on the first queries after IDE start, which amortises over a long session, and
+(INC.48)'s snapshot restore, which is exactly the IDE-restart case.
+
+**Budget the memory per project, not per program.** A monorepo has many
+`tsconfig.json`s and therefore many `Project` instances; § 13's retention figure is
+per project.
+
 ### The known gaps, all of them
 
 **Seven live of the ten ever numbered** — 2, 6 and 7 are closed and their numbers are
