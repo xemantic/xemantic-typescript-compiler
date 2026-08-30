@@ -5,6 +5,8 @@
 
 | Date | xtsc rev | Mode | xtsc warm | warm/tsc | warm/tsgo | tsc | tsgo | xtsc cold | xtsc-nat | nat/tsc | err | Run | warm2 |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| 2026-08-30 | [`d6accd00e6f1`](https://github.com/xemantic/xemantic-typescript-compiler/commit/d6accd00e6f1d9e46e55e28fc4ab1207520c6918) | check-only | 4.08s | 0.38× | 2.37× | 10.74s | 1.72s | 24.84s | 6.69s | 0.62× | 46 | [report](runs/20260830T232944Z-d6accd00e6f1.md) | 4.11s |
+| 2026-08-30 | [`d6accd00e6f1`](https://github.com/xemantic/xemantic-typescript-compiler/commit/d6accd00e6f1d9e46e55e28fc4ab1207520c6918) | emit | 5.12s | 0.40× | 2.16× | 12.83s | 2.37s | 28.62s | 7.53s | 0.59× | 46 | [report](runs/20260830T232944Z-d6accd00e6f1.md) | 4.59s |
 | 2026-08-30 | [`eea804a5dc1f`](https://github.com/xemantic/xemantic-typescript-compiler/commit/eea804a5dc1f9bad2f126cb49ae137e0c6ef85a5) | check-only | 3.36s | 0.36× | 2.27× | 9.46s | 1.48s | 21.20s | 5.52s | 0.58× | 46 | [report](runs/20260830T225356Z-eea804a5dc1f.md) | 3.28s |
 | 2026-08-30 | [`eea804a5dc1f`](https://github.com/xemantic/xemantic-typescript-compiler/commit/eea804a5dc1f9bad2f126cb49ae137e0c6ef85a5) | emit | 4.42s | 0.38× | 2.00× | 11.68s | 2.21s | 23.57s | 6.87s | 0.59× | 46 | [report](runs/20260830T225356Z-eea804a5dc1f.md) | 4.02s |
 | 2026-08-30 | [`b511fe186d73`](https://github.com/xemantic/xemantic-typescript-compiler/commit/b511fe186d73d2d6eb4dd35b733f166b4142b438) | check-only | 4.28s | 0.41× | 2.76× | 10.32s | 1.55s | 21.77s | 6.39s | 0.62× | 46 | [report](runs/20260830T222158Z-b511fe186d73.md) | 3.93s |
