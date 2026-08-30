@@ -20,6 +20,111 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.60) — the floor's third row was a question asked twice per entry, and the second ask cost five syscalls
+
+**THE QUEUE ENTRY SAID "DO NOT ASSUME IT IS THE GLOB". IT IS THE GLOB — AND THAT IS
+THE LEAST INTERESTING HALF OF THE ANSWER.** `FrontEnd.CONFIG` covers three different
+pieces of work with three different levers (tsconfig load, `@types` acquisition, the
+root-file glob) and no round had separated them. Split five ways at 2,401 files, the
+warm floor draws read:
+
+| block | before |
+|---|---|
+| tsconfig load | **0.43 ms** |
+| `@types` acquisition | **0.01 ms** |
+| root-file glob | 30.1 ms |
+| — of which the directory walk | 29.9 |
+| — — of which `vfs.isDirectory` per ENTRY | **15-21 ms over 2,451 calls (7.3-8.6 us each)** |
+| — — of which `vfs.list` + sort per DIRECTORY | 4.8 over 50 |
+| — — of which the include/exclude regex match | 5.0-5.8 over 2,401 |
+
+So the row is ~99% the glob, the glob is ~99% the walk, and **60-70% of the walk is one
+call the walk did not need to make**: for every entry the directory listing had just
+returned, it went back to the filesystem to ask "is this a directory?".
+
+**WHY THAT ONE BOOLEAN COSTS 7.3-8.6 us, WHICH IS THE PART NO AMOUNT OF READING OUR OWN
+SOURCE WOULD HAVE SHOWN.** `SystemVfs.isDirectory` is `SystemFileSystem.metadataOrNull(...)`,
+and kotlinx-io 0.9.1 compiles that (`FileSystemJvmKt$SystemFileSystem$1.metadataOrNull`,
+read out of the jar with `javap -c`) to `File.exists()` + `File.isFile()` +
+`File.isDirectory()` + `File.isFile()` + `File.length()` — **up to five `stat` syscalls
+plus a `FileMetadata` allocation to answer one bit** — on a `Path` rebuilt from the
+string the listing had just produced. The dependency's implementation was the price,
+and the only way to see it was to divide the row by its population and refuse the
+implied per-op cost (round 894's law: 7.3 us is impossible for one `stat`).
+
+**THE FIX IS A LISTING THAT ANSWERS THE KIND.** `Vfs.listEntries` returns
+`List<VfsEntry>`; **its default body is literally the two calls it replaces**, so every
+`Vfs` in the repo and every one an embedder writes is unchanged and correct without
+touching it. `SystemVfs` overrides it through a new `expect fun systemListEntries` —
+JVM actual: one `readdir` (`File.listFiles`, which constructs the children without
+touching the filesystem again) plus one `File.isDirectory` per entry; native actual:
+the portable pair, since Kotlin/Native has nothing cheaper.
+
+**RESULTS, both arms measured this session with the same runner** (only within-round
+paired deltas are quotable here):
+
+| | before | after |
+|---|---|---|
+| 2,401 files — `CONFIG` | 29.2 / 30.6 / 32.6 ms | **11.5 / 14.7 / 16.3 ms** |
+| 2,401 files — the walk | 28.4 / 29.9 / 31.9 | **10.9 / 13.9 / 15.6** |
+| 4,801 files — `CONFIG` | 52.8 / 52.9 (the queue's own recorded figure) | **20.7 / 25.9 / 27.1** |
+| per entry | ~9.3 us | **3.1-4.4 us** |
+
+**THE CENSUS IS THE RECEIPT THAT NOTHING WAS SKIPPED TO BUY IT** — `50 dirs, 2451
+entries, 2401 candidates, 2401 roots` at 2,401 files and `98 / 4899 / 4801 / 4801` at
+4,801, IDENTICAL across the change. And the per-entry figure is flat across the two
+sizes in both arms, so this is a constant-factor win on a linear row, not a complexity
+one: the three quadratics of the previous session are still gone.
+
+**WHAT THE PLAIN ARMS SAY, AND WHY THEY ARE NOT THE EVIDENCE.** The uninstrumented floor
+medians read 216 ms before and 222 after at 2,401 files — i.e. the ~16 ms saving is
+INSIDE the ±40% single-draw band (INC.52) characterised, and a wall-clock reading of this
+round would have concluded the opposite of the truth. The `FrontEnd` row is deterministic
+where the wall is not; that is the whole reason the split was built before the fix.
+
+**PINS, AND WHAT EACH ONE IS FOR.** The saving is a property of the PLATFORM's
+filesystem, so no timing assertion can state it and none is made. Two classes, two
+layers, ablated separately:
+
+* `RootGlobListingTest` (commonTest) — the CALL SHAPE. Its counting `Vfs` **overrides
+  `listEntries`** and answers the kind from the listing, exactly as `SystemVfs` does;
+  without that override the default *is* the pre-fix question sequence and the pin would
+  be vacuous against every binary. Pins: no `isDirectory` on a `.ts` path at all; the
+  count does not grow between a 10-file and a 100-file directory ((INC.57)'s
+  count-at-two-sizes idiom); and the roots — **and their ORDER**, round 776 — are what a
+  `Vfs` taking the DEFAULT `listEntries` produces.
+* `SystemVfsListEntriesTest` (jvmTest, real temp tree) — the EQUIVALENCE of the separate
+  JVM implementation, whose divergence would be silent: a wrong kind drops a file from
+  the program or adopts a directory as a root, with no diagnostic anywhere. Includes a
+  directory literally named `looks-like.ts`, which is the shape any
+  guess-the-kind-from-the-extension shortcut gets wrong.
+
+**ABLATION (one mistake at a time, on a COMMITTED tree, each arm `cmp`ed against HEAD so
+a dead arm cannot read as a redundant guard).** a1 restores `list` + `isDirectory` per
+entry: **2 of 3 `RootGlobListingTest` pins RED**, the equivalence pin correctly green (a1
+changes the questions, not the answers), `SystemVfsListEntriesTest` untouched. a2 makes
+the JVM actual answer the kind wrongly: **2 of 3 `SystemVfsListEntriesTest` pins RED**,
+`RootGlobListingTest` green (it drives an in-memory `Vfs`). Neither class covers the
+other's layer. Restored, REBUILT, and the restored binary re-run green ((CHK.54): a
+restore leaves the class dir holding the last arm).
+
+**GATES.** Suite **16,514 / 0 / 3** (+6, exactly the new pins); `cost_gate.py` exit 0
+with **every counter unchanged** (this touches no checker); `huge_methods.py
+--fail-over 0` clean; warning-clean.
+
+**NAMED SUCCESSOR — and it is not a perf item, it is a DEFECT this round walked into.**
+tsc's `commandLineParser.ts:3131-3141`: when `exclude` is absent from a tsconfig, the
+default exclude is `[outDir, declarationDir]` (the package folders are pruned separately,
+by the wildcard matcher, which is what our `walk`'s `pruned` set already does). **We do
+not implement that half at all** — `TsConfigLoader.defaultExclude` is the three package
+folders and nothing else. So for any project with `outDir: "dist"` that has ever emitted
+declarations, `dist/**/*.d.ts` matches the include glob and is pulled in as ROOT FILES:
+duplicate-identifier errors tsc does not report, plus the whole emitted tree crawled,
+read, parsed, bound and checked on every keystroke. It is invisible to every gate here
+(the corpus materialises no directory, and the eight dashboard profiles hold no
+`package.json` and are never emitted into) and it is exactly what an IntelliJ-hosted
+project looks like after one `tsc` run. Filed as **(CFG.1)**.
+
 ### Round (BIND.1) — a diagnostic that appeared and disappeared with the byte length of an UNRELATED file
 
 **Reported, not found by a sweep.** From the IntelliJ plugin: a TS2345 naming a type from
@@ -4052,7 +4157,38 @@ RHS, and the merged-member CONTRADICTION direction.
   table divided by file count. A pass that is honestly O(program) reads a CONSTANT
   µs/file; the quadratic one reads a doubling.
 
-- [ ] **(INC.60) THE `config load + @types + root glob` ROW — 29-45 ms OF A 279 ms FLOOR,
+- [ ] **(CFG.1) A tsconfig WITHOUT `exclude` MUST EXCLUDE `outDir` AND `declarationDir`,
+  AND WE EXCLUDE NEITHER — SO A PROJECT THAT HAS EVER EMITTED PULLS ITS OWN `dist/**/*.d.ts`
+  BACK IN AS ROOT FILES (2026-08-30, (INC.60)'s successor, read out of tsc's own
+  `commandLineParser.ts:3131-3141`).** There, `excludeOfRaw === "no-prop"` sets
+  `excludeSpecs = filter([outDir, declarationDir], d => !!d)`; the package folders
+  (`node_modules`/`bower_components`/`jspm_packages`) are pruned SEPARATELY by the
+  wildcard matcher, which is what our `walk`'s own `pruned` set already does — so
+  `TsConfigLoader.defaultExclude`'s three package folders are the half we have and the
+  outDir half is missing entirely. **Two costs, and the first is a correctness one**:
+  duplicate-identifier diagnostics tsc does not report, and the whole emitted tree
+  crawled, read, parsed, bound and checked on every keystroke ((INC.60) measured the
+  glob alone at ~3.4 us per entry, and every one of those entries then costs a read and
+  a parse as well). **NOTHING HERE CAN SEE IT**: the corpus harness materialises no
+  directory at all, and the eight dashboard profiles are never emitted into — so the
+  instrument is a `-project` fixture through `ProjectCompiler` + a `Vfs`, with a
+  `dist/` holding a `.d.ts` whose declarations collide with `src/`'s. Mind the
+  interaction with `rootDir`/`composite` before widening it beyond the two specs tsc
+  names, and note that an EXPLICIT `exclude` replaces the default in tsc — it is not
+  additive.
+
+- [x] **(INC.60) LANDED 2026-08-30 — the row is 99% the root-file glob, the glob is 99%
+  its directory walk, and 60-70% of THAT was `vfs.isDirectory` asked once per entry the
+  listing had just returned. kotlinx-io answers that one boolean with up to FIVE `stat`
+  syscalls (`metadataOrNull` = `exists` + `isFile` + `isDirectory` + `isFile` + `length`,
+  read out of the jar), i.e. 7.3-8.6 us per entry. `Vfs.listEntries` answers the kind WITH
+  the listing — its default body is exactly the two calls it replaces, so no other `Vfs`
+  changes — and `SystemVfs` overrides it via a new `expect fun systemListEntries` whose
+  JVM actual is one `readdir` plus one `stat` per entry. MEASURED, both arms this session:
+  `CONFIG` **29.2-32.6 -> 11.5-16.3 ms at 2,401 files** and **52.8/52.9 -> 20.7-27.1 at
+  4,801**, per entry **9.3 -> 3.1-4.4 us**, with the population census identical across
+  the change. tsconfig load (0.43 ms) and `@types` (0.01 ms) were never the row.
+  ORIGINAL ENTRY:** THE `config load + @types + root glob` ROW — 29-45 ms OF A 279 ms FLOOR,
   THIRD-LARGEST, AND NOTHING HAS EVER EXAMINED IT ON THIS SHAPE.** (INC.59)'s successor,
   and it is deliberately ranked ABOVE (INC.56) despite being slightly smaller: it carries
   **no soundness promise at all**, where (INC.56) needs an opt-in host contract plus

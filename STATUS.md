@@ -1,5 +1,40 @@
 # Status
 
+**(INC.60) — THE INCREMENTAL FLOOR'S THIRD ROW WAS A QUESTION ASKED TWICE PER ENTRY, AND
+THE SECOND ASK COST FIVE SYSCALLS (2026-08-30).** `FrontEnd.CONFIG` — tsconfig load,
+`@types` acquisition and the root-file glob — is what an editor pays on every keystroke,
+and no round had separated its three pieces. Split five ways it is **~99% the glob, the
+glob is ~99% its directory walk, and 60-70% of THAT is one call the walk did not need to
+make**: for every entry the directory listing had just returned it went back to the
+filesystem to ask "is this a directory?". tsconfig load is **0.43 ms** and `@types`
+**0.01 ms** — neither was ever the row. **WHY THAT BOOLEAN COSTS 7.3-8.6 us IS IN THE
+DEPENDENCY, NOT IN OUR SOURCE**: kotlinx-io 0.9.1 compiles `metadataOrNull` to
+`File.exists()` + `isFile()` + `isDirectory()` + `isFile()` + `length()` — up to five
+`stat` syscalls plus an allocation — on a `Path` rebuilt from the string the listing had
+just produced; it is visible only by dividing the row by its population and refusing the
+implied per-op cost (7.3 us is impossible for one `stat`). `Vfs.listEntries` answers the
+kind WITH the listing; **its default body is literally the two calls it replaces**, so
+every other `Vfs` is unchanged and correct without touching it, and `SystemVfs` overrides
+it through a new `expect fun systemListEntries` (JVM: one `readdir` + one `stat` per
+entry; native: the portable pair). **MEASURED, both arms this session with the same
+runner: `CONFIG` 29.2-32.6 -> 11.5-16.3 ms at 2,401 files and 52.8/52.9 -> 20.7-27.1 at
+4,801; per entry 9.3 -> 3.1-4.4 us, flat across both sizes** — a constant-factor win on a
+linear row, with the population census (`50 dirs / 2451 entries / 2401 candidates / 2401
+roots`) IDENTICAL across the change, which is the receipt that nothing was skipped to buy
+it. **THE UNINSTRUMENTED FLOOR MEDIANS READ 216 BEFORE AND 222 AFTER**, i.e. the saving
+sits inside the ±40% single-draw band and a wall-clock reading of this round would have
+concluded the opposite of the truth — which is why the split was built before the fix.
+Pinned at two layers and ablated separately: `RootGlobListingTest` (the CALL SHAPE; its
+counting `Vfs` must OVERRIDE `listEntries`, or the default *is* the pre-fix sequence and
+the pin is vacuous) and `SystemVfsListEntriesTest` (the JVM actual's EQUIVALENCE, whose
+divergence would be silent — it includes a directory named `looks-like.ts`). a1 reddens
+2 of 3 in the first and none in the second; a2 the reverse. **GATES.** Suite **16,514 /
+0 / 3** (+6, exactly the new pins); `cost_gate.py` exit 0 with **every counter
+unchanged**; `huge_methods.py --fail-over 0` clean. **SUCCESSOR (CFG.1), a DEFECT found
+on the way**: tsc's `commandLineParser.ts:3131-3141` defaults `exclude` to
+`[outDir, declarationDir]` when absent and **we implement none of it**, so a project that
+has ever emitted pulls its own `dist/**/*.d.ts` back in as ROOT FILES.
+
 **(BIND.1) — A DIAGNOSTIC THAT APPEARED AND DISAPPEARED WITH THE BYTE LENGTH OF AN
 UNRELATED FILE (2026-08-30, reported from the IntelliJ plugin).** `nodeKey(pos, end)`
 carries NO file identity and positions restart at 0 in every file, yet
@@ -158,53 +193,3 @@ clone-on-write is the named unblocker. **GATES.** Suite **16,489 / 0 / 3** (+4, 
 new pins); `cost_gate.py` exit 0 with `output.errors` flat at 46; `huge_methods.py
 --fail-over 0` clean, and `Checker.<init>` shrank **5,538 -> 5,464** bytecodes, buying back
 (JIT.1)(d) headroom.
-
-**(INC.52) — THE INCREMENTAL FLOOR'S DEAREST PASS STOPS WALKING EVERY FILE'S SYMBOL
-TABLE, AND ITS PRICE IS BELOW WHAT THIS REPO CAN MEASURE (2026-08-29).** With project
-diagnostics incremental ((INC.46)) and restart-proof ((INC.48)), what an editor pays per
-keystroke is the FLOOR. Decomposed: **68 ms**, of which the checker is **42 ms (67%)** with
-nothing to check, and the largest pass in both draws is `init:computeAllEnumValues` — whose
-second loop visited EVERY file's `locals` and recursed through every namespace's `exports`
-to find the program's enums. `BinderResult.bindsEnum` answers that from the bind that
-already happened: an identity, not an approximation, since `bindEnumDeclaration` is the one
-site minting a conventional enum symbol and `enumValues` is ID-keyed. **MEASURED AS A
-POPULATION, from ONE binary with the verify arm as the "before": 12,871 top-level symbol
-visits -> 8,676 (-32.6%)**, plus every namespace recursion beneath the **45 of 78** files
-skipped, with `localsSkipViolations = 0` over a non-empty skipped set. **AND THE TIME IS NOT
-RESOLVABLE, WHICH IS THE PART WORTH KEEPING**: the row that motivated the round read 13.16
-ms in one draw and **8.42 ms in the next draw of the same binary**; after the change, 7.27
-and 9.66; the floor wall reads 68 before and 74 after with draws spanning 57-86. So it is
-landed as a WORK REDUCTION with a control and no millisecond is claimed — a single-draw
-per-pass row on a 68 ms floor is not a measurement, and that is now a CLAUDE.md entry
-because the next agent will read the same table and reach for the same row. **GATES.** Suite
-**16,485 / 0 / 3** (+2, exactly the new pins); `cost_gate.py` exit 0; `huge_methods.py
---fail-over 0` clean; warning-clean.
-
-**(INC.48) — THE INCREMENTAL STATE OUTLIVES THE PROCESS, AND A RESTART IS **60x**
-(2026-08-29).** (INC.46) made project-wide diagnostics incremental within a process and
-every bit of that state died with it: an IDE restart, a plugin reload or a daemon recycle
-paid a whole-program build for a tree nobody had touched. `Project.saveState()` encodes
-what has to survive — export signatures, escapes, the program's file list, that build's
-diagnostics and a content hash per input — and `restoreState()` adopts it, so the next
-process starts at the (INC.46) gate instead of at a rebuild. **MEASURED on tsc's own 78
-sources, every arm asserted to agree ROW FOR ROW**: warm, **5,855 ms -> 94 ms (62x)**
-clean and 259 ms (23x) with a file changed on disk; in a **COLD process — which is what a
-restart actually is — 9,625-9,844 ms -> 155-175 ms (~60x)**, the snapshot being **47 KB**
-for a 78-file project. The cold column is the one that matters and it is nearly as good as
-the warm one, which was not obvious: an IDE restart pays the JIT ramp, and (INC.49)
-attributed ~18 s of a 23 s first query to exactly that — but the ramp barely touches a path
-that never checks the whole program. **IT WRITES NO FILE**: `encode`/`decode` answer and
-take a string, so the host decides where its caches live; the CLI's `--incremental`
-(`tsconfig.xtsbuildinfo`, INV.7(d3)) remains the convention for callers who want the other
-one. **EVERY PART OF THE CLAIM IS CHECKED, because skipping any of it is a stale answer**:
-the compiler build id (never a `.dirty`/`unknown` one — two dirty trees share an id without
-sharing behaviour), the config path, a CONTENT hash per file (never mtime — round 871), and
-the `.json` INPUTS as well as the sources, since a changed tsconfig or a `package.json`
-whose `type` decides a module format makes every stored row suspect rather than one file's.
-**AND THE STALENESS CASE NO HASH CAN SEE HAS ITS OWN MECHANISM**: a file ADDED while the
-process was down is in no stored hash and no stored list, so a restored state is not
-trusted until a build has re-crawled and found the same program — even a clean project runs
-the gate once, with an EMPTY partition. Ablated, the naive "trust the snapshot" version
-reddens exactly two pins and nothing else. **GATES.** Suite **16,483 / 0 / 3** (+13,
-exactly the new pins); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean;
-warning-clean.
