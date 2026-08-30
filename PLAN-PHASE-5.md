@@ -20,6 +20,43 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.59) — the same defect a THIRD time, in the path that emits nothing
+
+**FOUND BY RE-READING THE FLOOR, NOT BY TRUSTING THE RANKING — which is the reusable
+half of the whole session.** (INC.57) and (INC.58) had reordered the floor twice, so it
+was re-decomposed rather than assumed. `post-checker` had become the LARGEST row —
+**166-189 ms of a 366 ms floor (~48%)** at 2,401 files, scaling 10 -> 47 -> 177 ms across
+the three sizes — and **it appeared in no queue item at all**, including (INC.54)'s
+otherwise careful inventory. Its sub-rows put 158.5-175.3 ms of it in `POST_EMITPREP`
+against 6.8-8.2 ms at 601 files: **21x for 4x the files**.
+
+**ONE EXPRESSION.** `parsedSourceFiles.filter { it.key !in transformOrder.toSet() }` —
+`.toSet()` INSIDE the lambda, so an N-element set is rebuilt once per entry of an
+N-entry map. **And this is the `--noEmit` path**: round 738's `skipEmitOutputs` gate
+means such a build emits nothing, so it was spending 175 ms per keystroke preparing an
+emit order that would never be used. The hoist is exactly equivalent — a pure membership
+predicate, and `filter` preserves the map's order either way.
+
+**RESULTS. `POST_EMITPREP` 158.5-175.3 -> 1.8-2.8 ms (~70x)**, the whole post-checker
+region 166-189 -> 8.6-12.6, floor at 2,401 files **366 -> 279 ms**.
+
+**THE SESSION'S CUMULATIVE FIGURE — 1,653 -> 279 ms, 5.9x, on the per-keystroke floor of
+a 2,401-file project**, and since all three defects were super-linear the gain GROWS with
+project size. 165 -> 99 at 601 files, 409 -> 197 at 1,201.
+
+**GATES.** Suite **16,504 / 0 / 3** (+1, exactly the new pin); `cost_gate.py` exit 0 with
+every counter identical to the (INC.58) run; `huge_methods.py --fail-over 0` clean.
+Pinned with the same count-at-two-sizes idiom (`transformOrderSetBuilds == 1`), added to
+`ImportDepScanComplexityTest` because it is literally (INC.57)'s defect class.
+`docs/perf/import-dep-scan-complexity.md` § 7.
+
+**NAMED SUCCESSORS.** The floor is now 279 ms with all rows linear: crawl WALL **62-66
+ms** ((INC.56), now genuinely first as its entry claimed — but only after these three
+rounds), checker construct **61-66**, **`config load + @types + root glob` 29-45 ms —
+the row nothing has ever examined on this shape, and cheaper to start on than (INC.56)
+because it carries no soundness promise**, `extractRelativeImports` 16-25, post-checker
+9-13, bind 7-10.
+
 ### Round (INC.58) — the same law, one hour later, on a pass named for a feature the project does not use
 
 **FOUND BY (INC.57)'s OWN SUCCESSOR INSTRUMENT**, which is the point worth keeping:
@@ -3935,8 +3972,27 @@ RHS, and the merged-member CONTRADICTION direction.
   table divided by file count. A pass that is honestly O(program) reads a CONSTANT
   µs/file; the quadratic one reads a doubling.
 
+- [ ] **(INC.60) THE `config load + @types + root glob` ROW — 29-45 ms OF A 279 ms FLOOR,
+  THIRD-LARGEST, AND NOTHING HAS EVER EXAMINED IT ON THIS SHAPE.** (INC.59)'s successor,
+  and it is deliberately ranked ABOVE (INC.56) despite being slightly smaller: it carries
+  **no soundness promise at all**, where (INC.56) needs an opt-in host contract plus
+  (INC.48)'s "a content hash cannot see an ADDED file" hazard in a second costume.
+  `FrontEnd.CONFIG` covers tsconfig load, `@types` acquisition and the root-file glob
+  walk, and on the many-small shape it reads 12.1-20.2 / 29.3-44.5 ms at 601 / 2401
+  files, i.e. **~2.4x for 4x the files — the only SUB-linear row left**, which is itself
+  worth understanding before it is optimised (a sub-linear row usually means a fixed cost
+  is dominating, and a fixed cost on the FLOOR is paid per keystroke).
+  **The instrument is the one this session used three times**: two program sizes, the row
+  divided by file count. **Do not assume it is the glob** — (INC.53) and (INC.59) were
+  both found by splitting a row that a plausible story had already explained.
+
 - [ ] **(INC.56) LET AN IntelliJ-CLASS HOST SKIP THE RE-READ — ~~THE LARGEST REMAINING
-  FRONT-END ROW~~ *FOURTH*, AND IT IS THE ONLY ONE THAT COSTS A SOUNDNESS PROMISE.**
+  FRONT-END ROW~~ FOURTH AT THE TIME, AND *FIRST* AGAIN NOW THAT (INC.57)/(INC.58)/(INC.59)
+  HAVE CLEARED THE THREE ROWS ABOVE IT — BUT IT IS STILL THE ONLY ONE THAT COSTS A
+  SOUNDNESS PROMISE.** Re-measured after (INC.59): crawl WALL is **62-66 ms of a 279 ms
+  floor** at 2,401 files, now the largest single row. Its entry's claim is therefore true
+  again — but it was false when written and became true only because three other rounds
+  landed, which is why (INC.60) above (no promise, 29-45 ms) is ranked first.
   **PRICE RE-TAKEN 2026-08-30 BY (INC.57), ON THE VERY SHAPE THIS ENTRY DEMANDED.** On a
   1,201-file application-shaped project the floor rows are: checker construct **215-218
   ms** (53%), `extractRelativeImports` 76-125 (since fixed — (INC.57)), post-checker

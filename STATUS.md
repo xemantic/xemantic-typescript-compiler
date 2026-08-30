@@ -1,8 +1,8 @@
 # Status
 
-**(INC.57)+(INC.58) — THE FRONT END WAS QUADRATIC IN FILE COUNT **TWICE**, AND NO PROFILE
-HERE COULD EXPRESS EITHER; THE PER-KEYSTROKE FLOOR OF A 2,401-FILE PROJECT GOES
-**1,653 -> 366 ms** (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST
+**(INC.57)+(INC.58)+(INC.59) — THE FRONT END WAS QUADRATIC IN FILE COUNT **THREE TIMES**,
+AND NO PROFILE HERE COULD EXPRESS ANY OF THEM; THE PER-KEYSTROKE FLOOR OF A 2,401-FILE
+PROJECT GOES **1,653 -> 279 ms (5.9x)** (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST
 REMAINING FRONT-END ROW"* — its own entry demanded the prize first be re-measured on "a
 project with MANY SMALL files rather than tsc's 78 huge ones". That measurement **refuted
 the premise and found two independent quadratics beside it**, in different subsystems.
@@ -20,6 +20,18 @@ went RED on a WORKING binary because a relative specifier is served by an O(1) p
 never reaches the scan — **an assertion about WHICH path served an answer is not implied by
 the answer being right**; there are now two value pins, one per path. Suite **16,503 / 0 /
 3**; both gates clean with every cost counter unchanged.
+**AND (INC.59), THE THIRD — FOUND BY RE-READING THE FLOOR RATHER THAN TRUSTING THE
+RANKING, WHICH IS THE REUSABLE HALF OF THE WHOLE SESSION.** After two rounds had
+reordered it twice, `post-checker` had become the LARGEST row — 166-189 ms of a 366 ms
+floor (~48%) — and **appeared in no queue item at all**. One expression:
+`parsedSourceFiles.filter { it.key !in transformOrder.toSet() }`, with `.toSet()` INSIDE
+the lambda, so an N-element set was rebuilt once per entry of an N-entry map — **in the
+`--noEmit` path**, i.e. a build that emits nothing was spending 175 ms per keystroke
+preparing an emit order it would never use. `POST_EMITPREP` **158.5-175.3 -> 1.8-2.8 ms
+(~70x)**; floor 366 -> **279 ms**. Suite **16,504 / 0 / 3**, both gates clean, counters
+unchanged. The floor's rows are now all linear; the largest is the crawl wall (62-66 ms)
+— so (INC.56)'s claim is true again, but only because three other rounds landed first.
+
 **AND (INC.57), THE ONE THAT STARTED IT:** `extractRelativeImports` opened with
 `allFiles.map { it.fileName }.toSet()` — a fresh list AND set of every program file name —
 and the emit-order scan calls it **TWICE per file**: `2 x files^2` string hashes per build,

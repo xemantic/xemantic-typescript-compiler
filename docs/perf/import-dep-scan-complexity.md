@@ -1,15 +1,16 @@
-# (INC.57)/(INC.58) The front end was quadratic in the program's FILE COUNT — twice
+# (INC.57)/(INC.58)/(INC.59) The front end was quadratic in the program's FILE COUNT — three times
 
 **2026-08-30.** Measured while executing (INC.56)'s own instruction — *"it must be
 re-taken on a project with MANY SMALL files rather than tsc's 78 huge ones"*. The
-re-measurement refuted (INC.56)'s premise and found two independent quadratics beside
-it, in different subsystems, each invisible to every instrument in this repo for the
-same structural reason (§ 2).
+re-measurement refuted (INC.56)'s premise and found **three** independent quadratics
+beside it, in three different subsystems, each invisible to every instrument in this
+repo for the same structural reason (§ 2).
 
 **Together they take the per-keystroke floor of a 2,401-file project from 1,653 ms to
-366 ms.** §§ 0-5 are (INC.57), the emit-order import scan; § 6 is (INC.58),
-`checkJsxImportResolutions`, which § 6's own instrument found in the same session; § 7
-is what is left.
+279 ms — 5.9x.** §§ 0-5 are (INC.57), the emit-order import scan; § 6 is (INC.58),
+`checkJsxImportResolutions`, found by § 6's own instrument in the same session; § 7 is
+(INC.59), found by simply RE-READING the floor after § 6 rather than trusting the
+ranking two rounds had already changed twice; § 8 is what is left.
 
 ## 0. The headline
 
@@ -206,25 +207,73 @@ O(1) direct probe and never reaches the scan. **An assertion about WHICH path pr
 an answer is not implied by the answer being right.** There are now two value pins, one
 per resolution path — a bare specifier is what forces the suffix scan.
 
-## 7. What is left on this shape, and the next successor
+## 7. (INC.59) — the third one, in the path that emits nothing
 
-With both quadratics gone, the 2,401-file floor is **366 ms** and its rows are, at last,
-all linear. Re-measured after (INC.58):
+§ 6 changed the ranking for the second time in one session, so the floor was
+**re-decomposed rather than assumed**. `post-checker` had become the largest row —
+**166-189 ms of a 366 ms floor (~48%)** at 2,401 files, scaling 10 -> 47 -> 177 ms
+across the three sizes — and it appeared in no queue item at all. Its sub-rows put
+158.5-175.3 ms of that in `POST_EMITPREP`, against 6.8-8.2 ms at 601 files: **21x for
+4x the files**.
 
-| row | 2401 files | note |
+One expression:
+
+```kotlin
+parsedSourceFiles.filter { it.key !in transformOrder.toSet() }
+```
+
+`.toSet()` is INSIDE the lambda, so an N-element set is rebuilt once per entry of an
+N-entry map. **And this is the `--noEmit` path** — round 738's `skipEmitOutputs` gate
+means such a build emits nothing, so it was spending 175 ms per keystroke preparing an
+emit order that would never be used.
+
+The hoist is exactly equivalent (a pure membership predicate; `filter` preserves the
+map's order either way). **POST_EMITPREP 158.5-175.3 -> 1.8-2.8 ms (~70x)**, the whole
+post-checker region 166-189 -> 8.6-12.6, and the floor 366 -> **279 ms**.
+
+### The three together
+
+| files | original floor | +(INC.57) | +(INC.58) | +(INC.59) |
+|---|---|---|---|---|
+| 601 | 165 ms | 142 | 99 | — |
+| 1201 | 409 ms | 359 | 197 | — |
+| 2401 | **1653 ms** | 1035 | 366 | **279** |
+
+**5.9x on the per-keystroke floor at the top size**, and the gain grows with project
+size because all three defects were super-linear. The reusable half is not any of the
+three fixes but the loop that found them: **re-read the floor after every round that
+moves it** — the ranking changed three times in one session, and each new top row was
+one nothing in the queue had named.
+
+## 8. What is left on this shape, and the next successor
+
+With all three quadratics gone, the 2,401-file floor is **279 ms** (the instrumented
+`FE.total` reads 200-207 ms; the plain median carries the probe-free ~279) and its rows
+are, at last, all linear. Re-measured after (INC.59):
+
+| row | 2401 files (two draws) | note |
 |---|---|---|
-| crawl WALL | 49-70 ms | **(INC.56)** — now genuinely near the top, as its entry claimed, but only after these two rounds |
-| checker construct + init dispatch | 60-66 ms | was 756-810 before (INC.58) |
-| pass table total | 55-57 ms | was 751-798 |
-| `extractRelativeImports` | 17-22 ms | was 331.6 before (INC.57) |
+| **crawl WALL** | **62-66 ms** | **(INC.56)** — now genuinely first, as its entry claimed |
+| **checker construct + init dispatch** | **61-66 ms** | was 756-810 before (INC.58) |
+| config load + `@types` + root glob | 29-45 ms | never examined on this shape |
+| `extractRelativeImports` | 16-25 ms | was 331.6 before (INC.57) |
+| post-checker | 9-13 ms | was 166-189 before (INC.59) |
+| bind | 7-10 ms | |
 
-**So (INC.56) is now a defensible next item on this shape** — it was fourth of five and
-is now first or second — but the ordering claim in its entry was only true *after* the
-two rows above it were fixed, which is exactly what §5 records. It remains the only one
-of these that costs a soundness promise, so its opt-in framing stands.
+**(INC.56) is now a defensible next item** — it was fourth of five and is now first —
+but that was only true *after* these three rounds, which is exactly what §5 records. It
+remains the only one of these rows costing a soundness promise, so its opt-in framing
+stands. **`config load + @types + root glob` is the row nothing has ever looked at on
+this shape** and is now third; it is a cheaper place to start than (INC.56) because it
+carries no promise at all.
 
-The remaining super-linear-looking rows from §6's table (`init:buildPerFileScopes` 4.3x,
-`init:computePerFileVisibility` 6.6x, `init:moduleTypeNameIndex` 7.9x for 4x the files)
-are now the largest *growth* factors left, but they are small in absolute terms (13.5,
-6.7, 3.9 ms at 2,401 files). Price them before opening one — §2's law cuts both ways,
-and this repo's history is mostly of candidates that did not survive division.
+Inside the (now 55 ms) pass table the largest *growth* factors left are
+`init:buildPerFileScopes` (12.9 ms), `init:computePerFileVisibility` (5.5) and
+`init:moduleTypeNameIndex` (2.6). Price them before opening one — §2's law cuts both
+ways, and this repo's history is mostly of candidates that did not survive division.
+
+**The transferable half of this whole document is not any of the three fixes. It is the
+loop that found them:** re-read the floor after every round that moves it. The ranking
+changed three times in one session, and each new top row was one that no queue item had
+named — twice because the previous top row had been hiding it, once because no
+instrument had ever been pointed at this corpus shape at all.
