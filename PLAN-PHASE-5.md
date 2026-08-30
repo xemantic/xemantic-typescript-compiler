@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (CFG.1) — a project that has ever been built reads its own output back in, and the corpus cannot contain a directory
+
+**FOUND BY (INC.60) ON THE WAY PAST, WHICH IS THE ROUTE WORTH KEEPING.** Reading
+`collectRootFiles` to price the glob meant reading what it excludes, and the default was
+three package folders. Checking that against the reference — `commandLineParser.ts`, on
+this box in `build/bench/tsc-project-*` — says the rule is the OTHER half: with `exclude`
+absent, `excludeSpecs = filter([outDir, declarationDir], d => !!d)`. The package folders
+are not `exclude` entries in tsc at all; they are pruned from every wildcard match by the
+matcher (`commonPackageFolders`), which is exactly what `ProjectCompiler`'s own `walk`
+already does by basename. **So we had the redundant half and not the load-bearing one.**
+
+**WHAT IT COSTS. Measured against tsgo 7.0.2 on a two-file project** with
+`outDir: "dist"`, `declaration: true` and the `dist/a.d.ts` + `dist/a.js` a previous
+build leaves behind: **tsgo's program is 1 file and ours was 2**. `dist` matches the
+default everything-include and a `.d.ts` is a root extension, so any project that has
+ever run a declaration-emitting build pulls its own output in as ROOT FILES — and then
+crawls, reads, parses, binds and checks the whole emitted tree **on every keystroke**,
+which is the incremental floor (INC.53)-(INC.60) have been paying down. After the fix the
+CLI reads `1 root, 1 in program`, i.e. tsgo's own answer.
+
+**THE DIAGNOSTIC HALF IS REAL IN tsc AND UNOBSERVABLE HERE, AND THAT IS A MEASUREMENT
+RATHER THAN A GUESS.** Forced in (`include: ["src/…", "dist/…"]`), tsgo answers **TS2451
+twice** for a duplicated `declare const` across the two trees and **TS5011** for the moved
+common source directory. **We report neither** — both are separate gaps — so on this
+compiler today the entire observable consequence is the program SET and its cost. A value
+pin was written asserting those codes stay absent, **it stayed GREEN under the ablation
+that removes the whole fix**, and it was deleted rather than kept: round 808's rule, and
+the reason the class KDoc now records the two tsgo readings where the next reader will
+look for a diagnostic pin. Both gaps are filed below.
+
+**WHY NOTHING HERE COULD SEE THE DEFECT — the (INC.57) law on a third axis.** The
+generated corpus hands sources to the compiler directly and **materialises no directory at
+all**, so it has no glob to get wrong; and all eight dashboard profiles restrict `include`
+to a `src` subtree, under which `dist` never matched in the first place. The grid is
+therefore a CONTROL for this change and reads **`added=0 removed=0` on all eight**, as
+predicted before it was run. Only a `-project` fixture through `ProjectCompiler` and a
+`Vfs` can express the shape — the same instrument (CHK.29) needed for `package.json`
+scopes, and for the same reason.
+
+**AN EXPLICIT `exclude` STILL REPLACES THE DEFAULT**, exactly as in tsc — it is not
+additive. That direction is pinned deliberately, because it is the one a
+"just add outDir to the defaults" implementation gets wrong, and arm b2 is that
+implementation.
+
+**ABLATION** (one mistake at a time, on a committed tree, each arm `cmp`ed against HEAD).
+**b1**, the pre-fix default: `an emitted declaration is not a root file` +
+`declarationDir is excluded as well as outDir` RED. **b2**, the default made ADDITIVE with
+`outDir` only: `an explicit exclude REPLACES the default, as in tsc` + the declarationDir
+pin RED. Each substantive pin is uniquely discriminated by a different arm, and the two
+controls (`a project with no outDir is unchanged`, `node_modules is still excluded`) stay
+green in both — which is what they are for.
+
+**GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
+
+**NAMED SUCCESSORS, both measured this round against tsgo 7.0.2 and both filed below:**
+**(CHK.74)** a cross-file duplicate global (`declare const VERSION` in two script files)
+is TS2451 twice in tsc and **silent here**; **(CFG.2)** TS5011, the common-source-directory
+diagnostic, is likewise unreported. They matter beyond their own rows: between them they
+are why a defect that changes the PROGRAM could be invisible to every diagnostic channel
+this repo has.
+
 ### Round (INC.60) — the floor's third row was a question asked twice per entry, and the second ask cost five syscalls
 
 **THE QUEUE ENTRY SAID "DO NOT ASSUME IT IS THE GLOB". IT IS THE GLOB — AND THAT IS
@@ -4157,7 +4219,36 @@ RHS, and the merged-member CONTRADICTION direction.
   table divided by file count. A pass that is honestly O(program) reads a CONSTANT
   µs/file; the quadratic one reads a doubling.
 
-- [ ] **(CFG.1) A tsconfig WITHOUT `exclude` MUST EXCLUDE `outDir` AND `declarationDir`,
+- [ ] **(CHK.74) A CROSS-FILE DUPLICATE GLOBAL IS SILENT — `declare const VERSION: string;`
+  IN TWO SCRIPT FILES IS **TS2451 TWICE** IN tsgo 7.0.2 AND NOTHING HERE (2026-08-30,
+  measured by (CFG.1), which needed it as a value pin and could not have one).** Its
+  significance is larger than one row: together with (CFG.2) it is why a defect that
+  changed the PROGRAM ITSELF — (CFG.1)'s wrongly-adopted `dist` tree — was invisible to
+  every diagnostic channel in this repo, so the only observable left was a file COUNT.
+  Repro is two files and a tsconfig; grade against
+  `tools/tsgo-7.0.2/lib/tsc --noEmit -p <dir>`, and mind that a `.d.ts` gets lighter
+  checking than a `.ts` here (three shapes were tried before one reported at all —
+  a stale import, a stale type reference and this one — and only tsc reported any of them).
+
+- [ ] **(CFG.2) TS5011 (the common source directory moved, so `rootDir` must be set) IS
+  NOT REPORTED (2026-08-30, measured by (CFG.1) against tsgo 7.0.2 on an emitting build
+  whose inputs straddle `src` and `dist`).** tsc emits it at the tsconfig; we emit
+  nothing and silently pick a different output layout, which is a WRONG EMIT rather than
+  a missing warning — the outputs land somewhere the user did not ask for. Note the
+  neighbour already modelled: TS5055 ("would overwrite input file") has a filter in
+  `writeOutputs`, so the emit-path machinery for this family exists.
+
+- [x] **(CFG.1) LANDED 2026-08-30 — tsc's rule for an ABSENT `exclude` is
+  `[outDir, declarationDir]` (`commandLineParser.ts`), and the package folders are pruned
+  separately by the wildcard matcher, which our `walk` already does. We had only the
+  redundant half. Measured against tsgo 7.0.2: its program is 1 file where ours was 2, so
+  any project that has ever run a declaration-emitting build read its own `dist` back in
+  as ROOT FILES and re-checked the emitted tree on every keystroke. The corpus
+  materialises no directory and all eight profiles scope `include` to `src`, so the grid
+  is a CONTROL here (`added=0 removed=0`) — a `-project` fixture is the only instrument.
+  The diagnostic half is REAL IN tsc (TS2451 x2, TS5011) and unobservable here, filed as
+  (CHK.74)/(CFG.2), and the value pin written for it was deleted for passing on a broken
+  binary. ORIGINAL ENTRY:** A tsconfig WITHOUT `exclude` MUST EXCLUDE `outDir` AND `declarationDir`,
   AND WE EXCLUDE NEITHER — SO A PROJECT THAT HAS EVER EMITTED PULLS ITS OWN `dist/**/*.d.ts`
   BACK IN AS ROOT FILES (2026-08-30, (INC.60)'s successor, read out of tsc's own
   `commandLineParser.ts:3131-3141`).** There, `excludeOfRaw === "no-prop"` sets

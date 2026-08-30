@@ -1,5 +1,34 @@
 # Status
 
+**(CFG.1) — A PROJECT THAT HAS EVER BEEN BUILT READ ITS OWN OUTPUT BACK IN, AND THE
+CORPUS CANNOT CONTAIN A DIRECTORY (2026-08-30, found by (INC.60) on the way past).**
+tsc's rule for an ABSENT `exclude` is `excludeSpecs = filter([outDir, declarationDir],
+d => !!d)` (`commandLineParser.ts`); the package folders are not `exclude` entries there
+at all but are pruned from every wildcard match by the matcher — which is what
+`ProjectCompiler`'s own walk already does by basename. **We had the redundant half and
+not the load-bearing one.** Measured against tsgo 7.0.2 on a two-file project with
+`outDir: "dist"` and the artifacts a previous `--declaration` build leaves behind:
+**tsgo's program is 1 file and ours was 2** — `dist` matches the default everything-include
+and a `.d.ts` is a root extension — so such a project crawled, read, parsed, bound and
+checked its own emitted tree **on every keystroke**, which is the incremental floor the
+(INC.\*) arc has been paying down. After the fix the CLI answers `1 root, 1 in program`,
+i.e. tsgo's own. An EXPLICIT `exclude` still REPLACES the default, as in tsc — pinned,
+because that is the direction a "just add outDir to the defaults" implementation gets
+wrong, and it is ablation arm b2. **THE DIAGNOSTIC HALF IS REAL IN tsc AND UNOBSERVABLE
+HERE, WHICH IS ITSELF THE FINDING**: forced in, tsgo answers TS2451 twice for a duplicated
+`declare const` and TS5011 for the moved common source directory, and **we report
+neither** — so a defect that changed the PROGRAM ITSELF was invisible to every diagnostic
+channel in this repo and the only observable left was a file COUNT. A value pin asserting
+those codes stay absent **stayed green under the ablation that removes the whole fix** and
+was deleted rather than kept (round 808). Both gaps filed as **(CHK.74)** and **(CFG.2)**.
+**NOTHING HERE COULD SEE THE DEFECT EITHER**: the generated corpus materialises no
+directory, and all eight dashboard profiles scope `include` to a `src` subtree under which
+`dist` never matched — the grid is a CONTROL and reads `added=0 removed=0` on all eight,
+as predicted before it ran. Only a `-project` fixture through `ProjectCompiler` and a
+`Vfs` expresses it, the same instrument (CHK.29) needed and for the same reason.
+**GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
+`huge_methods.py --fail-over 0` clean; 8-profile grid clean.
+
 **(INC.60) — THE INCREMENTAL FLOOR'S THIRD ROW WAS A QUESTION ASKED TWICE PER ENTRY, AND
 THE SECOND ASK COST FIVE SYSCALLS (2026-08-30).** `FrontEnd.CONFIG` — tsconfig load,
 `@types` acquisition and the root-file glob — is what an editor pays on every keystroke,
@@ -165,31 +194,3 @@ is inert when unarmed; `huge_methods.py --fail-over 0` clean. Also documented: t
 rule is a CONFINEMENT rule (Symbol/Type ids are thread-local, so two threads on one
 `Project` corrupt an id space with no diagnostic), and the GraalVM/AOT/CRaC artifact levers
 do NOT apply to a plugin running in-process on the IDE's own JVM.
-
-**(INC.53) — THE INCREMENTAL FLOOR'S LARGEST BLOCK WAS NEVER IN A PASS, AND ~950 ROUNDS OF
-INSTRUMENTS COULD NOT SEE IT (2026-08-29).** The floor is what an editor pays per keystroke,
-and 32-44 ms of its 63-72 ms is "checker construct + getDiagnostics". Split for the first
-time: **`getDiagnostics()` is 2-3 MICROSECONDS**, so the whole phase is the CONSTRUCTOR — and
-~20 ms of it is the class's **~494 property initializers**, a constant that reads the same on
-a 63 ms floor build and a 5.2 s full one. That is 0.4% of a full compile, which is exactly why
-no round noticed, and **~30% of every language-service query**. **A FIELD INITIALIZER IS NOT A
-`pass("…")`**, so it contributes to no `--passTiming` row, no `cost_gate.py` counter and no
-diagnostic: the whole pass-gating arc ((INC.7)/(INC.20)/(INC.21), 189 walkers) swept loop
-headers and structurally could not reach it. **FOUR initializers are essentially all of it**
-(the other ~490 are 0.2-1.2 ms between them — 494 allocations cannot be 20 ms, which is what
-said a handful were doing whole-program work). Three were whole-program indices with exactly
-ONE read site each and now build on FIRST ASK: `localTypeAliasIndex` becomes a per-FILE index
-over that file's own frozen statements, in the same DFS order and first-wins per name, the
-other two `lazy(NONE)`. **Floor field region, four draws each side: 18.6 / 25.4 / 29.6 / 30.2
-ms -> 8.1 / 12.6 / 8.4 / 11.2**, with all three rows reading 0.00 ms and 0 files on a floor
-build; even a FULL build needs only **69 of 78** files' alias index. Claimed as a WORK
-REDUCTION, not a millisecond ((INC.52)'s law — the same binary reads 13.16 and 8.42 ms for one
-row in two draws), so `EagerIndexCensus` counts the population. **THE FOURTH IS REFUSED WITH
-ITS PRICE**: `parseBuiltinLib` splits three ways with no dominant part (binds 3.2-5.3 ms, decl
-walk 1.9-2.8, resolution + 45 `mergeSymbolTable` 3.1-5.3) — and the round-471 hypothesis that
-the data-class-keyed node sets dominate is MEASURED WRONG. Its two larger parts are
-per-checker by requirement (the checker mutates lib symbols), so round 884's `mergedSymbols`
-clone-on-write is the named unblocker. **GATES.** Suite **16,489 / 0 / 3** (+4, exactly the
-new pins); `cost_gate.py` exit 0 with `output.errors` flat at 46; `huge_methods.py
---fail-over 0` clean, and `Checker.<init>` shrank **5,538 -> 5,464** bytecodes, buying back
-(JIT.1)(d) headroom.

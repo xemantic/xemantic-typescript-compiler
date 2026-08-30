@@ -1,5 +1,34 @@
 
 
+**(INC.53) — THE INCREMENTAL FLOOR'S LARGEST BLOCK WAS NEVER IN A PASS, AND ~950 ROUNDS OF
+INSTRUMENTS COULD NOT SEE IT (2026-08-29).** The floor is what an editor pays per keystroke,
+and 32-44 ms of its 63-72 ms is "checker construct + getDiagnostics". Split for the first
+time: **`getDiagnostics()` is 2-3 MICROSECONDS**, so the whole phase is the CONSTRUCTOR — and
+~20 ms of it is the class's **~494 property initializers**, a constant that reads the same on
+a 63 ms floor build and a 5.2 s full one. That is 0.4% of a full compile, which is exactly why
+no round noticed, and **~30% of every language-service query**. **A FIELD INITIALIZER IS NOT A
+`pass("…")`**, so it contributes to no `--passTiming` row, no `cost_gate.py` counter and no
+diagnostic: the whole pass-gating arc ((INC.7)/(INC.20)/(INC.21), 189 walkers) swept loop
+headers and structurally could not reach it. **FOUR initializers are essentially all of it**
+(the other ~490 are 0.2-1.2 ms between them — 494 allocations cannot be 20 ms, which is what
+said a handful were doing whole-program work). Three were whole-program indices with exactly
+ONE read site each and now build on FIRST ASK: `localTypeAliasIndex` becomes a per-FILE index
+over that file's own frozen statements, in the same DFS order and first-wins per name, the
+other two `lazy(NONE)`. **Floor field region, four draws each side: 18.6 / 25.4 / 29.6 / 30.2
+ms -> 8.1 / 12.6 / 8.4 / 11.2**, with all three rows reading 0.00 ms and 0 files on a floor
+build; even a FULL build needs only **69 of 78** files' alias index. Claimed as a WORK
+REDUCTION, not a millisecond ((INC.52)'s law — the same binary reads 13.16 and 8.42 ms for one
+row in two draws), so `EagerIndexCensus` counts the population. **THE FOURTH IS REFUSED WITH
+ITS PRICE**: `parseBuiltinLib` splits three ways with no dominant part (binds 3.2-5.3 ms, decl
+walk 1.9-2.8, resolution + 45 `mergeSymbolTable` 3.1-5.3) — and the round-471 hypothesis that
+the data-class-keyed node sets dominate is MEASURED WRONG. Its two larger parts are
+per-checker by requirement (the checker mutates lib symbols), so round 884's `mergedSymbols`
+clone-on-write is the named unblocker. **GATES.** Suite **16,489 / 0 / 3** (+4, exactly the
+new pins); `cost_gate.py` exit 0 with `output.errors` flat at 46; `huge_methods.py
+--fail-over 0` clean, and `Checker.<init>` shrank **5,538 -> 5,464** bytecodes, buying back
+(JIT.1)(d) headroom.
+
+
 **(INC.52) — THE INCREMENTAL FLOOR'S DEAREST PASS STOPS WALKING EVERY FILE'S SYMBOL
 TABLE, AND ITS PRICE IS BELOW WHAT THIS REPO CAN MEASURE (2026-08-29).** With project
 diagnostics incremental ((INC.46)) and restart-proof ((INC.48)), what an editor pays per
