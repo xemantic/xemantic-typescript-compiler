@@ -88,10 +88,29 @@ object EagerIndexCensus {
      */
     var programNameSetBuilds: Int = 0
 
+    /**
+     * (INC.58) Iterations of `resolveJsxTsxCandidate`'s path-suffix scan, per compile.
+     *
+     * **0 for a program with no `.jsx`/`.tsx` file, whatever its size — that is the
+     * assertion.** It used to scan EVERY file of the program, once per import
+     * specifier per extension, i.e. `2 x files x specifiers`, and it did so precisely
+     * when `--jsx` is UNSET — the common case, and the one where the answer is always
+     * null. Measured on a 2,401-file project with no JSX in it, the pass cost
+     * **709.7 ms of a 774.7 ms floor pass table** and grew **14.6x for 4x the files**;
+     * (INC.54)(a) had ranked it at 1.2 ms from the tsc profile, which is the
+     * corpus-SHAPE law of (INC.57) restated 600-fold.
+     *
+     * Counted rather than timed for the same reason as [programNameSetBuilds]: the
+     * claim is a COMPLEXITY one, and only a count can say "this does not grow with
+     * the program".
+     */
+    var jsxSuffixScanSteps: Long = 0
+
     fun resetCounters() {
         localTypeAliasFileScans = 0
         enclosingImportBuilds = 0
         topLevelConstBuilds = 0
         programNameSetBuilds = 0
+        jsxSuffixScanSteps = 0
     }
 }

@@ -52583,6 +52583,29 @@ class Checker(
         if (binderResults.size <= 1 && !isMultiFileSource) return
         val jsxUnset = options.jsx.let { it.isNullOrBlank() || it.equals("none", ignoreCase = true) }
         if (!jsxUnset) return
+        // (INC.58) The ONLY files this pass can ever resolve to.
+        //
+        // Every non-null return of [resolveJsxTsxCandidate] is a member of
+        // `fileResults` whose name ends in `.jsx` or `.tsx` — the direct probes
+        // build their candidate as `"…$ext"` and test `in fileResults`, and the
+        // suffix scan returns a key matching `"/$base$ext"`. So a program with no
+        // such file cannot produce TS6142 at all, and this whole pass is a no-op
+        // for it: the common case, since the pass runs precisely when `--jsx` is
+        // UNSET.
+        //
+        // Built in `fileResults.keys` order and consulted in that order below, so
+        // the FIRST-MATCH the suffix scan returns is unchanged — the scan is
+        // order-sensitive and this filter is not allowed to reorder it.
+        //
+        // It is a local rather than a field on purpose: (INC.53) measured
+        // `Checker`'s ~494 property initializers at 16-30 ms on EVERY build, and a
+        // whole-program index added there is invisible to `--passTiming`,
+        // `cost_gate.py` and every diagnostic. Here it costs one O(files) scan
+        // inside the pass that needs it, and only when `--jsx` is unset.
+        val jsxTsxFileNames = fileResults.keys.filter {
+            it.endsWith(".jsx") || it.endsWith(".tsx")
+        }
+        if (jsxTsxFileNames.isEmpty()) return
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -52601,7 +52624,7 @@ class Checker(
                 // Skip specifiers that already carry the extension — TS6142 is only
                 // emitted when the extension was inferred by resolution, not stated.
                 if (moduleName.endsWith(".jsx") || moduleName.endsWith(".tsx")) continue
-                val resolved = resolveJsxTsxCandidate(moduleName, fileName) ?: continue
+                val resolved = resolveJsxTsxCandidate(moduleName, fileName, jsxTsxFileNames) ?: continue
                 emitTS6142(specifier, moduleName, resolved, source, fileName)
             }
         }
@@ -52613,7 +52636,11 @@ class Checker(
      * these to avoid TS2459 FPs across the rest of the checker — here the result
      * is only ever consumed by TS6142 emission, so the narrower scope is safe.
      */
-    private fun resolveJsxTsxCandidate(moduleName: String, contextFileName: String): String? {
+    private fun resolveJsxTsxCandidate(
+        moduleName: String,
+        contextFileName: String,
+        jsxTsxFileNames: List<String>,
+    ): String? {
         val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
         // Relative: resolve against the importing file's directory first.
         if (isRelative) {
@@ -52635,9 +52662,19 @@ class Checker(
             for (candidate in candidates) {
                 if (candidate in fileResults) return candidate
             }
-            // Suffix-match: any file ending with /base + ext
+            // Suffix-match: any file ending with /base + ext.
+            //
+            // (INC.58) Scanned over the `.jsx`/`.tsx` files ONLY, not over every
+            // file in the program. Both arms of the test can match only a name
+            // ending in `$ext`, so the filtered scan returns exactly what the full
+            // one did — in the same order, hence the same FIRST match — while the
+            // population it walks is normally empty. Over `fileResults.keys` this
+            // ran once per import specifier per extension, i.e. O(files x
+            // specifiers): measured 709.7 ms of a 774.7 ms floor pass table on a
+            // 2,401-file project with NO JSX in it, growing 14.6x for 4x the files.
             val suffix = "/$base$ext"
-            for (fn in fileResults.keys) {
+            for (fn in jsxTsxFileNames) {
+                EagerIndexCensus.jsxSuffixScanSteps++
                 if (fn.endsWith(suffix) || fn == "$base$ext") return fn
             }
         }
