@@ -83,6 +83,7 @@ class ImportDepScanComplexityTest {
         val tlc = EagerIndexCensus.topLevelConstBuilds
         val pns = EagerIndexCensus.programNameSetBuilds
         val tos = EagerIndexCensus.transformOrderSetBuilds
+        val rie = EagerIndexCensus.relativeImportExtractions
         EagerIndexCensus.resetCounters()
         try {
             return block()
@@ -92,6 +93,7 @@ class ImportDepScanComplexityTest {
             EagerIndexCensus.topLevelConstBuilds = tlc
             EagerIndexCensus.programNameSetBuilds = pns
             EagerIndexCensus.transformOrderSetBuilds = tos
+            EagerIndexCensus.relativeImportExtractions = rie
         }
     }
 

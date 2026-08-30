@@ -123,8 +123,29 @@ object EagerIndexCensus {
      */
     var transformOrderSetBuilds: Int = 0
 
+    /**
+     * (INC.64) Calls to `extractRelativeImports`, per compile.
+     *
+     * **0 on a `--noEmit` build, and `2 x emitting files` otherwise.** Its whole
+     * product is `importDeps` / `importDepsNoRefPath`, and every consumer of those
+     * exists to ORDER emitted output: `transformOrder` (whose only reader is the
+     * transform loop, already `emptyList()` under `skipEmitOutputs` since round 738),
+     * `sortedTsFiles` (which orders `jsOutputMap` entries a `--noEmit` build never
+     * produces) and `cpcRequireOnlyOrphans` (gated on the same flag already). So an
+     * editor keystroke was building a dependency ORDER for an emit that never
+     * happens — (INC.59)'s finding one call deeper, and the second time the emit-order
+     * region has been found running in the `--noEmit` path.
+     *
+     * **THE CORPUS CANNOT GATE THIS AND THAT IS THE POINT**: `skipEmitOutputs` is set
+     * ONLY by `ProjectCompiler`, never by the `@noEmit` corpus directive (round 738),
+     * so all ~13k baselines run with the gate OPEN and are a control. The instruments
+     * that see it are the `-project` pins and the 8-profile `--noEmit` grid.
+     */
+    var relativeImportExtractions: Int = 0
+
     fun resetCounters() {
         transformOrderSetBuilds = 0
+        relativeImportExtractions = 0
         localTypeAliasFileScans = 0
         enclosingImportBuilds = 0
         topLevelConstBuilds = 0

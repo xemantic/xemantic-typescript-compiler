@@ -2036,30 +2036,52 @@ class TypeScriptCompiler {
             // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
             if (skipJsEmit) continue
 
-            // Extract relative imports for dependency ordering
-            val feImpT0 = FrontEnd.t()
-            importDeps[file.fileName] = extractRelativeImports(
-                sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
-                includeReferencePathDeps = true,
-                paths = options.paths,
-                baseUrl = options.baseUrl,
-                tsconfigDir = computedTsconfigDir,
-                rootDirs = options.rootDirs,
-                symlinkMap = parsed.symlinkMap,
-            )
-            // Also compute deps WITHOUT ref-path edges as a fallback. If the
-            // full deps graph forms a cycle (mutual `/// <reference>` between
-            // files), we drop the ref-path edges and rely on input order.
-            importDepsNoRefPath[file.fileName] = extractRelativeImports(
-                sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
-                includeReferencePathDeps = false,
-                paths = options.paths,
-                baseUrl = options.baseUrl,
-                tsconfigDir = computedTsconfigDir,
-                rootDirs = options.rootDirs,
-                symlinkMap = parsed.symlinkMap,
-            )
-            FrontEnd.close(FrontEnd.IMPORTS, feImpT0)
+            // Extract relative imports for dependency ordering.
+            //
+            // (INC.64): SKIPPED ENTIRELY under `skipEmitOutputs`. The only product is
+            // `importDeps`/`importDepsNoRefPath`, and every consumer of those orders
+            // EMITTED output — `transformOrder` feeds a transform loop that is already
+            // `emptyList()` under this flag (round 738), `sortedTsFiles` orders
+            // `jsOutputMap` entries a `--noEmit` build never produces, and
+            // `cpcRequireOnlyOrphans` carries the same gate a few lines below. So an
+            // editor keystroke was computing a dependency ORDER for an emit that does
+            // not happen: measured at 15.0 / 17.1 / 22.6 ms of a ~170 ms incremental
+            // floor on 2,401 application-shaped files, ~10%.
+            //
+            // This is (INC.59)'s finding one call deeper, and like it the CORPUS IS A
+            // CONTROL rather than the gate — `skipEmitOutputs` is set only by
+            // `ProjectCompiler`, never by the `@noEmit` corpus directive, so all ~13k
+            // baselines run with this branch taken. What sees it is the `-project`
+            // pins and the 8-profile `--noEmit` grid.
+            //
+            // NOT a `continue`: `tsFileNames.add` below is NOT emit-only and every
+            // later phase reads it, so the gate wraps exactly the two calls.
+            if (!options.skipEmitOutputs) {
+                val feImpT0 = FrontEnd.t()
+                EagerIndexCensus.relativeImportExtractions += 2
+                importDeps[file.fileName] = extractRelativeImports(
+                    sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
+                    includeReferencePathDeps = true,
+                    paths = options.paths,
+                    baseUrl = options.baseUrl,
+                    tsconfigDir = computedTsconfigDir,
+                    rootDirs = options.rootDirs,
+                    symlinkMap = parsed.symlinkMap,
+                )
+                // Also compute deps WITHOUT ref-path edges as a fallback. If the
+                // full deps graph forms a cycle (mutual `/// <reference>` between
+                // files), we drop the ref-path edges and rely on input order.
+                importDepsNoRefPath[file.fileName] = extractRelativeImports(
+                    sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
+                    includeReferencePathDeps = false,
+                    paths = options.paths,
+                    baseUrl = options.baseUrl,
+                    tsconfigDir = computedTsconfigDir,
+                    rootDirs = options.rootDirs,
+                    symlinkMap = parsed.symlinkMap,
+                )
+                FrontEnd.close(FrontEnd.IMPORTS, feImpT0)
+            }
             // Detect whether this file uses `import X = require("...")` (CJS-style
             // import-equals). When an entry-point file uses this form, TypeScript
             // emits its dependencies in the order they appear in the file (single-root
