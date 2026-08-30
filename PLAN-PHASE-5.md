@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.58) — the same law, one hour later, on a pass named for a feature the project does not use
+
+**FOUND BY (INC.57)'s OWN SUCCESSOR INSTRUMENT**, which is the point worth keeping:
+divide the floor pass table by file count at two program sizes, and a pass that is
+honestly O(program) reads a constant µs/file while a quadratic one doubles. One row
+answered:
+
+| pass | 601 files | 2401 files | growth (4 = linear) |
+|---|---|---|---|
+| **`checkJsxImportResolutions`** | 48.66 ms | **709.74 ms** | **14.6** |
+| `init:buildPerFileScopes` | 3.17 | 13.52 | 4.3 |
+| `init:computePerFileVisibility` | 1.01 | 6.66 | 6.6 |
+| — table total — | 65.00 | 774.65 | 11.9 |
+
+**709.74 of 774.65 ms — 92% of the floor pass table — on a project with NO JSX IN IT.**
+`resolveJsxTsxCandidate`'s last resort is a path-suffix match ("any program file whose
+name ends with `/<base>.jsx`") and it walked `fileResults.keys` once per import
+specifier per extension: `2 x files x specifiers`. **And the pass is gated on `--jsx`
+being UNSET**, so it did its maximum work on exactly the projects that have nothing to
+do with JSX, and always answered null.
+
+**(INC.54)(a) RANKED THIS PASS AT 1.2 ms** from the tsc profile. Same pass, same binary,
+**600x** — (INC.57)'s corpus-SHAPE law confirmed on a second, independent instance
+within one session, and this time it invalidates a published RANKING and not just a
+price. That is why (INC.58)'s entry told the next round to re-take (INC.54)(a)'s
+ordering on the many-small shape before opening any of its rows.
+
+**THE NARROWING IS EXACTLY EQUIVALENT, NOT MERELY CONSERVATIVE.** Every non-null return
+of `resolveJsxTsxCandidate` is a `fileResults` member ending in `.jsx`/`.tsx` — the
+direct probes build their candidate as `"…$ext"` and test `in fileResults`, and both
+arms of the suffix scan can only match such a name. So the filtered scan returns the
+same file **in the same order** (load-bearing: the scan takes the FIRST match), and a
+program with no such file can produce no TS6142 at all and returns immediately. The
+filter is a LOCAL in the pass, not a `Checker` field — (INC.53) measured that class of
+field initializer at 16-30 ms on every build and invisible to every gate here.
+
+**RESULTS. 709.74 -> 0.30 ms at 2,401 files (2,350x), and now LINEAR** (0.076 / 0.150 /
+0.302 ms at 601 / 1201 / 2401 — exactly 2x for 2x files, i.e. the O(files) filter scan
+and nothing else). **The two rounds together take the per-keystroke floor from
+1653 -> 366 ms at 2,401 files (4.5x), 409 -> 197 at 1,201, 165 -> 99 at 601** — and the
+gain GROWS with project size, because both defects were super-linear.
+
+**A PIN LESSON WORTH KEEPING, because the pin caught it and no reasoning did.** The
+first value pin asserted `jsxSuffixScanSteps > 0` for a RELATIVE specifier and went RED
+**on a working binary**: TS6142 fired, but a relative specifier is served by the O(1)
+direct probe and never reaches the scan. **An assertion about WHICH path produced an
+answer is not implied by the answer being right.** There are now two value pins, one per
+resolution path — a BARE specifier is what forces the suffix scan — beside the two count
+pins (`jsxSuffixScanSteps == 0` at 10 files AND at 100).
+
+**GATES.** Suite **16,503 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0
+with **every counter identical to the (INC.57) run** (`output.errors` 46, `spine.nodes`
+856,962), so this checker change is counter-neutral on the compiler profile;
+`huge_methods.py --fail-over 0` clean. `docs/perf/import-dep-scan-complexity.md` § 6.
+
+**NAMED SUCCESSOR.** (INC.56) — genuinely near the top of this shape NOW, which its own
+entry claimed and which was only true after these two rounds (crawl wall 49-70 ms of a
+366 ms floor at 2,401 files). It stays the only floor row costing a soundness promise,
+so its opt-in framing stands. The three remaining super-linear-looking `init:` rows are
+the largest growth factors left but are small absolutely (13.5 / 6.7 / 3.9 ms) — price
+before opening.
+
 ### Round (INC.57) — the front end was QUADRATIC in file count, and no profile here could express it
 
 **HOW THIS ROUND STARTED, because the route is the finding.** (INC.56) was top of the
@@ -3839,8 +3901,19 @@ RHS, and the merged-member CONTRADICTION direction.
   refuse a file written by a different build. **Measure the serialise/deserialise cost against
   the 136 ms it replaces before building the invalidation.**
 
-- [ ] **(INC.58) THE `Checker` INIT-BLOCK PASS DISPATCH IS SUPER-LINEAR IN FILE COUNT —
-  ~73% OF THE FLOOR ON AN APPLICATION-SHAPED PROJECT.** (INC.57)'s successor, and it
+- [x] **(INC.58) DONE 2026-08-30 — IT WAS ONE PASS, AND IT WAS `checkJsxImportResolutions`:
+  **709.74 of a 774.65 ms floor pass table (92%) on a 2,401-file project with NO JSX**,
+  growing 14.6x for 4x the files. `resolveJsxTsxCandidate`'s path-suffix fallback walked
+  every file of the program once per import specifier per extension, and the pass is gated
+  on `--jsx` being UNSET — maximum work on exactly the projects that never use JSX, always
+  answering null. Restricted to the `.jsx`/`.tsx` subset (exactly equivalent: every
+  non-null return is such a file, and order is preserved so the FIRST match is unchanged),
+  with a whole-pass early-out when the program has none. **709.74 -> 0.30 ms, and LINEAR.**
+  **(INC.54)(a) had ranked this pass at 1.2 ms from the tsc profile — 600x, so that item's
+  whole ORDERING must be re-taken on the many-small shape before any of its rows is
+  opened.** Together with (INC.57) the floor goes **1653 -> 366 ms** at 2,401 files.
+  Suite 16,503 / 0 / 3; both gates clean and every cost counter unchanged.
+  `docs/perf/import-dep-scan-complexity.md` § 6. ORIGINAL ENTRY:** (INC.57)'s successor, and it
   re-frames (INC.54)(a) rather than repeating it. Measured AFTER (INC.57), so the
   quadratic is not in these numbers (`scripts/floor-decomposition.sh`, two draws):
   **73-91 ms at 601 files, 204-217 at 1201, 756-810 at 2401** — 2.4-2.8x then 3.5-4.0x

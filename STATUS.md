@@ -1,10 +1,26 @@
 # Status
 
-**(INC.57) — THE FRONT END WAS QUADRATIC IN FILE COUNT, AND NO PROFILE HERE COULD EXPRESS
-IT (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST REMAINING FRONT-END
-ROW"* — its own entry demanded the prize first be re-measured on "a project with MANY SMALL
-files rather than tsc's 78 huge ones". That measurement **refuted the premise and found a
-bigger target beside it**. `extractRelativeImports` opened with
+**(INC.57)+(INC.58) — THE FRONT END WAS QUADRATIC IN FILE COUNT **TWICE**, AND NO PROFILE
+HERE COULD EXPRESS EITHER; THE PER-KEYSTROKE FLOOR OF A 2,401-FILE PROJECT GOES
+**1,653 -> 366 ms** (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST
+REMAINING FRONT-END ROW"* — its own entry demanded the prize first be re-measured on "a
+project with MANY SMALL files rather than tsc's 78 huge ones". That measurement **refuted
+the premise and found two independent quadratics beside it**, in different subsystems.
+**(INC.58), found by (INC.57)'s own successor instrument (divide the floor pass table by
+file count at two sizes): `checkJsxImportResolutions` was **709.74 of a 774.65 ms floor
+pass table — 92% — on a project containing NO JSX**, growing 14.6x for 4x the files.**
+`resolveJsxTsxCandidate`'s path-suffix fallback walked every file of the program once per
+import specifier per extension, and the pass is gated on `--jsx` being **UNSET** — maximum
+work on precisely the projects that never use JSX, always answering null. Restricting it to
+the `.jsx`/`.tsx` subset is EXACTLY equivalent (every non-null return is such a file; order
+preserved, so the FIRST match is unchanged) and takes it to **0.30 ms, linear**.
+**(INC.54)(a) had ranked that pass at 1.2 ms from the tsc profile — 600x, so a published
+RANKING and not merely a price was invalidated.** A pin lesson from it: the first value pin
+went RED on a WORKING binary because a relative specifier is served by an O(1) probe and
+never reaches the scan — **an assertion about WHICH path served an answer is not implied by
+the answer being right**; there are now two value pins, one per path. Suite **16,503 / 0 /
+3**; both gates clean with every cost counter unchanged.
+**AND (INC.57), THE ONE THAT STARTED IT:** `extractRelativeImports` opened with
 `allFiles.map { it.fileName }.toSet()` — a fresh list AND set of every program file name —
 and the emit-order scan calls it **TWICE per file**: `2 x files^2` string hashes per build,
 plus two sibling `parsed.files.any { … }` scans in the same loop. On generated

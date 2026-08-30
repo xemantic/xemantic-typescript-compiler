@@ -1,9 +1,15 @@
-# (INC.57) The emit-order import scan was quadratic in the program's file count
+# (INC.57)/(INC.58) The front end was quadratic in the program's FILE COUNT — twice
 
 **2026-08-30.** Measured while executing (INC.56)'s own instruction — *"it must be
 re-taken on a project with MANY SMALL files rather than tsc's 78 huge ones"*. The
-re-measurement refuted (INC.56)'s premise and found a larger, cheaper, soundness-free
-target beside it.
+re-measurement refuted (INC.56)'s premise and found two independent quadratics beside
+it, in different subsystems, each invisible to every instrument in this repo for the
+same structural reason (§ 2).
+
+**Together they take the per-keystroke floor of a 2,401-file project from 1,653 ms to
+366 ms.** §§ 0-5 are (INC.57), the emit-order import scan; § 6 is (INC.58),
+`checkJsxImportResolutions`, which § 6's own instrument found in the same session; § 7
+is what is left.
 
 ## 0. The headline
 
@@ -143,21 +149,82 @@ policy where a file changed on disk without `updateFile` is missed, plus (INC.48
 "a content hash cannot see an ADDED file" in a second costume). It should be worked
 after the two rows above it, not before them.
 
-## 6. The successor
+## 6. (INC.58) — the successor, worked immediately, and the law held twice
 
-**The `Checker` init-block pass dispatch is itself super-linear in file count**, and
-after this round it is ~73% of the floor on the 2,401-file project. Measured (after,
-so the quadratic is not in it):
+§ 6's instrument (divide the floor pass table by file count at two program sizes) was
+run the same session. One pass carried almost all of it:
 
-| files | checker construct (draw 1 / draw 2) | growth for 2x files |
+| pass | 601 files | 2401 files | growth (4 = linear) |
+|---|---|---|---|
+| **`checkJsxImportResolutions`** | 48.66 ms | **709.74 ms** | **14.6** |
+| `init:buildPerFileScopes` | 3.17 | 13.52 | 4.3 |
+| `init:computePerFileVisibility` | 1.01 | 6.66 | 6.6 |
+| `init:moduleTypeNameIndex` | 0.50 | 3.93 | 7.9 |
+| — table total — | 65.00 | 774.65 | 11.9 |
+
+**709.74 of 774.65 ms — 92% of the floor pass table — on a project containing no JSX
+at all.** `resolveJsxTsxCandidate`'s last resort is a path-suffix match ("any program
+file whose name ends with `/<base>.jsx`"), and it walked `fileResults.keys` once per
+import specifier per extension: `2 x files x specifiers`. Worse, the pass is gated on
+`--jsx` being **UNSET**, so it did its maximum work on exactly the projects that have
+nothing to do with JSX, and always answered null.
+
+**(INC.54)(a) ranked this pass at 1.2 ms** from the tsc profile. Same pass, same
+binary, **600x** — § 2's law, confirmed on a second, independent instance within one
+session, and this time it also invalidates a published *ranking* rather than a price.
+
+**The narrowing is exactly equivalent.** Every non-null return of
+`resolveJsxTsxCandidate` is a `fileResults` member ending in `.jsx`/`.tsx`: the direct
+probes build their candidate as `"…$ext"` and test `in fileResults`, and both arms of
+the suffix scan (`fn.endsWith("/$base$ext")`, `fn == "$base$ext"`) can only match such
+a name. So the filtered scan returns the same file **in the same order** — load-bearing,
+since the scan takes the FIRST match — and a program with no such file may return
+immediately. The filter is a local in the pass rather than a `Checker` field, because
+(INC.53) measured that class of field initializer at 16-30 ms on every build and
+invisible to every gate here.
+
+**Result: 709.74 -> 0.30 ms at 2,401 files (2,350x), and now linear** (0.076 / 0.150 /
+0.302 ms at 601 / 1201 / 2401 — exactly 2x for 2x the files, which is the O(files)
+filter scan and nothing else).
+
+### The two rounds together
+
+| files | original floor | after (INC.57) | after (INC.58) |
+|---|---|---|---|
+| 601 | 165 ms | 142 | **99** |
+| 1201 | 409 ms | 359 | **197** |
+| 2401 | **1653 ms** | 1035 | **366** |
+
+A **4.5x** reduction in the per-keystroke floor at the top size, and the gain grows
+with the project because both defects were super-linear.
+
+### A pin lesson worth keeping
+
+The first value pin asserted `jsxSuffixScanSteps > 0` for a *relative* specifier and
+went RED **on a working binary**: TS6142 fired, but the relative path is served by the
+O(1) direct probe and never reaches the scan. **An assertion about WHICH path produced
+an answer is not implied by the answer being right.** There are now two value pins, one
+per resolution path — a bare specifier is what forces the suffix scan.
+
+## 7. What is left on this shape, and the next successor
+
+With both quadratics gone, the 2,401-file floor is **366 ms** and its rows are, at last,
+all linear. Re-measured after (INC.58):
+
+| row | 2401 files | note |
 |---|---|---|
-| 601 | 91.2 / 72.9 ms | — |
-| 1201 | 216.8 / 204.3 ms | 2.4–2.8x |
-| 2401 | 755.6 / 809.7 ms | 3.5–4.0x |
+| crawl WALL | 49-70 ms | **(INC.56)** — now genuinely near the top, as its entry claimed, but only after these two rounds |
+| checker construct + init dispatch | 60-66 ms | was 756-810 before (INC.58) |
+| pass table total | 55-57 ms | was 751-798 |
+| `extractRelativeImports` | 17-22 ms | was 331.6 before (INC.57) |
 
-That is roughly `N^1.5`–`N^1.9`, on the region an editor pays for on every keystroke.
-(INC.54)(a) named the pass table as "the largest block now" from the tsc profile and
-ranked its rows there; this says the ranking should be re-taken on the many-small
-shape first, because a pass whose cost is per-FILE will sort differently — and
-because a super-linear term is a different kind of target from a flat 6.9 ms row.
-`scripts/floor-decomposition.sh build/bench/many-small-2400 2` is the instrument.
+**So (INC.56) is now a defensible next item on this shape** — it was fourth of five and
+is now first or second — but the ordering claim in its entry was only true *after* the
+two rows above it were fixed, which is exactly what §5 records. It remains the only one
+of these that costs a soundness promise, so its opt-in framing stands.
+
+The remaining super-linear-looking rows from §6's table (`init:buildPerFileScopes` 4.3x,
+`init:computePerFileVisibility` 6.6x, `init:moduleTypeNameIndex` 7.9x for 4x the files)
+are now the largest *growth* factors left, but they are small in absolute terms (13.5,
+6.7, 3.9 ms at 2,401 files). Price them before opening one — §2's law cuts both ways,
+and this repo's history is mostly of candidates that did not survive division.
