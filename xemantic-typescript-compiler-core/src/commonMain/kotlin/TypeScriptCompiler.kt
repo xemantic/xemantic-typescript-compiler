@@ -1771,6 +1771,25 @@ class TypeScriptCompiler {
         dtsFileNamesInProjectDir: MutableList<String>,
         importedJsonBaseNames: Set<String>,
     ) {
+        // (INC.57) The program's file NAMES, built ONCE per build.
+        //
+        // Every consumer below asks this set exactly one question — "is this
+        // path a file of the program" — and each of them used to answer it by
+        // rebuilding the whole set (or by an `any {}` scan) inside the loop, so
+        // the region was O(files^2): `extractRelativeImports` alone allocated a
+        // list AND a set of every program file name TWICE per file. Measured on
+        // generated many-small-file projects (the shape an application has,
+        // where tsc's own 78 sources are 128 KB each and hide it), the
+        // `FrontEnd.IMPORTS` row grows 4x for 2x the files — 18.9 / 76.3 /
+        // 331.6 ms at 601 / 1201 / 2401 files.
+        //
+        // `parsed` is a `ParsedSource` and `files` is a `val List`, so the set
+        // is loop-invariant by construction; `.toSet()` is kept verbatim rather
+        // than swapped for a `HashSet` so the container (and therefore any
+        // iteration order a future consumer might depend on) is bit-for-bit
+        // what the per-call expression produced.
+        val allTsFileNames = parsed.files.map { it.fileName }.toSet()
+        EagerIndexCensus.programNameSetBuilds++
         for (file in parsed.files) {
             // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
             val baseName = file.fileName.substringAfterLast('/')
@@ -1879,10 +1898,13 @@ class TypeScriptCompiler {
                 val jsEquivalentPath2 = "$tsPathWithoutExt.jsx"
                 val jsEquivalentPath3 = "$tsPathWithoutExt.mjs"
                 val jsEquivalentPath4 = "$tsPathWithoutExt.cjs"
-                val hasConflictingJs = parsed.files.any { other ->
-                    other.fileName == jsEquivalentPath1 || other.fileName == jsEquivalentPath2 ||
-                    other.fileName == jsEquivalentPath3 || other.fileName == jsEquivalentPath4
-                }
+                // (INC.57) Four membership tests against the hoisted name set,
+                // where this was an `any {}` over every program file — the same
+                // question, asked once per candidate instead of once per file.
+                val hasConflictingJs = jsEquivalentPath1 in allTsFileNames ||
+                    jsEquivalentPath2 in allTsFileNames ||
+                    jsEquivalentPath3 in allTsFileNames ||
+                    jsEquivalentPath4 in allTsFileNames
                 if (hasConflictingJs) continue
             }
 
@@ -1994,7 +2016,7 @@ class TypeScriptCompiler {
                 }
                 if (base != null) {
                     val companionDts = "$base.d.ts"
-                    val hasCompanionDts = parsed.files.any { it.fileName == companionDts }
+                    val hasCompanionDts = companionDts in allTsFileNames // (INC.57)
                     if (hasCompanionDts) {
                         // Parse for diagnostics but skip emit + dependency ordering
                         continue
@@ -2008,7 +2030,7 @@ class TypeScriptCompiler {
             // Extract relative imports for dependency ordering
             val feImpT0 = FrontEnd.t()
             importDeps[file.fileName] = extractRelativeImports(
-                sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
                 includeReferencePathDeps = true,
                 paths = options.paths,
                 baseUrl = options.baseUrl,
@@ -2020,7 +2042,7 @@ class TypeScriptCompiler {
             // full deps graph forms a cycle (mutual `/// <reference>` between
             // files), we drop the ref-path edges and rely on input order.
             importDepsNoRefPath[file.fileName] = extractRelativeImports(
-                sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
                 includeReferencePathDeps = false,
                 paths = options.paths,
                 baseUrl = options.baseUrl,
@@ -2902,10 +2924,22 @@ fun computeParserFlags(fileName: String, content: String, options: CompilerOptio
     )
 }
 
+/**
+ * (INC.57) The `/// <reference path="…"/>` matcher, compiled ONCE.
+ *
+ * It was built inside [extractRelativeImports], i.e. once per program file per
+ * build. `Regex(…)` compiles its pattern eagerly, so that was a per-file cost
+ * paid on every query even though the pattern is a constant — and unlike the
+ * whole-source scans CLAUDE.md's `srcHas` entry covers, this one is anchored to
+ * lines that must start with `///`, so the scan itself is already bounded and
+ * the COMPILE was the whole of it.
+ */
+private val REFERENCE_PATH_REGEX = Regex("""///\s*<reference\s+path\s*=\s*["']([^"']+)["']""")
+
 private fun extractRelativeImports(
     sourceFile: SourceFile,
     currentFileName: String,
-    allFiles: List<SourceFileEntry>,
+    allTsFileNames: Set<String>,
     moduleSuffixes: List<String>? = null,
     includeReferencePathDeps: Boolean = false,
     paths: Map<String, List<String>> = emptyMap(),
@@ -2914,7 +2948,6 @@ private fun extractRelativeImports(
     rootDirs: List<String>? = null,
     symlinkMap: Map<String, String> = emptyMap(),
 ): List<String> {
-    val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
     val lastSlash = currentFileName.lastIndexOf('/')
     val dir = when {
@@ -2927,11 +2960,10 @@ private fun extractRelativeImports(
     // These create ordering dependencies (referenced file must be emitted first in outFile bundles).
     // Only used when outFile is set — for separate-file output TypeScript uses original order.
     if (includeReferencePathDeps) {
-        val referencePathRegex = Regex("""///\s*<reference\s+path\s*=\s*["']([^"']+)["']""")
         for (line in sourceFile.text.lineSequence()) {
             val trimmed = line.trimStart()
             if (!trimmed.startsWith("///")) break  // stop at first non-triple-slash line
-            val match = referencePathRegex.find(trimmed) ?: continue
+            val match = REFERENCE_PATH_REGEX.find(trimmed) ?: continue
             val refPath = match.groupValues[1]
             val resolved = if (refPath.startsWith("./") || refPath.startsWith("../")) {
                 resolveRelativePath(dir, refPath)

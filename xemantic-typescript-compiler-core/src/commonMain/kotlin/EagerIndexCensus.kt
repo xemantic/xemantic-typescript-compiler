@@ -70,9 +70,28 @@ object EagerIndexCensus {
     /** 1 if the whole-program top-level `const` string index was built, else 0. */
     var topLevelConstBuilds: Int = 0
 
+    /**
+     * (INC.57) How many times the program's file-NAME set was built, per compile.
+     *
+     * **1, and invariant to the program's file count — that is the whole
+     * assertion.** It used to be `2 x files`, because `extractRelativeImports`
+     * rebuilt `allFiles.map { it.fileName }.toSet()` on entry and the emit-order
+     * scan calls it twice for every file, which made the region quadratic:
+     * measured on generated many-small-file projects, `FrontEnd.IMPORTS` read
+     * 18.9 / 76.3 / 331.6 ms at 601 / 1201 / 2401 files — 4x the cost for 2x the
+     * files, textbook.
+     *
+     * Counted rather than timed for (INC.52)'s reason, and because a COUNT is
+     * the only thing that expresses a COMPLEXITY claim: one build of a 2,401-file
+     * program and one of a 601-file program must read the SAME number here, which
+     * no wall-clock assertion can say and which a quadratic binary fails by 4x.
+     */
+    var programNameSetBuilds: Int = 0
+
     fun resetCounters() {
         localTypeAliasFileScans = 0
         enclosingImportBuilds = 0
         topLevelConstBuilds = 0
+        programNameSetBuilds = 0
     }
 }
