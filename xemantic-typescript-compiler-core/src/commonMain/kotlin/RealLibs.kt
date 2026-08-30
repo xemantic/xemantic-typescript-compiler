@@ -222,7 +222,11 @@ object RealLibResolver {
      * orders by tsc's default-lib priority.
      */
     fun resolve(libNames: List<String>?, target: ScriptTarget): Resolution =
-        resolutionCache.getOrPut(ResolutionKey(libNames, target)) { resolveCore(libNames, target) }
+        ResolutionKey(libNames, target).let { key ->
+            resolutionCache[key] ?: resolveCore(libNames, target).also {
+                resolutionCache = resolutionCache + (key to it)
+            }
+        }
 
     /**
      * (INC.63): `resolve` is a pure function of two arguments over COMPILE-TIME CONSTANT
@@ -237,7 +241,18 @@ object RealLibResolver {
      */
     private data class ResolutionKey(val libNames: List<String>?, val target: ScriptTarget)
 
-    private val resolutionCache = HashMap<ResolutionKey, Resolution>()
+    /**
+     * (INC.67) Published COPY-ON-WRITE rather than mutated in place, because this map
+     * is PROCESS-GLOBAL and an IntelliJ-class host reaches it from several threads at
+     * once: `XtscService` keeps one `XtscSession` per `tsconfig.json`, each with its
+     * own single-thread executor, so a monorepo with N configs runs N compiler threads
+     * in one JVM. A racing `HashMap.put` can lose entries or corrupt the table; a
+     * reference swap of a map that is never mutated after publication cannot — a
+     * reader either sees the old complete map or the new complete one. A lost race
+     * costs a recomputation, which is the benign direction.
+     */
+    @Volatile
+    private var resolutionCache: Map<ResolutionKey, Resolution> = emptyMap()
 
     /**
      * (INC.63) census — lib-set resolutions this process has COMPUTED, as opposed to
@@ -246,6 +261,14 @@ object RealLibResolver {
      */
     var resolutions: Int = 0
         private set
+
+    /**
+     * (INC.67) The published map itself, for the one pin that can state copy-on-write
+     * DETERMINISTICALLY: a snapshot taken before a miss must NOT contain the key the
+     * miss then adds. A thread-safety claim is otherwise only testable by a stress
+     * test, which passes on a broken implementation most of the time.
+     */
+    internal val publishedResolutions: Map<*, Resolution> get() = resolutionCache
 
     private fun resolveCore(libNames: List<String>?, target: ScriptTarget): Resolution {
         val includedFiles = LinkedHashSet<String>() // dist file names, discovery order
@@ -357,17 +380,24 @@ object RealLibResolver {
  */
 object RealLibSnapshots {
 
-    private val parseCache = HashMap<String, SourceFile>()
+    /** (INC.67) Copy-on-write for [RealLibResolver.resolutionCache]'s reason — this
+     *  object is process-global and an IDE host reaches it from one thread per open
+     *  `tsconfig.json`. [prewarmParsedLibFiles] remains the way a `--workers` compile
+     *  avoids the duplicate PARSES a lost race would cost; this is about the map. */
+    @Volatile
+    private var parseCache: Map<String, SourceFile> = emptyMap()
 
     /**
      * The shared, immutable parse of one lib file, keyed by [RealLibFiles.files]
      * key. The [SourceFile.fileName] is the DISTRIBUTED name (`lib.es5.d.ts`,
      * `lib.d.ts`) — what tsc baselines render in lib-file positions.
      */
-    fun parsedLibFile(key: String): SourceFile = parseCache.getOrPut(key) {
+    fun parsedLibFile(key: String): SourceFile = parseCache[key] ?: run {
         val content = RealLibFiles.files[key]
             ?: error("Unknown real-lib key '$key' (not shipped in RealLibFiles)")
-        Parser(content, keyToDistFileName(key)).parse()
+        val parsed = Parser(content, keyToDistFileName(key)).parse()
+        parseCache = parseCache + (key to parsed)
+        parsed
     }
 
     private fun keyToDistFileName(key: String) = RealLibResolver.keyToDistFileName(key)
@@ -426,12 +456,18 @@ object RealLibSnapshots {
         val declFile: Map<Node, String>,
     )
 
-    private val declIndexCache = HashMap<String, LibDeclIndex>()
+    /** (INC.67) Copy-on-write, for the reason [parseCache] is. */
+    @Volatile
+    private var declIndexCache: Map<String, LibDeclIndex> = emptyMap()
 
     /**
      * (INC.63) census — how many indexes this process has BUILT (as opposed to
      * served). A pin reads it as a DELTA across two builds rather than as an
      * absolute, because the cache is process-global and outlives any one test.
+     *
+     * Plain, unsynchronized counters: they are CENSUS ONLY and their pins are
+     * single-threaded. Under a multi-threaded host ((INC.67)) an increment can be lost —
+     * read them as a lower bound there, never as a claim.
      */
     var declIndexBuilds: Int = 0
         private set
@@ -451,8 +487,9 @@ object RealLibSnapshots {
      */
     fun libDeclIndex(libNames: List<String>?, target: ScriptTarget): LibDeclIndex {
         val keys = RealLibResolver.resolve(libNames, target).orderedKeys
-        return declIndexCache.getOrPut(keys.joinToString("\u0000")) {
-            buildLibDeclIndex(keys.map { parsedLibFile(it) })
+        val key = keys.joinToString("\u0000")
+        return declIndexCache[key] ?: buildLibDeclIndex(keys.map { parsedLibFile(it) }).also {
+            declIndexCache = declIndexCache + (key to it)
         }
     }
 
@@ -462,6 +499,9 @@ object RealLibSnapshots {
      * data-class nodes dedupes STRUCTURALLY, so a different container would silently
      * change which declarations the sets contain.
      */
+    /** (INC.67) See [RealLibResolver.publishedResolutions] — the same pin, one object over. */
+    internal val publishedParses: Map<String, SourceFile> get() = parseCache
+
     private fun buildLibDeclIndex(files: List<SourceFile>): LibDeclIndex {
         val decls = HashSet<Node>()
         val memberDecls = HashSet<Node>()
