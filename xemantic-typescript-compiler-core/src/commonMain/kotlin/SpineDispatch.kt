@@ -4619,7 +4619,20 @@ object FrontEnd {
      */
     const val CFG_LIST = 53
 
-    const val N = 54
+    /**
+     * (INC.65) `resolver.resolve(spec, importer)` over every specifier of a frontier —
+     * the crawl's SEQUENTIAL half. INSIDE [CRAWL], and disjoint from [READ]/[PREPARSE],
+     * which are the concurrent half.
+     *
+     * It exists because [CRAWL]'s wall had no split at all below the two
+     * elapsed-with-suspension CPU sums, so the residue between them and the wall was
+     * unattributed — and on an application-shaped project that residue is most of the
+     * row. Module resolution probes the filesystem per candidate extension, which is
+     * (INC.60)'s family.
+     */
+    const val CRAWL_RESOLVE = 54
+
+    const val N = 55
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4676,6 +4689,7 @@ object FrontEnd {
         "    of which the directory walk",
         "      of which the include/exclude regex match",
         "      of which vfs.listEntries + sort (per directory)",
+        "  of which specifier resolution (sequential)",
     )
 
     /**
@@ -4683,7 +4697,7 @@ object FrontEnd {
      * the TOTAL is still summed over the disjoint top-level phases only.
      */
     private val order: IntArray = intArrayOf(
-        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
+        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE, PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,

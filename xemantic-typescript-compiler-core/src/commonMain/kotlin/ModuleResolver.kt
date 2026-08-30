@@ -78,18 +78,58 @@ class ModuleResolver(
 
     private val pkgJsonCache = HashMap<String, JsonObject?>()
 
+    /**
+     * (INC.65) The answers already computed, keyed by `(importerDir, specifier)`.
+     *
+     * **The key is the importer's DIRECTORY, not its path, and that is exact rather
+     * than approximate**: [resolve] reads `importerPath` once, to take its `dirname`,
+     * and never again — every branch below that line is a function of `importerDir`
+     * and `spec` alone. So two files in one directory importing the same specifier
+     * ask the same question, and on the generated 2,401-file application fixture that
+     * is a duplication factor of exactly **2.0** (4,701 resolutions over 2,351
+     * distinct pairs).
+     *
+     * Why it needs no invalidation: a [ModuleResolver] is constructed once per
+     * `ProjectCompiler.build`, so the memo's lifetime IS one build — and the crawl
+     * already documents that it assumes a `Vfs` static for its duration (its answers
+     * would otherwise not be deterministic either). It is deliberately NOT
+     * process-global for that reason; a cross-build cache cannot see an ADDED file,
+     * which is (INC.48)'s hazard.
+     *
+     * `null` is a real answer (an unresolved specifier, which the caller reports), so
+     * membership is tested rather than nullability — a `getOrPut` would re-probe the
+     * filesystem for every unresolved import, which is the population a broken project
+     * has most of.
+     */
+    private val resolutionCache = HashMap<String, String?>()
+
+    /** (INC.65) census — resolutions COMPUTED, as opposed to served from [resolutionCache]. */
+    var computedResolutions: Int = 0
+        private set
+
+    /** (INC.65) census — calls to [resolve], whether served or computed. */
+    var resolveCalls: Int = 0
+        private set
+
     /** Resolves [specifier] imported from [importerPath]; returns an absolute file path or null. */
     fun resolve(specifier: String, importerPath: String): String? {
         // Strip query/hash a bundler might tolerate.
         val spec = specifier.substringBefore('?').substringBefore('#')
         if (spec.isEmpty()) return null
+        resolveCalls++
         val importerDir = PathUtil.dirname(importerPath)
-        return if (PathUtil.isBare(spec)) {
+        // '\u0000' cannot occur in a path, so the two halves cannot be confused.
+        val key = "$importerDir\u0000$spec"
+        if (key in resolutionCache) return resolutionCache[key]
+        computedResolutions++
+        val answer = if (PathUtil.isBare(spec)) {
             resolveBare(spec, importerDir)
         } else {
             val base = if (PathUtil.isAbsolute(spec)) PathUtil.normalize(spec) else PathUtil.join(importerDir, spec)
             resolveAsFileOrDirectory(base)
         }
+        resolutionCache[key] = answer
+        return answer
     }
 
     // --- relative / absolute ----------------------------------------------------

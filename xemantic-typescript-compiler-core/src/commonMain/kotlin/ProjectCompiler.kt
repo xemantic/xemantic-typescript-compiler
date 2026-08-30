@@ -580,6 +580,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             // observable — this loop is what fixes them deterministically.
             val discovered = ArrayList<String>()
             val pending = HashSet<String>()
+            val feResolveT0 = FrontEnd.t()
             for (f in frontier) {
                 for (spec in f.specifiers) {
                     val resolved = resolver.resolve(spec, f.path)
@@ -606,6 +607,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                     if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
             }
+            FrontEnd.close(FrontEnd.CRAWL_RESOLVE, feResolveT0)
             // Read+parse the discoveries concurrently, then emit in DISCOVERY
             // order (the emission-order contract above). An unreadable discovered
             // file is dropped here and stays out of `loaded`, so a later frontier
