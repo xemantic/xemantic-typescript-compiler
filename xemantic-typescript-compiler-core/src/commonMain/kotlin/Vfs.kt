@@ -40,6 +40,13 @@ import kotlinx.io.writeString
  * works on JVM/Native/WASI); tests can supply an in-memory implementation to keep
  * resolution and tsconfig logic deterministic and FS-independent.
  */
+class VfsEntry(
+    /** Absolute, normalized path of the entry. */
+    val path: String,
+    /** Whether the entry is a directory. */
+    val isDirectory: Boolean,
+)
+
 interface Vfs {
     /** True if a file OR directory exists at [path]. */
     fun exists(path: String): Boolean
@@ -58,7 +65,39 @@ interface Vfs {
      * CLI invocations (`xtsc .`) produce the absolute paths glob matching requires.
      */
     fun resolveAbsolute(path: String): String = path
+
+    /**
+     * (INC.60) [list], with the ONE further question every caller of it asks —
+     * "is this entry a directory?" — already answered.
+     *
+     * The default implementation is exactly the two calls it replaces, so an
+     * implementation that does not override it is unchanged; [SystemVfs]
+     * overrides it because on a real filesystem the pair costs a directory
+     * listing PLUS a metadata probe per entry, and the listing already went to
+     * the filesystem for the same directory.
+     *
+     * Order is NOT specified — [ProjectCompiler]'s root-file walk sorts, and
+     * that sort is load-bearing (round 776: an unsorted crawl makes program
+     * order a property of the filesystem rather than of the project).
+     */
+    fun listEntries(path: String): List<VfsEntry> =
+        list(path).map { VfsEntry(it, isDirectory(it)) }
 }
+
+/**
+ * (INC.60) The platform's own directory listing, with each entry's kind.
+ *
+ * It exists because kotlinx-io has no such call and the pair it forces is
+ * measurably expensive: `SystemFileSystem.metadataOrNull` is compiled (0.9.1,
+ * `FileSystemJvmKt${'$'}SystemFileSystem${'$'}1.metadataOrNull`) to
+ * `File.exists()` + `File.isFile()` + `File.isDirectory()` + `File.isFile()` +
+ * `File.length()` — up to FIVE `stat` syscalls plus a `FileMetadata` allocation
+ * to answer one boolean — and the root-file glob asks it once per entry. Measured
+ * on a 2,401-file project: **18-21 ms over 2,451 entries (7.3-8.6 us each), 60-70%
+ * of the whole glob and the largest single component of the incremental FLOOR's
+ * `config load + @types + root glob` row.**
+ */
+internal expect fun systemListEntries(path: String): List<VfsEntry>
 
 /**
  * Production [Vfs] backed by kotlinx-io's [SystemFileSystem]. Multiplatform-safe
@@ -91,6 +130,8 @@ object SystemVfs : Vfs {
     } catch (_: Exception) {
         emptyList()
     }
+
+    override fun listEntries(path: String): List<VfsEntry> = systemListEntries(path)
 
     /**
      * (SERVE.2) round 873 — the directory relative paths resolve against, when

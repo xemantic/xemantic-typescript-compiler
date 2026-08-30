@@ -247,6 +247,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         // binderResult (its `sourceFile.text` no longer matching its statement positions)
         // that crashes the checker with a StringIndexOutOfBounds.
         val feConfigT0 = FrontEnd.t()
+        val feCfgLoadT0 = FrontEnd.t()
         val isBareSourceFile = !vfs.isDirectory(absPath) &&
             !absPath.endsWith(".json") && vfs.exists(absPath)
         val configPath = if (isBareSourceFile) absPath else resolveConfigPath(absPath)
@@ -262,6 +263,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         } else {
             TsConfigLoader(vfs).load(configPath)
         }
+        FrontEnd.close(FrontEnd.CFG_LOAD, feCfgLoadT0)
         // The `outDir` override is applied HERE, on the loaded config, and nowhere else:
         // [writeOutputs] and the TS5055 filter are the only readers of `options.outDir`
         // (the core is handed `outDir = null` deliberately — see `emitOptions` below), so
@@ -278,13 +280,18 @@ class ProjectCompiler(private val vfs: Vfs) {
         val allowJs = config.options.allowJs
         val supportedExt = if (allowJs) rootExtensions + listOf(".js", ".jsx", ".mjs", ".cjs") else rootExtensions
 
+        val feCfgRootsT0 = FrontEnd.t()
         val rootFiles = collectRootFiles(config, supportedExt)
+        FrontEnd.close(FrontEnd.CFG_ROOTS, feCfgRootsT0)
+        FrontEnd.globRoots = rootFiles.size.toLong()
 
         // Automatic type-library inclusion (tsconfig `types` / `typeRoots`): the
         // resolved entries join the graph walk as additional seeds so their own
         // imports and `/// <reference types>` directives are followed too.
         val typeDiagnostics = mutableListOf<Diagnostic>()
+        val feCfgTypesT0 = FrontEnd.t()
         val typeEntries = collectTypeRootEntries(config, resolver, typeDiagnostics)
+        FrontEnd.close(FrontEnd.CFG_TYPES, feCfgTypesT0)
 
         // The options the compilation core receives. The core's output naming serves
         // baseline comparison: by default it strips names to basenames (which collide
@@ -747,11 +754,17 @@ class ProjectCompiler(private val vfs: Vfs) {
         if (config.include.isNotEmpty()) {
             val includeRegexes = config.include.map { globToRegex(PathUtil.join(config.configDir, it), supportedExt) }
             val excludeRegexes = config.exclude.map { globToRegex(PathUtil.join(config.configDir, it), supportedExt) }
+            val feWalkT0 = FrontEnd.t()
             walk(config.configDir) { path ->
                 if (matchedExtension(path, supportedExt) == null) return@walk
-                if (excludeRegexes.any { it.matches(path) }) return@walk
-                if (includeRegexes.any { it.matches(path) }) result.add(path)
+                FrontEnd.globCandidates++
+                val feMatchT0 = FrontEnd.t()
+                if (excludeRegexes.none { it.matches(path) } && includeRegexes.any { it.matches(path) }) {
+                    result.add(path)
+                }
+                FrontEnd.close(FrontEnd.CFG_MATCH, feMatchT0)
             }
+            FrontEnd.close(FrontEnd.CFG_WALK, feWalkT0)
         }
         return result.toList()
     }
@@ -817,18 +830,20 @@ class ProjectCompiler(private val vfs: Vfs) {
             }
         } else {
             for (root in typeRoots) {
-                for (child in vfs.list(root).sorted()) { // sorted: deterministic program order
-                    if (!vfs.isDirectory(child)) continue
-                    val base = PathUtil.basename(child)
+                // sorted: deterministic program order. (INC.60) one listing per
+                // directory rather than a listing plus a probe per entry.
+                for (child in vfs.listEntries(root).sortedBy { it.path }) {
+                    if (!child.isDirectory) continue
+                    val base = PathUtil.basename(child.path)
                     if (base.startsWith(".")) continue
                     if (base.startsWith("@")) {
                         // A scope directory inside a type root contributes its subdirectories.
-                        for (scoped in vfs.list(child).sorted()) {
-                            if (!vfs.isDirectory(scoped) || PathUtil.basename(scoped).startsWith(".")) continue
-                            resolver.resolveTypeRootPackage(scoped)?.let { entries.add(it) }
+                        for (scoped in vfs.listEntries(child.path).sortedBy { it.path }) {
+                            if (!scoped.isDirectory || PathUtil.basename(scoped.path).startsWith(".")) continue
+                            resolver.resolveTypeRootPackage(scoped.path)?.let { entries.add(it) }
                         }
                     } else {
-                        resolver.resolveTypeRootPackage(child)?.let { entries.add(it) }
+                        resolver.resolveTypeRootPackage(child.path)?.let { entries.add(it) }
                     }
                 }
             }
@@ -889,11 +904,19 @@ class ProjectCompiler(private val vfs: Vfs) {
         while (stack.isNotEmpty()) {
             val d = stack.removeLast()
             val dirs = mutableListOf<String>()
-            for (entry in vfs.list(d).sorted()) {
-                if (vfs.isDirectory(entry)) {
-                    if (PathUtil.basename(entry) !in pruned) dirs.add(entry)
+            FrontEnd.globDirs++
+            val feListT0 = FrontEnd.t()
+            // (INC.60) ONE listing that already answers "directory?" per entry. The
+            // sort is round 776's and must stay: it fixes the program's ROOT-FILE
+            // order, and `listEntries` promises no order of its own.
+            val entries = vfs.listEntries(d).sortedBy { it.path }
+            FrontEnd.close(FrontEnd.CFG_LIST, feListT0)
+            for (entry in entries) {
+                FrontEnd.globEntries++
+                if (entry.isDirectory) {
+                    if (PathUtil.basename(entry.path) !in pruned) dirs.add(entry.path)
                 } else {
-                    onFile(entry)
+                    onFile(entry.path)
                 }
             }
             for (i in dirs.indices.reversed()) stack.addLast(dirs[i])

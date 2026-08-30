@@ -4585,7 +4585,41 @@ object FrontEnd {
      */
     const val CHK_F_LIBDECLS = 47
 
-    const val N = 48
+    // ---- (INC.60) the three blocks of [CONFIG], which no round had separated.
+    //
+    // [CONFIG] is the third-largest row of the INCREMENTAL FLOOR on an
+    // application-shaped project (29-45 ms of a 279 ms floor at 2,401 files,
+    // 52.8/52.9 ms at 4,801), and its ~1.4x growth for 2x the files says a
+    // FIXED cost dominates it — a fixed cost on the floor being paid on every
+    // keystroke. Its own KDoc names three different pieces of work with three
+    // different levers, and nothing said which one it is.
+    //
+    // They abut across the region (from its `t()` to its `close()` there is
+    // nothing else but a handful of `copy` calls), so their sum is a PARTITION
+    // CHECK rather than an unattributed remainder, and each costs ONE timestamp
+    // pair per compile.
+
+    /** `resolveConfigPath` + `TsConfigLoader.load`. INSIDE [CONFIG]. */
+    const val CFG_LOAD = 48
+    /** `collectRootFiles` — the include/exclude glob walk. INSIDE [CONFIG]. */
+    const val CFG_ROOTS = 49
+    /** `collectTypeRootEntries` — `@types` acquisition. INSIDE [CONFIG]. */
+    const val CFG_TYPES = 50
+    /** The directory walk itself, i.e. `vfs.list`/`isDirectory`. INSIDE [CFG_ROOTS]. */
+    const val CFG_WALK = 51
+    /** The per-file include/exclude regex matching. INSIDE [CFG_WALK]. */
+    const val CFG_MATCH = 52
+    /**
+     * `vfs.listEntries(dir).sortedBy { it.path }` — one per DIRECTORY. INSIDE [CFG_WALK].
+     *
+     * It was `vfs.list(dir).sorted()` plus a `vfs.isDirectory(entry)` per ENTRY, and
+     * the second half was 18-21 ms of a 29 ms walk at 2,401 files (7.3-8.6 us per
+     * entry) because kotlinx-io answers that one boolean with up to five `stat`
+     * syscalls — see [systemListEntries].
+     */
+    const val CFG_LIST = 53
+
+    const val N = 54
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4636,6 +4670,12 @@ object FrontEnd {
         "    of which localTypeAliasIndex (field)",
         "      of which RealLibSnapshots.bindLibFiles",
         "      of which the lib decl-set walk",
+        "  of which the tsconfig load",
+        "  of which the root-file glob",
+        "  of which @types acquisition",
+        "    of which the directory walk",
+        "      of which the include/exclude regex match",
+        "      of which vfs.listEntries + sort (per directory)",
     )
 
     /**
@@ -4643,7 +4683,7 @@ object FrontEnd {
      * the TOTAL is still summed over the disjoint top-level phases only.
      */
     private val order: IntArray = intArrayOf(
-        CONFIG, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
+        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
@@ -4680,6 +4720,24 @@ object FrontEnd {
     /** Files read by the crawl, and the total decoded UTF-16 length. */
     var filesRead: Long = 0
     var charsRead: Long = 0
+
+    /**
+     * (INC.60) census — the POPULATION behind [CFG_WALK] / [CFG_MATCH]: how many
+     * directories the root-file glob lists, how many entries those listings
+     * yield, how many of those entries survive the extension filter and are
+     * therefore tested against the include/exclude regexes, and how many root
+     * files come out.
+     *
+     * Round 758's law: a millisecond row is a LOCATION, not a price, until it is
+     * divided by the operation count behind it — and here the two candidate
+     * owners (a `readdir`+`stat` per entry against a regex match per candidate)
+     * are different work with different levers, which nanos alone cannot
+     * separate.
+     */
+    var globDirs: Long = 0
+    var globEntries: Long = 0
+    var globCandidates: Long = 0
+    var globRoots: Long = 0
 
     /**
      * (PERF.HW.b) census — program files bound on the SEQUENTIAL prefix of
@@ -5220,6 +5278,7 @@ object FrontEnd {
         firstAt = LongArray(N)
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
+        globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
         mergeDeclarationsAppended = 0
@@ -5491,6 +5550,10 @@ object FrontEnd {
         // this reads all-miss by construction; in a `--serve` daemon every
         // request after the first should read all-hit but for the files that
         // changed, which is the whole claim.
+        appendLine(
+            "root glob: $globDirs dirs, $globEntries entries, $globCandidates candidates, " +
+                "$globRoots roots"
+        )
         appendLine(
             "crawl parse cache: ${CrawlParseCache.hits} hit / ${CrawlParseCache.misses} miss" +
                 " (cumulative for this process), ${CrawlParseCache.size} paths held" +
