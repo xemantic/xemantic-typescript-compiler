@@ -20,6 +20,80 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.64) — two rows the crawl and the emit-order prep were paying on every keystroke, and the floor is 241 -> 146 ms
+
+**(INC.62)'s SUCCESSOR RANKING NAMED THE INIT PASS DISPATCH AND THE CRAWL. THE CRAWL'S
+ROW TURNED OUT NOT TO BE READS AT ALL, AND THE SECOND FIX WAS NOT ON THE LIST.**
+Both were found the same way: divide a row by its own population and refuse an implied
+per-op cost that is impossible.
+
+**(a) THE CRAWL HANDED EVERY FILE TO ANOTHER THREAD TO SCHEDULE A MAP PROBE.**
+The floor's `read+decode (CPU sum)` implies **77-102 us** to read a ~1 KB file — but that
+span is elapsed-WITH-SUSPENSION (CLAUDE.md already says so), so it is a location and not a
+price. The price is the WALL: **51-57 ms**, against **13-21 ms** to read all 2,401 files
+sequentially and **1.1-1.8 ms** for `computeParserFlags` over them. The gap is the SHAPE.
+`readAndScanBatch` read on `Dispatchers.IO` and then hopped to `Dispatchers.Default` for
+EVERY file so that a parse would never run on an IO thread — but on a warm incremental
+build every parse is a `CrawlParseCache` hit, so the hop was scheduling a ~1 us map probe
+onto another thread, `files` times. Priced with `Inc64CrawlShapeMain` (ABBA-rotated within
+one process, leading draw of each arm dropped): **sequential 14.4 ms, `flatMapMerge(16)`
+alone 17.2, one hop 18.5, the shipped two-hop shape 32.1.** The flags and the (read-only)
+lookup now run on the thread the read left us on and **only a MISS hops**; the cold crawl
+is untouched, which is the whole point of the hop. The floor's `pre-parse (CPU sum)` row
+falls **69-81 ms -> 2.0-2.7** across four arms.
+**WHAT THE WALL COULD NOT SAY, AND SAYING SO IS THE POINT.** Crawl WALL read 51.4-56.5
+before and 40.8-53.9 after: overlapping ranges, and that run's own `full` median was ~9%
+slower, so the box moved more than the effect. The claim rests on the mechanism plus the
+synthetic arm, and the PIN is a COUNT — `CrawlParseCache.parseDispatches`, folded
+single-threaded exactly like `hits`/`misses`, since a `++` from the concurrent workers is
+round 825's race with no exception to find it by. Pinned at two program sizes because the
+claim is complexity: a cold crawl dispatches once per file (5 -> 5, 20 -> 20), a warm one
+not at all, and after one edit exactly ONE file — the shape a keystroke has.
+
+**(b) A `--noEmit` BUILD COMPUTED A DEPENDENCY ORDER FOR AN EMIT THAT NEVER HAPPENS —
+15.0 / 17.1 / 22.6 ms, ~10% of the floor, AND IT WAS ON NO QUEUE.** `extractRelativeImports`
+runs twice per file and its whole product is `importDeps`/`importDepsNoRefPath`, whose every
+consumer orders EMITTED output: `transformOrder` feeds a transform loop round 738 already
+made `emptyList()` under `skipEmitOutputs`, `sortedTsFiles` orders `jsOutputMap` entries a
+`--noEmit` build never produces, and `cpcRequireOnlyOrphans` carried the same gate already.
+**This is (INC.59)'s finding one call deeper** — the second time the emit-order region has
+been caught running in the `--noEmit` path.
+**THE OBVIOUS EDIT IS WRONG**: a `continue` skips the rest of the loop body, and
+`tsFileNames.add(file.fileName)` sits below it, which every later phase reads. The gate
+wraps exactly the two calls.
+**AND THE CORPUS IS A CONTROL HERE, WHICH INVERTS THE USUAL READING**: `skipEmitOutputs` is
+set ONLY by `ProjectCompiler`, never by the `@noEmit` corpus directive (round 738), so all
+~13k baselines run with the branch TAKEN and cannot see the gate at all. The instruments
+that see it are the 8-profile `--noEmit` grid and the new `-project` pins; the EMITTING path
+is verified separately and independently — an `--outDir` build of the compiler profile is
+**byte-identical across the two binaries, 78 files, `diff -r` clean**.
+
+**THE VALUE PIN WAS BLIND ON ITS FIRST FIXTURE AND ONLY THE ABLATION SAID SO.** Named the
+obvious way round — `dep.ts` imported by `main.ts` — dependency order and ALPHABETICAL
+order coincide, so arm c2 (empty the sort's dependency edges) left "the outputs are ordered
+dependencies-first" GREEN. Renamed `zdep.ts` / `amain.ts` so the two orders are opposite:
+c2 then reddens that pin and only it, while c1 (remove the gate) reddens only the count pin.
+**A pin over an ORDER needs a fixture whose expected order differs from every order the
+system produces by accident** — and the accidental one here is the crawl's own sort.
+
+**MEASURED, floor median on `many-small-2400-dom` across this session's three landings:
+241 -> 189 -> 197 -> **146** ms (early) and 256 -> 166 -> 152 -> **143** (late)**, i.e.
+**-39% / -44%** over the round. `extractRelativeImports` no longer appears in the floor
+table at all.
+
+**GATES.** Suite **16,535 / 0 / 3** (+7 over the round, exactly the new pins);
+`cost_gate.py` exit 0 both times; `huge_methods.py --fail-over 0` clean; 8-profile
+before/after binary grid `added=0 removed=0` on all eight, covering (INC.63) and both
+halves of this round together.
+
+**SUCCESSOR (INC.65).** The dom floor is now: **checker construct 37-67 ms** (of which the
+init-block pass dispatch is most, and FLAT — see (INC.64) below for why that needs the
+(INC.7) partition question rather than a micro-optimisation), **crawl WALL 43-49**
+((INC.56), still the only row costing a soundness promise, and still the one an
+IntelliJ-class host can simply hand us), config+glob 16-19, post-checker 5-13. The two
+levers that are left are therefore a PARTITION question and a HOST PROMISE — the era of
+finding a stray quadratic in the front end may be over, which is itself worth recording.
+
 ### Round (INC.63) — every keystroke re-derived the whole lib, and the half the refusal named was 3% of it
 
 **(INC.62) SAID RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS. DONE,
@@ -4411,7 +4485,8 @@ RHS, and the merged-member CONTRADICTION direction.
   PARTITION-SCOPED or built on FIRST ASK — and (INC.20)'s MIXED-pass split is the shape
   that has worked. Note `init:computePerFileVisibility` and `init:buildPerFileScopes` are
   the (CHK.49) PAIR: they are one observable and must move together or not at all.
-  **(b) crawl WALL, 51-57 ms** — (INC.56), unchanged, and the only row that costs a
+  **(b) crawl WALL, ~~51-57~~ 43-49 ms after (INC.64)(a) removed the per-file dispatcher
+  hop** — (INC.56) for the READ half, which is still untouched and is the only row that costs a
   SOUNDNESS PROMISE, which is why it stays ranked behind anything that does not. It is
   also the row an IntelliJ-class host can simply hand us, so it is the one to open once
   the plugin exists to promise it.

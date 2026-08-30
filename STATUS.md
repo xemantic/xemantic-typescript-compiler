@@ -1,5 +1,43 @@
 # Status
 
+**(INC.64) — TWO ROWS PAID ON EVERY KEYSTROKE FOR WORK NOBODY READS, AND THE FLOOR IS
+241 -> 146 ms OVER THE SESSION (2026-08-30).** Both found by (INC.62)'s instrument —
+divide a row by its own population, refuse an impossible per-op cost.
+**(a) THE CRAWL HANDED EVERY FILE TO ANOTHER THREAD TO SCHEDULE A MAP PROBE.**
+`readAndScanBatch` read on `Dispatchers.IO` and then hopped to `Dispatchers.Default` for
+EVERY file so a parse would never run on an IO thread — but on a warm build every parse is
+a `CrawlParseCache` HIT, so the hop scheduled a ~1 us probe onto another thread, `files`
+times. Reading all 2,401 files sequentially is **13-21 ms** and the flags over them
+1.1-1.8, against a crawl WALL of **51-57**; priced with an ABBA-rotated synthetic arm,
+**sequential 14.4 / `flatMapMerge(16)` alone 17.2 / one hop 18.5 / the shipped two hops
+32.1 ms**. Only a MISS hops now; the cold crawl is untouched. `pre-parse (CPU sum)` falls
+**69-81 ms -> 2.0-2.7**. **The wall could NOT resolve it** (ranges overlap, and that run's
+`full` median was itself 9% slower), so the claim rests on the mechanism plus the synthetic
+arm and the PIN IS A COUNT — dispatches at two program sizes: cold 5 -> 5 and 20 -> 20,
+warm 0, and after one edit exactly ONE.
+**(b) A `--noEmit` BUILD COMPUTED A DEPENDENCY ORDER FOR AN EMIT THAT NEVER HAPPENS —
+15.0-22.6 ms, ~10% of the floor, AND IT WAS ON NO QUEUE.** `extractRelativeImports` runs
+twice per file and every consumer of its product orders EMITTED output. **(INC.59)'s
+finding one call deeper.** The obvious edit is wrong — a `continue` also skips
+`tsFileNames.add`, which every later phase reads. **AND THE CORPUS IS A CONTROL HERE, NOT
+THE GATE**: `skipEmitOutputs` is set only by `ProjectCompiler`, never by the `@noEmit`
+corpus directive, so all ~13k baselines run with the branch TAKEN. The 8-profile `--noEmit`
+grid (`added=0 removed=0` on all eight) and the new `-project` pins are what see it; the
+EMITTING path is verified independently — an `--outDir` build of the compiler profile is
+byte-identical across the two binaries, 78 files, `diff -r` clean.
+**THE VALUE PIN WAS BLIND ON ITS FIRST FIXTURE AND ONLY THE ABLATION SAID SO**: named the
+obvious way round (`dep` imported by `main`), dependency order and ALPHABETICAL order
+coincide, so emptying the sort's edges left it green. Renamed `zdep`/`amain` so the two
+orders are opposite — a pin over an ORDER needs a fixture whose expected order differs from
+every order the system produces by accident.
+**MEASURED (many-small-2400-dom, floor median): 241 -> 189 -> 197 -> 146 ms early and
+256 -> 166 -> 152 -> 143 late** across this session's three landings, **-39% / -44%**.
+**GATES.** Suite **16,535 / 0 / 3** (+7, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` clean.
+**SUCCESSOR (INC.65):** what is left is a PARTITION question (the init-block pass dispatch,
+flat across ~400 passes) and a HOST PROMISE ((INC.56), the crawl's read half) — the era of
+finding a stray quadratic in the front end may be over, which is itself worth recording.
+
 **(INC.63) — EVERY KEYSTROKE RE-DERIVED THE WHOLE LIB, AND THE HALF THE STANDING REFUSAL
 NAMED WAS 3% OF IT (2026-08-30).** (INC.62) asked for the floor on a `dom` fixture before
 opening any row; taken, and the largest single addressable row is `parseBuiltinLib` at
@@ -128,34 +166,3 @@ unchanged**; `huge_methods.py --fail-over 0` clean. **SUCCESSOR (CFG.1), a DEFEC
 on the way**: tsc's `commandLineParser.ts:3131-3141` defaults `exclude` to
 `[outDir, declarationDir]` when absent and **we implement none of it**, so a project that
 has ever emitted pulls its own `dist/**/*.d.ts` back in as ROOT FILES.
-
-**(BIND.1) — A DIAGNOSTIC THAT APPEARED AND DISAPPEARED WITH THE BYTE LENGTH OF AN
-UNRELATED FILE (2026-08-30, reported from the IntelliJ plugin).** `nodeKey(pos, end)`
-carries NO file identity and positions restart at 0 in every file, yet
-`Binder.nodeToSymbol` and `moduleInstanceStates` were ONE map shared by every
-`BinderResult` a binder produced — so two declarations at coincident offsets in DIFFERENT
-files shared a slot, last-wins in bind order. **IT IS NOT A THEORETICAL HAZARD: tsc's OWN
-78 SOURCES CARRY 271 KEYS WRITTEN BY TWO OR MORE *DECLARATION* NODES IN DIFFERENT FILES**
-(`watchUtilities.ts`/`moduleNameResolver.ts` variable declarations, a dozen
-import-specifier pairs), and an ordinary 223-file program (one source file plus `zod` and
-`@types/node`) carries 109 of them plus 4,324 shared keys overall. **THE TRIGGER IS
-WHITESPACE**, which is why it reads as random: `Node.end` is the end of the FOLLOWING
-token, so for a file's LAST statement it is the EOF offset — the one span trailing
-newlines move — and **106 of those 223 files have a last statement that appending
-newlines ALONE can drive into a collision**. Reduced to four lines: two same-length files
-each declaring a merged `namespace` made `buildNamespaceScope` build the scope of the
-OTHER file's namespace, so the file's own exports went missing (a false TS2304) and the
-foreign file's became visible (a missing one) — **both directions, against tsc 5.9.3** —
-and adding ONE character to the sibling file made it vanish. The tables are now per
-`bind()`; twelve checker reads holding only a `Node` go through `nodeSymbolOf` /
-`moduleInstanceStateOf`, which ask the OWNING file (INV.2(a) parent chain) and treat an
-owner that recorded nothing as **null** rather than scanning the others — that scan IS the
-collision. **NOTHING HERE COULD HAVE SEEN IT**: it needs two files whose declarations land
-on coincident offsets, which no hand-written fixture produces by accident, so
-`NodeKeyCollisionTest` hands two exact texts to the pipeline and ASSERTS the collision
-precondition; ablated, its two behavioural pins go red while the precondition and the
-no-collision control stay green. **GATES.** Suite **16,500 / 0 / 3** (+4, exactly the new
-pins); the compiler profile still reports **46 errors on 78 files**; `cost_gate.py` exit 0
-with `output.errors` and `spine.nodes` UNCHANGED — `typeOfExpr.calls` +0.54% and
-`narrow.memoServed` +1.55% are the 271 collisions on that profile now resolving to the
-right file, re-baselined here; `huge_methods.py --fail-over 0` clean; warning-clean.
