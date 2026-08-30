@@ -43,6 +43,14 @@ import kotlin.test.Test
  * the emitted tree is then crawled, read, parsed, bound and checked ON EVERY KEYSTROKE,
  * which is the incremental FLOOR an editor pays.
  *
+ * **THERE IS DELIBERATELY NO DIAGNOSTIC PIN HERE, AND THAT IS A MEASUREMENT.** In tsc
+ * the wrongly-included tree DOES report — forced in, tsgo 7.0.2 answers TS2451 twice for
+ * a duplicated `declare const` and TS5011 for the moved common source directory — but
+ * BOTH land in gaps of ours (a cross-file duplicate global is silent here, and so is
+ * TS5011), so on this compiler today the whole observable consequence is the program SET
+ * and its cost. A pin asserting the absence of those codes passes on a broken binary too,
+ * which is why one written that way was removed rather than kept as coverage.
+ *
  * **Why no gate in this repo could see it.** The generated corpus hands the compiler
  * sources directly and materialises no directory at all, so it has no glob to get wrong;
  * and the eight dashboard profiles all restrict `include` to a `src` subtree, under
@@ -88,24 +96,6 @@ class DefaultExcludeOutDirTest {
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         assert(result.rootFiles.size == 1)
         assert(result.programFiles.none { it.startsWith("/proj/types/") })
-    }
-
-    @Test
-    fun `a stale declaration no longer duplicates its own source`() {
-        // The VALUE half: a global-script declaration in the output tree collides with
-        // the one in the source tree. A count pin alone cannot say that the file being
-        // dropped is the one that was doing harm.
-        val vfs = InMemoryVfs(
-            mapOf(
-                "/proj/tsconfig.json" to
-                    """{ "compilerOptions": { "strict": true, "outDir": "dist", "declaration": true } }""",
-                "/proj/src/g.ts" to "declare const VERSION: string;\n",
-                "/proj/dist/g.d.ts" to "declare const VERSION: string;\n",
-            ),
-        )
-        val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assert(result.diagnostics.none { it.code == 2451 })
-        assert(result.diagnostics.none { it.code == 2300 })
     }
 
     @Test
