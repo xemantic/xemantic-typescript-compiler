@@ -29,8 +29,16 @@ the lambda, so an N-element set was rebuilt once per entry of an N-entry map —
 `--noEmit` path**, i.e. a build that emits nothing was spending 175 ms per keystroke
 preparing an emit order it would never use. `POST_EMITPREP` **158.5-175.3 -> 1.8-2.8 ms
 (~70x)**; floor 366 -> **279 ms**. Suite **16,504 / 0 / 3**, both gates clean, counters
-unchanged. The floor's rows are now all linear; the largest is the crawl wall (62-66 ms)
-— so (INC.56)'s claim is true again, but only because three other rounds landed first.
+unchanged. **VERIFIED AT MONOREPO SCALE:** a fourth size (4,801 files) reads a **428 ms
+floor against 279 at 2,401 — **1.53x for 2x the files, i.e. SUB-linear**, the cleanest
+evidence the quadratics are gone rather than reduced. The two rows still above 2.0x are
+single-digit-to-teens ms and sit at or below the noise ((INC.52) read one floor row at
+13.16 and 8.42 ms in two draws of ONE binary), so **this class is exhausted at these
+sizes** — what made the three findable is that they were 14.6x / 21x / 4x-per-doubling,
+one to two orders clear of that band. **SUCCESSOR (INC.60):** `config load + @types +
+root glob`, 52.8 / 52.9 ms at 4,801 — two draws **0.2% apart**, the one floor row
+measurable without fighting the noise, and it carries no soundness promise where
+(INC.56) does.
 
 **AND (INC.57), THE ONE THAT STARTED IT:** `extractRelativeImports` opened with
 `allFiles.map { it.fileName }.toSet()` — a fresh list AND set of every program file name —

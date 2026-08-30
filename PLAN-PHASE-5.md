@@ -50,12 +50,28 @@ Pinned with the same count-at-two-sizes idiom (`transformOrderSetBuilds == 1`), 
 `ImportDepScanComplexityTest` because it is literally (INC.57)'s defect class.
 `docs/perf/import-dep-scan-complexity.md` § 7.
 
-**NAMED SUCCESSORS.** The floor is now 279 ms with all rows linear: crawl WALL **62-66
-ms** ((INC.56), now genuinely first as its entry claimed — but only after these three
-rounds), checker construct **61-66**, **`config load + @types + root glob` 29-45 ms —
-the row nothing has ever examined on this shape, and cheaper to start on than (INC.56)
-because it carries no soundness promise**, `extractRelativeImports` 16-25, post-checker
-9-13, bind 7-10.
+**VERIFIED AT MONOREPO SCALE, WHICH IS THE CLOSING EVIDENCE.** A fourth size was
+generated (**4,801 files**) to test whether anything still blows up where a real
+monorepo lives. It does not: the floor reads **428 ms against 279 at 2,401 — 1.53x for
+2x the files, i.e. SUB-linear**, which is the cleanest single demonstration that the
+three quadratics are gone rather than merely reduced. Two rows read above 2.0x
+(post-checker 3.3x, checker construct 2.4x) and **neither is worth opening on this
+evidence**: their growth sits in `topologicalSort`/`hasCycle` (8-13 and 4-5 ms) and
+`init:computePerFileVisibility` (17.4 ms), i.e. at or below the noise this repo has
+already characterised — (INC.52) read one floor pass row at 13.16 and 8.42 ms in two
+draws of ONE binary, and two draws of the pass table here disagreed 54.7 vs 89.9 ms at
+the same size. **What made the three fixed defects findable is that they were 14.6x, 21x
+and 4x-per-doubling — one to two orders clear of that band. This class is exhausted at
+these sizes.**
+
+**NAMED SUCCESSORS,** ranked at 4,801 files: checker construct **143-182 ms**
+((INC.53)'s territory), crawl WALL **110-129** ((INC.56) — the only row costing a
+soundness promise), **`config load + @types + root glob` 52.8 / 52.9 ms — (INC.60), and
+ranked FIRST despite being smaller**, because it carries no promise and its two draws
+landed **0.2% apart**, making it the one row here measurable without fighting the noise
+band; its ~1.4x for 2x files says a FIXED cost dominates, and a fixed cost on the floor
+is paid on every keystroke ((INC.53)'s own argument). Then post-checker 35-41,
+`extractRelativeImports` 33-37, bind 15-17.
 
 ### Round (INC.58) — the same law, one hour later, on a pass named for a feature the project does not use
 
@@ -3979,9 +3995,11 @@ RHS, and the merged-member CONTRADICTION direction.
   (INC.48)'s "a content hash cannot see an ADDED file" hazard in a second costume.
   `FrontEnd.CONFIG` covers tsconfig load, `@types` acquisition and the root-file glob
   walk, and on the many-small shape it reads 12.1-20.2 / 29.3-44.5 ms at 601 / 2401
-  files, i.e. **~2.4x for 4x the files — the only SUB-linear row left**, which is itself
-  worth understanding before it is optimised (a sub-linear row usually means a fixed cost
-  is dominating, and a fixed cost on the FLOOR is paid per keystroke).
+  files, and **52.8 / 52.9 ms at 4,801 — two draws 0.2% APART**, which makes it the one
+  floor row here measurable without fighting the +-40% single-draw noise band. Its ~1.4x
+  for 2x the files says a FIXED cost dominates it, and **a fixed cost on the floor is paid
+  on every keystroke** — (INC.53)'s own argument for why ~20 ms of property initializers
+  mattered at 0.4% of a full compile.
   **The instrument is the one this session used three times**: two program sizes, the row
   divided by file count. **Do not assume it is the glob** — (INC.53) and (INC.59) were
   both found by splitting a row that a plausible story had already explained.

@@ -245,35 +245,55 @@ three fixes but the loop that found them: **re-read the floor after every round 
 moves it** — the ranking changed three times in one session, and each new top row was
 one nothing in the queue had named.
 
-## 8. What is left on this shape, and the next successor
+## 8. Verified at monorepo scale — the floor is now SUB-linear
 
-With all three quadratics gone, the 2,401-file floor is **279 ms** (the instrumented
-`FE.total` reads 200-207 ms; the plain median carries the probe-free ~279) and its rows
-are, at last, all linear. Re-measured after (INC.59):
+A fourth size was generated (4,801 files, ~4.9 MB) specifically to test whether anything
+still blows up at the scale a real monorepo has. **It does not.** The floor reads
+**428 ms against 279 at 2,401 files — 1.53x for 2x the files**, i.e. sub-linear, which
+is the cleanest single piece of evidence that the three quadratics are actually gone
+rather than merely reduced.
 
-| row | 2401 files (two draws) | note |
+| row | 2401 files | 4801 files | growth (2.0 = linear) |
+|---|---|---|---|
+| checker construct + init dispatch | 61-66 ms | 143-182 | 2.4x |
+| crawl WALL — **(INC.56)** | 62-66 | 110-129 | 1.8x |
+| config load + `@types` + root glob | 29-45 | **52.8 / 52.9** | ~1.4x |
+| post-checker | 9-13 | 35-41 | 3.3x |
+| `extractRelativeImports` | 16-25 | 33-37 | 1.8x |
+| bind | 7-10 | 15-17 | 1.9x |
+| — floor median — | **279** | **428** | **1.53x** |
+
+Two rows read above 2.0 and **neither is worth opening on this evidence**. The
+post-checker's growth is concentrated in `topologicalSort` and `hasCycle` (8-13 and
+4-5 ms at 4,801), and the checker constructor's in `init:computePerFileVisibility`
+(17.4 ms) — all single-digit-to-teens milliseconds, which is at or below the noise this
+repo has already characterised: **(INC.52) measured a floor pass row at 13.16 ms and
+8.42 ms in two draws of the SAME binary**, and two draws of the pass table here
+disagreed 54.7 vs 89.9 ms at the same size. Round 904's ~17 ms floor for a worthwhile
+candidate applies directly.
+
+**So the honest close is that this class is exhausted at these sizes.** What made the
+three fixed defects findable was that they were 14.6x, 21x and 4x-per-doubling — one to
+two orders of magnitude clear of the noise. A candidate that needs a careful A/B to see
+is not the same kind of object, and this repo's history is mostly of such candidates not
+surviving division.
+
+## 9. What is left, and the next successor
+
+The floor's rows are all at or near linear. Ranked at 4,801 files:
+
+| row | ms | note |
 |---|---|---|
-| **crawl WALL** | **62-66 ms** | **(INC.56)** — now genuinely first, as its entry claimed |
-| **checker construct + init dispatch** | **61-66 ms** | was 756-810 before (INC.58) |
-| config load + `@types` + root glob | 29-45 ms | never examined on this shape |
-| `extractRelativeImports` | 16-25 ms | was 331.6 before (INC.57) |
-| post-checker | 9-13 ms | was 166-189 before (INC.59) |
-| bind | 7-10 ms | |
+| checker construct + init dispatch | 143-182 | (INC.53)'s territory; the pass table inside it is 147 ms and flat-ish |
+| crawl WALL | 110-129 | **(INC.56)** — the only row costing a soundness promise |
+| config load + `@types` + root glob | **52.8 / 52.9** | **(INC.60)** — remarkably STABLE across draws (0.2% apart), never examined on this shape |
+| post-checker | 35-41 | `topologicalSort` + `hasCycle` |
+| `extractRelativeImports` | 33-37 | already linear |
+| bind | 15-17 | |
 
-**(INC.56) is now a defensible next item** — it was fourth of five and is now first —
-but that was only true *after* these three rounds, which is exactly what §5 records. It
-remains the only one of these rows costing a soundness promise, so its opt-in framing
-stands. **`config load + @types + root glob` is the row nothing has ever looked at on
-this shape** and is now third; it is a cheaper place to start than (INC.56) because it
-carries no promise at all.
-
-Inside the (now 55 ms) pass table the largest *growth* factors left are
-`init:buildPerFileScopes` (12.9 ms), `init:computePerFileVisibility` (5.5) and
-`init:moduleTypeNameIndex` (2.6). Price them before opening one — §2's law cuts both
-ways, and this repo's history is mostly of candidates that did not survive division.
-
-**The transferable half of this whole document is not any of the three fixes. It is the
-loop that found them:** re-read the floor after every round that moves it. The ranking
-changed three times in one session, and each new top row was one that no queue item had
-named — twice because the previous top row had been hiding it, once because no
-instrument had ever been pointed at this corpus shape at all.
+**(INC.60)** — the config row — is ranked ahead of (INC.56) despite being smaller
+because it carries **no soundness promise**, and its two draws landing 0.2% apart make
+it the one row here that can be measured without fighting the noise band. Its ~1.4x for
+2x files says a fixed cost dominates it, and **a fixed cost on the floor is paid on every
+keystroke** — which is the same reason (INC.53)'s ~20 ms of property initializers
+mattered at 0.4% of a full compile.
