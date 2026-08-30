@@ -167,6 +167,18 @@ class ProjectCompiler(private val vfs: Vfs) {
          *  banner before adding another. */
         recheckHolder: RecheckHolder? = null,
         /**
+         * (INC.55) A host's cancellation signal, polled BY THIS BUILD's compile
+         * thread. Null (the default) means the build cannot be cancelled, which is
+         * every CLI and corpus build.
+         *
+         * Installed for the duration of this call and restored afterwards, so a
+         * cancelled build leaves nothing armed behind it. When it fires, the build
+         * throws [CompilationCancelledError] and produces NO result — which is what
+         * makes a caller's state safe by construction, since every cache assignment
+         * in `Project` happens after `build` returns.
+         */
+        cancellation: CancellationSignal? = null,
+        /**
          * (INC.46) When true this build also summarises each walked file's EXPORT
          * SURFACE into [Result.exportSignatures] / [Result.exportSignatureEscapes], so
          * a caller can decide whether an edit to a file could have changed what an
@@ -178,6 +190,37 @@ class ProjectCompiler(private val vfs: Vfs) {
          * the case that matters: the answer is needed per EDIT, not per program.
          */
         exportSignatures: Boolean = false,
+    ): Result {
+        // (INC.55) Installed for exactly this build and restored however it ends, so a
+        // cancelled build leaves nothing armed for the next one. The work is delegated
+        // so that every `return` in the body below is covered by the `finally` without
+        // the body itself having to know about cancellation.
+        val previousSignal = Cancellation.install(cancellation)
+        try {
+            return buildCore(
+                projectPath = projectPath,
+                noEmit = noEmit,
+                recheckOnly = recheckOnly,
+                outDir = outDir,
+                typeCapture = typeCapture,
+                checkedSink = checkedSink,
+                recheckHolder = recheckHolder,
+                exportSignatures = exportSignatures,
+            )
+        } finally {
+            Cancellation.restore(previousSignal)
+        }
+    }
+
+    private fun buildCore(
+        projectPath: String,
+        noEmit: Boolean,
+        recheckOnly: Set<String>?,
+        outDir: String?,
+        typeCapture: TypeCaptureRequest?,
+        checkedSink: CheckedNodeSink?,
+        recheckHolder: RecheckHolder?,
+        exportSignatures: Boolean,
     ): Result {
         // (INC.4) A partition may not EMIT. The Transformer queries the checker it is
         // handed (`isReferencedAliasDeclaration` and friends decide import elision),

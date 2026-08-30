@@ -25,6 +25,8 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.Cancellation
+import com.xemantic.typescript.compiler.CancellationSignal
 import com.xemantic.typescript.compiler.CapturedDeclaration
 import com.xemantic.typescript.compiler.CapturedDefinition
 import com.xemantic.typescript.compiler.CompilerOptions
@@ -553,6 +555,42 @@ public class Project private constructor(
     internal var incrementalAnswers: Int = 0
         private set
 
+    /**
+     * (INC.55) The host's cancellation signal, polled by every build this project
+     * drives — or null, which is what a batch caller wants.
+     *
+     * ## Why an editor needs this and latency work cannot replace it
+     *
+     * A build runs on the compiler's own deep-stack thread and this class JOINS it,
+     * so the calling thread is blocked for the whole build and cannot abandon it
+     * from outside. On the IntelliJ platform `DaemonCodeAnalyzer` restarts analysis
+     * on every write action, so without this an editor has only bad options: block a
+     * pooled thread producing an answer that is already stale, and delay the next
+     * (wanted) answer behind it. That is a capability gap rather than a latency one —
+     * no amount of narrowing the check fixes it.
+     *
+     * ## What cancelling costs, and why the state is safe
+     *
+     * A cancelled build throws [CompilationCancelledError] out of the call that asked
+     * for it and produces NO result. Nothing in this class is left half-updated,
+     * BY CONSTRUCTION rather than by care: every cache assignment here happens AFTER
+     * `ProjectCompiler.build` returns, so a throw skips all of them and the project
+     * is exactly as it was. The work done by the abandoned build is lost — there is
+     * no partial result to keep — so a host should cancel because the answer is
+     * unwanted, not to poll.
+     *
+     * ## Where it is polled
+     *
+     * At every `pass("…")` boundary (~480 per compile) and every
+     * [Cancellation.SPINE_POLL_INTERVAL] spine nodes, which is what keeps a single
+     * large buffer's walk — 1.65 s on tsc's own `checker.ts` — interruptible.
+     *
+     * The signal is read on the COMPILE thread while the caller is blocked, so an
+     * implementation must be safe to call from another thread. On the IntelliJ
+     * platform that is `{ indicator.isCanceled }`.
+     */
+    public var cancellation: CancellationSignal? = null
+
     private var closed: Boolean = false
 
     /**
@@ -704,7 +742,10 @@ public class Project private constructor(
         // holder was passed.
         val holder = RecheckHolder()
         val result = ProjectCompiler(overlay)
-            .build(projectPath, noEmit = true, recheckOnly = keys, recheckHolder = holder)
+            .build(
+                projectPath, noEmit = true, recheckOnly = keys, recheckHolder = holder,
+                cancellation = cancellation,
+            )
         // The partition already filters its checker's diagnostics to the assigned
         // files; the filter here is what makes that a PROPERTY of this member rather
         // than something inherited from the core's current partition rules — a
@@ -801,6 +842,7 @@ public class Project private constructor(
         if (spans.isEmpty()) return
         val result = ProjectCompiler(overlay).build(
             projectPath,
+            cancellation = cancellation,
             noEmit = true,
             recheckOnly = keys,
             typeCapture = TypeCaptureRequest(spans),
@@ -1960,7 +2002,10 @@ public class Project private constructor(
             // standing between that claim and a subset of it.
             if (narrow) preparedAnswerFor(spans) ?: captureIn(request)
             else ProjectCompiler(overlay)
-                .build(projectPath, noEmit = true, typeCapture = request)
+                .build(
+                    projectPath, noEmit = true, typeCapture = request,
+                    cancellation = cancellation,
+                )
             )
             .capturedDefinitions
         val seed = referenceSeed(definitions, queryFile, caret) ?: return emptyList()
@@ -2263,6 +2308,7 @@ public class Project private constructor(
         val partition = if (narrowed == null) null else indexes.keys.toSet()
         val result = ProjectCompiler(overlay).build(
             projectPath,
+            cancellation = cancellation,
             noEmit = true,
             recheckOnly = partition,
             typeCapture = TypeCaptureRequest(spans),
@@ -2726,6 +2772,7 @@ public class Project private constructor(
 
         val after = ProjectCompiler(scratch).build(
             projectPath,
+            cancellation = cancellation,
             noEmit = true,
             // (INC.45) The SWEEP's partition, not one derived from `asked`: check (2)
             // below compares diagnostics as a multiset against the before-build's, so
@@ -3266,6 +3313,7 @@ public class Project private constructor(
         }
         val result = ProjectCompiler(overlay).build(
             projectPath,
+            cancellation = cancellation,
             noEmit = true,
             recheckOnly = captureFiles(request),
             typeCapture = request,
@@ -3349,6 +3397,7 @@ public class Project private constructor(
         overlay.clearJsonReads()
         val result = ProjectCompiler(overlay).build(
             projectPath, noEmit = true, exportSignatures = true,
+            cancellation = cancellation,
         )
         cached = result
         restoredUnverified = false
@@ -3417,6 +3466,7 @@ public class Project private constructor(
 
         val narrowed = ProjectCompiler(overlay).build(
             projectPath, noEmit = true, recheckOnly = dirty, exportSignatures = true,
+            cancellation = cancellation,
         )
         if (narrowed.programFiles != base.programFiles) return null
         for (file in dirty) {

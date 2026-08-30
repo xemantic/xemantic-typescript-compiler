@@ -1400,6 +1400,10 @@ object PassTiming {
  * constructor toward the JVM's 64 KB method limit.
  */
 internal fun pass(name: String, body: () -> Unit) {
+    // (INC.55) the coarse cancellation poll: ~480 boundaries per compile, spread
+    // through the whole init dispatch. `check` is a single field read when no host
+    // has armed one, which is every non-embedding build.
+    Cancellation.check()
     // (INC.19) the candidate universe for the replay bisection. Off by default and
     // recorded ABOVE every filter, so a replay's own run still names every row.
     if (PassTiming.recordRegistrations) PassTiming.registeredPasses.add(name)

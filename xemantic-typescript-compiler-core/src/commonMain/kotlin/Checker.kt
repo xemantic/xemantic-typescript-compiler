@@ -4169,6 +4169,15 @@ class Checker(
     /** Memoized class this-types keyed by class nodeId (null memoized via containsKey). */
     private val spineUncalledThisMemo = HashMap<Int, Type?>()
     /** Reusable ascent buffers for [spineUncalledReached] / [spineUncalledWithScopes]. */
+    /**
+     * (INC.55) The spine walk's cancellation poll counter — see [Cancellation].
+     *
+     * Declared before `init` per the init-order trap. It is a plain `Int` and not a
+     * volatile: only the compile thread touches it, and the value it gates is read
+     * from [Cancellation] which IS volatile.
+     */
+    private var spineCancelTick: Int = 0
+
     private val spineUncalledChain = ArrayList<Node>()
     private val spineUncalledOwnerBuf = ArrayList<Node>()
 
@@ -28165,6 +28174,16 @@ class Checker(
         val buf = ArrayList<Node>(16)
         val collect: (Node) -> Unit = { buf.add(it) }
         while (nodes.isNotEmpty()) {
+            // (INC.55) the FINE cancellation poll. This loop's own comment refuses
+            // interleaved work, so the poll is behind a counter: an increment, a mask
+            // and a predictable branch per node, with the volatile read taken once per
+            // [Cancellation.SPINE_POLL_INTERVAL] nodes (837 times for the compiler
+            // profile's 856,962). Without it a single large buffer's walk — 1.65 s on
+            // tsc's own `checker.ts` — would be uncancellable, which is the case an
+            // editor most needs to abandon.
+            if ((++spineCancelTick and (Cancellation.SPINE_POLL_INTERVAL - 1)) == 0) {
+                Cancellation.check()
+            }
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
