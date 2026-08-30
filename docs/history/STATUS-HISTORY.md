@@ -1,3 +1,33 @@
+
+**(INC.50)/(INC.51) — THE STABILITY RATE IS A PROPERTY OF THE CODEBASE, NOT OF LAYERING;
+AND ONE LINE OF ORDINARY LIBRARY CODE ESCAPED THE WHOLE FILE (2026-08-29).** (INC.47) left
+one question: is 67% a property of the mechanism or of tsc's own sources? Measured on three
+corpora of 40 real commits each, whole trees per side: tsc `src/compiler` **67%**,
+`cronstrue` **50%**, `marked` **72%** — the two libraries BRACKET tsc, so layered code is
+**not materially above** it and (INC.50)'s per-hop closure is refused by its own stated
+threshold. `cronstrue` is the CONTROL arm and was chosen as one: it is the only library
+outside the corpus where this checker agrees with tsgo 7.0.2 exactly (0 errors both sides)
+and has no dependencies, because a library we report errors on has types degraded to `any`
+and a degraded type is artificially STABLE. The transferable statement is that the rate
+tracks **what a codebase's commits touch** — cronstrue's edits are to the ~44 locale
+classes that ARE its exported surface (its MOVED cases are real signature changes such as
+`commaOnlyOnX0()` -> `commaOnlyOnX0(s?: string)`), where tsc's are inside function bodies.
+AND **(INC.51)**: pointing the mechanism at real code found a defect in ONE run.
+`marked.ts` escaped because of `export { useExtension as use }` — the walk collected the
+name an IMPORTER sees and looked it up in `locals`, which the file keys by the name it
+DECLARES, so every renaming export missed, read as "an exported name with no file-level
+symbol", and escaped the WHOLE file: every edit to it rebuilt the whole program forever and
+the export's type was never hashed. tsc's own 78 sources never use the shape, so all eight
+dashboard profiles are structurally blind to it. Fixed, with three pins — one of which
+records a DELIBERATE conservatism: renaming the LOCAL still moves the hash, because
+dropping declaration names would make two structurally identical classes hash equal and a
+class with a `private` member is nominally typed. **AND THE (INC.47) LAW REPEATED ON A
+SECOND CORPUS: removing an escape buys NOTHING** — marked's escapes went 1 -> 0 with its
+rate unchanged at 72%, exactly as `types.ts` left tsc's at 67%. On both, the file that
+could not be summarised was also one whose surface genuinely moved. **GATES.** Suite
+**16,470 / 0 / 3** (+4, exactly the (INC.51) pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` clean; warning-clean.
+
 **(INC.47) — THE EXPORT FINGERPRINT IS A CANONICAL SERIALIZATION, THE ESCAPE CLASS IS
 EMPTY, AND THE 87.5% CEILING IT WAS AIMED AT DID NOT EXIST (2026-08-29).** The walk no
 longer recurses: every type reachable from a file's exports is DISCOVERED once, in a

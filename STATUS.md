@@ -1,5 +1,40 @@
 # Status
 
+**(INC.57) — THE FRONT END WAS QUADRATIC IN FILE COUNT, AND NO PROFILE HERE COULD EXPRESS
+IT (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST REMAINING FRONT-END
+ROW"* — its own entry demanded the prize first be re-measured on "a project with MANY SMALL
+files rather than tsc's 78 huge ones". That measurement **refuted the premise and found a
+bigger target beside it**. `extractRelativeImports` opened with
+`allFiles.map { it.fileName }.toSet()` — a fresh list AND set of every program file name —
+and the emit-order scan calls it **TWICE per file**: `2 x files^2` string hashes per build,
+plus two sibling `parsed.files.any { … }` scans in the same loop. On generated
+application-shaped projects (`scripts/gen-many-small-project.py`) the `FrontEnd.IMPORTS`
+row grew **4x for 2x the files — 18.9 / 76.3 / 331.6 ms at 601 / 1201 / 2401** — which at
+2,401 files is 11.5 M hashes and ~92 MB of garbage on every keystroke. **WHY ~950 ROUNDS
+MISSED IT, and it is now a CLAUDE.md entry:** all eight dashboard profiles are ONE
+codebase, tsc's own sources at **78 files averaging 128 KB**, where `2 x 78^2` vanishes —
+**a cost that is per-FILE rather than per-BYTE is structurally inexpressible on that
+shape**, and nothing here had ever been pointed at the opposite one ((INC.9)'s regime law
+on a new axis: the SHAPE of the corpus). **The fix is a HOIST, not a cache** — `parsed.files`
+is a `val List` on a data class, so the set is loop-invariant by construction and there is
+no invalidation story; `.toSet()` is kept verbatim so the container and any iteration order
+stay bit-for-bit what the per-call expression produced. IMPORTS -> **5.8 / 7.1 / 16.1 ms**,
+per-file cost FLAT where it had been doubling; floor medians 165 -> 142, 409 -> 359,
+**1653 -> 1035 ms**. **PINNED AS A COUNT** (`programNameSetBuilds == 1` at 10 files AND at
+100) because the claim is about COMPLEXITY and only a count can state one, plus a VALUE pin
+on dependency-first emit order. **ONE ABLATION ARM, TWO ANSWERS:** the count pins go RED
+reading exactly **20** (`2 x files`) while the value pin stays GREEN; and all **20**
+`cost_gate.py` counters are IDENTICAL between arm and HEAD, so this round is provably
+counter-neutral and the gate's +0.54%/+1.55% is drift from the **60 commits** since the
+baseline was recorded at (CHK.63) — deliberately NOT rebaselined, since folding sixty
+commits of unattributed drift into this one would make it un-auditable. **(INC.56) is
+re-ranked, not refuted as a saving: it is FOURTH** (crawl wall 25-38 ms of a 409 ms floor)
+and the only one of the five costing a soundness promise. **SUCCESSOR (INC.58):** the
+`Checker` init-block pass dispatch is itself super-linear — 73-91 / 204-217 / 756-810 ms at
+601 / 1201 / 2401 files, ~73% of the floor. **GATES.** Suite **16,499 / 0 / 3** (+3, exactly
+the new pins); `cost_gate.py` exit 0, `output.errors` 46, `spine.nodes` 856,962;
+`huge_methods.py --fail-over 0` clean.
+
 **(INC.55) — A HOST CAN NOW CANCEL A BUILD, WHICH IS THE CAPABILITY AN IntelliJ PLUGIN
 NEEDS AND NO LATENCY WORK CAN REPLACE (2026-08-30).** Asked to judge the language service
 as "the best support one could get inside an IntelliJ platform IDE" rather than as
@@ -107,32 +142,3 @@ the gate once, with an EMPTY partition. Ablated, the naive "trust the snapshot" 
 reddens exactly two pins and nothing else. **GATES.** Suite **16,483 / 0 / 3** (+13,
 exactly the new pins); `cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean;
 warning-clean.
-
-**(INC.50)/(INC.51) — THE STABILITY RATE IS A PROPERTY OF THE CODEBASE, NOT OF LAYERING;
-AND ONE LINE OF ORDINARY LIBRARY CODE ESCAPED THE WHOLE FILE (2026-08-29).** (INC.47) left
-one question: is 67% a property of the mechanism or of tsc's own sources? Measured on three
-corpora of 40 real commits each, whole trees per side: tsc `src/compiler` **67%**,
-`cronstrue` **50%**, `marked` **72%** — the two libraries BRACKET tsc, so layered code is
-**not materially above** it and (INC.50)'s per-hop closure is refused by its own stated
-threshold. `cronstrue` is the CONTROL arm and was chosen as one: it is the only library
-outside the corpus where this checker agrees with tsgo 7.0.2 exactly (0 errors both sides)
-and has no dependencies, because a library we report errors on has types degraded to `any`
-and a degraded type is artificially STABLE. The transferable statement is that the rate
-tracks **what a codebase's commits touch** — cronstrue's edits are to the ~44 locale
-classes that ARE its exported surface (its MOVED cases are real signature changes such as
-`commaOnlyOnX0()` -> `commaOnlyOnX0(s?: string)`), where tsc's are inside function bodies.
-AND **(INC.51)**: pointing the mechanism at real code found a defect in ONE run.
-`marked.ts` escaped because of `export { useExtension as use }` — the walk collected the
-name an IMPORTER sees and looked it up in `locals`, which the file keys by the name it
-DECLARES, so every renaming export missed, read as "an exported name with no file-level
-symbol", and escaped the WHOLE file: every edit to it rebuilt the whole program forever and
-the export's type was never hashed. tsc's own 78 sources never use the shape, so all eight
-dashboard profiles are structurally blind to it. Fixed, with three pins — one of which
-records a DELIBERATE conservatism: renaming the LOCAL still moves the hash, because
-dropping declaration names would make two structurally identical classes hash equal and a
-class with a `private` member is nominally typed. **AND THE (INC.47) LAW REPEATED ON A
-SECOND CORPUS: removing an escape buys NOTHING** — marked's escapes went 1 -> 0 with its
-rate unchanged at 72%, exactly as `types.ts` left tsc's at 67%. On both, the file that
-could not be summarised was also one whose surface genuinely moved. **GATES.** Suite
-**16,470 / 0 / 3** (+4, exactly the (INC.51) pins); `cost_gate.py` exit 0;
-`huge_methods.py --fail-over 0` clean; warning-clean.

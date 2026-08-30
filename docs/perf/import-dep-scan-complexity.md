@@ -98,6 +98,31 @@ because the `pass("…")` poll count is not constant across programs, so a DIFFE
 was swamped. Here the quantity is 1 by construction — an absolute value, with program
 size as precisely the axis under test.
 
+## 4a. The ablation — one arm, two answers
+
+The arm is the mistake the pin's KDoc names: move the set build back inside
+`extractRelativeImports`, carrying the census increment with it. Applied against the
+committed tree (round 789's rule) and diffed against the arm's own snapshot (round
+922's rule, since `git diff --shortstat` is vacuous on a tree carrying the round's own
+work).
+
+**Answer 1 — the pins discriminate.** Both count pins go RED reading exactly **20** for
+a ten-file program, i.e. `2 x files`, precisely what the KDoc predicts. The VALUE pin
+stays GREEN, which is the point of having it: the two halves test different things
+(complexity vs correctness) and neither is redundant.
+
+**Answer 2 — the change is counter-neutral, measured rather than argued.** All **20**
+`cost_gate.py` counters are IDENTICAL between the quadratic arm and HEAD
+(`typeOfExpr.calls` 600,215 both, `narrow.memoServed` 46,921 both, `spine.nodes`
+856,962 both, …). So this round contributes zero to them, and the `+0.54%` /
+`+1.55%` the gate reports against `docs/perf/cost-counters.txt` is accumulated drift
+from the **60 commits** since that baseline was recorded at (CHK.63) on 2026-08-28.
+
+The baseline is deliberately **not** rebaselined here. Rebaselining would fold sixty
+commits of unattributed drift into this one and make it un-auditable — the counters
+are still inside the ±2% tolerance and the gate exits 0, so the honest record is to
+name the drift and leave it addressable.
+
 ## 5. What this says about (INC.56), which is the item that was being worked
 
 (INC.56) is *"LET AN IntelliJ-CLASS HOST SKIP THE RE-READ — **THE LARGEST REMAINING

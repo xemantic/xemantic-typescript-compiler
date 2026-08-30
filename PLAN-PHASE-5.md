@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.57) — the front end was QUADRATIC in file count, and no profile here could express it
+
+**HOW THIS ROUND STARTED, because the route is the finding.** (INC.56) was top of the
+queue: *"let an IntelliJ-class host skip the re-read — **THE LARGEST REMAINING FRONT-END
+ROW**"*. Its own entry demanded the prize be re-measured first, on *"a project with MANY
+SMALL files rather than tsc's 78 huge ones, because that is the shape an application
+project has and the per-file overhead is what would dominate there"*. That measurement
+was taken. It **refuted the entry's premise** and found a larger, cheaper,
+soundness-free target sitting next to it.
+
+**WHAT THE MEASUREMENT SAID.** Generated layered projects of 601 / 1201 / 2401 files at
+~1 KB each (`scripts/gen-many-small-project.py`) through
+`scripts/floor-decomposition.sh`. On the 1,201-file FLOOR, (INC.56)'s target — the crawl
+WALL — is **fourth** at 25-38 ms of a 409 ms floor, behind the checker constructor
+(215-218), `extractRelativeImports` (76-125) and the post-checker (39-56). It is also
+the only one of the five that costs a SOUNDNESS PROMISE. **Not refuted as a saving;
+refuted as a ranking** — its entry is amended below rather than checked off.
+
+**WHAT WAS ACTUALLY WRONG.** `extractRelativeImports` opened with
+`allFiles.map { it.fileName }.toSet()` — a fresh list AND a fresh hash set of every
+program file name — and the emit-order scan calls it **TWICE per file**. `2 x files^2`
+string hashes per build, plus two sibling `parsed.files.any { it.fileName == … }` scans
+in the same loop. The row grew **4x for 2x the files**: 18.9 / 76.3 / 331.6 ms. At 2,401
+files that is 11.5 M hashes and ~92 MB of garbage on every keystroke.
+
+**WHY ~950 ROUNDS MISSED IT — THE TRANSFERABLE HALF.** All eight dashboard profiles are
+ONE codebase: tsc's own sources, **78 files averaging 128 KB**, where `2 x 78^2` is
+twelve thousand probes and vanishes. **A cost that is per-FILE rather than per-BYTE is
+structurally inexpressible on that shape**, and nothing in this repo had ever been
+pointed at the opposite one. This is (INC.9)'s *"a cost prior does not transfer across
+REGIMES"* on a new axis — the **SHAPE of the corpus** — and it is now a CLAUDE.md entry.
+
+**THE FIX IS A HOIST, NOT A CACHE.** `parsed.files` is a `val List` on a data class and
+`parsed` is never reassigned, so the set is loop-invariant by construction and there is
+no invalidation story to get wrong. `.toSet()` is kept VERBATIM rather than swapped for
+a `HashSet`, so the container — and any iteration order a future consumer might depend
+on — stays bit-for-bit what the per-call expression produced, which keeps CLAUDE.md's
+"PROVE order is unused" rule out of scope entirely. The `/// <reference path>` `Regex`,
+also constructed per call, became a top-level `val`.
+
+**RESULTS.** IMPORTS 18.9 / 76.3 / 331.6 -> **5.8 / 7.1 / 16.1 ms**, per-file cost flat
+at ~6-8 us where it had been doubling. Floor medians 165 -> 142, 409 -> 359,
+**1653 -> 1035 ms**.
+
+**THE PIN IS A COUNT, AND DELIBERATELY COMPARES TWO PROGRAM SIZES.**
+`EagerIndexCensus.programNameSetBuilds` == **1 per compile, at 10 files AND at 100**.
+(INC.52)'s law rules out a timed assertion, but the stronger reason is that the claim is
+about **COMPLEXITY and only a count can state one**: a wall assertion says "this build
+was fast", where 1-at-both-sizes says the work does not grow with the program.
+(INC.55)'s caveat about comparing two different programs does NOT apply — that bit
+because the `pass()` poll count is not constant across programs and swamped a
+DIFFERENCE; here the quantity is 1 by construction, an absolute value, with program size
+as precisely the axis under test.
+
+**THE ABLATION — ONE ARM, TWO ANSWERS.** Moving the set build back inside
+`extractRelativeImports` with its census increment: (1) both count pins go RED reading
+exactly **20** for a ten-file program (`2 x files`, as the KDoc predicts) while the VALUE
+pin stays GREEN — the two halves test different things and neither is redundant; (2) all
+**20** `cost_gate.py` counters are IDENTICAL between the arm and HEAD, so this round is
+provably counter-neutral and the gate's `+0.54%` / `+1.55%` is **accumulated drift from
+the 60 commits since the baseline was recorded at (CHK.63) on 2026-08-28**. The baseline
+is deliberately NOT rebaselined: folding sixty commits of unattributed drift into this
+one would make it un-auditable, and the gate exits 0 either way.
+
+**GATES.** Suite **16,499 / 0 / 3** (+3, exactly the new pins); `cost_gate.py` exit 0
+with `output.errors` flat at 46 and `spine.nodes` at 856,962; `huge_methods.py
+--fail-over 0` clean. Emit ORDER is what this change computes, and the ~13k-baseline
+corpus (which emits `.js`) is the gate that covers it.
+`docs/perf/import-dep-scan-complexity.md`.
+
+**NAMED SUCCESSOR — (INC.58), below.** The `Checker` init-block pass dispatch is ITSELF
+super-linear in file count and is ~73% of the 2,401-file floor after this round.
+
 ### Round (INC.55) — cancellation, and what changes when the goal is named "IntelliJ"
 
 **WHY THIS ROUND EXISTS.** The owner rephrased the goal from "truly incremental" to
@@ -3766,8 +3839,40 @@ RHS, and the merged-member CONTRADICTION direction.
   refuse a file written by a different build. **Measure the serialise/deserialise cost against
   the 136 ms it replaces before building the invalidation.**
 
-- [ ] **(INC.56) LET AN IntelliJ-CLASS HOST SKIP THE RE-READ — THE LARGEST REMAINING
-  FRONT-END ROW, AND THE REFRAMED GOAL MOVES IT UP.** Every query re-reads and re-decodes
+- [ ] **(INC.58) THE `Checker` INIT-BLOCK PASS DISPATCH IS SUPER-LINEAR IN FILE COUNT —
+  ~73% OF THE FLOOR ON AN APPLICATION-SHAPED PROJECT.** (INC.57)'s successor, and it
+  re-frames (INC.54)(a) rather than repeating it. Measured AFTER (INC.57), so the
+  quadratic is not in these numbers (`scripts/floor-decomposition.sh`, two draws):
+  **73-91 ms at 601 files, 204-217 at 1201, 756-810 at 2401** — 2.4-2.8x then 3.5-4.0x
+  for 2x the files, i.e. roughly `N^1.5`-`N^1.9`, on the region an editor pays for on
+  every keystroke. `FrontEnd.CHK_INIT` already localises it to the init-block pass
+  dispatch (207-209 ms of the 215-218 at 1201 files), so the decomposition is one
+  `--passTimingRows` run away.
+  **WHY THIS IS NOT JUST (INC.54)(a).** That item ranked the pass table's rows from the
+  **tsc profile** — `init:computeAllEnumValues` 6.9 ms, `init:moduleTypeNameIndex` 2.6,
+  and so on. (INC.57) is the standing proof that a ranking taken on 78 huge files does
+  not transfer to an application shape: a pass whose cost is per-FILE sorts differently
+  there, and a SUPER-LINEAR term is a different kind of target from a flat 6.9 ms row.
+  **Re-take the ranking on `build/bench/many-small-2400` first** — the flat rows may
+  not be the ones worth moving.
+  **WHAT TO SUSPECT, stated so it can be refuted rather than assumed:** a super-linear
+  term in a per-file pass loop means some pass does work proportional to the PROGRAM
+  inside a loop over FILES — exactly (INC.57)'s shape one layer up. The instrument that
+  finds it without reading 400 passes is the same one: two program sizes, and a per-pass
+  table divided by file count. A pass that is honestly O(program) reads a CONSTANT
+  µs/file; the quadratic one reads a doubling.
+
+- [ ] **(INC.56) LET AN IntelliJ-CLASS HOST SKIP THE RE-READ — ~~THE LARGEST REMAINING
+  FRONT-END ROW~~ *FOURTH*, AND IT IS THE ONLY ONE THAT COSTS A SOUNDNESS PROMISE.**
+  **PRICE RE-TAKEN 2026-08-30 BY (INC.57), ON THE VERY SHAPE THIS ENTRY DEMANDED.** On a
+  1,201-file application-shaped project the floor rows are: checker construct **215-218
+  ms** (53%), `extractRelativeImports` 76-125 (since fixed — (INC.57)), post-checker
+  39-56, **crawl WALL 25-38 (6-9%)**, config+glob 12-20. At 2,401 files the crawl wall is
+  51-75 ms. So the saving is real but is fourth, behind two rows that cost no promise at
+  all — and (INC.58) above is now ~73% of that floor. **Work it after (INC.58); the
+  ordering, not the mechanism, is what changed.** Everything below is the original entry
+  and its hazards still stand.
+  ORIGINAL ENTRY: Every query re-reads and re-decodes
   every NON-OVERLAID file: **10-12 ms wall and 44-56 ms of CPU** across the crawl's workers
   for tsc's 78 sources, although the PARSE is already fully content-cached (`78 reused /
   0 fresh`) — the bytes are read only to compute the content key. It is O(PROJECT), not
