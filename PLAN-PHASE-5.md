@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (BIND.1) — a diagnostic that appeared and disappeared with the byte length of an UNRELATED file
+
+**Reported, not found by a sweep.** From the IntelliJ plugin: a TS2345 naming a type from
+elsewhere in the buffer, over the last `console.log`, that came and went as trailing
+newlines were added, "triggered by some combination of factors, like the amount of
+incremental compilation cycles".
+
+**The trigger reading is what makes it tractable.** Trailing whitespace changes exactly
+ONE span in a file: `Node.end` is the end of the FOLLOWING token
+(`NodeSpanSemanticsTest` finding 2), so a file's LAST statement ends at the EOF offset and
+every appended newline walks its `(pos, end)` one step. That is a key, and
+`nodeKey(pos, end)` carries no file identity while positions restart at 0 in every file —
+so the question is which table is keyed by it and lives longer than a file. Two:
+`Binder.nodeToSymbol` and `Binder.moduleInstanceStates`, ONE map each, shared by every
+`BinderResult` from one binder, last-wins in bind order. The hazard was DOCUMENTED
+(`Binder.kt:212`, CLAUDE.md) and worked around locally (`lexOwnerSymbols`), never fixed.
+
+**The population, measured rather than argued.** `NodeKeyCollisionCensusMain` parses every
+program file and groups nodes by key. On an ordinary 223-file program (the reporter's file
+plus `zod` and `@types/node`): 4,324 of 120,964 keys are produced by more than one file,
+**109 by two or more DECLARATION nodes**, and **106 of the 223 files** have a last
+statement that appending newlines alone can drive into a collision. On tsc's OWN 78
+sources: **271 declaration-node collisions** (`watchUtilities.ts`/`moduleNameResolver.ts`
+variable declarations, a dozen import-specifier pairs).
+
+**Reduced to four lines, and it fails in BOTH directions.** Two files of identical byte
+length, each declaring a merged `namespace`; their `ModuleDeclaration`s therefore share a
+key. `Checker.buildNamespaceScope` looks its namespace symbol up in that table, got the
+OTHER file's, and built the wrong scope: the file's own export vanished (a false TS2304 on
+`beta = alpha`) and the foreign file's became visible (`beta = gamma` accepted, where tsc
+says TS2304 at the same line:col). Adding ONE character to the sibling file removed the
+error; removing it brought it back. tsc 5.9.3 is the control on both arms.
+
+**The fix, and the one rule in it that is not obvious.** The tables are allocated per
+`bind()`. Twelve checker reads that hold only a `Node` go through `nodeSymbolOf` /
+`moduleInstanceStateOf`, which resolve the OWNING file from the INV.2(a) parent chain — and
+an owner that recorded nothing answers **null**, WITHOUT falling through to a scan of the
+other files, because that scan is precisely the collision. The scan survives for an
+UNINDEXED node only (a `copy()`/synthesized one), where there is no file to ask. Three
+`for (br in binderResults)` double loops and one `binderResults.firstOrNull()` retire with
+it — the latter answered only because the table used to be shared, and would have been a
+silent behaviour change under the split.
+
+**Why no gate here could have caught it, and what the pin does about it.** It needs TWO
+files whose declarations land on coincident offsets; no hand-written fixture produces that
+by accident and the `// @Filename:` harness would not preserve it. So
+`NodeKeyCollisionTest` hands two exact texts to `compileParsed` and ASSERTS the collision
+precondition — without that assertion the class goes quietly vacuous the day someone
+renames a binding. Ablated (the per-`bind()` reset removed, one mistake, rebuilt): the two
+behavioural pins go RED and the precondition and no-collision control stay GREEN, which is
+what separates "measures the fix" from "measures the fixture".
+
+**GATES.** Suite **16,500 / 0 / 3** (+4, exactly the new pins). Compiler profile still
+**46 errors on 78 files**. `cost_gate.py` exit 0, `output.errors` and `spine.nodes`
+unchanged; `typeOfExpr.calls` +0.54% and `narrow.memoServed` +1.55% are the profile's own
+271 collisions now resolving to the right file — an accounting item, re-baselined in the
+same commit. `huge_methods.py --fail-over 0` clean; warning-clean.
+
+**Left open.** The reporter's own TS2345 is NOT reproduced — that needs their project, and
+the collision depends on exact offsets. Same trigger signature and same class; whether it
+arrives through this table or a sibling is unconfirmed. `PLAN-PHASE-5.md` is at 23 live
+rounds against the ~10 the protocol asks for, and the trim was NOT attempted: the oldest
+round's section runs straight into the queue with no heading of its own, which is the exact
+shape that emptied this file twice.
 ### Round (INC.59) — the same defect a THIRD time, in the path that emits nothing
 
 **FOUND BY RE-READING THE FLOOR, NOT BY TRUSTING THE RANKING — which is the reusable

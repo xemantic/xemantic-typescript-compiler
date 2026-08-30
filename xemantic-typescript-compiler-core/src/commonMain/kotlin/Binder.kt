@@ -202,21 +202,48 @@ class Binder(private val options: CompilerOptions) {
         val NO_SCOPE_TYPE_DECLARATIONS: Pair<Boolean, Set<String>> = Pair(false, emptySet())
     }
 
-    private val nodeToSymbol = mutableMapOf<Long, Symbol>()
-    private val moduleInstanceStates = mutableMapOf<Long, ModuleInstanceState>()
+    /**
+     * (BIND.1) THIS FILE'S declaration nodes, keyed by `nodeKey(pos, end)` — and it is
+     * **per file**, which is the whole point.
+     *
+     * It used to be ONE map shared by every [BinderResult] this binder produced, and
+     * `nodeKey` carries no file identity while positions restart at 0 in every file: two
+     * declarations at coincident `(pos, end)` in DIFFERENT files were therefore one key,
+     * last-wins in bind order. That is not a theoretical hazard — measured on an ordinary
+     * 223-file program (one source file plus `zod` and `@types/node`), **109 keys were
+     * written by two or more declaration nodes in different files**, `posix.d.ts` and
+     * `win32.d.ts` among them with a `ModuleDeclaration` apiece at `pos=110, end=194`.
+     * The observable was a diagnostic that appeared and vanished with the BYTE LENGTH of
+     * an unrelated file: two same-length files each declaring a merged `namespace` made
+     * `Checker.buildNamespaceScope` build the scope of the OTHER file's namespace, so the
+     * file's own exports went missing (a false TS2304) and the foreign file's became
+     * visible (a missing one) — in both directions, against tsc, in four lines of
+     * TypeScript. `NodeKeyCollisionTest` is the pin.
+     *
+     * A reader that holds the owning [BinderResult] is now correct by construction; one
+     * that has only a [Node] goes through `Checker.owningBinderResult`, which resolves the
+     * file from the INV.2(a) parent chain. Do NOT hoist these back to the binder: the
+     * per-file map is the fix, and nothing about `nodeKey` prevents the collision.
+     */
+    private var nodeToSymbol = mutableMapOf<Long, Symbol>()
+
+    /** Module instance states for THIS file's namespace declarations — per file for
+     *  [nodeToSymbol]'s reason, and it collided the same way. */
+    private var moduleInstanceStates = mutableMapOf<Long, ModuleInstanceState>()
 
     /**
      * (INC.16) THE FILE'S OWN `ModuleDeclaration` / `EnumDeclaration` symbols, keyed by
      * `nodeId` — the two things [bindLexicalScopes] needs from the conventional bind.
      *
-     * It exists because [nodeToSymbol] is shared by every [BinderResult] from one
-     * [Binder] and its `(pos, end)` keys COLLIDE ACROSS FILES, last-wins in bind order
-     * (CLAUDE.md). Reading it from a scope build that runs at the END of `bind` is
-     * usually right by accident — the file just wrote its own entries — and reading it
-     * from a build DEFERRED to first ask would not be: a later file's declaration at the
-     * same offsets would answer instead, aliasing a foreign namespace's `exports` into
-     * this file's scope chain. `nodeId` is per-file and dense, so this table cannot
-     * collide, and the deferral is order-independent BY CONSTRUCTION rather than by a
+     * It exists because [nodeToSymbol] USED TO BE shared by every [BinderResult] from one
+     * [Binder], its `(pos, end)` keys colliding across files last-wins in bind order — so
+     * reading it from a scope build that runs at the END of `bind` was right only by
+     * accident (the file had just written its own entries), and reading it from a build
+     * DEFERRED to first ask would not have been: a later file's declaration at the same
+     * offsets would answer instead, aliasing a foreign namespace's `exports` into this
+     * file's scope chain. (BIND.1) has since made that table per-file, so the sharing is
+     * gone — this one STAYS, because `nodeId` is per-file and dense and so cannot collide
+     * at all, which keeps the deferral order-independent BY CONSTRUCTION rather than by a
      * measured zero (round (INC.19)'s lesson: an interned write whose winner depends on
      * dispatch order fails as a plausible answer, never as an error).
      *
@@ -241,6 +268,10 @@ class Binder(private val options: CompilerOptions) {
         val fileLocals = symbolTable()
         currentScope = fileLocals
         bindsEnum = false
+        // (BIND.1) fresh per file — see [nodeToSymbol]. A binder binds many files and
+        // `nodeKey` cannot tell them apart, so the tables may not outlive one of them.
+        nodeToSymbol = mutableMapOf()
+        moduleInstanceStates = mutableMapOf()
         // (INC.16) fresh per file — the deferred scope builder captures THIS one.
         val lexOwners = HashMap<Int, Symbol>()
         lexOwnerSymbols = lexOwners
@@ -564,7 +595,12 @@ class Binder(private val options: CompilerOptions) {
                 // Map the ImportDeclaration to all its specifier symbols
                 // (for whole-import elision checks)
                 if (bindings.elements.isNotEmpty()) {
-                    recordNodeSymbol(decl, nodeToSymbol[nodeKey(bindings.elements.first())]!!)
+                    // (BIND.1) `?.let`, not `!!`: the specifier is recorded just above
+                    // UNLESS it is synthetic (`recordNodeSymbol` skips those), and before
+                    // the per-file split a colliding entry from another file could satisfy
+                    // this read by accident. There is nothing to record for such an import.
+                    nodeToSymbol[nodeKey(bindings.elements.first())]
+                        ?.let { recordNodeSymbol(decl, it) }
                 }
             }
             else -> { /* no bindings */ }

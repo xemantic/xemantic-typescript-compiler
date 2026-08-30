@@ -233,6 +233,46 @@ class Checker(
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
 
+    /**
+     * (BIND.1) The [BinderResult] of the file [node] was parsed from, or null when the
+     * node is not reachable to a `SourceFile` — a `copy()`/Transformer-synthesized node,
+     * or a file that is not in this program.
+     *
+     * The two `nodeKey(pos, end)`-keyed binder tables are PER FILE (see
+     * `Binder.nodeToSymbol`), so a reader that holds only a [Node] has to name the file
+     * before it may probe them: `nodeKey` carries no file identity and positions restart
+     * at 0 in every file, so "search every result and take the first hit" answers with
+     * whichever file happens to have a node at those coincident offsets.
+     */
+    private fun owningBinderResult(node: Node): BinderResult? =
+        owningSourceFile(node)?.fileName?.let { fileResults[it] }
+
+    /**
+     * (BIND.1) The symbol the binder recorded for the declaration [node], asked of the
+     * file that OWNS it.
+     *
+     * An owner that recorded nothing answers null and the scan is NOT reattempted — an
+     * absent entry in the owning file is the correct answer, and falling through to the
+     * other files is precisely the collision this exists to remove. The scan survives for
+     * an UNINDEXED node only, where there is no file to ask and the pre-(BIND.1)
+     * behaviour is the conservative one.
+     */
+    private fun nodeSymbolOf(node: Node): Symbol? {
+        owningBinderResult(node)?.let { return it.nodeToSymbol[nodeKey(node)] }
+        val key = nodeKey(node)
+        for (result in binderResults) result.nodeToSymbol[key]?.let { return it }
+        return null
+    }
+
+    /** (BIND.1) [nodeSymbolOf]'s twin for `moduleInstanceStates`, with the same rule
+     *  about an owner that recorded nothing. */
+    private fun moduleInstanceStateOf(node: Node): ModuleInstanceState? {
+        owningBinderResult(node)?.let { return it.moduleInstanceStates[nodeKey(node)] }
+        val key = nodeKey(node)
+        for (result in binderResults) result.moduleInstanceStates[key]?.let { return it }
+        return null
+    }
+
     // -----------------------------------------------------------------------
     // Per-checker mutable state — grouped for parallel-checking readiness.
     // When N Checker instances run concurrently (Phase 4 item 9c), each
@@ -13095,29 +13135,26 @@ class Checker(
         // (INC.10) THE ASK. The whole-program alias walk runs here, once per
         // checker that is ever questioned, instead of in every checker's `init`.
         ensureImportReferencesTracked()
-        val key = nodeKey(node)
-        for (result in binderResults) {
-            val symbol = result.nodeToSymbol[key]
-            if (symbol != null) {
-                // Check if this specific symbol is referenced
-                if (symbol.id in referencedAliases) return true
-                // For ImportDeclarations with named imports, check if ANY specifier is referenced
-                if (node is ImportDeclaration) {
-                    val clause = node.importClause ?: return false
-                    val bindings = clause.namedBindings
-                    if (bindings is NamedImports) {
-                        return bindings.elements.any { spec ->
-                            val specSymbol = result.nodeToSymbol[nodeKey(spec)]
-                            specSymbol != null && specSymbol.id in referencedAliases
-                        }
-                    }
-                    // Default import or namespace import
-                    return false
+        // (BIND.1) the OWNING file's table, not the first of every file's that happens to
+        // hold a node at these offsets — an import elision decided from a foreign file's
+        // alias symbol drops a `require`/`import` the program needs.
+        val symbol = nodeSymbolOf(node) ?: return true // safe default: keep the import
+        // Check if this specific symbol is referenced
+        if (symbol.id in referencedAliases) return true
+        // For ImportDeclarations with named imports, check if ANY specifier is referenced
+        if (node is ImportDeclaration) {
+            val clause = node.importClause ?: return false
+            val bindings = clause.namedBindings
+            if (bindings is NamedImports) {
+                return bindings.elements.any { spec ->
+                    val specSymbol = nodeSymbolOf(spec)
+                    specSymbol != null && specSymbol.id in referencedAliases
                 }
-                return false
             }
+            // Default import or namespace import
+            return false
         }
-        return true // safe default: keep the import
+        return false
     }
 
     /**
@@ -13181,9 +13218,7 @@ class Checker(
                             else if (moduleName is StringLiteralNode) moduleName.text
                             else null
                     if (n == null || n != name) continue
-                    val state = binderResults.firstNotNullOfOrNull { br ->
-                        br.moduleInstanceStates[nodeKey(stmt)]
-                    }
+                    val state = moduleInstanceStateOf(stmt)
                     if (state == ModuleInstanceState.Instantiated) {
                         hasInstantiatedModule = true
                     } else {
@@ -13201,13 +13236,10 @@ class Checker(
             resolved.flags.hasAny(SymbolFlags.ConstEnum)) return false
         if (resolved.flags.hasAny(SymbolFlags.Value)) return true
         if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
-            for (br in binderResults) {
-                for (decl in resolved.declarations) {
-                    if (decl is ModuleDeclaration) {
-                        val state = br.moduleInstanceStates[nodeKey(decl)]
-                        if (state == ModuleInstanceState.Instantiated) return true
-                    }
-                }
+            for (decl in resolved.declarations) {
+                if (decl is ModuleDeclaration &&
+                    moduleInstanceStateOf(decl) == ModuleInstanceState.Instantiated
+                ) return true
             }
             return false
         }
@@ -13250,9 +13282,8 @@ class Checker(
                     if (!erasable) return false else sawExport = true
                 }
                 is ModuleDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
-                    val instantiated = binderResults.firstNotNullOfOrNull { br ->
-                        br.moduleInstanceStates[nodeKey(stmt)]
-                    } == ModuleInstanceState.Instantiated
+                    val instantiated =
+                        moduleInstanceStateOf(stmt) == ModuleInstanceState.Instantiated
                     if (instantiated) return false else sawExport = true
                 }
                 is ImportEqualsDeclaration -> if (ModifierFlag.Export in stmt.modifiers) return false
@@ -13266,15 +13297,11 @@ class Checker(
      * Get the constant value of an enum member node.
      */
     fun getEnumMemberValue(memberNode: Node): ConstantValue? {
-        val key = nodeKey(memberNode)
-        for (result in binderResults) {
-            val symbol = result.nodeToSymbol[key]
-            if (symbol != null) {
-                val enumSymbol = symbol.parent ?: return null
-                return enumValues[enumSymbol.id]?.get(symbol.name)
-            }
-        }
-        return null
+        // (BIND.1) another file's enum member at coincident offsets would answer with ITS
+        // constant, which is a silently wrong emitted value.
+        val symbol = nodeSymbolOf(memberNode) ?: return null
+        val enumSymbol = symbol.parent ?: return null
+        return enumValues[enumSymbol.id]?.get(symbol.name)
     }
 
     /**
@@ -13297,9 +13324,7 @@ class Checker(
                 is InterfaceDeclaration, is TypeAliasDeclaration -> hasTypeOnlyDecl = true
                 is ModuleDeclaration -> {
                     // Module is type-only only if NonInstantiated (no runtime IIFE)
-                    val state = binderResults.firstNotNullOfOrNull { br ->
-                        br.moduleInstanceStates[nodeKey(decl)]
-                    }
+                    val state = moduleInstanceStateOf(decl)
                     if (state == ModuleInstanceState.Instantiated || state == null) {
                         hasValueDecl = true
                     } else {
@@ -13539,10 +13564,11 @@ class Checker(
                 is InterfaceDeclaration -> { /* type-only, continue */ }
                 is TypeAliasDeclaration -> { /* type-only, continue */ }
                 is ModuleDeclaration -> {
-                    // Nested namespace — check if instantiated
-                    val br = binderResults.firstOrNull() ?: return false
-                    val state = br.moduleInstanceStates[nodeKey(stmt)]
-                    if (state == ModuleInstanceState.Instantiated) return false
+                    // Nested namespace — check if instantiated.
+                    // (BIND.1) the OWNING file's state: `binderResults.firstOrNull()` read
+                    // one arbitrary file's table, which answered only because the table
+                    // used to be shared by all of them.
+                    if (moduleInstanceStateOf(stmt) == ModuleInstanceState.Instantiated) return false
                 }
                 is ExportDeclaration -> { /* re-export — skip for now */ }
                 is ImportDeclaration -> { /* import — skip */ }
@@ -13582,8 +13608,7 @@ class Checker(
                     }
                     if (modName == name) {
                         // Check if the namespace has value exports
-                        val br = binderResults.firstOrNull() ?: continue
-                        val state = br.moduleInstanceStates[nodeKey(stmt)]
+                        val state = moduleInstanceStateOf(stmt)
                         if (state == ModuleInstanceState.Instantiated) {
                             hasValueDecl = true
                         } else {
@@ -13615,13 +13640,10 @@ class Checker(
                 // (e.g. `declare namespace NS { export var foo }` has a runtime value shape)
                 val exports = resolved.exports
                 if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
-                for (br in binderResults) {
-                    for (decl in resolved.declarations) {
-                        if (decl is ModuleDeclaration) {
-                            val state = br.moduleInstanceStates[nodeKey(decl)]
-                            if (state == ModuleInstanceState.Instantiated) return false
-                        }
-                    }
+                for (decl in resolved.declarations) {
+                    if (decl is ModuleDeclaration &&
+                        moduleInstanceStateOf(decl) == ModuleInstanceState.Instantiated
+                    ) return false
                 }
                 return true
             }
@@ -13637,13 +13659,10 @@ class Checker(
                     // If the namespace exports any value members, it's not type-only
                     val exports = resolved.exports
                     if (exports != null && exports.values.any { it.flags.hasAny(SymbolFlags.Value) }) return false
-                    for (br in binderResults) {
-                        for (decl in resolved.declarations) {
-                            if (decl is ModuleDeclaration) {
-                                val state = br.moduleInstanceStates[nodeKey(decl)]
-                                if (state == ModuleInstanceState.Instantiated) return false
-                            }
-                        }
+                    for (decl in resolved.declarations) {
+                        if (decl is ModuleDeclaration &&
+                            moduleInstanceStateOf(decl) == ModuleInstanceState.Instantiated
+                        ) return false
                     }
                     return true
                 }
@@ -14101,14 +14120,8 @@ class Checker(
     /**
      * Get the module instance state for a module/namespace declaration.
      */
-    fun getModuleInstanceState(node: ModuleDeclaration): ModuleInstanceState {
-        val key = nodeKey(node)
-        for (result in binderResults) {
-            val state = result.moduleInstanceStates[key]
-            if (state != null) return state
-        }
-        return ModuleInstanceState.Instantiated // safe default
-    }
+    fun getModuleInstanceState(node: ModuleDeclaration): ModuleInstanceState =
+        moduleInstanceStateOf(node) ?: ModuleInstanceState.Instantiated // safe default
 
     /**
      * Returns true if [name] is declared as a plain `var` in any file that comes
@@ -189196,9 +189209,7 @@ interface DataView {
                             if (ModifierFlag.Export !in s.modifiers) continue
                             // Check via binder's moduleInstanceState — a non-instantiated namespace
                             // (only type members) qualifies.
-                            val state = binderResults.firstNotNullOfOrNull { br ->
-                                br.moduleInstanceStates[nodeKey(s)]
-                            }
+                            val state = moduleInstanceStateOf(s)
                             if (state == ModuleInstanceState.NonInstantiated) return true
                         }
                     }

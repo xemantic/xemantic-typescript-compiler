@@ -1,5 +1,35 @@
 # Status
 
+**(BIND.1) — A DIAGNOSTIC THAT APPEARED AND DISAPPEARED WITH THE BYTE LENGTH OF AN
+UNRELATED FILE (2026-08-30, reported from the IntelliJ plugin).** `nodeKey(pos, end)`
+carries NO file identity and positions restart at 0 in every file, yet
+`Binder.nodeToSymbol` and `moduleInstanceStates` were ONE map shared by every
+`BinderResult` a binder produced — so two declarations at coincident offsets in DIFFERENT
+files shared a slot, last-wins in bind order. **IT IS NOT A THEORETICAL HAZARD: tsc's OWN
+78 SOURCES CARRY 271 KEYS WRITTEN BY TWO OR MORE *DECLARATION* NODES IN DIFFERENT FILES**
+(`watchUtilities.ts`/`moduleNameResolver.ts` variable declarations, a dozen
+import-specifier pairs), and an ordinary 223-file program (one source file plus `zod` and
+`@types/node`) carries 109 of them plus 4,324 shared keys overall. **THE TRIGGER IS
+WHITESPACE**, which is why it reads as random: `Node.end` is the end of the FOLLOWING
+token, so for a file's LAST statement it is the EOF offset — the one span trailing
+newlines move — and **106 of those 223 files have a last statement that appending
+newlines ALONE can drive into a collision**. Reduced to four lines: two same-length files
+each declaring a merged `namespace` made `buildNamespaceScope` build the scope of the
+OTHER file's namespace, so the file's own exports went missing (a false TS2304) and the
+foreign file's became visible (a missing one) — **both directions, against tsc 5.9.3** —
+and adding ONE character to the sibling file made it vanish. The tables are now per
+`bind()`; twelve checker reads holding only a `Node` go through `nodeSymbolOf` /
+`moduleInstanceStateOf`, which ask the OWNING file (INV.2(a) parent chain) and treat an
+owner that recorded nothing as **null** rather than scanning the others — that scan IS the
+collision. **NOTHING HERE COULD HAVE SEEN IT**: it needs two files whose declarations land
+on coincident offsets, which no hand-written fixture produces by accident, so
+`NodeKeyCollisionTest` hands two exact texts to the pipeline and ASSERTS the collision
+precondition; ablated, its two behavioural pins go red while the precondition and the
+no-collision control stay green. **GATES.** Suite **16,500 / 0 / 3** (+4, exactly the new
+pins); the compiler profile still reports **46 errors on 78 files**; `cost_gate.py` exit 0
+with `output.errors` and `spine.nodes` UNCHANGED — `typeOfExpr.calls` +0.54% and
+`narrow.memoServed` +1.55% are the 271 collisions on that profile now resolving to the
+right file, re-baselined here; `huge_methods.py --fail-over 0` clean; warning-clean.
 **(INC.57)+(INC.58)+(INC.59) — THE FRONT END WAS QUADRATIC IN FILE COUNT **THREE TIMES**,
 AND NO PROFILE HERE COULD EXPRESS ANY OF THEM; THE PER-KEYSTROKE FLOOR OF A 2,401-FILE
 PROJECT GOES **1,653 -> 279 ms (5.9x)** (2026-08-30).** Working (INC.56) — *"skip the re-read, THE LARGEST
