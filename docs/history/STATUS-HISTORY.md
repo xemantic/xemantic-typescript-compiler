@@ -1,5 +1,40 @@
 
 
+**(INC.60) — THE INCREMENTAL FLOOR'S THIRD ROW WAS A QUESTION ASKED TWICE PER ENTRY, AND
+THE SECOND ASK COST FIVE SYSCALLS (2026-08-30).** `FrontEnd.CONFIG` — tsconfig load,
+`@types` acquisition and the root-file glob — is what an editor pays on every keystroke,
+and no round had separated its three pieces. Split five ways it is **~99% the glob, the
+glob is ~99% its directory walk, and 60-70% of THAT is one call the walk did not need to
+make**: for every entry the directory listing had just returned it went back to the
+filesystem to ask "is this a directory?". tsconfig load is **0.43 ms** and `@types`
+**0.01 ms** — neither was ever the row. **WHY THAT BOOLEAN COSTS 7.3-8.6 us IS IN THE
+DEPENDENCY, NOT IN OUR SOURCE**: kotlinx-io 0.9.1 compiles `metadataOrNull` to
+`File.exists()` + `isFile()` + `isDirectory()` + `isFile()` + `length()` — up to five
+`stat` syscalls plus an allocation — on a `Path` rebuilt from the string the listing had
+just produced; it is visible only by dividing the row by its population and refusing the
+implied per-op cost (7.3 us is impossible for one `stat`). `Vfs.listEntries` answers the
+kind WITH the listing; **its default body is literally the two calls it replaces**, so
+every other `Vfs` is unchanged and correct without touching it, and `SystemVfs` overrides
+it through a new `expect fun systemListEntries` (JVM: one `readdir` + one `stat` per
+entry; native: the portable pair). **MEASURED, both arms this session with the same
+runner: `CONFIG` 29.2-32.6 -> 11.5-16.3 ms at 2,401 files and 52.8/52.9 -> 20.7-27.1 at
+4,801; per entry 9.3 -> 3.1-4.4 us, flat across both sizes** — a constant-factor win on a
+linear row, with the population census (`50 dirs / 2451 entries / 2401 candidates / 2401
+roots`) IDENTICAL across the change, which is the receipt that nothing was skipped to buy
+it. **THE UNINSTRUMENTED FLOOR MEDIANS READ 216 BEFORE AND 222 AFTER**, i.e. the saving
+sits inside the ±40% single-draw band and a wall-clock reading of this round would have
+concluded the opposite of the truth — which is why the split was built before the fix.
+Pinned at two layers and ablated separately: `RootGlobListingTest` (the CALL SHAPE; its
+counting `Vfs` must OVERRIDE `listEntries`, or the default *is* the pre-fix sequence and
+the pin is vacuous) and `SystemVfsListEntriesTest` (the JVM actual's EQUIVALENCE, whose
+divergence would be silent — it includes a directory named `looks-like.ts`). a1 reddens
+2 of 3 in the first and none in the second; a2 the reverse. **GATES.** Suite **16,514 /
+0 / 3** (+6, exactly the new pins); `cost_gate.py` exit 0 with **every counter
+unchanged**; `huge_methods.py --fail-over 0` clean. **SUCCESSOR (CFG.1), a DEFECT found
+on the way**: tsc's `commandLineParser.ts:3131-3141` defaults `exclude` to
+`[outDir, declarationDir]` when absent and **we implement none of it**, so a project that
+has ever emitted pulls its own `dist/**/*.d.ts` back in as ROOT FILES.
+
 **(BIND.1) — A DIAGNOSTIC THAT APPEARED AND DISAPPEARED WITH THE BYTE LENGTH OF AN
 UNRELATED FILE (2026-08-30, reported from the IntelliJ plugin).** `nodeKey(pos, end)`
 carries NO file identity and positions restart at 0 in every file, yet

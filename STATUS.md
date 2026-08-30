@@ -1,5 +1,42 @@
 # Status
 
+**(INC.65) — THE CRAWL RE-ASKED THE FILESYSTEM A QUESTION IT HAD ALREADY ANSWERED, AND THE
+SESSION'S FLOOR IS 241 -> 151 / 256 -> 116 ms (2026-08-30).** The previous round named "a
+PARTITION question and a HOST PROMISE" as all that was left; that was wrong within the hour,
+because **`FrontEnd.CRAWL` had no split below its two elapsed-WITH-SUSPENSION CPU sums** — so
+the residue between them and the WALL was unattributed, and on an application-shaped project
+that residue is most of the row. Bracketing the crawl's SEQUENTIAL half
+(`FrontEnd.CRAWL_RESOLVE`) read **20.6-28.6 ms of a 44-60 ms crawl wall**, ~15% of the whole
+floor. **(INC.53)'s "ask what runs OUTSIDE a pass" has a sub-row-shaped twin, and this is the
+third time this arc that ADDING an instrument, not reading one, is what found the cost.**
+**THE FIX IS EXACT, AND READING THE FUNCTION IS WHAT SAYS SO**: `ModuleResolver.resolve`
+reads `importerPath` once, to take its `dirname`, and never again, so `(importerDir,
+specifier)` is not a heuristic key but THE key. Censused offline before building anything:
+**4,701 resolutions over 2,351 distinct pairs — a duplication factor of exactly 2.0**, and a
+codebase with shared barrels has more. Nothing to invalidate — a `ModuleResolver` is
+constructed once per `build`, so the memo's lifetime IS one build; deliberately NOT
+process-global, since a cross-build cache cannot see an ADDED file ((INC.48)). `null` is a
+real answer and is memoized too, or the filesystem is re-probed for every unresolved
+specifier — the population a project mid-edit has most of. **CRAWL_RESOLVE 24.0 -> 14.3 ms
+mean; crawl wall 44-60 -> 34-44.**
+**THE PIN THE DESIGN RESTS ON IS NOT A COUNT**: a memo keyed by the SPECIFIER ALONE passes
+every count assertion and silently resolves `./dep` in one directory to another directory's
+file — a wrong PROGRAM, which per (CFG.1) this repo has no diagnostic channel to notice.
+Ablation d2 makes exactly that mistake and reddens exactly that pin.
+**GATES.** Suite **16,539 / 0 / 3**; `cost_gate.py` exit 0 with **`output.programFiles` 78**
+(the direct receipt that resolution still finds the same program); `huge_methods.py
+--fail-over 0` clean; 8-profile `--noEmit` grid `added=0 removed=0` on all eight; `--outDir`
+emit **byte-identical to the PRE-SESSION binary**, 78 files.
+**THE SESSION, ONE FIXTURE AND ONE INSTRUMENT: `many-small-2400-dom` floor medians 241 -> 151
+(early) and 256 -> 116 (late), -37% / -55%**, across (INC.63), (INC.64)(a)/(b) and (INC.65) —
+and **UNDERSTATED**, because the box drifted ~10% slower over the session (`full` median
+3,944 -> 4,335), so the floor's SHARE of a full build fell 6.1% -> 3.5%.
+**SUCCESSOR (INC.66):** checker construct 38-70 (the init pass dispatch, flat — an (INC.7)
+partition question), crawl WALL 34-44 (its READ half is (INC.56), the only row costing a
+soundness promise), config+glob 13-29 (co-largest on some draws, NO promise attached, and
+worth re-decomposing rather than assuming (INC.60) finished it). **And take the lesson
+literally: before pricing any row, check it HAS a split.**
+
 **(INC.64) — TWO ROWS PAID ON EVERY KEYSTROKE FOR WORK NOBODY READS, AND THE FLOOR IS
 241 -> 146 ms OVER THE SESSION (2026-08-30).** Both found by (INC.62)'s instrument —
 divide a row by its own population, refuse an impossible per-op cost.
@@ -131,38 +168,3 @@ as predicted before it ran. Only a `-project` fixture through `ProjectCompiler` 
 `Vfs` expresses it, the same instrument (CHK.29) needed and for the same reason.
 **GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
 `huge_methods.py --fail-over 0` clean; 8-profile grid clean.
-
-**(INC.60) — THE INCREMENTAL FLOOR'S THIRD ROW WAS A QUESTION ASKED TWICE PER ENTRY, AND
-THE SECOND ASK COST FIVE SYSCALLS (2026-08-30).** `FrontEnd.CONFIG` — tsconfig load,
-`@types` acquisition and the root-file glob — is what an editor pays on every keystroke,
-and no round had separated its three pieces. Split five ways it is **~99% the glob, the
-glob is ~99% its directory walk, and 60-70% of THAT is one call the walk did not need to
-make**: for every entry the directory listing had just returned it went back to the
-filesystem to ask "is this a directory?". tsconfig load is **0.43 ms** and `@types`
-**0.01 ms** — neither was ever the row. **WHY THAT BOOLEAN COSTS 7.3-8.6 us IS IN THE
-DEPENDENCY, NOT IN OUR SOURCE**: kotlinx-io 0.9.1 compiles `metadataOrNull` to
-`File.exists()` + `isFile()` + `isDirectory()` + `isFile()` + `length()` — up to five
-`stat` syscalls plus an allocation — on a `Path` rebuilt from the string the listing had
-just produced; it is visible only by dividing the row by its population and refusing the
-implied per-op cost (7.3 us is impossible for one `stat`). `Vfs.listEntries` answers the
-kind WITH the listing; **its default body is literally the two calls it replaces**, so
-every other `Vfs` is unchanged and correct without touching it, and `SystemVfs` overrides
-it through a new `expect fun systemListEntries` (JVM: one `readdir` + one `stat` per
-entry; native: the portable pair). **MEASURED, both arms this session with the same
-runner: `CONFIG` 29.2-32.6 -> 11.5-16.3 ms at 2,401 files and 52.8/52.9 -> 20.7-27.1 at
-4,801; per entry 9.3 -> 3.1-4.4 us, flat across both sizes** — a constant-factor win on a
-linear row, with the population census (`50 dirs / 2451 entries / 2401 candidates / 2401
-roots`) IDENTICAL across the change, which is the receipt that nothing was skipped to buy
-it. **THE UNINSTRUMENTED FLOOR MEDIANS READ 216 BEFORE AND 222 AFTER**, i.e. the saving
-sits inside the ±40% single-draw band and a wall-clock reading of this round would have
-concluded the opposite of the truth — which is why the split was built before the fix.
-Pinned at two layers and ablated separately: `RootGlobListingTest` (the CALL SHAPE; its
-counting `Vfs` must OVERRIDE `listEntries`, or the default *is* the pre-fix sequence and
-the pin is vacuous) and `SystemVfsListEntriesTest` (the JVM actual's EQUIVALENCE, whose
-divergence would be silent — it includes a directory named `looks-like.ts`). a1 reddens
-2 of 3 in the first and none in the second; a2 the reverse. **GATES.** Suite **16,514 /
-0 / 3** (+6, exactly the new pins); `cost_gate.py` exit 0 with **every counter
-unchanged**; `huge_methods.py --fail-over 0` clean. **SUCCESSOR (CFG.1), a DEFECT found
-on the way**: tsc's `commandLineParser.ts:3131-3141` defaults `exclude` to
-`[outDir, declarationDir]` when absent and **we implement none of it**, so a project that
-has ever emitted pulls its own `dist/**/*.d.ts` back in as ROOT FILES.

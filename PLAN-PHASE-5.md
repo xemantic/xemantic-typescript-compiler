@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.65) — the crawl re-asked the filesystem a question it had already answered, and the split is what found it
+
+**THE PREVIOUS ROUND NAMED "a PARTITION question and a HOST PROMISE" AS ALL THAT WAS LEFT.
+THAT WAS WRONG WITHIN THE HOUR, AND THE REASON IS THE ONE THIS ARC KEEPS RE-LEARNING: THE
+CRAWL HAD NO SPLIT.** `FrontEnd.CRAWL` decomposed into exactly two sub-rows, `read+decode`
+and `pre-parse`, both elapsed-WITH-SUSPENSION and therefore locations rather than prices —
+so the residue between them and the WALL was unattributed, and on an application-shaped
+project that residue is most of the row. Adding `FrontEnd.CRAWL_RESOLVE` around the crawl's
+sequential half read **20.6-28.6 ms of a 44-60 ms crawl wall** at 2,401 files: about half
+of it, and ~15% of the whole incremental floor. **(INC.53)'s law — "before pricing anything
+else in the floor, ask what runs OUTSIDE a pass" — has a crawl-shaped twin: ask what runs
+outside a SUB-ROW.**
+
+**THE FIX IS EXACT RATHER THAN APPROXIMATE, AND READING THE FUNCTION IS WHAT SAYS SO.**
+`ModuleResolver.resolve` reads `importerPath` exactly once, to take its `dirname`, and never
+again — every branch below that line is a function of `importerDir` and the specifier alone.
+So `(importerDir, specifier)` is not a heuristic key, it is THE key, and two files in one
+directory importing the same specifier are literally asking one question. **Population
+censused before building anything** (offline, no build): the fixture makes **4,701
+resolutions over 2,351 distinct pairs**, a duplication factor of exactly **2.0**, and a
+codebase with shared barrels has more.
+**NOTHING TO INVALIDATE**: a `ModuleResolver` is constructed once per
+`ProjectCompiler.build`, so the memo's lifetime IS one build, and the crawl already
+documents that it assumes a `Vfs` static for its duration. Deliberately NOT process-global —
+a cross-build cache cannot see an ADDED file, (INC.48)'s hazard. And `null` is a real answer
+and is memoized too, or the filesystem is re-probed for every unresolved specifier, which is
+the population a project mid-edit has most of.
+
+**MEASURED:** CRAWL_RESOLVE 20.6-28.6 -> **13.5-15.9 ms** (mean 24.0 -> 14.3), crawl wall
+44-60 -> **34-44**. Less than the 2.0 factor predicts, because the row also carries the loop
+and the `importEdges`/`moduleResolutions` writes, which are unchanged.
+
+**THE PIN THE WHOLE DESIGN RESTS ON IS NOT A COUNT.** A memo keyed by the SPECIFIER ALONE
+passes every count assertion in the class and silently resolves `./dep` in one directory to
+another directory's file — a wrong PROGRAM, and per (CFG.1) this repo has **no diagnostic
+channel that would notice**, so the only observable is the file itself. Ablation d2 makes
+exactly that mistake and reddens exactly that pin and no other; d1 (never consult the memo)
+reddens the two count pins and not it.
+
+**GATES.** Suite **16,539 / 0 / 3**; `cost_gate.py` exit 0 with **`output.programFiles` 78**,
+which is the direct receipt that resolution still finds the same program; `huge_methods.py
+--fail-over 0` clean; 8-profile `--noEmit` grid `added=0 removed=0` on all eight; and an
+`--outDir` build of the compiler profile **byte-identical to the PRE-SESSION binary's**,
+78 files, `diff -r` clean.
+
+**THE SESSION, ON ONE FIXTURE AND ONE INSTRUMENT.** `many-small-2400-dom` floor medians:
+**241 -> 151 ms (early) and 256 -> 116 (late)**, i.e. **-37% / -55%**, across (INC.63),
+(INC.64)(a), (INC.64)(b) and (INC.65). **The figure is UNDERSTATED**: the box drifted ~10%
+SLOWER over the session (the same runs' `full` median went 3,944 -> 4,335 early), so the
+floor's share of a full build fell further than its absolute value did — 6.1% -> 3.5%.
+
+**SUCCESSOR (INC.66).** Rows now, and the two that were "all that is left" are still there
+plus one that was not: **checker construct 38-70 ms** (the init-block pass dispatch, FLAT
+across ~400 passes — an (INC.7) partition question, not a micro-optimisation), **crawl WALL
+34-44** (of which resolve is now 13.5-15.9 and the READ half is (INC.56), the only row
+costing a soundness promise), **config+glob 13-29** — which is now co-largest with the crawl
+on some draws and has NO promise attached, so re-decompose it before assuming (INC.60)
+finished it — bind 7-9, post-checker 5.7-7.2. **And take the lesson literally: before
+pricing any of them, check the row HAS a split, because this round's whole finding lived in
+a residue no sub-row named.**
+
 ### Round (INC.64) — two rows the crawl and the emit-order prep were paying on every keystroke, and the floor is 241 -> 146 ms
 
 **(INC.62)'s SUCCESSOR RANKING NAMED THE INIT PASS DISPATCH AND THE CRAWL. THE CRAWL'S
@@ -4473,7 +4534,30 @@ RHS, and the merged-member CONTRADICTION direction.
   population, at two program sizes, and refuse an implied per-op cost that is physically
   impossible.**
 
-- [ ] **(INC.64) THE dom FLOOR AFTER (INC.63) — TWO CO-LARGEST ROWS, AND ONLY ONE OF THEM
+- [ ] **(INC.66) THE dom FLOOR AFTER (INC.65), AND THE INSTRUMENT LESSON THAT OUTRANKS THE
+  ROWS (2026-08-30).** Floor medians **151 ms (early) / 116 (late)** at 2,401 files, from
+  241 / 256 at the start of the (INC.63) session. Rows: **checker construct 38-70 ms** —
+  the init-block pass dispatch, FLAT across ~400 passes (top `init:computePerFileVisibility`
+  5.8, then 3.8 / 2.7 / 2.5 / 2.1), so there is no row to make cheaper and the question is
+  (INC.7)'s — which passes can be PARTITION-SCOPED or built on FIRST ASK, with (INC.20)'s
+  MIXED-pass split as the shape that has worked; note `init:computePerFileVisibility` and
+  `init:buildPerFileScopes` are the (CHK.49) PAIR, one observable, and must move together
+  or not at all. **crawl WALL 34-44**, of which `CRAWL_RESOLVE` is 13.5-15.9 after (INC.65)
+  and the READ half is (INC.56) — still the only row costing a SOUNDNESS PROMISE, and the
+  one an IntelliJ-class host can simply hand us. **config+glob 13-29**, which is co-largest
+  with the crawl on some draws, has NO promise attached, and should be re-decomposed rather
+  than assumed finished by (INC.60). bind 7-9, post-checker 5.7-7.2.
+  **THE LESSON RANKS ABOVE THE ROWS: BEFORE PRICING ANY ROW, CHECK IT HAS A SPLIT.**
+  (INC.65)'s entire finding lived in a residue no sub-row named — `FrontEnd.CRAWL` had two
+  sub-rows, both elapsed-with-suspension, so the gap between them and the wall was
+  unattributed and was half the row. That is (INC.53)'s "ask what runs OUTSIDE a pass" with
+  a sub-row-shaped twin, and it is the third time this arc that adding an instrument, not
+  reading one, is what found the cost.
+
+- [x] **(INC.64) DONE 2026-08-30 — both halves landed** (the crawl's per-file dispatcher hop,
+  and the emit-order prep running under `--noEmit`), and (INC.65) then found a THIRD row in
+  the residue the crawl had no sub-row for. Successor ranking is (INC.66) above.
+  ORIGINAL ENTRY:** THE dom FLOOR AFTER (INC.63) — TWO CO-LARGEST ROWS, AND ONLY ONE OF THEM
   IS A MICRO-OPTIMISATION QUESTION (2026-08-30).** Measured on
   `build/bench/many-small-2400-dom`, 2,401 files, three arms, PLAIN floor median 166-189 ms:
   **(a) the init-block pass dispatch, 40-53 ms** — now the largest checker row, and it is
