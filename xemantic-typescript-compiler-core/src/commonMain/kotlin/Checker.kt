@@ -15648,25 +15648,34 @@ class Checker(
                 }
             }
         }
+        // (INC.61) The part that is the SAME for every file, built ONCE. It used to
+        // be copied into a fresh table per file, i.e. `files x libGlobals`
+        // insertions — 13.5 ms on a 2,401-file project whose `lib` is `es2020` and
+        // **175.6 ms on the same program with `dom` added**, which is what an
+        // ordinary project gets by default. See [LayeredSymbolTable] for why the
+        // overlay reproduces the copy's iteration ORDER entry for entry.
+        val sharedBase: SymbolTable = symbolTable()
+        // Lib globals — visible from every file.
+        for ((name, sym) in libGlobals) sharedBase[name] = sym
+        // Script-file locals — visible across all files (TypeScript treats
+        // any file without imports/exports as contributing to the global
+        // namespace).
+        for ((name, sym) in scriptFileNames) {
+            if (name !in sharedBase) sharedBase[name] = sym
+        }
+        // (CHK.50) `declare global { … }` additions — global by construction,
+        // and therefore visible from every file exactly as a script-file local is.
+        for ((name, sym) in globalAugmentationAddedSymbols) {
+            if (name !in sharedBase) sharedBase[name] = sym
+        }
         for (result in binderResults) {
-            val fileScope: SymbolTable = symbolTable()
-            // Lib globals — visible from every file.
-            for ((name, sym) in libGlobals) fileScope[name] = sym
-            // Script-file locals — visible across all files (TypeScript treats
-            // any file without imports/exports as contributing to the global
-            // namespace).
-            for ((name, sym) in scriptFileNames) {
-                if (name !in fileScope) fileScope[name] = sym
-            }
-            // (CHK.50) `declare global { … }` additions — global by construction,
-            // and therefore visible from every file exactly as a script-file local is.
-            for ((name, sym) in globalAugmentationAddedSymbols) {
-                if (name !in fileScope) fileScope[name] = sym
-            }
-            // Own-file locals — visible to ourselves. Module files override
-            // any same-name lib/script entries (matches TypeScript's local-
-            // shadows-global semantics for the file's own declarations).
-            for ((name, sym) in result.locals) fileScope[name] = sym
+            // Own-file locals — visible to ourselves, and they SHADOW any same-name
+            // lib/script entry (TypeScript's local-shadows-global semantics for a
+            // file's own declarations). Snapshotted rather than aliased, so the view
+            // answers what the copy answered even if a binder table is later touched.
+            val fileScope: SymbolTable = LayeredSymbolTable(sharedBase, symbolTable().also {
+                it.putAll(result.locals)
+            })
             perFileScope[result.sourceFile.fileName] = fileScope
             // (WARM.23) round 896 — THE one mutation of [perFileScope], and so the
             // one place [perFileScopeOf]'s memo could go stale. Clearing it here

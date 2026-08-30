@@ -204,6 +204,96 @@ typealias SymbolTable = MutableMap<String, Symbol>
 fun symbolTable(): SymbolTable = mutableMapOf()
 
 /**
+ * (INC.61) A read-only [SymbolTable] that OVERLAYS one table on a SHARED base
+ * without copying the base.
+ *
+ * It exists because `Checker.buildPerFileScopes` built one flat table PER FILE by
+ * copying every lib global into it, i.e. `files x libGlobals` insertions. That is
+ * invisible on a project whose `lib` is small and dominant on one whose `lib` is
+ * not: measured on the SAME 2,401-file program, changing `lib` from `["es2020"]`
+ * to `["es2020", "dom"]` — which is what an ordinary project gets by DEFAULT —
+ * took that pass from **13.5 ms to 175.6 ms**, 70% of the whole floor pass table
+ * and ~46% of the per-keystroke floor.
+ *
+ * **The iteration ORDER is exactly what the copy produced**, which is what makes
+ * this a drop-in: the copy inserted the base first and then the file's own locals,
+ * and a `LinkedHashMap` keeps a key's ORIGINAL position when a later `put`
+ * overwrites its value — so iterating the base (answering [own]'s value where it
+ * shadows) and then [own]'s base-absent keys reproduces it entry for entry. That
+ * matters because three consumers iterate this table, and round 776's law is that
+ * a name order which stops being a function of the program is a cost counter that
+ * becomes a property of the box.
+ *
+ * **Mutators THROW rather than being silently ignored.** Nothing mutates a
+ * per-file scope after it is built, and a loud failure is the right way to find
+ * out if that ever stops being true — a view that quietly accepted a write would
+ * drop it, and the symptom would be a name resolving to a foreign module's local.
+ */
+internal class LayeredSymbolTable(
+    private val base: Map<String, Symbol>,
+    private val own: Map<String, Symbol>,
+) : MutableMap<String, Symbol> {
+
+    /** [own]'s keys that the base does not already carry, in [own]'s own order. */
+    private val ownOnly: List<String> = own.keys.filter { it !in base }
+
+    override val size: Int get() = base.size + ownOnly.size
+    override fun isEmpty(): Boolean = base.isEmpty() && own.isEmpty()
+    override fun containsKey(key: String): Boolean = own.containsKey(key) || base.containsKey(key)
+    override fun get(key: String): Symbol? = own[key] ?: base[key]
+    override fun containsValue(value: Symbol): Boolean = keySequence().any { get(it) === value }
+
+    private fun keySequence(): Sequence<String> = base.keys.asSequence() + ownOnly.asSequence()
+
+    override val keys: MutableSet<String>
+        get() = object : AbstractMutableSet<String>() {
+            override val size: Int get() = this@LayeredSymbolTable.size
+            override fun contains(element: String) = containsKey(element)
+            override fun add(element: String) = throw UnsupportedOperationException(READ_ONLY)
+            override fun iterator(): MutableIterator<String> = readOnly(keySequence().iterator())
+        }
+
+    override val values: MutableCollection<Symbol>
+        get() = object : AbstractMutableCollection<Symbol>() {
+            override val size: Int get() = this@LayeredSymbolTable.size
+            override fun add(element: Symbol) = throw UnsupportedOperationException(READ_ONLY)
+            override fun iterator(): MutableIterator<Symbol> =
+                readOnly(keySequence().map { get(it)!! }.iterator())
+        }
+
+    override val entries: MutableSet<MutableMap.MutableEntry<String, Symbol>>
+        get() = object : AbstractMutableSet<MutableMap.MutableEntry<String, Symbol>>() {
+            override val size: Int get() = this@LayeredSymbolTable.size
+            override fun add(element: MutableMap.MutableEntry<String, Symbol>) =
+                throw UnsupportedOperationException(READ_ONLY)
+            override fun iterator(): MutableIterator<MutableMap.MutableEntry<String, Symbol>> =
+                readOnly(keySequence().map { Entry(it, get(it)!!) as MutableMap.MutableEntry<String, Symbol> }.iterator())
+        }
+
+    private class Entry(
+        override val key: String,
+        override val value: Symbol,
+    ) : MutableMap.MutableEntry<String, Symbol> {
+        override fun setValue(newValue: Symbol): Symbol = throw UnsupportedOperationException(READ_ONLY)
+    }
+
+    private fun <T> readOnly(source: Iterator<T>): MutableIterator<T> = object : MutableIterator<T> {
+        override fun hasNext(): Boolean = source.hasNext()
+        override fun next(): T = source.next()
+        override fun remove() = throw UnsupportedOperationException(READ_ONLY)
+    }
+
+    override fun put(key: String, value: Symbol): Symbol? = throw UnsupportedOperationException(READ_ONLY)
+    override fun putAll(from: Map<out String, Symbol>) = throw UnsupportedOperationException(READ_ONLY)
+    override fun remove(key: String): Symbol? = throw UnsupportedOperationException(READ_ONLY)
+    override fun clear() = throw UnsupportedOperationException(READ_ONLY)
+
+    private companion object {
+        const val READ_ONLY = "a per-file scope is read-only (INC.61)"
+    }
+}
+
+/**
  * INV.2(c): one lexical scope, produced by the [Binder]'s additive
  * lexical-binding pass and keyed in [BinderResult.lexicalScopes] by the owner
  * node's `nodeId`. UNCONSUMED until INV.4 — nothing in the checker reads these
