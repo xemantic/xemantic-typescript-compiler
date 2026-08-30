@@ -106,7 +106,25 @@ object EagerIndexCensus {
      */
     var jsxSuffixScanSteps: Long = 0
 
+    /**
+     * (INC.59) How many times the emit-order `transformOrder` set was built, per compile.
+     *
+     * **1, and invariant to the program's file count.** It was written INSIDE a
+     * `filter` lambda (`parsedSourceFiles.filter { it.key !in transformOrder.toSet() }`),
+     * so an N-element set was rebuilt once per entry of an N-entry map — the third
+     * instance of this exact shape found in one session, after [programNameSetBuilds]
+     * and [jsxSuffixScanSteps], and the second of the three in a `--noEmit` path that
+     * emits nothing. Measured on generated many-small-file projects,
+     * `FrontEnd.POST_EMITPREP` read 6.8-8.2 ms at 601 files and **158.5-175.3 at
+     * 2401** — 21x for 4x the files — and 1.8-2.8 ms after the hoist.
+     *
+     * A count, for the reason the two above it are counts: the claim is a COMPLEXITY
+     * one, and only a count can say "this does not grow with the program".
+     */
+    var transformOrderSetBuilds: Int = 0
+
     fun resetCounters() {
+        transformOrderSetBuilds = 0
         localTypeAliasFileScans = 0
         enclosingImportBuilds = 0
         topLevelConstBuilds = 0

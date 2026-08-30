@@ -82,6 +82,7 @@ class ImportDepScanComplexityTest {
         val eii = EagerIndexCensus.enclosingImportBuilds
         val tlc = EagerIndexCensus.topLevelConstBuilds
         val pns = EagerIndexCensus.programNameSetBuilds
+        val tos = EagerIndexCensus.transformOrderSetBuilds
         EagerIndexCensus.resetCounters()
         try {
             return block()
@@ -90,6 +91,7 @@ class ImportDepScanComplexityTest {
             EagerIndexCensus.enclosingImportBuilds = eii
             EagerIndexCensus.topLevelConstBuilds = tlc
             EagerIndexCensus.programNameSetBuilds = pns
+            EagerIndexCensus.transformOrderSetBuilds = tos
         }
     }
 
@@ -172,5 +174,30 @@ class ImportDepScanComplexityTest {
         val order = result.jsOutputs.map { it.first.substringAfterLast('/') }
         // Declared d, c, b, a — emitted a, b, c, d, because each import is an edge.
         assert(order == listOf("a.js", "b.js", "c.js", "d.js"))
+    }
+
+    /**
+     * (INC.59) The SAME defect one subsystem over, and the third instance found in one
+     * session: `parsedSourceFiles.filter { it.key !in transformOrder.toSet() }` built an
+     * N-element set once per entry of an N-entry map, on every build INCLUDING
+     * `--noEmit`, which emits nothing at all. `FrontEnd.POST_EMITPREP` read 6.8-8.2 ms
+     * at 601 files and 158.5-175.3 at 2401 — 21x for 4x the files — against 1.8-2.8 ms
+     * after the hoist, which took the whole post-checker region from 166-189 to 8.6-12.6.
+     */
+    @Test
+    fun `the emit-order set is built ONCE per compile - at 10 files and at 100`() {
+        val small = withCensus {
+            compile(chain(10))
+            EagerIndexCensus.transformOrderSetBuilds
+        }
+        val large = withCensus {
+            val result = compile(chain(100))
+            assert(result.sourceEchoes.size == 100)
+            EagerIndexCensus.transformOrderSetBuilds
+        }
+        // Before (INC.59) this was one set per program FILE: 10 against 100.
+        assert(small == 1)
+        assert(large == 1)
+        assert(large == small)
     }
 }

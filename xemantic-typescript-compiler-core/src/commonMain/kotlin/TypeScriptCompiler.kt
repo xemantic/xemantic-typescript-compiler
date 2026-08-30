@@ -1572,9 +1572,18 @@ class TypeScriptCompiler {
         val transformOrder = if (options.outFile != null && !options.noResolve) {
             topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
         } else tsFileNames
+        // (INC.59) `transformOrder.toSet()` was written INSIDE the filter's lambda, so
+        // an N-element set was rebuilt once per entry of `parsedSourceFiles` — O(files^2)
+        // string hashes, on every build including `--noEmit`. Measured on generated
+        // many-small-file projects, `FrontEnd.POST_EMITPREP` read 6.8-8.2 ms at 601
+        // files and 158.5-175.3 at 2401: 21x for 4x the files. Hoisting is exactly
+        // equivalent — the predicate is a pure membership test and `filter` preserves
+        // the map's own order either way.
+        val transformOrderSet = transformOrder.toSet()
+        EagerIndexCensus.transformOrderSetBuilds++
         val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
             parsedSourceFiles[name]?.let { name to it }
-        } + parsedSourceFiles.filter { it.key !in transformOrder.toSet() }.map { it.toPair() }
+        } + parsedSourceFiles.filter { it.key !in transformOrderSet }.map { it.toPair() }
 
         cpcTransformAndEmit(
             options = options,
