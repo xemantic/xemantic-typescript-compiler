@@ -516,6 +516,10 @@ class ProjectCompiler(private val vfs: Vfs) {
         val ampBase: Long = 0, val ampSink: Long = 0,
         /** (WARM.19): whether [preParsed] came from [CrawlParseCache] rather than a parse. */
         val cacheHit: Boolean = false,
+        /** (INC.64): whether this file was handed to [Dispatchers.Default] for a parse.
+         *  Carried back rather than counted in place for [readNanos]'s reason — the
+         *  fold is single-threaded and a `++` from the workers would race. */
+        val parseDispatched: Boolean = false,
     ) {
         val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
 
@@ -641,13 +645,26 @@ class ProjectCompiler(private val vfs: Vfs) {
                     var ampBase = 0L
                     var ampSink = 0L
                     var cacheHit = false
+                    var parseDispatched = false
                     val preParsed =
                         if (content == null) null
-                        else withContext(Dispatchers.Default) {
+                        else {
                             // (WARM.19): the cross-request parse cache. `lookup`
                             // is READ-ONLY, which is what makes it safe to call
                             // from these concurrent workers; the matching
                             // `store` runs in the single-threaded fold below.
+                            //
+                            // (INC.64): the flags and the lookup run HERE, on the
+                            // thread the read left us on, and only a MISS hops to
+                            // [Dispatchers.Default]. A hop is a thread handoff, and
+                            // on a warm incremental build EVERY file is a cache hit,
+                            // so the unconditional hop was 2 x files handoffs to
+                            // schedule ~1 us of map probe: measured over these 2,401
+                            // files, the shipped two-hop shape is 32.1 ms against
+                            // 18.5 for one hop and 14.4 for a plain sequential read.
+                            // The COLD crawl is untouched — a miss still parses off
+                            // the IO dispatcher, which is the whole point of the hop
+                            // (docs/ARCHITECTURE-RETHINK.md § 4).
                             val flags = computeParserFlags(path, content, options)
                             val cached =
                                 if (path.endsWith(".json")) null
@@ -656,7 +673,10 @@ class ProjectCompiler(private val vfs: Vfs) {
                                 cacheHit = true
                                 cached
                             } else {
-                                parseForCrawl(path, content, options, flags)
+                                parseDispatched = true
+                                withContext(Dispatchers.Default) {
+                                    parseForCrawl(path, content, options, flags)
+                                }
                             }
                             if (pp != null) {
                                 ampBase = pp.sourceFile.statements.size.toLong()
@@ -664,15 +684,26 @@ class ProjectCompiler(private val vfs: Vfs) {
                                 // cache: it must price a real parse, on the
                                 // cached binary too, which is what makes the
                                 // before/after crawl row a controlled comparison.
-                                repeat(FrontEnd.parseAmp) {
-                                    ampSink += parseForCrawl(path, content, options, flags)
-                                        ?.sourceFile?.statements?.size?.toLong() ?: 0L
+                                // It stays on [Dispatchers.Default] because it IS a
+                                // real parse — and it is off (`parseAmp == 0`) in
+                                // every production build, so the hop it needs is not
+                                // one the shipped path pays.
+                                if (FrontEnd.parseAmp > 0) withContext(Dispatchers.Default) {
+                                    repeat(FrontEnd.parseAmp) {
+                                        ampSink += parseForCrawl(path, content, options, flags)
+                                            ?.sourceFile?.statements?.size?.toLong() ?: 0L
+                                    }
                                 }
                             }
                             pp
                         }
                     val t2 = FrontEnd.t()
-                    emit(CrawledFile(path, content, preParsed, t1 - t0, t2 - t1, ampBase, ampSink, cacheHit))
+                    emit(
+                        CrawledFile(
+                            path, content, preParsed, t1 - t0, t2 - t1,
+                            ampBase, ampSink, cacheHit, parseDispatched,
+                        )
+                    )
                 }
             }
             .toList()
@@ -687,6 +718,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             if (f.content != null && !f.path.endsWith(".json")) {
                 if (f.cacheHit) CrawlParseCache.hits++ else CrawlParseCache.misses++
             }
+            if (f.parseDispatched) CrawlParseCache.parseDispatches++
         }
         if (FrontEnd.mode == FrontEnd.ON) {
             for (f in byPath) {

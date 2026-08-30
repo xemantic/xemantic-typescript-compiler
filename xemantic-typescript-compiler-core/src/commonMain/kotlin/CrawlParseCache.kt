@@ -110,6 +110,21 @@ internal object CrawlParseCache {
     var hits: Long = 0
     var misses: Long = 0
 
+    /**
+     * (INC.64) census — crawled files that were handed to [Dispatchers.Default] for a
+     * PARSE, as opposed to answered from this cache on the thread the read left them on.
+     *
+     * It exists because the claim it pins is a COMPLEXITY one and only a count can state
+     * one: a warm incremental build must dispatch `misses` times, not `files` times. The
+     * shipped crawl used to hop unconditionally, which on an application-shaped project
+     * is 2 x files thread handoffs to schedule a ~1 us map probe.
+     *
+     * Written ONLY from the single-threaded fold in `readAndScanBatch`, exactly like
+     * [hits]/[misses] — a `++` from the concurrent workers is round 825's data race with
+     * no exception to find it by.
+     */
+    var parseDispatches: Long = 0
+
     /** How many paths are held. Bounded by the number of distinct files crawled. */
     val size: Int get() = entries.size
 
@@ -159,6 +174,7 @@ internal object CrawlParseCache {
         entries.clear()
         hits = 0
         misses = 0
+        parseDispatches = 0
     }
 }
 
