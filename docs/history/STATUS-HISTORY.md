@@ -1,5 +1,36 @@
 
 
+**(INC.55) — A HOST CAN NOW CANCEL A BUILD, WHICH IS THE CAPABILITY AN IntelliJ PLUGIN
+NEEDS AND NO LATENCY WORK CAN REPLACE (2026-08-30).** Asked to judge the language service
+as "the best support one could get inside an IntelliJ platform IDE" rather than as
+"incremental", the top of the list changes: there was **ZERO cancellation** anywhere in
+the compiler or the `Project` API. A build runs on the compiler's own deep-stack thread and
+`Project` JOINS it, so the caller is blocked for its whole duration and cannot abandon it
+from outside — while `DaemonCodeAnalyzer` restarts analysis on every write action. Without
+this an editor must either block a pooled thread producing an answer it has already
+discarded, delaying the next one behind it, or not run the analysis in a highlighting pass
+at all. `Project.cancellation` takes a `CancellationSignal` (on the platform,
+`{ indicator.isCanceled }`), polled at every `pass("…")` boundary AND every **1024 spine
+nodes** — the second is what keeps a large buffer's walk (1.65 s on tsc's own `checker.ts`)
+interruptible, and the hot loop's own comment refuses interleaved work, so the poll sits
+behind a counter (837 volatile reads for 856,962 nodes). **IT IS AN `Error` DELIBERATELY**:
+the checker, crawl and `Vfs` carry defensive `catch (Exception)` guards, and a cancellation
+they could swallow would let the build continue with a missing file — silently wrong, worse
+than not cancelling; `Error` is safe because the 2026-07-04 sweep left no `catch (Throwable)`
+anywhere, which is pinned rather than trusted to a KDoc. **STATE SAFETY IS BY CONSTRUCTION**
+— every cache assignment in `Project` happens after `build` returns, so a throw skips all of
+them — pinned both at the first poll and MID-flight. **THE PIN THAT ALMOST DIDN'T
+DISCRIMINATE**: the spine-poll test first compared a 3-file fixture with a 1-file one and
+FAILED, because the `pass()` poll count is not constant across programs (405 vs 418) and
+swamped the spine's ~12; holding file count and shape fixed and varying only SIZE reads ~417
+against ~526. **GATES.** Suite **16,496 / 0 / 3** (+7, exactly the new pins); `cost_gate.py`
+exit 0 with **`spine.nodes` UNCHANGED at 856,962** and `output.errors` flat at 46 — the poll
+is inert when unarmed; `huge_methods.py --fail-over 0` clean. Also documented: the threading
+rule is a CONFINEMENT rule (Symbol/Type ids are thread-local, so two threads on one
+`Project` corrupt an id space with no diagnostic), and the GraalVM/AOT/CRaC artifact levers
+do NOT apply to a plugin running in-process on the IDE's own JVM.
+
+
 **(INC.53) — THE INCREMENTAL FLOOR'S LARGEST BLOCK WAS NEVER IN A PASS, AND ~950 ROUNDS OF
 INSTRUMENTS COULD NOT SEE IT (2026-08-29).** The floor is what an editor pays per keystroke,
 and 32-44 ms of its 63-72 ms is "checker construct + getDiagnostics". Split for the first

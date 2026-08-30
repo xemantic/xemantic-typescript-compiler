@@ -20,6 +20,81 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.61) — the arc had been measuring the cheap `lib`, and the floor's largest pass is 45x smaller now
+
+**FOUND BY RE-READING THE FLOOR AFTER (INC.60), WHICH IS (INC.59)'s OWN LESSON APPLIED
+FOR THE SECOND TIME.** With `config` fixed the 4,801-file floor re-ranked to: checker
+construct **137 ms (38.8%)**, crawl WALL 126 (35.5%), `extractRelativeImports` 29,
+post-checker 26, config 20, bind 14 — and **123 of the checker's 137 ms is the init-block
+pass dispatch**, whose per-pass table no round had read on this shape since (INC.58)
+proved the tsc-profile ranking wrong by 600x. Read: `init:buildPerFileScopes` **28.2 ms**,
+the largest pass, twice the next one.
+
+**THEN THE FIXTURE ITSELF TURNED OUT TO BE THE UNDERSTATEMENT, AND THAT IS THE REUSABLE
+HALF.** `buildPerFileScopes` copies the whole SHARED half — lib globals, script-file
+locals, global augmentations — into a fresh table PER FILE, i.e. `files x libGlobals`
+insertions. The generated fixture pins `"lib": ["es2020"]` (~185 names). An ordinary
+project's `lib` is unset, which means **`dom`** (~2,242). Copying the fixture and changing
+**that one line and nothing else**:
+
+| | `lib: es2020` | `lib: es2020 + dom` |
+|---|---|---|
+| `init:buildPerFileScopes` | 13.5 ms | **175.6 ms** |
+| share of the floor pass table | 25% | **70%** |
+| floor (plain arm median) | 216 ms | 385 ms |
+
+**So every floor figure in this arc was taken on the cheap case.** (INC.57)'s law said the
+profile's FILE SHAPE can make a cost inexpressible; this is the same law on the
+**compilerOptions**, which CLAUDE.md had already recorded once for a library baseline
+((CHK.49): knip's `lib: ["esnext"]`) without anyone drawing the general conclusion.
+
+**THE FIX IS AN OVERLAY, NOT A CACHE — THERE IS NOTHING TO INVALIDATE.** The base is the
+same object for every file, so it is built ONCE and `LayeredSymbolTable` answers
+`own[k] ?: base[k]`. **The ORDER is the load-bearing half and it is not obvious**: three
+consumers iterate a per-file scope, and a `LinkedHashMap` keeps a key's ORIGINAL position
+when a later `put` merely overwrites its value — so a shadowing local must appear at the
+BASE's position carrying the OWN value, **not appended**. Reproducing that entry for entry
+is what makes the overlay a drop-in under round 776's order law. Mutators THROW: nothing
+writes to a per-file scope, and a view that silently accepted a write would drop it, with
+the symptom surfacing far away as a name resolving to a foreign module's local.
+
+**RESULTS (dom arm, 2,401 files, both arms this session):**
+
+| | before | after |
+|---|---|---|
+| `init:buildPerFileScopes` | 175.64 ms | **3.90** (45x) |
+| init-block pass dispatch | 334 | **42** (8x) |
+| checker construct | 393 | **83** (4.7x) |
+| floor phase total | 503 | **200** (2.5x) |
+| floor median, PLAIN arm | 385 | **202 ms** (1.9x) |
+
+**The plain-arm median moving is worth its own line.** (INC.60)'s 16 ms sat inside the
++-40% single-draw band and the wall read the WRONG SIGN; this one is far outside it, so
+here the wall corroborates the row instead of contradicting it. Two instruments agreeing
+is the difference between a measured win and a plausible one.
+
+**GATES.** Suite **16,523 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0 with
+every counter unchanged; `huge_methods.py --fail-over 0` clean; **8-profile grid
+`added=0 removed=0` on all eight** — run deliberately, because this is the checker's
+name-resolution substrate.
+
+**ABLATION.** c1 makes the overlay APPEND a shadowed key instead of keeping the base's
+position — the mistake an implementation makes by accident. **Exactly one pin reddens,
+`iteration order is entry-for-entry the copy's`**, and the lookup pins correctly stay
+green because c1 changes no answer. Worth stating plainly: **the 16,523-test corpus would
+not have caught c1 either**, since order reaches only cost counters and suggestion
+ordering — which is precisely why the pin compares against the reference CONSTRUCTION
+rather than a hand-written expectation.
+
+**NAMED SUCCESSORS.** The floor's ranking has moved again, so re-read it rather than
+inherit this list: at 2,401 dom-lib files the phases are now crawl WALL **55 ms (27%)**
+((INC.56), still the only row costing a soundness promise), checker construct 83 (of
+which the pass table 42 and the FIELD initializers **41** — (INC.53)'s territory, and now
+half of it), config 23, `extractRelativeImports` 16, post-checker 14.
+**And re-take any of them on a `dom` fixture**: `build/bench/many-small-2400-dom` exists
+for exactly that, and the two arms of this round are why it must be the default shape for
+floor work from here.
+
 ### Round (CFG.1) — a project that has ever been built reads its own output back in, and the corpus cannot contain a directory
 
 **FOUND BY (INC.60) ON THE WAY PAST, WHICH IS THE ROUTE WORTH KEEPING.** Reading
@@ -4218,6 +4293,32 @@ RHS, and the merged-member CONTRADICTION direction.
   finds it without reading 400 passes is the same one: two program sizes, and a per-pass
   table divided by file count. A pass that is honestly O(program) reads a CONSTANT
   µs/file; the quadratic one reads a doubling.
+
+- [x] **(INC.61) LANDED 2026-08-30 — `buildPerFileScopes` copied the whole SHARED half
+  (lib globals + script locals + global augmentations) into a fresh table PER FILE, i.e.
+  `files x libGlobals` insertions. **The fixture was hiding it**: with `lib: ["es2020"]`
+  the pass is 13.5 ms and with `dom` added — which is what an unset `lib` means — it is
+  **175.6 ms on the same 2,401 files**, 70% of the floor pass table. `LayeredSymbolTable`
+  overlays the file's own locals on a base built once, reproducing the copy's iteration
+  ORDER entry for entry (a `LinkedHashMap` keeps a shadowed key's ORIGINAL position, so a
+  shadowing local may not be appended — the one thing an implementation gets wrong, and
+  the only pin ablation c1 reddens). Measured: pass **175.6 -> 3.9 ms**, init dispatch
+  334 -> 42, checker construct 393 -> 83, floor phase total 503 -> 200, and the PLAIN
+  floor median 385 -> 202 ms.**
+
+- [ ] **(INC.62) RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS —
+  AND TREAT THAT AS THE DEFAULT SHAPE FROM HERE (2026-08-30, (INC.61)).** Every floor
+  figure in this arc was taken on a fixture pinning `"lib": ["es2020"]`, and (INC.61)
+  measured the SAME program's largest pass at **13x** with `dom` added. The ranking at
+  2,401 dom-lib files after (INC.61) is: crawl WALL **55 ms (27%)** ((INC.56), the only
+  row costing a soundness promise), checker construct 83 — **of which the pass table 42
+  and the FIELD initializers 41**, so (INC.53)'s territory is now HALF of it and was last
+  priced at ~10 ms on the tsc profile — config 23, `extractRelativeImports` 16,
+  post-checker 14. `build/bench/many-small-2400-dom` exists for this; generate the other
+  sizes the same way (copy the tsconfig, add `dom` to `lib`). **The instrument is
+  unchanged and it is the one that has now found five defects: divide a row by its own
+  population, at two program sizes, and refuse an implied per-op cost that is physically
+  impossible.**
 
 - [ ] **(CHK.74) A CROSS-FILE DUPLICATE GLOBAL IS SILENT — `declare const VERSION: string;`
   IN TWO SCRIPT FILES IS **TS2451 TWICE** IN tsgo 7.0.2 AND NOTHING HERE (2026-08-30,

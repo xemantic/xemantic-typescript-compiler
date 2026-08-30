@@ -1,5 +1,37 @@
 # Status
 
+**(INC.61) — THE WHOLE (INC.\*) ARC HAD BEEN MEASURING THE CHEAP `lib`, AND THE FLOOR'S
+LARGEST PASS IS NOW 45x SMALLER (2026-08-30).** Re-reading the floor after (INC.60) —
+(INC.59)'s own lesson, applied a second time — put **123 of the checker's 137 ms in the
+init-block pass dispatch**, whose per-pass table no round had read on the many-small shape
+since (INC.58) proved the tsc-profile ranking wrong by 600x. Its largest row was
+`init:buildPerFileScopes`, which copies the SHARED half of a file's scope — lib globals,
+script-file locals, global augmentations — into a fresh table **per file**, i.e.
+`files x libGlobals` insertions. **THEN THE FIXTURE ITSELF TURNED OUT TO BE THE
+UNDERSTATEMENT:** it pins `"lib": ["es2020"]` (~185 names) where an ordinary project's
+unset `lib` means **`dom`** (~2,242). Copying the fixture and changing **that one line and
+nothing else** takes the pass from **13.5 ms to 175.6 ms** on the same 2,401 files — 70%
+of the whole floor pass table. So (INC.57)'s law that a profile's FILE SHAPE can make a
+cost inexpressible holds equally for its **compilerOptions**, which CLAUDE.md had recorded
+once for a library baseline ((CHK.49)) without the general conclusion being drawn.
+**THE FIX IS AN OVERLAY, NOT A CACHE** — the base is the same object for every file, so it
+is built once and `LayeredSymbolTable` answers `own[k] ?: base[k]`. **Its ORDER is the
+load-bearing half**: three consumers iterate a per-file scope, and a `LinkedHashMap` keeps
+a shadowed key's ORIGINAL position, so a shadowing local must appear there carrying the
+OWN value rather than being appended — the one thing an implementation gets wrong, and
+the only pin ablation c1 reddens (**the 16,523-test corpus would not have caught it
+either**, since order reaches only cost counters and suggestion ordering). Mutators throw
+rather than silently dropping a write. **MEASURED (dom arm, 2,401 files, both arms this
+session): the pass 175.64 -> 3.90 ms (45x), init dispatch 334 -> 42, checker construct
+393 -> 83, floor phase total 503 -> 200, and the PLAIN floor median 385 -> 202 ms** —
+worth its own line, because (INC.60)'s 16 ms sat inside the ±40% single-draw band with the
+WRONG SIGN and this one is far outside it, so here the wall corroborates the row instead
+of contradicting it. **GATES.** Suite **16,523 / 0 / 3** (+4, exactly the new pins);
+`cost_gate.py` exit 0 with every counter unchanged; `huge_methods.py --fail-over 0` clean;
+8-profile grid `added=0 removed=0` on all eight, run deliberately because this is the
+checker's name-resolution substrate. **SUCCESSOR (INC.62): re-take the floor on a `dom`
+fixture before opening any of its rows, and treat that as the default shape from here.**
+
 **(CFG.1) — A PROJECT THAT HAS EVER BEEN BUILT READ ITS OWN OUTPUT BACK IN, AND THE
 CORPUS CANNOT CONTAIN A DIRECTORY (2026-08-30, found by (INC.60) on the way past).**
 tsc's rule for an ABSENT `exclude` is `excludeSpecs = filter([outDir, declarationDir],
@@ -164,33 +196,3 @@ and the only one of the five costing a soundness promise. **SUCCESSOR (INC.58):*
 601 / 1201 / 2401 files, ~73% of the floor. **GATES.** Suite **16,499 / 0 / 3** (+3, exactly
 the new pins); `cost_gate.py` exit 0, `output.errors` 46, `spine.nodes` 856,962;
 `huge_methods.py --fail-over 0` clean.
-
-**(INC.55) — A HOST CAN NOW CANCEL A BUILD, WHICH IS THE CAPABILITY AN IntelliJ PLUGIN
-NEEDS AND NO LATENCY WORK CAN REPLACE (2026-08-30).** Asked to judge the language service
-as "the best support one could get inside an IntelliJ platform IDE" rather than as
-"incremental", the top of the list changes: there was **ZERO cancellation** anywhere in
-the compiler or the `Project` API. A build runs on the compiler's own deep-stack thread and
-`Project` JOINS it, so the caller is blocked for its whole duration and cannot abandon it
-from outside — while `DaemonCodeAnalyzer` restarts analysis on every write action. Without
-this an editor must either block a pooled thread producing an answer it has already
-discarded, delaying the next one behind it, or not run the analysis in a highlighting pass
-at all. `Project.cancellation` takes a `CancellationSignal` (on the platform,
-`{ indicator.isCanceled }`), polled at every `pass("…")` boundary AND every **1024 spine
-nodes** — the second is what keeps a large buffer's walk (1.65 s on tsc's own `checker.ts`)
-interruptible, and the hot loop's own comment refuses interleaved work, so the poll sits
-behind a counter (837 volatile reads for 856,962 nodes). **IT IS AN `Error` DELIBERATELY**:
-the checker, crawl and `Vfs` carry defensive `catch (Exception)` guards, and a cancellation
-they could swallow would let the build continue with a missing file — silently wrong, worse
-than not cancelling; `Error` is safe because the 2026-07-04 sweep left no `catch (Throwable)`
-anywhere, which is pinned rather than trusted to a KDoc. **STATE SAFETY IS BY CONSTRUCTION**
-— every cache assignment in `Project` happens after `build` returns, so a throw skips all of
-them — pinned both at the first poll and MID-flight. **THE PIN THAT ALMOST DIDN'T
-DISCRIMINATE**: the spine-poll test first compared a 3-file fixture with a 1-file one and
-FAILED, because the `pass()` poll count is not constant across programs (405 vs 418) and
-swamped the spine's ~12; holding file count and shape fixed and varying only SIZE reads ~417
-against ~526. **GATES.** Suite **16,496 / 0 / 3** (+7, exactly the new pins); `cost_gate.py`
-exit 0 with **`spine.nodes` UNCHANGED at 856,962** and `output.errors` flat at 46 — the poll
-is inert when unarmed; `huge_methods.py --fail-over 0` clean. Also documented: the threading
-rule is a CONFINEMENT rule (Symbol/Type ids are thread-local, so two threads on one
-`Project` corrupt an id space with no diagnostic), and the GraalVM/AOT/CRaC artifact levers
-do NOT apply to a plugin running in-process on the IDE's own JVM.
