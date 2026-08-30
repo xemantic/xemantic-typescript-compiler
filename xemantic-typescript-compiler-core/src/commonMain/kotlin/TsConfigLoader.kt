@@ -61,8 +61,40 @@ data class LoadedTsConfig(
  */
 class TsConfigLoader(private val vfs: Vfs) {
 
-    /** Default TypeScript excludes when `exclude` is unspecified. */
+    /**
+     * Default TypeScript excludes when `exclude` is unspecified.
+     *
+     * (CFG.1) The package folders are what tsc prunes from every WILDCARD match
+     * regardless of `exclude` (`commonPackageFolders`, and
+     * [ProjectCompiler]'s own walk prunes the same three by basename), so listing
+     * them here is belt-and-braces rather than the rule. **The rule tsc actually
+     * has for an ABSENT `exclude` is `[outDir, declarationDir]`**
+     * (`commandLineParser.ts`: `excludeOfRaw === "no-prop"` =>
+     * `excludeSpecs = filter([outDir, declarationDir], d => !!d)`), and see
+     * [defaultExcludeFor] for why that half is not optional.
+     */
     private val defaultExclude = listOf("node_modules", "bower_components", "jspm_packages")
+
+    /**
+     * (CFG.1) The excludes for a config that specifies none: the package folders,
+     * plus **the directories this project EMITS INTO**.
+     *
+     * Without the second half a project that has ever run a declaration-emitting
+     * build reads its own output back in as ROOT FILES — `dist/**` matches the
+     * default `**/*` include, and a `.d.ts` is a root extension — which costs
+     * duplicate declarations tsc does not report and, on every keystroke, the whole
+     * emitted tree crawled, read, parsed, bound and checked. Measured on a
+     * two-file project: tsgo 7.0.2's program is 1 file and ours was 2.
+     *
+     * An EXPLICIT `exclude` REPLACES this, exactly as in tsc — it is not additive,
+     * so a project that names its own excludes and then emits into an included
+     * directory gets tsc's behaviour, warts and all.
+     */
+    private fun defaultExcludeFor(options: CompilerOptions, configDir: String): List<String> =
+        defaultExclude + listOfNotNull(
+            options.outDir,
+            options.declarationDir?.let { PathUtil.join(configDir, it) },
+        )
 
     /** Default include when neither `include` nor `files` is present: everything. */
     private val defaultInclude = listOf("**/*")
@@ -107,7 +139,7 @@ class TsConfigLoader(private val vfs: Vfs) {
         val include = (merged.include ?: emptyList()).ifEmpty {
             if (merged.files != null) emptyList() else defaultInclude
         }
-        val exclude = merged.exclude ?: defaultExclude
+        val exclude = merged.exclude ?: defaultExcludeFor(options, configDir)
         val files = (merged.files ?: emptyList()).map { PathUtil.join(configDir, it) }
         val customConditions = co["customConditions"]?.asStringList ?: emptyList()
 
