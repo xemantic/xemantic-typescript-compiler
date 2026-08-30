@@ -96,11 +96,9 @@ for layer in range(layers):
         with open(os.path.join(d, name + ".ts"), "w") as f:
             f.write("\n".join(lines) + "\n")
 
-# One deliberate error, so the FULL build is not silent.
-with open(os.path.join(src, "faulty.ts"), "w") as f:
-    f.write('import { m00_0Value } from "./layer00/m0_0";\n\n'
-            'export const broken: number = m00_0Value.id;\n')
-# fix the import path/name
+# One deliberate error, so the FULL build is not silent: FloorDecompositionMain
+# REFUSES a project whose full build reports nothing, because then the floor
+# build's own zero would be no evidence that the checker had been narrowed.
 with open(os.path.join(src, "faulty.ts"), "w") as f:
     f.write('import { m0_0Value } from "./layer00/m0_0";\n\n'
             'export const broken: number = m0_0Value.id;\n')
