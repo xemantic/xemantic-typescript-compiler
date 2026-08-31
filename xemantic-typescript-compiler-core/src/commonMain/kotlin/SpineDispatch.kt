@@ -4754,6 +4754,21 @@ object FrontEnd {
     var globRoots: Long = 0
 
     /**
+     * (INC.78) census — how many of those candidate-against-pattern decisions had to
+     * RUN THE REGEX, i.e. how many [GlobMatcher.matches] calls reached
+     * [GlobMatcher.regex] instead of answering from the pattern's literal head and
+     * tail.
+     *
+     * It is the receipt for the fast path, and it is a COUNT rather than a row for
+     * the reason this arc keeps re-learning: the row it decomposes is ~2-8 ms whose
+     * per-process spread is itself several milliseconds, while this is deterministic,
+     * comparable across machines, and moves by `candidates x patterns` exactly. A
+     * `-project` pin asserts it at two program sizes, which is the only way to state
+     * a claim about a per-candidate cost.
+     */
+    var globRegexEvals: Long = 0
+
+    /**
      * (INC.68) census — how often [PathUtil.normalize] is asked, and how often the
      * answer is the argument itself.
      *
@@ -5306,7 +5321,7 @@ object FrontEnd {
         firstAt = LongArray(N)
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
-        globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0
+        globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0; globRegexEvals = 0
         pathNormalizeCalls = 0; pathNormalizeFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
@@ -5581,7 +5596,7 @@ object FrontEnd {
         // changed, which is the whole claim.
         appendLine(
             "root glob: $globDirs dirs, $globEntries entries, $globCandidates candidates, " +
-                "$globRoots roots"
+                "$globRoots roots, $globRegexEvals regex evaluations"
         )
         appendLine(
             "path normalize: $pathNormalizeCalls calls, $pathNormalizeFast already normalized"

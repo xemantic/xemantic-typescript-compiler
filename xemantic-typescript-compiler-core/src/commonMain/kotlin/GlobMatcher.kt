@@ -90,17 +90,38 @@ class GlobMatcher private constructor(
     /** True when [path] is accepted by this pattern. Equivalent to `regex.matches(path)`. */
     fun matches(path: String): Boolean {
         if (!path.startsWith(literalPrefix)) return false
-        val suffixes = fastSuffixes ?: return regex.matches(path)
+        val suffixes = fastSuffixes ?: return runRegex(path)
+        // `(?:[^/]+/)*[^/]*` matches any remainder with NO EMPTY SEGMENT in it, which is
+        // the one way a head-and-tail test can accept what the pattern rejects. Since
+        // [literalPrefix] ends with a slash (`fastTailOf` requires it), "the remainder
+        // has an empty segment" is exactly "the path doubles that slash or a later one",
+        // and the oracle answers the case rather than a second rule guessing at it. A
+        // normalized path never gets here; an unnormalized one is answered correctly
+        // instead of silently, which is what (CFG.1) asks for.
+        if (path.indexOf("//", literalPrefix.length - 1) >= 0) return runRegex(path)
         val remaining = path.length - literalPrefix.length
         for (i in suffixes.indices) {
             val suffix = suffixes[i]
-            // The length guard keeps head and tail DISJOINT: without it a path shorter
-            // than the two together could satisfy both by overlapping in the middle,
-            // which the regex — where the head and the tail are consecutive — never
-            // accepts.
+            // A REDUNDANT GUARD, recorded rather than claimed (round 927): no path can
+            // satisfy both ends while overlapping in the middle, because the overlap
+            // would put [literalPrefix]'s own trailing slash inside a slash-free tail.
+            // It is here because that proof rests on BOTH of `fastTailOf`'s shape rules,
+            // and a future relaxation of either would make it load-bearing silently.
             if (suffix.length <= remaining && path.endsWith(suffix)) return true
         }
         return false
+    }
+
+    /**
+     * The oracle, counted. `FrontEnd.globRegexEvals` is this fast path's receipt — a
+     * deterministic count that moves by `candidates x patterns`, where the millisecond
+     * row it decomposes has a per-process spread of its own several times the effect.
+     * It is written from the glob walk's single caller thread, like the sibling
+     * `glob*` counters beside it.
+     */
+    private fun runRegex(path: String): Boolean {
+        FrontEnd.globRegexEvals++
+        return regex.matches(path)
     }
 
     companion object {
@@ -155,6 +176,11 @@ class GlobMatcher private constructor(
         /**
          * The literal tail of a `<literal> / ** / *<tail>` pattern, or null when
          * [p] is not of that shape.
+         *
+         * The head must end at a directory boundary, which is what makes the empty-segment
+         * test in [matches] exact: with a head ending mid-segment, `/p/src/x** / *` would
+         * accept `/p/src/x/a.ts`, whose remainder starts with a slash the pattern has no
+         * way to match.
          *
          * The shape is required EXACTLY — `**` immediately followed by a slash and a
          * bare `*`, and then

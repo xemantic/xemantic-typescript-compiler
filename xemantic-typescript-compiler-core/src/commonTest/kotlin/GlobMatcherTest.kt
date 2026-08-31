@@ -68,6 +68,7 @@ class GlobMatcherTest {
         "/p/src/a*b/**/*",
         "/p/src/one.ts",
         "/p/a+b/**/*",
+        "/p/src/x**/*",
     )
 
     /**
@@ -102,6 +103,10 @@ class GlobMatcherTest {
         "/p/a+b/a.ts",
         "/p/aXb/a.ts",
         "/px/src/a.ts",
+        "/p/src//a.ts",
+        "/p/src/a//b.ts",
+        "/p/src/xa.ts",
+        "/p/src/x/a.ts",
     )
 
     @Test
@@ -167,19 +172,47 @@ class GlobMatcherTest {
     }
 
     /**
-     * The head and the tail must be DISJOINT: without the length guard a path shorter
-     * than the two together satisfies both by overlapping, which the regex — where the
-     * head and the tail are consecutive — never accepts.
+     * The shortest path the head-and-tail shape can accept spells both and nothing
+     * else, and one character less spells only the head — the boundary the length
+     * guard is written for. The guard itself is REDUNDANT and is recorded as such in
+     * [GlobMatcher.matches] rather than claimed here: no path can satisfy both ends
+     * while overlapping, because the overlap would put the head's own trailing slash
+     * inside a slash-free tail. This pin is the VALUE at that boundary.
      */
     @Test
-    fun `the head and the tail may not overlap`() {
+    fun `the shortest accepted path spells the head and the tail`() {
         val matcher = GlobMatcher.compile("/p/src/**/*.ts", supportedExt)
-        // "/p/src/" is the head and ".ts" the tail; the shortest accepted path spells
-        // both, and one character less spells only the head.
         assert(matcher.matches("/p/src/.ts"))
         assert(!matcher.matches("/p/src/"))
         assert(matcher.matches("/p/src/.ts") == matcher.regex.matches("/p/src/.ts"))
         assert(matcher.matches("/p/src/") == matcher.regex.matches("/p/src/"))
+    }
+
+    /**
+     * An EMPTY SEGMENT is the one remainder `(?:[^/]+/)*[^/]*` cannot match, so it is
+     * the one way a head-and-tail test accepts what the pattern rejects. A normalized
+     * path never has one; this asserts the unnormalized one is answered correctly
+     * rather than silently, which (CFG.1) is the reason for.
+     */
+    @Test
+    fun `a doubled separator is refused exactly as the pattern refuses it`() {
+        val matcher = GlobMatcher.compile("/p/src/**/*", supportedExt)
+        assert(!matcher.matches("/p/src//a.ts"))
+        assert(!matcher.matches("/p/src/a//b.ts"))
+        assert(matcher.matches("/p/src/a/b.ts"))
+    }
+
+    /**
+     * And the rule that makes that test exact: a head ending MID-SEGMENT would leave a
+     * remainder starting with a separator, which is an empty segment the doubled-slash
+     * test cannot see. Such a pattern therefore may not take the shortcut at all.
+     */
+    @Test
+    fun `a wildcard that does not start a segment refuses the fast path`() {
+        val matcher = GlobMatcher.compile("/p/src/x**/*", supportedExt)
+        assert(matcher.fastSuffixes == null)
+        assert(!matcher.matches("/p/src/x/a.ts"))
+        assert(matcher.matches("/p/src/xa.ts"))
     }
 
     /**

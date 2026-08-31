@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler.project
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ProjectCompiler
 import kotlin.test.Test
 
@@ -108,5 +109,53 @@ class ProjectRootFileGlobTest {
         val roots = rootsOf()
         assert("/proj/src/nested/c.spec.ts" !in roots)
         assert("/proj/src/nested/b.ts" in roots)
+    }
+
+    // --- (INC.78) the COST half ------------------------------------------------
+
+    /**
+     * A project of [files] source files under `src`, with an `include` of the shape a
+     * real tsconfig has. Nothing imports anything, so the file count is exact.
+     */
+    private fun sizedVfs(files: Int, include: String): InMemoryVfs {
+        val entries = HashMap<String, String>()
+        entries["/sized/tsconfig.json"] =
+            """{ "compilerOptions": { "target": "es2020", "module": "esnext", "noEmit": true },""" +
+                """ "include": ["$include"] }"""
+        for (i in 0 until files) entries["/sized/src/g$i/f$i.ts"] = "export const v$i = $i;" + "\n"
+        return InMemoryVfs(entries)
+    }
+
+    /** Runs a build over [vfs] and answers how many glob decisions ran a regex. */
+    private fun regexEvalsFor(vfs: InMemoryVfs): Long {
+        FrontEnd.globRegexEvals = 0
+        ProjectCompiler(vfs).build("/sized", noEmit = true)
+        return FrontEnd.globRegexEvals
+    }
+
+    /**
+     * THE COST CLAIM IS A COMPLEXITY ONE, so it is stated at two program sizes — a
+     * single build's number cannot distinguish "the shortcut serves everything" from
+     * "this project happens to be small" ((INC.57)). The pre-(INC.78) binary reads
+     * `candidates x patterns` here, i.e. it DOUBLES with the file count; the shipped
+     * one reads zero at both.
+     */
+    @Test
+    fun `the tsconfig glob shape runs no regex at any program size`() {
+        assert(regexEvalsFor(sizedVfs(20, "src/**/*.ts")) == 0L)
+        assert(regexEvalsFor(sizedVfs(40, "src/**/*.ts")) == 0L)
+    }
+
+    /**
+     * And its positive control, without which the zero above is indistinguishable from
+     * a dead counter: a pattern whose middle is constrained must still run the regex,
+     * once per candidate, and that number must GROW with the program.
+     */
+    @Test
+    fun `a constrained pattern still runs the regex once per candidate`() {
+        val small = regexEvalsFor(sizedVfs(20, "src/*/*.ts"))
+        val large = regexEvalsFor(sizedVfs(40, "src/*/*.ts"))
+        assert(small == 20L)
+        assert(large == 40L)
     }
 }
