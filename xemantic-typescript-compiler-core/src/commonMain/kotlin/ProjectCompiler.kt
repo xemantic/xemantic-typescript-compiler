@@ -637,7 +637,17 @@ class ProjectCompiler(private val vfs: Vfs) {
             .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
                 flow {
                     val t0 = FrontEnd.t()
-                    val content = withContext(pipelineIoDispatcher) { vfs.readText(path) }
+                    // (INC.56) A read that CANNOT BLOCK is not worth a thread handoff.
+                    // The hop below exists so a blocking read cannot starve the
+                    // CPU-sized pool the parses run on; content the Vfs already holds
+                    // in memory — an unsaved editor buffer, or a file an IntelliJ-class
+                    // host has promised is unchanged — costs nothing to hand back, and
+                    // on an application-shaped project the handoff is what a per-file
+                    // read costs. Null is always a legal answer and is what every
+                    // ordinary filesystem gives, so the shipped CLI path is unchanged.
+                    val resident = vfs.readTextIfResident(path)
+                    val content =
+                        resident ?: withContext(pipelineIoDispatcher) { vfs.readText(path) }
                     val t1 = FrontEnd.t()
                     // (WARM.19) round 871 — the amplifier rides INSIDE this span
                     // and on the same dispatcher, so `FrontEnd.CRAWL`'s wall is
@@ -717,6 +727,10 @@ class ProjectCompiler(private val vfs: Vfs) {
         for (f in byPath) {
             val pp = f.preParsed
             if (pp != null) CrawlParseCache.store(f.path, pp)
+            // (INC.56) The ONE point at which a Vfs may retain what this batch read,
+            // for exactly [CrawlParseCache.store]'s reason: the concurrent flow above
+            // is drained by now. Every default implementation ignores it.
+            if (f.content != null) vfs.retainRead(f.path, f.content)
             if (f.content != null && !f.path.endsWith(".json")) {
                 if (f.cacheHit) CrawlParseCache.hits++ else CrawlParseCache.misses++
             }

@@ -82,6 +82,52 @@ interface Vfs {
      */
     fun listEntries(path: String): List<VfsEntry> =
         list(path).map { VfsEntry(it, isDirectory(it)) }
+
+    /**
+     * (INC.56) [path]'s text if answering CANNOT BLOCK — it is already resident in
+     * this Vfs's own memory — or null when the caller must perform a real read.
+     *
+     * The default is null: an ordinary filesystem has nothing resident, and an
+     * implementation that does not override this is unchanged.
+     *
+     * ## What it is for, which is NOT saving the read
+     *
+     * The crawl reads its files on an IO dispatcher so a blocking read cannot starve
+     * the CPU-sized pool the parses run on, and that thread handoff — not the read —
+     * is what a per-file read costs on an application-shaped project: measured over
+     * 2,401 small files, serving EVERY read from memory moved the crawl's wall by
+     * nothing, because 2,401 reads of ~1 KB spread over 16 workers are ~1-2 ms of it.
+     * What the hop costs is (INC.64)'s measurement one hop later. So this exists to
+     * let a caller skip the HANDOFF for content that is already in hand — an unsaved
+     * editor buffer, or a file a host has promised has not changed
+     * ([the `-project` module's overlay][Vfs]).
+     *
+     * ## The contract an implementation must keep
+     *
+     * It must answer exactly what [readText] would answer, or null. Null is always a
+     * legal answer and always safe — the caller then performs the real read — so an
+     * implementation may be as conservative as it likes. It must NOT record, mutate or
+     * lazily populate anything: the crawl calls this from its concurrent workers
+     * (round 825), which is also why it may not be used to serve a `.json`, whose read
+     * the overlay records for (INC.48)'s snapshot.
+     */
+    fun readTextIfResident(path: String): String? = null
+
+    /**
+     * (INC.56) Offers [text] as what [readTextIfResident] may answer for [path] from
+     * now on. Default: a no-op.
+     *
+     * Called from the crawl's SINGLE-THREADED fold, after the concurrent flow that
+     * produced [text] has been fully drained — the same point, and for the same
+     * reason, as `CrawlParseCache.store` (round 825: a plain `HashMap` write from N
+     * workers is a data race with no exception to find it by). An implementation that
+     * retains anything here must therefore mutate ONLY here, so that its
+     * [readTextIfResident] and [readText] stay read-only.
+     *
+     * An implementation is free to ignore the offer, and every one that has not been
+     * given a host's promise does.
+     */
+    fun retainRead(path: String, text: String) {}
 }
 
 /**

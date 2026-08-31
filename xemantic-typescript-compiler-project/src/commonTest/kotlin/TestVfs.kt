@@ -75,6 +75,14 @@ internal class InMemoryVfs(initial: Map<String, String> = emptyMap()) : Vfs {
         files[PathUtil.normalize(path)] = content
     }
 
+    /**
+     * Removes [path] from the backing store, as a file deleted behind the compiler's
+     * back — the half of "the filesystem moved" that [writeText] cannot express.
+     */
+    fun delete(path: String) {
+        files.remove(PathUtil.normalize(path))
+    }
+
     override fun list(path: String): List<String> {
         val dir = PathUtil.normalize(path)
         val prefix = if (dir == "/") "/" else "$dir/"

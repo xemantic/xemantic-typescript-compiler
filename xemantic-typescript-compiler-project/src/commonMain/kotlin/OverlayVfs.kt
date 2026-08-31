@@ -97,19 +97,123 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
     fun put(path: String, text: String) {
         contents[path] = text
         deleted.remove(path)
+        // (INC.56) An overlaid path is decided by [contents], so a retained entry for it
+        // is dead weight — and, if the overlay were ever dropped, a stale answer.
+        retained.remove(path)
     }
 
     /** Shadows [path] as absent, discarding any overlay text it had. */
     fun remove(path: String) {
         contents.remove(path)
         deleted.add(path)
+        retained.remove(path)
     }
 
     /** Drops every overlay entry, so this Vfs becomes a transparent [delegate]. */
     fun clear() {
         contents.clear()
         deleted.clear()
+        retained.clear()
     }
+
+    // ---- (INC.56) the host's filesystem promise ------------------------------
+
+    /**
+     * (INC.56) Path -> the text a build read through [delegate], retained ONLY while
+     * [trustFilesystem] is on.
+     *
+     * Never intersects [contents] or [deleted]: [put] and [remove] drop the entry for
+     * their path and [retainRead] refuses to make one, so an overlaid or tombstoned
+     * path is decided by those two and this map is never consulted for it.
+     *
+     * ## Threading — the reason [retainRead] exists at all
+     *
+     * The crawl reads its files from N concurrent workers, so this map is READ from
+     * several threads at once and may be WRITTEN from exactly one place: the crawl's
+     * single-threaded fold, after the flow that produced the text has been drained.
+     * That is `CrawlParseCache`'s discipline and it is not optional — a plain
+     * `HashMap` write from those workers is round 825's data race, with no exception
+     * to find it by. Populating it from [readText] would be the natural and wrong
+     * design.
+     *
+     * ## Why it costs (almost) no memory
+     *
+     * The value is the very `String` instance the delegate handed back, which the
+     * compiler's own `CrawlParseCache` is already retaining inside the `PreParsedFile`
+     * it parsed from it — so what is added per file is a map entry and a reference, not
+     * a copy of the source. That identity is also what keeps the parse cache's hit
+     * condition O(1): its gate is `e.content != source`, and `String.equals` returns on
+     * the reference compare when the two are the same object.
+     */
+    private val retained = HashMap<String, String>()
+
+    /**
+     * (INC.56) The HOST'S PROMISE: nothing changes the bytes of a file behind this
+     * [Vfs] without telling this project about it. Off by default.
+     *
+     * ## What it buys, and why it is opt-in rather than a default
+     *
+     * Every build re-reads and re-decodes every non-overlaid file, although the PARSE
+     * is already fully content-cached — the bytes are read only to compute the content
+     * key. That is O(PROJECT) work on every keystroke: measured on a 2,401-file
+     * application-shaped project, the crawl is 32-36 ms of an ~92 ms incremental floor
+     * and its concurrent read+decode half is most of what is left once the sequential
+     * specifier resolution ((INC.65)) is taken out.
+     *
+     * A compiler cannot promise this to itself — a `Vfs` whose backing store changes
+     * underneath is exactly what the promise excludes — but a HOST can. On the IntelliJ
+     * platform the IDE's own VFS is authoritative and guarantees change notification, so
+     * a plugin that routes every such event to [Project.updateFile] /
+     * [Project.deleteFile] / [Project.reloadFile] is already holding up its end.
+     *
+     * ## The exact scope of the promise, which is narrower than it first looks
+     *
+     * Only the CONTENT of a file that exists in both builds is taken on trust.
+     * ADDITIONS and DELETIONS are still discovered from the backing store on every
+     * build, because nothing here caches them: the root-file glob still lists
+     * directories through [listEntries], and `ModuleResolver` still probes candidate
+     * paths with [exists] before [readText]. So a file that appears or disappears
+     * behind the promise is still seen — what is missed, and missed silently, is a file
+     * whose bytes change with no notification.
+     *
+     * `.json` is deliberately EXCLUDED (see [readText]).
+     */
+    var trustFilesystem: Boolean = false
+        set(value) {
+            field = value
+            if (!value) retained.clear()
+        }
+
+    /**
+     * Drops EVERY overlay record of [path] — its text, its tombstone and anything
+     * retained for it alike — so the next read goes to [delegate] and answers whatever
+     * is there now.
+     *
+     * This is "what is on disk is the truth again", which is neither [put] (which
+     * shadows disk with text) nor [remove] (which shadows it with absence).
+     */
+    fun revert(path: String) {
+        val k = key(path)
+        contents.remove(k)
+        deleted.remove(k)
+        retained.remove(k)
+    }
+
+    /** (INC.56) Census — reads answered from [retained] rather than from [delegate]. */
+    var retainedServes: Long = 0
+        private set
+
+    /**
+     * (INC.56) Census — reads answered by [readTextIfResident], i.e. WITHOUT the
+     * crawl's per-file thread handoff.
+     *
+     * Separate from [retainedServes] because they answer different questions and only
+     * this one can see the core wiring: [readText] serves the retention too, so a
+     * build whose crawl stopped consulting [readTextIfResident] altogether would keep
+     * every delegate-read count green and pay the handoff again, silently.
+     */
+    var residentServes: Long = 0
+        private set
 
     /** True while nothing is overlaid — used only by tests and diagnostics. */
     val isEmpty: Boolean get() = contents.isEmpty() && deleted.isEmpty()
@@ -168,9 +272,69 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
 
     override fun readText(path: String): String? {
         val k = key(path)
-        if (k.endsWith(".json")) jsonReads.add(k)
+        // (INC.56) `.json` is never retained OR served from [retained]. A `tsconfig`'s
+        // `extends` target and a `package.json`'s `type` decide what the program IS
+        // ((INC.48)), they are read a handful of times per build rather than once per
+        // program file, and getting one of them stale is not a wrong diagnostic but a
+        // wrong PROGRAM. The saving is per SOURCE file; the risk is not worth the
+        // rounding error.
+        val json = k.endsWith(".json")
+        if (json) jsonReads.add(k)
         if (k in deleted) return null
-        return contents[k] ?: delegate.readText(k)
+        contents[k]?.let { return it }
+        if (!trustFilesystem || json) return delegate.readText(k)
+        retained[k]?.let {
+            retainedServes++
+            return it
+        }
+        return delegate.readText(k)
+    }
+
+    /**
+     * (INC.56) An overlaid buffer or a retained read, both of which are in memory here
+     * and cost nothing to hand back — so the crawl need not pay a thread handoff for
+     * them. Null for everything else, which is the safe answer and the only one an
+     * ordinary [Vfs] gives.
+     *
+     * READ-ONLY, and that is a threading requirement rather than tidiness: the crawl
+     * calls this from its concurrent workers, so the maps it consults may be mutated
+     * only from [retainRead] and from [Project]'s own API — neither of which runs while
+     * a build is in flight (round 825).
+     *
+     * `.json` is never answered here: [readText] records it for (INC.48)'s snapshot,
+     * and a resident answer that skipped that record would make the snapshot's input
+     * list depend on which files happened to be in memory.
+     */
+    override fun readTextIfResident(path: String): String? {
+        val k = key(path)
+        if (k.endsWith(".json") || k in deleted) return null
+        contents[k]?.let {
+            residentServes++
+            return it
+        }
+        if (!trustFilesystem) return null
+        return retained[k]?.also {
+            retainedServes++
+            residentServes++
+        }
+    }
+
+    /**
+     * (INC.56) Retains [text] as [path]'s content while [trustFilesystem] is on.
+     *
+     * The ONLY writer of [retained], called from the crawl's single-threaded fold, so
+     * every read of that map — here, in [readText] and in [readTextIfResident] — is a
+     * read of a map nothing is writing concurrently.
+     *
+     * A path that is overlaid or tombstoned is decided by [contents]/[deleted] and is
+     * not retained: keeping a second answer for it would be dead weight at best and,
+     * if the overlay were ever dropped, stale.
+     */
+    override fun retainRead(path: String, text: String) {
+        if (!trustFilesystem) return
+        val k = key(path)
+        if (k.endsWith(".json") || k in deleted || k in contents) return
+        retained[k] = text
     }
 
     /**

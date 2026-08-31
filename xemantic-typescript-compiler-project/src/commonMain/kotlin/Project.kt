@@ -591,6 +591,102 @@ public class Project private constructor(
      */
     public var cancellation: CancellationSignal? = null
 
+    /**
+     * (INC.56) THE HOST'S FILESYSTEM PROMISE: while this is true, this project may
+     * answer a build's read of an unchanged file from memory instead of reading the
+     * backing [Vfs] again. Off by default.
+     *
+     * ## What it buys
+     *
+     * Every build re-reads and re-decodes every non-overlaid program file, even though
+     * the PARSE is already fully content-cached across builds — the bytes are read only
+     * to compute the content key that proves the cached tree still applies. That is
+     * O(PROJECT) work on every keystroke, which is what a monorepo feels. Measured on a
+     * 2,401-file application-shaped project: the import-graph crawl is **32-36 ms of an
+     * ~92 ms incremental floor**, the largest single row left in it, and the concurrent
+     * read+decode half is most of what remains once (INC.65)'s sequential specifier
+     * resolution is taken out.
+     *
+     * ## What the host is promising, stated exactly
+     *
+     * That the BYTES of a file will not change without this project being told —
+     * through [updateFile], [deleteFile] or [reloadFile]. Nothing more:
+     *
+     *  - ADDED and REMOVED files are still discovered from the backing store on every
+     *    build. Nothing about the file SET is taken on trust: the root-file glob still
+     *    lists directories through the [Vfs] and module resolution still probes
+     *    candidate paths before reading them. A file that appears behind the promise is
+     *    picked up; a file that disappears drops out.
+     *  - `tsconfig.json` and `package.json` are never taken on trust either. They
+     *    decide what the program IS rather than what one file says, they are read a
+     *    handful of times per build rather than once per file, and the saving on them
+     *    would be a rounding error. See [OverlayVfs.readText].
+     *
+     * So the ONE thing that goes wrong when the promise is broken is a file whose
+     * content changed on disk with no notification: this project keeps reporting about
+     * the text it last saw, silently. That is why it is opt-in and why a compiler may
+     * never assume it — a [Vfs] whose backing store changes underneath is precisely
+     * what the promise excludes. On the IntelliJ platform the IDE's own VFS is
+     * authoritative and guarantees change notification, so a plugin routing those
+     * events here is already holding up its end; a batch caller, a file watcher with
+     * gaps, or a project on a network share is not.
+     *
+     * Setting it to false drops everything retained, so the next build reads the
+     * backing store again — turning the promise off is always safe.
+     */
+    public var trustFilesystem: Boolean
+        get() = overlay.trustFilesystem
+        set(value) {
+            checkOpen()
+            overlay.trustFilesystem = value
+        }
+
+    /**
+     * (INC.56) Reports that [path] changed behind this project's back: drops any
+     * overlay text AND anything retained under [trustFilesystem], so the next build
+     * takes it from the backing [Vfs] again.
+     *
+     * This is the third of the three ways a host reports a change, and the one for a
+     * change it cannot describe — a VCS checkout, an external tool, an editor buffer
+     * reverted to what is on disk. [updateFile] is the one to use when the host HAS the
+     * new text (an IDE always does); this one is for when it does not, and it costs a
+     * re-read rather than a copy.
+     *
+     * Marks the project dirty unconditionally, exactly as [updateFile] does, and for
+     * the same reason: whether an edit took effect must not depend on a comparison the
+     * caller cannot see.
+     */
+    public fun reloadFile(path: String) {
+        checkOpen()
+        val key = keyOf(path)
+        overlay.revert(key)
+        cached = null
+        narrowed.clear()
+        captures.clear()
+        prepared = null
+        recheck = null
+        (dirtyFiles ?: LinkedHashSet<String>().also { dirtyFiles = it }).add(key)
+        invalidate(key)
+    }
+
+    /**
+     * (INC.56) Census — reads this project answered from memory under
+     * [trustFilesystem] instead of from the backing [Vfs].
+     *
+     * Internal and for the measurement runners: the PINS count what reaches the
+     * backing store (a `CountingVfs`), which is the honest instrument, because a
+     * counter here would still read as a success for a serve that answered the wrong
+     * bytes.
+     */
+    internal val retainedReadCount: Long get() = overlay.retainedServes
+
+    /**
+     * (INC.56) Census — reads a build answered WITHOUT the crawl's per-file thread
+     * handoff, because this project already held the text. Nonzero on any build after
+     * the first under [trustFilesystem], and on every build for an overlaid buffer.
+     */
+    internal val residentReadCount: Long get() = overlay.residentServes
+
     private var closed: Boolean = false
 
     /**
