@@ -800,14 +800,19 @@ class ProjectCompiler(private val vfs: Vfs) {
         for (f in config.files) if (vfs.exists(f)) result.add(PathUtil.normalize(f))
 
         if (config.include.isNotEmpty()) {
-            val includeRegexes = config.include.map { globToRegex(PathUtil.join(config.configDir, it), supportedExt) }
-            val excludeRegexes = config.exclude.map { globToRegex(PathUtil.join(config.configDir, it), supportedExt) }
+            // (INC.78) The matcher, not a bare Regex: this asks every candidate against
+            // every pattern on EVERY build, i.e. on every keystroke of a language-service
+            // host, and the regex form was 1.9-3.4 us per candidate. [GlobMatcher] keeps
+            // that regex as its definition and reaches the same answer without running it
+            // for the pattern shapes tsconfigs actually use.
+            val includeGlobs = config.include.map { GlobMatcher.compile(PathUtil.join(config.configDir, it), supportedExt) }
+            val excludeGlobs = config.exclude.map { GlobMatcher.compile(PathUtil.join(config.configDir, it), supportedExt) }
             val feWalkT0 = FrontEnd.t()
             walk(config.configDir) { path ->
                 if (matchedExtension(path, supportedExt) == null) return@walk
                 FrontEnd.globCandidates++
                 val feMatchT0 = FrontEnd.t()
-                if (excludeRegexes.none { it.matches(path) } && includeRegexes.any { it.matches(path) }) {
+                if (excludeGlobs.none { it.matches(path) } && includeGlobs.any { it.matches(path) }) {
                     result.add(path)
                 }
                 FrontEnd.close(FrontEnd.CFG_MATCH, feMatchT0)
@@ -969,39 +974,6 @@ class ProjectCompiler(private val vfs: Vfs) {
             }
             for (i in dirs.indices.reversed()) stack.addLast(dirs[i])
         }
-    }
-
-    /**
-     * Converts a glob [pattern] (already absolute) to a [Regex] over absolute paths.
-     * Supports `**` (any depth), `*` (within a segment), `?`. If the final segment has
-     * no extension, the supported extensions are appended (TS `include: ["src"]` semantics).
-     */
-    private fun globToRegex(pattern: String, supportedExt: List<String>): Regex {
-        var p = PathUtil.normalize(pattern)
-        val lastSeg = PathUtil.basename(p)
-        val extlessDir = !lastSeg.contains('.') && !lastSeg.contains('*') && !lastSeg.contains('?')
-        if (extlessDir) p = "$p/**/*"
-        val sb = StringBuilder()
-        var i = 0
-        while (i < p.length) {
-            val c = p[i]
-            when (c) {
-                '*' -> if (i + 1 < p.length && p[i + 1] == '*') {
-                    // `**/` => any number of dirs; bare `**` => anything
-                    if (i + 2 < p.length && p[i + 2] == '/') { sb.append("(?:[^/]+/)*"); i += 2 } else sb.append(".*")
-                    i++
-                } else { sb.append("[^/]*"); i++ }
-                '?' -> { sb.append("[^/]"); i++ }
-                '.', '(', ')', '+', '{', '}', '[', ']', '$', '^', '|', '\\' -> { sb.append('\\').append(c); i++ }
-                else -> { sb.append(c); i++ }
-            }
-        }
-        // No extension in the pattern? accept any supported extension on the matched leaf.
-        if (!lastSeg.contains('.') ) {
-            val alt = supportedExt.joinToString("|") { Regex.escape(it) }
-            sb.append("(?:$alt)")
-        }
-        return Regex("^$sb$")
     }
 
     // --- crawl parse (specifier extraction + INV.1(e) pre-parse) -----------------
