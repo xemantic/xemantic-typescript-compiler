@@ -1,3 +1,32 @@
+**(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
+TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to
+publish `moduleOnlyGlobalNames` and `libValueShadowNames`, whose only three readers —
+`globalsForFile`, `globalsForFileNode`, `libValueBehindTypeOnlyShadow` — are all NAME
+RESOLUTION. So a build that checks nothing reads neither.
+**THE POPULATION DECIDED IT BEFORE ANY IMPLEMENTATION, for the price of one temporary
+counter: 0 asks on a floor build of the 2,401-file fixture against 335,881 on a full one.**
+(INC.16)'s law used as a GO/NO-GO rather than as a post-hoc explanation.
+**THE ORDERING CLAIM WAS CHECKED**: the pass compares `globals.keys` against
+`init:snapshotPreAugGlobalKeys`' snapshot, and all three writers of `globals` run at earlier
+init steps. **The one place it is deliberately NOT lazy is the probe** — the INV.3(a)
+classifier is still installed at the pass's moment and FORCES the sets from inside its lambda,
+so `globals.lookups` reads 783,383, **+0.00%**.
+**MEASURED:** row **-> 0.002-0.003 ms** from 5.5-7.2; ABBA-rotated floor
+**142.5 -> 120.0 ms (-15.8%)**.
+**THE VALUE RECEIPT IS THE CORPUS, AND THAT IS NOW A RULE RATHER THAN AN ACCIDENT:** ablation
+c2 (sets stay empty) reddens **492** core tests, while the hand-written `-project` value pin
+stays GREEN — the second round running where a `-project` pin cannot discriminate the
+mechanism and the corpus discriminates it in the hundreds. For the INV.3 visibility model the
+`-project` pins gate the REGIME (which builds do the work) and the corpus gates the ANSWER.
+**GATES.** Suite **16,565 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
+**SUCCESSOR IS A MEASUREMENT QUESTION, NOT A ROW ((INC.72)):** twice in a row the rotated
+floor WALL moved about **three times** what the pass table explains (-23.5 against ~4 ms,
+-22.5 against ~7). Both changes also removed thousands of RETAINED allocations per build,
+which round 801 says is a plausible mechanism and not a measured one. Decompose BOTH arms with
+`--frontEnd` before opening another init row: either the surplus is outside the init block, or
+the `rows`-tier probe under-reports and every ranking taken from it needs re-reading.
+
 **(INC.68) — 80% OF THE PATHS THIS COMPILER NORMALIZES WERE ALREADY NORMALIZED, AND THE
 BLOCKED ARMS INVENTED A REGRESSION THAT ROTATION REMOVED (2026-08-31).** (INC.66) said
 "before pricing any row, check it has a SPLIT"; the row it named for re-decomposition —

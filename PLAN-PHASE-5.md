@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.78) — the root-file glob asked an ACCEPTING regex per candidate, and no refusal filter could have helped it
+
+**`collectRootFiles` ran `excludeRegexes.none { it.matches(path) } && includeRegexes.any { it.matches(path) }`
+FOR EVERY CANDIDATE OF EVERY BUILD — i.e. on every keystroke of a language-service host.**
+Measured on the 2,401-file `many-small-2400-dom` fixture, `FrontEnd.CFG_MATCH` was
+**4.66-8.08 ms, 1.9-3.4 us per candidate**, on a ~90-110 ms incremental floor.
+
+**THE ATTRIBUTION IS THE FINDING, AND IT INVERTS THE OBVIOUS FIX.** (INC.77)'s own note said
+"most candidates could be refused by a cheaper prefix/extension test first". Standalone, one
+binary, ABBA-rotated, the two halves separate: the **exclude** half is **0.458 ms (191
+ns/candidate)** — its literal prefix fails on the first character, so it was already cheap —
+and the **include** half is **5.376 ms (2,239 ns)**. `src/**/*` compiles to
+`^…/src/(?:[^/]+/)*[^/]*(?:\.ts|…)$`, whose `(?:[^/]+/)*` backtracks over every directory
+segment and **runs to a MATCH for every file in the project**. A filter can only refuse, and
+nothing here needs refusing — so the lever is an EXACT shortcut, and the pre-filter the note
+proposed would have bought ~0.3 ms of the ~5.
+
+**WHAT LANDED.** `GlobMatcher` keeps the regex as its DEFINITION (round 792's shape — never a
+legality gate) and reaches the same answer without running it. When the whole pattern is
+`<literal>` + a `**` segment + a bare `*` leaf + a literal tail, `(?:[^/]+/)*[^/]*` matches
+any remainder, so the pattern accepts exactly the paths that start with the head and end with
+the tail. That shape is `src`, `src/**/*`, `src/**/*.ts`, `dist`, `**/*.spec.ts` — i.e. what
+tsconfigs contain. Anything with a constrained middle keeps the regex, with the literal prefix
+as a necessary-condition filter in front of it.
+
+**TWO CORRECTIONS THE FIRST CUT DID NOT HAVE, BOTH FOUND BY EXTENDING THE DIFFERENTIAL GRID
+RATHER THAN BY READING IT.** `(?:[^/]+/)*[^/]*` matches every remainder EXCEPT one with an
+EMPTY SEGMENT, so a path spelling a doubled separator is accepted by a head-and-tail test and
+REFUSED by the pattern — that case now falls back to the oracle. And the doubled-separator
+test is exact only BECAUSE the head ends at a directory boundary: with a head ending
+mid-segment, `x**` + a bare `*` leaf accepts a path whose remainder starts with a separator.
+The two are ONE mechanism. The length guard, by contrast, is provably unreachable (the overlap
+would put the head's own trailing slash inside a slash-free tail) and is recorded as a
+REDUNDANT GUARD rather than claimed (round 927).
+
+**THE WALL COULD NOT CARRY THE CLAIM AND THE COUNT CAN.** `regexBoth` vs `both` in ONE process
+read **12x, then 5x, then 3x** over four processes of the same binary — round 867's arm
+instability on a row whose own per-process spread is several times the effect. So the receipt
+is `FrontEnd.globRegexEvals`, the number of decisions that reach the regex: **4,802 -> 0** on
+the real fixture, deterministic and comparable across machines. The pin states it at TWO
+program sizes ((INC.57): one build cannot distinguish "the shortcut serves everything" from
+"this project is small"), with a positive control that a constrained pattern still runs the
+regex once per candidate and that the number GROWS — without which the zero is
+indistinguishable from a dead counter.
+
+**IN-BUILD, shipped binary, same draw position:** `CFG_MATCH` **4.66 -> 0.61 ms** (and draw 1
+8.08 -> 2.60), the root-file glob row **14.46 -> 9.16**. The remaining 0.61 is ~0.21 ms of the
+probe's own 2,401 timestamp pairs.
+
+**THE HAZARD IS SILENCE, so the gate is a differential and not a green suite.** (CFG.1): a
+wrong root-file set has no diagnostic channel here — the corpus harness materialises no
+directory at all and every dashboard profile scopes `include` to a subtree that stresses no
+wildcard shape. `GlobMatcherTest` asserts every fast answer against the pattern's own regex
+over a 16-pattern x 28-path grid; `ProjectRootFileGlobTest` is the end-to-end half through
+`ProjectCompiler` and a real `Vfs`, where the observable is the program's file SET.
+
+**ABLATION — four arms, one mistake each, four distinct red sets, all discriminating:**
+a1 (a single `*` treated as `**/*`) 4 RED, a2 (empty-segment fallback removed) 2 RED,
+a3 (boundary rule removed) 2 RED, a4 (no fast path at all) 2 RED — and a4 is the partition
+that matters: it reddens ONLY the cost pin and the regime pin while every VALUE pin stays
+green, which is what says the count is what grades the perf claim and the values grade
+correctness.
+
+**GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78 -> 78 (the value-side control on a real project);
+`huge_methods.py --fail-over 0` clean, 0 over limit.
+
+**SUCCESSOR.** After this the 2,401-file floor's glob row is `listEntries` (~8 ms, of which
+~4.4 is irreducible `stat`s — refused by (INC.77) on arithmetic) plus ~1 ms of everything
+else. What is left in the query is the init-block pass dispatch, the crawl's sequential
+specifier resolution (~11 ms) and its ~6 ms `flatMapMerge` residue — (INC.64)'s question with
+the last hop gone.
+
 ### Round (INC.76) — the language service was paying (INC.60)'s defect in full, through a wrapper that did not override
 
 **A WRAPPING `Vfs` THAT DOES NOT OVERRIDE `listEntries` INHERITS THE INTERFACE DEFAULT —
@@ -2363,6 +2436,17 @@ a residue no sub-row named.**
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
 
+- [x] **(INC.78) DONE 2026-08-31 — THE ROOT-FILE GLOB'S MATCH ROW, AND THE REFUSAL FILTER THAT
+  WOULD HAVE BOUGHT ~0.3 ms OF ~5.** (INC.77) ranked this row at ~5-6.8 ms and proposed a
+  cheap prefix/extension pre-filter. Measured, the EXCLUDE half was already 191 ns/candidate
+  (its literal prefix fails on the first character) and the INCLUDE half was **2,239** — an
+  ACCEPTING regex, which no refusal can short-circuit. `GlobMatcher` answers the
+  `<literal>` + `**` segment + bare `*` leaf + literal tail shape from the head and the tail,
+  keeping the regex as the oracle. **`FrontEnd.globRegexEvals` 4,802 -> 0** on the 2,401-file
+  fixture; `CFG_MATCH` **4.66 -> 0.61 ms** in the build. The receipt is the COUNT because the
+  same one-process wall ratio read 12x / 5x / 3x across four processes. Four ablation arms,
+  four distinct red sets, a4 partitioning the cost pin from the value pins.
+
 - [ ] **(INC.77) WHAT IS LEFT IN THE PER-KEYSTROKE QUERY AFTER (INC.56)/(INC.76), MEASURED —
   AND THE LARGEST ROW IS REFUSED WITH ITS REASON (2026-08-31).**
   **THE 25 ms "UNATTRIBUTED BLOCK" I EXPECTED DOES NOT EXIST**: the passes account for
@@ -2420,6 +2504,11 @@ a residue no sub-row named.**
   `ModuleResolver.resolve`'s 11.5 ms is ~2,351 real resolutions at one `exists` each
   ((INC.73)(a)) plus per-call path arithmetic — its one visible allocation, a `setOf(…)` built
   per call in `resolveAsFile`, is ~0.35 ms at round 912's bar and does not clear it.
+  **UPDATE 2026-08-31: THE `include/exclude regex match` ROW IS CLOSED BY (INC.78), AND THIS
+  ENTRY'S PROPOSAL FOR IT WAS AIMED AT THE WRONG HALF** — "most candidates could be refused by
+  a cheaper prefix/extension test first" is true of the EXCLUDE (already 191 ns) and false of
+  the INCLUDE, which matches every candidate and cannot be refused at all. What was left after
+  it: the walker pool's genuinely-open ~1.2 ms, the crawl's two halves, and the init block.
 
 - [ ] **(INC.75) THE PLUGIN CAN TAKE (INC.56) AND (INC.55) TODAY, AND READING IT SAYS WHAT
   ELSE IS STALE (2026-08-31, from `xemantic/xtsc-intellij-plugin` @ HEAD — (INC.67)'s method,

@@ -1,5 +1,34 @@
 # Status
 
+**(INC.78) — THE ROOT-FILE GLOB ASKED AN *ACCEPTING* REGEX PER CANDIDATE, AND NO REFUSAL
+FILTER COULD HAVE HELPED IT (2026-08-31).** `collectRootFiles` ran
+`excludeRegexes.none { } && includeRegexes.any { }` for every candidate of every build — i.e.
+on every keystroke of a language-service host — at **4.66-8.08 ms, 1.9-3.4 us per candidate**
+on a ~90-110 ms incremental floor at 2,401 files.
+**THE ATTRIBUTION INVERTS THE OBVIOUS FIX.** (INC.77) proposed a cheap prefix/extension
+pre-filter; measured standalone on one binary, the EXCLUDE half is **191 ns/candidate** (its
+literal prefix fails on the first character) and the INCLUDE half is **2,239** — `src/**/*`
+compiles to `^…/src/(?:[^/]+/)*[^/]*(?:\.ts|…)$`, which backtracks over every directory
+segment and **runs to a MATCH for every file in the project**. A filter can only refuse, so
+the lever is an EXACT shortcut and the proposal was aimed at the half that was already cheap.
+`GlobMatcher` keeps the regex as its DEFINITION and answers the
+`<literal>` + `**` segment + bare `*` leaf + literal tail shape — `src`, `src/**/*`,
+`src/**/*.ts`, `dist`, `**/*.spec.ts`, i.e. what tsconfigs contain — from the head and the
+tail. Two corrections came from EXTENDING the differential grid rather than reading it: an
+EMPTY SEGMENT is the one remainder `(?:[^/]+/)*[^/]*` cannot match (a doubled separator now
+falls back to the oracle), and that test is exact only because the head ends at a directory
+boundary. The length guard is provably unreachable and is recorded as a REDUNDANT GUARD.
+**THE WALL COULD NOT CARRY THE CLAIM: the same one-process ratio read 12x, then 5x, then 3x
+over four processes of one binary** (round 867's arm instability). The receipt is
+`FrontEnd.globRegexEvals` — decisions that reach the regex — **4,802 -> 0**, pinned at TWO
+program sizes with a positive control that a constrained pattern still runs it once per
+candidate. In-build `CFG_MATCH` **4.66 -> 0.61 ms**, root-file glob row **14.46 -> 9.16**.
+Gate is a DIFFERENTIAL, not a green suite ((CFG.1): a wrong root-file set is silent here);
+4 ablation arms, 4 distinct red sets, and the no-fast-path arm reddens ONLY the cost and
+regime pins while every value pin stays green.
+**GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78 -> 78; `huge_methods.py --fail-over 0` clean.
+
 **(INC.76) — THE LANGUAGE SERVICE WAS PAYING (INC.60)'s DEFECT IN FULL, THROUGH A WRAPPER THAT
 DID NOT OVERRIDE (2026-08-31).** `Vfs.listEntries`'s default body is
 `list(path).map { VfsEntry(it, isDirectory(it)) }`, and (INC.60) added that member precisely
@@ -119,33 +148,3 @@ the init-block dispatch at 22 (28%), config+glob 12, bind 8, post 5.** The pass 
 `init:mergeFileLocalsIntoGlobals` 2.06) — none of them a per-file table, so the
 (INC.70)/(INC.71) deferral shape does not transfer unchanged, and the GO/NO-GO for each is
 (INC.16)'s counter: who forces the index, and is it anyone on a floor build?
-
-**(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
-TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to
-publish `moduleOnlyGlobalNames` and `libValueShadowNames`, whose only three readers —
-`globalsForFile`, `globalsForFileNode`, `libValueBehindTypeOnlyShadow` — are all NAME
-RESOLUTION. So a build that checks nothing reads neither.
-**THE POPULATION DECIDED IT BEFORE ANY IMPLEMENTATION, for the price of one temporary
-counter: 0 asks on a floor build of the 2,401-file fixture against 335,881 on a full one.**
-(INC.16)'s law used as a GO/NO-GO rather than as a post-hoc explanation.
-**THE ORDERING CLAIM WAS CHECKED**: the pass compares `globals.keys` against
-`init:snapshotPreAugGlobalKeys`' snapshot, and all three writers of `globals` run at earlier
-init steps. **The one place it is deliberately NOT lazy is the probe** — the INV.3(a)
-classifier is still installed at the pass's moment and FORCES the sets from inside its lambda,
-so `globals.lookups` reads 783,383, **+0.00%**.
-**MEASURED:** row **-> 0.002-0.003 ms** from 5.5-7.2; ABBA-rotated floor
-**142.5 -> 120.0 ms (-15.8%)**.
-**THE VALUE RECEIPT IS THE CORPUS, AND THAT IS NOW A RULE RATHER THAN AN ACCIDENT:** ablation
-c2 (sets stay empty) reddens **492** core tests, while the hand-written `-project` value pin
-stays GREEN — the second round running where a `-project` pin cannot discriminate the
-mechanism and the corpus discriminates it in the hundreds. For the INV.3 visibility model the
-`-project` pins gate the REGIME (which builds do the work) and the corpus gates the ANSWER.
-**GATES.** Suite **16,565 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
-`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
-**SUCCESSOR IS A MEASUREMENT QUESTION, NOT A ROW ((INC.72)):** twice in a row the rotated
-floor WALL moved about **three times** what the pass table explains (-23.5 against ~4 ms,
--22.5 against ~7). Both changes also removed thousands of RETAINED allocations per build,
-which round 801 says is a plausible mechanism and not a measured one. Decompose BOTH arms with
-`--frontEnd` before opening another init row: either the surplus is outside the init block, or
-the `rows`-tier probe under-reports and every ranking taken from it needs re-reading.
-
