@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.81) — a list per key for 9,401 keys that never got a second entry, and a refuted round-471 hypothesis
+
+**THE ROW CAME FROM RE-DECOMPOSING RATHER THAN FROM THE QUEUE.** `enclosingImportIndex` is
+**4.7 ms** of an 87 ms per-keystroke query and no item had ever named it; (INC.57)'s "re-take
+the ranking after every round that moves the floor" is what surfaced it.
+
+**CENSUSED BEFORE ANYTHING WAS DESIGNED.** On the 2,401-file fixture the build inserts **9,401
+specifiers under 9,401 DISTINCT keys** — so every `getOrPut` MISSES and every one allocated a
+`MutableList` and a `Pair` — and **`multiFileKeys=0`**: not one key is reached from two files,
+i.e. the whole-program structural reach matches nothing on a real project.
+
+**AND THE OBVIOUS HYPOTHESIS WAS MEASURED AND REFUTED.** The key is an AST *data class*, so
+`hashCode` recurses both `Identifier`s and both comment lists — round 471's hazard, which this
+index's own KDoc never mentioned. Priced in ONE timestamp pair over a second pass of the same
+population: **76.5 ns each, 0.72 ms, 14% of the row**. The walk is ~1.0 ms and **~3.4 ms is
+the insert plus the two allocations per key**. So the key is left exactly as it is — its
+structural semantics are load-bearing, since the scan it replaced matched `spec in
+bindings.elements` across every file in program order — and only the REPRESENTATION changes.
+
+**WHAT LANDED:** the value is the `Pair` itself for the one-entry case, promoted to a list
+only when a second statement claims the same key, with the map presized. **4.60 -> 3.17 ms**,
+two class dirs differing only in this, rotated across processes, the after arm winning 3/3
+batches in both directions with NON-OVERLAPPING ranges — and the population census identical
+in both arms (9,401 / 9,401 / 0), which is the receipt that the same thing is stored.
+
+**THE PIN EXISTS BECAUSE THE CENSUS SAYS NOTHING REACHES THE PROMOTION.** `multiFileKeys=0` is
+exactly the statement that no real project exercises the multi-entry path, so it needs a
+fixture — and two BYTE-IDENTICAL importers are one, because `ImportSpecifier`'s data-class
+components include `pos` and `end`, so the same import at the same offsets in two files IS one
+key. The regime half asserts 0 for the ordinary shape and non-zero for the twins; the value
+half asserts both files still see the imported signature, since the index feeds `resolveAlias`
+and a lost entry degrades a callee to `any` and DELETES a diagnostic. Two ablation arms, each
+reddening a DIFFERENT pin — dropping the promotion reddens only the twin pin, breaking the
+one-entry reader only the ordinary one, so neither is redundant.
+
+**GATES.** Suite **16,624 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**WHAT IS LEFT, AND WHAT IS NOW REFUSED.** The ~3.4 ms was insert + allocation and about 1.4
+of it is gone; the residue is the walk (~1.0 ms over 2,401 files' statements) and the hash
+(0.72 ms), **both of which are refused**: the walk is the index's definition and the hash
+cannot be made cheaper without changing the key, whose structural semantics the replaced scan
+fixes. A per-FILE index would remove the walk and IS a semantics change — `multiFileKeys=0`
+says it would be equivalent on this project and says nothing about any other.
+
 ### Round (INC.80) — joining a path by arithmetic, and the two-draw read that nearly refuted it
 
 **`PathUtil.join(base, part)` built `"$base/$part"` AND NORMALIZED IT, AND FOR A MODULE
@@ -2539,6 +2584,13 @@ a residue no sub-row named.**
   with it. **TRANSFERABLE: a defaulted interface member added for speed is a silent regression
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
+
+- [x] **(INC.81)(a) DONE 2026-08-31 — the index's per-key list is gone (4.60 -> 3.17 ms,
+  rotated, 3/3 batches), the round-471 hash hypothesis is MEASURED AND REFUTED at 14% of the
+  row, and the promotion path no real project reaches is now pinned by a byte-identical-twin
+  fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
+  cannot move without changing a key whose structural semantics the replaced scan fixes.**
+  **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
 
 - [ ] **(INC.81) THE PER-KEYSTROKE QUERY RE-DECOMPOSED AFTER (INC.78)/(INC.79)/(INC.80) —
   87 ms, AND THE RANKING CHANGED AGAIN (2026-08-31, trusted arm, 2,401-file `dom` fixture,

@@ -1,5 +1,31 @@
 # Status
 
+**(INC.81) — A LIST PER KEY FOR 9,401 KEYS THAT NEVER GOT A SECOND ENTRY, AND A REFUTED
+ROUND-471 HYPOTHESIS (2026-08-31).** `Checker.enclosingImportIndex` is **4.7 ms** of an 87 ms
+per-keystroke query and NO queue item had ever named it — it surfaced only from re-taking the
+ranking after (INC.78)/(INC.79)/(INC.80), which is what (INC.57)'s law asks for.
+**CENSUSED BEFORE ANYTHING WAS DESIGNED:** the build inserts **9,401 specifiers under 9,401
+DISTINCT keys**, so every `getOrPut` misses and every one allocated a `MutableList` and a
+`Pair` — and **`multiFileKeys=0`**, i.e. not one key is reached from two files, so the
+whole-program structural reach matches nothing on a real project.
+**THE OBVIOUS HYPOTHESIS WAS MEASURED AND REFUTED.** The key is an AST *data class*, so
+`hashCode` recurses both Identifiers and both comment lists (round 471). Priced in ONE
+timestamp pair over a second pass: **76.5 ns each, 0.72 ms — 14% of the row**. The walk is
+~1.0 ms and **~3.4 ms is the insert plus the two allocations**. So the key is left alone (its
+structural semantics are load-bearing) and only the REPRESENTATION changed: the `Pair` itself
+for the one-entry case, promoted to a list on a second claim, map presized.
+**MEASURED** with two class dirs differing only in this, rotated across processes: **4.60 ->
+3.17 ms**, after winning 3/3 batches in both directions with NON-OVERLAPPING ranges, and the
+population census identical in both arms.
+**THE PIN EXISTS BECAUSE THE CENSUS SAYS NOTHING REACHES THE PROMOTION** — `multiFileKeys=0`
+is precisely that statement — so it takes a fixture, and two BYTE-IDENTICAL importers are one
+(`ImportSpecifier`'s components include `pos`/`end`, so the same import at the same offsets in
+two files IS one key). Two ablation arms, each reddening a DIFFERENT pin.
+**GATES.** Suite **16,624 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+**RESIDUE REFUSED WITH REASONS:** the walk IS the index's definition, and the hash cannot move
+without changing a key whose structural semantics the replaced scan fixes.
+
 **(INC.80) — JOINING A PATH BY ARITHMETIC, AND THE TWO-DRAW READ THAT NEARLY REFUTED IT
 (2026-08-31).** `PathUtil.join(base, part)` built `"$base/$part"` and normalized it — and for
 a module specifier that is exactly the case `isNormalized` must refuse (a `..` segment), so
@@ -110,34 +136,3 @@ is a DIRECTORY). The cost pin had to be restated as a COMPLEXITY claim at two pr
 **TRANSFERABLE: a defaulted interface member added for speed is a silent regression waiting
 for the next wrapper**, and the instrument is a row measured STANDALONE against the same row
 measured IN THE BUILD.
-
-**(INC.56) — AN IntelliJ-CLASS HOST CAN SKIP THE RE-READ, AND THE ROW IT WAS AIMED AT WAS A
-*LOCATION* (2026-08-31).** Two opt-in halves in the embedding API: `Project.trustFilesystem`
-(the host promises the bytes of a file will not change without this project being told —
-through `updateFile`, `deleteFile` or the new `reloadFile`) and `Vfs.readTextIfResident` /
-`Vfs.retainRead` (the crawl skips its per-file THREAD HANDOFF for content already in memory).
-Retention is written ONLY from the crawl's single-threaded fold — round 825, because the crawl
-reads from N concurrent workers.
-**MEASURED**, 8 instrumented draws per arm, one JVM per arm, arms rotated across processes,
-both rotations agreeing, with the untouched sequential specifier-resolution row as the control:
-crawl WALL **30.6/37.0 -> 21.7/19.4 ms** at 2,401 small files and **13.7/14.2 -> 9.5/7.8 ms**
-on tsc's 78 huge ones; `read+decode` **132.6/176.1 -> 1.52/1.39** and **65.4/63.2 ->
-0.076/0.057**.
-**AND THE REFUTATION IS WORTH MORE THAN THE ROW: THE QUEUE PRICED THIS FROM `FrontEnd.READ`,
-WHICH IS ELAPSED-WITH-SUSPENSION — A LOCATION, NOT A PRICE.** Retaining the content WITHOUT
-skipping the hop served **33,350 reads from memory and moved the crawl's wall by NOTHING** on
-the 2,401-file project, while halving it on tsc's 78 huge sources. **The read is a BYTE cost;
-the row that made it look like a FILE cost was the hop's suspension** — so the fix that works
-on both shapes removes the HANDOFF, not the read.
-**THE PROMISE IS NARROWER THAN THE ENTRY FEARED, AND IT IS PINNED:** additions and deletions
-are still discovered on every build (nothing caches the file SET), and `.json` is never
-trusted. 18 pins including the documented LIMIT (an unreported content change IS missed) and a
-REGIME pin that the crawl really takes the resident path; 4 of 5 ablation arms discriminate and
-the fifth is recorded as a REDUNDANT GUARD rather than claimed.
-**GATES.** Suite **16,586 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% — a CONTROL,
-since `SystemVfs` resides nothing and the CLI path is provably unchanged; `huge_methods.py
---fail-over 0` clean.
-**SUCCESSOR:** the crawl's remaining halves — sequential specifier resolution ~11-13 ms
-(non-syscall remainder; its syscall half is refused by (INC.73)(a)) and a ~7-9 ms concurrent
-residue that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with the last hop
-gone.
