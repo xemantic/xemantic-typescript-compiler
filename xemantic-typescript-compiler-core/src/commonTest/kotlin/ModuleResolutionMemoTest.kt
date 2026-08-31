@@ -109,6 +109,61 @@ class ModuleResolutionMemoTest {
     }
 
     /**
+     * (INC.82) The wrapper and the directory-taking entry point are ONE function.
+     *
+     * [ModuleResolver.resolve] now reads its `importerPath` for nothing but the
+     * `dirname`, which is what licenses the crawl to hoist that call out of its
+     * per-specifier loop. This pins the equality across the shapes the crawl actually
+     * produces — a nested importer, a root-level one, a bare specifier, a `..`-crossing
+     * one and an unresolvable one — because an implementation that consulted the path
+     * for anything else would agree on some of them and not all.
+     */
+    @Test
+    fun `resolveFrom answers exactly what resolve answers for the same directory`() {
+        val specs = listOf("./dep", "../b/dep", "./nope", "dep", "/p/a/dep.ts", "./dep.js")
+        val importers = listOf("/p/a/one.ts", "/p/b/three.ts")
+        for (importer in importers) {
+            val dir = PathUtil.dirname(importer)
+            for (spec in specs) {
+                val viaPath = ModuleResolver(vfs()).resolve(spec, importer)
+                val viaDir = ModuleResolver(vfs()).resolveFrom(spec, dir)
+                assert(viaDir == viaPath)
+            }
+        }
+    }
+
+    /**
+     * …and they share ONE memo, which is the point of the wrapper rather than an
+     * incidental property: a caller that hoists the `dirname` must not lose the answers
+     * a caller that did not has already paid for.
+     */
+    @Test
+    fun `the two entry points share one memo`() {
+        val r = ModuleResolver(vfs())
+        assert(r.resolve("./dep", "/p/a/one.ts") == "/p/a/dep.ts")
+        assert(r.resolveFrom("./dep", "/p/a") == "/p/a/dep.ts")
+        assert(r.resolveCalls == 2)
+        assert(r.computedResolutions == 1)
+    }
+
+    /**
+     * (INC.82) THE SENTINEL MUST NOT ESCAPE. A memoized `null` is stored as a marker so
+     * that a served answer costs one probe instead of a `containsKey` + `get` pair; an
+     * implementation returning the stored value directly hands its caller a string that
+     * is not a path, and every downstream reader would treat the import as RESOLVED —
+     * to a file that does not exist. Asked three times, so the answer is served from the
+     * memo twice and through both entry points.
+     */
+    @Test
+    fun `a memoized unresolved answer is null and never the marker`() {
+        val r = ModuleResolver(vfs())
+        assert(r.resolve("./nope", "/p/a/one.ts") == null)
+        assert(r.resolveFrom("./nope", "/p/a") == null)
+        assert(r.resolve("./nope", "/p/a/two.ts") == null)
+        assert(r.computedResolutions == 1)
+    }
+
+    /**
      * CONTROL: the memo is per INSTANCE, and an instance is per build. A second
      * resolver recomputes — which is what makes an added file visible to the next
      * build, and is why this is not a process-global cache.

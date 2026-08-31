@@ -588,14 +588,25 @@ class ProjectCompiler(private val vfs: Vfs) {
             val pending = HashSet<String>()
             val feResolveT0 = FrontEnd.t()
             for (f in frontier) {
+                // (INC.82) The importer contributes exactly its DIRECTORY to a resolution
+                // (`ModuleResolver.resolveFrom`'s contract), and this loop knows it once
+                // per FILE while it asks once per SPECIFIER — 4,701 asks over 2,401 files
+                // on the generated application fixture. The per-file resolution map is
+                // hoisted for the same reason, but stays LAZY: a file whose every import
+                // is unresolved must contribute no entry, exactly as the `getOrPut` it
+                // replaces did.
+                val importerDir = PathUtil.dirname(f.path)
+                var fileResolutions: MutableMap<String, String>? = null
                 for (spec in f.specifiers) {
-                    val resolved = resolver.resolve(spec, f.path)
+                    val resolved = resolver.resolveFrom(spec, importerDir)
                     if (resolved == null) {
                         if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
                         continue
                     }
                     importEdges.add(f.path to resolved)
-                    moduleResolutions.getOrPut(f.path) { mutableMapOf() }[spec] = resolved
+                    val into = fileResolutions
+                        ?: moduleResolutions.getOrPut(f.path) { mutableMapOf() }.also { fileResolutions = it }
+                    into[spec] = resolved
                     if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
                 // M4.8: `/// <reference path|types>` targets join the program too

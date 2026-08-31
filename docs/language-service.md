@@ -2404,9 +2404,11 @@ each other. This page had not been updated; the text is kept out rather than lef
 standing, since a stale claim here is invisible to every gate in this repo.)*
 
 1. **`completionsAt` and `signatureHelpAt` cannot reach a prepared check, at all.**
-   Not a policy: `Project.kt:995` (free-name), `:1041` (member) and `:1162` (signature
-   help) each call `captureIn(...)` **directly**, while `preparedAnswerFor` is reached
-   only from `captureAround` (`:2442`, `:2450`) and `referencesOf` (`:1487`). So a
+   Not a policy: `Project.kt:1449` (free-name), `:1495` (member) and `:1616` (signature
+   help) each call `captureIn(...)` (`:3402`) **directly**, while `preparedAnswerFor`
+   (`:3329`) is reached only from `captureAround` (`:3303`, `:3311`) and `referencesOf`
+   (`:2048`, at `:2099`). *(Line numbers re-verified 2026-08-31; the previous set
+   had rotted, the structural claim had not.)* So a
    `scopeSpans` / `memberSpans` / `signatureSpans` request is structurally unservable
    from `prepared`. Measured: `completionsAt` costs **207 ms immediately after
    `prepare(6 files)`**, **202 ms immediately after a hover in the same buffer**, and
@@ -2745,3 +2747,256 @@ silence**: each is a stated refusal, a deliberate divergence, or the architectur
    here they are one symbol. Stated in § 10d, deliberate.
 10. **No LSP layer.** This is an embedding API; the protocol, its 0-based coordinates and
     its lifecycle are a host's job. § 12 is the shape. **(not pinnable)**
+
+## 14. Cancellation, and state that outlives the process
+
+Two members § 0 lists that no section documented until this one. They have nothing
+in common except their audience: both exist for a host with a **lifecycle** — an
+editor whose user keeps typing while a build is in flight, and an editor that gets
+restarted. Neither is needed by a batch caller, and both are off by default.
+
+### 14a. `cancellation` — abandoning an answer nobody wants
+
+```kotlin
+public var Project.cancellation: CancellationSignal?  // Project.kt:592, null by default
+
+public fun interface CancellationSignal {             // Cancellation.kt:41
+    public fun isCancelled(): Boolean
+}
+
+public class CompilationCancelledError : Error        // Cancellation.kt:69
+```
+
+**Why the host has to supply this rather than interrupt the thread.** A build runs
+on the compiler's own deep-stack thread and this API *joins* it, so the calling
+thread is blocked for the whole build and cannot abandon it from outside.
+Cancellation is therefore cooperative: the host supplies the signal, the compiler
+polls it. On the IntelliJ platform `DaemonCodeAnalyzer` restarts analysis on every
+write action, so without this an editor has only bad options — block a pooled
+thread producing an answer that is already stale, and delay the next, wanted one
+behind it. That is a capability gap and not a latency one; no amount of narrowing
+the check closes it.
+
+**Arming it.** `CancellationSignal` is a `fun interface`, so a lambda is the whole
+ceremony, and one assignment covers the project: all eight
+`ProjectCompiler(…).build(…)` sites in `Project.kt` pass the field
+(`:843`, `:941`, `:2103`, `:2407`, `:2871`, `:3412`, `:3496`, `:3565`), so every
+build this project drives — a plain rebuild, a narrowed one, a capture, a rename's
+verification — polls it.
+
+```kotlin
+project.cancellation = CancellationSignal { indicator.isCanceled }
+```
+
+**Where it is polled, and what that costs.** `Cancellation.check()` runs at every
+`pass("…")` boundary (~480 per compile) and, in the spine walk, once per
+`Cancellation.SPINE_POLL_INTERVAL` nodes — 1024, a power of two used as a mask, so
+837 polls for the compiler profile's 856,962 nodes. The spine site is the one that
+matters and is pinned separately (`the spine polls too …`): without it a single
+large buffer's walk — 1.65 s on tsc's own `checker.ts` — would be uncancellable,
+which is precisely the case an editor most needs to abandon. Per node the price is
+an int increment, a mask and a predictable branch, against a volatile read every
+1024th time.
+
+**What a cancelled build leaves behind.** It throws `CompilationCancelledError` out
+of the call that asked for it and produces **no result**. Nothing in `Project` is
+left half-updated, by construction rather than by care: every cache assignment
+happens *after* `ProjectCompiler.build` returns, so a throw skips all of them and
+the project is exactly as it was — disarm and ask again and you get the answer a
+project that was never cancelled gives. The abandoned build's work is lost; there
+is no partial answer to keep, so **cancel because the answer is unwanted, not to
+poll**. The signal itself is installed for exactly one build and restored in a
+`finally` (`ProjectCompiler.kt:198`), so a cancelled build leaves nothing armed for
+the next one.
+
+> The install is a process-global with install-and-restore — the house pattern,
+> `SystemVfs.workingDirectory` being the other instance. The stated cost: two builds
+> running **concurrently in one process** share the field, so the second install
+> wins and the first build polls the wrong signal. That is already outside
+> `Project`'s one-thread-at-a-time contract (§ 11), and `--workers` installs none.
+
+#### The rough edge: it is an `Error`, and a JVM host will feel it
+
+`CompilationCancelledError` extends `Error`, not `Exception`, and that is
+deliberate. The checker carries defensive `catch (Exception)` guards — narrowed
+from `catch (Throwable)` on 2026-07-04 for exactly this class of reason — and the
+crawl and the `Vfs` carry more. A cancellation modelled as a `RuntimeException`
+would be swallowed by whichever guard it happened to be thrown inside, and the
+build would carry on with a missing file or a wrong default: a silently wrong
+answer, which is worse than not cancelling at all. `Error` is safe because the same
+sweep left **no** `catch (Throwable)` and **no** `catch (Error)` anywhere in
+`commonMain`, and the one boundary guard in `Checker`'s `init` catches
+`StackOverflowError` alone. `runWithDeepStack` transfers it faithfully across the
+deep-stack thread because it uses `runCatching`, which captures `Throwable`
+(`DeepStack.jvm.kt:58`, `:66`).
+
+**The consequence for a host, stated rather than left to be discovered.** On the
+JVM, `ExecutorService.submit` returns a `Future` whose `get` wraps whatever the task
+threw — `Error` included, since `FutureTask` catches `Throwable` — in a
+`java.util.concurrent.ExecutionException`; `CompletableFuture` does the same for
+`get`, and wraps in `CompletionException` for `join`. So a plugin that runs its
+analysis on an executor and has one generic failure branch
+(`catch (e: ExecutionException) { log.warn(…) }`) will log a warning **per cancelled
+keystroke** — which is the exact frequency this API is designed to be cancelled at,
+so the log fills with reports of the mechanism working. A host must unwrap the
+cause and read a cancellation as *no answer*, not as a failure:
+
+```kotlin
+fun analyze(path: String): List<Diagnostic>? =
+    try {
+        executor.submit<List<Diagnostic>> { project.diagnostics(path) }.get()
+    } catch (e: ExecutionException) {
+        // Unwrap: the Error crossed the executor boundary inside this.
+        when (e.cause) {
+            // Not a failure. The answer was not wanted; there is nothing to report,
+            // nothing to log and nothing to retry — the next query rebuilds.
+            is CompilationCancelledError -> null
+            // Anything else is a real failure and belongs in your log.
+            else -> throw e
+        }
+    }
+```
+
+Two smaller notes for the same host. `CompilationCancelledError` is *not* the
+platform's own cancellation type — if your host has one (the IntelliJ platform's
+`ProcessCanceledException`, say) the translation is yours to make, at this boundary
+and nowhere deeper. And a signal that answers true forever cancels every subsequent
+build too, so a host that arms per request must clear or re-point the field rather
+than leaving a spent indicator installed.
+
+### 14b. `saveState()` / `restoreState(text)` — the state that survives a restart
+
+```kotlin
+public fun saveState(): String?                  // Project.kt:3120
+public fun restoreState(text: String): Boolean   // Project.kt:3175
+```
+
+**What the snapshot is.** (INC.46) made project-wide diagnostics incremental
+*within* a process (§ 4b); all of that state is in memory, so an IDE restart, a
+plugin reload or a daemon recycle throws it away and the first query pays a whole
+program build again. The snapshot is the part that has to survive
+(`ProjectStateSnapshot`, core): the compiler **build id**, the **`configPath`**, a
+**content hash per input**, the program's **file list** in crawl order, the
+(INC.46) export **signatures** and **escapes**, and that build's **diagnostics**,
+row for row and in order. It is encoded as JSON carrying a format version
+(`FORMAT_VERSION = 1`, `ProjectStateSnapshot.kt:146`); a snapshot written at another
+version decodes to null and is refused rather than read.
+
+**It writes no file.** `saveState` answers a string and `restoreState` takes one, so
+the host decides where — and whether — its caches live. An embedding API that
+dropped a file into somebody's source tree unasked would be making that decision for
+it; the CLI's `--incremental` (`tsconfig.xtsbuildinfo`, INV.7(d3)) remains the
+convention for callers who want the other behaviour.
+
+**When `saveState()` answers null**, which is not an error and needs no fallback
+beyond skipping the write:
+
+* **No whole-program build has established a surface yet** — call `diagnostics()`
+  first (`Project.kt:3122`).
+* **This compiler build may not be reused across processes at all** — a `.dirty` or
+  `unknown` build id names a tree with local changes, and two such trees share the id
+  without sharing the behaviour (`ProjectStateSnapshot.isReusableBuildId`,
+  `Project.kt:3123`). Refusing to *write* such a snapshot is belt-and-braces: the
+  restore refuses it too, and a snapshot that can never be adopted is a file a host
+  would otherwise keep writing and never use.
+
+It also calls `checkOpen()`, so it must be called **before** `close()` — afterwards
+it throws `IllegalStateException` like every other member (§ 11). The hashes are
+read through the overlay, so an unsaved buffer is hashed as what this project
+actually checked; a later process reading the on-disk text sees a different hash and
+re-checks that file, which is the right answer.
+
+> Writing a pin for any of this: **every local dev build's id ends `.dirty`**, so a
+> test that does not install the named seam
+> (`ProjectStateSnapshot.allowUnstableBuildIdForTesting`, `ProjectStateSnapshot.kt:164`)
+> exercises nothing locally and the real path only in CI — i.e. it passes for
+> opposite reasons in the two places. `ProjectStateSnapshotTest` installs and
+> restores it per test, and pins the shipped default separately
+> (`the unstable-build-id seam is off by default`).
+
+**When `restoreState(text)` answers false.** A refusal is never an error, because
+the caller's fallback is the build it would have done anyway. Each of these produces
+a stale answer if skipped, which is the one failure the mechanism exists to prevent
+(`Project.kt:3177`–`:3200`):
+
+* **This project has already built, or already restored.** A snapshot is a claim
+  about a starting point; adopting one over live state would replace answers this
+  process computed with answers it did not.
+* **Unreadable, or written at another format version.** Nothing to adopt.
+* **A build id that may not be reused at all, or a different compiler build.** A
+  different compiler may report different rows for the same text.
+* **A different `configPath`.** The state describes one project.
+* **An empty program file list.**
+* **Any recorded path is now unreadable.** A vanished program file changes what every
+  importer resolves; a vanished `.json` input changes what the program *is*.
+* **A recorded `.json` input's content changed.** A changed `tsconfig.json` — or an
+  `extends` target, or a `package.json` whose `type` decides a file's module format —
+  does not date one file's rows, it changes what the program is and which options
+  apply, so every stored row is suspect and narrowing cannot repair it. Which `.json`
+  files a build depends on is not a function of the project path, which is why they
+  are *recorded as the build reads them* (`OverlayVfs.jsonReads`) rather than guessed.
+* **A program file that appears in the file list but was never hashed**, so it cannot
+  be proved unchanged.
+
+A program **source** file whose content changed is *not* a refusal: it becomes this
+project's dirty set, and is exactly what the (INC.46) gate is for.
+
+**The one limit to design around: a content hash cannot see an ADDED file.** So an
+adopted state is *unverified* until one build has re-crawled the project and found
+the same program. `restoreState` sets that flag (`Project.kt:3207`), and while it is
+set even a project whose dirty set is empty runs the gate with an empty partition
+rather than answering from the snapshot directly (`Project.kt:3555`); the flag clears
+only when a build's own `programFiles` has agreed (`:3606`, and on a full build
+`:3499`). This is the check that would be skipped by a naive "trust the snapshot when
+nothing changed" implementation, which passes every other pin — `a file added while
+the process was down is not missed` is the one that does not.
+
+**What it is worth** is in § 13's gap 1 with its provenance: warm, with nothing
+changed, **5,855 → 94 ms**; 259 ms with a file changed on disk; and in a cold
+process — a real restart, which is the case this exists for — **9,625–9,844 →
+155–175 ms**, from a 47 KB snapshot, every arm agreeing row for row.
+
+The host flow is two calls at the two ends of a session:
+
+```kotlin
+class ProjectSession(projectPath: String, private val cache: Cache) {
+
+    private val project = Project.open(projectPath)
+
+    init {
+        // Restore BEFORE the first query — a project that has already built refuses.
+        // false means "nothing adopted", which is not an error: the first query is
+        // then simply the build it would have been anyway.
+        cache.read()?.let { project.restoreState(it) }
+    }
+
+    fun diagnostics() = project.diagnostics()
+
+    fun close() {
+        // Save BEFORE close(); afterwards every member throws. null means there is
+        // nothing worth storing — no whole-program build yet, or a compiler build
+        // whose id may not be reused. Do not write a placeholder for it.
+        project.saveState()?.let { cache.write(it) }
+        project.close()
+    }
+}
+```
+
+### 14c. Where both are pinned
+
+The executable spec, for a reader who wants the contract rather than the prose —
+and because a page of prose about behaviour drifts within three rounds while pins do
+not (§ 13):
+
+| claim | pinned by |
+|---|---|
+| an armed signal that never fires changes no answer; a firing one stops the build; a cancelled build leaves the project and the global exactly as they were, mid-flight included; the spine polls as well as the passes; the type cannot be caught as an `Exception` | `ProjectCancellationTest` (`-project`, `src/commonTest`) — seven pins |
+| a restored state answers what a fresh build answers, with no edit / a body edit / a signature edit; an added file is not missed; a restore's first query goes through the gate and its second builds nothing; every refusal above; `saveState` before any query is null; the unstable-build-id seam is off by default | `ProjectStateSnapshotTest` (same module) — thirteen pins |
+
+Two things those tables deliberately do not cover. **Every wall figure quoted in
+this section is pinned by nothing** — § 13's rule applies here too: a timed
+assertion over a compile is a coin flip, so the numbers are dated and provenanced
+instead. And the `ExecutionException` unwrapping above is a property of
+`java.util.concurrent`, not of this compiler: it is stated here because it is the
+predictable consequence of a deliberate design decision, but nothing in this repo
+tests a host's executor.
