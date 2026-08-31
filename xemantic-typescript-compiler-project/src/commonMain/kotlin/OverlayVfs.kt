@@ -304,6 +304,16 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
      * `.json` is never answered here: [readText] records it for (INC.48)'s snapshot,
      * and a resident answer that skipped that record would make the snapshot's input
      * list depend on which files happened to be in memory.
+     *
+     * ## The [contents]-before-[retained] order is a REDUNDANT guard, and is kept
+     *
+     * Measured, not argued: an ablation that consults [retained] FIRST reddens nothing
+     * in `ProjectTrustedFilesystemTest`, because the two maps are disjoint by
+     * construction — [put] drops the retained entry for its path and [retainRead]
+     * refuses to make one for an overlaid path. It takes BOTH mistakes to shadow an
+     * unsaved buffer with a stale read, which is round 927's pair: the invariant is the
+     * load-bearing half and this order is the belt. Recorded here rather than claimed
+     * as coverage.
      */
     override fun readTextIfResident(path: String): String? {
         val k = key(path)

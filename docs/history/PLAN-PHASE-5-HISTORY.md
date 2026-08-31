@@ -132,6 +132,3056 @@ why they assert `rows.size == 1` and the `ZzzProj | undefined` text rather than 
     same thing — the only instrument that says so is re-pricing the unmasking patch.
 
 
+### Round (INC.64) — two rows the crawl and the emit-order prep were paying on every keystroke, and the floor is 241 -> 146 ms
+
+**(INC.62)'s SUCCESSOR RANKING NAMED THE INIT PASS DISPATCH AND THE CRAWL. THE CRAWL'S
+ROW TURNED OUT NOT TO BE READS AT ALL, AND THE SECOND FIX WAS NOT ON THE LIST.**
+Both were found the same way: divide a row by its own population and refuse an implied
+per-op cost that is impossible.
+
+**(a) THE CRAWL HANDED EVERY FILE TO ANOTHER THREAD TO SCHEDULE A MAP PROBE.**
+The floor's `read+decode (CPU sum)` implies **77-102 us** to read a ~1 KB file — but that
+span is elapsed-WITH-SUSPENSION (CLAUDE.md already says so), so it is a location and not a
+price. The price is the WALL: **51-57 ms**, against **13-21 ms** to read all 2,401 files
+sequentially and **1.1-1.8 ms** for `computeParserFlags` over them. The gap is the SHAPE.
+`readAndScanBatch` read on `Dispatchers.IO` and then hopped to `Dispatchers.Default` for
+EVERY file so that a parse would never run on an IO thread — but on a warm incremental
+build every parse is a `CrawlParseCache` hit, so the hop was scheduling a ~1 us map probe
+onto another thread, `files` times. Priced with `Inc64CrawlShapeMain` (ABBA-rotated within
+one process, leading draw of each arm dropped): **sequential 14.4 ms, `flatMapMerge(16)`
+alone 17.2, one hop 18.5, the shipped two-hop shape 32.1.** The flags and the (read-only)
+lookup now run on the thread the read left us on and **only a MISS hops**; the cold crawl
+is untouched, which is the whole point of the hop. The floor's `pre-parse (CPU sum)` row
+falls **69-81 ms -> 2.0-2.7** across four arms.
+**WHAT THE WALL COULD NOT SAY, AND SAYING SO IS THE POINT.** Crawl WALL read 51.4-56.5
+before and 40.8-53.9 after: overlapping ranges, and that run's own `full` median was ~9%
+slower, so the box moved more than the effect. The claim rests on the mechanism plus the
+synthetic arm, and the PIN is a COUNT — `CrawlParseCache.parseDispatches`, folded
+single-threaded exactly like `hits`/`misses`, since a `++` from the concurrent workers is
+round 825's race with no exception to find it by. Pinned at two program sizes because the
+claim is complexity: a cold crawl dispatches once per file (5 -> 5, 20 -> 20), a warm one
+not at all, and after one edit exactly ONE file — the shape a keystroke has.
+
+**(b) A `--noEmit` BUILD COMPUTED A DEPENDENCY ORDER FOR AN EMIT THAT NEVER HAPPENS —
+15.0 / 17.1 / 22.6 ms, ~10% of the floor, AND IT WAS ON NO QUEUE.** `extractRelativeImports`
+runs twice per file and its whole product is `importDeps`/`importDepsNoRefPath`, whose every
+consumer orders EMITTED output: `transformOrder` feeds a transform loop round 738 already
+made `emptyList()` under `skipEmitOutputs`, `sortedTsFiles` orders `jsOutputMap` entries a
+`--noEmit` build never produces, and `cpcRequireOnlyOrphans` carried the same gate already.
+**This is (INC.59)'s finding one call deeper** — the second time the emit-order region has
+been caught running in the `--noEmit` path.
+**THE OBVIOUS EDIT IS WRONG**: a `continue` skips the rest of the loop body, and
+`tsFileNames.add(file.fileName)` sits below it, which every later phase reads. The gate
+wraps exactly the two calls.
+**AND THE CORPUS IS A CONTROL HERE, WHICH INVERTS THE USUAL READING**: `skipEmitOutputs` is
+set ONLY by `ProjectCompiler`, never by the `@noEmit` corpus directive (round 738), so all
+~13k baselines run with the branch TAKEN and cannot see the gate at all. The instruments
+that see it are the 8-profile `--noEmit` grid and the new `-project` pins; the EMITTING path
+is verified separately and independently — an `--outDir` build of the compiler profile is
+**byte-identical across the two binaries, 78 files, `diff -r` clean**.
+
+**THE VALUE PIN WAS BLIND ON ITS FIRST FIXTURE AND ONLY THE ABLATION SAID SO.** Named the
+obvious way round — `dep.ts` imported by `main.ts` — dependency order and ALPHABETICAL
+order coincide, so arm c2 (empty the sort's dependency edges) left "the outputs are ordered
+dependencies-first" GREEN. Renamed `zdep.ts` / `amain.ts` so the two orders are opposite:
+c2 then reddens that pin and only it, while c1 (remove the gate) reddens only the count pin.
+**A pin over an ORDER needs a fixture whose expected order differs from every order the
+system produces by accident** — and the accidental one here is the crawl's own sort.
+
+**MEASURED, floor median on `many-small-2400-dom` across this session's three landings:
+241 -> 189 -> 197 -> **146** ms (early) and 256 -> 166 -> 152 -> **143** (late)**, i.e.
+**-39% / -44%** over the round. `extractRelativeImports` no longer appears in the floor
+table at all.
+
+**GATES.** Suite **16,535 / 0 / 3** (+7 over the round, exactly the new pins);
+`cost_gate.py` exit 0 both times; `huge_methods.py --fail-over 0` clean; 8-profile
+before/after binary grid `added=0 removed=0` on all eight, covering (INC.63) and both
+halves of this round together.
+
+**SUCCESSOR (INC.65).** The dom floor is now: **checker construct 37-67 ms** (of which the
+init-block pass dispatch is most, and FLAT — see (INC.64) below for why that needs the
+(INC.7) partition question rather than a micro-optimisation), **crawl WALL 43-49**
+((INC.56), still the only row costing a soundness promise, and still the one an
+IntelliJ-class host can simply hand us), config+glob 16-19, post-checker 5-13. The two
+levers that are left are therefore a PARTITION question and a HOST PROMISE — the era of
+finding a stray quadratic in the front end may be over, which is itself worth recording.
+
+### Round (INC.63) — every keystroke re-derived the whole lib, and the half the refusal named was 3% of it
+
+**(INC.62) SAID RE-TAKE THE FLOOR ON A `dom` FIXTURE BEFORE OPENING ANY OF ITS ROWS. DONE,
+AND THE RANKING IT PREDICTED WAS WRONG IN THE ONE PLACE THAT MATTERED.** Its forecast was
+"crawl WALL 55 ms (27%), checker construct 83 — of which the pass table 42 and the FIELD
+initializers 41". Measured on `build/bench/many-small-2400-dom` (three arms, 2,401 files):
+checker construct **84-99 ms (42-44%)**, crawl WALL 55-69 (27-30%), config+glob 15-30,
+`extractRelativeImports` 14-18, post-checker 10, bind 7-10. The field half is right — and
+**essentially ALL of it is ONE field**: `parseBuiltinLib` reads **46.2 / 47.1 / 50.1 ms**,
+the largest single addressable row on the floor, and *stable to ~1% across draws* where
+every other row swings 40%. It is also **O(1) in program size**, so it is a LARGER share
+the smaller the project — i.e. exactly what an IDE-hosted application project pays per
+keystroke, and the reason it hid: at `"lib": ["es2020"]` the same row is 8-11 ms.
+
+**THE ROW WAS REFUSED, AND THE REFUSAL WAS RIGHT ABOUT A MECHANISM THAT OWNS 3% OF IT.**
+(INC.54)(c) reads: *"`parseBuiltinLib`, ~8-11 ms — REFUSED by (INC.53) with its split
+measured (binds 3.2-5.3, decl-set walk 1.9-2.8, resolution + 45 `mergeSymbolTable`
+3.1-5.3) and BLOCKED on round 884's `mergedSymbols` clone-on-write"*. The block is real
+and still stands — `mergeSymbolTable` MUTATES the merged-in symbols, so a bound lib table
+cannot be shared. But the bind measures **1.4 ms**. The recorded split mis-attributed the
+cost because `RealLibResolver.resolve` sits INSIDE the `bindLibFiles` section, and it is
+not a bind at all: `bindLibFiles` **17.4 -> 1.4 ms** is that resolve being memoized.
+
+**SO THE 46-50 ms IS TWO THINGS, BOTH PURE FUNCTIONS OF THE SHARED PARSES, NEITHER OF THEM
+THE BLOCKED ONE.**
+**(1) ~32 ms is `RealLibResolver.resolve`, CALLED TWICE PER CONSTRUCTION.** Its
+`/// <reference lib=…/>` closure runs a regex over the CONTENT of every included file —
+~3.7 MB for a `dom` set — and `bindRealLibs` asks for it once itself (for `unknownNames`)
+and once more through `parsedLibFiles`. It is a pure function of `(libNames, target)` over
+compile-time-constant text; memoized.
+**(2) ~15 ms is the B85.2/M2.2 decl-set walk**, which fills `builtinLibDecls` /
+`builtinLibMemberDecls` / `realLibDeclFile` — ~30k insertions into containers keyed by
+**data-class AST nodes**, i.e. round 471's deep `hashCode`. **The arithmetic is what names
+the mechanism, before any build**: ~15 ms over ~30k insertions is **~500 ns per put**,
+20-40x a `HashMap` put with a `String` value and physically impossible for the container
+alone — (INC.62)'s own instrument, and the fifth defect it has found. Hoisted VERBATIM
+(same order, same containers — a `Set<Node>` dedupes STRUCTURALLY, so a different container
+would silently change which declarations the sets hold) into
+`RealLibSnapshots.libDeclIndex`, built once per process and per lib set. It belongs there
+for the same reason the PARSE does: the walk reads the shared, immutable AST and mutates
+nothing.
+
+**MEASURED.** `parseBuiltinLib` 47.12 -> 1.65, 50.09 -> 1.69, 46.23 -> 1.46 ms; the
+decl-set walk 12.0-15.9 -> **0.01**; checker construct 99 -> 55, 97 -> 44, 84 -> 43; and
+the **PLAIN floor median 241 -> 189 ms (early) and 256 -> 166 (late)**, the early arm's
+ranges not overlapping (236-247 against 176-195). The wall corroborates the row here, as
+it did for (INC.61) and unlike (INC.60), because the effect is far outside the +-40%
+single-draw band.
+
+**GATES.** Suite **16,528 / 0 / 3** (+5, exactly the new pins). `cost_gate.py` exit 0 with
+all 20 counters +0.00% — the EXPECTED answer, since a CLI compile constructs one checker
+and a hoist within one construction is a strict no-op there. `huge_methods.py --fail-over
+0` clean. 8-profile before/after BINARY grid `added=0 removed=0` on all eight
+(`scripts/inc63-grid.sh`) — **run as a CONTROL and labelled one in its own header**: the
+index is a function of the LIB SET alone and all eight profiles carry one lib
+configuration, so profiles 2..8 cannot say anything profile 1 did not. What actually
+discriminates the sharing is the CORPUS, which runs thousands of compiles in one JVM.
+
+**PINS AND THEIR ABLATION.** The claim each pin makes is a COUNT, not a time (round 868:
+a millisecond assertion over a sub-10-ms region is a coin flip, and this saving sits under
+the spread of a whole compile); both counters are process-global, so every pin reads a
+DELTA. a1 (never consult the index cache) reddens both count pins; a2 (drop the resolve
+memo) reddens the resolve pin; a3 (the two identity sets swapped in the returned index)
+reddens ONLY the coverage pin — which is the receipt that the count pins cannot see a
+wrong-table wiring and that the coverage pin can. The negative control — the embedded-lib
+path must build its own tables and never be served the real-lib index — stays green in all
+three, which is what stops a "share everything" implementation reading green.
+
+**SUCCESSOR, per the WORK ORDER note.** The dom floor after this round is: **init-block
+pass dispatch 40-53 ms** (now the largest checker row, and FLAT — top pass
+`init:computePerFileVisibility` 5.8 ms, then 3.8 / 2.7 / 2.5 / 2.1, a ~400-pass tail with
+no one to make cheaper, so it needs the (INC.7)-style question "which of these can be
+partition-scoped or built on first ask", not a micro-optimisation), **crawl WALL 51-57 ms**
+((INC.56), the only row costing a soundness promise and now co-largest), config+glob 17-30,
+`extractRelativeImports` 15-23, post-checker 10-21. Filed as **(INC.64)**.
+
+### Round (INC.61) — the arc had been measuring the cheap `lib`, and the floor's largest pass is 45x smaller now
+
+**FOUND BY RE-READING THE FLOOR AFTER (INC.60), WHICH IS (INC.59)'s OWN LESSON APPLIED
+FOR THE SECOND TIME.** With `config` fixed the 4,801-file floor re-ranked to: checker
+construct **137 ms (38.8%)**, crawl WALL 126 (35.5%), `extractRelativeImports` 29,
+post-checker 26, config 20, bind 14 — and **123 of the checker's 137 ms is the init-block
+pass dispatch**, whose per-pass table no round had read on this shape since (INC.58)
+proved the tsc-profile ranking wrong by 600x. Read: `init:buildPerFileScopes` **28.2 ms**,
+the largest pass, twice the next one.
+
+**THEN THE FIXTURE ITSELF TURNED OUT TO BE THE UNDERSTATEMENT, AND THAT IS THE REUSABLE
+HALF.** `buildPerFileScopes` copies the whole SHARED half — lib globals, script-file
+locals, global augmentations — into a fresh table PER FILE, i.e. `files x libGlobals`
+insertions. The generated fixture pins `"lib": ["es2020"]` (~185 names). An ordinary
+project's `lib` is unset, which means **`dom`** (~2,242). Copying the fixture and changing
+**that one line and nothing else**:
+
+| | `lib: es2020` | `lib: es2020 + dom` |
+|---|---|---|
+| `init:buildPerFileScopes` | 13.5 ms | **175.6 ms** |
+| share of the floor pass table | 25% | **70%** |
+| floor (plain arm median) | 216 ms | 385 ms |
+
+**So every floor figure in this arc was taken on the cheap case.** (INC.57)'s law said the
+profile's FILE SHAPE can make a cost inexpressible; this is the same law on the
+**compilerOptions**, which CLAUDE.md had already recorded once for a library baseline
+((CHK.49): knip's `lib: ["esnext"]`) without anyone drawing the general conclusion.
+
+**THE FIX IS AN OVERLAY, NOT A CACHE — THERE IS NOTHING TO INVALIDATE.** The base is the
+same object for every file, so it is built ONCE and `LayeredSymbolTable` answers
+`own[k] ?: base[k]`. **The ORDER is the load-bearing half and it is not obvious**: three
+consumers iterate a per-file scope, and a `LinkedHashMap` keeps a key's ORIGINAL position
+when a later `put` merely overwrites its value — so a shadowing local must appear at the
+BASE's position carrying the OWN value, **not appended**. Reproducing that entry for entry
+is what makes the overlay a drop-in under round 776's order law. Mutators THROW: nothing
+writes to a per-file scope, and a view that silently accepted a write would drop it, with
+the symptom surfacing far away as a name resolving to a foreign module's local.
+
+**RESULTS (dom arm, 2,401 files, both arms this session):**
+
+| | before | after |
+|---|---|---|
+| `init:buildPerFileScopes` | 175.64 ms | **3.90** (45x) |
+| init-block pass dispatch | 334 | **42** (8x) |
+| checker construct | 393 | **83** (4.7x) |
+| floor phase total | 503 | **200** (2.5x) |
+| floor median, PLAIN arm | 385 | **202 ms** (1.9x) |
+
+**The plain-arm median moving is worth its own line.** (INC.60)'s 16 ms sat inside the
++-40% single-draw band and the wall read the WRONG SIGN; this one is far outside it, so
+here the wall corroborates the row instead of contradicting it. Two instruments agreeing
+is the difference between a measured win and a plausible one.
+
+**GATES.** Suite **16,523 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0 with
+every counter unchanged; `huge_methods.py --fail-over 0` clean; **8-profile grid
+`added=0 removed=0` on all eight** — run deliberately, because this is the checker's
+name-resolution substrate.
+
+**ABLATION.** c1 makes the overlay APPEND a shadowed key instead of keeping the base's
+position — the mistake an implementation makes by accident. **Exactly one pin reddens,
+`iteration order is entry-for-entry the copy's`**, and the lookup pins correctly stay
+green because c1 changes no answer. Worth stating plainly: **the 16,523-test corpus would
+not have caught c1 either**, since order reaches only cost counters and suggestion
+ordering — which is precisely why the pin compares against the reference CONSTRUCTION
+rather than a hand-written expectation.
+
+**NAMED SUCCESSORS.** The floor's ranking has moved again, so re-read it rather than
+inherit this list: at 2,401 dom-lib files the phases are now crawl WALL **55 ms (27%)**
+((INC.56), still the only row costing a soundness promise), checker construct 83 (of
+which the pass table 42 and the FIELD initializers **41** — (INC.53)'s territory, and now
+half of it), config 23, `extractRelativeImports` 16, post-checker 14.
+**And re-take any of them on a `dom` fixture**: `build/bench/many-small-2400-dom` exists
+for exactly that, and the two arms of this round are why it must be the default shape for
+floor work from here.
+
+### Round (CFG.1) — a project that has ever been built reads its own output back in, and the corpus cannot contain a directory
+
+**FOUND BY (INC.60) ON THE WAY PAST, WHICH IS THE ROUTE WORTH KEEPING.** Reading
+`collectRootFiles` to price the glob meant reading what it excludes, and the default was
+three package folders. Checking that against the reference — `commandLineParser.ts`, on
+this box in `build/bench/tsc-project-*` — says the rule is the OTHER half: with `exclude`
+absent, `excludeSpecs = filter([outDir, declarationDir], d => !!d)`. The package folders
+are not `exclude` entries in tsc at all; they are pruned from every wildcard match by the
+matcher (`commonPackageFolders`), which is exactly what `ProjectCompiler`'s own `walk`
+already does by basename. **So we had the redundant half and not the load-bearing one.**
+
+**WHAT IT COSTS. Measured against tsgo 7.0.2 on a two-file project** with
+`outDir: "dist"`, `declaration: true` and the `dist/a.d.ts` + `dist/a.js` a previous
+build leaves behind: **tsgo's program is 1 file and ours was 2**. `dist` matches the
+default everything-include and a `.d.ts` is a root extension, so any project that has
+ever run a declaration-emitting build pulls its own output in as ROOT FILES — and then
+crawls, reads, parses, binds and checks the whole emitted tree **on every keystroke**,
+which is the incremental floor (INC.53)-(INC.60) have been paying down. After the fix the
+CLI reads `1 root, 1 in program`, i.e. tsgo's own answer.
+
+**THE DIAGNOSTIC HALF IS REAL IN tsc AND UNOBSERVABLE HERE, AND THAT IS A MEASUREMENT
+RATHER THAN A GUESS.** Forced in (`include: ["src/…", "dist/…"]`), tsgo answers **TS2451
+twice** for a duplicated `declare const` across the two trees and **TS5011** for the moved
+common source directory. **We report neither** — both are separate gaps — so on this
+compiler today the entire observable consequence is the program SET and its cost. A value
+pin was written asserting those codes stay absent, **it stayed GREEN under the ablation
+that removes the whole fix**, and it was deleted rather than kept: round 808's rule, and
+the reason the class KDoc now records the two tsgo readings where the next reader will
+look for a diagnostic pin. Both gaps are filed below.
+
+**WHY NOTHING HERE COULD SEE THE DEFECT — the (INC.57) law on a third axis.** The
+generated corpus hands sources to the compiler directly and **materialises no directory at
+all**, so it has no glob to get wrong; and all eight dashboard profiles restrict `include`
+to a `src` subtree, under which `dist` never matched in the first place. The grid is
+therefore a CONTROL for this change and reads **`added=0 removed=0` on all eight**, as
+predicted before it was run. Only a `-project` fixture through `ProjectCompiler` and a
+`Vfs` can express the shape — the same instrument (CHK.29) needed for `package.json`
+scopes, and for the same reason.
+
+**AN EXPLICIT `exclude` STILL REPLACES THE DEFAULT**, exactly as in tsc — it is not
+additive. That direction is pinned deliberately, because it is the one a
+"just add outDir to the defaults" implementation gets wrong, and arm b2 is that
+implementation.
+
+**ABLATION** (one mistake at a time, on a committed tree, each arm `cmp`ed against HEAD).
+**b1**, the pre-fix default: `an emitted declaration is not a root file` +
+`declarationDir is excluded as well as outDir` RED. **b2**, the default made ADDITIVE with
+`outDir` only: `an explicit exclude REPLACES the default, as in tsc` + the declarationDir
+pin RED. Each substantive pin is uniquely discriminated by a different arm, and the two
+controls (`a project with no outDir is unchanged`, `node_modules is still excluded`) stay
+green in both — which is what they are for.
+
+**GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
+
+**NAMED SUCCESSORS, both measured this round against tsgo 7.0.2 and both filed below:**
+**(CHK.74)** a cross-file duplicate global (`declare const VERSION` in two script files)
+is TS2451 twice in tsc and **silent here**; **(CFG.2)** TS5011, the common-source-directory
+diagnostic, is likewise unreported. They matter beyond their own rows: between them they
+are why a defect that changes the PROGRAM could be invisible to every diagnostic channel
+this repo has.
+
+### Round (INC.60) — the floor's third row was a question asked twice per entry, and the second ask cost five syscalls
+
+**THE QUEUE ENTRY SAID "DO NOT ASSUME IT IS THE GLOB". IT IS THE GLOB — AND THAT IS
+THE LEAST INTERESTING HALF OF THE ANSWER.** `FrontEnd.CONFIG` covers three different
+pieces of work with three different levers (tsconfig load, `@types` acquisition, the
+root-file glob) and no round had separated them. Split five ways at 2,401 files, the
+warm floor draws read:
+
+| block | before |
+|---|---|
+| tsconfig load | **0.43 ms** |
+| `@types` acquisition | **0.01 ms** |
+| root-file glob | 30.1 ms |
+| — of which the directory walk | 29.9 |
+| — — of which `vfs.isDirectory` per ENTRY | **15-21 ms over 2,451 calls (7.3-8.6 us each)** |
+| — — of which `vfs.list` + sort per DIRECTORY | 4.8 over 50 |
+| — — of which the include/exclude regex match | 5.0-5.8 over 2,401 |
+
+So the row is ~99% the glob, the glob is ~99% the walk, and **60-70% of the walk is one
+call the walk did not need to make**: for every entry the directory listing had just
+returned, it went back to the filesystem to ask "is this a directory?".
+
+**WHY THAT ONE BOOLEAN COSTS 7.3-8.6 us, WHICH IS THE PART NO AMOUNT OF READING OUR OWN
+SOURCE WOULD HAVE SHOWN.** `SystemVfs.isDirectory` is `SystemFileSystem.metadataOrNull(...)`,
+and kotlinx-io 0.9.1 compiles that (`FileSystemJvmKt$SystemFileSystem$1.metadataOrNull`,
+read out of the jar with `javap -c`) to `File.exists()` + `File.isFile()` +
+`File.isDirectory()` + `File.isFile()` + `File.length()` — **up to five `stat` syscalls
+plus a `FileMetadata` allocation to answer one bit** — on a `Path` rebuilt from the
+string the listing had just produced. The dependency's implementation was the price,
+and the only way to see it was to divide the row by its population and refuse the
+implied per-op cost (round 894's law: 7.3 us is impossible for one `stat`).
+
+**THE FIX IS A LISTING THAT ANSWERS THE KIND.** `Vfs.listEntries` returns
+`List<VfsEntry>`; **its default body is literally the two calls it replaces**, so every
+`Vfs` in the repo and every one an embedder writes is unchanged and correct without
+touching it. `SystemVfs` overrides it through a new `expect fun systemListEntries` —
+JVM actual: one `readdir` (`File.listFiles`, which constructs the children without
+touching the filesystem again) plus one `File.isDirectory` per entry; native actual:
+the portable pair, since Kotlin/Native has nothing cheaper.
+
+**RESULTS, both arms measured this session with the same runner** (only within-round
+paired deltas are quotable here):
+
+| | before | after |
+|---|---|---|
+| 2,401 files — `CONFIG` | 29.2 / 30.6 / 32.6 ms | **11.5 / 14.7 / 16.3 ms** |
+| 2,401 files — the walk | 28.4 / 29.9 / 31.9 | **10.9 / 13.9 / 15.6** |
+| 4,801 files — `CONFIG` | 52.8 / 52.9 (the queue's own recorded figure) | **20.7 / 25.9 / 27.1** |
+| per entry | ~9.3 us | **3.1-4.4 us** |
+
+**THE CENSUS IS THE RECEIPT THAT NOTHING WAS SKIPPED TO BUY IT** — `50 dirs, 2451
+entries, 2401 candidates, 2401 roots` at 2,401 files and `98 / 4899 / 4801 / 4801` at
+4,801, IDENTICAL across the change. And the per-entry figure is flat across the two
+sizes in both arms, so this is a constant-factor win on a linear row, not a complexity
+one: the three quadratics of the previous session are still gone.
+
+**WHAT THE PLAIN ARMS SAY, AND WHY THEY ARE NOT THE EVIDENCE.** The uninstrumented floor
+medians read 216 ms before and 222 after at 2,401 files — i.e. the ~16 ms saving is
+INSIDE the ±40% single-draw band (INC.52) characterised, and a wall-clock reading of this
+round would have concluded the opposite of the truth. The `FrontEnd` row is deterministic
+where the wall is not; that is the whole reason the split was built before the fix.
+
+**PINS, AND WHAT EACH ONE IS FOR.** The saving is a property of the PLATFORM's
+filesystem, so no timing assertion can state it and none is made. Two classes, two
+layers, ablated separately:
+
+* `RootGlobListingTest` (commonTest) — the CALL SHAPE. Its counting `Vfs` **overrides
+  `listEntries`** and answers the kind from the listing, exactly as `SystemVfs` does;
+  without that override the default *is* the pre-fix question sequence and the pin would
+  be vacuous against every binary. Pins: no `isDirectory` on a `.ts` path at all; the
+  count does not grow between a 10-file and a 100-file directory ((INC.57)'s
+  count-at-two-sizes idiom); and the roots — **and their ORDER**, round 776 — are what a
+  `Vfs` taking the DEFAULT `listEntries` produces.
+* `SystemVfsListEntriesTest` (jvmTest, real temp tree) — the EQUIVALENCE of the separate
+  JVM implementation, whose divergence would be silent: a wrong kind drops a file from
+  the program or adopts a directory as a root, with no diagnostic anywhere. Includes a
+  directory literally named `looks-like.ts`, which is the shape any
+  guess-the-kind-from-the-extension shortcut gets wrong.
+
+**ABLATION (one mistake at a time, on a COMMITTED tree, each arm `cmp`ed against HEAD so
+a dead arm cannot read as a redundant guard).** a1 restores `list` + `isDirectory` per
+entry: **2 of 3 `RootGlobListingTest` pins RED**, the equivalence pin correctly green (a1
+changes the questions, not the answers), `SystemVfsListEntriesTest` untouched. a2 makes
+the JVM actual answer the kind wrongly: **2 of 3 `SystemVfsListEntriesTest` pins RED**,
+`RootGlobListingTest` green (it drives an in-memory `Vfs`). Neither class covers the
+other's layer. Restored, REBUILT, and the restored binary re-run green ((CHK.54): a
+restore leaves the class dir holding the last arm).
+
+**GATES.** Suite **16,514 / 0 / 3** (+6, exactly the new pins); `cost_gate.py` exit 0
+with **every counter unchanged** (this touches no checker); `huge_methods.py
+--fail-over 0` clean; warning-clean.
+
+**NAMED SUCCESSOR — and it is not a perf item, it is a DEFECT this round walked into.**
+tsc's `commandLineParser.ts:3131-3141`: when `exclude` is absent from a tsconfig, the
+default exclude is `[outDir, declarationDir]` (the package folders are pruned separately,
+by the wildcard matcher, which is what our `walk`'s `pruned` set already does). **We do
+not implement that half at all** — `TsConfigLoader.defaultExclude` is the three package
+folders and nothing else. So for any project with `outDir: "dist"` that has ever emitted
+declarations, `dist/**/*.d.ts` matches the include glob and is pulled in as ROOT FILES:
+duplicate-identifier errors tsc does not report, plus the whole emitted tree crawled,
+read, parsed, bound and checked on every keystroke. It is invisible to every gate here
+(the corpus materialises no directory, and the eight dashboard profiles hold no
+`package.json` and are never emitted into) and it is exactly what an IntelliJ-hosted
+project looks like after one `tsc` run. Filed as **(CFG.1)**.
+
+### Round (BIND.1) — a diagnostic that appeared and disappeared with the byte length of an UNRELATED file
+
+**Reported, not found by a sweep.** From the IntelliJ plugin: a TS2345 naming a type from
+elsewhere in the buffer, over the last `console.log`, that came and went as trailing
+newlines were added, "triggered by some combination of factors, like the amount of
+incremental compilation cycles".
+
+**The trigger reading is what makes it tractable.** Trailing whitespace changes exactly
+ONE span in a file: `Node.end` is the end of the FOLLOWING token
+(`NodeSpanSemanticsTest` finding 2), so a file's LAST statement ends at the EOF offset and
+every appended newline walks its `(pos, end)` one step. That is a key, and
+`nodeKey(pos, end)` carries no file identity while positions restart at 0 in every file —
+so the question is which table is keyed by it and lives longer than a file. Two:
+`Binder.nodeToSymbol` and `Binder.moduleInstanceStates`, ONE map each, shared by every
+`BinderResult` from one binder, last-wins in bind order. The hazard was DOCUMENTED
+(`Binder.kt:212`, CLAUDE.md) and worked around locally (`lexOwnerSymbols`), never fixed.
+
+**The population, measured rather than argued.** `NodeKeyCollisionCensusMain` parses every
+program file and groups nodes by key. On an ordinary 223-file program (the reporter's file
+plus `zod` and `@types/node`): 4,324 of 120,964 keys are produced by more than one file,
+**109 by two or more DECLARATION nodes**, and **106 of the 223 files** have a last
+statement that appending newlines alone can drive into a collision. On tsc's OWN 78
+sources: **271 declaration-node collisions** (`watchUtilities.ts`/`moduleNameResolver.ts`
+variable declarations, a dozen import-specifier pairs).
+
+**Reduced to four lines, and it fails in BOTH directions.** Two files of identical byte
+length, each declaring a merged `namespace`; their `ModuleDeclaration`s therefore share a
+key. `Checker.buildNamespaceScope` looks its namespace symbol up in that table, got the
+OTHER file's, and built the wrong scope: the file's own export vanished (a false TS2304 on
+`beta = alpha`) and the foreign file's became visible (`beta = gamma` accepted, where tsc
+says TS2304 at the same line:col). Adding ONE character to the sibling file removed the
+error; removing it brought it back. tsc 5.9.3 is the control on both arms.
+
+**The fix, and the one rule in it that is not obvious.** The tables are allocated per
+`bind()`. Twelve checker reads that hold only a `Node` go through `nodeSymbolOf` /
+`moduleInstanceStateOf`, which resolve the OWNING file from the INV.2(a) parent chain — and
+an owner that recorded nothing answers **null**, WITHOUT falling through to a scan of the
+other files, because that scan is precisely the collision. The scan survives for an
+UNINDEXED node only (a `copy()`/synthesized one), where there is no file to ask. Three
+`for (br in binderResults)` double loops and one `binderResults.firstOrNull()` retire with
+it — the latter answered only because the table used to be shared, and would have been a
+silent behaviour change under the split.
+
+**Why no gate here could have caught it, and what the pin does about it.** It needs TWO
+files whose declarations land on coincident offsets; no hand-written fixture produces that
+by accident and the `// @Filename:` harness would not preserve it. So
+`NodeKeyCollisionTest` hands two exact texts to `compileParsed` and ASSERTS the collision
+precondition — without that assertion the class goes quietly vacuous the day someone
+renames a binding. Ablated (the per-`bind()` reset removed, one mistake, rebuilt): the two
+behavioural pins go RED and the precondition and no-collision control stay GREEN, which is
+what separates "measures the fix" from "measures the fixture".
+
+**GATES.** Suite **16,500 / 0 / 3** (+4, exactly the new pins). Compiler profile still
+**46 errors on 78 files**. `cost_gate.py` exit 0, `output.errors` and `spine.nodes`
+unchanged; `typeOfExpr.calls` +0.54% and `narrow.memoServed` +1.55% are the profile's own
+271 collisions now resolving to the right file — an accounting item, re-baselined in the
+same commit. `huge_methods.py --fail-over 0` clean; warning-clean.
+
+**Left open.** The reporter's own TS2345 is NOT reproduced — that needs their project, and
+the collision depends on exact offsets. Same trigger signature and same class; whether it
+arrives through this table or a sibling is unconfirmed. `PLAN-PHASE-5.md` is at 23 live
+rounds against the ~10 the protocol asks for, and the trim was NOT attempted: the oldest
+round's section runs straight into the queue with no heading of its own, which is the exact
+shape that emptied this file twice.
+### Round (INC.59) — the same defect a THIRD time, in the path that emits nothing
+
+**FOUND BY RE-READING THE FLOOR, NOT BY TRUSTING THE RANKING — which is the reusable
+half of the whole session.** (INC.57) and (INC.58) had reordered the floor twice, so it
+was re-decomposed rather than assumed. `post-checker` had become the LARGEST row —
+**166-189 ms of a 366 ms floor (~48%)** at 2,401 files, scaling 10 -> 47 -> 177 ms across
+the three sizes — and **it appeared in no queue item at all**, including (INC.54)'s
+otherwise careful inventory. Its sub-rows put 158.5-175.3 ms of it in `POST_EMITPREP`
+against 6.8-8.2 ms at 601 files: **21x for 4x the files**.
+
+**ONE EXPRESSION.** `parsedSourceFiles.filter { it.key !in transformOrder.toSet() }` —
+`.toSet()` INSIDE the lambda, so an N-element set is rebuilt once per entry of an
+N-entry map. **And this is the `--noEmit` path**: round 738's `skipEmitOutputs` gate
+means such a build emits nothing, so it was spending 175 ms per keystroke preparing an
+emit order that would never be used. The hoist is exactly equivalent — a pure membership
+predicate, and `filter` preserves the map's order either way.
+
+**RESULTS. `POST_EMITPREP` 158.5-175.3 -> 1.8-2.8 ms (~70x)**, the whole post-checker
+region 166-189 -> 8.6-12.6, floor at 2,401 files **366 -> 279 ms**.
+
+**THE SESSION'S CUMULATIVE FIGURE — 1,653 -> 279 ms, 5.9x, on the per-keystroke floor of
+a 2,401-file project**, and since all three defects were super-linear the gain GROWS with
+project size. 165 -> 99 at 601 files, 409 -> 197 at 1,201.
+
+**GATES.** Suite **16,504 / 0 / 3** (+1, exactly the new pin); `cost_gate.py` exit 0 with
+every counter identical to the (INC.58) run; `huge_methods.py --fail-over 0` clean.
+Pinned with the same count-at-two-sizes idiom (`transformOrderSetBuilds == 1`), added to
+`ImportDepScanComplexityTest` because it is literally (INC.57)'s defect class.
+`docs/perf/import-dep-scan-complexity.md` § 7.
+
+**VERIFIED AT MONOREPO SCALE, WHICH IS THE CLOSING EVIDENCE.** A fourth size was
+generated (**4,801 files**) to test whether anything still blows up where a real
+monorepo lives. It does not: the floor reads **428 ms against 279 at 2,401 — 1.53x for
+2x the files, i.e. SUB-linear**, which is the cleanest single demonstration that the
+three quadratics are gone rather than merely reduced. Two rows read above 2.0x
+(post-checker 3.3x, checker construct 2.4x) and **neither is worth opening on this
+evidence**: their growth sits in `topologicalSort`/`hasCycle` (8-13 and 4-5 ms) and
+`init:computePerFileVisibility` (17.4 ms), i.e. at or below the noise this repo has
+already characterised — (INC.52) read one floor pass row at 13.16 and 8.42 ms in two
+draws of ONE binary, and two draws of the pass table here disagreed 54.7 vs 89.9 ms at
+the same size. **What made the three fixed defects findable is that they were 14.6x, 21x
+and 4x-per-doubling — one to two orders clear of that band. This class is exhausted at
+these sizes.**
+
+**NAMED SUCCESSORS,** ranked at 4,801 files: checker construct **143-182 ms**
+((INC.53)'s territory), crawl WALL **110-129** ((INC.56) — the only row costing a
+soundness promise), **`config load + @types + root glob` 52.8 / 52.9 ms — (INC.60), and
+ranked FIRST despite being smaller**, because it carries no promise and its two draws
+landed **0.2% apart**, making it the one row here measurable without fighting the noise
+band; its ~1.4x for 2x files says a FIXED cost dominates, and a fixed cost on the floor
+is paid on every keystroke ((INC.53)'s own argument). Then post-checker 35-41,
+`extractRelativeImports` 33-37, bind 15-17.
+
+### Round (INC.58) — the same law, one hour later, on a pass named for a feature the project does not use
+
+**FOUND BY (INC.57)'s OWN SUCCESSOR INSTRUMENT**, which is the point worth keeping:
+divide the floor pass table by file count at two program sizes, and a pass that is
+honestly O(program) reads a constant µs/file while a quadratic one doubles. One row
+answered:
+
+| pass | 601 files | 2401 files | growth (4 = linear) |
+|---|---|---|---|
+| **`checkJsxImportResolutions`** | 48.66 ms | **709.74 ms** | **14.6** |
+| `init:buildPerFileScopes` | 3.17 | 13.52 | 4.3 |
+| `init:computePerFileVisibility` | 1.01 | 6.66 | 6.6 |
+| — table total — | 65.00 | 774.65 | 11.9 |
+
+**709.74 of 774.65 ms — 92% of the floor pass table — on a project with NO JSX IN IT.**
+`resolveJsxTsxCandidate`'s last resort is a path-suffix match ("any program file whose
+name ends with `/<base>.jsx`") and it walked `fileResults.keys` once per import
+specifier per extension: `2 x files x specifiers`. **And the pass is gated on `--jsx`
+being UNSET**, so it did its maximum work on exactly the projects that have nothing to
+do with JSX, and always answered null.
+
+**(INC.54)(a) RANKED THIS PASS AT 1.2 ms** from the tsc profile. Same pass, same binary,
+**600x** — (INC.57)'s corpus-SHAPE law confirmed on a second, independent instance
+within one session, and this time it invalidates a published RANKING and not just a
+price. That is why (INC.58)'s entry told the next round to re-take (INC.54)(a)'s
+ordering on the many-small shape before opening any of its rows.
+
+**THE NARROWING IS EXACTLY EQUIVALENT, NOT MERELY CONSERVATIVE.** Every non-null return
+of `resolveJsxTsxCandidate` is a `fileResults` member ending in `.jsx`/`.tsx` — the
+direct probes build their candidate as `"…$ext"` and test `in fileResults`, and both
+arms of the suffix scan can only match such a name. So the filtered scan returns the
+same file **in the same order** (load-bearing: the scan takes the FIRST match), and a
+program with no such file can produce no TS6142 at all and returns immediately. The
+filter is a LOCAL in the pass, not a `Checker` field — (INC.53) measured that class of
+field initializer at 16-30 ms on every build and invisible to every gate here.
+
+**RESULTS. 709.74 -> 0.30 ms at 2,401 files (2,350x), and now LINEAR** (0.076 / 0.150 /
+0.302 ms at 601 / 1201 / 2401 — exactly 2x for 2x files, i.e. the O(files) filter scan
+and nothing else). **The two rounds together take the per-keystroke floor from
+1653 -> 366 ms at 2,401 files (4.5x), 409 -> 197 at 1,201, 165 -> 99 at 601** — and the
+gain GROWS with project size, because both defects were super-linear.
+
+**A PIN LESSON WORTH KEEPING, because the pin caught it and no reasoning did.** The
+first value pin asserted `jsxSuffixScanSteps > 0` for a RELATIVE specifier and went RED
+**on a working binary**: TS6142 fired, but a relative specifier is served by the O(1)
+direct probe and never reaches the scan. **An assertion about WHICH path produced an
+answer is not implied by the answer being right.** There are now two value pins, one per
+resolution path — a BARE specifier is what forces the suffix scan — beside the two count
+pins (`jsxSuffixScanSteps == 0` at 10 files AND at 100).
+
+**GATES.** Suite **16,503 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0
+with **every counter identical to the (INC.57) run** (`output.errors` 46, `spine.nodes`
+856,962), so this checker change is counter-neutral on the compiler profile;
+`huge_methods.py --fail-over 0` clean. `docs/perf/import-dep-scan-complexity.md` § 6.
+
+**NAMED SUCCESSOR.** (INC.56) — genuinely near the top of this shape NOW, which its own
+entry claimed and which was only true after these two rounds (crawl wall 49-70 ms of a
+366 ms floor at 2,401 files). It stays the only floor row costing a soundness promise,
+so its opt-in framing stands. The three remaining super-linear-looking `init:` rows are
+the largest growth factors left but are small absolutely (13.5 / 6.7 / 3.9 ms) — price
+before opening.
+
+### Round (INC.57) — the front end was QUADRATIC in file count, and no profile here could express it
+
+**HOW THIS ROUND STARTED, because the route is the finding.** (INC.56) was top of the
+queue: *"let an IntelliJ-class host skip the re-read — **THE LARGEST REMAINING FRONT-END
+ROW**"*. Its own entry demanded the prize be re-measured first, on *"a project with MANY
+SMALL files rather than tsc's 78 huge ones, because that is the shape an application
+project has and the per-file overhead is what would dominate there"*. That measurement
+was taken. It **refuted the entry's premise** and found a larger, cheaper,
+soundness-free target sitting next to it.
+
+**WHAT THE MEASUREMENT SAID.** Generated layered projects of 601 / 1201 / 2401 files at
+~1 KB each (`scripts/gen-many-small-project.py`) through
+`scripts/floor-decomposition.sh`. On the 1,201-file FLOOR, (INC.56)'s target — the crawl
+WALL — is **fourth** at 25-38 ms of a 409 ms floor, behind the checker constructor
+(215-218), `extractRelativeImports` (76-125) and the post-checker (39-56). It is also
+the only one of the five that costs a SOUNDNESS PROMISE. **Not refuted as a saving;
+refuted as a ranking** — its entry is amended below rather than checked off.
+
+**WHAT WAS ACTUALLY WRONG.** `extractRelativeImports` opened with
+`allFiles.map { it.fileName }.toSet()` — a fresh list AND a fresh hash set of every
+program file name — and the emit-order scan calls it **TWICE per file**. `2 x files^2`
+string hashes per build, plus two sibling `parsed.files.any { it.fileName == … }` scans
+in the same loop. The row grew **4x for 2x the files**: 18.9 / 76.3 / 331.6 ms. At 2,401
+files that is 11.5 M hashes and ~92 MB of garbage on every keystroke.
+
+**WHY ~950 ROUNDS MISSED IT — THE TRANSFERABLE HALF.** All eight dashboard profiles are
+ONE codebase: tsc's own sources, **78 files averaging 128 KB**, where `2 x 78^2` is
+twelve thousand probes and vanishes. **A cost that is per-FILE rather than per-BYTE is
+structurally inexpressible on that shape**, and nothing in this repo had ever been
+pointed at the opposite one. This is (INC.9)'s *"a cost prior does not transfer across
+REGIMES"* on a new axis — the **SHAPE of the corpus** — and it is now a CLAUDE.md entry.
+
+**THE FIX IS A HOIST, NOT A CACHE.** `parsed.files` is a `val List` on a data class and
+`parsed` is never reassigned, so the set is loop-invariant by construction and there is
+no invalidation story to get wrong. `.toSet()` is kept VERBATIM rather than swapped for
+a `HashSet`, so the container — and any iteration order a future consumer might depend
+on — stays bit-for-bit what the per-call expression produced, which keeps CLAUDE.md's
+"PROVE order is unused" rule out of scope entirely. The `/// <reference path>` `Regex`,
+also constructed per call, became a top-level `val`.
+
+**RESULTS.** IMPORTS 18.9 / 76.3 / 331.6 -> **5.8 / 7.1 / 16.1 ms**, per-file cost flat
+at ~6-8 us where it had been doubling. Floor medians 165 -> 142, 409 -> 359,
+**1653 -> 1035 ms**.
+
+**THE PIN IS A COUNT, AND DELIBERATELY COMPARES TWO PROGRAM SIZES.**
+`EagerIndexCensus.programNameSetBuilds` == **1 per compile, at 10 files AND at 100**.
+(INC.52)'s law rules out a timed assertion, but the stronger reason is that the claim is
+about **COMPLEXITY and only a count can state one**: a wall assertion says "this build
+was fast", where 1-at-both-sizes says the work does not grow with the program.
+(INC.55)'s caveat about comparing two different programs does NOT apply — that bit
+because the `pass()` poll count is not constant across programs and swamped a
+DIFFERENCE; here the quantity is 1 by construction, an absolute value, with program size
+as precisely the axis under test.
+
+**THE ABLATION — ONE ARM, TWO ANSWERS.** Moving the set build back inside
+`extractRelativeImports` with its census increment: (1) both count pins go RED reading
+exactly **20** for a ten-file program (`2 x files`, as the KDoc predicts) while the VALUE
+pin stays GREEN — the two halves test different things and neither is redundant; (2) all
+**20** `cost_gate.py` counters are IDENTICAL between the arm and HEAD, so this round is
+provably counter-neutral and the gate's `+0.54%` / `+1.55%` is **accumulated drift from
+the 60 commits since the baseline was recorded at (CHK.63) on 2026-08-28**. The baseline
+is deliberately NOT rebaselined: folding sixty commits of unattributed drift into this
+one would make it un-auditable, and the gate exits 0 either way.
+
+**GATES.** Suite **16,499 / 0 / 3** (+3, exactly the new pins); `cost_gate.py` exit 0
+with `output.errors` flat at 46 and `spine.nodes` at 856,962; `huge_methods.py
+--fail-over 0` clean. Emit ORDER is what this change computes, and the ~13k-baseline
+corpus (which emits `.js`) is the gate that covers it.
+`docs/perf/import-dep-scan-complexity.md`.
+
+**NAMED SUCCESSOR — (INC.58), below.** The `Checker` init-block pass dispatch is ITSELF
+super-linear in file count and is ~73% of the 2,401-file floor after this round.
+
+### Round (INC.55) — cancellation, and what changes when the goal is named "IntelliJ"
+
+**WHY THIS ROUND EXISTS.** The owner rephrased the goal from "truly incremental" to
+"the best support one could get inside an IntelliJ platform-based IDE". That is not
+a restatement: it re-ranks the list, and the new top item is one no latency work
+reaches. Verified rather than assumed — **ZERO** cancellation or interrupt sites
+existed anywhere in the compiler or the `Project` API (the only `cancel` match in
+the surface is a comment about algebra).
+
+**THE ARGUMENT, because it is what justifies jumping the queue.** A build runs on
+the compiler's own deep-stack thread and `Project` JOINS it, so the calling thread
+is blocked for the whole build and cannot abandon it from outside.
+`DaemonCodeAnalyzer` restarts analysis on every write action. So without
+cooperative cancellation an editor has only bad options: block a pooled thread
+producing an answer it has already discarded — and delay the next, wanted one
+behind it — or not run the analysis in a highlighting pass at all. It is a
+CAPABILITY gap; narrowing the check does not touch it.
+
+**WHAT LANDED.** `Project.cancellation: CancellationSignal?`, threaded into all 8
+build sites, installed and restored around one build by `ProjectCompiler.build`
+(which now delegates to a private `buildCore` so every `return` in the body is
+covered by the `finally` without the body knowing about cancellation).
+
+**POLLED IN TWO PLACES AND THE SECOND IS THE POINT.** `pass("…")` gives ~480
+boundaries spread through the dispatch, but `checkSpine` is ONE pass — so a single
+large buffer's walk, 1.65 s on tsc's own `checker.ts`, would still be
+uncancellable. The spine loop therefore polls too, and since that loop's own
+comment refuses interleaved work it polls behind a counter: an increment, a mask
+and a predictable branch per node, with the volatile read taken once per 1024
+nodes (837 for the compiler profile's 856,962). `spine.nodes` is UNCHANGED at
+856,962 and `output.errors` flat at 46, i.e. the poll is inert unarmed.
+
+**IT IS AN `Error`, AND THAT IS THE DESIGN DECISION OF THE ROUND.** The checker,
+the crawl and the `Vfs` carry defensive `catch (Exception)` guards; a cancellation
+modelled as a `RuntimeException` would be swallowed by whichever guard it was
+thrown inside and the build would carry on with a missing file — silently wrong,
+which is worse than not cancelling. `Error` is safe for a checkable reason: the
+2026-07-04 sweep left NO `catch (Throwable)` and NO `catch (Error)` in
+`commonMain`, and `Checker`'s one boundary guard catches `StackOverflowError`
+alone; `runWithDeepStack` transfers it faithfully because it uses `runCatching`.
+**A future `catch (Throwable)` re-opens this silently, so the TYPE is pinned.**
+
+**STATE SAFETY IS BY CONSTRUCTION AND WAS CHECKED ANYWAY.** Every cache assignment
+in `Project` happens after `build` returns, so a throw skips all of them. Pinned
+twice — cancelling at the FIRST poll, and cancelling MID-flight (after 300 polls),
+which is the case a half-written cache would actually show up in.
+
+**THE PIN THAT ALMOST DIDN'T DISCRIMINATE, and the reusable lesson.** The
+spine-poll pin first compared a 3-file fixture against a 1-file one and went RED. I
+took that as "the mechanism is dead" and went looking — bytecode positive control
+(`javap -c -p | grep spineCancelTick`) said the poll WAS compiled into the
+production loop, and a `--passTiming` run said the file really does walk 8,401
+nodes. The premise was the bug: **the `pass()` poll count is NOT constant across
+programs** (405 against 418 here), which swamped the ~12 the spine contributed.
+Holding the file count and shapes fixed and varying only SIZE — one file at 400 and
+4,000 functions — reads ~417 against ~526. Now a CLAUDE.md entry, because it is the
+general form for any "does the fine-grained hook fire" question.
+
+**WHAT ELSE THE REFRAMING CHANGES, recorded so the queue reflects it.** (1) The
+host-owned VFS item moves UP: under the platform the IDE is authoritative for file
+content, so the "skipping a read is a soundness change" hedge largely dissolves,
+and re-reading + re-decoding every non-open file per query (44-56 ms of CPU, O(project))
+is the largest remaining front-end row. (2) **(INC.49)'s artifact question is NOT
+APPLICABLE** to in-process hosting — a plugin runs on the IDE's own JVM, so the
+GraalVM PGO image, the JDK 25 AOT cache and CRaC are all unavailable; what survives
+is the JIT ramp (amortised over a long session) and (INC.48)'s snapshot restore,
+which is exactly the IDE-restart case. (3) The threading rule needs to ship as a
+CONFINEMENT recipe, not a sentence: `Symbol`/`Type` ids are thread-local sequences
+handed off by `runWithDeepStack`, so two threads on one `Project` corrupt an id
+space with no diagnostic.
+
+**GATES.** Suite **16,496 / 0 / 3** (+7, exactly the new pins); `cost_gate.py` exit
+0; `huge_methods.py --fail-over 0` clean. Commits `c5462c3df`, `f3b63fb84`.
+
+**NAMED SUCCESSORS.** (INC.56) below — the host-owned VFS, now the top latency item
+— and (INC.54)'s pass table. Neither is blocked.
+
+### Round (INC.53) — the incremental floor's largest block was never in a pass
+
+**WHAT THIS ROUND BOUGHT.** ~13 ms off the per-keystroke FLOOR of every
+language-service query, a permanent instrument for a class of cost this repo could
+not previously see, and one measured refusal.
+
+**HOW IT WAS FOUND, because the route matters more than the fix.** (INC.52) left the
+floor decomposed to phases: 32-44 ms of a 63-72 ms floor is "checker construct +
+getDiagnostics", while the `--passTimingRows` table INSIDE it sums to ~19 ms. A third
+of the floor was therefore un-attributed and nobody had asked which of the two owners
+held it. Two `FrontEnd` rows answered it in one run: **`getDiagnostics()` is 2-3
+MICROSECONDS on a floor build**, so the entire phase is the CONSTRUCTOR. Splitting
+the constructor at its `init` block (Kotlin runs property initializers then init
+blocks in declaration order, and this class declares every field above its one init
+block — a CLAUDE.md invariant, which is what makes the subtraction exact) gave
+**~20 ms of ~494 PROPERTY INITIALIZERS**, and the decisive control is that the number
+is IDENTICAL on a 63 ms floor build and a 5.2 s full one (16.0-21.8 ms across eight
+draws either side). A constant that is 0.4% of a full compile and ~30% of a keystroke.
+
+**WHY NO INSTRUMENT HERE COULD SEE IT.** A field initializer is not a `pass("…")`.
+The `--passTiming` table is built BY `pass()`, `cost_gate.py` reads that table's
+counters, and the 8-profile grid compares diagnostics, which do not move. So the
+whole pass-gating arc — (INC.7)/(INC.20)/(INC.21), 189 walkers gated onto the check
+partition, four batches of loop-header sweeps — was structurally incapable of
+reaching this, however carefully it swept. **That is the transferable half of the
+round and it is now a CLAUDE.md entry: before pricing anything else in the floor,
+ask what runs OUTSIDE a pass.**
+
+**THE ARITHMETIC THAT NAMED THE CULPRITS, before any code was read.** 20 ms over ~494
+initializers is 40 us each, which is impossible for an allocation by ~3 orders of
+magnitude — the repo's own "a total is a LOCATION, not a price; divide it and refuse
+an impossible per-op cost" rule. So a handful had to be doing real work, and four
+were: `parseBuiltinLib` ~11.0 ms, `localTypeAliasIndex` ~5.4, `enclosingImportIndex`
+~3.4, `topLevelConstStringValues` ~3.1. The partition is exact — sum against measured
+field region reads 18.3/18.6, 25.2/25.4, 28.5/29.6, 29.7/30.2 — so the other ~490
+initializers are **0.2-1.2 ms between them**.
+
+**WHAT LANDED.** The three whole-program INDICES build on first ask. Each has exactly
+ONE read site, which is what makes this not an approximation: `localTypeAliasIndex`
+becomes a per-FILE index (`localTypeAliasesOf`) over that file's own frozen
+statements, in the same DFS order, first-wins per name; the other two are
+`lazy(NONE)` whole maps. Floor field region **18.6 / 25.4 / 29.6 / 30.2 ms -> 8.1 /
+12.6 / 8.4 / 11.2**, with all three rows reading 0.00 ms and 0 files on a floor build.
+A FULL build needs only **69 of 78** files' alias index, which was not predicted.
+
+**CLAIMED AS A WORK REDUCTION, NOT A MILLISECOND** — (INC.52)'s law, and it applies to
+this round's own rows: the floor's draws span 57-86 ms. `EagerIndexCensus` counts the
+population instead and `EagerIndexDeferralTest` pins it.
+
+**THE PIN THAT CAUGHT ITSELF, and it is the reusable lesson.** The per-file assertion
+(`fileScans < program size`) first passed as **0 < 3** — the fixture never reached
+`findLocalTypeAlias` at all, whose one caller needs a FUNCTION-LOCAL (B83.5-unbound)
+discriminated-union alias used as an array-literal element type. The vacuity guard
+written beside it ("an unpartitioned build still builds the indices it needs") is what
+went RED and exposed it. A count-based deferral pin needs a sibling asserting the
+mechanism is REACHED, or "it was not built" and "it is never built" are indistinguishable.
+
+**THE FOURTH IS REFUSED WITH ITS PRICE, and the tempting hypothesis is MEASURED WRONG.**
+`parseBuiltinLib` fills `builtinLibDecls`/`builtinLibMemberDecls`/`realLibDeclFile`,
+which are keyed by AST NODE — Kotlin data classes, whose `hashCode()` recurses the
+whole subtree (round 471) — and CLAUDE.md flags those very sets as safe only "because
+lib decl subtrees are small", which the DOM lib is not. Split, that walk is
+**1.9-2.8 ms** of 8-11: the binds are 3.2-5.3 and the lib-set resolution plus 45
+`mergeSymbolTable` calls 3.1-5.3. No part clears the floor for a round, and the two
+larger ones are per-checker BY REQUIREMENT — the checker merges into and mutates lib
+symbols (round 882: 406 adopts, 175 mutates, all on LIB symbols). **Named unblocker:
+round 884's `mergedSymbols` clone-on-write forwarding table.** The probe rows stay, so
+the next attempt starts from the split rather than from the refuted hypothesis.
+
+**WHAT WAS NOT ESTABLISHED, stated rather than left to be found.** `cost_gate.py`
+exits 0 with `output.errors` flat at 46, but two counters moved inside tolerance
+(`typeOfExpr.calls` +0.54%, `narrow.memoServed` +1.55%) — a first-touch ORDER shift,
+since the three indices are now built during the check rather than before it. **It is
+NOT separated from (INC.52)'s own drift**: the baseline was last recorded at
+`7a488783b` and (INC.52) is the only checker-touching commit since, and it quoted no
+per-counter deltas. Separating them needs a parent build and was not done.
+
+**GATES.** Suite **16,489 / 0 / 3** (+4, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` clean, and `Checker.<init>` shrank **5,538 -> 5,464**
+bytecodes, buying back (JIT.1)(d) headroom. Commits `af032b5e2`, `5f8390d3f`.
+
+**NAMED SUCCESSORS.** (1) The floor's next-largest block is now the pass table itself
+at ~19-24 ms, whose top rows are `init:computeAllEnumValues` 6.9 ms,
+`init:moduleTypeNameIndex` 2.6, `checkModulePreserve4Pin` 1.7,
+`init:computePerFileVisibility` 1.4, `checkJsxImportResolutions` 1.2,
+`init:buildPerFileScopes` 1.0 — the same "build it on first ask" question, now for
+`init:` passes rather than field initializers. (2) The crawl still READS AND DECODES
+every file on every query (10-12 ms wall, 44-56 ms of CPU) although the PARSE is
+already content-cached; for a host that owns its VFS that is redundant, and it is the
+largest remaining front-end row. (3) `parseBuiltinLib`, behind round 884.
+
+### Round (CHK.73) — REFUSED with its price measured, and the entry it refutes is its own
+
+**WHAT THIS ROUND BOUGHT.** Not a fix: a diagnosis that replaces the queue's, and a
+measured refusal with a named prerequisite. (CHK.73) said a default or namespace import
+"types as `any`" and priced a fix against round 409's TS2315 flood, with an
+ambient-module-only containment as the thing to try first. Built and measured, all three
+parts of that reading are wrong in a useful way.
+
+**FIRST, THE INSTRUMENT.** The bench profile's `node_modules/@types` is EMPTY, so
+CLAUDE.md's "only `build/bench/tsc-project-*` carries the real `@types/node`" is stale and
+the shape cannot be probed there at all — the tell is `unresolved imports: N (e.g. 'fs')`
+plus a TS2688, which reads exactly like the defect under investigation. A scratch project
+with `npm i @types/node@20` (network works; `tools/node/bin/npm` needs `node` ON THE PATH)
+gives a live repro against tsgo: **tsgo answers 3 rows where we answer 1**.
+
+**THREE DEFECTS, NOT ONE, AND NONE OF THEM IS THE ONE THE ENTRY NAMED.**
+
+ 1. `resolveAlias`'s `ImportDeclaration` arm has no `resolveImportTargetFallback` leg —
+    (CHK.30)'s standing rule for a BARE package specifier, applied to every other ladder.
+ 2. **`getTypeOfSymbolWorker` HAS NO `SymbolFlags.Module` ARM.** A fully resolved module
+    symbol with a populated `exports` table falls through to `anyType`. The alias
+    resolution the entry blamed has worked for a long time — `createModuleSymbol` even
+    digs a `.d.ts`'s single `declare module "…"` block out for exactly this case.
+ 3. `@types/node` is AMBIENT, so no FILE resolves and the crawl is right to report `fs`
+    unresolved. `import x = require("fs")` already takes a `globals[specifier]` second
+    chance; `import * as fs from "fs"` did not.
+
+**WITH ALL THREE, THE BINDING AND ITS MEMBERS TYPE EXACTLY AS tsgo** — `fsStar` -> the
+module, `fsStar.statSync` -> `StatSyncFn`, `fsStar.readFileSync('x')` ->
+`Buffer<ArrayBuffer>` — i.e. hover and completion on `fs.` work, which is the editor-facing
+half of the goal.
+
+**AND IT MAY NOT LAND, WHICH THE CORPUS SAID AND REVIEW DID NOT.** A general
+`SymbolFlags.Module` arm moves **21** baselines (the internal-module family:
+`aliasUsageIn*`, `typeValueConflict*`, `moduleAndInterfaceWithSameName`,
+`typeofInternalModules`). Containing it to an import alias's TARGET — so a bare `namespace
+N` value reference is untouched — takes that to **4**, and those four are ONE cause and a
+MEANING regression: a module object exposes an exported CLASS as its CONSTRUCTOR, and this
+checker types a class VALUE as its INSTANCE type, so a ctor-less class has no construct
+signature to match `new () => Model`. **The prerequisite is therefore the static side of a
+class value**, which is a checker-wide model change and not this round's business.
+
+**A THIRD THING THE PROBE SEPARATED.** The `statSync` silence that remains after all of
+this is not about namespaces: `statSync('x')` fails to type through a NAMED import too. It
+is a call whose callee type is a callable INTERFACE (`StatSyncFn`), which is its own gap.
+
+**NOTHING WAS LANDED AND THE TREE IS AT HEAD.** The queue entry now carries the
+decomposition, the four named tests, and the prerequisite; CLAUDE.md carries the two facts
+a future agent would otherwise re-derive (the missing Module arm, and the empty `@types`).
+
+### Round (INC.52) — the floor's dearest pass, and the measurement that says its price is unknowable
+
+**WHY THIS PASS.** With project diagnostics incremental ((INC.46)) and restart-proof
+((INC.48)), what an editor pays per keystroke is the FLOOR — the crawl, parse, bind and
+program-wide passes a narrowed build runs whatever it is checking. Decomposed this round
+(`scripts/floor-decomposition.sh`): a **68 ms** floor, of which the CHECKER is 42 ms (67%)
+with nothing to check, and the largest single pass in both draws is
+`init:computeAllEnumValues`.
+
+**WHAT LANDED.** That pass has two loops. (INC.16) gave the first a projection; the second
+still walked EVERY file's `locals` and recursed through every namespace's `exports` looking
+for `SymbolFlags.Enum`. `BinderResult.bindsEnum` answers the same question from the bind
+that already happened — an identity, not an approximation: `bindEnumDeclaration` is the one
+site minting a conventional enum symbol, `enumValues` is ID-keyed, and a merged symbol is
+one object shared by both files' tables (round 884), so a skipped file's enums are computed
+through the file that minted them.
+
+**MEASURED AS A POPULATION, FROM ONE BINARY.** The verify arm walks everything, so it *is*
+the before: **12,871 top-level symbol visits -> 8,676 (-32.6%)**, plus every namespace
+recursion beneath the **45 of 78** files skipped, with `localsSkipViolations = 0` over that
+non-empty skipped set (round 790's rule: a zero is evidence only beside a non-zero skip).
+
+**AND THE TIME IS NOT RESOLVABLE — WHICH IS THE PART WORTH KEEPING.** The row that motivated
+the round read **13.16 ms**, one draw. Two draws of the SAME binary read **13.16 and 8.42
+ms**; after the change, **7.27 and 9.66**. The floor wall reads 68 ms before and 74 after,
+with draws spanning **57-86 ms**. So the distributions overlap on both instruments and no
+millisecond is claimed: this is landed as a WORK REDUCTION with a control, not as a
+speed-up. **A single-draw per-pass row on a 68 ms floor is not a measurement**, and the
+floor's rows swing ~40% draw to draw — which is now a CLAUDE.md entry, because the next
+agent will read the same table and reach for the same row.
+
+**WHAT THE FLOOR IS MADE OF, for whoever prices the next lever** (68 ms, one draw, so read
+the shares and not the millisecond): config load + `@types` + root glob 9 ms, import-graph
+crawl 10 ms (80% of it read+decode), bind 4-6 ms, **checker construct + getDiagnostics 42
+ms**, post-checker 2 ms. Inside the checker, after this round, the largest rows are
+`init:computeAllEnumValues` ~7-10, `init:moduleTypeNameIndex` ~5.2,
+`checkModuleAugmentationReexportDuplicates` ~4.4-5.4, `init:computePerFileVisibility` ~1.6.
+**Nothing there is worth a round on its own** at this resolution; the honest next lever is
+either an amplified measurement (round 759's shape) or a structural one — reusing the BIND
+across queries, which CLAUDE.md records as blocked by `nodeToSymbol`'s cross-file `(pos,
+end)` collisions.
+
+**GATES.** Suite **16,485 / 0 / 3** (+2, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
+### Round (INC.48) — the incremental state outlives the process, and a restart is 60x
+
+**WHAT LANDED.** `Project.saveState()` / `restoreState()`, plus `ProjectStateSnapshot` in
+core. (INC.46) made project-wide diagnostics incremental WITHIN a process and every bit of
+that state died with it: an IDE restart, a plugin reload or a daemon recycle paid a
+whole-program build for a tree nobody had touched. The snapshot carries what has to
+survive — export signatures, escapes, the program's file list, that build's diagnostics,
+and a content hash per input — so the next process starts at the (INC.46) gate instead of
+at a rebuild.
+
+**MEASURED on tsc's own 78 sources (`scripts/inc48-restart-cost.sh`), every arm asserted to
+agree ROW FOR ROW:**
+
+| arm | warm | COLD process |
+|---|---|---|
+| `cold-open` — what a host pays today on every restart | 5,855 ms | 9,625-9,844 ms |
+| `restored-clean` — snapshot restored, nothing changed | **94 ms (62x)** | **155-175 ms (~60x)** |
+| `restored-edited` — one file changed on disk since | 259 ms (23x) | — |
+
+The snapshot is **47 KB** for a 78-file project. **The cold column is the one that
+matters and it is nearly as good as the warm one**, which was not obvious: an IDE restart
+pays the JIT ramp, and (INC.49) measured ~18 s of a 23 s first query as exactly that. It
+barely touches the restored path, because that path never checks the whole program —
+there is no ramp to pay for work that is not done. (The 9.6-9.8 s cold-open here is not
+(INC.49)'s 23.3 s; the conditions differ and the difference is not decomposed.)
+
+**IT WRITES NO FILE, DELIBERATELY.** `encode`/`decode` answer and take a string, so the
+host decides where — and whether — its caches live. An embedding API that dropped a file
+into somebody's source tree unasked would be making that decision for it, and the CLI's
+`--incremental` (`tsconfig.xtsbuildinfo`, INV.7(d3)) already serves callers who want the
+other convention.
+
+**EVERY PART OF THE CLAIM A SNAPSHOT CARRIES IS CHECKED, because skipping any of it is a
+stale answer**: the compiler build id (and never a `.dirty`/`unknown` one — two dirty dev
+trees share an id without sharing behaviour), the config path, a CONTENT hash per file
+(never mtime — round 871), and **the `.json` INPUTS as well as the sources**. That last is
+not a nicety: a changed `tsconfig` or a `package.json` whose `type` decides a module
+format ((CHK.29)) makes every stored row suspect rather than one file's, so it refuses the
+restore rather than narrowing it. `OverlayVfs` records which `.json` files a build actually
+read, because that set is not a function of the project path (`extends`, nodenext scopes).
+
+**AND THE STALENESS CASE NO CONTENT HASH CAN SEE HAS ITS OWN MECHANISM.** A file ADDED
+while the process was down is in no stored hash and in no stored list, and it changes what
+every importer resolves. So a restored state is NOT TRUSTED until a build has re-crawled
+and found the same program: even a clean project runs the gate once, with an EMPTY
+partition, which is the 94-155 ms floor rather than the 5.9 s rebuild. **Ablated**: the
+naive "trust the snapshot when nothing changed" implementation reddens exactly two pins —
+`a file added while the process was down is not missed` and `a restored state answers its
+first query through the gate` — and nothing else.
+
+**A SEAM THAT EXISTS TO STOP A PIN SET BEING VACUOUS IN ONE ENVIRONMENT.** A development
+tree's build id ends in `.dirty` and is correctly refused, so without
+`allowUnstableBuildIdForTesting` every pin here would be vacuous locally and exercise the
+real path only in CI — a pin that passes for opposite reasons in two environments is worse
+than no pin. It is installed and restored per test, it does not weaken the id EQUALITY
+check (`a snapshot from a different compiler build is refused` is the pin that says so),
+and the shipped default is pinned by a test of its own ((INC.16)'s law: a mode every pin
+installs is a default pinned by nothing).
+
+**13 pins in three families** — value, cost, refusal — with value paired to cost by
+construction, because an implementation that restored nothing passes every value pin.
+
+**GATES.** Suite **16,483 / 0 / 3** (+13, exactly the new pins); `cost_gate.py` exit 0;
+`huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
+### Round (INC.50)/(INC.51) — the stability rate is a property of the CODEBASE, not of layering; and one line of ordinary library code escaped the whole file
+
+**WHAT THIS ANSWERS.** (INC.47) closed the escape question and left one thing open: is
+**67%** a property of the mechanism or of tsc's own sources? tsc is one codebase's style —
+`export *` barrels, 78 files in a flat directory, one file declaring the whole type
+universe. (INC.50) said to refuse the per-hop closure *"unless the measured stability rate
+on a layered corpus is materially above the 67% measured here"*.
+
+**MEASURED ON THREE CORPORA, 40 real commits each, whole trees materialised per side:**
+
+| corpus | files | rate | escapes |
+|---|---|---|---|
+| tsc `src/compiler` | 78 | **67%** | 0 |
+| `cronstrue` (i18n locale layer, nested `src`) | 52 | **50%** | 0 |
+| `marked` (Lexer -> Tokenizer -> Parser -> Renderer) | 13 | **72%** | 1 -> **0** after (INC.51) |
+
+**SO (INC.50) IS REFUSED BY ITS OWN THRESHOLD.** Layered code is not materially above 67%
+— the two libraries BRACKET it, and the higher of the two carries a bias toward stability
+(18 ours-only diagnostics degrade some of its types to `any`, and a degraded type is
+artificially stable). The transferable statement is that the rate tracks **what a
+codebase's commits touch**, not how layered it is: cronstrue's edits are overwhelmingly to
+the ~44 locale classes that ARE its exported surface — measured, its MOVED cases are real
+signature changes such as `commaOnlyOnX0()` -> `commaOnlyOnX0(s?: string)` — where tsc's
+edits are mostly inside a compiler's function bodies.
+
+**cronstrue IS THE CONTROL ARM AND THAT IS WHY IT WAS CHOSEN.** It is the only library
+outside the corpus on which this checker agrees with tsgo 7.0.2 exactly (0 errors both
+sides) and it has no dependencies, so its fingerprints are computed from types that are
+actually resolved. A library we report errors on would read MORE stable, not less.
+
+**(INC.51) — AND POINTING IT AT REAL CODE FOUND A DEFECT IN ONE RUN.** `marked.ts` escaped,
+and the cause is `export { useExtension as use }`: the walk collected the name an IMPORTER
+sees and looked it up in `locals`, which the file keys by the name it DECLARES. Every
+renaming export missed, read as "an exported name with no file-level symbol", and escaped
+the WHOLE file — so every edit to it rebuilt the whole program forever, and the export's
+type was never hashed. tsc's own 78 sources never use the shape, so the eight dashboard
+profiles are structurally blind to it. Fixed by carrying the two names separately, with
+three pins; the third is the interesting one, because it pins a DELIBERATE conservatism:
+renaming the LOCAL still moves the hash (a function's type carries its declaration's name),
+and dropping declaration names would make two structurally identical classes hash equal —
+which is unsound, since a class with a `private` member is nominally typed.
+
+**AND THE SAME LAW APPEARED TWICE MORE: REMOVING AN ESCAPE BUYS NOTHING.** marked's escape
+went 1 -> 0 and its rate stayed at **72%**, exactly as `types.ts`'s removal left tsc's at
+67%. On both corpora the file that could not be summarised was also a file whose surface
+genuinely moved. An escape is a conservative label on a file that is *changing a lot* —
+which is why it looks like a cause and is not one.
+
+**WHAT THIS MEANS FOR THE ARC.** Two thirds of edits (67% / 72%) and half of cronstrue's are
+answered from a ~110 ms narrowed build instead of a ~5 s rebuild. The remaining third are
+commits that genuinely move an exported signature, and no refinement of the FINGERPRINT can
+serve them — only re-checking fewer dependents can, which is the closure (INC.35) measured
+at 100% of tsc's characters and this round refuses on the library corpora too.
+
+**GATES.** Suite **16,470 / 0 / 3** (+4 over 16,466 — exactly the (INC.51) pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
+### Round (INC.47) — the fingerprint walk is now LINEAR and the escape class is empty; the 87.5% ceiling it was aimed at did not exist
+
+**WHAT LANDED.** The exported-signature walk no longer recurses. Every type reachable from
+a file's exports is DISCOVERED once, in a deterministic order, and named by its discovery
+INDEX; a reference — forward, back or self — hashes as that index, and the file's hash folds
+each discovered type's own LOCAL structure in discovery order. That is a canonical
+serialization of the reachable subgraph: linear in nodes plus edges, cycles needing no
+special case, and **no strongly-connected component to canonicalise** — which is why it is
+both simpler and stronger than the Tarjan-per-SCC machinery the queue named.
+
+**MEASURED, whole-program, on tsc's own 78 sources (`scripts/inc47-fingerprint-cost.sh`):**
+
+| | before | after |
+|---|---|---|
+| `types.ts` | **122.52 ms for ONE export**, node-budget STOP | **6.21 ms for 871 exports** |
+| whole-program fingerprint | 131 ms | **16 ms** |
+| structural nodes visited | 2,019,605 | **38,502** |
+| budget stops / escapes | 1 / `[types.ts]` | **0 / `[]`** |
+| exports hashed | 2,137 | **3,007** |
+| identical-text stability | 78/78 | **78/78** |
+| narrowed-vs-whole agreement | 24/24 | **24/24** |
+
+**AND THE PRIZE IT WAS BUILT FOR DOES NOT EXIST — MEASURED, NOT ARGUED.** (INC.46)(2)
+recorded *"8 of the 13 still-MOVED cases moved ONLY because `types.ts` escapes"* and derived
+from it a **67% floor with an 87.5% ceiling**, which is what made (INC.47) the named
+successor. Running the same 40-commit corpus on BOTH arms: **27 stable / 40 = 67% on each,
+and every one of the 40 per-case verdicts is IDENTICAL.** Removing every escape bought
+exactly nothing on this corpus.
+
+**THE CEILING WAS A MIS-READ LABEL ON THE INSTRUMENT'S OWN OUTPUT.** `Inc46StabilityMain`
+printed *"N were moved only because a touched file ESCAPES"* over the code
+`if (escaped) movedBecauseEscaped.add(case.name)` — which counts every case that TOUCHED an
+escaping file, whether or not it also moved for a reason of its own. Its own printed detail
+contradicted the summary in the same run: case `009-0208948c` reads
+`[checker.ts, commandLineParser.ts, core.ts, executeCommandLine.ts, types.ts(escape)]`, i.e.
+four files moved beside the escape. Re-derived properly, **exactly ONE of the 8 (`005`) had
+the escape as its only mover**, so the real ceiling was 70%, not 87.5% — and after (INC.47)
+even that one moves, because `types.ts`'s real fingerprint moves: it is a file of exported
+interface declarations, so an edit to it usually IS a surface change. The runner now prints
+BOTH counts, with the mis-read recorded beside them.
+
+**SO WHY IT LANDS ANYWAY, AND THE STRONGEST REASON IS NOT THE COST.** The old walk bounded
+its own recursion with a DEPTH CAP of 24 (`EXPORT_FINGERPRINT_MAX_DEPTH`) and hashed
+everything below it as one constant. That is a **MISSED INVALIDATION** — the direction that
+costs a stale diagnostic — and it is live in shipped code as of (INC.46)(3), which serves
+project-wide diagnostics from the previous build whenever no touched file's fingerprint
+moved. Pinned and ABLATED: `a change deep inside a cyclic type graph moves the fingerprint`
+is RED on the pre-(INC.47) binary and green after, as is `a dense cyclic in-file type graph
+is fingerprinted exactly`. Discovery indices need no depth cap, so there is nothing left to
+truncate.
+
+**AND THE ESCAPE CLASS IS EMPTY, WHICH IS A CLAIM ABOUT OTHER CODEBASES.** tsc's corpus
+cannot show what that is worth — its one escaping file is one whose edits genuinely move the
+surface — but a single-file library with a large cyclic type graph is ordinary in real
+TypeScript, and before this it would have escaped and forced a whole-program rebuild on
+every keystroke, forever. That is the population an editor integration lives in.
+
+**WHAT A NEXT ROUND SHOULD NOT REDO.** Do not re-open SCC-aware hashing: there is no SCC
+left to hash, and the rate it was supposed to move is measured flat on both arms. The
+stability rate's remaining 33% is 13 commits that each genuinely move an exported signature;
+the only mechanism that could serve those is the per-hop pruning of (INC.50), which is
+measured to buy tsgo nothing on this same codebase.
+
+**GATES.** Suite **16,466 / 0 / 3** (+2 over 16,464 — exactly the two new pins);
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` exit 0; build warning-clean.
+
+### Round (INC.46)(3) — project-wide diagnostics ARE incremental now, and the gate is 40 real commits
+
+**WHAT LANDED.** `Project.diagnostics()` no longer rebuilds the whole program after every
+edit. When an edit moved no exported signature it answers the previous build's rows with
+the edited files' rows replaced, computed by ONE narrowed build. `Project.surface` +
+`Project.incrementalDiagnostics`, `ProjectCompiler.build(exportSignatures = …)` and its two
+new `Result` fields. This is the last interactive operation in the API that was
+whole-program in every case; with (INC.44)/(INC.45) it means **nothing an editor asks is
+whole-program by default any more.**
+
+**GRADED AS A DIFFERENTIAL OVER REAL EDITS, WHICH NEEDS NO BASELINE.**
+`scripts/inc46-incremental-differential.sh` replays (INC.46)(2)'s 40-commit corpus: build
+the parent tree, edit each touched file THROUGH THE OVERLAY (an editor's unsaved buffer),
+ask `diagnostics()`, and compare row for row against a project opened FRESH on the edited
+text. **EQUIVALENT — 40 agreed of 40 compared** — and the control that makes that mean
+something is `served=27`, i.e. 27 of the cases were actually answered incrementally rather
+than falling back. **A run with `served=0` is REFUSED by the harness**, because an
+implementation that always fell back would agree on every case and prove nothing (round
+790: a verifier reads 0 both when the skip is sound and when the instrument is dead). The
+27 is exactly (INC.46)(2)'s 67%, which is the two measurements corroborating each other on
+different instruments.
+
+**FIVE PRECONDITIONS, EACH CHECKED RATHER THAN ARGUED, EACH WITH ITS OWN PIN.** A baseline
+exists; every edited file was in that program; no edited file ESCAPES; the narrowed build
+finds the SAME program (so an edit that adds an import falls back — the crawl still runs in
+full, and a new file changes what every importer resolves); and no edited file's fingerprint
+moved. The last is sound because a narrowed build's fingerprint equals the whole-program
+build's, swept 24 of 24 in step (1) — the property that makes the mechanism CONVERGE instead
+of falling back on every first edit.
+
+**THE PIN SET IS A PAIR BY CONSTRUCTION.** A body-only edit must be SERVED and a signature
+edit must NOT: an implementation that always serves passes the first, one that never serves
+passes the second, and only both together say the gate discriminates. Both are pinned twice
+— once on the ANSWER (equal to a fresh build's) and once on the COST (builds counted at the
+`Vfs`), because without the cost family every pin passes against the pre-(INC.46) behaviour
+of rebuilding every time. **11 pins**, `ProjectIncrementalDiagnosticsTest`.
+
+**TWO THINGS THE PINS FOUND THAT REVIEW DID NOT.**
+**(a) THE INCREMENTAL ANSWER WAS NOT RETAINED.** `cached` cannot hold it — that field is a
+whole-program `ProjectCompiler.Result` and a narrowed build's is not one — so a second
+`diagnostics()` with no intervening edit fell through and REBUILT. An editor asks twice
+constantly (a project panel and a per-buffer annotator), so the mechanism would have paid
+for itself once and then thrown it away. The retention lives on the surface, which the
+accepted answer already updates.
+**(b) THE BUILD-COUNTING UNIT IS BLIND FOR AN EDITED CONFIG.** Every cost pin in this repo
+counts reads of `tsconfig.json` at the backing `Vfs`. An OVERLAID file is served from the
+overlay and never reaches the backing store — so after `updateFile("/proj/tsconfig.json", …)`
+the config's read count stops moving entirely, and a "did this rebuild" pin reads **0 builds
+for a build that certainly happened**. That is a general trap for every counted pin whose
+test edits the file it counts; the config pin now counts a SOURCE file with its own control.
+
+**ORDER IS PRESERVED, DELIBERATELY.** `diagnostics()` is documented as answering in the
+compiler's own order, so the edited files' fresh rows are SPLICED where their old rows were
+rather than appended — otherwise every edited file's rows would jump to the bottom of a
+project-wide list after an edit. A file that had no rows and now has some appends, which is
+the only case with no position to preserve.
+
+**COST, MEASURED ON THE SAME RUN.** The whole 40-case replay is **109,857 ms incremental
+against 211,271 ms full (1.92x)** — and that number is DILUTED on purpose: it includes the
+13 fallback cases, which pay a narrowed build AND a rebuild. The per-edit figure is the one
+from (INC.31)/(INC.37) that this mechanism now delivers on a served edit: **108-113 ms
+against 4,864-5,096 ms, a factor of 45.** A signature edit costs two builds instead of one,
+which is the price of the gate being wrong and is pinned as such.
+
+**GATES.** Suite **16,464 / 0 / 3** (+11 over the session's 16,453, exactly the new pins).
+`cost_gate.py` exit 0; `huge_methods.py --fail-over 0` clean; the differential EQUIVALENT
+40/40 with `served=27`. Build warning-clean (the round's one `No cast needed.` was fixed
+rather than left).
+
+**WHAT IS LEFT, NAMED.** `types.ts` still escapes — an in-file SCC that no budget closes
+(measured at 2 M and 12 M nodes), and it accounts for 8 of the 13 fallbacks, so **SCC-aware
+hashing is the one lever between the measured 67% and an 87.5% ceiling.** Second: the
+fingerprint is armed through a process-global that `ProjectCompiler.build` sets and restores
+around its own compile — sound for a single-threaded embedding API and stated in the code,
+but the right shape is a threaded parameter, which is a mechanical change through four
+layers.
+
+
+### Round (INC.46)(2) — the STABILITY RATE against a real edit corpus: 67%, and one text scan was worth 35 points of it
+
+**WHAT THIS ANSWERS.** (INC.46) step (2), the one the queue said could still refuse the
+whole mechanism: *"sample commits touching `src/compiler` and ask what fraction move no
+exported fingerprint. Under ~70% the 45x is diluted to nothing and the round should
+refuse."* Step (1) had established the fingerprint is cheap, rebuild-stable and
+partition-stable; none of that says how OFTEN a real edit leaves it alone, which is where
+all of the value lives.
+
+**THE CORPUS IS REAL AND THE HARNESS MATERIALISES WHOLE TREES.**
+`scripts/inc46-stability.sh` fetches its OWN blob-filtered depth-3000 clone of
+microsoft/TypeScript under `build/bench` — never `typescript-repo`, which is a depth-1
+shallow clone AND a build-pinned input (`typeScriptCommit`) — and takes 40 no-merge
+commits touching `src/compiler`, newest-first from the profile's own base commit
+`637d5746`, restricted to MODIFIED `.ts` files (a rename or an addition changes the
+program's name set, which is a different question). Per case it materialises the FULL
+`src/compiler` at the parent and at the commit into a SCRATCH copy of the bench profile,
+builds each with fingerprints on, and asks whether any TOUCHED file's fingerprint moved.
+Whole trees rather than just the changed files: a file from another era beside a tree from
+this one resolves against symbols that may not exist, which degrades its exports to `any`
+in a way that is neither the before nor the after. `Inc46StabilityMain`.
+
+**THE FIRST READING WAS 13 STABLE OF 40 — 32% — AND IT WAS AN ARTIFACT OF MY OWN ESCAPE
+LOGIC.** **24 of the 27 MOVED cases moved ONLY because a touched file ESCAPED**, and there
+were just two escaping files. One of them, `checker.ts`, escaped because
+`declaresGlobalSurface` scanned the whole source for `export as namespace` — a construct
+with NO AST NODE in this parser — and `checker.ts` says those words **twice, both times
+inside a `//` comment**. Since `checker.ts` is the file tsc's own history edits most, that
+single false positive was worth **35 percentage points**. Requiring the match to BEGIN ITS
+LINE (the construct is a top-level statement) took the rate to:
+
+| arm | stable / 40 | rate | escaping files |
+|---|---|---|---|
+| bare substring scan | 13 | **32%** | `checker.ts`, `types.ts` |
+| **line-anchored scan** | **27** | **67%** | `types.ts` |
+
+**AND THE REMAINING GAP HAS ONE NAMED CAUSE: 8 of the 13 still-MOVED cases moved ONLY
+because `types.ts` escapes.** So the achievable band is **67% at the floor and 87.5% at the
+ceiling**, the ceiling being loose — a commit touching `types.ts` often really does move a
+declaration.
+
+> **RETRACTED 2026-08-29 BY (INC.47), WHICH MEASURED BOTH ARMS.** That sentence is this
+> runner's summary line read at face value, and the line was mislabelled: the code behind
+> it is `if (escaped)`, which counts every case that TOUCHED an escaping file whether or
+> not it also moved on its own. The same run's detail lines contradict it — case
+> `009-0208948c` prints four moved files beside `types.ts(escape)`. Re-derived, exactly
+> ONE of the 8 had the escape as its only mover, so the ceiling was **70%**, not 87.5%.
+> With every escape removed the rate is **67% on both arms and all 40 verdicts
+> identical**. The general law, now in CLAUDE.md: a derived attribution PRINTED by an
+> instrument must be re-derived from that instrument's own detail before it becomes a
+> queue item's threshold.
+
+**`types.ts`'s ESCAPE IS STRUCTURAL AND WAS MEASURED, NOT ASSUMED.** It is a node-budget
+stop, and raising the budget does not close it: at **2,000,000** nodes it costs 129.6 ms and
+stops, and at **12,000,000** it costs **741 ms and still stops**, having burned the entire
+budget. The file-boundary cut cannot help INSIDE a file, and `types.ts` declares tsc's
+whole type universe — ~874 mutually recursive interfaces in ONE file — so the closed-subtree
+memo has nothing to memoize there for the same reason it had nothing program-wide before the
+cut. **The lever is SCC-AWARE hashing** (Tarjan, then hash each strongly-connected component
+as a unit), which is real machinery and deliberately not attempted here. The budget stays at
+the bounded 2,000,000, and `types.ts` is recorded in `ExportSignatures.whole` — the
+conservative direction, which costs a full rebuild and never a stale diagnostic.
+
+**WHAT THIS MEANS FOR THE QUEUE'S THRESHOLD.** 67% is at the ~70% line, not clearly past it —
+and the honest reading is that the mechanism is NOT refused, because the one thing standing
+between the measured floor and the ceiling is a named, bounded piece of work rather than a
+property of real edits. **The measured floor already pays**: 67% of edits answered from a
+108-113 ms narrowed build instead of a 4,864-5,096 ms rebuild is a 45x saving on two edits
+in three.
+
+**A LESSON WORTH MORE THAN THE NUMBER.** A whole-source substring scan for a construct that
+has no AST node is not a test for that construct — it is a test for the WORDS, and a
+compiler's own sources talk about compiler constructs constantly. No fixture would have
+found this: nobody writes `// export as namespace foo` into a hand-written test. The edit
+corpus found it in one run, and it presented as a plausible refusal (32%, well under
+threshold) rather than as a defect.
+
+**GATES.** Suite **16,453 / 0 / 3** (+13 over 16,440: the 12 step-(1) pins plus the
+comment-mention pin this round's defect earned). `cost_gate.py` exit 0; `huge_methods.py
+--fail-over 0` clean. Step (3) — wiring the invalidation into `Project.diagnostics()` —
+remains the next item, and it is now the only one left.
+
+
+### Round (INC.46)(1) — the exported-signature FINGERPRINT: step 1 landed, and the walk's shape had to be found by measurement three times
+
+**WHAT LANDED.** `ExportSignatures` (a census/mode object) plus
+`Checker.exportedSignatureFingerprints()` — one `Long` per program file summarising
+everything an IMPORTER can observe: the exported NAME SET, each name's meaning flags,
+and the STRUCTURE of its resolved type. OFF in the shipped compiler; nothing consults
+it yet. `scripts/inc46-fingerprint-cost.sh` + `Inc46FingerprintCostMain` are the
+runner; `ExportSignatureFingerprintTest` is 12 pins.
+
+**THE QUEUE'S THRESHOLD IS MET WITH ROOM.** (INC.46) said *"hook the fingerprint cost
+on a full build and read it — if it is not single-digit ms on `types.ts`'s 874 exports,
+stop."* Measured on tsc's own 78 sources, three ABBA-rotated rotations, one process:
+**136 ms whole-program** against a 5,215 ms rebuild (2.6%), and — the number that
+actually matters — **0 ms on 23 of 24 narrowed builds, 2 ms on the 24th**, because a
+narrowed build fingerprints only its own partition. So the per-EDIT cost of the gate is
+under a millisecond against the 108-113 ms narrowed build it rides on.
+
+**BUT THE SHAPE OF THE WALK IS THE WHOLE ROUND, AND IT WAS WRONG TWICE.**
+
+*(a) A PATH-ONLY CYCLE GUARD IS EXPONENTIAL, AND ITS SYMPTOM IS A HANG WITH NO
+DIAGNOSIS.* The first walk kept only a path set (the obvious way to break a cycle) and
+re-walked a type once per path reaching it. A real program's resolved-type graph is a
+dense DAG, not a tree: **159 s inside a single build and still running**, found only by
+`jcmd Thread.print` from an EXTERNAL process. Fixed by caching a completed subtree —
+but only when it is **CLOSED**, i.e. nothing inside it referred to a type strictly above
+it on the path (an open subtree's hash carries a path DISTANCE and is wrong at any other
+depth). `minRef` carries that back up; a SELF-reference still counts as closed, which is
+what makes an ordinary recursive interface memoizable.
+
+*(b) AND CLOSED-SUBTREE MEMOIZATION IS NOT ENOUGH, BECAUSE tsc's TYPE GRAPH IS ONE
+GIANT SCC.* With the memo, the whole program cost 200 ms — and **7 of 78 files did not
+finish inside a 400,000-node budget; raising it to 2,000,000 left 6 unfinished**, among
+them `checker.ts`, `binder.ts` and `emitter.ts`, i.e. the most-edited files. `Node.parent:
+Node` plus hundreds of mutually recursive interfaces put nearly everything in one
+strongly-connected component, so the memo has NOTHING to memoize until the component
+completes. **The cheap per-file numbers in that run were an artifact of a warm SHARED
+memo, not of the files' own size** — the same files measured from a cold memo (one
+narrowed build each) cost **115-146 ms** apiece.
+
+*(c) THE FIX IS TO CUT AT THE FILE BOUNDARY, AND IT FOLLOWS FROM WHAT THE GATE ACTUALLY
+ASKS.* The fingerprint answers one question: *given every other file is unchanged, did
+editing THIS file move what an importer can observe?* A type declared in another file is
+then unchanged BY CONSTRUCTION, so it is keyed by its declaration's
+`(fileName, pos, end)` — stable across two builds of identical text, id-free — and not
+descended into. `Checker.ExportFingerprinter.foreignKey`. What it gives up is
+transitivity, which is not wanted: a moved signature anywhere falls back to a
+whole-program build, the only answer a dependency closure could give on this program
+anyway ((INC.46)'s own measurement: a closure re-checks 100% of characters at the median
+edit).
+
+**THE THREE ARMS, SO THE PROGRESSION IS LEGIBLE** (same runner, same profile, one
+process each):
+
+| arm | whole-program fp | escapes | partition agreement | fp on a narrowed build |
+|---|---|---|---|---|
+| path memo, 400 k budget | 200 ms | 7/78 | 20/24 | (all 78 files) |
+| + partition-scoped, 2 M budget | 719 ms | 6/78 | **4/24** | 115-146 ms |
+| **+ foreign-declaration cut** | **136 ms** | **2/78** | **24/24** | **0 ms (23 of 24)** |
+
+**THE TWO CONTROLS THAT DECIDE FEASIBILITY, AND NEITHER IS A COST FIGURE.**
+(i) **STABILITY — 78/78 fingerprints identical across two builds of identical text.**
+This is the id-freedom claim under test: `Type.id`/`Symbol.id` are per-build,
+per-THREAD sequences (INV.6(6c0)), so a hash carrying one passes every structural test
+and then invalidates everything on every edit, which is indistinguishable from the
+mechanism not working. (ii) **PARTITION AGREEMENT — a narrowed build's fingerprint for a
+file must equal the whole-program build's, or the mechanism can never CONVERGE**: the
+baseline comes from a whole-program build and the edit's answer from a narrowed one, so
+a systematic disagreement means every first edit falls back, restores the whole-program
+baseline, and disagrees again forever. It read **4/24 with the transitive walk and 24/24
+with the cut** — i.e. the cut is not only cheaper, it is the thing that makes the
+mechanism converge at all, because the deep foreign structure is exactly where (INC.2)'s
+capture divergence lives.
+
+**WHAT THE QUEUE CENSUSED WAS THE WRONG QUANTITY.** (INC.46) priced the work as "~3,400
+`getTypeOfSymbol` + fingerprint calls" off a census of 3,398 exported declarations
+(mean 44/file, max 874 in `types.ts`). Cost does not track export COUNT — it tracks the
+transitive type CLOSURE, and the two are close to inversely related: with the cut,
+`utilities.ts`'s **692 exports cost 1.6 ms** while `types.ts` — which declares the SCC
+and therefore cuts nothing — is **129.6 ms and the round's one budget stop**. Before the
+cut the eight dearest files had **1 to 6 exports each**.
+
+**THE ESCAPE SET IS 2 OF 78** — `types.ts` (budget stop) and `checker.ts` (an exported
+name with no file-level symbol). Both are recorded in `ExportSignatures.whole`, never
+hidden: a file that cannot be fingerprinted exactly must invalidate the whole program,
+because an omission is a MISSED invalidation and that is the only direction that costs a
+stale diagnostic. `checker.ts`'s reason is undiagnosed and is the first thing the next
+round should look at — it is the file an editor edits most.
+
+**STEP (2) IS UNRUN AND SAYS SO.** The stability RATE against a real edit corpus needs a
+separate deepened TypeScript clone; `typescript-repo` here is a depth-1 shallow clone
+and is a build-pinned input. The 91.6%-of-characters-in-bodies proxy already in the
+queue entry is what stands in the meantime, and it is a proxy and not a rate. **Step (3),
+wiring the invalidation into `Project.diagnostics()`, is deliberately NOT in this
+commit** — the queue's order of work is measure-first and step (2) is the one that can
+still refuse the whole thing.
+
+**GATES.** Suite **16,452 / 0 / 3** (+12 over the 16,440 baseline, exactly the new pins).
+`cost_gate.py` **exit 0**, largest move **+0.08%** (`globals.lookups`/`globals.misses`,
+the profile's standing run-to-run residual) — the expected answer, since the walk is off
+by default and is a strict no-op then. `huge_methods.py --fail-over 0` clean.
+
+**A PROCESS TRAP WORTH ONE LINE.** An EMPTY `build/classes/kotlin/jvm/main` DURING a
+Kotlin compile is normal — the backend writes its output at the end — and reading it
+mid-build manufactures a convincing round-851 "the build was killed and wiped the class
+dir" diagnosis. It cost a redundant rebuild and a concurrent second Gradle invocation.
+Check `ps` for a live compile before reading an empty class dir as a wipe.
+
+
+### Round (INC.44) — `referencesAt` is narrowed by SPELLING; the doc claim that it "cannot be" confused the CLAIM with the EVIDENCE
+
+**THE HEADLINE.** `docs/language-service.md` said in three places, over three rounds,
+that `referencesAt` and `renameAt` "are NOT narrowed and will not be: their claim is
+about every file, so there is nothing to narrow to". The claim really is program-wide.
+The **evidence** is not: an occurrence can only be an answer if it SPELLS one of the
+names the caret's symbol is reachable by, so the population is selectable before it is
+typed. `referencesAt` now selects it, and `captureIn`'s partition — which has always
+been DERIVED from the request's own spans — narrows the check with it, using no new
+mechanism. On tsc's own 78 compiler sources a search for an ordinary name costs
+**510–553 ms against 8.8–11.1 s**, and the worst realistic case (`SyntaxKind`, 9,827
+hits in 49 files) still wins at 4,904 ms.
+
+**WHAT ANCHORS THE CLOSURE.** Two forms give one symbol two written spellings —
+`import { p as q }` and `export { p as q }` — and both write BOTH names in the file
+that declares the alias. So "select the files containing a name I am looking for, read
+the aliases they declare, repeat" is a fixed point that never opens a file the search
+had no other reason to open. Everything that binds a symbol to a spelling written
+nowhere near the other one is REFUSED and falls back to the old sweep: a default
+export, a default import's local, `export =`, `import x = require(…)`, a namespace
+binding, and any closure reaching the spelling `default`.
+
+**THE ONE THING THAT ALMOST MADE IT UNSOUND, AND IS THE ROUND'S TRANSFERABLE LESSON.**
+The obvious file filter — does the file's text contain the name — is not exact.
+`StringLiteralNode.text` is the **cooked** value, so `o["pl\ain"]` names the member
+`plain` while the file spells `pl\ain`; and `\a` is an IDENTITY escape, so it is not
+`\u` that is dangerous but ANY backslash inside a literal. Measured on the profile: 29
+of 78 files contain a backslash and they hold **78.2%** of the characters, so the rule
+is "skip only a file with no backslash at all", and the exact filter stays
+`occurrenceText(node) in names`. The partition is therefore exact either way; only the
+indexing cost moves. A pin (`a member spelled by an escape sequence…`) fails against
+the plain substring test and against nothing else.
+
+**WHAT THE ABLATION SAID, INCLUDING THE PART THAT DOES NOT FLATTER THE CHANGE.** Four
+arms, four distinct red sets. But **a3 — "nothing is an alias escape" — reddens only
+the three REFUSAL pins**, and the equivalence assertions above them pass: on every
+shape this round fixtures, the narrowed answer would be right without the escape guard
+at all. So the guard is CONSERVATISM, not a fix, and the round says so. It is kept
+because the gap it anticipates is **measured**: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`
+answers **6** references on a `export { renamed as default }` declaration — both `d`
+occurrences in the importing file included — where this API answers **2**. The day that
+divergence closes is the day the guard becomes load-bearing, and there is now a pin
+whose failure announces it.
+
+**WHAT COST A REPAIR.** The first alias pin was written expecting the specifier's
+`propertyName` span and the answer carries the specifier's **LOCAL** name — a search
+from the exporting end returns three `localAlias` spans and no `renamed` one. That is
+the fact the whole narrowing turns on and it had to be measured rather than assumed.
+And two ablation arms were lost to a second `gradlew` starting while the first was
+still running (`Unable to delete directory …/classes/kotlin/jvm/main`), which is
+CLAUDE.md's one-gradle-per-box rule collected again.
+
+**GATES.** Suite **16,434 / 0 / 3** (+12 from a re-verified 16,422 baseline, exactly the new pins); differential **EQUIVALENT** — 60 carets drawn by stride over all 381,775 occurrences, **59 of them actually narrowed** (the control), **0 diverged**, 12,248 hits compared element for element; mean partition **17.5 of 78 files**, aggregate 182.0 s narrowed against 561.6 s whole-program (**3.09x** on a draw that lands proportional to occurrence count, i.e. on the hottest names); `cost_gate.py` and `huge_methods.py` are CONTROLS here, not gates — nothing in
+`-core` was touched — and both are green: `cost_gate.py` exit 0 with `output.errors` **46** and a largest move of **+0.08%**
+(`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
+run-to-run residual), `huge_methods.py --fail-over 0` clean.
+
+### Round (CHK.71) — B83.5 was the WRONG NAME for the blocker, the real one is a **fourth shadow shape** and it LANDS; the receiver half is refused again, on a *different* row
+
+**THE HEADLINE.** (CHK.71) was queued as "blocked on nested-function shadowing (B83.5)".
+The blocker reduced to twelve lines, turned out to be a **fourth, uncovered shadow shape**
+rather than an unbound declaration, and is **landed on its own** — it is a shipped false
+positive with no optional chain anywhere near it. The optional-chain receiver half is
+**still refused**, but its price has moved: `moduleNameResolver.ts:706/710` are **gone**,
+and what remains is **one knip row** needing a narrowing nobody had named.
+
+**THE FOURTH SHADOW SHAPE.** `currentLocalTypes` is flat and first-decl-wins, and a
+function body enters on a COPY of its enclosing scope, so three mechanisms keep a
+shadowing declaration from reading the inherited binding: round 351's
+`applyBodyLocalShadowing` (a declaration at the nested function's TOP level), round 460's
+`applyAmbiguousBlockScopedLocals` (two declarations of one name in ONE body) and round
+455's `applyNestedGlobalShadow` (a BLOCK-scoped declaration shadowing a GLOBAL or
+file-level binding). The fourth combination — **a BLOCK-scoped declaration inside a NESTED
+function shadowing an ENCLOSING FUNCTION's local** — was none of them, and
+`registerNestedGlobalShadowName`'s condition says so literally:
+`outerBound && !currentLocalTypes.containsKey(nm)`, i.e. it fires only when the name is
+*not* already bound, which is exactly the inherited case inverted.
+
+The reduction separates all four in one file, and only the fourth fires:
+
+```
+function m1() {            // FIRES on the parent, tsgo silent
+  let result = mkO();
+  function inner(): Inner | undefined {
+    if (flag) { let result: Inner | undefined; result = mkI(); return result; }
+    return undefined;
+  }
+  inner(); return result;
+}
+function m2() { …nested fn, TOP-level decl… }   // silent — round 351
+function m3() { …same fn, plain inner block… }  // silent — round 460
+```
+
+**WHY IT IS SAFE TO WRITE, AND WHAT MAKES IT NOT BLANKET SUPPRESSION.** This function runs
+BEFORE the body walk on a freshly copied scope, so every entry standing in
+`currentLocalTypes` at that moment belongs to an ENCLOSING function — the test needs no
+new bookkeeping. An ANNOTATED declaration records **its own annotation** (the flat map's
+best approximation, and exactly what the top-level arm does), an un-annotated one records
+`anyType`, because a block-scoped inferred type must not be claimed for reads outside the
+block. Ablation arms b2/b3 are two spellings of "ignore the annotation" and reddened
+exactly the pin that asserts a wrong assignment is still caught against the INNER type.
+
+**THE RECEIVER HALF, RE-PRICED.** Re-derived and re-measured on top of (CHK.72)(a):
+
+  * **the two `moduleNameResolver.ts` rows are gone** — they were the fourth shadow shape,
+    and it is now fixed, so `added=0 removed=0` with BOTH halves in place (grid digest
+    `790c337141b167657e4f1f3a219474aa`, identical to HEAD);
+  * **knip goes 49 -> 50**, a NEW row and an ours-only false positive:
+    `compilers/compilers.ts:60:49 TS18047 'match' is possibly 'null'` in
+    `return match?.[1] ? [\`… ${match[1]} …\`] : []`. tsc narrows `match` to non-null in the
+    true branch of a truthy test on `match?.[1]`; we do not, and the row was invisible only
+    because `match?.[1]` used to answer `any`. **An optional-chain condition narrowing its
+    RECEIVER is the blocker now — not B83.5, which is closed.**
+  * the capture channel gains **236 definitions** in both arms, and exactly **one** of them
+    is order-dependent: `resolutionCache.ts @39543..39549` resolves in the FULL arm and is
+    ABSENT in the narrowed one, taking that gate's standing `definitions=0` to 1. The
+    (INC.2) first-touch family, in a population that did not exist on the parent.
+
+So the receiver half remains **built, measured and NOT landed** — a strictly better price
+than last round (two profile rows -> one knip row plus one capture definition), with a
+named, reducible blocker. Requeued as (CHK.71)(a).
+
+**ABLATIONS — three arms, one mistake each, each `cmp`-diffed against its own snapshot,
+each restore verified by `cmp` plus a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| b1 | the whole inherited-local shadow reverted | `ff21e8f6` | **3** | — |
+| b2 | register `anyType` instead of the declaration's annotation | `80e1a0a3` | **1** | — |
+| b3 | stop THREADING the annotation (the decl arm passes null) | `ff73fa00` | **1** | — identical red set to b2; ONE observable in two spellings |
+
+**A PIN WRITTEN AS A CONTROL MEASURED AS A POSITIVE.** `m4` asserts that the ENCLOSING
+function's binding still catches its own wrong assignment; b1 reddens it, because on the
+parent the FIRST TS2322 in that file is the INNER assignment reported against the OUTER
+type (`Type 'Inner' is not assignable to type 'Outer'`). Relabelled as a positive rather
+than left claiming control coverage. Two of my first four pin EXPECTATIONS were also wrong
+— the message strips nullish (`… to type 'Inner'`, not `'Inner | undefined'`) — and tsgo
+7.0.2 prints ours verbatim, which is now recorded in the pin.
+
+**GATES.** Suite **16,422 / 0 / 3** (+5, exactly the new pins; **no corpus baseline
+moved**), grid `790c337141b167657e4f1f3a219474aa` with `added=0 removed=0` on all eight,
+`cost_gate.py` exit **0** with `output.errors` **46** and no counter over +-2%,
+`huge_methods.py --fail-over 0` **783 scanned / 0 over**, partition-equivalence EQUIVALENT
+all 78 with floor **65 ms** [55, 81, 65, 58] (one draw), capture-equivalence DIVERGED
+**964** in 43 of 76 with `definitions=0 moreAny=0` — the standing state exactly — and knip
+**49** / jsonrepair **4**, unchanged.
+
+
+### Round (CHK.72)(a) — the queue's attribution was wrong a TENTH time: `statSync` is not an overload-resolution gap, the flow walk's call shortcut is, and knip's row is a **default/namespace import typing as `any`**
+
+**THE HEADLINE.** Two independent findings, one landed. (1) `resolveFlowCalleeDecl`
+answers ONE declaration and does **no overload selection at all**, so both consumers that
+read a RETURN ANNOTATION off it were answering about a signature the call does not select
+— a shipped WRONG TYPE and a shipped FALSE NEGATIVE, both reduced to four lines and both
+confirmed against tsgo 7.0.2. That is landed. (2) The knip row (CHK.72) was queued for is
+**not** about `statSync`'s overloads: `import fs from 'node:fs'` gives `fs` the type
+**`any`**, so every member access and call through it is `any`. Re-queued as (CHK.73) with
+the measurement.
+
+**THE REDUCTION TOOK SIX MINUTES AND KILLED THE QUEUE'S PREMISE TWICE.** The queue says
+`fs.statSync(dir, { throwIfNoEntry: false })` "resolves to `any` for us where tsc gives
+`Stats | undefined`", and calls it an overload-resolution / `@types/node` question. Neither
+half survived. With the seven `statSync` overloads hand-written, the DIRECT reader
+(`const q: number = statSync("x", …)`) answers `Stats | undefined` — the overload IS
+resolved, correctly, and `getReturnTypeOfCallExpression` had it right the whole time. What
+answered wrongly was a local whose type is INFERRED from the call. And inside knip's own
+project, three import spellings of the SAME function disagree:
+
+| spelling | our answer |
+|---|---|
+| `import { statSync } from 'node:fs'` | **`Stats \| undefined`** — correct, whole overload set present |
+| `import fs from 'node:fs'; fs.statSync(…)` | **`any`** |
+| `import * as fs from 'node:fs'; fs.statSync(…)` | **`any`** |
+
+`fs` ITSELF is `any` (probed directly: `const c = fs; const q: number = c` is silent), so
+this is not a member-lookup gap but the binding's type. `path.join(…)` and
+`fs.readFileSync(…)` are `any` for the same reason. knip's `glob-cache.ts:62` needs
+`stat?.isDirectory() ? stat.mtimeMs : Number.NaN` to type as `number`, which needs `stat`,
+which needs `fs.statSync` — so **no amount of narrowing or overload work closes that row**,
+and (CHK.70)(f)'s refusal of an `any` ternary is correct as written.
+
+**WHAT LANDED — (CHK.72)(a), the flow walk's call shortcut.** `resolveFlowCalleeDecl`
+answers `symbol.valueDeclaration ?: declarations.firstOrNull()`. For an overload set that
+is the FIRST signature, and its two return-annotation consumers then answer about it:
+
+  * `resolvedCallReturnTypeForFlow` (the post-overwrite reset) installed the **wrong
+    overload's return** — `const c = f("x")` where the string overload returns
+    `Stats | undefined` and the number one returns `Other | undefined` read
+    `Other | undefined` at every later use. A wrong type, not a lost narrow.
+  * `callRhsHasNonNullishReturnAnnotation` (behind `rhsIsDefinitelyNonNullish`) claimed
+    non-nullish off the first signature, so the caller took the OVERWRITE branch and
+    **stripped a `| undefined` the selected overload genuinely has** — silent at every
+    later read.
+
+Both now route through `getReturnTypeOfCallExpression`, i.e. the engine's own overload
+resolution, gated behind a BODYLESS resolved declaration (every overload signature is one,
+an ordinary implementation is not) so the common case asks nothing. It is universal, not a
+`declare function` curiosity: an implementation-bearing overload set, an interface method
+pair and a `declare namespace` member all read first-wins on the parent, and **arity alone
+did not discriminate** (`ff("x","y")` picked the 1-parameter overload).
+
+**THE "CONSERVATIVE" HALF WAS NOT FREE, AND ONLY THE GRID SAID SO.** The first version had
+`callRhsHasNonNullishReturnAnnotation` simply `return false` for an overload set — refusing
+a claim it could not justify, which reads as strictly safe. It cost **one ours-only TS2322
+on every profile** (`esDecorators.ts:1309`, `output.errors` 46 -> 47, the cost gate's only
+red): `factory.getGeneratedNameForNode` is **two overloads that BOTH return `Identifier`**,
+and declining it lost round 465's destructured-member non-nullish proof for
+`visitReferencedPropertyName`. **Conservatism is not free when the claim is what SUPPRESSES
+a diagnostic** — answering from the SELECTED overload instead restores it. The suite was
+green on the refused version; the grid was not.
+
+**ABLATIONS — three arms, one mistake each, each `cmp`-diffed against its own snapshot and
+each restore verified by `cmp` plus a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | both halves reverted | `be6aedf7` | **3** | — (p1, p2, p3) |
+| a2 | only the RESET half reverted | `5407d8db` | **4** | — p1/p2/p3 **plus the c3 CONTROL** |
+| a3 | only the NON-NULLISH half reverted | `afbdafe8` | **2** | — (p2, p3; p1 stays green) |
+
+a2 is the round-927 pair reading and is recorded as **ONE observable**: the non-nullish
+refusal is *unsound without* the precise reset — with the reset gone, `c3` (an overload set
+whose SELECTED overload is non-nullish) stops narrowing. a3 gives each half a uniquely-its-
+own failure, so neither is a redundant guard.
+
+**VACUITY, PER PIN.** Every positive names the DECLARATION reader with a PRIMITIVE target,
+which is the instrument that PRINTS the flow type in its TS2322 message — the pins assert
+the **source type string**, never the presence of a row, so a pin cannot pass by a
+different mechanism emitting the same code. The subject must be a local whose type is
+INFERRED from the call: a directly-read call is GREEN on both binaries (`c2`, recorded as a
+CONTROL) because that path was always right, and a fixture written that way would have been
+vacuous. `c3` is the control that stops "select the overload" from degenerating into
+"refuse to narrow" — it is the one a2 turns red.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * I spent two builds instrumenting before finding the site, and the FIRST probe was the
+    decisive one in the wrong direction: `cvdaRecordInferredLocalType` records
+    `Stats | undefined` **identically** for the overloaded and the non-overloaded callee.
+    The recording was never the problem; the flow READ was. A probe that prints the value
+    at the site you suspect is worth more than any amount of reading — and the value it
+    printed said "look elsewhere".
+  * The RETURN reader was correct while the DECLARATION reader was wrong on the same local
+    in the same function, which is what localised it to the flow shortcut rather than to
+    overload resolution.
+  * `narrowRendersMoreAny=0`, `definitions=0` and `DIVERGED 964 in 43 of 76` are all
+    unchanged, but **both capture ARM DIGESTS moved** (`full=3208853970728874912
+    narrow=-1697007308088931828`). That is expected for a change that alters a type in
+    BOTH arms and is re-recorded, not read as a regression.
+
+**GATES.** Suite **16,417 / 0 / 3** (16,411 + exactly the 6 new pins; **no corpus baseline
+moved**), grid `790c337141b167657e4f1f3a219474aa` — the standing fifth-lineage digest —
+`added=0 removed=0` on all eight against `chk70_gatefinal`, `cost_gate.py` exit **0** with
+`output.errors` **46** (largest move `narrow.memoServed` +1.55%, `typeOfExpr.calls` +0.54%
+— the overload asks, both inside +-2%), `huge_methods.py --fail-over 0` **783 classes
+scanned, 0 over**, partition-equivalence EQUIVALENT all 78 with floor **67 ms**
+[103, 67, 60, 57] (one draw), capture-equivalence DIVERGED **964** in 43 of 76 with
+`definitions=0 moreAny=0`, knip **49** and jsonrepair **4** — both unchanged, i.e. this
+lands with no library cost and does not close knip's row.
+
+
+### Round (CHK.70) + (CHK.63) — **THE GATE IS OPEN**, the last row was *not* the loop, and both remaining costs are pre-existing gaps the gate merely makes visible
+
+**THE HEADLINE.** `canUseTypeEngine`'s nullish-union-versus-primitive refusal is gone and
+the 8-profile grid is `added=0 removed=0` — the first time in the (CHK.61)-(CHK.69) arc.
+Three commits: `2ed1779b` (CHK.70)(a), `acb6d92b` (CHK.70)(c), `7a488783` the gate.
+
+**THE QUEUE'S DECOMPOSITION WAS WRONG A NINTH TIME, AND THE MEASUREMENT SAID SO IN ONE
+BUILD.** (CHK.70)(a) is real and landed — a loop whose back edges only COMPOUND-assign the
+reference has a fixpoint bounded by `entry union nonNullish(declaredType)`, which is a
+function of the DECLARATION and so costs no back-edge traversal — and it did **NOT** move
+`harness/tsserverLogger.ts:28:5`. Rebuilding the combined arm on top of it read `added=1`
+on `tsc-harness`, byte-identical to the arm without it. The row was **(CHK.70)(c)**: the
+LITERAL arm of `narrowByAssignmentRhs` is the one arm (CHK.63)(a) did not route through
+`assignmentReduceBase`, so `let r: string | undefined = undefined; r = ""` answered
+`undefined` — a literal cannot restore a member the ANTECEDENT has already lost, and an
+assignment OVERWRITES. Both halves are shipped FALSE POSITIVES in their own right, five and
+four, every one confirmed silent under tsgo 7.0.2 through round 784's UNION-target return
+reader, and both are 8-profile-grid-identical on their own.
+
+**(CHK.70)(a)'s RULE IS THE *ORDER-FREE* ONE, AND THAT WAS A CORRECTION MADE BY AN
+ABLATION.** The first version stopped the scan at the first compound assignment — sound for
+that path, since it overwrites. Arm a2 (return COMPOUND at the first sighting) read **0
+RED**, and the reason was that the c2 control's two `if` arms happened to be written in the
+order that makes the stack meet the PLAIN assignment first: with the arms swapped the arm
+is silent where tsgo reports. Fixing the fixture would have pinned an order-dependent rule;
+the rule was changed instead to "EVERY assignment to the name reachable backward from a back
+edge is a non-nullish compound one", which also keeps us on tsc's side of a second
+difference (tsc's compound arm takes the ANTECEDENT's base type, so
+`while (…) { r = maybeUndefined(); r += s }` is `string | undefined` there and a string at
+run time). Two controls, `c2b` and `c2d`, exist for exactly that and are what arm a2 turns
+green.
+
+**THE GATE NEEDED THREE MORE FIXES AND THE SUITE FOUND ALL THREE — THE DASHBOARD FOUND
+NONE.** With E1-E4 applied the grid was already `added=0 removed=0`, and the suite had
+**seven** failures:
+
+  * `functionReturn.ts` — a corpus baseline LOST a row. The return reader's flow answer at
+    an UNREACHABLE node is `never`, which relates to everything, and its substitution is
+    suppression-only: `return ''; return undefined;` suppressed itself. Pristine tsc
+    reports it. The fix is (CHK.69)'s own `never` refusal, one reader over.
+  * `WeakCallableSourceAnchorTest` x2 — TS2559/TS2560 lost at `o.weakMember = …`, because
+    an optional member's ASSIGNMENT TARGET now carries `| undefined` and the weak rule
+    wants the object half. tsc reaches it by DISTRIBUTING the relation over the union, and
+    a nullish constituent can never accept a weak source, so the target strips nullish.
+  * `EarlyExitNarrowsTheRestOfTheBlockTest` x2 and `CtaFnBodyAnchorTest` x1 — pins that
+    recorded OUR OLD answer. The two RESIDUES are rows tsc is silent on and the
+    `CtaFnBody` `n == 0` was a FALSE NEGATIVE tsc reports at `(3,11)`; all three
+    re-confirmed against tsgo and INVERTED rather than deleted, because they are now the
+    only thing that would notice the gate closing again.
+  * `FlowNodeCensusTest` — an instrument pin, not a behaviour one. Under this gate an
+    entirely UNREAD container is much harder to write (the declaration, assignment and
+    return readers all consult the flow walk for a primitive target now), so its
+    `untouched` function is rewritten to hold no assignment to a local, no `return` of a
+    reference and no initialisation from one.
+
+**AND A FOURTH, FOUND BY knip.** `narrowByAssignmentRhs` has resolving arms for a bare
+Identifier and for a PropertyAccess and had none for a ConditionalExpression, and no
+STRUCTURAL test can stand in — a ternary's arms are member reads and a member may be
+optional — while `getTypeOfExpression` answers the ternary EXACTLY (measured: the same
+`number` tsc gives, including through a `?.` condition). (CHK.70)(f).
+
+**BOTH REMAINING COSTS, NAMED.**
+
+  * **knip 48 -> 49** (jsonrepair 4, unchanged, byte-identical). The row is
+    `util/glob-cache.ts:62:3`, and it was reduced INSIDE knip's own project with a probe
+    file: `fs.statSync(dir, { throwIfNoEntry: false })` resolves to `any` for us where tsc
+    gives `Stats | undefined`, so the ternary defaulting `mtime` is `any` and (f)'s arm
+    correctly refuses it (accepting `any` would not match tsc either — tsc is silent only
+    because IT resolves the call). A TYPE-RESOLUTION gap, queued as (CHK.72).
+  * **The capture channel loses 611 of 742,265 spans (0.08%) from a real type to `any`**,
+    against **451** that correctly GAIN the `| undefined` an optional member has, 63 that
+    improve from `any`, 68 other, 114 absent and 26 new. `x?.y` over a `T | undefined`
+    receiver has ALWAYS answered `any` here — measured on the parent with a plainly
+    declared `number[] | undefined`, no optional member involved — so the gate only
+    enlarges the population. **The receiver half was BUILT and MEASURED and deliberately
+    NOT landed**: it restores all 611 and turns 8 measured false negatives into true
+    positives, and it costs **2 ours-only rows per profile** at
+    `moduleNameResolver.ts:706/710`. Those two are B83.5: a nested function's own
+    `let result: Resolved | undefined` resolves to the ENCLOSING function's `result`
+    (inferred `ResolvedTypeReferenceDirectiveWithFailedLookupLocations | undefined`), which
+    was invisible only because the outer initializer is itself an optional chain and
+    answered `any`. (CHK.71).
+
+**ABLATIONS — eleven arms, one mistake each, each `cmp`-diffed against its own snapshot,
+each restore verified by `cmp` PLUS a rebuilt md5.**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the whole of (CHK.70)(a) reverted | `dcaf1594` | **5** | — |
+| a2 | the scan stops at the first compound assignment | `1bf146a5` | **0** | BLIND FIXTURE — the arm IS reached, with the `if` arms swapped; the rule and the controls were changed |
+| c1 | (CHK.70)(c) reverted | `191927d4` | **4** | — (disjoint from a1's set) |
+| c2 | (CHK.63)(a)'s nullish-only bound dropped | `9aefa0ba` | **0** | UNDISCRIMINATED — full suite green AND grid byte-identical, recorded not claimed |
+| g0 | the whole gate reverted | `855d0eab` | **4** | — |
+| g1 | `canUseTypeEngine`'s nullish gate restored | `ea1a2535` | **5** | — |
+| g2 | the RETURN reader's flow admission removed | `f3059cb7` | **1** | — (a pre-existing switch-clause pin) |
+| g3 | the ASSIGNMENT reader's flow admission removed | `d726ede8` | **2** | — (exactly the two inverted residues) |
+| g4 | an optional member loses its `| undefined` | `7e2b7d1f` | **1** | — |
+| g5 | the `never` refusal dropped | `557b6990` | **1** | — |
+| g6 | the weak target keeps the `| undefined` | `5e0dcea6` | **3** | — |
+| g7 | the CONDITIONAL right-hand-side arm removed | `61f84d6b` | **1** | after de-vacuuming; **0** as first written |
+
+**g7's FIRST ZERO WAS A VACUOUS PIN AND NOTHING ELSE SAID SO.** The (f) pin's ternary had a
+LITERAL false arm (`: 0`), which some other mechanism already reaches, so it passed against
+a binary with the arm deleted. Written with a bare `number` identifier it goes red. Round
+902's law, and the only instrument was the ablation reading zero.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **(CHK.70)(a) alone buys nothing on the dashboard**, and its whole visible value is
+    five hand-written false positives. It was still worth landing (it is the loop half of
+    the same defect class) but the queue's claim that it was "the single remaining row" was
+    wrong.
+  * **Four of my first pin fixtures were vacuous or wrong-reader** — a `.length` and an
+    argument-position probe over the same loop shape read identically on both binaries, and
+    the ARGUMENT reader's gate pin turned out GREEN on the parent (it never went through
+    `canUseTypeEngine` at all) and is recorded as a CONTROL rather than as coverage.
+  * **The optional-chain receiver fix looked free and was not.** It is a strict improvement
+    on every instrument except the dashboard, where it adds two rows — and those two rows
+    are a DIFFERENT defect (B83.5) that it merely unmasks. Refusing it is the brief's rule
+    applied to my own work.
+  * **I re-committed the round-(CHK.62b) PLAN-PHASE-5.md trim mistake**, keyed on "the next
+    `###` heading", and deleted the whole queue (452 KB -> 102 KB). Caught by grepping for
+    the queue immediately afterwards and recovered by `git checkout --`; the note that
+    warns about it is four rounds up in this same file.
+
+**GATES, PER COMMIT.** `2ed1779b`: suite 16,391/0/3, grid `790c3371…` `added=0 removed=0`,
+cost_gate exit 0 (`globals.*` +0.02%, everything else +0.00%), huge_methods 783/0.
+`acb6d92b`: suite 16,398/0/3, same grid digest, cost_gate exit 0 with NO counter moved at
+all, huge_methods 783/0. `7a488783`: suite **16,411 / 0 / 3**, same grid digest,
+`added=0 removed=0` on all eight, cost_gate REBASELINED (`narrow.walks` +11.17%,
+`narrow.memoServed` +6.61%, `globals.*` +1.0%, everything else <= 0.3%, `output.errors` 46,
+cold self-compile 26,660 ms against the parent's 26.4-26.9 s band — one draw each),
+huge_methods 783/0, partition-equivalence EQUIVALENT all 78 with floor **62 ms**
+[62, 60, 52, 73] (one draw), capture-equivalence DIVERGED **964** in 43 of 76 (from 967),
+`definitions=0 moreAny=0`, both arm digests re-recorded
+(`full=6075298610392249308 narrow=-9054794969403683490`). **No corpus baseline moved in any
+of the three** — the suite delta is exactly the pins added.
+
+### Round (CHK.69) — the loop join's ~20x is **MEMOIZATION BEING SWITCHED OFF**, a SOUND cut-keyed memo recovers **0.003%**, and the whole prize turns out to need **no back edge at all**
+
+**THE HEADLINE, AND IT IS A REFUSAL THAT PAID FOR ITSELF.** (CHK.66)(b)'s back-edge
+union was reproduced digit-for-digit this session (`globals.lookups` 759,945 ->
+**15,128,215**, `output.errors` 47), then ATTRIBUTED, then refused — and the attribution
+handed over a change that delivers the same rows for nothing.
+
+**THE PRIZE, MEASURED BEFORE ANY FIX (the brief's first law).** One arm, `M1`, deletes the
+`narrowLoopCutUsed` term from the memo-store gate — unsound, and therefore exactly the
+CEILING of what any memoization scheme can return:
+
+| counter | parent | loop join | M1 (memo restored) | M1 vs loop join |
+|---|---|---|---|---|
+| `globals.lookups` | 771,681 | 15,128,215 | 1,630,952 | **-89.2%** |
+| `typeNode.cacheable` | 179,886 | 10,831,464 | 885,424 | **-91.8%** |
+| `typeOfExpr.calls` | 595,665 | 1,269,016 | 782,936 | -38.3% |
+| cold wall | 26,669 ms | 91,677 ms | 44,123 ms | -51.9% |
+
+So **~90% of the blowup is the suppression** — the loop body's paths are ENUMERATED
+instead of folded, because nothing computed under the cut may be stored and the flag
+propagates to the walk root. The (CHK.68) hypothesis is confirmed as to mechanism.
+
+**AND THE SOUND REPAIR OF IT IS MEASURED AT ZERO.** Arm `M2` gives `NarrowFlowMemo` a
+`cuts: LongArray` — a rolling hash of the in-progress label set as an extra equality field
+on every entry, so a cut answer is served only back to a walk standing in the SAME cut. It
+reads **15,127,750** against the loop join's 15,128,215: **0.003%**. The reason is
+structural and is the round's most transferable finding — **the cycle almost never closes
+ON the loop label; it closes on the walk's OWN PREFIX**, which happens whenever the query
+sits inside or after the loop, and that answer is a function of the PATH, not of the cut.
+**Even the unsound ceiling is +115% globals lookups, +395% type-node resolutions and
+44.1 s against 26.7 s cold, so the direction is refused in its BEST case.**
+
+**WHAT LANDS INSTEAD (`92598fb0`), AND IT IS THE LOOP JOIN'S OWN KDoc ARGUMENT USED
+FORWARD.** A loop label's value is the least fixpoint `L = E union (union of narrow_i(L))`.
+When no back edge ASSIGNS the reference every back edge is a pure NARROWING of `L`, so
+iterating from `E` never grows past `E` and **the fixpoint IS `E`** — the label can be
+answered by FOLLOWING ITS ENTRY, with no back-edge traversal, no cut and no memo
+suppression. `loopBodyMayAffectName` decides that by pure graph reachability (it resolves
+no type and asks the binder nothing) and answers TRUE — today's conservative
+`declaredType` — on anything it cannot rule out. **`output.errors` 46, wall 26.9 s against
+26.7 s, counters +0.3-0.4 pp over the standing residual.**
+
+**AND THE BINDER HALF, WHICH IS A SHIPPED FALSE NEGATIVE NOBODY WAS LOOKING FOR.**
+`bindForInStatement` / `bindForOfStatement` joined the **PRE-loop flow** to the post-loop
+label instead of the **LOOP LABEL**; tsc's `bindForInOrForOfStatement` sets
+`currentFlow = preLoopLabel` BEFORE `addAntecedent(postLoopLabel, currentFlow)`. So a
+`for-in`/`for-of` body was unreachable BACKWARD from any read after the loop and
+`for (const n of xs) { h.req = 1 }` did not invalidate a narrow established before it.
+`while` / `do` / `for(;;)` never had it — they exit through their condition, which carries
+the label. It also blinded the new back-edge scan whenever such a loop sat inside another
+one, which is why the two halves are ONE commit: each alone regresses the other's shape
+(measured — `while (cond()) { for (const n of xs) { h.req = 1 } }` is a lost diagnostic
+with only the checker half).
+
+**GROUND TRUTH, 14 HAND-WRITTEN SHAPES AGAINST tsc 7.0.2.** The parent has **5 shipped
+FALSE POSITIVES** (a narrow lost across a loop that cannot touch it: a `while` read inside
+and after, a `for-of`, a `do`/`while`, and a loop assigning a DIFFERENT member of the same
+object) and **2 shipped FALSE NEGATIVES** (the `for-of` exit). The shipped binary
+reproduces tsc **EXACTLY** on all 14.
+
+**THE GATE ((CHK.63)) IS RE-PRICED AND IT IS NOW *ONE ROW ON ONE PROFILE*.** The combined
+arm — gate + RETURN/ASSIGNMENT readers + (CHK.61)(b)'s checking half + (CHK.67) + this
+round — measures `added=0 removed=0` on **seven** profiles and `added=1` on `tsc-harness`:
+`harness/tsserverLogger.ts:28:5`. **(CHK.66)(b)'s own residue `checker.ts:43282:21` is
+GONE** — the capture dump shows that site (`getSignaturesOfSymbol`'s `decl`/`previous`
+loop) going from `any` to a real type with four go-to-definition rows GAINED. And the gate
+is now AFFORDABLE: `narrow.walks` **+11.2%**, `narrow.memoServed` +6.6%, everything else
+<= 1%, wall flat. **It is still NOT opened** — 1 ours-only row on a dashboard whose v1 exit
+is zero, with a named and tractable cause, is a decision to take at 0 rows.
+
+**GATES, PER COMMIT (`92598fb0`).** Suite **16,367** / 0 / 3 (+11, exactly the new pins; **16,380** after the rebase onto the (LIB.4) arc, which does not touch the checker — `Checker.class dcaf1594` either side)
+and **NO corpus baseline moved**. Grid `790c337141b167657e4f1f3a219474aa`,
+`added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
+rebuilt parent (`Checker.class b2675304`) — the digest is IDENTICAL to the parent's. NOTE
+the recipe: this round's `build/chk69/cap.sh` concatenates the eight per-profile sorted
+files in glob order, which is a FIFTH lineage and is not comparable to (CHK.68)'s
+`503774c2…`; the row counts (46/95/46x6) are identical. `cost_gate` REBASELINED — the
+round adds +0.43 pp on `globals.misses`/`globals.lookups` and +0.34 pp on
+`typeNode.cacheable` over the standing residual, which pushed `globals.misses` to +2.20%;
+**the rebaseline also absorbs the residual accumulated before this round, so the next
+round's gate is exact against `dcaf1594`**. `huge_methods` exit 0, **783** classes.
+`partition-equivalence` EQUIVALENT all 78, floor **63 ms** [63, 60, 71, 62] (one draw).
+`capture-equivalence` DIVERGED **967** in 43 of 76 (from 968), `definitions=0 moreAny=0`;
+**both arm digests move and are re-recorded** (`full=2052686027637998102`
+`narrow=-2628066049853121726`). knip **48** and jsonrepair **4**, byte-identical to arms
+taken from a parent class dir this session.
+
+**THE CAPTURE DIGEST MOVE, CLASSIFIED PER ELEMENT** (`XTSC_CAPEQ_DUMP` on both binaries).
+**168 of 742,255 spans change (0.023%), 0 LOST and 11 GAINED.** By direction: **66 are
+`any` -> a real type** (a member on a receiver that had washed at a loop), **29 are
+`X | undefined` -> `X`**, 63 are reformulations, 4 are narrower and **6 are WIDER** — the
+last group being the post-loop invalidation the binder half restores, one of which
+additionally loses an alias name to the known first-wins (INC.29) family. The 11 gained
+are go-to-definition rows that now resolve (`forEach` on a narrowed receiver reaching
+`lib.es5.d.ts`). The six wideners were NOT individually verified against tsc.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`dcaf1594`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the soundness gate deleted (the loop is ALWAYS answered by its entry) | `fcdb566c` | **9** | — |
+| a2 | the `for-in`/`for-of` exit goes AROUND the label again | `dcaf1594` (Flow.kt) | **4** | — |
+| a3 | the `never` refusal dropped | `9cd7d51a` | **0** | UNPINNED, but MEASURED — see below |
+| a4 | the whole arm dead (every label answers `declaredType`) | `e017e684` | **5** | — |
+
+a1 and a2 have DISTINCT red sets (a1 additionally reddens the two loop-assign controls and
+all four verifier controls), so they are two observables, not a round-927 pair. a4 is the
+arm-is-live control and reddens exactly the five "survives" positives.
+
+**a3's ZERO IS AN UNPINNED GUARD AND ITS INSTRUMENT IS THE GRID, NOT A PIN.** Run over the
+compiler profile the a3 binary adds **exactly the five `emitter.ts` `never` rows**
+(`4472:38`, `4473:40`, `4487:60`, `4488:39`, `4488:77`), so the refusal is load-bearing and
+measured — it just has no fixture. Four attempts to reduce it (a negated GENERIC
+type-guard call on an object union and on a primitive union, identifier and property-path
+subjects) produced **identical output on both arms** and all four are a SEPARATE shipped
+divergence: a negated generic type guard does not narrow at all here, where tsc is silent.
+Reported as an unpinned-but-measured observable, not as coverage.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The cut-keyed memo (M2) is a complete, sound design that buys nothing.** It is kept
+    only as a measurement (`build/chk69/m2.py`). Writing it was the only way to learn WHY
+    the suppression cannot be lifted — the cycle closes on the prefix, not on the label.
+  * **My first `a2` was a DEAD ARM that read RED=0 and looked like a redundant guard.** The
+    patch inserted the pre-(CHK.69) `joinAntecedent(postLoop, currentFlow)` without
+    REMOVING the new one, so `postLoop` got both antecedents and the label was still
+    reachable. **The `cmp`-against-its-own-snapshot check PASSED** (the file really did
+    differ), which is round 855/922's law shown to be necessary and not sufficient: a diff
+    proves the edit landed, never that it removes the thing under test.
+  * **My first pin family was VACUOUS in both directions and the controls hid it.** An
+    IDENTIFIER subject (`if (typeof x === "string")` then a loop) is answered from
+    `currentLocalTypes`, which is statement-ordered and loop-BLIND, so the positives passed
+    on the parent AND the controls passed on a binary that had no gate at all — `x = 1`
+    inside a loop does not invalidate the pre-loop narrow on either arm (a separate shipped
+    false negative, queued as (CHK.70)). Only a PROPERTY PATH reaches the flow walk.
+  * **The two verifier CONTROL classes went red for the right reason.**
+    `LoopEntryRetryGateTest` and `UnionRetrySubstitutionTest` assert that the plain walk
+    DOES diverge from the FollowLoopEntry mirror over the loop-crossing population; since
+    this round the plain walk agrees with the mirror on those shapes, so `typeDiff` read
+    ZERO. Both classes get a `loopCrossing` fixture whose loops ASSIGN the guarded
+    reference, which still washes. **A control that goes vacuous because the compiler
+    improved is indistinguishable from a control that was always dead** — the tell was
+    that only the CONTROLS moved while every functional pin in those classes stayed green.
+
+### Round (LIB.4) — `cronstrue` **COMPILES TO JVM BYTECODE**; the queue's five rungs were half the ladder, and four of the five defects found were SILENT wrong answers
+
+**The deliverable.** `cronstrue`'s English entry point — 11 files of published source,
+unmodified — reads `successful=true` through `compileTypeScriptProjectToJvm`, with the checker
+at **0 errors agreeing with tsgo 7.0.2 exactly**. It then fails at RUN time on the
+nominal/structural boundary, twice for one reason ((LIB.6)). Thirteen capabilities landed as
+corpus 17-29, in six commits, each gated on a green full suite (16,339 / 0 at the last).
+
+**The method, and the one thing it corrected about the queue.** The queue named five rungs; the
+ladder is thirteen. Its list was short because the earlier session peeled it *by patching a
+throwaway copy*, which walks past whatever the patch removed. Re-probing the UNMODIFIED library
+after each fix — `LibraryProbe`, read the one refusal, close it, re-probe — found the other
+eight. **Order matters too: the refusals arrive in the lowering's own file order, not the
+queue's**, so rung 2 arrived tenth.
+
+**Every `.expected` in 17-29 is `node`'s own stdout** (it runs a `.ts` directly), and each
+program is written so the INTUITIVE implementation fails it: `[10, 9].sort()` is `10,9`,
+`new Date(99, 0, 1)` is 1999, `substr`'s second argument is a length, `every` is true for an
+empty array. Program 23 is the single exception — node's stripper will not parse `<T>expr`, so
+its oracle is the `as`-spelled twin, which IS the claim under test.
+
+**The five defects, four of them silent.** None was a missing capability:
+
+1. **`for (let j …)` had no per-iteration binding** — every closure the loop made shared one
+   variable (`3,3,3` where JavaScript says `0,1,2`). Found ONLY because corpus 18 runs the `var`
+   and `let` spellings side by side: the `var` answer is correct and the `let` answer is not, and
+   neither alone shows it.
+2. **`toFixed` used the machine's LOCALE** — `"2,0"` on this box. Invisible on en-US, so CI could
+   never catch it, and it appeared on a plain `number` receiver, so it predates this arc.
+3. **The array callbacks were typed `Function1`**, truncating JavaScript's
+   `(element, index, array)`. Before the arc `map((v, i) => …)` was refused; with the new arity
+   adapter it would have begun dropping the index SILENTLY — the same defect with no diagnostic.
+4. **This arc's own `var` hoisting emitted into the wrong body** — `blockBodyOf` is the funnel for
+   SYNTHESIZED bodies too, so `var days = { … }` put its hoisted declaration into the constructor
+   of the shape class its own initializer had just built. Only the IR validator saw it; corpus 18
+   now carries the shape.
+5. **A checker FP, still open ((CHK.69))**: an assignment before a `var`'s declaration does not
+   count toward definite assignment. The mirror is silent, so it is that direction specifically.
+
+**What is left is one architectural milestone, not a queue.** (LIB.6), with a cheaper candidate
+named and priced against `docs/kir-structural-typing.md`'s measured 158-edge closure.
+
+
+### Round (CHK.68) — `x = y = z` was a **SHIPPED** false positive and it LANDS; the gate re-prices **6 rows -> 5**, the COMBINED arm is **exactly 1 row** — and the loop join it needs is a **~20x cost blowup nobody had priced**
+
+**THE HEADLINE, AND IT IS A REFUSAL WITH A NEW REASON.** `armBGR` was re-measured on top
+of (CHK.66)(a) — the round's assigned first move — and is **UNCHANGED at 6 rows**: the
+subtype reduction closes none of them. (CHK.67) was then diagnosed, and the queue's
+description of it was half wrong in the useful direction: of its two named shapes, the
+`index = index! + 1` BinaryExpression RHS was **already handled** by the (CHK.33)
+computed-primitive arm, and the CHAINED assignment is the whole gap. It landed
+(`2cbb3847`) and the gate re-prices **6 -> 5**. The COMBINED arm — gate + RETURN/ASSIGNMENT
+readers + (CHK.61)(b)'s checking half + (CHK.67) + the loop join — then measures
+**`added=1 removed=0` on all eight profiles**, the single row being (CHK.66)(b)'s known
+residue `checker.ts:43282:21`.
+
+**SO THE GATE IS ONE ROW AWAY IN DIAGNOSTICS AND NOWHERE NEAR IT IN COST.** The loop join
+was priced in ROWS for three consecutive rounds (8 -> 3 -> 1) and never once in COUNTERS.
+Measured this round, **alone**, on the compiler profile:
+
+| counter | baseline | loop join alone | delta |
+|---|---|---|---|
+| `globals.lookups` | 759,945 | 15,128,215 | **+1,891%** |
+| `globals.misses` | 742,400 | 15,111,247 | **+1,935%** |
+| `typeNode.cacheable` | 178,997 | 10,831,464 | **+5,951%** |
+| `typeNode.cacheHits` | 119,618 | 10,772,084 | **+8,905%** |
+| `typeOfExpr.calls` | 587,332 | 1,269,016 | **+116%** |
+| `narrow.memoServed` | 43,133 | 593,709 | **+1,276%** |
+| `narrow.walks` | 32,154 | 44,048 | **+37%** |
+
+`spine.nodes` and `typeOfExpr.distinct` are FLAT (+0.00% / +0.98%) against `calls` +116%,
+so the population is unchanged and **the same questions are simply re-asked ~20x**; 99.45%
+of the 10.8 M type-node resolutions are cache HITS and 99.9% of the 15.1 M globals lookups
+are MISSES, i.e. the cost is the ASKING, not the answering. On the wall it is ~3.5x: the
+8-profile grid went from ~25 s to ~90 s per profile and the harness killed it at 6 of 8.
+The mechanism is the shape of the arm — a loop label now walks EVERY antecedent including
+the back edges, and nothing computed under `narrowLoopCut` may be memoized
+(`narrowLoopCutUsed`), so each loop body is re-walked per query. **Stated as a hypothesis
+supported by the counters, not as a measured attribution** — no probe was built for it.
+
+**THE GATE IS THEREFORE REFUSED AGAIN, ON A REASON NO EARLIER ROUND HAD.** Its dependency
+is not one diagnostic away from clean; it needs a cost redesign. (CHK.66)(b) is re-queued
+with the counters attached and the direction named (memoize under the cut, keyed by the
+in-progress label set, or hoist the per-antecedent resolutions).
+
+**THE FIVE SURVIVING `armBGR` ROWS WERE READ INDIVIDUALLY AND ARE ALL ONE MECHANISM** — a
+narrow established OUTSIDE a loop, lost inside or after it. `moduleNameResolver.ts:824`
+(`if (host.directoryExists && host.getDirectories)` outside, the call inside the `for`),
+`moduleNameResolver.ts:2265` (guard outside, use inside `for (const conditions of …)`),
+`server/project.ts:502` and `:528` (`Debug.assertIsDefined(host.require)` outside, the
+call inside the loop), `harness/tsserverLogger.ts:28` (a `while (true)` join re-adding
+`undefined` before the `return`). The loop join removes all five, which is why the combined
+arm nets to +1.
+
+**(CHK.67), MEASURED AND LANDED.** A six-shape census against tsc 7.0.2 (`build/chk68/f2`,
+graded by a deliberate mis-assignment — the only instrument that PRINTS the flow type)
+isolated it: `x = a + b`, `x = y` and `x = o.p` all already matched tsc, in and out of a
+loop; only `x = y = z` did not, in BOTH regimes. Every arm of `narrowByAssignmentRhs`
+classifies the right-hand side SYNTACTICALLY, and `y = z` matches none of them — it is a
+`BinaryExpression` whose operator IS `=`, which the (CHK.33) arm excludes by construction.
+Reachable with NO gate and NO loop at the UNION-target declaration reader:
+`let i: number|undefined; i = c = o.len; const p: number|string = i` is ours-only, as is
+the object-typed sibling. `unwrapAssignmentChainRhs` descends the `=` chain through parens
+before the arms classify; a COMPOUND assignment is deliberately not unwrapped.
+
+**GATES, PER COMMIT (`2cbb3847`).** Suite **16,356** / 0 / 3 (+8, exactly the new subtests)
+and **NO corpus baseline moved**. Grid `503774c23b4535130ffdebabef430cf0`,
+`added=0 removed=0` on all eight against a parent capture taken THIS SESSION from a
+rebuilt parent (`Checker.class 19b32bf2`, the digest the (CHK.66) note recorded).
+`cost_gate` exit 0, `output.errors` **46**; counters are the standing residual to the
+third decimal (`typeOfExpr.calls` +1.42%, `globals.lookups` +1.54%, `globals.misses`
++1.77%, `narrow.walks` +0.87%, `typeNode.cacheable` +0.49 -> +0.50%). `huge_methods` exit
+0, **783** classes. `partition-equivalence` EQUIVALENT all 78, floor **61 ms**
+[58, 69, 61, 50] (one draw). `capture-equivalence` DIVERGED **968** in 43 of 76,
+`definitions=0 moreAny=0`, and **both arm digests UNCHANGED** from (CHK.66)'s
+(`full=446836089224869508 narrow=-3963031488196695014`). knip **48** and jsonrepair **4**,
+byte-identical to arms taken from the parent rebuilt this session.
+
+**LAST ROUND'S TWO HONEST GAPS ARE BOTH CLOSED.**
+
+  * **(CHK.66)'s capture digest move, classified per ELEMENT.** Both binaries dumped with
+    `XTSC_CAPEQ_DUMP` (the pre-(CHK.66) parent rebuilt to `Checker.class d0997340`, the
+    digest that note records). **67 spans of 742,254 moved — 0.009% — and NOT ONE GAINED A
+    MEMBER.** 57 are pure DROPS, every dropped member a strict subtype of a survivor
+    (`JsxEmit | JsxEmit.ReactJSX | undefined` -> `JsxEmit | undefined`,
+    `Expression | BinaryExpression | undefined` -> `Expression | undefined`,
+    `TypeFlags | TypeFlags.Intersection | undefined` -> `TypeFlags | undefined`); 3 collapse
+    to the alias the source itself spells (`PropertyName`, `ForInitializer`) and are
+    strictly better; 3 are member REORDERINGS inside a captured type; and **the two rows
+    that are not improvements are named**: one loses an alias NAME to the known first-wins
+    (INC.29) family (`ModuleKind | ModuleKind.None` -> the 13 members spelled out, where
+    the sibling caret two spans away keeps `ModuleKind`), and **3 are go-to-definition
+    location lists that lost the dropped constituent's own declaration** — (API.5)'s
+    "complete enough to highlight, not to edit" one mechanism over. Zero spans were added
+    or removed from the population.
+  * **A genuine parent library arm was rebuilt and both libraries re-taken.** knip **48**
+    and jsonrepair **4** on the rebuilt parent, byte-for-byte identical to (CHK.67)'s. The
+    stale 49-row capture the last round flagged is superseded.
+
+**THREE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`b2675304`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the chain is never unwrapped | `04502d1e` | **6** — every positive | — |
+| a2 | the unwrap does not see through parens | `b7c8cd6f` | **1** — P5, uniquely | — |
+| a3 | the unwrap descends exactly ONE link | `99f095d0` | **1** — P6, uniquely | — |
+
+No arm read 0; every one is uniquely discriminating, so there is no undiscriminated, dead
+or unpinned zero to report this round.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `f7fc33a1` rebuilt in this session
+(`Checker.class 19b32bf2`): **6 of 8 RED**, exactly the 6 positives, the 2 controls green
+on both binaries. Each positive names its reader — P1/P2/P5/P6 the DECLARATION reader with
+a UNION target (live with no gate, so the row simply disappears), P3/P4 the DECLARATION
+reader with a PRIMITIVE target graded by a deliberate mis-assignment, P4 inside a `for`.
+A nullish-source fixture is NOT vacuous here because the union target keeps it outside
+(CHK.63)'s own gate — which is why every positive uses `number | string` or an object
+union rather than a primitive target, and why P3/P4 assert on the MESSAGE's type rather
+than on silence.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The 43282 residue did not reproduce.** Three hand-written shapes of it (a 4-way
+    `.kind ===` disjunction over `Sig | Cls`, with and without an `as` assertion, in and
+    out of a loop) are all silent on the combined arm AND on tsc 7.0.2. The real site
+    additionally carries an enum discriminant, a `previousDeclaration = undefined` reset
+    in a sibling branch and a long body; the reduction was not attempted. Reported as an
+    unreproduced residue, not as a diagnosis.
+  * **The 8-profile grid on the loop arm exceeded the harness's 10-minute ceiling and was
+    killed at 6 of 8 profiles.** The two survivors were run directly with grid.sh's own
+    command; the capture is complete and the per-profile diff is over all eight. That the
+    grid TIMED OUT is itself the first evidence of the cost finding above — a wall-clock
+    tell noticed before any counter was read.
+  * **My first placement of the (CHK.67) helper put its KDoc BETWEEN
+    `narrowByAssignmentRhs`'s own KDoc and the function**, silently detaching the latter's
+    documentation. Relocated and proved inert the way the brief prescribes: `javap -c -p`
+    minus `line N:` is byte-identical across the move (diff exit 0, 0 lines) while
+    `Checker.class` md5 moves `bc643b95` -> `b2675304`.
+  * **`loop.py` still reverts edits inside the region it rewrites**, as the last round
+    recorded; on the current head it leaves `flowJoinUnion` DEFINED and the loop join
+    un-routed (2 references instead of 3), which builds cleanly and measures the wrong
+    arm. The routing must be re-applied by hand after it — `build/chk68/snap/Checker.kt.loopR`
+    is the correct composed tree.
+
+### Round (CHK.66) — the loop join's blocker is a **SHIPPED four-line divergence at a plain BRANCH label**, it lands, and the loop join re-prices **3 rows -> 1**
+
+**THE HEADLINE.** The queue said the loop join's residue was `getUnionType`'s missing
+subtype reduction, and named the site set as "downstream of the label, at a branch
+join". Measured, that is exactly right — and the branch-join defect is **reachable on
+the SHIPPED binary in four lines with no loop, no partition and no gate**:
+
+```ts
+const x = zzzMk();            // string | number
+if (x === "a") { zzzSink(x); }
+const p: boolean = x;         // ours: string | number | "a"
+                              // tsc 7.0.2: string | number
+```
+
+So the census that the round's first move should be — what does the rule RENDER? — put
+the whole item on a one-second CLI loop instead of a grid. `flowJoinUnion` landed as
+**`ad888740`** and the loop join was then re-priced on top of it.
+
+**THE SITE SET, AND WHY IT IS TWO LINES AND NOT `getUnionType`.** tsc reduces at
+`getTypeAtFlowBranchLabel` / `getTypeAtFlowLoopLabel` with `UnionReduction.Subtype` and
+NOWHERE ELSE that matters here; INV.5(a) interns our unions by member-id list alone and
+union member ORDER is pinned byte-for-byte across ~13k baselines, so a reduction inside
+`getUnionType` was refused on sight. The shipped change routes the TWO flow joins in
+`narrowTypeFromFlowCore` through one helper and touches nothing else.
+
+**TWO CONSERVATISMS AGAINST tsc, BOTH DELIBERATE AND BOTH PINNED.**
+
+  * **Only a member the DECLARATION does not itself contain may be dropped.** Every arm
+    of this walk filters DOWNWARD from the declaration, so a "foreign" member is exactly
+    one some narrowing step INTRODUCED — which is the whole defect class. It also makes
+    the reduction free on the overwhelming majority of joins (an id-set membership test,
+    no relation query at all), and it means a union the USER wrote is never re-shaped.
+    tsc would also reduce `type T = string | "a"` at a join; we do not. Pinned by C2,
+    which is the arm-a2 separating control.
+  * **The drop needs a STRICT subtype** (`m` assignable to `o` AND `o` NOT assignable to
+    `m`). **This repo has no subtype relation at all — `subtypeRelation` is declared at
+    `CheckerState` and has ZERO readers** — so assignability is what there is, and it is
+    bidirectional for pairs a subtype relation separates.
+
+**THE LOOP JOIN, RE-PRICED: 3 ROWS -> 1.** `build/chk65/loop.py baseR` re-applied on top
+of the reduction, with BOTH joins routed through `flowJoinUnion`, costs exactly **ONE**
+ours-only row on every one of the 8 profiles (added=1 removed=0, the same row each
+time): `checker.ts:43282:21`. **Both `utilities.ts` rows are GONE** — `11586:63` and
+`11704:47`, the `ConditionalTypeNode | Node | undefined` family the queue named, are
+closed by the reduction exactly as predicted. The survivor is a DIFFERENT mechanism and
+its shape says so: `previousDeclaration = node` reports
+`SignatureDeclaration's own 14 constituents | ClassDeclaration | ClassExpression`, i.e.
+our narrowing leaves two CLASS kinds in a union tsc has filtered to `SignatureDeclaration`
+— a discriminant/`isFunctionLike` filter gap over a loop-carried state, not a reduction
+one. Re-queued as **(CHK.66)** at 1 row; the built tree is
+`build/chk66/snap/Checker.kt.loopR` and it regenerates as
+`python3 build/chk65/loop.py baseR` + the two `flowJoinUnion` routings (note that
+`loop.py` REWRITES the region holding the reduction helper, so the helper must be
+re-inserted after it — `build/chk66/red.py` carries the text).
+
+**THE GATE ((CHK.63)) WAS NOT RE-MEASURED THIS ROUND** — `armBGR`'s grid was not re-run
+on top of the landed reduction, so its 6-row list stands as (CHK.65) measured it. What
+changed is what it is blocked on: (CHK.66)'s standalone price fell 3 -> 1, so the gate
+now needs one loop row plus (CHK.67). Re-taking `armBGR` is the next round's first move,
+and it is cheap — one build plus one grid.
+
+**GATES, PER COMMIT (`ad888740`).** Suite **16,348** / 0 failed / 3 skipped (+9, exactly
+the new subtests) and **NO corpus baseline moved** — which is the number this round was
+most exposed on, union display being byte-pinned there. 8-profile grid
+**`503774c23b4535130ffdebabef430cf0`**, `added=0 removed=0` on all eight, i.e. BYTE-
+IDENTICAL to the recorded parent capture; parent verified by rebuilding `184832b1` in
+this session (`Checker.class d0997340`, the same digest the (CHK.65) note recorded).
+`cost_gate.py` exit 0, `output.errors` **46**; the counters are the standing residual
+moved in the third decimal (`typeOfExpr.calls` +1.42%, `typeOfExpr.distinct` +0.97%,
+`narrow.walks` +0.84 -> +0.87%, `typeNode.cacheable` +0.39 -> +0.49%, `globals.lookups`
++1.53 -> +1.54%, `globals.misses` +1.75 -> +1.77%) — the relation queries the reduction
+adds are below a tenth of a percent. `huge_methods --fail-over 0` exit 0, **783** classes
+scanned, 0 over. `partition-equivalence` EQUIVALENT all 78, floor **54 ms**
+[75, 54, 54, 54] (one draw). `capture-equivalence` DIVERGED **968** in 43 of 76,
+`types=968 definitions=0 narrowRendersMoreAny=0 absentInNarrow=0 absentInFull=0` —
+UNCHANGED in every field; both arm digests moved (`full=446836089224869508`
+`narrow=-3963031488196695014`), which is expected of a change that re-renders a narrowed
+join, and is NOT classified per element this round (see the residue below). knip **48**
+and jsonrepair **4** — jsonrepair byte-identical to the last stored capture.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `184832b1` rebuilt in this session:
+**7 of 9 RED**, and they are exactly the 7 positives. Each names its reader — P1/P2/P3
+the DECLARATION reader (a deliberate mis-assignment, the only instrument that PRINTS the
+flow type; a `zzzTake(r)` fixture is vacuous for a local, and a NULLISH union is vacuous
+a second time under (CHK.63)'s own gate, so every fixture here is `string | number` or a
+non-nullish object union), P4/P5 the CALL-ARGUMENT reader (live only for a PARAMETER
+source), P6 a two-function differential (the narrowed join must render exactly like the
+un-narrowed one), P7 the ORDER of the survivors of a REAL drop in a 3-member union. The
+2 controls are green on BOTH binaries.
+
+**THREE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`19b32bf2`).**
+
+| arm | injected mistake | class | RED | kind of zero |
+|---|---|---|---|---|
+| a1 | the reduction never fires | `30820166` | **7** — every positive | — |
+| a2 | the FOREIGN gate removed (every member a drop candidate) | `45a0b283` | **1** — C2, uniquely | — |
+| a3 | the drop needs only plain ASSIGNABILITY | `ddd51425` | **0** | **UNDISCRIMINATED, not redundant** |
+
+**a3's zero is named and was chased.** It is not "measured redundant": the strictness
+clause can only REFUSE a drop, so it cannot introduce a wrong answer, and it is what
+stops `any` (mutually assignable with everything) being deleted from a join. I could not
+construct an input on which it fires — the two candidate shapes both collapse for another
+reason (`ZzzD` structurally identical to `ZzzA`, and `ZzzE` differing only by an OPTIONAL
+member, are BOTH already absent from the join on the fixed binary, and **tsc 7.0.2 also
+answers `ZzzA | ZzzC` for both**, so a "must keep" control there would have pinned a
+divergence). It is also profile-inert: the a3 binary is ROW-IDENTICAL to the parent on
+`tsc-project`, `tsc-services` and `tsc-harness`. Kept as a documented conservatism.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's decomposition was right for the first time in six rounds, and the
+    surprise was in the other direction**: the blocker it named for a LOOP item is a
+    defect of the plain BRANCH join, present on the shipped binary, needing no loop at
+    all. The instrument that found it in ninety seconds was the round's first move —
+    census what the rule RENDERS, on four lines, against `tsgo --noEmit`.
+  * **`P6`'s first form was a false pin.** It asserted the reduced join renders its ALIAS
+    name (`ZzzAl`); measured, the UN-narrowed control renders structurally too, so the
+    alias loss is the pre-existing (INC.27)/(INC.29) family and nothing to do with this
+    change. Rewritten as a two-function differential, which is discriminating.
+  * **`C4`'s first form pinned a KNOWN-OPEN gap** (inside the then-branch we say `string`
+    where tsc says `"a"`) and was deleted rather than pinned — CLAUDE.md's rule that an
+    open gap belongs in a session note, not in a control.
+  * **`loop.py` silently REVERTS an edit inside the region it rewrites.** Its patch spans
+    the `FlowBranchLabel` arm and the KDoc above `assignmentReduceBase`, so applying it
+    on top of the landed reduction deleted the helper AND un-routed the branch join; the
+    build's `Unresolved reference 'flowJoinUnion'` is the only reason it was noticed.
+  * **The capture-equivalence ARM DIGESTS moved and are NOT classified per element this
+    round.** The (CHK.64) `XTSC_CAPEQ_DUMP` comparison needs a dump from the PARENT
+    binary as well, i.e. a second full sweep plus a rebuild; the evidence carried instead
+    is that every classified field of the divergence is unchanged (968 / 43 of 76 /
+    definitions=0 / moreAny=0), the grid is byte-identical and no corpus baseline moved.
+    Say so rather than implying it was checked.
+  * **knip's stored BEFORE arm is three rounds stale** (Aug 26, 49 rows) and no 48-row
+    capture was on disk; my capture reads **48**, the count the (CHK.65) note records for
+    the parent, and the one row that differs from the stale capture
+    (`src/util/git.ts:17:55 TS2769`) was removed by a round between them, not by this
+    one. A parent library arm was NOT rebuilt this session — flagged, not claimed.
+
+### Round (CHK.65) — the four residues are **ONE mechanism at TWO readers**, it is a **SHIPPED false positive**, and it lands; the gate re-prices **7 rows -> 6**, and the loop join re-prices **8 -> 3** with its blocker finally named
+
+**THE HEADLINE.** The queue said (CHK.63) needed two things: (CHK.61)(b)'s checking
+half and the loop join. Measured, **(b)'s checking half is CORRECT and complete** — the
+five-shape census fixture matches tsc 7.0.2 EXACTLY, code for code, message for
+message, at the 1-based column — and what it costs is four MORE rows, of which
+**three are the loop family and one was a mechanism nobody had seen**. That fourth one
+turned out to be reachable on the SHIPPED binary with an explicit `| undefined`
+member, at TWO readers, and it is what landed.
+
+**THE DEFECT: A DOMAIN OF EXACTLY ONE LITERAL, MINUS THAT LITERAL, IS EMPTY.**
+
+```ts
+if (s.p !== undefined) { return s.p; }   // fine
+if (s.p !== undefined) { return s.p; }   // SHIPPED FALSE POSITIVE
+```
+
+The first guard's ELSE branch narrows the path to exactly `undefined`;
+[Checker.narrowUnionByLiteral]'s NON-union `keep = false` arm then answered its input
+UNCHANGED, on reasoning that is right for an INFINITE primitive domain and wrong when
+the input IS the literal being subtracted. tsc's `filterType` is ONE function for the
+union and non-union cases; here they are two branches and only the union one
+subtracted. **An IDENTIFIER subject goes through the M1.9 if-arm machinery and was
+always correct, which is exactly what hid it — every hand-written narrowing fixture in
+this repo uses a local.** It needs a PROPERTY PATH plus a preceding guard that leaves
+the else state behind: a `return`, a `throw`, or an earlier `&&` conjunct.
+
+**AND CLOSING THE FIRST READER LEAVES THE SECOND.** The assignment/return reader
+(TS2322) reads the flow walk and was fixed by the one line above; the
+ARITHMETIC/RELATIONAL OPERAND reader (TS18048) reads [Checker.arithOperandType], whose
+flow consult is gated on a UNION base **and refuses a `never` answer**, so it never saw
+the re-narrowing. [Checker.operandFlowNarrowsToNever] is the suppression there, and it
+must **CLAIM** the operand (return true, caller emits nothing) rather than merely
+decline — the first cut returned false and the TS18048 simply became a TS2365 about
+`number | undefined` one line down. Census on the parent, 5 false positives over 11
+shapes; after the first line 1 remained; after the second, 0.
+
+**THE GATE, RE-PRICED — AND IT NOW NEEDS EXACTLY ONE THING.** `armBGR` (the
+`canUseTypeEngine` nullish-union gate opened, the RETURN and ASSIGNMENT readers given
+the flow consult for a primitive target, AND (CHK.61)(b)'s checking half — an optional
+member's access type carrying `| undefined`) measures **6 distinct rows on the 8
+profiles**, down from 7 before this round's fix removed `checker.ts:30269`. **All six
+are the LOOP JOIN**, and (b)'s own two rows (`emitter.ts:1479`,
+`organizeImports.ts:862`) are GONE:
+
+| row | shape |
+|---|---|
+| `checker.ts:35649:17` | a `let index: number \| undefined` assigned on every path of an if/else INSIDE a `for` |
+| `moduleNameResolver.ts:824:26` | `if (host.f && host.g) { for (…) { host.f(x) } }` |
+| `moduleNameResolver.ts:2265:17` | `if (… && p.a.b.exports) { for (…) { use(p.a.b.exports) } }` |
+| `tsserverLogger.ts:28:5` | an assignment narrow that must survive `while (true)` |
+| `project.ts:502:33`, `:528:37` | `Debug.assertIsDefined(host.require)` before a `for` |
+
+**THE LOOP JOIN RE-PRICES 8 ROWS -> 3, AND THE BLOCKER IS `getUnionType`, NOT A FLAG.**
+(CHK.63)(b) refused it at 8 ours-only rows and predicted that "refusing a `never` join
+removes all five" and that the other three needed `narrowWalkTruncated` and the cut to
+be separate flags. Ported onto today's HEAD with the flags separated, the `never`
+family is **CLOSED** — 8 rows -> 3 — and the surviving three are NOT a flag problem:
+
+  * `checker.ts:43282:21`, `utilities.ts:11586:63`, `utilities.ts:11704:47`, all reading
+    `ConditionalTypeNode | Node | undefined` / `ClassExpression | Node | undefined`,
+    i.e. **a narrowed SUBTYPE beside the declaration's own constituents**. tsc's
+    `getTypeAtFlowLoopLabel` unions with `UnionReduction.Subtype`; **INV.5(a) interns
+    our unions by member-id list and performs NO subtype reduction**, so `A | B` with
+    `A ⊆ B` survives and a later discriminant test can no longer filter it. Once the
+    label explores back edges at all, branch states from a PREVIOUS iteration's body
+    reach a join that today never sees them.
+  * Three refusals were built and measured against it, one per attempt, and **none of
+    them is the answer**: refuse a `never` join (works, keeps 3), refuse a join with an
+    antecedent that IS `declaredType` by identity (no effect), and refuse a join that is
+    not a STRICT SUBSET of the declaration's constituents (no effect). The last two
+    prove the offending union is built DOWNSTREAM of the label, at a branch join over
+    the newly-reachable states — which is why no policy AT the label can fix it.
+  * The design regenerates from HEAD with `python3 build/chk65/loop.py baseR`;
+    `build/chk65/snap/Checker.kt.loopbase` is the built tree.
+
+**AND THE COMBINED ARM SPLITS THE REMAINDER CLEANLY.** gate + readers + (b) + the loop
+join measures **4 distinct rows** (6 of 8 profiles captured — the two missing ones carry
+only compiler rows already present): the 3 subtype-reduction rows above, plus
+`checker.ts:35649`, which the loop join does **not** close. That last one is an
+assignment-RHS classification gap (`index = index! + 1`, `index = cutoffIndex =
+result.length`), not a loop one.
+
+**GATES.** Suite **16,339** / 0 failed / 3 skipped (+13, exactly the new subtests);
+**no corpus baseline moved.** 8-profile grid `503774c23b4535130ffdebabef430cf0`,
+byte-identical PER PROFILE to the recorded parent capture, added=0 removed=0.
+`cost_gate.py` exit 0, `output.errors` **46**, every counter the standing residual to
+the digit (`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses`
++1.75%, `narrow.walks` +0.84%, `typeOfExpr.distinct` +0.97%, `typeNode.cacheable`
++0.39%). `huge_methods --fail-over 0` exit 0, **783** classes, 0 over.
+`partition-equivalence` EQUIVALENT all 78 (floor **56 ms**, one draw).
+`capture-equivalence` DIVERGED **968** in 43 of 76, `types=968 definitions=0
+narrowRendersMoreAny=0` — unchanged; both ARM DIGESTS moved and the dump against
+(CHK.63)'s is **0 lost, 0 gained, exactly 1 changed**: `checker.ts @1803172..1803191`
+(`checker.ts:30269`, the `symbol.lastAssignmentPos` of the `&&` chain) goes `undefined`
+-> `never`, which is tsc's own answer for that state. knip **48** and jsonrepair **4**,
+every row byte-identical against (CHK.63)'s third-commit capture.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Parent `3c6a8e33`, rebuilt in this session,
+with the fixtures already in place: **7 of 13 RED**, and they are exactly the 7
+positives. Each names its reader — P1/P2/P3/P4 the RETURN reader (TS2322), P5 the
+RELATIONAL operand reader and P6 the ARITHMETIC one (TS18048), P7 the `&&`-conjunct
+form of the same. The 6 controls are green on BOTH binaries and every one of them
+reports identically on tsc 7.0.2 where it is meant to report.
+
+**FOUR ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5 (`d0997340` both times).**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | the non-union subtraction never fires | `6635a19a` | **7** — every positive, both readers |
+| a2 | the operand suppression DECLINES instead of claiming | `781b93fc` | **3** — the three operand pins, on their `2365` assertion |
+| a3 | the operand suppression removed entirely | `3902f0e4` | the same 3 tests, on their `18048` assertion |
+| a4 | the suppression widened from `never` to ANY narrowing | `7039d1e3` | **0 -> 1** after the separating control was added |
+
+**THE KINDS OF ZERO, NAMED.** **a4 was UNPINNED, not redundant** — the fourth
+consecutive round with that shape. The separating fixture is an operand that IS
+narrowed and is STILL nullish (`number | null | undefined` minus `null`), which no
+other pin here contains; with it, a4 is a unique RED. **a2 and a3 are a round-927 pair
+at TEST granularity and are separated at ASSERTION granularity**: both redden the same
+three tests, a2 on `have(none { it.code == 2365 })` and a3 on
+`have(none { it.code == 18048 })`, so they are two observables and the pins say which.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's decomposition was wrong for the fifth round running, and this time in
+    the encouraging direction**: (b)'s checking half is not "refused", it is DONE and
+    exact, and its 4-row price is 3 loop rows plus one defect that had nothing to do
+    with it. What found the defect was the ARM, not reading — the census that isolates
+    it (11 shapes over one interface) took ten minutes once the arm's grid named a file
+    and a column.
+  * **A loop-join fixture graded through `zzzTake(r)` is VACUOUS**: the CALL-ARGUMENT
+    reader is live only when the source is a PARAMETER, so a fixture built on a local
+    `let` reads 0 rows on a broken AND a fixed binary. The instrument that works is a
+    deliberate mis-assignment (`const p: boolean = r`), which PRINTS the flow type; on
+    it the loop arm matches tsc on 14 of 15 shapes.
+  * **A nullish-union loop fixture is vacuous for a SECOND reason** — it sits under
+    (CHK.63)'s own gate, so both arms are silent. Use `string | number`.
+  * **Three refusals for the loop join's residue, three no-ops, and the third one is
+    what named the mechanism**: a rule that refuses any join that is not a strict subset
+    of the declaration's constituents changed NOTHING, which proves the offending union
+    is not the label's. That is a negative result worth more than the two arms before it.
+  * `bash script.sh & tail --pid=$!` inside a `run_in_background` Bash call is the
+    round-831 double-detach: the harness reaped it, the grid died at profile 1, and the
+    output directory was EMPTY with an exit status of 0 on the wrapper.
+
+### Round (CHK.63)(a)(c) — the four residues are **ONE reader gap plus TWO flow-walk defects**, three of which were SHIPPED false positives; the gate re-prices **6 rows -> 4**, and the loop join is **REFUSED with its price and its blocker named**
+
+**THE HEADLINE.** (CHK.64) left four residue rows and the queue read them as four
+mechanisms. Measured with a per-READER census, they are **two flow-walk defects and
+one reader gap**, and — the part that mattered for the round — **three of the four
+were reachable on the SHIPPED binary at the CALL-ARGUMENT reader, as FALSE
+POSITIVES.** Two are fixed and pinned there; the third is refused with a price. The
+gate itself is not opened: it now costs **4** rows, all four owned by work that is
+still open.
+
+**THE CENSUS THAT DECIDED THE ROUND, AND THE VACUITY THAT NEARLY KILLED IT.** The
+first census fixture built every residue shape over a `const` initialised from a call
+and read it at all four readers: **it reported nothing at all**, on our side, for
+every shape INCLUDING its own negative control. The argument reader is live for a
+nullish union only when the source is a **PARAMETER** — `const zzzU = zzzGet(k);
+zzzTake(zzzU)` is silent here and TS2345 in tsc, which is a separate gap. Re-cut
+against parameter sources, the same fixture answered immediately:
+
+| shape | ARGUMENT reader on the parent binary |
+|---|---|
+| (iii) an assignment inside the guarded branch | **FALSE POSITIVE** |
+| (iii) the plain `if (id === undefined) { id = t }` form | **FALSE POSITIVE** |
+| (iv) definite assignment across an if/else | correct |
+| (loop) an assignment narrow that must survive a loop | **FALSE POSITIVE** |
+| (vi) a non-null assertion | correct |
+
+So (iii) and the loop family are FLOW-WALK defects, live today, with nothing to do
+with the gate; (iv) and (vi) are correct in the walk and were only ever the READER.
+
+**(a) AN ASSIGNMENT INSIDE A NULLISH GUARD MUST OVERWRITE THAT GUARD'S OWN
+NARROWING.** [Checker.narrowByAssignmentRhs]'s two resolved-RHS arms (Identifier,
+round 463; PropertyAccess, round 464) FILTER the antecedent, and
+[Checker.narrowUnionByRhsAssignment] answers a non-union receiver unchanged — so
+inside the guard, where the antecedent is the bare `undefined` the condition just
+produced, the assignment was a **no-op** and the branch join re-minted
+`string | undefined`. [Checker.assignmentReduceBase] applies round 416's rule there:
+an assignment OVERWRITES, so the post-state is reduced from the DECLARED type. This
+is the commonest "default it if it is missing" idiom in TypeScript and it was a
+shipped false positive.
+
+**(a2) AND ITS OWN ABLATION FOUND THE SECOND HALF.** The arm that deletes the "a
+nullish assigned type keeps the antecedent" refusal read **0 RED** and a
+byte-identical 8-profile grid — the third consecutive round with an UNPINNED-not-
+redundant zero. The separating fixture needs a **THREE-member** declaration
+(`string | null | undefined` with a `null`-typed right-hand side): with
+`T | undefined` alone both bases answer the same type. The refusal was deleted.
+
+**(c) A `!` IS NOT RESPECTED THROUGH PARENTHESES.** `return (t)!` against
+`string | number` was a false TS2322 while `return t!` one line away was silent: the
+nullish-stripping arm admits its operand by KIND (Call / Identifier / PropertyAccess,
+rounds 439/456/479) and a ParenthesizedExpression is none of them.
+[Checker.nonNullOperandStrips] reads through parentheses and adds the LOGICAL
+operators, whose value is one of their own operands — which is the
+`server/project.ts:746` shape (`return (info && info.getLatestVersion())!`). `,` is
+excluded (a comma's value is its LAST operand) and that divergence from tsc is pinned
+as residue with the value we answer.
+
+**(b) THE LOOP JOIN IS REFUSED, AND ITS BLOCKER IS NAMED.** `narrowTypeFromFlowCore`
+answers `declaredType` at a `FlowLoopLabel`, so **every loop erases every assignment
+narrowing established before it** — `r = ""; while (…) { } take(r)` is a false
+positive even when the loop never mentions `r`. Built: the label unioned like a
+branch label, with a back edge that re-enters it contributing `never`
+(`narrowLoopCut`). That is EXACT for this flow algebra — every back edge is either a
+monotone narrowing, in which case iterating from the entry state never grows past it,
+or it passes an assignment, which computes its post-state from the DECLARED type and
+cuts the recursion itself — and it makes **all ten** loop shapes of the round's
+fixture agree with tsc 7.0.2 exactly, the `while (…) { r = undefined }` control
+included. **It costs 8 ours-only rows on every profile and is REVERTED.** The
+decomposition, which is the reusable part:
+
+  * **5 rows are a `never` the loop label was MASKING.** `emitter.ts` narrows
+    `modifiers` with `every(modifiers, isModifier)`, a GENERIC predicate we do not
+    infer; its NEGATION subtracts everything and answers `never`, and the loop label's
+    `declaredType` was resetting it. Propagating it correctly gives
+    `Property 'length' does not exist on type 'never'`. Refusing a `never` join back to
+    `declaredType` removes all five.
+  * **3 rows are a union that is LESS reducible than the declaration.** A join taken
+    over a TRUNCATED antecedent contains `declaredType` beside an already-narrowed
+    member, so a later kind test reads `ConditionalTypeNode | Node | undefined`
+    (`utilities.ts resolveNameHelper` x2, `checker.ts:43282`). Refusing a truncated
+    join needs `narrowWalkTruncated` and the CUT to be separate flags; a first cut of
+    that regressed the nested-loop shape and the attempt was stopped there under the
+    two-attempt rule.
+
+  The refusal is recorded rather than the mechanism deleted: `narrowLoopCut`'s design
+  and its fixpoint argument are in `build/chk63/snap/Checker.kt.gapB-refused`.
+
+**THE GATE, RE-PRICED — AND THE READER HALF IS WORTH 2 ROWS.** `armG` (the
+nullish-union gate opened, nothing else) still measures **6** rows on this round's
+binary: gap (a) does NOT remove `parser.ts:2642`, because the RETURN reader never
+consults the flow walk for a primitive target. Adding that consultation to the RETURN
+and ASSIGNMENT readers (`armGR`, measured, NOT landed) takes it to **4 distinct
+rows**, and every one is owned:
+
+| row | owner |
+|---|---|
+| `parser.ts:2642` | **GONE** — (a) plus the reader |
+| `server/project.ts:746` | **GONE** — (c) |
+| `emitter.ts:1479`, `organizeImports.ts:862` | (CHK.61)(b)'s checking half |
+| `checker.ts:35649`, `tsserverLogger.ts:28` | the REFUSED loop join — both reads sit inside a loop whose earlier iteration assigns the reference |
+
+So (CHK.63) now needs exactly two things and no more: **(b)'s checking half and the
+loop join**, and the reader consultation must land WITH the gate (it is unobservable
+without it).
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,318** / **16,325** /
+**16,326**, 0 failed, 3 skipped (+8, +7, +1 — exactly the new subtests); **no corpus
+baseline moved on any of the three.** 8-profile grid
+`503774c23b4535130ffdebabef430cf0` on all three, byte-identical PER PROFILE against
+the recorded parent capture (parent `Checker.class` md5 `eec8ea8f`, rebuilt in this
+session and used for every vacuity check). `cost_gate.py` exit 0 three times,
+`output.errors` **46**; every counter is the standing residual to the digit
+(`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses` +1.75%,
+`narrow.walks` +0.84%, `typeOfExpr.distinct` +0.97%, `typeNode.cacheable` +0.39%) —
+the round costs nothing measurable. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floors 79 / 63 / 56 ms,
+one draw each). knip **48** and jsonrepair **4**, EVERY ROW byte-identical across all
+three commits.
+
+**`capture-equivalence` MOVED TWICE AND BOTH MOVES ARE CLASSIFIED PER ELEMENT.**
+DIVERGED **968** in 43 of 76, `types=968 definitions=0 narrowRendersMoreAny=0` —
+unchanged throughout. Against last round's own dump (`build/chk64/arm-fix4.tsv`),
+commit 1 is **0 lost, 0 gained, 2 changed**, both DROPPING a spurious `| undefined`
+from a property-path assignment inside an `if (!x.p)` guard in `checker.ts`; commit 2
+is **0 lost, 0 gained, 1 changed**, a hover going `any` -> the concrete union, and tsc
+7.0.2's own LSP answers that same constituent set; commit 3 moves **nothing** (both
+digests unchanged).
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every pin was executed against a PARENT binary
+rebuilt in this session with the fixture already in place. `AssignmentInsideAGuard…`:
+**4 of 8 RED** on `eec8ea8f`, and the 9th pin (a2) **1 of 9 RED** on `0557ff4e`; the
+green ones are labelled controls. `NonNullAssertionThroughParensAndLogical…`: **4 of 7
+RED** on `40d1d6aa`. Every positive is at a reader the test names, and (c)'s four are
+at a UNION target deliberately — against a PRIMITIVE target the whole family is
+invisible, which is (CHK.63)'s own gate.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT,
+EVERY RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | the reduce base is never consulted | `33dc9963` | **4** — exactly the four (a) positives |
+| a2 | the nullish-only antecedent guard dropped | `7124ee49` | **0 — UNDISCRIMINATED**, and the 8-profile grid is byte-identical too |
+| a3 | the nullish-ASSIGNED refusal restored | `1fb8b365` | **1** — uniquely the (a2) pin (it read 0 before that pin existed) |
+| a4 | *withdrawn* — that call site belonged to the refused (b) work | — | — |
+| b1 | parentheses are not read through | `3c6889d3` | **4** — all four (c) positives |
+| b2 | a logical operand does not strip | `864ecf3b` | **3** — uniquely the three logical pins |
+| b3 | the COMMA operator admitted as well | `7dade5d0` | **1** — uniquely the residue pin |
+| b4 | only the LEFT operand of a logical must strip | `555e4651` | **0 — UNDISCRIMINATED** |
+
+**THE KINDS OF ZERO, NAMED.** **a2 is UNDISCRIMINATED and NOT shown redundant** — its
+guard is the REASONED bound that a non-nullish antecedent must keep the pass-through
+(reducing from the declaration there would widen a live type-guard narrowing back to
+the declaration), and both instruments that could see it are silent, so the KDoc now
+says so instead of claiming coverage. **a3 was UNPINNED, not redundant**, and is the
+round's own instance of the pattern; it is now a unique RED. **b4 is UNDISCRIMINATED**:
+requiring the RIGHT operand to strip as well is a conservatism these fixtures cannot
+separate. a1/a2/b1..b4 were taken on the commit-2 tree and a3 on the commit-3 tree.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's four residues were not four mechanisms and were not even four
+    ITEMS — two of them are ONE refused change, and two were SHIPPED false
+    positives that had nothing to do with the gate.** The census that shows it is one
+    fixture with the same guard in front of five readers, which is (CHK.64)'s own
+    method reused; what it cost was noticing that the fixture must use PARAMETER
+    sources, because a `const` initialised from a call is silent at the argument
+    reader too — a second, unrelated gap.
+  * **A `never` can be MASKED by a conservative join, and making the join precise is
+    what exposes it.** Five of the loop change's eight rows are a pre-existing defect
+    (a negated GENERIC type-guard call answering `never`) that `declaredType` at every
+    loop label was resetting. That is the mirror of round 830's law: a conservative
+    answer is not only imprecise, it can be load-bearing for something else's bug.
+  * **A killed restore leaves NO class file and a scratch-project run then prints
+    ZERO ROWS, which reads exactly like a clean fixture.** The 10-minute tool timeout
+    killed an ablation grid mid-restore; the next probe answered "no diagnostics"
+    against a classpath with no `Checker.class` in it at all. Round 851's trap with a
+    new trigger — check the class file exists before believing any scratch run.
+  * **`ours.sh`'s exit status is the GREP's**, so a run with no rows exits 1 and a run
+    against a broken build also exits 1. The only reliable tell is the raw output's
+    `diagnostics: N error(s)` line.
+
+### Round (CHK.64)(i)+(ii) — the five "narrowing gaps" are **two gaps at ONE reader**, both landed; (CHK.63)'s price falls **11 rows -> 6**
+
+**THE HEADLINE.** (CHK.64)'s queue entry lists five mechanisms. Measured, the
+first two are **one reader** and two different things its filler could not do:
+round 784's gate sends the ASSIGNMENT and RETURN readers to
+[Checker.currentLocalTypes] for a primitive target, and that map is filled by the
+legacy if-arm helper [Checker.extractNullNarrowing], which (i) answers ONE
+`(name, type)` pair and has no `&&` arm, and (ii) is only ever asked about a
+THEN-branch. Everything else about those shapes was already right: a MEMBER
+ACCESS, a CALL ARGUMENT and a DECLARATION after an `&&` guard *or* after an early
+exit are all correct on the parent binary, because they consult the flow walk.
+Both are now closed, and **`scripts/pristine_oracle.py` was not needed: every
+positive was checked against tsc 7.0.2 directly.**
+
+**THE PRICE OF (CHK.63), RE-TAKEN.** The `armG` arm (the nullish-union gate
+opened, nothing else) measured **11** ours-only rows on the eight profiles last
+round. On this round's binary it measures **6**:
+
+| row | cause | status |
+|---|---|---|
+| `sourcemap.ts:164/165/166` | (i) the `&&` condition | **GONE** |
+| `core.ts:2191`, `path.ts:585` | (ii) the early exit | **GONE** |
+| `emitter.ts:1479`, `organizeImports.ts:862` | (CHK.61)(b)'s absence | fixed by (b) |
+| `parser.ts:2642` | (iii) an assignment inside the guarded branch | open |
+| `checker.ts:35649` | (iv) definite assignment across an if/else | open |
+| `tsserverLogger.ts:28` | (iv family) an assignment narrow that must survive a LOOP | open |
+| `server/project.ts:746` | **(vi), NOT IN THE QUEUE** — a NON-NULL ASSERTION `!` is not respected at the return reader | open |
+
+So (CHK.64)'s own residue is **4 rows**, and a SIXTH mechanism turned up that the
+queue never listed. (CHK.63) is now worth opening for 6 rows, 2 of which (b) pays
+back.
+
+**WHAT (i) IS.** [Checker.extractNarrowingsFromCondition] flattens the
+(left-nested) `&&` spine ITERATIVELY and returns a LIST, at most one entry per
+name; `||` is not decomposed. All three consumers take the list — the two
+`checkTypeAssignabilityInStmt` dispatchers and the spine's `ctaM3NarrowThen`,
+whose value type becomes a `List`. **A "narrowing" to `any` is refused**:
+`typeofTypeGuardToType` answers `anyType` for `"object"`/`"function"`, so
+decomposing `typeof x === "object" && x !== null` installed `any` — 13 captured
+hovers went from tsc's own `object`/`unknown` to `any`, and it would DELETE a
+true positive. **The single-condition path still installs `any` and that is a
+shipped false NEGATIVE** (`if (typeof zzzO === "object") { zzzQs = zzzO }` is
+silent here and TS2322 in tsc), recorded as residue and not touched.
+
+**WHAT (ii) IS.** At the IfStatement's spine LEAVE, an `if` with no `else` whose
+then-branch DEFINITELY EXITS installs the NEGATED condition's narrowings for the
+rest of the enclosing frame. `ctaAlwaysExits` is conservative;
+`negateCondition` is syntactic. The install is REFUSED unless the enclosing frame
+opened its own `localTypes` scope, which is what bounds it — a statement-position
+block SHARES its parent's map and has no pop to revert a write.
+
+**THREE THINGS THE GATES FOUND THAT READING THE CODE DID NOT.**
+
+  * **`narrowedDeclared` is shared down the frame chain with NO undo log.**
+    Recording the declared type into it added **21 ours-only rows PER PROFILE**,
+    every one an assignment whose TARGET was read as another function's
+    same-named binding (`type` as `Type`, `source` as a `Map<…>`). The frame now
+    takes a COPY of its own at the first such write. Dropping the record instead
+    left **4** rows — an assignment BACK to the narrowed reference.
+  * **The last row standing was a SHIPPED defect this change made reachable.**
+    With NESTED narrows on one name the narrowing frame wrote `narrowedDeclared`
+    UNCONDITIONALLY, recording the OUTER narrow's result as if it were the
+    declaration, so `if (b) { if (isNs(b)) { b = undefined } }` was a false
+    TS2322 — reproducible with no early exit anywhere (`build/chk64/cb`). All
+    three writers are now FIRST-WINS.
+  * **A negated TYPE-GUARD CALL is refused.** `if (!some(components)) return []`
+    negates to `some(components)`, whose predicate is generic
+    (`array is readonly T[]`) and whose `T` we do not infer, so the narrow was
+    LESS precise than the declaration and `const reduced = [components[0]]`
+    hovered `any` — **20** captured spans in `path.ts`/`utilities.ts`, **3** with
+    it refused.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,296** then
+**16,308**, 0 failed, 3 skipped (+10 and +12 — exactly the new subtests);
+**no corpus baseline moved on either.** 8-profile grid
+`503774c23b4535130ffdebabef430cf0` on BOTH code commits, byte-identical PER
+PROFILE against a parent capture taken in this session (parent `Checker.class`
+md5 `d0f72b51`, rebuilt here). `cost_gate.py` exit 0 both times, `output.errors`
+**46**; the change costs `narrow.walks` **+0.84%**, `typeOfExpr.distinct`
++0.97%, `typeNode.cacheable` +0.43% over the recorded baseline — it installs
+narrowings where there were none — on top of the standing residual
+(`typeOfExpr.calls` +1.42%, `globals.lookups` +1.53%, `globals.misses` +1.75%);
+all far inside the +-2% gate. `huge_methods --fail-over 0` exit 0, **783**
+classes, 0 over. `partition-equivalence` EQUIVALENT all 78 (floors 75 ms
+[53, 93, 75, 58] and 64 ms [88, 64, 61, 56] — one draw each). knip **48** and
+jsonrepair **4**, EVERY ROW byte-identical against a parent arm rebuilt in this
+session.
+
+**`capture-equivalence` IS AGAIN THE ONE GATE THAT MOVED, AND THE MOVE IS
+CLASSIFIED PER ELEMENT AGAINST A PARENT DUMP TAKEN IN THIS SESSION.** DIVERGED
+**968** in 43 of 76, `types=968 definitions=0 narrowRendersMoreAny=0` —
+unchanged. Both ARM DIGESTs moved; the new instrument `XTSC_CAPEQ_DUMP`
+(committed first, round 789's rule) makes that classifiable, because the digest
+answers *whether* and only a per-span dump answers *which*. Whole round:
+**0 rows lost**, **+174 definitions gained** (spans that resolved to nothing now
+navigate), **2,137** type rows changed — **1,274** drop a spurious `| undefined`,
+**300** go `any` -> concrete, **485** render a narrower/named type (12 of 12
+sampled agree with tsc 7.0.2's LSP where the parent did not), **1** GAINS
+`| undefined` where tsc agrees with us (`ClassLikeDeclarationBase.name?`), and
+**3** go to `any` — all three a member access on a CORRECTLY narrowed receiver
+whose further `&&`-conjunct guard (`isNamedDeclaration(child) &&
+isPropertyName(child.name)`) we do not apply, i.e. the queue's own gap (v).
+Final digests `full=7848756790733502552 narrow=5188741781646622612`.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every pin was run against a PARENT binary
+rebuilt in this session with the fixture already in place. `AndCondition…Test`:
+**5 of 9 RED** on `d0f72b51` — the two multi-operand pins, the right-conjunct
+pin, the return-reader pin and the VALUE pin; the 4 green are labelled CONTROLS
+and count as coverage only for the arms that redden them.
+`EarlyExit…Test`: **8 of 12 RED** on `a8d4e445` (the (i) commit). Of the 4 green,
+three are labelled controls/residue and the fourth is labelled a CONTROL for a
+reason worth keeping: **the `!` arm of `negateCondition` is structurally
+unobservable today** — truthiness narrowing only removes `null`/`undefined`, so
+its subject is a nullish union, which `canUseTypeEngine` refuses against the
+primitive target this whole leg exists for; against a UNION target round 784's
+gate hands the read to the flow walk, which was always right. It starts
+discriminating the moment (CHK.63) opens.
+
+**TWELVE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, EACH
+`cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EVERY RESTORE VERIFIED BY `cmp` PLUS A
+REBUILT md5** (`eec8ea8f` / `a8d4e445`).
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a1 | no `&&` decomposition at all | `bb62d106` | **5** — exactly the five (i) positives |
+| a2 | only the FIRST conjunct survives | `a6cf1e22` | **2** — uniquely the two multi-operand pins |
+| a3 | `\|\|` decomposed as well | `4cf051a8` | **1** — uniquely the `\|\|` negative control |
+| a4 | the `anyType` refusal dropped | `56d36769` | **1** — uniquely the `typeof … "object"` guard |
+| a5 | the SPINE site takes only the first entry | `8583305a` | **2** — the spine is the load-bearing consumer |
+| a6 | the two DISPATCHER sites take only the first | `2424930f` | **0 — UNDISCRIMINATED** (see below) |
+| b1 | the whole early-exit install removed | `0568e654` | **7** |
+| b2 | `ctaAlwaysExits` accepts ANY then-branch | `225225e3` | **1** — uniquely the does-not-exit control |
+| b3 | a `Block`'s last statement is not looked into | `7b17469d` | **7** |
+| b4 | the `localScoped` refusal dropped | `eed8e3a0` | **1** — uniquely the while/nested-block RESIDUE pin |
+| b5 | the declared type not recorded | `870f5189` | **1** — uniquely the assign-back pin |
+| b6 | recorded into the SHARED map (no own copy) | `fe114f78` | **0 -> 1** — UNPINNED, then fixed |
+| b7 | `narrowedDeclared` back to LAST-wins | `0c0d8b5a` | **1** — uniquely the nested-narrows pin |
+| b8 | the call-predicate refusal dropped | `4f9f4c6b` | **0 — UNDISCRIMINATED, capture-only** |
+| b9 | the `!==` flip made a no-op | `6b97cbfd` | **7** |
+| b10 | an `if … else` allowed to narrow after it | `8f37e002` | **1** — uniquely the if/else RESIDUE pin |
+
+**THE KINDS OF ZERO, NAMED.** **a6 is UNDISCRIMINATED and NOT shown redundant**:
+the two `checkTypeAssignabilityInStmt` sites were reverted to a single narrowing
+and nothing moved, and a direct CLI probe of that arm over the round's own
+censuses (`build/chk64/c2`, `c5`) produced no row either — the spine anchors
+every `IfStatement` I could construct, function-body and FILE-level alike, so the
+legacy arms are truncated ((cta-m3j)) and are consistency insurance, not measured
+coverage. **b6 was UNPINNED, not redundant** — the third consecutive round with
+that pattern; the fixture is two same-named bindings in one file and the arm now
+reddens uniquely on it. **b8 is UNDISCRIMINATED and its effect is real but lives
+on the CAPTURE channel**; two diagnostic fixtures were built (a non-generic and a
+generic predicate) and under the embedded lib BOTH narrow precisely, so no
+diagnostic pin in this suite can reach it — recorded in the test's own KDoc
+rather than claimed. **b4 and b10 redden a RESIDUE pin**, which is the useful
+shape: they prove those two residues are REFUSALS with a price, not inabilities.
+**b1/b3/b9 share a 7-pin red set** and are not separated by these fixtures; both
+are load-bearing (b3's mistake makes every braced exit invisible), recorded as
+one observable in round 927's sense.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The queue's "five mechanisms, not one" is half right and the useful half is
+    the other one.** (i) and (ii) share a READER, which is why closing (ii) took
+    twenty minutes once (i) was in: the same `currentLocalTypes` install, at a
+    different position. The census that showed it costs one fixture — put the
+    same guard in front of a member access, an argument, a declaration, an
+    assignment and a return, and read which columns are already right.
+  * **`build/chk61b/n1`, the round's inherited repro, is SILENT on both
+    compilers** — its `&&` operands are `string | undefined` against primitive
+    targets, i.e. the (CHK.63) gate hides the gap the fixture was built to show.
+    A NON-NULLISH union (`number | string` + `typeof`) makes all four rows appear
+    on the shipped binary with no patch at all, and that is how (i) and (ii) were
+    both found. **A nullish fixture is the wrong instrument for anything below
+    that gate.**
+  * **Two of the three real defects this round fixed were found by a GATE, not by
+    reading.** The `narrowedDeclared` leak (21 rows/profile) and the last-wins
+    nested-narrow defect (1 row, and a shipped FP class) were both invisible in
+    the source and obvious in an 8-profile diff. The `anyType` widening and the
+    generic-predicate degradation were both found by the CAPTURE sweep and by
+    nothing else.
+  * **`capture-equivalence`'s ARM DIGEST is a yes/no answer to a question that
+    needs a list.** Classifying its move meant adding `XTSC_CAPEQ_DUMP` and
+    diffing two binaries span by span; the classification is what turned "both
+    digests moved" into "0 lost, +174 definitions, 1,274 spurious `| undefined`
+    dropped, 3 regressions". Committed first, so the ablations could not delete
+    it (round 789).
+
+### Round (CHK.61)(b) — the display half **LANDED**; the checking half is **REFUSED with its price finally taken**, and the refusal turned up a **systematic FALSE NEGATIVE** that is not (b)
+
+**THE HEADLINE, IN TWO PARTS.** (b)'s DISPLAY half is in: an optional member's
+hover now carries `| undefined` and then narrows, at tsc 7.0.2's own answers, with
+`added=0 removed=0` on all eight profiles and every library row byte-identical —
+because the leg is confined to the CAPTURE, which production never computes. (b)'s
+CHECKING half is REFUSED, and for the first time its price is measured rather than
+asserted: **15 ours-only rows on the eight profiles**, of which **9 are net new**.
+
+**(b) IS NOT SOUND ALONE, AND THE QUEUE'S "3 rows" WAS THE WRONG NUMBER BECAUSE IT
+WAS THE WRONG ARM.** `build/chk61/patch_b.py` (add `| undefined` at
+`computeRawTypeOfPropertyAccess`'s three `prop != null` returns) does not merely add
+rows — on the round's own four-line repro it **DELETES a true positive**:
+`const zzzA: string = zzzInst.zzzOpt` reports `Type 'number' is not assignable to
+type 'string'` on the shipped binary and **NOTHING** with patch_b, because the
+source becomes a nullish union and `canUseTypeEngine` refuses those against a
+primitive target. So (b) is only expressible together with opening that gate, and
+the honest arms are:
+
+| arm | 8-profile ours-only rows | on the round's repro |
+|---|---|---|
+| `p_head` (shipped) | 0 (md5 `503774c2…`) | 2 of tsc's 4 rows, one with the wrong TYPE |
+| `armG` — the nullish-union gate opened, nothing else | **11** | 6 of 6 at tsc's wording |
+| `armBG` — patch_b **and** the gate | **15** | **4 of 4, at tsc's own positions and wording** |
+
+`armBG` reproduces tsc EXACTLY on the repro, and that is what the refusal costs.
+Two of `armG`'s 11 are FIXED by (b) (`emitter.ts:1479`, `organizeImports.ts:862` —
+a `var` whose initializer is an optional member, inferred `boolean`/`string` here
+because the `| undefined` was dropped), and (b) adds six of its own.
+
+**THE SUPPRESSOR IS ONE LINE, AND WHAT IT HIDES IS A LARGE FALSE NEGATIVE THAT HAS
+NOTHING TO DO WITH (b).** `canUseTypeEngine`'s
+
+```kotlin
+if (sourceType is Type.Union && targetIsPrimitive) {
+    val hasNullish = sourceType.types.any { … Null or Undefined … }
+    if (!hasNullish) return true
+}
+```
+
+means **`T | undefined` is silently assignable to `T`** at a variable
+DECLARATION, an ASSIGNMENT and a RETURN whenever the target is a primitive. On a
+six-line fixture tsc emits 6 rows and we emit 2; the ARGUMENT position and a UNION
+target are the two that work. This is a shipped FN, not a (b) artefact, and it is
+now queued as **(CHK.63)** with the full row list.
+
+**THE FIVE NARROWING GAPS ARE FIVE MECHANISMS, NOT ONE — SO "close the shared cause
+then (b)" WAS NOT AVAILABLE.** Reproduced in a 30-line fixture with EXPLICIT
+`| undefined` members, i.e. on the shipped binary with no patch at all:
+
+  1. an `&&` if-condition narrows **neither** operand into the then-branch
+     (sourcemap.ts:164/165/166 — three rows), while a single condition does;
+  2. `if (x === undefined) continue;` does not narrow the rest of a loop body
+     (core.ts:2191, path.ts:585);
+  3. an assignment inside the guarded branch (`if (id === undefined) { m.set(t, id = t) }`)
+     does not narrow after the `if` (parser.ts:2642);
+  4. definite assignment across an if/else (`let i: number|undefined` assigned in
+     both arms) does not narrow (checker.ts:35649);
+  5. the optional-METHOD shapes — an outer `if (h.a && h.b)` surviving into a nested
+     `for`+`if` (moduleNameResolver.ts:824, project.ts:502/528), a three-deep chain
+     (moduleNameResolver.ts:2265) and an `&&` chain whose earlier conjunct narrows a
+     later one (checker.ts:30269, TS18048).
+
+**AND THE `&&` GAP IS NOT WHERE IT LOOKS.** The FLOW WALK handles `&&` correctly —
+`if (a && b) { a.length }` and `if (a && b) { take(a) }` are both right. The gap is
+that the RETURN and ASSIGNMENT readers do not consult it for a PRIMITIVE target
+(round 784's documented gate, `targetType is Interface|Reference|Object|Union|Intersection`),
+so they fall back to `currentLocalTypes`, which the LEGACY if-arm machinery
+(`extractNullNarrowing`) fills — and that helper returns ONE `(name, type)` pair and
+does not decompose an `&&` at all. Queued as **(CHK.64)**. A declaration with a
+primitive target does narrow, which is why the gap is invisible one line away.
+
+**WHAT LANDED, AND WHY IT IS FREE.** `typeCaptureOptionalMemberType` adds the
+constituent and then re-runs `getNarrowedTypeForReference`, so `if (o.p)` — and an
+`&&` chain in either operand position — still hovers `number`. It is on the FLOW
+WALK, not the legacy machinery, which is exactly why the display half can be right
+where the checking half would not be. A UNION receiver is decided PER CONSTITUENT
+(`memberIsOptionalOnReceiver`): tsc types `({p?: number} | {p: string}).p` as
+`string | number | undefined`, and asking `getPropertyOfType` about the union would
+make the verdict a function of constituent ORDER (round 916). Every expectation was
+read out of **tsc 7.0.2's own LSP** (`scripts/lsp_hover.py`), which is also how the
+two RESIDUE rows (`super.<opt>` and an INTERSECTION receiver, both `number` here
+against tsc's `number | undefined`) are recorded as divergences rather than as
+opinions.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,281 / 16,283 /
+16,286**, 0 failed, 3 skipped (+8/+2/+3, exactly the new subtests) — **no corpus
+baseline moved on any of the three**. `cost_gate.py` exit 0 on all three (read from
+the gate, not a pipeline), `output.errors` **46**, every counter digit-identical to
+(CHK.62)'s standing residual (`typeOfExpr.calls` +1.41%, `globals.lookups` +1.52%,
+`globals.misses` +1.74%). `huge_methods --fail-over 0` exit 0, **783** classes, 0
+over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on both code commits,
+byte-identical PER PROFILE against a parent capture taken in this session** (parent
+`Checker.class` md5 `e7963e28`, rebuilt here). `knip` **48** and `jsonrepair` **4**,
+EVERY ROW byte-identical against a parent arm rebuilt in this session.
+`partition-equivalence` EQUIVALENT all 78 (floors 72 ms [88, 56, 72, 63] and 66 ms
+[56, 62, 66, 75] — one draw each, the spread is the harness's).
+
+**`capture-equivalence` IS THE ONE GATE THAT MOVED, AND ITS MOVE IS AN IMPROVEMENT
+CLASSIFIED PER SPAN.** `DIVERGED` **1,005 -> 985 -> 968** in 43 of 76,
+`types` tracking it, `definitions` **360,414** UNCHANGED, `narrowRendersMoreAny` 0.
+Both ARM DIGESTs re-recorded per commit (final `full=2642712547047802314
+narrow=6791141519233628706`). The whole delta was enumerated at
+`XTSC_CAPEQ_PRINT=200000` and classified per element: **all 38 moved spans are the
+alias-display first-wins family** (`ModuleName`/`ModuleExportName`,
+`BindingOrAssignmentPattern`/`DestructuringPattern`,
+`AccessExpression`/`PropertyAccessExpression | ElementAccessExpression`), i.e.
+(INC.27)'s interning-key family shuffled by a changed first-touch order — **not one
+of them is an optionality rendering**, and the second commit added **zero** new
+divergences while removing 17.
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH (d8 excepted and labelled), EVERY CLASS md5
+DISTINCT, EACH `cmp`-DIFFED AGAINST ITS OWN SNAPSHOT AND EACH RESTORE VERIFIED BY
+`cmp`.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| d0 | the widening removed entirely | `082f7042` | **4** — the three optional-member rows + the union row |
+| d1 | widened but never RE-NARROWED | `e2e6045b` | **4** — uniquely the four guarded controls |
+| d2 | the optionality gate dropped (widen every member) | `a21c94f2` | **1** — uniquely the REQUIRED control |
+| d3 | a union decided by ALL instead of ANY | `724071bb` | **1** — uniquely the union row |
+| d4 | the union asked of ITSELF (round 916's one-constituent answer) | `5d9ca935` | **0 -> 1** — UNPINNED, then fixed |
+| d5 | the `super` refusal dropped | `0bd50a31` | **0 — REDUNDANT** |
+| d6 | the INTERSECTION refusal dropped | `4eeeb742` | **0 — REDUNDANT** |
+| d7 | the already-has-`undefined` early return dropped | `8a099b44` | **0 — REDUNDANT** |
+| d8 | MECHANISM PROBE, two mistakes: the `super` refusal AND the `any`-receiver guard | `893d3230` | **0 — mechanism NOT located** |
+
+**d1 IS THE ARM THAT MATTERS AND IT PROVES THE CONFINEMENT.** The queue entry
+predicted that adding the constituent would render `number | undefined` inside an
+`if (o.p)` guard; d1 is exactly that mistake and it reddens exactly the four
+guarded controls and nothing else — so the re-narrowing is load-bearing and the
+controls are coverage for it, which is why they are labelled both ways.
+**d4 REPEATS LAST ROUND'S c2 EXACTLY**: 0 RED against the optional-first union
+fixture, because `getPropertyOfType`'s union arm happens to answer the first
+constituent's symbol; the ORDER SIBLING (`{ zzzOrd: string } | { zzzOrd?: number }`)
+makes it **1 RED, uniquely that row**. **d5/d6/d7 are REDUNDANT and are now
+recorded as such in the KDoc rather than claimed** — each has a fixture exercising
+its shape and each stays green with the guard removed, because a lower layer
+already declines (`getUnionType` dedupes; `getPropertyOfType` has no Intersection
+branch; a `super` receiver resolves no member). d8 was a deliberate two-mistake
+probe to name the `super` mechanism and **failed to** — it is reported as a
+non-result, not as coverage.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** The three optional-member pins were run
+against the PARENT binary rebuilt in this session (`e7963e28`) with the fixture
+already in place: **3 RED**, reading `number` / `string` / `number`. The union pin
+and its order sibling redden under d0/d3/d4. The four guarded controls and the
+REQUIRED control pass on the parent for the trivial reason that the parent never
+widens — they are labelled CONTROLS and are counted as coverage only for d1 and d2,
+which redden them uniquely. The two RESIDUE pins (`super`, INTERSECTION) are
+labelled residue and counted as coverage for nothing. Every expected string came
+from tsc's LSP, not from this project's opinion.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The four-line repro of (b) is a repro of TWO defects and reading it as one
+    cost the first hour.** `zzzInst.zzzOptStr` against `string` is MISSING on the
+    shipped binary while `zzzInst.zzzOpt` against `string` merely has the wrong
+    type — same fixture, same line shape, two different mechanisms (the dropped
+    constituent, and the nullish-union gate). The tell was that patch_b made the
+    first row DISAPPEAR.
+  * **Reproducing the "five narrowing gaps" with EXPLICIT `| undefined` members
+    needed no patch and no build.** They are all shipped defects that the gate
+    hides; the (b) patch only makes them reachable. Half an hour of building arms
+    was avoidable by declaring the member `number | undefined` instead of `number?`.
+  * **The `&&` diagnosis was wrong twice before it was right.** "The `&&` narrowing
+    is broken" survived one fixture battery (V1-V7, every `&&` form red, every
+    single-condition form green) and was refuted by the next (W1/W2 — member access
+    and argument, both `&&`-guarded, both correct). What varies is the READER, not
+    the condition.
+  * **A KDoc that claims a refusal is deliberate is a claim the ablation can
+    check**, and here it was wrong three times out of three. The comment now says
+    "measured redundant, kept because it states the question this leg is not
+    answering" — with the note that `super` would become load-bearing the moment it
+    got a carrier, which is precisely what (CHK.61)(a) did for `this` last round.
+
+### Round (CHK.62b)+(CHK.61)(1)+(CHK.61)(a) — the price of the `this`-receiver line fell **1 -> 0** and **it landed**: three defects closed, and the reverted intersection leg was UNSOUND rather than unmasking
+
+**THE HEADLINE: (CHK.61)(a) IS IN, AT `added=0 removed=0` ON ALL EIGHT PROFILES.** Its price
+was 6 dashboard rows at (CHK.61), 3 after (CHK.62), **1** after this round's (CHK.62b), and
+**0** after this round's (CHK.61)(1). All six were false positives from pre-existing gaps the
+`any` was hiding; not one of them was `this`-specific, which is exactly what the refusals
+predicted and what took four rounds to prove one gap at a time.
+
+**(CHK.62b) — AN ASSIGNMENT WHOSE RHS IS A `this`-METHOD CALL DID NOT NARROW THE ASSIGNED
+REFERENCE, AND IT IS A SHIPPED DEFECT, NOT A PATCH ARTEFACT.** `rhsIsDefinitelyNonNullish`'s
+CALL arm reads the callee's return ANNOTATION, so it resolves the callee through
+`resolvePropertyMethodDecl`, which TYPES THE RECEIVER and bails at `recvType === anyType`.
+The queue recorded it as visible only under `patch_a`; that is true of `build/chk62/g2k`,
+whose declared unions all come from `this.zzzFind()` — but the moment the reference's union
+comes from anything else the row is on the SHIPPED binary:
+`let p = zzzFindFree(); p ??= this.zzzCreate(); return { p }` reported
+`p: ZzzProj | undefined` where tsc 7.0.2 is silent. The carrier is confined to that
+FLOW-ONLY resolver (both callers are narrowing resolvers, so a resolution can only ever
+SUPPRESS), which is what made it separable from (a).
+
+**THE OBSERVABLE IS THE OBJECT-LITERAL MEMBER AND *ONLY* IT, WHICH A WRITE PROBE CANNOT
+SEE.** At the same flow point `const q: ZzzProj = p` is SILENT on the broken binary while
+`return { p }` is a TS2322 — so CLAUDE.md's standing advice ("assert the narrowed type with a
+write probe") is the wrong instrument here, and a write-probe pin would have been VACUOUS.
+The value pin that works is a deliberately WRONG target: `return { zzzProj }` against
+`{ zzzProj: string }` makes the checker NAME the member type it built —
+`{ zzzProj: ZzzProj | undefined; }` before, `{ zzzProj: ZzzProj; }` after, and tsc agrees the
+member is `ZzzProj`.
+
+**(CHK.61)(1) — THE REVERTED ACCEPTANCE LEG WAS *UNSOUND*, NOT UNMASKING A DEFECT
+ELSEWHERE, AND A CENSUS OF THE NEWLY ACCEPTED PAIRS SAID SO IN ONE RUN.** The prior round
+recorded `callHierarchy.ts:199 'parent' does not exist on type 'never'` as "an acceptance in
+the relation feeds `typeGuardMemberDisjoint`". Printing every pair the new rule accepts on
+the services profile named exactly FOUR, all one shape:
+`FunctionExpression & { name: undefined; parent: … }` accepted against `{ name: Identifier }`.
+The merge rule is "the intersected member is a subtype of EVERY declaration, so ANY relating
+declaration suffices" — sound only when each declaration's type is spelled out INCLUDING its
+optionality. We model an optional member as plain `T` ((CHK.61)(b)), so `FunctionExpression`'s
+`name?: Identifier` was picked as the relating declaration where the real intersected member
+is `undefined`; the next negative type-predicate narrow then subtracted that constituent and
+left `never`. Widening the SOURCE declaration to `T | undefined` LOCALLY inside the rule
+fixes it — it is a suppression rule, so pessimism about a source member can only decline to
+suppress. **Ablation arm b1 is exactly the earlier attempt's mistake and it reddens exactly
+one pin.**
+
+**(CHK.61)(a) — LANDED.** `thisReceiverCarrierType` (`currentClassForThis`'s declared
+instance type) is consulted at `computeRawTypeOfPropertyAccess` and at
+`resolvePropertyMethodDecl`, only where the receiver already typed `any`/`error`. On
+`build/chk60/br/b2.ts`: **3 of tsc 7.0.2's 7 rows before, all 7 after, at tsc's own
+positions** (5,11) (6,11) (8,20). It also converts `WeakCallableSourceAnchorTest`'s
+`this`-member REFUSAL pin into a positive one at tsc's `(2,62)` / `(3,44)` — round 765's law
+firing in the useful direction, and the only suite failure the whole round produced.
+
+**AND IT IS A LANGUAGE-SERVICE WIN, WHICH ONLY `capture-equivalence` SEES**: `definitions`
+**360,376 -> 360,414**, i.e. go-to-definition on a `this.<member>` caret now RESOLVES. Both
+ARM DIGESTs moved (`full=5591703872112101713 narrow=704838071822341252`) with `DIVERGED`
+UNCHANGED at 1,005 spans in 43 of 76 (types=1005, definitions=0, moreAny 0) — a FULL-BUILD
+fix, so the full-vs-narrow relationship is untouched; (INC.26)'s rule, re-recorded rather
+than read as a regression.
+
+**GATES, per commit, all foreground, one at a time.** Suite **16,262 / 16,267 / 16,272 /
+16,273**, 0 failed, 3 skipped (+5/+5/+5/+1, exactly the new classes) — **no corpus baseline
+moved on any of the four.** `cost_gate.py` PASSES on all (exit read from the gate, not a
+pipeline), `output.errors` **46**, every counter within a hundredth of a percent of
+(CHK.62)'s standing residual (`typeOfExpr.calls` +1.42%/+1.41%, `globals.lookups` +1.52%,
+`globals.misses` +1.75%/+1.74%). `huge_methods --fail-over 0` exit 0, **783** classes, 0
+over. **8-profile grid `503774c23b4535130ffdebabef430cf0` on all three code commits,
+INCLUDING the one that lands (a) — `added=0 removed=0` on all eight**, verified by a
+per-profile `diff` against a parent capture taken in this session. `knip` **48** and
+`jsonrepair` **4**, EVERY ROW byte-identical. `partition-equivalence` EQUIVALENT all 78
+(floors 56 / 57 / 66 ms, one draw each — the spread is the harness's).
+
+**NINE ABLATION ARMS, ONE MISTAKE EACH, EVERY CLASS md5 DISTINCT, EACH `cmp`-DIFFED AGAINST
+ITS OWN SNAPSHOT AND EACH RESTORE VERIFIED BY `cmp` PLUS A REBUILT md5.**
+
+| arm | injected mistake | class | RED |
+|---|---|---|---|
+| a0 | the (CHK.62b) carrier removed from the flow resolver | `77222597` | **3** — the three (CHK.62b) positives |
+| a1 | the carrier present but answering null | `4d268baa` | **3** — the same three (a ROUND-927 PAIR with a0) |
+| a2 | any resolved `this.m()` treated as non-nullish | `ac22c4c7` | **1** — uniquely the nullable-return row |
+| b0 | `intersectionMergedSatisfiesTarget` removed | `ca09ebe3` | **2** — the two gap-1 positives |
+| b1 | the source-side `| undefined` dropped (the earlier attempt's exact mistake) | `30b3908a` | **1** — uniquely the optional-vs-`undefined` row |
+| b2 | the missing-required-property refusal dropped | `62244808` | **1** — uniquely that row |
+| c0 | the (a) carrier removed from `computeRawTypeOfPropertyAccess` | `20b9f09f` | **3** — the three (a) positives |
+| c1 | the carrier consulted SECOND instead of first | `103f0a7d` | **0 — REDUNDANT** |
+| c2 | the carrier answers for EVERY identifier receiver | `532c340f` | **0 — UNPINNED, then fixed** |
+
+**c1 IS A REDUNDANT GUARD AND c2 WAS A HOLE.** The fallback for a bare `this` is exactly
+`anyType`, so consulting the carrier first or second is observationally identical — the KDoc
+claiming the order is load-bearing was an over-claim and now says what is. c2 is the
+opposite: widening the carrier from `this` to any identifier receiver is plainly wrong (an
+`any`-typed parameter in the same body would acquire the class's type) and NOTHING pinned it.
+The round added the fixture that does (`zzzM(zzzP: any) { const zzzA: string = zzzP.zzzReq }`)
+and re-ran c2 against it: **1 RED, uniquely that row** (class `0ae9232b`). Two rows were also
+relabelled from CONTROL to COVERAGE, because an arm reddens each uniquely.
+
+**HOW VACUITY WAS RULED OUT, PER PIN.** Every positive was measured on the PARENT binary,
+rebuilt in this session (`Checker.class` md5 `181c293e` — the exact digest (CHK.62) recorded
+as its landed binary), through the CLI, against `tools/tsgo-7.0.2/lib/tsc` on byte-identical
+source; then shown RED under the arm naming its rule. **One candidate pin was DROPPED for
+vacuity before it was written**: the write probe `const zzzQ: ZzzProj = zzzProj` after the
+`this`-method assignment is silent on the parent, so it would have measured nothing. Two rows
+are labelled CONTROL and are NOT counted as coverage (no arm reddens them): the free-function
+RHS, and the merged-member CONTRADICTION direction.
+
+**WHAT DID NOT WORK, AND WHAT SURPRISED ME.**
+
+  * **The first two bisection matrices concluded the wrong axis.** `m8` in the second
+    (`let zzzProj: ZzzProj | undefined = zzzCreateFree(); zzzProj ??= this.zzzCreate()`) was
+    silent, which read as "the DECLARATION's initializer is the axis" — it is silent because
+    `zzzCreateFree(): ZzzProj` is already non-nullish, so the `??=` never mattered. A matrix
+    cell that is silent for a TRIVIAL reason is indistinguishable from one that is silent for
+    the reason you are testing; the third matrix, which held the declaration fixed, is what
+    named the receiver.
+  * **A `getNarrowedTypeForReference` debug diagnostic settled in one run what two matrices
+    could not.** Printing `raw`/`narrowed` at the object-literal member showed
+    `ZzzProj | undefined -> ZzzProj` for the free-function RHS and `-> ZzzProj | undefined`
+    for the `this` one, which located the defect in the walk rather than in the reader.
+  * **The (CHK.61)(1) revert note's diagnosis was inherited and wrong**, exactly like two of
+    (CHK.62)'s four. "An acceptance in the relation feeds `typeGuardMemberDisjoint`" reads as
+    a statement about someone else's code; the rule was simply unsound. **Censusing what a
+    new rule ACCEPTS is a one-run instrument and it should have been the first move**, not
+    the last.
+  * **A KDoc-only edit was proven inert rather than re-gated**: `javap -c -p` minus `line N:`
+    is byte-identical across it over 1,026,164 lines of disassembly, while the class md5
+    moves (`da1d4552` -> `e7963e28`) because the LineNumberTable shifts.
+
 ### Round (CHK.61c)+(CHK.61d) — the two defects (CHK.61) named were BUILT, PRICED and REFUSED for the same reason, and the pricing turned up **two other defects that were free to fix**
 
 **BOTH QUEUED ITEMS WORK, AND NEITHER IS LANDABLE.** (a) — take `currentClassForThis` as the

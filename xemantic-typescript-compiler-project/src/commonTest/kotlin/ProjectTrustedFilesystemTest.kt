@@ -244,6 +244,14 @@ class ProjectTrustedFilesystemTest {
      * `tsconfig.json` is excluded from the promise by construction — it decides what
      * the program IS, and a stale one is a wrong program rather than a wrong
      * diagnostic.
+     *
+     * A CONTROL rather than a discriminating pin, and recorded as one: nothing offers
+     * a config file to [OverlayVfs.retainRead] today, because that is called from the
+     * crawl's fold and a `tsconfig` is read by the config loader instead — so this is
+     * green against a binary with the `.json` refusal removed. What the refusal
+     * actually protects is a CRAWLED `.json` (a `resolveJsonModule` import), and the
+     * pin that sees it is `an offer is refused for json, for a tombstone and for an
+     * overlaid path`.
      */
     @Test
     fun `a tsconfig change behind the promise is still seen`() {

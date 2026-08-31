@@ -30,6 +30,38 @@ rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a
 `added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
 materialises no directory and cannot reach the resolver's path arithmetic.
 
+**(INC.69) — THE INIT-BLOCK DISPATCH IS NOT FLAT, AND A PLATEAU IS A SHARED PER-FILE COST
+(2026-08-31).** (INC.66) recorded the ~400-pass table as FLAT, "so there is no row to make
+cheaper"; a HISTOGRAM rather than a top-N list refutes it — on `many-small-2400-dom` the
+floor table is **418 rows summing to 39.5 ms, 44 of them carrying 37.1 (94%) and 367 carrying
+0.82** — and 21 of those 44 sit at an almost identical **0.39-0.55 ms**. A plateau of
+near-identical prices across unrelated walkers is not a coincidence of what they do: all 21
+are corpus PIN walkers whose whole body is a whole-program loop whose first act is
+`fileName.substringAfterLast('/') != "<one literal>"`, i.e. 2,401 iterations and a `String`
+allocation each to compare against a name no real project contains.
+**ONE BASENAME INDEX, BUILT ON FIRST ASK**, and the 21 loop HEADERS re-pointed at it; the
+redundant `!=` guard is kept VERBATIM so every loop body is byte-identical.
+**MEASURED — the deterministic half first**: the 21 rows **10.079 -> 0.457 ms** (second
+instrumented draw, round 846; 0.438 of the remainder is the FIRST asker paying the one build,
+the other twenty are 0.000-0.002), cross-checked against four draws of the unmodified binary
+in a separate process at 9.27-12.01. **ABBA-rotated wall, one JVM per arm, 4 processes/arm x
+8 draws: floor median-of-medians 157 -> 144.5 ms (-8.0%)**, means 162.5 -> 145.5.
+**THE SAME RUN RE-PROVED (INC.68)'s LAW ON ITSELF**: the two unrotated `rows` processes read
+whole-table sums of 52.32 -> 54.27 ms — the after arm 4% "worse" — while the 21 rows it
+changed fell 22-fold, because that process simply drew slow. An unrotated process compares
+rows WITHIN itself, never totals.
+**THE PINS ARE NESTED-PATH VALUE PINS BECAUSE THE CORPUS CANNOT REACH THEM**: the harness
+materialises no directory, so its names are FLAT and all ~13k baselines exercise the
+degenerate key — an index keyed by the full path passes every one and silently stops pinning
+a real project's `src/dates/temporal.ts`, a MISSING diagnostic nothing here prints.
+**GATES.** Suite **16,553 / 0 / 3** (+5, exactly the new pins); `cost_gate.py` exit 0, every
+counter +0.00%; `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`,
+labelled a CONTROL in its own header (no profile holds any of the 21 literals). Ablations
+a1/a2/a3 redden 2/1/2 of 5; **a4 (widen the index to a suffix match) reddens NOTHING and is
+recorded as a round-927 redundant-guard PAIR** — the index buys the speed, the kept guard
+keeps the correctness — and only a5, which widens the index AND deletes the guard, reddens
+the negative control.
+
 **(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
 SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
 `xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one

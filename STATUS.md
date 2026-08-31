@@ -1,5 +1,36 @@
 # Status
 
+**(INC.56) — AN IntelliJ-CLASS HOST CAN SKIP THE RE-READ, AND THE ROW IT WAS AIMED AT WAS A
+*LOCATION* (2026-08-31).** Two opt-in halves in the embedding API: `Project.trustFilesystem`
+(the host promises the bytes of a file will not change without this project being told —
+through `updateFile`, `deleteFile` or the new `reloadFile`) and `Vfs.readTextIfResident` /
+`Vfs.retainRead` (the crawl skips its per-file THREAD HANDOFF for content already in memory).
+Retention is written ONLY from the crawl's single-threaded fold — round 825, because the crawl
+reads from N concurrent workers.
+**MEASURED**, 8 instrumented draws per arm, one JVM per arm, arms rotated across processes,
+both rotations agreeing, with the untouched sequential specifier-resolution row as the control:
+crawl WALL **30.6/37.0 -> 21.7/19.4 ms** at 2,401 small files and **13.7/14.2 -> 9.5/7.8 ms**
+on tsc's 78 huge ones; `read+decode` **132.6/176.1 -> 1.52/1.39** and **65.4/63.2 ->
+0.076/0.057**.
+**AND THE REFUTATION IS WORTH MORE THAN THE ROW: THE QUEUE PRICED THIS FROM `FrontEnd.READ`,
+WHICH IS ELAPSED-WITH-SUSPENSION — A LOCATION, NOT A PRICE.** Retaining the content WITHOUT
+skipping the hop served **33,350 reads from memory and moved the crawl's wall by NOTHING** on
+the 2,401-file project, while halving it on tsc's 78 huge sources. **The read is a BYTE cost;
+the row that made it look like a FILE cost was the hop's suspension** — so the fix that works
+on both shapes removes the HANDOFF, not the read.
+**THE PROMISE IS NARROWER THAN THE ENTRY FEARED, AND IT IS PINNED:** additions and deletions
+are still discovered on every build (nothing caches the file SET), and `.json` is never
+trusted. 18 pins including the documented LIMIT (an unreported content change IS missed) and a
+REGIME pin that the crawl really takes the resident path; 4 of 5 ablation arms discriminate and
+the fifth is recorded as a REDUNDANT GUARD rather than claimed.
+**GATES.** Suite **16,586 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% — a CONTROL,
+since `SystemVfs` resides nothing and the CLI path is provably unchanged; `huge_methods.py
+--fail-over 0` clean.
+**SUCCESSOR:** the crawl's remaining halves — sequential specifier resolution ~11-13 ms
+(non-syscall remainder; its syscall half is refused by (INC.73)(a)) and a ~7-9 ms concurrent
+residue that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with the last hop
+gone.
+
 **(INC.73) — A 2.5 ms ROW, AND THE TWO REFUTATIONS THAT COST NOTHING TO FIND (2026-08-31).**
 `init:moduleTypeNameIndex` — the largest single row left in the floor's per-pass table after
 (INC.69)/(INC.70)/(INC.71) — is built on FIRST ASK; GO/NO-GO first, per (INC.16):
@@ -129,34 +160,3 @@ an absent scope makes `perFileScopeOf` answer null and every consumer falls back
 does not exist in BOTH arms — the older arm dies with `NoSuchMethodError` and the batch prints
 one arm's medians as if they were both.
 
-**(INC.69) — THE INIT-BLOCK DISPATCH IS NOT FLAT, AND A PLATEAU IS A SHARED PER-FILE COST
-(2026-08-31).** (INC.66) recorded the ~400-pass table as FLAT, "so there is no row to make
-cheaper"; a HISTOGRAM rather than a top-N list refutes it — on `many-small-2400-dom` the
-floor table is **418 rows summing to 39.5 ms, 44 of them carrying 37.1 (94%) and 367 carrying
-0.82** — and 21 of those 44 sit at an almost identical **0.39-0.55 ms**. A plateau of
-near-identical prices across unrelated walkers is not a coincidence of what they do: all 21
-are corpus PIN walkers whose whole body is a whole-program loop whose first act is
-`fileName.substringAfterLast('/') != "<one literal>"`, i.e. 2,401 iterations and a `String`
-allocation each to compare against a name no real project contains.
-**ONE BASENAME INDEX, BUILT ON FIRST ASK**, and the 21 loop HEADERS re-pointed at it; the
-redundant `!=` guard is kept VERBATIM so every loop body is byte-identical.
-**MEASURED — the deterministic half first**: the 21 rows **10.079 -> 0.457 ms** (second
-instrumented draw, round 846; 0.438 of the remainder is the FIRST asker paying the one build,
-the other twenty are 0.000-0.002), cross-checked against four draws of the unmodified binary
-in a separate process at 9.27-12.01. **ABBA-rotated wall, one JVM per arm, 4 processes/arm x
-8 draws: floor median-of-medians 157 -> 144.5 ms (-8.0%)**, means 162.5 -> 145.5.
-**THE SAME RUN RE-PROVED (INC.68)'s LAW ON ITSELF**: the two unrotated `rows` processes read
-whole-table sums of 52.32 -> 54.27 ms — the after arm 4% "worse" — while the 21 rows it
-changed fell 22-fold, because that process simply drew slow. An unrotated process compares
-rows WITHIN itself, never totals.
-**THE PINS ARE NESTED-PATH VALUE PINS BECAUSE THE CORPUS CANNOT REACH THEM**: the harness
-materialises no directory, so its names are FLAT and all ~13k baselines exercise the
-degenerate key — an index keyed by the full path passes every one and silently stops pinning
-a real project's `src/dates/temporal.ts`, a MISSING diagnostic nothing here prints.
-**GATES.** Suite **16,553 / 0 / 3** (+5, exactly the new pins); `cost_gate.py` exit 0, every
-counter +0.00%; `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`,
-labelled a CONTROL in its own header (no profile holds any of the 21 literals). Ablations
-a1/a2/a3 redden 2/1/2 of 5; **a4 (widen the index to a suffix match) reddens NOTHING and is
-recorded as a round-927 redundant-guard PAIR** — the index buys the speed, the kept guard
-keeps the correctness — and only a5, which widens the index AND deletes the guard, reddens
-the negative control.
