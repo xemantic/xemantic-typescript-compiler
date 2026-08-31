@@ -2397,6 +2397,23 @@ a residue no sub-row named.**
   `checkReverseMappedInferableArrows` 0.66 — **~10 ms between them, and that is now the
   largest coherent pool left**); crawl **19.6** (resolve 11.5, flow residue ~6); glob **15.3**
   (`listEntries` 8.0, regex match ~5); bind **8.0**; post ~6.
+  **AND THE ~10 ms WALKER POOL IS REFUSED TOO, AFTER READING ALL SIX — IT IS ~1.2 ms.** The
+  pass ROW is not the gateable part: **two of them are ALREADY partition-scoped and what is
+  left in their row is the whole-program COLLECTOR** that round 609 forbids gating
+  (`checkCircularGenericCallbackVariables` and `checkCircularClassBaseViaDefaultTypeArg` both
+  collect over `binderResults` and emit over `checkedResults` — (INC.20)'s MIXED split,
+  already applied); **one is pure collector**
+  (`checkCircularExportEqualsImportAlias`, THREE `binderResults` loops feeding a cycle
+  analysis, no per-file emission at all); and **three were already refused by earlier rounds**
+  (`checkSpreadNonIterableIntoFixedArity` and `populateAmbientCyclicBaseClasses` by (INC.7)
+  batch 4's reading, `checkModulePreserve4Pin` by (INC.70b)). What is genuinely open is
+  `checkCrossFileUseBeforeDeclaration`'s SECOND loop (~0.5 ms) and
+  `checkReverseMappedInferableArrows` (0.66) — **and the first carries a trap worth more than
+  the milliseconds**: its `fileIdx` comes from `binderResults.withIndex()` and is compared
+  against the indices the COLLECTOR recorded, so rewriting the header to
+  `checkedResults.withIndex()` silently renumbers it and makes a use-before-declaration
+  verdict a function of the PARTITION. **Read what an index MEANS before narrowing the loop
+  that produces it.**
   **TWO OF THOSE ARE REFUSED ON ARITHMETIC RATHER THAN LEFT OPEN.** The glob's `listEntries`
   residue is **~4.4 ms of irreducible `stat`s** (2,451 entries, one each — Java exposes no
   `d_type`, so 1 syscall per entry is the floor; `GlobListProbeMain` measures the split), and
