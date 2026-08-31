@@ -1,5 +1,36 @@
 # Status
 
+**(INC.80) — JOINING A PATH BY ARITHMETIC, AND THE TWO-DRAW READ THAT NEARLY REFUTED IT
+(2026-08-31).** `PathUtil.join(base, part)` built `"$base/$part"` and normalized it — and for
+a module specifier that is exactly the case `isNormalized` must refuse (a `..` segment), so
+(INC.68)'s fast path could never help it and the general body allocates a `split` list, a
+`String` per segment, an `ArrayDeque` and a `joinToString` builder: **3.4-4.1 ms over 4,701
+calls** in the crawl's specifier resolution. Counting the leading `..`, dropping that many
+segments off the base with `lastIndexOf` and concatenating is **131-136 ns** — priced as a
+probe arm and checked against the general body on all 4,701 real pairs BEFORE it was built.
+**THE MEASUREMENT IS THE PART WORTH READING.** Two draws of the row said NOTHING (6.26/7.22
+before, 6.22/7.45 after) and the refutation was already being written. **Six draws per arm,
+ROTATED ACROSS PROCESSES over two class dirs differing only in this file: 6.41 -> 4.95 ms at
+the median, the after arm winning in ALL THREE batches and BOTH rotation directions.**
+(INC.68)'s law bites in this direction too — an unrotated pair cannot see a 23% change in the
+very row it measures.
+**AND THE FIRST EXPLANATION WAS REFUTED RATHER THAN ASSUMED:** the natural story (the
+allocating arm pays GC the build never pays, round 801) is wrong — with a 2 GB young gen the
+allocating arm got SLOWER (873 -> 1,264 ns) and so did the arithmetic one (131 -> 257), 20
+young pauses in the whole process.
+**RECEIPTS:** `pathNormalizeCalls` **11,935 -> 9,577** and every remaining call takes the
+already-normalized path — a floor build performs **ZERO allocating normalizations, down from
+2,358**.
+**PINS** are a DIFFERENTIAL against the general body over a 12-base x 25-part grid ((CFG.1): a
+wrong join names a different FILE and nothing here notices). **It caught its own defect on the
+first run** — joining at the ROOT spelled `//dep`, a base the 4,701-pair fixture population
+does not contain and the adversarial grid does. Four ablation arms; the no-fast-path arm
+reddens ONLY the regime pin.
+**GATES.** Suite **16,622 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+**SUCCESSOR:** `dirname` + the memo key at **~1.5 ms over 4,701 calls** — the crawl loop knows
+the importer's directory once per FILE and re-derives it per SPECIFIER.
+
 **(INC.79) — THE CRAWL ASKED THE FILESYSTEM ABOUT FILES THE GLOB HAD ALREADY LISTED
 (2026-08-31).** (INC.73)(a) refused this row's syscall half by arithmetic — "2,351 distinct
 resolutions at exactly one `exists` each, so ~2.6 ms is irreducible". **That is true of the
@@ -110,36 +141,3 @@ since `SystemVfs` resides nothing and the CLI path is provably unchanged; `huge_
 (non-syscall remainder; its syscall half is refused by (INC.73)(a)) and a ~7-9 ms concurrent
 residue that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with the last hop
 gone.
-
-**(INC.73) — A 2.5 ms ROW, AND THE TWO REFUTATIONS THAT COST NOTHING TO FIND (2026-08-31).**
-`init:moduleTypeNameIndex` — the largest single row left in the floor's per-pass table after
-(INC.69)/(INC.70)/(INC.71) — is built on FIRST ASK; GO/NO-GO first, per (INC.16):
-`moduleTypeNameIndexBuilds` **0 on a floor build, 1 on a full one**.
-**ITS VALUE RECEIPT IS THE 8 PROFILES AND THE CORPUS IS A CONTROL — the ablation that never
-builds it reddens ZERO of the ~13k baselines and 3 of the 8 profiles (+2 rows each: harness,
-server, services)**, which is exactly where rounds 471 and 513 got their evidence. **A family
-can have no corpus coverage at all and still be load-bearing; the way to find out is to ablate
-and grid, not to reason about it.**
-**AND THE HONEST PART: neither the floor wall (medians 117/124 before against 119/127 after —
-no separation) nor a 2-process phase A/B can resolve 2.5 ms.** The receipts are the pass row
-from the clean single-binary decomposition plus the deterministic count, and the round is
-written up as the 2.5 ms landing it is.
-**TWO REFUTATIONS FROM THE SAME RECON, BOTH WORTH MORE THAN THE ROW.**
-**(a) `SystemVfs.exists` IS ONE SYSCALL** — 1130.7 ns/call against `java.io.File.exists`'s
-1108.8, **1.02x**, ABBA inside one process over the fixture's own 2,401 paths. So (INC.60)'s
-five-stat finding is specific to `metadataOrNull` and does NOT generalise; and the resolver
-already probes exactly ONCE per resolution (**2,351 `exists` + 10 `isDirectory` for 2,351
-distinct pairs**, because `.ts` is first in `allExtensions`), so there is no syscall lever in
-the crawl's 11 ms resolution row.
-**(b) `init:collectUmdGlobalsAndModuleFiles` (2.32) and `init:mergeFileLocalsIntoGlobals`
-(2.06) ARE NOT DEFERRABLE**, and the reason is not their readers but their readers' SCHEDULE:
-`umdGlobalNames` is read by the merge itself and `moduleFiles` by `collectModuleAugmentations`,
-both LATER INIT PASSES that run unconditionally. Combined prize ~5 ms of a 94 ms floor —
-refused on arithmetic.
-**GATES.** Suite **16,568 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% (including
-`typeNode.bypassed` 145,723, the direct receipt that `multiFileModuleTypeNames` answers
-identically); `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
-**SUCCESSOR:** the init dispatch has no non-walker row above ~1.4 ms left, so what remains
-there is (INC.7)'s partition question one walker at a time; **the floor's largest row is the
-CRAWL and its READ half is (INC.56)** — now the only row left with a double-digit prize, and
-the one an IntelliJ-class host can simply hand us.

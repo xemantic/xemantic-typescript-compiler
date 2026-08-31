@@ -20,6 +20,61 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.80) — joining a path by arithmetic, and the two-draw read that nearly refuted it
+
+**`PathUtil.join(base, part)` built `"$base/$part"` AND NORMALIZED IT, AND FOR A MODULE
+SPECIFIER THAT IS EXACTLY THE CASE `isNormalized` MUST REFUSE** — a `..` segment — so
+(INC.68)'s fast path could never help it and the general body allocates a `split` list, a
+`String` per segment, an `ArrayDeque` and a `joinToString` builder. **3.4-4.1 ms over 4,701
+calls (731-880 ns each)** inside the crawl's specifier resolution on the 2,401-file fixture.
+
+**PRICED AS A PROBE ARM BEFORE IT WAS BUILT**, and the arm was checked against the general
+body on all 4,701 real pairs: the ceiling (no validity scans) is **60 ns**, the SHIPPABLE
+version with both scans is **131-136 ns**. The scans are not new work — the general path
+already scans `base + "/" + part` once inside `normalize`, to decide it is not normalized;
+what the fast path removes is the allocation.
+
+**THE MEASUREMENT IS THE PART WORTH READING, AND IT NEARLY WENT THE OTHER WAY.** Two draws of
+the row said NOTHING — 6.26/7.22 before against 6.22/7.45 after — and I had already begun
+writing the refutation. **Six draws per arm, ROTATED ACROSS PROCESSES over two class dirs
+differing only in this file, say 6.41 -> 4.95 ms at the median, the after arm winning in ALL
+THREE batches and in BOTH rotation directions.** (INC.68)'s law bites in this direction too: an
+unrotated pair could not see a **23%** change in the very row it was measuring, and a
+two-draw read of an instrumented row is not evidence either way.
+
+**AND THE EXPLANATION I REACHED FOR FIRST IS REFUTED RATHER THAN ASSUMED.** The natural story
+for "the microbenchmark says 6x and the build says nothing" is that the allocating arm pays GC
+the build's 2,351-call population never pays (round 801's law). Measured: with a 2 GB young
+gen the allocating arm got **SLOWER** (873 -> 1,264 ns) and so did the arithmetic one (131 ->
+257) — both moved together, and the whole process took 20 young pauses. Not GC.
+
+**RECEIPTS, deterministic:** `pathNormalizeCalls` **11,935 -> 9,577**, and every remaining call
+now takes the already-normalized path — **a floor build performs ZERO allocating
+normalizations, down from 2,358** — with `join: 2358 relative, 2358 by arithmetic`.
+
+**PINS.** A DIFFERENTIAL against the general body over a 12-base x 25-part grid, because a
+wrong join names a different FILE and (CFG.1) says nothing here notices a wrong program. **It
+caught its own defect on the first run**: joining at the ROOT spelled `//dep` — a base the
+4,701-pair fixture population does not contain and the adversarial grid does, which is the
+whole argument for grading a fast path on shapes rather than on a corpus. Plus the REGIME pin
+(an always-falling-back implementation passes a differential by construction), its mirror, and
+the deliberately-declined boundary where a `..` run reaches the root.
+
+**ABLATION — four arms:** c1 (the root head's special case) 1 RED, c2 (tail unchecked) 2 RED,
+c3 (base unchecked) 2 RED, c4 (no fast path) 1 RED. c4 is again the partition that matters —
+it reddens ONLY the regime pin while every value pin stays green. c2 and c3 have IDENTICAL red
+sets: both guards are separately load-bearing and no pin distinguishes which is missing, which
+is round 927's pair recorded rather than claimed.
+
+**GATES.** Suite **16,622 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**WHAT IS LEFT IN THAT ROW:** `dirname` + the memo key at **~1.5 ms over 4,701 calls**, where
+the crawl loop already knows the importer's directory once per FILE and re-derives it per
+SPECIFIER — `ModuleResolver.resolve`'s KDoc already establishes that the answer is a function
+of `(importerDir, specifier)` alone, so a `resolveFrom(spec, dir)` overload plus a two-level
+memo is exact. Priced at `dirnameOnly` 0.80 ms and the key concat 0.43 ms.
+
 ### Round (INC.79) — the crawl asked the filesystem about files the glob had already listed
 
 **(INC.73)(a) REFUSED THIS ROW'S SYSCALL HALF BY ARITHMETIC — "2,351 distinct resolutions at
@@ -2484,6 +2539,17 @@ a residue no sub-row named.**
   with it. **TRANSFERABLE: a defaulted interface member added for speed is a silent regression
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
+
+- [x] **(INC.80) DONE 2026-08-31 — `PathUtil.join` BY ARITHMETIC, AND A TWO-DRAW READ THAT
+  NEARLY REFUTED IT.** A module specifier's `..` is exactly what `isNormalized` must refuse, so
+  (INC.68)'s fast path never applied and every join allocated a split list, a deque and a
+  builder: **731-880 ns x 4,701**. Counting the leading `..` and dropping that many segments off
+  the base is **131-136 ns**, priced as a probe arm and checked against the general body on all
+  4,701 real pairs before being built. **Two draws of the row saw nothing; six rotated across
+  processes saw 6.41 -> 4.95 ms, 3/3 batches, both directions.** The GC explanation was measured
+  and REFUTED (a 2 GB young gen made both arms slower). Receipt: a floor build now performs ZERO
+  allocating normalizations, down from 2,358. **STILL OPEN in the row:** `dirname` + the memo key
+  at ~1.5 ms, which a `resolveFrom(spec, dir)` overload plus a two-level memo would remove.
 
 - [x] **(INC.79) DONE 2026-08-31 — THE CRAWL'S RESOLVE ROW, AND A REFUSAL THAT WAS RIGHT ABOUT
   ITS COMPONENT AND WRONG ABOUT THE PROGRAM.** (INC.73)(a) called the row's syscall half
