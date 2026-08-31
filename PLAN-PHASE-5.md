@@ -2273,6 +2273,31 @@ a residue no sub-row named.**
   divided by file count. **Do not assume it is the glob** — (INC.53) and (INC.59) were
   both found by splitting a row that a plausible story had already explained.
 
+- [ ] **(INC.75) THE PLUGIN CAN TAKE (INC.56) AND (INC.55) TODAY, AND READING IT SAYS WHAT
+  ELSE IS STALE (2026-08-31, from `xemantic/xtsc-intellij-plugin` @ HEAD — (INC.67)'s method,
+  which found a defect the queue could not).** Three findings, none of them landable in THIS
+  repo, all of them compiler-facing:
+  **(a) `XtscSession` says in as many words that "the compiler has no way to revert an overlay
+  back to disk", and therefore retains `BufferContent` for EVERY buffer it was ever handed,
+  bounded only by evicting the whole session** — that is exactly `Project.reloadFile`, added by
+  (INC.56). Wiring it makes the per-path eviction the session's KDoc says is impossible.
+  **(b) `XtscSession.onCompilerThread` says "the compiler has no cancellation hook, so poll
+  instead of blocking" and polls `future.get(50 ms)`, which abandons the ANSWER while the build
+  runs to completion and the next pass queues behind it.** `Project.cancellation` has existed
+  since (INC.55) and `docs/language-service.md` § 14 documents it. Note the rough edge a host
+  hits: a cancelled build throws `CompilationCancelledError`, an **`Error`** by design, so an
+  `executor.submit` wraps it in `ExecutionException` and the plugin's failure branch would log
+  a warning per cancelled keystroke — a host must recognise it as "no answer", not a failure.
+  **(c) `trustFilesystem` is SAFE for this plugin today and its one gap is named**: `invalidate`
+  already closes whole sessions on any relevant external change, which is the promise kept by
+  the bluntest available means. What it deliberately SKIPS is the gap — `irrelevant(event)`
+  spares excluded/ignored roots, which is safe now only because the next dirty build re-reads
+  those files, and is NOT safe under the promise. The wiring is `reloadFile(path)` on a skipped
+  event rather than nothing. `docs/language-service.md` § 5a and the IntelliJ hosting section
+  carry the recipe.
+  **What is left HERE is nothing but the docs, which landed — this item is a HANDOFF**, kept
+  open so the next reader of the plugin does not re-derive it.
+
 - [x] **(INC.56) DONE 2026-08-31 — LANDED, AND ITS OWN PRICE WAS A LOCATION.** Two opt-in
   halves: `Project.trustFilesystem` (the host's promise, with `reloadFile` as the third way
   to report a change) and `Vfs.readTextIfResident`/`retainRead` (the crawl skips its per-file

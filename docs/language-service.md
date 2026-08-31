@@ -67,6 +67,10 @@ model to drift out of step with the compiler.
 | `renameAt(fileName, offset, newName)` | a verified edit plan, or a refusal that names its reason | § 10d |
 | `updateFile(path, text)` | overlays a buffer; marks the project dirty | § 5 |
 | `deleteFile(path)` | overlays a file as absent | § 5 |
+| `reloadFile(path)` | forgets a path entirely — overlay and retained read alike — so what is on disk is the truth again | § 5 |
+| `trustFilesystem` | opt-in: the host promises the bytes of a file never change without saying so, and builds stop re-reading | § 5a |
+| `cancellation` | a signal the build polls, so a host can abandon an unwanted answer | § 14 |
+| `saveState()` / `restoreState(text)` | this project's incremental state as text, for the next process | § 14 |
 | `close()` | releases the overlay and the cached build; idempotent | § 11 |
 
 `LineMap` is the line index behind `positionAt` / `offsetAt`, exposed for a host
@@ -763,6 +767,7 @@ You do not have to do anything to get this. It is what `diagnostics()` does.
 ```kotlin
 project.updateFile(path, text)   // an unsaved buffer; also creates files that are not on disk
 project.deleteFile(path)         // shadows a file as absent; undo by updateFile-ing it back
+project.reloadFile(path)         // forget everything about it — what is on disk is the truth again
 ```
 
 Nothing touches disk. An overlaid file need not exist there: adding one makes
@@ -781,6 +786,66 @@ you cannot see.
 Overlay edits cannot be served a stale parse. The parse cache is keyed by path
 *and validated against the exact content*, with no mtime, size or `stat`
 anywhere in the decision — so different overlay text misses by construction.
+
+`reloadFile` is the third change kind and the one a host reaches for when it does
+NOT have the new text: an external edit, a VCS checkout, a buffer reverted to what
+is on disk. It drops the overlay entry *and* anything retained under
+`trustFilesystem` below, and marks the project dirty exactly as `updateFile` does.
+Without it a host that has ever overlaid a buffer can never hand that path back to
+the filesystem, so it must retain the last text of every buffer it ever saw and
+bound that by throwing whole projects away.
+
+### 5a. `trustFilesystem` — letting the host's promise remove the re-read
+
+```kotlin
+project.trustFilesystem = true   // opt-in; off by default
+```
+
+Every build re-reads every non-overlaid program file, although the parse is already
+fully content-cached across builds: the bytes are read only to compute the content
+key that proves the cached tree still applies. That is O(project) work on every
+keystroke. A compiler cannot promise itself otherwise — a `Vfs` whose backing store
+changes underneath is exactly what the promise excludes — but a host can, and on the
+IntelliJ platform the IDE's own VFS is authoritative and guarantees change
+notification.
+
+**What you are promising, exactly.** That the BYTES of a file will not change
+without this project being told, through `updateFile`, `deleteFile` or `reloadFile`.
+Nothing more:
+
+* **Additions and deletions are still discovered** on every build. Nothing caches the
+  file set — the root-file glob still lists directories through the `Vfs` and module
+  resolution still probes candidates with `exists` before reading them — so a file
+  that appears or disappears behind the promise is still seen.
+* **`tsconfig.json` and `package.json` are never taken on trust.** They decide what
+  the program *is* rather than what one file says, they are read a handful of times
+  per build rather than once per file, and a stale one is a wrong PROGRAM rather than
+  a wrong diagnostic.
+
+So the one thing that goes wrong when the promise is broken is a file whose content
+changed on disk with nobody saying so: this project keeps reporting about the text it
+last saw, silently. Setting the property back to `false` drops everything retained,
+so withdrawing the promise is always safe.
+
+**What it is worth, and the part that is free.** Two halves land together. The
+retention removes the read; `Vfs.readTextIfResident` removes the per-file THREAD
+HANDOFF the read forces — the crawl hands every file to an IO dispatcher so a
+blocking read cannot starve the pool the parses run on, and on an application-shaped
+project that handoff is what a per-file read costs. Measured, 8 instrumented draws
+per arm, one JVM per arm, arms rotated across processes, with the untouched
+sequential specifier-resolution row as the control:
+
+| project shape | crawl WALL | of which read+decode |
+| --- | --- | --- |
+| 2,401 files of ~1 KB | 30.6 / 37.0 → **21.7 / 19.4 ms** | 132.6 / 176.1 → 1.52 / 1.39 ms |
+| 78 files of ~128 KB | 13.7 / 14.2 → **9.5 / 7.8 ms** | 65.4 / 63.2 → 0.076 / 0.057 ms |
+
+An UNSAVED BUFFER takes the resident path with no promise at all — it is in memory by
+construction — so that part costs nothing and is on by default.
+
+Pinned by `ProjectTrustedFilesystemTest`, including the documented limit (an
+unreported content change IS missed, and `reloadFile` is what makes it visible
+again), the two soundness claims above, and the `false` default.
 
 ## 6. Positions
 
@@ -2518,6 +2583,20 @@ on the first queries after IDE start, which amortises over a long session, and
 **Budget the memory per project, not per program.** A monorepo has many
 `tsconfig.json`s and therefore many `Project` instances; § 13's retention figure is
 per project.
+
+**Route every VFS event, then turn on `trustFilesystem`.** A host that already drops
+state on external change is *already* keeping the promise § 5a asks for — but usually
+by the bluntest available means, throwing whole projects away and paying a cold
+rebuild. The three event kinds map one-to-one onto the three calls: a document change
+or save is `updateFile`, a deletion is `deleteFile`, and anything else that moved a
+file's bytes is `reloadFile`. **The gap to watch is whatever your listener currently
+SKIPS** — an excluded or ignored root, say. Skipping such an event is safe today only
+because the next dirty build re-reads that file from disk; under the promise it is not,
+so a skipped path needs `reloadFile` rather than nothing.
+
+`reloadFile` also removes the reason a host would keep its own copy of every buffer it
+has ever overlaid: an overlay entry can now be handed back to the filesystem one path
+at a time, instead of being bounded by evicting the whole project.
 
 ### The known gaps, all of them
 
