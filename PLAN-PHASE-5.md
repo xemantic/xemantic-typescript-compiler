@@ -20,6 +20,63 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.83) — the crawl's concurrent residue: all three named members REFUSED, and the finding is again a residue no sub-row names
+
+**THE QUEUE NAMED THREE MEMBERS OF THE ~9 ms CONCURRENT HALF AND ALL THREE PRICE BELOW THE
+BAR.** Measured on `many-small-2400-dom`, per-keystroke query ~93 ms (trust arm):
+
+| candidate | population | isolated (upper bound) | in-build | verdict |
+|---|---|---|---|---|
+| `CrawledFile.specifiers = moduleSpecifiers.toSet()` (+ `associateBy` + re-index) | 2,401 files, 4,701 specifiers, mean **1.96**, max **2**, 50 files with none | `toSet` 0.53-0.63 ms, `associateBy`+re-index 0.19-0.25 — **~0.8 ms** | **unobtainable without a new probe boundary** | **REFUSE — 0.9% of the query, and that is a CEILING** |
+| `CrawlParseCache.lookup`'s `e.content != source` | 2,401 files, 2,430,979 chars | identity **0.09 ms** vs fresh-but-equal **1.79** -> the compare is **1.6 ms** | trust `pre-parse` 1.18-1.51 ms vs plain **2.31-2.76** | **REFUSE — identity DOES fire on the shipped arm, so it is ~0 ms there** |
+| the `Regex` built per call in `fileLooksLikeModuleForAwait` | — | 0.23 ms (esnext) / 1.9 (cjs) / 5.3 (cjs, every file awaits) | esnext 1.2-1.5 -> cjs 1.67-1.99 -> cjs+await **3.29-3.51** | **REFUSE at 0.00 ms — provably never called** |
+
+**THE THIRD IS THE ONE WORTH READING, BECAUSE IT IS DOUBLY GATED AND I HAD IT RANKED FIRST.**
+`fileLooksLikeModuleForAwait` is short-circuited by the option test above it for every ES
+module target, and `many-small-2400-dom` is `ESNext`; and even in a `commonjs` regime the
+regex is reached only for a file whose content contains `await`, of which this fixture has
+**0 of 2,401**. So the cost is `contains("await")` alone (+0.4-0.6 ms) and the regex itself
+is **never constructed**. Its worst realistic regime — commonjs AND every file awaiting — is
+1.4-1.6 ms. (INC.61)'s law on a fourth axis: a front-end price is a claim about the
+fixture's `compilerOptions`, not only about its file count.
+
+**AND THE SECOND REFUTES ITS OWN MECHANISM RATHER THAN ITS SIZE.** The content compare looks
+like a textbook O(bytes) cost and is ~0 on the arm that ships, because (INC.56)'s
+`retainRead` hands the cache back the SAME `String` instance and `String.equals` takes its
+identity path. It is 1.6 ms only for a host that does NOT make the filesystem promise — so
+it is a cost of *not* trusting, which is the opposite of a lever.
+
+**SO THE FINDING IS THE RESIDUE, FOR THE FOURTH TIME IN THIS ARC.** Crawl `WALL` is
+**12.2 / 12.4 / 14.1 / 15.5 ms** over 4 ABBA batches and the sequential resolve half
+**3.35 / 4.07 / 4.21 / 5.81**, so the concurrent half is **8-11 ms** — of which the two
+instrumented rows account for only `read+decode` **1.36-1.75** plus `pre-parse`
+**1.18-1.51** = **~2.8 ms**. **~6-8 ms is UNATTRIBUTED**: the `flatMapMerge(16)` machinery,
+the `CrawledFile` construction (which happens at `emit`, i.e. AFTER the `pre-parse` span
+closes, so it is charged to neither row), the flow collection, and the single-threaded fold
+(`store` / `retainRead` / three census loops). **That residue is the only thing in the
+concurrent half large enough to be worth a round**, and it cannot be ranked from the rows
+that exist — (INC.65)'s law, which is now the fourth time in this arc that ADDING an
+instrument rather than reading one is what would find the cost.
+
+**THE STATED NON-MEASUREMENTS**, which matter as much as the prices. Candidate 3 has NO
+in-build number and cannot get one without a production probe boundary. The `cjs` fixtures
+vary `moduleResolution` as well as `module`, so only their `pre-parse` row was read and
+never their WALL. And `pre-parse (CPU sum)` is elapsed-with-suspension over 16 workers — a
+CPU sum, not a wall price, so its contribution to the crawl wall is smaller still, which is
+why every crawl-wall range here overlaps across all three fixtures.
+
+**IF EITHER REFUSAL IS EVER RE-OPENED**, the hazard is recorded rather than the fix. Hoisting
+the regex is free hygiene and its pin must be a VALUE pin on `ParserFlags.topLevelAwait`
+across the four cases, because a wrong flag changes how a file PARSES (INV.1(e)) and the
+crawl-reuse gate then hands the core a different TREE with no diagnostic anywhere. Keeping
+`moduleSpecifiers` as a `List` and deduping at the consumer would change DISCOVERY ORDER,
+hence program file order, hence global symbol-id allocation — the documented ~350-test
+reshuffle.
+
+**SUCCESSOR:** split the concurrent residue with a probe boundary around the `CrawledFile`
+construction and the single-threaded fold, then re-rank. Until that exists, the ~6-8 ms is a
+location and not a price, and nothing in it should be designed against.
+
 ### Round (INC.82) — the importer's directory was re-derived per SPECIFIER, and the isolated probe over-read its own prize by 3x
 
 **THE ROW.** `ModuleResolver.resolve(specifier, importerPath)` read `importerPath` for
@@ -2686,6 +2743,22 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [x] **(INC.83) DONE 2026-08-31 — THE CRAWL'S CONCURRENT RESIDUE: ALL THREE NAMED MEMBERS
+  REFUSED WITH THEIR PRICES.** `moduleSpecifiers.toSet()` + `associateBy` is **~0.8 ms and
+  that is a CEILING** (no in-build number exists without a new probe boundary);
+  `CrawlParseCache`'s whole-content compare is **~0 ms on the arm that ships**, because
+  (INC.56)'s `retainRead` hands back the same `String` instance and `String.equals` takes its
+  identity path — its 1.6 ms is a cost of NOT trusting the host, i.e. the opposite of a lever;
+  and the per-call `Regex` is **provably never constructed** (the option test short-circuits
+  it for every ES module target, and even under `commonjs` it needs a file containing
+  `await`, of which the fixture has 0 of 2,401). Ceiling for all three together ~2.4 ms of a
+  93 ms query. **THE FINDING IS THE RESIDUE:** crawl WALL 12.2-15.5 ms, sequential resolve
+  3.35-5.81, so the concurrent half is 8-11 — and the two instrumented rows account for only
+  ~2.8 of it. **~6-8 ms is unattributed** (the `flatMapMerge` machinery, the `CrawledFile`
+  construction — which runs at `emit`, AFTER the `pre-parse` span closes, so no row can see
+  it — the flow collection and the single-threaded fold). (INC.65)'s law a fourth time.
+  `Inc82CandidatePriceMain` is the probe.
 
 - [x] **(INC.82) DONE 2026-08-31 — THE IMPORTER'S DIRECTORY WAS RE-DERIVED PER SPECIFIER,
   AND THE ISOLATED PROBE OVER-READ ITS OWN PRIZE BY 3x.** `resolve` read `importerPath` for
