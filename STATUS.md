@@ -1,5 +1,37 @@
 # Status
 
+**(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
+SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
+`xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one
+`XtscSession` per `tsconfig.json`, **each owning its own single-thread executor**, so a
+monorepo with N configs runs **N compiler threads in one JVM**. That is a shape no fixture,
+profile or corpus baseline here produces, and the one every process-global cache implicitly
+assumes away. `RealLibSnapshots.parseCache` was a plain `HashMap` mutated in place, and its
+KDoc's stated mitigation (`prewarmParsedLibFiles`) covers `--workers` inside ONE compile and
+says nothing about two independent sessions — and (INC.63)/(INC.65) had just added two more
+such maps. All three now publish **copy-on-write behind `@Volatile`**.
+**WHAT IT BUYS, PRECISELY:** a lost race still costs a RECOMPUTATION, and always did, since
+`getOrPut` on a `HashMap` is not atomic either; what this removes is the CORRUPTION. **And
+the duplicate is harmless for the mirror of round 471's reason** — the identity sets these
+feed compare `Node`s STRUCTURALLY, so two parses of the same lib text are interchangeable to
+every consumer. `ModuleResolver`'s (INC.65) memo needs none of it: per instance, per build.
+**THE FIRST DRAFT OF THE PIN BROKE TWO OF CLAUDE.md's OWN RULES AND ONLY RUNNING IT SAID SO**
+— it put a `Map<String, SourceFile>` inside `assert(...)`, so power-assert rendered the AST
+and the failure arrived as an **`OutOfMemoryError` in the diagram builder** with the real
+cause masked; and it compared two reads by IDENTITY, which assumes a quiescent process, so
+it passed in isolation and failed in the full suite. **A pin's ENVIRONMENT is part of its
+specification.**
+**GATES.** Suite **16,542 / 0 / 3**; `cost_gate.py` exit 0; `huge_methods.py --fail-over 0`
+clean; 8-profile grid `added=0 removed=0` on all eight; ablation e1 reddens exactly the
+publication pin.
+**WHAT ELSE THE PLUGIN REVIEW SHOWED:** it already does what this arc assumed a host would —
+`updateFile` for unsaved buffers, `diagnosticsOf` for the file ON SCREEN ONLY, one thread per
+project, and (INC.55)'s cancellation wired to `ProcessCanceledException`. Its `configPath`
+argument is load-bearing and non-obvious: without it a malformed `tsconfig.json` shows a
+clean editor over a program checked with default options. It is also the host that could make
+(INC.56)'s promise — but it invalidates on `VFS_CHANGES` rather than owning the read, so the
+promise is expressible and not yet made.
+
 **(INC.65) — THE CRAWL RE-ASKED THE FILESYSTEM A QUESTION IT HAD ALREADY ANSWERED, AND THE
 SESSION'S FLOOR IS 241 -> 151 / 256 -> 116 ms (2026-08-30).** The previous round named "a
 PARTITION question and a HOST PROMISE" as all that was left; that was wrong within the hour,
@@ -148,32 +180,3 @@ of contradicting it. **GATES.** Suite **16,523 / 0 / 3** (+4, exactly the new pi
 8-profile grid `added=0 removed=0` on all eight, run deliberately because this is the
 checker's name-resolution substrate. **SUCCESSOR (INC.62): re-take the floor on a `dom`
 fixture before opening any of its rows, and treat that as the default shape from here.**
-
-**(CFG.1) — A PROJECT THAT HAS EVER BEEN BUILT READ ITS OWN OUTPUT BACK IN, AND THE
-CORPUS CANNOT CONTAIN A DIRECTORY (2026-08-30, found by (INC.60) on the way past).**
-tsc's rule for an ABSENT `exclude` is `excludeSpecs = filter([outDir, declarationDir],
-d => !!d)` (`commandLineParser.ts`); the package folders are not `exclude` entries there
-at all but are pruned from every wildcard match by the matcher — which is what
-`ProjectCompiler`'s own walk already does by basename. **We had the redundant half and
-not the load-bearing one.** Measured against tsgo 7.0.2 on a two-file project with
-`outDir: "dist"` and the artifacts a previous `--declaration` build leaves behind:
-**tsgo's program is 1 file and ours was 2** — `dist` matches the default everything-include
-and a `.d.ts` is a root extension — so such a project crawled, read, parsed, bound and
-checked its own emitted tree **on every keystroke**, which is the incremental floor the
-(INC.\*) arc has been paying down. After the fix the CLI answers `1 root, 1 in program`,
-i.e. tsgo's own. An EXPLICIT `exclude` still REPLACES the default, as in tsc — pinned,
-because that is the direction a "just add outDir to the defaults" implementation gets
-wrong, and it is ablation arm b2. **THE DIAGNOSTIC HALF IS REAL IN tsc AND UNOBSERVABLE
-HERE, WHICH IS ITSELF THE FINDING**: forced in, tsgo answers TS2451 twice for a duplicated
-`declare const` and TS5011 for the moved common source directory, and **we report
-neither** — so a defect that changed the PROGRAM ITSELF was invisible to every diagnostic
-channel in this repo and the only observable left was a file COUNT. A value pin asserting
-those codes stay absent **stayed green under the ablation that removes the whole fix** and
-was deleted rather than kept (round 808). Both gaps filed as **(CHK.74)** and **(CFG.2)**.
-**NOTHING HERE COULD SEE THE DEFECT EITHER**: the generated corpus materialises no
-directory, and all eight dashboard profiles scope `include` to a `src` subtree under which
-`dist` never matched — the grid is a CONTROL and reads `added=0 removed=0` on all eight,
-as predicted before it ran. Only a `-project` fixture through `ProjectCompiler` and a
-`Vfs` expresses it, the same instrument (CHK.29) needed and for the same reason.
-**GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
-`huge_methods.py --fail-over 0` clean; 8-profile grid clean.

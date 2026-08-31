@@ -1,5 +1,34 @@
 
 
+**(CFG.1) — A PROJECT THAT HAS EVER BEEN BUILT READ ITS OWN OUTPUT BACK IN, AND THE
+CORPUS CANNOT CONTAIN A DIRECTORY (2026-08-30, found by (INC.60) on the way past).**
+tsc's rule for an ABSENT `exclude` is `excludeSpecs = filter([outDir, declarationDir],
+d => !!d)` (`commandLineParser.ts`); the package folders are not `exclude` entries there
+at all but are pruned from every wildcard match by the matcher — which is what
+`ProjectCompiler`'s own walk already does by basename. **We had the redundant half and
+not the load-bearing one.** Measured against tsgo 7.0.2 on a two-file project with
+`outDir: "dist"` and the artifacts a previous `--declaration` build leaves behind:
+**tsgo's program is 1 file and ours was 2** — `dist` matches the default everything-include
+and a `.d.ts` is a root extension — so such a project crawled, read, parsed, bound and
+checked its own emitted tree **on every keystroke**, which is the incremental floor the
+(INC.\*) arc has been paying down. After the fix the CLI answers `1 root, 1 in program`,
+i.e. tsgo's own. An EXPLICIT `exclude` still REPLACES the default, as in tsc — pinned,
+because that is the direction a "just add outDir to the defaults" implementation gets
+wrong, and it is ablation arm b2. **THE DIAGNOSTIC HALF IS REAL IN tsc AND UNOBSERVABLE
+HERE, WHICH IS ITSELF THE FINDING**: forced in, tsgo answers TS2451 twice for a duplicated
+`declare const` and TS5011 for the moved common source directory, and **we report
+neither** — so a defect that changed the PROGRAM ITSELF was invisible to every diagnostic
+channel in this repo and the only observable left was a file COUNT. A value pin asserting
+those codes stay absent **stayed green under the ablation that removes the whole fix** and
+was deleted rather than kept (round 808). Both gaps filed as **(CHK.74)** and **(CFG.2)**.
+**NOTHING HERE COULD SEE THE DEFECT EITHER**: the generated corpus materialises no
+directory, and all eight dashboard profiles scope `include` to a `src` subtree under which
+`dist` never matched — the grid is a CONTROL and reads `added=0 removed=0` on all eight,
+as predicted before it ran. Only a `-project` fixture through `ProjectCompiler` and a
+`Vfs` expresses it, the same instrument (CHK.29) needed and for the same reason.
+**GATES.** Suite **16,519 / 0 / 3**; `cost_gate.py` exit 0 with every counter unchanged;
+`huge_methods.py --fail-over 0` clean; 8-profile grid clean.
+
 **(INC.60) — THE INCREMENTAL FLOOR'S THIRD ROW WAS A QUESTION ASKED TWICE PER ENTRY, AND
 THE SECOND ASK COST FIVE SYSCALLS (2026-08-30).** `FrontEnd.CONFIG` — tsconfig load,
 `@types` acquisition and the root-file glob — is what an editor pays on every keystroke,

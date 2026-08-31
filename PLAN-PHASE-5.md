@@ -20,6 +20,59 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.67) — reading the PLUGIN found a defect the queue could not, and it was one this session had widened
+
+**THE INSTRUMENT WAS THE CONSUMER'S SOURCE, NOT A PROFILE.** `xemantic/xtsc-intellij-plugin`
+is the first real host of the `Project` API, and its `XtscService` keeps a
+`ConcurrentHashMap` of one `XtscSession` per `tsconfig.json`, **each owning its own
+single-thread executor**. So a monorepo with N configs runs **N compiler threads in one
+JVM** — a shape no fixture, profile or corpus baseline in this repo produces, and the one
+every process-global cache here is implicitly assuming away.
+
+`RealLibSnapshots.parseCache` was a plain `HashMap` mutated in place, and its KDoc already
+said "not thread-safe" with `prewarmParsedLibFiles` as the mitigation — **which covers
+`--workers` inside ONE compile and says nothing about two independent sessions.** (INC.63)
+and (INC.65) then added two more such maps, so this round is partly cleaning up a hazard
+the same session widened. All three now publish **copy-on-write behind `@Volatile`**: a
+reader sees the old complete map or the new complete one, never a half-written table.
+
+**WHAT THE FIX DOES AND DOES NOT BUY, stated precisely.** A lost race still costs a
+RECOMPUTATION — and always did, because `getOrPut` on a `HashMap` is not atomic either, so
+two threads could already both parse the same lib file. What copy-on-write removes is the
+CORRUPTION. **And the duplicate is harmless for a reason that is worth writing down,
+because it is the mirror of round 471's cost**: the identity sets these feed compare
+`Node`s STRUCTURALLY (they are data classes), so two parses of the same lib text are
+interchangeable to every consumer. The data-class equality that makes those sets expensive
+is what makes this race benign. `ModuleResolver`'s own (INC.65) memo needs none of it — it
+is per INSTANCE, i.e. per build.
+
+**THE FIRST DRAFT OF THE PIN BROKE TWO OF CLAUDE.md's OWN RULES AND ONLY RUNNING IT SAID
+SO.** It put the cache MAP inside `assert(...)`, and these maps hold `SourceFile`s — so
+power-assert rendered the AST on failure and the result arrived as an **`OutOfMemoryError`
+in the diagram builder**, with the real cause masked; that is the documented
+"never put a SourceFile subexpression in a power-assert assertion" trap, met head-on. And
+it compared two successive reads by IDENTITY, which assumes a quiescent process — the suite
+publishes into these maps from elsewhere, so the pin passed in isolation and failed in the
+full run. **Both failures are the same lesson: a pin's ENVIRONMENT is part of its
+specification.** Rewritten as booleans computed into locals, over the property
+copy-on-write actually promises (a map already handed out never grows), which is
+quiescence-independent by construction.
+
+**GATES.** Suite **16,542 / 0 / 3**; `cost_gate.py` exit 0; `huge_methods.py --fail-over 0`
+clean; 8-profile grid `added=0 removed=0` on all eight. Ablation e1 restores in-place
+mutation and reddens exactly the publication pin.
+
+**WHAT ELSE THE PLUGIN REVIEW SHOWED, for whoever opens (INC.56).** The plugin already
+does the things this arc assumed a host would: it pushes editor buffers with
+`updateFile` and never touches disk, asks `diagnosticsOf(listOf(file, configPath))` for the
+file ON SCREEN ONLY, guards the compiler behind a single thread per project with a 50 ms
+poll, and wires `ProcessCanceledException` to (INC.55)'s cancellation. **Its `configPath`
+argument is load-bearing and non-obvious** — `diagnosticsOf` answers only about the files it
+is asked about, so without it a malformed `tsconfig.json` would show a clean editor over a
+program checked with default options. It is also the host that can make (INC.56)'s promise,
+since the IDE's VFS is authoritative — but note it invalidates on `VFS_CHANGES` events
+rather than owning the read, so the promise is expressible and is not yet made.
+
 ### Round (INC.65) — the crawl re-asked the filesystem a question it had already answered, and the split is what found it
 
 **THE PREVIOUS ROUND NAMED "a PARTITION question and a HOST PROMISE" AS ALL THAT WAS LEFT.
