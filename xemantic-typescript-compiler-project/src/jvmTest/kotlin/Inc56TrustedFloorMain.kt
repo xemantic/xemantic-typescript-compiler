@@ -25,7 +25,9 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.FrontEnd
+import com.xemantic.typescript.compiler.PassTiming
 import java.io.File
 
 /**
@@ -134,5 +136,25 @@ fun main(args: Array<String>) {
         println("FEROW $arm ${lastRows[i]} ${lastCalls[i]} ${FrontEnd.names[i].trim()}")
     }
     println("RESIDENT $arm ${project.residentReadCount}")
+
+    // (INC.77) The per-PASS table at the `rows` tier, for ONE query, so the init-block
+    // dispatch block can be compared against the sum of what its passes account for.
+    // Deliberately a SEPARATE draw from the FrontEnd ones above: the two probes are not
+    // free of each other, and what is wanted here is the RATIO inside one draw, not a
+    // cross-probe subtraction.
+    PassTiming.reset()
+    PassTiming.detail = false
+    PassTiming.spineDetail = false
+    PassTiming.enabled = true
+    query(2000)
+    PassTiming.enabled = false
+    // (INC.77) (INC.16)'s GO/NO-GO question for the largest row: how many FILES does the
+    // partition-scoped pass actually build, and how many are built lazily afterwards?
+    println("FLTM $arm eagerBuilds=${FltmDefer.eagerBuilds} lazyBuilds=${FltmDefer.lazyBuilds}")
+    val passSum = PassTiming.passNanos.values.sum()
+    println("PT $arm initNanos=${PassTiming.checkerInitNanos} passSum=$passSum rows=${PassTiming.passNanos.size}")
+    for ((name, nanos) in PassTiming.passNanos.entries.sortedByDescending { it.value }.take(15)) {
+        println("PTROW $arm $nanos ${PassTiming.passCalls[name] ?: 0} $name")
+    }
     project.close()
 }

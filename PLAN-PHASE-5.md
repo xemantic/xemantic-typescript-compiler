@@ -2363,8 +2363,21 @@ a residue no sub-row named.**
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
 
-- [ ] **(INC.77) WHAT IS LEFT IN THE PER-KEYSTROKE QUERY AFTER (INC.56)/(INC.76)
-  (2026-08-31).** Trusted query ~123-125 ms on the 2,401-file `dom` fixture. Rows:
+- [ ] **(INC.77) WHAT IS LEFT IN THE PER-KEYSTROKE QUERY AFTER (INC.56)/(INC.76), MEASURED —
+  AND THE LARGEST ROW IS REFUSED WITH ITS REASON (2026-08-31).**
+  **THE 25 ms "UNATTRIBUTED BLOCK" I EXPECTED DOES NOT EXIST**: the passes account for
+  **97%** of the init block (`initNanos` 43.1 vs `passSum` 41.7 ms over 418 rows). The ~22 ms
+  pass table I had compared against came from a FLOOR build, where most passes are gated; a
+  query that CHECKS a file runs more of them. **Read a pass table from the same REGIME as the
+  block you are comparing it to** — (INC.9)'s law on a third axis.
+  **AND THE LARGEST ROW IS NOT A LEVER.** `init:buildFileLocalTypeMaps` is **14.9 ms, 34% of
+  the init block and ~12% of the whole query** — and (INC.16)'s go/no-go counter says
+  `eagerBuilds=1, lazyBuilds=0`: it builds exactly ONE file's map, the partition's. So the
+  14.9 ms is the build's FIRST REAL TYPE RESOLUTION — on the `dom` fixture that is the lib
+  being touched, which (INC.61) priced — attributed to this pass because it is the first
+  asker. CLAUDE.md's "a memo hides its miss cost from every section probe": deferring it
+  MOVES the cost, which (INC.10)/(INC.11) already measured from the other direction.
+  **DO NOT RE-OPEN IT FROM ITS SIZE.** Trusted query ~123-125 ms on the 2,401-file `dom` fixture. Rows:
   **init-block pass dispatch 46.9 ms (still half of it)** — (INC.7)'s partition question one
   walker at a time, and the per-pass table is only ~22 ms of it, so most of that block is
   still unattributed; **crawl 18.9**, of which sequential specifier resolution ~11.1 (its
@@ -2376,6 +2389,20 @@ a residue no sub-row named.**
   and most candidates could be refused by a cheaper prefix/extension test first; **bind 7.0**.
   Measure before building: (INC.76)'s standalone-vs-in-build comparison is the instrument that
   has now worked twice.
+  **RE-MEASURED AFTER (INC.76), trusted arm, ~118-124 ms total:** init-block dispatch **37.5**
+  (of which fltm 14.9, refused above; the rest is ~417 rows headed by the whole-program
+  `check*` walkers (INC.74) lists — `checkSpreadNonIterableIntoFixedArity` 2.22,
+  `checkCircularGenericCallbackVariables` 1.53, `checkCrossFileUseBeforeDeclaration` 1.50,
+  `checkModulePreserve4Pin` 1.35, `populateAmbientCyclicBaseClasses` 0.98,
+  `checkReverseMappedInferableArrows` 0.66 — **~10 ms between them, and that is now the
+  largest coherent pool left**); crawl **19.6** (resolve 11.5, flow residue ~6); glob **15.3**
+  (`listEntries` 8.0, regex match ~5); bind **8.0**; post ~6.
+  **TWO OF THOSE ARE REFUSED ON ARITHMETIC RATHER THAN LEFT OPEN.** The glob's `listEntries`
+  residue is **~4.4 ms of irreducible `stat`s** (2,451 entries, one each — Java exposes no
+  `d_type`, so 1 syscall per entry is the floor; `GlobListProbeMain` measures the split), and
+  `ModuleResolver.resolve`'s 11.5 ms is ~2,351 real resolutions at one `exists` each
+  ((INC.73)(a)) plus per-call path arithmetic — its one visible allocation, a `setOf(…)` built
+  per call in `resolveAsFile`, is ~0.35 ms at round 912's bar and does not clear it.
 
 - [ ] **(INC.75) THE PLUGIN CAN TAKE (INC.56) AND (INC.55) TODAY, AND READING IT SAYS WHAT
   ELSE IS STALE (2026-08-31, from `xemantic/xtsc-intellij-plugin` @ HEAD — (INC.67)'s method,
