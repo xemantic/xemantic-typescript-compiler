@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler.project
 
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.Vfs
+import com.xemantic.typescript.compiler.VfsEntry
 
 /**
  * An in-memory [Vfs] for deterministic tests, so nothing here touches a real
@@ -130,7 +131,10 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
 
     override fun exists(path: String): Boolean = delegate.exists(path)
 
-    override fun isDirectory(path: String): Boolean = delegate.isDirectory(path)
+    override fun isDirectory(path: String): Boolean {
+        isDirectoryCalls++
+        return delegate.isDirectory(path)
+    }
 
     override fun readText(path: String): String? {
         reads++
@@ -146,6 +150,29 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
     override fun list(path: String): List<String> {
         lists++
         return delegate.list(path)
+    }
+
+    /**
+     * (INC.76) How many times [isDirectory] reached this — the instrument for "did the
+     * layer above ask its kind question per ENTRY, or take it from the listing".
+     */
+    var isDirectoryCalls: Int = 0
+        private set
+
+    /** How many times [listEntries] reached this. */
+    var listEntriesCalls: Int = 0
+        private set
+
+    /**
+     * (INC.76) OVERRIDDEN, and that is not tidiness: `Vfs.listEntries`'s default body is
+     * `list(path).map { VfsEntry(it, isDirectory(it)) }`, so a counting Vfs that does not
+     * override it reports its own default's calls rather than the delegate's — CLAUDE.md
+     * says so in as many words, and a pin about who asks `isDirectory` would be vacuous
+     * against every binary without this.
+     */
+    override fun listEntries(path: String): List<VfsEntry> {
+        listEntriesCalls++
+        return delegate.listEntries(path)
     }
 
     override fun resolveAbsolute(path: String): String = delegate.resolveAbsolute(path)

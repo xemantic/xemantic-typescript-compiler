@@ -20,6 +20,80 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.76) — the language service was paying (INC.60)'s defect in full, through a wrapper that did not override
+
+**A WRAPPING `Vfs` THAT DOES NOT OVERRIDE `listEntries` INHERITS THE INTERFACE DEFAULT —
+`list(path).map { VfsEntry(it, isDirectory(it)) }` — AND FOR `OverlayVfs` THAT `isDirectory`
+IS `SystemVfs`'s, i.e. kotlinx-io's `metadataOrNull`, WHICH (INC.60) MEASURED AT UP TO **FIVE
+`stat` SYSCALLS PER ENTRY**. `OverlayVfs` IS ON THE SHIPPED PATH OF EVERY `Project` BUILD, SO
+THE WHOLE OF (INC.60)'s SAVING WAS HANDED BACK ON EVERY KEYSTROKE — SILENTLY, BECAUSE THE
+ANSWERS ARE IDENTICAL.** CLAUDE.md states this trap for a COUNTING Vfs written in a test; it
+is the same trap on the language service's own path, and it cost 11 ms of every query.
+
+**MEASURED STANDALONE FIRST, over the same 50 directories / 2,451 entries the build walks**
+(`GlobListProbeMain`, ABBA-rotated arms, each a strict superset of the one above it so the
+DIFFERENCES attribute the row):
+
+| arm | median | per entry |
+| --- | --- | --- |
+| `File.listFiles()` alone | 1.39 ms | 568 ns |
+| + `isDirectory` per entry | 5.49 ms | 2,239 ns |
+| + `child.path` | 5.40 ms | 2,203 ns |
+| + `PathUtil.normalize` (= `systemListEntries`) | 6.00 ms | 2,450 ns |
+| `SystemVfs.listEntries` + sort | **6.34 ms** | 2,585 ns |
+| the interface DEFAULT body | 18.10 ms | 7,384 ns |
+| `OverlayVfs.listEntries` + sort (SHIPPED) | **19.54 ms** | 7,973 ns |
+
+**19.5 against 6.3 — and 19.5 is what the build's own `vfs.listEntries + sort` row read
+(20.7 ms), to within noise. That match is what turned a 3x gap between a probe and a row into
+a diagnosis rather than a mystery.**
+
+**LANDED**, and it costs NO PROMISE — unlike (INC.56) it is a pure code fix, so BOTH arms
+gain: `vfs.listEntries + sort` **20.70 -> 9.73 ms**, the whole `config load + @types + root
+glob` row **28.14 -> 18.44 ms**, and the per-keystroke query medians **153/145 -> 123/125 ms**
+trusted and **156/162 -> 140/138** untrusted.
+
+**THE PINS ARE A DIFFERENTIAL AND NEED NO BASELINE.** The override must answer exactly what
+the default body answers, and the default body is two other public members of the same object
+— so each case asserts `listEntries(d) == list(d).map { VfsEntry(it, isDirectory(it)) }` as a
+set. That matters because a divergence here is silent in the dangerous direction: a wrong
+kind drops a file from the program or adopts a directory as a root, and (CFG.1) records that
+this repo has no diagnostic channel that notices. Cases: plain, an overlay-added file, an
+overlay-added file in a directory that exists ONLY in the overlay, a tombstone, a
+not-a-directory path, and the one asymmetry an obvious implementation gets wrong — **an
+on-disk FILE the overlay has given children reports as a DIRECTORY**, because `isDirectory` is
+`delegate.isDirectory(n) || hasOverlayChildren(n)`.
+
+**AND THE COST PIN HAD TO BE RESTATED AS A COMPLEXITY CLAIM.** `isDirectoryCalls == 0` after a
+build is FALSE and correctly so — a build legitimately asks about specific PATHS (resolving
+the project argument to a `tsconfig.json`, module resolution probing directory candidates).
+What must not happen is one question per ENTRY, and only two program sizes can say so: the
+count is a CONSTANT across 4 and 64 files here and grows by the entry count under the default
+body, which is the control. (INC.57)'s law for a complexity claim.
+
+**`CountingVfs` HAD THE SAME OMISSION**, so it is fixed in the same commit: a counting Vfs
+without the override reports its OWN default's calls rather than the delegate's, which is
+exactly what CLAUDE.md warns makes such a pin vacuous. An audit of every `Vfs` implementor in
+the repo found no third case — `TsBuildInfo.RecordingVfs` uses `Vfs by delegate`, which
+forwards the member, and the two `InMemoryVfs` are leaf implementations where the default body
+is free.
+
+**THE TRANSFERABLE HALF: A DEFAULTED INTERFACE MEMBER ADDED FOR SPEED IS A SILENT REGRESSION
+WAITING FOR THE NEXT WRAPPER.** (INC.60) shipped the fix and the wrapper that undid it was
+already in the tree; nothing could see it, because the two paths agree on every answer and
+differ only in syscalls. The instrument that found it is (INC.65)'s: a row measured
+STANDALONE against the same row measured IN THE BUILD, with the gap treated as a fact to
+explain rather than as noise.
+
+**GATES.** Suite unchanged bar the new pins; `cost_gate.py` and `huge_methods.py` are CONTROLS
+here — the change is in `-project` and the CLI's `SystemVfs` already had the override.
+
+**SUCCESSOR.** The glob row is now **18.4 ms**, of which the residue after `listEntries` is
+~6.8 ms of `include/exclude regex match` over 2,401 candidates (2.8 us each — a compiled
+`Regex` per include pattern per file, and the patterns are constant). The crawl is 18.9 with
+~11 of it sequential specifier resolution. And the init-block pass dispatch is **46.9 ms**,
+still half the query.
+
 ### Round (INC.56) — the host can skip the re-read, and the row it was aimed at was a LOCATION
 
 **THE LANDING, IN TWO OPT-IN HALVES, BOTH IN THE EMBEDDING API.** `Project.trustFilesystem`
@@ -2272,6 +2346,36 @@ a residue no sub-row named.**
   **The instrument is the one this session used three times**: two program sizes, the row
   divided by file count. **Do not assume it is the glob** — (INC.53) and (INC.59) were
   both found by splitting a row that a plausible story had already explained.
+
+- [x] **(INC.76) DONE 2026-08-31 — the language service was paying (INC.60)'s defect in full.**
+  `OverlayVfs` did not override `Vfs.listEntries`, so every `Project` build got the interface
+  DEFAULT body back — `list(path).map { VfsEntry(it, isDirectory(it)) }` — and that
+  `isDirectory` is kotlinx-io's `metadataOrNull`, up to FIVE `stat`s per entry. Standalone
+  over the build's own 50 directories / 2,451 entries: **6.34 ms taking the kinds from the
+  delegate's listing against 19.54 ms asking per entry**, and 19.5 is what the build's row
+  read. Landed: `vfs.listEntries + sort` **20.70 -> 9.73 ms**, the glob row **28.14 -> 18.44**,
+  the per-keystroke query **153/145 -> 123/125 ms** trusted and **156/162 -> 140/138**
+  untrusted — it costs NO promise, so both arms gain. Pins are a DIFFERENTIAL against the
+  default body (a wrong kind drops a file from the program and (CFG.1) says nothing notices);
+  the cost pin had to be a complexity claim at two program sizes, because a build legitimately
+  asks `isDirectory` about specific PATHS. `CountingVfs` had the same omission and is fixed
+  with it. **TRANSFERABLE: a defaulted interface member added for speed is a silent regression
+  waiting for the next wrapper**, and the instrument that finds it is a row measured
+  STANDALONE against the same row measured IN THE BUILD.
+
+- [ ] **(INC.77) WHAT IS LEFT IN THE PER-KEYSTROKE QUERY AFTER (INC.56)/(INC.76)
+  (2026-08-31).** Trusted query ~123-125 ms on the 2,401-file `dom` fixture. Rows:
+  **init-block pass dispatch 46.9 ms (still half of it)** — (INC.7)'s partition question one
+  walker at a time, and the per-pass table is only ~22 ms of it, so most of that block is
+  still unattributed; **crawl 18.9**, of which sequential specifier resolution ~11.1 (its
+  syscall half refused by (INC.73)(a), the non-syscall remainder of 4,701 calls unexamined)
+  and a ~6 ms concurrent residue that is now the `flatMapMerge` machinery itself with no IO
+  left in it — (INC.64)'s question one hop later; **root-file glob 18.4**, of which
+  `include/exclude regex match` is **6.8 ms over 2,401 candidates (2.8 us each)** — a
+  compiled `Regex.matches` per include pattern per candidate, where the patterns are constant
+  and most candidates could be refused by a cheaper prefix/extension test first; **bind 7.0**.
+  Measure before building: (INC.76)'s standalone-vs-in-build comparison is the instrument that
+  has now worked twice.
 
 - [ ] **(INC.75) THE PLUGIN CAN TAKE (INC.56) AND (INC.55) TODAY, AND READING IT SAYS WHAT
   ELSE IS STALE (2026-08-31, from `xemantic/xtsc-intellij-plugin` @ HEAD — (INC.67)'s method,

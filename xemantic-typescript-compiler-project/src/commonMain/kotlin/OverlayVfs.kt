@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler.project
 
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.Vfs
+import com.xemantic.typescript.compiler.VfsEntry
 
 /**
  * A [Vfs] that answers from an in-memory overlay first and falls through to
@@ -391,6 +392,67 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
         }
         return children.sorted()
     }
+
+    /**
+     * (INC.76) [list]'s answer with each entry's kind, taken from the DELEGATE'S OWN
+     * listing rather than by asking [isDirectory] per entry.
+     *
+     * ## Why this override is not optional
+     *
+     * `Vfs.listEntries`'s default body is `list(path).map { VfsEntry(it, isDirectory(it)) }`,
+     * and this class's [isDirectory] goes to `SystemVfs.isDirectory`, which is kotlinx-io's
+     * `metadataOrNull` — **up to FIVE `stat` syscalls to answer one boolean**. That is the
+     * exact cost (INC.60) removed from the root-file glob by giving [Vfs] this member and
+     * overriding it in `SystemVfs`; a WRAPPING Vfs that does not override it hands the
+     * whole saving straight back, silently, and this one is on the shipped path of every
+     * `Project` build. Measured over 50 directories / 2,451 entries of an
+     * application-shaped project: the delegate's own listing plus a sort is **6.3 ms**
+     * and the inherited default is **19.5 ms** (8.0 us per entry against 2.6), which
+     * matched the language service's `vfs.listEntries + sort` row to within noise.
+     *
+     * CLAUDE.md states the trap for a counting Vfs written in a test. It is the same trap
+     * here and it costs 13 ms of every keystroke.
+     *
+     * ## Equivalent to the default body, which is what the pin asserts
+     *
+     * Same entry SET as [list] — the delegate's children minus tombstones, plus the
+     * overlay's own immediate children — and the same KIND for each, including the two
+     * cases only the overlay can produce: a directory that exists nowhere but in the
+     * overlay (it is on the way to an overlaid file), and a delegate entry that the
+     * overlay has given children to. `ProjectCompiler.walk` sorts what it gets, and
+     * [Vfs.listEntries] promises no order, so this does not sort — exactly as
+     * `SystemVfs` does not.
+     */
+    override fun listEntries(path: String): List<VfsEntry> {
+        val dir = key(path)
+        val prefix = if (dir == "/") "/" else "$dir/"
+        // The overlay's immediate contributions to this directory, computed ONCE: asking
+        // [hasOverlayChildren] per entry would be a scan of the whole overlay per entry.
+        val overlayFiles = HashSet<String>()
+        val overlayDirs = HashSet<String>()
+        for (k in contents.keys) {
+            if (k.length <= prefix.length || !k.startsWith(prefix)) continue
+            val rest = k.substring(prefix.length)
+            val slash = rest.indexOf('/')
+            if (slash < 0) overlayFiles.add(k) else overlayDirs.add(prefix + rest.substring(0, slash))
+        }
+        val out = ArrayList<VfsEntry>()
+        val seen = HashSet<String>()
+        for (entry in delegate.listEntries(dir)) {
+            val n = PathUtil.normalize(entry.path)
+            if (n in deleted || !seen.add(n)) continue
+            // `isDirectory` is `delegate.isDirectory(n) || hasOverlayChildren(n)`, so an
+            // on-disk FILE the overlay has put children under is a directory here too.
+            out.add(if (entry.isDirectory || n in overlayDirs) VfsEntry(n, true) else entry.withPath(n))
+        }
+        for (f in overlayFiles) if (seen.add(f)) out.add(VfsEntry(f, f in overlayDirs))
+        for (d in overlayDirs) if (seen.add(d)) out.add(VfsEntry(d, true))
+        return out
+    }
+
+    /** [entry] itself when its path is already normalized, else an equal entry that is. */
+    private fun VfsEntry.withPath(normalized: String): VfsEntry =
+        if (path == normalized) this else VfsEntry(normalized, isDirectory)
 
     override fun resolveAbsolute(path: String): String = delegate.resolveAbsolute(path)
 }

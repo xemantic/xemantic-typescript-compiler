@@ -30,6 +30,39 @@ rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a
 `added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
 materialises no directory and cannot reach the resolver's path arithmetic.
 
+**(INC.70) — EVERY BUILD ALLOCATED A NAME-RESOLUTION TABLE FOR EVERY FILE, AND A FLOOR BUILD
+READS NONE OF THEM (2026-08-31).** `init:buildPerFileScopes` allocated two maps per program
+file, copied that file's own top-level locals into one and precomputed a
+`LayeredSymbolTable`'s shadow list — for EVERY file, on EVERY build, whether or not a name was
+ever resolved there. **THE POPULATION WAS MEASURED BEFORE ANY TIMING, per (INC.16):
+`perFileScopeBuilds` is 2,401 -> 0 on a floor build of the 2,401-file fixture and 2,401 ->
+2,401 on a full one.** Not "fewer" — none.
+**WHAT MAKES THE DEFERRAL EXACT IS AN INIT-ORDER FACT NEITHER FUNCTION STATES**: the eager
+loop SNAPSHOTTED `result.locals` precisely to survive a later mutation, and the checker's ONE
+writer of a `BinderResult.locals` is `collectModuleAugmentations`, dispatched at an EARLIER
+init step — so the two snapshots are the same table. A writer scheduled after this pass would
+make the eager and lazy answers disagree silently.
+**MEASURED:** row **4.625 -> 0.750 ms** (second instrumented draw), whole init block
+39.34 -> 36.38; ABBA-rotated floor **median-of-medians 160.0 -> 136.5 ms (-14.7%)**, four
+process medians DISJOINT. **The wall delta is larger than the row explains (~4 of ~23 ms) and
+the surplus is recorded as UNATTRIBUTED, not claimed** — the eager form also retained ~4,800
+maps per build, which is a plausible mechanism and not a measured one (round 801).
+**THE VALUE HALF IS A MEASUREMENT, NOT AN ASSUMPTION:** ablation b2 (never build a scope)
+reddens **503** core-suite tests.
+**AND THE THIRD ARM IS RECORDED AS BLIND, which is the round's second finding:** b3 (never
+STORE the built scope) reads 0 RED even after the fixture was strengthened, because
+`perFileScopeOf`'s one-entry IDENTITY memo absorbs every repeated ask for the same file — so
+the map's memoization is pinned by nothing here, and the reason is a second cache one layer
+up. Likewise the value pins do not discriminate `perFileScope`'s presence at all: under b2 the
+module-local leak is STILL TS2304, because `moduleOnlyGlobalNames` decides that upstream.
+**GATES.** Suite **16,559 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0` — COVERAGE here, since
+an absent scope makes `perFileScopeOf` answer null and every consumer falls back to the merged
+`globals`, i.e. a name resolving to a FOREIGN module's local.
+**HARNESS TRAP WORTH THE LINE:** a cross-binary A/B runner may read no census counter that
+does not exist in BOTH arms — the older arm dies with `NoSuchMethodError` and the batch prints
+one arm's medians as if they were both.
+
 **(INC.69) — THE INIT-BLOCK DISPATCH IS NOT FLAT, AND A PLATEAU IS A SHARED PER-FILE COST
 (2026-08-31).** (INC.66) recorded the ~400-pass table as FLAT, "so there is no row to make
 cheaper"; a HISTOGRAM rather than a top-N list refutes it — on `many-small-2400-dom` the

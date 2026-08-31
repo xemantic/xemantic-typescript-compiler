@@ -1,5 +1,27 @@
 # Status
 
+**(INC.76) — THE LANGUAGE SERVICE WAS PAYING (INC.60)'s DEFECT IN FULL, THROUGH A WRAPPER THAT
+DID NOT OVERRIDE (2026-08-31).** `Vfs.listEntries`'s default body is
+`list(path).map { VfsEntry(it, isDirectory(it)) }`, and (INC.60) added that member precisely
+because asking the kind per entry is kotlinx-io's `metadataOrNull` — **up to FIVE `stat`s**.
+`OverlayVfs` never overrode it, so **every `Project` build handed the whole saving back**,
+silently, since the answers are identical either way.
+**MEASURED STANDALONE over the build's own 50 directories / 2,451 entries: 6.34 ms taking the
+kinds from the delegate's listing against 19.54 ms asking per entry — and 19.5 is what the
+build's `vfs.listEntries + sort` row read.** That match turned a 3x probe-vs-row gap into a
+diagnosis. **LANDED, and it costs NO promise, so both arms gain**: that row **20.70 -> 9.73
+ms**, the whole root-file glob **28.14 -> 18.44**, the per-keystroke query **153/145 ->
+123/125 ms** trusted and **156/162 -> 140/138** untrusted.
+Pins are a DIFFERENTIAL against the default body — a wrong kind drops a file from the program
+or adopts a directory as a root, and (CFG.1) says nothing here notices — including the one
+asymmetry an obvious implementation gets wrong (an on-disk FILE the overlay has given children
+is a DIRECTORY). The cost pin had to be restated as a COMPLEXITY claim at two program sizes:
+`isDirectoryCalls == 0` is false and correctly so, because a build asks about specific PATHS.
+`CountingVfs` had the same omission and is fixed with it; an audit found no third case.
+**TRANSFERABLE: a defaulted interface member added for speed is a silent regression waiting
+for the next wrapper**, and the instrument is a row measured STANDALONE against the same row
+measured IN THE BUILD.
+
 **(INC.56) — AN IntelliJ-CLASS HOST CAN SKIP THE RE-READ, AND THE ROW IT WAS AIMED AT WAS A
 *LOCATION* (2026-08-31).** Two opt-in halves in the embedding API: `Project.trustFilesystem`
 (the host promises the bytes of a file will not change without this project being told —
@@ -126,37 +148,4 @@ floor WALL moved about **three times** what the pass table explains (-23.5 again
 which round 801 says is a plausible mechanism and not a measured one. Decompose BOTH arms with
 `--frontEnd` before opening another init row: either the surplus is outside the init block, or
 the `rows`-tier probe under-reports and every ranking taken from it needs re-reading.
-
-**(INC.70) — EVERY BUILD ALLOCATED A NAME-RESOLUTION TABLE FOR EVERY FILE, AND A FLOOR BUILD
-READS NONE OF THEM (2026-08-31).** `init:buildPerFileScopes` allocated two maps per program
-file, copied that file's own top-level locals into one and precomputed a
-`LayeredSymbolTable`'s shadow list — for EVERY file, on EVERY build, whether or not a name was
-ever resolved there. **THE POPULATION WAS MEASURED BEFORE ANY TIMING, per (INC.16):
-`perFileScopeBuilds` is 2,401 -> 0 on a floor build of the 2,401-file fixture and 2,401 ->
-2,401 on a full one.** Not "fewer" — none.
-**WHAT MAKES THE DEFERRAL EXACT IS AN INIT-ORDER FACT NEITHER FUNCTION STATES**: the eager
-loop SNAPSHOTTED `result.locals` precisely to survive a later mutation, and the checker's ONE
-writer of a `BinderResult.locals` is `collectModuleAugmentations`, dispatched at an EARLIER
-init step — so the two snapshots are the same table. A writer scheduled after this pass would
-make the eager and lazy answers disagree silently.
-**MEASURED:** row **4.625 -> 0.750 ms** (second instrumented draw), whole init block
-39.34 -> 36.38; ABBA-rotated floor **median-of-medians 160.0 -> 136.5 ms (-14.7%)**, four
-process medians DISJOINT. **The wall delta is larger than the row explains (~4 of ~23 ms) and
-the surplus is recorded as UNATTRIBUTED, not claimed** — the eager form also retained ~4,800
-maps per build, which is a plausible mechanism and not a measured one (round 801).
-**THE VALUE HALF IS A MEASUREMENT, NOT AN ASSUMPTION:** ablation b2 (never build a scope)
-reddens **503** core-suite tests.
-**AND THE THIRD ARM IS RECORDED AS BLIND, which is the round's second finding:** b3 (never
-STORE the built scope) reads 0 RED even after the fixture was strengthened, because
-`perFileScopeOf`'s one-entry IDENTITY memo absorbs every repeated ask for the same file — so
-the map's memoization is pinned by nothing here, and the reason is a second cache one layer
-up. Likewise the value pins do not discriminate `perFileScope`'s presence at all: under b2 the
-module-local leak is STILL TS2304, because `moduleOnlyGlobalNames` decides that upstream.
-**GATES.** Suite **16,559 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
-`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0` — COVERAGE here, since
-an absent scope makes `perFileScopeOf` answer null and every consumer falls back to the merged
-`globals`, i.e. a name resolving to a FOREIGN module's local.
-**HARNESS TRAP WORTH THE LINE:** a cross-binary A/B runner may read no census counter that
-does not exist in BOTH arms — the older arm dies with `NoSuchMethodError` and the batch prints
-one arm's medians as if they were both.
 
