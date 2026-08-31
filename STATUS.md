@@ -1,5 +1,37 @@
 # Status
 
+**(INC.68) — 80% OF THE PATHS THIS COMPILER NORMALIZES WERE ALREADY NORMALIZED, AND THE
+BLOCKED ARMS INVENTED A REGRESSION THAT ROTATION REMOVED (2026-08-31).** (INC.66) said
+"before pricing any row, check it has a SPLIT"; the row it named for re-decomposition —
+`config+glob`, the one floor row carrying no soundness promise — had a split already, and the
+cost was under it in a function neither row names. `PathUtil.normalize` is called once per
+directory entry by `systemListEntries` and once per candidate probe by `PathUtil.join`, and
+allocates ~10 objects each time. **THE CENSUS IS THE WHOLE ARGUMENT AND IT COST ONE COUNTER:
+11,935 calls per floor build, 9,584 (80.3%) returning the argument UNCHANGED** — not a
+property of the fixture, but of the callers (a child path built from an already-normalized
+parent; `"<normalized base>/<plain name>"`). So the fix is a one-pass allocation-free
+predicate and an early return: no cache, nothing to invalidate. **PRICED BY POPULATION
+BEFORE THE FLOOR WAS CONSULTED** ((INC.52)): 1.02-1.22 us/call against <=0.2, i.e. ~9 ms per
+floor build, which is what the rows returned. **ABBA-rotated, 4 processes/arm, 32 floor draws
+each:** `vfs.listEntries` 10.86 -> 7.76, specifier resolution 14.94 -> 10.66, crawl WALL
+39.51 -> 32.18, config+glob 17.96 -> 13.44, **floor median 127 -> 121 ms**.
+**THE LESSON OUTRANKS THE MILLISECONDS: the first, BLOCKED, paired run reported +2.70 ms on
+`include/exclude regex match` — a region that calls no `normalize` — reproducibly over 12
+draws per arm, and read config+glob as +3.39, i.e. it said the glob half was a net loss. Both
+signs INVERTED under rotation.** A per-arm draw count does not substitute for rotation, and a
+stable delta in a region with no causal path to the edit is the tell that the ORDER is the
+variable.
+**THE PINS ARE OVER THE ACCEPTANCES, because the directions are asymmetric**: a false
+negative costs the old path, a false positive resolves to a DIFFERENT FILE with no diagnostic
+anywhere ((CFG.1)). Value pins against a transcribed reference (a second implementation — a
+differential whose arms are one function cannot see a fast path), plus idempotence, a
+rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a2/a3/a4 redden
+5/5/4/3 of 6.
+**GATES.** Suite **16,548 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78; `huge_methods.py --fail-over 0` clean; 8-profile grid
+`added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
+materialises no directory and cannot reach the resolver's path arithmetic.
+
 **(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
 SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
 `xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one
@@ -148,35 +180,3 @@ names, with the embedded-lib negative control green in all three.
 **SUCCESSOR (INC.64):** the init-block pass dispatch (40-53 ms, FLAT — an (INC.7)-style
 partition question, not a micro-optimisation) and the crawl WALL (51-57 ms, (INC.56), the
 only row costing a soundness promise) are now co-largest.
-
-**(INC.61) — THE WHOLE (INC.\*) ARC HAD BEEN MEASURING THE CHEAP `lib`, AND THE FLOOR'S
-LARGEST PASS IS NOW 45x SMALLER (2026-08-30).** Re-reading the floor after (INC.60) —
-(INC.59)'s own lesson, applied a second time — put **123 of the checker's 137 ms in the
-init-block pass dispatch**, whose per-pass table no round had read on the many-small shape
-since (INC.58) proved the tsc-profile ranking wrong by 600x. Its largest row was
-`init:buildPerFileScopes`, which copies the SHARED half of a file's scope — lib globals,
-script-file locals, global augmentations — into a fresh table **per file**, i.e.
-`files x libGlobals` insertions. **THEN THE FIXTURE ITSELF TURNED OUT TO BE THE
-UNDERSTATEMENT:** it pins `"lib": ["es2020"]` (~185 names) where an ordinary project's
-unset `lib` means **`dom`** (~2,242). Copying the fixture and changing **that one line and
-nothing else** takes the pass from **13.5 ms to 175.6 ms** on the same 2,401 files — 70%
-of the whole floor pass table. So (INC.57)'s law that a profile's FILE SHAPE can make a
-cost inexpressible holds equally for its **compilerOptions**, which CLAUDE.md had recorded
-once for a library baseline ((CHK.49)) without the general conclusion being drawn.
-**THE FIX IS AN OVERLAY, NOT A CACHE** — the base is the same object for every file, so it
-is built once and `LayeredSymbolTable` answers `own[k] ?: base[k]`. **Its ORDER is the
-load-bearing half**: three consumers iterate a per-file scope, and a `LinkedHashMap` keeps
-a shadowed key's ORIGINAL position, so a shadowing local must appear there carrying the
-OWN value rather than being appended — the one thing an implementation gets wrong, and
-the only pin ablation c1 reddens (**the 16,523-test corpus would not have caught it
-either**, since order reaches only cost counters and suggestion ordering). Mutators throw
-rather than silently dropping a write. **MEASURED (dom arm, 2,401 files, both arms this
-session): the pass 175.64 -> 3.90 ms (45x), init dispatch 334 -> 42, checker construct
-393 -> 83, floor phase total 503 -> 200, and the PLAIN floor median 385 -> 202 ms** —
-worth its own line, because (INC.60)'s 16 ms sat inside the ±40% single-draw band with the
-WRONG SIGN and this one is far outside it, so here the wall corroborates the row instead
-of contradicting it. **GATES.** Suite **16,523 / 0 / 3** (+4, exactly the new pins);
-`cost_gate.py` exit 0 with every counter unchanged; `huge_methods.py --fail-over 0` clean;
-8-profile grid `added=0 removed=0` on all eight, run deliberately because this is the
-checker's name-resolution substrate. **SUCCESSOR (INC.62): re-take the floor on a `dom`
-fixture before opening any of its rows, and treat that as the default shape from here.**

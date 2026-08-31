@@ -178,6 +178,11 @@ object PathUtil {
 
     /** Collapses `.`/`..` segments and duplicate slashes; preserves a leading `/`. */
     fun normalize(path: String): String {
+        FrontEnd.pathNormalizeCalls++
+        if (isNormalized(path)) {
+            FrontEnd.pathNormalizeFast++
+            return path
+        }
         val p = path.replace('\\', '/')
         val isAbs = p.startsWith("/")
         val out = ArrayDeque<String>()
@@ -194,6 +199,52 @@ object PathUtil {
         }
         val joined = out.joinToString("/")
         return if (isAbs) "/$joined" else joined.ifEmpty { "." }
+    }
+
+    /**
+     * (INC.68) True when [normalize] would answer [path] UNCHANGED — checked in one
+     * pass with no allocation, where the general path allocates roughly ten objects
+     * (a `replace`, a `split` list plus a `String` per segment, an `ArrayDeque`, and
+     * a `joinToString` builder).
+     *
+     * It is worth having because almost every path this compiler normalizes is
+     * already normalized: `systemListEntries` normalizes a child path built by the
+     * platform from an already-normalized parent, and [join] normalizes
+     * `"<normalized base>/<plain name>"`. Measured on a 2,401-file project, the
+     * root-file glob alone spends 2.5-3.5 ms of its 12-13 ms doing this for no
+     * change at all, and the census counters ([FrontEnd.pathNormalizeCalls] /
+     * [FrontEnd.pathNormalizeFast]) are what say how much of the population is
+     * really in this shape rather than assumed to be.
+     *
+     * DELIBERATELY CONSERVATIVE — it answers false for anything it is not certain
+     * about, including the `..`-only path (`".."`, a genuine fixed point) and the
+     * empty string (which normalizes to `"."`). A false negative costs the old
+     * behaviour; a false positive would return an UN-normalized path, so the two
+     * directions are not symmetric and the pin population is the fixed points.
+     */
+    internal fun isNormalized(path: String): Boolean {
+        val n = path.length
+        if (n == 0) return false
+        var i = if (path[0] == '/') 1 else 0
+        if (i == n) return true // exactly "/"
+        var segStart = i
+        while (i <= n) {
+            val c = if (i == n) '/' else path[i]
+            if (c == '\\') return false
+            if (c == '/') {
+                val len = i - segStart
+                // an empty segment is "//" or a trailing "/"
+                if (len == 0) return false
+                if (len == 1 && path[segStart] == '.') {
+                    // a "." segment survives only as the WHOLE relative path
+                    if (segStart != 0 || n != 1) return false
+                }
+                if (len == 2 && path[segStart] == '.' && path[segStart + 1] == '.') return false
+                segStart = i + 1
+            }
+            i++
+        }
+        return true
     }
 
     /** Joins [base] with [part]; an absolute [part] replaces [base]. Result is normalized. */

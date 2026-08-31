@@ -4754,6 +4754,20 @@ object FrontEnd {
     var globRoots: Long = 0
 
     /**
+     * (INC.68) census — how often [PathUtil.normalize] is asked, and how often the
+     * answer is the argument itself.
+     *
+     * It exists because the row that motivated the fast path (the root-file glob's
+     * per-entry normalize) is a small share of the calls: [PathUtil.join]
+     * normalizes on every module-resolution candidate probe as well, and only a
+     * count can say which of the two the lever actually acts on. Approximate under
+     * `--workers` and under the crawl's flow workers (a plain `++` from several
+     * threads under-counts); it is a census, never a gate.
+     */
+    var pathNormalizeCalls: Long = 0
+    var pathNormalizeFast: Long = 0
+
+    /**
      * (PERF.HW.b) census — program files bound on the SEQUENTIAL prefix of
      * `cpcBindAndCheck`, i.e. inside [BIND].
      *
@@ -5293,6 +5307,7 @@ object FrontEnd {
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
         globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0
+        pathNormalizeCalls = 0; pathNormalizeFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
         mergeDeclarationsAppended = 0
@@ -5567,6 +5582,9 @@ object FrontEnd {
         appendLine(
             "root glob: $globDirs dirs, $globEntries entries, $globCandidates candidates, " +
                 "$globRoots roots"
+        )
+        appendLine(
+            "path normalize: $pathNormalizeCalls calls, $pathNormalizeFast already normalized"
         )
         appendLine(
             "crawl parse cache: ${CrawlParseCache.hits} hit / ${CrawlParseCache.misses} miss" +

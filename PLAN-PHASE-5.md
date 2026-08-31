@@ -20,6 +20,73 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.68) — 80% of the paths this compiler normalizes were already normalized, and the blocked arms invented a regression that rotation removed
+
+**(INC.66) SAID "BEFORE PRICING ANY ROW, CHECK IT HAS A SPLIT", AND THE ROW IT NAMED FOR
+RE-DECOMPOSITION — `config+glob`, the one floor row carrying NO soundness promise — HAD A
+SPLIT ALREADY. THE COST WAS UNDER IT, IN A FUNCTION NEITHER ROW NAMES.** `PathUtil.normalize`
+is called once per directory entry by `systemListEntries` and once per candidate probe by
+`PathUtil.join`, and its body allocates roughly ten objects every time: a `replace`, a
+`split` list plus a `String` per segment, an `ArrayDeque`, and a `joinToString` builder.
+
+**THE CENSUS IS THE WHOLE ARGUMENT AND IT COST ONE COUNTER.** A floor build of the 2,401-file
+`many-small-2400-dom` fixture makes **11,935 `normalize` calls, of which 9,584 (80.3%) return
+the argument unchanged.** That is not a coincidence of this fixture: `systemListEntries`
+normalizes a child path the platform built from an already-normalized parent, and `join`
+normalizes `"<normalized base>/<plain name>"`. So the fix is a one-pass, allocation-free
+predicate (`PathUtil.isNormalized`) and an early return — not a cache, not a new data
+structure, and nothing to invalidate.
+
+**PRICED BY POPULATION BEFORE THE FLOOR WAS EVEN CONSULTED, per (INC.52).** The same
+micro-benchmark over the same 2,451 real paths, run against BOTH binaries: the general path
+is **1.02-1.22 us/call**, the fast path is **at or below the measurement's own base noise
+(<=0.2 us)**. At 9,584 hits that is **~9 ms per floor build**, which is what the two consumer
+rows then actually returned.
+
+**MEASURED, ABBA-ROTATED, 4 PROCESSES PER ARM, 32 FLOOR DRAWS EACH:**
+`vfs.listEntries + sort` **10.86 -> 7.76**, specifier resolution **14.94 -> 10.66**, and their
+containing rows `config+glob` **17.96 -> 13.44** and crawl WALL **39.51 -> 32.18**. Floor
+median **127 -> 121 ms**.
+
+**THE LESSON THAT OUTRANKS THE MILLISECONDS: THE FIRST, *BLOCKED*, PAIRED RUN REPORTED A
++2.70 ms REGRESSION IN `include/exclude regex match` — A REGION THAT CALLS NO `normalize` AT
+ALL — AND IT REPRODUCED ACROSS 12 DRAWS PER ARM.** It also read the `config+glob` row as
+**+3.39**, i.e. it said the glob half was a net LOSS and cancelled the crawl half's win. Both
+signs INVERTED under rotation (-0.24 and -4.51). Twelve draws per arm is not a small sample,
+and the effect was stable enough to look like a mechanism worth hunting; what it was, was
+three `before` processes run before three `after` ones. **A per-arm draw count does not
+substitute for rotation, and a reproducible delta in a region with no causal path to the
+change is the tell that the ORDER is the variable** — round 869's law, met on the floor
+instrument for the first time in this arc.
+
+**THE PIN POPULATION IS THE ACCEPTANCES, BECAUSE THE TWO DIRECTIONS ARE NOT SYMMETRIC.** A
+false negative costs the old behaviour; a false positive hands back an un-normalized path,
+which resolves to a DIFFERENT FILE with no diagnostic anywhere ((CFG.1)). So the pins are
+value pins over the accepted set against a transcribed reference algorithm — a SECOND
+implementation, because a differential whose two arms are one function cannot see a fast
+path — plus an idempotence pin, a rewrite-count negative control, and a direct predicate pin
+that is quiescence-independent (the first draft asked a process-global COUNTER, which is
+(INC.67)'s lesson again). Ablations a1 (accept everything) 5/6 RED, a2 (accept `..`) 5/6,
+a3 (accept an empty segment) 4/6, a4 (accept a backslash) 3/6.
+
+**GATES.** Suite **16,548 / 0 / 3** (16,542 + the 6 new pins); `cost_gate.py` exit 0 with
+**every counter +0.00%** including `output.programFiles 78`, which is the direct receipt that
+path arithmetic still finds the same program; `huge_methods.py --fail-over 0` clean; and the
+8-profile grid `added=0 removed=0` on all eight. **That grid is COVERAGE here rather than a
+control**, unusually for this repo: the corpus materialises no directory, so it cannot reach
+the resolver's path arithmetic at all, and the profiles are the only instrument exercising
+real relative specifiers, `node_modules` layouts and `@types` roots.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor after this round is **~121 ms** at 2,401
+files: init-block pass dispatch **~46-49** (unchanged and still the largest — (INC.7)'s
+partition-scoping question, with (INC.20)'s MIXED-pass split as the shape that has worked,
+and the `init:computePerFileVisibility` / `init:buildPerFileScopes` (CHK.49) PAIR that must
+move together), crawl WALL **~32** (of which the READ half is (INC.56), the one row costing a
+soundness promise), config+glob **~13**, bind ~8, post-checker ~6.7. The next row with no
+promise attached is the init-block dispatch; it has never been split below the per-pass
+table, and this round is the third consecutive one where the cost was under a row that
+already looked decomposed.
+
 ### Round (INC.67) — reading the PLUGIN found a defect the queue could not, and it was one this session had widened
 
 **THE INSTRUMENT WAS THE CONSUMER'S SOURCE, NOT A PROFILE.** `xemantic/xtsc-intellij-plugin`
@@ -4586,6 +4653,15 @@ RHS, and the merged-member CONTRADICTION direction.
   unchanged and it is the one that has now found five defects: divide a row by its own
   population, at two program sizes, and refuse an implied per-op cost that is physically
   impossible.**
+
+- [x] **(INC.68) DONE 2026-08-31 — `PathUtil.normalize` got a one-pass, allocation-free fast
+  path. Census: **11,935 calls per floor build, 9,584 (80.3%) already normalized**; measured
+  per call **1.02-1.22 us -> <=0.2**. ABBA-rotated, 4 processes per arm: `vfs.listEntries`
+  10.86 -> 7.76, specifier resolution 14.94 -> 10.66, crawl WALL 39.51 -> 32.18, config+glob
+  17.96 -> 13.44, floor median **127 -> 121 ms**. The BLOCKED arms of the same comparison
+  reported a +2.70 ms regression in a region calling no `normalize`, reproducibly over 12
+  draws per arm, and rotation inverted it — see the session note. Successor is (INC.66)
+  below, whose ranking is unchanged except that config+glob is now ~13 ms.**
 
 - [ ] **(INC.66) THE dom FLOOR AFTER (INC.65), AND THE INSTRUMENT LESSON THAT OUTRANKS THE
   ROWS (2026-08-30).** Floor medians **151 ms (early) / 116 (late)** at 2,401 files, from
