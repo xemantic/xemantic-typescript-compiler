@@ -196,6 +196,18 @@ object EagerIndexCensus {
      */
     var perFileVisibilityBuilds: Int = 0
 
+    /**
+     * (INC.73) 1 if the round-471/513 module TYPE-NAME index was built, else 0.
+     *
+     * **0 on a build whose check partition is empty.** Its two sets
+     * (`moduleInterfaceNames`, `multiFileModuleTypeNames`) have three readers and all
+     * three are deep inside CHECKING — object-literal assignability, the `nodeTypes`
+     * cacheability gate and `isLibPhantomMemberOfModuleInterface` — so a build that
+     * checks nothing reads none of them. The pass was the largest single row left in
+     * the floor's per-pass table after (INC.69)/(INC.70)/(INC.71), at 2.52 ms.
+     */
+    var moduleTypeNameIndexBuilds: Int = 0
+
     fun resetCounters() {
         transformOrderSetBuilds = 0
         relativeImportExtractions = 0
@@ -207,5 +219,6 @@ object EagerIndexCensus {
         fileBasenameIndexBuilds = 0
         perFileScopeBuilds = 0
         perFileVisibilityBuilds = 0
+        moduleTypeNameIndexBuilds = 0
     }
 }

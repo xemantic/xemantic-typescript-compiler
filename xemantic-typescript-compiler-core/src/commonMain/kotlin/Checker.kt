@@ -939,6 +939,69 @@ class Checker(
      *  key `"aliasSymId|member"` (null = doesn't resolve). Declared before `init`. */
     private val nsImportMemberFnCache = HashMap<String, Node?>()
 
+    /**
+     * (INC.73) True once `init:moduleTypeNameIndex` has stood — i.e. once the AST the
+     * index is a pure function of is complete. Before that the two sets stay EMPTY,
+     * which is what the eager form also gave a reader that ran early.
+     *
+     * Declared before `init` per the init-order trap.
+     */
+    private var moduleTypeNameIndexArmed: Boolean = false
+
+    /** (INC.73) True once [ensureModuleTypeNameIndex] has built the two sets. */
+    private var moduleTypeNameIndexBuilt: Boolean = false
+
+    /**
+     * (INC.73) Build [moduleInterfaceNames] and [multiFileModuleTypeNames], the first
+     * time either is read.
+     *
+     * It is a pure function of the FROZEN AST — every program file's statement list and
+     * `isModuleFile` shape — so unlike [ensurePerFileVisibility] it has no `globals`
+     * ordering to respect; the only thing it waits for is the pass that arms it, which
+     * exists so a reader running before init step 1a4 still sees the empty sets the
+     * eager form gave it.
+     *
+     * The three readers are `objLitSatisfiesMultiFileInterface`, [nodeTypes]'
+     * cacheability gate and `isLibPhantomMemberOfModuleInterface` — all deep inside
+     * CHECKING — so on a build whose check partition is empty this never runs.
+     */
+    private fun ensureModuleTypeNameIndex() {
+        if (moduleTypeNameIndexBuilt || !moduleTypeNameIndexArmed) return
+        moduleTypeNameIndexBuilt = true
+        EagerIndexCensus.moduleTypeNameIndexBuilds++
+        val names = HashSet<String>()
+        val typeNameFiles = HashMap<String, MutableSet<String>>()
+        for (result in binderResults) {
+            val stmts = result.sourceFile.statements
+            if (!isModuleFile(stmts)) continue
+            val fn = result.sourceFile.fileName
+            for (stmt in stmts) {
+                val tn = when (stmt) {
+                    is InterfaceDeclaration -> { names.add(stmt.name.text); stmt.name.text }
+                    is ClassDeclaration -> stmt.name?.text
+                    is EnumDeclaration -> stmt.name.text
+                    is TypeAliasDeclaration -> stmt.name.text
+                    else -> null
+                } ?: continue
+                typeNameFiles.getOrPut(tn) { HashSet() }.add(fn)
+            }
+        }
+        moduleInterfaceNames = names
+        multiFileModuleTypeNames = typeNameFiles.filterValues { it.size >= 2 }.keys.toSet()
+    }
+
+    /** (INC.73) [moduleInterfaceNames], built on first ask. */
+    private fun moduleInterfaceNameSet(): Set<String> {
+        ensureModuleTypeNameIndex()
+        return moduleInterfaceNames
+    }
+
+    /** (INC.73) [multiFileModuleTypeNames], built on first ask. */
+    private fun multiFileModuleTypeNameSet(): Set<String> {
+        ensureModuleTypeNameIndex()
+        return multiFileModuleTypeNames
+    }
+
     /** Round 471: top-level interface names declared in ≥1 MODULE file (built at
      *  init 1a4). */
     private var moduleInterfaceNames: Set<String> = emptySet()
@@ -10516,27 +10579,12 @@ class Checker(
         // position-based and COLLIDES across files, so two codefix files'
         // identically-positioned `Info | undefined` annotations would share one
         // cached resolution (a cross-file leak the old conflated-ref bypass guarded).
-        pass("init:moduleTypeNameIndex") {
-            val names = HashSet<String>()
-            val typeNameFiles = HashMap<String, MutableSet<String>>()
-            for (result in binderResults) {
-                val stmts = result.sourceFile.statements
-                if (!isModuleFile(stmts)) continue
-                val fn = result.sourceFile.fileName
-                for (stmt in stmts) {
-                    val tn = when (stmt) {
-                        is InterfaceDeclaration -> { names.add(stmt.name.text); stmt.name.text }
-                        is ClassDeclaration -> stmt.name?.text
-                        is EnumDeclaration -> stmt.name.text
-                        is TypeAliasDeclaration -> stmt.name.text
-                        else -> null
-                    } ?: continue
-                    typeNameFiles.getOrPut(tn) { HashSet() }.add(fn)
-                }
-            }
-            moduleInterfaceNames = names
-            multiFileModuleTypeNames = typeNameFiles.filterValues { it.size >= 2 }.keys.toSet()
-        }
+        // (INC.73) The pass ARMS the index; [ensureModuleTypeNameIndex] builds it the
+        // first time either set is read. Its three readers —
+        // `objLitSatisfiesMultiFileInterface`, the [nodeTypes] cacheability gate and
+        // `isLibPhantomMemberOfModuleInterface` — are all deep inside CHECKING, so a
+        // build whose check partition is empty reads neither set and pays nothing.
+        pass("init:moduleTypeNameIndex") { moduleTypeNameIndexArmed = true }
         // 1b. Merge module augmentation exports into target module symbols
         // (snapshot the pre-augmentation key set so the per-file visibility
         // model can tell augmentation-ADDED names — legitimately global —
@@ -106425,7 +106473,7 @@ interface DataView {
             // a single-file interface keeps the standard paths, whose negative
             // controls (10 narrowing tests) rely on genuine reference-value
             // mismatches still firing.
-            if (name in multiFileModuleTypeNames &&
+            if (name in multiFileModuleTypeNameSet() &&
                 stmts.any { it is InterfaceDeclaration && it.name.text == name } &&
                 objectLiteralExactlySatisfiesFileLocalInterface(obj, name, fileName) &&
                 objLitExplicitValuesRelate(obj, fileLocalInterfaceMemberTypeNodes(name, fileName))
@@ -106514,10 +106562,10 @@ interface DataView {
      *  type name declared in ≥2 module files ([multiFileModuleTypeNames])? Such nodes
      *  must never enter the structural [nodeTypes] cache. Depth-bounded. */
     private fun isPerFileDependentRefNode(node: TypeNode, depth: Int = 0): Boolean {
-        if (multiFileModuleTypeNames.isEmpty() || depth > 4) return false
+        if (multiFileModuleTypeNameSet().isEmpty() || depth > 4) return false
         return when (node) {
             is TypeReference -> when (val tn = node.typeName) {
-                is Identifier -> tn.text in multiFileModuleTypeNames
+                is Identifier -> tn.text in multiFileModuleTypeNames // already ensured by the guard above
                 is QualifiedName -> tn.right.text in multiFileModuleTypeNames
                 else -> false
             } || node.typeArguments?.any { isPerFileDependentRefNode(it, depth + 1) } == true
@@ -162695,7 +162743,7 @@ interface DataView {
         // (39 s → 77 s). null = not a mixed lib+module interface (the common case).
         val phantom = libPhantomMembersCache.getOrPut(sym.id) {
             when {
-                sym.name !in moduleInterfaceNames -> null
+                sym.name !in moduleInterfaceNameSet() -> null
                 sym.declarations.none { it in builtinLibDecls } -> null
                 sym.declarations.none { it is InterfaceDeclaration && it !in builtinLibDecls } -> null
                 else -> obj.members

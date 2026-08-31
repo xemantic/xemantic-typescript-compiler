@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.73) — a 2.5 ms row, and the two refutations that cost nothing to find
+
+**THE SMALL LANDING.** `init:moduleTypeNameIndex` — the largest single row left in the
+floor's per-pass table after (INC.69)/(INC.70)/(INC.71), at **2.52 ms** — walks every module
+file's top-level statement list to publish `moduleInterfaceNames` (round 471) and
+`multiFileModuleTypeNames` (round 513). Its three readers are
+`objLitSatisfiesMultiFileInterface`, the `nodeTypes` cacheability gate and
+`isLibPhantomMemberOfModuleInterface`, all deep inside CHECKING, so it is built on first ask.
+**GO/NO-GO first, per (INC.16): `moduleTypeNameIndexBuilds` reads 0 on a floor build and 1 on
+a full one.** Unlike (INC.71)'s sets it is a pure function of the FROZEN AST, so there is no
+`globals` ordering to respect; the pass survives as a MARKER that arms it, so a reader running
+before init step 1a4 still sees the empty sets the eager form gave it.
+
+**THE VALUE RECEIPT IS THE 8 PROFILES, AND THIS ROUND HAD TO GO FIND THAT OUT — THE CORPUS IS
+A CONTROL HERE, NOT COVERAGE.** The ablation that never builds the index reddens **ZERO** of
+the ~13k baselines. Gridded against the shipped binary it reddens **3 of the 8 profiles,
++2 rows each — harness, server and services** — which is exactly where round 471's evidence
+came from (an un-memoized `isLibPhantomMemberOfModuleInterface` doubled the SERVICES
+self-compile, 39 s -> 77 s) and where round 513's tsc private-codefix `Info` shape lives. **So
+a family can have no corpus coverage at all and still be load-bearing, and the way to find out
+is to ablate and grid rather than to reason about it.** My own change is `added=0 removed=0`
+on all eight.
+
+**AND THE HONEST PART: NEITHER THE FLOOR WALL NOR A 2-PROCESS PHASE A/B CAN RESOLVE 2.5 ms.**
+Floor medians read 117/124 (before) against 119/127 (after) — no separation — and the phase
+A/B's init row read -8.19 in a batch whose untouched crawl moved -14.89 and whose
+`read+decode` moved -100. That is (INC.72)'s law again, and it is why the receipts quoted are
+the pass row from the clean single-binary decomposition plus the deterministic count.
+**Rule #1 of the session prompt — "time the population first; if it is small, stop" — applies
+to the REPORTING as much as to the choosing: this is a 2.5 ms landing and is written up as
+one.**
+
+**TWO REFUTATIONS FROM THE SAME RECON, BOTH CHEAP AND BOTH WORTH MORE THAN THE ROW.**
+
+**(a) `SystemVfs.exists` IS ONE SYSCALL — (INC.60)'s five-stat finding is specific to
+`metadataOrNull` and does NOT generalise.** Measured over the fixture's own 2,401 paths, ABBA
+inside one process: **1130.7 ns/call against `java.io.File.exists`'s 1108.8 — 1.02x.** And the
+resolver's probe ladder is already optimal for the ordinary shape: **2,351 `exists` and 10
+`isDirectory` per build for 2,351 distinct resolutions**, i.e. exactly one probe each, because
+`.ts` is first in `allExtensions`. So the crawl's 11 ms `specifier resolution` row is ~2.7 ms
+of syscall and ~8 ms of everything else, and there is no syscall lever in it.
+`ExistsProbeMain` is kept so the number can be re-taken.
+
+**(b) `init:collectUmdGlobalsAndModuleFiles` (2.32 ms) AND `init:mergeFileLocalsIntoGlobals`
+(2.06 ms) ARE NOT DEFERRABLE IN THIS SHAPE, AND THE REASON IS NOT THEIR READERS BUT THEIR
+READERS' SCHEDULE.** `umdGlobalNames` is read by `moduleLocalContributesGlobally`, which
+`init:mergeFileLocalsIntoGlobals` calls; `moduleFiles` is read by `collectModuleAugmentations`,
+which `init:mergeModuleAugmentations` dispatches. Both consumers are LATER INIT PASSES that run
+unconditionally, so a floor build forces the index whatever the checking path does. Deferring
+them means deferring the `globals` merges themselves behind an ensure on the ~783k-lookup hot
+path — a different and much larger change, and **the combined prize is ~5 ms of a 94 ms
+floor**, so it is refused on arithmetic rather than on difficulty.
+
+**SUCCESSOR.** With those two refused and this one landed, the init-block dispatch has no
+row above ~1.4 ms left that is not a walker, i.e. what remains there is (INC.7)'s partition
+question one walker at a time (`checkCircularGenericCallbackVariables` 1.38,
+`checkSpreadNonIterableIntoFixedArity` 1.26, `checkModulePreserve4Pin` 1.26 = (INC.70b),
+`checkCircularClassBaseViaDefaultTypeArg` 0.88, `checkCrossFileUseBeforeDeclaration` 0.82).
+**The floor's largest row is the CRAWL and its READ half is (INC.56)** — the one row costing a
+soundness promise, now also the only one left with a double-digit prize.
+
 ### Round (INC.72b) — the floor re-taken on the same instrument: 122 -> 94 ms across the session
 
 **THE CLEANEST SESSION NUMBER IS NOT AN A/B AT ALL — IT IS `scripts/floor-decomposition.sh`
@@ -4973,23 +5034,32 @@ RHS, and the merged-member CONTRADICTION direction.
   so `globals.lookups` is +0.00%. Value receipt: ablation c2 reddens **492** corpus tests,
   where the `-project` pins could not see the mechanism at all.
 
-- [ ] **(INC.73) THE FLOOR AFTER THIS SESSION — RE-TAKEN, AND THE RANKING HAS CHANGED
-  (2026-08-31).** `many-small-2400-dom`, same instrument and same slot as the session's first
-  reading: **122 -> 94 ms**. Phases: **crawl WALL 29 (36%)** — now the LARGEST row, which it
-  has not been for this arc, and its READ half is (INC.56), the one row costing a SOUNDNESS
-  PROMISE and the one an IntelliJ-class host can hand us; **init-block dispatch 22 (28%)**;
-  config+glob 12; bind 8; post 5. The pass table is **22.43 ms over 418 rows, 24 carrying
-  20.30**, and its head is three whole-program INDEX builds —
-  `init:moduleTypeNameIndex` 2.52, `init:collectUmdGlobalsAndModuleFiles` 2.32,
-  `init:mergeFileLocalsIntoGlobals` 2.06 — none of them a per-file table, so the
-  (INC.70)/(INC.71) deferral shape does not transfer unchanged. **For each of the three the
-  GO/NO-GO is (INC.16)'s counter, not a reading of the source: who forces the index, and is it
-  anyone on a floor build?** One temporary counter and one run per candidate; it has decided
-  the last two rounds and cost one build each. Below them the tail is walker-shaped
-  (`checkCircularGenericCallbackVariables` 1.38, `checkSpreadNonIterableIntoFixedArity` 1.26,
-  `checkModulePreserve4Pin` 1.26 = (INC.70b), `checkCircularClassBaseViaDefaultTypeArg` 0.88,
-  `checkCrossFileUseBeforeDeclaration` 0.82) — i.e. (INC.7)'s partition question, one walker at
-  a time.
+- [x] **(INC.73) DONE 2026-08-31 — the module TYPE-NAME index is built on first ask (2.52 ms),
+  and the round's two REFUTATIONS are worth more than the row.** GO/NO-GO first:
+  `moduleTypeNameIndexBuilds` 0 on a floor build, 1 on a full one. **Its value receipt is the 8
+  PROFILES and the corpus is a CONTROL — the ablation that never builds it reddens ZERO of the
+  ~13k baselines and 3 of the 8 profiles (+2 rows each: harness, server, services)**, which is
+  where rounds 471 and 513 got their evidence. A family can have no corpus coverage and still
+  be load-bearing; ablate and grid rather than reason. **Refuted in the same recon, both
+  cheaply: (a) `SystemVfs.exists` is 1.02x `java.io.File.exists` — ONE syscall, so (INC.60)'s
+  five-stat finding is specific to `metadataOrNull`, and the resolver already probes exactly
+  ONCE per resolution (2,351 `exists` + 10 `isDirectory` for 2,351 distinct pairs), so there is
+  no syscall lever in the crawl's 11 ms resolution row; (b) `init:collectUmdGlobalsAndModuleFiles`
+  and `init:mergeFileLocalsIntoGlobals` are not deferrable, because their products are consumed
+  by LATER INIT PASSES rather than by checking — combined prize ~5 ms, refused on arithmetic.**
+  Neither the floor wall nor a 2-process phase A/B can resolve 2.5 ms, and the write-up says so.
+
+- [ ] **(INC.74) WHAT IS LEFT IN THE FLOOR, AFTER (INC.73) CLOSED THE INDEX ROWS
+  (2026-08-31).** The init-block dispatch now has no non-walker row above ~1.4 ms, so what
+  remains there is (INC.7)'s partition question ONE WALKER AT A TIME —
+  `checkCircularGenericCallbackVariables` 1.38, `checkSpreadNonIterableIntoFixedArity` 1.26,
+  `checkModulePreserve4Pin` 1.26 ((INC.70b)), `checkCircularClassBaseViaDefaultTypeArg` 0.88,
+  `checkCrossFileUseBeforeDeclaration` 0.82 — each of which needs the round-609 collector
+  classification read, not guessed. **The floor's largest row is the CRAWL (~29 ms, 36%) and
+  its READ half is (INC.56), now the only row left with a double-digit prize** — and it is the
+  one an IntelliJ-class host can simply hand us, so it is the one to open now that the plugin
+  exists to promise it. Its `specifier resolution` sub-row is REFUSED as a syscall question by
+  (INC.73)(a); what is unexamined there is the ~8 ms of non-syscall work per 4,701 calls.
 
 - [x] **(INC.72) DONE 2026-08-31 — ANSWERED, and it retracts two of this session's own wall
   figures.** The surplus was the CRAWL, not a mechanism: the per-PHASE instrument over the same

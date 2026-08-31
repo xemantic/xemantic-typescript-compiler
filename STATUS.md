@@ -1,5 +1,38 @@
 # Status
 
+**(INC.73) — A 2.5 ms ROW, AND THE TWO REFUTATIONS THAT COST NOTHING TO FIND (2026-08-31).**
+`init:moduleTypeNameIndex` — the largest single row left in the floor's per-pass table after
+(INC.69)/(INC.70)/(INC.71) — is built on FIRST ASK; GO/NO-GO first, per (INC.16):
+`moduleTypeNameIndexBuilds` **0 on a floor build, 1 on a full one**.
+**ITS VALUE RECEIPT IS THE 8 PROFILES AND THE CORPUS IS A CONTROL — the ablation that never
+builds it reddens ZERO of the ~13k baselines and 3 of the 8 profiles (+2 rows each: harness,
+server, services)**, which is exactly where rounds 471 and 513 got their evidence. **A family
+can have no corpus coverage at all and still be load-bearing; the way to find out is to ablate
+and grid, not to reason about it.**
+**AND THE HONEST PART: neither the floor wall (medians 117/124 before against 119/127 after —
+no separation) nor a 2-process phase A/B can resolve 2.5 ms.** The receipts are the pass row
+from the clean single-binary decomposition plus the deterministic count, and the round is
+written up as the 2.5 ms landing it is.
+**TWO REFUTATIONS FROM THE SAME RECON, BOTH WORTH MORE THAN THE ROW.**
+**(a) `SystemVfs.exists` IS ONE SYSCALL** — 1130.7 ns/call against `java.io.File.exists`'s
+1108.8, **1.02x**, ABBA inside one process over the fixture's own 2,401 paths. So (INC.60)'s
+five-stat finding is specific to `metadataOrNull` and does NOT generalise; and the resolver
+already probes exactly ONCE per resolution (**2,351 `exists` + 10 `isDirectory` for 2,351
+distinct pairs**, because `.ts` is first in `allExtensions`), so there is no syscall lever in
+the crawl's 11 ms resolution row.
+**(b) `init:collectUmdGlobalsAndModuleFiles` (2.32) and `init:mergeFileLocalsIntoGlobals`
+(2.06) ARE NOT DEFERRABLE**, and the reason is not their readers but their readers' SCHEDULE:
+`umdGlobalNames` is read by the merge itself and `moduleFiles` by `collectModuleAugmentations`,
+both LATER INIT PASSES that run unconditionally. Combined prize ~5 ms of a 94 ms floor —
+refused on arithmetic.
+**GATES.** Suite **16,568 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% (including
+`typeNode.bypassed` 145,723, the direct receipt that `multiFileModuleTypeNames` answers
+identically); `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
+**SUCCESSOR:** the init dispatch has no non-walker row above ~1.4 ms left, so what remains
+there is (INC.7)'s partition question one walker at a time; **the floor's largest row is the
+CRAWL and its READ half is (INC.56)** — now the only row left with a double-digit prize, and
+the one an IntelliJ-class host can simply hand us.
+
 **(INC.72) — THE SURPLUS WAS THE CRAWL, AND BOTH OF THIS SESSION'S WALL FIGURES ARE RETRACTED
 (2026-08-31).** (INC.70) and (INC.71) each reported an ABBA-rotated floor wall about **three
 times** what their pass row explained, and that gap was queued as a mechanism to hunt. It was
@@ -127,35 +160,3 @@ a1/a2/a3 redden 2/1/2 of 5; **a4 (widen the index to a suffix match) reddens NOT
 recorded as a round-927 redundant-guard PAIR** — the index buys the speed, the kept guard
 keeps the correctness — and only a5, which widens the index AND deletes the guard, reddens
 the negative control.
-
-**(INC.68) — 80% OF THE PATHS THIS COMPILER NORMALIZES WERE ALREADY NORMALIZED, AND THE
-BLOCKED ARMS INVENTED A REGRESSION THAT ROTATION REMOVED (2026-08-31).** (INC.66) said
-"before pricing any row, check it has a SPLIT"; the row it named for re-decomposition —
-`config+glob`, the one floor row carrying no soundness promise — had a split already, and the
-cost was under it in a function neither row names. `PathUtil.normalize` is called once per
-directory entry by `systemListEntries` and once per candidate probe by `PathUtil.join`, and
-allocates ~10 objects each time. **THE CENSUS IS THE WHOLE ARGUMENT AND IT COST ONE COUNTER:
-11,935 calls per floor build, 9,584 (80.3%) returning the argument UNCHANGED** — not a
-property of the fixture, but of the callers (a child path built from an already-normalized
-parent; `"<normalized base>/<plain name>"`). So the fix is a one-pass allocation-free
-predicate and an early return: no cache, nothing to invalidate. **PRICED BY POPULATION
-BEFORE THE FLOOR WAS CONSULTED** ((INC.52)): 1.02-1.22 us/call against <=0.2, i.e. ~9 ms per
-floor build, which is what the rows returned. **ABBA-rotated, 4 processes/arm, 32 floor draws
-each:** `vfs.listEntries` 10.86 -> 7.76, specifier resolution 14.94 -> 10.66, crawl WALL
-39.51 -> 32.18, config+glob 17.96 -> 13.44, **floor median 127 -> 121 ms**.
-**THE LESSON OUTRANKS THE MILLISECONDS: the first, BLOCKED, paired run reported +2.70 ms on
-`include/exclude regex match` — a region that calls no `normalize` — reproducibly over 12
-draws per arm, and read config+glob as +3.39, i.e. it said the glob half was a net loss. Both
-signs INVERTED under rotation.** A per-arm draw count does not substitute for rotation, and a
-stable delta in a region with no causal path to the edit is the tell that the ORDER is the
-variable.
-**THE PINS ARE OVER THE ACCEPTANCES, because the directions are asymmetric**: a false
-negative costs the old path, a false positive resolves to a DIFFERENT FILE with no diagnostic
-anywhere ((CFG.1)). Value pins against a transcribed reference (a second implementation — a
-differential whose arms are one function cannot see a fast path), plus idempotence, a
-rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a2/a3/a4 redden
-5/5/4/3 of 6.
-**GATES.** Suite **16,548 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
-`output.programFiles` 78; `huge_methods.py --fail-over 0` clean; 8-profile grid
-`added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
-materialises no directory and cannot reach the resolver's path arithmetic.

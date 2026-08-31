@@ -1,3 +1,35 @@
+**(INC.68) — 80% OF THE PATHS THIS COMPILER NORMALIZES WERE ALREADY NORMALIZED, AND THE
+BLOCKED ARMS INVENTED A REGRESSION THAT ROTATION REMOVED (2026-08-31).** (INC.66) said
+"before pricing any row, check it has a SPLIT"; the row it named for re-decomposition —
+`config+glob`, the one floor row carrying no soundness promise — had a split already, and the
+cost was under it in a function neither row names. `PathUtil.normalize` is called once per
+directory entry by `systemListEntries` and once per candidate probe by `PathUtil.join`, and
+allocates ~10 objects each time. **THE CENSUS IS THE WHOLE ARGUMENT AND IT COST ONE COUNTER:
+11,935 calls per floor build, 9,584 (80.3%) returning the argument UNCHANGED** — not a
+property of the fixture, but of the callers (a child path built from an already-normalized
+parent; `"<normalized base>/<plain name>"`). So the fix is a one-pass allocation-free
+predicate and an early return: no cache, nothing to invalidate. **PRICED BY POPULATION
+BEFORE THE FLOOR WAS CONSULTED** ((INC.52)): 1.02-1.22 us/call against <=0.2, i.e. ~9 ms per
+floor build, which is what the rows returned. **ABBA-rotated, 4 processes/arm, 32 floor draws
+each:** `vfs.listEntries` 10.86 -> 7.76, specifier resolution 14.94 -> 10.66, crawl WALL
+39.51 -> 32.18, config+glob 17.96 -> 13.44, **floor median 127 -> 121 ms**.
+**THE LESSON OUTRANKS THE MILLISECONDS: the first, BLOCKED, paired run reported +2.70 ms on
+`include/exclude regex match` — a region that calls no `normalize` — reproducibly over 12
+draws per arm, and read config+glob as +3.39, i.e. it said the glob half was a net loss. Both
+signs INVERTED under rotation.** A per-arm draw count does not substitute for rotation, and a
+stable delta in a region with no causal path to the edit is the tell that the ORDER is the
+variable.
+**THE PINS ARE OVER THE ACCEPTANCES, because the directions are asymmetric**: a false
+negative costs the old path, a false positive resolves to a DIFFERENT FILE with no diagnostic
+anywhere ((CFG.1)). Value pins against a transcribed reference (a second implementation — a
+differential whose arms are one function cannot see a fast path), plus idempotence, a
+rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a2/a3/a4 redden
+5/5/4/3 of 6.
+**GATES.** Suite **16,548 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78; `huge_methods.py --fail-over 0` clean; 8-profile grid
+`added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
+materialises no directory and cannot reach the resolver's path arithmetic.
+
 **(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
 SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
 `xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one
