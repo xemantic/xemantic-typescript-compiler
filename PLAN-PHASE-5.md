@@ -20,6 +20,92 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.70) — every build allocated a name-resolution table for every file, and a floor build reads none of them
+
+**`init:buildPerFileScopes` ALLOCATED TWO MAPS PER PROGRAM FILE, COPIED THAT FILE'S OWN
+TOP-LEVEL LOCALS INTO ONE OF THEM AND PRECOMPUTED A `LayeredSymbolTable`'s SHADOW LIST — FOR
+EVERY FILE, ON EVERY BUILD, WHETHER OR NOT A SINGLE NAME WAS EVER RESOLVED IN IT.** After
+(INC.69) it was the second-largest row of the init dispatch. It is now built on first ask,
+per file, by `buildPerFileScopeFor`.
+
+**THE POPULATION WAS MEASURED BEFORE ANY TIMING, per (INC.16)'s law that a deferral is
+decided by WHO FORCES the table.** `EagerIndexCensus.perFileScopeBuilds` on the 2,401-file
+`many-small-2400-dom` fixture: **0 on a floor build and 2,401 on a full one.** Not "fewer" —
+*none*. A build whose check partition is empty resolves no name in any file, so the entire
+pass is deferred away, and a full build pays exactly what it paid before.
+
+**WHAT MAKES THE DEFERRAL EXACT IS AN INIT-ORDER FACT NEITHER FUNCTION STATES.** The eager
+loop SNAPSHOTTED `result.locals` and its KDoc said so — "so the view answers what the copy
+answered even if a binder table is later touched" — which is precisely the guarantee a
+deferral weakens. The checker's ONE writer of a `BinderResult.locals` is
+`collectModuleAugmentations`, dispatched by `init:mergeModuleAugmentations`, and that pass
+runs at an EARLIER init step than `init:buildPerFileScopes`. So the two snapshots are the
+same table; `sharedBase` (lib globals + script-file locals + `declare global` additions) is
+still captured eagerly at the pass's own position, so the program-wide half has not moved at
+all. **A new writer of `locals` scheduled after this pass would make the eager and lazy
+answers disagree silently, and nothing in this repo would print it** — that is the invariant
+the KDoc now carries.
+
+**MEASURED.** Per-pass row, second instrumented draw: `init:buildPerFileScopes`
+**4.625 -> 0.750 ms** (first draw 5.248 -> 0.653), and the whole init block 39.34 -> 36.38,
+i.e. the rest of the table is flat within its own draw noise.
+**Wall, ABBA-rotated, one JVM per arm, 4 processes per arm x 8 draws: floor
+median-of-process-medians 160.0 -> 136.5 ms (-14.7%)**, means 160.8 -> 136.2, with the four
+process medians DISJOINT (before 148-175, after 131-141).
+**AND THAT WALL DELTA IS LARGER THAN THE ROW EXPLAINS — ~4 ms of ~23 — SO THE SURPLUS IS
+RECORDED AS UNATTRIBUTED AND IS NOT CLAIMED.** The eager form also allocated ~4,800 maps and
+~2,400 `LayeredSymbolTable`s per build and RETAINED them for the build's life, which is a
+plausible mechanism and is not a measured one; round 801's "an allocation count is not a
+cost" says exactly that a plausible allocation story needs its own measurement. The
+quotable number is the deterministic row.
+
+**THE VALUE HALF IS CARRIED BY THE CORPUS, AND THAT IS NOW A MEASUREMENT RATHER THAN AN
+ASSUMPTION.** Ablation b2 — `buildPerFileScopeFor` never builds, i.e. `perFileScopeOf` always
+answers "scopes unbuilt" — reddens **503 core-suite tests**. That is the receipt that the
+table is load-bearing and that the whole-build path (which still builds every scope) is
+exercised end to end thousands of times per suite run.
+
+**TWO OF THE THREE ABLATION ARMS DISCRIMINATE AND THE THIRD IS RECORDED AS BLIND, WHICH IS
+ITSELF THE ROUND'S SECOND FINDING.** b1 (build every scope eagerly again) reddens the floor
+count pin and the narrowed-vs-whole pin; b2 (never build) reddens the whole-build count and
+the narrowed-vs-whole pin. **b3 — never STORE the built scope, i.e. rebuild it on every ask —
+reads 0 RED, because `perFileScopeOf`'s one-entry IDENTITY memo absorbs every repeated ask
+for the same file.** The fixture was strengthened first (three unresolved names in one file
+rather than one, so asks and files stop being the same number) and b3 still read 0: within a
+file the repeats never reach the map at all. So the map's memoization is pinned by nothing
+here, and the reason is a second cache one layer up — worth knowing before anyone "optimises"
+either of them.
+
+**AND THE VALUE PINS DO NOT DISCRIMINATE `perFileScope`'s PRESENCE ON THESE SHAPES**, which
+is why the corpus receipt above had to be taken: under b2 the module-local leak
+(`zzzModuleLocal` read from a file that does not import it) is STILL TS2304, because
+`moduleOnlyGlobalNames` / `globalsForFile` — `init:computePerFileVisibility`'s product, which
+this round does not touch — decides that question upstream. A pin can be green for a reason
+that has nothing to do with the mechanism under it.
+
+**GATES.** Suite **16,559 / 0 / 3** (16,553 + the 6 new pins, later 8); `cost_gate.py` exit 0
+with every counter +0.00%; `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0
+removed=0` on all eight — **COVERAGE here, and the script's header says why**: a per-file
+scope that is absent when asked makes `perFileScopeOf` answer null, every consumer reads that
+as "scopes unbuilt" and falls back to the merged `globals`, so the failure mode is a name
+resolving to a FOREIGN module's local and TS2304 is what moves.
+
+**A HARNESS TRAP WORTH THE LINE IT COSTS.** `FloorAbMain` briefly printed the new census
+counter, and the two arms of a two-binary A/B are loaded by the SAME runner class — so the
+older arm died with `NoSuchMethodError` and the batch printed only the after arm's medians,
+which reads exactly like a successful run of half the experiment. A cross-binary harness may
+read no counter that does not exist in both arms; populations belong in the pins.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor is now **~136 ms** at 2,401 files
+(from 157 at the start of this session). Inside the init dispatch the head is
+`init:computePerFileVisibility` (5.6-7.2 ms) — genuinely program-wide, a set DIFFERENCE over
+every file's locals, so the (INC.16) deferral shape does not apply to it and the question is
+whether its two products are asked at all on a floor build; then `init:moduleTypeNameIndex`
+2.3, `init:collectUmdGlobalsAndModuleFiles` 2.2, `init:mergeFileLocalsIntoGlobals` 2.2 and
+`checkSpreadNonIterableIntoFixedArity` 1.6. Outside it, `checkModulePreserve4Pin`'s raw
+whole-source `.contains` (1.2 ms) is **REFUSED with a measured reason** — see the (INC.70b)
+entry in the queue.
+
 ### Round (INC.69) — the init-block dispatch was not flat, and 21 walkers were paying a whole-program loop to compare one file name
 
 **(INC.66) RECORDED THE INIT-BLOCK PASS DISPATCH AS "FLAT ACROSS ~400 PASSES, SO THERE IS NO
@@ -4740,6 +4826,36 @@ RHS, and the merged-member CONTRADICTION direction.
   reported a +2.70 ms regression in a region calling no `normalize`, reproducibly over 12
   draws per arm, and rotation inverted it — see the session note. Successor is (INC.66)
   below, whose ranking is unchanged except that config+glob is now ~13 ms.**
+
+- [x] **(INC.70) DONE 2026-08-31 — per-file name-resolution scopes are built on FIRST ASK,
+  and a floor build builds NONE.** `init:buildPerFileScopes` allocated two maps and a
+  `LayeredSymbolTable` shadow list per program file on every build; the population measured
+  first, per (INC.16), is **2,401 -> 0 on a floor build and 2,401 -> 2,401 on a full one**.
+  Row **4.625 -> 0.750 ms**; ABBA-rotated floor **160.0 -> 136.5 ms**, of which only ~4 ms is
+  attributed (the surplus is recorded, not claimed). Exactness rests on an INIT-ORDER fact:
+  the only writer of a `BinderResult.locals` is `collectModuleAugmentations`, dispatched at an
+  earlier step. Value half gated by the CORPUS as a measurement — ablation b2 (never build a
+  scope) reddens **503** core tests.
+
+- [ ] **(INC.70b) `checkModulePreserve4Pin`'s RAW whole-source `.contains` — REFUSED, with the
+  measured reason (2026-08-31).** It is 1.2 ms of the floor and one of exactly four
+  `sourceFile.text.contains(` sites in `Checker.kt` that bypass (WARM.19)'s `srcHas` n-gram
+  filter. **Routing the three `binderResults`-scoped ones through `srcHas` REDDENS
+  `PartitionSrcScanPassTest`'s cost receipt** — and correctly: a whole-program scan asked
+  through `srcHas` FORCES every file's filter, including out-of-partition files, which is
+  exactly what that pin's "a narrowed build builds fewer filters than the whole program"
+  assertion exists to catch. It would also very likely be a LOSS on the floor, because after
+  (INC.20)/(INC.21) the other ~50 `srcHas` callers are partition-gated and build nothing
+  there, so this pass would be the FIRST asker and would pay the filter build for all 2,401
+  files — CLAUDE.md's "the srcScan family must be gated all at once or not at all". **What is
+  left to try is a cheaper PRE-GATE on the program's shape**, not a change of scanner: the
+  pass's whole emitting loop is a `when (basename)` over `a.js` / `f.cts` / `main1.ts` /
+  `main2.mts` / …, so (INC.69)'s `filesNamed` index can answer "can this pass do anything at
+  all" in one probe — but the `diagnostics.removeAll` above that loop is NOT keyed on a
+  basename, so such a pre-gate is a behaviour change for a program that carries the needle and
+  none of the names, and needs its own corpus receipt. The FOURTH site
+  (`retValue != 0 ^=`, inside a `checkedResults` loop) is already partition-scoped and could
+  be routed safely; it is 0.001 ms, i.e. not worth a suite run on its own.
 
 - [x] **(INC.69) DONE 2026-08-31 — the init-block dispatch is NOT flat, and 21 corpus-PIN
   walkers were the plateau.** (INC.66) recorded the ~400-pass table as flat "so there is no

@@ -47,6 +47,12 @@ import com.xemantic.typescript.compiler.SystemVfs
  *   com.xemantic.typescript.compiler.project.FloorAbMainKt <projectDir> <warmups> <draws> [rows]
  * ```
  *
+ * It deliberately reads NO census counter. Both arms of a two-binary A/B are
+ * loaded by the SAME runner class, so a counter that exists in only one of them is
+ * a `NoSuchMethodError` in the older arm — which prints a plausible partial run and
+ * leaves the batch reporting one arm's medians as if they were both. Populations
+ * belong in the pins, which run against one binary at a time.
+ *
  * `rows` additionally takes ONE instrumented draw at the `--passTimingRows` tier
  * and prints the per-pass table, which is the deterministic half of the answer:
  * the wall says whether the floor moved, the table says which rows moved it.
@@ -72,6 +78,7 @@ fun main(args: Array<String>) {
         "REFUSED: ${probe.programFiles.size} program files — point this at an application-shaped project"
     }
     println("project: $project files=${probe.programFiles.size}")
+
 
     repeat(warmups) { floor() }
 

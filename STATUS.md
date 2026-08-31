@@ -1,5 +1,38 @@
 # Status
 
+**(INC.70) — EVERY BUILD ALLOCATED A NAME-RESOLUTION TABLE FOR EVERY FILE, AND A FLOOR BUILD
+READS NONE OF THEM (2026-08-31).** `init:buildPerFileScopes` allocated two maps per program
+file, copied that file's own top-level locals into one and precomputed a
+`LayeredSymbolTable`'s shadow list — for EVERY file, on EVERY build, whether or not a name was
+ever resolved there. **THE POPULATION WAS MEASURED BEFORE ANY TIMING, per (INC.16):
+`perFileScopeBuilds` is 2,401 -> 0 on a floor build of the 2,401-file fixture and 2,401 ->
+2,401 on a full one.** Not "fewer" — none.
+**WHAT MAKES THE DEFERRAL EXACT IS AN INIT-ORDER FACT NEITHER FUNCTION STATES**: the eager
+loop SNAPSHOTTED `result.locals` precisely to survive a later mutation, and the checker's ONE
+writer of a `BinderResult.locals` is `collectModuleAugmentations`, dispatched at an EARLIER
+init step — so the two snapshots are the same table. A writer scheduled after this pass would
+make the eager and lazy answers disagree silently.
+**MEASURED:** row **4.625 -> 0.750 ms** (second instrumented draw), whole init block
+39.34 -> 36.38; ABBA-rotated floor **median-of-medians 160.0 -> 136.5 ms (-14.7%)**, four
+process medians DISJOINT. **The wall delta is larger than the row explains (~4 of ~23 ms) and
+the surplus is recorded as UNATTRIBUTED, not claimed** — the eager form also retained ~4,800
+maps per build, which is a plausible mechanism and not a measured one (round 801).
+**THE VALUE HALF IS A MEASUREMENT, NOT AN ASSUMPTION:** ablation b2 (never build a scope)
+reddens **503** core-suite tests.
+**AND THE THIRD ARM IS RECORDED AS BLIND, which is the round's second finding:** b3 (never
+STORE the built scope) reads 0 RED even after the fixture was strengthened, because
+`perFileScopeOf`'s one-entry IDENTITY memo absorbs every repeated ask for the same file — so
+the map's memoization is pinned by nothing here, and the reason is a second cache one layer
+up. Likewise the value pins do not discriminate `perFileScope`'s presence at all: under b2 the
+module-local leak is STILL TS2304, because `moduleOnlyGlobalNames` decides that upstream.
+**GATES.** Suite **16,559 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0` — COVERAGE here, since
+an absent scope makes `perFileScopeOf` answer null and every consumer falls back to the merged
+`globals`, i.e. a name resolving to a FOREIGN module's local.
+**HARNESS TRAP WORTH THE LINE:** a cross-binary A/B runner may read no census counter that
+does not exist in BOTH arms — the older arm dies with `NoSuchMethodError` and the batch prints
+one arm's medians as if they were both.
+
 **(INC.69) — THE INIT-BLOCK DISPATCH IS NOT FLAT, AND A PLATEAU IS A SHARED PER-FILE COST
 (2026-08-31).** (INC.66) recorded the ~400-pass table as FLAT, "so there is no row to make
 cheaper"; a HISTOGRAM rather than a top-N list refutes it — on `many-small-2400-dom` the
@@ -141,41 +174,3 @@ partition question), crawl WALL 34-44 (its READ half is (INC.56), the only row c
 soundness promise), config+glob 13-29 (co-largest on some draws, NO promise attached, and
 worth re-decomposing rather than assuming (INC.60) finished it). **And take the lesson
 literally: before pricing any row, check it HAS a split.**
-
-**(INC.64) — TWO ROWS PAID ON EVERY KEYSTROKE FOR WORK NOBODY READS, AND THE FLOOR IS
-241 -> 146 ms OVER THE SESSION (2026-08-30).** Both found by (INC.62)'s instrument —
-divide a row by its own population, refuse an impossible per-op cost.
-**(a) THE CRAWL HANDED EVERY FILE TO ANOTHER THREAD TO SCHEDULE A MAP PROBE.**
-`readAndScanBatch` read on `Dispatchers.IO` and then hopped to `Dispatchers.Default` for
-EVERY file so a parse would never run on an IO thread — but on a warm build every parse is
-a `CrawlParseCache` HIT, so the hop scheduled a ~1 us probe onto another thread, `files`
-times. Reading all 2,401 files sequentially is **13-21 ms** and the flags over them
-1.1-1.8, against a crawl WALL of **51-57**; priced with an ABBA-rotated synthetic arm,
-**sequential 14.4 / `flatMapMerge(16)` alone 17.2 / one hop 18.5 / the shipped two hops
-32.1 ms**. Only a MISS hops now; the cold crawl is untouched. `pre-parse (CPU sum)` falls
-**69-81 ms -> 2.0-2.7**. **The wall could NOT resolve it** (ranges overlap, and that run's
-`full` median was itself 9% slower), so the claim rests on the mechanism plus the synthetic
-arm and the PIN IS A COUNT — dispatches at two program sizes: cold 5 -> 5 and 20 -> 20,
-warm 0, and after one edit exactly ONE.
-**(b) A `--noEmit` BUILD COMPUTED A DEPENDENCY ORDER FOR AN EMIT THAT NEVER HAPPENS —
-15.0-22.6 ms, ~10% of the floor, AND IT WAS ON NO QUEUE.** `extractRelativeImports` runs
-twice per file and every consumer of its product orders EMITTED output. **(INC.59)'s
-finding one call deeper.** The obvious edit is wrong — a `continue` also skips
-`tsFileNames.add`, which every later phase reads. **AND THE CORPUS IS A CONTROL HERE, NOT
-THE GATE**: `skipEmitOutputs` is set only by `ProjectCompiler`, never by the `@noEmit`
-corpus directive, so all ~13k baselines run with the branch TAKEN. The 8-profile `--noEmit`
-grid (`added=0 removed=0` on all eight) and the new `-project` pins are what see it; the
-EMITTING path is verified independently — an `--outDir` build of the compiler profile is
-byte-identical across the two binaries, 78 files, `diff -r` clean.
-**THE VALUE PIN WAS BLIND ON ITS FIRST FIXTURE AND ONLY THE ABLATION SAID SO**: named the
-obvious way round (`dep` imported by `main`), dependency order and ALPHABETICAL order
-coincide, so emptying the sort's edges left it green. Renamed `zdep`/`amain` so the two
-orders are opposite — a pin over an ORDER needs a fixture whose expected order differs from
-every order the system produces by accident.
-**MEASURED (many-small-2400-dom, floor median): 241 -> 189 -> 197 -> 146 ms early and
-256 -> 166 -> 152 -> 143 late** across this session's three landings, **-39% / -44%**.
-**GATES.** Suite **16,535 / 0 / 3** (+7, exactly the new pins); `cost_gate.py` exit 0;
-`huge_methods.py --fail-over 0` clean.
-**SUCCESSOR (INC.65):** what is left is a PARTITION question (the init-block pass dispatch,
-flat across ~400 passes) and a HOST PROMISE ((INC.56), the crawl's read half) — the era of
-finding a stray quadratic in the front end may be over, which is itself worth recording.

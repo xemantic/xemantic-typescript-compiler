@@ -9190,6 +9190,19 @@ class Checker(
     private var perFileScopeMemoKey: String? = null
     private var perFileScopeMemoValue: SymbolTable? = null
 
+    /** (INC.70) The program-wide half of every per-file scope — lib globals, script-file
+     *  locals and `declare global` additions — captured by [buildPerFileScopes] and read
+     *  by [buildPerFileScopeFor]. Null until that pass has stood, which is what makes
+     *  [perFileScopeOf] answer null for "scopes unbuilt" exactly as before.
+     *  Declared before `init` per the init-order trap. */
+    private var perFileScopeSharedBase: SymbolTable? = null
+
+    /** (INC.70) fileName -> that file's own top-level locals, the other input of
+     *  [buildPerFileScopeFor]. One map put per program file, against the two
+     *  allocations the eager form paid per file. Declared before `init` per the
+     *  init-order trap. */
+    private val perFileScopeOwnLocals: MutableMap<String, SymbolTable> = HashMap()
+
     /**
      * (LIB.1)(c): `lib` option entries that are not lib names at all, recorded by
      * [bindRealLibs] and reported by [checkLibOption] as TS6046.
@@ -15709,22 +15722,62 @@ class Checker(
         for ((name, sym) in globalAugmentationAddedSymbols) {
             if (name !in sharedBase) sharedBase[name] = sym
         }
+        // (INC.70) The per-file half is built ON FIRST ASK, by [buildPerFileScopeFor].
+        // What stays eager is everything PROGRAM-WIDE — `sharedBase` above, and the
+        // fileName -> own-locals table below, which is one map put per file against
+        // the two allocations, a `putAll` and a `LayeredSymbolTable` shadow-list the
+        // eager form paid per file whether or not anything ever asked.
+        perFileScopeSharedBase = sharedBase
+        perFileScopeOwnLocals.clear()
+        perFileScope.clear()
         for (result in binderResults) {
-            // Own-file locals — visible to ourselves, and they SHADOW any same-name
-            // lib/script entry (TypeScript's local-shadows-global semantics for a
-            // file's own declarations). Snapshotted rather than aliased, so the view
-            // answers what the copy answered even if a binder table is later touched.
-            val fileScope: SymbolTable = LayeredSymbolTable(sharedBase, symbolTable().also {
-                it.putAll(result.locals)
-            })
-            perFileScope[result.sourceFile.fileName] = fileScope
-            // (WARM.23) round 896 — THE one mutation of [perFileScope], and so the
-            // one place [perFileScopeOf]'s memo could go stale. Clearing it here
-            // makes staleness inexpressible rather than unlikely; a new write site
-            // must clear it too.
-            perFileScopeMemoKey = null
-            perFileScopeMemoValue = null
+            perFileScopeOwnLocals[result.sourceFile.fileName] = result.locals
         }
+        // (WARM.23) round 896 — [perFileScopeOf]'s memo could go stale here and at
+        // [buildPerFileScopeFor]'s store; both clear it. A new write site must too.
+        perFileScopeMemoKey = null
+        perFileScopeMemoValue = null
+    }
+
+    /**
+     * (INC.70) Build ONE file's [perFileScope] entry, the first time it is asked for.
+     *
+     * ## Why this is deferrable and what makes it exact
+     *
+     * The eager loop allocated two maps, copied the file's own locals into one of
+     * them and precomputed a `LayeredSymbolTable`'s shadow list — **per program
+     * file, on every build, whether or not any name was ever resolved in that
+     * file**. On the incremental FLOOR (a build whose check partition is empty)
+     * that is the whole pass: measured on the 2,401-file `many-small-2400-dom`
+     * fixture, `init:buildPerFileScopes` was 3.3 ms of a ~120 ms floor.
+     *
+     * The inputs are frozen by the time the pass stands. `sharedBase` is captured
+     * eagerly, so the lib/script/`declare global` half is exactly what it was; the
+     * only remaining input is `result.locals`, and **the checker's ONE writer of a
+     * `BinderResult.locals` is `collectModuleAugmentations`, dispatched by
+     * `init:mergeModuleAugmentations`, which runs at an EARLIER init step**. So the
+     * snapshot the eager form took and the snapshot this takes are the same table.
+     * That ordering is the whole soundness argument and it is not self-evident from
+     * either function — a new writer of `locals` scheduled after this pass would
+     * make the two disagree silently, and nothing here would print it.
+     *
+     * ## Why the pin is a COUNT
+     *
+     * (INC.16)'s law: whether deferring a per-file table pays is decided by WHO
+     * FORCES it, which is a population to be measured rather than read.
+     * [EagerIndexCensus.perFileScopeBuilds] is that population — `binderResults.size`
+     * before, and on a narrowed build only the files something actually resolved a
+     * name in.
+     */
+    private fun buildPerFileScopeFor(fileName: String): SymbolTable? {
+        val base = perFileScopeSharedBase ?: return null
+        val own = perFileScopeOwnLocals[fileName] ?: return null
+        val scope: SymbolTable = LayeredSymbolTable(base, symbolTable().also { it.putAll(own) })
+        perFileScope[fileName] = scope
+        EagerIndexCensus.perFileScopeBuilds++
+        perFileScopeMemoKey = null
+        perFileScopeMemoValue = null
+        return scope
     }
 
     /**
@@ -15896,7 +15949,8 @@ class Checker(
     private fun perFileScopeProbe(fileName: String): SymbolTable? {
         if (MapCensus.on) MapCensus.perFileProbes++
         val r = MapCensus.perFileScopeReads
-        if (r == 0) return perFileScope[fileName]
+        if (r == 0) return perFileScope[fileName] ?: buildPerFileScopeFor(fileName)
+        if (fileName !in perFileScope) buildPerFileScopeFor(fileName)
         if (r < 0) {
             // In-situ EMPTY bracket at the same site and frequency, so `cold` can
             // be separated from the pair. The real read still happens, outside

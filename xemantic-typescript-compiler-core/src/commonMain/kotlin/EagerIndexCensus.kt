@@ -164,6 +164,22 @@ object EagerIndexCensus {
      */
     var fileBasenameIndexBuilds: Int = 0
 
+    /**
+     * (INC.70) How many per-file `perFileScope` tables were actually built, per compile.
+     *
+     * **`binderResults.size` before, and on a NARROWED build only the files something
+     * resolved a name in — that is the assertion.** `init:buildPerFileScopes` used to
+     * allocate two maps, copy a file's own locals into one and precompute a
+     * `LayeredSymbolTable` shadow list for EVERY program file on EVERY build, whether
+     * or not any name was ever resolved there; measured on the 2,401-file
+     * `many-small-2400-dom` fixture that is 3.3 ms of a ~120 ms incremental floor.
+     *
+     * A count for (INC.16)'s reason as well as (INC.52)'s: whether deferring a per-file
+     * table pays at all is decided by WHO FORCES it, and that is a population to be
+     * measured rather than read off the source.
+     */
+    var perFileScopeBuilds: Int = 0
+
     fun resetCounters() {
         transformOrderSetBuilds = 0
         relativeImportExtractions = 0
@@ -173,5 +189,6 @@ object EagerIndexCensus {
         programNameSetBuilds = 0
         jsxSuffixScanSteps = 0
         fileBasenameIndexBuilds = 0
+        perFileScopeBuilds = 0
     }
 }
