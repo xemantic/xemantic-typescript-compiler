@@ -56,7 +56,13 @@ reddening a DIFFERENT pin — dropping the promotion reddens only the twin pin, 
 one-entry reader only the ordinary one, so neither is redundant.
 
 **GATES.** Suite **16,624 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
-`huge_methods.py --fail-over 0` clean.
+`huge_methods.py --fail-over 0` clean. **And the CLI-path CONTROL for all four rounds
+((INC.78)-(INC.81)), which every `-project` measurement in them structurally cannot see:**
+`bench-compile-tsc.sh --project compiler --no-emit` reads **self 22,999 ms against 23,304
+(-1.3%), errors 46 vs 46** — inside the box's own swing, so it is read as NO REGRESSION on
+the full cold compile and not as a win. That is the right reading: `GlobMatcher`, the
+resolver's probe memo and the fast `join` all act on a front end that is ~13% of that
+compile, and the tsc profile is 78 huge files where every one of these costs is per-FILE.
 
 **WHAT IS LEFT, AND WHAT IS NOW REFUSED.** The ~3.4 ms was insert + allocation and about 1.4
 of it is gone; the residue is the walk (~1.0 ms over 2,401 files' statements) and the hash
