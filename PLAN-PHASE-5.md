@@ -20,6 +20,55 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.79) — the crawl asked the filesystem about files the glob had already listed
+
+**(INC.73)(a) REFUSED THIS ROW'S SYSCALL HALF BY ARITHMETIC — "2,351 distinct resolutions at
+exactly one `exists` each, so ~2.6 ms is irreducible" — AND THAT IS TRUE OF THE RESOLVER IN
+ISOLATION AND FALSE OF THE BUILD.** The root-file glob has already listed every directory of
+the project and proved which files are there, off the same `Vfs`, in the same build, ~20 ms
+earlier. The crawl then asked again, 2,351 times. **A per-component refusal can be right about
+its component and wrong about the program**, and the thing that says so is asking who else
+already knows the answer.
+
+**DECOMPOSED FIRST, per this repo's law** (`Inc79CrawlResolveProbeMain`, one binary,
+ABBA-rotated, population reconstructed from the sources' own specifiers and checked against
+the build's 4,701 / 2,351 distinct): `resolve` **9.4-9.8 ms**, of which `existsOnly`
+**4.4-4.6** (2,350 probes at ~1.9 us), `joinOnly` **3.7-3.9**, `dirnameOnly` 0.8, `keyOnly`
+1.2, `bookkeeping` 0.5-0.8. So the syscalls are the largest single piece and the path
+arithmetic is the next — and the row alone could say neither.
+
+**WHAT LANDED.** `ModuleResolver` memoizes `exists`/`isDirectory` for the build and is SEEDED
+with the glob's root-file list. **It adds no assumption**: (INC.65) already memoizes the whole
+ANSWER per `(importerDir, specifier)`, which is strictly stronger than memoizing the probes
+that answer is made of, and the resolver lives for exactly one `ProjectCompiler.build`. **The
+seed may only say YES** — a file can exist and be excluded from the program, so absence from
+it means nothing and falls through to the probe.
+
+**MEASURED, in the build, both draws, with three prior measurement runs as the before-arm:**
+the resolve row **10.2-12.0 -> 5.8-6.5 ms**. The receipt is the count the build now prints —
+**`module resolution: 2351 questions, 0 reached the filesystem`**, against 2,351 syscalls
+before. The `node_modules` ladder is the other beneficiary and the one this fixture cannot
+show: `resolveBare` asks `isDirectory("<dir>/node_modules")` for every ancestor of every
+importer, i.e. the same handful of directories thousands of times.
+
+**THE ABLATION FOUND THE PIN SET INCOMPLETE, WHICH IS WHAT IT IS FOR.** Arm b2 keyed the
+memo by BASENAME and reddened only the two COUNT pins — every value pin in the class happened
+to ask about names that exist on BOTH sides, so a memo answering "yes, that exists" for a
+same-named file in another directory passed all of them. That is a wrong PROGRAM, silent per
+(CFG.1). A pin asking for a file that exists in one directory and not the other was added, and
+b2 then reddens it. Three arms, three distinct red sets: b1 (the seed read as an authoritative
+file list) **4 RED**, b2 **3 RED**, b3 (no memo at all) **3 RED**.
+
+**GATES.** Suite **16,618 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**WHAT IS LEFT IN THE ROW, MEASURED AND NAMED:** `joinOnly` **3.7-3.9 ms over 4,701 calls
+(~810 ns each)** — `PathUtil.join(dir, "../layer02/m2_16")`, i.e. a `normalize` that must
+process `..` segments, and (INC.68)'s fast path cannot help a path that genuinely needs
+normalizing; and `dirname` + the memo key at **~1.5 ms**, where the crawl loop already knows
+the importer's directory once per FILE and re-derives it per SPECIFIER. Both are arithmetic,
+neither costs a promise.
+
 ### Round (INC.78) — the root-file glob asked an ACCEPTING regex per candidate, and no refusal filter could have helped it
 
 **`collectRootFiles` ran `excludeRegexes.none { it.matches(path) } && includeRegexes.any { it.matches(path) }`
@@ -2435,6 +2484,16 @@ a residue no sub-row named.**
   with it. **TRANSFERABLE: a defaulted interface member added for speed is a silent regression
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
+
+- [x] **(INC.79) DONE 2026-08-31 — THE CRAWL'S RESOLVE ROW, AND A REFUSAL THAT WAS RIGHT ABOUT
+  ITS COMPONENT AND WRONG ABOUT THE PROGRAM.** (INC.73)(a) called the row's syscall half
+  irreducible: one `exists` per distinct resolution. The ROOT-FILE GLOB had already proved
+  those files exist, in the same build, off the same `Vfs`. Seeding `ModuleResolver`'s
+  per-build probe memo from it takes the build to **2,351 questions / 0 syscalls** and the row
+  **10.2-12.0 -> 5.8-6.5 ms**. The seed is POSITIVE-ONLY (a file can exist and be excluded),
+  and the ablation that read the seed as an authoritative file list reddens 4 pins.
+  **STILL OPEN in the same row:** `PathUtil.join`/`normalize` at ~810 ns x 4,701 (3.7-3.9 ms)
+  and `dirname` + the memo key at ~1.5 ms, which the crawl loop could hoist per FILE.
 
 - [x] **(INC.78) DONE 2026-08-31 — THE ROOT-FILE GLOB'S MATCH ROW, AND THE REFUSAL FILTER THAT
   WOULD HAVE BOUGHT ~0.3 ms OF ~5.** (INC.77) ranked this row at ~5-6.8 ms and proposed a

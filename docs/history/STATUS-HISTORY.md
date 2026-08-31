@@ -1,3 +1,37 @@
+**(INC.72) — THE SURPLUS WAS THE CRAWL, AND BOTH OF THIS SESSION'S WALL FIGURES ARE RETRACTED
+(2026-08-31).** (INC.70) and (INC.71) each reported an ABBA-rotated floor wall about **three
+times** what their pass row explained, and that gap was queued as a mechanism to hunt. It was
+not a mechanism. Running the SAME two binaries with the per-PHASE instrument — two processes
+per arm, rotated, second instrumented draw — attributes the change and nothing else:
+**init-block pass dispatch 39.87 -> 25.06 ms (-14.81)**, which is what the two pass rows said,
+while the UNTOUCHED **import-graph crawl swung +18.01** in the same run, its
+elapsed-with-suspension `read+decode` sum moving **147.8 -> 249.9 ms**. Every other phase is
+flat to within 0.7 ms.
+**So (INC.70)'s "160.0 -> 136.5 (-23.5)" and (INC.71)'s "142.5 -> 120.0 (-22.5)" are each one
+batch's reading of a quantity carrying a ±20 ms concurrent term; the same binaries read
+128.5 -> 116.5 in this round's batch. What ships is -14.81 ms of init-block dispatch,
+phase-attributed, and that is the number to carry.**
+**THE LESSON IS NOT "ROTATE MORE" — IT IS "PICK AN INSTRUMENT WHOSE VARIANCE DOES NOT CONTAIN
+THE ANSWER".** (INC.68) showed a BLOCKED batch inventing a delta that rotation removed; this is
+the next step out — a ROTATED batch of a COMPOSITE quantity still cannot separate two of its
+terms, and 4 processes x 8 draws per arm did not help, because the noise is a real, large,
+unrelated phase rather than run-to-run jitter. For a checker-side floor change the receipt is
+now `FrontEnd`'s phase row plus the deterministic population count; the floor wall is a sanity
+check. `FloorAbMain` grows an `fe` mode so that decomposition is a two-BINARY A/B.
+**SESSION TOTAL, re-taken on the SAME INSTRUMENT rather than inferred from the A/B arms —
+`scripts/floor-decomposition.sh`, same fixture, same warm-ups, same `PLAIN late` slot: the
+2,401-file `dom` floor is 122 -> 94 ms (`PLAIN early` 144 -> 105).** Two runs of one recipe
+have no arm-rotation problem to get wrong, which is (INC.72)'s lesson applied to the
+REPORTING. **The ranking has changed and the next round must start from it: the CRAWL is now
+the largest floor row (29 ms, 36%) for the first time in this arc — its READ half is (INC.56),
+the one row costing a soundness promise and the one an IntelliJ-class host can hand us — with
+the init-block dispatch at 22 (28%), config+glob 12, bind 8, post 5.** The pass table is
+**22.43 ms over 418 rows**, headed by three whole-program INDEX builds
+(`init:moduleTypeNameIndex` 2.52, `init:collectUmdGlobalsAndModuleFiles` 2.32,
+`init:mergeFileLocalsIntoGlobals` 2.06) — none of them a per-file table, so the
+(INC.70)/(INC.71) deferral shape does not transfer unchanged, and the GO/NO-GO for each is
+(INC.16)'s counter: who forces the index, and is it anyone on a floor build?
+
 **(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
 TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to
 publish `moduleOnlyGlobalNames` and `libValueShadowNames`, whose only three readers —
