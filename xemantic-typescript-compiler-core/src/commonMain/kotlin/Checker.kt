@@ -9233,6 +9233,34 @@ class Checker(
      */
     private var moduleOnlyGlobalNames: Set<String> = emptySet()
 
+    /** (INC.71) `init:snapshotPreAugGlobalKeys`' answer, captured by
+     *  [computePerFileVisibility] and consumed by [ensurePerFileVisibility]. Null until
+     *  that pass has stood, which is what keeps the sets EMPTY before init step 1b2 —
+     *  the same degradation to the legacy merged consult the eager form had.
+     *  Declared before `init` per the init-order trap. */
+    private var perFileVisibilityPreAugKeys: Set<String>? = null
+
+    /** (INC.71) True once [ensurePerFileVisibility] has built the sets. */
+    private var perFileVisibilityComputed: Boolean = false
+
+    /** (INC.71) The INV.3(a) classifier's two taxonomies, built beside the sets and read
+     *  from inside the installed lambda. Empty on every build that never classifies a
+     *  lookup, i.e. everything but tier-3 `--passTiming`. */
+    private var classifierModuleLocalNames: Set<String> = emptySet()
+    private var classifierNonModuleVisible: Set<String> = emptySet()
+
+    /** (INC.71) [moduleOnlyGlobalNames], built on first ask. */
+    private fun moduleOnlyGlobals(): Set<String> {
+        ensurePerFileVisibility()
+        return moduleOnlyGlobalNames
+    }
+
+    /** (INC.71) [libValueShadowNames], built on first ask. */
+    private fun libValueShadows(): Set<String> {
+        ensurePerFileVisibility()
+        return libValueShadowNames
+    }
+
     /**
      * INV.3(d): names with a legitimate NON-module global meaning at merge
      * time — every SCRIPT-file local name.
@@ -15796,6 +15824,51 @@ class Checker(
      * instrumented).
      */
     private fun computePerFileVisibility(preAugmentationGlobalsKeys: Set<String>) {
+        // (INC.71) The pass now CAPTURES its one input and installs the classifier;
+        // the sets themselves are built by [ensurePerFileVisibility] on first ask.
+        perFileVisibilityPreAugKeys = preAugmentationGlobalsKeys
+        installGlobalsLookupClassifier()
+    }
+
+    /**
+     * (INC.71) Build the INV.3(b)(ii) visibility sets, the first time one is read.
+     *
+     * ## Why it is deferrable at all
+     *
+     * Everything it reads is frozen by the time [computePerFileVisibility] stands:
+     * each file's `isModuleFile` shape and `locals`, `libGlobals`, and
+     * `globals.keys` against the snapshot taken at `init:snapshotPreAugGlobalKeys`.
+     * **The last one is the ordering claim and it was checked rather than assumed:
+     * the only writers of [globals] are `init:mergeLibGlobals`,
+     * `init:mergeFileLocalsIntoGlobals` and `collectModuleAugmentations` (dispatched
+     * by `init:mergeModuleAugmentations`), and all three run at EARLIER init steps.**
+     * A writer added after this pass would make the eager and deferred answers
+     * disagree silently, exactly as for [buildPerFileScopeFor].
+     *
+     * ## Why it pays
+     *
+     * The sets have three readers — [globalsForFile], [globalsForFileNode] and
+     * [libValueBehindTypeOnlyShadow] — and all three are NAME RESOLUTION. A build
+     * whose check partition is empty resolves no name, so it reads none of them:
+     * measured on the 2,401-file `many-small-2400-dom` fixture, **0 asks on a floor
+     * build against 335,881 on a full one**, which is why the pass was ~5.6-7.2 ms of
+     * a ~136 ms incremental floor that could not be spent.
+     *
+     * ## The one place this is NOT lazy
+     *
+     * The INV.3(a) classifier is installed EAGERLY, at this pass's own moment, and
+     * forces the sets from inside its body — so under tier-3 `--passTiming` every
+     * classified lookup is classified exactly as before and `globals.lookups` /
+     * `globals.conflated` do not move. The visible consequence is that under FULL
+     * `--passTiming` the cost lands on whichever pass performs the first `globals`
+     * lookup rather than on this row; at the `rows` tier (which is what the floor
+     * decomposition uses) [globals] is not instrumented at all and the row is honest.
+     */
+    private fun ensurePerFileVisibility() {
+        if (perFileVisibilityComputed) return
+        val preAugmentationGlobalsKeys = perFileVisibilityPreAugKeys ?: return
+        perFileVisibilityComputed = true
+        EagerIndexCensus.perFileVisibilityBuilds++
         val moduleLocalNames = HashSet<String>()
         // (CHK.49) the LIB key set is deliberately NOT seeded here — see
         // [mergeSharedKeepNames]'s KDoc. A lib name a MODULE file declares now
@@ -15833,10 +15906,8 @@ class Checker(
             else moduleOnlyGlobalNames.filterTo(HashSet()) { n ->
                 libGlobals[n]?.valueDeclaration != null
             }
-        installGlobalsLookupClassifier(
-            moduleLocalNames,
-            HashSet(nonModuleVisible).apply { addAll(libGlobals.keys) },
-        )
+        classifierModuleLocalNames = moduleLocalNames
+        classifierNonModuleVisible = HashSet(nonModuleVisible).apply { addAll(libGlobals.keys) }
     }
 
     /**
@@ -15855,12 +15926,14 @@ class Checker(
      * context). The classifier must never consult [globals] itself — that
      * would recurse the hook.
      */
-    private fun installGlobalsLookupClassifier(
-        moduleLocalNames: Set<String>,
-        nonModuleVisible: Set<String>,
-    ) {
+    private fun installGlobalsLookupClassifier() {
         val instrumented = globals as? InstrumentedSymbolTable ?: return
         instrumented.onLookup = { name, sym ->
+            // (INC.71) force the sets here, so a classified lookup is classified
+            // exactly as it was when they were built eagerly.
+            ensurePerFileVisibility()
+            val moduleLocalNames = classifierModuleLocalNames
+            val nonModuleVisible = classifierNonModuleVisible
             val cls = when {
                 sym == null -> GlobalsLookupClass.MISS
                 name !in moduleLocalNames -> GlobalsLookupClass.TRUE_GLOBAL
@@ -16023,10 +16096,10 @@ class Checker(
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
         if (NameCensus.on) {
-            NameCensus.publish(moduleOnlyGlobalNames, globals.keys)
-            NameCensus.nameProbe(name, name in moduleOnlyGlobalNames, node = false)
+            NameCensus.publish(moduleOnlyGlobals(), globals.keys)
+            NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = false)
         }
-        if (name in moduleOnlyGlobalNames) {
+        if (name in moduleOnlyGlobals()) {
             // (WARM.23) round 896 — ONE probe. This used to be
             // `perFileScope.containsKey(fileName)` here and `perFileScope[fileName]`
             // again inside [lookupPerFile]: the file PATH hashed twice per name.
@@ -16073,10 +16146,10 @@ class Checker(
         // Before init step 1b2 the set is empty → everything degrades to the
         // legacy merged consult (same as the ownerless degradation below).
         if (NameCensus.on) {
-            NameCensus.publish(moduleOnlyGlobalNames, globals.keys)
-            NameCensus.nameProbe(name, name in moduleOnlyGlobalNames, node = true)
+            NameCensus.publish(moduleOnlyGlobals(), globals.keys)
+            NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = true)
         }
-        if (name !in moduleOnlyGlobalNames) return globals[name]
+        if (name !in moduleOnlyGlobals()) return globals[name]
         // Walk to the owning SourceFile, capturing the INNERMOST enclosing
         // `declare module "<spec>"` block on the way (the INV.3(c)(iv)
         // augmentation-visibility rule below needs it). Mirrors
@@ -117130,7 +117203,7 @@ interface DataView {
      * `getTypeOfSymbol(lib)`.
      */
     private fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? {
-        if (name !in libValueShadowNames) return null
+        if (name !in libValueShadows()) return null
         val lib = libGlobals[name] ?: return null
         var resolved = local
         if (resolved.flags.hasAny(SymbolFlags.Alias)) {
@@ -117167,7 +117240,7 @@ interface DataView {
                 // report TS2339. It must be asked AFTER [currentLocalTypes] and
                 // the destructured-binding set, which carry genuine inner
                 // bindings that DO shadow in both meanings.
-                if (id.text in libValueShadowNames) {
+                if (id.text in libValueShadows()) {
                     currentFileLocals?.get(id.text)?.let { local ->
                         libValueBehindTypeOnlyShadow(id.text, local)
                             ?.let { return getTypeOfSymbol(it) }

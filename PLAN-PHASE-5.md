@@ -20,6 +20,60 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.71) — the per-file VISIBILITY sets, and the floor wall that keeps outrunning the pass table
+
+**`init:computePerFileVisibility` WALKS EVERY PROGRAM FILE'S `locals` TO PUBLISH TWO SETS
+WHOSE ONLY THREE READERS ARE NAME RESOLUTION — SO A BUILD THAT CHECKS NOTHING READS NEITHER.**
+`moduleOnlyGlobalNames` and `libValueShadowNames` are consulted by `globalsForFile`,
+`globalsForFileNode` and `libValueBehindTypeOnlyShadow`, and nothing else.
+
+**THE POPULATION DECIDED IT BEFORE ANY IMPLEMENTATION, and it cost one temporary counter.**
+Three increments at those three readers, one build, one run: **0 asks on a floor build of the
+2,401-file `many-small-2400-dom` fixture against 335,881 on a full one.** That is (INC.16)'s
+law used as a GO/NO-GO rather than as a post-hoc explanation — had it read 335,881 on both,
+the round would have stopped there for the price of one build.
+
+**THE ORDERING CLAIM WAS CHECKED, NOT ASSUMED.** The pass reads `globals.keys` against
+`init:snapshotPreAugGlobalKeys`' snapshot, so a deferral is only exact if nothing writes
+[globals] afterwards; the writers are `init:mergeLibGlobals`,
+`init:mergeFileLocalsIntoGlobals` and `collectModuleAugmentations` (dispatched by
+`init:mergeModuleAugmentations`), and all three run at earlier init steps. Same shape as
+(INC.70)'s `locals` argument, and the same silent failure mode if a future pass breaks it.
+
+**THE ONE PLACE IT IS DELIBERATELY NOT LAZY IS THE PROBE.** The INV.3(a) classifier is still
+installed at the pass's own moment and FORCES the sets from inside its lambda, so under
+tier-3 `--passTiming` every classified lookup is classified exactly as before —
+`globals.lookups` reads **783,383, +0.00%**, which is the receipt. The visible consequence is
+that under FULL `--passTiming` the cost lands on whichever pass performs the first `globals`
+lookup instead of on this row; at the `rows` tier, which is what the floor decomposition
+uses, [globals] is not instrumented at all and the row is honest.
+
+**MEASURED.** Row `init:computePerFileVisibility` **-> 0.002-0.003 ms** from 5.5-7.2 (the
+instrumented draws on this fixture are noisy enough that one read 21.9 — see the successor
+note); ABBA-rotated floor **median-of-process-medians 142.5 -> 120.0 ms (-15.8%)**, means
+139.8 -> 120.2, three of the four process medians cleanly separated.
+
+**THE VALUE RECEIPT IS THE CORPUS AGAIN, AND FOR THE SAME REASON AS (INC.70): THE PROJECT
+PINS CANNOT SEE THE MECHANISM.** Ablation c2 (the sets stay empty forever) reddens **492**
+core-suite tests — but leaves the fixture's own module-local leak reporting TS2304, because
+on that shape the name is not in the merged `globals` either, so the set has nothing to add.
+**Two rounds running, a hand-written `-project` value pin has been unable to discriminate the
+thing under test while the corpus discriminated it in the hundreds.** That is worth stating
+as a rule rather than as an accident: for anything in the INV.3 visibility model, the
+`-project` pins gate the REGIME (which builds do the work) and the corpus gates the ANSWER.
+
+**SUCCESSOR — AND IT IS A MEASUREMENT QUESTION, NOT A ROW.** Twice in a row now the
+ABBA-rotated floor wall has moved about **three times** what the pass table explains:
+(INC.70) -23.5 ms wall against ~4 ms of row, (INC.71) -22.5 against ~7. Both changes also
+removed thousands of RETAINED allocations per build (2,401 `LayeredSymbolTable`s and their
+maps; two whole-program `HashSet`s over every file's locals), which is a plausible mechanism
+and — per round 801's "an allocation count is not a cost" — not a measured one. **Before
+opening another init row, decompose the floor on BOTH arms with `--frontEnd` as well as
+`--passTimingRows`**: if the surplus is outside the init block the next lever is not in the
+pass table at all, and if it is inside it then the rows-tier probe is under-reading and every
+ranking this arc has taken from it needs re-reading. The instrument exists
+(`scripts/floor-decomposition.sh`); what is missing is running it as a two-BINARY A/B.
+
 ### Round (INC.70) — every build allocated a name-resolution table for every file, and a floor build reads none of them
 
 **`init:buildPerFileScopes` ALLOCATED TWO MAPS PER PROGRAM FILE, COPIED THAT FILE'S OWN
@@ -4826,6 +4880,27 @@ RHS, and the merged-member CONTRADICTION direction.
   reported a +2.70 ms regression in a region calling no `normalize`, reproducibly over 12
   draws per arm, and rotation inverted it — see the session note. Successor is (INC.66)
   below, whose ranking is unchanged except that config+glob is now ~13 ms.**
+
+- [x] **(INC.71) DONE 2026-08-31 — the INV.3(b)(ii) per-file VISIBILITY sets are built on
+  FIRST ASK, and a floor build builds neither.** Their three readers are all name resolution,
+  so a build that checks nothing reads none: **0 asks on a floor build against 335,881 on a
+  full one**, measured with a temporary counter BEFORE the implementation, as a GO/NO-GO.
+  Row -> 0.002-0.003 ms from 5.5-7.2; ABBA-rotated floor **142.5 -> 120.0 ms**. The INV.3(a)
+  classifier stays installed at the pass's moment and forces the sets from inside its lambda,
+  so `globals.lookups` is +0.00%. Value receipt: ablation c2 reddens **492** corpus tests,
+  where the `-project` pins could not see the mechanism at all.
+
+- [ ] **(INC.72) THE FLOOR WALL HAS OUTRUN THE PASS TABLE BY ~3x TWICE IN A ROW — DECOMPOSE
+  BOTH ARMS BEFORE OPENING ANOTHER INIT ROW (2026-08-31).** (INC.70) measured -23.5 ms of
+  ABBA-rotated floor wall against ~4 ms of pass row; (INC.71) -22.5 against ~7. Both also
+  removed thousands of RETAINED allocations per build, which is a plausible mechanism and, per
+  round 801, not a measured one. **Two readings are possible and they lead opposite ways**: the
+  surplus is outside the init block (so the next lever is not in the pass table), or the
+  `rows`-tier probe under-reports (so every ranking this arc has taken from it needs
+  re-reading — and note the instrumented draws on this fixture are noisy enough that one read
+  `init:computePerFileVisibility` at 21.9 ms and the next at 7.2 in the same process pair).
+  The instrument exists — `scripts/floor-decomposition.sh` gives the `--frontEnd` phase table
+  — and what is missing is running it as a two-BINARY A/B, rotated, rather than once.
 
 - [x] **(INC.70) DONE 2026-08-31 — per-file name-resolution scopes are built on FIRST ASK,
   and a floor build builds NONE.** `init:buildPerFileScopes` allocated two maps and a

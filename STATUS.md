@@ -1,5 +1,34 @@
 # Status
 
+**(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
+TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to
+publish `moduleOnlyGlobalNames` and `libValueShadowNames`, whose only three readers —
+`globalsForFile`, `globalsForFileNode`, `libValueBehindTypeOnlyShadow` — are all NAME
+RESOLUTION. So a build that checks nothing reads neither.
+**THE POPULATION DECIDED IT BEFORE ANY IMPLEMENTATION, for the price of one temporary
+counter: 0 asks on a floor build of the 2,401-file fixture against 335,881 on a full one.**
+(INC.16)'s law used as a GO/NO-GO rather than as a post-hoc explanation.
+**THE ORDERING CLAIM WAS CHECKED**: the pass compares `globals.keys` against
+`init:snapshotPreAugGlobalKeys`' snapshot, and all three writers of `globals` run at earlier
+init steps. **The one place it is deliberately NOT lazy is the probe** — the INV.3(a)
+classifier is still installed at the pass's moment and FORCES the sets from inside its lambda,
+so `globals.lookups` reads 783,383, **+0.00%**.
+**MEASURED:** row **-> 0.002-0.003 ms** from 5.5-7.2; ABBA-rotated floor
+**142.5 -> 120.0 ms (-15.8%)**.
+**THE VALUE RECEIPT IS THE CORPUS, AND THAT IS NOW A RULE RATHER THAN AN ACCIDENT:** ablation
+c2 (sets stay empty) reddens **492** core tests, while the hand-written `-project` value pin
+stays GREEN — the second round running where a `-project` pin cannot discriminate the
+mechanism and the corpus discriminates it in the hundreds. For the INV.3 visibility model the
+`-project` pins gate the REGIME (which builds do the work) and the corpus gates the ANSWER.
+**GATES.** Suite **16,565 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`.
+**SUCCESSOR IS A MEASUREMENT QUESTION, NOT A ROW ((INC.72)):** twice in a row the rotated
+floor WALL moved about **three times** what the pass table explains (-23.5 against ~4 ms,
+-22.5 against ~7). Both changes also removed thousands of RETAINED allocations per build,
+which round 801 says is a plausible mechanism and not a measured one. Decompose BOTH arms with
+`--frontEnd` before opening another init row: either the surplus is outside the init block, or
+the `rows`-tier probe under-reports and every ranking taken from it needs re-reading.
+
 **(INC.70) — EVERY BUILD ALLOCATED A NAME-RESOLUTION TABLE FOR EVERY FILE, AND A FLOOR BUILD
 READS NONE OF THEM (2026-08-31).** `init:buildPerFileScopes` allocated two maps per program
 file, copied that file's own top-level locals into one and precomputed a
@@ -128,49 +157,3 @@ argument is load-bearing and non-obvious: without it a malformed `tsconfig.json`
 clean editor over a program checked with default options. It is also the host that could make
 (INC.56)'s promise — but it invalidates on `VFS_CHANGES` rather than owning the read, so the
 promise is expressible and not yet made.
-
-**(INC.65) — THE CRAWL RE-ASKED THE FILESYSTEM A QUESTION IT HAD ALREADY ANSWERED, AND THE
-SESSION'S FLOOR IS 241 -> 151 / 256 -> 116 ms (2026-08-30).** The previous round named "a
-PARTITION question and a HOST PROMISE" as all that was left; that was wrong within the hour,
-because **`FrontEnd.CRAWL` had no split below its two elapsed-WITH-SUSPENSION CPU sums** — so
-the residue between them and the WALL was unattributed, and on an application-shaped project
-that residue is most of the row. Bracketing the crawl's SEQUENTIAL half
-(`FrontEnd.CRAWL_RESOLVE`) read **20.6-28.6 ms of a 44-60 ms crawl wall**, ~15% of the whole
-floor. **(INC.53)'s "ask what runs OUTSIDE a pass" has a sub-row-shaped twin, and this is the
-third time this arc that ADDING an instrument, not reading one, is what found the cost.**
-**THE FIX IS EXACT, AND READING THE FUNCTION IS WHAT SAYS SO**: `ModuleResolver.resolve`
-reads `importerPath` once, to take its `dirname`, and never again, so `(importerDir,
-specifier)` is not a heuristic key but THE key. Censused offline before building anything:
-**4,701 resolutions over 2,351 distinct pairs — a duplication factor of exactly 2.0**, and a
-codebase with shared barrels has more. Nothing to invalidate — a `ModuleResolver` is
-constructed once per `build`, so the memo's lifetime IS one build; deliberately NOT
-process-global, since a cross-build cache cannot see an ADDED file ((INC.48)). `null` is a
-real answer and is memoized too, or the filesystem is re-probed for every unresolved
-specifier — the population a project mid-edit has most of. **CRAWL_RESOLVE 24.0 -> 14.3 ms
-mean; crawl wall 44-60 -> 34-44.**
-**THE PIN THE DESIGN RESTS ON IS NOT A COUNT**: a memo keyed by the SPECIFIER ALONE passes
-every count assertion and silently resolves `./dep` in one directory to another directory's
-file — a wrong PROGRAM, which per (CFG.1) this repo has no diagnostic channel to notice.
-Ablation d2 makes exactly that mistake and reddens exactly that pin.
-**GATES.** Suite **16,539 / 0 / 3**; `cost_gate.py` exit 0 with **`output.programFiles` 78**
-(the direct receipt that resolution still finds the same program); `huge_methods.py
---fail-over 0` clean; 8-profile `--noEmit` grid `added=0 removed=0` on all eight; `--outDir`
-emit **byte-identical to the PRE-SESSION binary**, 78 files.
-**THE SESSION, ONE FIXTURE AND ONE INSTRUMENT: `many-small-2400-dom` floor medians 241 -> 151
-(early) and 256 -> 116 (late), -37% / -55%**, across (INC.63), (INC.64)(a)/(b) and (INC.65) —
-and **UNDERSTATED**, because the box drifted ~10% slower over the session (`full` median
-3,944 -> 4,335), so the floor's SHARE of a full build fell 6.1% -> 3.5%.
-**AND THE NUMBER THE HOST ACTUALLY FEELS, measured through the `Project` API itself
-(`scripts/incremental-cost.sh`, 2,401 files, 3 rotations):** a body edit re-answers in
-**170-248 ms** (warm rotations 159-192), a comment-only edit 164-192, introducing an error
-166-193 with the TS2322 correctly found, and a re-query with NO edit is **0 ms** — the memo
-serves it. The narrowed build is **149-204 ms against a full build of 4,140-5,897**, i.e.
-**~25-30x**, and the partition's answer agrees with the full build's row for row on every
-rotation. The floor is the dominant term of that latency, which is what makes this arc the
-right one for an editor host.
-
-**SUCCESSOR (INC.66):** checker construct 38-70 (the init pass dispatch, flat — an (INC.7)
-partition question), crawl WALL 34-44 (its READ half is (INC.56), the only row costing a
-soundness promise), config+glob 13-29 (co-largest on some draws, NO promise attached, and
-worth re-decomposing rather than assuming (INC.60) finished it). **And take the lesson
-literally: before pricing any row, check it HAS a split.**

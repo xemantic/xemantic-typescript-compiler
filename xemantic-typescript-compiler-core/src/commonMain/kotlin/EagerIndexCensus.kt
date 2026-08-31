@@ -180,6 +180,22 @@ object EagerIndexCensus {
      */
     var perFileScopeBuilds: Int = 0
 
+    /**
+     * (INC.71) 1 if the INV.3(b)(ii) per-file VISIBILITY sets were built, else 0.
+     *
+     * **0 on a build whose check partition is empty — that is the assertion.** Their
+     * three readers ([globalsForFile], [globalsForFileNode],
+     * [libValueBehindTypeOnlyShadow]) are all NAME RESOLUTION, and a build that checks
+     * nothing resolves nothing: measured on the 2,401-file `many-small-2400-dom`
+     * fixture, **0 asks on a floor build against 335,881 on a full one**, for a pass
+     * that was 5.6-7.2 ms of a ~136 ms incremental floor.
+     *
+     * Unlike [perFileScopeBuilds] this is not a per-file population — the sets are one
+     * whole-program set difference — so the only two values it can take are 0 and 1,
+     * and the pin is that a FLOOR build reads 0 while a full one reads 1.
+     */
+    var perFileVisibilityBuilds: Int = 0
+
     fun resetCounters() {
         transformOrderSetBuilds = 0
         relativeImportExtractions = 0
@@ -190,5 +206,6 @@ object EagerIndexCensus {
         jsxSuffixScanSteps = 0
         fileBasenameIndexBuilds = 0
         perFileScopeBuilds = 0
+        perFileVisibilityBuilds = 0
     }
 }

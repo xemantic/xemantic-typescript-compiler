@@ -1,3 +1,49 @@
+**(INC.65) — THE CRAWL RE-ASKED THE FILESYSTEM A QUESTION IT HAD ALREADY ANSWERED, AND THE
+SESSION'S FLOOR IS 241 -> 151 / 256 -> 116 ms (2026-08-30).** The previous round named "a
+PARTITION question and a HOST PROMISE" as all that was left; that was wrong within the hour,
+because **`FrontEnd.CRAWL` had no split below its two elapsed-WITH-SUSPENSION CPU sums** — so
+the residue between them and the WALL was unattributed, and on an application-shaped project
+that residue is most of the row. Bracketing the crawl's SEQUENTIAL half
+(`FrontEnd.CRAWL_RESOLVE`) read **20.6-28.6 ms of a 44-60 ms crawl wall**, ~15% of the whole
+floor. **(INC.53)'s "ask what runs OUTSIDE a pass" has a sub-row-shaped twin, and this is the
+third time this arc that ADDING an instrument, not reading one, is what found the cost.**
+**THE FIX IS EXACT, AND READING THE FUNCTION IS WHAT SAYS SO**: `ModuleResolver.resolve`
+reads `importerPath` once, to take its `dirname`, and never again, so `(importerDir,
+specifier)` is not a heuristic key but THE key. Censused offline before building anything:
+**4,701 resolutions over 2,351 distinct pairs — a duplication factor of exactly 2.0**, and a
+codebase with shared barrels has more. Nothing to invalidate — a `ModuleResolver` is
+constructed once per `build`, so the memo's lifetime IS one build; deliberately NOT
+process-global, since a cross-build cache cannot see an ADDED file ((INC.48)). `null` is a
+real answer and is memoized too, or the filesystem is re-probed for every unresolved
+specifier — the population a project mid-edit has most of. **CRAWL_RESOLVE 24.0 -> 14.3 ms
+mean; crawl wall 44-60 -> 34-44.**
+**THE PIN THE DESIGN RESTS ON IS NOT A COUNT**: a memo keyed by the SPECIFIER ALONE passes
+every count assertion and silently resolves `./dep` in one directory to another directory's
+file — a wrong PROGRAM, which per (CFG.1) this repo has no diagnostic channel to notice.
+Ablation d2 makes exactly that mistake and reddens exactly that pin.
+**GATES.** Suite **16,539 / 0 / 3**; `cost_gate.py` exit 0 with **`output.programFiles` 78**
+(the direct receipt that resolution still finds the same program); `huge_methods.py
+--fail-over 0` clean; 8-profile `--noEmit` grid `added=0 removed=0` on all eight; `--outDir`
+emit **byte-identical to the PRE-SESSION binary**, 78 files.
+**THE SESSION, ONE FIXTURE AND ONE INSTRUMENT: `many-small-2400-dom` floor medians 241 -> 151
+(early) and 256 -> 116 (late), -37% / -55%**, across (INC.63), (INC.64)(a)/(b) and (INC.65) —
+and **UNDERSTATED**, because the box drifted ~10% slower over the session (`full` median
+3,944 -> 4,335), so the floor's SHARE of a full build fell 6.1% -> 3.5%.
+**AND THE NUMBER THE HOST ACTUALLY FEELS, measured through the `Project` API itself
+(`scripts/incremental-cost.sh`, 2,401 files, 3 rotations):** a body edit re-answers in
+**170-248 ms** (warm rotations 159-192), a comment-only edit 164-192, introducing an error
+166-193 with the TS2322 correctly found, and a re-query with NO edit is **0 ms** — the memo
+serves it. The narrowed build is **149-204 ms against a full build of 4,140-5,897**, i.e.
+**~25-30x**, and the partition's answer agrees with the full build's row for row on every
+rotation. The floor is the dominant term of that latency, which is what makes this arc the
+right one for an editor host.
+
+**SUCCESSOR (INC.66):** checker construct 38-70 (the init pass dispatch, flat — an (INC.7)
+partition question), crawl WALL 34-44 (its READ half is (INC.56), the only row costing a
+soundness promise), config+glob 13-29 (co-largest on some draws, NO promise attached, and
+worth re-decomposing rather than assuming (INC.60) finished it). **And take the lesson
+literally: before pricing any row, check it HAS a split.**
+
 **(INC.64) — TWO ROWS PAID ON EVERY KEYSTROKE FOR WORK NOBODY READS, AND THE FLOOR IS
 241 -> 146 ms OVER THE SESSION (2026-08-30).** Both found by (INC.62)'s instrument —
 divide a row by its own population, refuse an impossible per-op cost.
