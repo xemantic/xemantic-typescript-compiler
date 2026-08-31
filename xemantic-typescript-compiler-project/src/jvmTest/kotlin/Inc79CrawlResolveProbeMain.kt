@@ -157,8 +157,125 @@ fun main(args: Array<String>) {
         return System.nanoTime() - t0
     }
 
+    // (INC.80) THE CANDIDATE, priced before it is built: `join(dir, spec)` where the base
+    // is already normalized and the specifier's only `.`/`..` segments are a PREFIX — which
+    // is every module specifier — is a count of leading `..`, that many `lastIndexOf('/')`
+    // on the base, and one concat. No split list, no ArrayDeque, no joinToString. This arm
+    // is the CEILING (it omits the validity scan the real one needs), so a ceiling that is
+    // not much below `joinOnly` refuses the whole idea without a build.
+    fun fastJoinCeiling(base: String, part: String): String {
+        var i = 0
+        var up = 0
+        while (true) {
+            if (part.startsWith("./", i)) i += 2
+            else if (part.startsWith("../", i)) { up++; i += 3 }
+            else break
+        }
+        var end = base.length
+        var k = 0
+        while (k < up) {
+            val slash = base.lastIndexOf('/', end - 1)
+            if (slash <= 0) return PathUtil.join(base, part)
+            end = slash
+            k++
+        }
+        return if (i == part.length) base.substring(0, end) else base.substring(0, end) + "/" + part.substring(i)
+    }
+    // The SHIPPABLE version: the ceiling above omits the two scans that establish the
+    // fast path applies at all — that the base is normalized, and that the part's only
+    // `.`/`..` segments are a prefix. The current slow path already scans base+"/"+part
+    // once (inside `normalize`, to decide it is NOT normalized), so these scans are not
+    // new work; what the fast path removes is the split list, the deque and the
+    // joinToString. This arm is what decides whether that is worth a build.
+    fun scanIsNormalizedAbsolute(p: String): Boolean {
+        val n = p.length
+        if (n == 0 || p[0] != '/') return false
+        if (n == 1) return true
+        var i = 1
+        var segStart = 1
+        while (i <= n) {
+            val c = if (i == n) '/' else p[i]
+            if (c == '\\') return false
+            if (c == '/') {
+                val len = i - segStart
+                if (len == 0) return false
+                if (len == 1 && p[segStart] == '.') return false
+                if (len == 2 && p[segStart] == '.' && p[segStart + 1] == '.') return false
+                segStart = i + 1
+            }
+            i++
+        }
+        return true
+    }
+    fun scanIsCleanTail(p: String, from: Int): Boolean {
+        val n = p.length
+        if (from == n) return true
+        var i = from
+        var segStart = from
+        while (i <= n) {
+            val c = if (i == n) '/' else p[i]
+            if (c == '\\') return false
+            if (c == '/') {
+                val len = i - segStart
+                if (len == 0) return false
+                if (len == 1 && p[segStart] == '.') return false
+                if (len == 2 && p[segStart] == '.' && p[segStart + 1] == '.') return false
+                segStart = i + 1
+            }
+            i++
+        }
+        return true
+    }
+    fun fastJoinChecked(base: String, part: String): String {
+        if (part.isEmpty() || part[0] == '/') return PathUtil.join(base, part)
+        var i = 0
+        var up = 0
+        while (true) {
+            if (part.startsWith("./", i)) i += 2
+            else if (part.startsWith("../", i)) { up++; i += 3 }
+            else break
+        }
+        if (!scanIsCleanTail(part, i) || !scanIsNormalizedAbsolute(base)) return PathUtil.join(base, part)
+        var end = base.length
+        var k = 0
+        while (k < up) {
+            val slash = base.lastIndexOf('/', end - 1)
+            if (slash <= 0) return PathUtil.join(base, part)
+            end = slash
+            k++
+        }
+        return if (i == part.length) base.substring(0, end) else base.substring(0, end) + "/" + part.substring(i)
+    }
+    fun timeJoinFastChecked(): Long {
+        val dirs = pairs.map { PathUtil.dirname(it.first) }
+        val t0 = System.nanoTime()
+        for (i in pairs.indices) sink += fastJoinChecked(dirs[i], pairs[i].second).length.toLong()
+        return System.nanoTime() - t0
+    }
+
+    fun timeJoinFast(): Long {
+        val dirs = pairs.map { PathUtil.dirname(it.first) }
+        val t0 = System.nanoTime()
+        for (i in pairs.indices) sink += fastJoinCeiling(dirs[i], pairs[i].second).length.toLong()
+        return System.nanoTime() - t0
+    }
+
+    // The candidate must AGREE with the general path on every pair, or its timing is a
+    // measurement of a different function.
+    run {
+        val dirs = pairs.map { PathUtil.dirname(it.first) }
+        var diverged = 0
+        for (i in pairs.indices) {
+            if (fastJoinCeiling(dirs[i], pairs[i].second) != PathUtil.join(dirs[i], pairs[i].second)) diverged++
+            if (fastJoinChecked(dirs[i], pairs[i].second) != PathUtil.join(dirs[i], pairs[i].second)) diverged++
+        }
+        require(diverged == 0) { "REFUSED: fast join diverges on $diverged of ${pairs.size}" }
+    }
+
     val arms = listOf(
         "resolve" to ::timeResolve,
+        "joinFast" to ::timeJoinFast,
+        "joinChecked" to ::timeJoinFastChecked,
         "dirnameOnly" to ::timeDirnameOnly,
         "keyOnly" to ::timeKeyOnly,
         "joinOnly" to ::timeJoinOnly,

@@ -293,9 +293,101 @@ object PathUtil {
         return true
     }
 
-    /** Joins [base] with [part]; an absolute [part] replaces [base]. Result is normalized. */
-    fun join(base: String, part: String): String =
-        if (part.startsWith("/")) normalize(part) else normalize("$base/$part")
+    /**
+     * Joins [base] with [part]; an absolute [part] replaces [base]. Result is normalized.
+     *
+     * (INC.80) The overwhelmingly common shape — an ABSOLUTE NORMALIZED base joined with
+     * a module specifier whose only `.`/`..` segments are a PREFIX (`./dep`,
+     * `../layer02/m2_16`, `a/b`) — is answered without building the intermediate string
+     * at all: count the leading `..`, drop that many segments off [base] with
+     * `lastIndexOf`, and concatenate. Everything else falls through to [normalize],
+     * which stays the DEFINITION of what this answers.
+     *
+     * **WHY**: measured on the 2,401-file `many-small-2400-dom` fixture, the crawl's
+     * specifier resolution spends **3.4-4.1 ms over 4,701 calls (731-880 ns each)** in
+     * here, because a specifier with a `..` is exactly the case [isNormalized] must
+     * refuse — so (INC.68)'s fast path cannot help it and the general body allocates a
+     * `split` list, a `String` per segment, an `ArrayDeque` and a `joinToString` builder.
+     * The shape above costs **131-136 ns**, verified against the general body on all
+     * 4,701 of that project's real `(directory, specifier)` pairs before it was built.
+     *
+     * The two scans are not new work: the general path already scans `base + "/" + part`
+     * once inside [normalize], to decide it is not normalized. What is removed is the
+     * allocation.
+     *
+     * Deliberately conservative in one place worth naming: popping the LAST segment of an
+     * absolute base (`join("/a", "../b")`) falls back, so `..` runs that reach the root
+     * are answered by [normalize] rather than by arithmetic near a boundary. A false
+     * fallback costs the old speed; a false fast path would answer a DIFFERENT FILE, and
+     * per (CFG.1) nothing in this repo notices a wrong program.
+     */
+    fun join(base: String, part: String): String {
+        if (part.startsWith("/")) return normalize(part)
+        FrontEnd.pathJoinCalls++
+        if (part.isNotEmpty()) {
+            var i = 0
+            var up = 0
+            while (true) {
+                if (part.startsWith("./", i)) i += 2
+                else if (part.startsWith("../", i)) { up++; i += 3 }
+                else break
+            }
+            if (isCleanRelativeTail(part, i) && isNormalized(base) && base.startsWith("/")) {
+                var end = base.length
+                var popped = 0
+                while (popped < up) {
+                    val slash = base.lastIndexOf('/', end - 1)
+                    if (slash <= 0) { end = -1; break }
+                    end = slash
+                    popped++
+                }
+                if (end >= 0) {
+                    FrontEnd.pathJoinFast++
+                    // The ROOT is the one head that already ends in a separator, so
+                    // appending one spells `//` — which normalize would have collapsed
+                    // and this arithmetic would not. The 4,701-pair fixture population
+                    // this was priced on contains no such base; the adversarial grid in
+                    // `PathJoinFastPathTest` does, and caught it.
+                    val head = base.substring(0, end)
+                    return when {
+                        i == part.length -> head
+                        head == "/" -> "/" + part.substring(i)
+                        else -> head + "/" + part.substring(i)
+                    }
+                }
+            }
+        }
+        return normalize("$base/$part")
+    }
+
+    /**
+     * (INC.80) True when the part of [p] from [from] on is a run of plain segments — no
+     * separator run, no `.` or `..` segment, no backslash — i.e. text that [normalize]
+     * would carry through unchanged.
+     *
+     * Conservative in the same direction as [isNormalized]: it answers false for anything
+     * it is not certain about, and an empty remainder is true (the whole part was the
+     * `.`/`..` prefix).
+     */
+    private fun isCleanRelativeTail(p: String, from: Int): Boolean {
+        val n = p.length
+        if (from == n) return true
+        var i = from
+        var segStart = from
+        while (i <= n) {
+            val c = if (i == n) '/' else p[i]
+            if (c == '\\') return false
+            if (c == '/') {
+                val len = i - segStart
+                if (len == 0) return false
+                if (len == 1 && p[segStart] == '.') return false
+                if (len == 2 && p[segStart] == '.' && p[segStart + 1] == '.') return false
+                segStart = i + 1
+            }
+            i++
+        }
+        return true
+    }
 
     /** The parent directory of [path] (normalized), or "" / "/" at the root. */
     fun dirname(path: String): String {

@@ -4793,6 +4793,15 @@ object FrontEnd {
      * `--workers` and under the crawl's flow workers (a plain `++` from several
      * threads under-counts); it is a census, never a gate.
      */
+    /**
+     * (INC.80) census — [PathUtil.join] calls with a RELATIVE part, and how many were
+     * answered by segment arithmetic instead of building the joined string and
+     * normalizing it. The receipt for that fast path, and a count rather than a row
+     * because the row it decomposes has a per-process spread of milliseconds.
+     */
+    var pathJoinCalls: Long = 0
+    var pathJoinFast: Long = 0
+
     var pathNormalizeCalls: Long = 0
     var pathNormalizeFast: Long = 0
 
@@ -5337,7 +5346,7 @@ object FrontEnd {
         filesRead = 0; charsRead = 0
         globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0; globRegexEvals = 0
         resolveExistsQuestions = 0; resolveExistsProbes = 0
-        pathNormalizeCalls = 0; pathNormalizeFast = 0
+        pathNormalizeCalls = 0; pathNormalizeFast = 0; pathJoinCalls = 0; pathJoinFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
         mergeDeclarationsAppended = 0
@@ -5614,7 +5623,8 @@ object FrontEnd {
                 "$globRoots roots, $globRegexEvals regex evaluations"
         )
         appendLine(
-            "path normalize: $pathNormalizeCalls calls, $pathNormalizeFast already normalized"
+            "path normalize: $pathNormalizeCalls calls, $pathNormalizeFast already normalized; " +
+                "join: $pathJoinCalls relative, $pathJoinFast by arithmetic"
         )
         appendLine(
             "module resolution: $resolveExistsQuestions exists/isDirectory questions, " +
