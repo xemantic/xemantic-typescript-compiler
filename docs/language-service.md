@@ -2415,9 +2415,14 @@ standing, since a stale claim here is invisible to every gate in this repo.)*
    194 ms cold — the same build three ways. An *identical repeat* is free (0 – 1 ms),
    because `captureIn` still probes the LRU.
 
-**A capture build is MEMOIZED on its REQUEST** (`Project.captures`, two
-entries, dropped by every edit alongside the diagnostics cache), which changes the
-`builds` column in two places a host will actually hit:
+**A capture build is MEMOIZED on its REQUEST** (`Project.captures`, `Project.kt:455`
+— (INC.32) two LANES split by the request's WEIGHT, so that a cheap entry can never
+evict one that cost a rebuild: a request naming more than `CAPTURE_MEMO_CARET_SPANS`
+= 4 spans is buffer-sized and bounded at `CAPTURE_MEMO_BUFFERS` = 2, anything at or
+below it is caret-scoped and bounded at `CAPTURE_MEMO_CARET_ENTRIES` = 4, and
+`rememberCapture` (`:3427`) takes its victim only from whichever lane is over
+(`:3436-3441`). Both lanes are still dropped by every edit alongside the diagnostics
+cache), which changes the `builds` column in two places a host will actually hit:
 
 * **hover then go-to-definition at ONE caret is ONE build.** Both name the caret's node
   as a single span and read different channels of the one answer, so the requests are

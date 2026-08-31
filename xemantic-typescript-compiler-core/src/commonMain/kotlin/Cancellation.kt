@@ -62,9 +62,12 @@ fun interface CancellationSignal {
  * transfers it faithfully because it uses `runCatching`, which captures
  * `Throwable`.
  *
- * That reasoning is pinned by `CancellationTest`, not left as a comment: an added
- * `catch (Throwable)` anywhere on the build path would otherwise re-open it
- * silently.
+ * That reasoning is pinned by `ProjectCancellationTest` — specifically by its
+ * `a cancellation cannot be caught as an Exception`, which asserts the TYPE
+ * directly — and not left as a comment: an added `catch (Throwable)` anywhere on
+ * the build path would otherwise re-open it silently. That class lives DOWNSTREAM
+ * of this module, in `-project`'s `commonTest` (seven pins, six of which drive a
+ * real build), so the executable spec is not beside this file.
  */
 class CompilationCancelledError : Error("compilation cancelled by the host")
 

@@ -1,5 +1,42 @@
 # Status
 
+**(INC.82) — THE IMPORTER'S DIRECTORY WAS RE-DERIVED PER SPECIFIER, AND THE ISOLATED PROBE
+OVER-READ ITS OWN PRIZE BY 3x (2026-08-31).** `ModuleResolver.resolve` read `importerPath`
+for nothing but its `dirname` — the (INC.65) KDoc says so in as many words — then joined it
+with the specifier into a fresh `String` and probed the memo with it TWICE. The crawl knows
+that directory once per FILE and asked once per SPECIFIER: **4,701 asks over 2,401 files**.
+**PRICED BEFORE BUILDING** with the probe that already decomposes the row: of 1,314 ns per
+specifier, `dirnameOnly` 96 and `keyOnly` 174 — **1.27 ms of a 6.18 ms row**.
+**LANDED:** `resolveFrom(specifier, importerDir)` is the entry point and `resolve` a wrapper,
+which makes the contract structural rather than a comment; the memo is nested (`dir -> spec`)
+so the outer probe hashes a cached-hash instance the caller already holds and the inner one
+only the short specifier; a memoized `null` is an identity sentinel, so a served answer costs
+one probe; and the crawl hoists both the `dirname` and the per-file resolution map, the map
+staying LAZY so a file whose every import is unresolved still contributes no entry.
+**AND THE PART WORTH READING IS THE OVER-READ.** In the BUILD, over two class dirs differing
+only in these files and rotated across processes, `FERESOLVE` reads **4771/5143/4102 ->
+4677/4707/3954 us** — after wins 3/3 batches in both directions, ranges overlapping, delta
+**~0.15-0.44 ms, not 1.27**. `hits x mean-call-cost` one layer in from where it is usually
+quoted: 96 and 174 ns are what those operations cost **in a tight loop over 4,701 reps**,
+inputs in L1 and the branch perfectly predicted. **An isolated per-operation probe prices an
+UPPER BOUND on a removal, never the removal.**
+**SO THE RECEIPT IS THE COUNT, EXACT TO THE UNIT:** `path normalize: 9577 -> 7277`, i.e.
+precisely `4,701 - 2,401`, with the glob, join and resolution-question censuses IDENTICAL
+across the arms — the receipt that the same work is done. The floor wall moved 103 -> 93 ms
+3/3 and is **not claimed**: (INC.72)'s +-20 ms concurrent term is ten times the effect.
+**ABLATION:** three arms, three distinct red sets. a2's pin needed a whole build —
+`moduleResolutions` is not on the `Result` and reaches the checker as (CHK.30)'s
+bare-specifier answer, so a map written under the wrong importer is a LOST diagnostic.
+**ALSO: `docs/language-service.md` § 14 now EXISTS.** (INC.75)(b) claimed it documented
+`cancellation`; the § 0 table's rows for `cancellation`, `saveState()` and `restoreState()`
+all pointed at a section that was never written. It now carries the signatures, the poll
+points, the cancelled-build contract, the exact `null`/`false` conditions, the added-file
+limit, and the JVM edge a host hits: the cancellation is an `Error` by design, so
+`Future.get` wraps it in `ExecutionException` and a generic failure branch would log a
+warning per cancelled keystroke.
+**GATES.** Suite **16,629 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; compiler profile **46** diagnostics, unchanged.
+
 **(INC.81) — A LIST PER KEY FOR 9,401 KEYS THAT NEVER GOT A SECOND ENTRY, AND A REFUTED
 ROUND-471 HYPOTHESIS (2026-08-31).** `Checker.enclosingImportIndex` is **4.7 ms** of an 87 ms
 per-keystroke query and NO queue item had ever named it — it surfaced only from re-taking the
@@ -114,25 +151,3 @@ Gate is a DIFFERENTIAL, not a green suite ((CFG.1): a wrong root-file set is sil
 regime pins while every value pin stays green.
 **GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
 `output.programFiles` 78 -> 78; `huge_methods.py --fail-over 0` clean.
-
-**(INC.76) — THE LANGUAGE SERVICE WAS PAYING (INC.60)'s DEFECT IN FULL, THROUGH A WRAPPER THAT
-DID NOT OVERRIDE (2026-08-31).** `Vfs.listEntries`'s default body is
-`list(path).map { VfsEntry(it, isDirectory(it)) }`, and (INC.60) added that member precisely
-because asking the kind per entry is kotlinx-io's `metadataOrNull` — **up to FIVE `stat`s**.
-`OverlayVfs` never overrode it, so **every `Project` build handed the whole saving back**,
-silently, since the answers are identical either way.
-**MEASURED STANDALONE over the build's own 50 directories / 2,451 entries: 6.34 ms taking the
-kinds from the delegate's listing against 19.54 ms asking per entry — and 19.5 is what the
-build's `vfs.listEntries + sort` row read.** That match turned a 3x probe-vs-row gap into a
-diagnosis. **LANDED, and it costs NO promise, so both arms gain**: that row **20.70 -> 9.73
-ms**, the whole root-file glob **28.14 -> 18.44**, the per-keystroke query **153/145 ->
-123/125 ms** trusted and **156/162 -> 140/138** untrusted.
-Pins are a DIFFERENTIAL against the default body — a wrong kind drops a file from the program
-or adopts a directory as a root, and (CFG.1) says nothing here notices — including the one
-asymmetry an obvious implementation gets wrong (an on-disk FILE the overlay has given children
-is a DIRECTORY). The cost pin had to be restated as a COMPLEXITY claim at two program sizes:
-`isDirectoryCalls == 0` is false and correctly so, because a build asks about specific PATHS.
-`CountingVfs` had the same omission and is fixed with it; an audit found no third case.
-**TRANSFERABLE: a defaulted interface member added for speed is a silent regression waiting
-for the next wrapper**, and the instrument is a row measured STANDALONE against the same row
-measured IN THE BUILD.

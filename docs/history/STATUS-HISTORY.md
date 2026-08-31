@@ -29,6 +29,28 @@ since `SystemVfs` resides nothing and the CLI path is provably unchanged; `huge_
 residue that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with the last hop
 gone.
 
+**(INC.76) — THE LANGUAGE SERVICE WAS PAYING (INC.60)'s DEFECT IN FULL, THROUGH A WRAPPER THAT
+DID NOT OVERRIDE (2026-08-31).** `Vfs.listEntries`'s default body is
+`list(path).map { VfsEntry(it, isDirectory(it)) }`, and (INC.60) added that member precisely
+because asking the kind per entry is kotlinx-io's `metadataOrNull` — **up to FIVE `stat`s**.
+`OverlayVfs` never overrode it, so **every `Project` build handed the whole saving back**,
+silently, since the answers are identical either way.
+**MEASURED STANDALONE over the build's own 50 directories / 2,451 entries: 6.34 ms taking the
+kinds from the delegate's listing against 19.54 ms asking per entry — and 19.5 is what the
+build's `vfs.listEntries + sort` row read.** That match turned a 3x probe-vs-row gap into a
+diagnosis. **LANDED, and it costs NO promise, so both arms gain**: that row **20.70 -> 9.73
+ms**, the whole root-file glob **28.14 -> 18.44**, the per-keystroke query **153/145 ->
+123/125 ms** trusted and **156/162 -> 140/138** untrusted.
+Pins are a DIFFERENTIAL against the default body — a wrong kind drops a file from the program
+or adopts a directory as a root, and (CFG.1) says nothing here notices — including the one
+asymmetry an obvious implementation gets wrong (an on-disk FILE the overlay has given children
+is a DIRECTORY). The cost pin had to be restated as a COMPLEXITY claim at two program sizes:
+`isDirectoryCalls == 0` is false and correctly so, because a build asks about specific PATHS.
+`CountingVfs` had the same omission and is fixed with it; an audit found no third case.
+**TRANSFERABLE: a defaulted interface member added for speed is a silent regression waiting
+for the next wrapper**, and the instrument is a row measured STANDALONE against the same row
+measured IN THE BUILD.
+
 **(INC.73) — A 2.5 ms ROW, AND THE TWO REFUTATIONS THAT COST NOTHING TO FIND (2026-08-31).**
 `init:moduleTypeNameIndex` — the largest single row left in the floor's per-pass table after
 (INC.69)/(INC.70)/(INC.71) — is built on FIRST ASK; GO/NO-GO first, per (INC.16):

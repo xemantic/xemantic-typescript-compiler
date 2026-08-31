@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.82) — the importer's directory was re-derived per SPECIFIER, and the isolated probe over-read its own prize by 3x
+
+**THE ROW.** `ModuleResolver.resolve(specifier, importerPath)` read `importerPath` for
+nothing but its `dirname` — the (INC.65) KDoc has said so in as many words since it was
+written — and then joined the directory and the specifier into a fresh `String` and probed
+the memo with it TWICE, a `containsKey` + `get` pair, because `null` is a real answer. The
+crawl's sequential loop knows the importer's directory **once per FILE** and asked this
+**once per SPECIFIER**: 4,701 asks over 2,401 files on the generated application fixture.
+
+**PRICED BEFORE ANYTHING WAS BUILT**, with the probe that already decomposes the row
+(`Inc79CrawlResolveProbeMain` over `many-small-2400-dom`): of **1,314 ns per specifier**,
+`dirnameOnly` is **96** and `keyOnly` is **174** — i.e. **1.27 ms of a 6.18 ms row**.
+
+**WHAT LANDED.** `resolveFrom(specifier, importerDir)` is now the real entry point and
+`resolve` a thin wrapper over `PathUtil.dirname`, which makes the contract STRUCTURAL
+rather than a comment. The memo is nested (`dir -> spec -> answer`) instead of keyed by a
+composite string: the outer probe is a directory the caller already holds, so its hash is
+computed once and cached on that instance, and the inner probe hashes only the short
+specifier — where a fresh composite `String` never has a cached hash and paid for its whole
+length, twice. A memoized `null` is an identity-compared sentinel, so a served answer costs
+ONE probe. The crawl hoists both the `dirname` and the per-file resolution map out of its
+per-specifier loop, the map staying LAZY because a file whose every import is unresolved
+must contribute no entry, exactly as the `getOrPut` it replaces did.
+
+**AND THE PART WORTH READING IS THAT THE PROBE OVER-READ ITS OWN PRIZE BY ~3x.** Measured
+in the BUILD over two core class dirs differing only in these two files, rotated across
+processes, `FERESOLVE` reads **4771 / 5143 / 4102 us before against 4677 / 4707 / 3954
+after** — the after arm wins 3/3 batches in BOTH rotation directions, but the ranges
+overlap and the delta is **~0.15-0.44 ms, not 1.27**. That is CLAUDE.md's own
+`hits x mean-call-cost` law biting one layer in from where it is usually quoted: the 96 ns
+and 174 ns are real, and they are the cost of those operations **in a tight loop over 4,701
+reps**, where the inputs are in L1 and the branch is perfectly predicted. Interleaved with
+the resolution work around them they are worth less. **An isolated per-operation probe
+prices an UPPER BOUND on a removal, never the removal** — quote it as one.
+
+**SO THE RECEIPT IS THE DETERMINISTIC COUNT, AND IT IS EXACT TO THE UNIT.**
+`path normalize: 9577 -> 7277 calls` — **2,300 fewer, which is precisely 4,701 - 2,401**,
+one `dirname` per FILE instead of one per SPECIFIER. Everything else in the same census is
+IDENTICAL across the two arms and is the receipt that the same work is being done: root
+glob `50 dirs / 2451 entries / 2401 candidates / 2401 roots / 0 regex evaluations`, `join:
+2358 relative, 2358 by arithmetic`, `module resolution: 2351 questions, 0 reached the
+filesystem`, and the same diagnostic on the same line.
+
+**THE WALL IS NOT CLAIMED.** The query median moved **103 -> 93 ms**, 3/3 batches — which is
+ten times what this change can possibly explain, so per (INC.72) it is read as the floor
+wall's own +-20 ms concurrent term and NOT as a result. A sub-millisecond change is below
+what that instrument can resolve in either direction; it is recorded as consistent in sign
+and nothing more.
+
+**ABLATION — three arms, three DISTINCT red sets, none redundant.** a1 (the sentinel
+returned directly, so it escapes to the caller as a path that is not a path) **2 RED**;
+a2 (the per-file resolution map lifted one loop out, so it is shared across the frontier)
+**1 RED**; a3 (the directory dropped from the memo key) **1 RED**. a2's pin is the one that
+needed a whole build to write: `moduleResolutions` is not on `ProjectCompiler.Result` and
+reaches the checker as (CHK.30)'s bare-specifier answer, so a map written under the wrong
+importer is a **LOST diagnostic** and silent in every other channel.
+
+**GATES.** Suite **16,629 / 0 / 3** (up exactly the five new pins); `cost_gate.py` exit 0
+with every counter +0.00%; `huge_methods.py --fail-over 0` clean; and the correctness
+control the `-project` fixture cannot give — `--noEmit --listAll` on the compiler profile
+reads **46** diagnostics, unchanged.
+
+**ALSO LANDED THIS ROUND, AND IT CLOSES A CLAIM THIS QUEUE MADE ABOUT ITSELF.** (INC.75)(b)
+asserted that "`Project.cancellation` has existed since (INC.55) and
+`docs/language-service.md` § 14 documents it". **There was no § 14.** The § 0 API table's
+rows for `cancellation`, `saveState()` and `restoreState(text)` all pointed at a section
+that did not exist, so the three members an IDE host most needs were the three with no
+reference text — `cancellation` had prose only inside a § 13 subsection explaining why it
+is an `Error`, and the snapshot pair only a passing mention inside gap 1. § 14 now carries
+the signatures, where cancellation polls, the cancelled-build contract, the exact `null`
+and `false` conditions of the snapshot pair, the added-file limit, and **the JVM rough edge
+the plugin will hit**: `CompilationCancelledError` is an `Error` by design, so
+`Future.get` wraps it in `ExecutionException` and a generic failure branch logs a warning
+per cancelled keystroke — a host must unwrap `.cause` and read it as "no answer". § 13's
+stale `Project.kt` line numbers for the prepared-check defect were re-verified and
+corrected; the structural claim they carry is still true.
+
+**SUCCESSOR, per the WORK ORDER note.** The crawl's **~9 ms concurrent residue**
+((INC.81)(b)) is now the largest named row nobody has opened, and reading it names three
+members rather than one: `computeParserFlags` **constructs its `Regex` per call** instead
+of hoisting it as its neighbour `REFERENCE_PATH_REGEX` does (gated to non-ES-module
+projects by the option test above it, so this fixture cannot see it — (INC.61)'s law on a
+fourth axis); `CrawlParseCache.lookup` compares the whole content with `String.equals`,
+O(bytes) per file per build, whose identity fast path fires only when (INC.56)'s
+`retainRead` hands back the same instance — so the trusted and untrusted arms pay
+differently and the row must be read in both; and `CrawledFile`'s constructor eagerly
+builds `moduleSpecifiers.toSet()`, one `HashSet` per file. In the resolve row itself
+`arithOnly` is still **2.156 ms** with `join`/`normalize`/`extname`/`isBare` in it.
+
 ### Round (INC.81) — a list per key for 9,401 keys that never got a second entry, and a refuted round-471 hypothesis
 
 **THE ROW CAME FROM RE-DECOMPOSING RATHER THAN FROM THE QUEUE.** `enclosingImportIndex` is
@@ -2597,6 +2686,26 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [x] **(INC.82) DONE 2026-08-31 — THE IMPORTER'S DIRECTORY WAS RE-DERIVED PER SPECIFIER,
+  AND THE ISOLATED PROBE OVER-READ ITS OWN PRIZE BY 3x.** `resolve` read `importerPath` for
+  nothing but its `dirname` and then joined it with the specifier into a fresh `String` it
+  probed TWICE; the crawl knows that directory once per FILE and asked once per SPECIFIER
+  (4,701 over 2,401 files). `resolveFrom(specifier, importerDir)` is now the entry point,
+  the memo is nested (`dir -> spec`) so the outer probe hashes a cached-hash instance and
+  the inner one only the short specifier, a memoized `null` is an identity sentinel (one
+  probe, not two), and the crawl hoists both the `dirname` and the per-file resolution map —
+  the map staying LAZY so a file whose every import is unresolved still contributes no entry.
+  **The probe said 1.27 ms (`dirnameOnly` 96 ns + `keyOnly` 174 of 1,314 per specifier); the
+  BUILD says ~0.15-0.44** (`FERESOLVE` 4771/5143/4102 -> 4677/4707/3954, after winning 3/3
+  batches in both rotation directions, ranges overlapping). **An isolated per-operation probe
+  prices an UPPER BOUND on a removal, never the removal.** The receipt is therefore the
+  deterministic count and it is exact: `pathNormalizeCalls` **9577 -> 7277**, i.e. exactly
+  `4,701 - 2,401`, with glob / join / resolution-question censuses identical across the arms.
+  The floor WALL moved 103 -> 93 ms 3/3 and is NOT claimed — (INC.72)'s +-20 ms concurrent
+  term is ten times the effect. Three ablation arms, three distinct red sets.
+  **STILL OPEN in this row:** `arithOnly` is 2.156 ms with `join`/`normalize`/`extname`/
+  `isBare` in it.
 
 - [ ] **(INC.81) THE PER-KEYSTROKE QUERY RE-DECOMPOSED AFTER (INC.78)/(INC.79)/(INC.80) —
   87 ms, AND THE RANKING CHANGED AGAIN (2026-08-31, trusted arm, 2,401-file `dom` fixture,

@@ -461,8 +461,11 @@ public class Project private constructor(
      *
      * ## Why it is a slot of its own and not another [captures] entry
      *
-     * [captures] is an access-ordered LRU of two, sized for "the buffer in front of
-     * the user plus the one in the other split". A prepared check is the opposite
+     * [captures] is (INC.32) two LANES split by a request's WEIGHT — a buffer-sized
+     * lane bounded at [CAPTURE_MEMO_BUFFERS], sized for "the buffer in front of the
+     * user plus the one in the other split", and a caret-scoped lane bounded at
+     * [CAPTURE_MEMO_CARET_ENTRIES] — neither able to evict the other's. A prepared
+     * check is the opposite
      * shape — deliberately wide, deliberately expensive to earn, and worth keeping
      * precisely while the user moves AWAY from the buffer that earned it — so an
      * ordinary hover in an unprepared file must not evict it. Keeping it here means a
