@@ -20,8 +20,19 @@ terms, and 4 processes x 8 draws per arm did not help, because the noise is a re
 unrelated phase rather than run-to-run jitter. For a checker-side floor change the receipt is
 now `FrontEnd`'s phase row plus the deterministic population count; the floor wall is a sanity
 check. `FloorAbMain` grows an `fe` mode so that decomposition is a two-BINARY A/B.
-**SESSION TOTAL:** the 2,401-file `dom` floor is **~157 -> ~116-120 ms**, of which ~25 ms is
-attributed in the pass table across (INC.69)/(INC.70)/(INC.71).
+**SESSION TOTAL, re-taken on the SAME INSTRUMENT rather than inferred from the A/B arms —
+`scripts/floor-decomposition.sh`, same fixture, same warm-ups, same `PLAIN late` slot: the
+2,401-file `dom` floor is 122 -> 94 ms (`PLAIN early` 144 -> 105).** Two runs of one recipe
+have no arm-rotation problem to get wrong, which is (INC.72)'s lesson applied to the
+REPORTING. **The ranking has changed and the next round must start from it: the CRAWL is now
+the largest floor row (29 ms, 36%) for the first time in this arc — its READ half is (INC.56),
+the one row costing a soundness promise and the one an IntelliJ-class host can hand us — with
+the init-block dispatch at 22 (28%), config+glob 12, bind 8, post 5.** The pass table is
+**22.43 ms over 418 rows**, headed by three whole-program INDEX builds
+(`init:moduleTypeNameIndex` 2.52, `init:collectUmdGlobalsAndModuleFiles` 2.32,
+`init:mergeFileLocalsIntoGlobals` 2.06) — none of them a per-file table, so the
+(INC.70)/(INC.71) deferral shape does not transfer unchanged, and the GO/NO-GO for each is
+(INC.16)'s counter: who forces the index, and is it anyone on a floor build?
 
 **(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
 TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to

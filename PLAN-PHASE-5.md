@@ -20,6 +20,43 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.72b) — the floor re-taken on the same instrument: 122 -> 94 ms across the session
+
+**THE CLEANEST SESSION NUMBER IS NOT AN A/B AT ALL — IT IS `scripts/floor-decomposition.sh`
+RUN THE SAME WAY BEFORE AND AFTER.** Same fixture (`many-small-2400-dom`, 2,401 files), same
+script, same 3 warm-ups, same `PLAIN late` slot: **122 -> 94 ms** (and `PLAIN early`
+144 -> 105). That comparison has no arm-rotation problem to get wrong, because the two
+readings are two runs of one recipe rather than two arms of one batch — which is (INC.72)'s
+lesson applied to the reporting rather than to the measurement.
+
+**THE FLOOR AS IT NOW STANDS** (phase table, `both.floor` draw 2, total 81 ms of
+instrumented span):
+
+| phase | ms | share |
+| --- | --- | --- |
+| import-graph crawl (WALL) | **29** | 36% |
+| checker construct — of which the init-block dispatch **22** | 26 | 32% |
+| config load + `@types` + root glob | 12 | 15% |
+| bind (all program files) | 8 | 10% |
+| post-checker | 5 | 7% |
+
+**THE CRAWL IS NOW THE LARGEST ROW OF THE INCREMENTAL FLOOR**, which it has not been for this
+whole arc, and its READ half is (INC.56) — the one row that costs a SOUNDNESS PROMISE and the
+one an IntelliJ-class host can simply hand us. Its `specifier resolution` sub-row is 11 ms
+after (INC.65)'s memo and its `read+decode` sum is elapsed-with-suspension, i.e. a location.
+
+**AND THE PASS TABLE IS DOWN TO 22.43 ms OVER 418 ROWS, 24 OF WHICH CARRY 20.30.** The head is
+now three whole-program INDEX builds, all of them genuinely program-wide and none of them a
+per-file table the (INC.70)/(INC.71) shape can defer:
+`init:moduleTypeNameIndex` **2.52**, `init:collectUmdGlobalsAndModuleFiles` **2.32**,
+`init:mergeFileLocalsIntoGlobals` **2.06**, then `checkCircularGenericCallbackVariables` 1.38,
+`checkSpreadNonIterableIntoFixedArity` 1.26, `checkModulePreserve4Pin` 1.26 ((INC.70b)),
+`checkCircularClassBaseViaDefaultTypeArg` 0.88, `checkCrossFileUseBeforeDeclaration` 0.82.
+**The question for each of the three heads is the one (INC.16) answers with a counter, not by
+reading: who forces the index, and is it anyone on a floor build?** That is a temporary
+counter and one run per candidate — the cheapest GO/NO-GO in this arc, and it has now decided
+two rounds in a row.
+
 ### Round (INC.72) — the surplus was the CRAWL, and both of this session's wall figures are retracted
 
 **(INC.70) AND (INC.71) EACH REPORTED AN ABBA-ROTATED FLOOR WALL ABOUT THREE TIMES WHAT THEIR
@@ -4935,6 +4972,24 @@ RHS, and the merged-member CONTRADICTION direction.
   classifier stays installed at the pass's moment and forces the sets from inside its lambda,
   so `globals.lookups` is +0.00%. Value receipt: ablation c2 reddens **492** corpus tests,
   where the `-project` pins could not see the mechanism at all.
+
+- [ ] **(INC.73) THE FLOOR AFTER THIS SESSION — RE-TAKEN, AND THE RANKING HAS CHANGED
+  (2026-08-31).** `many-small-2400-dom`, same instrument and same slot as the session's first
+  reading: **122 -> 94 ms**. Phases: **crawl WALL 29 (36%)** — now the LARGEST row, which it
+  has not been for this arc, and its READ half is (INC.56), the one row costing a SOUNDNESS
+  PROMISE and the one an IntelliJ-class host can hand us; **init-block dispatch 22 (28%)**;
+  config+glob 12; bind 8; post 5. The pass table is **22.43 ms over 418 rows, 24 carrying
+  20.30**, and its head is three whole-program INDEX builds —
+  `init:moduleTypeNameIndex` 2.52, `init:collectUmdGlobalsAndModuleFiles` 2.32,
+  `init:mergeFileLocalsIntoGlobals` 2.06 — none of them a per-file table, so the
+  (INC.70)/(INC.71) deferral shape does not transfer unchanged. **For each of the three the
+  GO/NO-GO is (INC.16)'s counter, not a reading of the source: who forces the index, and is it
+  anyone on a floor build?** One temporary counter and one run per candidate; it has decided
+  the last two rounds and cost one build each. Below them the tail is walker-shaped
+  (`checkCircularGenericCallbackVariables` 1.38, `checkSpreadNonIterableIntoFixedArity` 1.26,
+  `checkModulePreserve4Pin` 1.26 = (INC.70b), `checkCircularClassBaseViaDefaultTypeArg` 0.88,
+  `checkCrossFileUseBeforeDeclaration` 0.82) — i.e. (INC.7)'s partition question, one walker at
+  a time.
 
 - [x] **(INC.72) DONE 2026-08-31 — ANSWERED, and it retracts two of this session's own wall
   figures.** The surplus was the CRAWL, not a mechanism: the per-PHASE instrument over the same
