@@ -9872,25 +9872,65 @@ class Checker(
      *  [binderResults] and never mutated afterwards — read-only shareable across future
      *  parallel checker workers (Tier 1 in docs/parallel-caching.md). Declared before
      *  `init` per the init-order trap. */
-    private val enclosingImportIndex: Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>>
+    private val enclosingImportIndex: Map<ImportSpecifier, Any>
         by lazy(LazyThreadSafetyMode.NONE) {
             FrontEnd.section(FrontEnd.CHK_F_EII) {
                 EagerIndexCensus.enclosingImportBuilds++
-                buildMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>> {
-                    for (result in binderResults) {
-                        for (stmt in result.sourceFile.statements) {
-                            if (stmt !is ImportDeclaration) continue
-                            val bindings =
-                                stmt.importClause?.namedBindings as? NamedImports ?: continue
-                            for (el in bindings.elements) {
-                                val entries = getOrPut(el) { mutableListOf() }
-                                if (entries.lastOrNull()?.second !== stmt) {
-                                    entries.add(result.sourceFile.fileName to stmt)
+                // (INC.81) The value is a Pair for the ONE-ENTRY case and a list only
+                // once a second statement claims the same key, because the census says
+                // that promotion essentially never happens: on a 2,401-file project the
+                // build inserts 9,401 specifiers under 9,401 DISTINCT keys and **not one
+                // key is reached from two files**. The old body allocated a
+                // `MutableList` for every one of them. Presized for the same reason —
+                // growing a map to 9,401 entries from the default 16 copies its nodes
+                // about ten times over.
+                //
+                // Measured split of the 5.1 ms row it replaces: the walk ~1.0 ms, the
+                // keys' structural `hashCode` 0.72 (76.5 ns each — round 471's hazard is
+                // real here and is only 14% of the row, which is why the key is left
+                // alone), and ~3.4 ms in the insert plus the two allocations per key.
+                val index = HashMap<ImportSpecifier, Any>(binderResults.size * 4)
+                for (result in binderResults) {
+                    for (stmt in result.sourceFile.statements) {
+                        if (stmt !is ImportDeclaration) continue
+                        val bindings =
+                            stmt.importClause?.namedBindings as? NamedImports ?: continue
+                        for (el in bindings.elements) {
+                            EagerIndexCensus.enclosingImportSpecifiers++
+                            val entry = result.sourceFile.fileName to stmt
+                            when (val existing = index[el]) {
+                                null -> index[el] = entry
+                                is Pair<*, *> ->
+                                    // A statement is listed ONCE even if it contains
+                                    // structural duplicates of the key — the old body's
+                                    // `entries.lastOrNull()?.second !== stmt` guard.
+                                    if (existing.second !== stmt) {
+                                        index[el] = mutableListOf(
+                                            @Suppress("UNCHECKED_CAST")
+                                            (existing as Pair<String, ImportDeclaration>),
+                                            entry,
+                                        )
+                                    }
+                                else -> {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val entries = existing as MutableList<Pair<String, ImportDeclaration>>
+                                    if (entries.last().second !== stmt) entries.add(entry)
                                 }
                             }
                         }
                     }
                 }
+                index
+            }.also { built ->
+                EagerIndexCensus.enclosingImportKeys = built.size
+                // Allocation-free: a `distinctBy` here would inflate the very row this
+                // census exists to divide.
+                @Suppress("UNCHECKED_CAST")
+                EagerIndexCensus.enclosingImportMultiFileKeys =
+                    built.count { (_, value) ->
+                        val entries = value as? List<Pair<String, ImportDeclaration>>
+                        entries != null && entries.any { it.first != entries[0].first }
+                    }
             }
         }
 
@@ -122238,8 +122278,15 @@ interface DataView {
      * replaced program-wide scans used ([enclosingImportIndex] has the rationale).
      * A statement is listed once even if it contains structural duplicates of [spec].
      */
+    @Suppress("UNCHECKED_CAST")
     private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
-        enclosingImportIndex[spec] ?: emptyList()
+        when (val entry = enclosingImportIndex[spec]) {
+            null -> emptyList()
+            // (INC.81) the one-entry representation, which is essentially the whole
+            // population — see the index's own build.
+            is Pair<*, *> -> listOf(entry as Pair<String, ImportDeclaration>)
+            else -> entry as List<Pair<String, ImportDeclaration>>
+        }
 
     /**
      * M1.12 (round 424): resolve property [seg] on [cur] for the prefix-path

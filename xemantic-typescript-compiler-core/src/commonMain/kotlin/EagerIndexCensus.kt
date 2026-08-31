@@ -67,6 +67,25 @@ object EagerIndexCensus {
     /** 1 if the whole-program import-specifier index was built, else 0. */
     var enclosingImportBuilds: Int = 0
 
+    /**
+     * (INC.81) census — the POPULATION behind `Checker.enclosingImportIndex`, which the
+     * per-keystroke query re-decomposition put at **4.7 ms** on a 2,401-file project.
+     *
+     * Round 758's law: a millisecond row is a LOCATION until it is divided by the
+     * operation count behind it, and here the candidate owners are different work with
+     * different levers — a structural `hashCode` over an AST data class (round 471), a
+     * `MutableList` allocated per distinct key, or the walk itself.
+     *
+     * [enclosingImportMultiFileKeys] is the one that decides a DESIGN rather than a
+     * price: the index is whole-program because the replaced scan matched a specifier
+     * STRUCTURALLY across every file and took the first hit in program order. If no key
+     * is ever reached from two files, that whole-program reach is doing nothing on a real
+     * project — which is a fact to measure before anything is built on either answer.
+     */
+    var enclosingImportSpecifiers: Int = 0
+    var enclosingImportKeys: Int = 0
+    var enclosingImportMultiFileKeys: Int = 0
+
     /** 1 if the whole-program top-level `const` string index was built, else 0. */
     var topLevelConstBuilds: Int = 0
 
@@ -213,6 +232,9 @@ object EagerIndexCensus {
         relativeImportExtractions = 0
         localTypeAliasFileScans = 0
         enclosingImportBuilds = 0
+        enclosingImportSpecifiers = 0
+        enclosingImportKeys = 0
+        enclosingImportMultiFileKeys = 0
         topLevelConstBuilds = 0
         programNameSetBuilds = 0
         jsxSuffixScanSteps = 0

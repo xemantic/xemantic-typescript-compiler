@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.EagerIndexCensus
 import com.xemantic.typescript.compiler.FltmDefer
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.PassTiming
@@ -151,6 +152,14 @@ fun main(args: Array<String>) {
     // (INC.77) (INC.16)'s GO/NO-GO question for the largest row: how many FILES does the
     // partition-scoped pass actually build, and how many are built lazily afterwards?
     println("FLTM $arm eagerBuilds=${FltmDefer.eagerBuilds} lazyBuilds=${FltmDefer.lazyBuilds}")
+    // (INC.81) the population behind `enclosingImportIndex`, whose row the query
+    // re-decomposition put at 4.7 ms — a row is a LOCATION until it is divided.
+    println(
+        "EII $arm builds=${EagerIndexCensus.enclosingImportBuilds}" +
+            " specifiers=${EagerIndexCensus.enclosingImportSpecifiers}" +
+            " keys=${EagerIndexCensus.enclosingImportKeys}" +
+            " multiFileKeys=${EagerIndexCensus.enclosingImportMultiFileKeys}"
+    )
     val passSum = PassTiming.passNanos.values.sum()
     println("PT $arm initNanos=${PassTiming.checkerInitNanos} passSum=$passSum rows=${PassTiming.passNanos.size}")
     for ((name, nanos) in PassTiming.passNanos.entries.sortedByDescending { it.value }.take(15)) {
