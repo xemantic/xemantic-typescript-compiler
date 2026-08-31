@@ -83,7 +83,7 @@ class BenchFrontEndTierTest {
     fun `the frontend tier arms the probe for the build and reports what it recorded`() =
         withSavedMode {
             val (value, text) = measureTier("frontend") {
-                FrontEnd.addCrawlFile(readNanos = 1_000_000L, parseNanos = 2_000_000L, chars = 4242)
+                FrontEnd.addCrawlFile(readNanos = 1_000_000L, parseNanos = 2_000_000L, makeNanos = 0L, chars = 4242)
                 val t0 = FrontEnd.t()
                 FrontEnd.close(FrontEnd.BIND, t0)
                 7
@@ -105,7 +105,7 @@ class BenchFrontEndTierTest {
     fun `negative control - off the tier the same recording calls are no-ops`() = withSavedMode {
         FrontEnd.mode = FrontEnd.OFF
         FrontEnd.reset()
-        FrontEnd.addCrawlFile(readNanos = 1_000_000L, parseNanos = 2_000_000L, chars = 4242)
+        FrontEnd.addCrawlFile(readNanos = 1_000_000L, parseNanos = 2_000_000L, makeNanos = 0L, chars = 4242)
         FrontEnd.close(FrontEnd.BIND, FrontEnd.t())
         assert(FrontEnd.filesRead == 0L)
         assert(FrontEnd.charsRead == 0L)
@@ -118,7 +118,7 @@ class BenchFrontEndTierTest {
     fun `tierStop disarms the frontend probe and zeroes its counters`() = withSavedMode {
         tierBegin("frontend")
         assert(FrontEnd.mode == FrontEnd.ON)
-        FrontEnd.addCrawlFile(readNanos = 1L, parseNanos = 1L, chars = 11)
+        FrontEnd.addCrawlFile(readNanos = 1L, parseNanos = 1L, makeNanos = 0L, chars = 11)
         assert(FrontEnd.filesRead == 1L)
         tierReport("frontend")
         assert(FrontEnd.mode == FrontEnd.ON)

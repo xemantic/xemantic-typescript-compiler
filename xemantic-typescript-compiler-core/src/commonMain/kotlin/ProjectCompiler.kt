@@ -527,6 +527,17 @@ class ProjectCompiler(private val vfs: Vfs) {
          *  fold is single-threaded and a `++` from the workers would race. */
         val parseDispatched: Boolean = false,
     ) {
+        /**
+         * (INC.84): the nanos this object's OWN construction cost — [specifiers] above
+         * all, which turns every module specifier of the file into a `Set` AFTER the
+         * pre-parse span has closed, so no existing row covered it.
+         *
+         * A `var` assigned immediately after construction rather than a constructor
+         * parameter, because it measures that very construction; folded by the
+         * single-threaded collector for [readNanos]'s reason.
+         */
+        var mkNanos: Long = 0
+
         val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
 
         /** M4.8: `/// <reference path>` targets — resolved relative to this file. */
@@ -575,10 +586,15 @@ class ProjectCompiler(private val vfs: Vfs) {
         // Frontier 0: the seeds — read per occurrence (duplicate-seed re-reads
         // preserved); an unreadable seed still enters the program as "".
         var frontier = readAndScanBatch(seeds, options)
+        // (INC.84) A cold `Flow`'s `emit` runs the COLLECTOR inline, so this loop is the
+        // downstream consumer's own per-file body as well as the dedup insert — charged
+        // to [FrontEnd.CRAWL]'s wall since that row existed, and named by nothing.
+        var feDrainT0 = FrontEnd.t()
         for (f in frontier) {
             loaded.add(f.path)
             emit(f)
         }
+        FrontEnd.close(FrontEnd.CRAWL_DRAIN, feDrainT0)
         while (frontier.isNotEmpty()) {
             // Resolve specifiers SEQUENTIALLY in frontier order: the resolver is
             // single-threaded state, and both the (importer, specifier) attribution
@@ -635,10 +651,12 @@ class ProjectCompiler(private val vfs: Vfs) {
             // file is dropped here and stays out of `loaded`, so a later frontier
             // may re-probe it — matching the sequential crawl.
             frontier = readAndScanBatch(discovered, options).filter { it.content != null }
+            feDrainT0 = FrontEnd.t()
             for (f in frontier) {
                 loaded.add(f.path)
                 emit(f)
             }
+            FrontEnd.close(FrontEnd.CRAWL_DRAIN, feDrainT0)
         }
     }
 
@@ -655,6 +673,11 @@ class ProjectCompiler(private val vfs: Vfs) {
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun readAndScanBatch(paths: List<String>, options: CompilerOptions): List<CrawledFile> {
         if (paths.isEmpty()) return emptyList()
+        // (INC.84) The concurrent half of the crawl, decomposed. [FrontEnd.CRAWL_BATCH]
+        // is this whole function's WALL; the three rows inside it partition it, bar the
+        // probe's own census loop (see [FrontEnd.CRAWL_BATCH]'s KDoc).
+        val feBatchT0 = FrontEnd.t()
+        val fePipeT0 = FrontEnd.t()
         val byPath = paths.asFlow()
             .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
                 flow {
@@ -732,15 +755,24 @@ class ProjectCompiler(private val vfs: Vfs) {
                             pp
                         }
                     val t2 = FrontEnd.t()
-                    emit(
-                        CrawledFile(
-                            path, content, preParsed, t1 - t0, t2 - t1,
-                            ampBase, ampSink, cacheHit, parseDispatched,
-                        )
+                    // (INC.84) The construction runs AFTER the pre-parse span closes and
+                    // is not free — `CrawledFile.specifiers` builds a `Set` from this
+                    // file's module specifiers. Its nanos ride back on the element and
+                    // are folded single-threaded below, because a `+=` from these 16
+                    // workers races (round 825). `FrontEnd.t()` answers 0 when the probe
+                    // is off, so the subtraction is 0 and the field write is the whole
+                    // production cost.
+                    val crawled = CrawledFile(
+                        path, content, preParsed, t1 - t0, t2 - t1,
+                        ampBase, ampSink, cacheHit, parseDispatched,
                     )
+                    crawled.mkNanos = FrontEnd.t() - t2
+                    emit(crawled)
                 }
             }
             .toList()
+        FrontEnd.close(FrontEnd.CRAWL_PIPE, fePipeT0)
+        val feFoldT0 = FrontEnd.t()
         // Single-threaded: the concurrent flow is fully drained by now, which is
         // the ONLY point at which [CrawlParseCache] may be written (round 825 —
         // a plain HashMap write from N workers is a race with no exception to
@@ -758,14 +790,25 @@ class ProjectCompiler(private val vfs: Vfs) {
             }
             if (f.parseDispatched) CrawlParseCache.parseDispatches++
         }
+        FrontEnd.close(FrontEnd.CRAWL_FOLD, feFoldT0)
+        // Deliberately OUTSIDE every span below [FrontEnd.CRAWL_BATCH]: the census is
+        // the instrument, and folding it into the row it decomposes would inflate the
+        // very quantity that row exists to report.
         if (FrontEnd.mode == FrontEnd.ON) {
             for (f in byPath) {
-                FrontEnd.addCrawlFile(f.readNanos, f.parseNanos, f.content?.length ?: 0)
+                FrontEnd.addCrawlFile(
+                    readNanos = f.readNanos, parseNanos = f.parseNanos,
+                    makeNanos = f.mkNanos, chars = f.content?.length ?: 0,
+                )
                 FrontEnd.addParseAmp(f.ampBase, f.ampSink)
             }
         }
+        val feIdxT0 = FrontEnd.t()
         val indexed = byPath.associateBy { it.path }
-        return paths.map { indexed.getValue(it) }
+        val ordered = paths.map { indexed.getValue(it) }
+        FrontEnd.close(FrontEnd.CRAWL_INDEX, feIdxT0)
+        FrontEnd.close(FrontEnd.CRAWL_BATCH, feBatchT0)
+        return ordered
     }
 
     private fun resolveConfigPath(projectPath: String): String {

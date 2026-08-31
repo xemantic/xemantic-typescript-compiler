@@ -4632,7 +4632,93 @@ object FrontEnd {
      */
     const val CRAWL_RESOLVE = 54
 
-    const val N = 55
+    // ---- (INC.84) the CONCURRENT half of [CRAWL], which no row could see.
+    //
+    // [CRAWL] is a WALL; [CRAWL_RESOLVE] is its sequential half; and the only
+    // two rows inside the concurrent half — [READ] and [PREPARSE] — are
+    // elapsed-with-suspension CPU SUMS across 16 workers, i.e. LOCATIONS and not
+    // prices (INC.56). On an application-shaped project those two sum to ~2.8 ms
+    // against a concurrent half of 8-11 ms, so ~6-8 ms was attributed to nothing
+    // at all: the `flatMapMerge` machinery, the `CrawledFile` construction (which
+    // runs AFTER [PREPARSE]'s span closes and is where each file's module
+    // specifiers become a `Set`), the flow collection, and the single-threaded
+    // fold that follows it.
+    //
+    // Every row below is a WALL taken on ONE thread except [CRAWL_MKFILE], which
+    // is a CPU sum carried per element and folded single-threaded — the shape
+    // [addCrawlFile] already uses, and the only race-free one available inside a
+    // 16-way `flatMapMerge` (round 825: a `+=` from those workers races with no
+    // exception to find it by). The distinction is the single most misread thing
+    // in this object, so each KDoc states which of the two it is.
+
+    /**
+     * `readAndScanBatch` — ONE frontier wave, WALL. INSIDE [CRAWL], disjoint
+     * from [CRAWL_RESOLVE].
+     *
+     * `[CRAWL_PIPE] + [CRAWL_FOLD] + [CRAWL_INDEX]` is a PARTITION CHECK over it
+     * with one deliberate exception: the probe's OWN per-element census loop sits
+     * between the fold and the index and is inside this span and inside no other,
+     * so a small positive residue here is a property of the INSTRUMENT and never a
+     * finding. One timestamp pair per wave.
+     */
+    const val CRAWL_BATCH = 55
+
+    /**
+     * `paths.asFlow().flatMapMerge(16) { … }.toList()` — the concurrent pipeline,
+     * WALL. INSIDE [CRAWL_BATCH].
+     *
+     * A wall, so it is directly comparable to [CRAWL] — and it is the row [READ]
+     * and [PREPARSE] never were. Their CPU sums may NOT be subtracted from it:
+     * 16 workers overlap, so `PIPE - (READ + PREPARSE + MKFILE)` is not a residue
+     * of anything. What this row bounds is everything the pipeline costs
+     * end-to-end, machinery included.
+     */
+    const val CRAWL_PIPE = 56
+
+    /**
+     * The per-file work AFTER the parse/cache lookup up to and including the
+     * `CrawledFile` construction — a CPU SUM across the crawl workers, not a wall.
+     * INSIDE [CRAWL_PIPE].
+     *
+     * It is not the allocation: the constructor body turns each file's
+     * `moduleSpecifiers` into a `Set` and reads its two `/// <reference>` lists,
+     * which is real per-file work running outside every existing span, since
+     * [PREPARSE]'s span closes before the object is built.
+     *
+     * It cannot be a constructor argument, because it measures its own
+     * construction; it is stored into the element immediately afterwards and
+     * folded by the single-threaded collector.
+     */
+    const val CRAWL_MKFILE = 57
+
+    /**
+     * The single-threaded fold after the flow is drained — `CrawlParseCache.store`,
+     * `vfs.retainRead` and the hit/miss/dispatch counters. WALL. INSIDE
+     * [CRAWL_BATCH].
+     *
+     * Single-threaded is load-bearing rather than incidental: it is the ONLY point
+     * at which the parse cache and the `Vfs` retention may be written (round 825),
+     * so anything moved out of it becomes a race. This row is what says what that
+     * discipline costs.
+     */
+    const val CRAWL_FOLD = 58
+
+    /** `associateBy` + the input-order re-index that restores it. WALL. INSIDE [CRAWL_BATCH]. */
+    const val CRAWL_INDEX = 59
+
+    /**
+     * The crawl flow's own per-file drain loops — `loaded.add(...)` plus the
+     * downstream `emit(f)`. WALL. INSIDE [CRAWL], disjoint from [CRAWL_BATCH] and
+     * [CRAWL_RESOLVE].
+     *
+     * A cold `Flow`'s `emit` runs the COLLECTOR inline, so this row carries the
+     * consumer's own per-file body (`program[path] = content`, the `preParsed`
+     * map) as well as the dedup-set insert. It is charged to the crawl by every
+     * wall in this repo and was named by nothing.
+     */
+    const val CRAWL_DRAIN = 60
+
+    const val N = 61
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4690,6 +4776,12 @@ object FrontEnd {
         "      of which the include/exclude regex match",
         "      of which vfs.listEntries + sort (per directory)",
         "  of which specifier resolution (sequential)",
+        "  of which readAndScanBatch (WALL)",
+        "    of which the flatMapMerge pipeline (WALL)",
+        "      of which CrawledFile construction (CPU sum)",
+        "    of which the single-threaded fold (WALL)",
+        "    of which associateBy + re-index (WALL)",
+        "  of which frontier drain + downstream emit (WALL)",
     )
 
     /**
@@ -4697,7 +4789,9 @@ object FrontEnd {
      * the TOTAL is still summed over the disjoint top-level phases only.
      */
     private val order: IntArray = intArrayOf(
-        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE, PARSE, IMPORTS,
+        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE,
+        CRAWL_BATCH, CRAWL_PIPE, CRAWL_MKFILE, CRAWL_FOLD, CRAWL_INDEX, CRAWL_DRAIN,
+        PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
@@ -5547,10 +5641,14 @@ object FrontEnd {
      * Add a crawl worker's own read/parse nanos. Called from the SINGLE-THREADED
      * collector after the concurrent flow has been drained — never from a worker.
      */
-    fun addCrawlFile(readNanos: Long, parseNanos: Long, chars: Int) {
+    fun addCrawlFile(readNanos: Long, parseNanos: Long, makeNanos: Long, chars: Int) {
         if (mode != ON) return
         nanos[READ] += readNanos; calls[READ]++
         nanos[PREPARSE] += parseNanos; if (parseNanos > 0) calls[PREPARSE]++
+        // (INC.84) The CPU sum of the post-parse per-file work, carried on the
+        // element for this function's own reason: the workers are concurrent and
+        // this collector is not.
+        nanos[CRAWL_MKFILE] += makeNanos; calls[CRAWL_MKFILE]++
         filesRead++; charsRead += chars
     }
 
