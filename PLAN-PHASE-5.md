@@ -20,6 +20,52 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.72) — the surplus was the CRAWL, and both of this session's wall figures are retracted
+
+**(INC.70) AND (INC.71) EACH REPORTED AN ABBA-ROTATED FLOOR WALL ABOUT THREE TIMES WHAT THEIR
+PASS ROW EXPLAINED, AND I QUEUED THAT GAP AS A MECHANISM TO HUNT. IT WAS NOT A MECHANISM. IT
+WAS THE CRAWL.** Running the SAME two binaries with the per-PHASE instrument instead of the
+per-pass one — two processes per arm, rotated `before after after before`, second instrumented
+draw — attributes the whole change and nothing else:
+
+| phase | before | after | delta |
+| --- | --- | --- | --- |
+| **init-block pass dispatch** | **39.87** | **25.06** | **-14.81** |
+| import-graph crawl (WALL) | 32.19 | 50.19 | **+18.01** |
+| of which read+decode (CPU sum) | 147.80 | 249.88 | +102.07 |
+| config load + @types + root glob | 15.60 | 14.96 | -0.63 |
+| bind (all program files) | 8.12 | 7.53 | -0.59 |
+| post-checker | 6.91 | 6.70 | -0.21 |
+
+Every other row is flat to within 0.7 ms. **The init block — the ONLY region either round
+touched — is -14.81 ms, which is what the two pass rows said (~4 + ~7, measured on noisy
+single draws). And the crawl, which neither round touched, swung +18 in the same run**, its
+`read+decode` CPU sum moving 102 ms: that row is ELAPSED-WITH-SUSPENSION across the crawl's
+`Dispatchers.Default` workers, so it prices contention, not work, and CLAUDE.md already says
+it is a LOCATION and never a price. A floor wall that contains an 18 ms swing in a concurrent
+phase cannot resolve a 7 ms change in a sequential one, however many draws it is given.
+
+**SO THE NUMBERS ARE RETRACTED AND REPLACED.** (INC.70)'s "floor 160.0 -> 136.5 (-23.5 ms)"
+and (INC.71)'s "142.5 -> 120.0 (-22.5 ms)" are each one batch's reading of a quantity with a
+±20 ms concurrent term in it; the same two binaries measured in this round's batch read
+**128.5 -> 116.5**. **What ships is -14.81 ms of init-block dispatch, phase-attributed, and
+that is the number to carry.** The floor on this fixture is ~116-120 ms against ~157 at the
+session's start, and the pass table's ~-25 ms across (INC.69)/(INC.70)/(INC.71) is the part
+that is attributed.
+
+**THE LESSON IS NOT "ROTATE MORE" — IT IS "PICK AN INSTRUMENT WHOSE VARIANCE DOES NOT CONTAIN
+THE ANSWER".** (INC.68) taught that a BLOCKED batch invents a delta and rotation removes it;
+this is the next step out: a ROTATED batch of a composite quantity still cannot separate two
+of its terms, and 4 processes x 8 draws per arm did not help because the noise is not
+run-to-run jitter but a real, large, unrelated phase. The floor wall stays useful as a
+sanity check and is no longer the receipt for a checker-side change; the receipt is
+`FrontEnd`'s phase row plus the deterministic population count.
+
+**WHAT LANDED IN CODE.** `FloorAbMain` grows an `fe` mode — two instrumented `--frontEnd`
+draws and a per-phase dump, beside the existing `rows` mode — so this decomposition is a
+two-binary A/B rather than the single-binary `scripts/floor-decomposition.sh` run it would
+otherwise have needed. It reads no census counter, for the reason (INC.70) recorded.
+
 ### Round (INC.71) — the per-file VISIBILITY sets, and the floor wall that keeps outrunning the pass table
 
 **`init:computePerFileVisibility` WALKS EVERY PROGRAM FILE'S `locals` TO PUBLISH TWO SETS
@@ -4890,17 +4936,18 @@ RHS, and the merged-member CONTRADICTION direction.
   so `globals.lookups` is +0.00%. Value receipt: ablation c2 reddens **492** corpus tests,
   where the `-project` pins could not see the mechanism at all.
 
-- [ ] **(INC.72) THE FLOOR WALL HAS OUTRUN THE PASS TABLE BY ~3x TWICE IN A ROW — DECOMPOSE
-  BOTH ARMS BEFORE OPENING ANOTHER INIT ROW (2026-08-31).** (INC.70) measured -23.5 ms of
-  ABBA-rotated floor wall against ~4 ms of pass row; (INC.71) -22.5 against ~7. Both also
-  removed thousands of RETAINED allocations per build, which is a plausible mechanism and, per
-  round 801, not a measured one. **Two readings are possible and they lead opposite ways**: the
-  surplus is outside the init block (so the next lever is not in the pass table), or the
-  `rows`-tier probe under-reports (so every ranking this arc has taken from it needs
-  re-reading — and note the instrumented draws on this fixture are noisy enough that one read
-  `init:computePerFileVisibility` at 21.9 ms and the next at 7.2 in the same process pair).
-  The instrument exists — `scripts/floor-decomposition.sh` gives the `--frontEnd` phase table
-  — and what is missing is running it as a two-BINARY A/B, rotated, rather than once.
+- [x] **(INC.72) DONE 2026-08-31 — ANSWERED, and it retracts two of this session's own wall
+  figures.** The surplus was the CRAWL, not a mechanism: the per-PHASE instrument over the same
+  two binaries attributes **init-block pass dispatch -14.81 ms** (which is what the pass rows
+  said) while the untouched crawl WALL swung **+18.01** in the same run, its
+  elapsed-with-suspension `read+decode` sum moving 102 ms. So (INC.70)'s -23.5 and (INC.71)'s
+  -22.5 are each one batch's reading of a quantity carrying a ±20 ms concurrent term; the same
+  binaries read 128.5 -> 116.5 in this round's batch. **THE TRANSFERABLE LESSON IS NOT "ROTATE
+  MORE" BUT "PICK AN INSTRUMENT WHOSE VARIANCE DOES NOT CONTAIN THE ANSWER"** — 4 processes x 8
+  draws per arm did not help, because the noise is a real unrelated phase rather than jitter.
+  For a checker-side floor change the receipt is now `FrontEnd`'s phase row plus the
+  deterministic count; the wall is a sanity check. `FloorAbMain`'s new `fe` mode is the
+  two-binary form of that decomposition.
 
 - [x] **(INC.70) DONE 2026-08-31 — per-file name-resolution scopes are built on FIRST ASK,
   and a floor build builds NONE.** `init:buildPerFileScopes` allocated two maps and a

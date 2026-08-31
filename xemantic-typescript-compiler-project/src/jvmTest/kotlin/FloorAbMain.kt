@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SystemVfs
@@ -63,6 +64,9 @@ fun main(args: Array<String>) {
     val warmups = if (args.size > 1) args[1].toInt() else 4
     val draws = if (args.size > 2) args[2].toInt() else 8
     val rows = args.size > 3 && args[3] == "rows"
+    // (INC.72) the OTHER instrument: the per-PHASE table, which is the only thing
+    // that can say whether a floor saving is inside the checker's init block at all.
+    val fe = args.size > 3 && args[3] == "fe"
     val nowhere = "/no/such/file/the/program/does/not/contain.ts"
     val compiler = ProjectCompiler(SystemVfs)
 
@@ -90,6 +94,24 @@ fun main(args: Array<String>) {
     }
     val sorted = ms.sorted()
     println("FLOOR draws=$ms median=${sorted[sorted.size / 2]}ms min=${sorted.first()} max=${sorted.last()}")
+
+    if (fe) {
+        // Two draws, same reason as the `rows` tier: the first instrumented draw in a
+        // process is the slowest and inflates every row it prints (round 846).
+        repeat(2) { draw ->
+            FrontEnd.reset()
+            FrontEnd.mode = FrontEnd.ON
+            val t0 = System.nanoTime()
+            floor()
+            val wall = (System.nanoTime() - t0) / 1_000_000
+            FrontEnd.mode = FrontEnd.OFF
+            println("FE $draw wall=$wall")
+            for (i in 0 until FrontEnd.N) {
+                if (FrontEnd.calls[i] == 0L) continue
+                println("FEROW$draw ${FrontEnd.nanos[i]} ${FrontEnd.calls[i]} ${FrontEnd.names[i].trim()}")
+            }
+        }
+    }
 
     if (rows) {
         // TWO instrumented draws, and only the SECOND is quotable: round 846

@@ -1,5 +1,28 @@
 # Status
 
+**(INC.72) — THE SURPLUS WAS THE CRAWL, AND BOTH OF THIS SESSION'S WALL FIGURES ARE RETRACTED
+(2026-08-31).** (INC.70) and (INC.71) each reported an ABBA-rotated floor wall about **three
+times** what their pass row explained, and that gap was queued as a mechanism to hunt. It was
+not a mechanism. Running the SAME two binaries with the per-PHASE instrument — two processes
+per arm, rotated, second instrumented draw — attributes the change and nothing else:
+**init-block pass dispatch 39.87 -> 25.06 ms (-14.81)**, which is what the two pass rows said,
+while the UNTOUCHED **import-graph crawl swung +18.01** in the same run, its
+elapsed-with-suspension `read+decode` sum moving **147.8 -> 249.9 ms**. Every other phase is
+flat to within 0.7 ms.
+**So (INC.70)'s "160.0 -> 136.5 (-23.5)" and (INC.71)'s "142.5 -> 120.0 (-22.5)" are each one
+batch's reading of a quantity carrying a ±20 ms concurrent term; the same binaries read
+128.5 -> 116.5 in this round's batch. What ships is -14.81 ms of init-block dispatch,
+phase-attributed, and that is the number to carry.**
+**THE LESSON IS NOT "ROTATE MORE" — IT IS "PICK AN INSTRUMENT WHOSE VARIANCE DOES NOT CONTAIN
+THE ANSWER".** (INC.68) showed a BLOCKED batch inventing a delta that rotation removed; this is
+the next step out — a ROTATED batch of a COMPOSITE quantity still cannot separate two of its
+terms, and 4 processes x 8 draws per arm did not help, because the noise is a real, large,
+unrelated phase rather than run-to-run jitter. For a checker-side floor change the receipt is
+now `FrontEnd`'s phase row plus the deterministic population count; the floor wall is a sanity
+check. `FloorAbMain` grows an `fe` mode so that decomposition is a two-BINARY A/B.
+**SESSION TOTAL:** the 2,401-file `dom` floor is **~157 -> ~116-120 ms**, of which ~25 ms is
+attributed in the pass table across (INC.69)/(INC.70)/(INC.71).
+
 **(INC.71) — THE PER-FILE VISIBILITY SETS, AND A FLOOR WALL THAT KEEPS OUTRUNNING THE PASS
 TABLE (2026-08-31).** `init:computePerFileVisibility` walks every program file's `locals` to
 publish `moduleOnlyGlobalNames` and `libValueShadowNames`, whose only three readers —
@@ -125,35 +148,3 @@ rewrite-count control and a quiescence-independent predicate pin. Ablations a1/a
 `output.programFiles` 78; `huge_methods.py --fail-over 0` clean; 8-profile grid
 `added=0 removed=0` on all eight — **coverage here rather than a control**, since the corpus
 materialises no directory and cannot reach the resolver's path arithmetic.
-
-**(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
-SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
-`xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one
-`XtscSession` per `tsconfig.json`, **each owning its own single-thread executor**, so a
-monorepo with N configs runs **N compiler threads in one JVM**. That is a shape no fixture,
-profile or corpus baseline here produces, and the one every process-global cache implicitly
-assumes away. `RealLibSnapshots.parseCache` was a plain `HashMap` mutated in place, and its
-KDoc's stated mitigation (`prewarmParsedLibFiles`) covers `--workers` inside ONE compile and
-says nothing about two independent sessions — and (INC.63)/(INC.65) had just added two more
-such maps. All three now publish **copy-on-write behind `@Volatile`**.
-**WHAT IT BUYS, PRECISELY:** a lost race still costs a RECOMPUTATION, and always did, since
-`getOrPut` on a `HashMap` is not atomic either; what this removes is the CORRUPTION. **And
-the duplicate is harmless for the mirror of round 471's reason** — the identity sets these
-feed compare `Node`s STRUCTURALLY, so two parses of the same lib text are interchangeable to
-every consumer. `ModuleResolver`'s (INC.65) memo needs none of it: per instance, per build.
-**THE FIRST DRAFT OF THE PIN BROKE TWO OF CLAUDE.md's OWN RULES AND ONLY RUNNING IT SAID SO**
-— it put a `Map<String, SourceFile>` inside `assert(...)`, so power-assert rendered the AST
-and the failure arrived as an **`OutOfMemoryError` in the diagram builder** with the real
-cause masked; and it compared two reads by IDENTITY, which assumes a quiescent process, so
-it passed in isolation and failed in the full suite. **A pin's ENVIRONMENT is part of its
-specification.**
-**GATES.** Suite **16,542 / 0 / 3**; `cost_gate.py` exit 0; `huge_methods.py --fail-over 0`
-clean; 8-profile grid `added=0 removed=0` on all eight; ablation e1 reddens exactly the
-publication pin.
-**WHAT ELSE THE PLUGIN REVIEW SHOWED:** it already does what this arc assumed a host would —
-`updateFile` for unsaved buffers, `diagnosticsOf` for the file ON SCREEN ONLY, one thread per
-project, and (INC.55)'s cancellation wired to `ProcessCanceledException`. Its `configPath`
-argument is load-bearing and non-obvious: without it a malformed `tsconfig.json` shows a
-clean editor over a program checked with default options. It is also the host that could make
-(INC.56)'s promise — but it invalidates on `VFS_CHANGES` rather than owning the read, so the
-promise is expressible and not yet made.

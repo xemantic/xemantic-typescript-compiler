@@ -1,3 +1,35 @@
+**(INC.67) — READING THE PLUGIN FOUND A DEFECT NO PROFILE COULD, AND IT WAS ONE THIS
+SESSION HAD WIDENED (2026-08-31).** The instrument was the CONSUMER'S SOURCE.
+`xemantic/xtsc-intellij-plugin` — the first real host of the `Project` API — keeps one
+`XtscSession` per `tsconfig.json`, **each owning its own single-thread executor**, so a
+monorepo with N configs runs **N compiler threads in one JVM**. That is a shape no fixture,
+profile or corpus baseline here produces, and the one every process-global cache implicitly
+assumes away. `RealLibSnapshots.parseCache` was a plain `HashMap` mutated in place, and its
+KDoc's stated mitigation (`prewarmParsedLibFiles`) covers `--workers` inside ONE compile and
+says nothing about two independent sessions — and (INC.63)/(INC.65) had just added two more
+such maps. All three now publish **copy-on-write behind `@Volatile`**.
+**WHAT IT BUYS, PRECISELY:** a lost race still costs a RECOMPUTATION, and always did, since
+`getOrPut` on a `HashMap` is not atomic either; what this removes is the CORRUPTION. **And
+the duplicate is harmless for the mirror of round 471's reason** — the identity sets these
+feed compare `Node`s STRUCTURALLY, so two parses of the same lib text are interchangeable to
+every consumer. `ModuleResolver`'s (INC.65) memo needs none of it: per instance, per build.
+**THE FIRST DRAFT OF THE PIN BROKE TWO OF CLAUDE.md's OWN RULES AND ONLY RUNNING IT SAID SO**
+— it put a `Map<String, SourceFile>` inside `assert(...)`, so power-assert rendered the AST
+and the failure arrived as an **`OutOfMemoryError` in the diagram builder** with the real
+cause masked; and it compared two reads by IDENTITY, which assumes a quiescent process, so
+it passed in isolation and failed in the full suite. **A pin's ENVIRONMENT is part of its
+specification.**
+**GATES.** Suite **16,542 / 0 / 3**; `cost_gate.py` exit 0; `huge_methods.py --fail-over 0`
+clean; 8-profile grid `added=0 removed=0` on all eight; ablation e1 reddens exactly the
+publication pin.
+**WHAT ELSE THE PLUGIN REVIEW SHOWED:** it already does what this arc assumed a host would —
+`updateFile` for unsaved buffers, `diagnosticsOf` for the file ON SCREEN ONLY, one thread per
+project, and (INC.55)'s cancellation wired to `ProcessCanceledException`. Its `configPath`
+argument is load-bearing and non-obvious: without it a malformed `tsconfig.json` shows a
+clean editor over a program checked with default options. It is also the host that could make
+(INC.56)'s promise — but it invalidates on `VFS_CHANGES` rather than owning the read, so the
+promise is expressible and not yet made.
+
 **(INC.65) — THE CRAWL RE-ASKED THE FILESYSTEM A QUESTION IT HAD ALREADY ANSWERED, AND THE
 SESSION'S FLOOR IS 241 -> 151 / 256 -> 116 ms (2026-08-30).** The previous round named "a
 PARTITION question and a HOST PROMISE" as all that was left; that was wrong within the hour,
