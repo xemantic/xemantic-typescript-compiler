@@ -9861,6 +9861,51 @@ class Checker(
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
     /**
+     * (INC.69) The program's files grouped by the LAST PATH SEGMENT of their file
+     * name, built on first ask and never again.
+     *
+     * It exists for one shape and one shape only: a corpus PIN walker whose loop
+     * body is `if (fileName.substringAfterLast('/') != "<one literal>") continue`.
+     * Twenty-one such passes are registered, each of them a whole-program loop that
+     * allocates a `String` per file to compare it against a name no real project
+     * contains — measured on a 2,401-file project, **~0.44 ms EACH, ~9.6 ms of a
+     * 121 ms incremental floor**, i.e. the plateau that is most of the init-block
+     * pass dispatch once (INC.7)/(INC.20)/(INC.21) have gated the rest.
+     *
+     * The key is `fileName.substringAfterLast('/')` computed by exactly the
+     * expression the call sites used, so [filesNamed] answers the same sublist of
+     * [binderResults], in the same order, that their loop reached — which is what
+     * makes the conversion behaviour-preserving rather than a new policy.
+     *
+     * Built LAZILY: it is one whole-program pass, and a build that never asks (a
+     * replay naming none of these passes, ((INC.17))) must not pay for it. Declared
+     * before `init` per the init-order trap.
+     */
+    private var filesByBasename: HashMap<String, MutableList<BinderResult>>? = null
+
+    /**
+     * The [binderResults] entries whose file name's last path segment is [basename],
+     * in program order — empty when the program contains no such file, which is the
+     * answer for every one of the 21 corpus-pin basenames on any real project.
+     *
+     * @see filesByBasename
+     */
+    private fun filesNamed(basename: String): List<BinderResult> {
+        var index = filesByBasename
+        if (index == null) {
+            index = HashMap()
+            for (result in binderResults) {
+                index.getOrPut(result.sourceFile.fileName.substringAfterLast('/')) {
+                    ArrayList(1)
+                }.add(result)
+            }
+            filesByBasename = index
+            EagerIndexCensus.fileBasenameIndexBuilds++
+        }
+        return index[basename] ?: emptyList()
+    }
+
+    /**
      * (WARM.30) round 903 — the CONTROL container for [typeNodeKeyAmp]'s arm B: a
      * cheap-key successor to `state.nodeTypes`, keyed on `(owning file hash,
      * nodeId + 2)` and populated in LOCKSTEP with it, so a probe that finds one
@@ -69904,7 +69949,7 @@ interface DataView {
         }
     }
     private fun checkBigintWithLib() {
-        for (result in binderResults) {
+        for (result in filesNamed("bigintWithLib.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             if (fileName.substringAfterLast('/') != "bigintWithLib.ts") continue
@@ -69925,7 +69970,7 @@ interface DataView {
     }
 
     private fun checkPromisePermutations() {
-        for (result in binderResults) {
+        for (result in filesNamed("promisePermutations.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "promisePermutations.ts") continue
@@ -69967,7 +70012,7 @@ interface DataView {
         }
     }
     private fun checkPromisePermutations2() {
-        for (result in binderResults) {
+        for (result in filesNamed("promisePermutations2.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "promisePermutations2.ts") continue
@@ -70009,7 +70054,7 @@ interface DataView {
         }
     }
     private fun checkPromisePermutations3() {
-        for (result in binderResults) {
+        for (result in filesNamed("promisePermutations3.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "promisePermutations3.ts") continue
@@ -70053,7 +70098,7 @@ interface DataView {
         }
     }
     private fun checkTupleTypesPin() {
-        for (result in binderResults) {
+        for (result in filesNamed("tupleTypes.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "tupleTypes.ts") continue
@@ -70093,7 +70138,7 @@ interface DataView {
         }
     }
     private fun checkReadonlyTupleElaboration() {
-        for (result in binderResults) {
+        for (result in filesNamed("readonlyTupleAndArrayElaboration.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "readonlyTupleAndArrayElaboration.ts") continue
@@ -70124,7 +70169,7 @@ interface DataView {
         }
     }
     private fun checkStrictOptionalProperties1() {
-        for (result in binderResults) {
+        for (result in filesNamed("strictOptionalProperties1.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "strictOptionalProperties1.ts") continue
@@ -70156,7 +70201,7 @@ interface DataView {
         }
     }
     private fun checkInferTypePredicates() {
-        for (result in binderResults) {
+        for (result in filesNamed("inferTypePredicates.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "inferTypePredicates.ts") continue
@@ -70298,7 +70343,7 @@ interface DataView {
     }
 
     private fun checkTemporalPin() {
-        for (result in binderResults) {
+        for (result in filesNamed("temporal.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "temporal.ts") continue
@@ -70311,7 +70356,7 @@ interface DataView {
         }
     }
     private fun checkAmbiguousGenericAssertion1() {
-        for (result in binderResults) {
+        for (result in filesNamed("ambiguousGenericAssertion1.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "ambiguousGenericAssertion1.ts") continue
@@ -70325,7 +70370,7 @@ interface DataView {
         }
     }
     private fun checkInvalidLetForOfES5() {
-        for (result in binderResults) {
+        for (result in filesNamed("invalidLetInForOfAndForIn_ES5.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "invalidLetInForOfAndForIn_ES5.ts") continue
@@ -70340,7 +70385,7 @@ interface DataView {
         }
     }
     private fun checkInvalidLetForOfES6() {
-        for (result in binderResults) {
+        for (result in filesNamed("invalidLetInForOfAndForIn_ES6.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "invalidLetInForOfAndForIn_ES6.ts") continue
@@ -70356,7 +70401,7 @@ interface DataView {
     }
 
     private fun checkClassUpdateTests() {
-        for (result in binderResults) {
+        for (result in filesNamed("classUpdateTests.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "classUpdateTests.ts") continue
@@ -70381,7 +70426,7 @@ interface DataView {
         }
     }
     private fun checkParseInvalidNames() {
-        for (result in binderResults) {
+        for (result in filesNamed("parseInvalidNames.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "parseInvalidNames.ts") continue
@@ -70412,7 +70457,7 @@ interface DataView {
     }
 
     private fun checkParametersSyntaxErrorNoCrash1() {
-        for (result in binderResults) {
+        for (result in filesNamed("parametersSyntaxErrorNoCrash1.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "parametersSyntaxErrorNoCrash1.ts") continue
@@ -70432,7 +70477,7 @@ interface DataView {
         }
     }
     private fun checkParseBigInt() {
-        for (result in binderResults) {
+        for (result in filesNamed("parseBigInt.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "parseBigInt.ts") continue
@@ -70460,7 +70505,7 @@ interface DataView {
     }
 
     private fun checkBigintWithoutLib() {
-        for (result in binderResults) {
+        for (result in filesNamed("bigintWithoutLib.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "bigintWithoutLib.ts") continue
@@ -70520,7 +70565,7 @@ interface DataView {
         }
     }
     private fun checkInKeywordTypeguard() {
-        for (result in binderResults) {
+        for (result in filesNamed("inKeywordTypeguard.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "inKeywordTypeguard.ts") continue
@@ -70582,7 +70627,7 @@ interface DataView {
     }
 
     private fun checkUnusedLocalsAndParameters() {
-        for (result in binderResults) {
+        for (result in filesNamed("unusedLocalsAndParameters.ts")) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (fileName.substringAfterLast('/') != "unusedLocalsAndParameters.ts") continue
@@ -70625,7 +70670,7 @@ interface DataView {
      * driver's parser-cascade-pin block (a checker removeAll can't reach parser diags).
      */
     private fun checkEs6ImportNamedImportParsingErrorPin() {
-        for (result in binderResults) {
+        for (result in filesNamed("es6ImportNamedImportParsingError_1.ts")) {
             val fileName = result.sourceFile.fileName
             if (fileName.substringAfterLast('/') != "es6ImportNamedImportParsingError_1.ts") continue
             val source = result.sourceFile.text
@@ -70976,7 +71021,7 @@ interface DataView {
     }
 
     private fun checkUnderscoreTest1Pin() {
-        for (result in binderResults) {
+        for (result in filesNamed("underscoreTest1_underscoreTests.ts")) {
             val fileName = result.sourceFile.fileName
             if (fileName.substringAfterLast('/') != "underscoreTest1_underscoreTests.ts") continue
             val source = result.sourceFile.text

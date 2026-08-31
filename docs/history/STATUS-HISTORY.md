@@ -1,3 +1,36 @@
+**(INC.63) — EVERY KEYSTROKE RE-DERIVED THE WHOLE LIB, AND THE HALF THE STANDING REFUSAL
+NAMED WAS 3% OF IT (2026-08-30).** (INC.62) asked for the floor on a `dom` fixture before
+opening any row; taken, and the largest single addressable row is `parseBuiltinLib` at
+**46-50 ms of a 241-256 ms floor**, stable to ~1% across draws where everything else swings
+40%, and **O(1) in program size — so it is a BIGGER share the smaller the project**, i.e.
+precisely what an IDE-hosted application pays per keystroke. It was invisible at
+`"lib": ["es2020"]`, where the same row is 8-11 ms. **(INC.54)(c) had REFUSED it whole,
+"BLOCKED on round 884's `mergedSymbols` clone-on-write"** — true of the BIND, which
+measures **1.4 ms**. The other 97% is two pure functions of the SHARED parses:
+`RealLibResolver.resolve`, whose `/// <reference lib=…/>` closure regexes ~3.7 MB of lib
+text and which `bindRealLibs` called **TWICE** per construction (~32 ms), and the
+B85.2/M2.2 decl-set walk, ~30k puts into containers keyed by **data-class AST nodes** —
+round 471's deep `hashCode` at a scale the es2020 fixtures could not express (~15 ms).
+**THE ARITHMETIC NAMED THE MECHANISM BEFORE ANY BUILD**: ~500 ns per `HashMap` put with a
+`String` value is 20-40x impossible, which is (INC.62)'s own instrument and the fifth
+defect it has found. The recorded split mis-attributed the resolve because it sits INSIDE
+the `bindLibFiles` section — `bindLibFiles` **17.4 -> 1.4 ms** is that regex, not a bind.
+**A REFUSAL THAT NAMES A BLOCKER MUST CHECK THE BLOCKED HALF IS WHERE THE COST IS.**
+**MEASURED (many-small-2400-dom, both arms this session):** `parseBuiltinLib` 47.1 -> 1.65,
+50.1 -> 1.69, 46.2 -> 1.46 ms; the decl-set walk 12.0-15.9 -> **0.01**; checker construct
+99 -> 55 / 97 -> 44 / 84 -> 43; **PLAIN floor median 241 -> 189 (early) and 256 -> 166
+(late)**, the early arm's ranges disjoint. **GATES.** Suite **16,528 / 0 / 3** (+5, exactly
+the new pins); `cost_gate.py` exit 0 with all 20 counters +0.00% (the EXPECTED answer — a
+CLI compile builds one checker, so a hoist within one construction is a no-op there);
+`huge_methods.py --fail-over 0` clean; 8-profile before/after BINARY grid `added=0
+removed=0` on all eight, run and LABELLED as a control (the index is a function of the lib
+set alone and the eight profiles share one — the corpus, thousands of compiles in one JVM,
+is what discriminates the sharing). Ablation: three arms, each reddening exactly the pin it
+names, with the embedded-lib negative control green in all three.
+**SUCCESSOR (INC.64):** the init-block pass dispatch (40-53 ms, FLAT — an (INC.7)-style
+partition question, not a micro-optimisation) and the crawl WALL (51-57 ms, (INC.56), the
+only row costing a soundness promise) are now co-largest.
+
 
 
 

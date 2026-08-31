@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.69) — the init-block dispatch was not flat, and 21 walkers were paying a whole-program loop to compare one file name
+
+**(INC.66) RECORDED THE INIT-BLOCK PASS DISPATCH AS "FLAT ACROSS ~400 PASSES, SO THERE IS NO
+ROW TO MAKE CHEAPER". IT IS NOT FLAT, AND THE MEASUREMENT THAT SAYS SO IS A HISTOGRAM RATHER
+THAN A TOP-N LIST.** On the 2,401-file `many-small-2400-dom` fixture the floor's per-pass
+table is **418 rows summing to 39.5 ms, of which 44 rows carry 37.1 ms (94%) and the other
+367 carry 0.82 ms** — the (INC.7)/(INC.20)/(INC.21) gating arc did its job and what is left
+is a short list, not a tail. Reading the table by rank shows five `init:*` heads and then a
+**PLATEAU of ~21 rows at 0.39-0.55 ms each**, and a plateau of near-identical prices across
+unrelated walkers is not a coincidence of what they do — it is a shared per-file cost.
+
+**IT WAS ONE LINE, REPEATED 21 TIMES.** Each of those passes is a corpus PIN walker whose
+whole body is
+`for (result in binderResults) { … if (fileName.substringAfterLast('/') != "<one literal>") continue; … }`.
+So each walked the entire program and allocated a `String` per file to compare it against a
+name no real project contains: 2,401 iterations x ~185 ns x 21 passes.
+
+**THE FIX IS AN INDEX AND THE SAFETY IS THAT NOTHING ELSE MOVED.** One
+`HashMap<String, MutableList<BinderResult>>` keyed by `fileName.substringAfterLast('/')`,
+built on first ask (`Checker.filesNamed`), and the 21 loop HEADERS re-pointed at
+`filesNamed("<literal>")`. **The redundant `!=` guard is kept VERBATIM in every body** — it
+can no longer be taken, and keeping it means each loop body is byte-identical to what it was,
+which is what makes the conversion an equivalence rather than a new policy. Arm a4 then
+measured that this is not decoration: widening the index to a suffix match reddens NOTHING,
+because the kept guard refuses what the index wrongly offered. It is round 927's two-guards
+pair — the index buys the SPEED, the guard keeps the CORRECTNESS — and only a5, which
+widens the index **and** deletes the guard, reddens the negative control.
+
+**MEASURED, and the deterministic half is the one to quote.** Per-pass rows, second
+instrumented draw (round 846: a probe's own cost warms up, so a single-draw table inflates
+every row): the 21 rows read **10.079 ms -> 0.457 ms**, of which **0.438 is
+`checkBigintWithLib` alone** — the first of the 21 in pass order, paying the one index build
+for all of them — and the other twenty are 0.000-0.002. Four independent draws of the
+unmodified binary in a separate process put the same 21 rows at 9.27 / 9.66 / 10.51 / 12.01
+ms, so the before figure is not one draw's luck.
+**Wall, ABBA-rotated, one JVM per arm, 4 processes per arm x 8 draws:** floor
+median-of-process-medians **157 -> 144.5 ms (-8.0%)**, means 162.5 -> 145.5 (-10.5%); 3 of
+the 4 positional pairs favour the after arm.
+
+**AND THE SAME RUN RE-DEMONSTRATED (INC.68)'s LAW ON ITSELF.** The two `rows` processes were
+NOT rotated (one process per arm, taken last), and their WHOLE-TABLE sums read
+**52.32 -> 54.27 ms**, i.e. the after arm looks 4% worse overall while the 21 rows it changed
+fell 22-fold — because that particular after process drew slow (its own plain floor median
+was 171 against the before process's 156). A single unrotated process cannot compare TOTALS;
+it can compare rows WITHIN itself, which is what is quoted above.
+
+**THE PINS ARE VALUE PINS OVER NESTED PATHS, BECAUSE THE CORPUS STRUCTURALLY CANNOT REACH
+THEM.** The generated harness materialises no directory, so its file names are FLAT and
+`substringAfterLast('/')` returns the whole string: all ~13k baselines exercise the
+degenerate key and are a CONTROL for this conversion, not coverage of it. An index keyed by
+the full path passes every one of them and silently stops pinning a real project's
+`src/dates/temporal.ts` — a MISSING diagnostic, which nothing in this repo prints. Five pins
+(`CorpusPinBasenameIndexTest`): a nested-path hit, a negative control, two files sharing one
+basename, and two COUNT pins at 10 and 100 files ((INC.57)'s shape —
+`EagerIndexCensus.fileBasenameIndexBuilds == 1` at both sizes, where an un-memoized binary
+reads 21). Ablations a1 (key by full path) 2/5 RED, a2 (map to a single result rather than a
+list) 1/5, a3 (drop the memo) 2/5, a4 (widen to a suffix match) **0/5 — recorded as a
+redundant-guard pair, not as coverage**, and a5 (widen AND delete the guard) 1/5.
+
+**GATES.** Suite **16,553 / 0 / 3** (16,548 + the 5 new pins); `cost_gate.py` exit 0 with
+**every counter +0.00%**; `huge_methods.py --fail-over 0` clean; 8-profile grid
+`added=0 removed=0` on all eight — **a CONTROL here and said so in the script's own header**,
+since no profile contains a file named `temporal.ts` or any of the other 20 literals, so
+those walkers emit nothing in either arm; what the grid can catch is the accident this
+change's shape invites, a scripted rewrite landing on a loop it was not aimed at.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor after this round is **~112 ms** at 2,401
+files. Inside the init dispatch the ranking is now: `init:computePerFileVisibility` 5.5 and
+`init:buildPerFileScopes` 3.3 — the (CHK.49) PAIR, one observable, which must move together
+or not at all — then `init:moduleTypeNameIndex` 2.2, `init:mergeFileLocalsIntoGlobals` 2.1,
+`init:collectUmdGlobalsAndModuleFiles` 2.1, `checkSpreadNonIterableIntoFixedArity` 1.6,
+`checkCircularGenericCallbackVariables` 1.3, `init:evolvingArrayUseSiteWalks` 1.3 and
+`checkModulePreserve4Pin` **1.2, which is a RAW `binderResults.none { it.sourceFile.text
+.contains(…) }`** — a whole-program text scan that bypasses (WARM.19)'s `srcHas` n-gram
+filter, and one of exactly three such raw sites left in `Checker.kt`. That one is the next
+sub-step and is measured, not guessed; after it the row with no soundness promise attached is
+the crawl WALL (~31 ms), whose READ half is (INC.56).
+
 ### Round (INC.68) — 80% of the paths this compiler normalizes were already normalized, and the blocked arms invented a regression that rotation removed
 
 **(INC.66) SAID "BEFORE PRICING ANY ROW, CHECK IT HAS A SPLIT", AND THE ROW IT NAMED FOR
@@ -4662,6 +4740,22 @@ RHS, and the merged-member CONTRADICTION direction.
   reported a +2.70 ms regression in a region calling no `normalize`, reproducibly over 12
   draws per arm, and rotation inverted it — see the session note. Successor is (INC.66)
   below, whose ranking is unchanged except that config+glob is now ~13 ms.**
+
+- [x] **(INC.69) DONE 2026-08-31 — the init-block dispatch is NOT flat, and 21 corpus-PIN
+  walkers were the plateau.** (INC.66) recorded the ~400-pass table as flat "so there is no
+  row to make cheaper"; a HISTOGRAM rather than a top-N list says otherwise — 418 rows, 44 of
+  them carrying 94% of 39.5 ms, and 21 of those 44 sitting at an almost identical
+  0.39-0.55 ms because they share one line: a whole-program loop whose first act is
+  `fileName.substringAfterLast('/') != "<one literal>"`. One basename index built on first
+  ask took those 21 rows **10.079 -> 0.457 ms** (second instrumented draw; 0.438 of the
+  remainder is the first asker paying the build) and the ABBA-rotated floor
+  **157 -> 144.5 ms**. **THE TRANSFERABLE HALF: a PLATEAU of near-identical prices across
+  unrelated passes is a shared per-file cost, not a coincidence of what they do — and a
+  top-N ranking cannot show a plateau, only a distribution can.** Successor is
+  `checkModulePreserve4Pin`'s raw whole-source `.contains` (1.2 ms, one of three sites that
+  bypass (WARM.19)'s `srcHas` filter), then the five `init:*` heads, of which
+  `init:computePerFileVisibility` + `init:buildPerFileScopes` are the (CHK.49) pair and move
+  together or not at all.
 
 - [ ] **(INC.66) THE dom FLOOR AFTER (INC.65), AND THE INSTRUMENT LESSON THAT OUTRANKS THE
   ROWS (2026-08-30).** Floor medians **151 ms (early) / 116 (late)** at 2,401 files, from

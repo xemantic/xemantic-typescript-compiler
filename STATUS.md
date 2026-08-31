@@ -1,5 +1,37 @@
 # Status
 
+**(INC.69) — THE INIT-BLOCK DISPATCH IS NOT FLAT, AND A PLATEAU IS A SHARED PER-FILE COST
+(2026-08-31).** (INC.66) recorded the ~400-pass table as FLAT, "so there is no row to make
+cheaper"; a HISTOGRAM rather than a top-N list refutes it — on `many-small-2400-dom` the
+floor table is **418 rows summing to 39.5 ms, 44 of them carrying 37.1 (94%) and 367 carrying
+0.82** — and 21 of those 44 sit at an almost identical **0.39-0.55 ms**. A plateau of
+near-identical prices across unrelated walkers is not a coincidence of what they do: all 21
+are corpus PIN walkers whose whole body is a whole-program loop whose first act is
+`fileName.substringAfterLast('/') != "<one literal>"`, i.e. 2,401 iterations and a `String`
+allocation each to compare against a name no real project contains.
+**ONE BASENAME INDEX, BUILT ON FIRST ASK**, and the 21 loop HEADERS re-pointed at it; the
+redundant `!=` guard is kept VERBATIM so every loop body is byte-identical.
+**MEASURED — the deterministic half first**: the 21 rows **10.079 -> 0.457 ms** (second
+instrumented draw, round 846; 0.438 of the remainder is the FIRST asker paying the one build,
+the other twenty are 0.000-0.002), cross-checked against four draws of the unmodified binary
+in a separate process at 9.27-12.01. **ABBA-rotated wall, one JVM per arm, 4 processes/arm x
+8 draws: floor median-of-medians 157 -> 144.5 ms (-8.0%)**, means 162.5 -> 145.5.
+**THE SAME RUN RE-PROVED (INC.68)'s LAW ON ITSELF**: the two unrotated `rows` processes read
+whole-table sums of 52.32 -> 54.27 ms — the after arm 4% "worse" — while the 21 rows it
+changed fell 22-fold, because that process simply drew slow. An unrotated process compares
+rows WITHIN itself, never totals.
+**THE PINS ARE NESTED-PATH VALUE PINS BECAUSE THE CORPUS CANNOT REACH THEM**: the harness
+materialises no directory, so its names are FLAT and all ~13k baselines exercise the
+degenerate key — an index keyed by the full path passes every one and silently stops pinning
+a real project's `src/dates/temporal.ts`, a MISSING diagnostic nothing here prints.
+**GATES.** Suite **16,553 / 0 / 3** (+5, exactly the new pins); `cost_gate.py` exit 0, every
+counter +0.00%; `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0 removed=0`,
+labelled a CONTROL in its own header (no profile holds any of the 21 literals). Ablations
+a1/a2/a3 redden 2/1/2 of 5; **a4 (widen the index to a suffix match) reddens NOTHING and is
+recorded as a round-927 redundant-guard PAIR** — the index buys the speed, the kept guard
+keeps the correctness — and only a5, which widens the index AND deletes the guard, reddens
+the negative control.
+
 **(INC.68) — 80% OF THE PATHS THIS COMPILER NORMALIZES WERE ALREADY NORMALIZED, AND THE
 BLOCKED ARMS INVENTED A REGRESSION THAT ROTATION REMOVED (2026-08-31).** (INC.66) said
 "before pricing any row, check it has a SPLIT"; the row it named for re-decomposition —
@@ -147,36 +179,3 @@ every order the system produces by accident.
 **SUCCESSOR (INC.65):** what is left is a PARTITION question (the init-block pass dispatch,
 flat across ~400 passes) and a HOST PROMISE ((INC.56), the crawl's read half) — the era of
 finding a stray quadratic in the front end may be over, which is itself worth recording.
-
-**(INC.63) — EVERY KEYSTROKE RE-DERIVED THE WHOLE LIB, AND THE HALF THE STANDING REFUSAL
-NAMED WAS 3% OF IT (2026-08-30).** (INC.62) asked for the floor on a `dom` fixture before
-opening any row; taken, and the largest single addressable row is `parseBuiltinLib` at
-**46-50 ms of a 241-256 ms floor**, stable to ~1% across draws where everything else swings
-40%, and **O(1) in program size — so it is a BIGGER share the smaller the project**, i.e.
-precisely what an IDE-hosted application pays per keystroke. It was invisible at
-`"lib": ["es2020"]`, where the same row is 8-11 ms. **(INC.54)(c) had REFUSED it whole,
-"BLOCKED on round 884's `mergedSymbols` clone-on-write"** — true of the BIND, which
-measures **1.4 ms**. The other 97% is two pure functions of the SHARED parses:
-`RealLibResolver.resolve`, whose `/// <reference lib=…/>` closure regexes ~3.7 MB of lib
-text and which `bindRealLibs` called **TWICE** per construction (~32 ms), and the
-B85.2/M2.2 decl-set walk, ~30k puts into containers keyed by **data-class AST nodes** —
-round 471's deep `hashCode` at a scale the es2020 fixtures could not express (~15 ms).
-**THE ARITHMETIC NAMED THE MECHANISM BEFORE ANY BUILD**: ~500 ns per `HashMap` put with a
-`String` value is 20-40x impossible, which is (INC.62)'s own instrument and the fifth
-defect it has found. The recorded split mis-attributed the resolve because it sits INSIDE
-the `bindLibFiles` section — `bindLibFiles` **17.4 -> 1.4 ms** is that regex, not a bind.
-**A REFUSAL THAT NAMES A BLOCKER MUST CHECK THE BLOCKED HALF IS WHERE THE COST IS.**
-**MEASURED (many-small-2400-dom, both arms this session):** `parseBuiltinLib` 47.1 -> 1.65,
-50.1 -> 1.69, 46.2 -> 1.46 ms; the decl-set walk 12.0-15.9 -> **0.01**; checker construct
-99 -> 55 / 97 -> 44 / 84 -> 43; **PLAIN floor median 241 -> 189 (early) and 256 -> 166
-(late)**, the early arm's ranges disjoint. **GATES.** Suite **16,528 / 0 / 3** (+5, exactly
-the new pins); `cost_gate.py` exit 0 with all 20 counters +0.00% (the EXPECTED answer — a
-CLI compile builds one checker, so a hoist within one construction is a no-op there);
-`huge_methods.py --fail-over 0` clean; 8-profile before/after BINARY grid `added=0
-removed=0` on all eight, run and LABELLED as a control (the index is a function of the lib
-set alone and the eight profiles share one — the corpus, thousands of compiles in one JVM,
-is what discriminates the sharing). Ablation: three arms, each reddening exactly the pin it
-names, with the embedded-lib negative control green in all three.
-**SUCCESSOR (INC.64):** the init-block pass dispatch (40-53 ms, FLAT — an (INC.7)-style
-partition question, not a micro-optimisation) and the crawl WALL (51-57 ms, (INC.56), the
-only row costing a soundness promise) are now co-largest.

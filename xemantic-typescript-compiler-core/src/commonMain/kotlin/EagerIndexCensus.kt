@@ -143,6 +143,27 @@ object EagerIndexCensus {
      */
     var relativeImportExtractions: Int = 0
 
+    /**
+     * (INC.69) How many times the checker built its BASENAME index, per compile.
+     *
+     * **1, and invariant to the number of passes that consult it — that is the
+     * whole assertion.** Twenty-one registered corpus-PIN walkers are gated on
+     * `fileName.substringAfterLast('/') != "<one literal>"`, and each of them used
+     * to reach that test by iterating every program file and allocating a `String`
+     * per file to compare. Measured on the 2,401-file `many-small-2400-dom`
+     * fixture, that is **~0.44 ms EACH** — a plateau of 21 rows of an
+     * essentially identical price, **~9.6 ms of a 121 ms incremental floor** and
+     * the bulk of what was left of the init-block pass dispatch after
+     * (INC.7)/(INC.20)/(INC.21) gated everything gateable.
+     *
+     * A COUNT, for the reason [programNameSetBuilds] and [transformOrderSetBuilds]
+     * are counts: the claim is that the work is done ONCE per compile rather than
+     * once per consulting pass, and no wall-clock assertion on a ~120 ms floor can
+     * say that ((INC.52): the same binary reads 13.16 and 8.42 ms for one row in
+     * two draws of one run). An un-memoized binary reads 21 here.
+     */
+    var fileBasenameIndexBuilds: Int = 0
+
     fun resetCounters() {
         transformOrderSetBuilds = 0
         relativeImportExtractions = 0
@@ -151,5 +172,6 @@ object EagerIndexCensus {
         topLevelConstBuilds = 0
         programNameSetBuilds = 0
         jsxSuffixScanSteps = 0
+        fileBasenameIndexBuilds = 0
     }
 }
