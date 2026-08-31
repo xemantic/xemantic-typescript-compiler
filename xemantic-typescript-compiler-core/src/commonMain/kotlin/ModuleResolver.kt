@@ -103,6 +103,69 @@ class ModuleResolver(
      */
     private val resolutionCache = HashMap<String, String?>()
 
+    /**
+     * (INC.79) The filesystem answers already obtained, for this build.
+     *
+     * **This adds no assumption**: [resolutionCache] above already memoizes the whole
+     * ANSWER for a `(importerDir, specifier)` pair, which is strictly stronger than
+     * memoizing the probes it is made of — a [ModuleResolver] lives for exactly one
+     * `ProjectCompiler.build`, and the crawl already documents that it treats the [Vfs]
+     * as static for that build's duration.
+     *
+     * **WHY IT IS WORTH ANYTHING.** Measured on the 2,401-file `many-small-2400-dom`
+     * fixture, the crawl's sequential resolve row is ~11 ms of a ~120 ms per-keystroke
+     * query, and **4.4 ms of that is 2,350 `exists` syscalls at ~1.9 us each** — asking
+     * whether files exist that the ROOT-FILE GLOB has already listed, in this same
+     * build, off the same [Vfs]. [seedExistingFiles] hands those answers over instead of
+     * paying for them twice. What it cannot do is answer NEGATIVELY from that set: a
+     * file can exist and be excluded from the program, so only the positive direction is
+     * sound and everything else falls through to the probe (and is then memoized).
+     *
+     * The `node_modules` ladder in [resolveBare] is the other beneficiary and the one
+     * this fixture cannot show: it asks `isDirectory("<dir>/node_modules")` for every
+     * ancestor of every importer, i.e. the same handful of directories thousands of
+     * times.
+     */
+    private val existsCache = HashMap<String, Boolean>()
+    private val isDirectoryCache = HashMap<String, Boolean>()
+
+    /** (INC.79) census — `exists`/`isDirectory` questions asked, and syscalls actually made. */
+    var existsQuestions: Int = 0
+        private set
+    var existsProbes: Int = 0
+        private set
+
+    /**
+     * Records that every path in [paths] exists, because something in this build has
+     * already established that it does — the root-file glob's own listings.
+     *
+     * Only the POSITIVE direction: absence from [paths] says nothing, since the glob
+     * reports the files it SELECTS rather than the files that are there.
+     */
+    fun seedExistingFiles(paths: Collection<String>) {
+        for (path in paths) existsCache[path] = true
+    }
+
+    private fun exists(path: String): Boolean {
+        existsQuestions++
+        val known = existsCache[path]
+        if (known != null) return known
+        existsProbes++
+        val answer = vfs.exists(path)
+        existsCache[path] = answer
+        return answer
+    }
+
+    private fun isDirectory(path: String): Boolean {
+        existsQuestions++
+        val known = isDirectoryCache[path]
+        if (known != null) return known
+        existsProbes++
+        val answer = vfs.isDirectory(path)
+        isDirectoryCache[path] = answer
+        return answer
+    }
+
     /** (INC.65) census — resolutions COMPUTED, as opposed to served from [resolutionCache]. */
     var computedResolutions: Int = 0
         private set
@@ -137,7 +200,7 @@ class ModuleResolver(
     /** Resolves [p] as a file (with extension/`.js`→`.ts` probing) or directory (index/package). */
     private fun resolveAsFileOrDirectory(p: String): String? {
         resolveAsFile(p)?.let { return it }
-        if (vfs.isDirectory(p)) resolveAsDirectory(p)?.let { return it }
+        if (isDirectory(p)) resolveAsDirectory(p)?.let { return it }
         return null
     }
 
@@ -147,17 +210,17 @@ class ModuleResolver(
         // A JS-ish specifier most likely denotes a sibling TS file.
         jsToTs[ext]?.let { tsExts ->
             val stem = p.removeSuffix(ext)
-            for (te in tsExts) if (vfs.exists(stem + te)) return stem + te
-            if (vfs.exists(p)) return p // a real .js (allowJs) as a last resort
+            for (te in tsExts) if (exists(stem + te)) return stem + te
+            if (exists(p)) return p // a real .js (allowJs) as a last resort
             return null
         }
         // Already has a known TS/JS/json extension.
         if (ext.isNotEmpty() && (ext in setOf(".ts", ".tsx", ".json") || p.endsWith(".d.ts"))) {
-            if (vfs.exists(p)) return p
+            if (exists(p)) return p
         }
         // Extensionless: probe.
-        for (e in allExtensions) if (vfs.exists(p + e)) return p + e
-        if (ext.isNotEmpty() && vfs.exists(p)) return p
+        for (e in allExtensions) if (exists(p + e)) return p + e
+        if (ext.isNotEmpty() && exists(p)) return p
         return null
     }
 
@@ -169,7 +232,7 @@ class ModuleResolver(
             }
             pkg["main"]?.stringValue?.let { m ->
                 resolveAsFile(PathUtil.join(dir, m))?.let { return it }
-                if (vfs.isDirectory(PathUtil.join(dir, m))) resolveIndex(PathUtil.join(dir, m))?.let { return it }
+                if (isDirectory(PathUtil.join(dir, m))) resolveIndex(PathUtil.join(dir, m))?.let { return it }
             }
         }
         return resolveIndex(dir)
@@ -178,7 +241,7 @@ class ModuleResolver(
     private fun resolveIndex(dir: String): String? {
         for (base in indexBases) {
             val p = "$dir/$base"
-            if (vfs.exists(p)) return p
+            if (exists(p)) return p
         }
         return null
     }
@@ -191,13 +254,13 @@ class ModuleResolver(
         while (true) {
             val nm = "$dir/node_modules"
             val pkgDir = "$nm/$pkg"
-            if (vfs.isDirectory(pkgDir)) {
+            if (isDirectory(pkgDir)) {
                 resolveInPackage(pkgDir, sub)?.let { return it }
             }
             // @types fallback: @types/<name> or @types/<scope>__<name>.
             val typesPkg = if (pkg.startsWith("@")) "@types/" + pkg.substring(1).replace("/", "__") else "@types/$pkg"
             val typesDir = "$nm/$typesPkg"
-            if (vfs.isDirectory(typesDir)) {
+            if (isDirectory(typesDir)) {
                 resolveInPackage(typesDir, sub)?.let { return it }
             }
             val parent = PathUtil.dirname(dir)
@@ -248,14 +311,14 @@ class ModuleResolver(
      * entry is always a declaration file, so `main` and runtime `index.*` never apply.
      */
     fun resolveTypeRootPackage(pkgDir: String): String? {
-        if (!vfs.isDirectory(pkgDir)) return null
+        if (!isDirectory(pkgDir)) return null
         readPackageJson("$pkgDir/package.json")?.let { pkg ->
             (pkg["types"]?.stringValue ?: pkg["typings"]?.stringValue)?.let { t ->
                 resolveAsFile(PathUtil.join(pkgDir, t))?.let { return it }
             }
         }
         val index = "$pkgDir/index.d.ts"
-        return if (vfs.exists(index)) index else null
+        return if (exists(index)) index else null
     }
 
     // --- package.json "exports" -------------------------------------------------

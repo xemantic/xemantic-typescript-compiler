@@ -284,6 +284,12 @@ class ProjectCompiler(private val vfs: Vfs) {
         val rootFiles = collectRootFiles(config, supportedExt)
         FrontEnd.close(FrontEnd.CFG_ROOTS, feCfgRootsT0)
         FrontEnd.globRoots = rootFiles.size.toLong()
+        // (INC.79) The glob has just PROVEN every one of these exists, off this very
+        // `Vfs` and in this very build. The crawl otherwise asks the filesystem the same
+        // question again for each of them — 2,350 `exists` syscalls, 4.4 ms of a ~120 ms
+        // per-keystroke query on a 2,401-file project. Positive answers only: a file
+        // ABSENT from this list may still exist and merely be excluded from the program.
+        resolver.seedExistingFiles(rootFiles)
 
         // Automatic type-library inclusion (tsconfig `types` / `typeRoots`): the
         // resolved entries join the graph walk as additional seeds so their own
@@ -608,6 +614,11 @@ class ProjectCompiler(private val vfs: Vfs) {
                 }
             }
             FrontEnd.close(FrontEnd.CRAWL_RESOLVE, feResolveT0)
+            // (INC.79) The receipt for the seeded probe memo — a syscall COUNT, which is
+            // deterministic where the row it decomposes has a per-process spread of
+            // several milliseconds. Written from the crawl's own sequential half.
+            FrontEnd.resolveExistsQuestions = resolver.existsQuestions.toLong()
+            FrontEnd.resolveExistsProbes = resolver.existsProbes.toLong()
             // Read+parse the discoveries concurrently, then emit in DISCOVERY
             // order (the emission-order contract above). An unreadable discovered
             // file is dropped here and stays out of `loaded`, so a later frontier

@@ -4769,6 +4769,20 @@ object FrontEnd {
     var globRegexEvals: Long = 0
 
     /**
+     * (INC.79) census — the crawl's module-resolution questions, and how many of them
+     * reached the filesystem.
+     *
+     * `ModuleResolver` memoizes `exists`/`isDirectory` for the build (which adds no
+     * assumption over the whole-answer memo it already had) and is SEEDED with the
+     * root-file glob's own listings, so a specifier naming a file the glob already
+     * proved exists costs a map probe rather than a syscall. The receipt is this pair
+     * rather than the row: a syscall count is deterministic and comparable across
+     * machines, where the row's per-process spread is itself several milliseconds.
+     */
+    var resolveExistsQuestions: Long = 0
+    var resolveExistsProbes: Long = 0
+
+    /**
      * (INC.68) census — how often [PathUtil.normalize] is asked, and how often the
      * answer is the argument itself.
      *
@@ -5322,6 +5336,7 @@ object FrontEnd {
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
         globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0; globRegexEvals = 0
+        resolveExistsQuestions = 0; resolveExistsProbes = 0
         pathNormalizeCalls = 0; pathNormalizeFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
@@ -5600,6 +5615,10 @@ object FrontEnd {
         )
         appendLine(
             "path normalize: $pathNormalizeCalls calls, $pathNormalizeFast already normalized"
+        )
+        appendLine(
+            "module resolution: $resolveExistsQuestions exists/isDirectory questions, " +
+                "$resolveExistsProbes reached the filesystem"
         )
         appendLine(
             "crawl parse cache: ${CrawlParseCache.hits} hit / ${CrawlParseCache.misses} miss" +
