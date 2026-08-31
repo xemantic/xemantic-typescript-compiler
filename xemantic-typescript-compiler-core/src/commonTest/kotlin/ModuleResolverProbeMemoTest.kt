@@ -61,6 +61,7 @@ class ModuleResolverProbeMemoTest {
             "/p/a/hidden.ts" to "export const h = 1;\n",
             "/p/a/one.ts" to "import { x } from \"./dep\";\n",
             "/p/b/dep.ts" to "export const y = 2;\n",
+            "/p/a/only.ts" to "export const o = 1;\n",
             "/p/b/three.ts" to "import { y } from \"./dep\";\n",
         )
     )
@@ -98,6 +99,22 @@ class ModuleResolverProbeMemoTest {
         val r = ModuleResolver(vfs())
         r.seedExistingFiles(listOf("/p/a/dep.ts"))
         assert(r.resolve("./dep", "/p/b/three.ts") == "/p/b/dep.ts")
+    }
+
+    /**
+     * THE WRONG-ANSWER PIN, and it is here because an ablation found the set missing it:
+     * a memo keyed by anything less than the WHOLE path — a basename, say — answers
+     * "yes, that exists" for a file of the same name in another directory, and the
+     * import then names a file that is not there. Every count pin stays green for such a
+     * memo, and so does every other value pin in this class, because they all happen to
+     * ask about names that exist on both sides.
+     */
+    @Test
+    fun `a file existing only in another directory is not resolved here`() {
+        val r = ModuleResolver(vfs())
+        r.seedExistingFiles(listOf("/p/a/only.ts"))
+        assert(r.resolve("./only", "/p/a/one.ts") == "/p/a/only.ts")
+        assert(r.resolve("./only", "/p/b/three.ts") == null)
     }
 
     /** The memo may not invent existence: a specifier naming nothing still answers null. */
