@@ -2540,6 +2540,40 @@ a residue no sub-row named.**
   waiting for the next wrapper**, and the instrument that finds it is a row measured
   STANDALONE against the same row measured IN THE BUILD.
 
+- [ ] **(INC.81) THE PER-KEYSTROKE QUERY RE-DECOMPOSED AFTER (INC.78)/(INC.79)/(INC.80) —
+  87 ms, AND THE RANKING CHANGED AGAIN (2026-08-31, trusted arm, 2,401-file `dom` fixture,
+  8 rotated draws).** (INC.57)'s law: re-decompose after every round that moves the floor
+  rather than inheriting an ordering. **WALL median 87 ms** [81, 83, 84, 84, 87, 90, 111, 130]
+  against (INC.77)'s 118-125. Rows: **init-block pass dispatch 40.8** (47%, and 12.5 of it is
+  `init:buildFileLocalTypeMaps` — refused by (INC.77) as the build's first real type
+  resolution, do not re-open it from its size); **crawl WALL 14.2**, of which sequential
+  resolve is now **4.5-5.7** and the rest (~9 ms) is the concurrent half with NO IO and NO
+  parse left in it; **config+glob 9.2** (root glob 8.6, of which `listEntries` 7.3, ~4.4 ms of
+  it irreducible `stat`s per (INC.77)); **bind 7.1**; **post-checker 6.2**.
+  **THE TWO NAMED CANDIDATES, in order:**
+  **(a) `enclosingImportIndex` (field) 4.7 ms** — a row no queue item has ever named. It is
+  already `by lazy`, so this is what it COSTS when asked, not an eager waste: a program-wide
+  `Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>>` over ~9,400 specifiers,
+  i.e. ~500 ns per entry. **Read round 471 first**: the key is an AST *data class*, so every
+  `getOrPut` hashes structurally — and the KDoc says the structural keying is LOAD-BEARING
+  (`mergeSymbolTable` hands `resolveAlias` a different instance), so the key cannot simply
+  become identity. Measure the split (hash vs put vs the walk) before designing, and check
+  whether a NARROWED query needs the whole-program index at all — the entries list is in
+  program encounter order and first-match semantics are byte-pinned, which is what makes a
+  per-file index a semantics change rather than a refactor.
+  **(b) the crawl's ~9 ms concurrent residue** — (INC.64)'s question with BOTH hops now gone
+  ((INC.64) removed the parse hop for a cache hit, (INC.56) the read hop for resident
+  content). What is left per file is the `flatMapMerge` machinery itself, `computeParserFlags`
+  and `CrawlParseCache.lookup`. **Two things already known**: `fileLooksLikeModuleForAwait` is
+  short-circuited for an ES module target and would be a whole-content scan per file for a
+  `commonjs` project (so this row is a function of the fixture's `module` setting, (INC.61)'s
+  law on a third axis); and the cache lookup is keyed by CONTENT, so its hash is O(bytes) and
+  irreducible. (INC.64) measured the machinery alone at 17.2 ms against a 14.4 ms sequential
+  read at this file count — i.e. ~2.8 ms of it is the flow, and the rest is unattributed.
+  **INSTRUMENT for both:** `Inc56TrustedFloorMain <dir> trust 8 6` prints the WALL, the FEROW
+  rows and the PTROW pass rows in the QUERY regime — read a pass table from the same regime as
+  the block you compare it to ((INC.77)).
+
 - [x] **(INC.80) DONE 2026-08-31 — `PathUtil.join` BY ARITHMETIC, AND A TWO-DRAW READ THAT
   NEARLY REFUTED IT.** A module specifier's `..` is exactly what `isNormalized` must refuse, so
   (INC.68)'s fast path never applied and every join allocated a split list, a deque and a
