@@ -20,6 +20,66 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.84) — the concurrent half is named, and its 16-way merge is running at 0.6x parallelism
+
+**THE ~6-8 ms THAT NO ROW COULD SEE IS NOW ATTRIBUTED, AND THE RESIDUE AFTER THE SPLIT IS
+0.17-0.37 ms.** Six new `FrontEnd` rows, each stating in its own KDoc whether it is a WALL or
+a CPU SUM across the 16 workers — the single most misread distinction in that file, and the
+reason (INC.83) could rank nothing:
+
+```
+CRAWL (WALL)                  9.45 - 12.75 ms
+  specifier resolution        3.08 -  4.49   (already named)
+  readAndScanBatch  WALL      5.90 -  7.64   <-- the concurrent half, now named
+    flatMapMerge pipe WALL    4.83 -  6.44
+    single-threaded fold      0.59 -  0.69
+    associateBy + reindex     0.17 -  0.28
+  frontier drain + emit       0.27 -  0.39
+  residue                     0.17 -  0.23
+  CPU sums inside the pipeline, 2,401 files each:
+    read+decode               1.09 -  1.38
+    pre-parse                 0.91 -  1.27
+    CrawledFile construction  0.89 -  1.20   <-- NEW, ~370-500 ns/file
+```
+
+**`CRAWL_MKFILE` IS THE ROW NO EXISTING SPAN COULD REACH**, which is why (INC.83) had to
+refuse it as unobtainable: the constructor builds a `Set` of the file's module specifiers
+AFTER the pre-parse span closes and BEFORE `emit`, so it fell between the two. Its nanos ride
+back on the element and are folded by the single-threaded collector, because a `+=` from
+those 16 workers is round 825's race with no exception to find it by.
+
+**THE FINDING IS A RATIO, AND THE ROW'S OWN KDoc FORBIDS THE SUBTRACTION THAT WOULD HAVE
+GIVEN THE WRONG ANSWER**: with 16 overlapping workers, `PIPE - (READ + PREPARSE + MKFILE)` is
+a residue of nothing. Total worker CPU inside the pipeline is **3.71 / 2.89 / 3.49 ms**
+against pipeline WALLS of **6.44 / 4.83 / 5.79** — an effective parallelism of
+**0.58 / 0.60 / 0.60x**, replicated to two decimals across three independent draws. **Sixteen
+workers producing LESS CPU than their own wall is scheduling, not work.**
+
+**AND THE CONTROL THAT MAKES IT ATTRIBUTABLE IS THE OTHER ARM.** The same pipeline on the
+UNTRUSTING arm runs at **7.5-8.9x** — where reads genuinely block, the merge earns its keep
+handsomely (its `read+decode` CPU sum there is 124-187 ms against 1.1-1.4 on the trusted
+arm). So this is not "concurrency is bad"; it is that a wave in which every read is served
+from memory and every parse from the content cache has **nothing to overlap**, and pays 16
+channels and their scheduling to discover that. (INC.64) removed two dispatcher hops per file
+for exactly this reason and left the merge itself in place; this is that finding one layer
+out.
+
+**GATES.** Suite **16,633 / 0 / 3**; `cost_gate.py` exit 0 with every counter **+0.00%**
+(which is the *expected* answer for a probe and is read as a control, not a result);
+`huge_methods.py --fail-over 0` clean; compiler profile **46** diagnostics. The pin's own
+ablation — one `close` dropped — reddens 2 of its 4 tests.
+
+**SUCCESSOR, OPEN:** an adaptive drain for a wave that is all cache hits. The prize is
+bounded by the pipeline wall minus its own unavoidable CPU, i.e. **~2-3.5 ms of a ~110 ms
+keystroke**, and the hazards are named rather than guessed: `CrawlParseCache.store` and
+`vfs.retainRead` must stay in the single-threaded fold whatever the drain does (round 825),
+and the function's return is already order-restored by `paths.map { indexed.getValue(it) }`,
+so the emission-order contract is a property of that line and not of the pipeline. Everything
+below the pipeline is REFUSED and the split is diffuse: **no unnamed member is above ~0.4 ms**
+— `CrawledFile` construction 0.89-1.20 (real, but inside the very pipeline the successor
+wants to change), fold 0.59-0.76 (its single-threadedness is load-bearing), re-index
+0.17-0.28, drain 0.27-0.54.
+
 ### Round (INC.83) — the crawl's concurrent residue: all three named members REFUSED, and the finding is again a residue no sub-row names
 
 **THE QUEUE NAMED THREE MEMBERS OF THE ~9 ms CONCURRENT HALF AND ALL THREE PRICE BELOW THE
@@ -2743,6 +2803,22 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [x] **(INC.84) DONE 2026-08-31 — THE CONCURRENT HALF IS NAMED, AND ITS 16-WAY MERGE RUNS AT
+  0.6x PARALLELISM.** Six `FrontEnd` rows (`CRAWL_BATCH` / `CRAWL_PIPE` / `CRAWL_FOLD` /
+  `CRAWL_INDEX` / `CRAWL_DRAIN` / `CRAWL_MKFILE`), each declaring WALL vs CPU-SUM in its KDoc.
+  Batch WALL **5.90-7.64 ms**, of which the pipeline **4.83-6.44**, fold 0.59-0.69, re-index
+  0.17-0.28; drain 0.27-0.39; **residue 0.17-0.37**. `CRAWL_MKFILE` (0.89-1.20 ms CPU sum,
+  ~400 ns/file) is the row no span could reach — the construction runs after `PREPARSE` closes
+  and before `emit` — and its nanos ride the element into the single-threaded fold (round 825).
+  **THE VERDICT IS A RATIO, NOT A SUBTRACTION** (16 overlapping workers make the subtraction
+  meaningless, and the KDoc says so): worker CPU **3.71/2.89/3.49** against walls
+  **6.44/4.83/5.79** = **0.58/0.60/0.60x**, three draws. The same pipeline on the UNTRUSTING
+  arm runs at **7.5-8.9x**, which is the control that makes it attributable: the merge earns
+  its keep exactly while reads block, and on the shipped arm nothing blocks.
+  **SUCCESSOR (OPEN):** an adaptive drain for an all-cache-hit wave, bounded at ~2-3.5 ms of a
+  ~110 ms keystroke; `CrawlParseCache.store`/`retainRead` stay single-threaded whatever it
+  does, and order is restored by `paths.map { indexed.getValue(it) }` rather than by the flow.
 
 - [x] **(INC.83) DONE 2026-08-31 — THE CRAWL'S CONCURRENT RESIDUE: ALL THREE NAMED MEMBERS
   REFUSED WITH THEIR PRICES.** `moduleSpecifiers.toSet()` + `associateBy` is **~0.8 ms and
