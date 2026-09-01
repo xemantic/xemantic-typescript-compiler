@@ -103,6 +103,44 @@ passes with 72 files carrying rows** — the arm that can actually see a starved
 realism arm's sensitivity being 1. Both `cost_gate` and the corpus are CONTROLS here, not
 coverage: neither partitions, so (b) is a strict no-op on both by construction.
 
+**(d) THE BIGGEST PLUGIN-FACING LATENCY ITEM ON THE PAGE WAS RE-DERIVED AND IS NOT A DEFECT
+WORTH FIXING — IT IS THE FLOOR.** `docs/language-service.md` § 13 carried, as its "one open
+defect", that `completionsAt`/`signatureHelpAt` cannot reach a prepared check: 207 ms right
+after `prepare(6 files)` against 194 cold, "the same build three ways". For an IDE that is the
+most latency-sensitive interaction there is, so the two refusals standing between it and a fix
+were re-derived at HEAD rather than inherited.
+**BOTH STILL HOLD, AND (INC.33) IS FIRMER THAN WHEN IT WAS WRITTEN.** Re-run of
+`scripts/inc33-widen-cost.sh`, populations identical to the recorded run: widened hover
+**+286 -> +340 ms** on `binder.ts` (break-even **1.40 -> 1.52**) and **+25.1 -> +26.2 s** on
+`checker.ts` (**12.1 -> 12.9**). **The floor arc landing is WHY it got firmer** — the base fell
+(checker.ts 2,407 -> 2,189) while per-anchor capture did not, so every ratio rose. Retention
+unchanged to the digit: **54.4 M** records for one widened `checker.ts` entry, `scopeNames`
+49,879,917 byte-identical across two runs a week apart, ~92% of it the O(anchors x globals)
+scope channel. Route 2 (the re-entrant valve) is still blocked by (INC.41) -> (INC.43), open
+with three measured blockers of its own.
+**THE QUEUE'S OWN NAMED SUCCESSOR IS REFUTED BY MECHANISM RATHER THAN LEFT UNPRICED.** The
+"PREPARE-AMORTISED case" survives the cost half and dies on invalidation: `sourceIndexOf` reads
+`overlay.readText(key)`, so the typed `.` MUST reach `updateFile` or `completionAnchorAt` is
+computed from pre-`.` text and answers about the wrong node — and `updateFile` does
+`captures.clear(); prepared = null`. The dominant completion is invoked at a state nothing can
+have prepared. (INC.32) moved the EVICTION bound, never invalidation.
+**AND THE PRIZE IT ASSUMES DOES NOT EXIST, WHICH IS THE REFRAME.** `member.caret` costs what
+`base.noCapture` costs (binder.ts **224 vs 254 ms**, checker.ts **2,035 vs 2,189**) and
+`completions.mid.cold` **215** ~ `diagnosticsOf.mid.fresh` **219**: the capture work for a caret
+completion is FREE and the ~200 ms **is one narrowed build**. There is no wiring win to recover
+— completion latency IS the incremental floor, i.e. the arc already being worked. In the same
+run `prepare(6)` is 465 ms and hover is **16 ms prepared against 824 unprepared**, so `prepare`
+is not weak; it simply covers no caret channel.
+**TWO THINGS BANKED BESIDES THE VERDICT.** The page's line citations had rotted a THIRD time
+(+3, within a day of being "re-verified"), so § 13 defect 1 now cites BY SYMBOL with the
+`grep -a` check that settles it. And a leg the page omitted is now recorded with its trap:
+`prepare` builds a TYPE-span request, so those channels would come back EMPTY even if wired —
+and since `memberSpans`/`scopeSpans` are the SAME TYPE as `typeSpans`, a naive
+`preparedAnswerFor(listOf(receiverSpan))` would HIT on a bare-identifier receiver and render
+nothing, which is (INC.14)'s absent-answer hazard and type-invisible. Queued as (INC.89)(d) is
+the one arm (INC.33) never built — a `spans + signatureSpans` widening — recorded explicitly as
+a LEAD, since it is a residual by subtraction.
+
 **SUCCESSOR, per the WORK ORDER note.** The query is the init block and essentially nothing
 else, and after this round its head is refused on re-derived evidence rather than inherited
 claims. The one row above 2 ms with NO recorded refusal of any kind is
@@ -2555,6 +2593,25 @@ a residue no sub-row named.**
   never against a session's worth of queries. Measure that (instrument kept and re-takeable:
   `scripts/inc33-widen-cost.sh` + `Inc33WidenMain`) before anyone builds the wiring. This item
   (per-handler spine cost) is orthogonal to all three and remains unpriced on its own terms.
+  **>>> THE PREPARE-AMORTISED CASE IS REFUTED BY MECHANISM, 2026-09-01 ((INC.89)) — IT DOES NOT
+  NEED MEASURING, AND THE WHOLE CARET-CHANNEL ORDER ABOVE IS SUPERSEDED. <<<** It survives the
+  cost half (a widening charged to `prepare` on idle is not charged to every hover) and dies on
+  INVALIDATION: `sourceIndexOf` reads `overlay.readText(key)`, so a host that does NOT report
+  the typed `.` through `updateFile` has `completionAnchorAt` computed against the PRE-`.` text,
+  answering about the wrong node — while `updateFile`/`deleteFile`/`close` each do
+  `captures.clear(); prepared = null` (the `captures` KDoc audits that there is no fourth path).
+  **So the dominant completion is invoked at a program state nothing can have prepared.**
+  (INC.32) changed the EVICTION bound, never invalidation, so it does not touch this.
+  **AND THE PRIZE THE ITEM ASSUMES DOES NOT EXIST.** Re-measured at HEAD: `member.caret` costs
+  what `base.noCapture` costs (binder.ts **224 vs 254 ms**, checker.ts **2,035 vs 2,189**), and
+  `completions.mid.cold` **215** ≈ `diagnosticsOf.mid.fresh` **219** — the capture work for a
+  caret completion is FREE, and the ~200 ms IS one narrowed build. There is no ~200 ms of
+  wiring to recover; the lever is the FLOOR, i.e. the live (INC.52)-(INC.89) arc.
+  (INC.33) itself was re-run at HEAD and is FIRMER, not weaker: break-even **1.40 -> 1.52** on
+  binder.ts and **12.1 -> 12.9** on checker.ts, because the floor arc cut the base (checker.ts
+  2,407 -> 2,189) while per-anchor capture did not move; retention unchanged to the digit
+  (**54.4 M** records for one widened `checker.ts` entry, `scopeNames` 49,879,917 byte-identical
+  across the two runs). Full re-derivation in `docs/language-service.md` § 13 defect 1.
 
 - [x] **(INC.40) DONE 2026-08-24 (`4eff0799`, `8d4e95b0`) — THE "DECAYING" REPLAY IS
   **2.25-2.30x**, AND IT IS NOW SHIPPED FOR DIAGNOSTICS BEHIND A TYPE-LEVEL VALVE.** The
@@ -3113,6 +3170,26 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [ ] **(INC.89)(d) ONE ARM, NOT A ROUND — price a `spans + signatureSpans` widening, the
+  only caret-channel variant (INC.33) never built (2026-09-01, (INC.89)).** **THIS IS A LEAD,
+  NOT A FINDING, AND IT IS LABELLED SO BECAUSE IT IS A RESIDUAL OBTAINED BY SUBTRACTION** —
+  this repo forbids reading one as a measurement. In (INC.33)'s own re-run table the SIGNATURE
+  channel is nearly free in both currencies: `sigs.file - base` is **+83 ms for 18,594 anchors
+  on `checker.ts`** (against `spans.file - base` = **+1,310**) and inside the noise floor on
+  `binder.ts`, with **9,520** retained sig items against the 265,688 types+defs that entry
+  already holds (**+3.6%**) — nothing like the scope channel's O(anchors x globals) blow-up
+  that refused the others. (INC.33) measured that arm but only ever offered
+  `spansMembers.file` as "the cheapest shippable", so this combination has never been priced.
+  IF additive it is +83 ms on a 3,499 ms hover to save a 2,002 ms signature-help build,
+  break-even ~0.04.
+  **DO IT AS ONE ARM IN `Inc33WidenMain` (`spansSigs.file`), NOT AS A ROUND** — additivity is
+  the assumption under test and it is the only thing being asked. **And know the cap before
+  spending anything on it**: signature help is re-triggered by `(` and by EVERY `,`, which are
+  edits, and (INC.89) established that an edit must reach `updateFile` or the anchor is stale,
+  and `updateFile` does `captures.clear(); prepared = null`. So even a perfect result serves
+  only the re-open-without-edit slice. If it measures non-additive, record it and CLOSE the
+  caret-channel direction entirely.
 
 - [ ] **(INC.89)(c) `checkSpreadNonIterableIntoFixedArity` (2.01-2.22 ms) AND
   `checkReverseMappedInferableArrows` (0.66 ms) — THE THROWAWAY-COLLECTION SHAPE AGAIN, AND

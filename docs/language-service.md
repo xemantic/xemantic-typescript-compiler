@@ -2403,17 +2403,90 @@ which replaced the entry-count bound with two weight-based lanes that cannot evi
 each other. This page had not been updated; the text is kept out rather than left
 standing, since a stale claim here is invisible to every gate in this repo.)*
 
-1. **`completionsAt` and `signatureHelpAt` cannot reach a prepared check, at all.**
-   Not a policy: `Project.kt:1449` (free-name), `:1495` (member) and `:1616` (signature
-   help) each call `captureIn(...)` (`:3402`) **directly**, while `preparedAnswerFor`
-   (`:3329`) is reached only from `captureAround` (`:3303`, `:3311`) and `referencesOf`
-   (`:2048`, at `:2099`). *(Line numbers re-verified 2026-08-31; the previous set
-   had rotted, the structural claim had not.)* So a
-   `scopeSpans` / `memberSpans` / `signatureSpans` request is structurally unservable
-   from `prepared`. Measured: `completionsAt` costs **207 ms immediately after
-   `prepare(6 files)`**, **202 ms immediately after a hover in the same buffer**, and
-   194 ms cold — the same build three ways. An *identical repeat* is free (0 – 1 ms),
-   because `captureIn` still probes the LRU.
+1. **`completionsAt` and `signatureHelpAt` cannot reach a prepared check, at all —
+   AND (INC.89) RE-DERIVED THIS INTO SOMETHING OTHER THAN A DEFECT WORTH FIXING.**
+   Not a policy: `completionsAt`'s free-name and member sites and `signatureHelpAt`'s
+   each call `captureIn(...)` **directly**, while `preparedAnswerFor` is reached only
+   from `captureAround` (twice) and `referencesOf`. *(**CITED BY SYMBOL, NOT BY LINE,
+   ON PURPOSE**: this paragraph's line numbers have now rotted THREE times — most
+   recently by +3 within a day of being "re-verified 2026-08-31" — while the
+   structural claim never moved once. `grep -a 'preparedAnswerFor' Project.kt` returns
+   exactly four hits and is the check; note `grep` WITHOUT `-a` silently returns
+   nothing on this file.)* So a `scopeSpans` / `memberSpans` / `signatureSpans`
+   request is structurally unservable from `prepared` — and there is a **second,
+   harder leg this page used to omit**: `prepare` builds a `TypeCaptureRequest` of
+   TYPE spans only, so even if those three sites consulted `preparedAnswerFor` the
+   prepared `Result` carries `capturedMembers`/`capturedScopes`/`capturedSignatures`
+   **empty**. That leg hides a live trap, because `preparedAnswerFor` takes
+   `List<TypeCaptureSpan>` and `memberSpans`/`scopeSpans` are the SAME TYPE: a member
+   receiver that is a bare identifier **is** an occurrence node, so a naive
+   `preparedAnswerFor(listOf(receiverSpan))` would HIT, return a result with no
+   members, and the completion would render nothing — (INC.14)'s absent-answer
+   hazard, and type-invisible.
+   Measured (2026-09-01, `scripts/inc31-ls-cost.sh`, recorded → today):
+   `completionsAt` **207 → 190 ms** immediately after `prepare(6 files)`,
+   **202 → 214** immediately after a hover in the same buffer, **194 → 215** cold —
+   still *the same build three ways*; an identical repeat is free (0 ms) because
+   `captureIn` still probes the LRU. For contrast in the same run, `prepare(6)` is
+   465 ms and `hover6` is **16 ms prepared against 824 ms unprepared**: `prepare`
+   works spectacularly for every channel it covers, and these two get nothing.
+   **THE REFRAME, AND IT IS THE POINT.** `member.caret` costs essentially what
+   `base.noCapture` costs at both files (binder.ts **224 vs 254 ms**; checker.ts
+   **2,035 vs 2,189**), and `completions.mid.cold` 215 ≈ `diagnosticsOf.mid.fresh`
+   219. **The capture work for a caret completion is FREE — the 190-215 ms IS one
+   narrowed build and nothing else.** So this is not a prepare-wiring defect with a
+   200 ms prize; it is the incremental FLOOR, i.e. the (INC.52)-(INC.89) arc that is
+   already the live work.
+   **NEITHER DIRECTION IS PINNED** — `LanguageServiceStateTest` pins `completionsAt`
+   and `signatureHelpAt` at 1 build each and `ProjectPreparedCheckTest` mentions
+   neither, so a round that ever wires this must add the pin or (INC.16)'s law
+   applies: an ablation restoring today's behaviour would read 0 RED.
+
+   **BOTH ROUTES OUT ARE PRICED AND SHUT, RE-DERIVED AT HEAD ON 2026-09-01 RATHER
+   THAN INHERITED ((INC.89)).**
+   *Route 1 — widen the prepared request to carry member/scope/signature spans
+   ((INC.33)).* Re-run of `scripts/inc33-widen-cost.sh` at HEAD, populations
+   identical to the recorded run: widened hover on `binder.ts` **+286 → +340 ms**
+   (break-even **1.40 → 1.52** completions per hover with no edit since), on
+   `checker.ts` **+25.1 → +26.2 s** (break-even **12.1 → 12.9**). The floor arc DID
+   land — `checker.ts` base fell 2,407 → 2,189 ms — and that makes the refusal
+   **stronger**, because the base got cheaper while the per-anchor capture work did
+   not, so every break-even ratio ROSE. Retention is unchanged to the digit: one
+   widened `checker.ts` entry is **54.4 M records** (`scopeNames` 49,879,917,
+   byte-identical across the two runs), ~92% of it the scope channel, which is
+   O(anchors × globals).
+   *Route 2 — a re-entrant capture against a retained checker ((INC.17)'s
+   `ProgramRecheck`).* Still blocked by (INC.41): the valve is intact and still
+   **diagnostics-only**, and (INC.41)'s residual is (INC.43), which is open and
+   carries three separately-measured blockers of its own. Nothing has landed
+   against it.
+   *And the "prepare-amortised" successor the queue names — pay the widening once
+   for a working set, then answer many carets — is REFUTED BY MECHANISM, not merely
+   unpriced.* It survives the cost half and dies on invalidation: `sourceIndexOf`
+   reads `overlay.readText(key)`, so if the host does NOT report the typed `.`
+   through `updateFile`, `completionAnchorAt` is computed against the PRE-`.` text
+   and answers about the wrong node — while `updateFile` (and `deleteFile`, and
+   `close`; the `captures` KDoc audits that there is no fourth path) does
+   `captures.clear(); prepared = null`. **So the dominant completion is invoked at a
+   program state nothing can have prepared.** (INC.32) changed the EVICTION bound,
+   never invalidation, so it does not touch this. What a prepare-amortised widening
+   could still serve is the minority slice — an explicit Ctrl+Space on an
+   already-typed `x.y`, or a popup reopened after a fresh 465 ms prepare — bought at
+   243k retained member items for a `binder.ts`-sized buffer and 4.27 M for
+   `checker.ts`. Not worth opening on that evidence.
+   *One cheap un-refused question is left, and it is a LEAD, not a finding, because
+   it is a residual obtained by subtraction.* The SIGNATURE channel is nearly free in
+   both currencies — `sigs.file − base` is **+83 ms for 18,594 anchors on
+   `checker.ts`** (against `spans.file − base` = +1,310) and inside the noise floor
+   on `binder.ts`, with **9,520** retained sig items against the 265,688 types+defs
+   that entry already holds (+3.6%). (INC.33) measured that arm but never turned it
+   into a variant, offering only `spansMembers.file` as "the cheapest shippable". A
+   `spans + signatureSpans` widening has therefore never been priced. IF additive it
+   would be +83 ms on a 3,499 ms hover to save a 2,002 ms signature-help build —
+   but additivity is an ASSUMPTION, and this repo forbids reading a residual as a
+   measurement, so the honest form is ONE new arm in `Inc33WidenMain`
+   (`spansSigs.file`), not a round. Note it is capped by the same argument anyway:
+   signature help is re-triggered by `(` and by every `,`, which are edits.
 
 **A capture build is MEMOIZED on its REQUEST** (`Project.captures`, `Project.kt:455`
 — (INC.32) two LANES split by the request's WEIGHT, so that a cheap entry can never

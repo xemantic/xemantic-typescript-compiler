@@ -32,6 +32,20 @@ toward FALSE POSITIVES silently. The head therefore stays `binderResults.withInd
 partition is a `continue` AFTER the enumeration. Receipt is a COUNT, never a millisecond.
 Ablation reddens **pin 6 only**, and the other six are recorded as structural rather than
 claimed as coverage.
+**(d) THE BIGGEST PLUGIN-FACING LATENCY ITEM ON THE PAGE IS NOT A DEFECT WORTH FIXING — IT IS
+THE FLOOR.** `docs/language-service.md` § 13's "one open defect" was that
+`completionsAt`/`signatureHelpAt` cannot reach a prepared check (207 ms after `prepare(6)`
+against 194 cold). Both refusals standing in front of it were re-derived at HEAD and **both
+hold; (INC.33) is FIRMER than when written** — break-even **1.40 -> 1.52** and **12.1 -> 12.9**,
+*because* the floor arc cut the base while per-anchor capture did not; retention unchanged to
+the digit (**54.4 M** records for one widened `checker.ts` entry). The queue's own named
+successor, the PREPARE-AMORTISED case, is **REFUTED BY MECHANISM**: the typed `.` must reach
+`updateFile` or the completion anchor is computed from stale text, and `updateFile` does
+`captures.clear(); prepared = null`, so the dominant completion is invoked at a state nothing
+can have prepared. **And the prize it assumes does not exist** — `member.caret` costs what
+`base.noCapture` costs (224 vs 254 ms; 2,035 vs 2,189), so the ~200 ms **is one narrowed
+build**: completion latency IS the incremental floor. § 13 now cites BY SYMBOL after its line
+numbers rotted a third time in a day.
 **GATES.** Suite **16,677 / 0 / 3** (+24, all this round's pins); `cost_gate.py` exit 0, every
 counter +0.00%, `output.errors` 46; `huge_methods.py --fail-over 0` clean; **`partition-gate.sh
 sensitivity` EQUIVALENT on all 76 files across 78 netting passes, 72 carrying rows** — the arm
