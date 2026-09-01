@@ -50,6 +50,10 @@ separately BLOCKED-PENDING-USER (the licence-string decision does not by itself 
 build.gradle.kts edit, which is Guardrail-gated). `docs/inputs/` does not exist, so there
 is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skipped.
 
+**(LIC.3) DONE** — CONTRIBUTING.md created (root): external PRs cannot be merged until the
+contributor agreement exists; issues and minimal reproductions welcomed, with the repo's
+issues URL. Doc-only, no gate applies.
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -856,7 +860,7 @@ Owner decisions 2026-09-02:
   LICENSE-EXCEPTION, before any publish. Nothing is published yet, so no artifact is wrong
   today.
 
-- [ ] **(LIC.3) CONTRIBUTING.md (owner decision 2026-09-02, recorded in § Approvals above,
+- [x] **(LIC.3) DONE 2026-09-02 — CONTRIBUTING.md (owner decision 2026-09-02, recorded in § Approvals above,
   where the owner labels it "(LIC.2)" — queued as (LIC.3) here because the (LIC.2) queue
   label was already taken by the POM item): until the contributor agreement exists,
   CONTRIBUTING.md states that external pull requests cannot be merged; issues and
