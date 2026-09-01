@@ -1576,6 +1576,89 @@ finished it — bind 7-9, post-checker 5.7-7.2. **And take the lesson literally:
 pricing any of them, check the row HAS a split, because this round's whole finding lived in
 a residue no sub-row named.**
 
+- [ ] **(INC.91) THE REVERSE-DEPENDENCY CLOSURE, REOPENED BY MEASUREMENT ON LAYERED CODE —
+  (INC.35) IS RIGHT ABOUT tsc's SOURCES AND WRONG AS A GENERAL REFUSAL (2026-09-01, (INC.90)).**
+  (INC.35) closed the closure because a file-level AND a symbol-level use graph both re-check
+  ~100% of tsc's characters at the median edit — and (INC.90) CORROBORATES that from the other
+  implementation: tsgo, which *implements* per-hop pruning, recovers **nothing** there (its
+  signature edit costs **1,695 ms against its own 1,667 ms cold**). **On an application-shaped
+  project the same mechanism is worth almost everything**: 2,401 files in 48 layers, a signature
+  edit at `layer00`, and tsgo answers in **304 ms against its own 427 ms cold** — i.e. a
+  signature edit costs it what a BODY edit costs (297) — where we fall back to a whole rebuild
+  at **3,850 ms**. **12.7x on the wall, ~96x on marginal cost above each side's own floor: the
+  largest gap this comparison has ever measured, and the only one with a named mechanism on the
+  other side.** The old page predicted exactly this and said the `(LIB.*)` libraries were where
+  it could be tested; it is now tested, on a bigger and more honest fixture.
+  **WHAT TO BUILD, AND IT IS NOT A CLOSURE OVER FILES.** tsgo's rule is per-hop and
+  SIGNATURE-keyed: a file's signature is a hash of its forced declaration emit, and an unchanged
+  signature STOPS the walk at that file. We already have the expensive half — (INC.46)'s
+  exported-signature fingerprint, `ExportSurface.signatures`, computed per file and already
+  proven to converge (24 of 24 on the compiler profile). What is missing is only the WALK: on a
+  signature move, re-check the edited file's direct importers, re-fingerprint THEM, and stop
+  wherever a fingerprint did not move. The import graph is already in
+  `ProjectCompiler.Result`. **So this is a traversal over data we compute anyway, not a new
+  analysis** — which is what makes it different from (INC.35)'s refused design.
+  **PRICE THE PRIZE FIRST, per the standing law.** The prize is bounded by (INC.46)'s own
+  measurement: **33% of real commits move a fingerprint** (67% are already served), so this
+  reaches only that third — but on layered code that third currently costs a FULL rebuild each.
+  Census before building: on `many-small-2400-dom`, how many files are in the transitive
+  importer set of a `layer00` module, and how many of them actually move their own fingerprint?
+  If the answer is "essentially all of them" this is (INC.35) again and must be refused again,
+  and the fixture's own layering makes that measurable in one run.
+  **AND GRADE IT ON THE RIGHT CHANNEL.** A lost collector or a lost type-parameter scope
+  surfaces as a wrong TYPE and never as a missing error ((INC.19)), so the gate is
+  `scripts/capture-equivalence.sh` BESIDE the diagnostics differential — and the receipt is
+  `Project.incrementalAnswers` plus a per-cell row count, exactly as (INC.90)'s runner prints.
+  Instruments ready: `scripts/inc46-vs-tsgo.sh` / `scripts/tsgo-incremental-bench.sh`, both
+  parametrised, with `build/bench/inc90-edits-app`.
+
+- [ ] **(INC.92) `Cancellation.signal` IS A PROCESS-GLOBAL AND THE PLUGIN'S SHAPE IS N
+  CONCURRENT BUILDS — THE TWO CONTRACTS CONTRADICT EACH OTHER IN WRITING (2026-09-01).**
+  `Cancellation.kt:111` is a `@Volatile private var signal` installed and restored around each
+  build (`ProjectCompiler.kt:198/211`), and its own KDoc states the cost: *"two builds running
+  CONCURRENTLY in one process share this field, so the second install wins and the first build
+  would poll the wrong signal."* But `docs/language-service.md` explicitly blesses "one
+  single-thread executor per project" and "a monorepo has many `tsconfig.json`s and therefore
+  many `Project` instances" — which is the IntelliJ plugin verbatim ((INC.67)). Install/restore
+  is not LIFO across threads, so a concurrent pair can leave the field holding the other
+  session's signal or null. **Consequence is a DEGRADED CAPABILITY, not a wrong answer:
+  (INC.55) silently fails to cancel for one of two concurrent sessions.** It cannot bite today
+  (the plugin sets no signal) and bites the moment the plugin adopts cancellation in a monorepo.
+  Fix direction: carry the signal through the `runWithDeepStack` handoff, which exists for
+  exactly this purpose (the thread-local `Symbol`/`Type` id counters, INV.6(6c0)), rather than a
+  process-global. The pin needs TWO concurrent builds, since a same-thread pin passes either way.
+
+- [ ] **(INC.93) (INC.67) IS INCOMPLETE — `CrawlParseCache` IS A PROCESS-GLOBAL PLAIN
+  `HashMap` AND THE N-SESSION SHAPE REACHES IT CONCURRENTLY (2026-09-01).**
+  `CrawlParseCache.kt:97` is `private val entries = HashMap<String, PreParsedFile>()`, written by
+  `store` and read by `lookup`. Its threading KDoc argues only about the crawl's N
+  `Dispatchers.Default` workers WITHIN ONE BUILD and concludes "lookup must stay read-only and
+  store must stay off the concurrent path" — sound for one build, **silent about two**, which is
+  precisely the shape (INC.67) named and converted only the three `RealLibs` maps for.
+  **Severity is LOW for the ANSWER and not for the PROCESS**: a wrong tree cannot be served
+  (`lookup` gates on `flags` AND full `content` equality), so the realistic outcome is a lost
+  entry, i.e. a redundant parse — the benign class (INC.67) explicitly accepted. What is
+  uncovered is structural corruption during a concurrent RESIZE.
+  **DO NOT COPY THE `RealLibSnapshots` FIX AS WRITTEN — IT IS O(n^2) HERE.** Those maps are
+  written ~45 times per process; `store` is called ONCE PER CRAWLED FILE, so a per-store
+  copy-on-write is 2,401 copies of a 2,401-entry map = ~5.7 M entry copies per build on the
+  application fixture. The shape that fits is a BATCHED publish: the single-threaded fold
+  accumulates into a local map and swaps a `@Volatile` reference ONCE per frontier, which keeps
+  the published map immutable while paying O(frontiers x n) rather than O(files x n). Price it
+  against `FrontEnd`'s crawl WALL before landing — (INC.64) measured that row at 51-57 ms and a
+  regression there is the whole incremental floor.
+
+- [ ] **(API.9) WINDOWS IS UNSUPPORTED, AND IT IS A COMPILER-SIDE GAP THAT TURNS THE INTELLIJ
+  PLUGIN OFF FOR A WHOLE PLATFORM (2026-09-01).** `Vfs.kt:460`:
+  `fun isAbsolute(specifier: String): Boolean = specifier.startsWith("/")`. A `C:/…` path is
+  therefore not absolute and would be joined onto the JVM's working directory, so the plugin
+  refuses any non-`/` path outright and logs *"Windows is not supported yet"*
+  (`XtscService.kt:106-113`) — TypeScript highlighting is simply OFF on Windows. Not incremental
+  work, and **the single largest this-repo item the plugin is genuinely blocked on.** Note
+  (CFG.1)'s law before starting: a wrong path resolves to a DIFFERENT FILE and this repo has no
+  diagnostic channel that notices, so the gate is a `-project` fixture over a `Vfs` plus
+  `output.programFiles`, never a green corpus (whose harness materialises no directory at all).
+
 - [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
   ONE n-BODY BY ADDING ONE ANNOTATION (2026-08-27, the scriptc head-to-head).** `const bi =
@@ -3545,7 +3628,12 @@ a residue no sub-row named.**
   the INCLUDE, which matches every candidate and cannot be refused at all. What was left after
   it: the walker pool's genuinely-open ~1.2 ms, the crawl's two halves, and the init block.
 
-- [ ] **(INC.75) THE PLUGIN CAN TAKE (INC.56) AND (INC.55) TODAY, AND READING IT SAYS WHAT
+- [x] **(INC.75) HANDOFF — CLOSED 2026-09-01 by (INC.90)'s plugin re-read, which CONFIRMED
+  the three findings and added a fourth (Windows, (API.9)); the plugin still uses none of the
+  five shipped capabilities, and every remaining item is plugin-side. Its own text already said
+  "what is left HERE is nothing but the docs, which landed" — leaving it unchecked made a
+  handoff read as open work for a whole round. ORIGINAL: THE PLUGIN CAN TAKE (INC.56) AND
+  (INC.55) TODAY, AND READING IT SAYS WHAT
   ELSE IS STALE (2026-08-31, from `xemantic/xtsc-intellij-plugin` @ HEAD — (INC.67)'s method,
   which found a defect the queue could not).** Three findings, none of them landable in THIS
   repo, all of them compiler-facing:

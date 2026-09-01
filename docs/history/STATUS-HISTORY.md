@@ -1042,3 +1042,75 @@ touched) and both are green: `cost_gate.py` exit 0 with `output.errors` **46** a
 (`globals.lookups`/`globals.misses` — the profile is unchanged, this is its standing
 run-to-run residual), `huge_methods.py --fail-over 0` clean.
 
+
+**(INC.85) — A WAVE THAT CANNOT BLOCK IS DRAINED WITHOUT THE 16-WAY MERGE, AND THE GATE IS
+DEFAULTED OFF (2026-09-01).** (INC.84) measured the crawl's `flatMapMerge` pipeline at
+**0.58/0.60/0.60x effective parallelism** on the arm an IntelliJ-class host runs — 16 workers
+producing LESS CPU than their own wall, because every read is served from memory and every
+parse from the content cache, so there is nothing to overlap. The same pipeline runs at
+**7.5-8.9x** for a host that does not promise the filesystem, which is the control that makes
+this a statement about the WAVE rather than about concurrency.
+`readAndScanBatch` now classifies per path on the caller's thread — resident content AND a
+content-cache hit is built directly, anything else defers to the old pipeline moved verbatim —
+with both halves feeding the UNCHANGED single-threaded fold, so `CrawlParseCache.store`,
+`retainRead` and the counters still run once each and off the flow (round 825).
+**`readAndScanBatch` WALL 8.48/9.82/12.28 -> 5.84/5.32/4.73 ms; pipeline 6.63/8.13/9.61 ->
+0.81/0.80/0.67.** The receipt is DETERMINISTIC and no wall number is quoted: a warm trusted
+keystroke reads **2400 resident / 1 piped** (the merge is entered for the edited file alone)
+against **0 / 2401** cold and untrusting, while four rotated batches of the query wall gave
+sign-flipping deltas on the untouched CONTROL arm too — (INC.72)'s +-20 ms concurrent term.
+**THE ROUND WAS FIRST REPORTED AS A REFUSAL, AND WHAT CHANGED THE VERDICT WAS REMOVING A COST
+RATHER THAN RE-MEASURING.** The first design made every host pay a per-path probe (~0.6-0.9 ms
+per wave) to serve a regime only some are in. `Vfs.hasResidentContent()` — a whole-store
+question **defaulted `false`**, asked ONCE per wave — means every `Vfs` that has not opted in,
+`SystemVfs` and so the entire shipped CLI and daemon path, performs **not one probe**.
+**AND THE GATE'S SHAPE IS STRUCTURAL, NOT A THRESHOLD:** `OverlayVfs` answers from `retained`
+alone and deliberately NOT from overlaid buffers, because `contents` is O(open editors) while
+a wave is O(program files) — that disjunct would spend O(program) probes to fast-drain a
+handful and can never pay at any project size. Dropping it took the last non-winning regime
+from 0.6-0.9 ms to **99-111 NANOseconds**.
+**EIGHT ABLATION ARMS, AND a5 IS THE ONE WORTH READING:** it was **DEAD on its first pass**
+because the fixture's edit dropped retention, so the shape that matters — an unsaved buffer,
+resident with new bytes over a stale cached tree — did not exist. Rebuilt, it reddens exactly
+the staleness pin. **Without it this change could have shipped serving the PREVIOUS
+KEYSTROKE'S parse tree, with no counter, order pin or corpus baseline noticing.**
+**GATES.** Suite **16,645 / 0 / 3**; `cost_gate.py` exit 0, every counter unchanged;
+`huge_methods.py --fail-over 0` clean; compiler profile **46**; `--frontEnd` census lines
+byte-identical before and after.
+
+**(INC.82) — THE IMPORTER'S DIRECTORY WAS RE-DERIVED PER SPECIFIER, AND THE ISOLATED PROBE
+OVER-READ ITS OWN PRIZE BY 3x (2026-08-31).** `ModuleResolver.resolve` read `importerPath`
+for nothing but its `dirname` — the (INC.65) KDoc says so in as many words — then joined it
+with the specifier into a fresh `String` and probed the memo with it TWICE. The crawl knows
+that directory once per FILE and asked once per SPECIFIER: **4,701 asks over 2,401 files**.
+**PRICED BEFORE BUILDING** with the probe that already decomposes the row: of 1,314 ns per
+specifier, `dirnameOnly` 96 and `keyOnly` 174 — **1.27 ms of a 6.18 ms row**.
+**LANDED:** `resolveFrom(specifier, importerDir)` is the entry point and `resolve` a wrapper,
+which makes the contract structural rather than a comment; the memo is nested (`dir -> spec`)
+so the outer probe hashes a cached-hash instance the caller already holds and the inner one
+only the short specifier; a memoized `null` is an identity sentinel, so a served answer costs
+one probe; and the crawl hoists both the `dirname` and the per-file resolution map, the map
+staying LAZY so a file whose every import is unresolved still contributes no entry.
+**AND THE PART WORTH READING IS THE OVER-READ.** In the BUILD, over two class dirs differing
+only in these files and rotated across processes, `FERESOLVE` reads **4771/5143/4102 ->
+4677/4707/3954 us** — after wins 3/3 batches in both directions, ranges overlapping, delta
+**~0.15-0.44 ms, not 1.27**. `hits x mean-call-cost` one layer in from where it is usually
+quoted: 96 and 174 ns are what those operations cost **in a tight loop over 4,701 reps**,
+inputs in L1 and the branch perfectly predicted. **An isolated per-operation probe prices an
+UPPER BOUND on a removal, never the removal.**
+**SO THE RECEIPT IS THE COUNT, EXACT TO THE UNIT:** `path normalize: 9577 -> 7277`, i.e.
+precisely `4,701 - 2,401`, with the glob, join and resolution-question censuses IDENTICAL
+across the arms — the receipt that the same work is done. The floor wall moved 103 -> 93 ms
+3/3 and is **not claimed**: (INC.72)'s +-20 ms concurrent term is ten times the effect.
+**ABLATION:** three arms, three distinct red sets. a2's pin needed a whole build —
+`moduleResolutions` is not on the `Result` and reaches the checker as (CHK.30)'s
+bare-specifier answer, so a map written under the wrong importer is a LOST diagnostic.
+**ALSO: `docs/language-service.md` § 14 now EXISTS.** (INC.75)(b) claimed it documented
+`cancellation`; the § 0 table's rows for `cancellation`, `saveState()` and `restoreState()`
+all pointed at a section that was never written. It now carries the signatures, the poll
+points, the cancelled-build contract, the exact `null`/`false` conditions, the added-file
+limit, and the JVM edge a host hits: the cancellation is an `Error` by design, so
+`Future.get` wraps it in `ExecutionException` and a generic failure branch would log a
+warning per cancelled keystroke.
+**GATES.** Suite **16,629 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean; compiler profile **46** diagnostics, unchanged.
