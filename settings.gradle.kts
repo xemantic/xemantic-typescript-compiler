@@ -37,5 +37,9 @@ include(
     "xemantic-typescript-compiler-client",
     "xemantic-typescript-compiler-project",
     // SPIKE (branch `spike/ts-to-kotlin-ir`): the Kotlin-IR backend.
-    "xemantic-typescript-compiler-kir"
+    "xemantic-typescript-compiler-kir",
+    // PHASE 18 (owner directive 2026-09-01): the Kotlin externals generator
+    // and the LSP server, both pre-approved additions.
+    "xemantic-typescript-compiler-externals",
+    "xemantic-typescript-compiler-lsp"
 )

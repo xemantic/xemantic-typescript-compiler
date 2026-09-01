@@ -672,6 +672,15 @@ no counter), then continue top-to-bottom.
   types; (4) run TypeScript as JVM bytecode (KIR). Drop "drop-in replacement for tsc" as
   the lead. Keep every measured number and "Honest limits" verbatim.
 
+- [ ] **(LIC.2) BLOCKED-PENDING-USER — THE ROOT POM DECLARES "The Apache License, Version
+  2.0" WHILE THE PROJECT IS `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`
+  (build.gradle.kts, `subprojects` → `pom` → `licenses`).** Found during (LIC.1); worse than
+  the README drift because it is the metadata Maven Central would publish. Untouched because
+  build-system changes are Guardrail-gated. PROPOSAL: set `name` to the SPDX expression,
+  `url` to the repo's LICENSE, and add a second `license` entry pointing at
+  LICENSE-EXCEPTION, before any publish. Nothing is published yet, so no artifact is wrong
+  today.
+
 - [ ] **(EXT.1) KOTLIN EXTERNALS GENERATOR, FIRST CUT — ONE INTERFACE END-TO-END WITH A
   PIN.** New module `xemantic-typescript-compiler-externals` (JVM first; pre-approved
   2026-09-01). Consume the checker the way `-kir` already does (`kir/front/CheckedFacts.kt`
