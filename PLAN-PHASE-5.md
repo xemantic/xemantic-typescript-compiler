@@ -650,7 +650,7 @@ merge per the workflow, run the corpus suite + cost_gate after the merge (new mo
 no counter), then continue top-to-bottom.
 
 
-- [ ] **(LIC.1) LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
+- [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
   for `AGPL-3.0-or-later` (and any project-licence description missing the output exception)

@@ -162,6 +162,7 @@ dependencies {
 
 ## License
 
-AGPL-3.0-or-later, with an **[output exception](LICENSE-EXCEPTION)**: anything this
-compiler produces from *your* input — JavaScript, declarations, source maps, diagnostics,
-emitted runtime helpers — is yours, unencumbered.
+`AGPL-3.0-only WITH LicenseRef-xtsc-output-exception` — AGPL-3.0-only, with an
+**[output exception](LICENSE-EXCEPTION)**: anything this compiler produces from *your*
+input — JavaScript, declarations, source maps, diagnostics, emitted runtime helpers — is
+yours, unencumbered.
