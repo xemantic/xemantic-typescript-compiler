@@ -25,6 +25,38 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.1) — the doc arc landed, and the 142-method census answers the WebStorm question with three numbers (2026-09-01)
+
+**(LIC.1), (DOC.1), (DOC.2), (INV.D) DONE; two modules scaffolded; (EXT.1)/(LSP.1) in
+flight as a worktree wave.** (LIC.1): README now says `AGPL-3.0-only WITH
+LicenseRef-xtsc-output-exception` like the 1,079 source headers — and the sweep found a
+WORSE drift the item did not name: the root POM declares Apache-2.0; queued as (LIC.2)
+BLOCKED-PENDING-USER because build files are Guardrail-gated. (DOC.1):
+`docs/language-service.md` § 3b retitled as the CLI comparison it is — the 182 ms floor
+is a property of the fresh-process harness, `tsgo --lsp` pays none of it per query, the
+"long-lived host is favourable" conclusion is REMOVED until (LSP.3) measures resident vs
+resident; caveat 5 added to `docs/perf/incremental-vs-tsgo.md` scoping every "floor paid
+per query" claim to the CLI. (DOC.2): README repositioned on `docs/reposition` (pushed,
+awaiting owner review; the verbatim-kept "Honest limits" bullet about non-incremental
+queries is stale since the (INC.\*) arc — flagged in the branch commit, kept verbatim per
+the directive).
+
+**(INV.D) — `docs/INVERSION-DESIGN.md`.** Census source: microsoft/TypeScript main
+`tsc/internal/api/proto.go` @ 253c5e2 (sparse clone; exactly 142 methods — the local
+v7.0.2 clone has 114, so the directive's number is main's). **The answer: A=94 answerable
+post-hoc today from the retained graph (21 with named model divergences — no freshness,
+first-wins alias identity, no subtype reduction, round-916 getPropertyOfType), B=15 need
+walk-scoped state (13 of them served by a record-during-walk NodeLinks store; only
+`resolveName`/`getSymbolsInScope` need tree-derived scopes, i.e. B83.5), C=33 not checker
+questions (25 already behind Project/TsConfigLoader/Emitter).** The design's core finding:
+pillar 4 (canonical identity) is DONE, pillar 3 (on-demand flow) is NOT REQUIRED for the
+census — the walk already computes flow-narrowed answers, so RECORDING (pillar 2) serves
+every B/R row; laziness is a Stage-4 concern only. Neither consumer being built needs the
+inversion at all — EXT rides the sink, LSP rides `Project`. (INV.1) queued
+BLOCKED-PENDING-USER with the one-commit Stage-1 proposal. Numbering bridge to the OLD
+ARCHITECTURE-RETHINK INV.0-7 series is § 8 of the design — do not confuse the two.
+
+
 ### Round (P18.0) — the project is re-pointed: TypeScript for the JVM and Kotlin (2026-09-01)
 
 **OWNER DIRECTIVE, PERSISTED BEFORE ANY OTHER WORK.** The WebStorm evaluation paused — their
@@ -724,7 +756,7 @@ no counter), then continue top-to-bottom.
   `docs/perf/incremental-vs-tsgo.md`, REPLACING the CLI table (DOC.1) retitled. This is
   the number the previous comparison should have been.
 
-- [ ] **(INV.D) ANALYSIS — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
+- [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
   xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written
   design, NO code (CLAUDE.md: analysis items produce artifacts before code). Census every
   method of tsgo's `tsc/internal/api/proto.go` (sparse-clone microsoft/TypeScript
@@ -742,6 +774,17 @@ no counter), then continue top-to-bottom.
   as one commit. Use the two consumers being built (EXT, LSP) as the concrete query
   inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
   proposal — implementation does NOT start in the session that writes the design.
+
+- [ ] **(INV.1) BLOCKED-PENDING-USER — STAGE 1 OF `docs/INVERSION-DESIGN.md`: THE
+  PER-FILE `nodeTypeId` STORE, OFF BY DEFAULT, ONE COMMIT.** Proposal (§ 9 of the design):
+  a per-file `IntArray` keyed by nodeId recording the walk's own expression-type answer at
+  `checkedSinkEmit`-time, first-wins; pins: the round-911 positive control (a body local's
+  recorded type differs from the post-hoc `getTypeOfExpression` answer), a production-mode
+  counter at 0 (round 900's law), cost_gate +0.00% flag-off; then MEASURE the flag-on
+  recording cost on both program shapes before any further stage is priced. Moves 13 of
+  tsgo's 15 walk-scoped API methods to answerable ((INV.D) § 3a); `resolveName`/
+  `getSymbolsInScope` stay open until Stage 3 (B83.5). Implementation does not start
+  without owner approval.
 
 - [ ] **(INV.0) SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
   `docs/INVERSION-DESIGN.md` NAMES.** tsgo's `internal/checker` decomposition is the
