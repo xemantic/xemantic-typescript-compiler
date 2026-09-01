@@ -135,17 +135,26 @@ import com.xemantic.typescript.compiler.parsedSourceOrNull
  *
  * ## What this class is NOT
  *
- * It is not a full language service: there is no rename, no keyword completion, and
- * no incremental reuse of a previous build's internal state.
- * A query on a dirty project is a FULL rebuild, and that is a property of the
- * compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
+ * It is not a full language service: it answers about ONE project, and there is no
+ * workspace-wide symbol search and no organize-imports.
+ * A query on a dirty project is, BY DEFAULT, a full rebuild, and that is a property
+ * of the compiler rather than a shortcut taken here — `ProjectCompiler.Result` is a flat
  * value (paths, diagnostics, an import graph) that retains no AST, no binder
  * output and no checker; the checker's construction IS the compilation
  * (`docs/ARCHITECTURE-RETHINK.md`). What makes a re-query cheap anyway is the
  * compiler's process-global, CONTENT-keyed parse cache, which every unedited file
- * hits — so the second build of an N-file project re-parses only what changed. Do
- * not add "incremental" reuse on top of this class; the seam for it does not exist
- * yet.
+ * hits — so the second build of an N-file project re-parses only what changed.
+ *
+ * **All three things this section used to deny now ship, and this paragraph told a
+ * host author the opposite for several rounds after they landed.** [renameAt] is a
+ * rename carrying its own completeness net; [completionsAt] merges keywords; and
+ * (INC.46) is exactly "incremental reuse of a previous build's internal state" —
+ * [diagnostics] answers from the previous build's export surface whenever no edited
+ * file's exported signature moved, measured at 67% of 40 real commits to tsc's own
+ * sources. What survives of the warning is only the SHAPE of that reuse: it is
+ * decided per query against five explicit conditions and falls back to a full
+ * rebuild whenever any of them cannot be justified, so a host may never ASSUME an
+ * edit was cheap — it may only observe afterwards that one was.
  *
  * ## Emit
  *

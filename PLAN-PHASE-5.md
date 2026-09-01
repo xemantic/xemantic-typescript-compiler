@@ -20,6 +20,82 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.90) — the tsgo incremental comparison, re-taken on a second arm that is finally like-for-like
+
+**THE COMPARISON HAD ONE ARM, AND IT WAS THE WRONG SHAPE AND NOT LIKE-FOR-LIKE.** Every
+tsgo incremental number this repo has ever published came from tsc's own 78 sources —
+huge files, `export *` barrels, and a profile where we report **46** rows against tsgo's
+**65**. This round added a second arm on `many-small-2400-dom` (2,401 files, 48 layers x 50
+modules, edit at `layer00`, i.e. the deepest-dependency worst case) where **both compilers
+report the identical single row** (`src/faulty.ts:3:14 TS2322`, same column and message), so
+the equivalence gate `kir-bench.sh` has and this comparison always lacked passes exactly.
+Full table and caveats: `docs/perf/incremental-vs-tsgo.md` (rewritten); the 46-vs-65
+decomposition is `docs/perf/tsgo-diagnostic-gap.md` (new).
+
+**ARM A DID NOT MOVE SINCE 2026-08-29, AND THAT IS THE EXPECTED ANSWER RATHER THAN A
+DISAPPOINTING ONE** — ours 5,523 ms warm / 226 body / 5,578 signature against the recorded
+5,352 / 232 / 5,694; tsgo 1,667 / 185 no-op / 297 body / 1,695 signature. The ~25 (INC.\*)
+rounds since removed per-FILE costs and this profile has 78 huge files, which (INC.57)'s law
+already predicts.
+
+**ARM B IS THE FINDING, AND IT REOPENS (INC.35).** That item closed the reverse-dependency
+closure on the measurement that a closure buys nothing on tsc's sources — and Arm A
+corroborates it FOR TSGO TOO (its signature edit costs **1,695 ms against its own 1,667 ms
+cold**, i.e. its per-hop pruning recovers nothing there). **Arm B is the counter-example the
+old page explicitly predicted and never tested**: on LAYERED code tsgo's pruning makes a
+signature edit cost what a body edit costs (**304 vs 297 ms**, against its own 427 ms cold),
+while we fall back to a full rebuild at **3,850 ms**. That is **12.7x on the wall and ~96x on
+marginal cost above each side's own floor** — the largest gap this comparison has ever
+measured, and the only one with a named mechanism on the other side. See (INC.91).
+
+**AND THE WALL-VERSUS-MARGINAL SPLIT IS THE PART A ONE-NUMBER SUMMARY GETS WRONG.** On Arm B
+we answer a body-only edit in **137 ms against 297** and a no-op in **0 against 264** — but
+tsgo's floor (process start + `.tsbuildinfo` read + re-stat) is **89% of its own body-edit
+cell**, so its MARGINAL body cost is ~33 ms against our ~137. We win the wall on the
+live-session model; they win the compute on a real invalidation algorithm. Quoting either
+alone is the thing that page now exists to prevent.
+
+**THE PLUGIN'S OWN CALL IS IMMUNE TO THE CLIFF, WHICH NO EARLIER TABLE COULD SHOW BECAUSE NO
+EARLIER TABLE MEASURED IT.** `incrementalDiagnostics()` is reached from `diagnostics()` and
+from nowhere else (`Project.kt:737`), while the IntelliJ plugin asks
+`diagnosticsOf(listOf(fileOnScreen, configPath))` exclusively — which narrows at the SOURCE
+(INV.6) instead. Measured: **93-106 ms on Arm B and 187-217 ms on Arm A, independent of the
+edit shape**, beating tsgo in both cells. It also independently corroborates (INC.86)'s 90 ms
+per-keystroke figure on the same fixture. The trade is coverage, not latency: it answers one
+file's rows, so a cross-file error introduced elsewhere is not shown until that file is
+visited.
+
+**THREE HARNESS DEFECTS FOUND WHILE TAKING THE NUMBERS, AND THE FIRST IS THE ONE WORTH
+REMEMBERING.** (a) The inherited fixture's `orig.ts` was **CRLF** (3,916 CRs) while both edit
+variants were **LF**, so every "one-line edit" was that line PLUS a whole-file newline
+normalisation of all 3,916 lines — the page described the fixture as "a local `const` inside
+an exported function" and it was that plus whole-file churn. Regenerated CRLF-preserving; the
+re-measured cells land within noise, which is EVIDENCE and not proof that it did not matter.
+(b) The tsgo harness called `run` inside a command substitution, so its row count never
+escaped the subshell and every printed count was a stale value from a previous call — an
+equivalence gate reading its own stale output. (c) Both harnesses were hardcoded to
+`binder.ts` and to shared-scratchpad paths that survived only by luck; both are now
+parametrised with durable edit dirs under `build/bench/inc90-edits-*`.
+
+**TWO RECEIPTS THE OLD RUNNER COULD NOT PRINT, BOTH LOAD-BEARING.** A per-cell diagnostic ROW
+COUNT on both sides (`kir-bench.sh`'s law: a wall-clock harness reads a program that does
+LESS as the fastest arm), and a served-vs-fell-back count read from `Project.incrementalAnswers`
+— without which a body-only cell that SILENTLY FELL BACK to a rebuild is indistinguishable
+from one the mechanism served, and both would be reported as "our incremental time" (round
+790). Both arms read `body 3/3 served, signature 0/3`, which is what licenses reading the two
+cells as the two mechanisms rather than as two timings.
+
+**AND THE REFERENCE-COMPILER CLAIM IN CLAUDE.md IS FALSE.** Round 938's "`tools/tsgo-7.0.2/lib/tsc`
+IS THE ONLY REFERENCE COMPILER RUNNABLE ON THIS BOX" is refuted: `tools/node/bin/node` (22.20.0)
+and real `typescript@6.0.3` at `build/tools/tsc-ref/node_modules/typescript/lib/tsc.js` both run.
+Pristine 6.0.3 and tsgo 7.0.2 **agree on all 65 rows, zero divergence either way**, so the 19-row
+gap is **19 genuine false negatives of ours and 0 tsgo divergences** — the queue's hopeful hedge
+is refuted. It is NOT a 29% work gap: 18 of the 19 are emission- or lookup-side on work already
+done (our own header prints `unresolved imports: 8 (e.g. 'fs')`, naming the very specifiers whose
+diagnostics are missing), and only one row skips real checking. `build/tools/tsc-ref` is
+provisioned by nothing in the repo and vanishes on a `clean` — a harness reading it must REFUSE
+when it is absent rather than fall back to tsgo.
+
 ### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
 
 **(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather

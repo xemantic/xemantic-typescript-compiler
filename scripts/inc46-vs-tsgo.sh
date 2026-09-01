@@ -5,6 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 P="${1:-build/bench/ours-bench}"
+EDIT_REL="${2:-src/compiler/binder.ts}"
+EDITS="${3:-/tmp/claude-1000}"
+REPS="${4:-3}"
 [[ -f "$P/tsconfig.json" ]] || { echo "REFUSED: no project at $P" >&2; exit 2; }
 CLASSES="$ROOT/xemantic-typescript-compiler-project/build/classes/kotlin/jvm/test"
 [[ -f "$CLASSES/com/xemantic/typescript/compiler/project/IncrementalComparisonMainKt.class" ]] || {
@@ -14,4 +17,5 @@ DEPS="$(xtsc_dep_classpath)"
 CP="$CLASSES:$ROOT/xemantic-typescript-compiler-project/build/classes/kotlin/jvm/main"
 CP="$CP:$ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$DEPS"
 exec java -Xmx6g -cp "$CP" \
-  com.xemantic.typescript.compiler.project.IncrementalComparisonMainKt "$ROOT/$P"
+  com.xemantic.typescript.compiler.project.IncrementalComparisonMainKt \
+  "$ROOT/$P" "$EDIT_REL" "$EDITS" "$REPS"
