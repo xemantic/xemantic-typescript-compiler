@@ -165,5 +165,37 @@ fun main(args: Array<String>) {
     for ((name, nanos) in PassTiming.passNanos.entries.sortedByDescending { it.value }.take(15)) {
         println("PTROW $arm $nanos ${PassTiming.passCalls[name] ?: 0} $name")
     }
+    // (INC.86)(b) THE DISTRIBUTION, not the top-N. (INC.69) measured a PLATEAU of 21
+    // near-identical rows sharing one per-file cost, and recorded that a top-N ranking is
+    // structurally unable to show one: 44 rows carried 94% and 367 carried 0.82 ms
+    // between them. The init block is now 48% of a per-keystroke query, so what is left
+    // in it is a shape question. Every row is printed, plus a bucket census, so the
+    // shape is readable without a second run.
+    val sorted = PassTiming.passNanos.entries.sortedByDescending { it.value }
+    var cum = 0L
+    var rowsTo50 = 0
+    var rowsTo90 = 0
+    for ((i, e) in sorted.withIndex()) {
+        cum += e.value
+        if (rowsTo50 == 0 && cum * 2 >= passSum) rowsTo50 = i + 1
+        if (rowsTo90 == 0 && cum * 10 >= passSum * 9) rowsTo90 = i + 1
+    }
+    println("PTSHAPE $arm rows=${sorted.size} rowsTo50pct=$rowsTo50 rowsTo90pct=$rowsTo90")
+    // Buckets in us, so a plateau shows as a spike in one bucket rather than as a tail.
+    val buckets = longArrayOf(10, 50, 100, 250, 500, 1000, 2000, 5000, Long.MAX_VALUE)
+    val counts = IntArray(buckets.size)
+    val sums = LongArray(buckets.size)
+    for (e in sorted) {
+        val us = e.value / 1000
+        val b = buckets.indexOfFirst { us < it }
+        counts[b]++; sums[b] += e.value
+    }
+    for (b in buckets.indices) {
+        if (counts[b] == 0) continue
+        println("PTBUCKET $arm <${buckets[b]}us count=${counts[b]} totalNanos=${sums[b]}")
+    }
+    for ((name, nanos) in sorted) {
+        println("PTALL $arm $nanos ${PassTiming.passCalls[name] ?: 0} $name")
+    }
     project.close()
 }

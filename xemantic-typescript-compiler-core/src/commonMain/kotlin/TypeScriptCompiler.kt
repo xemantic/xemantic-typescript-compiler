@@ -1472,13 +1472,29 @@ class TypeScriptCompiler {
                     t.contains("with: {1234, \"resolution-mode\"") ||
                     (t.contains("const c = + <1234> x") && t.contains("const b = + <> x"))
             }
-            val hasModulePreserve4 = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }
-            val mp4Files = setOf("a.js", "b.ts", "c.ts", "d.ts", "e.mts", "f.cts", "g.js", "main1.ts", "main2.mts", "main3.cjs", "main4.cjs", "dummy.ts")
+            // (INC.87)(a) The corpus `modulePreserve4` gate is a WHOLE-PROGRAM TEXT SCAN whose
+            // ONLY consumer is `isPinFile`, which is only ever called from inside the
+            // `allParserDiagsForPins.isNotEmpty()` branch below. Computed eagerly it scanned
+            // every byte of the program on every build to answer a question nobody asked —
+            // measured **1.18 ms of a 4.51 ms [FrontEnd.POST_DIAGS]** on a 2,401-file
+            // project, and it is paid again on every re-entrant recheck, which re-runs this
+            // very lambda. Two changes, both pure: the scan is DEFERRED, and the cheap
+            // basename test is moved IN FRONT of it in `isPinFile` so that even a program
+            // that does reach the branch only scans when a row's file is one of the twelve
+            // fixture basenames. `&&` is short-circuiting and both operands are pure, so the
+            // reordering is answer-preserving by construction.
+            val hasModulePreserve4 by lazy(LazyThreadSafetyMode.NONE) {
+                val feMp4T0 = FrontEnd.t()
+                val found = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }
+                FrontEnd.close(FrontEnd.POST_MP4, feMp4T0)
+                found
+            }
             fun isPinFile(fn: String?): Boolean {
                 if (fn == null) return false
                 if (isParserCascadePinFile(fn)) return true
-                return hasModulePreserve4 && fn.substringAfterLast('/') in mp4Files
+                return fn.substringAfterLast('/') in MODULE_PRESERVE4_FILES && hasModulePreserve4
             }
+            val feSuppressT0 = FrontEnd.t()
             if (allParserDiagsForPins.isNotEmpty()) {
                 rows.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
             }
@@ -1500,9 +1516,11 @@ class TypeScriptCompiler {
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }
             }
+            FrontEnd.close(FrontEnd.POST_SUPPRESS, feSuppressT0)
         }
         applyParseCascadeSuppression(diagnostics)
         val rowsAfterSuppression = diagnostics.size
+        val fePostAppendT0 = FrontEnd.t()
         // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
         // resolves through an `exports` field that exposes no types entry.
         diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
@@ -1525,6 +1543,8 @@ class TypeScriptCompiler {
                 )
             }
         }
+
+        FrontEnd.close(FrontEnd.POST_APPEND, fePostAppendT0)
 
         // (INC.17) Everything the post-checker region APPENDED — every one of those
         // blocks reads `parsed`/`parsedSourceFiles` and nothing partitioned, so they
@@ -2762,6 +2782,31 @@ private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, B
 }
 
 /**
+ * (INC.87)(a) The twelve `modulePreserve4` fixture basenames, hoisted out of
+ * `applyParseCascadeSuppression` so the set is built once per process rather than once per
+ * invocation of that lambda — which the (INC.17) recheck path calls again per query.
+ */
+private val MODULE_PRESERVE4_FILES = setOf(
+    "a.js", "b.ts", "c.ts", "d.ts", "e.mts", "f.cts", "g.js",
+    "main1.ts", "main2.mts", "main3.cjs", "main4.cjs", "dummy.ts",
+)
+
+/**
+ * (INC.87)(a) `node_modules/<pkg>/package.json`, hoisted so it is COMPILED once per process
+ * rather than once per compile.
+ *
+ * It is rooted at an alternation, so it carries no Boyer-Moore literal and is attempted at
+ * every position of every subject it is handed; its call site therefore pre-gates on
+ * `endsWith("/package.json")`, which is exact because the pattern's own tail anchors there.
+ * Do not remove that gate on the grounds that the regex "already checks" — the gate exists
+ * because the regex checks it EXPENSIVELY.
+ */
+private val PKG_JSON_REGEX = Regex("""(?:^|/)node_modules/(@[^/]+/[^/]+|[^/]+)/package\.json$""")
+
+/** (INC.87)(a) `/// <reference types="X" />`, hoisted for the same reason. */
+private val TYPES_REFERENCE_REGEX = Regex("""^\s*///\s*<reference\s+types\s*=\s*(["'])([^"']+)\1\s*/?>""")
+
+/**
  * B98.r121 (TS2688): A `/// <reference types="X" />` directive resolves `X` through its
  * `node_modules/X/package.json`. When that package.json carries an `"exports"` field that
  * exposes NO types entry (no `.d.ts` path and no `"types"`/`"typings"` condition inside
@@ -2773,12 +2818,20 @@ private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, B
 private fun checkMissingTypesReferenceExports(files: List<SourceFileEntry>): List<Diagnostic> {
     val diags = mutableListOf<Diagnostic>()
     val pkgJsonByName = mutableMapOf<String, String>()
-    val pkgRegex = Regex("""(?:^|/)node_modules/(@[^/]+/[^/]+|[^/]+)/package\.json$""")
+    // (INC.87)(a) [PKG_JSON_REGEX] is rooted at an ALTERNATION `(?:^|/)`, so `BnM.optimize`
+    // refuses it a literal prefix and it is attempted at EVERY POSITION of every file name
+    // this program contains — measured **3.30 ms of a 4.51 ms [FrontEnd.POST_DIAGS]** on a
+    // 2,401-file project which, having no `node_modules` at all, returns nothing from it.
+    // The pre-gate is EXACT rather than heuristic: the pattern's tail is `/package\.json$`,
+    // so a name it can match necessarily ends with `/package.json`, and `endsWith` therefore
+    // refuses only what the regex would refuse. The pattern stays LIVE as the decider for
+    // whatever survives the gate (round 792's shape), so no answer moves.
     for (f in files) {
-        pkgRegex.find(f.fileName)?.let { pkgJsonByName[it.groupValues[1]] = f.content }
+        if (!f.fileName.endsWith("/package.json")) continue
+        PKG_JSON_REGEX.find(f.fileName)?.let { pkgJsonByName[it.groupValues[1]] = f.content }
     }
     if (pkgJsonByName.isEmpty()) return diags
-    val refRegex = Regex("""^\s*///\s*<reference\s+types\s*=\s*(["'])([^"']+)\1\s*/?>""")
+    val refRegex = TYPES_REFERENCE_REGEX
     for (f in files) {
         val fn = f.fileName
         if (fn.contains("/node_modules/")) continue

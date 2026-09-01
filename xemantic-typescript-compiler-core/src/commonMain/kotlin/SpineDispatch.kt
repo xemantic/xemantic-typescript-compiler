@@ -4731,7 +4731,22 @@ object FrontEnd {
      */
     const val CRAWL_RESIDENT = 61
 
-    const val N = 62
+    // ---- (INC.86)(a) round 949 — the three blocks of [POST_DIAGS]. The row is
+    // 4.22 ms of a 90 ms per-keystroke query and NO queue item had ever named it,
+    // and (INC.65)'s law says to split a row before pricing it: the region holds
+    // one whole-program TEXT scan, a guarded `removeAll` chain over the diagnostic
+    // list, and three appending walks over the program's files, whose costs scale
+    // with three different populations. These three abut across [POST_DIAGS] by
+    // construction, so their sum is a partition check on it.
+
+    /** The corpus `modulePreserve4` whole-program text scan. INSIDE [POST_DIAGS]. */
+    const val POST_MP4 = 62
+    /** The parse-cascade `removeAll` suppression chain. INSIDE [POST_DIAGS]. */
+    const val POST_SUPPRESS = 63
+    /** TS2688 + TS2209 + the isolatedDeclarations emit. INSIDE [POST_DIAGS]. */
+    const val POST_APPEND = 64
+
+    const val N = 65
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4796,6 +4811,9 @@ object FrontEnd {
         "    of which associateBy + re-index (WALL)",
         "  of which frontier drain + downstream emit (WALL)",
         "    of which the resident fast drain (WALL)",
+        "    of which the modulePreserve4 whole-program scan",
+        "    of which the parse-cascade removeAll chain",
+        "    of which TS2688 + TS2209 + isolatedDeclarations",
     )
 
     /**
@@ -4811,7 +4829,9 @@ object FrontEnd {
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
         CHECK, CHK_CTOR, CHK_INIT, CHK_F_LIB, CHK_F_LIBBIND, CHK_F_LIBDECLS, CHK_F_TLC, CHK_F_EII, CHK_F_LTA,
-        CHK_DIAGS, STAR, TPI, TAV, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        CHK_DIAGS, STAR, TPI, TAV, POST,
+        POST_DIAGS, POST_MP4, POST_SUPPRESS, POST_APPEND,
+        POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
