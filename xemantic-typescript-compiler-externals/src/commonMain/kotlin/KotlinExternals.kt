@@ -61,8 +61,14 @@ import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
 import com.xemantic.typescript.compiler.TypeParameter
+import com.xemantic.typescript.compiler.TypeFlags
 import com.xemantic.typescript.compiler.TypeReference
+import com.xemantic.typescript.compiler.VariableDeclaration
+import com.xemantic.typescript.compiler.VariableStatement
 import com.xemantic.typescript.compiler.anyType
+import com.xemantic.typescript.compiler.booleanType
+import com.xemantic.typescript.compiler.numberType
+import com.xemantic.typescript.compiler.stringType
 import com.xemantic.typescript.compiler.computeParserFlags
 import com.xemantic.typescript.compiler.runWithDeepStack
 
@@ -188,6 +194,7 @@ public fun generateKotlinExternals(
         exportedEnums = sourceFiles.flatMap(::exportedEnumDeclarations),
         exportedAliases = sourceFiles.flatMap(::exportedAliasDeclarations),
         exportedFunctions = sourceFiles.flatMap(::exportedFunctionDeclarations),
+        exportedValues = sourceFiles.flatMap(::exportedValueDeclarations),
         topLevelExportWiring = sourceFiles.flatMap(::topLevelExportWiring),
     )
     val checker = runWithDeepStack {
@@ -205,6 +212,24 @@ public fun generateKotlinExternals(
         diagnostics = parseDiagnostics + checker.getDiagnostics(),
     )
 }
+
+/**
+ * (EXT.9) The file's exported TOP-LEVEL value declarations — every
+ * [VariableDeclaration] of an `export [declare] const|let|var` statement,
+ * paired with whether its list is `const` (→ `val`). Membership for the
+ * [VariableDeclaration] sink arm, which fires for every local too.
+ */
+private fun exportedValueDeclarations(sourceFile: SourceFile): List<ExportedValue> =
+    sourceFile.statements
+        .filterIsInstance<VariableStatement>()
+        .filter { ModifierFlag.Export in it.modifiers }
+        .flatMap { statement ->
+            val readOnly = statement.declarationList.flags == SyntaxKind.ConstKeyword
+            statement.declarationList.declarations.map { ExportedValue(it, readOnly) }
+        }
+
+/** (EXT.9) One exported value declaration and its list's `const`-ness. */
+private class ExportedValue(val node: VariableDeclaration, val readOnly: Boolean)
 
 /**
  * (EXT.7) The file's top-level EXPORT WIRING statements — `export { a } from
@@ -290,6 +315,8 @@ private class ExternalsCollector(
     private val exportedEnums: List<EnumDeclaration>,
     private val exportedAliases: List<TypeAliasDeclaration>,
     private val exportedFunctions: List<FunctionDeclaration>,
+    /** (EXT.9) Exported top-level value declarations. */
+    private val exportedValues: List<ExportedValue>,
     /** (EXT.7) Top-level export-wiring statements, each a loud marker. */
     private val topLevelExportWiring: List<Node>,
 ) : CheckedNodeSink {
@@ -327,6 +354,7 @@ private class ExternalsCollector(
                 is ExternalClass -> typeNameOnce(declaration, declaration.name, seenTypeNames)
                 is ExternalEnum -> typeNameOnce(declaration, declaration.name, seenTypeNames)
                 is ExternalTypeAlias -> typeNameOnce(declaration, declaration.name, seenTypeNames)
+                is ExternalTopLevelValue -> declaration
                 is SkippedDeclaration -> declaration
             }
         }
@@ -655,6 +683,12 @@ private class ExternalsCollector(
                 seen.add(node)
                 collectFunction(node, lens)?.let { declarations.add(it) }
             }
+            is VariableDeclaration -> {
+                val exported = exportedValues.firstOrNull { it.node === node } ?: return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectValue(exported, lens))
+            }
             is ExportAssignment, is ExportDeclaration -> {
                 if (topLevelExportWiring.none { it === node }) return
                 if (seen.any { it === node }) return
@@ -663,6 +697,83 @@ private class ExternalsCollector(
             }
             else -> return
         }
+    }
+
+    /**
+     * (EXT.9) `export [declare] const|let|var x: T` → `public external val|var
+     * x: T`. The type is the annotation resolved by the checker where one is
+     * written, and the checker's own answer for the name where none is
+     * (`lens.typeOf` on the declared identifier — an un-annotated
+     * `export const VERSION = "1.0"` is typed by its initializer, and only the
+     * checker knows what that widened to). A destructuring declaration
+     * (`export const { a, b } = …`) binds names no single `val` can carry and
+     * is a loud skip.
+     */
+    private fun collectValue(exported: ExportedValue, lens: CheckedLens): ExternalDeclaration {
+        val node = exported.node
+        val name = (node.name as? Identifier)?.text
+            ?: return SkippedDeclaration("destructuring export - no single name to declare")
+        val scope = scopeOf(emptySet())
+        val type =
+            if (node.type != null) {
+                annotationText(node.type, optional = false, returnPosition = false, lens = lens, scope = scope)
+            } else {
+                // A `const`'s literal type (`export const RETRIES = 3` is typed
+                // `3`, the (WIDEN.1) const rule) widens to its base primitive
+                // here: the declaration is what a consumer BINDS, and `val
+                // RETRIES: 3` has no Kotlin shape — the same widening TypeScript
+                // itself performs at every mutable position.
+                kotlinTypeText(widenLiteral(lens.typeOf(node.name)), optional = false, returnPosition = false, lens = lens, scope = scope)
+            }
+        return ExternalTopLevelValue(name, type, exported.readOnly)
+    }
+
+    private fun widenLiteral(type: Type): Type = when (type) {
+        is Type.StringLiteral -> stringType
+        is Type.NumberLiteral -> numberType
+        is Type.Intrinsic ->
+            if (TypeFlags.BooleanLiteral in type.flags) booleanType else type
+        else -> type
+    }
+
+    /**
+     * (EXT.9) An accessor PAIR is one Kotlin property: `get x(): T` (and its
+     * `set x(v: T)`) → `var x: T`, a getter alone → `val x: T`, a setter
+     * alone → `var x: T` typed by the setter's parameter. The property is
+     * emitted at the FIRST accessor's position and the partner is consumed,
+     * so member order is preserved and nothing is rendered twice. Static
+     * accessors reach the companion the same way.
+     */
+    private fun collectAccessor(
+        member: Node,
+        siblings: List<Node>,
+        lens: CheckedLens,
+        members: MutableList<ExternalMember>,
+        scope: TypeScope,
+    ) {
+        val (name, isGetter) = when (member) {
+            is GetAccessor -> (member.name as? Identifier)?.text to true
+            is SetAccessor -> (member.name as? Identifier)?.text to false
+            else -> return
+        }
+        if (name == null) {
+            members.add(SkippedMember("accessor with a non-identifier name"))
+            return
+        }
+        val getter = siblings.filterIsInstance<GetAccessor>().firstOrNull { (it.name as? Identifier)?.text == name }
+        val setter = siblings.filterIsInstance<SetAccessor>().firstOrNull { (it.name as? Identifier)?.text == name }
+        // Emit at the first accessor of the pair only.
+        val first: Node? = siblings.firstOrNull { it === getter || it === setter }
+        if (first !== member) return
+        val annotation = getter?.type
+            ?: setter?.parameters?.firstOrNull { !it.isCommentPlaceholder }?.type
+        members.add(
+            ExternalProperty(
+                name = name,
+                type = annotationText(annotation, optional = false, returnPosition = false, lens = lens, scope = scope),
+                readOnly = setter == null,
+            )
+        )
     }
 
     /**
@@ -788,6 +899,8 @@ private class ExternalsCollector(
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, target, memberScope)
                 is MethodDeclaration -> collectMethod(member, lens, target, memberScope)
+                is GetAccessor, is SetAccessor ->
+                    collectAccessor(member, accessorSiblings(node.members, isStatic), lens, target, memberScope)
                 is Constructor -> {}
                 is SemicolonClassElement -> {}
                 // A static initialization block declares nothing a consumer
@@ -902,6 +1015,8 @@ private class ExternalsCollector(
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, members, scope)
                 is MethodDeclaration -> collectMethod(member, lens, members, scope)
+                is GetAccessor, is SetAccessor ->
+                    collectAccessor(member, node.members, lens, members, scope)
                 // A stray `;` between members is pure syntax — there is
                 // nothing to generate and nothing to mark.
                 is SemicolonClassElement -> {}
@@ -993,6 +1108,28 @@ private class ExternalsCollector(
      */
     private fun isPrivateName(name: Node): Boolean =
         name is Identifier && name.text.startsWith("#")
+
+    /**
+     * (EXT.9) The accessors a class accessor may pair with: the same static
+     * side, and neither `private`/`protected` nor `#`-named (those were
+     * skipped above and must not become a silent partner).
+     */
+    private fun accessorSiblings(members: List<Node>, isStatic: Boolean): List<Node> =
+        members.filter { member ->
+            val modifiers = when (member) {
+                is GetAccessor -> member.modifiers
+                is SetAccessor -> member.modifiers
+                else -> return@filter false
+            }
+            val name = when (member) {
+                is GetAccessor -> member.name
+                is SetAccessor -> member.name
+                else -> return@filter false
+            }
+            (ModifierFlag.Static in modifiers) == isStatic &&
+                ModifierFlag.Private !in modifiers && ModifierFlag.Protected !in modifiers &&
+                !isPrivateName(name)
+        }
 
     private fun collectProperty(
         member: PropertyDeclaration,

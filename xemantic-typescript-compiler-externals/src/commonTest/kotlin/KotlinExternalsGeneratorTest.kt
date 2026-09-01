@@ -348,6 +348,8 @@ class KotlinExternalsGeneratorTest {
             public external interface Fine {
                 public var p: String
             }
+
+            public external val bad: Double
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
@@ -1285,6 +1287,102 @@ class KotlinExternalsGeneratorTest {
         )
         val rendered = result.kotlin
         assert(rendered.contains("public external interface Leaf : Root {\n    public var l: Double\n}\n"))
+    }
+
+    // --- (EXT.9) exported values and accessors --------------------------------
+
+    @Test
+    fun `exported values render as val or var - annotated resolved, un-annotated by the checker's answer`() {
+        val result = generate(
+            """
+            export type Id = string;
+            export declare const VERSION: Id;
+            export const RETRIES = 3;
+            export let counter: number;
+            export var flag: boolean, other: string;
+            export const { a, b } = { a: 1, b: 2 };
+            declare const hidden: number;
+            """
+        )
+        val expected = """
+            public typealias Id = String
+
+            public external val VERSION: String
+
+            public external val RETRIES: Double
+
+            public external var counter: Double
+
+            public external var flag: Boolean
+
+            public external var other: String
+
+            /* xtsc: skipped destructuring export - no single name to declare */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+        val gate = "public val VERSION: String = null!!\n" in result.compileCheckSource
+        assert(gate)
+    }
+
+    @Test
+    fun `accessor pairs collapse to one property - getter alone is val, setter alone is var`() {
+        val result = generate(
+            """
+            export class Meter {
+                get value(): number;
+                set value(v: number);
+                get label(): string;
+                set only(v: boolean);
+                static get shared(): Meter;
+                private get secret(): string;
+                #hidden: number;
+            }
+            export interface Gauge {
+                get reading(): number;
+                set reading(r: number);
+                get max(): number;
+            }
+            """
+        )
+        val expected = """
+            public open external class Meter {
+                public var value: Double
+                public val label: String
+                public var only: Boolean
+                public companion object {
+                    public val shared: Meter
+                }
+            }
+
+            public external interface Gauge {
+                public var reading: Double
+                public val max: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `an accessor pair is emitted once at the first accessor's position`() {
+        val result = generate(
+            """
+            export class Order {
+                set x(v: string);
+                y: number;
+                get x(): string;
+            }
+            """
+        )
+        val expected = """
+            public open external class Order {
+                public var x: String
+                public var y: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
     }
 
 }

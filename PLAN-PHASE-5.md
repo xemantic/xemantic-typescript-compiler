@@ -151,6 +151,22 @@ implementor is the checker's, and no counter moves (the lens is live only under 
 Gate fixture grew `Dog extends Animal implements Farmable` + `Named extends Farmable`;
 mitt and smol-toml gates unchanged (their bases are lib types, still markers).
 
+**(EXT.9) LANDED — EXPORTED VALUES AND ACCESSORS** (externals 70 → 73 pins; full suite
+16,828/0/3). `export [declare] const|let|var x: T` renders `public external val|var
+x: T` — the annotation resolved by the checker where written, and for an un-annotated
+declaration the checker's own answer for the NAME (`lens.typeOf` on the declared
+identifier), with a `const`'s LITERAL type widened to its base primitive (`export const
+RETRIES = 3` is typed `3` by the (WIDEN.1) const rule and a consumer binds a `Double`;
+the first pin caught the un-widened `Any? /* xtsc: unmapped 3 */`). A destructuring export
+is a loud skip; a non-exported `declare const` (smol-toml's `_default`) stays silent, as
+before. Accessors: a get/set PAIR is one property (`var`), a getter alone `val`, a
+setter alone `var` typed by its parameter, emitted at the FIRST accessor's position with
+the partner consumed — so member order survives and nothing renders twice; static
+accessors reach the companion, interface accessors (TS 4.x) the interface, and a
+`private`/`protected`/`#` accessor is neither rendered nor a silent PARTNER (the
+sibling set is filtered the same way the member loop is). The gate variant initializes
+a top-level value with `= null!!`; gate fixture grew both shapes.
+
 ### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
 
 **Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
@@ -904,10 +920,18 @@ Owner decisions 2026-09-02:
   subclass declaring none, cross-file bases through the new lens member
   `heritageBaseSymbol`; the gate variant renders classes `abstract` with the
   superclass call. Lib/non-exported/wrong-kind bases stay per-base markers.
-  Still to emit: namespaces/modules, index signatures, accessors,
-  generic-ALIAS references (`Handler<T>` uses still fall back), `export
-  const` values, parameter properties; module wiring; next ladder rung: RxJS
-  (`class Subject<T> extends Observable<T>` is exactly this rung's shape). Unions and other inexpressible shapes: ONE
+  DONE 2026-09-02 ((EXT.9), (P18.6) note): exported VALUES (`export [declare]
+  const|let|var x: T` → `public external val|var x: T`; un-annotated ones
+  by the checker's answer with a `const`'s literal type widened to its base;
+  a destructuring export a loud skip) and ACCESSORS (a get/set pair one
+  property, getter-only `val`, setter-only `var`, emitted at the first
+  accessor's position; static accessors in the companion; interface
+  accessors too; private/`#` accessors omitted).
+  Still to emit: namespaces/modules, index signatures, generic-ALIAS
+  references (`Handler<T>` uses still fall back), parameter properties;
+  module wiring; next ladder rung: RxJS (`class Subject<T> extends
+  Observable<T>` is (EXT.8)'s shape; `export declare const EMPTY:
+  Observable<never>` is (EXT.9)'s). Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
   RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
 

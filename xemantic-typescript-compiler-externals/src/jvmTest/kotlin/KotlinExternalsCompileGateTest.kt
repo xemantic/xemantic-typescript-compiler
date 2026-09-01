@@ -108,6 +108,14 @@ class KotlinExternalsCompileGateTest {
         }
         export interface Farmable { graze(): void; }
         export interface Named extends Farmable { name: string; }
+        export declare const DEFAULT_NAME: string;
+        export let population: number;
+        export class Meter {
+            get value(): number;
+            set value(v: number);
+            get label(): string;
+            static get shared(): Meter;
+        }
         export interface Farm {
             star: Animal;
             pen: Pen<Animal>;

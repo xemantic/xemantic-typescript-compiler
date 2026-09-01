@@ -127,6 +127,18 @@ internal class ExternalEnum(
     val markers: List<String>,
 ) : ExternalDeclaration
 
+/**
+ * (EXT.9) An exported top-level value — `public external val|var x: T`. The
+ * gate variant initializes it with `= null!!` (a top-level property needs an
+ * initializer or a getter).
+ */
+internal class ExternalTopLevelValue(
+    val name: String,
+    /** Full Kotlin type text, fallback marker included. */
+    val type: String,
+    val readOnly: Boolean,
+) : ExternalDeclaration
+
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedDeclaration(val description: String) : ExternalDeclaration
 
@@ -486,6 +498,14 @@ internal fun renderKotlinExternals(
                         }
                 appendLine(
                     "public typealias ${kotlinIdentifier(declaration.name)}$typeParams = ${declaration.body}"
+                )
+            }
+            is ExternalTopLevelValue -> {
+                val keyword = if (declaration.readOnly) "val" else "var"
+                val externalModifier = if (external) "external " else ""
+                val body = if (external) "" else " = null!!"
+                appendLine(
+                    "public $externalModifier$keyword ${kotlinIdentifier(declaration.name)}: ${declaration.type}$body"
                 )
             }
             is ExternalTopLevelFunction -> {

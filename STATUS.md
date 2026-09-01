@@ -22,7 +22,8 @@ wrapper: 12,880 of 16,000 threaded reads counted); atomics + a CAS-swapped per-p
 `TypeInstantiator` extracted (the instantiation seam, ~290 lines verbatim, `Checker.kt`
 191,030 → 190,771; ledger row 3 with the first NON-none ambient surface; suite 16,819/0/3 byte-identical, cost_gate +0.00%, ab −0.81% NOISE-DOMINATED, JFR alloc unchanged, the 10 B hop `inline (hot)`). (EXT.8) heritage to GENERATED targets (supertypes, `override`/`open`,
 inherited constructors, `open external class`, cross-file bases via the new lens member
-`heritageBaseSymbol`; externals 70/0; full suite 16,825/0/3).
+`heritageBaseSymbol`; externals 70/0; full suite 16,825/0/3). (EXT.9) exported values (`val`/`var`, literal consts widened) and
+accessor pairs as properties (externals 73/0; full suite 16,828/0/3).
 
 **(P18.5) — DONE (2026-09-02).** Owner additions applied ((INV.0) merged with
 receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,
