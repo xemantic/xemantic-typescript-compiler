@@ -857,13 +857,30 @@ no counter), then continue top-to-bottom.
 
 - [ ] **(API.18) A FILE-FINAL TOKEN IS UNREACHABLE BY EVERY `-project` POSITION LOOKUP
   WHEN THE FILE LACKS A TRAILING NEWLINE — found by (LSP.1), pinned as a recorded edge in
-  `XtscLspServerTest`, NOT yet fixed.** `SourceIndex.realEndOf` snaps an end to the
-  greatest token end STRICTLY BELOW `node.end`; the last token's raw end is EXACT (the EOF
-  lookahead is zero-width), so the snap lands on the PREVIOUS token and clamps to `pos` —
-  an empty span, and `quickInfoAt` answers null anywhere inside the last identifier,
-  silently; the touch fallback cannot save it. Round 920's own mechanism in a sixth
-  costume its five fixes did not cover. Fix in `-project` (`realEndOf` must accept an
-  exact end at EOF), then flip the (LSP.1) recorded-edge pin to the correct expectation.
+  `XtscLspServerTest`; TWO `realEndOf`-LOCAL FIXES WERE BUILT AND REVERTED 2026-09-01, AND
+  THE ANALYSIS SAYS NO SPAN-ARITHMETIC FIX EXISTS.** The defect: the file-final token's
+  raw `end` is EXACT (the EOF lookahead is zero-width), so `realEndOf`'s strictly-below
+  snap manufactures an empty span and `quickInfoAt` answers null inside the last
+  identifier, silently. **What the two attempts measured:** (1) accepting an exact end at
+  EOF only when `best <= pos` heals the LEAF but not the DESCENT — every ANCESTOR of the
+  final token shares the exact bound and gets truncated before its last token, so `pathAt`
+  stops at `SourceFile`; (2) accepting it ahead of the strictly-below branch heals the
+  descent and breaks the EOF-RECOVERY population (dangling `.` anchors, open arg lists,
+  the touch rule): the zero-width EOF token makes a naive membership test vacuous, and —
+  the load-bearing finding — **a true container of the final token and a node merely
+  ABUTTING it are indistinguishable by `(pos, rawEnd)` alone** (`ex` and its enclosing
+  PropertyAccess in `…ex.` share BOTH pos and raw end; `a` in `f(a)` covers the `)` by
+  overshoot exactly as a statement covers its own final token). **The fix therefore lives
+  in `pathAt`'s DESCENT, not in `realEndOf`**: bound each child's end by its NEXT
+  SIBLING's pos, letting the LAST child inherit the parent's bound, with the root bound =
+  the last REAL token's end (not `textLength`, or the trailing-newline caret re-enters the
+  tree) — the rule round 910's own CLAUDE.md entry already prescribes and `SourceIndex`
+  approximates by tokens. Derived ownership rule for the follow-up: token `[ts, te)` is
+  OWNED by node N iff `N.pos <= ts`, `te <= N.rawEnd`, and NOT `bestBelow(N.rawEnd) == ts`
+  (that equality identifies the one-token overshoot). Gates when attempted: -project +
+  -lsp module suites (five EOF-population pins redden on a wrong cut: CompletionAnchor,
+  ProjectCompletion END-of-buffer, SignatureAnchor open-arg-list, the LSP touch rule, the
+  recorded edge), `TokenIndexInvariants`, `scripts/round920-token-gate.sh`.
 
 - [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
   xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written
