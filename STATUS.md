@@ -1,5 +1,24 @@
 # Status
 
+**(P18.1/P18.2) — THE DOC ARC, THE 142-METHOD CENSUS, AND THE FIRST TWO PHASE-18 CONSUMERS
+(2026-09-01).** (LIC.1)/(DOC.1)/(DOC.2 on `docs/reposition`)/(INV.D) landed in the main
+context; then ONE two-agent worktree wave landed **(EXT.1)** — Kotlin externals from the
+CHECKED program, alias-resolution pin `Species`->`String`, metadata-compile gate with a
+negative control, 15 pins — and **(LSP.1)** — JSON-RPC/LSP over `Project`, initialize +
+didOpen + hover, **LSP UTF-16 = Project offsets CONFIRMED identical modulo the 1-base** at
+an astral-char pin, 42 pins. `docs/INVERSION-DESIGN.md` answers the WebStorm question:
+of tsgo's 142 API methods, **A=94 answerable post-hoc today, B=15 walk-scoped (13 closable
+by a record-during-walk NodeLinks store — (INV.1) proposal BLOCKED-PENDING-USER), C=33 not
+checker questions**; on-demand flow is NOT required for the census. **The LSP's first
+fixture found a `-project` defect ((API.18): a file-final token is unreachable without a
+trailing newline)** — the mission thesis demonstrating itself: a new consumer finds what
+the corpus structurally cannot. Also queued: (LIC.2) the root POM says Apache-2.0
+(BLOCKED-PENDING-USER, build file). Suite on the
+merged tree: **16,734 / 0 failures / 3 skipped** (+57: 15 externals + 42 lsp);
+`cost_gate.py` exit 0, every counter +0.00% (the new modules move nothing — the control
+passes); `huge_methods.py --fail-over 0` clean (core-only census: a CONTROL for the new
+modules, per its own gotcha).
+
 **(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
 2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
 query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are
@@ -124,27 +143,3 @@ numbers rotted a third time in a day.
 counter +0.00%, `output.errors` 46; `huge_methods.py --fail-over 0` clean; **`partition-gate.sh
 sensitivity` EQUIVALENT on all 76 files across 78 netting passes, 72 carrying rows** — the arm
 that can see a starved partition. `cost_gate` and the corpus are CONTROLS here, not coverage.
-
-**(INC.88) — THE ROOT-FILE GLOB IS REFUSED, AND THE SPLIT IS WHAT EARNS IT (2026-09-01).**
-Re-decomposing after (INC.87)(a) put the glob SECOND at **9.95 ms of a 95-100 ms query**, behind
-an init block that is 48.8 and largely refused. Closed in both available directions.
-**DIRECTION 1, memoizing the glob across builds under `trustFilesystem`, is refused by a promise
-this compiler already SHIPS:** that KDoc says "ADDED and REMOVED files are still discovered from
-the backing store on every build. **Nothing about the file SET is taken on trust**", two pins
-state it, `OverlayVfs` and `docs/language-service.md` repeat it, and (INC.65) refused the same
-shape one layer down. (INC.60)'s policy — a no-promise fix outranks a promise-costing one — is
-why the other half was measured first.
-**DIRECTION 2 WAS A REAL HYPOTHESIS AND IS REFUTED.** (INC.77) priced this row's syscall half at
-~1.8 us/entry and called the residue irreducible — measured over `SystemVfs` ALONE, where the
-shipped path is `OverlayVfs` wrapping it plus a per-directory sort, and the row reads 3.4-3.8
-us/entry. Two new sub-rows closing against the SAME open timestamp:
-`listEntries + sort 8.431 ms` = **sort 0.483 (5.7%)** + **OverlayVfs merge 0.752 (8.9%)** +
-**the BACKING STORE's listing 7.196 (85.4%)**. That 85% is `File.listFiles()` plus one `stat`
-per entry, and Java exposes no `d_type`, so one syscall per entry is a floor. **(INC.77) is
-CONFIRMED on the shipped path** and both wrappers together are 1.2 ms of 8.4.
-**WHAT LANDS IS THE INSTRUMENT, NOT A FIX** — the rows are inline no-ops when the probe is off,
-so the refusal is reproducible instead of a claim in a note, which matters because the refusal
-they confirm had been quoted for three rounds without ever being checked on the path it
-described.
-**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
-`huge_methods.py --fail-over 0` clean.

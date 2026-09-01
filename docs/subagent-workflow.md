@@ -40,3 +40,24 @@ git merge <worktree-branch> --no-ff -m "merge: task <X> fix"
 # Conflicts are typically in different functions of the same file — resolve manually
 git push
 ```
+
+## Worktree waves in THIS repo (learned 2026-09-01, the (EXT.1)/(LSP.1) wave)
+
+- **One gradle invocation per BOX, not per agent**: every agent gradle call goes through
+  `flock /tmp/xtsc-gradle.lock ./gradlew …`, launched `run_in_background` with FULL
+  output redirected to a file (never piped). Agents must never `--stop` or pkill a
+  daemon, and must run only their module's QUALIFIED task — bare `jvmTest` runs every
+  module's 16k-test corpus.
+- **A fresh worktree lacks `typescript-repo/` and `tools/`** (gitignored), and core's
+  `generateRealLibSources` would CLONE TypeScript over the network without them — agents
+  symlink both from the main checkout as their first action. **The `.gitignore`
+  trailing-slash patterns (`/tools/`, `/typescript-repo/`) do NOT match symlinks**
+  (dir-only patterns), so the links show as `??` forever: delete them before ending with
+  a clean tree, and re-create them before any further build in that worktree.
+- **Pre-scaffold shared files in the MAIN context** (settings.gradle.kts module
+  registration, build.gradle.kts skeletons) so the agents' file sets are provably
+  disjoint; forbid agents from editing anything outside their module (docs and
+  CLAUDE.md included — they REPORT candidate gotchas instead).
+- Expect each worktree's first build to be a COLD core compile (~6-8 min), serialized
+  behind the lock. The merge gate (full suite + cost_gate + huge_methods) runs ONCE, in
+  the main context, after all branches merge.

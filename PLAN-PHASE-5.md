@@ -25,6 +25,50 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.2) — the first wave: the externals generator and the LSP server both land, and the LSP's first fixture finds a compiler defect (2026-09-01)
+
+**(EXT.1) AND (LSP.1) LANDED FROM ONE TWO-AGENT WORKTREE WAVE** (disjoint pre-scaffolded
+modules; gradle serialized behind a shared flock — the orchestration worked exactly as
+designed, one build holding the lock while the other queued). Merged `--no-ff`, then the
+full suite over all modules on the merged tree plus cost_gate/huge_methods as the gates.
+
+**(EXT.1)**: `generateKotlinExternals(fileName, source)` — every exported non-generic
+interface rendered as a Kotlin `external interface` whose member types are the CHECKER's
+answers, 15 pins all full-string equality. The Dukat/Karakum separation pin: `p: Species`
+with `type Species = string` renders `String` (resolved), not `Species` (syntax). The
+compile gate went branch (ii), decided empirically: `KotlinMetadataCompiler` REFUSES the
+`external` modifier (`only top-level functions can be external` + not-applicable ×2), so
+the gate compiles the renderer's own `external`-omitting variant, with a negative control
+(`NoSuchType` must fail) AND a sentinel pin that reddens the day a Kotlin release accepts
+`external` in metadata. One mapping home (`kotlinTypeText`): string/number/boolean/void
+(return-position only) + optionality; EVERYTHING else is `Any? /* xtsc: unmapped <lens
+render> */`, never silent; `errorType` carries the `any` flag and is classified by
+intrinsic NAME so a degraded resolution lands marked. Consumption fact for EXT.2+:
+at an `InterfaceDeclaration` sink callback, `lens.typeOfTypeNode` is the member-type
+oracle and resolves aliases; `Parameter.isCommentPlaceholder` must be filtered or empty
+parens with a comment grow a phantom parameter.
+
+**(LSP.1)**: JSON-RPC 2.0 + LSP base-protocol framing over kotlinx-io (in-memory-testable
+via `Buffer`), initialize/didOpen/hover/shutdown/exit mapped onto `Project`, 42 pins.
+**The work-order pin answered: LSP UTF-16 code units and `Project` offsets are IDENTICAL
+modulo the 1-base** — astral-char fixture confirms, no compensation layer. Full policy
+set pinned (id-echo incl. string ids, -32601/-32700/-32600, post-shutdown, handler
+Exception → -32603 with the session surviving, `Error` propagating per doctrine).
+
+**AND THE FIRST REAL FIXTURE FOUND A `-project` DEFECT — queued as (API.18)**: a
+file-final token is unreachable by every position lookup when the file lacks a trailing
+newline (`realEndOf` snaps STRICTLY below an EXACT end and clamps to an empty span) —
+round 920's mechanism in a sixth costume. The agent pinned the observed behaviour rather
+than patching a foreign module (per its brief), which is what the disjointness rule is
+for. **This is the mission thesis demonstrating itself: a new consumer finds defect
+classes the corpus structurally cannot** — (CHK.32)'s law, now on the API surface.
+
+**Wave mechanics worth keeping** (recorded in docs/subagent-workflow.md): the
+`.gitignore` `/tools/` and `/typescript-repo/` trailing-slash patterns do NOT match the
+SYMLINKS a fresh worktree needs (dir-only patterns), so agents must remove them before
+ending clean; both agents' first builds were ~6-8 min cold core compiles, serialized.
+
+
 ### Round (P18.1) — the doc arc landed, and the 142-method census answers the WebStorm question with three numbers (2026-09-01)
 
 **(LIC.1), (DOC.1), (DOC.2), (INV.D) DONE; two modules scaffolded; (EXT.1)/(LSP.1) in
@@ -713,7 +757,7 @@ no counter), then continue top-to-bottom.
   LICENSE-EXCEPTION, before any publish. Nothing is published yet, so no artifact is wrong
   today.
 
-- [ ] **(EXT.1) KOTLIN EXTERNALS GENERATOR, FIRST CUT — ONE INTERFACE END-TO-END WITH A
+- [x] **(EXT.1) DONE 2026-09-01 (worktree wave, merged) — KOTLIN EXTERNALS GENERATOR, FIRST CUT — ONE INTERFACE END-TO-END WITH A
   PIN.** New module `xemantic-typescript-compiler-externals` (JVM first; pre-approved
   2026-09-01). Consume the checker the way `-kir` already does (`kir/front/CheckedFacts.kt`
   is the precedent: `CheckedNodeSink.declaration` + `CheckedLens`), so the eager
@@ -730,7 +774,7 @@ no counter), then continue top-to-bottom.
   `smol-toml` → RxJS → `typescript.d.ts`. GATE at every rung: the generated Kotlin
   compiles (in-test compile check).
 
-- [ ] **(LSP.1) LSP SERVER OVER THE EXISTING `Project` API — initialize + didOpen +
+- [x] **(LSP.1) DONE 2026-09-01 (worktree wave, merged) — LSP SERVER: initialize + didOpen +
   hover.** New module `xemantic-typescript-compiler-lsp` (JVM; distributed later as a
   GraalVM native image through the EXISTING nativeImage configuration; a Kotlin/Native
   target is a later item; pre-approved 2026-09-01). JSON-RPC 2.0 over stdio using
@@ -755,6 +799,16 @@ no counter), then continue top-to-bottom.
   hover after a signature edit; whole-project diagnostics. Publish in
   `docs/perf/incremental-vs-tsgo.md`, REPLACING the CLI table (DOC.1) retitled. This is
   the number the previous comparison should have been.
+
+- [ ] **(API.18) A FILE-FINAL TOKEN IS UNREACHABLE BY EVERY `-project` POSITION LOOKUP
+  WHEN THE FILE LACKS A TRAILING NEWLINE — found by (LSP.1), pinned as a recorded edge in
+  `XtscLspServerTest`, NOT yet fixed.** `SourceIndex.realEndOf` snaps an end to the
+  greatest token end STRICTLY BELOW `node.end`; the last token's raw end is EXACT (the EOF
+  lookahead is zero-width), so the snap lands on the PREVIOUS token and clamps to `pos` —
+  an empty span, and `quickInfoAt` answers null anywhere inside the last identifier,
+  silently; the touch fallback cannot save it. Round 920's own mechanism in a sixth
+  costume its five fixes did not cover. Fix in `-project` (`realEndOf` must accept an
+  exact end at EOF), then flip the (LSP.1) recorded-edge pin to the correct expectation.
 
 - [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
   xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written

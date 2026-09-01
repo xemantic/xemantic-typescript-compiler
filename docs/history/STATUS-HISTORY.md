@@ -1,3 +1,27 @@
+**(INC.88) — THE ROOT-FILE GLOB IS REFUSED, AND THE SPLIT IS WHAT EARNS IT (2026-09-01).**
+Re-decomposing after (INC.87)(a) put the glob SECOND at **9.95 ms of a 95-100 ms query**, behind
+an init block that is 48.8 and largely refused. Closed in both available directions.
+**DIRECTION 1, memoizing the glob across builds under `trustFilesystem`, is refused by a promise
+this compiler already SHIPS:** that KDoc says "ADDED and REMOVED files are still discovered from
+the backing store on every build. **Nothing about the file SET is taken on trust**", two pins
+state it, `OverlayVfs` and `docs/language-service.md` repeat it, and (INC.65) refused the same
+shape one layer down. (INC.60)'s policy — a no-promise fix outranks a promise-costing one — is
+why the other half was measured first.
+**DIRECTION 2 WAS A REAL HYPOTHESIS AND IS REFUTED.** (INC.77) priced this row's syscall half at
+~1.8 us/entry and called the residue irreducible — measured over `SystemVfs` ALONE, where the
+shipped path is `OverlayVfs` wrapping it plus a per-directory sort, and the row reads 3.4-3.8
+us/entry. Two new sub-rows closing against the SAME open timestamp:
+`listEntries + sort 8.431 ms` = **sort 0.483 (5.7%)** + **OverlayVfs merge 0.752 (8.9%)** +
+**the BACKING STORE's listing 7.196 (85.4%)**. That 85% is `File.listFiles()` plus one `stat`
+per entry, and Java exposes no `d_type`, so one syscall per entry is a floor. **(INC.77) is
+CONFIRMED on the shipped path** and both wrappers together are 1.2 ms of 8.4.
+**WHAT LANDS IS THE INSTRUMENT, NOT A FIX** — the rows are inline no-ops when the probe is off,
+so the refusal is reproducible instead of a claim in a note, which matters because the refusal
+they confirm had been quoted for three rounds without ever being checked on the path it
+described.
+**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
 **(INC.87)(a) — THE POST-CHECKER'S FILTER ROW IS 4.5 ms OF A KEYSTROKE AND 89% OF IT ANSWERS
 NOTHING; SPLITTING IT REFUTED ITS OWN SHAPE (2026-09-01).** (INC.86)(a) named
 `post-check diagnostic filters` — 4.22 ms of a 90 ms query and a row NO queue item had ever
