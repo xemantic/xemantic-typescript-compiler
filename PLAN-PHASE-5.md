@@ -785,7 +785,19 @@ no counter), then continue top-to-bottom.
   at a non-BMP character. (LSP.1) = initialize + didOpen + hover → `quickInfoAt`, against
   a fixture project the `-project` tests already use.
 
-- [ ] **(LSP.2) THE REMAINING SEVEN FEATURES + THE NATIVE IMAGE.** didChange →
+- [x] **(LSP.2) DONE 2026-09-01 — THE REMAINING FEATURES + THE NATIVE-IMAGE WIRING.**
+  didChange (Full sync; ranged changes SKIPPED and pinned) / didClose → `reloadFile` /
+  didSave (text authoritative, else reload) / watched-files; definition, references
+  (includeDeclaration honoured), documentHighlight (read=2/write=3), completion (labels +
+  detail + textEdit over the replacement span), signatureHelp, prepareRename (parse-only via
+  `nodeInfoAt`) / rename (a RenamePlan refusal → JSON-RPC error `-32803` CARRYING the
+  refusal name + conflicts), pull diagnostics, and PROJECT-WIDE publishDiagnostics off the
+  narrowed `diagnostics()` (on open/close/save/watched-files, deliberately never per
+  keystroke; cleared files republished empty). 16 new pins, all self-consistency against a
+  parallel `Project`; module 58/0 warning-clean. The nativeImage task is WIRED (mirror of
+  `-cli`'s, entry `XtscLspMainKt`, output `xtsc-lsp`) and configures; no GraalVM on this
+  box, so the first verified image build is a CI/another-host step — same status as the
+  cli's arm. didChange →
   `updateFile`; didClose → drop the overlay; didSave and watched-files → `reloadFile`;
   definition → `definitionsAt`; completion → `completionsAt`; signatureHelp →
   `signatureHelpAt`; references → `referencesAt`; documentHighlight →

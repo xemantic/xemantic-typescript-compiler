@@ -160,3 +160,54 @@ private fun hexDigit(c: Char): Int = when (c) {
     in 'A'..'F' -> c - 'A' + 10
     else -> -1
 }
+
+/**
+ * (LSP.2) The `file://` URI of a local [path] — [uriToPath]'s inverse, pinned as a
+ * round trip.
+ *
+ * Percent-encodes every byte outside the RFC 3986 unreserved set, UTF-8-encoded,
+ * keeping `/` as the segment separator. Uppercase hex, so a round trip through a
+ * client that normalises case still names the same file after [percentDecode].
+ */
+internal fun pathToUri(path: String): String {
+    val out = StringBuilder("file://")
+    for (b in path.encodeToByteArray()) {
+        val c = b.toInt() and 0xFF
+        val ch = c.toChar()
+        val unreserved = ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' ||
+            ch == '-' || ch == '.' || ch == '_' || ch == '~' || ch == '/'
+        if (unreserved) out.append(ch)
+        else out.append('%').append(HEX[c ushr 4]).append(HEX[c and 0xF])
+    }
+    return out.toString()
+}
+
+private val HEX: CharArray = "0123456789ABCDEF".toCharArray()
+
+/**
+ * (LSP.2) A server-initiated NOTIFICATION — `publishDiagnostics` is one — which
+ * differs from a response in carrying a `method` and no `id`.
+ */
+internal fun notificationMessage(method: String, params: JsonElement): String =
+    buildJsonObject {
+        put("jsonrpc", "2.0")
+        put("method", method)
+        put("params", params)
+    }.toString()
+
+/**
+ * (LSP.2) A refusal a REQUEST handler raises to answer a JSON-RPC error instead of
+ * a result — the rename path's contract: a [RenamePlan refusal]
+ * [com.xemantic.typescript.compiler.project.RenameRefusal] becomes an LSP error
+ * CARRYING ITS REASON, never an empty edit that looks like success.
+ *
+ * [code] defaults to LSP 3.17's `RequestFailed`: the request was valid and the
+ * server understood it; the answer is simply "no, and here is why".
+ */
+internal class LspRequestException(
+    val code: Int = REQUEST_FAILED,
+    override val message: String,
+) : Exception(message)
+
+/** LSP 3.17: a valid request the server refuses, with the reason in `message`. */
+internal const val REQUEST_FAILED: Int = -32803
