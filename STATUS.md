@@ -1,5 +1,42 @@
 # Status
 
+**(INC.89) — THREE INHERITED REFUSALS RE-DERIVED, ONE PLUGIN-FACING API MEMBER PINNED, ONE
+SPLIT LANDED (2026-09-01).** (INC.88) left a standing instruction — "anything larger needs the
+refusals re-derived rather than inherited" — and the first half of this round is that, on
+reading alone. Fresh baseline, TWO processes ((INC.52)): WALL **102/106 ms**, init block
+**40.0/48.2**, head `init:buildFileLocalTypeMaps` **21.4/15.3**, `init:buildPerFileScopes`
+**5.7/5.5**, `init:computeAllEnumValues` **4.8/4.5**.
+**THE THREE ANSWERS DIFFER FROM EACH OTHER, WHICH IS THE ARGUMENT FOR DOING IT.**
+`buildFileLocalTypeMaps` is **CONFIRMED** — it is partition-scoped already, builds ONE file's
+map (`eagerBuilds=1`), and the ms is that file's first real type-resolution cascade; do not
+re-open it from its size. The two un-Boyer-Moore-able whole-program regexes in
+`collectUmdGlobalsAndModuleFiles` are **already censused honestly** ("0 ms — 0 `.d.ts` files.
+LATENT on a `@types` tree"). And `isModuleFile`, recomputed **≥5 times per build** across the
+init setup block, is **REFUTED as a lever with no build at all**: it early-returns on the FIRST
+import/export, which every file of a module-shaped project has. A repetition count is not a
+cost — round 801's law one predicate over.
+**(a) `Project.reloadFile` AND `OverlayVfs.revert` ARE NOW PINNED** — the API (INC.75) tells the
+IntelliJ plugin to adopt, documented as a first-class third change kind and present in the suite
+only as a step inside two `trustFilesystem` tests, with its implementation half unpinned
+entirely. 17 pins, no production code changed. **TWO ablations, because one cannot grade both
+halves**: emptying `reloadFile` reddens 7; emptying `revert` reddens 12 — all 7 revert pins plus
+the 5 reload VALUE pins, cross-validating that reload's promises flow through `revert`. A doc
+edge was pinned rather than waved through: for a file existing ONLY in the overlay, "what is on
+disk is the truth" means **ABSENCE**, so reload removes it.
+**(b) THE (INC.20) SPLIT FOR `checkCrossFileUseBeforeDeclaration`** — its emitter walked all
+2,401 files to produce rows `getDiagnostics()` then dropped, because the diagnostic is anchored
+at the USE file and the partition filter discards the rest. **The ordinal invariant is the whole
+risk**: the verdict compares `decl.fileIdx > useFileIdx`, both ordinals of `binderResults`, so
+re-heading on `checkedResults.withIndex()` renumbers `useFileIdx` to ~0 and flips the verdict
+toward FALSE POSITIVES silently. The head therefore stays `binderResults.withIndex()` and the
+partition is a `continue` AFTER the enumeration. Receipt is a COUNT, never a millisecond.
+Ablation reddens **pin 6 only**, and the other six are recorded as structural rather than
+claimed as coverage.
+**GATES.** Suite **16,677 / 0 / 3** (+24, all this round's pins); `cost_gate.py` exit 0, every
+counter +0.00%, `output.errors` 46; `huge_methods.py --fail-over 0` clean; **`partition-gate.sh
+sensitivity` EQUIVALENT on all 76 files across 78 netting passes, 72 carrying rows** — the arm
+that can see a starved partition. `cost_gate` and the corpus are CONTROLS here, not coverage.
+
 **(INC.88) — THE ROOT-FILE GLOB IS REFUSED, AND THE SPLIT IS WHAT EARNS IT (2026-09-01).**
 Re-decomposing after (INC.87)(a) put the glob SECOND at **9.95 ms of a 95-100 ms query**, behind
 an init block that is 48.8 and largely refused. Closed in both available directions.

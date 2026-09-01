@@ -20,6 +20,104 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
+
+**(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather
+than inherited" — AND THIS ROUND SPENT ITS FIRST HALF DOING EXACTLY THAT, ON READING ALONE.**
+Fresh query baseline first (2,401-file `dom` fixture, trusted arm, one-file partition, TWO
+independent processes, because a single `--passTiming` draw swings ~40% ((INC.52))):
+WALL **102 / 106 ms**, init block **40.0 / 48.2 ms** raw. Head of the pass table, both draws:
+
+```
+init:buildFileLocalTypeMaps        21.38 / 15.28 ms
+init:buildPerFileScopes             5.72 /  5.48
+init:computeAllEnumValues           4.77 /  4.53
+init:collectUmdGlobalsAndModuleFiles 2.43 /  2.31
+checkSpine                          2.33 /  7.02
+```
+
+**THREE REFUSALS RE-DERIVED, AND THE ANSWERS DIFFER FROM EACH OTHER — which is the argument
+for doing it at all.**
+**(1) `init:buildFileLocalTypeMaps` — CONFIRMED, and it was already MEASURED.** The eager loop
+selects `checkedResults` under the shipped `FltmDefer.Scope.PARTITION`, so on a one-file query
+it builds ONE file's map (`eagerBuilds=1, lazyBuilds=0`). The 15-21 ms is that file's first
+real type-resolution cascade, not per-file overhead. **DO NOT RE-OPEN IT FROM ITS SIZE** — it
+is the largest row in the query and it is the one row here nothing can take.
+**(2) THE TWO WHOLE-PROGRAM REGEXES in `collectUmdGlobalsAndModuleFiles` — ALREADY CENSUSED,
+HONESTLY.** Both are un-Boyer-Moore-able by (WARM.10)'s own criterion (`(?m)^\s*export\s+as\s+
+namespace` and `\brequire\s*\(`, neither with a 4-char literal root) and both are constructed
+per call. `docs/perf/whole-program-regex-census.md:130` already carries the first as "**0 ms**
+— 0 `.d.ts` files. LATENT on a `@types` tree", which is exactly right. No finding; the census
+earned its keep by pre-empting one.
+**(3) `isModuleFile` RECOMPUTED ≥5 TIMES PER BUILD INSIDE THE INIT SETUP BLOCK — REFUTED as a
+lever, in two minutes of reading and with no build.** It is a genuine repetition (65 call sites;
+at least `init:mergeSharedKeepNames`, `init:mergeFileLocalsIntoGlobals`, `mergeGlobalAugmentations`,
+`init:buildPerFileScopes`, `init:collectUmdGlobalsAndModuleFiles`, plus two lazy indices) and it
+is mechanically memoizable per `BinderResult` — but it **early-returns `true` on the FIRST
+import/export statement**, and every file of any module-shaped project opens with one. Its
+worst case is a SCRIPT file, and the lib `.d.ts` that would be the real worst case are not in
+`binderResults` at all. **A repetition count is not a cost** — the same law as round 801's
+"an allocation count is not a cost", one predicate over.
+
+**(a) LANDED — `Project.reloadFile` AND `OverlayVfs.revert` ARE PINNED, AND THEY ARE THE API
+(INC.75) TELLS THE PLUGIN TO ADOPT.** `reloadFile` is documented as a first-class THIRD change
+kind beside `updateFile`/`deleteFile` (`docs/language-service.md` § 5) and existed in the suite
+only as a STEP INSIDE two `trustFilesystem` tests; `OverlayVfs.revert`, its implementation half,
+had no direct pin at all. 17 pins, no production code changed.
+**TWO ABLATIONS, BECAUSE ONE COULD NOT GRADE BOTH HALVES** — the revert pins do not go through
+`reloadFile`, so emptying `reloadFile` (7 red) says nothing about them; emptying
+`OverlayVfs.revert` reddens 12, being all 7 substantive revert pins PLUS the 5 `reloadFile`
+VALUE pins, which cross-validates that reload's promises really flow through `revert` while its
+dirty-marking and closed-project pins correctly stay green. Both restores verified by `md5sum`
+of the production files rather than by `git diff` alone.
+**A DOC EDGE WAS FOUND AND PINNED RATHER THAN WAVED THROUGH:** § 5's "what is on disk is the
+truth again" has an unstated case — for a file existing ONLY in the overlay the truth is
+**ABSENCE**, so reload REMOVES it from the program rather than restoring anything.
+
+**(b) LANDED — THE (INC.20) SPLIT FOR `checkCrossFileUseBeforeDeclaration`, AND ITS EMITTER WAS
+WALKING ALL 2,401 FILES TO PRODUCE ROWS THE PARTITION FILTER THEN DROPPED.**
+`emitCrossFileTS2448` sets `fileName = useFileName` — the USE site's file, non-null — and
+`getDiagnostics()` drops every row naming a file outside the partition, so that work was
+**already discarded output**. The collector loop is untouched (round 609: the DECLARATION may
+live in a file the partition does not contain, which is what pin 4 asserts).
+**THE ORDINAL INVARIANT IS THE WHOLE RISK AND (INC.77) WAS RIGHT TO FLAG IT.** The verdict is
+`decl.fileIdx > useFileIdx` and `decl.fileIdx` is an ordinal of `binderResults` stamped by the
+collector; re-heading the emitter on `checkedResults.withIndex()` renumbers `useFileIdx` to ~0
+under a one-file partition, so `decl.fileIdx > 0` holds for nearly every declaration and the
+TS2448 verdict silently becomes a function of the PARTITION — flipping toward FALSE POSITIVES.
+**So the loop head stays `binderResults.withIndex()` and the partition is a `continue` AFTER
+the enumeration**, the same shape as the `.d.ts` / `.js` skips already in that loop. That is
+the general rule for any mixed pass whose verdict compares ordinals of its own enumeration.
+**RECEIPT IS A COUNT** (`EagerIndexCensus.crossFileUbdEmitterFiles`), never a millisecond: a
+~1.5 ms row cannot be resolved against the query's own ±20 ms term ((INC.72)).
+**THE ABLATION IS REPORTED, NOT OVERCLAIMED.** Re-heading on `checkedResults.withIndex()`
+reddens **pin 6 only** — the ablated binary invents a TS2448 no unpartitioned build produces.
+The other six are green under THAT arm for structural reasons and are not weak: the three count
+pins are red against the UN-NARROWED parent, and pin 4 guards against narrowing the COLLECTOR.
+Three distinct mistakes, three distinct pins — round 807's law, stated rather than blurred.
+
+**GATES.** Suite **16,677 / 0 / 3** (+24 over (INC.88)'s 16,653, all of them this round's pins);
+`cost_gate.py` exit 0, every counter +0.00%, `output.errors` 46; `huge_methods.py --fail-over 0`
+clean; **`partition-gate.sh sensitivity` EQUIVALENT on all 76 files across 78 distinct netting
+passes with 72 files carrying rows** — the arm that can actually see a starved partition, the
+realism arm's sensitivity being 1. Both `cost_gate` and the corpus are CONTROLS here, not
+coverage: neither partitions, so (b) is a strict no-op on both by construction.
+
+**SUCCESSOR, per the WORK ORDER note.** The query is the init block and essentially nothing
+else, and after this round its head is refused on re-derived evidence rather than inherited
+claims. The one row above 2 ms with NO recorded refusal of any kind is
+**`checkSpreadNonIterableIntoFixedArity` (2.01 / 2.22 ms)**: it allocates THREE `HashSet`s per
+program file plus an `intersect` (a fourth) and walks the file, then discards all of them at an
+early exit — the identical throwaway-collection shape (INC.87)(b) named on
+`evolvingArrayUseSiteWalks`, on a row 20% larger. Its recorded refusal is (INC.7) batch 4's,
+which says only that the LOOP HEADER cannot be swapped (it writes a checker field); it says
+nothing about the interior, and that distinction is what this round found three times.
+`checkReverseMappedInferableArrows` (0.66 ms, three full statement scans of one list before its
+first early exit) is the same shape, smaller, and is likewise unrefused. **Both need
+(INC.80)'s two-class-dir ABBA to price, exactly as (INC.87)(b) does — do not land either off a
+single draw.**
+
+
 ### Round (INC.88) — the root-file glob is REFUSED, and the split is what earns it
 
 **THE RE-DECOMPOSITION AFTER (INC.87)(a) PUT THE ROOT-FILE GLOB SECOND**, at **9.95 ms of a
@@ -3015,6 +3113,33 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [ ] **(INC.89)(c) `checkSpreadNonIterableIntoFixedArity` (2.01-2.22 ms) AND
+  `checkReverseMappedInferableArrows` (0.66 ms) — THE THROWAWAY-COLLECTION SHAPE AGAIN, AND
+  NEITHER CARRIES A REFUSAL OF ITS INTERIOR (2026-09-01, (INC.89)).** After (INC.89) re-derived
+  the init block's head, these are the only rows above ~0.6 ms with no recorded refusal of the
+  work itself. `checkSpreadNonIterableIntoFixedArity` (`Checker.kt` ~66270, registered ~10877)
+  allocates THREE `HashSet`s per program file, then `uninitVars.intersect(tildeAssigned)` as a
+  fourth, then walks the file — and discards all of it at an early exit, for every file
+  declaring none of what it looks for. `checkReverseMappedInferableArrows` (~179524) makes
+  THREE separate full statement scans of the SAME list (~179529, ~179537, ~179550) before its
+  first early exit at ~179549, plus 3-5 `mutableSetOf`s per file, and is gated
+  `if (!options.strict) return` so its whole population is a function of the fixture's `strict`.
+  **WHY THE RECORDED REFUSAL DOES NOT COVER THIS.** Both are refused by (INC.7) batch 4's
+  reading, whose criterion is the LOOP HEADER — "53 write a checker field or retract inside the
+  private closure… the loop header is exhausted". That is a statement about narrowing the loop,
+  and it is correct; it says nothing about the per-file allocations INSIDE it. (INC.89) found
+  that same header-vs-interior confusion three times in one round.
+  **PRICE IT BEFORE BUILDING IT, AND THE FLOOR IS KNOWN.** Round 801: an allocation count is
+  not a cost, and round 912's bar is >113,000 allocations/rebuild at a generous 150 ns to clear
+  the ~17 ms floor — here the population is ~4 x 2,401 ≈ 9,600 per pass, i.e. **~0.5-1.4 ms**,
+  right at the floor and possibly under it. So the honest first step is a deterministic COUNT
+  of collections built and of files reaching the early exit, not a rewrite.
+  **INSTRUMENT: (INC.80)'s two class dirs + an ABBA rotation across processes** — this is
+  exactly why (INC.87)(b)'s one-loop rewrite was BUILT AND REVERTED (the pass-timing table moved
+  +51% in the same run that showed the row falling). Do not land either off a single draw, and
+  note that like `evolvingArrayUseSiteWalks` these emit into the corpus, so unlike it they DO
+  have a value gate.
 
 - [ ] **(INC.87)(b) `init:evolvingArrayUseSiteWalks` — THE ONE UNREFUSED WHOLE-PROGRAM
   `init:*` PASS, 1.835 ms, AND IT NEEDS AN INSTRUMENT BEFORE IT NEEDS A FIX (2026-09-01).**
