@@ -1,5 +1,40 @@
 # Status
 
+**(INC.85) — A WAVE THAT CANNOT BLOCK IS DRAINED WITHOUT THE 16-WAY MERGE, AND THE GATE IS
+DEFAULTED OFF (2026-09-01).** (INC.84) measured the crawl's `flatMapMerge` pipeline at
+**0.58/0.60/0.60x effective parallelism** on the arm an IntelliJ-class host runs — 16 workers
+producing LESS CPU than their own wall, because every read is served from memory and every
+parse from the content cache, so there is nothing to overlap. The same pipeline runs at
+**7.5-8.9x** for a host that does not promise the filesystem, which is the control that makes
+this a statement about the WAVE rather than about concurrency.
+`readAndScanBatch` now classifies per path on the caller's thread — resident content AND a
+content-cache hit is built directly, anything else defers to the old pipeline moved verbatim —
+with both halves feeding the UNCHANGED single-threaded fold, so `CrawlParseCache.store`,
+`retainRead` and the counters still run once each and off the flow (round 825).
+**`readAndScanBatch` WALL 8.48/9.82/12.28 -> 5.84/5.32/4.73 ms; pipeline 6.63/8.13/9.61 ->
+0.81/0.80/0.67.** The receipt is DETERMINISTIC and no wall number is quoted: a warm trusted
+keystroke reads **2400 resident / 1 piped** (the merge is entered for the edited file alone)
+against **0 / 2401** cold and untrusting, while four rotated batches of the query wall gave
+sign-flipping deltas on the untouched CONTROL arm too — (INC.72)'s +-20 ms concurrent term.
+**THE ROUND WAS FIRST REPORTED AS A REFUSAL, AND WHAT CHANGED THE VERDICT WAS REMOVING A COST
+RATHER THAN RE-MEASURING.** The first design made every host pay a per-path probe (~0.6-0.9 ms
+per wave) to serve a regime only some are in. `Vfs.hasResidentContent()` — a whole-store
+question **defaulted `false`**, asked ONCE per wave — means every `Vfs` that has not opted in,
+`SystemVfs` and so the entire shipped CLI and daemon path, performs **not one probe**.
+**AND THE GATE'S SHAPE IS STRUCTURAL, NOT A THRESHOLD:** `OverlayVfs` answers from `retained`
+alone and deliberately NOT from overlaid buffers, because `contents` is O(open editors) while
+a wave is O(program files) — that disjunct would spend O(program) probes to fast-drain a
+handful and can never pay at any project size. Dropping it took the last non-winning regime
+from 0.6-0.9 ms to **99-111 NANOseconds**.
+**EIGHT ABLATION ARMS, AND a5 IS THE ONE WORTH READING:** it was **DEAD on its first pass**
+because the fixture's edit dropped retention, so the shape that matters — an unsaved buffer,
+resident with new bytes over a stale cached tree — did not exist. Rebuilt, it reddens exactly
+the staleness pin. **Without it this change could have shipped serving the PREVIOUS
+KEYSTROKE'S parse tree, with no counter, order pin or corpus baseline noticing.**
+**GATES.** Suite **16,645 / 0 / 3**; `cost_gate.py` exit 0, every counter unchanged;
+`huge_methods.py --fail-over 0` clean; compiler profile **46**; `--frontEnd` census lines
+byte-identical before and after.
+
 **(INC.82) — THE IMPORTER'S DIRECTORY WAS RE-DERIVED PER SPECIFIER, AND THE ISOLATED PROBE
 OVER-READ ITS OWN PRIZE BY 3x (2026-08-31).** `ModuleResolver.resolve` read `importerPath`
 for nothing but its `dirname` — the (INC.65) KDoc says so in as many words — then joined it
@@ -122,32 +157,3 @@ b2 then reddens it. Three arms, three distinct red sets (4 / 3 / 3).
 (**3.7-3.9 ms**, a `normalize` that must process `..` segments, which (INC.68)'s fast path
 cannot help) and `dirname` + the memo key at **~1.5 ms**, which the crawl loop could hoist
 per FILE.
-
-**(INC.78) — THE ROOT-FILE GLOB ASKED AN *ACCEPTING* REGEX PER CANDIDATE, AND NO REFUSAL
-FILTER COULD HAVE HELPED IT (2026-08-31).** `collectRootFiles` ran
-`excludeRegexes.none { } && includeRegexes.any { }` for every candidate of every build — i.e.
-on every keystroke of a language-service host — at **4.66-8.08 ms, 1.9-3.4 us per candidate**
-on a ~90-110 ms incremental floor at 2,401 files.
-**THE ATTRIBUTION INVERTS THE OBVIOUS FIX.** (INC.77) proposed a cheap prefix/extension
-pre-filter; measured standalone on one binary, the EXCLUDE half is **191 ns/candidate** (its
-literal prefix fails on the first character) and the INCLUDE half is **2,239** — `src/**/*`
-compiles to `^…/src/(?:[^/]+/)*[^/]*(?:\.ts|…)$`, which backtracks over every directory
-segment and **runs to a MATCH for every file in the project**. A filter can only refuse, so
-the lever is an EXACT shortcut and the proposal was aimed at the half that was already cheap.
-`GlobMatcher` keeps the regex as its DEFINITION and answers the
-`<literal>` + `**` segment + bare `*` leaf + literal tail shape — `src`, `src/**/*`,
-`src/**/*.ts`, `dist`, `**/*.spec.ts`, i.e. what tsconfigs contain — from the head and the
-tail. Two corrections came from EXTENDING the differential grid rather than reading it: an
-EMPTY SEGMENT is the one remainder `(?:[^/]+/)*[^/]*` cannot match (a doubled separator now
-falls back to the oracle), and that test is exact only because the head ends at a directory
-boundary. The length guard is provably unreachable and is recorded as a REDUNDANT GUARD.
-**THE WALL COULD NOT CARRY THE CLAIM: the same one-process ratio read 12x, then 5x, then 3x
-over four processes of one binary** (round 867's arm instability). The receipt is
-`FrontEnd.globRegexEvals` — decisions that reach the regex — **4,802 -> 0**, pinned at TWO
-program sizes with a positive control that a constrained pattern still runs it once per
-candidate. In-build `CFG_MATCH` **4.66 -> 0.61 ms**, root-file glob row **14.46 -> 9.16**.
-Gate is a DIFFERENTIAL, not a green suite ((CFG.1): a wrong root-file set is silent here);
-4 ablation arms, 4 distinct red sets, and the no-fast-path arm reddens ONLY the cost and
-regime pins while every value pin stays green.
-**GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
-`output.programFiles` 78 -> 78; `huge_methods.py --fail-over 0` clean.

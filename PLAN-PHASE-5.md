@@ -20,6 +20,74 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.85) — a wave that cannot block is drained without the 16-way merge, and the gate is defaulted OFF
+
+**(INC.84) MEASURED THE PIPELINE AT 0.6x EFFECTIVE PARALLELISM ON THE ARM AN IDE RUNS**, and
+this acts on it. `readAndScanBatch` now classifies each path on the caller's thread: a file
+whose content is RESIDENT and whose parse the content cache already HOLDS is built directly;
+everything else is deferred to the old pipeline, moved verbatim into `drainConcurrently`.
+Both halves feed the UNCHANGED single-threaded fold, so `CrawlParseCache.store`,
+`vfs.retainRead` and the counters still run once each and off the flow (round 825).
+
+```
+readAndScanBatch WALL   8.48 / 9.82 / 12.28  ->  5.84 / 5.32 / 4.73 ms
+flatMapMerge pipeline   6.63 / 8.13 /  9.61  ->  0.81 / 0.80 / 0.67
+net vs the old pipeline                          -2.2 / -4.0 / -6.0
+```
+
+**THE RECEIPT IS DETERMINISTIC AND NO WALL NUMBER IS QUOTED.** A warm trusted keystroke reads
+**2400 resident / 1 piped** — the merge is entered for the edited file ALONE — against
+**0 / 2401** both cold and for an untrusting `Vfs`. Four rotated batches of the query wall
+gave sign-flipping deltas *on the untouched control arm as well*, which is (INC.72)'s law:
+that instrument carries a +-20 ms concurrent term and cannot resolve a 2-6 ms sequential
+change, so it is reported as unable to see it rather than as evidence either way.
+
+**THE ROUND WAS FIRST REPORTED AS A REFUSAL AND THAT WAS THE RIGHT CALL ON ITS OWN NUMBERS.**
+The first design made EVERY host pay a per-path classification probe — ~0.6-0.9 ms per wave
+for 2,401 paths — to serve a regime only some of them are in. What changed the verdict was
+not re-measuring but removing the cost: **`Vfs.hasResidentContent()`, a whole-store question
+defaulted `false` and asked ONCE per wave**, so every `Vfs` that has not opted in —
+`SystemVfs`, i.e. the entire shipped CLI and daemon path — performs not one probe and runs
+exactly today's code.
+
+**AND THE GATE'S SHAPE IS A STRUCTURAL ARGUMENT, NOT A THRESHOLD.** `OverlayVfs` answers it
+from the RETAINED map alone and deliberately not from the overlaid buffers: `contents` is
+O(open editor buffers) while a wave is O(program files), so that disjunct would spend
+O(program) probes to fast-drain at most a handful and **can never pay for itself at any
+project size**. Dropping it took the last non-winning regime from 0.6-0.9 ms to **99-111
+NANOseconds**. The four regimes are now: cold **0** waves classified, non-opted-in `Vfs`
+**0**, overlay without the promise **~100 ns**, overlay with it pays and wins. The KDoc
+carries that reason in its own section, because a missing disjunct is exactly what a later
+reader "fixes" back.
+
+**THE `trustFilesystem` CONJUNCT IS REDUNDANT AND IS KEPT AS THE BELT** — `retainRead` opens
+with `if (!trustFilesystem) return` and the setter clears `retained` on withdrawal, so
+`retained.isNotEmpty()` already implies the promise. It takes BOTH mistakes to serve a stale
+read and an ablation dropping either alone reddens nothing: round 927's pair, recorded rather
+than claimed.
+
+**EIGHT ABLATION ARMS, and a5 is the one worth reading.** a5 (the cached tree served by PATH,
+with no content/flags gate) was a **DEAD arm on its first pass** — 0 RED — because the
+fixture's `edit()` dropped retention, so the one shape that matters, *an unsaved buffer,
+resident with new bytes over a stale cached tree*, did not exist in it. With that fixture
+built, a5 reddens exactly the staleness pin. **Without it this change could have shipped
+serving the PREVIOUS KEYSTROKE'S parse tree, and no counter, order pin or corpus baseline
+would have noticed.** a6 is the two-independent-guards control at 0 RED; a3 confirms that
+`paths.map { indexed.getValue(it) }` — not the flow — is what fixes program order, reddening
+both crawl-order pins.
+
+**GATES.** Suite **16,645 / 0 / 3**; `cost_gate.py` exit 0, every counter unchanged;
+`huge_methods.py --fail-over 0` clean; compiler profile **46**; and the `--frontEnd` census
+lines (`root glob` / `path normalize` / `module resolution`) **byte-identical** before and
+after, which is the receipt that the same work is being done.
+
+**COORDINATION NOTE, since it decided the outcome.** The round was handed back once rather
+than accepted, on the ground that its two objections were not equal: "the query wall cannot
+see it" is a statement about an instrument that (INC.72) already says cannot see changes of
+this size, while "the blocking arm now pays" was a real cost — and removable. Only the second
+was worth acting on. A refusal is worth as much as a fix here, but a refusal resting on an
+instrument's blindness is worth re-examining before it is accepted.
+
 ### Round (INC.84) — the concurrent half is named, and its 16-way merge is running at 0.6x parallelism
 
 **THE ~6-8 ms THAT NO ROW COULD SEE IS NOW ATTRIBUTED, AND THE RESIDUE AFTER THE SPLIT IS
@@ -2803,6 +2871,22 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [x] **(INC.85) DONE 2026-09-01 — A WAVE THAT CANNOT BLOCK IS DRAINED WITHOUT THE 16-WAY
+  MERGE.** `readAndScanBatch` classifies per path on the caller's thread (resident content
+  AND a content-cache hit -> built directly; anything else -> the old pipeline verbatim), both
+  halves feeding the unchanged single-threaded fold. **Batch WALL 8.48/9.82/12.28 -> 5.84/
+  5.32/4.73 ms, pipeline 6.63/8.13/9.61 -> 0.81/0.80/0.67**, deterministic receipt **2400
+  resident / 1 piped** warm-trusted against **0 / 2401** cold and untrusting. No wall figure
+  quoted — the control arm's own deltas flip sign across rotated batches ((INC.72)).
+  **THE COST IS GATED OFF BY DEFAULT:** `Vfs.hasResidentContent()` defaults `false` and is
+  asked once per wave, so `SystemVfs` — the whole shipped CLI/daemon — probes nothing;
+  `OverlayVfs` answers from `retained` alone and NOT from overlaid buffers, because `contents`
+  is O(open editors) against a wave's O(program) and can never pay at any project size (a
+  structural fact, not a threshold — it took the last regime to **99-111 ns**). Eight ablation
+  arms; **a5 was DEAD on its first pass** and only became discriminating once a fixture with
+  an unsaved buffer over a stale cached tree existed — without it the change could have
+  shipped serving the previous keystroke's tree, invisibly.
 
 - [x] **(INC.84) DONE 2026-08-31 — THE CONCURRENT HALF IS NAMED, AND ITS 16-WAY MERGE RUNS AT
   0.6x PARALLELISM.** Six `FrontEnd` rows (`CRAWL_BATCH` / `CRAWL_PIPE` / `CRAWL_FOLD` /

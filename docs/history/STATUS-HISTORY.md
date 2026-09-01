@@ -29,6 +29,35 @@ since `SystemVfs` resides nothing and the CLI path is provably unchanged; `huge_
 residue that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with the last hop
 gone.
 
+**(INC.78) — THE ROOT-FILE GLOB ASKED AN *ACCEPTING* REGEX PER CANDIDATE, AND NO REFUSAL
+FILTER COULD HAVE HELPED IT (2026-08-31).** `collectRootFiles` ran
+`excludeRegexes.none { } && includeRegexes.any { }` for every candidate of every build — i.e.
+on every keystroke of a language-service host — at **4.66-8.08 ms, 1.9-3.4 us per candidate**
+on a ~90-110 ms incremental floor at 2,401 files.
+**THE ATTRIBUTION INVERTS THE OBVIOUS FIX.** (INC.77) proposed a cheap prefix/extension
+pre-filter; measured standalone on one binary, the EXCLUDE half is **191 ns/candidate** (its
+literal prefix fails on the first character) and the INCLUDE half is **2,239** — `src/**/*`
+compiles to `^…/src/(?:[^/]+/)*[^/]*(?:\.ts|…)$`, which backtracks over every directory
+segment and **runs to a MATCH for every file in the project**. A filter can only refuse, so
+the lever is an EXACT shortcut and the proposal was aimed at the half that was already cheap.
+`GlobMatcher` keeps the regex as its DEFINITION and answers the
+`<literal>` + `**` segment + bare `*` leaf + literal tail shape — `src`, `src/**/*`,
+`src/**/*.ts`, `dist`, `**/*.spec.ts`, i.e. what tsconfigs contain — from the head and the
+tail. Two corrections came from EXTENDING the differential grid rather than reading it: an
+EMPTY SEGMENT is the one remainder `(?:[^/]+/)*[^/]*` cannot match (a doubled separator now
+falls back to the oracle), and that test is exact only because the head ends at a directory
+boundary. The length guard is provably unreachable and is recorded as a REDUNDANT GUARD.
+**THE WALL COULD NOT CARRY THE CLAIM: the same one-process ratio read 12x, then 5x, then 3x
+over four processes of one binary** (round 867's arm instability). The receipt is
+`FrontEnd.globRegexEvals` — decisions that reach the regex — **4,802 -> 0**, pinned at TWO
+program sizes with a positive control that a constrained pattern still runs it once per
+candidate. In-build `CFG_MATCH` **4.66 -> 0.61 ms**, root-file glob row **14.46 -> 9.16**.
+Gate is a DIFFERENTIAL, not a green suite ((CFG.1): a wrong root-file set is silent here);
+4 ablation arms, 4 distinct red sets, and the no-fast-path arm reddens ONLY the cost and
+regime pins while every value pin stays green.
+**GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78 -> 78; `huge_methods.py --fail-over 0` clean.
+
 **(INC.76) — THE LANGUAGE SERVICE WAS PAYING (INC.60)'s DEFECT IN FULL, THROUGH A WRAPPER THAT
 DID NOT OVERRIDE (2026-08-31).** `Vfs.listEntries`'s default body is
 `list(path).map { VfsEntry(it, isDirectory(it)) }`, and (INC.60) added that member precisely
