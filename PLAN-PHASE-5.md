@@ -806,8 +806,20 @@ no counter), then continue top-to-bottom.
   project-wide publish via the narrowed `diagnostics()` — the one feature tsgo's LSP
   lacks; keep it. Then the native image through the existing configuration.
 
-- [ ] **(LSP.3) THE HONEST COMPARISON: `xtsc-lsp` vs `tsgo --lsp`, BOTH LONG-LIVED, ON
-  tsc's 78 SOURCES.** Cells: first-open to first hover; hover after a body-only edit;
+- [x] **(LSP.3) DONE 2026-09-01 — THE HONEST COMPARISON, MEASURED: `xtsc-lsp` vs
+  `tsgo --lsp`, BOTH LONG-LIVED, ON tsc's 78 SOURCES — AND IT IS THEIRS BY 30-50x ON
+  PER-EDIT HOVER.** first-open→first-hover **255 ms vs 24,839** (different work: they
+  lazily checked one node; we eagerly published the whole 46-row project error list on a
+  cold JVM); hover after body edit **14 vs 630 ms**, after signature edit **17 vs 398**
+  (shape-independent on our side, per (INC.90)); project-wide publish **524 ms / 5 files
+  / exactly 46 rows** vs n/a (their session pushed 1 notification, 2 rows, open file
+  only); per-file pull receipt caught the 46-vs-65 gap surfacing (1 item theirs, 0 ours,
+  binder.ts). Mechanism named, not lamented: their lazy NodeLinks answering vs our
+  narrowed-build-per-question — INVERSION-DESIGN's bin-B gap measured end-to-end, the
+  strongest number for its Stage 1-2. Harness `scripts/lsp3-bench.py` (probe receipts,
+  CRLF-preserving reads, row-count receipts); published in
+  `docs/perf/incremental-vs-tsgo.md` (new LSP arm section) + language-service.md § 3b
+  updated. tsgo 7.0.2 `--lsp -stdio` does not exit on `exit` (killed after grace). Cells: first-open to first hover; hover after a body-only edit;
   hover after a signature edit; whole-project diagnostics. Publish in
   `docs/perf/incremental-vs-tsgo.md`, REPLACING the CLI table (DOC.1) retitled. This is
   the number the previous comparison should have been.

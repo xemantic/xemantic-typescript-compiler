@@ -98,8 +98,67 @@ the `--incremental` CLI in a fresh process, so tsgo's per-query floor (process s
 host would integrate, is a long-lived session with snapshot updates and lazy per-file
 checking and pays none of it per query. Wherever this page says "their floor is paid on
 every query", read "every CLI query". The long-lived comparison — `xtsc-lsp` against
-`tsgo --lsp`, both resident — is pending as **(LSP.3)** and will replace the CLI tables'
-role here when it lands.
+`tsgo --lsp`, both resident — is **measured below** ((LSP.3), 2026-09-01) and is the
+table an editor integration should read; the CLI tables remain for the
+wall-vs-marginal analysis they carry.
+
+
+## The LSP arm — both servers long-lived ((LSP.3), 2026-09-01)
+
+`scripts/lsp3-bench.py` drives BOTH servers over stdio in ONE session each, on the same
+78-source tree and the same (INC.90) CRLF-preserving edit variants of
+`src/compiler/binder.ts`. Ours: `xtsc-lsp` (`XtscLspMainKt`, java -Xmx4g, cold JVM).
+Theirs: `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`. Hover caret on
+`bindSourceFile`'s name; medians of 3 (all draws shown), one box, one day.
+
+| cell | tsgo 7.0.2 `--lsp` | xtsc-lsp |
+|---|---|---|
+| first-open to first hover | **255 ms** | **24,839 ms** (cold JVM; includes the eager project-wide check — see below) |
+| hover after a BODY-ONLY didChange | **14 ms** [12, 14, 15] | **630 ms** [547, 630, 723] |
+| hover after a SIGNATURE didChange | **17 ms** [12, 17, 18] | **398 ms** [392, 398, 479] |
+| whole-project diagnostics on didSave | n/a — no such call | **524 ms**, 5 files / **46 rows** published |
+| per-file pull `textDocument/diagnostic`, edited file | 107 ms first / 0 ms after, **1 item** | 0 ms, **0 items** |
+
+**Receipts.** Every hover non-empty on both sides; the body-edit landing PROVED by a
+hover on the added line's own const (`probe_ok`, both servers — a server that ignored
+the didChange would read as instantly fast); our publish wave's row sum is **exactly
+the 46** this profile is known to report. The per-file pull row is a **row-count
+divergence receipt**: tsgo sees 1 diagnostic in `binder.ts` that we do not — the
+46-vs-65 gap (`tsgo-diagnostic-gap.md`) surfacing per-file, so the caveat that every
+ratio flatters us by that gap applies here exactly as in the CLI tables.
+
+**Read it straight: on per-edit hover latency their LSP is ~30-50x faster than ours,
+and the mechanism is the architecture, not the language.** Their session answers a
+hover by asking a LAZY checker for ONE node's type over `NodeLinks`-style caches —
+nothing else is computed. Ours answers a fresh caret by running a NARROWED CAPTURE
+BUILD, so the (INC.\*) per-query floor is our lower bound per fresh question. This is
+`docs/INVERSION-DESIGN.md`'s bin-B gap measured end-to-end, and it is the strongest
+number in favour of that design's Stage 1-2. Two qualifiers, stated not to soften it:
+our hovers were measured on a ~2-minute-old JVM still on the JIT ramp (the body cell
+falls 723 → 547 within the session; (INC.90) measured the same underlying query at
+187-217 ms on a warm JVM), and our didChange-to-hover includes the whole front-end
+floor by design. Neither qualifier reaches 30x.
+
+**The first-open cell is two different products, and the table must not hide that.**
+tsgo's 255 ms opened the project and answered one lazy question — it had published
+diagnostics for the OPEN FILE only (1 notification, 2 rows, in the whole session) and
+had checked nothing else. Our 24,839 ms is a cold JVM (the known artifact-stack cost,
+§ 4) PLUS a deliberate eager whole-program check that published all 46 rows across 5
+files before the first hover answered — the project error list an editor gets
+immediately from us and never gets from their LSP (their own answer to
+"what is wrong with my project" is a separate `tsc --incremental` process). A host
+that wants lazy opening can simply not wire the publish; the cold JVM remains and
+remains ours to fix (AOT/CRaC, § 4).
+
+**The capability asymmetry survives measurement**: project-wide incremental
+diagnostics over a live session — 524 ms for the full 46-row wave on didSave, files
+that became clean republished empty — has no tsgo-LSP equivalent to race. That, the
+embedding API, and the JVM toolchain story are the differentiation; per-edit hover
+latency is theirs until the inversion lands.
+
+One tsgo observation for whoever scripts against it: their 7.0.2 `--lsp -stdio`
+server does not exit on the `exit` notification (killed after a 15 s grace in the
+harness).
 
 ## Arm A — tsc's own 78 compiler sources
 
@@ -266,6 +325,11 @@ whole project, incrementally" is answered by `tsc --incremental` in a separate p
 ## Reproduce
 
 ```bash
+# The LSP arm — both servers long-lived, 3 reps (classpath: core+project+lsp class
+# dirs plus the daemon install-lib's external jars; see scripts/lsp3-bench.py header)
+XTSC_LSP_CP=... python3 scripts/lsp3-bench.py ours build/bench/ours-bench build/bench/inc90-edits-tsc 3
+python3 scripts/lsp3-bench.py tsgo build/bench/tsgo-bench build/bench/inc90-edits-tsc 3
+
 # Arm A — tsc's own 78 compiler sources, 3 reps
 scripts/tsgo-incremental-bench.sh build/bench/tsgo-bench \
     src/compiler/binder.ts build/bench/inc90-edits-tsc 3

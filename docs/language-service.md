@@ -425,8 +425,12 @@ which is what an editor host would actually integrate.** `tsgo --lsp` is a long-
 session with snapshot updates and lazy per-file checking: it pays no process start, no
 `.tsbuildinfo` read and no tree re-stat per query, so the 182 ms floor visible in the
 CLI column below is a property of the CLI harness, not of tsgo in an editor. The
-long-lived comparison — `xtsc-lsp` against `tsgo --lsp`, both resident — is **pending
-as (LSP.3)** and will replace this table's role when it lands.
+long-lived comparison — `xtsc-lsp` against `tsgo --lsp`, both resident — is **measured
+((LSP.3), 2026-09-01)**: see the LSP arm of
+[`docs/perf/incremental-vs-tsgo.md`](perf/incremental-vs-tsgo.md), and its headline is
+honest in their favour — per-edit hover is **~30-50x faster there** (12-18 ms against
+our 398-630), because their lazy checker answers ONE node from NodeLinks-style caches
+while every fresh caret here costs a narrowed build.
 
 Measured on tsc's own 78 compiler sources, same tree, same two edits to one file — a
 **body-only** edit (a local `const` inside an exported function) and a **signature**
@@ -454,11 +458,12 @@ resident mode is not in it.
 **Against the CLI, holding the program in memory wins the edit loop** — we answer a
 body-only edit in less absolute time than a compiler whose full check is 3.3x faster,
 because the CLI's per-query floor (process start, state read, re-stat) is 79% of what
-that edit costs it. **Against `tsgo --lsp` this is unmeasured**: their session holds
-its state resident exactly as ours does, so none of that floor applies, and the honest
-expectation is that their lazy per-file checking makes the per-edit cells competitive
-or better. (LSP.3) measures it; until then this section draws no conclusion about
-long-lived hosts.
+that edit costs it. **Against `tsgo --lsp`, measured, the per-edit cells are theirs by
+30-50x**: resident-vs-resident, their lazy per-node answering beats our
+narrowed-build-per-question model, which is exactly the bin-B architecture gap
+`docs/INVERSION-DESIGN.md` names and its Stage 1-2 exists to close. What survives on
+our side of that measurement: the project-wide incremental `diagnostics()` wave
+(46 rows / 5 files in 524 ms on didSave) has no tsgo-LSP equivalent at all.
 
 **On first open, we lose badly and it is not close** — 23.3 s against 1.6 s, of which
 ~18 s is JVM start and JIT warm-up rather than compilation, and this cost is real in
@@ -499,15 +504,16 @@ a fresh checker — though its per-file first answer on a cold process will beat
 
 ### The honest summary
 
-The table compares a resident API against a CLI, so it cannot decide the question a
-host actually has — which *resident* design serves an edit loop faster. That is
-(LSP.3): `xtsc-lsp` against `tsgo --lsp`, both long-lived, first-open to first hover,
-hover after each edit shape, and whole-project diagnostics. What stands today without
-that measurement: the project-wide incremental `diagnostics()` call is a structural
-capability their LSP does not expose, and the cold JVM start is a real cost their
-toolchain does not pay. **A short-lived invocation** — a CI step, a pre-commit hook, a
-one-shot check — is the case tsgo's CLI is built for and where it is straightforwardly
-better today.
+(LSP.3) answered the question this table could not: resident-vs-resident, **their
+edit loop is faster and it is not close** (per-edit hover 12-18 ms against our
+398-630; first open 255 ms against our cold-JVM 24.8 s, though the two did different
+work — theirs checked one node lazily, ours eagerly published the whole 46-row
+project error list first). What is ours after measurement: the project-wide
+incremental diagnostics wave their LSP structurally lacks, the embedding API, and the
+no-Node-no-Go toolchain — and the per-edit gap is the inversion's to close
+(`docs/INVERSION-DESIGN.md`). **A short-lived invocation** — a CI step, a pre-commit
+hook, a one-shot check — remains the case tsgo's CLI is built for and where it is
+straightforwardly better today.
 
 The measurements, the harnesses and the source reading behind this section are in
 [`docs/perf/incremental-vs-tsgo.md`](perf/incremental-vs-tsgo.md).
