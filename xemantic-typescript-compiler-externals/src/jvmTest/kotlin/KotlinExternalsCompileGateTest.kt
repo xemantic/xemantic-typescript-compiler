@@ -26,14 +26,6 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
-import org.jetbrains.kotlin.cli.common.arguments.K2MetadataCompilerArguments
-import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
-import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSourceLocation
-import org.jetbrains.kotlin.cli.common.messages.MessageCollector
-import org.jetbrains.kotlin.cli.metadata.KotlinMetadataCompiler
-import org.jetbrains.kotlin.config.Services
-import java.nio.file.Files
-import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 
 /**
@@ -63,59 +55,6 @@ import kotlin.test.Test
  * reddens and the gate should move to the verbatim output.
  */
 class KotlinExternalsCompileGateTest {
-
-    private class CompileCheck(
-        val successful: Boolean,
-        val errors: List<String>,
-    )
-
-    private class RecordingMessageCollector : MessageCollector {
-
-        private val recordedErrors = mutableListOf<String>()
-
-        val errors: List<String> get() = recordedErrors.toList()
-
-        override fun clear() {
-            recordedErrors.clear()
-        }
-
-        override fun hasErrors(): Boolean = recordedErrors.isNotEmpty()
-
-        override fun report(
-            severity: CompilerMessageSeverity,
-            message: String,
-            location: CompilerMessageSourceLocation?,
-        ) {
-            if (severity.isError) recordedErrors += buildString {
-                if (location != null) {
-                    append(location.line).append(':').append(location.column)
-                    append(' ')
-                }
-                append(message)
-            }
-        }
-
-    }
-
-    @OptIn(kotlin.io.path.ExperimentalPathApi::class)
-    private fun compileCheck(source: String): CompileCheck {
-        val work = Files.createTempDirectory("xtsc-externals-gate")
-        try {
-            val sourceFile = work.resolve("Externals.kt")
-            Files.writeString(sourceFile, source)
-            val messages = RecordingMessageCollector()
-            val arguments = K2MetadataCompilerArguments().apply {
-                freeArgs = listOf(sourceFile.toString())
-                destination = work.resolve("klib").toString()
-                moduleName = "xtsc-externals-gate"
-                metadataKlib = true
-            }
-            KotlinMetadataCompiler().exec(messages, Services.EMPTY, arguments)
-            return CompileCheck(!messages.hasErrors(), messages.errors)
-        } finally {
-            work.deleteRecursively()
-        }
-    }
 
     /** The MVP surface, end to end: every mapping, a fallback, backticks. */
     private val fixture = """

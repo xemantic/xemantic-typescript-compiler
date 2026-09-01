@@ -609,6 +609,46 @@ class KotlinExternalsGeneratorTest {
         assert(skipped)
     }
 
+    // --- (EXT.6) default exports --------------------------------------------
+
+    @Test
+    fun `a default-exported function renders with a loud default marker`() {
+        val result = generate(
+            """
+            export default function greet(who: string): string { return who; }
+            """
+        )
+        val rendered = result.kotlin
+        val markerAt =
+            rendered.indexOf("/* xtsc: default export - consumers bind the module's default */")
+        val funAt = rendered.indexOf("public external fun greet(who: String): String")
+        assert(markerAt >= 0)
+        assert(funAt > markerAt)
+    }
+
+    @Test
+    fun `a default-exported class renders with the marker and a nameless one skips loudly`() {
+        val named = generate(
+            """
+            export default class Widget { label: string; }
+            """
+        )
+        val namedRendered = named.kotlin
+        val marker =
+            "/* xtsc: default export - consumers bind the module's default */" in namedRendered
+        val header = "public external class Widget {" in namedRendered
+        assert(marker)
+        assert(header)
+        val nameless = generate(
+            """
+            export default class { p: string; }
+            """
+        )
+        val namelessRendered = nameless.kotlin
+        val skipped = "/* xtsc: skipped class without a name */" in namelessRendered
+        assert(skipped)
+    }
+
     // --- (EXT.4) classes and enums ------------------------------------------
 
     @Test

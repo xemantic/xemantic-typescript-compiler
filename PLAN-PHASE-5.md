@@ -133,6 +133,25 @@ ones that MAP to one Kotlin signature (two literal-typed parameters both falling
 is a loud skip (a nullable function-typed property cannot carry TPs). Gate fixture
 widened with all three shapes; metadata compile green.
 
+**(EXT.6) LANDED — DEFAULT EXPORTS + THE mitt RUNG IS GREEN** (externals 47 → 52 pins,
+full suite 16,803/0/3). Every DEFAULT-exported kind now renders under its written name
+with a loud `default export - consumers bind the module's default` marker (functions had
+been rendering default exports SILENTLY — the same half-right silence (EXT.4) refused
+for classes; module wiring is a later rung), and a nameless default class/function skips
+loudly. `KotlinExternalsMittGateTest` embeds the VERBATIM `mitt@3.0.1` `index.d.ts`
+(fetched from npm, MIT, attributed) — the fixture ladder's first rung — and gates that
+the generated Kotlin metadata-compiles, plus spine pins (`public typealias Handler<T> =
+(T) -> Unit`, `public external fun <Events> mitt(...): Emitter<Events>`, the default
+marker) and loud-fallback pins for the keyof/indexed/conditional shapes. **Mechanism
+finding, measured by the gate's own first run**: the lens ambient substitutes a
+declaration's own TPs to `any` inside a reference annotation (`Emitter<Events>` resolved
+as `Emitter<any>`), so `annotationTextOrNull` gained the (EXT.2) own-TP mechanism one
+level up — a generic reference names its TARGET by the checker's positive identity and
+renders its ARGUMENTS from their own annotations, one unmappable argument still refusing
+the whole. Probe discipline: two guessed pins failed before `kotlin.test.fail(rendered)`
+printed the actual output — round 761's "probe the value" one module over. Also
+extracted `MetadataCompileCheck.kt` (shared by both gates).
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -990,10 +1009,15 @@ Owner decisions 2026-09-02:
   the optional-generic combination a loud skip), interface/class method
   OVERLOADS (rendered as Kotlin overloads; ones collapsing to a duplicate
   mapped signature — the marker-stripped key — keep the first and mark the
-  rest). Still to emit: namespaces/modules, DEFAULT exports (mitt's own entry
-  shape), index signatures, heritage clauses, accessors,
-  references with TP arguments inside another generic (falls back —
-  (EXT.2)'s lens-ambient finding). Unions and other inexpressible shapes: ONE
+  rest); DEFAULT exports (loud marker on every kind; module wiring —
+  `@JsModule`/`@JsName` — is still a later rung) and generic references to
+  GENERATED targets (`Emitter<Events>` — target named by checker identity,
+  arguments from their own annotations), which together made the **mitt rung
+  GREEN**: `KotlinExternalsMittGateTest` embeds the verbatim `mitt@3.0.1`
+  `index.d.ts` (MIT, attributed) and its generated Kotlin metadata-compiles.
+  Still to emit: namespaces/modules, index signatures, heritage clauses,
+  accessors, generic-ALIAS references (`Handler<T>` uses still fall back);
+  module wiring; next ladder rung: `smol-toml`. Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
   RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
 

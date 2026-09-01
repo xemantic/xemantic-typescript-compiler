@@ -181,22 +181,22 @@ private fun exportedInterfaceDeclarations(sourceFile: SourceFile): List<Interfac
         .filter { ModifierFlag.Export in it.modifiers }
 
 /**
- * (EXT.4) The file's exported TOP-LEVEL classes. A DEFAULT-exported class is
- * deliberately excluded: `export default class` binds the module's `default`
- * export, not the written name, and the default-exports rung owns that mapping
- * — rendering it as a named class here would be silently half-right.
+ * (EXT.4) The file's exported TOP-LEVEL classes. (EXT.6): a DEFAULT-exported
+ * class is collected too — it renders under its written name with a loud
+ * `default export` marker, because the module's consumers bind `default`, not
+ * the name, and module wiring (`@JsModule`/`@JsName`) is a later rung.
  */
 private fun exportedClassDeclarations(sourceFile: SourceFile): List<ClassDeclaration> =
     sourceFile.statements
         .filterIsInstance<ClassDeclaration>()
-        .filter { ModifierFlag.Export in it.modifiers && ModifierFlag.Default !in it.modifiers }
+        .filter { ModifierFlag.Export in it.modifiers }
 
 /** (EXT.4) The file's exported TOP-LEVEL enums, `const` ones included — the
  *  collector refuses those loudly, so they must reach it. */
 private fun exportedEnumDeclarations(sourceFile: SourceFile): List<EnumDeclaration> =
     sourceFile.statements
         .filterIsInstance<EnumDeclaration>()
-        .filter { ModifierFlag.Export in it.modifiers && ModifierFlag.Default !in it.modifiers }
+        .filter { ModifierFlag.Export in it.modifiers }
 
 /** (EXT.4) The file's exported TOP-LEVEL type aliases — membership for the
  *  alias arm, so a namespace-nested alias never renders at top level. */
@@ -213,7 +213,7 @@ private fun exportedAliasDeclarations(sourceFile: SourceFile): List<TypeAliasDec
 private fun exportedFunctionDeclarations(sourceFile: SourceFile): List<FunctionDeclaration> =
     sourceFile.statements
         .filterIsInstance<FunctionDeclaration>()
-        .filter { ModifierFlag.Export in it.modifiers && it.name != null }
+        .filter { ModifierFlag.Export in it.modifiers }
 
 /**
  * Collects exported interfaces as the checker walks past their declarations.
@@ -328,6 +328,29 @@ private class ExternalsCollector(
             ?.text
             ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
         if (ownParam != null) return kotlinIdentifier(ownParam)
+        val referenceArguments = (annotation as? TypeReference)?.typeArguments
+        if (referenceArguments != null) {
+            // (EXT.6) A generic reference names its TARGET by the CHECKER's
+            // positive identity (the resolved reference's target declaration is
+            // in the generated surface) while its ARGUMENTS render from their
+            // own annotations — the (EXT.2) own-TP mechanism one level up,
+            // measured on mitt: the lens ambient substitutes a declaration's
+            // own type parameters to `any` silently, so `Emitter<Events>`
+            // resolved as `Emitter<any>` and fell back. One unmappable
+            // argument still refuses the WHOLE reference.
+            val targetName = scope.generatedNameOf(lens.typeOfTypeNode(annotation))
+            if (targetName != null) {
+                val arguments = referenceArguments.map { argument ->
+                    annotationTextOrNull(
+                        argument,
+                        returnPosition = false,
+                        lens = lens,
+                        scope = scope,
+                    ) ?: return null
+                }
+                return "${kotlinIdentifier(targetName)}<${arguments.joinToString(", ")}>"
+            }
+        }
         if (annotation is FunctionType) {
             if (annotation.typeParameters != null) return null
             val parameters = annotation.parameters
@@ -373,23 +396,8 @@ private class ExternalsCollector(
         }
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val scope = scopeOf(typeParameters.toSet())
-        val markers = mutableListOf<String>()
-        for (parameter in node.typeParameters.orEmpty()) {
-            parameter.constraint?.let {
-                markers.add(
-                    "constraint on ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-            parameter.default?.let {
-                markers.add(
-                    "default for ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-        }
+        val markers = typeParameterMarkers(node.typeParameters, lens)
+        defaultExportMarker(node.modifiers, markers)
         val parameters = node.parameters
             .filterNot { it.isCommentPlaceholder }
             .mapIndexed { index, parameter ->
@@ -419,6 +427,21 @@ private class ExternalsCollector(
                 scope = scope,
             ),
         )
+    }
+
+    /**
+     * (EXT.6) The loud record every DEFAULT-exported declaration carries: the
+     * rendered name is the written one, but a JavaScript consumer binds the
+     * module's `default` — the wiring (`@JsModule`/`@JsName`) is a later rung,
+     * and until it lands the divergence must be readable in the output.
+     */
+    private fun defaultExportMarker(
+        modifiers: Set<ModifierFlag>,
+        markers: MutableList<String>,
+    ) {
+        if (ModifierFlag.Default in modifiers) {
+            markers.add(0, "default export - consumers bind the module's default")
+        }
     }
 
     /**
@@ -546,23 +569,8 @@ private class ExternalsCollector(
             ?: return SkippedDeclaration("class without a name")
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val scope = scopeOf(typeParameters.toSet())
-        val headerMarkers = mutableListOf<String>()
-        for (parameter in node.typeParameters.orEmpty()) {
-            parameter.constraint?.let {
-                headerMarkers.add(
-                    "constraint on ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-            parameter.default?.let {
-                headerMarkers.add(
-                    "default for ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-        }
+        val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
+        defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
         val staticMembers = mutableListOf<ExternalMember>()
         if (node.heritageClauses != null) {
@@ -658,6 +666,7 @@ private class ExternalsCollector(
         }
         val entries = mutableListOf<String>()
         val markers = mutableListOf<String>()
+        defaultExportMarker(node.modifiers, markers)
         for (member in node.members) {
             when (val memberName = member.name) {
                 is Identifier -> entries.add(memberName.text)
@@ -719,23 +728,8 @@ private class ExternalsCollector(
         // loud header marker, never a silent widening.
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val scope = scopeOf(typeParameters.toSet())
-        val headerMarkers = mutableListOf<String>()
-        for (parameter in node.typeParameters.orEmpty()) {
-            parameter.constraint?.let {
-                headerMarkers.add(
-                    "constraint on ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-            parameter.default?.let {
-                headerMarkers.add(
-                    "default for ${parameter.name.text}: " +
-                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
-                        " not carried"
-                )
-            }
-        }
+        val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
+        defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
         if (node.heritageClauses != null) {
             // Heritage is (EXT.2+) too: the supertype may be un-generated (a
