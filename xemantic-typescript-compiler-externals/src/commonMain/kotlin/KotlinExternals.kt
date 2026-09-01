@@ -36,20 +36,25 @@ import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.DiagnosticCategory
 import com.xemantic.typescript.compiler.EnumDeclaration
+import com.xemantic.typescript.compiler.ExportAssignment
+import com.xemantic.typescript.compiler.ExportDeclaration
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.FunctionType
 import com.xemantic.typescript.compiler.GetAccessor
+import com.xemantic.typescript.compiler.HeritageClause
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
+import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.SemicolonClassElement
 import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.SourceFileEntry
 import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
@@ -131,40 +136,95 @@ public fun generateKotlinExternals(
     fileName: String,
     source: String,
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
+): KotlinExternals = generateKotlinExternals(files = listOf(SourceFileEntry(fileName, source)), options = options)
+
+/**
+ * (EXT.7) The MULTI-FILE entry point: one program over every [files] entry —
+ * a package's whole `dist` declaration set, say — bound by ONE [Binder] (a program's
+ * binder results must share one binder's tables, exactly as
+ * `TypeScriptCompiler`'s multi-file site does) and checked by ONE [Checker],
+ * so an import between the files resolves and a member typed by ANOTHER
+ * file's exported interface renders by NAME under the same positive-identity
+ * evidence a same-file reference gets.
+ *
+ * Give the files PATH-shaped names (`/pkg/dist/index.d.ts`), the shape every
+ * published package has: the checker resolves a relative specifier against
+ * the importer's directory (measured, a flat name happens to resolve too, but
+ * that is not a contract to lean on). A `.js` specifier resolves to its
+ * `.d.ts`/`.ts` sibling, the checker's own rule.
+ *
+ * The output is ONE Kotlin source in walk order — the files' order, then
+ * declaration order within each — which is what a consumer of the package
+ * wants: its surface, not its file layout. Declarations from several files
+ * share one Kotlin package, so a TYPE name exported by two files is a loud
+ * skip for the second (Kotlin refuses the redeclaration); functions share a
+ * signature space instead and go through the overload collapse.
+ */
+public fun generateKotlinExternals(
+    files: List<SourceFileEntry>,
+    options: CompilerOptions = CompilerOptions(useRealLibs = true),
 ): KotlinExternals {
-    val flags = computeParserFlags(fileName, source, options)
-    val parser = Parser(
-        source,
-        fileName,
-        forceJsx = flags.forceJsx,
-        topLevelAwait = flags.topLevelAwait,
-        needsJsxFlag = flags.needsJsxFlag,
-        noImplicitAny = flags.noImplicitAny,
-    )
-    val sourceFile = parser.parse()
-    val parseDiagnostics = parser.getDiagnostics()
-    val binderResult = Binder(options).bind(sourceFile)
+    val parseDiagnostics = mutableListOf<Diagnostic>()
+    val sourceFiles = files.map { file ->
+        val flags = computeParserFlags(file.fileName, file.content, options)
+        val parser = Parser(
+            file.content,
+            file.fileName,
+            forceJsx = flags.forceJsx,
+            topLevelAwait = flags.topLevelAwait,
+            needsJsxFlag = flags.needsJsxFlag,
+            noImplicitAny = flags.noImplicitAny,
+        )
+        val sourceFile = parser.parse()
+        parseDiagnostics += parser.getDiagnostics()
+        sourceFile
+    }
+    val binder = Binder(options)
+    val binderResults = sourceFiles.map { binder.bind(it) }
     val collector = ExternalsCollector(
-        exportedInterfaces = exportedInterfaceDeclarations(sourceFile),
-        exportedClasses = exportedClassDeclarations(sourceFile),
-        exportedEnums = exportedEnumDeclarations(sourceFile),
-        exportedAliases = exportedAliasDeclarations(sourceFile),
-        exportedFunctions = exportedFunctionDeclarations(sourceFile),
+        exportedInterfaces = sourceFiles.flatMap(::exportedInterfaceDeclarations),
+        exportedClasses = sourceFiles.flatMap(::exportedClassDeclarations),
+        exportedEnums = sourceFiles.flatMap(::exportedEnumDeclarations),
+        exportedAliases = sourceFiles.flatMap(::exportedAliasDeclarations),
+        exportedFunctions = sourceFiles.flatMap(::exportedFunctionDeclarations),
+        topLevelExportWiring = sourceFiles.flatMap(::topLevelExportWiring),
     )
     val checker = runWithDeepStack {
         Checker(
             options,
-            listOf(binderResult),
+            binderResults,
             isMultiFileSource = true,
             checkedSink = collector,
         )
     }
+    val declarations = collector.finish()
     return KotlinExternals(
-        kotlin = renderKotlinExternals(collector.declarations, external = true),
-        compileCheckSource = renderKotlinExternals(collector.declarations, external = false),
+        kotlin = renderKotlinExternals(declarations, external = true),
+        compileCheckSource = renderKotlinExternals(declarations, external = false),
         diagnostics = parseDiagnostics + checker.getDiagnostics(),
     )
 }
+
+/**
+ * (EXT.7) The file's top-level EXPORT WIRING statements — `export { a } from
+ * './x.js'`, `export * from`, `export default <expression>`, `export = x` —
+ * which declare nothing of their own and re-route names a JavaScript consumer
+ * binds. Module wiring (`@JsModule`/`@JsName`) is a later rung, so each one is
+ * a LOUD marker; the membership set keeps a `declare module "x" { export … }`
+ * body's wiring out, exactly as the other collections keep nested
+ * declarations out. A bare `export {}` (the module-marker idiom) is excluded
+ * here: it re-routes nothing, so there is nothing to be loud about.
+ */
+private fun topLevelExportWiring(sourceFile: SourceFile): List<Node> =
+    sourceFile.statements.filter { statement ->
+        when (statement) {
+            is ExportAssignment -> true
+            is ExportDeclaration ->
+                statement.moduleSpecifier != null ||
+                    (statement.exportClause as? NamedExports)?.elements?.isNotEmpty() ?: true
+            else -> false
+        }
+    }
 
 /**
  * (EXT.2) The file's exported [InterfaceDeclaration]s, pre-scanned from the
@@ -229,9 +289,55 @@ private class ExternalsCollector(
     private val exportedEnums: List<EnumDeclaration>,
     private val exportedAliases: List<TypeAliasDeclaration>,
     private val exportedFunctions: List<FunctionDeclaration>,
+    /** (EXT.7) Top-level export-wiring statements, each a loud marker. */
+    private val topLevelExportWiring: List<Node>,
 ) : CheckedNodeSink {
 
-    val declarations = mutableListOf<ExternalDeclaration>()
+    private val declarations = mutableListOf<ExternalDeclaration>()
+
+    /**
+     * (EXT.7) The collected declarations after the two whole-program passes
+     * that can only run once every file has been walked: the top-level
+     * function OVERLOAD collapse (the (EXT.5) rule, applied to the module
+     * surface — overloads of one name are consecutive in walk order, and a
+     * second one mapping to the same Kotlin signature becomes a marker), and
+     * the cross-file TYPE-NAME collision rule: every file's declarations share
+     * one Kotlin package, so a second interface/class/enum/alias spelling a
+     * name an earlier one already took is a loud skip rather than a
+     * redeclaration the consumer's compiler refuses.
+     */
+    fun finish(): List<ExternalDeclaration> {
+        val seenSignatures = HashSet<String>()
+        val seenTypeNames = HashSet<String>()
+        return declarations.map { declaration ->
+            when (declaration) {
+                is ExternalTopLevelFunction -> {
+                    val signature = overloadSignature(
+                        declaration.name,
+                        declaration.typeParameters,
+                        declaration.parameters,
+                    )
+                    if (seenSignatures.add(signature)) declaration
+                    else SkippedDeclaration(
+                        "overload of ${declaration.name} collapsing to a duplicate signature"
+                    )
+                }
+                is ExternalInterface -> typeNameOnce(declaration, declaration.name, seenTypeNames)
+                is ExternalClass -> typeNameOnce(declaration, declaration.name, seenTypeNames)
+                is ExternalEnum -> typeNameOnce(declaration, declaration.name, seenTypeNames)
+                is ExternalTypeAlias -> typeNameOnce(declaration, declaration.name, seenTypeNames)
+                is SkippedDeclaration -> declaration
+            }
+        }
+    }
+
+    private fun typeNameOnce(
+        declaration: ExternalDeclaration,
+        name: String,
+        seenTypeNames: MutableSet<String>,
+    ): ExternalDeclaration =
+        if (seenTypeNames.add(name)) declaration
+        else SkippedDeclaration("$name declared again by another file - one Kotlin package cannot hold both")
 
     /**
      * (EXT.4) The NAMING set — the declarations a resolved type may be
@@ -380,20 +486,26 @@ private class ExternalsCollector(
     }
 
     /**
-     * (EXT.3) An exported top-level function. Overloads are (EXT.4): a name
-     * declared by MORE than one exported top-level declaration is a loud skip
-     * — emitting each signature would also emit the implementation signature
-     * beside its overloads, which is not the surface TypeScript consumers see.
+     * (EXT.3) An exported top-level function. (EXT.7) Overloads render as
+     * Kotlin overloads — the (EXT.5) method rule brought to the module surface
+     * — with ONE deliberate omission: the IMPLEMENTATION signature. Where a
+     * name is declared more than once in a file and one declaration carries
+     * a body, that body's signature is not part of the surface TypeScript
+     * consumers see (it is not callable), so it produces NOTHING — not a
+     * marker, because nothing consumable was lost. A `.d.ts` has no
+     * implementation, so every one of its overloads renders, and [finish]
+     * collapses the ones that map to one Kotlin signature.
      */
     private fun collectFunction(
         node: FunctionDeclaration,
         lens: CheckedLens,
-    ): ExternalDeclaration {
+    ): ExternalDeclaration? {
         val name = node.name?.text
             ?: return SkippedDeclaration("top-level function without a name")
-        if (exportedFunctions.count { it.name?.text == name } > 1) {
-            return SkippedDeclaration("overloaded function $name")
+        val overloadGroup = exportedFunctions.filter {
+            it.name?.text == name && it.parent === node.parent
         }
+        if (node.body != null && overloadGroup.size > 1) return null
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val scope = scopeOf(typeParameters.toSet())
         val markers = typeParameterMarkers(node.typeParameters, lens)
@@ -479,6 +591,18 @@ private class ExternalsCollector(
      * fallback does not, and Kotlin refuses conflicting overloads — so the
      * later duplicates become loud markers instead of a compile error.
      */
+    private fun overloadSignature(
+        name: String,
+        typeParameters: List<String>,
+        parameters: List<ExternalParameter>,
+    ): String = buildString {
+        append(name)
+        append('<').append(typeParameters.joinToString(","))
+        append(">(")
+        parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
+        append(')')
+    }
+
     private fun dedupeOverloads(members: MutableList<ExternalMember>) {
         val seenSignatures = HashSet<String>()
         for (index in members.indices) {
@@ -487,13 +611,7 @@ private class ExternalsCollector(
             // two different literal types both falling to `Any? /* xtsc: … */`
             // conflict however different their markers read — so the key is
             // the type text with the marker stripped.
-            val signature = buildString {
-                append(member.name)
-                append('<').append(member.typeParameters.joinToString(","))
-                append(">(")
-                member.parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
-                append(')')
-            }
+            val signature = overloadSignature(member.name, member.typeParameters, member.parameters)
             if (!seenSignatures.add(signature)) {
                 members[index] =
                     SkippedMember("overload of ${member.name} collapsing to a duplicate signature")
@@ -546,10 +664,49 @@ private class ExternalsCollector(
                 if (exportedFunctions.none { it === node }) return
                 if (seen.any { it === node }) return
                 seen.add(node)
-                declarations.add(collectFunction(node, lens))
+                collectFunction(node, lens)?.let { declarations.add(it) }
+            }
+            is ExportAssignment, is ExportDeclaration -> {
+                if (topLevelExportWiring.none { it === node }) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectExportWiring(node))
             }
             else -> return
         }
+    }
+
+    /**
+     * (EXT.7) `export default <expression>` / `export = x` / `export { … }
+     * [from '…']` / `export * from '…'`: nothing is declared, names are
+     * re-routed for a JavaScript consumer, and the wiring that would express
+     * that (`@JsModule`/`@JsName`) is a later rung — so each is a loud
+     * marker spelling what it wires, never a silent drop.
+     */
+    private fun collectExportWiring(node: Node): ExternalDeclaration = when (node) {
+        is ExportAssignment -> {
+            val expression = (node.expression as? Identifier)?.text ?: "an expression"
+            val form = if (node.isExportEquals) "export = " else "default export of "
+            SkippedDeclaration("$form$expression - module wiring is a later rung")
+        }
+        is ExportDeclaration -> {
+            val clause = when (val exportClause = node.exportClause) {
+                null -> "*"
+                is NamedExports -> exportClause.elements.joinToString(", ", "{ ", " }") {
+                    val local = it.propertyName?.text
+                    if (local == null || local == it.name.text) it.name.text
+                    else "$local as ${it.name.text}"
+                }
+                else -> exportClause::class.simpleName ?: "clause"
+            }
+            val from = (node.moduleSpecifier as? StringLiteralNode)?.text
+                ?.let { " from '$it'" } ?: ""
+            val typeOnly = if (node.isTypeOnly) "type " else ""
+            SkippedDeclaration(
+                "re-export $typeOnly$clause$from - module wiring is a later rung"
+            )
+        }
+        else -> SkippedDeclaration("export wiring")
     }
 
     /**
@@ -573,9 +730,7 @@ private class ExternalsCollector(
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
         val staticMembers = mutableListOf<ExternalMember>()
-        if (node.heritageClauses != null) {
-            members.add(SkippedMember("heritage clause"))
-        }
+        heritageMarkers(node.heritageClauses, members)
         // One declared constructor becomes the primary constructor; overloads
         // (two signatures plus the implementation is THREE Constructor nodes)
         // are a loud marker with no primary constructor at all — picking one
@@ -623,6 +778,14 @@ private class ExternalsCollector(
             if (ModifierFlag.Private in modifiers || ModifierFlag.Protected in modifiers) {
                 continue
             }
+            val memberName = when (member) {
+                is PropertyDeclaration -> member.name
+                is MethodDeclaration -> member.name
+                is GetAccessor -> member.name
+                is SetAccessor -> member.name
+                else -> null
+            }
+            if (memberName != null && isPrivateName(memberName)) continue
             val isStatic = ModifierFlag.Static in modifiers
             val target = if (isStatic) staticMembers else members
             val memberScope = if (isStatic) scopeOf(emptySet()) else scope
@@ -731,12 +894,7 @@ private class ExternalsCollector(
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
-        if (node.heritageClauses != null) {
-            // Heritage is (EXT.2+) too: the supertype may be un-generated (a
-            // lib type, a non-exported interface), so the clause is marked
-            // rather than rendered or silently dropped.
-            members.add(SkippedMember("heritage clause"))
-        }
+        heritageMarkers(node.heritageClauses, members)
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, members, scope)
@@ -752,6 +910,34 @@ private class ExternalsCollector(
         dedupeOverloads(members)
         return ExternalInterface(node.name.text, typeParameters, headerMarkers, members)
     }
+
+    /**
+     * Heritage is still a later rung: the supertype may be un-generated (a
+     * lib type — `extends Date`, `extends Error` — or a non-exported
+     * neighbour), so the clause is marked rather than rendered or silently
+     * dropped. (EXT.7) The marker NAMES what is not carried, so a reader of
+     * the output knows which base the consumer's Kotlin will not see.
+     */
+    private fun heritageMarkers(
+        clauses: List<HeritageClause>?,
+        members: MutableList<ExternalMember>,
+    ) {
+        for (clause in clauses.orEmpty()) {
+            val keyword = clause.token.name.removeSuffix("Keyword").lowercase()
+            val bases = clause.types.joinToString(", ") {
+                (it.expression as? Identifier)?.text ?: "a base expression"
+            }
+            members.add(SkippedMember("heritage clause $keyword $bases"))
+        }
+    }
+
+    /**
+     * (EXT.7) An ECMAScript PRIVATE name (`#private`) — a class-private
+     * member, which is not part of any consumable surface, exactly like a
+     * `private`-modified one: omitted without a marker.
+     */
+    private fun isPrivateName(name: Node): Boolean =
+        name is Identifier && name.text.startsWith("#")
 
     private fun collectProperty(
         member: PropertyDeclaration,

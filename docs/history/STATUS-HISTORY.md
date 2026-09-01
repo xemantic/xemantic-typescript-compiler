@@ -1,3 +1,17 @@
+**(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
+2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
+query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are
+functions of walk-scoped state; tsgo is the free official default, so "a TypeScript compiler"
+is not the mission. **The mission: no Node and no Go in the toolchain; an embeddable
+whole-program checker (`Project`); a Kotlin externals generator with resolved types (the
+Dukat/Karakum gap); the KIR JVM bytecode backend; an LSP anyone can try in five minutes.**
+The directive is persisted in CLAUDE.md § "AI agent mission", the WORK ORDER at the top of the
+PLAN-PHASE-5.md QUEUE (new items (LIC.1) (DOC.1) (DOC.2) (EXT.1…n) (LSP.1…n) (INV.D) (INV.0)),
+and SESSION-PROMPT.md, so run-loop iterations cannot revert to the old mission. **The (INC.\*)
+latency family is CLOSED** at a 94-110 ms incremental floor / 93-217 ms plugin query — further
+INC rounds are REFUSED unless a plugin-facing query measures > 300 ms warm. Suite unchanged:
+**16,677 / 0 failures / 3 skipped** (doc-only commit).
+
 **(INC.91) — THE REOPENED CLOSURE, CENSUSED THE SAME DAY AND REFUSED ON SOUNDNESS
 (2026-09-01).** (INC.90) reopened the reverse-dependency closure on a 12.7x measurement; this
 census refuses the PROPOSAL without touching that number. Counts, two reproducing runs.

@@ -388,7 +388,7 @@ class KotlinExternalsGeneratorTest {
         )
         val expected = """
             public external interface Sub {
-                /* xtsc: skipped heritage clause */
+                /* xtsc: skipped heritage clause extends Object */
                 /* xtsc: skipped IndexSignature */
                 public var own: String
             }
@@ -872,7 +872,10 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `an overloaded exported function is a loud skip and a nested function is silent`() {
+    fun `an overloaded exported function renders its overloads without the implementation signature`() {
+        // (EXT.7) supersedes the (EXT.3) loud skip: the overload signatures
+        // ARE the surface; the implementation signature (the one with a body)
+        // is not callable and produces nothing.
         val result = generate(
             """
             export function pick(x: string): string;
@@ -881,15 +884,222 @@ class KotlinExternalsGeneratorTest {
             export function outer(): void { function inner(): void {} }
             """
         )
+        val expected = """
+            public external fun pick(x: String): String
+
+            public external fun pick(x: Double): Double
+
+            public external fun outer(): Unit
+        """.trimIndent() + "\n"
         val rendered = result.kotlin
-        val overloadMarker = rendered.contains("/* xtsc: skipped overloaded function pick */")
-        val noPickFun = "external fun pick" !in rendered
-        val outerPresent = "public external fun outer(): Unit\n" in rendered
-        val innerAbsent = "inner" !in rendered
-        assert(overloadMarker)
-        assert(noPickFun)
-        assert(outerPresent)
-        assert(innerAbsent)
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a lone function with a body still renders - the omission is only for an implementation among overloads`() {
+        val result = generate(
+            """
+            export function one(x: string): string { return x; }
+            """
+        )
+        val expected = "public external fun one(x: String): String\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    // --- (EXT.7) the smol-toml rung: multi-file, overloads, wiring ----------
+
+    private fun generateFiles(vararg files: Pair<String, String>): KotlinExternals =
+        generateKotlinExternals(
+            files.map { (name, source) ->
+                com.xemantic.typescript.compiler.SourceFileEntry(name, source.trimIndent())
+            }
+        )
+
+    @Test
+    fun `a member typed by another file's exported interface renders by name across a js specifier`() {
+        // Path-shaped names, a `.js` specifier resolving to its `.d.ts`
+        // sibling — the shape every published package has. The Dukat pin
+        // still holds across the file boundary: `Kind` is an alias in the
+        // OTHER file and renders as what it resolves to.
+        val result = generateFiles(
+            "/pkg/dist/a.d.ts" to """
+                export type Kind = string;
+                export interface Creature {
+                    name: string;
+                }
+            """,
+            "/pkg/dist/b.d.ts" to """
+                import type { Creature, Kind } from './a.js';
+                export interface Habitat {
+                    resident: Creature;
+                    kind: Kind;
+                    residents: Creature[];
+                }
+            """,
+        )
+        val expected = """
+            public typealias Kind = String
+
+            public external interface Creature {
+                public var name: String
+            }
+
+            public external interface Habitat {
+                public var resident: Creature
+                public var kind: String
+                public var residents: Any? /* xtsc: unmapped Creature[] */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `negative control - a same-named non-exported interface in the importing file still falls back`() {
+        // The cross-file naming set is keyed by IDENTITY, not by spelling: b's
+        // own non-exported `Creature` is what `resident` resolves to, it is not
+        // in the generated surface, and a's exported `Creature` sharing the
+        // name must not be borrowed for it. A name-keyed union of the files'
+        // exported names would render `Creature` here and be wrong.
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export interface Creature {
+                    name: string;
+                }
+            """,
+            "/pkg/b.d.ts" to """
+                interface Creature {
+                    local: boolean;
+                }
+                export interface Habitat {
+                    resident: Creature;
+                }
+            """,
+        )
+        val rendered = result.kotlin
+        val fallback = "    public var resident: Any? /* xtsc: unmapped Creature */\n" in rendered
+        assert(fallback)
+    }
+
+    @Test
+    fun `a type name exported by two files is a loud skip for the second`() {
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export interface Shape { a: string; }
+            """,
+            "/pkg/b.d.ts" to """
+                export interface Shape { b: number; }
+                export class Other {}
+            """,
+            "/pkg/c.d.ts" to """
+                export type Other = string;
+            """,
+        )
+        val expected = """
+            public external interface Shape {
+                public var a: String
+            }
+
+            /* xtsc: skipped Shape declared again by another file - one Kotlin package cannot hold both */
+
+            public external class Other
+
+            /* xtsc: skipped Other declared again by another file - one Kotlin package cannot hold both */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `top-level overloads collapsing to one mapped signature keep only the first`() {
+        // Two literal-typed parameters both fall to the `Any?` fallback: one
+        // Kotlin signature, so the second is a marker — the (EXT.5) method
+        // rule on the module surface.
+        val result = generate(
+            """
+            export declare function choose(mode: "a"): string;
+            export declare function choose(mode: "b"): number;
+            export declare function choose(mode: boolean): boolean;
+            """
+        )
+        val expected = """
+            public external fun choose(mode: Any? /* xtsc: unmapped "a" */): String
+
+            /* xtsc: skipped overload of choose collapsing to a duplicate signature */
+
+            public external fun choose(mode: Boolean): Boolean
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a private-name member is omitted like a private one and lib heritage is named`() {
+        val result = generate(
+            """
+            export declare class Stamp extends Date implements Object {
+                #secret;
+                #hidden(): void;
+                private also: string;
+                shown: string;
+            }
+            """
+        )
+        val expected = """
+            public external class Stamp {
+                /* xtsc: skipped heritage clause extends Date */
+                /* xtsc: skipped heritage clause implements Object */
+                public var shown: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `export wiring is loud - default value, export equals, star and named re-exports - and an empty export is silent`() {
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export interface A { a: string; }
+            """,
+            "/pkg/index.d.ts" to """
+                import { A } from './a.js';
+                declare const _default: { a: A };
+                export default _default;
+                export * from './a.js';
+                export { A, A as Alias };
+                export {};
+            """,
+        )
+        val expected = """
+            public external interface A {
+                public var a: String
+            }
+
+            /* xtsc: skipped default export of _default - module wiring is a later rung */
+
+            /* xtsc: skipped re-export * from './a.js' - module wiring is a later rung */
+
+            /* xtsc: skipped re-export { A, A as Alias } - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `export equals is a loud marker`() {
+        val result = generate(
+            """
+            declare const lib: { v: number };
+            export = lib;
+            """
+        )
+        val expected = "/* xtsc: skipped export = lib - module wiring is a later rung */\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
     }
 
 }

@@ -25,6 +25,55 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.6) — the smol-toml rung: the externals generator goes multi-file (2026-09-02)
+
+**(EXT.7) LANDED — THE smol-toml RUNG IS GREEN** (externals module 52 → 64 pins, full suite
+16,815/0/3). The second fixture-ladder rung is what mitt is not — a seven-file package
+with relative `.js` imports between the files — so the rung's first deliverable is the
+MULTI-FILE entry point: `generateKotlinExternals(files: List<SourceFileEntry>)` parses each
+file, binds all of them with ONE `Binder` (the multi-file site in `TypeScriptCompiler` is
+the precedent: a program's binder results must share one binder's tables) and checks with
+ONE `Checker`; the pre-scanned exported sets are the UNION over the files, so a member typed
+by ANOTHER file's exported interface renders by name under the same `===` identity evidence
+a same-file reference gets (pinned across a `.js` specifier resolving to its `.d.ts`
+sibling, with the Dukat alias-resolution pin holding across the file boundary). The output
+is ONE Kotlin source in walk order, so the collector gained a `finish()` pass for the two
+rules that need every file walked: a second exported TYPE name across files is a loud skip
+(one Kotlin package cannot hold both), and top-level function overloads collapse by the
+(EXT.5) marker-stripped key. **Top-level overloads now RENDER** — (EXT.3)'s loud skip was
+about the implementation signature being emitted beside its overloads, so the rule is
+exactly that: among overloads, the declaration WITH a body produces nothing (it is not a
+callable surface; a lone function with a body still renders), and a `.d.ts` has no
+implementation so every overload renders. smol-toml's two `parse` overloads map to
+DIFFERENT Kotlin signatures (an intersection parameter falls back, `options?: ParseOptions`
+maps by name to `ParseOptions?`) and both survive; the gate compiles them as Kotlin
+overloads. Three smaller shapes from the same fixture: an ECMAScript `#private` member
+(measured: the parser hands it over as an `Identifier` spelled `#private`, so it had been
+a "member with a non-identifier name" marker — now omitted like a `private` one, since it
+is one), heritage markers that NAME what is not carried (`skipped heritage clause extends
+Date`, one per clause), and the export WIRING family — `export default <value>`, `export
+=`, `export { a as b } [from '…']`, `export * from` — each a loud marker naming what it
+wires, with the module-marker idiom `export {}` deliberately silent (it wires nothing). The
+gate: `KotlinExternalsSmolTomlGateTest` embeds the VERBATIM seven `dist` declaration files
+of `smol-toml@1.7.1` (BSD-3-Clause; each file carries the licence's notice, conditions and
+disclaimer verbatim, which is what a source redistribution owes) and the generated Kotlin
+metadata-compiles, with spine pins on the classes, the overloads, the destructured optional
+parameter (`p1: Any? /* xtsc: unmapped { maxDepth?: … } */`) and the loud alias refusals —
+and the checker reports ZERO diagnostics on the package. **Two measured surprises.** (1)
+The recursive aliases `TomlValue`/`TomlValueWithoutBigInt` resolve to `any` in this checker
+(a recursion guard's answer), so their refusal reads `unmappable body any` — loud, so not a
+generator defect, but a checker limitation the ladder will meet again. (2) My first
+negative control claimed a FLAT file name defeats the relative import (CLAUDE.md's
+`Inv3PerFileLookupTest` lesson, transplanted); measured, `./a.js` against a flat `a.d.ts`
+RESOLVES through a direct `Checker` construction, so the control was a false claim and was
+replaced by one that discriminates the mechanism it is for — a same-named NON-exported
+interface in the importing file must still fall back, which a name-keyed union of the
+files' exported names would get wrong. The KDoc says "path-shaped is the shape every
+package has", not "flat is defeated". Probe discipline held once more: the fixture's
+rendering was READ (a deliberate `fail(rendered)`) before a single pin was written, and the
+KDoc glob `dist/*.d.ts` re-tripped the nested-comment trap CLAUDE.md already records —
+twice, once per file, caught by the compiler both times.
+
 ### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
 
 **Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
@@ -757,9 +806,21 @@ Owner decisions 2026-09-02:
   arguments from their own annotations), which together made the **mitt rung
   GREEN**: `KotlinExternalsMittGateTest` embeds the verbatim `mitt@3.0.1`
   `index.d.ts` (MIT, attributed) and its generated Kotlin metadata-compiles.
+  DONE 2026-09-02 ((EXT.7), (P18.6) note): the **smol-toml rung is GREEN** —
+  MULTI-FILE generation (`generateKotlinExternals(List<SourceFileEntry>)`, one
+  Binder + one Checker, cross-file by-name rendering under the same identity
+  evidence, a second exported TYPE name across files a loud skip), top-level
+  function OVERLOADS rendered (implementation signature omitted, duplicates
+  collapsed by the (EXT.5) key), `#private` members omitted like `private`,
+  heritage markers NAME the base (`extends Date`), and every export-wiring
+  statement (`export default <value>`, `export =`, `export { } [from]`,
+  `export *`) a loud marker with `export {}` silent; `KotlinExternalsSmolTomlGateTest`
+  embeds the verbatim seven `smol-toml@1.7.1` declaration files (BSD-3-Clause,
+  notices retained) and metadata-compiles the output.
   Still to emit: namespaces/modules, index signatures, heritage clauses,
-  accessors, generic-ALIAS references (`Handler<T>` uses still fall back);
-  module wiring; next ladder rung: `smol-toml`. Unions and other inexpressible shapes: ONE
+  accessors, generic-ALIAS references (`Handler<T>` uses still fall back),
+  `export const` values, parameter properties; module wiring; next ladder
+  rung: RxJS. Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
   RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
 

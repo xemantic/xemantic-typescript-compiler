@@ -7,7 +7,16 @@ for both). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.5) — IN PROGRESS (2026-09-02).** Owner additions applied ((INV.0) merged with
+**(P18.6) — IN PROGRESS (2026-09-02).** (EXT.7) the **smol-toml rung is GREEN**: the
+externals generator goes MULTI-FILE (`generateKotlinExternals(List<SourceFileEntry>)`, one
+Binder + one Checker, cross-file by-name rendering, cross-file type-name collisions a loud
+skip), top-level overloads render (implementation signature omitted, duplicates collapsed),
+`#private` omitted, heritage markers name the base, export wiring loud (`export {}` silent);
+`KotlinExternalsSmolTomlGateTest` embeds the verbatim seven `smol-toml@1.7.1` files and
+metadata-compiles the output with zero checker diagnostics (externals 64/0; full suite
+16,815/0/3).
+
+**(P18.5) — DONE (2026-09-02).** Owner additions applied ((INV.0) merged with
 receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,
 shrinkage dashboard row); (LIC.3) CONTRIBUTING.md; (EXT.4) classes + enums landed
 (externals 40/0 — `external class` with primary ctor + companion statics;
@@ -68,17 +77,3 @@ merged tree: **16,734 / 0 failures / 3 skipped** (+57: 15 externals + 42 lsp);
 `cost_gate.py` exit 0, every counter +0.00% (the new modules move nothing — the control
 passes); `huge_methods.py --fail-over 0` clean (core-only census: a CONTROL for the new
 modules, per its own gotcha).
-
-**(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
-2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
-query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are
-functions of walk-scoped state; tsgo is the free official default, so "a TypeScript compiler"
-is not the mission. **The mission: no Node and no Go in the toolchain; an embeddable
-whole-program checker (`Project`); a Kotlin externals generator with resolved types (the
-Dukat/Karakum gap); the KIR JVM bytecode backend; an LSP anyone can try in five minutes.**
-The directive is persisted in CLAUDE.md § "AI agent mission", the WORK ORDER at the top of the
-PLAN-PHASE-5.md QUEUE (new items (LIC.1) (DOC.1) (DOC.2) (EXT.1…n) (LSP.1…n) (INV.D) (INV.0)),
-and SESSION-PROMPT.md, so run-loop iterations cannot revert to the old mission. **The (INC.\*)
-latency family is CLOSED** at a 94-110 ms incremental floor / 93-217 ms plugin query — further
-INC rounds are REFUSED unless a plugin-facing query measures > 300 ms warm. Suite unchanged:
-**16,677 / 0 failures / 3 skipped** (doc-only commit).
