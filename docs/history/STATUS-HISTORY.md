@@ -1114,3 +1114,9 @@ limit, and the JVM edge a host hits: the cancellation is an `Error` by design, s
 warning per cancelled keystroke.
 **GATES.** Suite **16,629 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
 `huge_methods.py --fail-over 0` clean; compiler profile **46** diagnostics, unchanged.
+
+**(INC.86)(b) ANSWERED:** the init block is 418 rows, `rowsTo50pct=5`, tail of 363 rows worth
+**1.03 ms between them** — no plateau left.
+**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%, `output.errors`
+46; `huge_methods.py --fail-over 0` clean; **two-binary 8-profile grid added=0 removed=0 on all
+eight**, its before-arm control verified non-blind.

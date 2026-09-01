@@ -96,6 +96,36 @@ diagnostics are missing), and only one row skips real checking. `build/tools/tsc
 provisioned by nothing in the repo and vanishes on a `clean` — a harness reading it must REFUSE
 when it is absent rather than fall back to tsgo.
 
+### Round (INC.91) — the reopened closure, censused the same day and refused on soundness
+
+**(INC.90) REOPENED THE CLOSURE ON A 12.7x MEASUREMENT AND THIS CENSUS REFUSES THE PROPOSAL
+WITHOUT TOUCHING THAT NUMBER** — the prize is real, the stopping signal is not.
+`Inc91ClosureCensusMain`, counts not milliseconds, two reproducing runs.
+**THREE OF MY OWN FRAMINGS WERE WRONG AND THE CENSUS SAYS SO.** The transitive importer closure
+of a `layer00` module is **187 of 2,401 files (7.8%)**, not "most of the program" — the
+fixture's fan-out is ~4 per hop, not ~50. The offset-sensitivity worry I raised (foreign types
+keyed by `(fileName, pos, end)`, so any byte shift moves every importer) is **refuted**: it is
+real (`Checker.kt:57089`) and costs exactly **ONE extra hop** — 1 fingerprint moved for an
+append-at-END edit, **3** for the identical edit at the TOP, and **0 beyond hop 2**, because an
+unedited importer's own declarations do not move. A barrel probe shows the cascade SKIPS
+barrels and lands on real consumers, since `foreignKey` names the DECLARING file.
+**THE REAL BLOCKER WAS WRITTEN IN THE FINGERPRINT'S OWN KDoc THE WHOLE TIME** (`:57050`):
+the cut gives up TRANSITIVITY, and `incrementalDiagnostics` is sound BECAUSE a moved signature
+anywhere falls back. The proposal kept the signal and deleted the fallback. **Refuting number:
+on a length-preserving three-file edit the only error is at HOP 2, hop 1 is silent in every
+channel (0 rows, fingerprint unmoved, `.d.ts` unchanged), and the walk would report 0 rows
+where the truth is 1** — a missing diagnostic, the one outcome the five gates exist to prevent.
+tsgo answers 1/1 on the same probe and ITS hop-1 `.d.ts` is textually unchanged too, so the
+feature is achievable and its soundness simply cannot come from a signature.
+**WHAT SURVIVES IS MOST OF THE WIN AND NEEDS NO NEW ANALYSIS:** narrow a signature edit to the
+transitive importer CLOSURE (`Result.importEdges`, already computed), splice the rest, use the
+fingerprint for nothing. **2,401 -> 187 files, 12.8x**, sound because a superset always is, and
+it degrades to today's behaviour on barrels — which turns (INC.35)'s finding into a property of
+the mechanism rather than a reason not to have one.
+**AND THE METHOD IS THE REUSABLE PART:** the census cost one probe runner and no wall clock,
+and it killed a design that had a real 12.7x measurement behind it. A prize being real is not
+evidence that a mechanism for collecting it is sound.
+
 ### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
 
 **(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather
@@ -1576,41 +1606,51 @@ finished it — bind 7-9, post-checker 5.7-7.2. **And take the lesson literally:
 pricing any of them, check the row HAS a split, because this round's whole finding lived in
 a residue no sub-row named.**
 
-- [ ] **(INC.91) THE REVERSE-DEPENDENCY CLOSURE, REOPENED BY MEASUREMENT ON LAYERED CODE —
-  (INC.35) IS RIGHT ABOUT tsc's SOURCES AND WRONG AS A GENERAL REFUSAL (2026-09-01, (INC.90)).**
-  (INC.35) closed the closure because a file-level AND a symbol-level use graph both re-check
-  ~100% of tsc's characters at the median edit — and (INC.90) CORROBORATES that from the other
-  implementation: tsgo, which *implements* per-hop pruning, recovers **nothing** there (its
-  signature edit costs **1,695 ms against its own 1,667 ms cold**). **On an application-shaped
-  project the same mechanism is worth almost everything**: 2,401 files in 48 layers, a signature
-  edit at `layer00`, and tsgo answers in **304 ms against its own 427 ms cold** — i.e. a
-  signature edit costs it what a BODY edit costs (297) — where we fall back to a whole rebuild
-  at **3,850 ms**. **12.7x on the wall, ~96x on marginal cost above each side's own floor: the
-  largest gap this comparison has ever measured, and the only one with a named mechanism on the
-  other side.** The old page predicted exactly this and said the `(LIB.*)` libraries were where
-  it could be tested; it is now tested, on a bigger and more honest fixture.
-  **WHAT TO BUILD, AND IT IS NOT A CLOSURE OVER FILES.** tsgo's rule is per-hop and
-  SIGNATURE-keyed: a file's signature is a hash of its forced declaration emit, and an unchanged
-  signature STOPS the walk at that file. We already have the expensive half — (INC.46)'s
-  exported-signature fingerprint, `ExportSurface.signatures`, computed per file and already
-  proven to converge (24 of 24 on the compiler profile). What is missing is only the WALK: on a
-  signature move, re-check the edited file's direct importers, re-fingerprint THEM, and stop
-  wherever a fingerprint did not move. The import graph is already in
-  `ProjectCompiler.Result`. **So this is a traversal over data we compute anyway, not a new
-  analysis** — which is what makes it different from (INC.35)'s refused design.
-  **PRICE THE PRIZE FIRST, per the standing law.** The prize is bounded by (INC.46)'s own
-  measurement: **33% of real commits move a fingerprint** (67% are already served), so this
-  reaches only that third — but on layered code that third currently costs a FULL rebuild each.
-  Census before building: on `many-small-2400-dom`, how many files are in the transitive
-  importer set of a `layer00` module, and how many of them actually move their own fingerprint?
-  If the answer is "essentially all of them" this is (INC.35) again and must be refused again,
-  and the fixture's own layering makes that measurable in one run.
-  **AND GRADE IT ON THE RIGHT CHANNEL.** A lost collector or a lost type-parameter scope
-  surfaces as a wrong TYPE and never as a missing error ((INC.19)), so the gate is
-  `scripts/capture-equivalence.sh` BESIDE the diagnostics differential — and the receipt is
-  `Project.incrementalAnswers` plus a per-cell row count, exactly as (INC.90)'s runner prints.
-  Instruments ready: `scripts/inc46-vs-tsgo.sh` / `scripts/tsgo-incremental-bench.sh`, both
-  parametrised, with `build/bench/inc90-edits-app`.
+- [ ] **(INC.91) THE SIGNATURE-EDIT CLIFF — CENSUSED 2026-09-01 AND **REFUSED AS WRITTEN**,
+  NOT ON THE PRIZE BUT ON SOUNDNESS. WHAT REPLACES IT IS THE CLOSURE-NARROWED BUILD, WHICH
+  NEEDS NO FINGERPRINT AND IS WORTH 12.8x ON ITS OWN.**
+  The proposal was a per-hop, signature-keyed walk: on a signature move re-check the direct
+  importers, re-fingerprint them, stop where a fingerprint did not move. **The stopping signal
+  is unsound and the refuting number is 1 real diagnostic reported as 0.**
+  **THE MEASUREMENT** (`Inc91ClosureCensusMain`, counts not milliseconds, reproduced across two
+  runs; whole-program arm so (INC.19)'s first-touch order is not a second variable):
+  transitive importer closure of `layer00/m0_0.ts` is **187 files of 2,401 (7.8%)** — hop 1 is
+  3 files and the fan-out is ~4 per hop, NOT ~50, so "layer00 is the bottom layer therefore most
+  of the program" was wrong. Fingerprints moved: **1** for an append-at-END signature edit and
+  **3** for the identical edit inserted at the TOP. Controls: 0 moved on an unedited rebuild,
+  `escapes = 0`, rows = 1 in every cell.
+  **THE OFFSET WORRY IS REFUTED, AND CHEAPLY.** `foreignKey` does mix `decl.pos`/`decl.end`
+  (`Checker.kt:57089-57090`), so an importer's hash does carry the byte offsets of what it
+  imports — but it **does not cascade**: it costs exactly ONE extra hop (3, not 2,400), because
+  an unedited importer's own declarations do not move, so its own consumers' keys are stable.
+  A barrel probe confirms the shape: a TOP insert at a leaf moves the leaf and its three real
+  consumers and NOT the two barrels, because `foreignKey` names the DECLARING file.
+  **THE ACTUAL BLOCKER IS NON-TRANSITIVITY, AND IT IS WRITTEN IN THE FINGERPRINT'S OWN KDoc**
+  (`Checker.kt:57050`): *"What the cut gives up is transitivity — F's hash does not move when
+  G's type changes — and transitivity is not wanted here: a moved signature ANYWHERE falls back
+  to a whole-program build."* `incrementalDiagnostics` is sound BECAUSE it falls back; this item
+  proposed to delete the fallback and keep the signal. Measured on a three-file,
+  **length-preserving** semantic edit (`count: number` -> `count: string`, 106 bytes both ways,
+  zero offset shift): the program's only error is at **hop 2**, hop 1 is silent in EVERY channel
+  (0 rows, fingerprint unmoved, `.d.ts` text unchanged), and the census says **MOVED: 1 file**.
+  So the walk stops at hop 1 and reports **0 rows where the truth is 1** — a missing diagnostic,
+  which is the one outcome the five gates exist to prevent. tsgo answers 1/1 on the same probe
+  and its own hop-1 `.d.ts` is textually unchanged too, so **the feature is achievable but its
+  soundness cannot come from a signature alone** — it is not a signal we already have.
+  **BUILD THIS INSTEAD, AND IT IS MOST OF THE WIN:** on a signature move, replace the FULL
+  REBUILD with a build narrowed to the edited files' **transitive importer closure**, splicing
+  the previous rows for everything outside it. It prunes with `Result.importEdges`
+  (`ProjectCompiler.kt:68`, already computed) and **uses the fingerprint for nothing**, so the
+  non-transitivity above cannot bite; it is sound for the reason a superset always is. Worth
+  **2,401 -> 187 files (12.8x)** here, and it DEGRADES TO TODAY'S BEHAVIOUR on barrel codebases
+  where the closure is ~100% — which is (INC.35)'s finding, now a property of the mechanism
+  rather than a reason not to have it. Keep the existing `exportSignatureEscapes` and
+  shared-name guards; a file outside the closure must be unable to observe the edit, and an
+  escape is exactly the case where that is not provable.
+  **THE REMAINING 187 -> 4-8 IS THE PER-HOP PRUNING AND IT IS BLOCKED ON A *TRANSITIVE*
+  SIGNATURE**, which is a different and larger item than the walk — do not re-open it as a
+  walk. **GRADE ON THE CAPTURE CHANNEL TOO** ((INC.19)): a lost collector surfaces as a wrong
+  TYPE and never as a missing error.
 
 - [ ] **(INC.92) `Cancellation.signal` IS A PROCESS-GLOBAL AND THE PLUGIN'S SHAPE IS N
   CONCURRENT BUILDS — THE TWO CONTRACTS CONTRADICT EACH OTHER IN WRITING (2026-09-01).**

@@ -1,5 +1,28 @@
 # Status
 
+**(INC.91) — THE REOPENED CLOSURE, CENSUSED THE SAME DAY AND REFUSED ON SOUNDNESS
+(2026-09-01).** (INC.90) reopened the reverse-dependency closure on a 12.7x measurement; this
+census refuses the PROPOSAL without touching that number. Counts, two reproducing runs.
+**THREE FRAMINGS REFUTED, INCLUDING TWO OF MY OWN.** The transitive importer closure of a
+`layer00` module is **187 of 2,401 files (7.8%)**, not "most of the program" — fan-out is ~4
+per hop. The offset-sensitivity worry (foreign types keyed by `(fileName, pos, end)`) is REAL
+(`Checker.kt:57089`) and costs exactly **ONE extra hop**: 1 fingerprint moved for an
+append-at-END edit, **3** for the identical edit at the TOP, **0 beyond hop 2**.
+**THE BLOCKER WAS IN THE FINGERPRINT'S OWN KDoc THE WHOLE TIME** (`:57050`): (INC.47)'s
+file-boundary cut gives up TRANSITIVITY, and `incrementalDiagnostics` is sound BECAUSE a moved
+signature anywhere falls back. The proposal kept the signal and deleted the fallback.
+**Refuting number: on a length-preserving three-file edit the only error is at HOP 2, hop 1 is
+silent in every channel, and the walk reports 0 rows where the truth is 1** — a missing
+diagnostic. tsgo answers 1/1 and its own hop-1 `.d.ts` is unchanged too, so the feature is
+achievable but its soundness cannot come from a signature.
+**WHAT SURVIVES IS MOST OF THE WIN:** narrow a signature edit to the transitive importer
+CLOSURE (`Result.importEdges`, already computed), splice the rest, use the fingerprint for
+nothing — **2,401 -> 187 files (12.8x)**, sound because a superset always is, degrading to
+today's behaviour on barrels. The remaining 187 -> 4-8 needs a TRANSITIVE signature, a larger
+item than the walk. **The method is the reusable part: one probe runner, no wall clock, and it
+killed a design with a real 12.7x measurement behind it — a prize being real is not evidence
+that a mechanism for collecting it is sound.**
+
 **(INC.90) — THE tsgo INCREMENTAL COMPARISON RE-TAKEN ON A SECOND ARM THAT IS FINALLY
 LIKE-FOR-LIKE, AND THE SIGNATURE CLIFF REOPENS (INC.35) (2026-09-01).** Every tsgo incremental
 number this repo had published came from ONE arm — tsc's 78 huge barrel-exporting sources,
@@ -139,9 +162,3 @@ named `b.ts`/`c.ts`, two of the twelve `modulePreserve4` basenames, so the scan 
 That collision is now the POSITIVE control (round 790).
 **REFUSED, not shipped:** `init:evolvingArrayUseSiteWalks` (1.835 ms, five throwaway
 collections per file) — a rewrite was built and REVERTED, unpriceable and unpinnable locally.
-**(INC.86)(b) ANSWERED:** the init block is 418 rows, `rowsTo50pct=5`, tail of 363 rows worth
-**1.03 ms between them** — no plateau left.
-**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%, `output.errors`
-46; `huge_methods.py --fail-over 0` clean; **two-binary 8-profile grid added=0 removed=0 on all
-eight**, its before-arm control verified non-blind.
-

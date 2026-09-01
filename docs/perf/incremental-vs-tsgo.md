@@ -283,6 +283,38 @@ a body-only cell that did not serve is measuring a rebuild.
    code: 3,850 ms against 304. `(INC.35)`'s refusal was sound *for the profile it was
    measured on* and should be re-opened with Arm B as its instrument — another instance
    of the standing law that a cost prior does not transfer across regimes.
+
+   **Censused the same day, and the obvious remedy is unsound — see `(INC.91)`.** The
+   tempting design is tsgo's own: on a signature move re-check the direct importers,
+   re-fingerprint them, and stop where a fingerprint did not move. We cannot do that,
+   and the reason is written in the fingerprint's own KDoc (`Checker.kt:57050`):
+   `(INC.47)`'s file-boundary cut deliberately gives up **transitivity**, so `F`'s hash
+   does not move when `G`'s type changes, and `incrementalDiagnostics` is sound
+   precisely *because* a moved signature anywhere falls back to a whole-program build.
+   Measured on a length-preserving three-file edit (`count: number` -> `count: string`,
+   106 bytes both ways, zero offset shift): the program's only error is at **hop 2**,
+   hop 1 is silent in every channel — 0 rows, fingerprint unmoved, `.d.ts` text
+   unchanged — so the walk stops one hop early and reports **0 rows where the truth is
+   1**. tsgo answers 1/1 on the same probe and *its* hop-1 declaration text is unchanged
+   too, so the feature is achievable but its soundness cannot come from a signature.
+
+   **What survives is most of the win and needs no new analysis:** narrow a signature
+   edit to the edited files' **transitive importer closure** (`Result.importEdges`,
+   already computed), splice the previous rows for everything outside it, and use the
+   fingerprint for nothing. On Arm B that is **2,401 -> 187 files (12.8x)**; it is sound
+   for the reason a superset always is; and it degrades to today's behaviour on barrel
+   codebases where the closure is ~100%, which turns `(INC.35)`'s finding into a
+   property of the mechanism rather than a reason not to have one. The remaining
+   187 -> 4-8 is the per-hop pruning, and it is blocked on a *transitive* signature —
+   a different and larger item than the walk.
+
+   Two numbers from that census worth keeping, both of which refuted a prior held while
+   this page was being written: the transitive importer closure of a bottom-layer module
+   is **187 of 2,401 files (7.8%)**, not "most of the program" (the fixture's fan-out is
+   ~4 per hop); and the fingerprint's `foreignKey` does mix `decl.pos`/`decl.end`
+   (`Checker.kt:57089`), so an importer's hash carries the byte offsets of what it
+   imports — but that costs exactly **one extra hop** (1 moved for an append-at-end
+   edit, 3 for the identical edit at the top, 0 beyond) and does not cascade.
 2. **The gap to close is the signature edit, and only on layered projects.** Everything
    else we already win or draw on the wall.
 3. **The shipped editor path is not the thing to optimise first** — `diagnosticsOf` is
