@@ -1,7 +1,8 @@
 # xemantic-typescript-compiler
 
-The TypeScript compiler — scanner, parser, binder, **type checker**, transformer and
-emitter — rewritten from scratch in Kotlin Multiplatform. No Node.js, anywhere.
+**TypeScript for the JVM and Kotlin.** The TypeScript compiler — scanner, parser,
+binder, **type checker**, transformer and emitter — rewritten from scratch in Kotlin
+Multiplatform. **No Node.js and no Go anywhere in the toolchain.**
 
 [<img alt="GitHub Release Date" src="https://img.shields.io/github/release-date/xemantic/xemantic-typescript-compiler">](https://github.com/xemantic/xemantic-typescript-compiler/releases)
 [<img alt="license" src="https://img.shields.io/github/license/xemantic/xemantic-typescript-compiler?color=blue">](https://github.com/xemantic/xemantic-typescript-compiler/blob/main/LICENSE)
@@ -21,21 +22,21 @@ emitter — rewritten from scratch in Kotlin Multiplatform. No Node.js, anywhere
 
 ---
 
-`xtsc` is a **drop-in replacement for `tsc`** — point it at your `tsconfig.json`, get the
-same diagnostics and the same JavaScript:
+`xtsc` is not trying to out-run `tsgo` at being `tsc`. TypeScript 7 *is* the Go
+compiler, it is free and official, and if a faster `tsc` is all you need, use it.
+This project exists for the places `tsgo` cannot go:
 
-```shell
-xtsc --noEmit -p .          # type-check
-xtsc -p . --outDir build    # type-check and emit
-xtsc --watch -p .           # stay up, rebuild on change
-```
-
-On speed, plainly: it is about **2.7× faster than TypeScript's JavaScript compiler**, and
-still **2.3× behind `tsgo`** — the Go rewrite, which since TypeScript 7 *is* the `tsc` you
-get from npm. Closing that gap is the current target and where most of the work goes.
-
-But speed is not why this exists. It is a **whole-program type checker running on the
-JVM**, not a transpiler, and that buys three things neither `tsc` does.
+1. **Type-check and compile TypeScript with nothing but a JVM** — no Node, no Go, no
+   npm anywhere in the toolchain. One artifact, or a native binary.
+2. **Embed a whole-program TypeScript checker in a Kotlin application** — the entire
+   IDE surface (hover, definitions, completions, rename, project diagnostics) is a
+   function call on a live object, not an LSP process you shell out to.
+3. **Generate Kotlin externals with resolved types** — from the *checked* program, not
+   from `.d.ts` syntax. The gap [Dukat](https://github.com/Kotlin/dukat) and
+   [Karakum](https://github.com/karakum-team/karakum) never closed. *(in progress —
+   the current demo target)*
+4. **Run TypeScript as JVM bytecode** — a backend lowers the checked program to Kotlin
+   IR and hands it to kotlinc's own JVM phases. Real npm libraries already run this way.
 
 ## 1. Embed it — the whole IDE surface is a function call
 
@@ -54,6 +55,7 @@ project.signatureHelpAt(file, offset)      // every overload
 project.referencesAt(file, offset)         // find references, read vs write
 project.renameAt(file, offset, "newName")  // a plan — applied and RECOMPILED before you see it
 project.fileSemantics(file)                // hover + definition for a whole file, in ONE compile
+project.diagnostics()                      // the WHOLE project — a call tsgo's LSP does not have
 ```
 
 Everything crossing that surface is a value — no AST, no `Symbol`, no `Type` — and every
@@ -63,7 +65,22 @@ jumps to a same-spelled binding looks like it worked, so this compiler declines 
 → **[docs/language-service.md](docs/language-service.md)** — cost model, position
 conventions, and every known gap, listed.
 
-## 2. Run TypeScript on the JVM — as bytecode
+## 2. Generate Kotlin externals — with resolved types *(in progress)*
+
+Every Kotlin/JS interop generator so far has translated **declaration syntax**: Dukat
+(archived) and Karakum both walk `.d.ts` ASTs and meet the same wall — conditional
+types, mapped types, overload selection, generic instantiation — everything whose answer
+is not in the syntax. `xtsc` sits on the other side of that wall: it *has* the checked
+program. The externals generator consumes the checker's resolved type graph — the same
+facts interface the JVM backend already consumes — and emits Kotlin `external`
+declarations whose types are the checker's answers, with one **documented** fallback for
+every shape Kotlin cannot express, never a silent `dynamic`.
+
+Status: being built as the current demo — first target is real library `.d.ts` entries
+(`mitt`, `smol-toml`, RxJS, then `typescript.d.ts` itself), with a hard gate that the
+generated Kotlin compiles.
+
+## 3. Run TypeScript on the JVM — as bytecode
 
 A second backend lowers the **checked** program to Kotlin IR and hands it to kotlinc's own
 JVM phases. No JavaScript engine is involved; the output is `.class` files.
@@ -87,7 +104,15 @@ not a new compiler.
 → **[docs/kir-design.md](docs/kir-design.md)** (experimental — it refuses, loudly, what it
 cannot yet lower)
 
-## 3. Keep it warm
+## 4. And still a full compiler CLI
+
+Point it at your `tsconfig.json`, get `tsc`'s diagnostics and `tsc`'s JavaScript:
+
+```shell
+xtsc --noEmit -p .          # type-check
+xtsc -p . --outDir build    # type-check and emit
+xtsc --watch -p .           # stay up, rebuild on change
+```
 
 The JVM is slow to start and fast once running, so the CLI splits the two: a compile
 daemon holds the warm compiler, and a **native** thin client (7 ms, no JVM) talks to it.
@@ -102,7 +127,8 @@ GraalVM native image for one-shot use where there is nothing to keep warm.
 
 ## How fast, exactly
 
-TypeScript's own compiler — 78 files, 194,702 LOC — on CI (`ubuntu-latest`, JDK 26):
+Speed is published for honesty, not as the pitch. TypeScript's own compiler — 78 files,
+194,702 LOC — on CI (`ubuntu-latest`, JDK 26):
 
 | | check-only | emit |
 |---|---:|---:|
@@ -112,10 +138,9 @@ TypeScript's own compiler — 78 files, 194,702 LOC — on CI (`ubuntu-latest`, 
 | `tsc` 7.0.2 — `tsgo`, the Go rewrite | 1.70 s | 2.44 s |
 
 Both rows are called `tsc`, so read the comparison carefully: **2.7× faster than the
-JavaScript compiler, 2.3× slower than the Go one.** TypeScript 7 ships the Go compiler as
-the `typescript` package itself, so that second row is what `npm install typescript` puts
-on your machine today — it is the bar, and matching it is the open problem. Every push
-re-runs this; the whole series is in [bench-history/](bench-history/README.md).
+JavaScript compiler, 2.3× slower than the Go one** — and the Go one is what
+`npm install typescript` puts on your machine today. Every push re-runs this; the whole
+series is in [bench-history/](bench-history/README.md).
 
 ## How correct
 
