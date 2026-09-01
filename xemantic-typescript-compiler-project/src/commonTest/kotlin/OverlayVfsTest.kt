@@ -172,4 +172,119 @@ class OverlayVfsTest {
             ),
         )
     }
+
+    // ---- revert: the third change kind ---------------------------------------
+
+    /**
+     * (INC.56) [OverlayVfs.revert] is what [Project.reloadFile] is made of, and it is
+     * neither [OverlayVfs.put] (which shadows disk with text) nor [OverlayVfs.remove]
+     * (which shadows it with absence): it drops EVERY record of one path — its text,
+     * its tombstone and anything retained under the filesystem promise alike — so the
+     * next read goes to the delegate and answers whatever is there now.
+     *
+     * Three separate maps, pinned one at a time below, because dropping two of them
+     * and missing the third is silent: a host would hand a path back to the filesystem
+     * and keep being answered from memory.
+     */
+    @Test
+    fun `revert drops overlay text so the backing store answers again`() {
+        val overlay = OverlayVfs(backing())
+        overlay.put("/proj/src/a.ts", "edited")
+        assert(overlay.readText("/proj/src/a.ts") == "edited")
+        overlay.revert("/proj/src/a.ts")
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+        assert(overlay.isEmpty)
+    }
+
+    @Test
+    fun `revert drops a tombstone so the file is really there again`() {
+        val overlay = OverlayVfs(backing())
+        overlay.remove("/proj/src/a.ts")
+        assert(!overlay.exists("/proj/src/a.ts"))
+        overlay.revert("/proj/src/a.ts")
+        assert(overlay.exists("/proj/src/a.ts"))
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+        assert(overlay.list("/proj/src") == listOf("/proj/src/a.ts", "/proj/src/b.ts"))
+        assert(overlay.isEmpty)
+    }
+
+    /**
+     * The one case where "the backing store is the truth again" means the file goes
+     * away rather than coming back — an overlay-only file has no disk answer to fall
+     * back to.
+     */
+    @Test
+    fun `revert removes a file that exists only in the overlay`() {
+        val overlay = OverlayVfs(backing())
+        overlay.put("/proj/src/c.ts", "c")
+        overlay.revert("/proj/src/c.ts")
+        assert(!overlay.exists("/proj/src/c.ts"))
+        assert(overlay.readText("/proj/src/c.ts") == null)
+        assert(overlay.list("/proj/src") == listOf("/proj/src/a.ts", "/proj/src/b.ts"))
+    }
+
+    /**
+     * (INC.56) The third map. A retained read is invisible in an ordinary answer —
+     * it holds the very bytes the delegate holds — so the pin retains text that
+     * DISAGREES with the backing store, which is exactly the state the promise's
+     * documented limit describes, and asserts the disagreement is gone afterwards.
+     */
+    @Test
+    fun `revert drops what was retained under the filesystem promise`() {
+        val overlay = OverlayVfs(backing())
+        overlay.trustFilesystem = true
+        overlay.retainRead("/proj/src/a.ts", "stale")
+        assert(overlay.hasResidentContent())
+        assert(overlay.readText("/proj/src/a.ts") == "stale")
+        assert(overlay.readTextIfResident("/proj/src/a.ts") == "stale")
+        overlay.revert("/proj/src/a.ts")
+        assert(!overlay.hasResidentContent())
+        assert(overlay.readTextIfResident("/proj/src/a.ts") == null)
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+    }
+
+    /** And the overlaid half and the retained half are dropped by the ONE call. */
+    @Test
+    fun `revert drops the text and the retention together`() {
+        val overlay = OverlayVfs(backing())
+        overlay.trustFilesystem = true
+        overlay.retainRead("/proj/src/a.ts", "stale")
+        overlay.put("/proj/src/a.ts", "edited")
+        assert(overlay.readText("/proj/src/a.ts") == "edited")
+        overlay.revert("/proj/src/a.ts")
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+        assert(!overlay.hasResidentContent())
+    }
+
+    /** It is a per-PATH forget, not [OverlayVfs.clear] — every other entry survives. */
+    @Test
+    fun `revert leaves every other overlay entry alone`() {
+        val overlay = OverlayVfs(backing())
+        overlay.put("/proj/src/a.ts", "edited a")
+        overlay.remove("/proj/src/b.ts")
+        overlay.revert("/proj/src/a.ts")
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+        assert(overlay.readText("/proj/src/b.ts") == null)
+        assert(!overlay.isEmpty)
+    }
+
+    @Test
+    fun `revert normalizes its path before it meets overlay keys`() {
+        val overlay = OverlayVfs(backing())
+        overlay.put("/proj/src/a.ts", "edited")
+        overlay.revert("/proj/src/lib/../a.ts")
+        assert(overlay.readText("/proj/src/a.ts") == "a")
+        assert(overlay.isEmpty)
+    }
+
+    @Test
+    fun `reverting a path the overlay never held changes nothing`() {
+        val overlay = OverlayVfs(backing())
+        overlay.put("/proj/src/a.ts", "edited")
+        overlay.revert("/proj/src/b.ts")
+        overlay.revert("/proj/src/never-existed.ts")
+        assert(overlay.readText("/proj/src/a.ts") == "edited")
+        assert(overlay.readText("/proj/src/b.ts") == "b")
+        assert(!overlay.exists("/proj/src/never-existed.ts"))
+    }
 }
