@@ -163,11 +163,20 @@ subprojects {
                     url = organizationUrl
                 }
 
+                // (LIC.2), owner-approved 2026-09-02: the SPDX expression the 1,078 source
+                // headers carry, plus a second entry for the output exception. The URLs
+                // name this repository's own licence texts, because the exception is
+                // project-specific and has no canonical home elsewhere.
                 licenses {
                     license {
-                        name = "The Apache License, Version 2.0"
-                        url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
-                        distribution = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+                        name = "AGPL-3.0-only WITH LicenseRef-xtsc-output-exception"
+                        url = "https://github.com/$gitHubAccount/${rootProject.name}/blob/main/LICENSE"
+                        distribution = "repo"
+                    }
+                    license {
+                        name = "xemantic-typescript-compiler Output Exception"
+                        url = "https://github.com/$gitHubAccount/${rootProject.name}/blob/main/LICENSE-EXCEPTION"
+                        distribution = "repo"
                     }
                 }
 

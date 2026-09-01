@@ -25,6 +25,32 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.7) — two owner decisions land: the POM licence and Stage 1 of the inversion (2026-09-02)
+
+**(LIC.2) LANDED.** The root POM's `licenses` block now carries the SPDX expression the
+1,078 source headers carry (`AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`, `url`
+at the repo's `LICENSE`) plus a second entry for the Output Exception (`url` at
+`LICENSE-EXCEPTION`), both `distribution = "repo"`. Verified by generating
+`xemantic-typescript-compiler-core`'s JVM POM and reading the block back; no other
+`Apache` string survives in any build file. Owner approved the build-file edit and the
+two-entry shape in this session.
+
+**(INV.1) APPROVED, and the § 10 question answered.** The owner asked what the
+cost-neutrality contract in `docs/INVERSION-DESIGN.md` § 10 entails — it was committed by
+the (P18.5) session under the label "owner additions", so it is an agent's transcription of
+that conversation, not the owner's own text. What it says: `cost_gate.py` reads 0.00% for a
+pure restructuring BY CONSTRUCTION (its counters count calls), so per-commit evidence for
+(INV.\*) work is instead (1) `ab-interleaved.sh` wall time with win rate, (2) a JFR
+allocation profile before/after, (3) `-XX:+PrintInlining` on the three hottest entry
+points showing every new delegation hop still `inline (hot)`, (4) core-module compile time
+before/after; hot-path rules (final long-lived collaborators, interfaces only with one
+production implementation, interned per-instantiation mappers, no capturing lambdas /
+`by lazy` / boxed seams / `open` classes), watch inlining depth and frame size in the
+relation recursions, and the success metric is `Checker.kt` line-count SHRINKAGE on the
+STATUS.md dashboard. For (INV.1) this means: the store ships OFF, the flag-off path must
+measure inert on wall AND allocation (not only on the counters), and the flag-on recording
+cost is measured on the compiler profile and the 2,401-file shape before Stage 2 is priced.
+
 ### Round (P18.6) — the smol-toml rung: the externals generator goes multi-file (2026-09-02)
 
 **(EXT.7) LANDED — THE smol-toml RUNG IS GREEN** (externals module 52 → 64 pins, full suite
@@ -750,6 +776,15 @@ Owner decisions 2026-09-02:
   pull requests cannot be merged; issues and reproductions are welcome. One commit.**
   (Implementation queued as (LIC.3) below — the queue's (LIC.2) label was already held by
   the POM-drift item, which remains a separate, still-blocked build-file change.)
+- **(LIC.2) POM licence metadata — APPROVED 2026-09-02**, in the proposed two-entry shape
+  (SPDX expression + a second entry for the output exception, URLs at the repo's own
+  licence texts). Landed the same day.
+- **(INV.1) Stage 1 of `docs/INVERSION-DESIGN.md` — APPROVED 2026-09-02.** The owner asked
+  what the § 10 cost-neutrality contract entails (it was written by an agent from the
+  2026-09-02 conversation and labelled "owner additions"); the answer is recorded in the
+  (P18.7) session note. The bar for (INV.1): flag OFF must be inert on wall time and
+  allocation as well as on `cost_gate.py`; flag ON is MEASURED on both program shapes
+  before any later stage is priced.
 
 
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
@@ -774,14 +809,15 @@ Owner decisions 2026-09-02:
   types; (4) run TypeScript as JVM bytecode (KIR). Drop "drop-in replacement for tsc" as
   the lead. Keep every measured number and "Honest limits" verbatim.
 
-- [ ] **(LIC.2) BLOCKED-PENDING-USER — THE ROOT POM DECLARES "The Apache License, Version
-  2.0" WHILE THE PROJECT IS `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`
-  (build.gradle.kts, `subprojects` → `pom` → `licenses`).** Found during (LIC.1); worse than
-  the README drift because it is the metadata Maven Central would publish. Untouched because
-  build-system changes are Guardrail-gated. PROPOSAL: set `name` to the SPDX expression,
-  `url` to the repo's LICENSE, and add a second `license` entry pointing at
-  LICENSE-EXCEPTION, before any publish. Nothing is published yet, so no artifact is wrong
-  today.
+- [x] **(LIC.2) DONE 2026-09-02 (owner-approved 2026-09-02, the proposed two-entry shape) — THE ROOT
+  POM DECLARED "The Apache License, Version 2.0" WHILE THE PROJECT IS `AGPL-3.0-only WITH
+  LicenseRef-xtsc-output-exception`** (build.gradle.kts, `subprojects` → `pom` → `licenses`).
+  Found during (LIC.1); worse than the README drift because it is the metadata Maven Central
+  would publish. Landed: the first `license` entry names the SPDX expression with `url` at
+  the repo's `LICENSE` (main branch), a second entry names the Output Exception with `url` at
+  `LICENSE-EXCEPTION`, both `distribution = "repo"`. Verified by generating the core JVM POM
+  (`generatePomFileForJvmPublication`) and reading its `<licenses>` block. Nothing was
+  published under the wrong metadata.
 
 - [x] **(LIC.3) DONE 2026-09-02 — CONTRIBUTING.md (owner decision 2026-09-02, recorded in § Approvals above,
   where the owner labels it "(LIC.2)" — queued as (LIC.3) here because the (LIC.2) queue
