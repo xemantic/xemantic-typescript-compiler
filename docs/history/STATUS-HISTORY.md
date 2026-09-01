@@ -1,3 +1,60 @@
+**(INC.81) — A LIST PER KEY FOR 9,401 KEYS THAT NEVER GOT A SECOND ENTRY, AND A REFUTED
+ROUND-471 HYPOTHESIS (2026-08-31).** `Checker.enclosingImportIndex` is **4.7 ms** of an 87 ms
+per-keystroke query and NO queue item had ever named it — it surfaced only from re-taking the
+ranking after (INC.78)/(INC.79)/(INC.80), which is what (INC.57)'s law asks for.
+**CENSUSED BEFORE ANYTHING WAS DESIGNED:** the build inserts **9,401 specifiers under 9,401
+DISTINCT keys**, so every `getOrPut` misses and every one allocated a `MutableList` and a
+`Pair` — and **`multiFileKeys=0`**, i.e. not one key is reached from two files, so the
+whole-program structural reach matches nothing on a real project.
+**THE OBVIOUS HYPOTHESIS WAS MEASURED AND REFUTED.** The key is an AST *data class*, so
+`hashCode` recurses both Identifiers and both comment lists (round 471). Priced in ONE
+timestamp pair over a second pass: **76.5 ns each, 0.72 ms — 14% of the row**. The walk is
+~1.0 ms and **~3.4 ms is the insert plus the two allocations**. So the key is left alone (its
+structural semantics are load-bearing) and only the REPRESENTATION changed: the `Pair` itself
+for the one-entry case, promoted to a list on a second claim, map presized.
+**MEASURED** with two class dirs differing only in this, rotated across processes: **4.60 ->
+3.17 ms**, after winning 3/3 batches in both directions with NON-OVERLAPPING ranges, and the
+population census identical in both arms.
+**THE PIN EXISTS BECAUSE THE CENSUS SAYS NOTHING REACHES THE PROMOTION** — `multiFileKeys=0`
+is precisely that statement — so it takes a fixture, and two BYTE-IDENTICAL importers are one
+(`ImportSpecifier`'s components include `pos`/`end`, so the same import at the same offsets in
+two files IS one key). Two ablation arms, each reddening a DIFFERENT pin.
+**GATES.** Suite **16,624 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+**RESIDUE REFUSED WITH REASONS:** the walk IS the index's definition, and the hash cannot move
+without changing a key whose structural semantics the replaced scan fixes.
+
+**(INC.80) — JOINING A PATH BY ARITHMETIC, AND THE TWO-DRAW READ THAT NEARLY REFUTED IT
+(2026-08-31).** `PathUtil.join(base, part)` built `"$base/$part"` and normalized it — and for
+a module specifier that is exactly the case `isNormalized` must refuse (a `..` segment), so
+(INC.68)'s fast path could never help it and the general body allocates a `split` list, a
+`String` per segment, an `ArrayDeque` and a `joinToString` builder: **3.4-4.1 ms over 4,701
+calls** in the crawl's specifier resolution. Counting the leading `..`, dropping that many
+segments off the base with `lastIndexOf` and concatenating is **131-136 ns** — priced as a
+probe arm and checked against the general body on all 4,701 real pairs BEFORE it was built.
+**THE MEASUREMENT IS THE PART WORTH READING.** Two draws of the row said NOTHING (6.26/7.22
+before, 6.22/7.45 after) and the refutation was already being written. **Six draws per arm,
+ROTATED ACROSS PROCESSES over two class dirs differing only in this file: 6.41 -> 4.95 ms at
+the median, the after arm winning in ALL THREE batches and BOTH rotation directions.**
+(INC.68)'s law bites in this direction too — an unrotated pair cannot see a 23% change in the
+very row it measures.
+**AND THE FIRST EXPLANATION WAS REFUTED RATHER THAN ASSUMED:** the natural story (the
+allocating arm pays GC the build never pays, round 801) is wrong — with a 2 GB young gen the
+allocating arm got SLOWER (873 -> 1,264 ns) and so did the arithmetic one (131 -> 257), 20
+young pauses in the whole process.
+**RECEIPTS:** `pathNormalizeCalls` **11,935 -> 9,577** and every remaining call takes the
+already-normalized path — a floor build performs **ZERO allocating normalizations, down from
+2,358**.
+**PINS** are a DIFFERENTIAL against the general body over a 12-base x 25-part grid ((CFG.1): a
+wrong join names a different FILE and nothing here notices). **It caught its own defect on the
+first run** — joining at the ROOT spelled `//dep`, a base the 4,701-pair fixture population
+does not contain and the adversarial grid does. Four ablation arms; the no-fast-path arm
+reddens ONLY the regime pin.
+**GATES.** Suite **16,622 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+**SUCCESSOR:** `dirname` + the memo key at **~1.5 ms over 4,701 calls** — the crawl loop knows
+the importer's directory once per FILE and re-derives it per SPECIFIER.
+
 **(INC.79) — THE CRAWL ASKED THE FILESYSTEM ABOUT FILES THE GLOB HAD ALREADY LISTED
 (2026-08-31).** (INC.73)(a) refused this row's syscall half by arithmetic — "2,351 distinct
 resolutions at exactly one `exists` each, so ~2.6 ms is irreducible". **That is true of the
