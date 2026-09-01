@@ -1,9 +1,10 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,030** lines (was 191,155 at the metric's creation;
-2 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
-for both). Reference points:
+extraction):** `Checker.kt` **190,771** lines (was 191,155 at the metric's creation;
+3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
+for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
+checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
@@ -17,7 +18,9 @@ metadata-compiles the output with zero checker diagnostics (externals 64/0; full
 16,815/0/3). (TEST.1) the "order-sensitive" `ProjectTrustedFilesystemTest` control was a
 DATA RACE in the test's own `CountingVfs` under the crawl's 16 concurrent readers (old
 wrapper: 12,880 of 16,000 threaded reads counted); atomics + a CAS-swapped per-path map,
-`CountingVfsConcurrencyTest` reddens the old wrapper (full suite 16,816/0/3).
+`CountingVfsConcurrencyTest` reddens the old wrapper (full suite 16,816/0/3). (INV.0) step 3:
+`TypeInstantiator` extracted (the instantiation seam, ~290 lines verbatim, `Checker.kt`
+191,030 → 190,771; ledger row 3 with the first NON-none ambient surface; suite 16,819/0/3 byte-identical, cost_gate +0.00%, ab −0.81% NOISE-DOMINATED, JFR alloc unchanged, the 10 B hop `inline (hot)`).
 
 **(P18.5) — DONE (2026-09-02).** Owner additions applied ((INV.0) merged with
 receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,

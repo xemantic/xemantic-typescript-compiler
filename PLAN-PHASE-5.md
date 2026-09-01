@@ -95,6 +95,31 @@ code; the wrapper it grades is the common one), red against the old wrapper, gre
 construction against the new. Lesson recorded in CLAUDE.md: a counting Vfs under the crawl
 is a concurrent instrument, and a count pin's flake is a race before it is an order.
 
+**(INV.0) STEP 3 — `TypeInstantiator`, THE INSTANTIATION SEAM, AND THE FIRST LEDGER ROW
+THAT IS HONEST ABOUT A NON-EMPTY AMBIENT SURFACE** (`Checker.kt` 191,030 → 190,771; ledger
+row 3; suite 16,819/0/3 byte-identical, +3 mapper pins; RECEIPTS: cost_gate +0.00% on every counter — the control; ab-interleaved 6 pairs −0.81% B-wins-3/6 NOISE-DOMINATED, i.e. no wall effect; JFR allocation 1,903 vs 1,999 samples, same leaf families, no new frame; PrintInlining reads the 10-byte `Checker::instantiateType` hop `inline` ×55 / `inline (hot)` ×32 and refuses it only at 20 callers that are cold or already at `DesiredMethodLimit`, the `instantiateSignature` hop `inline` ×15, the fn-aware hop `inline (hot)` ×4, while the 1,265-byte body reads exactly what the 1,241-byte pre-split body read (`callee is too large` ×81 in BOTH arms — instantiation was never an inlined leaf); the three standing hot sites row-for-row identical; core `--rerun` compile 79.2 → 80.6 s (run 2), flat. Measurement-harness note, second session running: the background task runner KILLS a silent long-running receipt command at ~1 minute (twice: one A/B pair each time), where step 1 saw ~4.5 min — the A/B, the JFR pair and the inlining pair each ran in the FOREGROUND under the 10-minute tool timeout instead, one JVM at a time, and completed). Why this seam third: the owner's core order names name resolution and
+`getTypeOfSymbol`/`getTypeOfExpression` first, and those are exactly the families whose
+ambient surface is the whole checker (`currentLocalTypes`, the cta frames, the per-file
+scopes, the write gates) — extracting them is Stage 3's work, not a verbatim move. The
+instantiation family is the next seam whose ambient reads can be COUNTED on one hand: a
+census of every call name in the 291-line region found four checker members
+(`getTypeOfSymbol`, `getUnionType`, `getIntersectionType`, `getOrInternReference`) and
+stdlib, nothing else. So the collaborator takes the checker (final class, direct calls),
+the `symbolTypes` table and the interner as constructor inputs, its ten functions moved
+verbatim with those four calls re-pointed, the checker keeps one-line private delegations
+at the seam (the hops the inlining receipt prices), `TypeMapper` became a file-level
+`fun interface` (the checker's six ad-hoc mapper lambdas are byte-identical, they merely
+name a top-level type now) and `createTypeMapper` — a pure function — became file-level
+and pinned without a checker (`TypeInstantiatorTest`: index, identity, a structurally
+identical twin parameter NOT mapped). Three checker members went `private` → `internal`
+for the collaborator to reach them; the ledger row records them as the debt a later
+stage pays (an instantiator taking a `TypeResolver` and a `TypeNormalizer` as inputs
+would read "none"). **The gotcha that bit while doing it**: a checker-side private
+delegation named `createTypeMapper` calling a top-level `createTypeMapper` recurses into
+ITSELF (a member wins name resolution over a same-named top-level function), so the
+delegation was deleted rather than kept — the 21 call sites resolve to the file-level
+function directly.
+
 ### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
 
 **Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
@@ -955,8 +980,13 @@ Owner decisions 2026-09-02:
   proposal — implementation does NOT start in the session that writes the design.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
-  surface NONE) DONE 2026-09-02, ledger row 1; next seams per the order: name resolution,
-  getTypeOfSymbol/getTypeOfExpression, relations, instantiation, signatures, flow.**
+  surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
+  `TypeRelationCache.kt`) ledger row 2; step 3 (`TypeInstantiator` — the instantiation
+  seam, ambient surface `getTypeOfSymbol` + union/intersection normalization reads and a
+  `symbolTypes` write, stated) DONE 2026-09-02, ledger row 3, `Checker.kt` 190,771; next
+  seams per the order: name resolution, getTypeOfSymbol/getTypeOfExpression (Stage-3-shaped
+  — their ambient IS the checker), relations (the relater's algorithm out of
+  `checkTypeRelatedTo` into `TypeRelationCache.kt`'s seam), signatures, flow.**
   **SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
   `docs/INVERSION-DESIGN.md` NAMES (owner additions 2026-09-02 MERGED into the item
   (INV.D)/P18.0 had already queued, per the directive's own merge rule; moved here to sit
