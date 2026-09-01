@@ -100,6 +100,26 @@ receipt script was KILLED mid-batch by the task runner (~4.5 min) — chunked re
 (ab / JFR / inlining as separate background commands) completed cleanly; nothing in the
 tree was at risk because the receipts are read-only over snapshotted class dirs.
 
+**(API.18) LANDED — THE FILE-FINAL TOKEN, HEALED BY OWNERSHIP RATHER THAN SPAN
+ARITHMETIC** (suite 16,791/0/3; -lsp 58/0 with the recorded-edge pin FLIPPED to the healed
+assertion; -project +9 pins in `FileFinalTokenTest` + the shape admitted to
+`TokenIndexGateTest`). The two reverted attempts' analysis held — a container and an
+abutter are indistinguishable by `(pos, rawEnd)` at EOF — and the fix honors it: a
+DESCENT over RAW ends computes the final token's owner chain (last-match per level, so an
+ASI sibling whose raw end overshoots ONTO the token loses to the true owner; the chain
+counts only when its leaf STARTS at the token's start — an identifier, literal or keyword
+does, a closing bracket or an abutter never can), and `realEndOf` consults it by IDENTITY
+(packed `(pos,end)` key prefilter + `===` confirm, because a parent and first child share
+both coordinates). With owners' exact ends accepted, the ordinary `pathAt` descent and
+all three `TokenIndexInvariants` rules (SPAN_IS_EXACT / REACHABLE / PATH_NESTS) heal with
+NO carve-outs — the item's "the fix lives in pathAt's descent" is honored in substance:
+the descent DECIDES, `realEndOf` consults. Punctuation-final files and dangling-dot
+recovery keep today's conservative answers, pinned as such. **A latent flake surfaced and
+is queued as (TEST.1)**: `ProjectTrustedFilesystemTest`'s negative control read
+`afterFirst == 0` in the two-module filtered run, green alone and in the full suite —
+round 914's order-sensitivity family, pre-existing (the failing pin counts Vfs reads,
+which nothing in this change touches).
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -1010,7 +1030,7 @@ Owner decisions 2026-09-02:
   `docs/perf/incremental-vs-tsgo.md`, REPLACING the CLI table (DOC.1) retitled. This is
   the number the previous comparison should have been.
 
-- [ ] **(API.18) A FILE-FINAL TOKEN IS UNREACHABLE BY EVERY `-project` POSITION LOOKUP
+- [x] **(API.18) DONE 2026-09-02 ((P18.5) note: ownership of the file-final token decided by a raw-end last-match descent whose leaf must START at the token — consulted by `realEndOf`, so the ordinary `pathAt` descent and all three invariant rules heal with no carve-outs; abutters and punctuation-final files keep today's conservative answers) — A FILE-FINAL TOKEN IS UNREACHABLE BY EVERY `-project` POSITION LOOKUP
   WHEN THE FILE LACKS A TRAILING NEWLINE — found by (LSP.1), pinned as a recorded edge in
   `XtscLspServerTest`; TWO `realEndOf`-LOCAL FIXES WERE BUILT AND REVERTED 2026-09-01, AND
   THE ANALYSIS SAYS NO SPAN-ARITHMETIC FIX EXISTS.** The defect: the file-final token's
@@ -1036,6 +1056,16 @@ Owner decisions 2026-09-02:
   -lsp module suites (five EOF-population pins redden on a wrong cut: CompletionAnchor,
   ProjectCompletion END-of-buffer, SignatureAnchor open-arg-list, the LSP touch rule, the
   recorded edge), `TokenIndexInvariants`, `scripts/round920-token-gate.sh`.
+
+- [ ] **(TEST.1) `ProjectTrustedFilesystemTest`'s NEGATIVE CONTROL IS ORDER-SENSITIVE
+  (found 2026-09-02): green in the full suite and alone (19/0), red in a two-module
+  filtered run — `afterFirst == 0`, i.e. the FIRST build never read `b.ts` through the
+  counting wrapper at all.** Some cross-class process-global state lets a first build skip
+  the read; suspects, in round-914's family: `CrawlParseCache` (process-global, (INC.93))
+  and the (INC.85)/(INC.56) resident-content path vs the wrapper's counted method set
+  ((INC.76)'s defaulted-member trap — does `CountingVfs` intercept `readTextIfResident`?).
+  Diagnose the mechanism before trusting any new count pin in that class; the fix is
+  probably counting at the method the crawl actually calls.
 
 - [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
   xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written

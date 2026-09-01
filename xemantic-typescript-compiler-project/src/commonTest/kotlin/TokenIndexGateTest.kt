@@ -157,6 +157,18 @@ class TokenIndexGateTest {
         "const crlf = 1;\r\nconst lf = 2;\nconst cr = 3;\rconst afterAll = crlf + lf + cr;\n"
 
     @Test
+    fun `a file ending in its final identifier with no trailing newline passes every rule`() {
+        // (API.18)'s population, admitted to the gate the day it was healed:
+        // before the owner-chain fix this shape violated
+        // IDENTIFIER_SPAN_IS_EXACT, IDENTIFIER_IS_REACHABLE and PATH_NESTS at
+        // once - the whole containing chain's raw ends are EXACT (the EOF
+        // lookahead is zero-width), and the strictly-below snap lost the final
+        // token from every span.
+        val text = "const abc = 1;\nconst tail = abc"
+        assert(violationsOf("/proj/src/eof.ts", text).isEmpty())
+    }
+
+    @Test
     fun `the index holds on every lexical shape a context-free scan can get wrong`() {
         assert(violationsOf("/proj/src/shapes.ts", hardShapes).isEmpty())
     }

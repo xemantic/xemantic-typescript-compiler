@@ -441,6 +441,72 @@ internal class SourceIndex private constructor(
     }
 
     /**
+     * (API.18) The file-final REAL token's end, or -1 when the file has none
+     * (an empty file scans only the zero-width end-of-file token). Computed
+     * with [finalTokenOwnerByKey] on first ask; -2 means not yet computed.
+     */
+    private var finalTokenEnd = -2
+
+    /**
+     * (API.18) The nodes that OWN the file-final real token, keyed by their
+     * packed `(pos shl 32) or end` for an O(1) probe and confirmed by IDENTITY
+     * (a parent and its first child can share both coordinates, so several
+     * owners may share one key — and an ABUTTING node can share a key with an
+     * owner, which is exactly the ambiguity the identity list resolves).
+     *
+     * ## Why ownership needs a descent, not span arithmetic
+     *
+     * Only the zero-width EOF lookahead produces an EXACT raw `end`, so the
+     * file-final token is the one place `realEndOf`'s strictly-below snap is
+     * wrong — and the (API.18) analysis measured that no span test can repair
+     * it: a true container of the final token and a node merely abutting it
+     * are indistinguishable by `(pos, rawEnd)` alone (`ex` and its enclosing
+     * property access in `…ex.` share BOTH). What discriminates is structure,
+     * read by a descent over RAW ends: at each level the LAST child whose
+     * `[pos, end]` covers the whole token wins (an earlier sibling whose raw
+     * end merely overshoots ONTO the token — `foo` in an ASI-separated
+     * `foo⏎bar` — loses to the later true owner), and the chain counts only
+     * when its leaf STARTS at the token's start. An identifier, a literal or
+     * a keyword leaf starts there; a closing bracket never does, and neither
+     * does an abutter — so a punctuation-final file computes an EMPTY chain
+     * and keeps today's conservative answers.
+     */
+    private var finalTokenOwnerByKey: HashMap<Long, ArrayList<Node>>? = null
+
+    private fun finalTokenOwners(): HashMap<Long, ArrayList<Node>> {
+        finalTokenOwnerByKey?.let { return it }
+        val byKey = HashMap<Long, ArrayList<Node>>()
+        var index = tokenKinds.size - 1
+        while (index >= 0 && tokenKinds[index] == SyntaxKind.EndOfFile) index--
+        val ts = if (index >= 0) tokenStarts[index] else -1
+        val te = if (index >= 0) tokenEnds[index] else -1
+        if (te > ts) {
+            val path = ArrayList<Node>()
+            var current: Node = sourceFile
+            while (true) {
+                var next: Node? = null
+                forEachChild(current) { child ->
+                    if (child.pos <= ts && te <= child.end && child.pos < child.end) {
+                        next = child
+                    }
+                }
+                val chosen = next ?: break
+                path.add(chosen)
+                current = chosen
+            }
+            if (path.lastOrNull()?.pos == ts) {
+                for (owner in path) {
+                    val key = (owner.pos.toLong() shl 32) or (owner.end.toLong() and 0xFFFFFFFFL)
+                    byKey.getOrPut(key) { ArrayList() }.add(owner)
+                }
+            }
+        }
+        finalTokenEnd = te
+        finalTokenOwnerByKey = byKey
+        return byKey
+    }
+
+    /**
      * The offset one past [node]'s last character — the number `Node.end` is
      * commonly mistaken for.
      *
@@ -448,6 +514,16 @@ internal class SourceIndex private constructor(
      * token following it is the zero-width end-of-file; it is answered from the
      * text length directly rather than through the search, which would otherwise
      * snap it back to the last real token and lose the file's trailing trivia.
+     *
+     * (API.18) A node that OWNS the file-final real token also has an exact
+     * `end` — the EOF lookahead is zero-width for the whole chain above the
+     * final token when the file carries no trailing trivia — and snapping it
+     * strictly below loses the token from every ancestor's span at once, which
+     * is what made a file-final identifier unreachable by every position
+     * lookup. Ownership is decided by [finalTokenOwnerByKey]'s descent, never
+     * by the span itself; a node whose raw end merely equals the final token's
+     * end without owning it (`ex` in `…ex.`, `return ex` before a closing
+     * brace) keeps the snap.
      *
      * Clamped to at least `node.pos`, so a node the search cannot place (a
      * zero-width recovery node, or one inside a region the context-free scan
@@ -457,6 +533,12 @@ internal class SourceIndex private constructor(
     fun realEndOf(node: Node): Int {
         if ((node as NodeBase).kindId == NodeKind.SOURCE_FILE) return textLength
         val bound = node.end
+        val owners = finalTokenOwners()
+        if (bound == finalTokenEnd) {
+            val key = (node.pos.toLong() shl 32) or (bound.toLong() and 0xFFFFFFFFL)
+            val sharers = owners[key]
+            if (sharers != null && sharers.any { it === node }) return bound
+        }
         // The greatest token end strictly below `bound`.
         var lo = 0
         var hi = tokenEnds.size - 1

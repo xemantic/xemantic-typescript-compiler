@@ -235,23 +235,27 @@ class XtscLspServerTest {
     }
 
     @Test
-    fun `a file-final identifier with no trailing newline hovers as null - a recorded -project edge`() {
-        // NOT a guarantee — a defect record, in `LanguageServiceStateTest`'s own
-        // idiom, so that a fix upstream is a deliberate inversion here rather
-        // than an accident nobody notices. `SourceIndex.realEndOf` snaps a
-        // node's raw `end` back to "the greatest token end STRICTLY below it";
-        // the last token of a file with no trailing trivia has an EXACT raw end
-        // (the EOF lookahead is zero-width), so the snap lands on the token
-        // BEFORE it and clamps to `pos` — an empty span no position lookup can
-        // enter. `quickInfoAt` therefore answers null ANYWHERE inside such an
-        // identifier, and the touch fallback cannot save the caret one past it
-        // either. A trailing newline widens the raw end past the token and
-        // restores every answer, which is what the touch-rule test above uses.
+    fun `a file-final identifier with no trailing newline hovers like any other - the healed -project edge`() {
+        // Until (API.18) landed this was the RECORDED-DEFECT inversion of the
+        // touch-rule test above: the last token of a file with no trailing
+        // trivia has an EXACT raw end (the EOF lookahead is zero-width),
+        // `SourceIndex.realEndOf`'s strictly-below snap truncated every
+        // containing span short of it, and `quickInfoAt` answered null
+        // ANYWHERE inside such an identifier. The fix decides ownership of the
+        // file-final token by a descent (`SourceIndex.finalTokenOwnerByKey`),
+        // so the hover must now answer exactly what the trailing-newline
+        // variant answers.
         val text = "const abc = 1;\nconst tail = abc"
         val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to text)
         val direct = Project.open("/proj", InMemoryVfs(vfsFiles))
         val insideFinal = direct.quickInfoAt(file, text.length - 2)
-        assert(insideFinal == null)
+        val healthyFiles = mapOf("/proj/tsconfig.json" to config, file to (text + "\n"))
+        val healthy = Project.open("/proj", InMemoryVfs(healthyFiles))
+        val healthyAnswer = healthy.quickInfoAt(file, text.length - 2)
+        assert(insideFinal != null)
+        assert(healthyAnswer != null)
+        val sameDisplay = insideFinal.displayString == healthyAnswer.displayString
+        assert(sameDisplay)
 
         val input = Buffer()
         writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
@@ -261,8 +265,8 @@ class XtscLspServerTest {
         )
         val output = Buffer()
         XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
-        val resultIsNull = readResponses(output)[2]?.get("result") is JsonNull
-        assert(resultIsNull)
+        val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
+        assert(value == insideFinal.displayString)
     }
 
     @Test
