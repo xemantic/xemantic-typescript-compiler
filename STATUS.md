@@ -1,5 +1,38 @@
 # Status
 
+**(INC.87)(a) — THE POST-CHECKER'S FILTER ROW IS 4.5 ms OF A KEYSTROKE AND 89% OF IT ANSWERS
+NOTHING; SPLITTING IT REFUTED ITS OWN SHAPE (2026-09-01).** (INC.86)(a) named
+`post-check diagnostic filters` — 4.22 ms of a 90 ms query and a row NO queue item had ever
+named. Split into three abutting sub-rows first, per (INC.65): **POST_DIAGS 4.507 -> 0.508 ms**,
+of which **TS2688+TS2209+isolatedDecls 3.296 -> 0.492**, the **`modulePreserve4` whole-program
+text scan 1.184 -> ABSENT (`calls` 1 -> 0)**, and the parse-cascade `removeAll` chain 0.0022 ->
+0.0017 as the untouched control. The three summed to 99.4% of the row.
+**THE OBVIOUS CANDIDATE WAS THE SMALLER MEMBER.** Reading the region, the eye lands on one
+unconditional whole-program TEXT scan sitting above the guard that is its only consumer — real,
+and 26%. The other 73% was `checkMissingTypesReferenceExports`' package.json pass, rooted at an
+alternation `(?:^|/)`, so `BnM.optimize` gives it no literal and it is attempted at EVERY
+POSITION of every file NAME — on a fixture with no `node_modules` at all, i.e. wholly to answer
+NO. Pre-gated on `endsWith("/package.json")`, EXACT because the pattern's own tail anchors
+there, regex kept live as the decider (round 792). The text scan is deferred behind a `lazy`
+with the cheap basename test moved in front of it — and it is paid TWICE per keystroke in the
+shipped design, since the (INC.17) recheck re-runs that very lambda.
+**NO WALL IS CLAIMED AND THE SAME RUN SAYS WHY:** WALL read 108 -> 88 ms while `initNanos` read
+**51.5 -> 77.9** on untouched code. One `--passTiming` draw is not a measurement ((INC.52)) and
+the query wall carries (INC.72)'s ±20 ms term. The receipt is a COUNT — the bracket lives INSIDE
+the `lazy`, so `calls == 0` IS the statement that the scan never ran.
+**BOTH PIN CLASSES WENT RED FIRST, BOTH INSTRUCTIVELY.** `ProjectCompiler` never puts a
+`package.json` into the program at all, so the TS2688 pin had to move to the multi-file harness
+— as an absence assertion it would have been green forever; and the count pin's fixture was
+named `b.ts`/`c.ts`, two of the twelve `modulePreserve4` basenames, so the scan correctly ran.
+That collision is now the POSITIVE control (round 790).
+**REFUSED, not shipped:** `init:evolvingArrayUseSiteWalks` (1.835 ms, five throwaway
+collections per file) — a rewrite was built and REVERTED, unpriceable and unpinnable locally.
+**(INC.86)(b) ANSWERED:** the init block is 418 rows, `rowsTo50pct=5`, tail of 363 rows worth
+**1.03 ms between them** — no plateau left.
+**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%, `output.errors`
+46; `huge_methods.py --fail-over 0` clean; **two-binary 8-profile grid added=0 removed=0 on all
+eight**, its before-arm control verified non-blind.
+
 **(INC.85) — A WAVE THAT CANNOT BLOCK IS DRAINED WITHOUT THE 16-WAY MERGE, AND THE GATE IS
 DEFAULTED OFF (2026-09-01).** (INC.84) measured the crawl's `flatMapMerge` pipeline at
 **0.58/0.60/0.60x effective parallelism** on the arm an IntelliJ-class host runs — 16 workers
@@ -128,32 +161,3 @@ reddens ONLY the regime pin.
 `huge_methods.py --fail-over 0` clean.
 **SUCCESSOR:** `dirname` + the memo key at **~1.5 ms over 4,701 calls** — the crawl loop knows
 the importer's directory once per FILE and re-derives it per SPECIFIER.
-
-**(INC.79) — THE CRAWL ASKED THE FILESYSTEM ABOUT FILES THE GLOB HAD ALREADY LISTED
-(2026-08-31).** (INC.73)(a) refused this row's syscall half by arithmetic — "2,351 distinct
-resolutions at exactly one `exists` each, so ~2.6 ms is irreducible". **That is true of the
-resolver in isolation and false of the BUILD**: the root-file glob has already listed every
-directory of the project and proved which files are there, off the same `Vfs`, ~20 ms earlier
-in the same build. A per-component refusal can be right about its component and wrong about
-the program, and what says so is asking who else already knows the answer.
-**DECOMPOSED FIRST** (one binary, ABBA-rotated, population checked against the build's own
-4,701 specifiers / 2,351 distinct): `resolve` **9.4-9.8 ms**, of which `existsOnly` **4.4-4.6**
-(2,350 probes at ~1.9 us), `joinOnly` **3.7-3.9**, `dirnameOnly` 0.8, `keyOnly` 1.2,
-`bookkeeping` 0.5-0.8 — so the syscalls are the largest piece and the path arithmetic the
-next, neither of which the row itself could say.
-`ModuleResolver` now memoizes `exists`/`isDirectory` for the build and is SEEDED from the
-glob. **It adds no assumption**: (INC.65) already memoizes the whole ANSWER per
-`(importerDir, specifier)`, strictly stronger, over the same one-build lifetime. **The seed
-may only say YES** — a file can exist and be excluded from the program.
-**MEASURED:** the row **10.2-12.0 -> 5.8-6.5 ms**, and the receipt is the count the build
-prints — **2,351 questions, 0 reached the filesystem**.
-**THE ABLATION FOUND THE PIN SET INCOMPLETE, WHICH IS WHAT IT IS FOR:** keying the memo by
-BASENAME reddened only the COUNT pins, because every value pin happened to ask about names
-existing on both sides — a wrong PROGRAM, silent per (CFG.1). The missing pin was added and
-b2 then reddens it. Three arms, three distinct red sets (4 / 3 / 3).
-**GATES.** Suite **16,618 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
-`huge_methods.py --fail-over 0` clean.
-**SUCCESSOR, measured and named:** `PathUtil.join`/`normalize` at ~810 ns x 4,701
-(**3.7-3.9 ms**, a `normalize` that must process `..` segments, which (INC.68)'s fast path
-cannot help) and `dirname` + the memo key at **~1.5 ms**, which the crawl loop could hoist
-per FILE.

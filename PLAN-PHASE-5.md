@@ -20,6 +20,91 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (INC.87)(a) — the post-checker's filter row is 4.5 ms of a keystroke, and 89% of it answers nothing
+
+**(INC.86)(a) NAMED A ROW NO QUEUE ITEM HAD EVER NAMED, AND SPLITTING IT REFUTED THE OBVIOUS
+READING OF IT.** `FrontEnd.POST_DIAGS` now decomposes into three abutting sub-rows
+(`POST_MP4` / `POST_SUPPRESS` / `POST_APPEND`), per (INC.65)'s law that a row is split before
+it is priced. Measured on the 2,401-file `dom` fixture, trusted arm, medians over six
+instrumented draws:
+
+```
+POST_DIAGS                                   4.507 -> 0.508 ms
+  of which TS2688 + TS2209 + isolatedDecls   3.296 -> 0.492
+  of which the modulePreserve4 scan          1.184 -> ABSENT   (calls 1 -> 0)
+  of which the parse-cascade removeAll       0.0022 -> 0.0017  (control, untouched)
+```
+
+The three abut by construction and summed to **99.4%** of the row before the change.
+
+**THE COST WAS NOT WHERE THE REGION'S SHAPE SAID IT WAS.** Reading the code, the candidate is
+obvious: one unconditional WHOLE-PROGRAM TEXT SCAN (`hasModulePreserve4`) sitting above the
+guard that is its only consumer. That scan is real and it is the SMALLER member. The larger is
+`checkMissingTypesReferenceExports`' package.json pass, whose pattern is rooted at an
+alternation `(?:^|/)`, so `BnM.optimize` gives it no literal prefix and it is attempted at
+**every position of every file name in the program** — on a fixture that contains no
+`node_modules` at all, i.e. the whole 3.30 ms was spent to answer NO. The analysis agent that
+mapped the region explicitly REFUSED to attribute the row without measuring, on the grounds
+that the same row reads 1.88 ms on tsc's 10 MB profile against 4.22 here — an inversion a
+text-scan explanation cannot produce. It was right to refuse.
+
+**THE TWO FIXES, both answer-preserving by construction.** The package.json pass is pre-gated
+on `endsWith("/package.json")`, which is EXACT rather than heuristic — the pattern's own tail
+is `/package\.json$`, so a name it can match necessarily ends there — with the regex kept LIVE
+as the decider for whatever survives (round 792's shape); both patterns are hoisted out of the
+per-call body, where they were recompiled on every compile. And `hasModulePreserve4` is
+deferred behind a `lazy`, with the cheap basename test moved in front of it in `isPinFile`
+(`&&` short-circuits and both operands are pure). The second one is paid TWICE per keystroke
+in the shipped design, because the (INC.17) recheck path re-runs this very lambda.
+
+**NO WALL FIGURE IS CLAIMED, AND THE SAME RUN IS WHY.** `WALL` read 108 -> 88 ms, and in that
+same pair of runs `initNanos` read **51.5 -> 77.9 ms** on code this round does not touch. One
+`--passTiming` draw is not a measurement at floor scale ((INC.52)) and the query wall carries
+(INC.72)'s ±20 ms concurrent term. The receipt is therefore a COUNT and is exact: the timing
+bracket for the deferred scan lives INSIDE the `lazy { }`, so `calls == 0` is the statement
+that it never ran.
+
+**BOTH NEW PIN CLASSES WENT RED ON THEIR FIRST RUN, AND BOTH FOR REASONS WORTH KEEPING.**
+(i) The TS2688 positive control did not fire — because **`ProjectCompiler` never puts a
+`package.json` into the program at all**; its own comment says the nearest enclosing manifest
+"is not one of the program's inputs". So the mechanism is reachable only through the
+multi-file `@Filename` harness, and the first draft read `programFiles=[index.ts]` with an
+empty diagnostic list. Written as an ABSENCE assertion it would have been green forever.
+(ii) The count pin read `POST_MP4 == 1` where it demanded 0 — because the fixture was named
+`b.ts` / `c.ts`, which are **two of the twelve `modulePreserve4` basenames**, so the cheap
+test matched and the scan correctly ran. CLAUDE.md's collider rule (`top`, `name`, `Text`,
+`Event`) in a new costume. That collision is now the POSITIVE control, which is what turns the
+two zeros from a possibly-dead probe into evidence (round 790).
+
+**REFUSED THIS ROUND rather than shipped:** `init:evolvingArrayUseSiteWalks` builds five
+throwaway collections per file and measures **1.835 ms**. A one-loop rewrite was built and
+REVERTED — it can be neither priced (the pass table moved +51% in the same run) nor pinned
+locally (the pass emits nothing; it only sets `flowDepthTripped`), and round 801 already
+measured that removing 367,189 allocations is worth 0 ms.
+
+**AND (INC.86)(b) IS ANSWERED BY ITS OWN DISTRIBUTION.** `Inc56TrustedFloorMain` printed a
+top-15; it now prints every row plus a bucket census, because (INC.69) records that a top-N
+cannot show a plateau. The init block is **418 rows, `rowsTo50pct=5`, `rowsTo90pct=22`**, and
+the 363-row tail below 10 µs is **1.03 ms in total** — so there is no plateau left to harvest
+there, (INC.69) having already taken the one that existed. Its largest row
+(`init:buildFileLocalTypeMaps`, 16.5 ms) is refused with its price by (INC.77), and rows 2-4
+are refused by (INC.73)(b) and (INC.7) batch 4.
+
+**GATES.** Suite **16,653 / 0 / 3** (+8, this round's pins); `cost_gate.py` exit 0 with every
+counter +0.00% and `output.errors` 46; `huge_methods.py --fail-over 0` clean; **the two-binary
+8-profile grid `added=0 removed=0` on all eight**, its before-arm carrying a positive control
+that the class dir genuinely lacks `POST_MP4` (verified afterwards to be non-blind: `javap`
+answers, and the restored binary does contain it).
+
+**SUCCESSOR, per the WORK ORDER note.** The per-keystroke query must be RE-DECOMPOSED before
+anything else is opened ((INC.57)'s law — the ranking has changed after every round in this
+arc). What is known going in: the post-checker row is now ~2.6 ms and its filter half ~0.5,
+so the front end and the post-checker are both spent; the init block is ~43-52 ms and is
+concentrated in five refused rows; and the one unrefused member is
+`init:evolvingArrayUseSiteWalks` (1.835 ms), which needs an instrument that can price it —
+two class dirs and an ABBA rotation, not a single pass-timing draw.
+
+
 ### Round (INC.85) — a wave that cannot block is drained without the 16-way merge, and the gate is defaulted OFF
 
 **(INC.84) MEASURED THE PIPELINE AT 0.6x EFFECTIVE PARALLELISM ON THE ARM AN IDE RUNS**, and
@@ -2871,6 +2956,30 @@ a residue no sub-row named.**
   fixture. The residue is refused with reasons: the walk IS the index's definition and the hash
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
+
+- [ ] **(INC.87)(b) `init:evolvingArrayUseSiteWalks` — THE ONE UNREFUSED WHOLE-PROGRAM
+  `init:*` PASS, 1.835 ms, AND IT NEEDS AN INSTRUMENT BEFORE IT NEEDS A FIX (2026-09-01).**
+  Per file it builds FIVE throwaway collections (`filterIsInstance` -> `flatMap` -> `filter`
+  -> `mapNotNull` -> `toSet`) and discards all five for every file declaring no top-level
+  `x = []`, which is nearly all of them. **A one-loop rewrite was BUILT AND REVERTED in
+  (INC.87)(a)**, not because it was wrong but because it could be neither priced nor pinned:
+  the pass-timing table moved **+51% in the same run** that showed it 1.835 -> 1.602, and the
+  pass EMITS NOTHING (it only sets `flowDepthTripped`), so no local value pin can see it and
+  the corpus is the only value gate. Round 801's law bounds the prize: ~12,000 allocations is
+  ~0.6-1.8 ms at 50-150 ns, i.e. right at the floor. **What it needs is two class dirs and an
+  ABBA rotation across processes** ((INC.80)'s instrument), or a deterministic count of
+  collections built. Do not re-land it off a single draw.
+
+- [x] **(INC.86) DONE 2026-09-01 — BOTH CANDIDATES ANSWERED.** (a) LANDED as (INC.87)(a):
+  `POST_DIAGS` **4.507 -> 0.508 ms**, its TS2688 member 3.296 -> 0.492 and the
+  `modulePreserve4` scan gone entirely (`calls` 1 -> 0). The split refuted the row's own
+  shape — the whole-program TEXT scan is the SMALLER member; the larger was an
+  alternation-rooted regex over every file NAME. (b) ANSWERED by taking the distribution the
+  entry asked for: 418 rows, `rowsTo50pct=5`, `rowsTo90pct=22`, tail of 363 rows worth
+  **1.03 ms between them** — no plateau, and the five rows carrying half of it are each
+  already refused with a price. `Inc56TrustedFloorMain` now prints `PTALL`/`PTSHAPE`/
+  `PTBUCKET` instead of a top-15, per (INC.69).
+  ORIGINAL ENTRY BELOW.
 
 - [ ] **(INC.86) THE PER-KEYSTROKE QUERY RE-DECOMPOSED AFTER (INC.82)/(INC.85) — 90 ms, AND
   THE FRONT END IS NO LONGER WHERE THE QUERY IS (2026-09-01, trusted arm, 2,401-file `dom`

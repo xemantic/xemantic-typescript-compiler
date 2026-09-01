@@ -1,3 +1,32 @@
+**(INC.79) — THE CRAWL ASKED THE FILESYSTEM ABOUT FILES THE GLOB HAD ALREADY LISTED
+(2026-08-31).** (INC.73)(a) refused this row's syscall half by arithmetic — "2,351 distinct
+resolutions at exactly one `exists` each, so ~2.6 ms is irreducible". **That is true of the
+resolver in isolation and false of the BUILD**: the root-file glob has already listed every
+directory of the project and proved which files are there, off the same `Vfs`, ~20 ms earlier
+in the same build. A per-component refusal can be right about its component and wrong about
+the program, and what says so is asking who else already knows the answer.
+**DECOMPOSED FIRST** (one binary, ABBA-rotated, population checked against the build's own
+4,701 specifiers / 2,351 distinct): `resolve` **9.4-9.8 ms**, of which `existsOnly` **4.4-4.6**
+(2,350 probes at ~1.9 us), `joinOnly` **3.7-3.9**, `dirnameOnly` 0.8, `keyOnly` 1.2,
+`bookkeeping` 0.5-0.8 — so the syscalls are the largest piece and the path arithmetic the
+next, neither of which the row itself could say.
+`ModuleResolver` now memoizes `exists`/`isDirectory` for the build and is SEEDED from the
+glob. **It adds no assumption**: (INC.65) already memoizes the whole ANSWER per
+`(importerDir, specifier)`, strictly stronger, over the same one-build lifetime. **The seed
+may only say YES** — a file can exist and be excluded from the program.
+**MEASURED:** the row **10.2-12.0 -> 5.8-6.5 ms**, and the receipt is the count the build
+prints — **2,351 questions, 0 reached the filesystem**.
+**THE ABLATION FOUND THE PIN SET INCOMPLETE, WHICH IS WHAT IT IS FOR:** keying the memo by
+BASENAME reddened only the COUNT pins, because every value pin happened to ask about names
+existing on both sides — a wrong PROGRAM, silent per (CFG.1). The missing pin was added and
+b2 then reddens it. Three arms, three distinct red sets (4 / 3 / 3).
+**GATES.** Suite **16,618 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+**SUCCESSOR, measured and named:** `PathUtil.join`/`normalize` at ~810 ns x 4,701
+(**3.7-3.9 ms**, a `normalize` that must process `..` segments, which (INC.68)'s fast path
+cannot help) and `dirname` + the memo key at **~1.5 ms**, which the crawl loop could hoist
+per FILE.
+
 **(INC.56) — AN IntelliJ-CLASS HOST CAN SKIP THE RE-READ, AND THE ROW IT WAS AIMED AT WAS A
 *LOCATION* (2026-08-31).** Two opt-in halves in the embedding API: `Project.trustFilesystem`
 (the host promises the bytes of a file will not change without this project being told —
