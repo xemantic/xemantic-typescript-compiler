@@ -1,5 +1,9 @@
 # Status
 
+**Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
+extraction):** `Checker.kt` **191,155** lines. Reference points: tsc ≈ 50k lines (one
+file), tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10.
+
 **(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
 (2026-09-01).** In one session under the re-pointing directive: the directive persisted;
 licence strings aligned ((LIC.1), with (LIC.2) POM drift flagged BLOCKED-PENDING-USER); the

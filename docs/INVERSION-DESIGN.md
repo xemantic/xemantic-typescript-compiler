@@ -375,6 +375,8 @@ Each stage is many small commits; every commit passes the full corpus suite,
   input to every later stage, because it is the census of what must become explicit).
   Gates per commit: corpus byte-identical AND cost_gate 0.00%. Record core-module
   compile time before/after (the 110k-line single file is why BUILD.1 exists).
+  **The cost-neutrality contract (§ 10) governs every extraction — cost_gate 0.00% is a
+  control there, not evidence; the receipts are wall time, allocation, and inlining.**
 - **Stage 1 = the store, off by default** — the (INV.1) proposal below. FIRST
   SUB-STEP, one commit: the per-file `nodeTypeId` array alone, filled from the
   existing sink route behind a flag, plus the pin that PROVES it captures what
@@ -425,4 +427,28 @@ instrumentation item. This document is the bridge between the two.
 > recording cost on the compiler profile and the 2,401-file shape before any further
 > stage is priced. One commit. Implementation does NOT start until the owner approves
 > this item — (INV.D) is analysis-only by its own terms.
+## 10. Cost-neutrality contract (owner additions, 2026-09-02)
 
+The split (Stage 0 / (INV.0)) and every later stage are graded against this contract.
+`cost_gate.py` reads 0.00% for a pure split BY CONSTRUCTION — its counters count calls,
+and a split moves none — so it is a control, not evidence. The per-commit evidence is:
+`scripts/ab-interleaved.sh` wall time with win rate; a JFR allocation profile
+before/after (`scripts/aggregate_jfr.py`); `-XX:+UnlockDiagnosticVMOptions
+-XX:+PrintInlining` on `checkArgumentsAgainstSignature`, `getTypeOfExpression` and
+`isTypeAssignableTo`, confirming every new delegation hop reads `inline (hot)`; and
+core-module compile time before/after.
+
+- Collaborators are long-lived and final; interfaces on hot dispatch only with one
+  implementation loaded in production (Kotlin/Native interface dispatch is slower than
+  class dispatch — keep the corpus-on-native target in view).
+- Objects describing an instantiation (a TypeMapper) are created once per DISTINCT
+  instantiation and interned as the cache key — tsc's model.
+- Forbidden on hot paths: capturing lambdas as inputs, `by lazy`, boxing through
+  generic or nullable seams (`Map<Int,_>`, `Pair`, `Int?`, value classes in generic
+  position), `open` classes. The existing `IntKeyMap`/`LongKeyMap` stay the seam types.
+- Watch inlining depth (~15 levels) and frame size in the relation recursions;
+  re-check deep-stack headroom on the pathological corpus cases after each core
+  extraction.
+- Success metric for the inversion is SHRINKAGE: checker core line count as a
+  STATUS.md dashboard row. Reference points: tsc ≈ 50k lines (one file), tsgo 60,479
+  across 25 files, `Checker.kt` **191,155** today (`wc -l`, 2026-09-02).

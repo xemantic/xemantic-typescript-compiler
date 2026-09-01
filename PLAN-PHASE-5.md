@@ -25,6 +25,31 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
+
+**Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
+Checker.kt split was MERGED into the existing (INV.0) item per its own merge rule ((INV.D)
+had already queued it at P18.0) and the item moved to sit directly after (INV.D), ahead of
+the blocked (INV.1); what the merge added is the constructor discipline (FINAL classes,
+built once per Checker, per-node context as parameters) and the RECEIPT protocol —
+cost_gate 0.00% is a control for a pure split BY CONSTRUCTION, evidence is ab-interleaved
+wall+win-rate, a JFR allocation profile, PrintInlining on the three hot sites, and
+core-module compile time. (2) `docs/INVERSION-DESIGN.md` § 10 "Cost-neutrality contract"
+added (final collaborators; interned TypeMappers; forbidden hot-path shapes — capturing
+lambdas, `by lazy`, boxed seams, `open`; inlining-depth/deep-stack re-checks; SHRINKAGE as
+the success metric), with a pointer from § 6 Stage 0; the shrinkage row is now on
+STATUS.md (`Checker.kt` 191,155 lines, verified by `wc -l`). (3) CLAUDE.md gotcha on
+cost_gate's structural blindness to splits. (4) § Approvals recreated in the WORK ORDER
+preamble (the 2026-07-02 original was trimmed away; pointer to CLAUDE.md for the old
+pre-approvals) carrying the two 2026-09-02 owner decisions: the licence is
+`AGPL-3.0-only`, NOT `-or-later` (swept: no `-or-later` anywhere in README/docs — (LIC.1)
+held), and the CONTRIBUTING.md no-external-PRs statement. **Label collision handled, not
+hidden**: the owner labels the CONTRIBUTING decision "(LIC.2)" but the queue's (LIC.2) was
+already the POM-drift item — the deliverable is queued as (LIC.3), the POM item stays
+separately BLOCKED-PENDING-USER (the licence-string decision does not by itself approve a
+build.gradle.kts edit, which is Guardrail-gated). `docs/inputs/` does not exist, so there
+is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skipped.
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -784,6 +809,21 @@ B = (LSP.1), both new modules so they cannot conflict — while the main context
 merge per the workflow, run the corpus suite + cost_gate after the merge (new modules must move
 no counter), then continue top-to-bottom.
 
+**§ Approvals (owner decisions — do not re-open).** The 2026-07-02 pre-approvals
+(conformance-category adoption, the real-lib migration, the M5 native re-enable) and the
+2026-09-01 Phase 18 pre-approvals (two new modules, no new dependencies, `docs/reposition`
+for README positioning) are recorded in CLAUDE.md § Guardrails / § "AI agent mission".
+Owner decisions 2026-09-02:
+
+- **The licence is `AGPL-3.0-only` (NOT `-or-later`), decided 2026-09-01.** Rationale: the
+  sole rights holder can widen later; `-or-later` is irrevocable for every distributed
+  copy; the output exception is drafted against the fixed v3 text. **Any doc saying
+  `-or-later` is a defect.**
+- **(LIC.2) Until the contributor agreement exists, CONTRIBUTING.md states that external
+  pull requests cannot be merged; issues and reproductions are welcome. One commit.**
+  (Implementation queued as (LIC.3) below — the queue's (LIC.2) label was already held by
+  the POM-drift item, which remains a separate, still-blocked build-file change.)
+
 
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
@@ -815,6 +855,12 @@ no counter), then continue top-to-bottom.
   `url` to the repo's LICENSE, and add a second `license` entry pointing at
   LICENSE-EXCEPTION, before any publish. Nothing is published yet, so no artifact is wrong
   today.
+
+- [ ] **(LIC.3) CONTRIBUTING.md (owner decision 2026-09-02, recorded in § Approvals above,
+  where the owner labels it "(LIC.2)" — queued as (LIC.3) here because the (LIC.2) queue
+  label was already taken by the POM item): until the contributor agreement exists,
+  CONTRIBUTING.md states that external pull requests cannot be merged; issues and
+  reproductions are welcome. One commit.**
 
 - [x] **(EXT.1) DONE 2026-09-01 (worktree wave, merged) — KOTLIN EXTERNALS GENERATOR, FIRST CUT — ONE INTERFACE END-TO-END WITH A
   PIN.** New module `xemantic-typescript-compiler-externals` (JVM first; pre-approved
@@ -957,6 +1003,28 @@ no counter), then continue top-to-bottom.
   inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
   proposal — implementation does NOT start in the session that writes the design.
 
+- [ ] **(INV.0) SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
+  `docs/INVERSION-DESIGN.md` NAMES (owner additions 2026-09-02 MERGED into the item
+  (INV.D)/P18.0 had already queued, per the directive's own merge rule; moved here to sit
+  directly after (INV.D) as instructed).** tsgo's `internal/checker` decomposition is the
+  reference map (relater, inference, mapper, flow, nodebuilder, grammarchecks, jsx,
+  emitresolver, services). Order: the future memoized core first (name resolution,
+  getTypeOfSymbol / getTypeOfExpression, relations, instantiation, signatures, flow);
+  check passes last. FINAL classes with explicit inputs, constructed ONCE per Checker;
+  per-node context travels as parameters, never as a per-visit allocation; no extension
+  functions over `internal` state. Every extraction adds a row to
+  `docs/inversion-ambient-ledger.md`: ambient fields read / written. No semantic change:
+  corpus byte-identical AND cost_gate at 0.00% per commit. **RECEIPT per commit —
+  cost_gate reads 0.00% for a pure split BY CONSTRUCTION (counters count calls, not
+  nanoseconds), so it is a control, not evidence; the evidence is: (1)
+  `scripts/ab-interleaved.sh` wall time with win rate, (2) a JFR allocation profile
+  before/after via `scripts/aggregate_jfr.py`, (3) `-XX:+UnlockDiagnosticVMOptions
+  -XX:+PrintInlining` on `checkArgumentsAgainstSignature`, `getTypeOfExpression` and
+  `isTypeAssignableTo`, confirming every new delegation hop reads `inline (hot)`, and
+  (4) core-module compile time before/after.** The full contract (final collaborators,
+  interned mappers, forbidden hot-path shapes, the shrinkage metric) is
+  `docs/INVERSION-DESIGN.md` § 10.
+
 - [ ] **(INV.1) BLOCKED-PENDING-USER — STAGE 1 OF `docs/INVERSION-DESIGN.md`: THE
   PER-FILE `nodeTypeId` STORE, OFF BY DEFAULT, ONE COMMIT.** Proposal (§ 9 of the design):
   a per-file `IntArray` keyed by nodeId recording the walk's own expression-type answer at
@@ -967,17 +1035,6 @@ no counter), then continue top-to-bottom.
   tsgo's 15 walk-scoped API methods to answerable ((INV.D) § 3a); `resolveName`/
   `getSymbolsInScope` stay open until Stage 3 (B83.5). Implementation does not start
   without owner approval.
-
-- [ ] **(INV.0) SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
-  `docs/INVERSION-DESIGN.md` NAMES.** tsgo's `internal/checker` decomposition is the
-  reference map (relater, inference, mapper, flow, nodebuilder, grammarchecks, jsx,
-  emitresolver, services). Order: the future memoized core first (name resolution,
-  getTypeOfSymbol / getTypeOfExpression, relations, instantiation, signatures, flow);
-  check passes last. Prefer classes with explicit inputs over extension functions over
-  `internal` state. Every extraction adds a row to `docs/inversion-ambient-ledger.md`:
-  ambient fields read / written. No semantic change: corpus byte-identical AND cost_gate
-  at 0.00% per commit. Record core-module compile time before and after.
-
 
 - [ ] **(INC.91) THE SIGNATURE-EDIT CLIFF — CENSUSED 2026-09-01 AND **REFUSED AS WRITTEN**,
   NOT ON THE PRIZE BUT ON SOUNDNESS. WHAT REPLACES IT IS THE CLOSURE-NARROWED BUILD, WHICH
