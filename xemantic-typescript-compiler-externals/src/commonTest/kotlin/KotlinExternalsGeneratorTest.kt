@@ -636,7 +636,7 @@ class KotlinExternalsGeneratorTest {
         val namedRendered = named.kotlin
         val marker =
             "/* xtsc: default export - consumers bind the module's default */" in namedRendered
-        val header = "public external class Widget {" in namedRendered
+        val header = "public open external class Widget {" in namedRendered
         assert(marker)
         assert(header)
         val nameless = generate(
@@ -666,7 +666,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
-            public external class Animal(name: String) {
+            public open external class Animal(name: String) {
                 public var name: String
                 public val kind: String
                 public fun speak(volume: Double): String
@@ -677,7 +677,7 @@ class KotlinExternalsGeneratorTest {
             }
         """.trimIndent() + "\n"
         val expectedGate = """
-            public class Animal(name: String) {
+            public abstract class Animal(name: String) {
                 public var name: String = null!!
                 public val kind: String = null!!
                 public fun speak(volume: Double): String = null!!
@@ -708,7 +708,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
-            public external class Vault {
+            public open external class Vault {
                 public var openly: String
             }
         """.trimIndent() + "\n"
@@ -730,7 +730,7 @@ class KotlinExternalsGeneratorTest {
         )
         val rendered = result.kotlin
         val marker = "    /* xtsc: skipped multiple constructors */\n" in rendered
-        val headerHasNoParens = "public external class Multi {\n" in rendered
+        val headerHasNoParens = "public open external class Multi {\n" in rendered
         assert(marker)
         assert(headerHasNoParens)
     }
@@ -746,7 +746,7 @@ class KotlinExternalsGeneratorTest {
         )
         val rendered = result.kotlin
         val marker = "/* xtsc: skipped parameter property x */" in rendered
-        val header = "public external class Point(x: Double, y: Double) {" in rendered
+        val header = "public open external class Point(x: Double, y: Double) {" in rendered
         assert(marker)
         assert(header)
     }
@@ -1005,7 +1005,7 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: skipped Shape declared again by another file - one Kotlin package cannot hold both */
 
-            public external class Other
+            public open external class Other
 
             /* xtsc: skipped Other declared again by another file - one Kotlin package cannot hold both */
         """.trimIndent() + "\n"
@@ -1049,7 +1049,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
-            public external class Stamp {
+            public open external class Stamp {
                 /* xtsc: skipped heritage clause extends Date */
                 /* xtsc: skipped heritage clause implements Object */
                 public var shown: String
@@ -1100,6 +1100,191 @@ class KotlinExternalsGeneratorTest {
         val expected = "/* xtsc: skipped export = lib - module wiring is a later rung */\n"
         val rendered = result.kotlin
         assert(rendered == expected)
+    }
+
+    // --- (EXT.8) heritage to generated targets --------------------------------
+
+    @Test
+    fun `an interface extending generated interfaces renders them as supertypes and redeclarations as override`() {
+        val result = generate(
+            """
+            export interface Named { name: string; readonly id: number; }
+            export interface Boxed<T> { value: T; }
+            export interface Person extends Named, Boxed<string>, Object {
+                name: string;
+                readonly id: number;
+                age: number;
+            }
+            """
+        )
+        val expected = """
+            public external interface Named {
+                public var name: String
+                public val id: Double
+            }
+
+            public external interface Boxed<T> {
+                public var value: T
+            }
+
+            public external interface Person : Named, Boxed<String> {
+                /* xtsc: skipped heritage clause extends Object */
+                public override var name: String
+                public override val id: Double
+                public var age: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a class extending a generated class and implementing a generated interface - override and open`() {
+        val result = generate(
+            """
+            export interface Shape { area(): number; }
+            export class Base {
+                constructor(tag: string);
+                tag: string;
+                describe(): string;
+                keep(): void;
+            }
+            export class Circle extends Base implements Shape {
+                constructor(tag: string, r: number);
+                r: number;
+                area(): number;
+                describe(): string;
+            }
+            """
+        )
+        val expected = """
+            public external interface Shape {
+                public fun area(): Double
+            }
+
+            public open external class Base(tag: String) {
+                public var tag: String
+                public open fun describe(): String
+                public fun keep(): Unit
+            }
+
+            public open external class Circle(tag: String, r: Double) : Base, Shape {
+                public var r: Double
+                public override fun area(): Double
+                public override fun describe(): String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `the gate variant renders classes abstract and calls the generated base - inherited or own constructor`() {
+        // TypeScript INHERITS the constructor of a class declaring none, so
+        // `Derived` is called as `Derived("x", 1)` and renders the base's
+        // parameters, passed through by name in the gate's superclass call;
+        // a class with its OWN constructor calls the base with `null!!`s.
+        val result = generate(
+            """
+            export class Base { constructor(a: string, b: number); }
+            export class Derived extends Base { x: string; }
+            export class Own extends Base { constructor(z: boolean); }
+            export class Lone {}
+            """
+        )
+        val expected = """
+            public abstract class Base(a: String, b: Double)
+
+            public abstract class Derived(a: String, b: Double) : Base(a, b) {
+                public var x: String = null!!
+            }
+
+            public abstract class Own(z: Boolean) : Base(null!!, null!!)
+
+            public abstract class Lone
+        """.trimIndent() + "\n"
+        val gateVariant = result.compileCheckSource
+        assert(gateVariant == expected)
+        val realDerived = "public open external class Derived(a: String, b: Double) : Base {\n" in result.kotlin
+        val realOwn = "public open external class Own(z: Boolean) : Base\n" in result.kotlin
+        assert(realDerived)
+        assert(realOwn)
+    }
+
+    @Test
+    fun `an override that differs by parameter types is an overload - and a readonly narrowing is loud`() {
+        val result = generate(
+            """
+            export interface A { m(x: string): string; p: string; }
+            export interface B extends A {
+                m(x: number): number;
+                readonly p: string;
+            }
+            """
+        )
+        val expected = """
+            public external interface A {
+                public fun m(x: String): String
+                public var p: String
+            }
+
+            public external interface B : A {
+                public fun m(x: Double): Double
+                /* xtsc: readonly narrows an inherited var - rendered var */
+                public override var p: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `negative control - a base of the wrong kind or a non-exported base stays a marker`() {
+        val result = generate(
+            """
+            interface Hidden { h: string; }
+            export class K { k: string; }
+            export interface FromClass extends K { }
+            export interface FromHidden extends Hidden { }
+            export class Impl implements K { }
+            """
+        )
+        val expected = """
+            public open external class K {
+                public var k: String
+            }
+
+            public external interface FromClass {
+                /* xtsc: skipped heritage clause extends K */
+            }
+
+            public external interface FromHidden {
+                /* xtsc: skipped heritage clause extends Hidden */
+            }
+
+            public open external class Impl {
+                /* xtsc: skipped heritage clause implements K */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `heritage across files renders by name under the same identity evidence`() {
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export interface Root { r: string; }
+            """,
+            "/pkg/b.d.ts" to """
+                import type { Root } from './a.js';
+                export interface Leaf extends Root { l: number; }
+            """,
+        )
+        val rendered = result.kotlin
+        assert(rendered.contains("public external interface Leaf : Root {\n    public var l: Double\n}\n"))
     }
 
 }

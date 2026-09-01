@@ -100,6 +100,14 @@ class KotlinExternalsCompileGateTest {
         }
         export abstract class Shape { area(): number { return 0; } }
         export class Pen<T> { occupant?: T; }
+        export class Dog extends Animal implements Farmable {
+            constructor(name: string, breed: string);
+            breed: string;
+            speak(volume: number): string;
+            graze(): void;
+        }
+        export interface Farmable { graze(): void; }
+        export interface Named extends Farmable { name: string; }
         export interface Farm {
             star: Animal;
             pen: Pen<Animal>;

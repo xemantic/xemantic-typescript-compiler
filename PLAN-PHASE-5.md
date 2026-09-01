@@ -120,6 +120,37 @@ ITSELF (a member wins name resolution over a same-named top-level function), so 
 delegation was deleted rather than kept — the 21 call sites resolve to the file-level
 function directly.
 
+**(EXT.8) LANDED — HERITAGE TO GENERATED TARGETS** (externals 64 → 70 pins; full suite
+16,825/0/3). The rung RxJS needs before anything else (`Subject<T> extends
+Observable<T>`): a heritage base that is a GENERATED interface/class renders as a Kotlin
+supertype — resolved by IDENTITY, the base symbol's declaration `===` a pre-scanned
+exported declaration, generic arguments from their own annotations, one unmappable
+argument refusing the base — while a lib type, a non-exported neighbour, an enum or a base
+of the wrong KIND for the Kotlin shape (an interface cannot extend a class; a class cannot
+`extends` an interface) stays a per-BASE marker naming it. Kotlin then owes what TypeScript
+never asks for: `override` on a redeclared member (a property by name; a method by its
+mapped signature — the (EXT.5) `overloadSignature` key moved to the renderer and is shared,
+so the overload collapse and the override decision cannot disagree; a differing signature
+is an overload, not an override), `open` on the CLASS member some generated subclass
+overrides (an interface member is open already), `open external class` on every
+non-abstract class (Dukat's and kotlin-wrappers' convention — JavaScript classes are always
+extensible), a `readonly` narrowing of an inherited `var` rendered `var` with a marker
+(Kotlin refuses `override val` over `var`), and the INHERITED constructor for a subclass
+declaring none (TypeScript inherits it; a consumer's `Derived("x", 1)` must keep
+compiling), passed through by name in the gate variant's superclass call and `null!!`s
+when the subclass has its own. The GATE variant renders every class `abstract`: a
+non-external class implementing a generated interface would owe implementations, and
+`abstract` also keeps it extensible — both things an external class gets for free (the
+existing gate-variant class pin moved to `abstract` deliberately). **The finding that cost
+the third test run**: an IMPORTED base fell to the marker because the lens's `resolveName`
+is the walk-scoped INV.2(c) lexical lookup, which by its `symbols`-only rule offers no
+import — so `CheckedLens` gained `heritageBaseSymbol(base)`, answered by the checker's own
+`resolveHeritageBaseSymbol` (what the clause itself is resolved with, qualified names and
+imports included), then `aliasTarget` for the declaration it names; the only lens
+implementor is the checker's, and no counter moves (the lens is live only under a sink).
+Gate fixture grew `Dog extends Animal implements Farmable` + `Named extends Farmable`;
+mitt and smol-toml gates unchanged (their bases are lib types, still markers).
+
 ### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
 
 **Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
@@ -863,10 +894,20 @@ Owner decisions 2026-09-02:
   `export *`) a loud marker with `export {}` silent; `KotlinExternalsSmolTomlGateTest`
   embeds the verbatim seven `smol-toml@1.7.1` declaration files (BSD-3-Clause,
   notices retained) and metadata-compiles the output.
-  Still to emit: namespaces/modules, index signatures, heritage clauses,
-  accessors, generic-ALIAS references (`Handler<T>` uses still fall back),
-  `export const` values, parameter properties; module wiring; next ladder
-  rung: RxJS. Unions and other inexpressible shapes: ONE
+  DONE 2026-09-02 ((EXT.8), (P18.6) note): HERITAGE to GENERATED targets —
+  `interface B extends A, Box<string>` → `: A, Box<String>`, a class's
+  `extends`/`implements` of generated targets → supertypes, `override` on
+  redeclared members (property by name, method by mapped signature; a
+  differing signature is an overload) with `open` on the class member some
+  generated subclass overrides, `open external class` for every non-abstract
+  class (the Dukat/kotlin-wrappers convention), an inherited constructor for a
+  subclass declaring none, cross-file bases through the new lens member
+  `heritageBaseSymbol`; the gate variant renders classes `abstract` with the
+  superclass call. Lib/non-exported/wrong-kind bases stay per-base markers.
+  Still to emit: namespaces/modules, index signatures, accessors,
+  generic-ALIAS references (`Handler<T>` uses still fall back), `export
+  const` values, parameter properties; module wiring; next ladder rung: RxJS
+  (`class Subject<T> extends Observable<T>` is exactly this rung's shape). Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
   RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
 

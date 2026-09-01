@@ -347,10 +347,10 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
     fun `smol-toml's classes render with lib heritage marked and the private name omitted`() {
         val result = generateKotlinExternals(smolTomlDist)
         val rendered = result.kotlin
-        val dateHeader = "public external class TomlDate(date: Any? /* xtsc: unmapped string | Date */) {\n" +
+        val dateHeader = "public open external class TomlDate(date: Any? /* xtsc: unmapped string | Date */) {\n" +
             "    /* xtsc: skipped heritage clause extends Date */\n" in rendered
         val statics = "        public fun wrapAsLocalDate(jsDate: Any? /* xtsc: unmapped Date */): TomlDate\n" in rendered
-        val errorHeader = "public external class TomlError(message: String, options: Any? " +
+        val errorHeader = "public open external class TomlError(message: String, options: Any? " +
             "/* xtsc: unmapped ErrorOptions & { toml: string; ptr: number; } */) {\n" +
             "    /* xtsc: skipped heritage clause extends Error */\n" +
             "    public var line: Double\n" in rendered

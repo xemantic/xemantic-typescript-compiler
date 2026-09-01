@@ -135,6 +135,19 @@ interface CheckedLens {
     fun aliasTarget(symbol: Symbol): Symbol?
 
     /**
+     * (EXT.8) What a heritage-clause base expression names — the `X` of
+     * `extends X` / `implements X<T>`, an [Identifier] or a qualified
+     * `A.B.C` — resolved exactly as the checker resolves it for the clause
+     * itself, imports included. [resolveName] cannot answer this: it reads
+     * the walk-scoped lexical chain, which offers no import (the INV.2(c)
+     * `symbols`-only rule), so an imported base would read as unresolved.
+     * The answer may still be an import ALIAS; ask [aliasTarget] for what it
+     * names. Null when the base does not resolve or is not exported from the
+     * namespace it is qualified with.
+     */
+    fun heritageBaseSymbol(base: Expression): Symbol?
+
+    /**
      * Is [source] assignable to [target]?
      *
      * The backend needs this for a reason unrelated to diagnostics: TypeScript

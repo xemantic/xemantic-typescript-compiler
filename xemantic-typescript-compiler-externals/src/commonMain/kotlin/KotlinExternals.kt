@@ -56,6 +56,7 @@ import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.SourceFileEntry
 import com.xemantic.typescript.compiler.StringLiteralNode
+import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
@@ -591,18 +592,6 @@ private class ExternalsCollector(
      * fallback does not, and Kotlin refuses conflicting overloads — so the
      * later duplicates become loud markers instead of a compile error.
      */
-    private fun overloadSignature(
-        name: String,
-        typeParameters: List<String>,
-        parameters: List<ExternalParameter>,
-    ): String = buildString {
-        append(name)
-        append('<').append(typeParameters.joinToString(","))
-        append(">(")
-        parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
-        append(')')
-    }
-
     private fun dedupeOverloads(members: MutableList<ExternalMember>) {
         val seenSignatures = HashSet<String>()
         for (index in members.indices) {
@@ -730,7 +719,14 @@ private class ExternalsCollector(
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
         val staticMembers = mutableListOf<ExternalMember>()
-        heritageMarkers(node.heritageClauses, members)
+        val heritage = collectHeritage(node.heritageClauses, lens, scope, members) { base, isExtends ->
+            if (isExtends) base is ClassDeclaration else base is InterfaceDeclaration
+        }
+        if (heritage.extends.size > 1) {
+            // Unreachable from well-formed TypeScript (one `extends` per
+            // class); kept loud rather than picking one.
+            members.add(SkippedMember("class with more than one extends base"))
+        }
         // One declared constructor becomes the primary constructor; overloads
         // (two signatures plus the implementation is THREE Constructor nodes)
         // are a loud marker with no primary constructor at all — picking one
@@ -809,6 +805,8 @@ private class ExternalsCollector(
             typeParameters = typeParameters,
             headerMarkers = headerMarkers,
             isAbstract = ModifierFlag.Abstract in node.modifiers,
+            superClass = heritage.extends.singleOrNull(),
+            interfaces = heritage.implements,
             constructorParameters = constructorParameters,
             members = members,
             staticMembers = staticMembers,
@@ -894,7 +892,12 @@ private class ExternalsCollector(
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
-        heritageMarkers(node.heritageClauses, members)
+        // An interface may `extends` a generated interface; a generated CLASS
+        // as an interface's base has no Kotlin shape (an interface cannot
+        // extend a class) and stays a marker.
+        val heritage = collectHeritage(node.heritageClauses, lens, scope, members) { base, _ ->
+            base is InterfaceDeclaration
+        }
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, members, scope)
@@ -908,27 +911,79 @@ private class ExternalsCollector(
             }
         }
         dedupeOverloads(members)
-        return ExternalInterface(node.name.text, typeParameters, headerMarkers, members)
+        return ExternalInterface(node.name.text, typeParameters, headerMarkers, heritage.extends, members)
     }
 
+    /** (EXT.8) The bases a declaration's heritage clauses resolve to. */
+    private class Heritage(
+        /** `extends` bases that are GENERATED classes/interfaces, as Kotlin type text. */
+        val extends: List<String>,
+        /** `implements` bases that are GENERATED interfaces, as Kotlin type text. */
+        val implements: List<String>,
+    )
+
     /**
-     * Heritage is still a later rung: the supertype may be un-generated (a
-     * lib type — `extends Date`, `extends Error` — or a non-exported
-     * neighbour), so the clause is marked rather than rendered or silently
-     * dropped. (EXT.7) The marker NAMES what is not carried, so a reader of
-     * the output knows which base the consumer's Kotlin will not see.
+     * (EXT.8) A heritage base renders as a Kotlin supertype when it is a
+     * GENERATED target — the base name resolves (`lens.resolveName`, the
+     * walk-scoped scope at the declaration) to a symbol whose declaration IS
+     * one of the pre-scanned exported interfaces/classes, by `===` — and, for
+     * a generic base, when EVERY type argument maps (the (EXT.6) reference
+     * rule: arguments from their own annotations). Anything else is what it
+     * always was: a loud marker naming the base a consumer's Kotlin will not
+     * see — a lib type (`extends Date`, `extends Error`), a non-exported
+     * neighbour, an enum, an unmappable argument. [kindOk] refuses a base of
+     * the wrong KIND for the Kotlin shape (an interface cannot extend a
+     * generated CLASS, a class cannot `extends` an interface — TypeScript
+     * refuses the latter too), so the marker is per BASE, never per clause.
      */
-    private fun heritageMarkers(
+    private fun collectHeritage(
         clauses: List<HeritageClause>?,
+        lens: CheckedLens,
+        scope: TypeScope,
         members: MutableList<ExternalMember>,
-    ) {
+        kindOk: (base: Node, isExtends: Boolean) -> Boolean,
+    ): Heritage {
+        val extends = mutableListOf<String>()
+        val implements = mutableListOf<String>()
         for (clause in clauses.orEmpty()) {
+            val isExtends = clause.token == SyntaxKind.ExtendsKeyword
             val keyword = clause.token.name.removeSuffix("Keyword").lowercase()
-            val bases = clause.types.joinToString(", ") {
-                (it.expression as? Identifier)?.text ?: "a base expression"
+            for (base in clause.types) {
+                val baseName = (base.expression as? Identifier)?.text
+                val rendered = baseName?.let { name ->
+                    // Resolved as the checker resolves the clause itself (the
+                    // lexical `resolveName` offers no import); an imported base
+                    // is its import ALIAS, and the identity test needs the
+                    // declaration it names.
+                    val symbol = lens.heritageBaseSymbol(base.expression)
+                        ?.let { lens.aliasTarget(it) ?: it }
+                        ?: return@let null
+                    val declaration = symbol.declarations.firstOrNull { declared ->
+                        nameableDeclarations.any { it === declared }
+                    } ?: return@let null
+                    if (!kindOk(declaration, isExtends)) return@let null
+                    val arguments = base.typeArguments.orEmpty().map { argument ->
+                        annotationTextOrNull(
+                            argument,
+                            returnPosition = false,
+                            lens = lens,
+                            scope = scope,
+                        ) ?: return@let null
+                    }
+                    if (arguments.isEmpty()) kotlinIdentifier(symbol.name)
+                    else "${kotlinIdentifier(symbol.name)}<${arguments.joinToString(", ")}>"
+                }
+                when {
+                    rendered == null ->
+                        members.add(
+                            SkippedMember("heritage clause $keyword ${baseName ?: "a base expression"}")
+                        )
+                    isExtends -> extends.add(rendered)
+                    else -> implements.add(rendered)
+                }
             }
-            members.add(SkippedMember("heritage clause $keyword $bases"))
         }
+        return Heritage(extends, implements)
     }
 
     /**

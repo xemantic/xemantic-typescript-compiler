@@ -5664,6 +5664,9 @@ class Checker(
             override fun aliasTarget(symbol: Symbol): Symbol? =
                 if (symbol.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(symbol) else null
 
+            override fun heritageBaseSymbol(base: Expression): Symbol? =
+                resolveHeritageBaseSymbol(base)
+
             override fun isAssignableTo(source: Type, target: Type): Boolean =
                 isTypeAssignableTo(source, target)
 

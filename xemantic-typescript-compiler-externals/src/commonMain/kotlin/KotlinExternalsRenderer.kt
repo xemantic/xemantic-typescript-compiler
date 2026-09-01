@@ -49,6 +49,11 @@ internal class ExternalInterface(
      * comments directly under the header, never dropped.
      */
     val headerMarkers: List<String>,
+    /**
+     * (EXT.8) Supertypes that are GENERATED interfaces, as Kotlin type text
+     * (`Base`, `Box<String>`); every other base is a marker among [members].
+     */
+    val supertypes: List<String>,
     val members: List<ExternalMember>,
 ) : ExternalDeclaration
 
@@ -97,6 +102,10 @@ internal class ExternalClass(
     /** Loud records — a constraint or default not carried — under the header. */
     val headerMarkers: List<String>,
     val isAbstract: Boolean,
+    /** (EXT.8) The `extends` base when it is a GENERATED class, as Kotlin type text. */
+    val superClass: String?,
+    /** (EXT.8) The `implements` bases that are GENERATED interfaces. */
+    val interfaces: List<String>,
     /** null = no declared constructor (Kotlin's implicit default matches TS's). */
     val constructorParameters: List<ExternalParameter>?,
     val members: List<ExternalMember>,
@@ -147,6 +156,171 @@ internal class ExternalParameter(
 
 /** A member (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedMember(val description: String) : ExternalMember
+
+/**
+ * (EXT.5) The Kotlin-signature key of a function: name, type-parameter names and
+ * the parameter types with their `/* xtsc: … */` markers STRIPPED — two literal
+ * types both falling to `Any?` conflict however different their markers read.
+ * Shared by the overload collapse (collector) and the override decision
+ * (renderer), so the two cannot disagree about what "the same signature" is.
+ */
+internal fun overloadSignature(
+    name: String,
+    typeParameters: List<String>,
+    parameters: List<ExternalParameter>,
+): String = buildString {
+    append(name)
+    append('<').append(typeParameters.joinToString(","))
+    append(">(")
+    parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
+    append(')')
+}
+
+/**
+ * (EXT.8) What a declaration INHERITS from its generated bases, transitively —
+ * the input to Kotlin's `override` rule, which TypeScript has no counterpart
+ * for: a subinterface may simply redeclare a base member, Kotlin must say
+ * `override`, and a class member overridden below must be `open`.
+ *
+ * Bases are looked up by NAME (the supertype text with any `<…>` stripped) over
+ * the generation's own declarations — a supertype text is only ever produced
+ * for a generated target, so the lookup cannot miss for a reason other than a
+ * cross-file name collision, which [ExternalsCollector.finish] already reduced
+ * to one declaration per name.
+ */
+private class Inheritance(declarations: List<ExternalDeclaration>) {
+
+    private val byName = HashMap<String, ExternalDeclaration>()
+
+    init {
+        for (declaration in declarations) {
+            when (declaration) {
+                is ExternalInterface -> byName.putIfAbsent(declaration.name, declaration)
+                is ExternalClass -> byName.putIfAbsent(declaration.name, declaration)
+                else -> {}
+            }
+        }
+    }
+
+    private fun basesOf(declaration: ExternalDeclaration): List<ExternalDeclaration> {
+        val texts = when (declaration) {
+            is ExternalInterface -> declaration.supertypes
+            is ExternalClass -> listOfNotNull(declaration.superClass) + declaration.interfaces
+            else -> emptyList()
+        }
+        return texts.mapNotNull { byName[it.substringBefore('<').trim('`')] }
+    }
+
+    private fun ownMembers(declaration: ExternalDeclaration): List<ExternalMember> = when (declaration) {
+        is ExternalInterface -> declaration.members
+        is ExternalClass -> declaration.members
+        else -> emptyList()
+    }
+
+    /** Member key: `p:` + name for a property, `f:` + [overloadSignature] for a function. */
+    fun keyOf(member: ExternalMember): String? = when (member) {
+        is ExternalProperty -> "p:" + member.name
+        is ExternalFunction -> "f:" + overloadSignature(member.name, member.typeParameters, member.parameters)
+        is SkippedMember -> null
+    }
+
+    /**
+     * Every inherited member by key, nearest base first — the first base
+     * declaring a key wins, which is what a redeclaration is compared against.
+     */
+    fun inherited(declaration: ExternalDeclaration): Map<String, ExternalMember> {
+        val result = HashMap<String, ExternalMember>()
+        val visited = HashSet<String>()
+        fun walk(d: ExternalDeclaration) {
+            val name = (d as? ExternalInterface)?.name ?: (d as? ExternalClass)?.name ?: return
+            if (!visited.add(name)) return
+            for (base in basesOf(d)) {
+                for (member in ownMembers(base)) {
+                    val key = keyOf(member) ?: continue
+                    result.putIfAbsent(key, member)
+                }
+                walk(base)
+            }
+        }
+        walk(declaration)
+        return result
+    }
+
+    /**
+     * For every CLASS name, the keys of its own members that some generated
+     * declaration below it overrides — those must be `open` (a Kotlin class
+     * member is final by default; an interface member is open already).
+     */
+    val openedByClass: Map<String, Set<String>> = run {
+        val opened = HashMap<String, MutableSet<String>>()
+        for (declaration in byName.values) {
+            val inherited = inherited(declaration)
+            for (member in ownMembers(declaration)) {
+                val key = keyOf(member) ?: continue
+                if (key !in inherited) continue
+                // Attribute the override to the nearest base declaring the key.
+                var found = false
+                val visited = HashSet<String>()
+                fun mark(d: ExternalDeclaration) {
+                    if (found) return
+                    val name = (d as? ExternalInterface)?.name ?: (d as? ExternalClass)?.name ?: return
+                    if (!visited.add(name)) return
+                    for (base in basesOf(d)) {
+                        if (found) return
+                        if (base is ExternalClass && base.members.any { keyOf(it) == key }) {
+                            opened.getOrPut(base.name) { HashSet() }.add(key)
+                            found = true
+                            return
+                        }
+                        if (base is ExternalInterface && base.members.any { keyOf(it) == key }) {
+                            found = true
+                            return
+                        }
+                        mark(base)
+                    }
+                }
+                mark(declaration)
+            }
+        }
+        opened
+    }
+
+    private fun classNamed(supertype: String): ExternalClass? =
+        byName[supertype.substringBefore('<').trim('`')] as? ExternalClass
+
+    /**
+     * (EXT.8) The constructor a class is CALLED with: its own when it declares
+     * one, else the nearest generated base's — TypeScript inherits the
+     * constructor of a class that declares none, and a consumer's
+     * `Derived("x", 1)` must keep compiling. Null when nothing up the chain
+     * declares one (Kotlin's implicit default matches TS's).
+     */
+    fun effectiveConstructor(declaration: ExternalClass): List<ExternalParameter>? {
+        var current: ExternalClass? = declaration
+        val visited = HashSet<String>()
+        while (current != null && visited.add(current.name)) {
+            current.constructorParameters?.let { return it }
+            current = current.superClass?.let(::classNamed)
+        }
+        return null
+    }
+
+    /**
+     * (EXT.8) The gate variant's superclass call (an external class omits it, a
+     * plain Kotlin class may not): the INHERITED parameters passed through by
+     * name when the class declares no constructor of its own, one `null!!` per
+     * base parameter otherwise.
+     */
+    fun gateSuperCall(declaration: ExternalClass, superClass: String): String {
+        val base = classNamed(superClass) ?: return "()"
+        val baseParameters = effectiveConstructor(base).orEmpty()
+        val arguments =
+            if (declaration.constructorParameters == null) baseParameters.map { kotlinIdentifier(it.name) }
+            else baseParameters.map { "null!!" }
+        return arguments.joinToString(", ", prefix = "(", postfix = ")")
+    }
+
+}
 
 /**
  * The ONE place the TypeScript-to-Kotlin type mapping is decided.
@@ -273,6 +447,7 @@ internal fun renderKotlinExternals(
     declarations: List<ExternalDeclaration>,
     external: Boolean,
 ): String = buildString {
+    val inheritance = Inheritance(declarations)
     declarations.forEachIndexed { index, declaration ->
         if (index > 0) appendLine()
         when (declaration) {
@@ -286,13 +461,19 @@ internal fun renderKotlinExternals(
                         .joinToString(", ", prefix = "<", postfix = ">") {
                             kotlinIdentifier(it)
                         }
+                val supertypes =
+                    if (declaration.supertypes.isEmpty()) ""
+                    else declaration.supertypes.joinToString(", ", prefix = " : ")
                 appendLine(
-                    "public $keyword ${kotlinIdentifier(declaration.name)}$typeParams {"
+                    "public $keyword ${kotlinIdentifier(declaration.name)}$typeParams$supertypes {"
                 )
                 for (marker in declaration.headerMarkers) {
                     appendLine("    /* xtsc: $marker */")
                 }
-                for (member in declaration.members) appendMember(member)
+                val inherited = inheritance.inherited(declaration)
+                for (member in declaration.members) {
+                    appendMember(member, inherited = inherited[inheritance.keyOf(member)])
+                }
                 appendLine("}")
             }
             is ExternalTypeAlias -> {
@@ -327,8 +508,19 @@ internal fun renderKotlinExternals(
             }
             is ExternalClass -> {
                 // Kotlin's canonical modifier order: visibility, then
-                // abstract, then external.
-                val abstractModifier = if (declaration.isAbstract) "abstract " else ""
+                // abstract/open, then external. (EXT.8) A non-abstract class is
+                // `open` — Dukat's and kotlin-wrappers' convention for externals,
+                // because JavaScript classes are always extensible and a
+                // generated subclass (or a consumer's) must be able to say so.
+                // The GATE variant renders every class `abstract`: a
+                // non-external class implementing a generated interface would
+                // otherwise owe implementations, and `abstract` also keeps it
+                // extensible — both are things an external class gets for free.
+                val abstractModifier = when {
+                    !external -> "abstract "
+                    declaration.isAbstract -> "abstract "
+                    else -> "open "
+                }
                 val externalModifier = if (external) "external " else ""
                 val typeParams =
                     if (declaration.typeParameters.isEmpty()) ""
@@ -336,12 +528,25 @@ internal fun renderKotlinExternals(
                         .joinToString(", ", prefix = "<", postfix = ">") {
                             kotlinIdentifier(it)
                         }
-                val constructorText = declaration.constructorParameters
+                val constructorText = inheritance.effectiveConstructor(declaration)
                     ?.joinToString(", ", prefix = "(", postfix = ")") {
                         "${kotlinIdentifier(it.name)}: ${it.type}"
                     } ?: ""
+                // (EXT.8) Supertypes: the generated base class first (with the
+                // gate variant's `null!!` constructor call — an external class
+                // omits the call, a plain Kotlin class may not), then the
+                // generated interfaces.
+                val supertypeTexts = buildList {
+                    declaration.superClass?.let { base ->
+                        add(if (external) base else base + inheritance.gateSuperCall(declaration, base))
+                    }
+                    addAll(declaration.interfaces)
+                }
+                val supertypes =
+                    if (supertypeTexts.isEmpty()) ""
+                    else supertypeTexts.joinToString(", ", prefix = " : ")
                 val header = "public $abstractModifier${externalModifier}class " +
-                    "${kotlinIdentifier(declaration.name)}$typeParams$constructorText"
+                    "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
                 val hasBody = declaration.headerMarkers.isNotEmpty() ||
                     declaration.members.isNotEmpty() ||
                     declaration.staticMembers.isNotEmpty()
@@ -352,8 +557,16 @@ internal fun renderKotlinExternals(
                     for (marker in declaration.headerMarkers) {
                         appendLine("    /* xtsc: $marker */")
                     }
+                    val inherited = inheritance.inherited(declaration)
+                    val opened = inheritance.openedByClass[declaration.name].orEmpty()
                     for (member in declaration.members) {
-                        appendMember(member, needsBody = !external)
+                        val key = inheritance.keyOf(member)
+                        appendMember(
+                            member,
+                            needsBody = !external,
+                            inherited = inherited[key],
+                            open = key != null && key in opened,
+                        )
                     }
                     if (declaration.staticMembers.isNotEmpty()) {
                         appendLine("    public companion object {")
@@ -404,13 +617,28 @@ private fun StringBuilder.appendMember(
     member: ExternalMember,
     needsBody: Boolean = false,
     indent: String = "    ",
+    /** (EXT.8) The inherited member this one redeclares, if any — it renders `override`. */
+    inherited: ExternalMember? = null,
+    /** (EXT.8) A class member some generated subclass overrides — it renders `open`. */
+    open: Boolean = false,
 ) {
     val body = if (needsBody) " = null!!" else ""
+    val modifiers = buildString {
+        if (inherited != null) append("override ")
+        if (open) append("open ")
+    }
     when (member) {
         is ExternalProperty -> {
-            val keyword = if (member.readOnly) "val" else "var"
+            // Kotlin refuses `override val` over a `var`; TypeScript allows a
+            // subinterface to add `readonly`. Rendered as the base's `var`,
+            // loudly — the narrowing is a TypeScript-only fact.
+            val baseIsVar = inherited is ExternalProperty && !inherited.readOnly
+            if (member.readOnly && baseIsVar) {
+                appendLine("${indent}/* xtsc: readonly narrows an inherited var - rendered var */")
+            }
+            val keyword = if (member.readOnly && !baseIsVar) "val" else "var"
             appendLine(
-                "${indent}public $keyword ${kotlinIdentifier(member.name)}: ${member.type}$body"
+                "${indent}public $modifiers$keyword ${kotlinIdentifier(member.name)}: ${member.type}$body"
             )
         }
         is ExternalFunction -> {
@@ -425,7 +653,7 @@ private fun StringBuilder.appendMember(
                 "${kotlinIdentifier(it.name)}: ${it.type}"
             }
             appendLine(
-                "${indent}public fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
+                "${indent}public ${modifiers}fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
             )
         }
         is SkippedMember ->
