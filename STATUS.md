@@ -14,7 +14,10 @@ skip), top-level overloads render (implementation signature omitted, duplicates 
 `#private` omitted, heritage markers name the base, export wiring loud (`export {}` silent);
 `KotlinExternalsSmolTomlGateTest` embeds the verbatim seven `smol-toml@1.7.1` files and
 metadata-compiles the output with zero checker diagnostics (externals 64/0; full suite
-16,815/0/3).
+16,815/0/3). (TEST.1) the "order-sensitive" `ProjectTrustedFilesystemTest` control was a
+DATA RACE in the test's own `CountingVfs` under the crawl's 16 concurrent readers (old
+wrapper: 12,880 of 16,000 threaded reads counted); atomics + a CAS-swapped per-path map,
+`CountingVfsConcurrencyTest` reddens the old wrapper (full suite 16,816/0/3).
 
 **(P18.5) — DONE (2026-09-02).** Owner additions applied ((INV.0) merged with
 receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,

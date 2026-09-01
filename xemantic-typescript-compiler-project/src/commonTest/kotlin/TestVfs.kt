@@ -27,6 +27,10 @@ package com.xemantic.typescript.compiler.project
 
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.Vfs
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.incrementAndFetch
 import com.xemantic.typescript.compiler.VfsEntry
 
 /**
@@ -106,11 +110,24 @@ internal class InMemoryVfs(initial: Map<String, String> = emptyMap()) : Vfs {
  * equal values — so the only sharp signal for "the cache was used" is that the
  * layer BELOW it went untouched. That is why this counts reads rather than timing
  * anything: a timed assertion over a compile is a coin flip (CLAUDE.md, round 868).
+ *
+ * (TEST.1) EVERY COUNTER HERE IS ATOMIC, AND THE PER-PATH TABLE IS COPY-ON-WRITE,
+ * because the crawl reads a program's files from **sixteen concurrent workers**
+ * (`ProjectCompiler.drainConcurrently`: `flatMapMerge(FRONTEND_CONCURRENCY)` around
+ * `withContext(pipelineIoDispatcher) { vfs.readText(path) }`). The first cut kept a
+ * plain `reads++` and a `HashMap` put, i.e. round 825's data race one layer up — two
+ * workers inserting two paths into one bucket of a fresh table lose one of them
+ * outright, and the symptom was `ProjectTrustedFilesystemTest`'s negative control
+ * reading `afterFirst == 0` ONCE in a filtered run and green everywhere else: a race,
+ * not the order-sensitivity it was queued as. `CountingVfsConcurrencyTest` (jvmTest)
+ * drives the wrapper from real threads and is what would have caught it.
  */
+@OptIn(ExperimentalAtomicApi::class)
 internal class CountingVfs(private val delegate: Vfs) : Vfs {
 
-    var reads: Int = 0
-        private set
+    private val readCount = AtomicInt(0)
+
+    val reads: Int get() = readCount.load()
 
     /**
      * Reads per path, so a test can calibrate on ONE file rather than on the sum.
@@ -118,13 +135,18 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
      * (API.3c) The sum is a fine unit for "did this rebuild" and a bad one for "how
      * many times": a crawl reads a project's files a number of times that is a
      * property of the crawl, and a per-path count is a property of the build.
+     *
+     * An immutable map swapped by CAS: a lost race here RETRIES rather than losing
+     * an entry, which is the whole difference from a `HashMap` under the crawl.
      */
-    private val readsByPath = HashMap<String, Int>()
+    private val readsByPath = AtomicReference<Map<String, Int>>(emptyMap())
 
     /** How many times [path] has been read through this. */
-    fun readsOf(path: String): Int = readsByPath[PathUtil.normalize(path)] ?: 0
-    var lists: Int = 0
-        private set
+    fun readsOf(path: String): Int = readsByPath.load()[PathUtil.normalize(path)] ?: 0
+
+    private val listCount = AtomicInt(0)
+
+    val lists: Int get() = listCount.load()
 
     /** Reads plus directory listings — any evidence the backing store was consulted. */
     val touches: Int get() = reads + lists
@@ -132,14 +154,18 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
     override fun exists(path: String): Boolean = delegate.exists(path)
 
     override fun isDirectory(path: String): Boolean {
-        isDirectoryCalls++
+        isDirectoryCount.incrementAndFetch()
         return delegate.isDirectory(path)
     }
 
     override fun readText(path: String): String? {
-        reads++
+        readCount.incrementAndFetch()
         val key = PathUtil.normalize(path)
-        readsByPath[key] = (readsByPath[key] ?: 0) + 1
+        while (true) {
+            val current = readsByPath.load()
+            val next = current + (key to ((current[key] ?: 0) + 1))
+            if (readsByPath.compareAndSet(current, next)) break
+        }
         return delegate.readText(path)
     }
 
@@ -148,20 +174,22 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
     }
 
     override fun list(path: String): List<String> {
-        lists++
+        listCount.incrementAndFetch()
         return delegate.list(path)
     }
+
+    private val isDirectoryCount = AtomicInt(0)
 
     /**
      * (INC.76) How many times [isDirectory] reached this — the instrument for "did the
      * layer above ask its kind question per ENTRY, or take it from the listing".
      */
-    var isDirectoryCalls: Int = 0
-        private set
+    val isDirectoryCalls: Int get() = isDirectoryCount.load()
+
+    private val listEntriesCount = AtomicInt(0)
 
     /** How many times [listEntries] reached this. */
-    var listEntriesCalls: Int = 0
-        private set
+    val listEntriesCalls: Int get() = listEntriesCount.load()
 
     /**
      * (INC.76) OVERRIDDEN, and that is not tidiness: `Vfs.listEntries`'s default body is
@@ -171,7 +199,7 @@ internal class CountingVfs(private val delegate: Vfs) : Vfs {
      * against every binary without this.
      */
     override fun listEntries(path: String): List<VfsEntry> {
-        listEntriesCalls++
+        listEntriesCount.incrementAndFetch()
         return delegate.listEntries(path)
     }
 

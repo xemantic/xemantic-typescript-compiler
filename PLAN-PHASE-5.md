@@ -74,6 +74,27 @@ rendering was READ (a deliberate `fail(rendered)`) before a single pin was writt
 KDoc glob `dist/*.d.ts` re-tripped the nested-comment trap CLAUDE.md already records —
 twice, once per file, caught by the compiler both times.
 
+**(TEST.1) DONE — THE "ORDER-SENSITIVE" NEGATIVE CONTROL WAS A DATA RACE IN THE TEST'S
+OWN INSTRUMENT** (project module 847 → 848 pins; full suite 16,816/0/3). Neither the
+`-project` module alone (847/0) nor the suspected predecessor classes (`FileFinalTokenTest`
++ `TokenIndexGateTest` + the class itself, one JVM) reproduced the red, and no process-global
+in the module or in core serves a READ (`CrawlParseCache` needs the content first; the
+resident path answers only from an overlay or a retention the fresh project has none of) —
+so the mechanism could not be an order. What IS true of every first build is that the crawl
+reads the program's files from SIXTEEN concurrent workers
+(`drainConcurrently`'s `flatMapMerge` around `withContext(pipelineIoDispatcher) {
+vfs.readText(path) }`), and `CountingVfs.readText` kept a plain `reads++` and a `HashMap`
+put — round 825's race one layer up, in the test harness. Two workers inserting two paths
+into the same bucket of a fresh table lose one outright, and a lost `b.ts` insertion IS
+`afterFirst == 0`. Measured with real threads (8 × 2,000 reads over 64 paths): the old
+wrapper counted **12,880 of 16,000**. The fix is stdlib `kotlin.concurrent.atomics` (an
+`AtomicInt` per counter, an `AtomicReference` to an immutable per-path map swapped by CAS —
+a lost race retries instead of losing an entry; no dependency added, common code); the pin
+is `CountingVfsConcurrencyTest` in `jvmTest` (spawning threads is not expressible in common
+code; the wrapper it grades is the common one), red against the old wrapper, green by
+construction against the new. Lesson recorded in CLAUDE.md: a counting Vfs under the crawl
+is a concurrent instrument, and a count pin's flake is a race before it is an order.
+
 ### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
 
 **Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
@@ -901,15 +922,18 @@ Owner decisions 2026-09-02:
   ProjectCompletion END-of-buffer, SignatureAnchor open-arg-list, the LSP touch rule, the
   recorded edge), `TokenIndexInvariants`, `scripts/round920-token-gate.sh`.
 
-- [ ] **(TEST.1) `ProjectTrustedFilesystemTest`'s NEGATIVE CONTROL IS ORDER-SENSITIVE
+- [x] **(TEST.1) DONE 2026-09-02 ((P18.6) note) — NOT order-sensitivity: A DATA RACE IN
+  THE TEST'S OWN COUNTING WRAPPER.** `CountingVfs.readText` kept `reads++` and a plain
+  `HashMap` put while the crawl reads from 16 concurrent workers; measured under 8 threads
+  the old wrapper lost 3,120 of 16,000 reads, and losing exactly one path's bucket
+  insertion is `afterFirst == 0`. Fixed with stdlib atomics + a copy-on-write per-path
+  map; `CountingVfsConcurrencyTest` (jvmTest, real threads) reddens the old wrapper.
+  ORIGINAL: `ProjectTrustedFilesystemTest`'s NEGATIVE CONTROL IS ORDER-SENSITIVE
   (found 2026-09-02): green in the full suite and alone (19/0), red in a two-module
   filtered run — `afterFirst == 0`, i.e. the FIRST build never read `b.ts` through the
-  counting wrapper at all.** Some cross-class process-global state lets a first build skip
-  the read; suspects, in round-914's family: `CrawlParseCache` (process-global, (INC.93))
-  and the (INC.85)/(INC.56) resident-content path vs the wrapper's counted method set
-  ((INC.76)'s defaulted-member trap — does `CountingVfs` intercept `readTextIfResident`?).
-  Diagnose the mechanism before trusting any new count pin in that class; the fix is
-  probably counting at the method the crawl actually calls.
+  counting wrapper at all. Suspects were `CrawlParseCache` and the resident-content
+  path; neither the module alone nor the suspected predecessor classes reproduced it,
+  which is what pointed at a race rather than an order.
 
 - [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
   xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written
