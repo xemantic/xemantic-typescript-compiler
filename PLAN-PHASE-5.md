@@ -664,8 +664,9 @@ no counter), then continue top-to-bottom.
   host" conclusion until it is measured. This closes the previous session's question — we
   compared against the wrong tsgo.
 
-- [ ] **(DOC.2) README REPOSITIONING — ON BRANCH `docs/reposition`, NOT MAIN (owner reviews
-  positioning text; pre-approved 2026-09-01).** Thesis: (1) type-check and compile
+- [x] **(DOC.2) DONE 2026-09-01 — README REPOSITIONED ON BRANCH `docs/reposition` (pushed;
+  awaiting owner review; a REVIEW FLAG in the branch commit notes the verbatim-kept "Honest
+  limits" bullet about non-incremental queries is stale since the (INC.\*) arc).** Thesis: (1) type-check and compile
   TypeScript with no Node and no Go anywhere in the toolchain; (2) embed a whole-program
   checker in a Kotlin application (`Project`); (3) generate Kotlin externals with resolved
   types; (4) run TypeScript as JVM bytecode (KIR). Drop "drop-in replacement for tsc" as
