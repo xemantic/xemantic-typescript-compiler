@@ -2872,6 +2872,36 @@ a residue no sub-row named.**
   cannot move without changing a key whose structural semantics the replaced scan fixes.**
   **(b) IS STILL OPEN** — the crawl's ~9 ms concurrent residue.
 
+- [ ] **(INC.86) THE PER-KEYSTROKE QUERY RE-DECOMPOSED AFTER (INC.82)/(INC.85) — 90 ms, AND
+  THE FRONT END IS NO LONGER WHERE THE QUERY IS (2026-09-01, trusted arm, 2,401-file `dom`
+  fixture, 8 rotations x 6 draws).** (INC.57)'s law: re-take the ranking rather than inherit
+  one. **WALL median 90 ms** [79, 82, 83, 84, 90, 91, 95, 104]. Rows:
+  **checker construct + getDiagnostics 45.86 (51%)** — of which the **init-block pass dispatch
+  42.93** and `getDiagnostics()` itself **0.011**; **config load + @types + root glob 10.91**;
+  **crawl WALL 10.74** (tight: [10.44, 10.86]), of which sequential resolve **4.34** and the
+  two CPU sums 1.06 + 0.98; **bind 7.08**; **post-checker 6.43**.
+  **THE FRONT-END ARC HAS DONE ITS WORK AND THE RANKING SAYS SO.** Crawl and glob together are
+  now 21.6 ms against the init block's 42.9 — where (INC.77) opened with the crawl at 19.6 and
+  the glob at 15.3. Do not open another crawl row without re-reading (INC.83): its three named
+  members are refused with prices, and what remained after (INC.84)/(INC.85) is a pipeline
+  entered for ONE file per keystroke.
+  **THE TWO CANDIDATES, in order:**
+  **(a) `post-check diagnostic filters` 4.22 ms of the 6.43 post-checker row — a row NO QUEUE
+  ITEM HAS EVER NAMED**, which is the (INC.57)/(INC.65)/(INC.81) pattern for the fourth time:
+  the finding is in a sub-row that only appears once you print the distribution. It runs in the
+  `--noEmit` path, so (INC.59)'s question applies — ask FIRST whether a per-keystroke query
+  needs it at all, before making it cheaper. Its neighbours are named and small
+  (`collectCrossFileNamespaceExports` 0.85, `topologicalSort` 0.30, output assembly 0.53).
+  **(b) the init block's 42.93 ms**, which is 48% of the query and is where everything left
+  is. Read (INC.77) BEFORE touching it: its largest row (`init:buildFileLocalTypeMaps`, ~12-15
+  ms) is REFUSED as the build's first real type resolution — deferring it MOVES the cost — and
+  the ~10 ms whole-program-walker pool it names is really ~1.2 ms once the round-609 collector
+  classification is read per walker. So the open part is neither of those and needs a
+  distribution, not a top-N list ((INC.69)'s plateau lesson).
+  **INSTRUMENT:** `Inc56TrustedFloorMain <dir> trust 8 6` prints WALL, the FEROW rows and the
+  PTROW pass rows in the QUERY regime — and read a pass table only against a block from the
+  SAME regime ((INC.77)).
+
 - [x] **(INC.85) DONE 2026-09-01 — A WAVE THAT CANNOT BLOCK IS DRAINED WITHOUT THE 16-WAY
   MERGE.** `readAndScanBatch` classifies per path on the caller's thread (resident content
   AND a content-cache hit -> built directly; anything else -> the old pipeline verbatim), both
