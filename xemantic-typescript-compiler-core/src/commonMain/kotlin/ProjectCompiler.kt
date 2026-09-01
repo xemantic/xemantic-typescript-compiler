@@ -670,15 +670,168 @@ class ProjectCompiler(private val vfs: Vfs) {
      * per-instance state only (no top-level/companion mutable state; the
      * TypeParameter `internSalt` stamp is per-file pure — audited for this step).
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun readAndScanBatch(paths: List<String>, options: CompilerOptions): List<CrawledFile> {
         if (paths.isEmpty()) return emptyList()
         // (INC.84) The concurrent half of the crawl, decomposed. [FrontEnd.CRAWL_BATCH]
-        // is this whole function's WALL; the three rows inside it partition it, bar the
+        // is this whole function's WALL; the rows inside it partition it, bar the
         // probe's own census loop (see [FrontEnd.CRAWL_BATCH]'s KDoc).
         val feBatchT0 = FrontEnd.t()
+        // (INC.85) The ADAPTIVE drain. [residentDrain] answers — sequentially, on this
+        // thread — exactly the files that need neither io nor a parse; every other file,
+        // which is every file of a cold crawl and every file under an ordinary `Vfs`,
+        // goes to [drainConcurrently] UNCHANGED. Both halves are folded together below,
+        // so every write still happens once, in the single-threaded region.
+        val feResidentT0 = FrontEnd.t()
+        // The PRE-GATE, and the reason a cold build and an ordinary `Vfs` pay exactly
+        // nothing for this: `hasResidentContent` is a whole-store question answered
+        // ONCE per wave, `false` by default on the interface, so a `Vfs` that has not
+        // opted in never sees a probe. Without it the classification asked 2,401 files
+        // whether they were resident in order to be told "no" 2,401 times, which
+        // measured 0.56-0.69 ms per wave on the untrusting arm — a cost paid by the
+        // one path this change cannot help.
+        val mayBeResident = vfs.hasResidentContent()
+        val fast = ArrayList<CrawledFile>()
+        // `paths` ITSELF on the fast exit, not a copy: the untrusting path must be the
+        // pre-(INC.85) one down to the allocation.
+        val deferred: List<String>
+        if (mayBeResident) {
+            FrontEnd.crawlDrainScans++
+            val rest = ArrayList<String>()
+            for (path in paths) {
+                val cf = residentDrain(path, options)
+                if (cf == null) rest.add(path) else fast.add(cf)
+            }
+            deferred = rest
+        } else {
+            FrontEnd.crawlDrainSkips++
+            deferred = paths
+        }
+        FrontEnd.crawlResidentFiles += fast.size.toLong()
+        FrontEnd.crawlPipelineFiles += deferred.size.toLong()
+        FrontEnd.close(FrontEnd.CRAWL_RESIDENT, feResidentT0)
         val fePipeT0 = FrontEnd.t()
-        val byPath = paths.asFlow()
+        val piped = if (deferred.isEmpty()) emptyList() else drainConcurrently(deferred, options)
+        FrontEnd.close(FrontEnd.CRAWL_PIPE, fePipeT0)
+        // Concatenated in classification order, which is NOT input order — the
+        // `associateBy` + `paths.map` below is what restores that, and it is the
+        // crawl's discovery order and therefore the binder's file order (round 776).
+        val byPath: List<CrawledFile> = when {
+            fast.isEmpty() -> piped
+            piped.isEmpty() -> fast
+            else -> fast + piped
+        }
+        val feFoldT0 = FrontEnd.t()
+        // Single-threaded: the concurrent flow is fully drained by now, which is
+        // the ONLY point at which [CrawlParseCache] may be written (round 825 —
+        // a plain HashMap write from N workers is a race with no exception to
+        // find it by). Unconditional, unlike the census below it: the cache is
+        // production behaviour, not instrumentation.
+        for (f in byPath) {
+            val pp = f.preParsed
+            if (pp != null) CrawlParseCache.store(f.path, pp)
+            // (INC.56) The ONE point at which a Vfs may retain what this batch read,
+            // for exactly [CrawlParseCache.store]'s reason: the concurrent flow above
+            // is drained by now. Every default implementation ignores it.
+            if (f.content != null) vfs.retainRead(f.path, f.content)
+            if (f.content != null && !f.path.endsWith(".json")) {
+                if (f.cacheHit) CrawlParseCache.hits++ else CrawlParseCache.misses++
+            }
+            if (f.parseDispatched) CrawlParseCache.parseDispatches++
+        }
+        FrontEnd.close(FrontEnd.CRAWL_FOLD, feFoldT0)
+        // Deliberately OUTSIDE every span below [FrontEnd.CRAWL_BATCH]: the census is
+        // the instrument, and folding it into the row it decomposes would inflate the
+        // very quantity that row exists to report.
+        if (FrontEnd.mode == FrontEnd.ON) {
+            for (f in byPath) {
+                FrontEnd.addCrawlFile(
+                    readNanos = f.readNanos, parseNanos = f.parseNanos,
+                    makeNanos = f.mkNanos, chars = f.content?.length ?: 0,
+                )
+                FrontEnd.addParseAmp(f.ampBase, f.ampSink)
+            }
+        }
+        val feIdxT0 = FrontEnd.t()
+        val indexed = byPath.associateBy { it.path }
+        val ordered = paths.map { indexed.getValue(it) }
+        FrontEnd.close(FrontEnd.CRAWL_INDEX, feIdxT0)
+        FrontEnd.close(FrontEnd.CRAWL_BATCH, feBatchT0)
+        return ordered
+    }
+
+    /**
+     * (INC.85) The ONE file [readAndScanBatch] can answer without leaving this thread:
+     * one whose content is already in memory (`Vfs.readTextIfResident`) AND which this
+     * process has already parsed from exactly those bytes under exactly those flags.
+     * Null otherwise — which is what an ordinary `Vfs` answers for everything, and what
+     * EVERY file answers on a cold build.
+     *
+     * ## Why the pipeline is the wrong shape for such a file, measured
+     *
+     * On an application-shaped project (2,401 files, warm incremental query) the
+     * sixteen-way `flatMapMerge` runs at **0.58-0.60x effective parallelism** — the
+     * worker CPU inside it (2.9-3.7 ms) is LESS than its own wall (4.8-6.4 ms) — because
+     * there is nothing left to overlap: every read is resident and every parse is a
+     * [CrawlParseCache] hit, so the merge pays sixteen channels and their scheduling to
+     * discover that. On the UNTRUSTING arm the same pipeline runs at **7.5-8.9x**, which
+     * is exactly why it must stay as it is for the blocking case and why this is a
+     * per-file classification rather than a policy.
+     *
+     * ## The three properties that make this a scheduling change and not a semantic one
+     *
+     * 1. `readTextIfResident` and [CrawlParseCache.lookup] are both READ-ONLY, so a
+     *    refusal here leaves nothing for the pipeline to undo and cannot make it answer
+     *    differently. The gate is `lookup`'s own, asked with the flags
+     *    [computeParserFlags] would give (INV.1(e)'s single source of truth), so the two
+     *    drains cannot disagree about what a hit is.
+     * 2. Every WRITE stays where it was: [CrawlParseCache.store], `vfs.retainRead` and
+     *    the hit/miss/dispatch counters are folded single-threaded by the caller over
+     *    the concatenation of both drains (round 825 — a write from the flow's workers
+     *    is a data race with no exception to find it by).
+     * 3. Nothing here decides ORDER.
+     *
+     * ## The cold build, which is the hazard
+     *
+     * A parse MISS is DEFERRED rather than parsed here, so this can never move a real
+     * parse onto the caller's thread: a cold crawl of N files defers all N and enters
+     * the concurrent pipeline exactly as before. `.json` is deferred for the same
+     * reason it is never cached (the crawl re-parses it per build), and `OverlayVfs`
+     * deliberately never reports one resident anyway.
+     *
+     * The amplifier must price a REAL parse on the cached binary, so `FrontEnd.parseAmp`
+     * disables this path wholesale rather than being reproduced inside it.
+     */
+    private fun residentDrain(path: String, options: CompilerOptions): CrawledFile? {
+        if (FrontEnd.parseAmp > 0) return null
+        if (path.endsWith(".json")) return null
+        val t0 = FrontEnd.t()
+        val content = vfs.readTextIfResident(path) ?: return null
+        val t1 = FrontEnd.t()
+        // The only work a refusal wastes, and it short-circuits on the module kind or on
+        // `content.contains("await")` before any scan.
+        val flags = computeParserFlags(path, content, options)
+        val pp = CrawlParseCache.lookup(path, content, flags) ?: return null
+        val t2 = FrontEnd.t()
+        val crawled = CrawledFile(
+            path, content, pp, t1 - t0, t2 - t1,
+            pp.sourceFile.statements.size.toLong(), 0L,
+            cacheHit = true, parseDispatched = false,
+        )
+        crawled.mkNanos = FrontEnd.t() - t2
+        return crawled
+    }
+
+    /**
+     * INV.1(b)'s concurrent pipeline, unchanged — see [readAndScanBatch]'s KDoc for what
+     * it is and why. Entered for every file whose read would BLOCK or whose parse is not
+     * already cached.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun drainConcurrently(
+        paths: List<String>,
+        options: CompilerOptions,
+    ): List<CrawledFile> =
+        paths.asFlow()
             .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
                 flow {
                     val t0 = FrontEnd.t()
@@ -771,45 +924,6 @@ class ProjectCompiler(private val vfs: Vfs) {
                 }
             }
             .toList()
-        FrontEnd.close(FrontEnd.CRAWL_PIPE, fePipeT0)
-        val feFoldT0 = FrontEnd.t()
-        // Single-threaded: the concurrent flow is fully drained by now, which is
-        // the ONLY point at which [CrawlParseCache] may be written (round 825 —
-        // a plain HashMap write from N workers is a race with no exception to
-        // find it by). Unconditional, unlike the census below it: the cache is
-        // production behaviour, not instrumentation.
-        for (f in byPath) {
-            val pp = f.preParsed
-            if (pp != null) CrawlParseCache.store(f.path, pp)
-            // (INC.56) The ONE point at which a Vfs may retain what this batch read,
-            // for exactly [CrawlParseCache.store]'s reason: the concurrent flow above
-            // is drained by now. Every default implementation ignores it.
-            if (f.content != null) vfs.retainRead(f.path, f.content)
-            if (f.content != null && !f.path.endsWith(".json")) {
-                if (f.cacheHit) CrawlParseCache.hits++ else CrawlParseCache.misses++
-            }
-            if (f.parseDispatched) CrawlParseCache.parseDispatches++
-        }
-        FrontEnd.close(FrontEnd.CRAWL_FOLD, feFoldT0)
-        // Deliberately OUTSIDE every span below [FrontEnd.CRAWL_BATCH]: the census is
-        // the instrument, and folding it into the row it decomposes would inflate the
-        // very quantity that row exists to report.
-        if (FrontEnd.mode == FrontEnd.ON) {
-            for (f in byPath) {
-                FrontEnd.addCrawlFile(
-                    readNanos = f.readNanos, parseNanos = f.parseNanos,
-                    makeNanos = f.mkNanos, chars = f.content?.length ?: 0,
-                )
-                FrontEnd.addParseAmp(f.ampBase, f.ampSink)
-            }
-        }
-        val feIdxT0 = FrontEnd.t()
-        val indexed = byPath.associateBy { it.path }
-        val ordered = paths.map { indexed.getValue(it) }
-        FrontEnd.close(FrontEnd.CRAWL_INDEX, feIdxT0)
-        FrontEnd.close(FrontEnd.CRAWL_BATCH, feBatchT0)
-        return ordered
-    }
 
     private fun resolveConfigPath(projectPath: String): String {
         val p = PathUtil.normalize(projectPath)

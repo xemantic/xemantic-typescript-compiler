@@ -114,6 +114,45 @@ interface Vfs {
     fun readTextIfResident(path: String): String? = null
 
     /**
+     * (INC.85) Whether this `Vfs` holds ANY resident content at all — i.e. whether
+     * [readTextIfResident] could answer non-null for anything right now.
+     *
+     * ## What it promises, and what a wrong answer costs
+     *
+     * It is a WHOLE-STORE question, deliberately not a per-path one, and it exists so
+     * that a caller with a wave of paths can decide ONCE whether asking about them is
+     * worth anything. `ProjectCompiler.readAndScanBatch` gates its entire per-file
+     * classification pass on it: `false` and the wave goes straight to the concurrent
+     * pipeline, with not one probe performed.
+     *
+     * **The two directions are not symmetric, and the default is the safe one.**
+     * A wrong `true` costs a wasted probe per path — the classification then finds
+     * nothing resident and defers everything, which is exactly what would have
+     * happened anyway. A wrong `false` costs only the OLD code path: every file goes
+     * through the pipeline, which is what this whole interface did before (INC.85) and
+     * is correct by construction. **Neither direction can change an answer** — this
+     * decides scheduling, never content — so an implementation may be as conservative
+     * or as approximate as it likes, and an over-approximation ("something might be
+     * resident") is preferred to an under-approximation only on performance grounds.
+     *
+     * ## The wrapper trap
+     *
+     * This is a defaulted interface member added for SPEED, which in this repo is a
+     * silent regression waiting for the next wrapper (INC.76: `OverlayVfs` inherited
+     * `listEntries`' default body and handed (INC.60)'s whole saving back). A `Vfs`
+     * that DELEGATES [readTextIfResident] to another must delegate this too, or it
+     * answers `false` over a store that does hold content and silently gives the merge
+     * back its work. Kotlin's `class W(d: Vfs) : Vfs by d` generates a forwarder for
+     * this member as it does for every other, so the idiomatic wrapper is correct for
+     * free; a wrapper that overrides [readTextIfResident] by hand must override this by
+     * hand as well.
+     *
+     * Must be O(1)-ish and must not mutate anything: it is asked once per crawl wave,
+     * from the crawl's own thread.
+     */
+    fun hasResidentContent(): Boolean = false
+
+    /**
      * (INC.56) Offers [text] as what [readTextIfResident] may answer for [path] from
      * now on. Default: a no-op.
      *

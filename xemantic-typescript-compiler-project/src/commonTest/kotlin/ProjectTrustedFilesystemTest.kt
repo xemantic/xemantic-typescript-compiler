@@ -340,6 +340,36 @@ class ProjectTrustedFilesystemTest {
         assert(overlay.readTextIfResident("/x/a.ts") == "in the editor")
     }
 
+    /**
+     * (INC.85) The whole-store PRE-GATE, which is a different question from residency
+     * and must stay one. `readAndScanBatch` probes every path of a wave only when this
+     * is true, so it tracks [OverlayVfs.retained] — O(program under the promise) — and
+     * deliberately NOT the overlaid buffers, which are O(open editors) and could never
+     * repay an O(program) probe. An overlaid buffer is still RESIDENT (the pin above);
+     * it simply does not license the scan.
+     */
+    @Test
+    fun `the pre-gate tracks the promise and not the open buffers`() {
+        val overlay = OverlayVfs(InMemoryVfs(mapOf("/x/a.ts" to "export const a = 1;\n")))
+        assert(!overlay.hasResidentContent())
+
+        // An unsaved buffer is resident and still does not open the gate.
+        overlay.put("/x/open.ts", "in the editor")
+        assert(overlay.readTextIfResident("/x/open.ts") == "in the editor")
+        assert(!overlay.hasResidentContent())
+
+        // The promise plus a read does.
+        overlay.trustFilesystem = true
+        assert(!overlay.hasResidentContent())
+        overlay.retainRead("/x/a.ts", "export const a = 1;\n")
+        assert(overlay.hasResidentContent())
+
+        // Withdrawing it closes the gate again — the setter clears the retention, which
+        // is what makes the `trustFilesystem` conjunct a belt rather than the rule.
+        overlay.trustFilesystem = false
+        assert(!overlay.hasResidentContent())
+    }
+
     /** What the offer refuses, each for its own reason. */
     @Test
     fun `an offer is refused for json, for a tombstone and for an overlaid path`() {

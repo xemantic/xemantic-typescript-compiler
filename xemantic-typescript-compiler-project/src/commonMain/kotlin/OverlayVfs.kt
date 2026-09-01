@@ -292,6 +292,38 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
     }
 
     /**
+     * (INC.85) True while [retained] could answer [readTextIfResident] — i.e. while the
+     * host's promise is in force and a build has already read the program.
+     *
+     * ## Why the overlaid [contents] are deliberately NOT part of this
+     *
+     * The gate decides whether `ProjectCompiler.readAndScanBatch` runs a per-path
+     * residency probe over the WHOLE wave. [contents] is O(open editor buffers) and a
+     * wave is O(program files), so answering `true` for it would spend O(program) probes
+     * to fast-drain at most a handful of files — **it can never pay for itself at any
+     * project size**, which is a structural fact and not a threshold. [retained] is the
+     * opposite: under [trustFilesystem] it holds the whole program, which is exactly
+     * why that half does pay. Do not "fix" the missing disjunct back.
+     *
+     * Nothing is lost by omitting it. A `false` here costs only the pre-(INC.85) path:
+     * every file goes through the concurrent pipeline, which still serves an overlaid
+     * buffer from [contents] through [readText] and parses it from its new bytes.
+     *
+     * The [trustFilesystem] conjunct is redundant with [retainRead]'s own early return
+     * and the setter's `retained.clear()` — [retained] cannot be non-empty without it —
+     * and is kept as the belt: it takes both mistakes to serve a stale read, and an
+     * ablation dropping either alone reddens nothing (round 927's pair).
+     *
+     * Deliberately an OVER-approximation of what [readTextIfResident] will serve: it
+     * ignores the `.json` refusal and the [deleted] tombstones, because a wrong `true`
+     * costs one wasted probe per path while a wrong `false` is merely the old path. It
+     * does NOT consult [delegate], and that is exact rather than an omission —
+     * [readTextIfResident] answers only from these maps, so nothing underneath this
+     * wrapper is reachable through it.
+     */
+    override fun hasResidentContent(): Boolean = trustFilesystem && retained.isNotEmpty()
+
+    /**
      * (INC.56) An overlaid buffer or a retained read, both of which are in memory here
      * and cost nothing to hand back — so the crawl need not pay a thread handoff for
      * them. Null for everything else, which is the safe answer and the only one an
@@ -316,6 +348,7 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
      * load-bearing half and this order is the belt. Recorded here rather than claimed
      * as coverage.
      */
+
     override fun readTextIfResident(path: String): String? {
         val k = key(path)
         if (k.endsWith(".json") || k in deleted) return null

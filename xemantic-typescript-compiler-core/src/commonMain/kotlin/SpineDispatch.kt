@@ -4718,7 +4718,20 @@ object FrontEnd {
      */
     const val CRAWL_DRAIN = 60
 
-    const val N = 61
+    /**
+     * (INC.85) The crawl's ADAPTIVE drain — the sequential classification loop that
+     * answers a file whose read is resident AND whose parse is cached, and defers every
+     * other file to [CRAWL_PIPE]. WALL, one timestamp pair per wave. INSIDE
+     * [CRAWL_BATCH], disjoint from [CRAWL_PIPE].
+     *
+     * Its wall is NOT the receipt for the change — [crawlResidentFiles] /
+     * [crawlPipelineFiles] are, because they are deterministic where every row in this
+     * region has a per-process spread of milliseconds. This row exists so the region it
+     * adds is attributed rather than dumped into [CRAWL_BATCH]'s residue.
+     */
+    const val CRAWL_RESIDENT = 61
+
+    const val N = 62
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4782,6 +4795,7 @@ object FrontEnd {
         "    of which the single-threaded fold (WALL)",
         "    of which associateBy + re-index (WALL)",
         "  of which frontier drain + downstream emit (WALL)",
+        "    of which the resident fast drain (WALL)",
     )
 
     /**
@@ -4790,7 +4804,7 @@ object FrontEnd {
      */
     private val order: IntArray = intArrayOf(
         CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE,
-        CRAWL_BATCH, CRAWL_PIPE, CRAWL_MKFILE, CRAWL_FOLD, CRAWL_INDEX, CRAWL_DRAIN,
+        CRAWL_BATCH, CRAWL_RESIDENT, CRAWL_PIPE, CRAWL_MKFILE, CRAWL_FOLD, CRAWL_INDEX, CRAWL_DRAIN,
         PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_BIND,
@@ -4875,6 +4889,37 @@ object FrontEnd {
      */
     var resolveExistsQuestions: Long = 0
     var resolveExistsProbes: Long = 0
+
+    /**
+     * (INC.85) census — how the crawl DRAINED each file: [crawlResidentFiles] answered
+     * on the caller's thread because the read was already in memory and the parse was
+     * already cached, [crawlPipelineFiles] handed to the sixteen-way `flatMapMerge`.
+     *
+     * The pair is the round's receipt and it is a COUNT for the reason this arc keeps
+     * re-learning: the row it decomposes is 5-10 ms whose per-process spread is itself
+     * several milliseconds, while these move by exactly one per file and are identical
+     * on any box. The COLD arm is what stops "always take the fast drain" reading green
+     * — a first build must put every file through the pipeline, because a real parse
+     * belongs on `Dispatchers.Default` and not on this thread.
+     *
+     * Written from `ProjectCompiler.readAndScanBatch`'s own sequential classification
+     * loop, never from the flow's workers (round 825).
+     */
+    var crawlResidentFiles: Long = 0
+    var crawlPipelineFiles: Long = 0
+
+    /**
+     * (INC.85) census — crawl WAVES that ran the per-file residency classification
+     * ([crawlDrainScans]) against waves that took the whole-store pre-gate's fast exit
+     * ([crawlDrainSkips]) and went straight to the concurrent pipeline.
+     *
+     * This is the receipt that the blocking path is untouched: a cold build and any
+     * `Vfs` that has not opted into `hasResidentContent` must show `scans == 0`, i.e.
+     * not one probe was performed. It is a count and not a row for the usual reason —
+     * the region is sub-millisecond and its per-process spread is larger than it.
+     */
+    var crawlDrainScans: Long = 0
+    var crawlDrainSkips: Long = 0
 
     /**
      * (INC.68) census — how often [PathUtil.normalize] is asked, and how often the
@@ -5440,6 +5485,8 @@ object FrontEnd {
         filesRead = 0; charsRead = 0
         globDirs = 0; globEntries = 0; globCandidates = 0; globRoots = 0; globRegexEvals = 0
         resolveExistsQuestions = 0; resolveExistsProbes = 0
+        crawlResidentFiles = 0; crawlPipelineFiles = 0
+        crawlDrainScans = 0; crawlDrainSkips = 0
         pathNormalizeCalls = 0; pathNormalizeFast = 0; pathJoinCalls = 0; pathJoinFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
@@ -5727,6 +5774,11 @@ object FrontEnd {
         appendLine(
             "module resolution: $resolveExistsQuestions exists/isDirectory questions, " +
                 "$resolveExistsProbes reached the filesystem"
+        )
+        appendLine(
+            "crawl drain: $crawlResidentFiles resident + cached (sequential), " +
+                "$crawlPipelineFiles through the concurrent pipeline; " +
+                "$crawlDrainScans wave(s) classified, $crawlDrainSkips skipped the probe"
         )
         appendLine(
             "crawl parse cache: ${CrawlParseCache.hits} hit / ${CrawlParseCache.misses} miss" +
