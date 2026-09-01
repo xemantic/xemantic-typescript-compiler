@@ -65,11 +65,19 @@ def main() -> None:
         i = args.index("--callers-of")
         callers_of = args[i + 1]
         del args[i:i + 2]
+    # (INV.0) --event lets the same aggregation run over allocation samples
+    # (jdk.ObjectAllocationSample — enabled by settings=profile), which is the
+    # split receipts' allocation profile. Counts are SAMPLES, not bytes.
+    event = "jdk.ExecutionSample"
+    if "--event" in args:
+        i = args.index("--event")
+        event = args[i + 1]
+        del args[i:i + 2]
     jfr_file = args[0]
     topn = int(args[1]) if len(args) > 1 else 30
 
     proc = subprocess.Popen(
-        [find_jfr_tool(), "print", "--events", "jdk.ExecutionSample", jfr_file],
+        [find_jfr_tool(), "print", "--events", event, jfr_file],
         stdout=subprocess.PIPE, text=True, errors="replace")
 
     frame_re = re.compile(r"^\s+(\S+?)\.([A-Za-z0-9_$<>]+)\([^)]*\)")
@@ -78,7 +86,7 @@ def main() -> None:
     in_stack = False
     assert proc.stdout is not None
     for line in proc.stdout:
-        if line.startswith("jdk.ExecutionSample"):
+        if line.startswith(event):
             if cur:
                 stacks.append(cur)
             cur, in_stack = [], False

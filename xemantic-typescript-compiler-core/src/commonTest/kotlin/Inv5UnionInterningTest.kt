@@ -33,7 +33,7 @@ import kotlin.test.Test
 /**
  * INV.5(a) (round 545): canonical union/intersection identity —
  * [getUnionType]/[getIntersectionType] intern by member-id key
- * (CheckerState.unionInternCache/intersectionInternCache), so identical
+ * (the [TypeInterner] in CheckerState — (INV.0) step 1), so identical
  * member lists share one instance and Type.id regardless of WHICH pass
  * builds the type first (the round-543 first-touch blocker).
  *
