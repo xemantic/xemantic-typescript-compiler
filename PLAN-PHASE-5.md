@@ -656,7 +656,7 @@ no counter), then continue top-to-bottom.
   for `AGPL-3.0-or-later` (and any project-licence description missing the output exception)
   and align on the header string. One commit.
 
-- [ ] **(DOC.1) `docs/language-service.md` § 3b COMPARES AGAINST THE WRONG tsgo — THE
+- [x] **(DOC.1) DONE 2026-09-01 — `docs/language-service.md` § 3b COMPARED AGAINST THE WRONG tsgo — THE
   `--incremental` CLI IN FRESH PROCESSES — AND ATTRIBUTES A 182 ms PROCESS FLOOR TO tsgo.**
   The relevant comparison is `tsgo --lsp`: a long-lived session with snapshot updates and
   lazy per-file checking, which pays no such floor. Re-title the table honestly ("vs tsgo

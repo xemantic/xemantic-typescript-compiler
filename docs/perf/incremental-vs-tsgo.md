@@ -92,6 +92,15 @@ documented run-to-run swing is about ±13%. **No ratio below is quoted to more p
 than that supports** — anything under about 1.3x is reported as "comparable", not as a
 win, in either direction.
 
+**5. The arm an editor host cares about is NOT on this page.** Every tsgo cell below is
+the `--incremental` CLI in a fresh process, so tsgo's per-query floor (process start,
+`.tsbuildinfo` read, re-stat) is a property of that harness — `tsgo --lsp`, the thing a
+host would integrate, is a long-lived session with snapshot updates and lazy per-file
+checking and pays none of it per query. Wherever this page says "their floor is paid on
+every query", read "every CLI query". The long-lived comparison — `xtsc-lsp` against
+`tsgo --lsp`, both resident — is pending as **(LSP.3)** and will replace the CLI tables'
+role here when it lands.
+
 ## Arm A — tsc's own 78 compiler sources
 
 Fixtures `build/bench/tsgo-bench` and `build/bench/ours-bench`; edit

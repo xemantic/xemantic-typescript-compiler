@@ -417,15 +417,22 @@ this layer does not, so the API will not guess a working set on the caller's
 behalf; batching the visible tabs into one call is the host's job, not
 something `Project` infers.
 
-## 3b. If you are choosing between this and a tsgo LSP integration
+## 3b. What is measured against tsgo — its CLI, not yet its LSP
 
-Both answer editor questions from a real type-check. They differ in **where the
-incremental state lives**, and that difference decides more of the cost model than
-either compiler's speed does. Measured on tsc's own 78 compiler sources, same tree,
-same two edits to one file — a **body-only** edit (a local `const` inside an exported
-function) and a **signature** edit (one added `export const`):
+Both answer editor questions from a real type-check. **The table below compares this
+API against tsgo's `--incremental` CLI in fresh processes — NOT against `tsgo --lsp`,
+which is what an editor host would actually integrate.** `tsgo --lsp` is a long-lived
+session with snapshot updates and lazy per-file checking: it pays no process start, no
+`.tsbuildinfo` read and no tree re-stat per query, so the 182 ms floor visible in the
+CLI column below is a property of the CLI harness, not of tsgo in an editor. The
+long-lived comparison — `xtsc-lsp` against `tsgo --lsp`, both resident — is **pending
+as (LSP.3)** and will replace this table's role when it lands.
 
-| | tsgo 7.0.2, `--incremental --noEmit`, fresh process | this API, in-session |
+Measured on tsc's own 78 compiler sources, same tree, same two edits to one file — a
+**body-only** edit (a local `const` inside an exported function) and a **signature**
+edit (one added `export const`):
+
+| | tsgo 7.0.2 CLI, `--incremental --noEmit`, fresh process per query | this API, in-session |
 |---|---|---|
 | full check, no prior state | **1,631 ms** | **5,352 ms** warm · **23,266 ms** cold JVM |
 | nothing edited | **182 ms** | **0 ms** |
@@ -433,37 +440,48 @@ function) and a **signature** edit (one added `export const`):
 | after a signature edit | **1,654 ms** | **5,694 ms** |
 
 **Read the caveats before the numbers.** On this project we report **46** diagnostics
-where tsgo reports **65** — we are doing less work, by a margin nobody has decomposed,
-and every ratio above flatters us by it. The two models are also not the same shape:
-tsgo's state is `.tsbuildinfo` on disk, so each of its cells is a fresh process that
-re-reads that state and re-stats the tree, while ours is a live object that pays
-neither. Medians of three, one machine, one day. Treat the table as a comparison of
-two ARCHITECTURES, not of two compilers.
+where tsgo reports **65** — the margin is decomposed in
+[`docs/perf/tsgo-diagnostic-gap.md`](perf/tsgo-diagnostic-gap.md) (19 genuine false
+negatives of ours), and every ratio above flatters us by it. The two columns are also
+different process models: tsgo's CLI cells each pay a fresh process that re-reads
+`.tsbuildinfo` and re-stats the tree; ours is a live object that pays neither. Medians
+of three, one machine, one day. Treat the table as a comparison of a CLI against a
+resident API — it cannot say which *resident* design is faster, because tsgo's
+resident mode is not in it.
 
-### What the shape difference buys, in both directions
+### What the table can and cannot say
 
-**In the edit loop, holding the program beats checking faster.** Their compiler is
-**3.3x faster than ours on a full check** and we still answer a body-only edit in less
-absolute time, because their 182 ms floor — process start, state read, re-stat — is
-paid on every query and is 79% of what that edit costs them. Ours is zero. If your host
-keeps a long-lived process, that floor is the number to compare, not the full check.
+**Against the CLI, holding the program in memory wins the edit loop** — we answer a
+body-only edit in less absolute time than a compiler whose full check is 3.3x faster,
+because the CLI's per-query floor (process start, state read, re-stat) is 79% of what
+that edit costs it. **Against `tsgo --lsp` this is unmeasured**: their session holds
+its state resident exactly as ours does, so none of that floor applies, and the honest
+expectation is that their lazy per-file checking makes the per-edit cells competitive
+or better. (LSP.3) measures it; until then this section draws no conclusion about
+long-lived hosts.
 
 **On first open, we lose badly and it is not close** — 23.3 s against 1.6 s, of which
-~18 s is JVM start and JIT warm-up rather than compilation. A host that opens a project
-and wants diagnostics immediately will feel that. It is an artifact-stack problem (a
-native image, an AOT cache, or a resident daemon) rather than a property of the checker,
-but today it is real and you should plan for it — for example by opening the project and
-running one query off the critical path, before the user asks anything.
+~18 s is JVM start and JIT warm-up rather than compilation, and this cost is real in
+*any* process model. A host that opens a project and wants diagnostics immediately
+will feel it. It is an artifact-stack problem (a native image, an AOT cache, or a
+resident daemon) rather than a property of the checker, but today it is real and you
+should plan for it — for example by opening the project and running one query off the
+critical path, before the user asks anything.
 
-**Neither design gets anything from a dependency closure on a codebase like this one.**
-tsgo implements per-hop pruning — on a signature change it walks the reverse-reference
-graph and re-checks a dependent only if that dependent's own signature also moved — and
-on this project it bought nothing measurable (1,654 ms against a 1,631 ms cold check).
-We do not build the closure at all and fall back to a whole-program build, which costs
-the same here. On more layered code theirs should degrade more gracefully than ours;
-that is untested by both of us and is the honest limit of this comparison.
+**The dependency closure buys nothing on THIS codebase and nearly everything on a
+layered one.** tsc's own sources are `export *` barrels, so tsgo's per-hop pruning
+recovers nothing here (1,654 ms against its own 1,631 ms cold check) and our
+whole-program fallback costs the same. On an application-shaped 2,401-file tree the
+same mechanism is worth almost everything to them — a signature edit costs tsgo
+**304 ms against 427 cold** while we rebuild at **3,850 ms** — measured 2026-09-01 in
+[`docs/perf/incremental-vs-tsgo.md`](perf/incremental-vs-tsgo.md) (Arm B), which
+reopened and then refused the closure item ((INC.91)); the surviving design is the
+closure-narrowed build.
 
 ### Two capability differences worth knowing before you design a host
+
+These are from reading tsgo's LSP sources (`internal/project`, at `main` 2026-08-20),
+not from the CLI table, so they survive the caveat above.
 
 **There is a project-wide diagnostics call here, and it is incremental.**
 `diagnostics()` answers about the whole program and, after an edit that moved no
@@ -476,16 +494,19 @@ rather than a matter of tuning.
 **Repeated and overlapping questions about one project state are free here.** A second
 identical query builds nothing; so does a query about a subset of a set already asked
 about, and so does one about a file no set covered (§ 4a). tsgo re-creates its checker
-pool whenever the program is updated, so its per-file answers after an edit start from a
-fresh checker. Conversely their per-file first answer on a cold process will beat ours.
+pool whenever the program is updated, so its per-file answers after an edit start from
+a fresh checker — though its per-file first answer on a cold process will beat ours.
 
 ### The honest summary
 
-Choose on your process model, not on the table. **A long-lived host that edits and
-re-asks** — an IDE, a language server, a watch task — is what this API's cost model is
-built for, and the numbers above are favourable there for architectural reasons that
-will not evaporate. **A short-lived invocation** — a CI step, a pre-commit hook, a
-one-shot check — is the case tsgo is built for and where it is straightforwardly
+The table compares a resident API against a CLI, so it cannot decide the question a
+host actually has — which *resident* design serves an edit loop faster. That is
+(LSP.3): `xtsc-lsp` against `tsgo --lsp`, both long-lived, first-open to first hover,
+hover after each edit shape, and whole-project diagnostics. What stands today without
+that measurement: the project-wide incremental `diagnostics()` call is a structural
+capability their LSP does not expose, and the cold JVM start is a real cost their
+toolchain does not pay. **A short-lived invocation** — a CI step, a pre-commit hook, a
+one-shot check — is the case tsgo's CLI is built for and where it is straightforwardly
 better today.
 
 The measurements, the harnesses and the source reading behind this section are in
