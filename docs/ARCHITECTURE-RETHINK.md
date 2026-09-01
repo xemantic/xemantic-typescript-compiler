@@ -916,6 +916,14 @@ on `Dispatchers.IO` (UTF-8 → UTF-16 transcoding) while processing on
 
 ## 5. The phased plan (queue items INV.0–INV.7)
 
+> **2026-09-01, Phase 18:** this INV.0–INV.7 series is SUPERSEDED as a queue — parts
+> landed (INV.0 = PassTiming; INV.2(c) tables; the INV.4 spine; INV.5 interning;
+> INV.6 `--workers`; the (INC.\*) arc), and the live successor series
+> ((INV.D)/(INV.0)/(INV.1) in PLAN-PHASE-5.md, DIFFERENT meanings under the same
+> prefix) is defined by `docs/INVERSION-DESIGN.md`, whose § 8 is the bridge between
+> the two numberings. Read this section as the 2026-07-13 architecture rationale,
+> not as work items.
+
 Not a rewrite — an **inversion of control**, migrating walkers into a single-pass
 spine while the corpus suite + `--listAll` byte-diffs + bench TSV pin behavior at
 every step. The verification loop is the project's superpower; it is what makes
