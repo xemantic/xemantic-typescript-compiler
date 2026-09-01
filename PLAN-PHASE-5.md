@@ -25,6 +25,37 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.3) — the LSP is feature-complete for a first release, and the honest tsgo number is 30-50x against us (2026-09-01)
+
+**(LSP.2) LANDED** in the main context: the full feature map onto `Project` (lifecycle
+incl. Full-sync didChange with ranged changes SKIPPED-and-pinned, didClose→reloadFile,
+didSave, watched-files; definition/references/documentHighlight/completion/signatureHelp;
+prepareRename from the parse alone; rename refusals as `-32803` errors CARRYING the
+RenameRefusal name; pull diagnostics; project-wide publishDiagnostics off the narrowed
+`diagnostics()`, on lifecycle events never keystrokes, cleared files republished empty).
+16 new pins, 58/0 module, warning-clean. nativeImage task wired (mirror of -cli, entry
+`XtscLspMainKt`); configures — no GraalVM on this box, first verified image is a
+CI/other-host step, same status as the cli arm. One instructive test defect: `obj("result")
+as? JsonArray` can never succeed (obj() already cast) — the compiler's "cast can never
+succeed" warning was the tell, and the warning-clean rule is what surfaced it.
+
+**(LSP.3) MEASURED, AND THE ANSWER IS HONEST IN THEIR FAVOUR.** Both servers long-lived
+over stdio on tsc's 78 sources ((INC.90) CRLF-preserving variants, probe + row-count
+receipts): tsgo first-open→first-hover **255 ms**, per-edit hover **12-18 ms** either
+shape; ours **24.8 s** cold-JVM first open (including the eager 46-row project-wide
+publish their open never performs) and **398-630 ms** per-edit hover. Their lazy
+NodeLinks-style per-node answering vs our narrowed-build-per-fresh-question —
+**INVERSION-DESIGN.md's bin-B gap measured end-to-end**, the strongest number for its
+Stage 1-2. Ours alone after measurement: the project-wide publish (524 ms, 5 files,
+exactly 46 rows — the receipt matched the known count) — tsgo's session pushed 1
+notification/2 rows (open file only). The per-file pull receipt caught the 46-vs-65 gap
+surfacing per-file (their 1 item in binder.ts, our 0). tsgo `--lsp -stdio` does not exit
+on `exit`. Published: perf doc's new LSP arm + § 3b updated from "pending" to the
+verdict. **Sequencing note: (LSP.2)/(LSP.3) were taken before the (EXT.2…n) ladder
+because the WORK ORDER's own closing line names the tsgo --lsp number as this session's
+sought answer; the ladder is next.**
+
+
 ### Round (P18.2) — the first wave: the externals generator and the LSP server both land, and the LSP's first fixture finds a compiler defect (2026-09-01)
 
 **(EXT.1) AND (LSP.1) LANDED FROM ONE TWO-AGENT WORKTREE WAVE** (disjoint pre-scaffolded
