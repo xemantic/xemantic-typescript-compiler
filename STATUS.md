@@ -1,5 +1,19 @@
 # Status
 
+**(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
+2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
+query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are
+functions of walk-scoped state; tsgo is the free official default, so "a TypeScript compiler"
+is not the mission. **The mission: no Node and no Go in the toolchain; an embeddable
+whole-program checker (`Project`); a Kotlin externals generator with resolved types (the
+Dukat/Karakum gap); the KIR JVM bytecode backend; an LSP anyone can try in five minutes.**
+The directive is persisted in CLAUDE.md § "AI agent mission", the WORK ORDER at the top of the
+PLAN-PHASE-5.md QUEUE (new items (LIC.1) (DOC.1) (DOC.2) (EXT.1…n) (LSP.1…n) (INV.D) (INV.0)),
+and SESSION-PROMPT.md, so run-loop iterations cannot revert to the old mission. **The (INC.\*)
+latency family is CLOSED** at a 94-110 ms incremental floor / 93-217 ms plugin query — further
+INC rounds are REFUSED unless a plugin-facing query measures > 300 ms warm. Suite unchanged:
+**16,677 / 0 failures / 3 skipped** (doc-only commit).
+
 **(INC.91) — THE REOPENED CLOSURE, CENSUSED THE SAME DAY AND REFUSED ON SOUNDNESS
 (2026-09-01).** (INC.90) reopened the reverse-dependency closure on a 12.7x measurement; this
 census refuses the PROPOSAL without touching that number. Counts, two reproducing runs.
@@ -134,31 +148,3 @@ they confirm had been quoted for three rounds without ever being checked on the 
 described.
 **GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
 `huge_methods.py --fail-over 0` clean.
-
-**(INC.87)(a) — THE POST-CHECKER'S FILTER ROW IS 4.5 ms OF A KEYSTROKE AND 89% OF IT ANSWERS
-NOTHING; SPLITTING IT REFUTED ITS OWN SHAPE (2026-09-01).** (INC.86)(a) named
-`post-check diagnostic filters` — 4.22 ms of a 90 ms query and a row NO queue item had ever
-named. Split into three abutting sub-rows first, per (INC.65): **POST_DIAGS 4.507 -> 0.508 ms**,
-of which **TS2688+TS2209+isolatedDecls 3.296 -> 0.492**, the **`modulePreserve4` whole-program
-text scan 1.184 -> ABSENT (`calls` 1 -> 0)**, and the parse-cascade `removeAll` chain 0.0022 ->
-0.0017 as the untouched control. The three summed to 99.4% of the row.
-**THE OBVIOUS CANDIDATE WAS THE SMALLER MEMBER.** Reading the region, the eye lands on one
-unconditional whole-program TEXT scan sitting above the guard that is its only consumer — real,
-and 26%. The other 73% was `checkMissingTypesReferenceExports`' package.json pass, rooted at an
-alternation `(?:^|/)`, so `BnM.optimize` gives it no literal and it is attempted at EVERY
-POSITION of every file NAME — on a fixture with no `node_modules` at all, i.e. wholly to answer
-NO. Pre-gated on `endsWith("/package.json")`, EXACT because the pattern's own tail anchors
-there, regex kept live as the decider (round 792). The text scan is deferred behind a `lazy`
-with the cheap basename test moved in front of it — and it is paid TWICE per keystroke in the
-shipped design, since the (INC.17) recheck re-runs that very lambda.
-**NO WALL IS CLAIMED AND THE SAME RUN SAYS WHY:** WALL read 108 -> 88 ms while `initNanos` read
-**51.5 -> 77.9** on untouched code. One `--passTiming` draw is not a measurement ((INC.52)) and
-the query wall carries (INC.72)'s ±20 ms term. The receipt is a COUNT — the bracket lives INSIDE
-the `lazy`, so `calls == 0` IS the statement that the scan never ran.
-**BOTH PIN CLASSES WENT RED FIRST, BOTH INSTRUCTIVELY.** `ProjectCompiler` never puts a
-`package.json` into the program at all, so the TS2688 pin had to move to the multi-file harness
-— as an absence assertion it would have been green forever; and the count pin's fixture was
-named `b.ts`/`c.ts`, two of the twelve `modulePreserve4` basenames, so the scan correctly ran.
-That collision is now the POSITIVE control (round 790).
-**REFUSED, not shipped:** `init:evolvingArrayUseSiteWalks` (1.835 ms, five throwaway
-collections per file) — a rewrite was built and REVERTED, unpriceable and unpinnable locally.

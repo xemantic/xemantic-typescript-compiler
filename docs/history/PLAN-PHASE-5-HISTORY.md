@@ -1,3 +1,1018 @@
+### Round (INC.82) — the importer's directory was re-derived per SPECIFIER, and the isolated probe over-read its own prize by 3x
+
+**THE ROW.** `ModuleResolver.resolve(specifier, importerPath)` read `importerPath` for
+nothing but its `dirname` — the (INC.65) KDoc has said so in as many words since it was
+written — and then joined the directory and the specifier into a fresh `String` and probed
+the memo with it TWICE, a `containsKey` + `get` pair, because `null` is a real answer. The
+crawl's sequential loop knows the importer's directory **once per FILE** and asked this
+**once per SPECIFIER**: 4,701 asks over 2,401 files on the generated application fixture.
+
+**PRICED BEFORE ANYTHING WAS BUILT**, with the probe that already decomposes the row
+(`Inc79CrawlResolveProbeMain` over `many-small-2400-dom`): of **1,314 ns per specifier**,
+`dirnameOnly` is **96** and `keyOnly` is **174** — i.e. **1.27 ms of a 6.18 ms row**.
+
+**WHAT LANDED.** `resolveFrom(specifier, importerDir)` is now the real entry point and
+`resolve` a thin wrapper over `PathUtil.dirname`, which makes the contract STRUCTURAL
+rather than a comment. The memo is nested (`dir -> spec -> answer`) instead of keyed by a
+composite string: the outer probe is a directory the caller already holds, so its hash is
+computed once and cached on that instance, and the inner probe hashes only the short
+specifier — where a fresh composite `String` never has a cached hash and paid for its whole
+length, twice. A memoized `null` is an identity-compared sentinel, so a served answer costs
+ONE probe. The crawl hoists both the `dirname` and the per-file resolution map out of its
+per-specifier loop, the map staying LAZY because a file whose every import is unresolved
+must contribute no entry, exactly as the `getOrPut` it replaces did.
+
+**AND THE PART WORTH READING IS THAT THE PROBE OVER-READ ITS OWN PRIZE BY ~3x.** Measured
+in the BUILD over two core class dirs differing only in these two files, rotated across
+processes, `FERESOLVE` reads **4771 / 5143 / 4102 us before against 4677 / 4707 / 3954
+after** — the after arm wins 3/3 batches in BOTH rotation directions, but the ranges
+overlap and the delta is **~0.15-0.44 ms, not 1.27**. That is CLAUDE.md's own
+`hits x mean-call-cost` law biting one layer in from where it is usually quoted: the 96 ns
+and 174 ns are real, and they are the cost of those operations **in a tight loop over 4,701
+reps**, where the inputs are in L1 and the branch is perfectly predicted. Interleaved with
+the resolution work around them they are worth less. **An isolated per-operation probe
+prices an UPPER BOUND on a removal, never the removal** — quote it as one.
+
+**SO THE RECEIPT IS THE DETERMINISTIC COUNT, AND IT IS EXACT TO THE UNIT.**
+`path normalize: 9577 -> 7277 calls` — **2,300 fewer, which is precisely 4,701 - 2,401**,
+one `dirname` per FILE instead of one per SPECIFIER. Everything else in the same census is
+IDENTICAL across the two arms and is the receipt that the same work is being done: root
+glob `50 dirs / 2451 entries / 2401 candidates / 2401 roots / 0 regex evaluations`, `join:
+2358 relative, 2358 by arithmetic`, `module resolution: 2351 questions, 0 reached the
+filesystem`, and the same diagnostic on the same line.
+
+**THE WALL IS NOT CLAIMED.** The query median moved **103 -> 93 ms**, 3/3 batches — which is
+ten times what this change can possibly explain, so per (INC.72) it is read as the floor
+wall's own +-20 ms concurrent term and NOT as a result. A sub-millisecond change is below
+what that instrument can resolve in either direction; it is recorded as consistent in sign
+and nothing more.
+
+**ABLATION — three arms, three DISTINCT red sets, none redundant.** a1 (the sentinel
+returned directly, so it escapes to the caller as a path that is not a path) **2 RED**;
+a2 (the per-file resolution map lifted one loop out, so it is shared across the frontier)
+**1 RED**; a3 (the directory dropped from the memo key) **1 RED**. a2's pin is the one that
+needed a whole build to write: `moduleResolutions` is not on `ProjectCompiler.Result` and
+reaches the checker as (CHK.30)'s bare-specifier answer, so a map written under the wrong
+importer is a **LOST diagnostic** and silent in every other channel.
+
+**GATES.** Suite **16,629 / 0 / 3** (up exactly the five new pins); `cost_gate.py` exit 0
+with every counter +0.00%; `huge_methods.py --fail-over 0` clean; and the correctness
+control the `-project` fixture cannot give — `--noEmit --listAll` on the compiler profile
+reads **46** diagnostics, unchanged.
+
+**ALSO LANDED THIS ROUND, AND IT CLOSES A CLAIM THIS QUEUE MADE ABOUT ITSELF.** (INC.75)(b)
+asserted that "`Project.cancellation` has existed since (INC.55) and
+`docs/language-service.md` § 14 documents it". **There was no § 14.** The § 0 API table's
+rows for `cancellation`, `saveState()` and `restoreState(text)` all pointed at a section
+that did not exist, so the three members an IDE host most needs were the three with no
+reference text — `cancellation` had prose only inside a § 13 subsection explaining why it
+is an `Error`, and the snapshot pair only a passing mention inside gap 1. § 14 now carries
+the signatures, where cancellation polls, the cancelled-build contract, the exact `null`
+and `false` conditions of the snapshot pair, the added-file limit, and **the JVM rough edge
+the plugin will hit**: `CompilationCancelledError` is an `Error` by design, so
+`Future.get` wraps it in `ExecutionException` and a generic failure branch logs a warning
+per cancelled keystroke — a host must unwrap `.cause` and read it as "no answer". § 13's
+stale `Project.kt` line numbers for the prepared-check defect were re-verified and
+corrected; the structural claim they carry is still true.
+
+**SUCCESSOR, per the WORK ORDER note.** The crawl's **~9 ms concurrent residue**
+((INC.81)(b)) is now the largest named row nobody has opened, and reading it names three
+members rather than one: `computeParserFlags` **constructs its `Regex` per call** instead
+of hoisting it as its neighbour `REFERENCE_PATH_REGEX` does (gated to non-ES-module
+projects by the option test above it, so this fixture cannot see it — (INC.61)'s law on a
+fourth axis); `CrawlParseCache.lookup` compares the whole content with `String.equals`,
+O(bytes) per file per build, whose identity fast path fires only when (INC.56)'s
+`retainRead` hands back the same instance — so the trusted and untrusted arms pay
+differently and the row must be read in both; and `CrawledFile`'s constructor eagerly
+builds `moduleSpecifiers.toSet()`, one `HashSet` per file. In the resolve row itself
+`arithOnly` is still **2.156 ms** with `join`/`normalize`/`extname`/`isBare` in it.
+
+### Round (INC.81) — a list per key for 9,401 keys that never got a second entry, and a refuted round-471 hypothesis
+
+**THE ROW CAME FROM RE-DECOMPOSING RATHER THAN FROM THE QUEUE.** `enclosingImportIndex` is
+**4.7 ms** of an 87 ms per-keystroke query and no item had ever named it; (INC.57)'s "re-take
+the ranking after every round that moves the floor" is what surfaced it.
+
+**CENSUSED BEFORE ANYTHING WAS DESIGNED.** On the 2,401-file fixture the build inserts **9,401
+specifiers under 9,401 DISTINCT keys** — so every `getOrPut` MISSES and every one allocated a
+`MutableList` and a `Pair` — and **`multiFileKeys=0`**: not one key is reached from two files,
+i.e. the whole-program structural reach matches nothing on a real project.
+
+**AND THE OBVIOUS HYPOTHESIS WAS MEASURED AND REFUTED.** The key is an AST *data class*, so
+`hashCode` recurses both `Identifier`s and both comment lists — round 471's hazard, which this
+index's own KDoc never mentioned. Priced in ONE timestamp pair over a second pass of the same
+population: **76.5 ns each, 0.72 ms, 14% of the row**. The walk is ~1.0 ms and **~3.4 ms is
+the insert plus the two allocations per key**. So the key is left exactly as it is — its
+structural semantics are load-bearing, since the scan it replaced matched `spec in
+bindings.elements` across every file in program order — and only the REPRESENTATION changes.
+
+**WHAT LANDED:** the value is the `Pair` itself for the one-entry case, promoted to a list
+only when a second statement claims the same key, with the map presized. **4.60 -> 3.17 ms**,
+two class dirs differing only in this, rotated across processes, the after arm winning 3/3
+batches in both directions with NON-OVERLAPPING ranges — and the population census identical
+in both arms (9,401 / 9,401 / 0), which is the receipt that the same thing is stored.
+
+**THE PIN EXISTS BECAUSE THE CENSUS SAYS NOTHING REACHES THE PROMOTION.** `multiFileKeys=0` is
+exactly the statement that no real project exercises the multi-entry path, so it needs a
+fixture — and two BYTE-IDENTICAL importers are one, because `ImportSpecifier`'s data-class
+components include `pos` and `end`, so the same import at the same offsets in two files IS one
+key. The regime half asserts 0 for the ordinary shape and non-zero for the twins; the value
+half asserts both files still see the imported signature, since the index feeds `resolveAlias`
+and a lost entry degrades a callee to `any` and DELETES a diagnostic. Two ablation arms, each
+reddening a DIFFERENT pin — dropping the promotion reddens only the twin pin, breaking the
+one-entry reader only the ordinary one, so neither is redundant.
+
+**GATES.** Suite **16,624 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean. **And the CLI-path CONTROL for all four rounds
+((INC.78)-(INC.81)), which every `-project` measurement in them structurally cannot see:**
+`bench-compile-tsc.sh --project compiler --no-emit` reads **self 22,999 ms against 23,304
+(-1.3%), errors 46 vs 46** — inside the box's own swing, so it is read as NO REGRESSION on
+the full cold compile and not as a win. That is the right reading: `GlobMatcher`, the
+resolver's probe memo and the fast `join` all act on a front end that is ~13% of that
+compile, and the tsc profile is 78 huge files where every one of these costs is per-FILE.
+
+**WHAT IS LEFT, AND WHAT IS NOW REFUSED.** The ~3.4 ms was insert + allocation and about 1.4
+of it is gone; the residue is the walk (~1.0 ms over 2,401 files' statements) and the hash
+(0.72 ms), **both of which are refused**: the walk is the index's definition and the hash
+cannot be made cheaper without changing the key, whose structural semantics the replaced scan
+fixes. A per-FILE index would remove the walk and IS a semantics change — `multiFileKeys=0`
+says it would be equivalent on this project and says nothing about any other.
+
+### Round (INC.80) — joining a path by arithmetic, and the two-draw read that nearly refuted it
+
+**`PathUtil.join(base, part)` built `"$base/$part"` AND NORMALIZED IT, AND FOR A MODULE
+SPECIFIER THAT IS EXACTLY THE CASE `isNormalized` MUST REFUSE** — a `..` segment — so
+(INC.68)'s fast path could never help it and the general body allocates a `split` list, a
+`String` per segment, an `ArrayDeque` and a `joinToString` builder. **3.4-4.1 ms over 4,701
+calls (731-880 ns each)** inside the crawl's specifier resolution on the 2,401-file fixture.
+
+**PRICED AS A PROBE ARM BEFORE IT WAS BUILT**, and the arm was checked against the general
+body on all 4,701 real pairs: the ceiling (no validity scans) is **60 ns**, the SHIPPABLE
+version with both scans is **131-136 ns**. The scans are not new work — the general path
+already scans `base + "/" + part` once inside `normalize`, to decide it is not normalized;
+what the fast path removes is the allocation.
+
+**THE MEASUREMENT IS THE PART WORTH READING, AND IT NEARLY WENT THE OTHER WAY.** Two draws of
+the row said NOTHING — 6.26/7.22 before against 6.22/7.45 after — and I had already begun
+writing the refutation. **Six draws per arm, ROTATED ACROSS PROCESSES over two class dirs
+differing only in this file, say 6.41 -> 4.95 ms at the median, the after arm winning in ALL
+THREE batches and in BOTH rotation directions.** (INC.68)'s law bites in this direction too: an
+unrotated pair could not see a **23%** change in the very row it was measuring, and a
+two-draw read of an instrumented row is not evidence either way.
+
+**AND THE EXPLANATION I REACHED FOR FIRST IS REFUTED RATHER THAN ASSUMED.** The natural story
+for "the microbenchmark says 6x and the build says nothing" is that the allocating arm pays GC
+the build's 2,351-call population never pays (round 801's law). Measured: with a 2 GB young
+gen the allocating arm got **SLOWER** (873 -> 1,264 ns) and so did the arithmetic one (131 ->
+257) — both moved together, and the whole process took 20 young pauses. Not GC.
+
+**RECEIPTS, deterministic:** `pathNormalizeCalls` **11,935 -> 9,577**, and every remaining call
+now takes the already-normalized path — **a floor build performs ZERO allocating
+normalizations, down from 2,358** — with `join: 2358 relative, 2358 by arithmetic`.
+
+**PINS.** A DIFFERENTIAL against the general body over a 12-base x 25-part grid, because a
+wrong join names a different FILE and (CFG.1) says nothing here notices a wrong program. **It
+caught its own defect on the first run**: joining at the ROOT spelled `//dep` — a base the
+4,701-pair fixture population does not contain and the adversarial grid does, which is the
+whole argument for grading a fast path on shapes rather than on a corpus. Plus the REGIME pin
+(an always-falling-back implementation passes a differential by construction), its mirror, and
+the deliberately-declined boundary where a `..` run reaches the root.
+
+**ABLATION — four arms:** c1 (the root head's special case) 1 RED, c2 (tail unchecked) 2 RED,
+c3 (base unchecked) 2 RED, c4 (no fast path) 1 RED. c4 is again the partition that matters —
+it reddens ONLY the regime pin while every value pin stays green. c2 and c3 have IDENTICAL red
+sets: both guards are separately load-bearing and no pin distinguishes which is missing, which
+is round 927's pair recorded rather than claimed.
+
+**GATES.** Suite **16,622 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**WHAT IS LEFT IN THAT ROW:** `dirname` + the memo key at **~1.5 ms over 4,701 calls**, where
+the crawl loop already knows the importer's directory once per FILE and re-derives it per
+SPECIFIER — `ModuleResolver.resolve`'s KDoc already establishes that the answer is a function
+of `(importerDir, specifier)` alone, so a `resolveFrom(spec, dir)` overload plus a two-level
+memo is exact. Priced at `dirnameOnly` 0.80 ms and the key concat 0.43 ms.
+
+### Round (INC.79) — the crawl asked the filesystem about files the glob had already listed
+
+**(INC.73)(a) REFUSED THIS ROW'S SYSCALL HALF BY ARITHMETIC — "2,351 distinct resolutions at
+exactly one `exists` each, so ~2.6 ms is irreducible" — AND THAT IS TRUE OF THE RESOLVER IN
+ISOLATION AND FALSE OF THE BUILD.** The root-file glob has already listed every directory of
+the project and proved which files are there, off the same `Vfs`, in the same build, ~20 ms
+earlier. The crawl then asked again, 2,351 times. **A per-component refusal can be right about
+its component and wrong about the program**, and the thing that says so is asking who else
+already knows the answer.
+
+**DECOMPOSED FIRST, per this repo's law** (`Inc79CrawlResolveProbeMain`, one binary,
+ABBA-rotated, population reconstructed from the sources' own specifiers and checked against
+the build's 4,701 / 2,351 distinct): `resolve` **9.4-9.8 ms**, of which `existsOnly`
+**4.4-4.6** (2,350 probes at ~1.9 us), `joinOnly` **3.7-3.9**, `dirnameOnly` 0.8, `keyOnly`
+1.2, `bookkeeping` 0.5-0.8. So the syscalls are the largest single piece and the path
+arithmetic is the next — and the row alone could say neither.
+
+**WHAT LANDED.** `ModuleResolver` memoizes `exists`/`isDirectory` for the build and is SEEDED
+with the glob's root-file list. **It adds no assumption**: (INC.65) already memoizes the whole
+ANSWER per `(importerDir, specifier)`, which is strictly stronger than memoizing the probes
+that answer is made of, and the resolver lives for exactly one `ProjectCompiler.build`. **The
+seed may only say YES** — a file can exist and be excluded from the program, so absence from
+it means nothing and falls through to the probe.
+
+**MEASURED, in the build, both draws, with three prior measurement runs as the before-arm:**
+the resolve row **10.2-12.0 -> 5.8-6.5 ms**. The receipt is the count the build now prints —
+**`module resolution: 2351 questions, 0 reached the filesystem`**, against 2,351 syscalls
+before. The `node_modules` ladder is the other beneficiary and the one this fixture cannot
+show: `resolveBare` asks `isDirectory("<dir>/node_modules")` for every ancestor of every
+importer, i.e. the same handful of directories thousands of times.
+
+**THE ABLATION FOUND THE PIN SET INCOMPLETE, WHICH IS WHAT IT IS FOR.** Arm b2 keyed the
+memo by BASENAME and reddened only the two COUNT pins — every value pin in the class happened
+to ask about names that exist on BOTH sides, so a memo answering "yes, that exists" for a
+same-named file in another directory passed all of them. That is a wrong PROGRAM, silent per
+(CFG.1). A pin asking for a file that exists in one directory and not the other was added, and
+b2 then reddens it. Three arms, three distinct red sets: b1 (the seed read as an authoritative
+file list) **4 RED**, b2 **3 RED**, b3 (no memo at all) **3 RED**.
+
+**GATES.** Suite **16,618 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**WHAT IS LEFT IN THE ROW, MEASURED AND NAMED:** `joinOnly` **3.7-3.9 ms over 4,701 calls
+(~810 ns each)** — `PathUtil.join(dir, "../layer02/m2_16")`, i.e. a `normalize` that must
+process `..` segments, and (INC.68)'s fast path cannot help a path that genuinely needs
+normalizing; and `dirname` + the memo key at **~1.5 ms**, where the crawl loop already knows
+the importer's directory once per FILE and re-derives it per SPECIFIER. Both are arithmetic,
+neither costs a promise.
+
+### Round (INC.78) — the root-file glob asked an ACCEPTING regex per candidate, and no refusal filter could have helped it
+
+**`collectRootFiles` ran `excludeRegexes.none { it.matches(path) } && includeRegexes.any { it.matches(path) }`
+FOR EVERY CANDIDATE OF EVERY BUILD — i.e. on every keystroke of a language-service host.**
+Measured on the 2,401-file `many-small-2400-dom` fixture, `FrontEnd.CFG_MATCH` was
+**4.66-8.08 ms, 1.9-3.4 us per candidate**, on a ~90-110 ms incremental floor.
+
+**THE ATTRIBUTION IS THE FINDING, AND IT INVERTS THE OBVIOUS FIX.** (INC.77)'s own note said
+"most candidates could be refused by a cheaper prefix/extension test first". Standalone, one
+binary, ABBA-rotated, the two halves separate: the **exclude** half is **0.458 ms (191
+ns/candidate)** — its literal prefix fails on the first character, so it was already cheap —
+and the **include** half is **5.376 ms (2,239 ns)**. `src/**/*` compiles to
+`^…/src/(?:[^/]+/)*[^/]*(?:\.ts|…)$`, whose `(?:[^/]+/)*` backtracks over every directory
+segment and **runs to a MATCH for every file in the project**. A filter can only refuse, and
+nothing here needs refusing — so the lever is an EXACT shortcut, and the pre-filter the note
+proposed would have bought ~0.3 ms of the ~5.
+
+**WHAT LANDED.** `GlobMatcher` keeps the regex as its DEFINITION (round 792's shape — never a
+legality gate) and reaches the same answer without running it. When the whole pattern is
+`<literal>` + a `**` segment + a bare `*` leaf + a literal tail, `(?:[^/]+/)*[^/]*` matches
+any remainder, so the pattern accepts exactly the paths that start with the head and end with
+the tail. That shape is `src`, `src/**/*`, `src/**/*.ts`, `dist`, `**/*.spec.ts` — i.e. what
+tsconfigs contain. Anything with a constrained middle keeps the regex, with the literal prefix
+as a necessary-condition filter in front of it.
+
+**TWO CORRECTIONS THE FIRST CUT DID NOT HAVE, BOTH FOUND BY EXTENDING THE DIFFERENTIAL GRID
+RATHER THAN BY READING IT.** `(?:[^/]+/)*[^/]*` matches every remainder EXCEPT one with an
+EMPTY SEGMENT, so a path spelling a doubled separator is accepted by a head-and-tail test and
+REFUSED by the pattern — that case now falls back to the oracle. And the doubled-separator
+test is exact only BECAUSE the head ends at a directory boundary: with a head ending
+mid-segment, `x**` + a bare `*` leaf accepts a path whose remainder starts with a separator.
+The two are ONE mechanism. The length guard, by contrast, is provably unreachable (the overlap
+would put the head's own trailing slash inside a slash-free tail) and is recorded as a
+REDUNDANT GUARD rather than claimed (round 927).
+
+**THE WALL COULD NOT CARRY THE CLAIM AND THE COUNT CAN.** `regexBoth` vs `both` in ONE process
+read **12x, then 5x, then 3x** over four processes of the same binary — round 867's arm
+instability on a row whose own per-process spread is several times the effect. So the receipt
+is `FrontEnd.globRegexEvals`, the number of decisions that reach the regex: **4,802 -> 0** on
+the real fixture, deterministic and comparable across machines. The pin states it at TWO
+program sizes ((INC.57): one build cannot distinguish "the shortcut serves everything" from
+"this project is small"), with a positive control that a constrained pattern still runs the
+regex once per candidate and that the number GROWS — without which the zero is
+indistinguishable from a dead counter.
+
+**IN-BUILD, shipped binary, same draw position:** `CFG_MATCH` **4.66 -> 0.61 ms** (and draw 1
+8.08 -> 2.60), the root-file glob row **14.46 -> 9.16**. The remaining 0.61 is ~0.21 ms of the
+probe's own 2,401 timestamp pairs.
+
+**THE HAZARD IS SILENCE, so the gate is a differential and not a green suite.** (CFG.1): a
+wrong root-file set has no diagnostic channel here — the corpus harness materialises no
+directory at all and every dashboard profile scopes `include` to a subtree that stresses no
+wildcard shape. `GlobMatcherTest` asserts every fast answer against the pattern's own regex
+over a 16-pattern x 28-path grid; `ProjectRootFileGlobTest` is the end-to-end half through
+`ProjectCompiler` and a real `Vfs`, where the observable is the program's file SET.
+
+**ABLATION — four arms, one mistake each, four distinct red sets, all discriminating:**
+a1 (a single `*` treated as `**/*`) 4 RED, a2 (empty-segment fallback removed) 2 RED,
+a3 (boundary rule removed) 2 RED, a4 (no fast path at all) 2 RED — and a4 is the partition
+that matters: it reddens ONLY the cost pin and the regime pin while every VALUE pin stays
+green, which is what says the count is what grades the perf claim and the values grade
+correctness.
+
+**GATES.** Suite **16,610 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00% including
+`output.programFiles` 78 -> 78 (the value-side control on a real project);
+`huge_methods.py --fail-over 0` clean, 0 over limit.
+
+**SUCCESSOR.** After this the 2,401-file floor's glob row is `listEntries` (~8 ms, of which
+~4.4 is irreducible `stat`s — refused by (INC.77) on arithmetic) plus ~1 ms of everything
+else. What is left in the query is the init-block pass dispatch, the crawl's sequential
+specifier resolution (~11 ms) and its ~6 ms `flatMapMerge` residue — (INC.64)'s question with
+the last hop gone.
+
+### Round (INC.76) — the language service was paying (INC.60)'s defect in full, through a wrapper that did not override
+
+**A WRAPPING `Vfs` THAT DOES NOT OVERRIDE `listEntries` INHERITS THE INTERFACE DEFAULT —
+`list(path).map { VfsEntry(it, isDirectory(it)) }` — AND FOR `OverlayVfs` THAT `isDirectory`
+IS `SystemVfs`'s, i.e. kotlinx-io's `metadataOrNull`, WHICH (INC.60) MEASURED AT UP TO **FIVE
+`stat` SYSCALLS PER ENTRY**. `OverlayVfs` IS ON THE SHIPPED PATH OF EVERY `Project` BUILD, SO
+THE WHOLE OF (INC.60)'s SAVING WAS HANDED BACK ON EVERY KEYSTROKE — SILENTLY, BECAUSE THE
+ANSWERS ARE IDENTICAL.** CLAUDE.md states this trap for a COUNTING Vfs written in a test; it
+is the same trap on the language service's own path, and it cost 11 ms of every query.
+
+**MEASURED STANDALONE FIRST, over the same 50 directories / 2,451 entries the build walks**
+(`GlobListProbeMain`, ABBA-rotated arms, each a strict superset of the one above it so the
+DIFFERENCES attribute the row):
+
+| arm | median | per entry |
+| --- | --- | --- |
+| `File.listFiles()` alone | 1.39 ms | 568 ns |
+| + `isDirectory` per entry | 5.49 ms | 2,239 ns |
+| + `child.path` | 5.40 ms | 2,203 ns |
+| + `PathUtil.normalize` (= `systemListEntries`) | 6.00 ms | 2,450 ns |
+| `SystemVfs.listEntries` + sort | **6.34 ms** | 2,585 ns |
+| the interface DEFAULT body | 18.10 ms | 7,384 ns |
+| `OverlayVfs.listEntries` + sort (SHIPPED) | **19.54 ms** | 7,973 ns |
+
+**19.5 against 6.3 — and 19.5 is what the build's own `vfs.listEntries + sort` row read
+(20.7 ms), to within noise. That match is what turned a 3x gap between a probe and a row into
+a diagnosis rather than a mystery.**
+
+**LANDED**, and it costs NO PROMISE — unlike (INC.56) it is a pure code fix, so BOTH arms
+gain: `vfs.listEntries + sort` **20.70 -> 9.73 ms**, the whole `config load + @types + root
+glob` row **28.14 -> 18.44 ms**, and the per-keystroke query medians **153/145 -> 123/125 ms**
+trusted and **156/162 -> 140/138** untrusted.
+
+**THE PINS ARE A DIFFERENTIAL AND NEED NO BASELINE.** The override must answer exactly what
+the default body answers, and the default body is two other public members of the same object
+— so each case asserts `listEntries(d) == list(d).map { VfsEntry(it, isDirectory(it)) }` as a
+set. That matters because a divergence here is silent in the dangerous direction: a wrong
+kind drops a file from the program or adopts a directory as a root, and (CFG.1) records that
+this repo has no diagnostic channel that notices. Cases: plain, an overlay-added file, an
+overlay-added file in a directory that exists ONLY in the overlay, a tombstone, a
+not-a-directory path, and the one asymmetry an obvious implementation gets wrong — **an
+on-disk FILE the overlay has given children reports as a DIRECTORY**, because `isDirectory` is
+`delegate.isDirectory(n) || hasOverlayChildren(n)`.
+
+**AND THE COST PIN HAD TO BE RESTATED AS A COMPLEXITY CLAIM.** `isDirectoryCalls == 0` after a
+build is FALSE and correctly so — a build legitimately asks about specific PATHS (resolving
+the project argument to a `tsconfig.json`, module resolution probing directory candidates).
+What must not happen is one question per ENTRY, and only two program sizes can say so: the
+count is a CONSTANT across 4 and 64 files here and grows by the entry count under the default
+body, which is the control. (INC.57)'s law for a complexity claim.
+
+**`CountingVfs` HAD THE SAME OMISSION**, so it is fixed in the same commit: a counting Vfs
+without the override reports its OWN default's calls rather than the delegate's, which is
+exactly what CLAUDE.md warns makes such a pin vacuous. An audit of every `Vfs` implementor in
+the repo found no third case — `TsBuildInfo.RecordingVfs` uses `Vfs by delegate`, which
+forwards the member, and the two `InMemoryVfs` are leaf implementations where the default body
+is free.
+
+**THE TRANSFERABLE HALF: A DEFAULTED INTERFACE MEMBER ADDED FOR SPEED IS A SILENT REGRESSION
+WAITING FOR THE NEXT WRAPPER.** (INC.60) shipped the fix and the wrapper that undid it was
+already in the tree; nothing could see it, because the two paths agree on every answer and
+differ only in syscalls. The instrument that found it is (INC.65)'s: a row measured
+STANDALONE against the same row measured IN THE BUILD, with the gap treated as a fact to
+explain rather than as noise.
+
+**GATES.** Suite unchanged bar the new pins; `cost_gate.py` and `huge_methods.py` are CONTROLS
+here — the change is in `-project` and the CLI's `SystemVfs` already had the override.
+
+**SUCCESSOR.** The glob row is now **18.4 ms**, of which the residue after `listEntries` is
+~6.8 ms of `include/exclude regex match` over 2,401 candidates (2.8 us each — a compiled
+`Regex` per include pattern per file, and the patterns are constant). The crawl is 18.9 with
+~11 of it sequential specifier resolution. And the init-block pass dispatch is **46.9 ms**,
+still half the query.
+
+### Round (INC.56) — the host can skip the re-read, and the row it was aimed at was a LOCATION
+
+**THE LANDING, IN TWO OPT-IN HALVES, BOTH IN THE EMBEDDING API.** `Project.trustFilesystem`
+is the HOST'S PROMISE — the bytes of a file will not change without this project being told,
+through `updateFile`, `deleteFile` or the new `reloadFile`. `Vfs.readTextIfResident` is the
+half that turned out to matter: the crawl hands every file to an IO dispatcher so a blocking
+read cannot starve the pool the parses run on, and content already in memory skips that
+handoff. Retention lives in `OverlayVfs` and is written ONLY from the crawl's single-threaded
+fold, through the new `Vfs.retainRead` — round 825's discipline, because the crawl reads from
+N concurrent workers and populating a `HashMap` from `readText` would be a data race with no
+exception to find it by.
+
+**MEASURED** — 8 instrumented draws per arm, ONE JVM PER ARM, arms rotated across processes
+(round 867), medians, both rotations agreeing, with the untouched sequential
+specifier-resolution row as the control that makes the crawl delta attributable:
+
+| shape | arm | crawl WALL | `read+decode` | resolve (control) |
+| --- | --- | --- | --- | --- |
+| 2,401 x ~1 KB | plain | 30.6 / 37.0 ms | 132.6 / 176.1 ms | 11.6 / 12.6 ms |
+| | **trust** | **21.7 / 19.4 ms** | **1.52 / 1.39 ms** | 12.7 / 11.4 ms |
+| 78 x ~128 KB | plain | 13.7 / 14.2 ms | 65.4 / 63.2 ms | 1.28 / 1.28 ms |
+| | **trust** | **9.5 / 7.8 ms** | **0.076 / 0.057 ms** | 1.33 / 1.28 ms |
+
+i.e. **~-13 ms of the crawl on the application shape and ~-5 ms on the byte-heavy one.**
+
+**AND THE REFUTATION THAT COST NOTHING TO FIND, WHICH IS WORTH MORE THAN THE ROW.** The queue
+priced this entry from `FrontEnd.READ` — "10-12 ms wall and 44-56 ms of CPU … the bytes are
+read only to compute the content key" — and **that row is elapsed-WITH-SUSPENSION, i.e. a
+LOCATION and not a price.** The first build of this round retained the content WITHOUT
+skipping the handoff: it served **33,350 reads from memory** and moved the crawl's wall by
+**NOTHING** on the 2,401-file project, while halving it on tsc's 78 huge sources. 2,401 reads
+of ~1 KB spread over 16 workers are ~1-2 ms; 10 MB of UTF-8 decode is not. **The read is a
+BYTE cost, and the row that made it look like a FILE cost was the hop's suspension** — which
+is why the fix that works on BOTH shapes is the one that removes the hop, not the one that
+removes the read. Same law as (INC.64), one hop later, and the same class as (INC.65): the
+crawl's rows do not say what they appear to say until you ask what a concurrent span measures.
+
+**THE PROMISE IS NARROWER THAN THE QUEUE FEARED, AND THAT IS PINNED RATHER THAN ARGUED.** The
+entry expected the host to have to promise ADDITIONS too. It does not: nothing caches the file
+SET — the root-file glob still lists directories through the `Vfs` and module resolution still
+probes candidates with `exists` before `readText` — so a file that appears or disappears
+behind the promise is still seen. Only CONTENT is taken on trust. `.json` is excluded outright,
+because a stale `tsconfig` is a wrong PROGRAM rather than a wrong diagnostic ((INC.48)).
+
+**18 PINS, AND THE ABLATION SAYS WHICH OF THEM ARE PINS.** Arms, one mistake at a time
+(`scripts/inc56-ablate.sh`, snapshot-based rather than `git checkout` because the tree carries
+the round's own work): **a1** never serve the retention — **4 RED**; **a2** retain and serve
+`.json` — **1 RED**; **a3** drop the `trustFilesystem` gate — **3 RED**, all three negative
+controls; **a5** nothing is ever resident, so the handoff comes back — **6 RED**, and it is the
+only arm the REGIME pin can see (`readText` serves the retention too, so without that pin a
+build that stopped consulting `readTextIfResident` would keep every read count green and
+silently pay the handoff again). **a4 — consult the retention BEFORE the overlay — reddens
+NOTHING, and it is recorded as a REDUNDANT GUARD rather than claimed**: the two maps are
+disjoint by construction (`put` drops the retained entry, `retainRead` refuses an overlaid
+path), so it takes BOTH mistakes to shadow an unsaved buffer. Round 927's pair.
+
+**TWO PINS THAT ARE CONTROLS, SAID OUT LOUD.** `a tsconfig change behind the promise is still
+seen` is green against a binary with the `.json` refusal removed, because nothing offers a
+config file to `retainRead` at all — that call sits in the crawl's fold and a `tsconfig` is
+read by the config loader. What the refusal protects is a CRAWLED `.json` (a
+`resolveJsonModule` import). And the whole class had to be re-written once after its first
+run: `Project.diagnostics()` narrows by (INC.46) to the files the host REPORTED as dirty, so a
+change nobody reported is invisible through it whether the filesystem is trusted or not — a
+disk-change pin written the obvious way measures (INC.46) and not this mechanism, and reads as
+a defect in whichever arm ran first. They go through `Project.files`, which forces the
+whole-program build.
+
+**GATES.** Suite **16,586 / 0 / 3** (16,568 plus the 18 new pins); `cost_gate.py` exit 0 with
+every counter **+0.00%** — expected and reported as a CONTROL, since `SystemVfs` resides
+nothing and `readTextIfResident` answers null there, i.e. the CLI path is provably unchanged;
+`huge_methods.py --fail-over 0` clean.
+
+**SUCCESSOR, per the WORK ORDER note.** The crawl's remaining halves on the 2,401-file shape
+are now **sequential specifier resolution ~11-13 ms** — whose syscall half (INC.73)(a) already
+refused, leaving the non-syscall remainder of 4,701 calls unexamined — and a **~7-9 ms
+concurrent residue** that is the `flatMapMerge` machinery itself, i.e. (INC.64)'s question with
+the last hop now gone: what a per-file flow element costs when there is no IO left in it. The
+`.json` half of the promise is deliberately unclaimed and is worth nothing today. And the
+IntelliJ plugin can now be handed this: `trustFilesystem = true` plus a VFS listener routing
+every change to `updateFile`/`deleteFile`/`reloadFile`.
+
+### Round (INC.73) — a 2.5 ms row, and the two refutations that cost nothing to find
+
+**THE SMALL LANDING.** `init:moduleTypeNameIndex` — the largest single row left in the
+floor's per-pass table after (INC.69)/(INC.70)/(INC.71), at **2.52 ms** — walks every module
+file's top-level statement list to publish `moduleInterfaceNames` (round 471) and
+`multiFileModuleTypeNames` (round 513). Its three readers are
+`objLitSatisfiesMultiFileInterface`, the `nodeTypes` cacheability gate and
+`isLibPhantomMemberOfModuleInterface`, all deep inside CHECKING, so it is built on first ask.
+**GO/NO-GO first, per (INC.16): `moduleTypeNameIndexBuilds` reads 0 on a floor build and 1 on
+a full one.** Unlike (INC.71)'s sets it is a pure function of the FROZEN AST, so there is no
+`globals` ordering to respect; the pass survives as a MARKER that arms it, so a reader running
+before init step 1a4 still sees the empty sets the eager form gave it.
+
+**THE VALUE RECEIPT IS THE 8 PROFILES, AND THIS ROUND HAD TO GO FIND THAT OUT — THE CORPUS IS
+A CONTROL HERE, NOT COVERAGE.** The ablation that never builds the index reddens **ZERO** of
+the ~13k baselines. Gridded against the shipped binary it reddens **3 of the 8 profiles,
++2 rows each — harness, server and services** — which is exactly where round 471's evidence
+came from (an un-memoized `isLibPhantomMemberOfModuleInterface` doubled the SERVICES
+self-compile, 39 s -> 77 s) and where round 513's tsc private-codefix `Info` shape lives. **So
+a family can have no corpus coverage at all and still be load-bearing, and the way to find out
+is to ablate and grid rather than to reason about it.** My own change is `added=0 removed=0`
+on all eight.
+
+**AND THE HONEST PART: NEITHER THE FLOOR WALL NOR A 2-PROCESS PHASE A/B CAN RESOLVE 2.5 ms.**
+Floor medians read 117/124 (before) against 119/127 (after) — no separation — and the phase
+A/B's init row read -8.19 in a batch whose untouched crawl moved -14.89 and whose
+`read+decode` moved -100. That is (INC.72)'s law again, and it is why the receipts quoted are
+the pass row from the clean single-binary decomposition plus the deterministic count.
+**Rule #1 of the session prompt — "time the population first; if it is small, stop" — applies
+to the REPORTING as much as to the choosing: this is a 2.5 ms landing and is written up as
+one.**
+
+**TWO REFUTATIONS FROM THE SAME RECON, BOTH CHEAP AND BOTH WORTH MORE THAN THE ROW.**
+
+**(a) `SystemVfs.exists` IS ONE SYSCALL — (INC.60)'s five-stat finding is specific to
+`metadataOrNull` and does NOT generalise.** Measured over the fixture's own 2,401 paths, ABBA
+inside one process: **1130.7 ns/call against `java.io.File.exists`'s 1108.8 — 1.02x.** And the
+resolver's probe ladder is already optimal for the ordinary shape: **2,351 `exists` and 10
+`isDirectory` per build for 2,351 distinct resolutions**, i.e. exactly one probe each, because
+`.ts` is first in `allExtensions`. So the crawl's 11 ms `specifier resolution` row is ~2.7 ms
+of syscall and ~8 ms of everything else, and there is no syscall lever in it.
+`ExistsProbeMain` is kept so the number can be re-taken.
+
+**(b) `init:collectUmdGlobalsAndModuleFiles` (2.32 ms) AND `init:mergeFileLocalsIntoGlobals`
+(2.06 ms) ARE NOT DEFERRABLE IN THIS SHAPE, AND THE REASON IS NOT THEIR READERS BUT THEIR
+READERS' SCHEDULE.** `umdGlobalNames` is read by `moduleLocalContributesGlobally`, which
+`init:mergeFileLocalsIntoGlobals` calls; `moduleFiles` is read by `collectModuleAugmentations`,
+which `init:mergeModuleAugmentations` dispatches. Both consumers are LATER INIT PASSES that run
+unconditionally, so a floor build forces the index whatever the checking path does. Deferring
+them means deferring the `globals` merges themselves behind an ensure on the ~783k-lookup hot
+path — a different and much larger change, and **the combined prize is ~5 ms of a 94 ms
+floor**, so it is refused on arithmetic rather than on difficulty.
+
+**SUCCESSOR.** With those two refused and this one landed, the init-block dispatch has no
+row above ~1.4 ms left that is not a walker, i.e. what remains there is (INC.7)'s partition
+question one walker at a time (`checkCircularGenericCallbackVariables` 1.38,
+`checkSpreadNonIterableIntoFixedArity` 1.26, `checkModulePreserve4Pin` 1.26 = (INC.70b),
+`checkCircularClassBaseViaDefaultTypeArg` 0.88, `checkCrossFileUseBeforeDeclaration` 0.82).
+**The floor's largest row is the CRAWL and its READ half is (INC.56)** — the one row costing a
+soundness promise, now also the only one left with a double-digit prize.
+
+### Round (INC.72b) — the floor re-taken on the same instrument: 122 -> 94 ms across the session
+
+**THE CLEANEST SESSION NUMBER IS NOT AN A/B AT ALL — IT IS `scripts/floor-decomposition.sh`
+RUN THE SAME WAY BEFORE AND AFTER.** Same fixture (`many-small-2400-dom`, 2,401 files), same
+script, same 3 warm-ups, same `PLAIN late` slot: **122 -> 94 ms** (and `PLAIN early`
+144 -> 105). That comparison has no arm-rotation problem to get wrong, because the two
+readings are two runs of one recipe rather than two arms of one batch — which is (INC.72)'s
+lesson applied to the reporting rather than to the measurement.
+
+**THE FLOOR AS IT NOW STANDS** (phase table, `both.floor` draw 2, total 81 ms of
+instrumented span):
+
+| phase | ms | share |
+| --- | --- | --- |
+| import-graph crawl (WALL) | **29** | 36% |
+| checker construct — of which the init-block dispatch **22** | 26 | 32% |
+| config load + `@types` + root glob | 12 | 15% |
+| bind (all program files) | 8 | 10% |
+| post-checker | 5 | 7% |
+
+**THE CRAWL IS NOW THE LARGEST ROW OF THE INCREMENTAL FLOOR**, which it has not been for this
+whole arc, and its READ half is (INC.56) — the one row that costs a SOUNDNESS PROMISE and the
+one an IntelliJ-class host can simply hand us. Its `specifier resolution` sub-row is 11 ms
+after (INC.65)'s memo and its `read+decode` sum is elapsed-with-suspension, i.e. a location.
+
+**AND THE PASS TABLE IS DOWN TO 22.43 ms OVER 418 ROWS, 24 OF WHICH CARRY 20.30.** The head is
+now three whole-program INDEX builds, all of them genuinely program-wide and none of them a
+per-file table the (INC.70)/(INC.71) shape can defer:
+`init:moduleTypeNameIndex` **2.52**, `init:collectUmdGlobalsAndModuleFiles` **2.32**,
+`init:mergeFileLocalsIntoGlobals` **2.06**, then `checkCircularGenericCallbackVariables` 1.38,
+`checkSpreadNonIterableIntoFixedArity` 1.26, `checkModulePreserve4Pin` 1.26 ((INC.70b)),
+`checkCircularClassBaseViaDefaultTypeArg` 0.88, `checkCrossFileUseBeforeDeclaration` 0.82.
+**The question for each of the three heads is the one (INC.16) answers with a counter, not by
+reading: who forces the index, and is it anyone on a floor build?** That is a temporary
+counter and one run per candidate — the cheapest GO/NO-GO in this arc, and it has now decided
+two rounds in a row.
+
+### Round (INC.72) — the surplus was the CRAWL, and both of this session's wall figures are retracted
+
+**(INC.70) AND (INC.71) EACH REPORTED AN ABBA-ROTATED FLOOR WALL ABOUT THREE TIMES WHAT THEIR
+PASS ROW EXPLAINED, AND I QUEUED THAT GAP AS A MECHANISM TO HUNT. IT WAS NOT A MECHANISM. IT
+WAS THE CRAWL.** Running the SAME two binaries with the per-PHASE instrument instead of the
+per-pass one — two processes per arm, rotated `before after after before`, second instrumented
+draw — attributes the whole change and nothing else:
+
+| phase | before | after | delta |
+| --- | --- | --- | --- |
+| **init-block pass dispatch** | **39.87** | **25.06** | **-14.81** |
+| import-graph crawl (WALL) | 32.19 | 50.19 | **+18.01** |
+| of which read+decode (CPU sum) | 147.80 | 249.88 | +102.07 |
+| config load + @types + root glob | 15.60 | 14.96 | -0.63 |
+| bind (all program files) | 8.12 | 7.53 | -0.59 |
+| post-checker | 6.91 | 6.70 | -0.21 |
+
+Every other row is flat to within 0.7 ms. **The init block — the ONLY region either round
+touched — is -14.81 ms, which is what the two pass rows said (~4 + ~7, measured on noisy
+single draws). And the crawl, which neither round touched, swung +18 in the same run**, its
+`read+decode` CPU sum moving 102 ms: that row is ELAPSED-WITH-SUSPENSION across the crawl's
+`Dispatchers.Default` workers, so it prices contention, not work, and CLAUDE.md already says
+it is a LOCATION and never a price. A floor wall that contains an 18 ms swing in a concurrent
+phase cannot resolve a 7 ms change in a sequential one, however many draws it is given.
+
+**SO THE NUMBERS ARE RETRACTED AND REPLACED.** (INC.70)'s "floor 160.0 -> 136.5 (-23.5 ms)"
+and (INC.71)'s "142.5 -> 120.0 (-22.5 ms)" are each one batch's reading of a quantity with a
+±20 ms concurrent term in it; the same two binaries measured in this round's batch read
+**128.5 -> 116.5**. **What ships is -14.81 ms of init-block dispatch, phase-attributed, and
+that is the number to carry.** The floor on this fixture is ~116-120 ms against ~157 at the
+session's start, and the pass table's ~-25 ms across (INC.69)/(INC.70)/(INC.71) is the part
+that is attributed.
+
+**THE LESSON IS NOT "ROTATE MORE" — IT IS "PICK AN INSTRUMENT WHOSE VARIANCE DOES NOT CONTAIN
+THE ANSWER".** (INC.68) taught that a BLOCKED batch invents a delta and rotation removes it;
+this is the next step out: a ROTATED batch of a composite quantity still cannot separate two
+of its terms, and 4 processes x 8 draws per arm did not help because the noise is not
+run-to-run jitter but a real, large, unrelated phase. The floor wall stays useful as a
+sanity check and is no longer the receipt for a checker-side change; the receipt is
+`FrontEnd`'s phase row plus the deterministic population count.
+
+**WHAT LANDED IN CODE.** `FloorAbMain` grows an `fe` mode — two instrumented `--frontEnd`
+draws and a per-phase dump, beside the existing `rows` mode — so this decomposition is a
+two-binary A/B rather than the single-binary `scripts/floor-decomposition.sh` run it would
+otherwise have needed. It reads no census counter, for the reason (INC.70) recorded.
+
+### Round (INC.71) — the per-file VISIBILITY sets, and the floor wall that keeps outrunning the pass table
+
+**`init:computePerFileVisibility` WALKS EVERY PROGRAM FILE'S `locals` TO PUBLISH TWO SETS
+WHOSE ONLY THREE READERS ARE NAME RESOLUTION — SO A BUILD THAT CHECKS NOTHING READS NEITHER.**
+`moduleOnlyGlobalNames` and `libValueShadowNames` are consulted by `globalsForFile`,
+`globalsForFileNode` and `libValueBehindTypeOnlyShadow`, and nothing else.
+
+**THE POPULATION DECIDED IT BEFORE ANY IMPLEMENTATION, and it cost one temporary counter.**
+Three increments at those three readers, one build, one run: **0 asks on a floor build of the
+2,401-file `many-small-2400-dom` fixture against 335,881 on a full one.** That is (INC.16)'s
+law used as a GO/NO-GO rather than as a post-hoc explanation — had it read 335,881 on both,
+the round would have stopped there for the price of one build.
+
+**THE ORDERING CLAIM WAS CHECKED, NOT ASSUMED.** The pass reads `globals.keys` against
+`init:snapshotPreAugGlobalKeys`' snapshot, so a deferral is only exact if nothing writes
+[globals] afterwards; the writers are `init:mergeLibGlobals`,
+`init:mergeFileLocalsIntoGlobals` and `collectModuleAugmentations` (dispatched by
+`init:mergeModuleAugmentations`), and all three run at earlier init steps. Same shape as
+(INC.70)'s `locals` argument, and the same silent failure mode if a future pass breaks it.
+
+**THE ONE PLACE IT IS DELIBERATELY NOT LAZY IS THE PROBE.** The INV.3(a) classifier is still
+installed at the pass's own moment and FORCES the sets from inside its lambda, so under
+tier-3 `--passTiming` every classified lookup is classified exactly as before —
+`globals.lookups` reads **783,383, +0.00%**, which is the receipt. The visible consequence is
+that under FULL `--passTiming` the cost lands on whichever pass performs the first `globals`
+lookup instead of on this row; at the `rows` tier, which is what the floor decomposition
+uses, [globals] is not instrumented at all and the row is honest.
+
+**MEASURED.** Row `init:computePerFileVisibility` **-> 0.002-0.003 ms** from 5.5-7.2 (the
+instrumented draws on this fixture are noisy enough that one read 21.9 — see the successor
+note); ABBA-rotated floor **median-of-process-medians 142.5 -> 120.0 ms (-15.8%)**, means
+139.8 -> 120.2, three of the four process medians cleanly separated.
+
+**THE VALUE RECEIPT IS THE CORPUS AGAIN, AND FOR THE SAME REASON AS (INC.70): THE PROJECT
+PINS CANNOT SEE THE MECHANISM.** Ablation c2 (the sets stay empty forever) reddens **492**
+core-suite tests — but leaves the fixture's own module-local leak reporting TS2304, because
+on that shape the name is not in the merged `globals` either, so the set has nothing to add.
+**Two rounds running, a hand-written `-project` value pin has been unable to discriminate the
+thing under test while the corpus discriminated it in the hundreds.** That is worth stating
+as a rule rather than as an accident: for anything in the INV.3 visibility model, the
+`-project` pins gate the REGIME (which builds do the work) and the corpus gates the ANSWER.
+
+**SUCCESSOR — AND IT IS A MEASUREMENT QUESTION, NOT A ROW.** Twice in a row now the
+ABBA-rotated floor wall has moved about **three times** what the pass table explains:
+(INC.70) -23.5 ms wall against ~4 ms of row, (INC.71) -22.5 against ~7. Both changes also
+removed thousands of RETAINED allocations per build (2,401 `LayeredSymbolTable`s and their
+maps; two whole-program `HashSet`s over every file's locals), which is a plausible mechanism
+and — per round 801's "an allocation count is not a cost" — not a measured one. **Before
+opening another init row, decompose the floor on BOTH arms with `--frontEnd` as well as
+`--passTimingRows`**: if the surplus is outside the init block the next lever is not in the
+pass table at all, and if it is inside it then the rows-tier probe is under-reading and every
+ranking this arc has taken from it needs re-reading. The instrument exists
+(`scripts/floor-decomposition.sh`); what is missing is running it as a two-BINARY A/B.
+
+### Round (INC.70) — every build allocated a name-resolution table for every file, and a floor build reads none of them
+
+**`init:buildPerFileScopes` ALLOCATED TWO MAPS PER PROGRAM FILE, COPIED THAT FILE'S OWN
+TOP-LEVEL LOCALS INTO ONE OF THEM AND PRECOMPUTED A `LayeredSymbolTable`'s SHADOW LIST — FOR
+EVERY FILE, ON EVERY BUILD, WHETHER OR NOT A SINGLE NAME WAS EVER RESOLVED IN IT.** After
+(INC.69) it was the second-largest row of the init dispatch. It is now built on first ask,
+per file, by `buildPerFileScopeFor`.
+
+**THE POPULATION WAS MEASURED BEFORE ANY TIMING, per (INC.16)'s law that a deferral is
+decided by WHO FORCES the table.** `EagerIndexCensus.perFileScopeBuilds` on the 2,401-file
+`many-small-2400-dom` fixture: **0 on a floor build and 2,401 on a full one.** Not "fewer" —
+*none*. A build whose check partition is empty resolves no name in any file, so the entire
+pass is deferred away, and a full build pays exactly what it paid before.
+
+**WHAT MAKES THE DEFERRAL EXACT IS AN INIT-ORDER FACT NEITHER FUNCTION STATES.** The eager
+loop SNAPSHOTTED `result.locals` and its KDoc said so — "so the view answers what the copy
+answered even if a binder table is later touched" — which is precisely the guarantee a
+deferral weakens. The checker's ONE writer of a `BinderResult.locals` is
+`collectModuleAugmentations`, dispatched by `init:mergeModuleAugmentations`, and that pass
+runs at an EARLIER init step than `init:buildPerFileScopes`. So the two snapshots are the
+same table; `sharedBase` (lib globals + script-file locals + `declare global` additions) is
+still captured eagerly at the pass's own position, so the program-wide half has not moved at
+all. **A new writer of `locals` scheduled after this pass would make the eager and lazy
+answers disagree silently, and nothing in this repo would print it** — that is the invariant
+the KDoc now carries.
+
+**MEASURED.** Per-pass row, second instrumented draw: `init:buildPerFileScopes`
+**4.625 -> 0.750 ms** (first draw 5.248 -> 0.653), and the whole init block 39.34 -> 36.38,
+i.e. the rest of the table is flat within its own draw noise.
+**Wall, ABBA-rotated, one JVM per arm, 4 processes per arm x 8 draws: floor
+median-of-process-medians 160.0 -> 136.5 ms (-14.7%)**, means 160.8 -> 136.2, with the four
+process medians DISJOINT (before 148-175, after 131-141).
+**AND THAT WALL DELTA IS LARGER THAN THE ROW EXPLAINS — ~4 ms of ~23 — SO THE SURPLUS IS
+RECORDED AS UNATTRIBUTED AND IS NOT CLAIMED.** The eager form also allocated ~4,800 maps and
+~2,400 `LayeredSymbolTable`s per build and RETAINED them for the build's life, which is a
+plausible mechanism and is not a measured one; round 801's "an allocation count is not a
+cost" says exactly that a plausible allocation story needs its own measurement. The
+quotable number is the deterministic row.
+
+**THE VALUE HALF IS CARRIED BY THE CORPUS, AND THAT IS NOW A MEASUREMENT RATHER THAN AN
+ASSUMPTION.** Ablation b2 — `buildPerFileScopeFor` never builds, i.e. `perFileScopeOf` always
+answers "scopes unbuilt" — reddens **503 core-suite tests**. That is the receipt that the
+table is load-bearing and that the whole-build path (which still builds every scope) is
+exercised end to end thousands of times per suite run.
+
+**TWO OF THE THREE ABLATION ARMS DISCRIMINATE AND THE THIRD IS RECORDED AS BLIND, WHICH IS
+ITSELF THE ROUND'S SECOND FINDING.** b1 (build every scope eagerly again) reddens the floor
+count pin and the narrowed-vs-whole pin; b2 (never build) reddens the whole-build count and
+the narrowed-vs-whole pin. **b3 — never STORE the built scope, i.e. rebuild it on every ask —
+reads 0 RED, because `perFileScopeOf`'s one-entry IDENTITY memo absorbs every repeated ask
+for the same file.** The fixture was strengthened first (three unresolved names in one file
+rather than one, so asks and files stop being the same number) and b3 still read 0: within a
+file the repeats never reach the map at all. So the map's memoization is pinned by nothing
+here, and the reason is a second cache one layer up — worth knowing before anyone "optimises"
+either of them.
+
+**AND THE VALUE PINS DO NOT DISCRIMINATE `perFileScope`'s PRESENCE ON THESE SHAPES**, which
+is why the corpus receipt above had to be taken: under b2 the module-local leak
+(`zzzModuleLocal` read from a file that does not import it) is STILL TS2304, because
+`moduleOnlyGlobalNames` / `globalsForFile` — `init:computePerFileVisibility`'s product, which
+this round does not touch — decides that question upstream. A pin can be green for a reason
+that has nothing to do with the mechanism under it.
+
+**GATES.** Suite **16,559 / 0 / 3** (16,553 + the 6 new pins, later 8); `cost_gate.py` exit 0
+with every counter +0.00%; `huge_methods.py --fail-over 0` clean; 8-profile grid `added=0
+removed=0` on all eight — **COVERAGE here, and the script's header says why**: a per-file
+scope that is absent when asked makes `perFileScopeOf` answer null, every consumer reads that
+as "scopes unbuilt" and falls back to the merged `globals`, so the failure mode is a name
+resolving to a FOREIGN module's local and TS2304 is what moves.
+
+**A HARNESS TRAP WORTH THE LINE IT COSTS.** `FloorAbMain` briefly printed the new census
+counter, and the two arms of a two-binary A/B are loaded by the SAME runner class — so the
+older arm died with `NoSuchMethodError` and the batch printed only the after arm's medians,
+which reads exactly like a successful run of half the experiment. A cross-binary harness may
+read no counter that does not exist in both arms; populations belong in the pins.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor is now **~136 ms** at 2,401 files
+(from 157 at the start of this session). Inside the init dispatch the head is
+`init:computePerFileVisibility` (5.6-7.2 ms) — genuinely program-wide, a set DIFFERENCE over
+every file's locals, so the (INC.16) deferral shape does not apply to it and the question is
+whether its two products are asked at all on a floor build; then `init:moduleTypeNameIndex`
+2.3, `init:collectUmdGlobalsAndModuleFiles` 2.2, `init:mergeFileLocalsIntoGlobals` 2.2 and
+`checkSpreadNonIterableIntoFixedArity` 1.6. Outside it, `checkModulePreserve4Pin`'s raw
+whole-source `.contains` (1.2 ms) is **REFUSED with a measured reason** — see the (INC.70b)
+entry in the queue.
+
+### Round (INC.69) — the init-block dispatch was not flat, and 21 walkers were paying a whole-program loop to compare one file name
+
+**(INC.66) RECORDED THE INIT-BLOCK PASS DISPATCH AS "FLAT ACROSS ~400 PASSES, SO THERE IS NO
+ROW TO MAKE CHEAPER". IT IS NOT FLAT, AND THE MEASUREMENT THAT SAYS SO IS A HISTOGRAM RATHER
+THAN A TOP-N LIST.** On the 2,401-file `many-small-2400-dom` fixture the floor's per-pass
+table is **418 rows summing to 39.5 ms, of which 44 rows carry 37.1 ms (94%) and the other
+367 carry 0.82 ms** — the (INC.7)/(INC.20)/(INC.21) gating arc did its job and what is left
+is a short list, not a tail. Reading the table by rank shows five `init:*` heads and then a
+**PLATEAU of ~21 rows at 0.39-0.55 ms each**, and a plateau of near-identical prices across
+unrelated walkers is not a coincidence of what they do — it is a shared per-file cost.
+
+**IT WAS ONE LINE, REPEATED 21 TIMES.** Each of those passes is a corpus PIN walker whose
+whole body is
+`for (result in binderResults) { … if (fileName.substringAfterLast('/') != "<one literal>") continue; … }`.
+So each walked the entire program and allocated a `String` per file to compare it against a
+name no real project contains: 2,401 iterations x ~185 ns x 21 passes.
+
+**THE FIX IS AN INDEX AND THE SAFETY IS THAT NOTHING ELSE MOVED.** One
+`HashMap<String, MutableList<BinderResult>>` keyed by `fileName.substringAfterLast('/')`,
+built on first ask (`Checker.filesNamed`), and the 21 loop HEADERS re-pointed at
+`filesNamed("<literal>")`. **The redundant `!=` guard is kept VERBATIM in every body** — it
+can no longer be taken, and keeping it means each loop body is byte-identical to what it was,
+which is what makes the conversion an equivalence rather than a new policy. Arm a4 then
+measured that this is not decoration: widening the index to a suffix match reddens NOTHING,
+because the kept guard refuses what the index wrongly offered. It is round 927's two-guards
+pair — the index buys the SPEED, the guard keeps the CORRECTNESS — and only a5, which
+widens the index **and** deletes the guard, reddens the negative control.
+
+**MEASURED, and the deterministic half is the one to quote.** Per-pass rows, second
+instrumented draw (round 846: a probe's own cost warms up, so a single-draw table inflates
+every row): the 21 rows read **10.079 ms -> 0.457 ms**, of which **0.438 is
+`checkBigintWithLib` alone** — the first of the 21 in pass order, paying the one index build
+for all of them — and the other twenty are 0.000-0.002. Four independent draws of the
+unmodified binary in a separate process put the same 21 rows at 9.27 / 9.66 / 10.51 / 12.01
+ms, so the before figure is not one draw's luck.
+**Wall, ABBA-rotated, one JVM per arm, 4 processes per arm x 8 draws:** floor
+median-of-process-medians **157 -> 144.5 ms (-8.0%)**, means 162.5 -> 145.5 (-10.5%); 3 of
+the 4 positional pairs favour the after arm.
+
+**AND THE SAME RUN RE-DEMONSTRATED (INC.68)'s LAW ON ITSELF.** The two `rows` processes were
+NOT rotated (one process per arm, taken last), and their WHOLE-TABLE sums read
+**52.32 -> 54.27 ms**, i.e. the after arm looks 4% worse overall while the 21 rows it changed
+fell 22-fold — because that particular after process drew slow (its own plain floor median
+was 171 against the before process's 156). A single unrotated process cannot compare TOTALS;
+it can compare rows WITHIN itself, which is what is quoted above.
+
+**THE PINS ARE VALUE PINS OVER NESTED PATHS, BECAUSE THE CORPUS STRUCTURALLY CANNOT REACH
+THEM.** The generated harness materialises no directory, so its file names are FLAT and
+`substringAfterLast('/')` returns the whole string: all ~13k baselines exercise the
+degenerate key and are a CONTROL for this conversion, not coverage of it. An index keyed by
+the full path passes every one of them and silently stops pinning a real project's
+`src/dates/temporal.ts` — a MISSING diagnostic, which nothing in this repo prints. Five pins
+(`CorpusPinBasenameIndexTest`): a nested-path hit, a negative control, two files sharing one
+basename, and two COUNT pins at 10 and 100 files ((INC.57)'s shape —
+`EagerIndexCensus.fileBasenameIndexBuilds == 1` at both sizes, where an un-memoized binary
+reads 21). Ablations a1 (key by full path) 2/5 RED, a2 (map to a single result rather than a
+list) 1/5, a3 (drop the memo) 2/5, a4 (widen to a suffix match) **0/5 — recorded as a
+redundant-guard pair, not as coverage**, and a5 (widen AND delete the guard) 1/5.
+
+**GATES.** Suite **16,553 / 0 / 3** (16,548 + the 5 new pins); `cost_gate.py` exit 0 with
+**every counter +0.00%**; `huge_methods.py --fail-over 0` clean; 8-profile grid
+`added=0 removed=0` on all eight — **a CONTROL here and said so in the script's own header**,
+since no profile contains a file named `temporal.ts` or any of the other 20 literals, so
+those walkers emit nothing in either arm; what the grid can catch is the accident this
+change's shape invites, a scripted rewrite landing on a loop it was not aimed at.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor after this round is **~112 ms** at 2,401
+files. Inside the init dispatch the ranking is now: `init:computePerFileVisibility` 5.5 and
+`init:buildPerFileScopes` 3.3 — the (CHK.49) PAIR, one observable, which must move together
+or not at all — then `init:moduleTypeNameIndex` 2.2, `init:mergeFileLocalsIntoGlobals` 2.1,
+`init:collectUmdGlobalsAndModuleFiles` 2.1, `checkSpreadNonIterableIntoFixedArity` 1.6,
+`checkCircularGenericCallbackVariables` 1.3, `init:evolvingArrayUseSiteWalks` 1.3 and
+`checkModulePreserve4Pin` **1.2, which is a RAW `binderResults.none { it.sourceFile.text
+.contains(…) }`** — a whole-program text scan that bypasses (WARM.19)'s `srcHas` n-gram
+filter, and one of exactly three such raw sites left in `Checker.kt`. That one is the next
+sub-step and is measured, not guessed; after it the row with no soundness promise attached is
+the crawl WALL (~31 ms), whose READ half is (INC.56).
+
+### Round (INC.68) — 80% of the paths this compiler normalizes were already normalized, and the blocked arms invented a regression that rotation removed
+
+**(INC.66) SAID "BEFORE PRICING ANY ROW, CHECK IT HAS A SPLIT", AND THE ROW IT NAMED FOR
+RE-DECOMPOSITION — `config+glob`, the one floor row carrying NO soundness promise — HAD A
+SPLIT ALREADY. THE COST WAS UNDER IT, IN A FUNCTION NEITHER ROW NAMES.** `PathUtil.normalize`
+is called once per directory entry by `systemListEntries` and once per candidate probe by
+`PathUtil.join`, and its body allocates roughly ten objects every time: a `replace`, a
+`split` list plus a `String` per segment, an `ArrayDeque`, and a `joinToString` builder.
+
+**THE CENSUS IS THE WHOLE ARGUMENT AND IT COST ONE COUNTER.** A floor build of the 2,401-file
+`many-small-2400-dom` fixture makes **11,935 `normalize` calls, of which 9,584 (80.3%) return
+the argument unchanged.** That is not a coincidence of this fixture: `systemListEntries`
+normalizes a child path the platform built from an already-normalized parent, and `join`
+normalizes `"<normalized base>/<plain name>"`. So the fix is a one-pass, allocation-free
+predicate (`PathUtil.isNormalized`) and an early return — not a cache, not a new data
+structure, and nothing to invalidate.
+
+**PRICED BY POPULATION BEFORE THE FLOOR WAS EVEN CONSULTED, per (INC.52).** The same
+micro-benchmark over the same 2,451 real paths, run against BOTH binaries: the general path
+is **1.02-1.22 us/call**, the fast path is **at or below the measurement's own base noise
+(<=0.2 us)**. At 9,584 hits that is **~9 ms per floor build**, which is what the two consumer
+rows then actually returned.
+
+**MEASURED, ABBA-ROTATED, 4 PROCESSES PER ARM, 32 FLOOR DRAWS EACH:**
+`vfs.listEntries + sort` **10.86 -> 7.76**, specifier resolution **14.94 -> 10.66**, and their
+containing rows `config+glob` **17.96 -> 13.44** and crawl WALL **39.51 -> 32.18**. Floor
+median **127 -> 121 ms**.
+
+**THE LESSON THAT OUTRANKS THE MILLISECONDS: THE FIRST, *BLOCKED*, PAIRED RUN REPORTED A
++2.70 ms REGRESSION IN `include/exclude regex match` — A REGION THAT CALLS NO `normalize` AT
+ALL — AND IT REPRODUCED ACROSS 12 DRAWS PER ARM.** It also read the `config+glob` row as
+**+3.39**, i.e. it said the glob half was a net LOSS and cancelled the crawl half's win. Both
+signs INVERTED under rotation (-0.24 and -4.51). Twelve draws per arm is not a small sample,
+and the effect was stable enough to look like a mechanism worth hunting; what it was, was
+three `before` processes run before three `after` ones. **A per-arm draw count does not
+substitute for rotation, and a reproducible delta in a region with no causal path to the
+change is the tell that the ORDER is the variable** — round 869's law, met on the floor
+instrument for the first time in this arc.
+
+**THE PIN POPULATION IS THE ACCEPTANCES, BECAUSE THE TWO DIRECTIONS ARE NOT SYMMETRIC.** A
+false negative costs the old behaviour; a false positive hands back an un-normalized path,
+which resolves to a DIFFERENT FILE with no diagnostic anywhere ((CFG.1)). So the pins are
+value pins over the accepted set against a transcribed reference algorithm — a SECOND
+implementation, because a differential whose two arms are one function cannot see a fast
+path — plus an idempotence pin, a rewrite-count negative control, and a direct predicate pin
+that is quiescence-independent (the first draft asked a process-global COUNTER, which is
+(INC.67)'s lesson again). Ablations a1 (accept everything) 5/6 RED, a2 (accept `..`) 5/6,
+a3 (accept an empty segment) 4/6, a4 (accept a backslash) 3/6.
+
+**GATES.** Suite **16,548 / 0 / 3** (16,542 + the 6 new pins); `cost_gate.py` exit 0 with
+**every counter +0.00%** including `output.programFiles 78`, which is the direct receipt that
+path arithmetic still finds the same program; `huge_methods.py --fail-over 0` clean; and the
+8-profile grid `added=0 removed=0` on all eight. **That grid is COVERAGE here rather than a
+control**, unusually for this repo: the corpus materialises no directory, so it cannot reach
+the resolver's path arithmetic at all, and the profiles are the only instrument exercising
+real relative specifiers, `node_modules` layouts and `@types` roots.
+
+**SUCCESSOR, per the WORK ORDER note.** The floor after this round is **~121 ms** at 2,401
+files: init-block pass dispatch **~46-49** (unchanged and still the largest — (INC.7)'s
+partition-scoping question, with (INC.20)'s MIXED-pass split as the shape that has worked,
+and the `init:computePerFileVisibility` / `init:buildPerFileScopes` (CHK.49) PAIR that must
+move together), crawl WALL **~32** (of which the READ half is (INC.56), the one row costing a
+soundness promise), config+glob **~13**, bind ~8, post-checker ~6.7. The next row with no
+promise attached is the init-block dispatch; it has never been split below the per-pass
+table, and this round is the third consecutive one where the cost was under a row that
+already looked decomposed.
+
+### Round (INC.67) — reading the PLUGIN found a defect the queue could not, and it was one this session had widened
+
+**THE INSTRUMENT WAS THE CONSUMER'S SOURCE, NOT A PROFILE.** `xemantic/xtsc-intellij-plugin`
+is the first real host of the `Project` API, and its `XtscService` keeps a
+`ConcurrentHashMap` of one `XtscSession` per `tsconfig.json`, **each owning its own
+single-thread executor**. So a monorepo with N configs runs **N compiler threads in one
+JVM** — a shape no fixture, profile or corpus baseline in this repo produces, and the one
+every process-global cache here is implicitly assuming away.
+
+`RealLibSnapshots.parseCache` was a plain `HashMap` mutated in place, and its KDoc already
+said "not thread-safe" with `prewarmParsedLibFiles` as the mitigation — **which covers
+`--workers` inside ONE compile and says nothing about two independent sessions.** (INC.63)
+and (INC.65) then added two more such maps, so this round is partly cleaning up a hazard
+the same session widened. All three now publish **copy-on-write behind `@Volatile`**: a
+reader sees the old complete map or the new complete one, never a half-written table.
+
+**WHAT THE FIX DOES AND DOES NOT BUY, stated precisely.** A lost race still costs a
+RECOMPUTATION — and always did, because `getOrPut` on a `HashMap` is not atomic either, so
+two threads could already both parse the same lib file. What copy-on-write removes is the
+CORRUPTION. **And the duplicate is harmless for a reason that is worth writing down,
+because it is the mirror of round 471's cost**: the identity sets these feed compare
+`Node`s STRUCTURALLY (they are data classes), so two parses of the same lib text are
+interchangeable to every consumer. The data-class equality that makes those sets expensive
+is what makes this race benign. `ModuleResolver`'s own (INC.65) memo needs none of it — it
+is per INSTANCE, i.e. per build.
+
+**THE FIRST DRAFT OF THE PIN BROKE TWO OF CLAUDE.md's OWN RULES AND ONLY RUNNING IT SAID
+SO.** It put the cache MAP inside `assert(...)`, and these maps hold `SourceFile`s — so
+power-assert rendered the AST on failure and the result arrived as an **`OutOfMemoryError`
+in the diagram builder**, with the real cause masked; that is the documented
+"never put a SourceFile subexpression in a power-assert assertion" trap, met head-on. And
+it compared two successive reads by IDENTITY, which assumes a quiescent process — the suite
+publishes into these maps from elsewhere, so the pin passed in isolation and failed in the
+full run. **Both failures are the same lesson: a pin's ENVIRONMENT is part of its
+specification.** Rewritten as booleans computed into locals, over the property
+copy-on-write actually promises (a map already handed out never grows), which is
+quiescence-independent by construction.
+
+**GATES.** Suite **16,542 / 0 / 3**; `cost_gate.py` exit 0; `huge_methods.py --fail-over 0`
+clean; 8-profile grid `added=0 removed=0` on all eight. Ablation e1 restores in-place
+mutation and reddens exactly the publication pin.
+
+**WHAT ELSE THE PLUGIN REVIEW SHOWED, for whoever opens (INC.56).** The plugin already
+does the things this arc assumed a host would: it pushes editor buffers with
+`updateFile` and never touches disk, asks `diagnosticsOf(listOf(file, configPath))` for the
+file ON SCREEN ONLY, guards the compiler behind a single thread per project with a 50 ms
+poll, and wires `ProcessCanceledException` to (INC.55)'s cancellation. **Its `configPath`
+argument is load-bearing and non-obvious** — `diagnosticsOf` answers only about the files it
+is asked about, so without it a malformed `tsconfig.json` would show a clean editor over a
+program checked with default options. It is also the host that can make (INC.56)'s promise,
+since the IDE's VFS is authoritative — but note it invalidates on `VFS_CHANGES` events
+rather than owning the read, so the promise is expressible and is not yet made.
+
+### Round (INC.65) — the crawl re-asked the filesystem a question it had already answered, and the split is what found it
+
+**THE PREVIOUS ROUND NAMED "a PARTITION question and a HOST PROMISE" AS ALL THAT WAS LEFT.
+THAT WAS WRONG WITHIN THE HOUR, AND THE REASON IS THE ONE THIS ARC KEEPS RE-LEARNING: THE
+CRAWL HAD NO SPLIT.** `FrontEnd.CRAWL` decomposed into exactly two sub-rows, `read+decode`
+and `pre-parse`, both elapsed-WITH-SUSPENSION and therefore locations rather than prices —
+so the residue between them and the WALL was unattributed, and on an application-shaped
+project that residue is most of the row. Adding `FrontEnd.CRAWL_RESOLVE` around the crawl's
+sequential half read **20.6-28.6 ms of a 44-60 ms crawl wall** at 2,401 files: about half
+of it, and ~15% of the whole incremental floor. **(INC.53)'s law — "before pricing anything
+else in the floor, ask what runs OUTSIDE a pass" — has a crawl-shaped twin: ask what runs
+outside a SUB-ROW.**
+
+**THE FIX IS EXACT RATHER THAN APPROXIMATE, AND READING THE FUNCTION IS WHAT SAYS SO.**
+`ModuleResolver.resolve` reads `importerPath` exactly once, to take its `dirname`, and never
+again — every branch below that line is a function of `importerDir` and the specifier alone.
+So `(importerDir, specifier)` is not a heuristic key, it is THE key, and two files in one
+directory importing the same specifier are literally asking one question. **Population
+censused before building anything** (offline, no build): the fixture makes **4,701
+resolutions over 2,351 distinct pairs**, a duplication factor of exactly **2.0**, and a
+codebase with shared barrels has more.
+**NOTHING TO INVALIDATE**: a `ModuleResolver` is constructed once per
+`ProjectCompiler.build`, so the memo's lifetime IS one build, and the crawl already
+documents that it assumes a `Vfs` static for its duration. Deliberately NOT process-global —
+a cross-build cache cannot see an ADDED file, (INC.48)'s hazard. And `null` is a real answer
+and is memoized too, or the filesystem is re-probed for every unresolved specifier, which is
+the population a project mid-edit has most of.
+
+**MEASURED:** CRAWL_RESOLVE 20.6-28.6 -> **13.5-15.9 ms** (mean 24.0 -> 14.3), crawl wall
+44-60 -> **34-44**. Less than the 2.0 factor predicts, because the row also carries the loop
+and the `importEdges`/`moduleResolutions` writes, which are unchanged.
+
+**THE PIN THE WHOLE DESIGN RESTS ON IS NOT A COUNT.** A memo keyed by the SPECIFIER ALONE
+passes every count assertion in the class and silently resolves `./dep` in one directory to
+another directory's file — a wrong PROGRAM, and per (CFG.1) this repo has **no diagnostic
+channel that would notice**, so the only observable is the file itself. Ablation d2 makes
+exactly that mistake and reddens exactly that pin and no other; d1 (never consult the memo)
+reddens the two count pins and not it.
+
+**GATES.** Suite **16,539 / 0 / 3**; `cost_gate.py` exit 0 with **`output.programFiles` 78**,
+which is the direct receipt that resolution still finds the same program; `huge_methods.py
+--fail-over 0` clean; 8-profile `--noEmit` grid `added=0 removed=0` on all eight; and an
+`--outDir` build of the compiler profile **byte-identical to the PRE-SESSION binary's**,
+78 files, `diff -r` clean.
+
+**THE SESSION, ON ONE FIXTURE AND ONE INSTRUMENT.** `many-small-2400-dom` floor medians:
+**241 -> 151 ms (early) and 256 -> 116 (late)**, i.e. **-37% / -55%**, across (INC.63),
+(INC.64)(a), (INC.64)(b) and (INC.65). **The figure is UNDERSTATED**: the box drifted ~10%
+SLOWER over the session (the same runs' `full` median went 3,944 -> 4,335 early), so the
+floor's share of a full build fell further than its absolute value did — 6.1% -> 3.5%.
+
+**SUCCESSOR (INC.66).** Rows now, and the two that were "all that is left" are still there
+plus one that was not: **checker construct 38-70 ms** (the init-block pass dispatch, FLAT
+across ~400 passes — an (INC.7) partition question, not a micro-optimisation), **crawl WALL
+34-44** (of which resolve is now 13.5-15.9 and the READ half is (INC.56), the only row
+costing a soundness promise), **config+glob 13-29** — which is now co-largest with the crawl
+on some draws and has NO promise attached, so re-decompose it before assuming (INC.60)
+finished it — bind 7-9, post-checker 5.7-7.2. **And take the lesson literally: before
+pricing any of them, check the row HAS a split, because this round's whole finding lived in
+a residue no sub-row named.**
+
 ### Round (CHK.62) — THREE of (CHK.61)'s four unmasked gaps are CLOSED, and **two of its four diagnoses were wrong**; (a)'s price falls **6 rows -> 3**, and the last row's true cause is now located
 
 **THE HEADLINE IS THE RE-PRICING.** With gaps 3 and 4 closed, the `this`-receiver patch

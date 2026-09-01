@@ -2,15 +2,26 @@
 
 Copy the block below into a new Claude Code session. Phase 17's v1 goal
 (fully compile the TypeScript compiler) LANDED at round 481 and was re-verified
-at round 679; since round 716 the live mission is **single-thread performance**,
-under the owner's logical-parity directive. The block is self-contained — it
-points at `CLAUDE.md` for the protocol and `PLAN-PHASE-5.md` for the queue.
+at round 679. **Since 2026-09-01 (owner directive) the live mission is PHASE 18:
+TypeScript for the JVM and Kotlin** — an embeddable whole-program checker, a
+Kotlin externals generator with resolved types, the KIR JVM backend, and an LSP.
+Single-thread performance and the (INC.\*) latency arc are CLOSED. The block is
+self-contained — it points at `CLAUDE.md` for the protocol and `PLAN-PHASE-5.md`
+for the queue.
 
 ---
 
 ```
-Work the Phase 17 queue in PLAN-PHASE-5.md. The live mission is SINGLE-THREAD
-PERFORMANCE — matching tsc — not conformance.
+Work the QUEUE in PLAN-PHASE-5.md, honouring the WORK ORDER note at its top.
+The live mission (owner directive 2026-09-01, CLAUDE.md § "AI agent mission") is
+PHASE 18: TYPESCRIPT FOR THE JVM AND KOTLIN — no Node and no Go in the
+toolchain, a whole-program checker embeddable in Kotlin applications (the
+`Project` API), a Kotlin externals generator with resolved types, the KIR JVM
+bytecode backend, and an LSP anyone can try in five minutes. It is NOT
+"a TypeScript compiler competing with tsgo", and it is NOT single-thread
+performance: the (INC.*) latency family is CLOSED at a 94-110 ms incremental
+floor — REFUSE latency rounds on Checker.kt unless a plugin-facing query is
+measured > 300 ms warm.
 
 (This session may be one iteration of `scripts/run-loop.sh`. Commit + push every
 completed sub-step individually. Do NOT leave uncommitted changes at session end
@@ -18,9 +29,9 @@ completed sub-step individually. Do NOT leave uncommitted changes at session end
 
 Before picking any work:
 - read STATUS.md (corpus count + latest round notes)
-- read docs/ARCHITECTURE-RETHINK.md § 0 and § 0.1 FIRST — § 0 is the round-716
-  measured correction that supersedes § 1's diagnosis, and § 0.1 is the budget
-  for what single-thread parity actually costs. Do not plan perf work without it.
+- for any perf or INV work: read docs/ARCHITECTURE-RETHINK.md § 0 and § 0.1
+  first (§ 0 is the round-716 measured correction; § 0.1 the single-thread
+  budget), and docs/INVERSION-DESIGN.md once (INV.D) has produced it.
 - read CLAUDE.md's "AI agent mission" + "Execution protocol"
 - open PLAN-PHASE-5.md and read the WORK ORDER note at the top of the QUEUE,
   then the recent session notes
