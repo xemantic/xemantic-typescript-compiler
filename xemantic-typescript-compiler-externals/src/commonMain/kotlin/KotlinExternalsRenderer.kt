@@ -80,6 +80,40 @@ internal class ExternalTopLevelFunction(
     val returnType: String,
 ) : ExternalDeclaration
 
+/**
+ * (EXT.4) An exported class — `public external class`, the one declared
+ * constructor as the primary constructor, TS `static` members as the companion
+ * object. In the compile-gate variant every member grows a `= null!!` body
+ * (class members, unlike interface members, cannot stay abstract without the
+ * modifier), decided by the renderer flag, never by text surgery.
+ */
+internal class ExternalClass(
+    val name: String,
+    val typeParameters: List<String>,
+    /** Loud records — a constraint or default not carried — under the header. */
+    val headerMarkers: List<String>,
+    val isAbstract: Boolean,
+    /** null = no declared constructor (Kotlin's implicit default matches TS's). */
+    val constructorParameters: List<ExternalParameter>?,
+    val members: List<ExternalMember>,
+    /** TS `static` members — rendered as the companion object. */
+    val staticMembers: List<ExternalMember>,
+) : ExternalDeclaration
+
+/**
+ * (EXT.4) An exported (non-const) enum — Kotlin has no `external enum class`,
+ * so the shape is a sealed interface whose companion object carries one `val`
+ * per entry, typed by the interface: exactly what the runtime enum object
+ * exposes. The gate variant initializes each val with `= null!!`.
+ */
+internal class ExternalEnum(
+    val name: String,
+    /** Entry NAMES as written — each becomes a companion `val`. */
+    val entries: List<String>,
+    /** Loud records for entries that could not be rendered. */
+    val markers: List<String>,
+) : ExternalDeclaration
+
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedDeclaration(val description: String) : ExternalDeclaration
 
@@ -275,16 +309,92 @@ internal fun renderKotlinExternals(
                         "($parameters): ${declaration.returnType}$body"
                 )
             }
+            is ExternalClass -> {
+                // Kotlin's canonical modifier order: visibility, then
+                // abstract, then external.
+                val abstractModifier = if (declaration.isAbstract) "abstract " else ""
+                val externalModifier = if (external) "external " else ""
+                val typeParams =
+                    if (declaration.typeParameters.isEmpty()) ""
+                    else declaration.typeParameters
+                        .joinToString(", ", prefix = "<", postfix = ">") {
+                            kotlinIdentifier(it)
+                        }
+                val constructorText = declaration.constructorParameters
+                    ?.joinToString(", ", prefix = "(", postfix = ")") {
+                        "${kotlinIdentifier(it.name)}: ${it.type}"
+                    } ?: ""
+                val header = "public $abstractModifier${externalModifier}class " +
+                    "${kotlinIdentifier(declaration.name)}$typeParams$constructorText"
+                val hasBody = declaration.headerMarkers.isNotEmpty() ||
+                    declaration.members.isNotEmpty() ||
+                    declaration.staticMembers.isNotEmpty()
+                if (!hasBody) {
+                    appendLine(header)
+                } else {
+                    appendLine("$header {")
+                    for (marker in declaration.headerMarkers) {
+                        appendLine("    /* xtsc: $marker */")
+                    }
+                    for (member in declaration.members) {
+                        appendMember(member, needsBody = !external)
+                    }
+                    if (declaration.staticMembers.isNotEmpty()) {
+                        appendLine("    public companion object {")
+                        for (member in declaration.staticMembers) {
+                            appendMember(member, needsBody = !external, indent = "        ")
+                        }
+                        appendLine("    }")
+                    }
+                    appendLine("}")
+                }
+            }
+            is ExternalEnum -> {
+                val keyword =
+                    if (external) "sealed external interface" else "sealed interface"
+                val header = "public $keyword ${kotlinIdentifier(declaration.name)}"
+                if (declaration.entries.isEmpty() && declaration.markers.isEmpty()) {
+                    appendLine(header)
+                } else {
+                    appendLine("$header {")
+                    for (marker in declaration.markers) {
+                        appendLine("    /* xtsc: $marker */")
+                    }
+                    if (declaration.entries.isNotEmpty()) {
+                        appendLine("    public companion object {")
+                        val body = if (external) "" else " = null!!"
+                        for (entry in declaration.entries) {
+                            appendLine(
+                                "        public val ${kotlinIdentifier(entry)}: " +
+                                    "${kotlinIdentifier(declaration.name)}$body"
+                            )
+                        }
+                        appendLine("    }")
+                    }
+                    appendLine("}")
+                }
+            }
         }
     }
 }
 
-private fun StringBuilder.appendMember(member: ExternalMember) {
+/**
+ * [needsBody] is the gate variant's CLASS-member rule: a non-external class
+ * member cannot stay bodiless (an interface member can), so a fun grows
+ * `= null!!` and a property the same as its initializer — `Nothing`-typed,
+ * legal for any member type, built from language built-ins alone.
+ */
+private fun StringBuilder.appendMember(
+    member: ExternalMember,
+    needsBody: Boolean = false,
+    indent: String = "    ",
+) {
+    val body = if (needsBody) " = null!!" else ""
     when (member) {
         is ExternalProperty -> {
             val keyword = if (member.readOnly) "val" else "var"
             appendLine(
-                "    public $keyword ${kotlinIdentifier(member.name)}: ${member.type}"
+                "${indent}public $keyword ${kotlinIdentifier(member.name)}: ${member.type}$body"
             )
         }
         is ExternalFunction -> {
@@ -292,11 +402,11 @@ private fun StringBuilder.appendMember(member: ExternalMember) {
                 "${kotlinIdentifier(it.name)}: ${it.type}"
             }
             appendLine(
-                "    public fun ${kotlinIdentifier(member.name)}($parameters): ${member.returnType}"
+                "${indent}public fun ${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
             )
         }
         is SkippedMember ->
-            appendLine("    /* xtsc: skipped ${member.description} */")
+            appendLine("${indent}/* xtsc: skipped ${member.description} */")
     }
 }
 

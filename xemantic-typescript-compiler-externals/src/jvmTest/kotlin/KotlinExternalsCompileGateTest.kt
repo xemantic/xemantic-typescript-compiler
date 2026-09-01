@@ -151,6 +151,21 @@ class KotlinExternalsCompileGateTest {
             cb?: (n: number) => string;
             ping?(x: string): void;
         }
+        export enum Direction { Up, Down }
+        export class Animal {
+            name: string;
+            readonly kind: string;
+            constructor(name: string) { this.name = name; this.kind = "beast"; }
+            speak(volume: number): string { return this.name; }
+            static create(name: string): Animal { return new Animal(name); }
+        }
+        export abstract class Shape { area(): number { return 0; } }
+        export class Pen<T> { occupant?: T; }
+        export interface Farm {
+            star: Animal;
+            pen: Pen<Animal>;
+            dir: Direction;
+        }
     """.trimIndent()
 
     @Test

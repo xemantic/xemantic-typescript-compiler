@@ -29,12 +29,17 @@ import com.xemantic.typescript.compiler.Binder
 import com.xemantic.typescript.compiler.CheckedLens
 import com.xemantic.typescript.compiler.CheckedNodeSink
 import com.xemantic.typescript.compiler.Checker
+import com.xemantic.typescript.compiler.ClassDeclaration
+import com.xemantic.typescript.compiler.ClassStaticBlockDeclaration
 import com.xemantic.typescript.compiler.CompilerOptions
+import com.xemantic.typescript.compiler.Constructor
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.DiagnosticCategory
+import com.xemantic.typescript.compiler.EnumDeclaration
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.FunctionType
+import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
@@ -43,7 +48,9 @@ import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.SemicolonClassElement
+import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
@@ -137,8 +144,11 @@ public fun generateKotlinExternals(
     val parseDiagnostics = parser.getDiagnostics()
     val binderResult = Binder(options).bind(sourceFile)
     val collector = ExternalsCollector(
-        exportedInterfaceDeclarations(sourceFile),
-        exportedFunctionDeclarations(sourceFile),
+        exportedInterfaces = exportedInterfaceDeclarations(sourceFile),
+        exportedClasses = exportedClassDeclarations(sourceFile),
+        exportedEnums = exportedEnumDeclarations(sourceFile),
+        exportedAliases = exportedAliasDeclarations(sourceFile),
+        exportedFunctions = exportedFunctionDeclarations(sourceFile),
     )
     val checker = runWithDeepStack {
         Checker(
@@ -170,6 +180,31 @@ private fun exportedInterfaceDeclarations(sourceFile: SourceFile): List<Interfac
         .filter { ModifierFlag.Export in it.modifiers }
 
 /**
+ * (EXT.4) The file's exported TOP-LEVEL classes. A DEFAULT-exported class is
+ * deliberately excluded: `export default class` binds the module's `default`
+ * export, not the written name, and the default-exports rung owns that mapping
+ * — rendering it as a named class here would be silently half-right.
+ */
+private fun exportedClassDeclarations(sourceFile: SourceFile): List<ClassDeclaration> =
+    sourceFile.statements
+        .filterIsInstance<ClassDeclaration>()
+        .filter { ModifierFlag.Export in it.modifiers && ModifierFlag.Default !in it.modifiers }
+
+/** (EXT.4) The file's exported TOP-LEVEL enums, `const` ones included — the
+ *  collector refuses those loudly, so they must reach it. */
+private fun exportedEnumDeclarations(sourceFile: SourceFile): List<EnumDeclaration> =
+    sourceFile.statements
+        .filterIsInstance<EnumDeclaration>()
+        .filter { ModifierFlag.Export in it.modifiers && ModifierFlag.Default !in it.modifiers }
+
+/** (EXT.4) The file's exported TOP-LEVEL type aliases — membership for the
+ *  alias arm, so a namespace-nested alias never renders at top level. */
+private fun exportedAliasDeclarations(sourceFile: SourceFile): List<TypeAliasDeclaration> =
+    sourceFile.statements
+        .filterIsInstance<TypeAliasDeclaration>()
+        .filter { ModifierFlag.Export in it.modifiers }
+
+/**
  * (EXT.3) The file's exported TOP-LEVEL function declarations — the membership
  * test behind the [FunctionDeclaration] sink arm, because the sink fires for
  * NESTED function declarations too and only the module surface is generated.
@@ -189,10 +224,26 @@ private fun exportedFunctionDeclarations(sourceFile: SourceFile): List<FunctionD
  */
 private class ExternalsCollector(
     private val exportedInterfaces: List<InterfaceDeclaration>,
+    private val exportedClasses: List<ClassDeclaration>,
+    private val exportedEnums: List<EnumDeclaration>,
+    private val exportedAliases: List<TypeAliasDeclaration>,
     private val exportedFunctions: List<FunctionDeclaration>,
 ) : CheckedNodeSink {
 
     val declarations = mutableListOf<ExternalDeclaration>()
+
+    /**
+     * (EXT.4) The NAMING set — the declarations a resolved type may be
+     * rendered by NAME against. Interfaces, classes (an instance type is a
+     * [Type.Interface] whose symbol declares the class) and enums (a
+     * member-less [Type.Object] carrying the enum symbol). A `const` enum is
+     * excluded: its declaration is refused (no runtime object), so a name
+     * pointing at it would reference a type the generated module does not
+     * declare.
+     */
+    private val nameableDeclarations: List<Node> =
+        exportedInterfaces + exportedClasses +
+            exportedEnums.filterNot { ModifierFlag.Const in it.modifiers }
 
     /**
      * (EXT.2) The generated-name predicate for [TypeScope]: a [Type.Interface]
@@ -205,11 +256,14 @@ private class ExternalsCollector(
     private fun generatedNameOf(type: Type): String? {
         val symbol = when (type) {
             is Type.Reference -> type.target.symbol
-            is Type.Interface -> type.symbol
+            // Type.Interface (interfaces AND class instance types) and the
+            // member-less Object an enum resolves to both land here; the
+            // identity test below is what keeps the widening sound.
+            is Type.Object -> type.symbol
             else -> null
         } ?: return null
         val declared = symbol.declarations.any { declaration ->
-            exportedInterfaces.any { it === declaration }
+            nameableDeclarations.any { it === declaration }
         }
         return if (declared) symbol.name else null
     }
@@ -377,26 +431,37 @@ private class ExternalsCollector(
     override fun expression(node: Expression, lens: CheckedLens) {}
 
     override fun declaration(node: Node, lens: CheckedLens) {
-        // A non-exported declaration is not part of the module's surface, so
-        // it is not generated — deliberately without a marker: nothing
+        // (EXT.4) Membership, not modifiers, for EVERY kind: the sink fires
+        // for NESTED declarations too (a namespace body, a function body), and
+        // only the pre-scanned TOP-LEVEL exported sets are the module surface.
+        // A non-exported declaration is deliberately silent — nothing
         // consuming the module could have named it.
         when (node) {
             is InterfaceDeclaration -> {
-                if (ModifierFlag.Export !in node.modifiers) return
+                if (exportedInterfaces.none { it === node }) return
                 if (seen.any { it === node }) return
                 seen.add(node)
                 declarations.add(collectInterface(node, lens))
             }
+            is ClassDeclaration -> {
+                if (exportedClasses.none { it === node }) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectClass(node, lens))
+            }
+            is EnumDeclaration -> {
+                if (exportedEnums.none { it === node }) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectEnum(node))
+            }
             is TypeAliasDeclaration -> {
-                if (ModifierFlag.Export !in node.modifiers) return
+                if (exportedAliases.none { it === node }) return
                 if (seen.any { it === node }) return
                 seen.add(node)
                 declarations.add(collectTypeAlias(node, lens))
             }
             is FunctionDeclaration -> {
-                // Membership, not modifiers: the sink fires for NESTED
-                // function declarations too, and only the pre-scanned
-                // top-level exported set is the module surface.
                 if (exportedFunctions.none { it === node }) return
                 if (seen.any { it === node }) return
                 seen.add(node)
@@ -404,6 +469,144 @@ private class ExternalsCollector(
             }
             else -> return
         }
+    }
+
+    /**
+     * (EXT.4) An exported class. The instance side reuses the interface
+     * member machinery; the STATIC side becomes the companion object, and a
+     * static member refuses the syntactic own-type-parameter answer (a Kotlin
+     * companion object cannot see the class's type parameters — and TypeScript
+     * refuses `static x: T` too, so nothing correct is lost). `private` and
+     * `protected` members are omitted WITHOUT a marker: they are not part of
+     * the consumable surface, the same policy as a non-exported declaration.
+     */
+    private fun collectClass(
+        node: ClassDeclaration,
+        lens: CheckedLens,
+    ): ExternalDeclaration {
+        val name = node.name?.text
+            ?: return SkippedDeclaration("class without a name")
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        val scope = scopeOf(typeParameters.toSet())
+        val headerMarkers = mutableListOf<String>()
+        for (parameter in node.typeParameters.orEmpty()) {
+            parameter.constraint?.let {
+                headerMarkers.add(
+                    "constraint on ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+            parameter.default?.let {
+                headerMarkers.add(
+                    "default for ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+        }
+        val members = mutableListOf<ExternalMember>()
+        val staticMembers = mutableListOf<ExternalMember>()
+        if (node.heritageClauses != null) {
+            members.add(SkippedMember("heritage clause"))
+        }
+        // One declared constructor becomes the primary constructor; overloads
+        // (two signatures plus the implementation is THREE Constructor nodes)
+        // are a loud marker with no primary constructor at all — picking one
+        // would invite calls the others refuse.
+        val constructors = node.members.filterIsInstance<Constructor>()
+        var constructorParameters: List<ExternalParameter>? = null
+        when {
+            constructors.size > 1 ->
+                members.add(SkippedMember("multiple constructors"))
+            constructors.size == 1 -> {
+                constructorParameters = constructors.single().parameters
+                    .filterNot { it.isCommentPlaceholder }
+                    .mapIndexed { index, parameter ->
+                        val parameterName =
+                            (parameter.name as? Identifier)?.text ?: "p$index"
+                        if (parameter.modifiers.isNotEmpty()) {
+                            // `constructor(public x: number)` DECLARES a
+                            // member; the expansion is a later rung, so the
+                            // member's absence is loud.
+                            members.add(
+                                SkippedMember("parameter property $parameterName")
+                            )
+                        }
+                        ExternalParameter(
+                            name = parameterName,
+                            type = annotationText(
+                                parameter.type,
+                                optional = parameter.questionToken,
+                                returnPosition = false,
+                                lens = lens,
+                                scope = scope,
+                            ),
+                        )
+                    }
+            }
+        }
+        for (member in node.members) {
+            val modifiers = when (member) {
+                is PropertyDeclaration -> member.modifiers
+                is MethodDeclaration -> member.modifiers
+                is GetAccessor -> member.modifiers
+                is SetAccessor -> member.modifiers
+                else -> emptySet()
+            }
+            if (ModifierFlag.Private in modifiers || ModifierFlag.Protected in modifiers) {
+                continue
+            }
+            val isStatic = ModifierFlag.Static in modifiers
+            val target = if (isStatic) staticMembers else members
+            val memberScope = if (isStatic) scopeOf(emptySet()) else scope
+            when (member) {
+                is PropertyDeclaration -> collectProperty(member, lens, target, memberScope)
+                is MethodDeclaration -> collectMethod(member, lens, target, memberScope)
+                is Constructor -> {}
+                is SemicolonClassElement -> {}
+                // A static initialization block declares nothing a consumer
+                // could name — pure runtime, silently outside the surface.
+                is ClassStaticBlockDeclaration -> {}
+                else -> target.add(
+                    SkippedMember(member::class.simpleName ?: "member")
+                )
+            }
+        }
+        return ExternalClass(
+            name = name,
+            typeParameters = typeParameters,
+            headerMarkers = headerMarkers,
+            isAbstract = ModifierFlag.Abstract in node.modifiers,
+            constructorParameters = constructorParameters,
+            members = members,
+            staticMembers = staticMembers,
+        )
+    }
+
+    /**
+     * (EXT.4) An exported enum — Kotlin cannot declare an `external enum
+     * class`, so the shape is a sealed interface whose companion object
+     * carries one `val` per entry, typed by the interface (the runtime enum
+     * object's own members). A `const` enum is INLINED at every use site —
+     * there is no runtime object for those vals to describe — so the whole
+     * declaration refuses loudly, and [nameableDeclarations] excludes it.
+     */
+    private fun collectEnum(node: EnumDeclaration): ExternalDeclaration {
+        if (ModifierFlag.Const in node.modifiers) {
+            return SkippedDeclaration("const enum ${node.name.text} - no runtime object")
+        }
+        val entries = mutableListOf<String>()
+        val markers = mutableListOf<String>()
+        for (member in node.members) {
+            when (val memberName = member.name) {
+                is Identifier -> entries.add(memberName.text)
+                // Cooked text — `"up-hill" = 1` names the member `up-hill`.
+                is StringLiteralNode -> entries.add(memberName.text)
+                else -> markers.add("enum member with a non-literal name")
+            }
+        }
+        return ExternalEnum(node.name.text, entries, markers)
     }
 
     /**

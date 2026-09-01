@@ -503,6 +503,228 @@ class KotlinExternalsGeneratorTest {
         assert(restFallback)
     }
 
+    // --- (EXT.4) classes and enums ------------------------------------------
+
+    @Test
+    fun `an exported class renders constructor members statics and the gate variant grows bodies`() {
+        val result = generate(
+            """
+            export class Animal {
+                name: string;
+                readonly kind: string;
+                constructor(name: string) { this.name = name; this.kind = "beast"; }
+                speak(volume: number): string { return this.name; }
+                static create(name: string): Animal { return new Animal(name); }
+                static tally: number;
+            }
+            """
+        )
+        val expected = """
+            public external class Animal(name: String) {
+                public var name: String
+                public val kind: String
+                public fun speak(volume: Double): String
+                public companion object {
+                    public fun create(name: String): Animal
+                    public var tally: Double
+                }
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public class Animal(name: String) {
+                public var name: String = null!!
+                public val kind: String = null!!
+                public fun speak(volume: Double): String = null!!
+                public companion object {
+                    public fun create(name: String): Animal = null!!
+                    public var tally: Double = null!!
+                }
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gate = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gate == expectedGate)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `private and protected class members are omitted from the surface`() {
+        val result = generate(
+            """
+            export class Vault {
+                openly: string;
+                private combo: string;
+                protected hinge: number;
+                private crack(): void {}
+            }
+            """
+        )
+        val expected = """
+            public external class Vault {
+                public var openly: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `multiple constructors are a loud marker and no primary constructor`() {
+        val result = generate(
+            """
+            export class Multi {
+                x: number;
+                constructor(x: number);
+                constructor(x: string);
+                constructor(x: any) { this.x = 0; }
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val marker = "    /* xtsc: skipped multiple constructors */\n" in rendered
+        val headerHasNoParens = "public external class Multi {\n" in rendered
+        assert(marker)
+        assert(headerHasNoParens)
+    }
+
+    @Test
+    fun `a constructor parameter property is loud and the parameter still renders`() {
+        val result = generate(
+            """
+            export class Point {
+                constructor(public x: number, y: number) {}
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val marker = "/* xtsc: skipped parameter property x */" in rendered
+        val header = "public external class Point(x: Double, y: Double) {" in rendered
+        assert(marker)
+        assert(header)
+    }
+
+    @Test
+    fun `an abstract class keeps the abstract modifier`() {
+        val result = generate(
+            """
+            export abstract class Shape { area(): number { return 0; } }
+            """
+        )
+        val rendered = result.kotlin
+        val header = "public abstract external class Shape {\n" in rendered
+        assert(header)
+    }
+
+    @Test
+    fun `a class instance type and a generic class reference render by name`() {
+        val result = generate(
+            """
+            export class Beast { legs: number; }
+            export class Pen<T> { occupant?: T; }
+            export interface Farm { star: Beast; pen: Pen<Beast>; }
+            """
+        )
+        val rendered = result.kotlin
+        val star = "    public var star: Beast\n" in rendered
+        val pen = "    public var pen: Pen<Beast>\n" in rendered
+        val ownTypeParam = "    public var occupant: T?\n" in rendered
+        assert(star)
+        assert(pen)
+        assert(ownTypeParam)
+    }
+
+    @Test
+    fun `a static member typed by the class type parameter falls back loudly`() {
+        // A Kotlin companion object cannot see the class's type parameters -
+        // and TypeScript refuses `static x: T` too - so the syntactic own-TP
+        // answer is refused for statics and the type falls to the marker.
+        val result = generate(
+            """
+            export class Holder<T> { value: T; static last: T; }
+            """
+        )
+        val rendered = result.kotlin
+        val instance = "    public var value: T\n" in rendered
+        val staticFallback = "        public var last: Any? /* xtsc: unmapped" in rendered
+        assert(instance)
+        assert(staticFallback)
+    }
+
+    @Test
+    fun `an exported enum renders as a sealed interface with companion entries`() {
+        val result = generate(
+            """
+            export enum Direction { Up, Down }
+            """
+        )
+        val expected = """
+            public sealed external interface Direction {
+                public companion object {
+                    public val Up: Direction
+                    public val Down: Direction
+                }
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public sealed interface Direction {
+                public companion object {
+                    public val Up: Direction = null!!
+                    public val Down: Direction = null!!
+                }
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gate = result.compileCheckSource
+        assert(rendered == expected)
+        assert(gate == expectedGate)
+    }
+
+    @Test
+    fun `an enum-typed member renders the enum name and a member literal falls back`() {
+        val result = generate(
+            """
+            export enum Direction { Up, Down }
+            export interface Move { dir: Direction; only: Direction.Up; }
+            """
+        )
+        val rendered = result.kotlin
+        val named = "    public var dir: Direction\n" in rendered
+        val memberLiteralFallback = "public var only: Any? /* xtsc: unmapped" in rendered
+        assert(named)
+        assert(memberLiteralFallback)
+    }
+
+    @Test
+    fun `a const enum is a loud skip and is not a nameable target`() {
+        val result = generate(
+            """
+            export const enum Speed { Slow, Fast }
+            export interface Racer { speed: Speed; }
+            """
+        )
+        val rendered = result.kotlin
+        val skipped = "/* xtsc: skipped const enum Speed - no runtime object */" in rendered
+        val noSealedInterface = "sealed external interface Speed" !in rendered
+        val memberFallback = "public var speed: Any? /* xtsc: unmapped" in rendered
+        assert(skipped)
+        assert(noSealedInterface)
+        assert(memberFallback)
+    }
+
+    @Test
+    fun `a string-named enum member is backticked`() {
+        val result = generate(
+            """
+            export enum Terrain { Flat, "up-hill" = 1 }
+            """
+        )
+        val rendered = result.kotlin
+        val backticked = "        public val `up-hill`: Terrain\n" in rendered
+        assert(backticked)
+    }
+
     @Test
     fun `an overloaded exported function is a loud skip and a nested function is silent`() {
         val result = generate(

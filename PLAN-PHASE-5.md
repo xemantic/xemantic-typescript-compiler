@@ -54,6 +54,27 @@ is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skip
 contributor agreement exists; issues and minimal reproductions welcomed, with the repo's
 issues URL. Doc-only, no gate applies.
 
+**(EXT.4) LANDED — CLASSES AND ENUMS** (externals module 29 → 40 pins, full suite
+16,775/0/3). `export class` → `public [abstract ]external class` with the one declared
+constructor as the primary constructor, TS statics as the companion object, `readonly` →
+`val`; `private`/`protected` members OMITTED (the non-exported-declaration policy — not a
+consumable surface); >1 constructor and a parameter property are loud markers. `export
+enum` → Karakum's shape: `public sealed external interface E { companion object { val
+Entry: E } }`; a `const enum` is a loud skip (no runtime object) and is EXCLUDED from the
+naming set, so a member typed by one falls back rather than naming a type the module does
+not declare. The naming set widened `Type.Interface` → `Type.Object` (a class instance
+type IS a `Type.Interface`; an enum is a member-less `Type.Object` carrying the enum
+symbol — the (CHK.60) fact, consumed) and stays positive-identity-gated, so an enum
+MEMBER literal (declared by `EnumMember` nodes) is outside it by construction. The gate
+variant grows `= null!!` bodies for class/enum members (a non-external class member
+cannot stay bodiless) — a renderer flag, never text surgery — and the metadata compile
+gate passes on the widened fixture. Two mechanism findings: a STATIC member refuses the
+syntactic own-TP answer (a Kotlin companion object cannot see class TPs; TS refuses
+`static x: T` too — pinned by a fallback marker), and all five collection arms now gate
+on IDENTITY membership in the pre-scanned top-level exported sets, closing a latent leak
+where a namespace-nested exported interface/alias would have rendered at top level
+(default-exported declarations stay deliberately silent until the DEFAULT-exports rung).
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -904,8 +925,11 @@ Owner decisions 2026-09-02:
   metadata compile allows. Module 29/0; gate fixture carries every new shape.
 
 - [ ] **(EXT.4…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
-  progresses.** Still to emit: classes, enums, namespaces/modules, overloads,
-  DEFAULT exports (mitt's own entry shape), index signatures, heritage clauses,
+  progresses.** DONE 2026-09-02 ((P18.5) note): classes (`external class` +
+  primary ctor + companion statics) and enums (`sealed external interface` +
+  companion entry vals; `const enum` a loud skip). Still to emit:
+  namespaces/modules, overloads, DEFAULT exports (mitt's own entry shape), index
+  signatures, heritage clauses, accessors,
   generic ALIASES, references with TP arguments inside another generic (falls back —
   (EXT.2)'s lens-ambient finding). Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
