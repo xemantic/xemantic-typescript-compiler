@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
+
+**(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
+own-TP resolution (the measured mechanism: the lens at an interface-declaration callback
+resolves a bare `T` to `any` — an interface's TPs are not the reconstructed fn-TP
+ambient), interface references under POSITIVE `===` identity evidence, `public typealias`
+for mappable exported aliases (uses still resolve — the Dukat pin holds), top-level
+functions (nested ones stay silent by ===-membership; overloads loudly skipped),
+function-TYPE annotations mapped recursively with whole-annotation refusal on
+generic/optional-param/rest shapes (an optional parameter is ARITY, not nullability),
+optional methods flipped to nullable function-typed properties. The compile-gate variant
+renders non-external functions with the body `= null!!` — Nothing-typed, legal for any
+return type, built-ins only, which is what the zero-classpath metadata compile allows.
+Gate fixture carries every new shape; negative control intact.
+
+**(API.18) ATTEMPTED TWICE AND REVERTED, WITH THE MECHANISM RECORDED IN THE QUEUE ITEM:**
+no span-arithmetic fix exists — at EOF a true container of the final token and a node
+merely ABUTTING it share `(pos, rawEnd)` exactly, so the fix is `pathAt`'s
+sibling-bound descent (round 910's own prescription), with the derived per-token
+ownership rule and the five reddening EOF-population pins written down for the next
+attempt. Tree restored, both module suites re-verified green.
+
+**SESSION CLOSE.** Full-suite state across all nine modules: **16,764 / 0 failures / 3
+skipped** (+87 this session: 15+14 externals, 42+16 lsp); `cost_gate.py` exit 0, every
+counter unchanged — the whole Phase 18 arc landed without touching a single checker
+counter, which is the (INC-closure) directive holding by construction.
+
+
 ### Round (P18.3) — the LSP is feature-complete for a first release, and the honest tsgo number is 30-50x against us (2026-09-01)
 
 **(LSP.2) LANDED** in the main context: the full feature map onto `Project` (lifecycle
