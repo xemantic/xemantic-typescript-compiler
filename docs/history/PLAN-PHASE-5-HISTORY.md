@@ -1,5 +1,64 @@
 ### Round (INC.87)(a) — the post-checker's filter row is 4.5 ms of a keystroke, and 89% of it answers nothing
 
+### Round (INC.88) — the root-file glob is REFUSED, and the split is what earns it
+
+**THE RE-DECOMPOSITION AFTER (INC.87)(a) PUT THE ROOT-FILE GLOB SECOND**, at **9.95 ms of a
+95-100 ms query** behind an init block that is 48.8 and largely refused — so it was the row to
+open. It is now closed, on evidence rather than on inheritance.
+
+**THE FIRST IDEA WAS REFUSED BY A PROMISE THIS COMPILER ALREADY SHIPS.** Memoizing the glob
+across builds under `trustFilesystem` is exactly what an IntelliJ-class host looks able to
+support — and `Project.trustFilesystem`'s own KDoc says the opposite in as many words:
+"ADDED and REMOVED files are still discovered from the backing store on every build. **Nothing
+about the file SET is taken on trust.**" Two shipped pins state it
+(`ProjectTrustedFilesystemTest`: a file added / deleted behind the promise still joins / leaves
+the program), `OverlayVfs` and `docs/language-service.md` § 5a repeat it, and (INC.65) refused
+the same shape one layer down ("**NEVER process-global** — a cross-build cache cannot see an
+ADDED file, (INC.48)'s hazard"). It would also widen a gap the plugin already has: its
+`irrelevant(event)` skips excluded roots, safe today only because the next build re-reads them.
+**And (INC.60)'s ranking policy is the general rule** — a fix costing no promise outranks a
+promise-costing one of comparable size, which is why the no-promise half was measured first.
+
+**THE NO-PROMISE HALF WAS A REAL HYPOTHESIS AND IT IS REFUTED.** (INC.77) priced this row's
+syscall half at ~1.8 µs/entry and called the residue irreducible — but that split was taken over
+`SystemVfs` ALONE (`GlobListProbeMain`), where the shipped path is `OverlayVfs` wrapping it plus
+a per-directory sort at the call site, and the measured row is **3.4-3.8 µs/entry**. So ~2
+µs/entry had never been measured on the path that runs, and (INC.76) had already found one
+saving hiding in exactly that seam. Two new sub-rows (`CFG_LIST_VFS`, `CFG_LIST_DELEG`, closing
+against the SAME open timestamp so their difference is the sort with no third boundary):
+
+```
+vfs.listEntries + sort (50 dirs, 2451 entries)   8.431 ms
+  of which the sort                              0.483   (5.7%)
+  of which the OverlayVfs merge                  0.752   (8.9%)
+  of which the BACKING STORE's listing           7.196  (85.4%)
+```
+
+**85% is `File.listFiles()` plus one `stat` per entry for `isDirectory`, and Java exposes no
+`d_type`, so one syscall per entry is a genuine floor.** (INC.77) is therefore CONFIRMED on the
+shipped path, and the two wrappers are 1.2 ms of 8.4 between them — below every candidate floor
+in this repo. The glob is closed in BOTH directions.
+
+**WHAT THE ROUND LEAVES BEHIND is the instrument, not a fix.** `t()`/`close()` are inline
+no-ops when the probe is off, so the two rows cost nothing in production and make the refusal
+reproducible rather than a claim in a note — which matters because the previous refusal was
+correct, quoted for three rounds, and had never been checked on the path it was quoted about.
+
+**GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%;
+`huge_methods.py --fail-over 0` clean.
+
+**SUCCESSOR, per the WORK ORDER note.** With the post-checker (3.1 ms), the glob (floor) and
+the crawl ((INC.83)/(INC.84)/(INC.85)) all closed, **the per-keystroke query is now the init
+block and essentially nothing else** — 48.8 of ~95 ms, `rowsTo50pct=4`, and every row above
+~2 ms carrying a recorded refusal. The two open members are (INC.87)(b)
+`init:evolvingArrayUseSiteWalks` (1.835 ms, needs a two-class-dir ABBA to price) and
+`checkCrossFileUseBeforeDeclaration`'s second loop (~0.8-2.1 ms, and (INC.77) warns its
+`fileIdx` comes from `binderResults.withIndex()`, so re-heading it on `checkedResults` silently
+renumbers a use-before-declaration verdict). **Anything larger needs the refusals re-derived
+rather than inherited** — (INC.87)(a) and this round are both cases where a quoted refusal or a
+code-reading was wrong about the path that actually runs.
+
+
 **(INC.86)(a) NAMED A ROW NO QUEUE ITEM HAD EVER NAMED, AND SPLITTING IT REFUTED THE OBVIOUS
 READING OF IT.** `FrontEnd.POST_DIAGS` now decomposes into three abutting sub-rows
 (`POST_MP4` / `POST_SUPPRESS` / `POST_APPEND`), per (INC.65)'s law that a row is split before

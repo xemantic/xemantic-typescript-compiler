@@ -8,7 +8,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.6) — IN PROGRESS (2026-09-02).** (EXT.7) the **smol-toml rung is GREEN**: the
+**(P18.6) — SESSION CLOSE, FIVE LANDINGS, 16,803 → 16,828 / 0 / 3 (2026-09-02).** (EXT.7) the **smol-toml rung is GREEN**: the
 externals generator goes MULTI-FILE (`generateKotlinExternals(List<SourceFileEntry>)`, one
 Binder + one Checker, cross-file by-name rendering, cross-file type-name collisions a loud
 skip), top-level overloads render (implementation signature omitted, duplicates collapsed),
