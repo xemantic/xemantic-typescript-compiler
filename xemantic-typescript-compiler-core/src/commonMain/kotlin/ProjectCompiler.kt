@@ -1141,7 +1141,15 @@ class ProjectCompiler(private val vfs: Vfs) {
             // (INC.60) ONE listing that already answers "directory?" per entry. The
             // sort is round 776's and must stay: it fixes the program's ROOT-FILE
             // order, and `listEntries` promises no order of its own.
-            val entries = vfs.listEntries(d).sortedBy { it.path }
+            // (INC.88) the listing and the SORT are separated, so [FrontEnd.CFG_LIST]'s
+            // 9.26 ms over 50 directories can be attributed rather than assumed. Round 776's
+            // ordering requirement constrains the RESULT, not which layer pays for it.
+            // Both rows close against the SAME open timestamp, so [FrontEnd.CFG_LIST_VFS] is
+            // the listing and [FrontEnd.CFG_LIST] the listing plus the sort — their
+            // difference is the sort, with no third boundary to pay for.
+            val listed = vfs.listEntries(d)
+            FrontEnd.close(FrontEnd.CFG_LIST_VFS, feListT0)
+            val entries = listed.sortedBy { it.path }
             FrontEnd.close(FrontEnd.CFG_LIST, feListT0)
             for (entry in entries) {
                 FrontEnd.globEntries++

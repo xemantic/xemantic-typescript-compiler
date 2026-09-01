@@ -4746,7 +4746,22 @@ object FrontEnd {
     /** TS2688 + TS2209 + the isolatedDeclarations emit. INSIDE [POST_DIAGS]. */
     const val POST_APPEND = 64
 
-    const val N = 65
+    // ---- (INC.88) round 950 — the two blocks of [CFG_LIST]. That row is 9.26 ms over
+    // FIFTY directories on a 2,401-file project (~3.8 us per entry) and is the second
+    // largest thing in a per-keystroke query after the init block. (INC.77) priced its
+    // syscall half at ~1.8 us/entry and called the rest irreducible, but that split was
+    // measured over `SystemVfs` ALONE (`GlobListProbeMain`), where the shipped path is
+    // `OverlayVfs` wrapping it plus a per-directory sort at the call site. These two rows
+    // make the three layers separable: [CFG_LIST] minus [CFG_LIST_VFS] is the SORT,
+    // [CFG_LIST_VFS] minus [CFG_LIST_DELEG] is the overlay merge, and [CFG_LIST_DELEG] is
+    // the readdir + per-entry stat that really is a floor.
+
+    /** `vfs.listEntries(d)` alone — [CFG_LIST] without the call site's sort. INSIDE [CFG_LIST]. */
+    const val CFG_LIST_VFS = 65
+    /** The BACKING store's listing, under whatever wrapper. INSIDE [CFG_LIST_VFS]. */
+    const val CFG_LIST_DELEG = 66
+
+    const val N = 67
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4814,6 +4829,8 @@ object FrontEnd {
         "    of which the modulePreserve4 whole-program scan",
         "    of which the parse-cascade removeAll chain",
         "    of which TS2688 + TS2209 + isolatedDeclarations",
+        "      of which vfs.listEntries alone (no sort)",
+        "        of which the backing store's listing",
     )
 
     /**
@@ -4821,7 +4838,7 @@ object FrontEnd {
      * the TOTAL is still summed over the disjoint top-level phases only.
      */
     private val order: IntArray = intArrayOf(
-        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE,
+        CONFIG, CFG_LOAD, CFG_ROOTS, CFG_WALK, CFG_MATCH, CFG_LIST, CFG_LIST_VFS, CFG_LIST_DELEG, CFG_TYPES, CRAWL, READ, PREPARSE, CRAWL_RESOLVE,
         CRAWL_BATCH, CRAWL_RESIDENT, CRAWL_PIPE, CRAWL_MKFILE, CRAWL_FOLD, CRAWL_INDEX, CRAWL_DRAIN,
         PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,

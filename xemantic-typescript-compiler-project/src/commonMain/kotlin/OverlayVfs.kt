@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.Vfs
 import com.xemantic.typescript.compiler.VfsEntry
@@ -471,7 +472,14 @@ internal class OverlayVfs(private val delegate: Vfs) : Vfs {
         }
         val out = ArrayList<VfsEntry>()
         val seen = HashSet<String>()
-        for (entry in delegate.listEntries(dir)) {
+        // (INC.88) hoisted out of the loop header so the BACKING store's cost is separable
+        // from this wrapper's per-entry merge — (INC.76) already found one saving hiding in
+        // exactly this seam, and the (INC.77) split that called the residue irreducible was
+        // measured over `SystemVfs` alone, never through this class.
+        val feDelegT0 = FrontEnd.t()
+        val delegated = delegate.listEntries(dir)
+        FrontEnd.close(FrontEnd.CFG_LIST_DELEG, feDelegT0)
+        for (entry in delegated) {
             val n = PathUtil.normalize(entry.path)
             if (n in deleted || !seen.add(n)) continue
             // `isDirectory` is `delegate.isDirectory(n) || hasOverlayChildren(n)`, so an
