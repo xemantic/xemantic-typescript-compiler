@@ -1647,6 +1647,23 @@ a residue no sub-row named.**
   rather than a reason not to have it. Keep the existing `exportSignatureEscapes` and
   shared-name guards; a file outside the closure must be unable to observe the edit, and an
   escape is exactly the case where that is not provable.
+  **TWO SOUNDNESS HAZARDS THE CENSUS DID NOT REACH, FOUND BY READING, AND THE FIRST IS FATAL
+  TO A NAIVE `importEdges` CLOSURE.** (i) **Not every cross-file interaction is an import
+  edge.** `Checker.kt:990` builds `multiFileModuleTypeNames` as literally *"type names declared
+  in >= 2 module files"* — two files that merely SHARE A TYPE NAME affect each other with no
+  import between them, and CLAUDE.md records that this family plus `moduleInterfaceNames`
+  ablates to **0 RED on the ~13k corpus while reddening 3 of the 8 profiles** ((INC.73)), i.e.
+  it is load-bearing and the corpus cannot see it. **A closure that is the transitive
+  `importEdges` reachability alone therefore MISSES those files and drops their diagnostics** —
+  the same failure this census refused the walk for, arriving by a different door. The closure
+  must be UNIONED with the files sharing any type name with an edited file (that set is already
+  computed), or an edited file spelling such a name must be treated as an ESCAPE.
+  (ii) **`importEdges` completeness is a precondition, not an assumption** — it has exactly
+  three `add` sites (`ProjectCompiler.kt:622/634/639`) and the closure is only as sound as their
+  coverage of type-only imports, `export *` re-exports, `import type`, `require`, and
+  `/// <reference>`. A missing edge kind is a MISSING DIAGNOSTIC and (CFG.1) says nothing here
+  prints it; audit the three sites against the specifier kinds the crawl resolves before
+  trusting the graph, and pin the audit rather than the graph.
   **THE REMAINING 187 -> 4-8 IS THE PER-HOP PRUNING AND IT IS BLOCKED ON A *TRANSITIVE*
   SIGNATURE**, which is a different and larger item than the walk — do not re-open it as a
   walk. **GRADE ON THE CAPTURE CHANNEL TOO** ((INC.19)): a lost collector surfaces as a wrong
