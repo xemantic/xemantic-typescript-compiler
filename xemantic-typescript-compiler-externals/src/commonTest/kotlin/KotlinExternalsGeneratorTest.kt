@@ -56,6 +56,8 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
+            public typealias Species = String
+
             public external interface Creature {
                 public var name: String
                 public var limbCount: Double
@@ -107,6 +109,8 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
+            public typealias Species = String
+
             public external interface Creature {
                 public var kind: String
             }
@@ -193,15 +197,22 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `generic interface is refused with a marker`() {
+    fun `a generic interface renders its type parameters and members typed by them`() {
+        // (EXT.2) flipped this pin from a refusal marker to the rendering. The
+        // own-type-parameter rule is SYNTACTIC — measured, the lens at an
+        // interface-declaration callback resolves a bare `T` to `any`.
         val result = generate(
             """
-            export interface Box<T> { value: T; }
+            export interface Box<T> { value: T; tag: string; wrap(x: T): T; }
             export interface Plain { p: string; }
             """
         )
         val expected = """
-            /* xtsc: skipped generic interface Box */
+            public external interface Box<T> {
+                public var value: T
+                public var tag: String
+                public fun wrap(x: T): T
+            }
 
             public external interface Plain {
                 public var p: String
@@ -209,6 +220,102 @@ class KotlinExternalsGeneratorTest {
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
+    }
+
+    @Test
+    fun `a constrained type parameter keeps its name and marks the constraint`() {
+        val result = generate(
+            """
+            export interface Tagged<T extends string> { value: T; }
+            """
+        )
+        val rendered = result.kotlin
+        val headerAt = rendered.indexOf("public external interface Tagged<T> {")
+        val markerAt = rendered.indexOf("/* xtsc: constraint on T: string not carried */")
+        assert(headerAt >= 0)
+        assert(markerAt > headerAt)
+    }
+
+    @Test
+    fun `a member typed by another exported interface renders that name`() {
+        val result = generate(
+            """
+            export interface Creature { name: string; }
+            export interface Cage { occupant: Creature; spare?: Creature; }
+            """
+        )
+        val expected = """
+            public external interface Creature {
+                public var name: String
+            }
+
+            public external interface Cage {
+                public var occupant: Creature
+                public var spare: Creature?
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a generic reference renders with mapped arguments and falls back when one does not map`() {
+        val result = generate(
+            """
+            export interface Box<T> { value: T; }
+            export interface Holder { good: Box<string>; bad: Box<string | number>; }
+            """
+        )
+        val rendered = result.kotlin
+        val good = "    public var good: Box<String>\n" in rendered
+        val bad = rendered.contains("public var bad: Any? /* xtsc: unmapped")
+        assert(good)
+        assert(bad)
+    }
+
+    @Test
+    fun `a non-exported interface is not a nameable target`() {
+        // Positive evidence only - `Hidden` resolves, the checker knows it,
+        // but it is not part of the generated surface, so naming it would emit
+        // Kotlin that references a type the module does not declare.
+        val result = generate(
+            """
+            interface Hidden { h: string; }
+            export interface Uses { member: Hidden; }
+            """
+        )
+        val rendered = result.kotlin
+        val fallback = rendered.contains("public var member: Any? /* xtsc: unmapped")
+        val noBareName = "public var member: Hidden" !in rendered
+        assert(fallback)
+        assert(noBareName)
+    }
+
+    @Test
+    fun `an exported alias with an unmappable body is a loud skip`() {
+        val result = generate(
+            """
+            export type Mixed = string | number;
+            """
+        )
+        val rendered = result.kotlin
+        val skipped = rendered.contains("/* xtsc: skipped type alias Mixed with unmappable body")
+        assert(skipped)
+        val noTypealias = "typealias Mixed" !in rendered
+        assert(noTypealias)
+    }
+
+    @Test
+    fun `an alias body naming a generated interface renders that name`() {
+        val result = generate(
+            """
+            export interface Creature { name: string; }
+            export type Beast = Creature;
+            """
+        )
+        val rendered = result.kotlin
+        val alias = "public typealias Beast = Creature\n" in rendered
+        assert(alias)
     }
 
     @Test

@@ -41,6 +41,11 @@ import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.SemicolonClassElement
+import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.Type
+import com.xemantic.typescript.compiler.TypeAliasDeclaration
+import com.xemantic.typescript.compiler.TypeNode
+import com.xemantic.typescript.compiler.TypeReference
 import com.xemantic.typescript.compiler.anyType
 import com.xemantic.typescript.compiler.computeParserFlags
 import com.xemantic.typescript.compiler.runWithDeepStack
@@ -129,7 +134,7 @@ public fun generateKotlinExternals(
     val sourceFile = parser.parse()
     val parseDiagnostics = parser.getDiagnostics()
     val binderResult = Binder(options).bind(sourceFile)
-    val collector = ExternalsCollector()
+    val collector = ExternalsCollector(exportedInterfaceDeclarations(sourceFile))
     val checker = runWithDeepStack {
         Checker(
             options,
@@ -146,6 +151,20 @@ public fun generateKotlinExternals(
 }
 
 /**
+ * (EXT.2) The file's exported [InterfaceDeclaration]s, pre-scanned from the
+ * SYNTAX before the check runs — the membership set behind "render a named
+ * type by its name". Syntax suffices for the SET (exported-ness and the name
+ * are written); what still needs the checker is the IDENTITY test at each use,
+ * which compares the resolved type's own declaration against these nodes by
+ * `===`, so a lib type or a non-exported neighbour that shares the spelling is
+ * positive-evidence excluded.
+ */
+private fun exportedInterfaceDeclarations(sourceFile: SourceFile): List<InterfaceDeclaration> =
+    sourceFile.statements
+        .filterIsInstance<InterfaceDeclaration>()
+        .filter { ModifierFlag.Export in it.modifiers }
+
+/**
  * Collects exported interfaces as the checker walks past their declarations.
  *
  * Everything the lens is asked happens INSIDE [declaration] — a [CheckedLens]
@@ -153,9 +172,63 @@ public fun generateKotlinExternals(
  * types are resolved and mapped to Kotlin TEXT on the spot, and the model
  * retains no checker object at all.
  */
-private class ExternalsCollector : CheckedNodeSink {
+private class ExternalsCollector(
+    private val exportedInterfaces: List<InterfaceDeclaration>,
+) : CheckedNodeSink {
 
     val declarations = mutableListOf<ExternalDeclaration>()
+
+    /**
+     * (EXT.2) The generated-name predicate for [TypeScope]: a [Type.Interface]
+     * whose declaration IS one of this file's exported interfaces — reached
+     * directly or as a [Type.Reference]'s target — answers its written name.
+     * The declaration is consulted on the TARGET for a reference (`kir/api`'s
+     * lesson: a Reference's own symbol carries no declaration where its
+     * target's does).
+     */
+    private fun generatedNameOf(type: Type): String? {
+        val symbol = when (type) {
+            is Type.Reference -> type.target.symbol
+            is Type.Interface -> type.symbol
+            else -> null
+        } ?: return null
+        val declared = symbol.declarations.any { declaration ->
+            exportedInterfaces.any { it === declaration }
+        }
+        return if (declared) symbol.name else null
+    }
+
+    private fun scopeOf(typeParamNames: Set<String>): TypeScope =
+        TypeScope(typeParamNames, ::generatedNameOf)
+
+    /**
+     * (EXT.2) The one place a member ANNOTATION becomes Kotlin type text.
+     *
+     * A bare reference to the enclosing declaration's own type parameter is
+     * answered SYNTACTICALLY, before the lens is asked — measured, the lens at
+     * an interface-declaration callback resolves `T` to `any` (an interface's
+     * type parameters are not part of the reconstructed ambient, which carries
+     * a FUNCTION's), and `any` is the silent direction. Everything else goes
+     * through the checker as before; `optional` and `returnPosition` behave as
+     * in [kotlinTypeText].
+     */
+    private fun annotationText(
+        annotation: TypeNode?,
+        optional: Boolean,
+        returnPosition: Boolean,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): String {
+        val ownParam = ((annotation as? TypeReference)?.typeName as? Identifier)
+            ?.text
+            ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
+        if (ownParam != null) {
+            val name = kotlinIdentifier(ownParam)
+            return if (optional) "$name?" else name
+        }
+        val type = annotation?.let { lens.typeOfTypeNode(it) } ?: anyType
+        return kotlinTypeText(type, optional, returnPosition, lens, scope)
+    }
 
     /**
      * Interfaces already collected, compared by IDENTITY: the spine may visit
@@ -168,25 +241,75 @@ private class ExternalsCollector : CheckedNodeSink {
     override fun expression(node: Expression, lens: CheckedLens) {}
 
     override fun declaration(node: Node, lens: CheckedLens) {
-        if (node !is InterfaceDeclaration) return
-        // A non-exported interface is not part of the module's surface, so it
-        // is not generated — deliberately without a marker: nothing consuming
-        // the module could have named it.
-        if (ModifierFlag.Export !in node.modifiers) return
-        if (seen.any { it === node }) return
-        seen.add(node)
-        declarations.add(collectInterface(node, lens))
+        // A non-exported declaration is not part of the module's surface, so
+        // it is not generated — deliberately without a marker: nothing
+        // consuming the module could have named it.
+        when (node) {
+            is InterfaceDeclaration -> {
+                if (ModifierFlag.Export !in node.modifiers) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectInterface(node, lens))
+            }
+            is TypeAliasDeclaration -> {
+                if (ModifierFlag.Export !in node.modifiers) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectTypeAlias(node, lens))
+            }
+            else -> return
+        }
+    }
+
+    /**
+     * (EXT.2) An exported alias whose body MAPS becomes a `public typealias`;
+     * one whose body does not is a loud skip — emitting `typealias U = Any?`
+     * would flatten every consumer signature that names it, silently.
+     */
+    private fun collectTypeAlias(
+        node: TypeAliasDeclaration,
+        lens: CheckedLens,
+    ): ExternalDeclaration {
+        if (node.typeParameters != null) {
+            return SkippedDeclaration("generic type alias ${node.name.text}")
+        }
+        val body = lens.typeOfTypeNode(node.type)
+        val mapped = kotlinTypeTextOrNull(
+            body,
+            returnPosition = false,
+            scope = scopeOf(emptySet()),
+        ) ?: return SkippedDeclaration(
+            "type alias ${node.name.text} with unmappable body " +
+                commentSafe(lens.render(body))
+        )
+        return ExternalTypeAlias(node.name.text, mapped)
     }
 
     private fun collectInterface(
         node: InterfaceDeclaration,
         lens: CheckedLens,
     ): ExternalDeclaration {
-        // Generics are (EXT.2+): refused LOUDLY as a rendered marker rather
-        // than dropped, because a silently absent exported declaration is the
-        // failure direction nothing downstream can see.
-        if (node.typeParameters != null) {
-            return SkippedDeclaration("generic interface ${node.name.text}")
+        // (EXT.2) A generic interface renders its type-parameter NAMES; what
+        // Kotlin externals cannot carry — a constraint, a default — becomes a
+        // loud header marker, never a silent widening.
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        val scope = scopeOf(typeParameters.toSet())
+        val headerMarkers = mutableListOf<String>()
+        for (parameter in node.typeParameters.orEmpty()) {
+            parameter.constraint?.let {
+                headerMarkers.add(
+                    "constraint on ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+            parameter.default?.let {
+                headerMarkers.add(
+                    "default for ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
         }
         val members = mutableListOf<ExternalMember>()
         if (node.heritageClauses != null) {
@@ -197,8 +320,8 @@ private class ExternalsCollector : CheckedNodeSink {
         }
         for (member in node.members) {
             when (member) {
-                is PropertyDeclaration -> collectProperty(member, lens, members)
-                is MethodDeclaration -> collectMethod(member, lens, members)
+                is PropertyDeclaration -> collectProperty(member, lens, members, scope)
+                is MethodDeclaration -> collectMethod(member, lens, members, scope)
                 // A stray `;` between members is pure syntax — there is
                 // nothing to generate and nothing to mark.
                 is SemicolonClassElement -> {}
@@ -207,13 +330,14 @@ private class ExternalsCollector : CheckedNodeSink {
                 )
             }
         }
-        return ExternalInterface(node.name.text, members)
+        return ExternalInterface(node.name.text, typeParameters, headerMarkers, members)
     }
 
     private fun collectProperty(
         member: PropertyDeclaration,
         lens: CheckedLens,
         members: MutableList<ExternalMember>,
+        scope: TypeScope,
     ) {
         val name = (member.name as? Identifier)?.text
         if (name == null) {
@@ -222,17 +346,18 @@ private class ExternalsCollector : CheckedNodeSink {
         }
         // The annotation is resolved by the CHECKER — `typeOfTypeNode` is
         // `getTypeFromTypeNode` under the walk's own ambient — so an alias
-        // arrives as what it denotes. An absent annotation IS implicit `any`,
-        // which is exactly what the checker would answer.
-        val type = member.type?.let { lens.typeOfTypeNode(it) } ?: anyType
+        // arrives as what it denotes; an absent annotation IS implicit `any`.
+        // The one syntactic exception is [annotationText]'s own-type-parameter
+        // rule.
         members.add(
             ExternalProperty(
                 name = name,
-                type = kotlinTypeText(
-                    type,
+                type = annotationText(
+                    member.type,
                     optional = member.questionToken,
                     returnPosition = false,
                     lens = lens,
+                    scope = scope,
                 ),
                 readOnly = ModifierFlag.Readonly in member.modifiers,
             )
@@ -243,6 +368,7 @@ private class ExternalsCollector : CheckedNodeSink {
         member: MethodDeclaration,
         lens: CheckedLens,
         members: MutableList<ExternalMember>,
+        scope: TypeScope,
     ) {
         val name = (member.name as? Identifier)?.text
         if (name == null) {
@@ -262,28 +388,27 @@ private class ExternalsCollector : CheckedNodeSink {
                 // positional one keeps the declaration readable.
                 val parameterName =
                     (parameter.name as? Identifier)?.text ?: "p$index"
-                val parameterType =
-                    parameter.type?.let { lens.typeOfTypeNode(it) } ?: anyType
                 ExternalParameter(
                     name = parameterName,
-                    type = kotlinTypeText(
-                        parameterType,
+                    type = annotationText(
+                        parameter.type,
                         optional = parameter.questionToken,
                         returnPosition = false,
                         lens = lens,
+                        scope = scope,
                     ),
                 )
             }
-        val returnType = member.type?.let { lens.typeOfTypeNode(it) } ?: anyType
         members.add(
             ExternalFunction(
                 name = name,
                 parameters = parameters,
-                returnType = kotlinTypeText(
-                    returnType,
+                returnType = annotationText(
+                    member.type,
                     optional = false,
                     returnPosition = true,
                     lens = lens,
+                    scope = scope,
                 ),
             )
         )

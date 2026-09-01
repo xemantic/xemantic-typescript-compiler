@@ -797,13 +797,29 @@ no counter), then continue top-to-bottom.
   emitted text, and GATE: the generated Kotlin must compile — reuse the
   kotlin-compiler-embeddable in-test compile check `-kir` already has.
 
-- [ ] **(EXT.2…n) EXTERNALS MVP LADDER — decompose into queue items as the work
-  progresses.** Given a program's `.d.ts` entry, emit Kotlin/JS `external` declarations
-  for: classes, functions, type aliases, enums, namespaces/modules, generics, overloads,
-  optional/nullable members, index signatures. Unions and other shapes Kotlin cannot
-  express: ONE documented fallback per shape, never silent. Fixture ladder: `mitt` →
-  `smol-toml` → RxJS → `typescript.d.ts`. GATE at every rung: the generated Kotlin
-  compiles (in-test compile check).
+- [x] **(EXT.2) DONE 2026-09-01 — GENERICS, INTERFACE REFERENCES, TYPE ALIASES.** A
+  generic interface renders its TP names (constraints/defaults become loud header
+  markers); a member typed by another EXPORTED interface renders that name under
+  POSITIVE identity evidence (`===` against the pre-scanned exported declarations — a
+  lib type or non-exported neighbour sharing the spelling falls back); a generic
+  reference renders `Box<String>` only when EVERY argument maps; an exported
+  non-generic alias with a mappable body becomes `public typealias` (uses still render
+  RESOLVED — the Dukat pin holds; an unmappable body is a loud skip, never
+  `typealias = Any?`). **Mechanism finding for EXT.3+: the lens at an
+  interface-declaration callback resolves a bare own-`T` annotation to `any` (an
+  interface's TPs are not the reconstructed FN-TP ambient), so own-TP annotations are
+  answered SYNTACTICALLY in `annotationText` — the one place annotations become Kotlin
+  text.** Module 21/0; the compile gate's fixture now carries generics + references +
+  typealias, negative control intact.
+
+- [ ] **(EXT.3…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
+  progresses.** Still to emit: functions, classes, enums, namespaces/modules,
+  overloads, optional methods, index signatures, heritage clauses, generic ALIASES,
+  references with TP arguments (`Box<T>` inside another generic — currently falls back
+  because the lens degrades the arg, see (EXT.2)'s mechanism finding). Unions and other
+  inexpressible shapes: ONE documented fallback per shape, never silent. Fixture
+  ladder: `mitt` → `smol-toml` → RxJS → `typescript.d.ts`; GATE at every rung: the
+  generated Kotlin compiles (in-test metadata compile).
 
 - [x] **(LSP.1) DONE 2026-09-01 (worktree wave, merged) — LSP SERVER: initialize + didOpen +
   hover.** New module `xemantic-typescript-compiler-lsp` (JVM; distributed later as a

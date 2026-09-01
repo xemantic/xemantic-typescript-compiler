@@ -41,7 +41,27 @@ internal sealed interface ExternalDeclaration
 
 internal class ExternalInterface(
     val name: String,
+    /** The declaration's own type-parameter NAMES, rendered as written. */
+    val typeParameters: List<String>,
+    /**
+     * (EXT.2) Loud per-declaration records — a constrained or defaulted type
+     * parameter whose constraint Kotlin externals cannot carry — rendered as
+     * comments directly under the header, never dropped.
+     */
+    val headerMarkers: List<String>,
     val members: List<ExternalMember>,
+) : ExternalDeclaration
+
+/**
+ * (EXT.2) An exported, non-generic type alias whose body mapped — rendered as
+ * `public typealias`. USES of the alias still render the RESOLVED type (the
+ * (EXT.1) `Species` -> `String` pin): the alias declaration is emitted for the
+ * consumer's vocabulary, the resolution is what the checker knows.
+ */
+internal class ExternalTypeAlias(
+    val name: String,
+    /** Full Kotlin type text of the alias body. */
+    val body: String,
 ) : ExternalDeclaration
 
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
@@ -97,14 +117,69 @@ internal fun kotlinTypeText(
     optional: Boolean,
     returnPosition: Boolean,
     lens: CheckedLens,
+    scope: TypeScope = TypeScope.EMPTY,
 ): String {
-    val mapped = mappedIntrinsic(type, returnPosition)
+    val mapped = mappedText(type, returnPosition, scope)
     return when {
         mapped == null ->
             "Any? /* xtsc: unmapped ${commentSafe(lens.render(type))} */"
         optional -> "$mapped?"
         else -> mapped
     }
+}
+
+/**
+ * (EXT.2) What a type may resolve AGAINST at one use site: the enclosing
+ * declaration's own type-parameter names, and the predicate deciding whether a
+ * named type is one THIS generation emits.
+ *
+ * [generatedNameOf] must demand POSITIVE evidence (the `kir/api` mapper's
+ * lesson): a type is rendered by NAME only when its symbol's declaration IS one
+ * of the exported declarations being generated — a lib type or a non-exported
+ * neighbour that merely shares a name falls to the fallback, never to a bare
+ * name the generated module does not declare.
+ */
+internal class TypeScope(
+    val ownTypeParams: Set<String>,
+    val generatedNameOf: (Type) -> String?,
+) {
+    internal companion object {
+        val EMPTY: TypeScope = TypeScope(emptySet()) { null }
+    }
+}
+
+/**
+ * (EXT.2) The mapping WITHOUT the fallback: null where [kotlinTypeText] would
+ * mark — for callers that must REFUSE a declaration rather than degrade a
+ * member (the typealias body).
+ */
+internal fun kotlinTypeTextOrNull(
+    type: Type,
+    returnPosition: Boolean,
+    scope: TypeScope,
+): String? = mappedText(type, returnPosition, scope)
+
+private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): String? {
+    mappedIntrinsic(type, returnPosition)?.let { return it }
+    // The enclosing declaration's own type parameter, by its written name.
+    if (type is Type.TypeParam) {
+        val name = type.symbol?.name ?: return null
+        return if (name in scope.ownTypeParams) kotlinIdentifier(name) else null
+    }
+    // A reference to an interface THIS generation emits — a bare use...
+    scope.generatedNameOf(type)?.let { name ->
+        if (type !is Type.Reference) return kotlinIdentifier(name)
+        // ...or a generic instantiation, rendered only when EVERY argument
+        // maps: one unmappable argument falls the whole reference back, so a
+        // half-translated `Box<...>` never appears.
+        val args = type.resolvedTypeArguments ?: return kotlinIdentifier(name)
+        val mappedArgs = args.map { argument ->
+            mappedText(argument, returnPosition = false, scope) ?: return null
+        }
+        return if (mappedArgs.isEmpty()) kotlinIdentifier(name)
+        else "${kotlinIdentifier(name)}<${mappedArgs.joinToString(", ")}>"
+    }
+    return null
 }
 
 private fun mappedIntrinsic(type: Type, returnPosition: Boolean): String? {
@@ -123,7 +198,7 @@ private fun mappedIntrinsic(type: Type, returnPosition: Boolean): String? {
  * nested comment-close would end the marker early and break the generated
  * file, and a line break would break the single-line member.
  */
-private fun commentSafe(rendered: String): String = rendered
+internal fun commentSafe(rendered: String): String = rendered
     .replace("*/", "* /")
     .replace('\n', ' ')
     .replace('\r', ' ')
@@ -147,10 +222,25 @@ internal fun renderKotlinExternals(
                 appendLine("/* xtsc: skipped ${declaration.description} */")
             is ExternalInterface -> {
                 val keyword = if (external) "external interface" else "interface"
-                appendLine("public $keyword ${kotlinIdentifier(declaration.name)} {")
+                val typeParams =
+                    if (declaration.typeParameters.isEmpty()) ""
+                    else declaration.typeParameters
+                        .joinToString(", ", prefix = "<", postfix = ">") {
+                            kotlinIdentifier(it)
+                        }
+                appendLine(
+                    "public $keyword ${kotlinIdentifier(declaration.name)}$typeParams {"
+                )
+                for (marker in declaration.headerMarkers) {
+                    appendLine("    /* xtsc: $marker */")
+                }
                 for (member in declaration.members) appendMember(member)
                 appendLine("}")
             }
+            is ExternalTypeAlias ->
+                appendLine(
+                    "public typealias ${kotlinIdentifier(declaration.name)} = ${declaration.body}"
+                )
         }
     }
 }

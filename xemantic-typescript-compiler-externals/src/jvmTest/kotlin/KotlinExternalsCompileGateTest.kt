@@ -135,6 +135,15 @@ class KotlinExternalsCompileGateTest {
             val: number;
             in: boolean;
         }
+        export interface Box<T> {
+            value: T;
+            wrap(x: T): T;
+        }
+        export interface Holder {
+            occupant: Creature;
+            boxed: Box<string>;
+        }
+        export type Beast = Creature;
     """.trimIndent()
 
     @Test
