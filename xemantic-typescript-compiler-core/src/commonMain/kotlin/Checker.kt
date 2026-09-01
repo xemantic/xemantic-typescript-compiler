@@ -161172,85 +161172,8 @@ interface DataView {
     // Structural typing engine (Phase 4 items 4a-4e)
     // -----------------------------------------------------------------------
 
-    /** Ternary logic for type relations: True, False, or Maybe (for recursive checks). */
-    private enum class Ternary { True, False, Maybe }
-
-    /** Relation cache — maps (sourceId, targetId) packed into Long → result. */
-    private class Relation {
-        private val cache = HashMap<Long, Ternary>()
-
-        /**
-         * (WARM.31) round 904 — arm B of the boxed-key amplifier, populated in
-         * LOCKSTEP with [cache] and read only under `--boxedKeyAmp`. It is the
-         * primitive-keyed successor this whole candidate is about, and putting it
-         * HERE rather than in a synthetic loop is what keeps the measurement
-         * honest: the same key stream, the same table occupancy, the same cache
-         * residency (round 897 — a leaf profile cannot see a working-set effect,
-         * so a bench-rig key sequence would price a different machine state).
-         *
-         * `LongKeyMap` reserves key 0 as its empty-slot sentinel, so a key of
-         * exactly 0 is skipped and COUNTED rather than assumed impossible.
-         */
-        private val shadow = LongKeyMap<Ternary>(1024)
-
-        fun get(sourceId: Int, targetId: Int): Ternary? {
-            val k = packKey(sourceId, targetId)
-            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REL_CACHE, k)
-            if (MapCensus.boxedKeyAmp > 0) amp(k)
-            return cache[k]
-        }
-
-        /**
-         * Two arms under one timestamp pair each, order alternating per call so a
-         * drift inside the rebuild lands on both. Neither arm's key is computed
-         * inside its bracket, so what is measured is the PROBE and nothing else.
-         *
-         * Two falsifiers ride along. (1) Each sink is 0 or `r` per call, hence an
-         * exact multiple of `r` — and the two sinks must be EQUAL, which is the
-         * lockstep control: they diverge the moment the shadow stops mirroring.
-         * (2) A `HashMap` probe on an unchanging key is loop-invariant-looking, so
-         * C2 may hoist it; the falsifier for that is the SLOPE between two `r`,
-         * never the sink (round 903).
-         */
-        private fun amp(k: Long) {
-            val r = MapCensus.boxedKeyAmp
-            val boxedFirst = (MapCensus.bkAmpCalls and 1L) == 0L
-            if (boxedFirst) { ampBoxed(k, r); ampPrimitive(k, r) }
-            else { ampPrimitive(k, r); ampBoxed(k, r) }
-            MapCensus.bkAmpCalls++
-        }
-
-        private fun ampBoxed(k: Long, r: Int) {
-            val t0 = PassTiming.nowNanos()
-            var s = 0L
-            var i = 0
-            while (i < r) { if (cache[k] != null) s++; i++ }
-            MapCensus.bkAmpBoxedNanos += PassTiming.nowNanos() - t0
-            MapCensus.bkAmpBoxedSink += s
-        }
-
-        private fun ampPrimitive(k: Long, r: Int) {
-            val t0 = PassTiming.nowNanos()
-            var s = 0L
-            var i = 0
-            while (i < r) { if (shadow.get(k) != null) s++; i++ }
-            MapCensus.bkAmpPrimNanos += PassTiming.nowNanos() - t0
-            MapCensus.bkAmpPrimSink += s
-        }
-
-        fun set(sourceId: Int, targetId: Int, result: Ternary) {
-            val k = packKey(sourceId, targetId)
-            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_REL_CACHE, k)
-            cache[k] = result
-            if (MapCensus.boxedKeyAmp > 0) {
-                if (k != 0L) shadow.put(k, result) else MapCensus.bkAmpSentinelKeys++
-            }
-        }
-
-        /** (HASH.1)(b) round 890: see [packIdPair] — this map's 43,080 real keys
-         *  collapsed onto 18,201 hashes, 1,140 of them in a single bucket. */
-        private fun packKey(a: Int, b: Int): Long = packIdPair(a, b)
-    }
+    // (INV.0) [Ternary] and the [Relation] cache live in TypeRelationCache.kt
+    // since Stage 0's second extraction — the relater seam's future home.
 
     /**
      * 4a. Fast flag-based type relatedness check (no recursion).

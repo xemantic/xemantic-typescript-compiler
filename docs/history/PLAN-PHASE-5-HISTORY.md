@@ -1,3 +1,273 @@
+### Round (INC.87)(a) — the post-checker's filter row is 4.5 ms of a keystroke, and 89% of it answers nothing
+
+**(INC.86)(a) NAMED A ROW NO QUEUE ITEM HAD EVER NAMED, AND SPLITTING IT REFUTED THE OBVIOUS
+READING OF IT.** `FrontEnd.POST_DIAGS` now decomposes into three abutting sub-rows
+(`POST_MP4` / `POST_SUPPRESS` / `POST_APPEND`), per (INC.65)'s law that a row is split before
+it is priced. Measured on the 2,401-file `dom` fixture, trusted arm, medians over six
+instrumented draws:
+
+```
+POST_DIAGS                                   4.507 -> 0.508 ms
+  of which TS2688 + TS2209 + isolatedDecls   3.296 -> 0.492
+  of which the modulePreserve4 scan          1.184 -> ABSENT   (calls 1 -> 0)
+  of which the parse-cascade removeAll       0.0022 -> 0.0017  (control, untouched)
+```
+
+The three abut by construction and summed to **99.4%** of the row before the change.
+
+**THE COST WAS NOT WHERE THE REGION'S SHAPE SAID IT WAS.** Reading the code, the candidate is
+obvious: one unconditional WHOLE-PROGRAM TEXT SCAN (`hasModulePreserve4`) sitting above the
+guard that is its only consumer. That scan is real and it is the SMALLER member. The larger is
+`checkMissingTypesReferenceExports`' package.json pass, whose pattern is rooted at an
+alternation `(?:^|/)`, so `BnM.optimize` gives it no literal prefix and it is attempted at
+**every position of every file name in the program** — on a fixture that contains no
+`node_modules` at all, i.e. the whole 3.30 ms was spent to answer NO. The analysis agent that
+mapped the region explicitly REFUSED to attribute the row without measuring, on the grounds
+that the same row reads 1.88 ms on tsc's 10 MB profile against 4.22 here — an inversion a
+text-scan explanation cannot produce. It was right to refuse.
+
+**THE TWO FIXES, both answer-preserving by construction.** The package.json pass is pre-gated
+on `endsWith("/package.json")`, which is EXACT rather than heuristic — the pattern's own tail
+is `/package\.json$`, so a name it can match necessarily ends there — with the regex kept LIVE
+as the decider for whatever survives (round 792's shape); both patterns are hoisted out of the
+per-call body, where they were recompiled on every compile. And `hasModulePreserve4` is
+deferred behind a `lazy`, with the cheap basename test moved in front of it in `isPinFile`
+(`&&` short-circuits and both operands are pure). The second one is paid TWICE per keystroke
+in the shipped design, because the (INC.17) recheck path re-runs this very lambda.
+
+**NO WALL FIGURE IS CLAIMED, AND THE SAME RUN IS WHY.** `WALL` read 108 -> 88 ms, and in that
+same pair of runs `initNanos` read **51.5 -> 77.9 ms** on code this round does not touch. One
+`--passTiming` draw is not a measurement at floor scale ((INC.52)) and the query wall carries
+(INC.72)'s ±20 ms concurrent term. The receipt is therefore a COUNT and is exact: the timing
+bracket for the deferred scan lives INSIDE the `lazy { }`, so `calls == 0` is the statement
+that it never ran.
+
+**BOTH NEW PIN CLASSES WENT RED ON THEIR FIRST RUN, AND BOTH FOR REASONS WORTH KEEPING.**
+(i) The TS2688 positive control did not fire — because **`ProjectCompiler` never puts a
+`package.json` into the program at all**; its own comment says the nearest enclosing manifest
+"is not one of the program's inputs". So the mechanism is reachable only through the
+multi-file `@Filename` harness, and the first draft read `programFiles=[index.ts]` with an
+empty diagnostic list. Written as an ABSENCE assertion it would have been green forever.
+(ii) The count pin read `POST_MP4 == 1` where it demanded 0 — because the fixture was named
+`b.ts` / `c.ts`, which are **two of the twelve `modulePreserve4` basenames**, so the cheap
+test matched and the scan correctly ran. CLAUDE.md's collider rule (`top`, `name`, `Text`,
+`Event`) in a new costume. That collision is now the POSITIVE control, which is what turns the
+two zeros from a possibly-dead probe into evidence (round 790).
+
+**REFUSED THIS ROUND rather than shipped:** `init:evolvingArrayUseSiteWalks` builds five
+throwaway collections per file and measures **1.835 ms**. A one-loop rewrite was built and
+REVERTED — it can be neither priced (the pass table moved +51% in the same run) nor pinned
+locally (the pass emits nothing; it only sets `flowDepthTripped`), and round 801 already
+measured that removing 367,189 allocations is worth 0 ms.
+
+**AND (INC.86)(b) IS ANSWERED BY ITS OWN DISTRIBUTION.** `Inc56TrustedFloorMain` printed a
+top-15; it now prints every row plus a bucket census, because (INC.69) records that a top-N
+cannot show a plateau. The init block is **418 rows, `rowsTo50pct=5`, `rowsTo90pct=22`**, and
+the 363-row tail below 10 µs is **1.03 ms in total** — so there is no plateau left to harvest
+there, (INC.69) having already taken the one that existed. Its largest row
+(`init:buildFileLocalTypeMaps`, 16.5 ms) is refused with its price by (INC.77), and rows 2-4
+are refused by (INC.73)(b) and (INC.7) batch 4.
+
+**GATES.** Suite **16,653 / 0 / 3** (+8, this round's pins); `cost_gate.py` exit 0 with every
+counter +0.00% and `output.errors` 46; `huge_methods.py --fail-over 0` clean; **the two-binary
+8-profile grid `added=0 removed=0` on all eight**, its before-arm carrying a positive control
+that the class dir genuinely lacks `POST_MP4` (verified afterwards to be non-blind: `javap`
+answers, and the restored binary does contain it).
+
+**SUCCESSOR, per the WORK ORDER note.** The per-keystroke query must be RE-DECOMPOSED before
+anything else is opened ((INC.57)'s law — the ranking has changed after every round in this
+arc). What is known going in: the post-checker row is now ~2.6 ms and its filter half ~0.5,
+so the front end and the post-checker are both spent; the init block is ~43-52 ms and is
+concentrated in five refused rows; and the one unrefused member is
+`init:evolvingArrayUseSiteWalks` (1.835 ms), which needs an instrument that can price it —
+two class dirs and an ABBA rotation, not a single pass-timing draw.
+
+
+### Round (INC.85) — a wave that cannot block is drained without the 16-way merge, and the gate is defaulted OFF
+
+**(INC.84) MEASURED THE PIPELINE AT 0.6x EFFECTIVE PARALLELISM ON THE ARM AN IDE RUNS**, and
+this acts on it. `readAndScanBatch` now classifies each path on the caller's thread: a file
+whose content is RESIDENT and whose parse the content cache already HOLDS is built directly;
+everything else is deferred to the old pipeline, moved verbatim into `drainConcurrently`.
+Both halves feed the UNCHANGED single-threaded fold, so `CrawlParseCache.store`,
+`vfs.retainRead` and the counters still run once each and off the flow (round 825).
+
+```
+readAndScanBatch WALL   8.48 / 9.82 / 12.28  ->  5.84 / 5.32 / 4.73 ms
+flatMapMerge pipeline   6.63 / 8.13 /  9.61  ->  0.81 / 0.80 / 0.67
+net vs the old pipeline                          -2.2 / -4.0 / -6.0
+```
+
+**THE RECEIPT IS DETERMINISTIC AND NO WALL NUMBER IS QUOTED.** A warm trusted keystroke reads
+**2400 resident / 1 piped** — the merge is entered for the edited file ALONE — against
+**0 / 2401** both cold and for an untrusting `Vfs`. Four rotated batches of the query wall
+gave sign-flipping deltas *on the untouched control arm as well*, which is (INC.72)'s law:
+that instrument carries a +-20 ms concurrent term and cannot resolve a 2-6 ms sequential
+change, so it is reported as unable to see it rather than as evidence either way.
+
+**THE ROUND WAS FIRST REPORTED AS A REFUSAL AND THAT WAS THE RIGHT CALL ON ITS OWN NUMBERS.**
+The first design made EVERY host pay a per-path classification probe — ~0.6-0.9 ms per wave
+for 2,401 paths — to serve a regime only some of them are in. What changed the verdict was
+not re-measuring but removing the cost: **`Vfs.hasResidentContent()`, a whole-store question
+defaulted `false` and asked ONCE per wave**, so every `Vfs` that has not opted in —
+`SystemVfs`, i.e. the entire shipped CLI and daemon path — performs not one probe and runs
+exactly today's code.
+
+**AND THE GATE'S SHAPE IS A STRUCTURAL ARGUMENT, NOT A THRESHOLD.** `OverlayVfs` answers it
+from the RETAINED map alone and deliberately not from the overlaid buffers: `contents` is
+O(open editor buffers) while a wave is O(program files), so that disjunct would spend
+O(program) probes to fast-drain at most a handful and **can never pay for itself at any
+project size**. Dropping it took the last non-winning regime from 0.6-0.9 ms to **99-111
+NANOseconds**. The four regimes are now: cold **0** waves classified, non-opted-in `Vfs`
+**0**, overlay without the promise **~100 ns**, overlay with it pays and wins. The KDoc
+carries that reason in its own section, because a missing disjunct is exactly what a later
+reader "fixes" back.
+
+**THE `trustFilesystem` CONJUNCT IS REDUNDANT AND IS KEPT AS THE BELT** — `retainRead` opens
+with `if (!trustFilesystem) return` and the setter clears `retained` on withdrawal, so
+`retained.isNotEmpty()` already implies the promise. It takes BOTH mistakes to serve a stale
+read and an ablation dropping either alone reddens nothing: round 927's pair, recorded rather
+than claimed.
+
+**EIGHT ABLATION ARMS, and a5 is the one worth reading.** a5 (the cached tree served by PATH,
+with no content/flags gate) was a **DEAD arm on its first pass** — 0 RED — because the
+fixture's `edit()` dropped retention, so the one shape that matters, *an unsaved buffer,
+resident with new bytes over a stale cached tree*, did not exist in it. With that fixture
+built, a5 reddens exactly the staleness pin. **Without it this change could have shipped
+serving the PREVIOUS KEYSTROKE'S parse tree, and no counter, order pin or corpus baseline
+would have noticed.** a6 is the two-independent-guards control at 0 RED; a3 confirms that
+`paths.map { indexed.getValue(it) }` — not the flow — is what fixes program order, reddening
+both crawl-order pins.
+
+**GATES.** Suite **16,645 / 0 / 3**; `cost_gate.py` exit 0, every counter unchanged;
+`huge_methods.py --fail-over 0` clean; compiler profile **46**; and the `--frontEnd` census
+lines (`root glob` / `path normalize` / `module resolution`) **byte-identical** before and
+after, which is the receipt that the same work is being done.
+
+**COORDINATION NOTE, since it decided the outcome.** The round was handed back once rather
+than accepted, on the ground that its two objections were not equal: "the query wall cannot
+see it" is a statement about an instrument that (INC.72) already says cannot see changes of
+this size, while "the blocking arm now pays" was a real cost — and removable. Only the second
+was worth acting on. A refusal is worth as much as a fix here, but a refusal resting on an
+instrument's blindness is worth re-examining before it is accepted.
+
+### Round (INC.84) — the concurrent half is named, and its 16-way merge is running at 0.6x parallelism
+
+**THE ~6-8 ms THAT NO ROW COULD SEE IS NOW ATTRIBUTED, AND THE RESIDUE AFTER THE SPLIT IS
+0.17-0.37 ms.** Six new `FrontEnd` rows, each stating in its own KDoc whether it is a WALL or
+a CPU SUM across the 16 workers — the single most misread distinction in that file, and the
+reason (INC.83) could rank nothing:
+
+```
+CRAWL (WALL)                  9.45 - 12.75 ms
+  specifier resolution        3.08 -  4.49   (already named)
+  readAndScanBatch  WALL      5.90 -  7.64   <-- the concurrent half, now named
+    flatMapMerge pipe WALL    4.83 -  6.44
+    single-threaded fold      0.59 -  0.69
+    associateBy + reindex     0.17 -  0.28
+  frontier drain + emit       0.27 -  0.39
+  residue                     0.17 -  0.23
+  CPU sums inside the pipeline, 2,401 files each:
+    read+decode               1.09 -  1.38
+    pre-parse                 0.91 -  1.27
+    CrawledFile construction  0.89 -  1.20   <-- NEW, ~370-500 ns/file
+```
+
+**`CRAWL_MKFILE` IS THE ROW NO EXISTING SPAN COULD REACH**, which is why (INC.83) had to
+refuse it as unobtainable: the constructor builds a `Set` of the file's module specifiers
+AFTER the pre-parse span closes and BEFORE `emit`, so it fell between the two. Its nanos ride
+back on the element and are folded by the single-threaded collector, because a `+=` from
+those 16 workers is round 825's race with no exception to find it by.
+
+**THE FINDING IS A RATIO, AND THE ROW'S OWN KDoc FORBIDS THE SUBTRACTION THAT WOULD HAVE
+GIVEN THE WRONG ANSWER**: with 16 overlapping workers, `PIPE - (READ + PREPARSE + MKFILE)` is
+a residue of nothing. Total worker CPU inside the pipeline is **3.71 / 2.89 / 3.49 ms**
+against pipeline WALLS of **6.44 / 4.83 / 5.79** — an effective parallelism of
+**0.58 / 0.60 / 0.60x**, replicated to two decimals across three independent draws. **Sixteen
+workers producing LESS CPU than their own wall is scheduling, not work.**
+
+**AND THE CONTROL THAT MAKES IT ATTRIBUTABLE IS THE OTHER ARM.** The same pipeline on the
+UNTRUSTING arm runs at **7.5-8.9x** — where reads genuinely block, the merge earns its keep
+handsomely (its `read+decode` CPU sum there is 124-187 ms against 1.1-1.4 on the trusted
+arm). So this is not "concurrency is bad"; it is that a wave in which every read is served
+from memory and every parse from the content cache has **nothing to overlap**, and pays 16
+channels and their scheduling to discover that. (INC.64) removed two dispatcher hops per file
+for exactly this reason and left the merge itself in place; this is that finding one layer
+out.
+
+**GATES.** Suite **16,633 / 0 / 3**; `cost_gate.py` exit 0 with every counter **+0.00%**
+(which is the *expected* answer for a probe and is read as a control, not a result);
+`huge_methods.py --fail-over 0` clean; compiler profile **46** diagnostics. The pin's own
+ablation — one `close` dropped — reddens 2 of its 4 tests.
+
+**SUCCESSOR, OPEN:** an adaptive drain for a wave that is all cache hits. The prize is
+bounded by the pipeline wall minus its own unavoidable CPU, i.e. **~2-3.5 ms of a ~110 ms
+keystroke**, and the hazards are named rather than guessed: `CrawlParseCache.store` and
+`vfs.retainRead` must stay in the single-threaded fold whatever the drain does (round 825),
+and the function's return is already order-restored by `paths.map { indexed.getValue(it) }`,
+so the emission-order contract is a property of that line and not of the pipeline. Everything
+below the pipeline is REFUSED and the split is diffuse: **no unnamed member is above ~0.4 ms**
+— `CrawledFile` construction 0.89-1.20 (real, but inside the very pipeline the successor
+wants to change), fold 0.59-0.76 (its single-threadedness is load-bearing), re-index
+0.17-0.28, drain 0.27-0.54.
+
+### Round (INC.83) — the crawl's concurrent residue: all three named members REFUSED, and the finding is again a residue no sub-row names
+
+**THE QUEUE NAMED THREE MEMBERS OF THE ~9 ms CONCURRENT HALF AND ALL THREE PRICE BELOW THE
+BAR.** Measured on `many-small-2400-dom`, per-keystroke query ~93 ms (trust arm):
+
+| candidate | population | isolated (upper bound) | in-build | verdict |
+|---|---|---|---|---|
+| `CrawledFile.specifiers = moduleSpecifiers.toSet()` (+ `associateBy` + re-index) | 2,401 files, 4,701 specifiers, mean **1.96**, max **2**, 50 files with none | `toSet` 0.53-0.63 ms, `associateBy`+re-index 0.19-0.25 — **~0.8 ms** | **unobtainable without a new probe boundary** | **REFUSE — 0.9% of the query, and that is a CEILING** |
+| `CrawlParseCache.lookup`'s `e.content != source` | 2,401 files, 2,430,979 chars | identity **0.09 ms** vs fresh-but-equal **1.79** -> the compare is **1.6 ms** | trust `pre-parse` 1.18-1.51 ms vs plain **2.31-2.76** | **REFUSE — identity DOES fire on the shipped arm, so it is ~0 ms there** |
+| the `Regex` built per call in `fileLooksLikeModuleForAwait` | — | 0.23 ms (esnext) / 1.9 (cjs) / 5.3 (cjs, every file awaits) | esnext 1.2-1.5 -> cjs 1.67-1.99 -> cjs+await **3.29-3.51** | **REFUSE at 0.00 ms — provably never called** |
+
+**THE THIRD IS THE ONE WORTH READING, BECAUSE IT IS DOUBLY GATED AND I HAD IT RANKED FIRST.**
+`fileLooksLikeModuleForAwait` is short-circuited by the option test above it for every ES
+module target, and `many-small-2400-dom` is `ESNext`; and even in a `commonjs` regime the
+regex is reached only for a file whose content contains `await`, of which this fixture has
+**0 of 2,401**. So the cost is `contains("await")` alone (+0.4-0.6 ms) and the regex itself
+is **never constructed**. Its worst realistic regime — commonjs AND every file awaiting — is
+1.4-1.6 ms. (INC.61)'s law on a fourth axis: a front-end price is a claim about the
+fixture's `compilerOptions`, not only about its file count.
+
+**AND THE SECOND REFUTES ITS OWN MECHANISM RATHER THAN ITS SIZE.** The content compare looks
+like a textbook O(bytes) cost and is ~0 on the arm that ships, because (INC.56)'s
+`retainRead` hands the cache back the SAME `String` instance and `String.equals` takes its
+identity path. It is 1.6 ms only for a host that does NOT make the filesystem promise — so
+it is a cost of *not* trusting, which is the opposite of a lever.
+
+**SO THE FINDING IS THE RESIDUE, FOR THE FOURTH TIME IN THIS ARC.** Crawl `WALL` is
+**12.2 / 12.4 / 14.1 / 15.5 ms** over 4 ABBA batches and the sequential resolve half
+**3.35 / 4.07 / 4.21 / 5.81**, so the concurrent half is **8-11 ms** — of which the two
+instrumented rows account for only `read+decode` **1.36-1.75** plus `pre-parse`
+**1.18-1.51** = **~2.8 ms**. **~6-8 ms is UNATTRIBUTED**: the `flatMapMerge(16)` machinery,
+the `CrawledFile` construction (which happens at `emit`, i.e. AFTER the `pre-parse` span
+closes, so it is charged to neither row), the flow collection, and the single-threaded fold
+(`store` / `retainRead` / three census loops). **That residue is the only thing in the
+concurrent half large enough to be worth a round**, and it cannot be ranked from the rows
+that exist — (INC.65)'s law, which is now the fourth time in this arc that ADDING an
+instrument rather than reading one is what would find the cost.
+
+**THE STATED NON-MEASUREMENTS**, which matter as much as the prices. Candidate 3 has NO
+in-build number and cannot get one without a production probe boundary. The `cjs` fixtures
+vary `moduleResolution` as well as `module`, so only their `pre-parse` row was read and
+never their WALL. And `pre-parse (CPU sum)` is elapsed-with-suspension over 16 workers — a
+CPU sum, not a wall price, so its contribution to the crawl wall is smaller still, which is
+why every crawl-wall range here overlaps across all three fixtures.
+
+**IF EITHER REFUSAL IS EVER RE-OPENED**, the hazard is recorded rather than the fix. Hoisting
+the regex is free hygiene and its pin must be a VALUE pin on `ParserFlags.topLevelAwait`
+across the four cases, because a wrong flag changes how a file PARSES (INV.1(e)) and the
+crawl-reuse gate then hands the core a different TREE with no diagnostic anywhere. Keeping
+`moduleSpecifiers` as a `List` and deduping at the consumer would change DISCOVERY ORDER,
+hence program file order, hence global symbol-id allocation — the documented ~350-test
+reshuffle.
+
+**SUCCESSOR:** split the concurrent residue with a probe boundary around the `CrawledFile`
+construction and the single-threaded fold, then re-rank. Until that exists, the ~6-8 ms is a
+location and not a price, and nothing in it should be designed against.
+
 ### Round (INC.82) — the importer's directory was re-derived per SPECIFIER, and the isolated probe over-read its own prize by 3x
 
 **THE ROW.** `ModuleResolver.resolve(specifier, importerPath)` read `importerPath` for

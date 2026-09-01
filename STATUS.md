@@ -1,8 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,107** lines (was 191,155 at the metric's creation;
-1 collaborator extracted: `TypeInterner`, ambient surface none). Reference points:
+extraction):** `Checker.kt` **191,030** lines (was 191,155 at the metric's creation;
+2 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
+for both). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
@@ -19,8 +20,8 @@ inlining (the 277 B monolith never hot-inlined; the 13 B hop + body both do);
 recorded-edge pin flipped to healed, punctuation-final files pinned conservative);
 (EXT.5) generic aliases + generic methods + method overloads (externals 47/0);
 (EXT.6) default exports + generic references to generated targets — **the mitt rung is
-GREEN** (verbatim mitt@3.0.1 d.ts generates and metadata-compiles; externals 52/0,
-suite 16,803/0/3).
+GREEN** (verbatim mitt@3.0.1 d.ts generates and metadata-compiles; externals 52/0);
+(INV.0) step 2: `Relation`+`Ternary` relocated to `TypeRelationCache.kt` (suite 16,803/0/3).
 
 **(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
 (2026-09-01).** In one session under the re-pointing directive: the directive persisted;
