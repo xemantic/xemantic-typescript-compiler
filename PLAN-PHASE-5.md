@@ -75,6 +75,31 @@ on IDENTITY membership in the pre-scanned top-level exported sets, closing a lat
 where a namespace-nested exported interface/alias would have rendered at top level
 (default-exported declarations stay deliberately silent until the DEFAULT-exports rung).
 
+**(INV.0) STEP 1 LANDED — `TypeInterner`, THE FIRST STAGE-0 COLLABORATOR, AND THE OWNER'S
+RECEIPT PROTOCOL EXERCISED END-TO-END.** Canonical type identity (INV.5(a), design § 4
+pillar 4) extracted into a final class with an EMPTY ambient surface: the six intern
+caches moved wholesale out of `CheckerState`, their only three access sites became
+one-line delegations, and normalization stayed with the callers — identity ONLY is what
+makes the ambient columns read "none". `docs/inversion-ambient-ledger.md` created (row 1);
+`Checker.kt` 191,155 → 191,107; 6 identity pins (`TypeInternerTest`, including the
+deliberate null-vs-empty-args conflation and the two-interners-share-nothing lifetime
+pin). RECEIPTS (contract § 10): corpus 16,781/0/3 BYTE-IDENTICAL; cost_gate +0.00% on
+every counter (the control, exactly as the contract predicts for a pure split);
+huge_methods 0; ab-interleaved 6 pairs +60 ms (+0.26%) B-wins-2/6 = NOISE-DOMINATED (no
+wall effect — plus 4 pairs from a killed first batch reading the same); JFR allocation
+profile 2,041 vs 2,036 samples, same leaf families, no new frame (aggregate_jfr.py
+gained `--event` so the same aggregation reads jdk.ObjectAllocationSample); core
+`--rerun` compile 84.7/80.5 s → 79.5/80.9 s (flat, the baseline series). **The
+PrintInlining receipt found the split IMPROVED the hot path rather than merely not
+hurting it**: the pre-split `getOrInternReference` was a 277-byte body C2 refused at
+EVERY hot site (`callee is too large` ×39, zero `inline (hot)`), while the split's
+13-byte hop inlines everywhere and the 273-byte `TypeInterner::reference` body itself
+reads `inline (hot)` ×7 (union ×10 vs ×3 before); the three standing hot sites are
+row-for-row identical across arms. A measurement-harness note: the first combined
+receipt script was KILLED mid-batch by the task runner (~4.5 min) — chunked re-runs
+(ab / JFR / inlining as separate background commands) completed cleanly; nothing in the
+tree was at risk because the receipts are read-only over snapshotted class dirs.
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -1031,7 +1056,10 @@ Owner decisions 2026-09-02:
   inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
   proposal — implementation does NOT start in the session that writes the design.
 
-- [ ] **(INV.0) SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
+- [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
+  surface NONE) DONE 2026-09-02, ledger row 1; next seams per the order: name resolution,
+  getTypeOfSymbol/getTypeOfExpression, relations, instantiation, signatures, flow.**
+  **SPLIT `Checker.kt` BY RESPONSIBILITY ALONG THE SEAMS
   `docs/INVERSION-DESIGN.md` NAMES (owner additions 2026-09-02 MERGED into the item
   (INV.D)/P18.0 had already queued, per the directive's own merge rule; moved here to sit
   directly after (INV.D) as instructed).** tsgo's `internal/checker` decomposition is the

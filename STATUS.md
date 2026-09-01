@@ -1,14 +1,20 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,155** lines. Reference points: tsc ≈ 50k lines (one
-file), tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10.
+extraction):** `Checker.kt` **191,107** lines (was 191,155 at the metric's creation;
+1 collaborator extracted: `TypeInterner`, ambient surface none). Reference points:
+tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
+`docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
 **(P18.5) — IN PROGRESS (2026-09-02).** Owner additions applied ((INV.0) merged with
 receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,
 shrinkage dashboard row); (LIC.3) CONTRIBUTING.md; (EXT.4) classes + enums landed
 (externals 40/0 — `external class` with primary ctor + companion statics;
-`sealed external interface` enums; `const enum` refused loudly; full suite 16,775/0/3).
+`sealed external interface` enums; `const enum` refused loudly; full suite 16,775/0/3);
+(INV.0) STEP 1: `TypeInterner` extracted — first Stage-0 collaborator, ambient surface
+NONE, suite 16,781/0/3 byte-identical, cost_gate +0.00%, wall NOISE-DOMINATED at +0.26%,
+allocation profile unchanged, and the receipt protocol found the split IMPROVED hot
+inlining (the 277 B monolith never hot-inlined; the 13 B hop + body both do).
 
 **(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
 (2026-09-01).** In one session under the re-pointing directive: the directive persisted;
