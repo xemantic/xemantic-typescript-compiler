@@ -85289,6 +85289,44 @@ interface DataView {
      * (CallExpression / NewExpression etc.) are not walked here — TS2448
      * for those at top level isn't covered by the existing baselines and
      * widening risks regressing tests not yet investigated.
+     *
+     * ## (INC.20) THE SPLIT, AND WHY THE COLLECTOR MAY NOT MOVE
+     *
+     * The two halves are already lexically separate and have OPPOSITE partition
+     * behaviour:
+     *
+     *  - the COLLECTOR (`firstDeclByName`) writes no diagnostic and MUST stay
+     *    whole-program — the entire point of this check is that the DECLARATION
+     *    lives in a file the partition does not contain, so gating it onto
+     *    `checkedResults` would starve the index of exactly the declarations the
+     *    emission resolves through (round 609's law);
+     *  - the EMITTER's only output is `diagnostics.add` inside
+     *    [emitCrossFileTS2448], which sets `fileName = useFileName` — the USE
+     *    site's file, and never null. [getDiagnostics] drops every row naming a
+     *    file outside the partition, so every row this loop produces for an
+     *    out-of-partition file is ALREADY discarded. Narrowing it therefore
+     *    removes provably-wasted work and is a strict no-op on output; with no
+     *    partition (`assignedFiles == null`) nothing is skipped at all, so a full
+     *    compile — and the whole corpus, which never partitions — runs the pass it
+     *    always ran.
+     *
+     * ## THE ORDINAL INVARIANT — the whole risk of this narrowing
+     *
+     * The verdict is `decl.fileIdx > useFileIdx`. `decl.fileIdx` is stamped by the
+     * COLLECTOR as the declaring file's ordinal in `binderResults`; `useFileIdx`
+     * is the EMITTER loop's ordinal. **Both must remain ordinals of the SAME
+     * enumeration.** Re-heading this loop on `checkedResults.withIndex()` would
+     * RENUMBER `useFileIdx` — under a one-file partition it becomes ~0, so
+     * `decl.fileIdx > 0` holds for nearly every declaration in the program and the
+     * TS2448 verdict silently becomes a function of the partition, flipping toward
+     * FALSE POSITIVES. So the loop head stays `binderResults.withIndex()` and the
+     * partition is applied as a `continue` AFTER the enumeration — the same shape
+     * as the `.d.ts` and `.js`/`.jsx`/`.cjs`/`.mjs` skips already in it, which
+     * likewise must not renumber anything.
+     *
+     * The receipt is a COUNT ([EagerIndexCensus.crossFileUbdEmitterFiles]), not a
+     * millisecond: (INC.52)'s law — a ~1.5 ms row cannot be resolved against a
+     * floor whose own draws span tens of milliseconds.
      */
     private fun checkCrossFileUseBeforeDeclaration() {
         val firstDeclByName = HashMap<String, CrossFileBlockDecl>()
@@ -85313,8 +85351,18 @@ interface DataView {
             }
         }
         if (firstDeclByName.isEmpty()) return
+        // (INC.20) THE EMITTING HALF, narrowed to the check partition. The loop
+        // head stays `binderResults.withIndex()` on purpose — see the ordinal
+        // invariant in this function's KDoc; the partition is a `continue`, which
+        // cannot renumber `useFileIdx`.
         for ((fileIdx, result) in binderResults.withIndex()) {
             val fileName = result.sourceFile.fileName
+            // (INC.17): a DIRECT partition read — not routed through
+            // [checkedResults], so the census must be told explicitly.
+            if (PassTiming.enabled) PassTiming.notePartitionRead()
+            if (retainForRecheck) PassTiming.currentPass?.let { partitionReadingPasses.add(it) }
+            val partitionHere = assignedFiles
+            if (partitionHere != null && fileName !in partitionHere) continue
             if (isDtsFile(fileName)) continue
             // TypeScript only emits cross-file TS2448 when the use site is
             // a TS file. JS use sites (`b = 30` in b.js referencing `let b`
@@ -85322,6 +85370,7 @@ interface DataView {
             // baseline `jsFileCompilationLetDeclarationOrder`).
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                 fileName.endsWith(".cjs") || fileName.endsWith(".mjs")) continue
+            EagerIndexCensus.crossFileUbdEmitterFiles++
             val source = result.sourceFile.text
             val localNames = result.locals.keys
             for (stmt in result.sourceFile.statements) {

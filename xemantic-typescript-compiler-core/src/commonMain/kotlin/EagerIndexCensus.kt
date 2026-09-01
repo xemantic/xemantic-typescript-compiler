@@ -227,7 +227,32 @@ object EagerIndexCensus {
      */
     var moduleTypeNameIndexBuilds: Int = 0
 
+    /**
+     * (INC.20) Files `checkCrossFileUseBeforeDeclaration`'s EMITTING loop actually
+     * walked, per compile.
+     *
+     * **Every eligible file on an unpartitioned build; only the partition's own
+     * eligible files on a narrowed one — that is the assertion.** The pass is
+     * MIXED: a whole-program COLLECTOR builds `firstDeclByName` (and must stay
+     * whole-program, since the declaration this check is about lives in a file the
+     * partition does not contain), then a second loop walks every file's top-level
+     * statements to EMIT. Only the second one moved.
+     *
+     * Counted rather than timed for (INC.52)'s reason: the row is ~1.5 ms and a
+     * per-pass draw on the incremental floor swings ~40%, so no wall-clock
+     * assertion can see it. The count is deterministic and needs no second binary.
+     *
+     * The mistake this is the instrument for is NOT "the loop was not narrowed" but
+     * the opposite one — re-heading it on `checkedResults.withIndex()` renumbers
+     * `useFileIdx` out of `binderResults`'s ordinal space and turns the
+     * `decl.fileIdx > useFileIdx` verdict into a function of the partition. That
+     * one is caught by the VALUE pins in `PartitionCrossFileUbdSplitTest`; this
+     * count is what says the narrowing happened at all.
+     */
+    var crossFileUbdEmitterFiles: Int = 0
+
     fun resetCounters() {
+        crossFileUbdEmitterFiles = 0
         transformOrderSetBuilds = 0
         relativeImportExtractions = 0
         localTypeAliasFileScans = 0
