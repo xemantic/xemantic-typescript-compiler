@@ -417,7 +417,7 @@ no); INV.6 = `--workers`; INV.7 partially (the (INC.\*) arc). **The Phase 18 ite
 directive** — (INV.0) is the responsibility split (Stage 0 above), not the old
 instrumentation item. This document is the bridge between the two.
 
-## 9. The (INV.1) proposal — queued BLOCKED-PENDING-USER
+## 9. The (INV.1) proposal — APPROVED 2026-09-02, LANDED the same day (record below)
 
 > **(INV.1)** Land Stage 1's first sub-step: a per-file `nodeTypeId: IntArray` store
 > (working name `NodeAnswers`), OFF by default, filled at `checkedSinkEmit`-time for
@@ -427,6 +427,63 @@ instrumentation item. This document is the bridge between the two.
 > recording cost on the compiler profile and the 2,401-file shape before any further
 > stage is priced. One commit. Implementation does NOT start until the owner approves
 > this item — (INV.D) is analysis-only by its own terms.
+### 9a. What landed, and what it measured (2026-09-02)
+
+**The store is `NodeAnswerStore` (`NodeAnswers.kt`), one per checked file, keyed by
+`nodeId`, filled by `Checker.nodeAnswerRecord` at the SAME hook and under the SAME
+reconstructed ambient as the capture and the KIR sink (`typeCaptureVisit`), first-wins,
+with the refusal decided BEFORE the resolution.** What is recorded is
+`typeCaptureReportedType`'s answer — the capture's own rule (BUG.4 / API.11), so the store
+is the capture generalised to every `Expression` with no display rule of its own. The flag
+is the `Checker` constructor parameter `recordNodeAnswers` (DATA, like `typeCapture` and
+`checkedSink`), whose default reads the process-global `NodeAnswers.enabled` ONCE at
+construction; the CLI arms it with `--nodeAnswers` through the `ModeLedger` and prints the
+recorded count after `time:`; `BenchMain`'s 8th argument arms it warm.
+
+**One deviation from § 4, and it is a correction of § 4, not a choice:** the slot holds the
+`Type` object, not an `Int` id. § 4 wrote "ids resolve through the checker's existing
+id→Type lookup" and **no such lookup exists** — `Type.id` is minted by a thread-local
+counter and registered nowhere. Under compressed references the slot is the same four
+bytes, and reading it is one step shorter. The "6.9 MB for two arrays" sizing stands.
+
+**Pins** (`NodeAnswerStoreTest`, 10, on `TypeCaptureMeasurementTest`'s own fixture and six
+positions): the round-911 positive control — a body local recorded `number`, post-hoc
+`string` (a different DECLARATION), on one instance; the three parameters and the
+`typeof`-narrow recorded correctly where post-hoc reads `any`; the store agrees with a
+capture at every requested span; **every `Expression` of the file holds an answer** and
+the computation count equals the recorded count; production mode — no store allocated and
+**`nodeAnswerComputations == 0`** (round 900's law: the count lives inside the guarded
+function); the shipped default is off ((INC.16)'s law); a first-wins / unindexed-node unit
+pin.
+
+**Receipts, flag OFF** (the contract's control and its evidence): full suite 16,838 / 0 / 3
+(+10, the pins); `cost_gate.py` exit 0, all 20 counters +0.00%; `huge_methods.py
+--fail-over 0` clean; warm A/B parent vs this commit on the compiler profile, three
+rotated pairs, one JVM per arm: **+0.19 / −0.97 / −3.17 %, B wins 2/3, median −0.97 %,
+arm sd 0.93 % / 0.83 % — NOISE-DOMINATED**, which is the expected reading for a change
+whose production-path cost is ONE field write per FILE (78 on that profile); no store is
+allocated and no hot entry point gained a delegation hop, so the JFR-allocation and
+`PrintInlining` arms have nothing to show and were not run. (`ab-warm.sh` itself could not
+drive this pair: it shares the CURRENT test classes across arms, and this commit changed
+`BenchMain` — the arms were driven by hand with the parent's own test classes.)
+
+**Measurement, flag ON** — the number the design asked for before any later stage is priced
+(warm `BenchMain`, 6 warm-up / 8 measured, ABBA across four JVMs per shape):
+
+| shape | off (ms) | on (ms) | delta | recorded | per recorded expression |
+|---|---|---|---|---|---|
+| compiler profile, 78 files | 5,272 / 5,485 | 6,152 / 6,212 | **+14.9 %** (+804 ms) | 598,455 | **1.34 µs** |
+| many-small-2400-dom, 2,401 files | 3,378 / 3,307 | 3,638 / 3,737 | **+10.3 %** (+345 ms) | 232,106 | **1.49 µs** |
+
+Diagnostics identical in every arm (46 / 1). Per recorded expression the price is the same
+on both shapes to within 11 %, so it is a per-NODE cost and not a per-file or per-program
+one; what it buys is one resolution plus one ambient reconstruction per expression. It is
+NOT priced against (INC.13)'s +9-17 ms/file capture widening here — that measured a
+per-FILE request and this is the per-EXPRESSION population, ~7,700 expressions per file on
+the compiler profile. **Whether the 1.3-1.5 µs is the resolution or the reconstruction is
+the first question of Stage 2's pricing** ((INV.1b) in the queue), and nothing in this
+stage depends on the answer: the flag ships off.
+
 ## 10. Cost-neutrality contract (owner additions, 2026-09-02)
 
 The split (Stage 0 / (INV.0)) and every later stage are graded against this contract.

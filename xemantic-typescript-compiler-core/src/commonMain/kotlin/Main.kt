@@ -611,6 +611,12 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--reachMemoCensus", "--reachmemocensus" -> {
                 ReachMemoCensus.reset(); modes.set(ReachMemoCensus::on, true)
             }
+            // (INV.1) the per-file node-answer store, Stage 1 of the inversion.
+            // A checker reads the mode ONCE at construction; the counters print
+            // after `time:` and are cleared there, like PassTiming's.
+            "--nodeAnswers", "--nodeanswers" -> {
+                NodeAnswers.reset(); modes.set(NodeAnswers::enabled, true)
+            }
             // (WARM.22) — the EDGE amplifier. Arms the census too, because its
             // arithmetic falsifier prints in that table and a slope with no
             // falsifier beside it is not a measurement (round 759).
@@ -745,6 +751,12 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     // in the response TEXT rather than only in the flag.
     PartitionCheck.reportLines.clear()
     println("time:    ${duration.inWholeMilliseconds} ms")
+    if (NodeAnswers.enabled) {
+        // (INV.1) the receipt, then the counters dropped — the ledger restores
+        // the FLAG; counters are each object's own reset(), as for PassTiming.
+        println("nodeAnswers: recorded ${NodeAnswers.recordedTotal} expression type(s) in ${NodeAnswers.filesTotal} file(s)")
+        NodeAnswers.reset()
+    }
     if (passTiming) PassTiming.dump(::println)
     if (FltmCensus.on) print(FltmCensus.report())
     if (passTiming) {
@@ -1132,6 +1144,9 @@ internal fun usageText(): String =
                              --reachCensus. Two values of N cancel the boundary and give the
                              cost of ONE edge evaluation, and the arm-count pair gives its
                              slope in arms
+          --nodeAnswers      (INV.1) record the walk's own type answer for every expression into
+                             a per-file store (Stage 1 of docs/INVERSION-DESIGN.md); prints the
+                             recorded-node count after `time:` — the flag-on cost receipt
           --reachMemoCensus  (WARM.33) every ACCESS to the 45 per-file INV.4 reach/depth memos
                              (probe, ascent, write), the per-node consultation histogram, and a
                              set-associative LRU model of BOTH layouts — 45 arrays versus one

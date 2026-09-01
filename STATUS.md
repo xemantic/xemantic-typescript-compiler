@@ -1,12 +1,27 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **190,771** lines (was 191,155 at the metric's creation;
+extraction):** `Checker.kt` **190,878** lines (was 191,155 at the metric's creation; +107 of those are
+(INV.1)'s store hook, an ADDITION and not an extraction;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.7) — TWO OWNER DECISIONS LAND: THE POM LICENCE AND STAGE 1 OF THE INVERSION, 16,828 → 16,838 / 0 / 3 (2026-09-02).**
+(LIC.2) the root POM's `licenses` block now declares `AGPL-3.0-only WITH
+LicenseRef-xtsc-output-exception` plus a second entry for the Output Exception (was
+Apache-2.0; verified on the generated core JVM POM). **(INV.1) the per-file node-answer
+store** (`NodeAnswerStore`, `Type` slots by `nodeId`, filled at the capture/sink hook under
+the reconstructed ambient, first-wins, refusal before resolution), OFF by default behind a
+`Checker` parameter / `--nodeAnswers`; 10 pins incl. the round-911 positive control (body
+local `number` recorded vs `string` post-hoc) and the production-mode computation count at
+0; cost_gate +0.00%, huge_methods clean, warm A/B flag-off NOISE-DOMINATED (3 rotated
+pairs, sd < 1%); **flag ON measured: +14.9 % warm on the compiler profile (1.34 µs per
+recorded expression, 598,455 of them) and +10.3 % on many-small-2400-dom (1.49 µs,
+232,106)** — per-node, attributed next by (INV.1b). (INV.2) Stage 2 queued
+BLOCKED-PENDING-USER. Design record: `docs/INVERSION-DESIGN.md` § 9a.
 
 **(P18.6) — SESSION CLOSE, FIVE LANDINGS, 16,803 → 16,828 / 0 / 3 (2026-09-02).** (EXT.7) the **smol-toml rung is GREEN**: the
 externals generator goes MULTI-FILE (`generateKotlinExternals(List<SourceFileEntry>)`, one
@@ -68,21 +83,3 @@ cannot do at all — our wave: **524 ms, 5 files, exactly 46 rows**). Receipts c
 46-vs-65 gap per-file. Published in `docs/perf/incremental-vs-tsgo.md` (LSP arm) + § 3b.
 Suite unchanged **16,734 / 0 / 3** plus the 16 new LSP pins → next count on the full run.
 
-**(P18.1/P18.2) — THE DOC ARC, THE 142-METHOD CENSUS, AND THE FIRST TWO PHASE-18 CONSUMERS
-(2026-09-01).** (LIC.1)/(DOC.1)/(DOC.2 on `docs/reposition`)/(INV.D) landed in the main
-context; then ONE two-agent worktree wave landed **(EXT.1)** — Kotlin externals from the
-CHECKED program, alias-resolution pin `Species`->`String`, metadata-compile gate with a
-negative control, 15 pins — and **(LSP.1)** — JSON-RPC/LSP over `Project`, initialize +
-didOpen + hover, **LSP UTF-16 = Project offsets CONFIRMED identical modulo the 1-base** at
-an astral-char pin, 42 pins. `docs/INVERSION-DESIGN.md` answers the WebStorm question:
-of tsgo's 142 API methods, **A=94 answerable post-hoc today, B=15 walk-scoped (13 closable
-by a record-during-walk NodeLinks store — (INV.1) proposal BLOCKED-PENDING-USER), C=33 not
-checker questions**; on-demand flow is NOT required for the census. **The LSP's first
-fixture found a `-project` defect ((API.18): a file-final token is unreachable without a
-trailing newline)** — the mission thesis demonstrating itself: a new consumer finds what
-the corpus structurally cannot. Also queued: (LIC.2) the root POM says Apache-2.0
-(BLOCKED-PENDING-USER, build file). Suite on the
-merged tree: **16,734 / 0 failures / 3 skipped** (+57: 15 externals + 42 lsp);
-`cost_gate.py` exit 0, every counter +0.00% (the new modules move nothing — the control
-passes); `huge_methods.py --fail-over 0` clean (core-only census: a CONTROL for the new
-modules, per its own gotcha).

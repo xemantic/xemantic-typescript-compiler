@@ -1,3 +1,138 @@
+### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
+
+**(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather
+than inherited" — AND THIS ROUND SPENT ITS FIRST HALF DOING EXACTLY THAT, ON READING ALONE.**
+Fresh query baseline first (2,401-file `dom` fixture, trusted arm, one-file partition, TWO
+independent processes, because a single `--passTiming` draw swings ~40% ((INC.52))):
+WALL **102 / 106 ms**, init block **40.0 / 48.2 ms** raw. Head of the pass table, both draws:
+
+```
+init:buildFileLocalTypeMaps        21.38 / 15.28 ms
+init:buildPerFileScopes             5.72 /  5.48
+init:computeAllEnumValues           4.77 /  4.53
+init:collectUmdGlobalsAndModuleFiles 2.43 /  2.31
+checkSpine                          2.33 /  7.02
+```
+
+**THREE REFUSALS RE-DERIVED, AND THE ANSWERS DIFFER FROM EACH OTHER — which is the argument
+for doing it at all.**
+**(1) `init:buildFileLocalTypeMaps` — CONFIRMED, and it was already MEASURED.** The eager loop
+selects `checkedResults` under the shipped `FltmDefer.Scope.PARTITION`, so on a one-file query
+it builds ONE file's map (`eagerBuilds=1, lazyBuilds=0`). The 15-21 ms is that file's first
+real type-resolution cascade, not per-file overhead. **DO NOT RE-OPEN IT FROM ITS SIZE** — it
+is the largest row in the query and it is the one row here nothing can take.
+**(2) THE TWO WHOLE-PROGRAM REGEXES in `collectUmdGlobalsAndModuleFiles` — ALREADY CENSUSED,
+HONESTLY.** Both are un-Boyer-Moore-able by (WARM.10)'s own criterion (`(?m)^\s*export\s+as\s+
+namespace` and `\brequire\s*\(`, neither with a 4-char literal root) and both are constructed
+per call. `docs/perf/whole-program-regex-census.md:130` already carries the first as "**0 ms**
+— 0 `.d.ts` files. LATENT on a `@types` tree", which is exactly right. No finding; the census
+earned its keep by pre-empting one.
+**(3) `isModuleFile` RECOMPUTED ≥5 TIMES PER BUILD INSIDE THE INIT SETUP BLOCK — REFUTED as a
+lever, in two minutes of reading and with no build.** It is a genuine repetition (65 call sites;
+at least `init:mergeSharedKeepNames`, `init:mergeFileLocalsIntoGlobals`, `mergeGlobalAugmentations`,
+`init:buildPerFileScopes`, `init:collectUmdGlobalsAndModuleFiles`, plus two lazy indices) and it
+is mechanically memoizable per `BinderResult` — but it **early-returns `true` on the FIRST
+import/export statement**, and every file of any module-shaped project opens with one. Its
+worst case is a SCRIPT file, and the lib `.d.ts` that would be the real worst case are not in
+`binderResults` at all. **A repetition count is not a cost** — the same law as round 801's
+"an allocation count is not a cost", one predicate over.
+
+**(a) LANDED — `Project.reloadFile` AND `OverlayVfs.revert` ARE PINNED, AND THEY ARE THE API
+(INC.75) TELLS THE PLUGIN TO ADOPT.** `reloadFile` is documented as a first-class THIRD change
+kind beside `updateFile`/`deleteFile` (`docs/language-service.md` § 5) and existed in the suite
+only as a STEP INSIDE two `trustFilesystem` tests; `OverlayVfs.revert`, its implementation half,
+had no direct pin at all. 17 pins, no production code changed.
+**TWO ABLATIONS, BECAUSE ONE COULD NOT GRADE BOTH HALVES** — the revert pins do not go through
+`reloadFile`, so emptying `reloadFile` (7 red) says nothing about them; emptying
+`OverlayVfs.revert` reddens 12, being all 7 substantive revert pins PLUS the 5 `reloadFile`
+VALUE pins, which cross-validates that reload's promises really flow through `revert` while its
+dirty-marking and closed-project pins correctly stay green. Both restores verified by `md5sum`
+of the production files rather than by `git diff` alone.
+**A DOC EDGE WAS FOUND AND PINNED RATHER THAN WAVED THROUGH:** § 5's "what is on disk is the
+truth again" has an unstated case — for a file existing ONLY in the overlay the truth is
+**ABSENCE**, so reload REMOVES it from the program rather than restoring anything.
+
+**(b) LANDED — THE (INC.20) SPLIT FOR `checkCrossFileUseBeforeDeclaration`, AND ITS EMITTER WAS
+WALKING ALL 2,401 FILES TO PRODUCE ROWS THE PARTITION FILTER THEN DROPPED.**
+`emitCrossFileTS2448` sets `fileName = useFileName` — the USE site's file, non-null — and
+`getDiagnostics()` drops every row naming a file outside the partition, so that work was
+**already discarded output**. The collector loop is untouched (round 609: the DECLARATION may
+live in a file the partition does not contain, which is what pin 4 asserts).
+**THE ORDINAL INVARIANT IS THE WHOLE RISK AND (INC.77) WAS RIGHT TO FLAG IT.** The verdict is
+`decl.fileIdx > useFileIdx` and `decl.fileIdx` is an ordinal of `binderResults` stamped by the
+collector; re-heading the emitter on `checkedResults.withIndex()` renumbers `useFileIdx` to ~0
+under a one-file partition, so `decl.fileIdx > 0` holds for nearly every declaration and the
+TS2448 verdict silently becomes a function of the PARTITION — flipping toward FALSE POSITIVES.
+**So the loop head stays `binderResults.withIndex()` and the partition is a `continue` AFTER
+the enumeration**, the same shape as the `.d.ts` / `.js` skips already in that loop. That is
+the general rule for any mixed pass whose verdict compares ordinals of its own enumeration.
+**RECEIPT IS A COUNT** (`EagerIndexCensus.crossFileUbdEmitterFiles`), never a millisecond: a
+~1.5 ms row cannot be resolved against the query's own ±20 ms term ((INC.72)).
+**THE ABLATION IS REPORTED, NOT OVERCLAIMED.** Re-heading on `checkedResults.withIndex()`
+reddens **pin 6 only** — the ablated binary invents a TS2448 no unpartitioned build produces.
+The other six are green under THAT arm for structural reasons and are not weak: the three count
+pins are red against the UN-NARROWED parent, and pin 4 guards against narrowing the COLLECTOR.
+Three distinct mistakes, three distinct pins — round 807's law, stated rather than blurred.
+
+**GATES.** Suite **16,677 / 0 / 3** (+24 over (INC.88)'s 16,653, all of them this round's pins);
+`cost_gate.py` exit 0, every counter +0.00%, `output.errors` 46; `huge_methods.py --fail-over 0`
+clean; **`partition-gate.sh sensitivity` EQUIVALENT on all 76 files across 78 distinct netting
+passes with 72 files carrying rows** — the arm that can actually see a starved partition, the
+realism arm's sensitivity being 1. Both `cost_gate` and the corpus are CONTROLS here, not
+coverage: neither partitions, so (b) is a strict no-op on both by construction.
+
+**(d) THE BIGGEST PLUGIN-FACING LATENCY ITEM ON THE PAGE WAS RE-DERIVED AND IS NOT A DEFECT
+WORTH FIXING — IT IS THE FLOOR.** `docs/language-service.md` § 13 carried, as its "one open
+defect", that `completionsAt`/`signatureHelpAt` cannot reach a prepared check: 207 ms right
+after `prepare(6 files)` against 194 cold, "the same build three ways". For an IDE that is the
+most latency-sensitive interaction there is, so the two refusals standing between it and a fix
+were re-derived at HEAD rather than inherited.
+**BOTH STILL HOLD, AND (INC.33) IS FIRMER THAN WHEN IT WAS WRITTEN.** Re-run of
+`scripts/inc33-widen-cost.sh`, populations identical to the recorded run: widened hover
+**+286 -> +340 ms** on `binder.ts` (break-even **1.40 -> 1.52**) and **+25.1 -> +26.2 s** on
+`checker.ts` (**12.1 -> 12.9**). **The floor arc landing is WHY it got firmer** — the base fell
+(checker.ts 2,407 -> 2,189) while per-anchor capture did not, so every ratio rose. Retention
+unchanged to the digit: **54.4 M** records for one widened `checker.ts` entry, `scopeNames`
+49,879,917 byte-identical across two runs a week apart, ~92% of it the O(anchors x globals)
+scope channel. Route 2 (the re-entrant valve) is still blocked by (INC.41) -> (INC.43), open
+with three measured blockers of its own.
+**THE QUEUE'S OWN NAMED SUCCESSOR IS REFUTED BY MECHANISM RATHER THAN LEFT UNPRICED.** The
+"PREPARE-AMORTISED case" survives the cost half and dies on invalidation: `sourceIndexOf` reads
+`overlay.readText(key)`, so the typed `.` MUST reach `updateFile` or `completionAnchorAt` is
+computed from pre-`.` text and answers about the wrong node — and `updateFile` does
+`captures.clear(); prepared = null`. The dominant completion is invoked at a state nothing can
+have prepared. (INC.32) moved the EVICTION bound, never invalidation.
+**AND THE PRIZE IT ASSUMES DOES NOT EXIST, WHICH IS THE REFRAME.** `member.caret` costs what
+`base.noCapture` costs (binder.ts **224 vs 254 ms**, checker.ts **2,035 vs 2,189**) and
+`completions.mid.cold` **215** ~ `diagnosticsOf.mid.fresh` **219**: the capture work for a caret
+completion is FREE and the ~200 ms **is one narrowed build**. There is no wiring win to recover
+— completion latency IS the incremental floor, i.e. the arc already being worked. In the same
+run `prepare(6)` is 465 ms and hover is **16 ms prepared against 824 unprepared**, so `prepare`
+is not weak; it simply covers no caret channel.
+**TWO THINGS BANKED BESIDES THE VERDICT.** The page's line citations had rotted a THIRD time
+(+3, within a day of being "re-verified"), so § 13 defect 1 now cites BY SYMBOL with the
+`grep -a` check that settles it. And a leg the page omitted is now recorded with its trap:
+`prepare` builds a TYPE-span request, so those channels would come back EMPTY even if wired —
+and since `memberSpans`/`scopeSpans` are the SAME TYPE as `typeSpans`, a naive
+`preparedAnswerFor(listOf(receiverSpan))` would HIT on a bare-identifier receiver and render
+nothing, which is (INC.14)'s absent-answer hazard and type-invisible. Queued as (INC.89)(d) is
+the one arm (INC.33) never built — a `spans + signatureSpans` widening — recorded explicitly as
+a LEAD, since it is a residual by subtraction.
+
+**SUCCESSOR, per the WORK ORDER note.** The query is the init block and essentially nothing
+else, and after this round its head is refused on re-derived evidence rather than inherited
+claims. The one row above 2 ms with NO recorded refusal of any kind is
+**`checkSpreadNonIterableIntoFixedArity` (2.01 / 2.22 ms)**: it allocates THREE `HashSet`s per
+program file plus an `intersect` (a fourth) and walks the file, then discards all of them at an
+early exit — the identical throwaway-collection shape (INC.87)(b) named on
+`evolvingArrayUseSiteWalks`, on a row 20% larger. Its recorded refusal is (INC.7) batch 4's,
+which says only that the LOOP HEADER cannot be swapped (it writes a checker field); it says
+nothing about the interior, and that distinction is what this round found three times.
+`checkReverseMappedInferableArrows` (0.66 ms, three full statement scans of one list before its
+first early exit) is the same shape, smaller, and is likewise unrefused. **Both need
+(INC.80)'s two-class-dir ABBA to price, exactly as (INC.87)(b) does — do not land either off a
+single draw.**
+
 ### Round (INC.87)(a) — the post-checker's filter row is 4.5 ms of a keystroke, and 89% of it answers nothing
 
 ### Round (INC.88) — the root-file glob is REFUSED, and the split is what earns it

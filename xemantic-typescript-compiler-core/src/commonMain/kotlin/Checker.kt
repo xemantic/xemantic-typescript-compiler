@@ -107,6 +107,22 @@ class Checker(
      */
     private val checkedSink: CheckedNodeSink? = null,
     /**
+     * (INV.1) When true, the check spine records its OWN expression-type answer
+     * for every [Expression] of every file it walks into a per-file
+     * [NodeAnswerStore], readable afterwards through [nodeAnswers] — Stage 1 of
+     * `docs/INVERSION-DESIGN.md`, the store a post-hoc type oracle would serve
+     * from. Taken under the same reconstructed ambient [typeCaptureVisit]
+     * installs for a capture and a sink, at the same hook, first-wins.
+     *
+     * DATA, like [typeCapture] and [checkedSink]; the default reads the
+     * process-global [NodeAnswers.enabled] ONCE, here, so a CLI measurement can
+     * arm it without threading a parameter through every construction site.
+     * Off by default and off is the whole compiler: no store is allocated, and
+     * `NodeAnswerStoreTest` pins [nodeAnswerComputations] at zero for a
+     * production-mode compile.
+     */
+    private val recordNodeAnswers: Boolean = NodeAnswers.enabled,
+    /**
      * (INC.17) When true this checker is a RE-ENTRANT one: it records which `init`
      * passes read the partition, and [recheckAdditionalFiles] may later widen that
      * partition and re-enter exactly those passes — answering about a file the
@@ -5631,6 +5647,34 @@ class Checker(
     private var captureHookCurrentFile: Any? = null
 
     /**
+     * (INV.1) The per-file stores, keyed by file name, in walk order. Empty
+     * unless [recordNodeAnswers]. `internal` for [capturedTypes]' reason: a
+     * consumer reads it after the check, and a store is valid for THIS build
+     * only ([NodeAnswerStore]'s KDoc).
+     */
+    private val nodeAnswerStores = LinkedHashMap<String, NodeAnswerStore>()
+
+    /** (INV.1) The recorded answers of every file this checker walked. */
+    internal val nodeAnswers: Map<String, NodeAnswerStore> get() = nodeAnswerStores
+
+    /**
+     * (INV.1) The store of the file the spine is walking, or null — which is
+     * always, in production. Installed beside [captureHookCurrentFile] per file
+     * and folded into it, so [spineEnterNode]'s hook stays one field read.
+     */
+    private var nodeAnswerStoreCurrentFile: NodeAnswerStore? = null
+
+    /**
+     * (INV.1) How many times [nodeAnswerRecord] computed a type for the store.
+     * Round 900's law: a guard cannot protect its own argument, so the count is
+     * taken INSIDE the guarded function and pinned at exactly 0 with the flag
+     * off; with it on, it equals the sum of every store's `recorded`, because
+     * the first-wins refusal runs BEFORE the computation.
+     */
+    internal var nodeAnswerComputations: Int = 0
+        private set
+
+    /**
      * (KIR) The forwarding lens handed to [checkedSink], allocated once and only
      * when a sink was supplied.
      *
@@ -5838,11 +5882,15 @@ class Checker(
         val wantsSink = checkedSink != null &&
             (node is Expression || node is Declaration || node is ClassElement ||
                 node is Parameter)
-        if (!wantsCapture && !wantsSink) return
+        // (INV.1) the store's population is every Expression, unconditionally —
+        // it is the capture with every span requested. Independent of both.
+        val wantsAnswer = nodeAnswerStoreCurrentFile != null && node is Expression
+        if (!wantsCapture && !wantsSink && !wantsAnswer) return
         val frame = ctaFrames.lastOrNull()
         if (frame == null) {
             if (wantsCapture) typeCaptureRecordAt(node, spineFileName)
             if (wantsSink) checkedSinkEmit(node)
+            if (wantsAnswer) nodeAnswerRecord(node)
             return
         }
         // The ambient a statement anchor installs, reproduced VERBATIM from
@@ -5886,6 +5934,7 @@ class Checker(
             withCtaFrameLocals(frame) {
                 if (wantsCapture) typeCaptureRecordAt(node, spineFileName)
                 if (wantsSink) checkedSinkEmit(node)
+                if (wantsAnswer) nodeAnswerRecord(node)
             }
         } finally {
             repeat(namespacesPushed) { inferenceNamespaceStack.removeLast() }
@@ -5916,6 +5965,34 @@ class Checker(
         currentCheckFileName = spineFileName
         try {
             if (node is Expression) sink.expression(node, lens) else sink.declaration(node, lens)
+        } finally {
+            currentCheckFileName = saved
+        }
+    }
+
+    /**
+     * (INV.1) Records the walk's answer for [node] into the current file's store,
+     * FIRST WINS, under the ambient [typeCaptureVisit] has just reconstructed.
+     *
+     * The refusal comes BEFORE the computation: a node that already holds an
+     * answer costs no resolution, which is what keeps [nodeAnswerComputations]
+     * equal to the stores' `recorded` sum. What is computed is
+     * [typeCaptureReportedType] — the capture's own rule, so a member name
+     * answers the type of its ACCESS (BUG.4) and a member declaration name its
+     * declared type (API.11), never the free-name collider.
+     *
+     * `currentCheckFileName` is installed for [typeCaptureRecord]'s reason: it is
+     * the key `getTypeOfIdentifier` reaches `fileLocalTypeMaps` through, and the
+     * spine's own handlers leave it at rest between anchors.
+     */
+    private fun nodeAnswerRecord(node: Expression) {
+        val store = nodeAnswerStoreCurrentFile ?: return
+        if (store.has(node)) return
+        nodeAnswerComputations++
+        val saved = currentCheckFileName
+        currentCheckFileName = spineFileName
+        try {
+            store.record(node, typeCaptureReportedType(node))
         } finally {
             currentCheckFileName = saved
         }
@@ -8673,7 +8750,24 @@ class Checker(
      *
      * Returns null when no [Expression] in [fileName] carries that raw span.
      */
-    internal fun postHocTypeAtSpanForTesting(fileName: String, start: Int, end: Int): String? {
+    internal fun postHocTypeAtSpanForTesting(fileName: String, start: Int, end: Int): String? =
+        expressionAtSpanForTesting(fileName, start, end)?.let { typeToString(getTypeOfExpression(it)) }
+
+    /**
+     * (INV.1) TEST-ONLY — the STORE's answer at a span, rendered exactly as
+     * [postHocTypeAtSpanForTesting] renders the post-hoc one, so the two can be
+     * held against each other on one instance. Null when no [Expression] carries
+     * the span, or when nothing was recorded there (the flag off, or the node
+     * never reached by the walk).
+     */
+    internal fun nodeAnswerTextAtSpanForTesting(fileName: String, start: Int, end: Int): String? {
+        val node = expressionAtSpanForTesting(fileName, start, end) ?: return null
+        val type = nodeAnswerStores[fileName]?.typeAt(node) ?: return null
+        return typeToString(type)
+    }
+
+    /** The deepest [Expression] in [fileName] carrying the raw span, or null. */
+    private fun expressionAtSpanForTesting(fileName: String, start: Int, end: Int): Expression? {
         val sourceFile = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
             ?.sourceFile ?: return null
         // Iterative, as every full-tree walk here must be (deep chains overflow a
@@ -8687,7 +8781,7 @@ class Checker(
             if (node is Expression && node.pos == start && node.end == end) found = node
             forEachChild(node) { child -> stack.add(child) }
         }
-        return found?.let { typeToString(getTypeOfExpression(it)) }
+        return found
     }
 
     /**
@@ -28232,7 +28326,15 @@ class Checker(
                     else typeCaptureSignatureArgsByFile[sf.fileName]
                 // (KIR) the one field the per-node hook reads — see
                 // [captureHookCurrentFile].
-                captureHookCurrentFile = typeCaptureKeysCurrentFile ?: checkedSink
+                // (INV.1) one store per file, allocated only under the flag;
+                // `getOrPut` so a second walk of the same file (the profiled
+                // rebuild under `--passTiming`) lands on the same first-wins
+                // slots rather than a fresh array.
+                nodeAnswerStoreCurrentFile =
+                    if (recordNodeAnswers) nodeAnswerStores.getOrPut(sf.fileName) { NodeAnswerStore(sf) }
+                    else null
+                captureHookCurrentFile =
+                    typeCaptureKeysCurrentFile ?: checkedSink ?: nodeAnswerStoreCurrentFile
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
@@ -28411,6 +28513,11 @@ class Checker(
                 // positional TS2454 dedup scan sees every spine-emitted
                 // TS2454 for this file (walker 5 + the spineUbd co-emissions).
                 spineDaFlowFileEnd(result)
+            }
+            // (INV.1) the CLI report's receipt — once per checker, on this thread.
+            if (nodeAnswerStores.isNotEmpty()) {
+                NodeAnswers.filesTotal += nodeAnswerStores.size
+                for (store in nodeAnswerStores.values) NodeAnswers.recordedTotal += store.recorded
             }
         } finally {
             currentFileLocals = savedLocals

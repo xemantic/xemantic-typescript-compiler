@@ -51,6 +51,7 @@ import com.xemantic.typescript.compiler.NameCensus
 import com.xemantic.typescript.compiler.SpineSections
 import com.xemantic.typescript.compiler.SrcScan
 import com.xemantic.typescript.compiler.ParallelCheckMode
+import com.xemantic.typescript.compiler.NodeAnswers
 import com.xemantic.typescript.compiler.ShareBind
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
@@ -980,7 +981,16 @@ fun main(args: Array<String>) {
         else -> error("usage: 7th argument must be `shareBind`, `off`, or omitted — not '$f'")
     }
     ShareBind.enabled = shareBind
-    println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers,"shareBind":$shareBind}""")
+    // (INV.1) the 8th argument, `nodeAnswers`, arms the per-file node-answer
+    // store for the whole process — one arm per JVM, round 867's law, and the
+    // ONLY warm instrument for the flag-on recording cost the design asks for.
+    val nodeAnswers: Boolean = when (val f = args.getOrNull(7)?.lowercase()) {
+        null, "", "off", "false" -> false
+        "nodeanswers", "on", "true" -> true
+        else -> error("usage: 8th argument must be `nodeAnswers`, `off`, or omitted — not '$f'")
+    }
+    NodeAnswers.enabled = nodeAnswers
+    println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers,"shareBind":$shareBind,"nodeAnswers":$nodeAnswers}""")
 
     repeat(warmup) {
         ProjectCompiler(SystemVfs).build(project, noEmit = noEmit)

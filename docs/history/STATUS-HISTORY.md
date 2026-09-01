@@ -1,3 +1,22 @@
+**(P18.1/P18.2) — THE DOC ARC, THE 142-METHOD CENSUS, AND THE FIRST TWO PHASE-18 CONSUMERS
+(2026-09-01).** (LIC.1)/(DOC.1)/(DOC.2 on `docs/reposition`)/(INV.D) landed in the main
+context; then ONE two-agent worktree wave landed **(EXT.1)** — Kotlin externals from the
+CHECKED program, alias-resolution pin `Species`->`String`, metadata-compile gate with a
+negative control, 15 pins — and **(LSP.1)** — JSON-RPC/LSP over `Project`, initialize +
+didOpen + hover, **LSP UTF-16 = Project offsets CONFIRMED identical modulo the 1-base** at
+an astral-char pin, 42 pins. `docs/INVERSION-DESIGN.md` answers the WebStorm question:
+of tsgo's 142 API methods, **A=94 answerable post-hoc today, B=15 walk-scoped (13 closable
+by a record-during-walk NodeLinks store — (INV.1) proposal BLOCKED-PENDING-USER), C=33 not
+checker questions**; on-demand flow is NOT required for the census. **The LSP's first
+fixture found a `-project` defect ((API.18): a file-final token is unreachable without a
+trailing newline)** — the mission thesis demonstrating itself: a new consumer finds what
+the corpus structurally cannot. Also queued: (LIC.2) the root POM says Apache-2.0
+(BLOCKED-PENDING-USER, build file). Suite on the
+merged tree: **16,734 / 0 failures / 3 skipped** (+57: 15 externals + 42 lsp);
+`cost_gate.py` exit 0, every counter +0.00% (the new modules move nothing — the control
+passes); `huge_methods.py --fail-over 0` clean (core-only census: a CONTROL for the new
+modules, per its own gotcha).
+
 **(P18.0) — THE PROJECT IS RE-POINTED: TYPESCRIPT FOR THE JVM AND KOTLIN (owner directive
 2026-09-01).** The WebStorm evaluation paused — their need was a post-hoc TYPE ORACLE (the
 query shape of tsgo's `tsc/internal/api/proto.go`, 142 methods) and this checker's answers are

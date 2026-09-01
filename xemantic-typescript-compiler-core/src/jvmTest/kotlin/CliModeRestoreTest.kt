@@ -111,6 +111,7 @@ class CliModeRestoreTest {
             BindMutationCheck::class.java,
             ShareBind::class.java,
             MergeClone::class.java,
+            NodeAnswers::class.java,
         )
 
         /**
@@ -296,7 +297,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--mapCensus", "--perFileScopeAmp", "--flowMapReplay", "--lexLevelAmp",
     "--typeNodeKeyCensus", "--typeNodeKeyAmp", "--boxedKeyCensus", "--boxedKeyAmp",
     "--iterCensus", "--iterAmp",
-    "--reachMemoCensus",
+    "--reachMemoCensus", "--nodeAnswers",
     "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )
