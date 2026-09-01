@@ -120,6 +120,19 @@ is queued as (TEST.1)**: `ProjectTrustedFilesystemTest`'s negative control read
 round 914's order-sensitivity family, pre-existing (the failing pin counts Vfs reads,
 which nothing in this change touches).
 
+**(EXT.5) LANDED — GENERIC ALIASES, GENERIC METHODS, METHOD OVERLOADS** (externals 40 →
+47 pins, full suite 16,798/0/3). `type Handler<T> = (event: T) => void` — mitt's spine —
+renders as `public typealias Handler<T> = (T) -> Unit`, the body answered SYNTACTICALLY
+under the alias's own TP scope ((EXT.2)'s lens-ambient finding, third consumer); a
+generic METHOD renders `fun <Key> on(...)` with constraint/default markers (shared
+`typeParameterMarkers` helper), the member scope = enclosing TPs + the method's own;
+interface/class method overloads render as Kotlin overloads, with a post-pass collapsing
+ones that MAP to one Kotlin signature (two literal-typed parameters both falling to the
+`Any?` fallback conflict however different their markers read — the dedup key strips
+` /* xtsc: ...` first, which the pin caught on the first run); an optional GENERIC method
+is a loud skip (a nullable function-typed property cannot carry TPs). Gate fixture
+widened with all three shapes; metadata compile green.
+
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -972,10 +985,14 @@ Owner decisions 2026-09-02:
 - [ ] **(EXT.4…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
   progresses.** DONE 2026-09-02 ((P18.5) note): classes (`external class` +
   primary ctor + companion statics) and enums (`sealed external interface` +
-  companion entry vals; `const enum` a loud skip). Still to emit:
-  namespaces/modules, overloads, DEFAULT exports (mitt's own entry shape), index
-  signatures, heritage clauses, accessors,
-  generic ALIASES, references with TP arguments inside another generic (falls back —
+  companion entry vals; `const enum` a loud skip); generic ALIASES (syntactic
+  body under the alias's own TP scope), generic METHODS (own TPs + markers,
+  the optional-generic combination a loud skip), interface/class method
+  OVERLOADS (rendered as Kotlin overloads; ones collapsing to a duplicate
+  mapped signature — the marker-stripped key — keep the first and mark the
+  rest). Still to emit: namespaces/modules, DEFAULT exports (mitt's own entry
+  shape), index signatures, heritage clauses, accessors,
+  references with TP arguments inside another generic (falls back —
   (EXT.2)'s lens-ambient finding). Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
   RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.

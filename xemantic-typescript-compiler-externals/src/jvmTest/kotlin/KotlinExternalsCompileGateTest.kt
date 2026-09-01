@@ -166,6 +166,12 @@ class KotlinExternalsCompileGateTest {
             pen: Pen<Animal>;
             dir: Direction;
         }
+        export type Callback<T> = (event: T) => void;
+        export interface Emitter {
+            on<Key extends string>(type: Key, count: number): void;
+            pick(x: string): string;
+            pick(x: number, y: number): number;
+        }
     """.trimIndent()
 
     @Test

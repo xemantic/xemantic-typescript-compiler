@@ -60,6 +60,10 @@ internal class ExternalInterface(
  */
 internal class ExternalTypeAlias(
     val name: String,
+    /** (EXT.5) The alias's own type-parameter NAMES; empty for a plain alias. */
+    val typeParameters: List<String>,
+    /** (EXT.5) Loud records — a constraint or default not carried. */
+    val markers: List<String>,
     /** Full Kotlin type text of the alias body. */
     val body: String,
 ) : ExternalDeclaration
@@ -128,6 +132,10 @@ internal class ExternalProperty(
 
 internal class ExternalFunction(
     val name: String,
+    /** (EXT.5) A generic METHOD's own type-parameter names, syntactic. */
+    val typeParameters: List<String>,
+    /** (EXT.5) Loud per-member records — constraints/defaults not carried. */
+    val markers: List<String>,
     val parameters: List<ExternalParameter>,
     val returnType: String,
 ) : ExternalMember
@@ -287,10 +295,18 @@ internal fun renderKotlinExternals(
                 for (member in declaration.members) appendMember(member)
                 appendLine("}")
             }
-            is ExternalTypeAlias ->
+            is ExternalTypeAlias -> {
+                for (marker in declaration.markers) appendLine("/* xtsc: $marker */")
+                val typeParams =
+                    if (declaration.typeParameters.isEmpty()) ""
+                    else declaration.typeParameters
+                        .joinToString(", ", prefix = "<", postfix = ">") {
+                            kotlinIdentifier(it)
+                        }
                 appendLine(
-                    "public typealias ${kotlinIdentifier(declaration.name)} = ${declaration.body}"
+                    "public typealias ${kotlinIdentifier(declaration.name)}$typeParams = ${declaration.body}"
                 )
+            }
             is ExternalTopLevelFunction -> {
                 for (marker in declaration.markers) appendLine("/* xtsc: $marker */")
                 val typeParams =
@@ -398,11 +414,18 @@ private fun StringBuilder.appendMember(
             )
         }
         is ExternalFunction -> {
+            for (marker in member.markers) appendLine("${indent}/* xtsc: $marker */")
+            val typeParams =
+                if (member.typeParameters.isEmpty()) ""
+                else member.typeParameters
+                    .joinToString(", ", prefix = "<", postfix = "> ") {
+                        kotlinIdentifier(it)
+                    }
             val parameters = member.parameters.joinToString(", ") {
                 "${kotlinIdentifier(it.name)}: ${it.type}"
             }
             appendLine(
-                "${indent}public fun ${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
+                "${indent}public fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
             )
         }
         is SkippedMember ->

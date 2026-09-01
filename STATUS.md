@@ -16,7 +16,8 @@ NONE, suite 16,781/0/3 byte-identical, cost_gate +0.00%, wall NOISE-DOMINATED at
 allocation profile unchanged, and the receipt protocol found the split IMPROVED hot
 inlining (the 277 B monolith never hot-inlined; the 13 B hop + body both do);
 (API.18) file-final token healed by an ownership descent (suite 16,791/0/3, the LSP
-recorded-edge pin flipped to healed, punctuation-final files pinned conservative).
+recorded-edge pin flipped to healed, punctuation-final files pinned conservative);
+(EXT.5) generic aliases + generic methods + method overloads (externals 47/0, suite 16,798/0/3).
 
 **(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
 (2026-09-01).** In one session under the re-pointing directive: the directive persisted;

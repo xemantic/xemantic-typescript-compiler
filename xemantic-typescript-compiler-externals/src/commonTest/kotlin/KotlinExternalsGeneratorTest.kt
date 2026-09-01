@@ -503,6 +503,112 @@ class KotlinExternalsGeneratorTest {
         assert(restFallback)
     }
 
+    // --- (EXT.5) generic aliases, generic methods, overloads ----------------
+
+    @Test
+    fun `a generic type alias renders its parameters and a syntactic body`() {
+        val result = generate(
+            """
+            export type Handler<T> = (event: T) => void;
+            """
+        )
+        val rendered = result.kotlin
+        assert(rendered == "public typealias Handler<T> = (T) -> Unit\n")
+    }
+
+    @Test
+    fun `a defaulted generic alias parameter keeps its name and marks the default`() {
+        val result = generate(
+            """
+            export type Handler<T = unknown> = (event: T) => void;
+            """
+        )
+        val rendered = result.kotlin
+        val markerAt = rendered.indexOf("/* xtsc: default for T: unknown not carried */")
+        val aliasAt = rendered.indexOf("public typealias Handler<T> = (T) -> Unit")
+        assert(markerAt >= 0)
+        assert(aliasAt > markerAt)
+    }
+
+    @Test
+    fun `a generic alias with an unmappable body is a loud skip`() {
+        val result = generate(
+            """
+            export type Pair<T> = { first: T };
+            """
+        )
+        val rendered = result.kotlin
+        val skipped = "/* xtsc: skipped generic type alias Pair with unmappable body */" in rendered
+        val noTypealias = "typealias Pair" !in rendered
+        assert(skipped)
+        assert(noTypealias)
+    }
+
+    @Test
+    fun `a generic method renders its own type parameters with a constraint marker`() {
+        val result = generate(
+            """
+            export interface Emitter {
+                on<Key extends string>(type: Key, count: number): void;
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val markerAt = rendered.indexOf("    /* xtsc: constraint on Key: string not carried */")
+        val funAt = rendered.indexOf("    public fun <Key> on(type: Key, count: Double): Unit")
+        assert(markerAt >= 0)
+        assert(funAt > markerAt)
+    }
+
+    @Test
+    fun `interface method overloads render as kotlin overloads`() {
+        val result = generate(
+            """
+            export interface Picker {
+                pick(x: string): string;
+                pick(x: number, y: number): number;
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val first = "    public fun pick(x: String): String\n" in rendered
+        val second = "    public fun pick(x: Double, y: Double): Double\n" in rendered
+        assert(first)
+        assert(second)
+    }
+
+    @Test
+    fun `overloads collapsing to one mapped signature keep only the first`() {
+        // The two literal-typed parameters are DIFFERENT types to TypeScript
+        // and both fall to the same Any? fallback here - Kotlin would refuse
+        // the conflicting pair, so the later one becomes a marker.
+        val result = generate(
+            """
+            export interface Chooser {
+                choose(mode: "a"): void;
+                choose(mode: "b"): void;
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val marker = "/* xtsc: skipped overload of choose collapsing to a duplicate signature */" in rendered
+        val funCount = Regex("public fun choose").findAll(rendered).count()
+        assert(marker)
+        assert(funCount == 1)
+    }
+
+    @Test
+    fun `an optional generic method is a loud skip`() {
+        val result = generate(
+            """
+            export interface Probe { ping?<T>(x: T): void; }
+            """
+        )
+        val rendered = result.kotlin
+        val skipped = "/* xtsc: skipped optional generic method ping */" in rendered
+        assert(skipped)
+    }
+
     // --- (EXT.4) classes and enums ------------------------------------------
 
     @Test

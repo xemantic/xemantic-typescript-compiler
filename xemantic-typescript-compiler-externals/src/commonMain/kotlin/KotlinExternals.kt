@@ -54,6 +54,7 @@ import com.xemantic.typescript.compiler.StringLiteralNode
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
+import com.xemantic.typescript.compiler.TypeParameter
 import com.xemantic.typescript.compiler.TypeReference
 import com.xemantic.typescript.compiler.anyType
 import com.xemantic.typescript.compiler.computeParserFlags
@@ -421,6 +422,63 @@ private class ExternalsCollector(
     }
 
     /**
+     * (EXT.5) The constraint/default markers for one type-parameter list — the
+     * same loud records interfaces and functions have always rendered, shared
+     * so a METHOD's own list gets them too.
+     */
+    private fun typeParameterMarkers(
+        parameters: List<TypeParameter>?,
+        lens: CheckedLens,
+    ): MutableList<String> {
+        val markers = mutableListOf<String>()
+        for (parameter in parameters.orEmpty()) {
+            parameter.constraint?.let {
+                markers.add(
+                    "constraint on ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+            parameter.default?.let {
+                markers.add(
+                    "default for ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+        }
+        return markers
+    }
+
+    /**
+     * (EXT.5) Collapses overloads that MAP to one Kotlin signature: TypeScript
+     * distinguishes them (a literal-typed parameter, say) where the mapping's
+     * fallback does not, and Kotlin refuses conflicting overloads — so the
+     * later duplicates become loud markers instead of a compile error.
+     */
+    private fun dedupeOverloads(members: MutableList<ExternalMember>) {
+        val seenSignatures = HashSet<String>()
+        for (index in members.indices) {
+            val member = members[index] as? ExternalFunction ?: continue
+            // The marker comment is NOT part of the signature Kotlin sees —
+            // two different literal types both falling to `Any? /* xtsc: … */`
+            // conflict however different their markers read — so the key is
+            // the type text with the marker stripped.
+            val signature = buildString {
+                append(member.name)
+                append('<').append(member.typeParameters.joinToString(","))
+                append(">(")
+                member.parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
+                append(')')
+            }
+            if (!seenSignatures.add(signature)) {
+                members[index] =
+                    SkippedMember("overload of ${member.name} collapsing to a duplicate signature")
+            }
+        }
+    }
+
+    /**
      * Interfaces already collected, compared by IDENTITY: the spine may visit
      * the same tree more than once (a `declarationOnly` pre-pass walks the same
      * nodes), and first wins — the first visit is the one under the tightest
@@ -573,6 +631,8 @@ private class ExternalsCollector(
                 )
             }
         }
+        dedupeOverloads(members)
+        dedupeOverloads(staticMembers)
         return ExternalClass(
             name = name,
             typeParameters = typeParameters,
@@ -613,13 +673,30 @@ private class ExternalsCollector(
      * (EXT.2) An exported alias whose body MAPS becomes a `public typealias`;
      * one whose body does not is a loud skip — emitting `typealias U = Any?`
      * would flatten every consumer signature that names it, silently.
+     *
+     * (EXT.5) A GENERIC alias renders too — `type Handler<T> = (event: T) =>
+     * void` is mitt's spine — with its body answered SYNTACTICALLY under the
+     * alias's own type-parameter scope, for (EXT.2)'s measured reason: the
+     * lens ambient carries a FUNCTION's type parameters, never a declaration's
+     * own, so asking it about a bare `T` answers `any` silently. The
+     * non-generic path keeps the RESOLVED body (the Dukat pin: uses render
+     * what the checker knows).
      */
     private fun collectTypeAlias(
         node: TypeAliasDeclaration,
         lens: CheckedLens,
     ): ExternalDeclaration {
-        if (node.typeParameters != null) {
-            return SkippedDeclaration("generic type alias ${node.name.text}")
+        val name = node.name.text
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        if (typeParameters.isNotEmpty()) {
+            val markers = typeParameterMarkers(node.typeParameters, lens)
+            val body = annotationTextOrNull(
+                node.type,
+                returnPosition = false,
+                lens = lens,
+                scope = scopeOf(typeParameters.toSet()),
+            ) ?: return SkippedDeclaration("generic type alias $name with unmappable body")
+            return ExternalTypeAlias(name, typeParameters, markers, body)
         }
         val body = lens.typeOfTypeNode(node.type)
         val mapped = kotlinTypeTextOrNull(
@@ -627,10 +704,10 @@ private class ExternalsCollector(
             returnPosition = false,
             scope = scopeOf(emptySet()),
         ) ?: return SkippedDeclaration(
-            "type alias ${node.name.text} with unmappable body " +
+            "type alias $name with unmappable body " +
                 commentSafe(lens.render(body))
         )
-        return ExternalTypeAlias(node.name.text, mapped)
+        return ExternalTypeAlias(name, emptyList(), emptyList(), mapped)
     }
 
     private fun collectInterface(
@@ -678,6 +755,7 @@ private class ExternalsCollector(
                 )
             }
         }
+        dedupeOverloads(members)
         return ExternalInterface(node.name.text, typeParameters, headerMarkers, members)
     }
 
@@ -723,7 +801,21 @@ private class ExternalsCollector(
             members.add(SkippedMember("member with a non-identifier name"))
             return
         }
+        // (EXT.5) A generic METHOD renders its own type-parameter names
+        // syntactically, exactly as a top-level function does, with the same
+        // constraint/default markers; the member scope is the enclosing
+        // declaration's parameters PLUS the method's own.
+        val methodTypeParameters = member.typeParameters.orEmpty().map { it.name.text }
+        val methodScope =
+            if (methodTypeParameters.isEmpty()) scope
+            else TypeScope(scope.ownTypeParams + methodTypeParameters, scope.generatedNameOf)
         if (member.questionToken) {
+            if (methodTypeParameters.isNotEmpty()) {
+                // A nullable function-typed PROPERTY cannot carry type
+                // parameters, so an optional GENERIC method has no shape here.
+                members.add(SkippedMember("optional generic method $name"))
+                return
+            }
             // (EXT.3) An optional METHOD is a nullable function-typed
             // property: `m?(x: string): void` -> `var m: ((String) -> Unit)?`.
             // Refused to the marker when any piece does not map — a
@@ -772,20 +864,22 @@ private class ExternalsCollector(
                         optional = parameter.questionToken,
                         returnPosition = false,
                         lens = lens,
-                        scope = scope,
+                        scope = methodScope,
                     ),
                 )
             }
         members.add(
             ExternalFunction(
                 name = name,
+                typeParameters = methodTypeParameters,
+                markers = typeParameterMarkers(member.typeParameters, lens),
                 parameters = parameters,
                 returnType = annotationText(
                     member.type,
                     optional = false,
                     returnPosition = true,
                     lens = lens,
-                    scope = scope,
+                    scope = methodScope,
                 ),
             )
         )
