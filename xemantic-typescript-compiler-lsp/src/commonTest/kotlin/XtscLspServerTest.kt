@@ -163,8 +163,10 @@ class XtscLspServerTest {
         assert(value == expected.displayString)
 
         // the range round-trips to the QuickInfo span through the same API.
-        val start = result?.obj("range")?.obj("start")
-        val end = result?.obj("range")?.obj("end")
+        // (`result` smart-casts to non-null here: the asserts above compared a
+        // value reached through it against non-null expectations.)
+        val start = result.obj("range")?.obj("start")
+        val end = result.obj("range")?.obj("end")
         val startOffset = directProject().offsetAt(
             file,
             (start?.int("line") ?: -1) + 1,
@@ -207,10 +209,12 @@ class XtscLspServerTest {
 
     @Test
     fun `the touch rule answers one to the left of a caret just past an identifier`() {
-        // The file ends EXACTLY at the identifier, so the caret one past it is
-        // end-of-file — inside no node by construction — and only the § 12
-        // fallback at offset minus one can answer.
-        val text = "const abc = 1;\nconst tail = abc"
+        // The identifier is the last CONTENT of its line, so the caret one past
+        // it sits on the line terminator — inside no node's real span — and only
+        // the § 12 fallback at offset minus one can answer. (The file must end
+        // with that newline: see the file-final-identifier pin below for what
+        // happens without one.)
+        val text = "const abc = 1;\nconst tail = abc\n"
         val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to text)
         val lastLine = "const tail = abc"
         val input = Buffer()
@@ -221,12 +225,44 @@ class XtscLspServerTest {
         XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
 
         val direct = Project.open("/proj", InMemoryVfs(vfsFiles))
-        val primary = direct.quickInfoAt(file, text.length)
-        val expected = direct.quickInfoAt(file, text.length - 1)
+        val caret = text.length - 1
+        val primary = direct.quickInfoAt(file, caret)
+        val expected = direct.quickInfoAt(file, caret - 1)
         assert(primary == null)
         assert(expected != null)
         val value = readResponses(output)[2]?.obj("result")?.obj("contents")?.string("value")
         assert(value == expected.displayString)
+    }
+
+    @Test
+    fun `a file-final identifier with no trailing newline hovers as null - a recorded -project edge`() {
+        // NOT a guarantee — a defect record, in `LanguageServiceStateTest`'s own
+        // idiom, so that a fix upstream is a deliberate inversion here rather
+        // than an accident nobody notices. `SourceIndex.realEndOf` snaps a
+        // node's raw `end` back to "the greatest token end STRICTLY below it";
+        // the last token of a file with no trailing trivia has an EXACT raw end
+        // (the EOF lookahead is zero-width), so the snap lands on the token
+        // BEFORE it and clamps to `pos` — an empty span no position lookup can
+        // enter. `quickInfoAt` therefore answers null ANYWHERE inside such an
+        // identifier, and the touch fallback cannot save the caret one past it
+        // either. A trailing newline widens the raw end past the token and
+        // restores every answer, which is what the touch-rule test above uses.
+        val text = "const abc = 1;\nconst tail = abc"
+        val vfsFiles = mapOf("/proj/tsconfig.json" to config, file to text)
+        val direct = Project.open("/proj", InMemoryVfs(vfsFiles))
+        val insideFinal = direct.quickInfoAt(file, text.length - 2)
+        assert(insideFinal == null)
+
+        val input = Buffer()
+        writeFrame(input, request(1, "initialize", initializeParams("file:///proj")))
+        writeFrame(
+            input,
+            request(2, "textDocument/hover", hoverParams(fileUri, 1, "const tail = a".length)),
+        )
+        val output = Buffer()
+        XtscLanguageServer(InMemoryVfs(vfsFiles)).serve(input, output)
+        val resultIsNull = readResponses(output)[2]?.get("result") is JsonNull
+        assert(resultIsNull)
     }
 
     @Test
