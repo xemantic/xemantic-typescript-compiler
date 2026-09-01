@@ -812,14 +812,26 @@ no counter), then continue top-to-bottom.
   text.** Module 21/0; the compile gate's fixture now carries generics + references +
   typealias, negative control intact.
 
-- [ ] **(EXT.3…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
-  progresses.** Still to emit: functions, classes, enums, namespaces/modules,
-  overloads, optional methods, index signatures, heritage clauses, generic ALIASES,
-  references with TP arguments (`Box<T>` inside another generic — currently falls back
-  because the lens degrades the arg, see (EXT.2)'s mechanism finding). Unions and other
-  inexpressible shapes: ONE documented fallback per shape, never silent. Fixture
-  ladder: `mitt` → `smol-toml` → RxJS → `typescript.d.ts`; GATE at every rung: the
-  generated Kotlin compiles (in-test metadata compile).
+- [x] **(EXT.3) DONE 2026-09-01 — TOP-LEVEL FUNCTIONS, FUNCTION TYPES, OPTIONAL
+  METHODS.** `export function` → `public external fun` (generic TPs syntactic,
+  constraints as markers above the fun; membership by === against the pre-scanned
+  TOP-LEVEL exported set, so nested declarations stay silent; an overloaded name is a
+  loud skip — (EXT.4)); function-TYPE annotations map recursively and syntactically
+  (`(name: string) => void` → `(String) -> Unit`; alias pieces still resolve through
+  the lens), REFUSING as a whole on a generic fn type, an OPTIONAL parameter (arity,
+  not nullability) or a REST parameter; an optional method flips to a nullable
+  function-typed property `((String) -> Unit)?`. **The compile-gate variant renders a
+  non-external function with the body `= null!!`** — `Nothing`-typed, legal for any
+  return type, built from language built-ins alone, which is what a zero-classpath
+  metadata compile allows. Module 29/0; gate fixture carries every new shape.
+
+- [ ] **(EXT.4…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
+  progresses.** Still to emit: classes, enums, namespaces/modules, overloads,
+  DEFAULT exports (mitt's own entry shape), index signatures, heritage clauses,
+  generic ALIASES, references with TP arguments inside another generic (falls back —
+  (EXT.2)'s lens-ambient finding). Unions and other inexpressible shapes: ONE
+  documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
+  RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
 
 - [x] **(LSP.1) DONE 2026-09-01 (worktree wave, merged) — LSP SERVER: initialize + didOpen +
   hover.** New module `xemantic-typescript-compiler-lsp` (JVM; distributed later as a

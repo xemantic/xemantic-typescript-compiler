@@ -33,6 +33,8 @@ import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Diagnostic
 import com.xemantic.typescript.compiler.DiagnosticCategory
 import com.xemantic.typescript.compiler.Expression
+import com.xemantic.typescript.compiler.FunctionDeclaration
+import com.xemantic.typescript.compiler.FunctionType
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.MethodDeclaration
@@ -134,7 +136,10 @@ public fun generateKotlinExternals(
     val sourceFile = parser.parse()
     val parseDiagnostics = parser.getDiagnostics()
     val binderResult = Binder(options).bind(sourceFile)
-    val collector = ExternalsCollector(exportedInterfaceDeclarations(sourceFile))
+    val collector = ExternalsCollector(
+        exportedInterfaceDeclarations(sourceFile),
+        exportedFunctionDeclarations(sourceFile),
+    )
     val checker = runWithDeepStack {
         Checker(
             options,
@@ -165,6 +170,16 @@ private fun exportedInterfaceDeclarations(sourceFile: SourceFile): List<Interfac
         .filter { ModifierFlag.Export in it.modifiers }
 
 /**
+ * (EXT.3) The file's exported TOP-LEVEL function declarations — the membership
+ * test behind the [FunctionDeclaration] sink arm, because the sink fires for
+ * NESTED function declarations too and only the module surface is generated.
+ */
+private fun exportedFunctionDeclarations(sourceFile: SourceFile): List<FunctionDeclaration> =
+    sourceFile.statements
+        .filterIsInstance<FunctionDeclaration>()
+        .filter { ModifierFlag.Export in it.modifiers && it.name != null }
+
+/**
  * Collects exported interfaces as the checker walks past their declarations.
  *
  * Everything the lens is asked happens INSIDE [declaration] — a [CheckedLens]
@@ -174,6 +189,7 @@ private fun exportedInterfaceDeclarations(sourceFile: SourceFile): List<Interfac
  */
 private class ExternalsCollector(
     private val exportedInterfaces: List<InterfaceDeclaration>,
+    private val exportedFunctions: List<FunctionDeclaration>,
 ) : CheckedNodeSink {
 
     val declarations = mutableListOf<ExternalDeclaration>()
@@ -219,15 +235,135 @@ private class ExternalsCollector(
         lens: CheckedLens,
         scope: TypeScope,
     ): String {
+        val mapped = annotationTextOrNull(annotation, returnPosition, lens, scope)
+        return when {
+            mapped == null -> {
+                val type = annotation?.let { lens.typeOfTypeNode(it) } ?: anyType
+                "Any? /* xtsc: unmapped ${commentSafe(lens.render(type))} */"
+            }
+            !optional -> mapped
+            // A nullable FUNCTION type needs the parentheses; a name does not.
+            " -> " in mapped -> "($mapped)?"
+            else -> "$mapped?"
+        }
+    }
+
+    /**
+     * (EXT.3) [annotationText] without the fallback — null where the shape
+     * does not map, so a COMPOSITE (a function type, a generic argument)
+     * refuses as a WHOLE rather than shipping a half-translated signature.
+     *
+     * The function-type arm is SYNTACTIC for the same measured reason the
+     * own-type-parameter arm is: the pieces are annotations, and recursing
+     * over them keeps alias resolution (each piece still goes through the
+     * lens) while never asking the checker a question whose ambient it does
+     * not have. Refused inside a function type, deliberately: a generic
+     * function type, an OPTIONAL parameter (`(x?: s) => v` changes ARITY,
+     * which `(String?) -> Unit` does not express — a caller may omit the
+     * argument, not pass null), and a REST parameter.
+     */
+    private fun annotationTextOrNull(
+        annotation: TypeNode?,
+        returnPosition: Boolean,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): String? {
+        if (annotation == null) return null
         val ownParam = ((annotation as? TypeReference)?.typeName as? Identifier)
             ?.text
             ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
-        if (ownParam != null) {
-            val name = kotlinIdentifier(ownParam)
-            return if (optional) "$name?" else name
+        if (ownParam != null) return kotlinIdentifier(ownParam)
+        if (annotation is FunctionType) {
+            if (annotation.typeParameters != null) return null
+            val parameters = annotation.parameters
+                .filterNot { it.isCommentPlaceholder }
+                .map { parameter ->
+                    if (parameter.questionToken || parameter.dotDotDotToken) return null
+                    annotationTextOrNull(
+                        parameter.type ?: return null,
+                        returnPosition = false,
+                        lens = lens,
+                        scope = scope,
+                    ) ?: return null
+                }
+            val returnType = annotationTextOrNull(
+                annotation.type,
+                returnPosition = true,
+                lens = lens,
+                scope = scope,
+            ) ?: return null
+            return "(${parameters.joinToString(", ")}) -> $returnType"
         }
-        val type = annotation?.let { lens.typeOfTypeNode(it) } ?: anyType
-        return kotlinTypeText(type, optional, returnPosition, lens, scope)
+        return kotlinTypeTextOrNull(
+            lens.typeOfTypeNode(annotation),
+            returnPosition = returnPosition,
+            scope = scope,
+        )
+    }
+
+    /**
+     * (EXT.3) An exported top-level function. Overloads are (EXT.4): a name
+     * declared by MORE than one exported top-level declaration is a loud skip
+     * — emitting each signature would also emit the implementation signature
+     * beside its overloads, which is not the surface TypeScript consumers see.
+     */
+    private fun collectFunction(
+        node: FunctionDeclaration,
+        lens: CheckedLens,
+    ): ExternalDeclaration {
+        val name = node.name?.text
+            ?: return SkippedDeclaration("top-level function without a name")
+        if (exportedFunctions.count { it.name?.text == name } > 1) {
+            return SkippedDeclaration("overloaded function $name")
+        }
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        val scope = scopeOf(typeParameters.toSet())
+        val markers = mutableListOf<String>()
+        for (parameter in node.typeParameters.orEmpty()) {
+            parameter.constraint?.let {
+                markers.add(
+                    "constraint on ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+            parameter.default?.let {
+                markers.add(
+                    "default for ${parameter.name.text}: " +
+                        commentSafe(lens.render(lens.typeOfTypeNode(it))) +
+                        " not carried"
+                )
+            }
+        }
+        val parameters = node.parameters
+            .filterNot { it.isCommentPlaceholder }
+            .mapIndexed { index, parameter ->
+                val parameterName =
+                    (parameter.name as? Identifier)?.text ?: "p$index"
+                ExternalParameter(
+                    name = parameterName,
+                    type = annotationText(
+                        parameter.type,
+                        optional = parameter.questionToken,
+                        returnPosition = false,
+                        lens = lens,
+                        scope = scope,
+                    ),
+                )
+            }
+        return ExternalTopLevelFunction(
+            name = name,
+            typeParameters = typeParameters,
+            markers = markers,
+            parameters = parameters,
+            returnType = annotationText(
+                node.type,
+                optional = false,
+                returnPosition = true,
+                lens = lens,
+                scope = scope,
+            ),
+        )
     }
 
     /**
@@ -256,6 +392,15 @@ private class ExternalsCollector(
                 if (seen.any { it === node }) return
                 seen.add(node)
                 declarations.add(collectTypeAlias(node, lens))
+            }
+            is FunctionDeclaration -> {
+                // Membership, not modifiers: the sink fires for NESTED
+                // function declarations too, and only the pre-scanned
+                // top-level exported set is the module surface.
+                if (exportedFunctions.none { it === node }) return
+                if (seen.any { it === node }) return
+                seen.add(node)
+                declarations.add(collectFunction(node, lens))
             }
             else -> return
         }
@@ -376,9 +521,38 @@ private class ExternalsCollector(
             return
         }
         if (member.questionToken) {
-            // An optional METHOD is a nullable function-typed property in
-            // Kotlin, which is (EXT.2+) shape work — marked, not guessed at.
-            members.add(SkippedMember("optional method $name"))
+            // (EXT.3) An optional METHOD is a nullable function-typed
+            // property: `m?(x: string): void` -> `var m: ((String) -> Unit)?`.
+            // Refused to the marker when any piece does not map — a
+            // half-translated signature is the silent direction.
+            val parameterTypes = member.parameters
+                .filterNot { it.isCommentPlaceholder }
+                .map { parameter ->
+                    if (parameter.questionToken || parameter.dotDotDotToken) null
+                    else annotationTextOrNull(
+                        parameter.type,
+                        returnPosition = false,
+                        lens = lens,
+                        scope = scope,
+                    )
+                }
+            val returnType = annotationTextOrNull(
+                member.type,
+                returnPosition = true,
+                lens = lens,
+                scope = scope,
+            )
+            if (parameterTypes.any { it == null } || returnType == null) {
+                members.add(SkippedMember("optional method $name"))
+                return
+            }
+            members.add(
+                ExternalProperty(
+                    name = name,
+                    type = "((${parameterTypes.joinToString(", ")}) -> $returnType)?",
+                    readOnly = false,
+                )
+            )
             return
         }
         val parameters = member.parameters

@@ -64,6 +64,22 @@ internal class ExternalTypeAlias(
     val body: String,
 ) : ExternalDeclaration
 
+/**
+ * (EXT.3) An exported top-level function — `public external fun`. In the
+ * compile-gate variant a non-external function must have a BODY, and the gate
+ * has no classpath beyond Kotlin's built-ins, so the variant renders
+ * `= null!!` — an expression of type `Nothing`, legal as the body of any
+ * return type, built from nothing but the language.
+ */
+internal class ExternalTopLevelFunction(
+    val name: String,
+    val typeParameters: List<String>,
+    /** Loud records — a constraint or default not carried — above the fun. */
+    val markers: List<String>,
+    val parameters: List<ExternalParameter>,
+    val returnType: String,
+) : ExternalDeclaration
+
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedDeclaration(val description: String) : ExternalDeclaration
 
@@ -241,6 +257,24 @@ internal fun renderKotlinExternals(
                 appendLine(
                     "public typealias ${kotlinIdentifier(declaration.name)} = ${declaration.body}"
                 )
+            is ExternalTopLevelFunction -> {
+                for (marker in declaration.markers) appendLine("/* xtsc: $marker */")
+                val typeParams =
+                    if (declaration.typeParameters.isEmpty()) ""
+                    else declaration.typeParameters
+                        .joinToString(", ", prefix = "<", postfix = "> ") {
+                            kotlinIdentifier(it)
+                        }
+                val parameters = declaration.parameters.joinToString(", ") {
+                    "${kotlinIdentifier(it.name)}: ${it.type}"
+                }
+                val keyword = if (external) "external fun" else "fun"
+                val body = if (external) "" else " = null!!"
+                appendLine(
+                    "public $keyword $typeParams${kotlinIdentifier(declaration.name)}" +
+                        "($parameters): ${declaration.returnType}$body"
+                )
+            }
         }
     }
 }

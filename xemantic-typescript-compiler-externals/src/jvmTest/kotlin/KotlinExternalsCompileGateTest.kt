@@ -144,6 +144,13 @@ class KotlinExternalsCompileGateTest {
             boxed: Box<string>;
         }
         export type Beast = Creature;
+        export function greet(who: string, count: number): string { return who; }
+        export function id<T>(x: T): T { return x; }
+        export interface Handlers {
+            onName: (name: string) => void;
+            cb?: (n: number) => string;
+            ping?(x: string): void;
+        }
     """.trimIndent()
 
     @Test

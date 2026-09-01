@@ -397,4 +397,131 @@ class KotlinExternalsGeneratorTest {
         assert(rendered == expected)
     }
 
+    // --- (EXT.3) functions and function types --------------------------------
+
+    @Test
+    fun `an exported function renders externally and the gate variant grows a nothing body`() {
+        val result = generate(
+            """
+            export function greet(who: string, count: number): string { return who; }
+            """
+        )
+        val expectedExternal = "public external fun greet(who: String, count: Double): String\n"
+        val expectedGate = "public fun greet(who: String, count: Double): String = null!!\n"
+        val external = result.kotlin
+        val gate = result.compileCheckSource
+        assert(external == expectedExternal)
+        assert(gate == expectedGate)
+    }
+
+    @Test
+    fun `a generic function renders its own type parameters syntactically`() {
+        val result = generate(
+            """
+            export function id<T>(x: T): T { return x; }
+            """
+        )
+        val rendered = result.kotlin
+        assert(rendered == "public external fun <T> id(x: T): T\n")
+    }
+
+    @Test
+    fun `a constrained function type parameter marks above the fun`() {
+        val result = generate(
+            """
+            export function tag<T extends string>(x: T): T { return x; }
+            """
+        )
+        val rendered = result.kotlin
+        val markerAt = rendered.indexOf("/* xtsc: constraint on T: string not carried */")
+        val funAt = rendered.indexOf("public external fun <T> tag(x: T): T")
+        assert(markerAt >= 0)
+        assert(funAt > markerAt)
+    }
+
+    @Test
+    fun `a function-typed member renders as a kotlin function type`() {
+        val result = generate(
+            """
+            export interface Handlers {
+                onName: (name: string) => void;
+                pick: (a: string, b: number) => string;
+            }
+            """
+        )
+        val expected = """
+            public external interface Handlers {
+                public var onName: (String) -> Unit
+                public var pick: (String, Double) -> String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `an optional function-typed member parenthesizes its nullability`() {
+        val result = generate(
+            """
+            export interface Handlers { cb?: (n: number) => string; }
+            """
+        )
+        val rendered = result.kotlin
+        val line = "    public var cb: ((Double) -> String)?\n" in rendered
+        assert(line)
+    }
+
+    @Test
+    fun `an optional method becomes a nullable function-typed property`() {
+        val result = generate(
+            """
+            export interface Probe { ping?(x: string): void; }
+            """
+        )
+        val rendered = result.kotlin
+        val line = "    public var ping: ((String) -> Unit)?\n" in rendered
+        assert(line)
+    }
+
+    @Test
+    fun `a function type with an optional or rest parameter falls back loudly`() {
+        // `(x?: s) => v` changes ARITY - a caller may OMIT the argument - which
+        // `(String?) -> Unit` does not express, so the whole annotation falls
+        // back rather than shipping a signature that invites a wrong call.
+        val result = generate(
+            """
+            export interface Handlers {
+                opt: (x?: string) => void;
+                rest: (...xs: string[]) => void;
+            }
+            """
+        )
+        val rendered = result.kotlin
+        val optFallback = "public var opt: Any? /* xtsc: unmapped" in rendered
+        val restFallback = "public var rest: Any? /* xtsc: unmapped" in rendered
+        assert(optFallback)
+        assert(restFallback)
+    }
+
+    @Test
+    fun `an overloaded exported function is a loud skip and a nested function is silent`() {
+        val result = generate(
+            """
+            export function pick(x: string): string;
+            export function pick(x: number): number;
+            export function pick(x: any): any { return x; }
+            export function outer(): void { function inner(): void {} }
+            """
+        )
+        val rendered = result.kotlin
+        val overloadMarker = rendered.contains("/* xtsc: skipped overloaded function pick */")
+        val noPickFun = "external fun pick" !in rendered
+        val outerPresent = "public external fun outer(): Unit\n" in rendered
+        val innerAbsent = "inner" !in rendered
+        assert(overloadMarker)
+        assert(noPickFun)
+        assert(outerPresent)
+        assert(innerAbsent)
+    }
+
 }
