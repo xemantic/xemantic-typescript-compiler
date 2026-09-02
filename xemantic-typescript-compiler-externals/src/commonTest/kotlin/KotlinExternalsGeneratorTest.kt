@@ -2219,4 +2219,388 @@ class KotlinExternalsGeneratorTest {
         assert(errorCodes.isEmpty())
     }
 
+    // --- (EXT.11c) Kotlin's overload equivalence, name collisions, narrowed vars ---
+
+    @Test
+    fun `overloads differing only in nullability or in type-parameter names collapse`() {
+        // Before ((EXT.5)'s textual key): all five rendered, and Kotlin
+        // refused `first(predicate: Boolean, defaultValue: D)` beside
+        // `defaultValue: D?` and beside `<T, S> … defaultValue: S` as
+        // `Conflicting overloads` — the rxjs `first`/`last` shape. Measured:
+        // a FREE own type parameter (every occurrence covariant) reads as its
+        // bound `Any?`, `?` or not; names never count.
+        val result = generate(
+            """
+            export interface Src<T> { v: T; }
+            export declare function first<T, D>(predicate: boolean, defaultValue: D): Src<D>;
+            export declare function first<T, D>(predicate: boolean, defaultValue?: D): Src<D>;
+            export declare function first<T, S>(predicate: boolean, defaultValue: S): Src<S>;
+            export declare function first<T, S>(pick: (value: T) => boolean, defaultValue?: S): Src<S>;
+            export declare function first<T, D>(pick: (value: T) => boolean, defaultValue: D): Src<D>;
+            """
+        )
+        val expected = """
+            public external interface Src<T> {
+                public var v: T
+            }
+
+            public external fun <T, D> first(predicate: Boolean, defaultValue: D): Src<D>
+
+            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+
+            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+
+            public external fun <T, S> first(pick: (T) -> Boolean, defaultValue: S?): Src<S>
+
+            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a bare type parameter is one overload with any at equal arity and type-parameter order does not count`() {
+        // Before: `<T> of(value: T)` beside `<A> of(anything: Any?)` was a
+        // compile error (the rxjs `of` shape), and so were the two
+        // `pair`s that only reorder or reuse their type parameters. The
+        // negative control is the COUNT: `of(single: Any?)` declares no type
+        // parameter and is a distinct overload, and so is the one-parameter
+        // `pair`.
+        val result = generate(
+            """
+            export interface Box<T> { v: T; }
+            export declare function of<T>(value: T): Box<T>;
+            export declare function of<A>(anything: any): Box<A>;
+            export declare function of(single: any): Box<any>;
+            export declare function pair<T, U>(a: T, b: U): void;
+            export declare function pair<U, T>(a: T, b: U): void;
+            export declare function pair<A, B>(a: A, b: A): void;
+            export declare function pair<A>(a: A, b: A): void;
+            """
+        )
+        val expected = """
+            public external interface Box<T> {
+                public var v: T
+            }
+
+            public external fun <T> of(value: T): Box<T>
+
+            /* xtsc: skipped overload of of collapsing to a duplicate signature */
+
+            public external fun of(single: Any?): Box<Any?>
+
+            public external fun <T, U> pair(a: T, b: U): Unit
+
+            /* xtsc: skipped overload of pair collapsing to a duplicate signature */
+
+            /* xtsc: skipped overload of pair collapsing to a duplicate signature */
+
+            public external fun <A> pair(a: A, b: A): Unit
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `negative control - a type parameter in a generic argument or a callback parameter keeps the overload`() {
+        // Measured: an own type parameter PINNED by an invariant (`Box<T>`)
+        // or contravariant (`(T) -> Unit`) occurrence is distinct from
+        // `Any?` and from its nullable self, and compared with another
+        // pinned one up to renaming — `Box<T>` and `Box<U>` collapse,
+        // `(Box<T>, Box<U>)` and `(Box<A>, Box<A>)` do not, `(Box<B>,
+        // Box<A>)` does. A callback's RETURN is covariant, so `() => T`
+        // erases like a bare parameter. Before this round `wrap<U>(x: Box<U>)`
+        // and `two<A, B>(a: Box<B>, b: Box<A>)` were compile errors.
+        val result = generate(
+            """
+            export interface Box<T> { v: T; }
+            export declare function wrap<T>(x: Box<T>): void;
+            export declare function wrap<U>(x: Box<any>): void;
+            export declare function wrap<U>(x: Box<U>): void;
+            export declare function wrap<U>(x: Box<U | null>): void;
+            export declare function on<T>(cb: (x: T) => void): void;
+            export declare function on<U>(cb: (x: any) => void): void;
+            export declare function make<T>(cb: () => T): void;
+            export declare function make<U>(cb: () => any): void;
+            export declare function two<T, U>(a: Box<T>, b: Box<U>): void;
+            export declare function two<A, B>(a: Box<A>, b: Box<A>): void;
+            export declare function two<A, B>(a: Box<B>, b: Box<A>): void;
+            """
+        )
+        val expected = """
+            public external interface Box<T> {
+                public var v: T
+            }
+
+            public external fun <T> wrap(x: Box<T>): Unit
+
+            public external fun <U> wrap(x: Box<Any?>): Unit
+
+            /* xtsc: skipped overload of wrap collapsing to a duplicate signature */
+
+            public external fun <U> wrap(x: Box<U?>): Unit
+
+            public external fun <T> on(cb: (T) -> Unit): Unit
+
+            public external fun <U> on(cb: (Any?) -> Unit): Unit
+
+            public external fun <T> make(cb: () -> T): Unit
+
+            /* xtsc: skipped overload of make collapsing to a duplicate signature */
+
+            public external fun <T, U> two(a: Box<T>, b: Box<U>): Unit
+
+            public external fun <A, B> two(a: Box<A>, b: Box<A>): Unit
+
+            /* xtsc: skipped overload of two collapsing to a duplicate signature */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `method overloads use the same equivalence and an enclosing type parameter is an ordinary type`() {
+        // `emit<V>(x: V)` is one overload with `emit<U>(x: any)`; `on<V>(x:
+        // V)` is not one with `on<U>(x: T)`, because the INTERFACE's `T` is
+        // a named type to Kotlin, not a free parameter — and `once(x: T)`
+        // beside `once(x: any)` is legal for the same reason.
+        val result = generate(
+            """
+            export interface Emitter<T> {
+                on<U>(x: T): void;
+                on<V>(x: V): void;
+                emit<U>(x: any): void;
+                emit<V>(x: V): void;
+                once(x: T): void;
+                once(x: any): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Emitter<T> {
+                public fun <U> on(x: T): Unit
+                public fun <V> on(x: V): Unit
+                public fun <U> emit(x: Any?): Unit
+                /* xtsc: skipped overload of emit collapsing to a duplicate signature */
+                public fun once(x: T): Unit
+                public fun once(x: Any?): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a value sharing a type's name is a loud skip whatever the order and a function beside an interface stays`() {
+        // Before: `public external val AjaxError: AjaxErrorCtor` beside
+        // `public external interface AjaxError` — Kotlin's `Conflicting
+        // declarations` (the rxjs companion-value idiom, nine times over the
+        // package). The type wins in both walk orders; a function and an
+        // interface of one name are legal Kotlin (measured) and both stay.
+        val result = generate(
+            """
+            export interface AjaxError { status: number; }
+            export interface AjaxErrorCtor { new (status: number): AjaxError; }
+            export declare const AjaxError: AjaxErrorCtor;
+            export declare const Later: number;
+            export interface Later { id: string; }
+            export declare function Shape(): number;
+            export interface Shape { s: string; }
+            """
+        )
+        val expected = """
+            public external interface AjaxError {
+                public var status: Double
+            }
+
+            public external interface AjaxErrorCtor {
+                /* xtsc: skipped construct signature */
+            }
+
+            /* xtsc: skipped value AjaxError shares its name with the type AjaxError - module wiring is a later rung */
+
+            /* xtsc: skipped value Later shares its name with the type Later - module wiring is a later rung */
+
+            public external interface Later {
+                public var id: String
+            }
+
+            public external fun Shape(): Double
+
+            public external interface Shape {
+                public var s: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a function spelling a class's constructor is a loud skip and a second same-named value too`() {
+        // Measured against the metadata compiler: `fun Box(v: String)`
+        // beside `class Box(v: String)` is `Conflicting overloads` with the
+        // constructor, `fun Box(v: Double)` is a legal overload of it, a
+        // class without a constructor exposes the implicit `Empty()`, and a
+        // `typealias Name = String` exposes `String()` — so only the
+        // zero-argument `Name()` collides. Two values of one name are
+        // `Conflicting declarations` like two types.
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export declare class Box { constructor(v: string); }
+                export declare class Empty { }
+                export type Name = string;
+            """,
+            "/pkg/b.d.ts" to """
+                export declare function Box(v: string): number;
+                export declare function Box(v: number): number;
+                export declare function Empty(): number;
+                export declare function Name(): string;
+                export declare function Name(x: string): string;
+                export declare const twice: number;
+            """,
+            "/pkg/c.d.ts" to """
+                export declare const twice: string;
+            """,
+        )
+        val expected = """
+            public open external class Box(v: String)
+
+            public open external class Empty
+
+            public typealias Name = String
+
+            /* xtsc: skipped function Box shares its signature with the constructor of Box - module wiring is a later rung */
+
+            public external fun Box(v: Double): Double
+
+            /* xtsc: skipped function Empty shares its signature with the constructor of Empty - module wiring is a later rung */
+
+            /* xtsc: skipped function Name shares its signature with the constructor of Name - module wiring is a later rung */
+
+            public external fun Name(x: String): String
+
+            public external val twice: Double
+
+            /* xtsc: skipped twice declared again by another file - one Kotlin package cannot hold both */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a narrowed var override renders the inherited type loudly and a covariant val override keeps its own`() {
+        // Before: `public override var source: Obs<U>` over the inherited
+        // `var source: Obs<Any?>?` — Kotlin's "type of 'var' doesn't match
+        // the overridden" (the rxjs `ConnectableObservable` shape) — and
+        // `handle(x: U)` carried no `override` at all, because the base's
+        // `T` was compared with the derived's `U` by text. The base is now
+        // read through the supertype's arguments; a readonly member over a
+        // readonly base is a covariant `val` override, legal as it is; the
+        // readonly-narrows-var and the narrowed-type markers compose; two
+        // unmapped types are one `Any?` and no narrowing.
+        val result = generate(
+            """
+            interface Hidden1 { a: string; }
+            interface Hidden2 extends Hidden1 { b: string; }
+            export interface Obs<T> { v: T; }
+            export declare class Base<T> {
+                source: Obs<any> | undefined;
+                readonly tag: Obs<any>;
+                both: Obs<any>;
+                other: Obs<T>;
+                raw: Hidden1;
+                handle(x: T): void;
+            }
+            export declare class Derived<U> extends Base<U> {
+                source: Obs<U>;
+                readonly tag: Obs<U>;
+                readonly both: Obs<U>;
+                other: Obs<U>;
+                raw: Hidden2;
+                handle(x: U): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Obs<T> {
+                public var v: T
+            }
+
+            public open external class Base<T> {
+                public open var source: Obs<Any?>?
+                public open val tag: Obs<Any?>
+                public open var both: Obs<Any?>
+                public open var other: Obs<T>
+                public open var raw: Any? /* xtsc: unmapped Hidden1 */
+                public open fun handle(x: T): Unit
+            }
+
+            public open external class Derived<U> : Base<U> {
+                /* xtsc: narrowed to Obs<U> in TypeScript - rendered as the inherited Obs<Any?>? */
+                public override var source: Obs<Any?>?
+                public override val tag: Obs<U>
+                /* xtsc: readonly narrows an inherited var - rendered var */
+                /* xtsc: narrowed to Obs<U> in TypeScript - rendered as the inherited Obs<Any?> */
+                public override var both: Obs<Any?>
+                public override var other: Obs<U>
+                public override var raw: Any? /* xtsc: unmapped Hidden2 */
+                public override fun handle(x: U): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an inherited constructor and an override are read through a renamed generic chain`() {
+        // Before: `class Leaf<V>(x: T)` — the base's own parameter name,
+        // unbound in the leaf — and `use(v: V)` without `override` two links
+        // down. The substitution composes: `Leaf<V> : Mid<V>`, `Mid<U> :
+        // Root<Obs<U>>`, so `Root<T>`'s `T` is `Obs<V>` seen from the leaf.
+        val result = generate(
+            """
+            export interface Obs<T> { v: T; }
+            export declare class Root<T> {
+                constructor(x: T);
+                use(v: T): void;
+            }
+            export declare class Mid<U> extends Root<Obs<U>> { }
+            export declare class Leaf<V> extends Mid<V> {
+                use(v: Obs<V>): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Obs<T> {
+                public var v: T
+            }
+
+            public open external class Root<T>(x: T) {
+                public open fun use(v: T): Unit
+            }
+
+            public open external class Mid<U>(x: Obs<U>) : Root<Obs<U>>
+
+            public open external class Leaf<V>(x: Obs<V>) : Mid<V> {
+                public override fun use(v: Obs<V>): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
 }

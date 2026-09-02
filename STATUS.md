@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, 16,867 → 16,904 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES COMPILE, 16,867 → 16,920 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -35,7 +35,14 @@ export-specifier loop read `from` as the clause keyword where the import loop al
 tsc's list-element predicate; one line, 15 pins, emitted JS byte-identical to tsgo on 13
 shapes, cost_gate +0.00%; no pristine baseline covers a `from` specifier. The same probe's
 37 Kotlin compile errors (overload equivalence, value-vs-type name collisions, a narrowed
-`var` override) are queued as (EXT.11c).
+`var` override) were then closed by **(EXT.11c), 16,904 → 16,920 / 0 / 3: all 250 files compile (37 → 0)** —
+Kotlin's overload-equivalence relation MEASURED against the metadata compiler over ~100 pairs
+and pinned (a free own type parameter erases to `Any?`, a pinned one keeps identity up to
+renaming; the override relation is a DIFFERENT key — positional identity, exact nullability —
+so `KotlinSignatureKeys.kt` ships two), value-vs-type name collisions a loud skip, a narrowed
+`var` override rendered as the inherited type with a marker, inheritance read through the
+supertype's type arguments (a renamed TP silently lost every `override` before); a 21-file
+extras gate; externals 118/0.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

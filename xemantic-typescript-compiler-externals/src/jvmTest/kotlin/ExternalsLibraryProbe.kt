@@ -176,6 +176,13 @@ class ExternalsLibraryProbe {
                 "skipped constructor this parameter <TYPE> not carried",
             Regex("""skipped this parameter .* not carried - optional method \S+""") to
                 "skipped this parameter <TYPE> not carried - optional method <NAME>",
+            // (EXT.11c)
+            Regex("""skipped value \S+ shares its name with the type \S+ - module wiring is a later rung""") to
+                "skipped value <NAME> shares its name with the type <NAME> - module wiring",
+            Regex("""skipped function \S+ shares its signature with the constructor of \S+ - module wiring is a later rung""") to
+                "skipped function <NAME> shares its signature with the constructor of <NAME> - module wiring",
+            Regex("""narrowed to .* in TypeScript - rendered as the inherited .*""") to
+                "narrowed to <TYPE> in TypeScript - rendered as the inherited <TYPE>",
         )
     }
 

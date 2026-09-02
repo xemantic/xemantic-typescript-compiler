@@ -333,19 +333,60 @@ private class ExternalsCollector(
     private val declarations = mutableListOf<ExternalDeclaration>()
 
     /**
-     * (EXT.7) The collected declarations after the two whole-program passes
+     * (EXT.7) The collected declarations after the whole-program passes
      * that can only run once every file has been walked: the top-level
      * function OVERLOAD collapse (the (EXT.5) rule, applied to the module
      * surface — overloads of one name are consecutive in walk order, and a
-     * second one mapping to the same Kotlin signature becomes a marker), and
-     * the cross-file TYPE-NAME collision rule: every file's declarations share
-     * one Kotlin package, so a second interface/class/enum/alias spelling a
-     * name an earlier one already took is a loud skip rather than a
-     * redeclaration the consumer's compiler refuses.
+     * second one mapping to the same Kotlin signature becomes a marker; the
+     * signature is the measured [overloadSignature], (EXT.11c)), and the
+     * cross-file NAME rules: every file's declarations share one Kotlin
+     * package, so a second interface/class/enum/alias spelling a name an
+     * earlier one already took is a loud skip rather than a redeclaration
+     * the consumer's compiler refuses, and so is a second VALUE of one name.
+     *
+     * (EXT.11c) The VALUE-vs-TYPE rule, measured against the metadata
+     * compiler: Kotlin cannot hold a top-level `val`/`var` and a type
+     * (interface, class, the enum's sealed interface, a typealias) of one
+     * name in one package — `Conflicting declarations` — where TypeScript
+     * pairs them routinely (`export interface AjaxError …` beside `export
+     * declare const AjaxError: AjaxErrorCtor`, the companion-value idiom
+     * behind every RxJS error class). The TYPE wins whatever the walk order
+     * (the type names are collected first), and the value is a loud skip
+     * naming the type it collides with; the `@JsName` wiring that could
+     * rename it is the module-wiring rung. A FUNCTION is different: `fun
+     * Foo()` beside `interface Foo` is legal Kotlin, and beside a CLASS (or
+     * an alias to one) it is legal too UNLESS its signature is the class's
+     * constructor's — `fun Foo(x: String)` beside `class Foo(y: String)` is
+     * `Conflicting overloads` with the constructor, with the class's type
+     * parameters counting as the constructor's own (`fun <T> Foo(x: T)`
+     * conflicts with `class Foo<T>(x: T)`, `fun Foo(x: Any?)` does not),
+     * and a class declaring no constructor exposing the implicit `Foo()`.
+     * So a function is skipped only on that measured collision, by the same
+     * [overloadSignature] the collapse uses, against the class's EFFECTIVE
+     * constructor ([Inheritance.effectiveConstructor], the inherited one
+     * counts — it is what the class header renders). A `typealias` exposes
+     * the aliased class's constructors the same way: `typealias Foo = String`
+     * beside `fun Foo()` conflicts (`String()` exists; `Double`/`Boolean`
+     * measured alike, a nullable alias body too), an alias to a generated
+     * class beside a function spelling that class's constructor conflicts,
+     * an alias to a function type or to an interface conflicts with nothing.
      */
     fun finish(): List<ExternalDeclaration> {
         val seenSignatures = HashSet<String>()
         val seenTypeNames = HashSet<String>()
+        val seenValueNames = HashSet<String>()
+        val typeDeclarations = HashMap<String, ExternalDeclaration>()
+        for (declaration in declarations) {
+            val name = when (declaration) {
+                is ExternalInterface -> declaration.name
+                is ExternalClass -> declaration.name
+                is ExternalEnum -> declaration.name
+                is ExternalTypeAlias -> declaration.name
+                else -> null
+            } ?: continue
+            typeDeclarations.putIfAbsent(name, declaration)
+        }
+        val inheritance = Inheritance(declarations)
         return declarations.map { declaration ->
             when (declaration) {
                 is ExternalTopLevelFunction -> {
@@ -354,16 +395,30 @@ private class ExternalsCollector(
                         declaration.typeParameters,
                         declaration.parameters,
                     )
-                    if (seenSignatures.add(signature)) declaration
-                    else SkippedDeclaration(
-                        "overload of ${declaration.name} collapsing to a duplicate signature"
-                    )
+                    val collidingType = typeDeclarations[declaration.name]
+                    when {
+                        !seenSignatures.add(signature) -> SkippedDeclaration(
+                            "overload of ${declaration.name} collapsing to a duplicate signature"
+                        )
+                        collidingType != null && signature in constructorSignatures(collidingType, inheritance) ->
+                            SkippedDeclaration(
+                                "function ${declaration.name} shares its signature with the constructor of " +
+                                    "${declaration.name} - module wiring is a later rung"
+                            )
+                        else -> declaration
+                    }
                 }
                 is ExternalInterface -> typeNameOnce(declaration, declaration.name, seenTypeNames)
                 is ExternalClass -> typeNameOnce(declaration, declaration.name, seenTypeNames)
                 is ExternalEnum -> typeNameOnce(declaration, declaration.name, seenTypeNames)
                 is ExternalTypeAlias -> typeNameOnce(declaration, declaration.name, seenTypeNames)
-                is ExternalTopLevelValue -> declaration
+                is ExternalTopLevelValue -> when {
+                    declaration.name in typeDeclarations -> SkippedDeclaration(
+                        "value ${declaration.name} shares its name with the type ${declaration.name}" +
+                            " - module wiring is a later rung"
+                    )
+                    else -> typeNameOnce(declaration, declaration.name, seenValueNames)
+                }
                 is SkippedDeclaration -> declaration
             }
         }
@@ -376,6 +431,54 @@ private class ExternalsCollector(
     ): ExternalDeclaration =
         if (seenTypeNames.add(name)) declaration
         else SkippedDeclaration("$name declared again by another file - one Kotlin package cannot hold both")
+
+    /**
+     * (EXT.11c) The [overloadSignature]s of the constructors a same-named
+     * FUNCTION would conflict with, under the function's name: a generated
+     * class's effective constructor (its type parameters as the constructor's
+     * own; the implicit `()` when nothing up the chain declares one), an
+     * alias to a Kotlin class with a default constructor (`String`, `Double`,
+     * `Boolean` — the primitives an alias body maps to) or to a generated
+     * class (that class's constructor read through the alias body's
+     * arguments, the alias's own type parameters as the constructor's).
+     * Empty for an interface, an enum, an alias to a function type.
+     */
+    private fun constructorSignatures(type: ExternalDeclaration, inheritance: Inheritance): Set<String> =
+        when (type) {
+            is ExternalClass -> setOf(
+                overloadSignature(
+                    type.name,
+                    type.typeParameters,
+                    inheritance.effectiveConstructor(type).orEmpty(),
+                )
+            )
+            is ExternalTypeAlias -> {
+                val body = parseKotlinTypeText(type.body) as? NamedTypeText
+                when {
+                    body == null -> emptySet()
+                    body.arguments.isEmpty() && body.name in kotlinClassesWithDefaultConstructor ->
+                        setOf(overloadSignature(type.name, type.typeParameters, emptyList()))
+                    else -> {
+                        val target = inheritance.declarationNamed(body.name) as? ExternalClass
+                        if (target == null) emptySet()
+                        else {
+                            val arguments = body.arguments.map { it.toKotlinText() }
+                            val substitution =
+                                if (arguments.size == target.typeParameters.size) target.typeParameters.zip(arguments).toMap()
+                                else emptyMap()
+                            val parameters = inheritance.effectiveConstructor(target).orEmpty().map {
+                                ExternalParameter(it.name, substituteTypeParameters(it.type, substitution), it.vararg)
+                            }
+                            setOf(overloadSignature(type.name, type.typeParameters, parameters))
+                        }
+                    }
+                }
+            }
+            else -> emptySet()
+        }
+
+    /** (EXT.11c) The Kotlin built-ins an alias body maps to that expose a default constructor. */
+    private val kotlinClassesWithDefaultConstructor = setOf("String", "Double", "Boolean")
 
     /**
      * (EXT.4) The NAMING set — the declarations a resolved type may be

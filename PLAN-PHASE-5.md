@@ -89,6 +89,54 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.11c) LANDED — the whole `rxjs@7.8.2` surface (250 files) COMPILES: 37 → 0 Kotlin errors,
+and the Kotlin overload-equivalence rule is now a MEASURED table, not a guess.** ~100 Kotlin pairs
+were fed to the metadata compiler (`KotlinOverloadEquivalenceTest`, 5 tests, pins the table
+against the compiler): two same-named functions conflict iff their own type-parameter COUNT and
+value-parameter count/`vararg`-positions match, concrete nullability is equal at every depth, and
+— the part no textual key sees — a FREE own type parameter (every occurrence covariant: top
+level, function-type return, vararg element, variance composed) erases to its bound with the
+occurrence's nullability (`T` ≡ `T?` ≡ `Any?`, `<T : Base> f(T)` ≡ `f(Base)`, order and identity
+irrelevant), while a PINNED one (any invariant or contravariant occurrence — a generic argument,
+a function-type parameter) keeps a nullability-carrying identity at EVERY occurrence, compared
+up to bijective renaming (`Box<T>` ≡ `Box<U>`, ≠ `Box<Any?>`, ≠ `Box<U?>`; `(T, Box<T>)` ≠
+`(Any?, Box<U>)` — the row every per-parameter model fails). **The queue's "TP-list length
+collapses" was WRONG** — `<A> f(Any?)` and `<A, R> f(Any?)` are distinct; rxjs's `zip` conflict
+was a 2-vs-2 NAME conflict. **And the brief's "keep the collapse key and the override key
+agreeing" was REFUTED**: the OVERRIDE relation is positional TP identity with exact nullability
+(`override fun <T> f(x: T)` over `<U> f(x: Any?)` is "overrides nothing" while the same member
+declared beside it is legal), so `KotlinSignatureKeys.kt` ships TWO keys, `overloadSignature`
+(free TP → `Any?`, pinned TP → `#k` by first occurrence + `?`, TP count, `vararg` kept) and
+`overrideSignature` (positional `#i`, exact nullability), each documented with its rows; an
+unparseable type text falls back to the old textual key. Also measured: a `val`/`var` conflicts
+with an interface/class/alias/value of its name, a `fun` beside an interface is legal, a `fun`
+beside a CLASS conflicts iff its signature equals the class's constructor (`class Foo<T>` does not
+collide with `fun Foo()`; `fun Foo()` collides with `typealias Foo = String`), and a `var`
+override must repeat the inherited type EXACTLY (nullability alone refuses; `val` over `val` and
+`var` over `val` are covariant).
+
+**The rules.** `finish()` collects type names first, then a value sharing a type's name is a loud
+`skipped value AjaxError shares its name with the type AjaxError - module wiring is a later rung`
+(order-independent) and a function whose overload key equals a same-named class's/alias's
+constructor is a loud skip. The renderer's `Inheritance` now reads bases THROUGH the supertype's
+type arguments, composed down the chain, keyed by `overrideSignature` — before, a renamed TP
+(`class D<U> extends B<U>` over `B<T>`) silently lost every `override`/`open` and rendered an
+inherited constructor with the base's unbound `T`. A subclass redeclaring an inherited `var` with
+a different type renders the BASE's type with `/* xtsc: narrowed to X in TypeScript - rendered as
+the inherited Y */` (composes with the readonly marker; `val` overrides untouched). Gate:
+`KotlinExternalsRxjsExtrasGateTest`, 21 verbatim files (the 13 seeds + their import closure,
+smaller than the core set), compiles at 0 diagnostics with the three mechanisms visible. Eight
+exact pins, each RED by stash-ablation; no existing pin moved. Externals 102 → 118/0; suite
+16,904 → 16,920 / 0 / 3. **250-file census after: 0 compile errors, 0 diagnostics, 968 markers
+(collapses 40 → 49, value-vs-type skips 9, narrowed var 1, unmapped 432; 291 re-export and 117
+constraint markers are the module-wiring/constraint residue), 478 declarations.**
+
+**Two things left on the table, recorded not taken.** First-wins collapse keeps the EARLIER of two
+equivalent overloads, which loses the clean `<T> of(value: T): Observable<T>` to the all-`Any?`
+rest overload declared before it — correct Kotlin, worse output; a "most-mapped signature wins"
+policy is a separate decision, queued below. Function-vs-alias constructor collision is modelled
+only for `String`/`Double`/`Boolean` bodies and aliases to generated classes.
+
 **(PARSE.1) LANDED — a parser defect on rxjs's own `index.d.ts:43`, found by the 250-file
 probe.** `export { from } from './x'` reported TS1005/TS1141/TS1434 (plus checker fallout):
 `Parser.parseNamedExports` had a hand-written `if (token == FromKeyword) break` at the
@@ -1136,7 +1184,7 @@ Owner decisions 2026-09-02:
   negative control each (a two-member union stays marked; `errorType` stays marked; a
   same-named non-lib `Array` is not an array).
 
-- [ ] **(EXT.11c) THE WHOLE `rxjs@7.8.2` SURFACE — ALL 250 `dist/types` FILES THROUGH THE
+- [x] **(EXT.11c) DONE 2026-09-02 ((P18.9) note: 37 → 0 compile errors on all 250 files, the Kotlin overload-equivalence table MEASURED and pinned, externals 118/0, suite 16,920/0/3; one brief assumption refuted — the collapse key and the override key are different relations) — THE WHOLE `rxjs@7.8.2` SURFACE — ALL 250 `dist/types` FILES THROUGH THE
   PROBE (2026-09-02, after (EXT.11b)): 496 declarations (348 fun, 68 interface, 39 val,
   32 class, 8 typealias, 1 sealed interface), 967 markers, 3 checker diagnostics (ONE
   parser defect, (PARSE.1)), **37 COMPILE ERRORS IN THREE MECHANISMS**, none of which the
@@ -1180,6 +1228,15 @@ Owner decisions 2026-09-02:
   or the generator refuses a value whose initializer/annotation resolves to a class's
   instance type through an identifier naming the CLASS (`lens.typeReferenceSymbol`-style
   identity: the value's symbol IS a class declaration). Pin both directions.
+
+- [ ] **(EXT.12) OVERLOAD COLLAPSE POLICY — "MOST-MAPPED SIGNATURE WINS" INSTEAD OF FIRST-WINS
+  (recorded by (EXT.11c), not taken).** Kotlin-equivalent overloads collapse to the FIRST in
+  declaration order, which on rxjs keeps `of(...valuesAndScheduler: Any?)` and drops the clean
+  `<T> of(value: T): Observable<T>`, and keeps `first`'s `null`-predicate twin over the typed
+  one. Decide and pin: among an equivalence class keep the member with the FEWEST markers
+  (ties → first), render the dropped ones as today's markers naming the kept signature. Both
+  gates and the 250-file probe are the receipt (the collapse count must not move, the kept
+  spellings must).
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

@@ -201,27 +201,6 @@ internal fun parameterText(parameter: ExternalParameter): String =
 internal class SkippedMember(val description: String) : ExternalMember
 
 /**
- * (EXT.5) The Kotlin-signature key of a function: name, type-parameter names and
- * the parameter types with their `/* xtsc: … */` markers STRIPPED — two literal
- * types both falling to `Any?` conflict however different their markers read.
- * Shared by the overload collapse (collector) and the override decision
- * (renderer), so the two cannot disagree about what "the same signature" is.
- */
-internal fun overloadSignature(
-    name: String,
-    typeParameters: List<String>,
-    parameters: List<ExternalParameter>,
-): String = buildString {
-    append(name)
-    append('<').append(typeParameters.joinToString(","))
-    append(">(")
-    parameters.joinTo(this, ",") {
-        (if (it.vararg) "vararg " else "") + it.type.substringBefore(" /* xtsc:")
-    }
-    append(')')
-}
-
-/**
  * (EXT.8) What a declaration INHERITS from its generated bases, transitively —
  * the input to Kotlin's `override` rule, which TypeScript has no counterpart
  * for: a subinterface may simply redeclare a base member, Kotlin must say
@@ -232,8 +211,17 @@ internal fun overloadSignature(
  * for a generated target, so the lookup cannot miss for a reason other than a
  * cross-file name collision, which [ExternalsCollector.finish] already reduced
  * to one declaration per name.
+ *
+ * (EXT.11c) A base's members are read THROUGH the supertype's type arguments:
+ * `class D<U> : B<U>` inherits `B<T>`'s `fun f(x: T)` as `fun f(x: U)`, and
+ * only that substituted form can be compared with `D`'s own redeclaration,
+ * whose text is in `D`'s vocabulary — before this a renamed type parameter
+ * hid every override down a generic chain (the (EXT.8) fixtures all spell
+ * `T`, so nothing noticed). The substitution composes down the chain, and
+ * the override decision itself is the measured [overrideSignature], not the
+ * overload-conflict key (`KotlinSignatureKeys.kt` has the two tables).
  */
-private class Inheritance(declarations: List<ExternalDeclaration>) {
+internal class Inheritance(declarations: List<ExternalDeclaration>) {
 
     private val byName = HashMap<String, ExternalDeclaration>()
 
@@ -247,13 +235,39 @@ private class Inheritance(declarations: List<ExternalDeclaration>) {
         }
     }
 
-    private fun basesOf(declaration: ExternalDeclaration): List<ExternalDeclaration> {
+    /** The generated declaration a supertype text names, if any. */
+    fun declarationNamed(supertype: String): ExternalDeclaration? =
+        byName[supertype.substringBefore('<').trim('`')]
+
+    private fun typeParametersOf(declaration: ExternalDeclaration): List<String> = when (declaration) {
+        is ExternalInterface -> declaration.typeParameters
+        is ExternalClass -> declaration.typeParameters
+        else -> emptyList()
+    }
+
+    /**
+     * A base with the substitution its members are read through: the base's
+     * own type-parameter names mapped to the supertype's arguments, those
+     * arguments themselves already in the DERIVED declaration's vocabulary
+     * through [outer] (the substitution the derived declaration was reached
+     * with). Arity mismatch — not producible, kept safe — maps nothing.
+     */
+    private class Base(val declaration: ExternalDeclaration, val substitution: Map<String, String>)
+
+    private fun basesOf(declaration: ExternalDeclaration, outer: Map<String, String>): List<Base> {
         val texts = when (declaration) {
             is ExternalInterface -> declaration.supertypes
             is ExternalClass -> listOfNotNull(declaration.superClass) + declaration.interfaces
             else -> emptyList()
         }
-        return texts.mapNotNull { byName[it.substringBefore('<').trim('`')] }
+        return texts.mapNotNull { text ->
+            val base = declarationNamed(text) ?: return@mapNotNull null
+            val parameters = typeParametersOf(base)
+            val arguments = typeArgumentTexts(text).orEmpty().map { substituteTypeParameters(it, outer) }
+            val substitution =
+                if (parameters.size == arguments.size) parameters.zip(arguments).toMap() else emptyMap()
+            Base(base, substitution)
+        }
     }
 
     private fun ownMembers(declaration: ExternalDeclaration): List<ExternalMember> = when (declaration) {
@@ -262,32 +276,66 @@ private class Inheritance(declarations: List<ExternalDeclaration>) {
         else -> emptyList()
     }
 
-    /** Member key: `p:` + name for a property, `f:` + [overloadSignature] for a function. */
+    /** [member] with every type text read through [substitution]. */
+    private fun substituted(member: ExternalMember, substitution: Map<String, String>): ExternalMember =
+        if (substitution.isEmpty()) member else when (member) {
+            is ExternalProperty -> ExternalProperty(
+                name = member.name,
+                type = substituteTypeParameters(member.type, substitution),
+                readOnly = member.readOnly,
+            )
+            is ExternalFunction -> ExternalFunction(
+                name = member.name,
+                typeParameters = member.typeParameters,
+                markers = member.markers,
+                parameters = member.parameters.map { substitutedParameter(it, substitution) },
+                returnType = substituteTypeParameters(member.returnType, substitution),
+            )
+            is SkippedMember -> member
+        }
+
+    private fun substitutedParameter(parameter: ExternalParameter, substitution: Map<String, String>) =
+        ExternalParameter(parameter.name, substituteTypeParameters(parameter.type, substitution), parameter.vararg)
+
+    /** Member key: `p:` + name for a property, `f:` + [overrideSignature] for a function. */
     fun keyOf(member: ExternalMember): String? = when (member) {
         is ExternalProperty -> "p:" + member.name
-        is ExternalFunction -> "f:" + overloadSignature(member.name, member.typeParameters, member.parameters)
+        is ExternalFunction -> "f:" + overrideSignature(member.name, member.typeParameters, member.parameters)
         is SkippedMember -> null
     }
 
+    /** One inherited member: the base declaring it, its raw form there, and its form read through the chain. */
+    private class InheritedMember(val base: ExternalDeclaration, val raw: ExternalMember, val seen: ExternalMember)
+
     /**
-     * Every inherited member by key, nearest base first — the first base
-     * declaring a key wins, which is what a redeclaration is compared against.
+     * Every member inherited by [declaration], nearest base first, each in
+     * the derived declaration's vocabulary — the first base declaring a key
+     * wins, which is what a redeclaration is compared against.
      */
-    fun inherited(declaration: ExternalDeclaration): Map<String, ExternalMember> {
-        val result = HashMap<String, ExternalMember>()
+    private fun inheritedMembers(declaration: ExternalDeclaration): List<InheritedMember> {
+        val result = mutableListOf<InheritedMember>()
         val visited = HashSet<String>()
-        fun walk(d: ExternalDeclaration) {
+        fun walk(d: ExternalDeclaration, outer: Map<String, String>) {
             val name = (d as? ExternalInterface)?.name ?: (d as? ExternalClass)?.name ?: return
             if (!visited.add(name)) return
-            for (base in basesOf(d)) {
-                for (member in ownMembers(base)) {
-                    val key = keyOf(member) ?: continue
-                    result.putIfAbsent(key, member)
+            for (base in basesOf(d, outer)) {
+                for (member in ownMembers(base.declaration)) {
+                    result += InheritedMember(base.declaration, member, substituted(member, base.substitution))
                 }
-                walk(base)
+                walk(base.declaration, base.substitution)
             }
         }
-        walk(declaration)
+        walk(declaration, emptyMap())
+        return result
+    }
+
+    /** Every inherited member by key, nearest base first, in the derived declaration's vocabulary. */
+    fun inherited(declaration: ExternalDeclaration): Map<String, ExternalMember> {
+        val result = HashMap<String, ExternalMember>()
+        for (member in inheritedMembers(declaration)) {
+            val key = keyOf(member.seen) ?: continue
+            result.putIfAbsent(key, member.seen)
+        }
         return result
     }
 
@@ -295,57 +343,52 @@ private class Inheritance(declarations: List<ExternalDeclaration>) {
      * For every CLASS name, the keys of its own members that some generated
      * declaration below it overrides — those must be `open` (a Kotlin class
      * member is final by default; an interface member is open already).
+     * The override is attributed to the NEAREST base declaring the key, and
+     * recorded under that base's own (raw) key, which is what the renderer
+     * looks the base's members up by.
      */
     val openedByClass: Map<String, Set<String>> = run {
         val opened = HashMap<String, MutableSet<String>>()
         for (declaration in byName.values) {
-            val inherited = inherited(declaration)
+            val inherited = inheritedMembers(declaration)
             for (member in ownMembers(declaration)) {
                 val key = keyOf(member) ?: continue
-                if (key !in inherited) continue
-                // Attribute the override to the nearest base declaring the key.
-                var found = false
-                val visited = HashSet<String>()
-                fun mark(d: ExternalDeclaration) {
-                    if (found) return
-                    val name = (d as? ExternalInterface)?.name ?: (d as? ExternalClass)?.name ?: return
-                    if (!visited.add(name)) return
-                    for (base in basesOf(d)) {
-                        if (found) return
-                        if (base is ExternalClass && base.members.any { keyOf(it) == key }) {
-                            opened.getOrPut(base.name) { HashSet() }.add(key)
-                            found = true
-                            return
-                        }
-                        if (base is ExternalInterface && base.members.any { keyOf(it) == key }) {
-                            found = true
-                            return
-                        }
-                        mark(base)
-                    }
+                val nearest = inherited.firstOrNull { keyOf(it.seen) == key } ?: continue
+                if (nearest.base is ExternalClass) {
+                    val rawKey = keyOf(nearest.raw) ?: continue
+                    opened.getOrPut(nearest.base.name) { HashSet() }.add(rawKey)
                 }
-                mark(declaration)
             }
         }
         opened
     }
 
-    private fun classNamed(supertype: String): ExternalClass? =
-        byName[supertype.substringBefore('<').trim('`')] as? ExternalClass
+    private fun classNamed(supertype: String): ExternalClass? = declarationNamed(supertype) as? ExternalClass
 
     /**
      * (EXT.8) The constructor a class is CALLED with: its own when it declares
      * one, else the nearest generated base's — TypeScript inherits the
      * constructor of a class that declares none, and a consumer's
      * `Derived("x", 1)` must keep compiling. Null when nothing up the chain
-     * declares one (Kotlin's implicit default matches TS's).
+     * declares one (Kotlin's implicit default matches TS's). An inherited
+     * constructor's parameter types are read through the chain's type
+     * arguments ((EXT.11c)), in the class's own vocabulary.
      */
     fun effectiveConstructor(declaration: ExternalClass): List<ExternalParameter>? {
         var current: ExternalClass? = declaration
+        var substitution: Map<String, String> = emptyMap()
         val visited = HashSet<String>()
         while (current != null && visited.add(current.name)) {
-            current.constructorParameters?.let { return it }
-            current = current.superClass?.let(::classNamed)
+            current.constructorParameters?.let { parameters ->
+                return parameters.map { substitutedParameter(it, substitution) }
+            }
+            val superClass = current.superClass ?: return null
+            val base = classNamed(superClass) ?: return null
+            val arguments = typeArgumentTexts(superClass).orEmpty().map { substituteTypeParameters(it, substitution) }
+            substitution =
+                if (base.typeParameters.size == arguments.size) base.typeParameters.zip(arguments).toMap()
+                else emptyMap()
+            current = base
         }
         return null
     }
@@ -869,8 +912,26 @@ private fun StringBuilder.appendMember(
                 appendLine("${indent}/* xtsc: readonly narrows an inherited var - rendered var */")
             }
             val keyword = if (member.readOnly && !baseIsVar) "val" else "var"
+            // (EXT.11c) A `var` override must repeat the inherited type EXACTLY
+            // (measured: `Box<Any?>` over `Box<Any?>?` is refused, nullability
+            // alone), where TypeScript lets a subclass REDECLARE a mutable
+            // member narrower — `ConnectableObservable<T>.source:
+            // Observable<T>` over `Observable.source: Observable<any> |
+            // undefined`. Rendered as the inherited type, loudly, the narrowing
+            // named. A `val` override is covariant in Kotlin, so a narrowed
+            // readonly member over a readonly base keeps its own type.
+            val type =
+                if (baseIsVar && typeTextsDiffer(member.type, inherited.type)) {
+                    appendLine(
+                        "${indent}/* xtsc: narrowed to ${typeTextWithoutMarker(member.type)} in TypeScript" +
+                            " - rendered as the inherited ${typeTextWithoutMarker(inherited.type)} */"
+                    )
+                    inherited.type
+                } else {
+                    member.type
+                }
             appendLine(
-                "${indent}public $modifiers$keyword ${kotlinIdentifier(member.name)}: ${member.type}$body"
+                "${indent}public $modifiers$keyword ${kotlinIdentifier(member.name)}: $type$body"
             )
         }
         is ExternalFunction -> {
