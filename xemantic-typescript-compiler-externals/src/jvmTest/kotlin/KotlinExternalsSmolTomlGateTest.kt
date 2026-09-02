@@ -374,7 +374,9 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
         // by name), so both survive the collapse.
         val bigIntOverload = "public external fun parse(toml: String, options: Any? /* xtsc: unmapped ParseOptions & " in rendered
         val plainOverload = "public external fun parse(toml: String, options: ParseOptions?): Any? /* xtsc: unmapped TomlTableWithoutBigInt */\n" in rendered
-        val destructured = "public external fun stringify(obj: Any? /* xtsc: unmapped any */, p1: Any? /* xtsc: unmapped { maxDepth?: number | undefined; numbersAsFloat?: boolean | undefined; } */): String\n" in rendered
+        // (EXT.11b) `obj: any` is `Any?` with no marker; the destructured
+        // options parameter keeps its marker.
+        val destructured = "public external fun stringify(obj: Any?, p1: Any? /* xtsc: unmapped { maxDepth?: number | undefined; numbersAsFloat?: boolean | undefined; } */): String\n" in rendered
         val options = "public external interface ParseOptions {\n    public var maxDepth: Double?\n" in rendered
         val defaultValue = "/* xtsc: skipped default export of _default - module wiring is a later rung */" in rendered
         val reExport = "/* xtsc: skipped re-export { parse, stringify, TomlDate, TomlError } - module wiring is a later rung */" in rendered

@@ -1210,6 +1210,19 @@ export declare class Action<T> extends Subscription {
         val schedule = "    public fun <T> schedule(work: SchedulerAction<T>.(T) -> Unit, delay: Double, state: T): Subscription\n" in rendered
         val positional = "(SchedulerAction<T>, T) -> Unit" !in rendered
         val value = "public external val EMPTY_SUBSCRIPTION: Subscription\n" in rendered
+        // (EXT.11b) The cheap mapping wins, read off the probe: an array of
+        // a generated generic, `any` with no marker inside a function type,
+        // a nullable union of a generated generic, a literal union widened,
+        // the `vararg` rest parameter of `pipe`'s open-arity overload, and an
+        // optional member typed by a nullable union rendering ONE `?`.
+        val observers = "    public var observers: Array<Observer<T>>\n" in rendered
+        val observerError = "public external interface Observer<T> {\n    public var next: (T) -> Unit\n    public var error: (Any?) -> Unit\n    public var complete: () -> Unit\n}\n" in rendered
+        val source = "    public var source: Observable<Any?>?\n    public var operator: Operator<Any?, T>?\n" in rendered
+        val kind = "    public val kind: String\n    public val value: T?\n    public val error: Any?\n" in rendered
+        val subscribe = "    public fun subscribe(next: ((T) -> Unit)?, error: ((Any?) -> Unit)?, complete: (() -> Unit)?): Subscription\n" in rendered
+        val restPipe = "op9: OperatorFunction<H, I>, vararg operations: OperatorFunction<Any?, Any?>): Observable<Any?>\n" in rendered
+        val subscription = "public open external class Subscription(initialTeardown: (() -> Unit)?) : SubscriptionLike {\n" in rendered
+        val anonymous = "public open external class AnonymousSubject<T>(destination: Observer<T>?, source: Observable<T>?) : Subject<T> {\n" in rendered
         assert(unary)
         assert(operator)
         assert(mono)
@@ -1219,6 +1232,14 @@ export declare class Action<T> extends Subscription {
         assert(schedule)
         assert(positional)
         assert(value)
+        assert(observers)
+        assert(observerError)
+        assert(source)
+        assert(kind)
+        assert(subscribe)
+        assert(restPipe)
+        assert(subscription)
+        assert(anonymous)
     }
 
     @Test
@@ -1240,6 +1261,16 @@ export declare class Action<T> extends Subscription {
         val schedulerAction = "public external interface SchedulerAction<T> {\n    /* xtsc: skipped heritage clause extends Subscription */\n" in rendered
         // No call signature survives as a nameless method anywhere.
         val noNamelessFun = "fun ``(" !in rendered
+        // (EXT.11b) What the cheap mapping deliberately does NOT reach: a
+        // union of two DISTINCT texts (`Subscriber<any> | Observer<any>`),
+        // an OPTIONAL parameter inside a function type (arity), and a
+        // `Promise<T>` (no classpath in the gate, not a built-in).
+        val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Subscriber<any> | Observer<any> */) : Subscription, Observer<T> {\n" in rendered
+        val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */, error: Any? /* xtsc: unmapped (e?: any | undefined) => void */, complete: (() -> Unit)?): Subscriber<T>\n" in rendered
+        val promise = "    public fun toPromise(): Any? /* xtsc: unmapped Promise<any> */\n" in rendered
+        assert(distinctUnion)
+        assert(optionalInFunctionType)
+        assert(promise)
         assert(input)
         assert(falsy)
         assert(teardown)

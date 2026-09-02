@@ -38,6 +38,8 @@ import com.xemantic.typescript.compiler.DiagnosticCategory
 import com.xemantic.typescript.compiler.EnumDeclaration
 import com.xemantic.typescript.compiler.ExportAssignment
 import com.xemantic.typescript.compiler.ExportDeclaration
+import com.xemantic.typescript.compiler.ArrayType
+import com.xemantic.typescript.compiler.BigIntLiteralNode
 import com.xemantic.typescript.compiler.Expression
 import com.xemantic.typescript.compiler.FunctionDeclaration
 import com.xemantic.typescript.compiler.FunctionType
@@ -45,12 +47,17 @@ import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.HeritageClause
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.InterfaceDeclaration
+import com.xemantic.typescript.compiler.KeywordTypeNode
+import com.xemantic.typescript.compiler.LiteralType
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.NumericLiteralNode
 import com.xemantic.typescript.compiler.Parameter
+import com.xemantic.typescript.compiler.ParenthesizedType
 import com.xemantic.typescript.compiler.Parser
+import com.xemantic.typescript.compiler.PrefixUnaryExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.QualifiedName
 import com.xemantic.typescript.compiler.SemicolonClassElement
@@ -62,16 +69,15 @@ import com.xemantic.typescript.compiler.SyntaxKind
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
-import com.xemantic.typescript.compiler.TypeParameter
+import com.xemantic.typescript.compiler.TypeOperator
 import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.TypeParameter
 import com.xemantic.typescript.compiler.TypeQuery
 import com.xemantic.typescript.compiler.TypeReference
+import com.xemantic.typescript.compiler.UnionType
 import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.VariableStatement
 import com.xemantic.typescript.compiler.anyType
-import com.xemantic.typescript.compiler.booleanType
-import com.xemantic.typescript.compiler.numberType
-import com.xemantic.typescript.compiler.stringType
 import com.xemantic.typescript.compiler.computeParserFlags
 import com.xemantic.typescript.compiler.runWithDeepStack
 
@@ -474,12 +480,12 @@ private class ExternalsCollector(
                 "Any? /* xtsc: unmapped typeof ${commentSafe(entityNameText(annotation.exprName))} */"
             mapped == null -> {
                 val type = annotation?.let { lens.typeOfTypeNode(it) } ?: anyType
-                "Any? /* xtsc: unmapped ${commentSafe(lens.render(type))} */"
+                val text = annotation?.let { referenceMarkerText(it, type, lens) }
+                "Any? /* xtsc: unmapped ${text ?: commentSafe(lens.render(type))} */"
             }
             !optional -> mapped
-            // A nullable FUNCTION type needs the parentheses; a name does not.
-            " -> " in mapped -> "($mapped)?"
-            else -> "$mapped?"
+            // (EXT.11b) One nullable-wrapping rule for every producer.
+            else -> nullableTypeText(mapped)
         }
     }
 
@@ -495,7 +501,11 @@ private class ExternalsCollector(
      * not have. Refused inside a function type, deliberately: a generic
      * function type, an OPTIONAL parameter (`(x?: s) => v` changes ARITY,
      * which `(String?) -> Unit` does not express — a caller may omit the
-     * argument, not pass null), and a REST parameter.
+     * argument, not pass null), and a REST parameter (a Kotlin function type
+     * has no `vararg`; a DECLARATION's rest parameter maps, see
+     * [externalParameter]). Both refusals survive (EXT.11b) unchanged: the
+     * nullable-union and `any` rules make the PIECES map more often, never a
+     * parameter's optionality.
      *
      * (EXT.11a) A `typeof X` query refuses OUTRIGHT, before the lens is
      * asked: the lens answers the INSTANCE type for a class value (CHK.73),
@@ -515,6 +525,52 @@ private class ExternalsCollector(
             ?.text
             ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
         if (ownParam != null) return kotlinIdentifier(ownParam)
+        // (EXT.11b) The SYNTACTIC arms of the type table, each the twin of a
+        // resolved-type rule in `mappedText` (the renderer's KDoc carries the
+        // rationale per row) — syntactic for the reason every arm here is:
+        // the pieces are annotations, and only recursing over them keeps a
+        // declaration's own type parameters answerable inside a composite
+        // (`Array<T>`, `(err: any) => void`, `((value: T) => void) | null`).
+        when (annotation) {
+            // `any` / `unknown` written: `Any?`, no marker.
+            is KeywordTypeNode -> when (annotation.kind) {
+                SyntaxKind.AnyKeyword, SyntaxKind.UnknownKeyword -> return "Any?"
+                else -> {}
+            }
+            // A literal type widens to its base; a bigint literal refuses.
+            is LiteralType -> return literalBaseText(annotation.literal)
+            // `(…)` around a type is pure syntax — `(() => void) | null`
+            // parenthesises the function type for the union.
+            is ParenthesizedType ->
+                return annotationTextOrNull(annotation.type, returnPosition, lens, scope)
+            // `T[]` is `Array<T>` — the syntax IS the array, no evidence needed.
+            is ArrayType ->
+                return arrayTextOrNull(annotation.elementType, lens, scope)
+            // `readonly T[]` maps to the same `Array<T>`: Kotlin externals
+            // have no read-only array, and `List<T>` would lie about the
+            // runtime object. Any other type operator (`keyof T`, `unique
+            // symbol`) refuses.
+            is TypeOperator ->
+                return if (annotation.operator == SyntaxKind.ReadonlyKeyword) {
+                    annotationTextOrNull(annotation.type, returnPosition, lens, scope)
+                } else {
+                    null
+                }
+            // A union collapses to the ONE text its non-nullish members map
+            // to, nullable when a `null`/`undefined` member was dropped —
+            // `X | null` -> `X?`, `'N' | 'E' | 'C'` -> `String`, `'a' | 'b' |
+            // null` -> `String?`; distinct texts refuse (`string | number`).
+            is UnionType -> {
+                val members = annotation.types.filterNot(::isNullishTypeNode)
+                val texts = members.mapTo(LinkedHashSet()) { member ->
+                    annotationTextOrNull(member, returnPosition = false, lens = lens, scope = scope)
+                        ?: return null
+                }
+                val text = texts.singleOrNull() ?: return null
+                return if (members.size < annotation.types.size) nullableTypeText(text) else text
+            }
+            else -> {}
+        }
         // (EXT.10) A reference to an exported ALIAS this generation emits renders
         // by NAME wherever the resolved body would not map: a generic
         // instantiation (`Handler<string>` resolves to an anonymous function type
@@ -573,15 +629,73 @@ private class ExternalsCollector(
                 return "${kotlinIdentifier(targetName)}<${arguments.joinToString(", ")}>"
             }
         }
+        // (EXT.11b) `Array<T>` / `ReadonlyArray<T>` written as a reference —
+        // AFTER the generated-name leg, so a program's own exported
+        // `Array`-named interface is named as itself, and on POSITIVE lib
+        // evidence: the reference's symbol (import alias followed) has every
+        // declaration in a `lib.*.d.ts` file. A reference SPELLING one of
+        // the two names whose symbol is anything else refuses HERE, before
+        // the resolved path — the checker resolves a one-argument `Array<X>`
+        // to the lib array BY NAME (`getTypeFromTypeReference`), so the
+        // resolved type of a reference to a program's own `Array` interface
+        // is the lib's, and only the written reference's symbol can tell them
+        // apart (measured: without this leg a non-exported local `interface
+        // Array<T>` rendered `Array<String>`). A two-argument `Array<A, B>`
+        // is not the lib's shape and refuses.
+        if (annotation is TypeReference && (annotation.typeName as? Identifier)?.text in libArrayNames) {
+            val symbol = lens.typeReferenceSymbol(annotation) ?: return null
+            if (!isLibArraySymbol(symbol)) return null
+            val element = referenceArguments?.singleOrNull() ?: return null
+            return arrayTextOrNull(element, lens, scope)
+        }
         if (annotation is FunctionType) {
             if (annotation.typeParameters != null) return null
             return functionTypeText(annotation.parameters, annotation.type, lens, scope)
         }
+        val resolved = lens.typeOfTypeNode(annotation)
+        // (EXT.11b) An `any` the checker ANSWERED for something the source
+        // did not spell `any` is a degraded resolution — `Record<string,
+        // number>` resolves to the bare `any` intrinsic here (measured), not
+        // to `errorType`, and so would map to a clean `Any?` by the resolved
+        // rule. The written keyword is the only evidence that `any` was
+        // meant; every other annotation reaching this leg keeps its marker,
+        // spelled by what was written ([annotationText]).
+        if (isAnyIntrinsic(resolved)) return null
         return kotlinTypeTextOrNull(
-            lens.typeOfTypeNode(annotation),
+            resolved,
             returnPosition = returnPosition,
             scope = scope,
         )
+    }
+
+    /** (EXT.11b) Any intrinsic carrying the `any` flag — `any`, `error`, `unresolved`. */
+    private fun isAnyIntrinsic(type: Type): Boolean =
+        type is Type.Intrinsic && TypeFlags.Any in type.flags
+
+    /**
+     * (EXT.11b) The marker text of a written REFERENCE whose resolved type
+     * would mislead: one the checker DEGRADED to `any` — `Record<string,
+     * number> resolved to any`, because `lens.render` alone prints `any`
+     * (B58.1 renders `errorType` as `any` too) and a marker reading
+     * `unmapped any` beside a rule that MAPS `any` would say the opposite of
+     * what it means — and one spelling `Array`/`ReadonlyArray` that names
+     * something other than the lib array, which the checker resolves to the
+     * lib array BY NAME (so its render, `string[]`, would claim the very
+     * mapping that was refused). The reference is spelled as written, its
+     * arguments rendered by the checker (which does resolve those). Null for
+     * every other annotation, which keeps the checker's own rendering.
+     */
+    private fun referenceMarkerText(annotation: TypeNode, resolved: Type, lens: CheckedLens): String? {
+        if (annotation !is TypeReference) return null
+        val reason = when {
+            isAnyIntrinsic(resolved) -> "resolved to any"
+            (annotation.typeName as? Identifier)?.text in libArrayNames &&
+                !isLibArraySymbol(lens.typeReferenceSymbol(annotation)) -> "not the lib Array"
+            else -> return null
+        }
+        val written = entityNameText(annotation.typeName) +
+            (annotation.typeArguments?.joinToString(", ", "<", ">") { lens.render(lens.typeOfTypeNode(it)) } ?: "")
+        return "${commentSafe(written)} - $reason"
     }
 
     /**
@@ -642,6 +756,105 @@ private class ExternalsCollector(
     /** (EXT.11a) The `this` parameter of a signature — its name is the keyword, parsed as an [Identifier]. */
     private fun isThisParameter(parameter: Parameter): Boolean =
         (parameter.name as? Identifier)?.text == "this"
+
+    /**
+     * (EXT.11b) `null` and `undefined` in type position — the parser's
+     * [KeywordTypeNode]s for both (a `null` type is NOT a [LiteralType] here),
+     * the members a nullable union drops.
+     */
+    private fun isNullishTypeNode(node: TypeNode): Boolean =
+        node is KeywordTypeNode &&
+            (node.kind == SyntaxKind.NullKeyword || node.kind == SyntaxKind.UndefinedKeyword)
+
+    /**
+     * (EXT.11b) The base of a written literal type — the syntactic twin of
+     * [widenLiteral]: a string literal is `String`, a numeric one (negated or
+     * not) `Double`, `true`/`false` (parsed as [Identifier]s) `Boolean`. A
+     * bigint literal has no mapping to widen to and refuses, as the resolved
+     * `Type.BigIntLiteral` does.
+     */
+    private fun literalBaseText(literal: Expression): String? = when (literal) {
+        is StringLiteralNode -> "String"
+        is NumericLiteralNode -> "Double"
+        is PrefixUnaryExpression -> if (literal.operand is NumericLiteralNode) "Double" else null
+        is Identifier -> if (literal.text == "true" || literal.text == "false") "Boolean" else null
+        is BigIntLiteralNode -> null
+        else -> null
+    }
+
+    /**
+     * (EXT.11b) `Array<element>` from the element ANNOTATION, null where the
+     * element refuses — one unmappable element refuses the whole array, as
+     * one unmappable argument refuses a generated generic reference.
+     */
+    private fun arrayTextOrNull(element: TypeNode, lens: CheckedLens, scope: TypeScope): String? {
+        val text = annotationTextOrNull(element, returnPosition = false, lens = lens, scope = scope)
+            ?: return null
+        return "Array<$text>"
+    }
+
+    /**
+     * (EXT.11b) The element annotation of an ARRAY-shaped type node — `T[]`,
+     * `readonly T[]`, a lib `Array<T>`/`ReadonlyArray<T>` reference — or null
+     * for anything else: what a rest parameter's `vararg` needs.
+     */
+    private fun arrayElementAnnotation(annotation: TypeNode, lens: CheckedLens): TypeNode? = when {
+        annotation is ArrayType -> annotation.elementType
+        annotation is ParenthesizedType -> arrayElementAnnotation(annotation.type, lens)
+        annotation is TypeOperator && annotation.operator == SyntaxKind.ReadonlyKeyword ->
+            arrayElementAnnotation(annotation.type, lens)
+        annotation is TypeReference ->
+            annotation.typeArguments?.singleOrNull()
+                ?.takeIf { isLibArraySymbol(lens.typeReferenceSymbol(annotation)) }
+        else -> null
+    }
+
+    /**
+     * (EXT.11b) One parameter of a DECLARATION — a function, a method, a
+     * constructor — as the model carries it. A REST parameter `...xs: T[]`
+     * (or `...xs: Array<T>`, `...xs: readonly T[]`) is `vararg xs: T`: the
+     * one Kotlin shape that keeps the call site's arity open. Where the
+     * element does not map the whole annotation goes through the ordinary
+     * marker path (`Any? /* xtsc: unmapped Foo[] */` — loud, and the arity
+     * loss is readable in the marker); where the rest type is not an array
+     * shape at all (a tuple, a bare type parameter constrained to an array)
+     * the marker names it as a REST type, because its element-wise mapping
+     * would otherwise read as a plausible single parameter. Inside a function
+     * TYPE a rest parameter stays refused ([functionTypeText]): a Kotlin
+     * function type has no `vararg`.
+     *
+     * A destructuring parameter has no name of its own; a positional one
+     * keeps the declaration readable.
+     */
+    private fun externalParameter(
+        index: Int,
+        parameter: Parameter,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): ExternalParameter {
+        val name = (parameter.name as? Identifier)?.text ?: "p$index"
+        val annotation = parameter.type
+        if (parameter.dotDotDotToken && annotation != null) {
+            val element = arrayElementAnnotation(annotation, lens)
+            if (element != null) {
+                annotationTextOrNull(element, returnPosition = false, lens = lens, scope = scope)
+                    ?.let { return ExternalParameter(name, it, vararg = true) }
+            } else {
+                val rendered = commentSafe(lens.render(lens.typeOfTypeNode(annotation)))
+                return ExternalParameter(name, "Any? /* xtsc: unmapped rest $rendered */")
+            }
+        }
+        return ExternalParameter(
+            name = name,
+            type = annotationText(
+                annotation,
+                optional = parameter.questionToken,
+                returnPosition = false,
+                lens = lens,
+                scope = scope,
+            ),
+        )
+    }
 
     /**
      * (EXT.11a) A DECLARATION's parameter list with its `this` parameter set
@@ -719,20 +932,7 @@ private class ExternalsCollector(
         val declared = declaredParameters(node.parameters, lens, scope)
         declared.thisMarker?.let { markers.add(it) }
         val parameters = declared.parameters
-            .mapIndexed { index, parameter ->
-                val parameterName =
-                    (parameter.name as? Identifier)?.text ?: "p$index"
-                ExternalParameter(
-                    name = parameterName,
-                    type = annotationText(
-                        parameter.type,
-                        optional = parameter.questionToken,
-                        returnPosition = false,
-                        lens = lens,
-                        scope = scope,
-                    ),
-                )
-            }
+            .mapIndexed { index, parameter -> externalParameter(index, parameter, lens, scope) }
         return ExternalTopLevelFunction(
             name = name,
             typeParameters = typeParameters,
@@ -906,14 +1106,6 @@ private class ExternalsCollector(
         return ExternalTopLevelValue(name, type, exported.readOnly)
     }
 
-    private fun widenLiteral(type: Type): Type = when (type) {
-        is Type.StringLiteral -> stringType
-        is Type.NumberLiteral -> numberType
-        is Type.Intrinsic ->
-            if (TypeFlags.BooleanLiteral in type.flags) booleanType else type
-        else -> type
-    }
-
     /**
      * (EXT.9) An accessor PAIR is one Kotlin property: `get x(): T` (and its
      * `set x(v: T)`) → `var x: T`, a getter alone → `val x: T`, a setter
@@ -1033,26 +1225,16 @@ private class ExternalsCollector(
                 declared.thisMarker?.let { members.add(SkippedMember("constructor $it")) }
                 constructorParameters = declared.parameters
                     .mapIndexed { index, parameter ->
-                        val parameterName =
-                            (parameter.name as? Identifier)?.text ?: "p$index"
+                        val external = externalParameter(index, parameter, lens, scope)
                         if (parameter.modifiers.isNotEmpty()) {
                             // `constructor(public x: number)` DECLARES a
                             // member; the expansion is a later rung, so the
                             // member's absence is loud.
                             members.add(
-                                SkippedMember("parameter property $parameterName")
+                                SkippedMember("parameter property ${external.name}")
                             )
                         }
-                        ExternalParameter(
-                            name = parameterName,
-                            type = annotationText(
-                                parameter.type,
-                                optional = parameter.questionToken,
-                                returnPosition = false,
-                                lens = lens,
-                                scope = scope,
-                            ),
-                        )
+                        external
                     }
             }
         }
@@ -1579,29 +1761,14 @@ private class ExternalsCollector(
             members.add(
                 ExternalProperty(
                     name = name,
-                    type = "((${parameterTypes.joinToString(", ")}) -> $returnType)?",
+                    type = nullableTypeText("(${parameterTypes.joinToString(", ")}) -> $returnType"),
                     readOnly = false,
                 )
             )
             return
         }
         val parameters = declared.parameters
-            .mapIndexed { index, parameter ->
-                // A destructuring parameter has no name of its own; a
-                // positional one keeps the declaration readable.
-                val parameterName =
-                    (parameter.name as? Identifier)?.text ?: "p$index"
-                ExternalParameter(
-                    name = parameterName,
-                    type = annotationText(
-                        parameter.type,
-                        optional = parameter.questionToken,
-                        returnPosition = false,
-                        lens = lens,
-                        scope = methodScope,
-                    ),
-                )
-            }
+            .mapIndexed { index, parameter -> externalParameter(index, parameter, lens, methodScope) }
         val markers = typeParameterMarkers(member.typeParameters, lens)
         declared.thisMarker?.let { markers.add(it) }
         members.add(

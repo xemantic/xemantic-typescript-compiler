@@ -26,8 +26,15 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.typescript.compiler.CheckedLens
+import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.NodeBase
+import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.Symbol
 import com.xemantic.typescript.compiler.Type
 import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.booleanType
+import com.xemantic.typescript.compiler.numberType
+import com.xemantic.typescript.compiler.stringType
 
 /**
  * One rendered top-level declaration — a generated interface, or the loud
@@ -169,8 +176,26 @@ internal class ExternalFunction(
 
 internal class ExternalParameter(
     val name: String,
+    /**
+     * Full Kotlin type text — for a [vararg] parameter the ELEMENT type
+     * (`vararg xs: String`), never the array.
+     */
     val type: String,
+    /**
+     * (EXT.11b) A DECLARATION's rest parameter `...xs: T[]` is Kotlin's
+     * `vararg xs: T`: the one shape that keeps the call site's arity open, as
+     * JavaScript's is. Rendered by [parameterText]; part of the
+     * [overloadSignature] key, because `vararg xs: T` and `xs: Array<T>` are
+     * distinct Kotlin signatures exactly as `...xs: T[]` and `xs: T[]` are
+     * distinct TypeScript ones.
+     */
+    val vararg: Boolean = false,
 )
+
+/** (EXT.11b) The one rendering of a parameter: `[vararg ]name: type`. */
+internal fun parameterText(parameter: ExternalParameter): String =
+    (if (parameter.vararg) "vararg " else "") +
+        "${kotlinIdentifier(parameter.name)}: ${parameter.type}"
 
 /** A member (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedMember(val description: String) : ExternalMember
@@ -190,7 +215,9 @@ internal fun overloadSignature(
     append(name)
     append('<').append(typeParameters.joinToString(","))
     append(">(")
-    parameters.joinTo(this, ",") { it.type.substringBefore(" /* xtsc:") }
+    parameters.joinTo(this, ",") {
+        (if (it.vararg) "vararg " else "") + it.type.substringBefore(" /* xtsc:")
+    }
     append(')')
 }
 
@@ -353,14 +380,51 @@ private class Inheritance(declarations: List<ExternalDeclaration>) {
  *  - `void`    -> `Unit`, in RETURN position only — a property typed `void`
  *    is not a `Unit` slot, it is an oddity that falls through to the marker
  *  - optional member or parameter `p?: T` -> the mapped type made nullable
+ *    ([nullableTypeText])
+ *  - (EXT.11b) `any` and `unknown` -> `Any?`, with NO marker: the fallback
+ *    text was already `Any?`, so what changes is that a composite carrying an
+ *    `any` — `(err: any) => void`, `any[]`, `Observable<any>` — now maps as a
+ *    whole instead of refusing. `Any?` is the honest Kotlin spelling of both
+ *    (a JavaScript value of any type, null included). `errorType` and its
+ *    `unresolved` sibling — intrinsics carrying the `any` FLAG under another
+ *    name, i.e. a DEGRADED resolution — stay in the fallback: the test is
+ *    the intrinsic's NAME, never the flag alone, because a degraded `any` is
+ *    the silent direction this generator exists to refuse. The collector
+ *    adds the other half of that evidence: a WRITTEN annotation that is not
+ *    the `any` keyword and resolves to the bare `any` intrinsic anyway
+ *    (`Record<string, number>` does, in this checker) never reaches this
+ *    row — it keeps a marker naming what was written — so a resolved `any`
+ *    maps only where it was spelled, or answered for an un-annotated value.
+ *  - (EXT.11b) a LITERAL type widens to its base — `"N"` -> `String`, `1` ->
+ *    `Double`, `true`/`false` -> `Boolean` ([widenLiteral], the widening
+ *    `collectValue` has always applied to an un-annotated `const`): a Kotlin
+ *    external has no literal types, and the base is what every mutable
+ *    TypeScript position widens to anyway. A bigint literal stays a marker
+ *    (no `bigint` mapping to widen to).
+ *  - (EXT.11b) a UNION whose members other than `null`/`undefined` ALL map to
+ *    ONE Kotlin text collapses to that text, nullable when a nullish member
+ *    was dropped: `X | null`, `X | undefined`, `X | null | undefined` -> `X?`
+ *    (exactly one survivor, the common case), and — the literal rule
+ *    composed — `"N" | "E" | "C"` -> `String`, `"a" | "b" | null` -> `String?`.
+ *    Two survivors mapping to DIFFERENT texts (`string | number`) keep the
+ *    marker: Kotlin has no union, and `Any?` there would be a silent widening.
+ *  - (EXT.11b) an ARRAY — `T[]` resolves to a [Type.Reference] whose target
+ *    is the lib `Array<T>` interface, `ReadonlyArray<T>` to its sibling —
+ *    -> `Array<T>` when the one argument maps, on POSITIVE lib evidence:
+ *    the target's symbol is named `Array`/`ReadonlyArray` AND every one of
+ *    its declarations sits in a `lib.*.d.ts` file ([isLibDeclared]); a
+ *    program's own `Array`-named type is not an array. `ReadonlyArray` maps
+ *    to the same `Array<T>` deliberately — Kotlin externals have no read-only
+ *    array type, and `List<T>` would be a lie about the runtime object.
  *
- * ANY other type — unions, `any`, `unknown`, literals, object types, generics,
- * references to other interfaces — maps to the ONE documented fallback:
- * `Any?` followed by a marker comment carrying the checker's own rendering of
- * the type, so nothing is ever dropped silently. The fallback is already
- * nullable, which is why optionality does not add a second `?` to it. Note
- * `errorType` (a degraded resolution) is an intrinsic named `error` carrying
- * the `any` flag, so it lands in the fallback too — marked, never mapped.
+ * ANY other type — a union of distinct texts, an intersection, an object
+ * literal type, a generic the generation does not emit (`Promise<T>` among
+ * them: the compile gate has no classpath and `kotlin.js.Promise` is not a
+ * built-in, so it stays a marker until a platform rung), references to
+ * non-generated interfaces — maps to the ONE documented fallback: `Any?`
+ * followed by a marker comment carrying the checker's own rendering of the
+ * type, so nothing is ever dropped silently. The fallback is already
+ * nullable, which is why optionality does not add a second `?` to it.
  */
 internal fun kotlinTypeText(
     type: Type,
@@ -373,10 +437,113 @@ internal fun kotlinTypeText(
     return when {
         mapped == null ->
             "Any? /* xtsc: unmapped ${commentSafe(lens.render(type))} */"
-        optional -> "$mapped?"
+        optional -> nullableTypeText(mapped)
         else -> mapped
     }
 }
+
+/**
+ * (EXT.11b) The ONE nullable-wrapping rule, shared by every producer of a
+ * nullable type text — an optional member or parameter, an optional method's
+ * function-typed property, and the nullable-union rules on both the
+ * syntactic and the resolved path — so no two of them can disagree about
+ * the shape:
+ *
+ *  - a FUNCTION type is parenthesised, `((T) -> Unit)?` — `(T) -> Unit?`
+ *    would make the RETURN nullable instead;
+ *  - a text that is ALREADY nullable is left alone, so optionality composed
+ *    with a nullable union (`p?: X | undefined`, the `.d.ts` idiom under
+ *    `exactOptionalPropertyTypes`) renders `X?` ONCE, and `Any?` stays
+ *    `Any?` — Kotlin refuses `X??`.
+ *
+ * "Already nullable" is decided on the TOP-LEVEL shape ([isFunctionTypeText]),
+ * not on the last character: `(T) -> String?` ends in `?` and is a function
+ * type whose RETURN is nullable, so it is wrapped to `((T) -> String?)?`;
+ * `((T) -> String)?` has its arrow one level down and is left alone.
+ */
+internal fun nullableTypeText(mapped: String): String = when {
+    isFunctionTypeText(mapped) -> "($mapped)?"
+    mapped.endsWith("?") -> mapped
+    else -> "$mapped?"
+}
+
+/**
+ * (EXT.11b) Whether a Kotlin type text is a FUNCTION type at its top level —
+ * an ` -> ` outside every `(…)` and `<…>` — as opposed to a name carrying one
+ * inside its arguments (`Array<(T) -> Unit>`) or a function type already
+ * parenthesised for nullability (`((T) -> Unit)?`). The arrow is tested
+ * before the `>` it contains is counted as a closing bracket.
+ */
+private fun isFunctionTypeText(text: String): Boolean {
+    var depth = 0
+    var index = 0
+    while (index < text.length) {
+        if (text.startsWith(" -> ", index)) {
+            if (depth == 0) return true
+            index += 4
+            continue
+        }
+        when (text[index]) {
+            '(', '<' -> depth++
+            ')', '>' -> depth--
+        }
+        index++
+    }
+    return false
+}
+
+/**
+ * (EXT.11b) A literal type widened to its base primitive — the widening
+ * TypeScript itself performs at every mutable position, and the only shape
+ * a Kotlin external can carry. Shared by `collectValue` (an un-annotated
+ * `export const RETRIES = 3` is typed `3`) and [mappedText] (a literal
+ * annotation, a member of a literal union). A bigint literal is left as it
+ * is: there is no `bigint` mapping for it to widen to, so it stays a marker.
+ */
+internal fun widenLiteral(type: Type): Type = when (type) {
+    is Type.StringLiteral -> stringType
+    is Type.NumberLiteral -> numberType
+    is Type.Intrinsic ->
+        if (TypeFlags.BooleanLiteral in type.flags) booleanType else type
+    else -> type
+}
+
+/** (EXT.11b) The `null` and `undefined` intrinsics — the members a nullable union drops. */
+internal fun isNullishType(type: Type): Boolean =
+    type is Type.Intrinsic && (TypeFlags.Null in type.flags || TypeFlags.Undefined in type.flags)
+
+/**
+ * (EXT.11b) The positive LIB evidence behind an array mapping: [symbol] has
+ * at least one declaration and every one of them sits in a source file whose
+ * base name is `lib.<…>.d.ts` — `Checker.isLibFileName`'s own predicate,
+ * applied to the [SourceFile] reached by walking [NodeBase.parent] up from
+ * the declaration (stamped by every parse, lib parses included). A symbol a
+ * program declared, or MERGED into (a global-script `interface Array<T>`
+ * augmentation adopts the program's declaration beside the lib's), answers
+ * false and keeps the fallback: a name is never evidence.
+ */
+internal fun isLibDeclared(symbol: Symbol): Boolean {
+    val declarations = symbol.declarations
+    if (declarations.isEmpty()) return false
+    return declarations.all { declaration ->
+        var node: Node? = declaration
+        while (node != null && node !is SourceFile) node = (node as? NodeBase)?.parent
+        if (node !is SourceFile) return false
+        val base = node.fileName.substringAfterLast('/').substringAfterLast('\\')
+        base.startsWith("lib.") && base.endsWith(".d.ts")
+    }
+}
+
+/** (EXT.11b) The lib array interfaces an `Array<T>` mapping may name. */
+internal val libArrayNames: Set<String> = setOf("Array", "ReadonlyArray")
+
+/**
+ * (EXT.11b) Whether [symbol] is the lib `Array`/`ReadonlyArray` interface —
+ * the name AND [isLibDeclared], so a program's own `Array`-named type never
+ * qualifies.
+ */
+internal fun isLibArraySymbol(symbol: Symbol?): Boolean =
+    symbol != null && symbol.name in libArrayNames && isLibDeclared(symbol)
 
 /**
  * (EXT.2) What a type may resolve AGAINST at one use site: the enclosing
@@ -410,11 +577,25 @@ internal fun kotlinTypeTextOrNull(
 ): String? = mappedText(type, returnPosition, scope)
 
 private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): String? {
-    mappedIntrinsic(type, returnPosition)?.let { return it }
+    // (EXT.11b) A literal type is its base primitive here.
+    mappedIntrinsic(widenLiteral(type), returnPosition)?.let { return it }
     // The enclosing declaration's own type parameter, by its written name.
     if (type is Type.TypeParam) {
         val name = type.symbol?.name ?: return null
         return if (name in scope.ownTypeParams) kotlinIdentifier(name) else null
+    }
+    // (EXT.11b) A union collapses to the ONE text its non-nullish members
+    // map to, nullable when a nullish member was dropped; distinct texts
+    // keep the marker. `never` is not a member Kotlin can drop, so `X |
+    // never` refuses as any other two-member union does (the checker reduces
+    // it away before it gets here in every ordinary case).
+    if (type is Type.Union) {
+        val members = type.types.filterNot(::isNullishType)
+        val texts = members.mapTo(LinkedHashSet()) { member ->
+            mappedText(member, returnPosition = false, scope) ?: return null
+        }
+        val text = texts.singleOrNull() ?: return null
+        return if (members.size < type.types.size) nullableTypeText(text) else text
     }
     // A reference to an interface THIS generation emits — a bare use...
     scope.generatedNameOf(type)?.let { name ->
@@ -444,6 +625,16 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
         return if (mappedArgs.isEmpty()) kotlinIdentifier(name)
         else "${kotlinIdentifier(name)}<${mappedArgs.joinToString(", ")}>"
     }
+    // (EXT.11b) The lib array, after the generated-name leg so that an
+    // exported `Array`-named interface of the program is consulted first —
+    // and refused by [isLibArraySymbol] anyway, since its declaration is not
+    // in a lib file. Exactly one argument: the lib declares no other arity,
+    // and a mis-declared one is not an array.
+    if (type is Type.Reference && isLibArraySymbol(type.target.symbol)) {
+        val argument = type.resolvedTypeArguments?.singleOrNull() ?: return null
+        val element = mappedText(argument, returnPosition = false, scope) ?: return null
+        return "Array<$element>"
+    }
     return null
 }
 
@@ -454,6 +645,10 @@ private fun mappedIntrinsic(type: Type, returnPosition: Boolean): String? {
         TypeFlags.Number in type.flags -> "Double"
         TypeFlags.Boolean in type.flags -> "Boolean"
         TypeFlags.Void in type.flags && returnPosition -> "Unit"
+        // (EXT.11b) By NAME: `errorType`/`unresolvedType` carry the same
+        // flag and must stay marked.
+        TypeFlags.Any in type.flags && type.intrinsicName == "any" -> "Any?"
+        TypeFlags.Unknown in type.flags -> "Any?"
         else -> null
     }
 }
@@ -537,9 +732,7 @@ internal fun renderKotlinExternals(
                         .joinToString(", ", prefix = "<", postfix = "> ") {
                             kotlinIdentifier(it)
                         }
-                val parameters = declaration.parameters.joinToString(", ") {
-                    "${kotlinIdentifier(it.name)}: ${it.type}"
-                }
+                val parameters = declaration.parameters.joinToString(", ", transform = ::parameterText)
                 val keyword = if (external) "external fun" else "fun"
                 val body = if (external) "" else " = null!!"
                 appendLine(
@@ -570,9 +763,7 @@ internal fun renderKotlinExternals(
                             kotlinIdentifier(it)
                         }
                 val constructorText = inheritance.effectiveConstructor(declaration)
-                    ?.joinToString(", ", prefix = "(", postfix = ")") {
-                        "${kotlinIdentifier(it.name)}: ${it.type}"
-                    } ?: ""
+                    ?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
                 // (EXT.8) Supertypes: the generated base class first (with the
                 // gate variant's `null!!` constructor call — an external class
                 // omits the call, a plain Kotlin class may not), then the
@@ -690,9 +881,7 @@ private fun StringBuilder.appendMember(
                     .joinToString(", ", prefix = "<", postfix = "> ") {
                         kotlinIdentifier(it)
                     }
-            val parameters = member.parameters.joinToString(", ") {
-                "${kotlinIdentifier(it.name)}: ${it.type}"
-            }
+            val parameters = member.parameters.joinToString(", ", transform = ::parameterText)
             appendLine(
                 "${indent}public ${modifiers}fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
             )

@@ -89,6 +89,44 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.11b) LANDED in the same session — the census's cheap mapping wins.** Nullable unions:
+`X | null` / `X | undefined` / both → `X?` where X maps, SYNTACTICALLY (a `UnionType`
+annotation, so it composes inside function types: `((value: T) => void) | null` → `((T) ->
+Unit)?`; a `ParenthesizedType` arm was needed, since the parser keeps the parentheses) and on
+the resolved `Type.Union` (members filtered by the Null/Undefined intrinsics) — ONE rule: the
+non-nullish members all mapping to one text → that text, `?`-wrapped when a nullish member was
+dropped; distinct texts → the marker. `nullableTypeText` is the one wrapping helper (optional
+members/parameters, the optional-method property, both union paths) and decides "already
+nullable" on the TOP-LEVEL shape, so `(T) -> String?` wraps to `((T) -> String?)?` and `X?` is
+never doubled. `any`/`unknown` → `Any?` with NO marker (the fallback was already `Any?`, so
+this is marker removal that unblocks every composite: `(err: any) => void` → `(Any?) -> Unit`),
+keyed on the intrinsic NAME `any` so `error`/`unresolved` stay marked. Arrays: `T[]`,
+`readonly T[]`, and `Array<T>`/`ReadonlyArray<T>` on positive lib evidence (every declaration
+of the reference's symbol sits in a `lib.*.d.ts` — walked through `parent`) → `Array<T>`; a
+declaration's rest parameter `...xs: T[]` → `vararg xs: T` (a non-array rest type is now a
+loud `unmapped rest …` — HEAD rendered `...xs: T` as a plain `xs: T`, silently). Literal types
+widen to their base (`"N"` → `String`) through the shared `widenLiteral`, and a literal union
+collapses through the one-text clause (`'N' | 'E' | 'C'` → `String`). `Promise<T>` and an
+optional parameter inside a function type stay refused, said where a reader would look.
+
+**Two measured surprises, both CLAUDE.md-worthy.** (1) A LIB MAPPED ALIAS (`Record<string,
+number>`) resolves to the bare `anyType` in this checker — not `errorType` — so "map `any`"
+needs WRITTEN evidence: the resolved-type fallback refuses an `any` the source did not spell
+(`unmapped Record<string, number> - resolved to any`). (2) `getTypeFromTypeReference` resolves a
+one-argument `Array<X>` to the lib array BY NAME, so a program's own non-exported `interface
+Array<T>` is invisible on the resolved path; the syntactic arm refuses any reference SPELLING
+`Array`/`ReadonlyArray` whose symbol is not lib-declared, BEFORE the resolved path (`unmapped
+Array<string> - not the lib Array`). Eight exact pins (9 RED of 88 by stash-ablation, the
+distinct-texts boundary control green on both arms); three existing pins moved marker →
+mapping only (`residents: Array<Creature>`, `choose(mode: String)`, smol-toml's
+`stringify(obj: Any?, …)`); the RxJS gate's spine gained eight pins from the output
+(`observers: Array<Observer<T>>`, `source: Observable<Any?>?`, `val kind: String`,
+`subscribe(next: ((T) -> Unit)?, …)`, `vararg operations: OperatorFunction<Any?, Any?>`,
+`Subscription(initialTeardown: (() -> Unit)?)`). Externals 94 → 102/0; suite 16,881 →
+16,889 / 0 / 3. **Census after: 97 → 62 markers, 74 → 39 `unmapped` in 25 shapes** — what is
+left is `Promise` (8), optional-in-function-type (6), distinct-text unions, intersections,
+lib utility types (`Partial<Observer<T>>`, `Exclude`, `Readonly`) and `typeof`.
+
 **Silent defect found, queued (CHK.73 shape):** `export const plain = Plain` for a
 NON-generic class renders `val plain: Plain` — the instance type — which compiles and is
 wrong; only the generic case is refused by the arity guard.
@@ -1050,7 +1088,7 @@ Owner decisions 2026-09-02:
   inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
   proposal — implementation does NOT start in the session that writes the design.
 
-- [ ] **(EXT.11b) THE RxJS CORE CENSUS'S CHEAP MAPPING WINS — 74 `unmapped` markers in 42
+- [x] **(EXT.11b) DONE 2026-09-02 ((P18.9) note: 97 → 62 markers on the RxJS core, externals 102/0, suite 16,889/0/3) — THE RxJS CORE CENSUS'S CHEAP MAPPING WINS — 74 `unmapped` markers in 42
   shapes after (EXT.11a), and the top mechanisms are Kotlin-expressible.** In order of
   occurrences (probe census, (P18.9) note): (1) NULLABLE UNIONS — `X | null`, `X |
   undefined`, `X | null | undefined` → `X?` where X maps, both syntactically (a `UnionType`

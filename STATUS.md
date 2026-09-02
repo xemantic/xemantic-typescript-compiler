@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, 16,867 → 16,881 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, 16,867 → 16,889 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -23,7 +23,13 @@ positionally — now a Kotlin RECEIVER (`SchedulerAction<T>.(T) -> Unit`). New i
 `ExternalsLibraryProbe` (env-gated; generated Kotlin, compile errors, diagnostics, a marker
 census per mechanism). 10 exact pins, each red by stash-ablation; externals 94/0. Census
 after: 97 markers / 0 errors — nullable unions, `any`, arrays and literals are the next
-rung ((EXT.11b), queued); a `val plain: Plain` class-value defect queued as (CHK.73b).
+rung; a `val plain: Plain` class-value defect queued as (CHK.73b). **(EXT.11b) LANDED next,
+16,881 → 16,889 / 0 / 3:** nullable unions → `X?` (syntactic and resolved, one rule, composing
+inside function types), `any`/`unknown` → `Any?` unmarked (keyed on the intrinsic NAME —
+`Record<…>` resolves to the bare `anyType` here, so a resolved `any` the source did not spell
+stays marked), arrays → `Array<T>` on lib evidence (a program's own `Array` refused: the
+checker resolves `Array<X>` by NAME), rest parameters → `vararg`, literals widen; RxJS census
+97 → 62 markers, externals 102/0.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

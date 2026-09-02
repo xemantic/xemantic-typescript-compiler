@@ -582,8 +582,9 @@ class KotlinExternalsGeneratorTest {
     @Test
     fun `overloads collapsing to one mapped signature keep only the first`() {
         // The two literal-typed parameters are DIFFERENT types to TypeScript
-        // and both fall to the same Any? fallback here - Kotlin would refuse
-        // the conflicting pair, so the later one becomes a marker.
+        // and both widen to `String` here ((EXT.11b); before it, both fell to
+        // the same Any? fallback) - Kotlin would refuse the conflicting pair,
+        // so the later one becomes a marker.
         val result = generate(
             """
             export interface Chooser {
@@ -950,7 +951,7 @@ class KotlinExternalsGeneratorTest {
             public external interface Habitat {
                 public var resident: Creature
                 public var kind: String
-                public var residents: Any? /* xtsc: unmapped Creature[] */
+                public var residents: Array<Creature>
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin
@@ -1017,9 +1018,10 @@ class KotlinExternalsGeneratorTest {
 
     @Test
     fun `top-level overloads collapsing to one mapped signature keep only the first`() {
-        // Two literal-typed parameters both fall to the `Any?` fallback: one
-        // Kotlin signature, so the second is a marker — the (EXT.5) method
-        // rule on the module surface.
+        // Two literal-typed parameters both widen to `String` ((EXT.11b);
+        // before it both fell to the `Any?` fallback): one Kotlin signature,
+        // so the second is a marker — the (EXT.5) method rule on the module
+        // surface.
         val result = generate(
             """
             export declare function choose(mode: "a"): string;
@@ -1028,7 +1030,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
-            public external fun choose(mode: Any? /* xtsc: unmapped "a" */): String
+            public external fun choose(mode: String): String
 
             /* xtsc: skipped overload of choose collapsing to a duplicate signature */
 
@@ -1862,6 +1864,353 @@ class KotlinExternalsGeneratorTest {
 
             public open external class Ctor(x: String) {
                 /* xtsc: skipped constructor this parameter Box<String> not carried */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    // --- (EXT.11b) nullable unions, any/unknown, arrays, literals ----------
+
+    @Test
+    fun `nullable unions map to a nullable type on the syntactic and the resolved path`() {
+        // Before: every one of these was `Any? /* xtsc: unmapped X | null */`.
+        val result = generate(
+            """
+            export type Maybe = string | null;
+            export interface Box { v: number; }
+            export interface Nullish<T> {
+                p: string | null;
+                q: Box | undefined;
+                r: number | null | undefined;
+                f: ((value: T) => void) | null;
+                g: (() => void) | undefined;
+                m: Maybe;
+                cb(next: ((value: T) => void) | null): Box | null;
+            }
+            """
+        )
+        val expected = """
+            public typealias Maybe = String?
+
+            public external interface Box {
+                public var v: Double
+            }
+
+            public external interface Nullish<T> {
+                public var p: String?
+                public var q: Box?
+                public var r: Double?
+                public var f: ((T) -> Unit)?
+                public var g: (() -> Unit)?
+                public var m: String?
+                public fun cb(next: ((T) -> Unit)?): Box?
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `double optionality renders one question mark and a nullable return is wrapped`() {
+        // `p?: X | undefined` is the `.d.ts` idiom under
+        // exactOptionalPropertyTypes: the union already made the text
+        // nullable, and optionality must not make it `String??`. The optional
+        // method's return is nullable INSIDE the function type, so the
+        // property's own nullability parenthesises the whole function.
+        val result = generate(
+            """
+            export interface Box { v: number; }
+            export interface Opt {
+                p?: string | undefined;
+                q?: Box | null;
+                f?: ((x: string) => void) | undefined;
+                m?(x: string): string | null;
+                g(x?: Box | null): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Box {
+                public var v: Double
+            }
+
+            public external interface Opt {
+                public var p: String?
+                public var q: Box?
+                public var f: ((String) -> Unit)?
+                public var m: ((String) -> String?)?
+                public fun g(x: Box?): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `negative control - a union of distinct texts stays the marker with or without a nullish member`() {
+        val result = generate(
+            """
+            export interface Box { v: number; }
+            export interface Mixed {
+                p: string | number;
+                q: string | number | null;
+                r: Box | string | undefined;
+                s: Box | void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Box {
+                public var v: Double
+            }
+
+            public external interface Mixed {
+                public var p: Any? /* xtsc: unmapped string | number */
+                public var q: Any? /* xtsc: unmapped string | number | null */
+                public var r: Any? /* xtsc: unmapped string | Box | undefined */
+                public var s: Any? /* xtsc: unmapped Box | void */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `any and unknown map to nullable Any without a marker and unblock the composites carrying them`() {
+        // Before: `p: Any? /* xtsc: unmapped any */`, and every composite
+        // below refused as a whole because one piece was `any`.
+        val result = generate(
+            """
+            export type Loose = any;
+            export type Opaque = unknown;
+            export interface Box<T> { v: T; }
+            export interface Anything {
+                p: any;
+                q: unknown;
+                t?: any;
+                r: (err: any) => void;
+                s: any[];
+                b: Box<any>;
+                l: Loose;
+                o: Opaque;
+                u: any | undefined;
+                fn(cb: (value: unknown) => any): any;
+            }
+            """
+        )
+        val expected = """
+            public typealias Loose = Any?
+
+            public typealias Opaque = Any?
+
+            public external interface Box<T> {
+                public var v: T
+            }
+
+            public external interface Anything {
+                public var p: Any?
+                public var q: Any?
+                public var t: Any?
+                public var r: (Any?) -> Unit
+                public var s: Array<Any?>
+                public var b: Box<Any?>
+                public var l: Any?
+                public var o: Any?
+                public var u: Any?
+                public fun fn(cb: (Any?) -> Any?): Any?
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `negative control - a degraded resolution stays marked and a Promise is not a built-in`() {
+        // `Missing` resolves to nothing and `Record<string, number>` (a lib
+        // mapped alias) resolves to the bare `any` intrinsic in this checker
+        // (measured): both are the silent direction, so a resolved `any` the
+        // source did not SPELL keeps its marker — naming what was written,
+        // since `lens.render` prints `any` for both — and the written
+        // keyword is the only `any` that maps. A rest parameter inside a
+        // function type stays refused, and `Promise<T>` stays a marker: the
+        // compile gate has no classpath and `kotlin.js.Promise` is not a
+        // built-in.
+        val result = generate(
+            """
+            export interface Degraded {
+                u: Missing;
+                v: Missing[];
+                w: Record<string, number>;
+                x: Array<string, number>;
+                p: Promise<string>;
+                run(): Promise<void>;
+                spread: (...args: any[]) => any;
+            }
+            """
+        )
+        val expected = """
+            public external interface Degraded {
+                public var u: Any? /* xtsc: unmapped Missing - resolved to any */
+                public var v: Any? /* xtsc: unmapped any[] */
+                public var w: Any? /* xtsc: unmapped Record<string, number> - resolved to any */
+                public var x: Any? /* xtsc: unmapped Array<string, number> */
+                public var p: Any? /* xtsc: unmapped Promise<string> */
+                public fun run(): Any? /* xtsc: unmapped Promise<void> */
+                public var spread: Any? /* xtsc: unmapped (...args: any[]) => any */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes == listOf(2304, 2304, 2314))
+    }
+
+    @Test
+    fun `arrays map to Array on both paths and a declaration's rest parameter is vararg`() {
+        // Before: `a: Any? /* xtsc: unmapped string[] */` and `...parts:
+        // string[]` rendered `parts: Any? /* xtsc: unmapped string[] */`.
+        val result = generate(
+            """
+            export type Names = string[];
+            export interface Box { v: number; }
+            export interface Bag<T> {
+                a: string[];
+                b: Array<T>;
+                c: ReadonlyArray<Box>;
+                d: readonly number[];
+                e: Box[][];
+                f: ((x: T) => void)[];
+                g: string[] | null;
+                names: Names;
+                add(...more: Box[]): void;
+            }
+            export declare function join(sep: string, ...parts: string[]): string;
+            export declare function all<T>(...xs: Array<T>): T;
+            export declare class Pool {
+                constructor(...items: readonly Box[]);
+                take(...boxes: ReadonlyArray<Box>): Box;
+            }
+            """
+        )
+        val expected = """
+            public typealias Names = Array<String>
+
+            public external interface Box {
+                public var v: Double
+            }
+
+            public external interface Bag<T> {
+                public var a: Array<String>
+                public var b: Array<T>
+                public var c: Array<Box>
+                public var d: Array<Double>
+                public var e: Array<Array<Box>>
+                public var f: Array<(T) -> Unit>
+                public var g: Array<String>?
+                public var names: Array<String>
+                public fun add(vararg more: Box): Unit
+            }
+
+            public external fun join(sep: String, vararg parts: String): String
+
+            public external fun <T> all(vararg xs: T): T
+
+            public open external class Pool(vararg items: Box) {
+                public fun take(vararg boxes: Box): Box
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `negative control - a program's own Array is not an array and a rest parameter that cannot be vararg is loud`() {
+        // The non-exported local `Array` shadows the lib's for `a`: its
+        // declaration is in the program, not in a lib file, so it is no
+        // evidence of an array — while `b`'s `string[]` SYNTAX is one. The
+        // marker spells the WRITTEN reference: the checker resolves a
+        // one-argument `Array<X>` to the lib array by name, so its render
+        // (`string[]`) would claim the mapping that was refused. A
+        // two-argument `Array<A, B>` is not the lib's shape. A rest parameter
+        // typed by a tuple or by a bare type parameter has no element to
+        // spread, and one whose element does not map keeps the whole
+        // annotation's marker.
+        val result = generate(
+            """
+            interface Array<T> { own: T; }
+            export interface Uses {
+                a: Array<string>;
+                b: string[];
+                c: Array<string, number>;
+            }
+            export declare function f(...pair: [string, number]): void;
+            export declare function g<T extends unknown[]>(...xs: T): void;
+            export declare function h(...xs: (string | number)[]): void;
+            """
+        )
+        val expected = """
+            public external interface Uses {
+                public var a: Any? /* xtsc: unmapped Array<string> - not the lib Array */
+                public var b: Array<String>
+                public var c: Any? /* xtsc: unmapped Array<string, number> - not the lib Array */
+            }
+
+            public external fun f(pair: Any? /* xtsc: unmapped rest [string, number] */): Unit
+
+            /* xtsc: constraint on T: unknown[] not carried */
+            public external fun <T> g(xs: Any? /* xtsc: unmapped rest any */): Unit
+
+            public external fun h(xs: Any? /* xtsc: unmapped (string | number)[] */): Unit
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `literal types widen to their base and a literal union collapses to it`() {
+        // Before: `kind: Any? /* xtsc: unmapped "N" */`. A union whose
+        // members all widen to ONE text is that text; a union widening to
+        // two texts and a bigint literal keep their markers.
+        val result = generate(
+            """
+            export type Kind = "N" | "E" | "C";
+            export interface Notif {
+                kind: "N";
+                code: 1;
+                neg: -1;
+                on: true;
+                mode: "a" | "b" | "c";
+                maybe: "a" | "b" | null;
+                k: Kind;
+                mixed: "a" | 1;
+                big: 10n;
+                tag(kind: "E" | "C"): "done";
+            }
+            """
+        )
+        val expected = """
+            public typealias Kind = String
+
+            public external interface Notif {
+                public var kind: String
+                public var code: Double
+                public var neg: Double
+                public var on: Boolean
+                public var mode: String
+                public var maybe: String?
+                public var k: String
+                public var mixed: Any? /* xtsc: unmapped "a" | 1 */
+                public var big: Any? /* xtsc: unmapped 10n */
+                public fun tag(kind: String): String
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin
