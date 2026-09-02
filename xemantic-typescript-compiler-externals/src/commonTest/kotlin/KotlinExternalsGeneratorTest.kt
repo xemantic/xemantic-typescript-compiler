@@ -1872,6 +1872,9 @@ class KotlinExternalsGeneratorTest {
         // and `public external val C: Any?` for a class expression. A
         // namespace MEMBER `NS.x` resolves to a value and keeps the
         // checker's answer; a class merged with a namespace is the class.
+        // (EXT.13) The two ambient namespaces now FLATTEN — `NS`'s `x` and
+        // `Inner` and `M`'s `z` join the surface under their headers — which
+        // moved this pin's text; the value refusals are unchanged.
         val result = generate(
             """
             export enum Kind { A, B }
@@ -1896,6 +1899,14 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: skipped value K initialized by the enum Kind - an enum object value has no externals shape yet */
 
+            /* xtsc: namespace NS - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external val x: Double
+
+            public open external class Inner {
+                public var y: Double
+            }
+
             /* xtsc: skipped value N initialized by the namespace NS - a namespace object value has no externals shape yet */
 
             /* xtsc: skipped value I initialized by the class NS.Inner - a constructor value has no externals shape yet */
@@ -1907,6 +1918,10 @@ class KotlinExternalsGeneratorTest {
             public open external class M {
                 public var y: Double
             }
+
+            /* xtsc: namespace M - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external val z: Double
 
             /* xtsc: skipped value m initialized by the class M - a constructor value has no externals shape yet */
         """.trimIndent() + "\n"
@@ -2653,6 +2668,12 @@ class KotlinExternalsGeneratorTest {
 
     @Test
     fun `a narrowed var override renders the inherited type loudly and a covariant val override keeps its own`() {
+        // (EXT.13) `tag` MOVED: `override val tag: Obs<U>` over `val tag:
+        // Obs<Any?>` was pinned here as the covariant case and is REFUSED by
+        // the metadata compiler (`T` is invariant; measured 2026-09-02) — no
+        // gate had compiled this fixture. The covariant `val` rule survives
+        // for a Kotlin SUBTYPE ([Inheritance.isSubtypeText]); a generic
+        // instantiation is not one, and renders the inherited type loudly.
         // Before: `public override var source: Obs<U>` over the inherited
         // `var source: Obs<Any?>?` — Kotlin's "type of 'var' doesn't match
         // the overridden" (the rxjs `ConnectableObservable` shape) — and
@@ -2702,7 +2723,8 @@ class KotlinExternalsGeneratorTest {
             public open external class Derived<U> : Base<U> {
                 /* xtsc: narrowed to Obs<U> in TypeScript - rendered as the inherited Obs<Any?>? */
                 public override var source: Obs<Any?>?
-                public override val tag: Obs<U>
+                /* xtsc: narrowed to Obs<U> in TypeScript - rendered as the inherited Obs<Any?> */
+                public override val tag: Obs<Any?>
                 /* xtsc: readonly narrows an inherited var - rendered var */
                 /* xtsc: narrowed to Obs<U> in TypeScript - rendered as the inherited Obs<Any?> */
                 public override var both: Obs<Any?>
@@ -2904,6 +2926,795 @@ class KotlinExternalsGeneratorTest {
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
         assert(errorCodes.isEmpty())
+    }
+
+    // ---- (EXT.13) the namespace rung ---------------------------------------
+    //
+    // Every positive pin below was RED against the pre-(EXT.13) collector by
+    // construction — a namespace rendered nothing then (its members were not
+    // in any membership set), so no ablation arm was needed to prove
+    // discrimination; each expected text was read from the generator's own
+    // output and every fixture's gate variant compiled.
+
+    private fun generateDts(source: String): KotlinExternals =
+        generateKotlinExternals("t.d.ts", source.trimIndent())
+
+    @Test
+    fun `a root ambient namespace with export equals flattens every declaration kind under one header`() {
+        // The `typescript.d.ts` shape: `declare namespace ts { … } export = ts`.
+        // Interfaces, a class with a static, an enum, an alias, function
+        // overloads and values render exactly as top-level declarations do,
+        // under the loud header; the `export =` keeps its wiring marker.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; parent: Node; }
+                class Program {
+                    getRoot(): Node;
+                    static create(n: Node): Program;
+                }
+                enum Kind { A, B }
+                type Path = string;
+                function transform(n: Node): Node;
+                function transform(n: Node, deep: boolean): Node;
+                const version: string;
+                let sys: Node;
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+                public var parent: Node
+            }
+
+            public open external class Program {
+                public fun getRoot(): Node
+                public companion object {
+                    public fun create(n: Node): Program
+                }
+            }
+
+            public sealed external interface Kind {
+                public companion object {
+                    public val A: Kind
+                    public val B: Kind
+                }
+            }
+
+            public typealias Path = String
+
+            public external fun transform(n: Node): Node
+
+            public external fun transform(n: Node, deep: Boolean): Node
+
+            public external val version: String
+
+            public external var sys: Node
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an ambient namespace exports every member implicitly and an explicit export elsewhere does not switch it off`() {
+        // tsgo 7.0.2, measured: `ns.A`, `ns.B` and `ns.v` all resolve from
+        // another file — tsc's `setExportContextFlag` is switched off by an
+        // export DECLARATION only, which a namespace body cannot hold.
+        val result = generateDts(
+            """
+            declare namespace ns {
+                export interface A { p: string; }
+                interface B { q: A; }
+                const v: number;
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ns - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface A {
+                public var p: String
+            }
+
+            public external interface B {
+                public var q: A
+            }
+
+            public external val v: Double
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `an ambient module with an export declaration exports only the export-modified members`() {
+        // The one switch-off (tsgo: `B` is TS2459, "declares 'B' locally,
+        // but it is not exported"); the `export { … }` itself is wiring.
+        val result = generateDts(
+            """
+            declare module "widgets" {
+                export interface Widget { id: number; }
+                interface Hidden { id: number; }
+                export { Widget as Gadget };
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "widgets" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Widget {
+                public var id: Double
+            }
+
+            /* xtsc: skipped re-export { Widget as Gadget } - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a nested namespace is an object holding an interface a value a function and a further object`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                namespace server {
+                    interface Project { name: string; }
+                    const defaultName: string;
+                    function open(name: string): Project;
+                    namespace protocol {
+                        interface Request { seq: number; }
+                    }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object server {
+                public interface Project {
+                    public var name: String
+                }
+
+                public val defaultName: String
+
+                public fun open(name: String): Project
+
+                public object protocol {
+                    public interface Request {
+                        public var seq: Double
+                    }
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val gateExpected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public object server {
+                public interface Project {
+                    public var name: String
+                }
+
+                public val defaultName: String = null!!
+
+                public fun open(name: String): Project = null!!
+
+                public object protocol {
+                    public interface Request {
+                        public var seq: Double
+                    }
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gate = result.compileCheckSource
+        assert(rendered == expected)
+        assert(gate == gateExpected)
+    }
+
+    @Test
+    fun `a nested object holds an enum a class with a static an abstract class a callable interface overloads and an empty object`() {
+        // Every declaration kind one indent in, the `external` keyword on
+        // the object alone; a callable interface is an interface here (a
+        // `typealias` cannot nest), its call signature the usual loud skip.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                namespace server {
+                    enum Mode { Fast, Slow }
+                    class Session { mode: Mode; static open(): Session; }
+                    abstract class Base { abstract go(): void; }
+                    interface Callable { (x: number): string; }
+                    function overloaded(x: string): string;
+                    function overloaded(x: any): string;
+                    namespace empty { }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object server {
+                public sealed interface Mode {
+                    public companion object {
+                        public val Fast: Mode
+                        public val Slow: Mode
+                    }
+                }
+
+                public open class Session {
+                    public var mode: Mode
+                    public companion object {
+                        public fun open(): Session
+                    }
+                }
+
+                public abstract class Base {
+                    public fun go(): Unit
+                }
+
+                public interface Callable {
+                    /* xtsc: skipped call signature */
+                }
+
+                public fun overloaded(x: String): String
+
+                public fun overloaded(x: Any?): String
+
+                public object empty
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a type alias inside a nested namespace is a loud skip and a use of it renders its body`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                namespace server {
+                    type NormalizedPath = string;
+                    interface Project { path: NormalizedPath; }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object server {
+                /* xtsc: skipped type alias NormalizedPath inside namespace server - Kotlin aliases are top-level only */
+
+                public interface Project {
+                    public var path: String
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `an export import alias inside a namespace is a loud marker naming its target whatever the target is`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Info { name: string; }
+                namespace server {
+                    namespace protocol {
+                        export import Info = ts.Info;
+                        export import Other = ts.Missing;
+                    }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Info {
+                public var name: String
+            }
+
+            public external object server {
+                public object protocol {
+                    /* xtsc: alias Info = ts.Info - re-exported name, wiring is a later rung */
+
+                    /* xtsc: alias Other = ts.Missing - re-exported name, wiring is a later rung */
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `cross-scope references render by the shortest path in all three directions`() {
+        // root -> nested (`server.Project`, `server.protocol.Request`),
+        // nested -> root (bare `Node`), nested -> enclosing's nested sibling
+        // (`protocol.Request` from `server` and from `server.typingsInstaller`),
+        // and a bare name inside the same nested scope.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; }
+                interface Host { project: server.Project; request: server.protocol.Request; }
+                namespace server {
+                    interface Project { root: Node; request: protocol.Request; }
+                    namespace protocol {
+                        interface Request { node: Node; project: Project; }
+                    }
+                    namespace typingsInstaller {
+                        interface Log { request: protocol.Request; }
+                    }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+            }
+
+            public external interface Host {
+                public var project: server.Project
+                public var request: server.protocol.Request
+            }
+
+            public external object server {
+                public interface Project {
+                    public var root: Node
+                    public var request: protocol.Request
+                }
+
+                public object protocol {
+                    public interface Request {
+                        public var node: Node
+                        public var project: Project
+                    }
+                }
+
+                public object typingsInstaller {
+                    public interface Log {
+                        public var request: protocol.Request
+                    }
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `the same type name in two namespaces survives in both and each reference picks its own`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; }
+                namespace a {
+                    interface Node { left: Node; }
+                    interface Holder { n: Node; }
+                }
+                namespace b {
+                    interface Node { right: Node; }
+                }
+                interface Both { a: a.Node; b: b.Node; root: Node; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+            }
+
+            public external object a {
+                public interface Node {
+                    public var left: Node
+                }
+
+                public interface Holder {
+                    public var n: Node
+                }
+            }
+
+            public external object b {
+                public interface Node {
+                    public var right: Node
+                }
+            }
+
+            public external interface Both {
+                public var a: a.Node
+                public var b: b.Node
+                public var root: Node
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a root type shadowed inside a namespace declaring the same name has no spelling and is a loud marker`() {
+        // `ts.Node` written inside `a`, which declares its own `Node`: Kotlin
+        // resolves the bare name innermost-first and the generated file has
+        // no package to qualify by. The bare `Node` beside it is `a.Node`.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; }
+                namespace a {
+                    interface Node { left: Node; }
+                    interface Holder { root: ts.Node; }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+            }
+
+            public external object a {
+                public interface Node {
+                    public var left: Node
+                }
+
+                public interface Holder {
+                    public var root: Any? /* xtsc: unmapped ts.Node - shadowed inside a, no Kotlin spelling reaches it */
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `heritage to a nested type renders the supertype by its path`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                namespace server {
+                    interface Base { id: number; }
+                    class ProjectService { host: string; }
+                }
+                interface Derived extends server.Base { name: string; }
+                class Service extends server.ProjectService { open(): void; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object server {
+                public interface Base {
+                    public var id: Double
+                }
+
+                public open class ProjectService {
+                    public var host: String
+                }
+            }
+
+            public external interface Derived : server.Base {
+                public var name: String
+            }
+
+            public open external class Service : server.ProjectService {
+                public fun open(): Unit
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a dotted root namespace flattens its first segment and nests the rest`() {
+        val result = generateDts(
+            """
+            declare namespace A.B {
+                interface X { p: string; }
+            }
+            declare namespace A.C.D {
+                interface Y { x: B.X; }
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace A - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object B {
+                public interface X {
+                    public var p: String
+                }
+            }
+
+            /* xtsc: namespace A - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object C {
+                public object D {
+                    public interface Y {
+                        public var x: B.X
+                    }
+                }
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a non-ambient namespace is a loud skip and an ambient one beside ordinary exports flattens`() {
+        val result = generate(
+            """
+            export namespace Runtime {
+                export interface A { p: string; }
+                export const x: number = 1;
+            }
+            export declare namespace Ambient {
+                interface B { q: string; }
+            }
+            export interface Top { a: Runtime.A; b: Ambient.B; }
+            """
+        )
+        val expected = """
+            /* xtsc: skipped namespace Runtime has a runtime body - only an ambient namespace is generated */
+
+            /* xtsc: namespace Ambient - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface B {
+                public var q: String
+            }
+
+            public external interface Top {
+                public var a: Any? /* xtsc: unmapped A */
+                public var b: B
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a declaration merged in one scope is a loud skip naming the merge and a namespace merged onto an enum too`() {
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; }
+                interface Node { parent: Node; }
+                enum Kind { A }
+                namespace Kind { function parse(s: string): Kind; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+            }
+
+            /* xtsc: skipped Node declared again in the same scope - TypeScript merges the declarations, one Kotlin scope cannot hold both */
+
+            public sealed external interface Kind {
+                public companion object {
+                    public val A: Kind
+                }
+            }
+
+            /* xtsc: skipped namespace Kind declared again in the same scope - one Kotlin scope cannot hold both */
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a var narrowed down a chain renders the type its base actually renders`() {
+        // `typescript.d.ts`'s request chain: the second link compared its
+        // redeclaration with the first link's DECLARED `FileRequestArgs`,
+        // which the first link does not render (it renders the inherited
+        // `Any?`) — 29 compile errors before the effective inherited type.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Request { arguments?: any; }
+                interface FileRequest extends Request { arguments: FileRequestArgs; }
+                interface FileLocationRequest extends FileRequest { arguments: FileLocationRequestArgs; }
+                interface FileRequestArgs { file: string; }
+                interface FileLocationRequestArgs extends FileRequestArgs { line: number; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Request {
+                public var arguments: Any?
+            }
+
+            public external interface FileRequest : Request {
+                /* xtsc: narrowed to FileRequestArgs in TypeScript - rendered as the inherited Any? */
+                public override var arguments: Any?
+            }
+
+            public external interface FileLocationRequest : FileRequest {
+                /* xtsc: narrowed to FileLocationRequestArgs in TypeScript - rendered as the inherited Any? */
+                public override var arguments: Any?
+            }
+
+            public external interface FileRequestArgs {
+                public var file: String
+            }
+
+            public external interface FileLocationRequestArgs : FileRequestArgs {
+                public var line: Double
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a base whose member clashes with one already inherited is dropped with a loud heritage marker`() {
+        // Two bases, one property key, two Kotlin types — no override
+        // reconciles them (a `var` override must repeat the type exactly),
+        // so the later base is dropped whole, on a class and on an interface.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface ModuleResolutionHost { useCaseSensitiveFileNames?: boolean | (() => boolean); readFile(f: string): string; }
+                interface LanguageServiceHost { useCaseSensitiveFileNames?(): boolean; getScriptVersion(f: string): string; }
+                class Project implements LanguageServiceHost, ModuleResolutionHost {
+                    useCaseSensitiveFileNames(): boolean;
+                    getScriptVersion(f: string): string;
+                    readFile(f: string): string;
+                }
+                interface Both extends LanguageServiceHost, ModuleResolutionHost { }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface ModuleResolutionHost {
+                public var useCaseSensitiveFileNames: Any? /* xtsc: unmapped boolean | (() => boolean) */
+                public fun readFile(f: String): String
+            }
+
+            public external interface LanguageServiceHost {
+                public var useCaseSensitiveFileNames: (() -> Boolean)?
+                public fun getScriptVersion(f: String): String
+            }
+
+            public open external class Project : LanguageServiceHost {
+                public fun useCaseSensitiveFileNames(): Boolean
+                public override fun getScriptVersion(f: String): String
+                public fun readFile(f: String): String
+                /* xtsc: skipped heritage clause implements ModuleResolutionHost - its useCaseSensitiveFileNames clashes with the one inherited from LanguageServiceHost */
+            }
+
+            public external interface Both : LanguageServiceHost {
+                /* xtsc: skipped heritage clause extends ModuleResolutionHost - its useCaseSensitiveFileNames clashes with the one inherited from LanguageServiceHost */
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a readonly redeclaration keeps its type only where Kotlin sees a subtype`() {
+        // `Leaf.parent: Identifier` over `Node.parent: Node` is a subtype
+        // (Identifier extends Node) and keeps its type; an enum-member
+        // literal (marked `Any?`), a type parameter and a nullable widening
+        // are not, and render the inherited type loudly; a `var` over a `val`
+        // of the same type is a legal override.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                enum SyntaxKind { Identifier, Token }
+                interface Node { readonly kind: SyntaxKind; readonly parent: Node; }
+                interface Identifier extends Node { readonly kind: SyntaxKind.Identifier; }
+                interface Token<TKind extends SyntaxKind> extends Node { readonly kind: TKind; }
+                interface Declaration extends Node { kind: SyntaxKind; }
+                interface Leaf extends Node { readonly parent: Identifier; }
+                interface Wide extends Node { readonly parent?: Node; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public sealed external interface SyntaxKind {
+                public companion object {
+                    public val Identifier: SyntaxKind
+                    public val Token: SyntaxKind
+                }
+            }
+
+            public external interface Node {
+                public val kind: SyntaxKind
+                public val parent: Node
+            }
+
+            public external interface Identifier : Node {
+                /* xtsc: narrowed to Any? in TypeScript - rendered as the inherited SyntaxKind */
+                public override val kind: SyntaxKind
+            }
+
+            public external interface Token<TKind> : Node {
+                /* xtsc: constraint on TKind: SyntaxKind not carried */
+                /* xtsc: narrowed to TKind in TypeScript - rendered as the inherited SyntaxKind */
+                public override val kind: SyntaxKind
+            }
+
+            public external interface Declaration : Node {
+                public override var kind: SyntaxKind
+            }
+
+            public external interface Leaf : Node {
+                public override val parent: Identifier
+            }
+
+            public external interface Wide : Node {
+                /* xtsc: narrowed to Node? in TypeScript - rendered as the inherited Node */
+                public override val parent: Node
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
     }
 
 }

@@ -246,6 +246,12 @@ private fun KotlinTypeText.withNullable(): KotlinTypeText = when (this) {
     is FunctionTypeText -> copy(nullable = true)
 }
 
+/** (EXT.13) The non-null form of a type text, for the subtype test. */
+internal fun KotlinTypeText.withoutNullable(): KotlinTypeText = when (this) {
+    is NamedTypeText -> copy(nullable = false)
+    is FunctionTypeText -> copy(nullable = false)
+}
+
 /**
  * The Kotlin text of a parsed type, in exactly the shape the generator
  * renders — the round trip is what lets a SUBSTITUTED inherited type be

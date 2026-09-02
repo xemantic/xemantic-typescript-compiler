@@ -140,9 +140,13 @@ class ExternalsLibraryProbe {
     private companion object {
         val markerRegex = Regex("""/\* xtsc: (.*?) \*/""")
         val unmappedRegex = Regex("""unmapped (.*)""")
+        // (EXT.13) Declarations at any depth (a nested object's members are
+        // indented) and the `object` kind.
         val declarationRegex =
-            Regex("""public ((?:(?:open|abstract|sealed|external) )*(?:interface|class|typealias|fun|val|var))\b.*""")
+            Regex(""" *public ((?:(?:open|abstract|sealed|external) )*(?:interface|class|typealias|fun|val|var|object))\b.*""")
         val categories: List<Pair<Regex, String>> = listOf(
+            // (EXT.13) Before the generic `unmapped`, which would absorb it.
+            Regex("""unmapped .* - shadowed inside .*""") to "unmapped <REF> - shadowed inside <PATH>",
             Regex("""unmapped .*""") to "unmapped <TYPE>",
             Regex("""constraint on \S+: .* not carried""") to "constraint on <T>: <TYPE> not carried",
             Regex("""default for \S+: .* not carried""") to "default for <T>: <TYPE> not carried",
@@ -185,6 +189,25 @@ class ExternalsLibraryProbe {
                 "skipped function <NAME> shares its signature with the constructor of <NAME> - module wiring",
             Regex("""narrowed to .* in TypeScript - rendered as the inherited .*""") to
                 "narrowed to <TYPE> in TypeScript - rendered as the inherited <TYPE>",
+            // (EXT.13)
+            Regex("""namespace \S+ - members rendered at top level; .*""") to
+                "namespace <NAME> - members rendered at top level",
+            Regex("""module "[^"]*" - members rendered at top level; .*""") to
+                "module <NAME> - members rendered at top level",
+            Regex("""alias \S+ = .* - re-exported name, wiring is a later rung""") to
+                "alias <NAME> = <TARGET> - re-exported name",
+            Regex("""skipped type alias \S+ inside namespace \S+ - Kotlin aliases are top-level only""") to
+                "skipped type alias <NAME> inside namespace <PATH>",
+            Regex("""skipped namespace \S+ has a runtime body - .*""") to
+                "skipped namespace <NAME> has a runtime body",
+            Regex("""skipped namespace \S+ declared again in the same scope - .*""") to
+                "skipped namespace <NAME> declared again in the same scope",
+            Regex("""skipped \S+ declared again in the same scope - TypeScript merges .*""") to
+                "skipped <NAME> declared again in the same scope - TypeScript merges the declarations",
+            Regex("""skipped heritage clause (?:extends|implements) \S+ - its \S+ clashes with the one inherited from \S+""") to
+                "skipped heritage clause <BASE> - its <MEMBER> clashes with the one inherited from <BASE>",
+            Regex("""skipped value \S+ shares its name with the namespace object \S+ - module wiring is a later rung""") to
+                "skipped value <NAME> shares its name with the namespace object <NAME> - module wiring",
         )
     }
 

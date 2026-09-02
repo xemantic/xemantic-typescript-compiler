@@ -138,6 +138,47 @@ class KotlinExternalsCompileGateTest {
         assert(check.successful)
     }
 
+    /**
+     * (EXT.13) The NESTED-OBJECT shape: a flattened root, nested objects two
+     * deep holding an interface, an enum, a class with a static, a value,
+     * a function and an empty object, references in all three directions,
+     * heritage to a nested type, a same-named type in two namespaces, and a
+     * nested alias's use inlined — the gate variant of all of it compiles.
+     */
+    private val nestedFixture = """
+        declare namespace ts {
+            interface Node { kind: number; }
+            interface Host { project: server.Project; request: server.protocol.Request; }
+            interface Derived extends server.Base { name: string; }
+            namespace server {
+                type NormalizedPath = string;
+                interface Base { id: number; }
+                interface Project extends Base { root: Node; path: NormalizedPath; request: protocol.Request; }
+                enum Mode { Fast, Slow }
+                class Session { mode: Mode; static open(): Session; }
+                const defaultName: string;
+                function open(name: string): Project;
+                namespace protocol {
+                    interface Request { node: Node; project: Project; }
+                    interface Node { line: number; }
+                }
+                namespace empty { }
+            }
+        }
+        export = ts;
+    """.trimIndent()
+
+    @Test
+    fun `generated nested objects compile as kotlin metadata`() {
+        val result = generateKotlinExternals("t.d.ts", nestedFixture)
+        val check = compileCheck(result.compileCheckSource)
+        val compileErrors = check.errors
+        val hasNestedObject = "    public object protocol {\n" in result.compileCheckSource
+        assert(compileErrors.isEmpty())
+        assert(check.successful)
+        assert(hasNestedObject)
+    }
+
     @Test
     fun `negative control - a deliberately broken source fails the same gate`() {
         // Round 790's law: a verifier without its complement population reads

@@ -62,6 +62,14 @@ internal class ExternalInterface(
      */
     val supertypes: List<String>,
     val members: List<ExternalMember>,
+    /**
+     * (EXT.13) The namespace PATH the interface is declared under — empty at
+     * the module surface (a flattened root namespace included), `[server,
+     * protocol]` inside the nested objects. What [Inheritance] resolves a
+     * supertype text FROM: the text is the shortest spelling that resolves at
+     * the declaring scope, so the scope is part of its meaning.
+     */
+    val path: List<String> = emptyList(),
 ) : ExternalDeclaration
 
 /**
@@ -124,6 +132,8 @@ internal class ExternalClass(
     val members: List<ExternalMember>,
     /** TS `static` members — rendered as the companion object. */
     val staticMembers: List<ExternalMember>,
+    /** (EXT.13) The namespace path the class is declared under; see [ExternalInterface.path]. */
+    val path: List<String> = emptyList(),
 ) : ExternalDeclaration
 
 /**
@@ -154,6 +164,46 @@ internal class ExternalTopLevelValue(
 
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedDeclaration(val description: String) : ExternalDeclaration
+
+/**
+ * (EXT.13) A NESTED namespace — `ts.server`, `ts.server.protocol` — as a
+ * Kotlin nested object: `public external object server { … }` holding the
+ * namespace's interfaces, classes, enums, values, functions and further
+ * objects, each rendered exactly as at the module surface, one indent in.
+ * The compile-gate variant is `public object server { … }` with the same
+ * `= null!!` bodies a class's members get.
+ *
+ * Why an object and not a package: the ROOT ambient namespace of a
+ * declaration file IS the module's surface (`declare namespace ts { … }`
+ * followed by `export = ts` is what a consumer's `@file:JsModule("typescript")`
+ * binds), so its members flatten to the top level; and a Kotlin `typealias`
+ * is top-level only, which is why a flattened root can carry the aliases
+ * every real `.d.ts` root is full of. A nested namespace is a runtime
+ * object hung off the root (`ts.server.protocol`), which is exactly what a
+ * nested `object` is. What it cannot hold is a `typealias` — that is the
+ * one loud skip the object shape adds, and uses of such an alias still
+ * resolve through the checker to what the alias denotes, so the loss is
+ * the NAME only.
+ *
+ * Inside an `external object` every nested declaration is implicitly
+ * external, so the `external` modifier is rendered on the object alone.
+ */
+internal class ExternalObject(
+    val name: String,
+    /** The ENCLOSING namespace path; the object's own qualified path is `path + name`. */
+    val path: List<String>,
+    val declarations: List<ExternalDeclaration>,
+) : ExternalDeclaration
+
+/**
+ * (EXT.13) A loud record that is NOT a refusal — rendered `/* xtsc: … */`
+ * without the `skipped` prefix: the header a flattened root namespace
+ * renders under (`namespace ts - members rendered at top level; …`) and
+ * the re-exported name an `export import X = ts.X` line declares. Nothing
+ * was dropped in either case; something was wired that Kotlin cannot yet
+ * express, and the reader must be told.
+ */
+internal class ExternalMarker(val text: String) : ExternalDeclaration
 
 internal sealed interface ExternalMember
 
@@ -218,16 +268,79 @@ internal fun parameterText(parameter: ExternalParameter): String =
 internal class SkippedMember(val description: String) : ExternalMember
 
 /**
+ * (EXT.13) The qualified Kotlin name of a declaration under [path] —
+ * `server.protocol.Node` — the key every per-declaration table in this file
+ * uses, because two nested namespaces may each declare a `Node`.
+ */
+internal fun qualifiedName(path: List<String>, name: String): String =
+    if (path.isEmpty()) name else path.joinToString(".") + "." + name
+
+/**
+ * (EXT.13) Kotlin's resolution of a dotted spelling from inside a scope,
+ * over the set of QUALIFIED names this generation declares (types and
+ * objects alike): the FIRST segment is looked up innermost scope first, and
+ * once found the rest of the spelling must chain from there — Kotlin does
+ * not keep searching outer scopes when a later segment is missing. Answers
+ * the qualified name the spelling denotes, or null.
+ */
+internal fun resolveSpelling(
+    spelling: List<String>,
+    fromPath: List<String>,
+    declared: Set<String>,
+): List<String>? {
+    if (spelling.isEmpty()) return null
+    for (k in fromPath.size downTo 0) {
+        val prefix = fromPath.take(k)
+        if (qualifiedName(prefix, spelling[0]) !in declared) continue
+        val full = prefix + spelling
+        return if (qualifiedName(full.dropLast(1), full.last()) in declared) full else null
+    }
+    return null
+}
+
+/**
+ * (EXT.13) The SHORTEST Kotlin spelling of the declaration `targetPath +
+ * name` that resolves to it from inside [fromPath] — the bare name inside
+ * its own or an enclosing scope, `protocol.Foo` from `server`,
+ * `server.protocol.Foo` from the root — or null when no spelling reaches
+ * it: a root `Node` referenced from inside a namespace declaring its own
+ * `Node` is SHADOWED, and with no package to qualify by there is no Kotlin
+ * text for it (the caller marks it). Each segment is rendered through
+ * [kotlinIdentifier].
+ */
+internal fun shortestSpelling(
+    fromPath: List<String>,
+    targetPath: List<String>,
+    name: String,
+    declared: Set<String>,
+): String? {
+    val full = targetPath + name
+    for (drop in targetPath.size downTo 0) {
+        val spelling = full.drop(drop)
+        if (resolveSpelling(spelling, fromPath, declared) == full) {
+            return spelling.joinToString(".", transform = ::kotlinIdentifier)
+        }
+    }
+    return null
+}
+
+/** (EXT.13) The segments of a rendered dotted type text, `<…>` and backticks stripped. */
+private fun spellingSegments(text: String): List<String> =
+    text.substringBefore('<').split('.').map { it.trim().trim('`') }
+
+/**
  * (EXT.8) What a declaration INHERITS from its generated bases, transitively —
  * the input to Kotlin's `override` rule, which TypeScript has no counterpart
  * for: a subinterface may simply redeclare a base member, Kotlin must say
  * `override`, and a class member overridden below must be `open`.
  *
- * Bases are looked up by NAME (the supertype text with any `<…>` stripped) over
- * the generation's own declarations — a supertype text is only ever produced
- * for a generated target, so the lookup cannot miss for a reason other than a
- * cross-file name collision, which [ExternalsCollector.finish] already reduced
- * to one declaration per name.
+ * Bases are looked up by the supertype text (any `<…>` stripped) RESOLVED
+ * FROM THE DERIVING DECLARATION's own namespace path ([resolveSpelling],
+ * (EXT.13)) over the generation's own declarations, nested objects walked —
+ * a supertype text is only ever produced for a generated target and is the
+ * shortest spelling that resolves at the declaring scope, so the lookup
+ * cannot miss for a reason other than a same-scope name collision, which
+ * [ExternalsCollector.finish] already reduced to one declaration per name.
  *
  * (EXT.11c) A base's members are read THROUGH the supertype's type arguments:
  * `class D<U> : B<U>` inherits `B<T>`'s `fun f(x: T)` as `fun f(x: U)`, and
@@ -240,26 +353,53 @@ internal class SkippedMember(val description: String) : ExternalMember
  */
 internal class Inheritance(declarations: List<ExternalDeclaration>) {
 
-    private val byName = HashMap<String, ExternalDeclaration>()
+    /** Generated interfaces and classes by QUALIFIED name, first wins. */
+    private val byQualified = HashMap<String, ExternalDeclaration>()
+
+    /** Every qualified name a spelling may resolve through: the types above plus the objects. */
+    private val declared = HashSet<String>()
 
     init {
-        for (declaration in declarations) {
-            when (declaration) {
-                is ExternalInterface -> byName.putIfAbsent(declaration.name, declaration)
-                is ExternalClass -> byName.putIfAbsent(declaration.name, declaration)
-                else -> {}
+        fun collect(list: List<ExternalDeclaration>) {
+            for (declaration in list) {
+                when (declaration) {
+                    is ExternalInterface -> byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
+                    is ExternalClass -> byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
+                    is ExternalObject -> {
+                        declared.add(qualifiedName(declaration.path, declaration.name))
+                        collect(declaration.declarations)
+                    }
+                    else -> {}
+                }
             }
         }
+        collect(declarations)
+        declared.addAll(byQualified.keys)
     }
 
-    /** The generated declaration a supertype text names, if any. */
-    fun declarationNamed(supertype: String): ExternalDeclaration? =
-        byName[supertype.substringBefore('<').trim('`')]
+    /** The generated declaration a supertype text names from inside [fromPath], if any. */
+    fun declarationNamed(supertype: String, fromPath: List<String>): ExternalDeclaration? {
+        val full = resolveSpelling(spellingSegments(supertype), fromPath, declared) ?: return null
+        return byQualified[qualifiedName(full.dropLast(1), full.last())]
+    }
 
     private fun typeParametersOf(declaration: ExternalDeclaration): List<String> = when (declaration) {
         is ExternalInterface -> declaration.typeParameters
         is ExternalClass -> declaration.typeParameters
         else -> emptyList()
+    }
+
+    private fun pathOf(declaration: ExternalDeclaration): List<String> = when (declaration) {
+        is ExternalInterface -> declaration.path
+        is ExternalClass -> declaration.path
+        else -> emptyList()
+    }
+
+    /** The qualified name of a generated interface or class, the key of every table here. */
+    fun qualifiedNameOf(declaration: ExternalDeclaration): String? = when (declaration) {
+        is ExternalInterface -> qualifiedName(declaration.path, declaration.name)
+        is ExternalClass -> qualifiedName(declaration.path, declaration.name)
+        else -> null
     }
 
     /**
@@ -272,13 +412,11 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
     private class Base(val declaration: ExternalDeclaration, val substitution: Map<String, String>)
 
     private fun basesOf(declaration: ExternalDeclaration, outer: Map<String, String>): List<Base> {
-        val texts = when (declaration) {
-            is ExternalInterface -> declaration.supertypes
-            is ExternalClass -> listOfNotNull(declaration.superClass) + declaration.interfaces
-            else -> emptyList()
-        }
+        val pruned = prunedSupertypes(declaration)
+        val texts = listOfNotNull(pruned.superClass) + pruned.interfaces
+        val fromPath = pathOf(declaration)
         return texts.mapNotNull { text ->
-            val base = declarationNamed(text) ?: return@mapNotNull null
+            val base = declarationNamed(text, fromPath) ?: return@mapNotNull null
             val parameters = typeParametersOf(base)
             val arguments = typeArgumentTexts(text).orEmpty().map { substituteTypeParameters(it, outer) }
             val substitution =
@@ -333,7 +471,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         val result = mutableListOf<InheritedMember>()
         val visited = HashSet<String>()
         fun walk(d: ExternalDeclaration, outer: Map<String, String>) {
-            val name = (d as? ExternalInterface)?.name ?: (d as? ExternalClass)?.name ?: return
+            val name = qualifiedNameOf(d) ?: return
             if (!visited.add(name)) return
             for (base in basesOf(d, outer)) {
                 for (member in ownMembers(base.declaration)) {
@@ -346,41 +484,225 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         return result
     }
 
-    /** Every inherited member by key, nearest base first, in the derived declaration's vocabulary. */
-    fun inherited(declaration: ExternalDeclaration): Map<String, ExternalMember> {
-        val result = HashMap<String, ExternalMember>()
-        for (member in inheritedMembers(declaration)) {
-            val key = keyOf(member.seen) ?: continue
-            result.putIfAbsent(key, member.seen)
+    /**
+     * (EXT.13) A declaration's OWN members as it RENDERS them — the renderer's
+     * rule for a `var` narrowing an inherited `var` applied here too (the
+     * inherited type is rendered, and the keyword is `var`), so that the next
+     * declaration down the chain compares its redeclaration with what its
+     * base actually renders and not with what the base DECLARED. Measured on
+     * `typescript.d.ts`: `Request.arguments: any`, `FileRequest` narrows it
+     * to `FileRequestArgs` (rendered `Any?`, loudly), `FileLocationRequest`
+     * narrows again to `FileLocationRequestArgs` — and rendering IT as the
+     * inherited DECLARED `FileRequestArgs` was 29 `Type of 'var' property
+     * doesn't match` errors, one per link of the request chain.
+     */
+    private fun renderedOwnMembers(declaration: ExternalDeclaration): List<ExternalMember> {
+        val inherited = inherited(declaration)
+        val path = pathOf(declaration)
+        return ownMembers(declaration).map { member ->
+            if (member !is ExternalProperty) return@map member
+            val base = inherited[keyOf(member)] as? ExternalProperty ?: return@map member
+            val baseIsVar = !base.readOnly
+            val type = if (rendersInheritedType(member, base, path)) base.type else member.type
+            ExternalProperty(member.name, type, readOnly = member.readOnly && !baseIsVar)
         }
+    }
+
+    /**
+     * (EXT.11c, generalised by (EXT.13)) Whether a property REDECLARATION
+     * renders the INHERITED type rather than its own, loudly: Kotlin lets
+     * only a `val` over a `val` narrow, and only to a SUBTYPE
+     * ([isSubtypeText]); a `var` override and a `var` over a `val` must
+     * repeat the inherited type exactly. Measured on `typescript.d.ts`:
+     * `Node.kind: SyntaxKind` (an enum, a sealed interface here) redeclared
+     * `readonly kind: SyntaxKind.Identifier` (an enum-member literal, a
+     * marked `Any?`) or `readonly kind: TKind` (a type parameter) was 241
+     * `not a subtype of overridden property` errors, and three
+     * non-readonly redeclarations of it the exact-type kind.
+     */
+    fun rendersInheritedType(member: ExternalProperty, base: ExternalProperty, fromPath: List<String>): Boolean {
+        if (!typeTextsDiffer(member.type, base.type)) return false
+        if (!base.readOnly || !member.readOnly) return true
+        return !isSubtypeText(member.type, base.type, fromPath)
+    }
+
+    /**
+     * (EXT.13) Whether the rendered type [own] is a Kotlin SUBTYPE of
+     * [base], decided conservatively over the generator's own type texts
+     * (markers stripped): equal texts; any type under `Any?`; the non-null
+     * form under the nullable one; a generated interface or class under a
+     * type it transitively extends or implements — by declaration identity,
+     * for argument-free types (a generic instantiation's variance is not
+     * modelled and answers false, i.e. the inherited type is rendered).
+     * False is the safe answer: it costs a loud marker, never a compile
+     * error.
+     */
+    fun isSubtypeText(own: String, base: String, fromPath: List<String>): Boolean {
+        val ownParsed = parseKotlinTypeText(own) ?: return false
+        val baseParsed = parseKotlinTypeText(base) ?: return false
+        if (ownParsed == baseParsed) return true
+        if (baseParsed is NamedTypeText && baseParsed.name == "Any" && baseParsed.nullable) return true
+        if (baseParsed.nullable && ownParsed == baseParsed.withoutNullable()) return true
+        if (ownParsed !is NamedTypeText || baseParsed !is NamedTypeText) return false
+        if (ownParsed.nullable && !baseParsed.nullable) return false
+        if (ownParsed.arguments.isNotEmpty() || baseParsed.arguments.isNotEmpty()) return false
+        val ownDeclaration = declarationNamed(ownParsed.name, fromPath) ?: return false
+        val baseDeclaration = declarationNamed(baseParsed.name, fromPath) ?: return false
+        val target = qualifiedNameOf(baseDeclaration) ?: return false
+        val visited = HashSet<String>()
+        fun extends(d: ExternalDeclaration): Boolean {
+            val name = qualifiedNameOf(d) ?: return false
+            if (!visited.add(name)) return false
+            return basesOf(d, emptyMap()).any { qualifiedNameOf(it.declaration) == target || extends(it.declaration) }
+        }
+        return extends(ownDeclaration)
+    }
+
+    private val inheritedCache = HashMap<String, Map<String, ExternalMember>>()
+
+    /**
+     * Every inherited member by key, nearest base first, in the derived
+     * declaration's vocabulary — each as its base RENDERS it
+     * ([renderedOwnMembers]), composed down the chain, and keyed AFTER the
+     * substitution (a function's override key is its parameter types, which
+     * the substitution rewrites). Memoised by qualified name; a cycle in the
+     * supertypes (not producible, kept safe) reads an empty map.
+     */
+    fun inherited(declaration: ExternalDeclaration): Map<String, ExternalMember> {
+        val qualified = qualifiedNameOf(declaration) ?: return emptyMap()
+        inheritedCache[qualified]?.let { return it }
+        inheritedCache[qualified] = emptyMap()
+        val result = LinkedHashMap<String, ExternalMember>()
+        for (base in basesOf(declaration, emptyMap())) {
+            val members = renderedOwnMembers(base.declaration) + inherited(base.declaration).values
+            for (member in members) {
+                val seen = substituted(member, base.substitution)
+                val key = keyOf(seen) ?: continue
+                result.putIfAbsent(key, seen)
+            }
+        }
+        inheritedCache[qualified] = result
         return result
     }
 
     /**
-     * For every CLASS name, the keys of its own members that some generated
-     * declaration below it overrides — those must be `open` (a Kotlin class
-     * member is final by default; an interface member is open already).
-     * The override is attributed to the NEAREST base declaring the key, and
-     * recorded under that base's own (raw) key, which is what the renderer
-     * looks the base's members up by.
+     * (EXT.13) The supertypes a declaration KEEPS, and the loud markers of the
+     * ones it must DROP: two bases each contributing a member of one key
+     * whose Kotlin types DIFFER — a property of another type, a function of
+     * another return type — cannot both be supertypes of one Kotlin
+     * declaration (a `var` override must repeat the inherited type EXACTLY,
+     * so no override reconciles them; measured on `typescript.d.ts`:
+     * `LanguageServiceHost` inherits `useCaseSensitiveFileNames` as
+     * `(() -> Boolean)?` from one base and as a marked `Any?` from another,
+     * `property types do not match`), where TypeScript intersects them. The
+     * FIRST base to contribute a key keeps it and every later base
+     * contributing a clashing member is dropped whole — a base's `extends`
+     * is one clause, and its members are read as it renders them, bases
+     * first, so a decision higher in the chain is what the lower one sees.
+     * Memoised; a cycle reads the written supertypes.
+     */
+    class PrunedSupertypes(
+        val superClass: String?,
+        val interfaces: List<String>,
+        val markers: List<SkippedMember>,
+    )
+
+    private val prunedCache = HashMap<String, PrunedSupertypes>()
+
+    fun prunedSupertypes(declaration: ExternalDeclaration): PrunedSupertypes {
+        val qualified = qualifiedNameOf(declaration) ?: return PrunedSupertypes(null, emptyList(), emptyList())
+        prunedCache[qualified]?.let { return it }
+        val superClass = (declaration as? ExternalClass)?.superClass
+        val interfaces = when (declaration) {
+            is ExternalInterface -> declaration.supertypes
+            is ExternalClass -> declaration.interfaces
+            else -> emptyList()
+        }
+        val written = PrunedSupertypes(superClass, interfaces, emptyList())
+        prunedCache[qualified] = written
+        val path = pathOf(declaration)
+        val seen = HashMap<String, Pair<ExternalMember, String>>()
+        val markers = mutableListOf<SkippedMember>()
+        fun keeps(text: String, keyword: String): Boolean {
+            val base = declarationNamed(text, path) ?: return true
+            val parameters = typeParametersOf(base)
+            val arguments = typeArgumentTexts(text).orEmpty()
+            val substitution =
+                if (parameters.size == arguments.size) parameters.zip(arguments).toMap() else emptyMap()
+            val members = (renderedOwnMembers(base) + inherited(base).values)
+                .map { substituted(it, substitution) }
+            for (member in members) {
+                val key = keyOf(member) ?: continue
+                val earlier = seen[key] ?: continue
+                if (!clashes(earlier.first, member, path)) continue
+                markers += SkippedMember(
+                    "heritage clause $keyword $text - its ${memberName(member)} clashes with the one inherited from ${earlier.second}"
+                )
+                return false
+            }
+            for (member in members) {
+                val key = keyOf(member) ?: continue
+                seen.putIfAbsent(key, member to text)
+            }
+            return true
+        }
+        val keptSuper = superClass?.takeIf { keeps(it, "extends") }
+        val keyword = if (declaration is ExternalClass) "implements" else "extends"
+        val keptInterfaces = interfaces.filter { keeps(it, keyword) }
+        val pruned = if (markers.isEmpty()) written else PrunedSupertypes(keptSuper, keptInterfaces, markers)
+        prunedCache[qualified] = pruned
+        return pruned
+    }
+
+    /**
+     * Measured against the metadata compiler: two inherited PROPERTIES of one
+     * key clash unless their types are EQUAL (`(() -> Boolean)?` beside
+     * `Any?` is refused although one is under the other), two inherited
+     * FUNCTIONS of one key clash only when neither return type is a subtype
+     * of the other (`fun f(): String` beside `fun f(): Any?` is accepted),
+     * and a `val` beside a `var` of one type is not a clash.
+     */
+    private fun clashes(a: ExternalMember, b: ExternalMember, fromPath: List<String>): Boolean = when {
+        a is ExternalProperty && b is ExternalProperty -> typeTextsDiffer(a.type, b.type)
+        a is ExternalFunction && b is ExternalFunction ->
+            typeTextsDiffer(a.returnType, b.returnType) &&
+                !isSubtypeText(a.returnType, b.returnType, fromPath) &&
+                !isSubtypeText(b.returnType, a.returnType, fromPath)
+        else -> false
+    }
+
+    private fun memberName(member: ExternalMember): String = when (member) {
+        is ExternalProperty -> member.name
+        is ExternalFunction -> member.name
+        is SkippedMember -> "member"
+    }
+
+    /**
+     * For every CLASS (by qualified name), the keys of its own members that
+     * some generated declaration below it overrides — those must be `open`
+     * (a Kotlin class member is final by default; an interface member is
+     * open already). The override is attributed to the NEAREST base
+     * declaring the key, and recorded under that base's own (raw) key, which
+     * is what the renderer looks the base's members up by.
      */
     val openedByClass: Map<String, Set<String>> = run {
         val opened = HashMap<String, MutableSet<String>>()
-        for (declaration in byName.values) {
+        for (declaration in byQualified.values) {
             val inherited = inheritedMembers(declaration)
             for (member in ownMembers(declaration)) {
                 val key = keyOf(member) ?: continue
                 val nearest = inherited.firstOrNull { keyOf(it.seen) == key } ?: continue
                 if (nearest.base is ExternalClass) {
                     val rawKey = keyOf(nearest.raw) ?: continue
-                    opened.getOrPut(nearest.base.name) { HashSet() }.add(rawKey)
+                    opened.getOrPut(qualifiedName(nearest.base.path, nearest.base.name)) { HashSet() }.add(rawKey)
                 }
             }
         }
         opened
     }
 
-    private fun classNamed(supertype: String): ExternalClass? = declarationNamed(supertype) as? ExternalClass
+    private fun classNamed(supertype: String, fromPath: List<String>): ExternalClass? =
+        declarationNamed(supertype, fromPath) as? ExternalClass
 
     /**
      * (EXT.8) The constructor a class is CALLED with: its own when it declares
@@ -395,12 +717,12 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         var current: ExternalClass? = declaration
         var substitution: Map<String, String> = emptyMap()
         val visited = HashSet<String>()
-        while (current != null && visited.add(current.name)) {
+        while (current != null && visited.add(qualifiedName(current.path, current.name))) {
             current.constructorParameters?.let { parameters ->
                 return parameters.map { substitutedParameter(it, substitution) }
             }
             val superClass = current.superClass ?: return null
-            val base = classNamed(superClass) ?: return null
+            val base = classNamed(superClass, current.path) ?: return null
             val arguments = typeArgumentTexts(superClass).orEmpty().map { substituteTypeParameters(it, substitution) }
             substitution =
                 if (base.typeParameters.size == arguments.size) base.typeParameters.zip(arguments).toMap()
@@ -417,7 +739,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
      * base parameter otherwise.
      */
     fun gateSuperCall(declaration: ExternalClass, superClass: String): String {
-        val base = classNamed(superClass) ?: return "()"
+        val base = classNamed(superClass, declaration.path) ?: return "()"
         val baseParameters = effectiveConstructor(base).orEmpty()
         val arguments =
             if (declaration.constructorParameters == null) baseParameters.map { kotlinIdentifier(it.name) }
@@ -619,9 +941,31 @@ internal fun isLibArraySymbol(symbol: Symbol?): Boolean =
 internal class TypeScope(
     val ownTypeParams: Set<String>,
     val generatedNameOf: (Type) -> String?,
+    /**
+     * (EXT.13) The namespace path of the CURRENT scope — what a generated
+     * name is spelled relative to ([shortestSpelling]); [generatedNameOf]
+     * already closes over it, the field is for the marker that must name
+     * the scope a shadowed reference could not be spelled from.
+     */
+    val path: List<String> = emptyList(),
+    /**
+     * (EXT.13) The namespace path a WRITTEN name is resolved from — the
+     * declaration's own scope, and, for a nested alias's body inlined at a
+     * use site, the ALIAS's scope while [path] stays the use's: names are
+     * looked up where they were written and spelled where they are used.
+     */
+    val resolvePath: List<String> = path,
+    /** (EXT.13) The file the current declaration is in; the namespace ladder is file-local. */
+    val fileName: String? = null,
+    /**
+     * (EXT.13) Whether the current declaration sits inside a namespace BODY —
+     * a flattened root's included, whose path is empty — where the checker's
+     * name resolution is measured unreliable and the ladder is the resolver.
+     */
+    val inNamespace: Boolean = false,
 ) {
     internal companion object {
-        val EMPTY: TypeScope = TypeScope(emptySet()) { null }
+        val EMPTY: TypeScope = TypeScope(emptySet(), { null })
     }
 }
 
@@ -730,170 +1074,201 @@ internal fun commentSafe(rendered: String): String = rendered
  * compile-gate variant (`public interface`) — a renderer flag, never a text
  * strip, so the two renderings cannot drift apart. See
  * [KotlinExternals.compileCheckSource] for why the variant exists.
+ *
+ * (EXT.13) A nested [ExternalObject] renders its declarations through the
+ * same fold one indent in, with the `external` keyword on the object alone:
+ * inside an `external object` every nested declaration is implicitly
+ * external (Kotlin/JS refuses the modifier there), so the keyword is a
+ * property of the DEPTH, and the `external`-driven decisions that are not
+ * keyword placement — the gate variant's `= null!!` bodies, `abstract`
+ * classes — stay what they are at every depth.
  */
 internal fun renderKotlinExternals(
     declarations: List<ExternalDeclaration>,
     external: Boolean,
 ): String = buildString {
     val inheritance = Inheritance(declarations)
+    appendDeclarations(declarations, indent = "", external = external, externalKeyword = external, inheritance = inheritance)
+}
+
+private fun StringBuilder.appendDeclarations(
+    declarations: List<ExternalDeclaration>,
+    indent: String,
+    external: Boolean,
+    /** Whether the `external` modifier is rendered at this depth — the top level only. */
+    externalKeyword: Boolean,
+    inheritance: Inheritance,
+) {
     declarations.forEachIndexed { index, declaration ->
         if (index > 0) appendLine()
-        when (declaration) {
-            is SkippedDeclaration ->
-                appendLine("/* xtsc: skipped ${declaration.description} */")
-            is ExternalInterface -> {
-                val keyword = if (external) "external interface" else "interface"
-                val typeParams =
-                    if (declaration.typeParameters.isEmpty()) ""
-                    else declaration.typeParameters
-                        .joinToString(", ", prefix = "<", postfix = ">") {
-                            kotlinIdentifier(it)
-                        }
-                val supertypes =
-                    if (declaration.supertypes.isEmpty()) ""
-                    else declaration.supertypes.joinToString(", ", prefix = " : ")
-                appendLine(
-                    "public $keyword ${kotlinIdentifier(declaration.name)}$typeParams$supertypes {"
-                )
+        appendDeclaration(declaration, indent, external, externalKeyword, inheritance)
+    }
+}
+
+private fun typeParameterText(typeParameters: List<String>, postfix: String = ">"): String =
+    if (typeParameters.isEmpty()) ""
+    else typeParameters.joinToString(", ", prefix = "<", postfix = postfix) { kotlinIdentifier(it) }
+
+private fun StringBuilder.appendDeclaration(
+    declaration: ExternalDeclaration,
+    indent: String,
+    external: Boolean,
+    externalKeyword: Boolean,
+    inheritance: Inheritance,
+) {
+    val member = "$indent    "
+    when (declaration) {
+        is SkippedDeclaration ->
+            appendLine("$indent/* xtsc: skipped ${declaration.description} */")
+        is ExternalMarker ->
+            appendLine("$indent/* xtsc: ${declaration.text} */")
+        is ExternalObject -> {
+            val keyword = if (externalKeyword) "external object" else "object"
+            val header = "${indent}public $keyword ${kotlinIdentifier(declaration.name)}"
+            if (declaration.declarations.isEmpty()) {
+                appendLine(header)
+            } else {
+                appendLine("$header {")
+                // Nested declarations are implicitly external: keyword off, everything else as is.
+                appendDeclarations(declaration.declarations, member, external, externalKeyword = false, inheritance)
+                appendLine("$indent}")
+            }
+        }
+        is ExternalInterface -> {
+            val keyword = if (externalKeyword) "external interface" else "interface"
+            val typeParams = typeParameterText(declaration.typeParameters)
+            val supertypes =
+                if (declaration.supertypes.isEmpty()) ""
+                else declaration.supertypes.joinToString(", ", prefix = " : ")
+            appendLine(
+                "${indent}public $keyword ${kotlinIdentifier(declaration.name)}$typeParams$supertypes {"
+            )
+            for (marker in declaration.headerMarkers) {
+                appendLine("$member/* xtsc: $marker */")
+            }
+            val inherited = inheritance.inherited(declaration)
+            for (m in declaration.members) {
+                appendMember(m, indent = member, inherited = inherited[inheritance.keyOf(m)], inheritance = inheritance, path = declaration.path)
+            }
+            appendLine("$indent}")
+        }
+        is ExternalTypeAlias -> {
+            for (marker in declaration.markers) appendLine("$indent/* xtsc: $marker */")
+            val typeParams = typeParameterText(declaration.typeParameters)
+            appendLine(
+                "${indent}public typealias ${kotlinIdentifier(declaration.name)}$typeParams = ${declaration.body}"
+            )
+        }
+        is ExternalTopLevelValue -> {
+            val keyword = if (declaration.readOnly) "val" else "var"
+            val externalModifier = if (externalKeyword) "external " else ""
+            val body = if (external) "" else " = null!!"
+            appendLine(
+                "${indent}public $externalModifier$keyword ${kotlinIdentifier(declaration.name)}: ${declaration.type}$body"
+            )
+        }
+        is ExternalTopLevelFunction -> {
+            for (marker in declaration.markers) appendLine("$indent/* xtsc: $marker */")
+            val typeParams = typeParameterText(declaration.typeParameters, postfix = "> ")
+            val parameters = declaration.parameters.joinToString(", ", transform = ::parameterText)
+            val keyword = if (externalKeyword) "external fun" else "fun"
+            val body = if (external) "" else " = null!!"
+            appendLine(
+                "${indent}public $keyword $typeParams${kotlinIdentifier(declaration.name)}" +
+                    "($parameters): ${declaration.returnType}$body"
+            )
+        }
+        is ExternalClass -> {
+            // Kotlin's canonical modifier order: visibility, then
+            // abstract/open, then external. (EXT.8) A non-abstract class is
+            // `open` — Dukat's and kotlin-wrappers' convention for externals,
+            // because JavaScript classes are always extensible and a
+            // generated subclass (or a consumer's) must be able to say so.
+            // The GATE variant renders every class `abstract`: a
+            // non-external class implementing a generated interface would
+            // otherwise owe implementations, and `abstract` also keeps it
+            // extensible — both are things an external class gets for free.
+            val abstractModifier = when {
+                !external -> "abstract "
+                declaration.isAbstract -> "abstract "
+                else -> "open "
+            }
+            val externalModifier = if (externalKeyword) "external " else ""
+            val typeParams = typeParameterText(declaration.typeParameters)
+            val constructorText = inheritance.effectiveConstructor(declaration)
+                ?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
+            // (EXT.8) Supertypes: the generated base class first (with the
+            // gate variant's `null!!` constructor call — an external class
+            // omits the call, a plain Kotlin class may not), then the
+            // generated interfaces.
+            val supertypeTexts = buildList {
+                declaration.superClass?.let { base ->
+                    add(if (external) base else base + inheritance.gateSuperCall(declaration, base))
+                }
+                addAll(declaration.interfaces)
+            }
+            val supertypes =
+                if (supertypeTexts.isEmpty()) ""
+                else supertypeTexts.joinToString(", ", prefix = " : ")
+            val header = "${indent}public $abstractModifier${externalModifier}class " +
+                "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
+            val hasBody = declaration.headerMarkers.isNotEmpty() ||
+                declaration.members.isNotEmpty() ||
+                declaration.staticMembers.isNotEmpty()
+            if (!hasBody) {
+                appendLine(header)
+            } else {
+                appendLine("$header {")
                 for (marker in declaration.headerMarkers) {
-                    appendLine("    /* xtsc: $marker */")
+                    appendLine("$member/* xtsc: $marker */")
                 }
                 val inherited = inheritance.inherited(declaration)
-                for (member in declaration.members) {
-                    appendMember(member, inherited = inherited[inheritance.keyOf(member)])
+                val opened = inheritance.openedByClass[qualifiedName(declaration.path, declaration.name)].orEmpty()
+                for (m in declaration.members) {
+                    val key = inheritance.keyOf(m)
+                    appendMember(
+                        m,
+                        needsBody = !external,
+                        indent = member,
+                        inherited = inherited[key],
+                        open = key != null && key in opened,
+                        inheritance = inheritance,
+                        path = declaration.path,
+                    )
                 }
-                appendLine("}")
-            }
-            is ExternalTypeAlias -> {
-                for (marker in declaration.markers) appendLine("/* xtsc: $marker */")
-                val typeParams =
-                    if (declaration.typeParameters.isEmpty()) ""
-                    else declaration.typeParameters
-                        .joinToString(", ", prefix = "<", postfix = ">") {
-                            kotlinIdentifier(it)
-                        }
-                appendLine(
-                    "public typealias ${kotlinIdentifier(declaration.name)}$typeParams = ${declaration.body}"
-                )
-            }
-            is ExternalTopLevelValue -> {
-                val keyword = if (declaration.readOnly) "val" else "var"
-                val externalModifier = if (external) "external " else ""
-                val body = if (external) "" else " = null!!"
-                appendLine(
-                    "public $externalModifier$keyword ${kotlinIdentifier(declaration.name)}: ${declaration.type}$body"
-                )
-            }
-            is ExternalTopLevelFunction -> {
-                for (marker in declaration.markers) appendLine("/* xtsc: $marker */")
-                val typeParams =
-                    if (declaration.typeParameters.isEmpty()) ""
-                    else declaration.typeParameters
-                        .joinToString(", ", prefix = "<", postfix = "> ") {
-                            kotlinIdentifier(it)
-                        }
-                val parameters = declaration.parameters.joinToString(", ", transform = ::parameterText)
-                val keyword = if (external) "external fun" else "fun"
-                val body = if (external) "" else " = null!!"
-                appendLine(
-                    "public $keyword $typeParams${kotlinIdentifier(declaration.name)}" +
-                        "($parameters): ${declaration.returnType}$body"
-                )
-            }
-            is ExternalClass -> {
-                // Kotlin's canonical modifier order: visibility, then
-                // abstract/open, then external. (EXT.8) A non-abstract class is
-                // `open` — Dukat's and kotlin-wrappers' convention for externals,
-                // because JavaScript classes are always extensible and a
-                // generated subclass (or a consumer's) must be able to say so.
-                // The GATE variant renders every class `abstract`: a
-                // non-external class implementing a generated interface would
-                // otherwise owe implementations, and `abstract` also keeps it
-                // extensible — both are things an external class gets for free.
-                val abstractModifier = when {
-                    !external -> "abstract "
-                    declaration.isAbstract -> "abstract "
-                    else -> "open "
-                }
-                val externalModifier = if (external) "external " else ""
-                val typeParams =
-                    if (declaration.typeParameters.isEmpty()) ""
-                    else declaration.typeParameters
-                        .joinToString(", ", prefix = "<", postfix = ">") {
-                            kotlinIdentifier(it)
-                        }
-                val constructorText = inheritance.effectiveConstructor(declaration)
-                    ?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
-                // (EXT.8) Supertypes: the generated base class first (with the
-                // gate variant's `null!!` constructor call — an external class
-                // omits the call, a plain Kotlin class may not), then the
-                // generated interfaces.
-                val supertypeTexts = buildList {
-                    declaration.superClass?.let { base ->
-                        add(if (external) base else base + inheritance.gateSuperCall(declaration, base))
+                if (declaration.staticMembers.isNotEmpty()) {
+                    appendLine("${member}public companion object {")
+                    for (m in declaration.staticMembers) {
+                        appendMember(m, needsBody = !external, indent = "$member    ")
                     }
-                    addAll(declaration.interfaces)
+                    appendLine("$member}")
                 }
-                val supertypes =
-                    if (supertypeTexts.isEmpty()) ""
-                    else supertypeTexts.joinToString(", ", prefix = " : ")
-                val header = "public $abstractModifier${externalModifier}class " +
-                    "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
-                val hasBody = declaration.headerMarkers.isNotEmpty() ||
-                    declaration.members.isNotEmpty() ||
-                    declaration.staticMembers.isNotEmpty()
-                if (!hasBody) {
-                    appendLine(header)
-                } else {
-                    appendLine("$header {")
-                    for (marker in declaration.headerMarkers) {
-                        appendLine("    /* xtsc: $marker */")
-                    }
-                    val inherited = inheritance.inherited(declaration)
-                    val opened = inheritance.openedByClass[declaration.name].orEmpty()
-                    for (member in declaration.members) {
-                        val key = inheritance.keyOf(member)
-                        appendMember(
-                            member,
-                            needsBody = !external,
-                            inherited = inherited[key],
-                            open = key != null && key in opened,
+                appendLine("$indent}")
+            }
+        }
+        is ExternalEnum -> {
+            val keyword =
+                if (externalKeyword) "sealed external interface" else "sealed interface"
+            val header = "${indent}public $keyword ${kotlinIdentifier(declaration.name)}"
+            if (declaration.entries.isEmpty() && declaration.markers.isEmpty()) {
+                appendLine(header)
+            } else {
+                appendLine("$header {")
+                for (marker in declaration.markers) {
+                    appendLine("$member/* xtsc: $marker */")
+                }
+                if (declaration.entries.isNotEmpty()) {
+                    appendLine("${member}public companion object {")
+                    val body = if (external) "" else " = null!!"
+                    for (entry in declaration.entries) {
+                        appendLine(
+                            "$member    public val ${kotlinIdentifier(entry)}: " +
+                                "${kotlinIdentifier(declaration.name)}$body"
                         )
                     }
-                    if (declaration.staticMembers.isNotEmpty()) {
-                        appendLine("    public companion object {")
-                        for (member in declaration.staticMembers) {
-                            appendMember(member, needsBody = !external, indent = "        ")
-                        }
-                        appendLine("    }")
-                    }
-                    appendLine("}")
+                    appendLine("$member}")
                 }
-            }
-            is ExternalEnum -> {
-                val keyword =
-                    if (external) "sealed external interface" else "sealed interface"
-                val header = "public $keyword ${kotlinIdentifier(declaration.name)}"
-                if (declaration.entries.isEmpty() && declaration.markers.isEmpty()) {
-                    appendLine(header)
-                } else {
-                    appendLine("$header {")
-                    for (marker in declaration.markers) {
-                        appendLine("    /* xtsc: $marker */")
-                    }
-                    if (declaration.entries.isNotEmpty()) {
-                        appendLine("    public companion object {")
-                        val body = if (external) "" else " = null!!"
-                        for (entry in declaration.entries) {
-                            appendLine(
-                                "        public val ${kotlinIdentifier(entry)}: " +
-                                    "${kotlinIdentifier(declaration.name)}$body"
-                            )
-                        }
-                        appendLine("    }")
-                    }
-                    appendLine("}")
-                }
+                appendLine("$indent}")
             }
         }
     }
@@ -913,6 +1288,9 @@ private fun StringBuilder.appendMember(
     inherited: ExternalMember? = null,
     /** (EXT.8) A class member some generated subclass overrides — it renders `open`. */
     open: Boolean = false,
+    /** (EXT.13) The rule deciding whether a redeclaration renders the inherited type; null = never. */
+    inheritance: Inheritance? = null,
+    path: List<String> = emptyList(),
 ) {
     val body = if (needsBody) " = null!!" else ""
     val modifiers = buildString {
@@ -936,9 +1314,13 @@ private fun StringBuilder.appendMember(
             // Observable<T>` over `Observable.source: Observable<any> |
             // undefined`. Rendered as the inherited type, loudly, the narrowing
             // named. A `val` override is covariant in Kotlin, so a narrowed
-            // readonly member over a readonly base keeps its own type.
+            // readonly member over a readonly base keeps its own type — when
+            // Kotlin can see the narrowing as a SUBTYPE ((EXT.13),
+            // [Inheritance.rendersInheritedType]).
             val type =
-                if (baseIsVar && typeTextsDiffer(member.type, inherited.type)) {
+                if (inherited is ExternalProperty && inheritance != null &&
+                    inheritance.rendersInheritedType(member, inherited, path)
+                ) {
                     appendLine(
                         "${indent}/* xtsc: narrowed to ${typeTextWithoutMarker(member.type)} in TypeScript" +
                             " - rendered as the inherited ${typeTextWithoutMarker(inherited.type)} */"

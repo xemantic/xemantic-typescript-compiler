@@ -25,7 +25,7 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-### Round (P18.9) — the RxJS core rung COMPILES, its census halves, and a parser defect falls out of the whole-library probe (2026-09-02)
+### Round (P18.9) — the externals ladder goes green at every rung: RxJS core, its census, a parser defect, all of RxJS, and `typescript.d.ts` through the namespace rung (2026-09-02)
 
 **(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under
 `dist/types/internal`), generates with ZERO checker diagnostics and its Kotlin now COMPILES.**
@@ -88,6 +88,50 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 **Marker text over-reports `any`**: `lens.render` substitutes the declaration's own TPs to
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
+
+**(EXT.13) LANDED — the namespace rung: `typescript.d.ts` (11,448 lines, ONE `declare namespace
+ts` with `export = ts`) now generates 9,792 lines of Kotlin that metadata-compile at 0 errors.**
+The design: the ROOT ambient namespace (and `declare module "m"`) FLATTENS to the module surface
+under one header marker (`namespace ts - members rendered at top level; @JsModule/@JsQualifier
+wiring is a later rung`) — a Kotlin `typealias` is top-level only and `export = ts` makes the body
+the surface a consumer's `@file:JsModule` will bind; NESTED namespaces are `external object`s
+(gate: `object`, members `= null!!`) with a nested alias a loud skip (its USES inline the body —
+the Dukat promise kept by syntax) and `export import X = ts.X` a marker; a NON-ambient namespace,
+the shorthand `declare module "m";` and `declare global` are loud skips; a dotted `declare
+namespace A.B` is `A` flattened with `B` nested (one node with a `PropertyAccessExpression`
+name). References render by the SHORTEST Kotlin spelling that resolves at the use site (Kotlin's
+innermost-first rule over the generation's own qualified names; a root type shadowed by a nested
+same-named one refuses loudly), `Inheritance` keys by qualified path, and every `finish()` rule
+is per SCOPE (a same-scope same-file duplicate — `interface Node` twice in `ts`, 10 of them — is
+the merge wording). tsgo 7.0.2 measured on implicit export: every member of an ambient namespace
+is exported, an explicit `export` elsewhere does NOT switch it off, nested namespaces inherit it,
+and the only switch-off is an export DECLARATION (`export { A }`), impossible in a namespace body
+(TS1194) and possible in `declare module "m"` — tsc's `setExportContextFlag`, implemented as such.
+
+**Deviation, and a checker finding: the lens is WRONG inside namespace bodies in both directions**
+(bare `Project` → `any` beside its own declaration, bare `Node` → the ROOT's where the namespace
+declares its own, `server.protocol.Request` → a type failing identity, and 509 `extends
+Node`-shaped clauses failing `heritageBaseSymbol` in the flattened root), so the generator grew a
+THIRD syntactic arm, `writtenTarget` — TypeScript's lexical rule over its own per-file tree,
+consulted only for a qualified name or a name written inside a namespace body; a bare name at a
+file's top level keeps the checker (imports). Queued as (CHK.76). **Three mechanisms the 588 KB
+gate exposed and closed**: chained `var` narrowing (29 errors — `inherited` now answers members
+as their base RENDERS them, composed down the chain), a diamond clash (`prunedSupertypes` drops a
+later base whose member clashes with one already inherited, measured rule: properties must be
+equal, functions only when neither return is a subtype), and `val` narrowing to a NON-subtype
+(244 — `readonly kind: SyntaxKind.Identifier` over `SyntaxKind` renders the inherited type loudly;
+a generated-subtype narrowing keeps its own). Two existing pins moved, one of them because the
+metadata compiler REFUSES `override val tag: Obs<U>` over `val tag: Obs<Any?>` (invariant `T`) —
+no gate had ever compiled that fixture. 16 new pins + a nested-object compile-gate case;
+`KotlinExternalsTypescriptGateTest` reads the local file (`XTSC_TYPESCRIPT_DTS` or the default,
+resolved against cwd AND its parent — the module test worker runs in the module dir; loud skip
+when absent). Externals 126 → 145/0; suite 16,928 → 16,947 / 0 / 3. **Census: 5,422
+declarations (1,802 val, 1,529 fun, 1,149 var, 831 interface, 73 enums, 22 typealias, 10 class, 6
+objects); 1,659 markers — 760 unmapped (unions of interfaces, `string & {}` brands, `{}`), 453
+narrowed-override, 180 unmappable root aliases, 72 constraints, 60 nested-alias skips, 26 optional
+methods, 19 `export import`, 11 value/type shares, 10 merges, 7 heritage skips; checker 1 error
+(TS1039, (CHK.75)).** The ladder — mitt → smol-toml → RxJS → typescript.d.ts — is now GREEN at
+every rung.
 
 **(EXT.12) LANDED — the overload collapse keeps the LEAST-MARKED member of an equivalence class,
 ties to the first declared.** One helper family in `KotlinSignatureKeys.kt` serves both sites
@@ -1276,6 +1320,43 @@ Owner decisions 2026-09-02:
   (ties → first), render the dropped ones as today's markers naming the kept signature. Both
   gates and the 250-file probe are the receipt (the collapse count must not move, the kept
   spellings must).
+
+- [x] **(EXT.13) DONE 2026-09-02 ((P18.9) note: `typescript.d.ts` → 9,792 lines of Kotlin compiling at 0 errors, 5,422 declarations; externals 145/0, suite 16,947/0/3; the checker's namespace resolution defects it found are (CHK.76)) — THE NAMESPACE RUNG — `typescript.d.ts` (the ladder's fourth rung) IS ONE
+  `declare namespace ts { … }` WITH `export = ts`, AND THE GENERATOR EMITS NOTHING FOR IT
+  (probed 2026-09-02: 1,296 root declarations, none carrying `export` — ambient-namespace
+  members are implicitly exported; nested `server`/`server.protocol`/`JsTyping`/
+  `ScriptSnapshot`; `export import X = ts.X` aliases).** Design: the ROOT ambient namespace
+  (and a `declare module "m"`) FLATTENS to the module surface under one loud header marker
+  (a Kotlin `typealias` is top-level only, and `export = ts` makes the body the surface a
+  consumer's `@file:JsModule` will bind); NESTED namespaces are `external object` members
+  (a nested alias a loud skip, its uses resolving through the checker); references render by
+  the shortest path from the use site; `Inheritance` keys by qualified path. Gate:
+  `KotlinExternalsTypescriptGateTest` over the local `typescript.d.ts` (env/default path,
+  loud skip when absent — the receipt is the note's census) plus hermetic pins.
+
+- [ ] **(CHK.75) TS1039 FALSE POSITIVE ON `typescript.d.ts:2610` — `protected readonly
+  latestDistTag = "latest";` IN AN AMBIENT (`declare namespace`) ABSTRACT CLASS (found
+  2026-09-02 by the externals probe; tsc 6.0.3's own declaration file, so pristine is silent
+  by construction).** tsc permits a LITERAL initializer on a `readonly` property in an ambient
+  context (the constant-initializer rule of `checkGrammarProperty`/`isValidAmbientInitializer`:
+  string/number/`-number`/boolean literals, template without substitutions, enum member
+  references); our emitter of TS1039 has no readonly-literal exemption. Fix at the walker,
+  pin all literal kinds plus the negative control (a non-literal initializer still reports,
+  a non-readonly literal still reports), corpus + cost_gate.
+
+- [ ] **(CHK.76) NAME RESOLUTION INSIDE A `declare namespace` BODY IS WRONG IN BOTH
+  DIRECTIONS, MEASURED BY (EXT.13) ON `typescript.d.ts` (2026-09-02): inside a nested namespace
+  a bare `Project` resolves to `any` (a sibling declared in the same namespace), a bare `Node`
+  resolves to the ROOT's `Node` where the namespace declares its own, `server.protocol.Request`
+  resolves to a type that fails identity, and inside the flattened root a bare heritage base
+  fails `heritageBaseSymbol` — 509 of tsc's `extends Node`-shaped clauses.** The generator
+  works around it with a SYNTACTIC lexical resolver over its own per-file tree
+  (`writtenTarget`, consulted for a qualified name or a name written inside a namespace body);
+  `typeReferenceSymbol` refuses qualified names by contract. These are checker defects on real
+  declaration files (B83.5's family: namespace-scoped declarations and the INV.2(c) chain):
+  reproduce each with a `.d.ts` fixture against tsgo, fix at the resolver, then retire the
+  generator's third syntactic arm where the lens answers. Instrument: the `typescript.d.ts`
+  probe's heritage-skip count (7 after the workaround; hundreds through the lens alone).
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
