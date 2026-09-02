@@ -89,6 +89,27 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.12) LANDED — the overload collapse keeps the LEAST-MARKED member of an equivalence class,
+ties to the first declared.** One helper family in `KotlinSignatureKeys.kt` serves both sites
+(`dedupeOverloads` for instance/static/interface members and `finish()` for the module surface,
+through a new sealed `FunctionSignature` view): the whole list is grouped by `overloadSignature`
+BEFORE deciding — a class spans non-consecutive declarations (rxjs's `zip` interleave) — then
+the strictly-fewest-markers member wins (` /* xtsc:` occurrences in parameter and return texts
+plus the member's own marker list). Every member keeps its declared SLOT: the survivor renders
+where it was declared and each dropped one is a marker where IT was — moving the survivor into
+the class's first slot would move it past members of OTHER classes in an interleaved surface,
+and nothing downstream reads position (`override`/`open` are keyed). The marker now names the
+survivor: `skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T)`.
+Four pins RED by ablation (the `of` shape, one per marker KIND — parameter, return, constraint —
+with a non-zero tie control, a three-member class keeping its middle member in place, a
+method/static/interface trio) and eight tie pins re-worded; the extras gate re-pinned from the
+output (`first` now keeps the typed `BooleanConstructor, defaultValue: D` twin over the `null`
+one; `of` keeps `<T> of(value: T): Observable<T>`). 250-file probe: collapse markers **49 → 49**,
+total 968 → 960, 0 compile errors; six survivors changed (`of`, `combineLatestAll`, operator
+`combineLatest`, `first`, `skipWhile`, `zipAll`). Externals 122 → 126/0; suite 16,924 → 16,928 /
+0 / 3. One trap re-met: a KDoc spelling `` `*/` `` closes the comment (CLAUDE.md's entry) — the
+first build failed on it.
+
 **(CHK.73b) LANDED — a class-valued export is refused loudly, generator-side.** `export const
 plain = Plain` rendered `val plain: Plain` (the INSTANCE type — the checker has no static-side
 type for a class value, (CHK.73)) and compiled. `collectValue`'s un-annotated branch now asks
@@ -1247,7 +1268,7 @@ Owner decisions 2026-09-02:
   instance type through an identifier naming the CLASS (`lens.typeReferenceSymbol`-style
   identity: the value's symbol IS a class declaration). Pin both directions.
 
-- [ ] **(EXT.12) OVERLOAD COLLAPSE POLICY — "MOST-MAPPED SIGNATURE WINS" INSTEAD OF FIRST-WINS
+- [x] **(EXT.12) DONE 2026-09-02 ((P18.9) note; least-marked survivor, ties first, slots kept; 49 collapses unchanged, 6 rxjs survivors cleaner; externals 126/0, suite 16,928/0/3) — OVERLOAD COLLAPSE POLICY — "MOST-MAPPED SIGNATURE WINS" INSTEAD OF FIRST-WINS
   (recorded by (EXT.11c), not taken).** Kotlin-equivalent overloads collapse to the FIRST in
   declaration order, which on rxjs keeps `of(...valuesAndScheduler: Any?)` and drops the clean
   `<T> of(value: T): Observable<T>`, and keeps `first`'s `null`-predicate twin over the typed

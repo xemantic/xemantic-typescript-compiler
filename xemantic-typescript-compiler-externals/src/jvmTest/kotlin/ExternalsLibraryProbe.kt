@@ -146,7 +146,9 @@ class ExternalsLibraryProbe {
             Regex("""unmapped .*""") to "unmapped <TYPE>",
             Regex("""constraint on \S+: .* not carried""") to "constraint on <T>: <TYPE> not carried",
             Regex("""default for \S+: .* not carried""") to "default for <T>: <TYPE> not carried",
-            Regex("""skipped overload of \S+ collapsing to a duplicate signature""") to
+            // (EXT.12) The marker names the kept signature; the category does
+            // not, so a census stays comparable across the policy change.
+            Regex("""skipped overload of \S+ collapsing to a duplicate signature - kept .*""") to
                 "skipped overload of <NAME> collapsing to a duplicate signature",
             Regex("""skipped \S+ declared again by another file - .*""") to
                 "skipped <NAME> declared again by another file",

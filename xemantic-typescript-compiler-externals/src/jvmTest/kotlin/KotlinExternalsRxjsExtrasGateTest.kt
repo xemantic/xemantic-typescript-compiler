@@ -1554,12 +1554,18 @@ export declare const EmptyError: EmptyErrorCtor;
         val rangeValue = "/* xtsc: skipped value ArgumentOutOfRangeError shares its name with the type ArgumentOutOfRangeError - module wiring is a later rung */\n" in rendered
         val emptyValue = "/* xtsc: skipped value EmptyError shares its name with the type EmptyError - module wiring is a later rung */\n" in rendered
         val noValueAjaxError = "public external val AjaxError" !in rendered
-        // (1) `first`'s six overloads are four Kotlin signatures: the
-        // nullability-only twin of the first and the name-only twin of the
-        // fourth are markers, at their positions.
-        val firstBlock = "public external fun <T> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+        // (1) `first`'s six overloads are four Kotlin signatures. (EXT.12):
+        // the `null`-predicate first overload (three markers: a default not
+        // carried, the `null` parameter, the return) is one overload with the
+        // typed `<T, D>(predicate: BooleanConstructor, defaultValue: D)` (two
+        // markers), which is now the survivor — before, first-wins kept the
+        // `null` twin. The name-only twin of the fourth is a marker naming
+        // it, at its position.
+        val firstBlock = "/* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Any?, defaultValue: D) */\n" +
             "\n" +
-            "/* xtsc: skipped overload of first collapsing to a duplicate signature */\n" +
+            "public external fun <T> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+            "\n" +
+            "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
             "\n" +
             "/* xtsc: constraint on S: any not carried */\n" +
             "public external fun <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S?): OperatorFunction<T, S>\n" +
@@ -1567,24 +1573,36 @@ export declare const EmptyError: EmptyErrorCtor;
             "/* xtsc: constraint on S: any not carried */\n" +
             "public external fun <T, S, D> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
             "\n" +
-            "/* xtsc: skipped overload of first collapsing to a duplicate signature */\n"
+            "/* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S?) */\n"
         val first = firstBlock in rendered
-        // The `of` twin: `<T> of(value: T)` is one overload with `<A>
-        // of(...valuesAndScheduler)`'s fallback, which comes first in the
-        // file and wins — the clean signature is the marker (first wins is
-        // the collapse's standing policy; a "most mapped wins" policy is a
-        // separate decision), beside `<A> of(...values: A)`'s.
-        val ofValue = "/* xtsc: constraint on A: readonly unknown[] not carried */\n" +
-            "public external fun <A> of(valuesAndScheduler: Any? /* xtsc: unmapped rest [any, SchedulerLike] */): Any? /* xtsc: unmapped Observable<any> */\n" in rendered
-        val ofCollapsed = "public external fun <T> of(): Observable<T>\n" +
+        // The `of` twins. (EXT.12): `<T> of(value: T)` is one overload with
+        // `<A> of(...valuesAndScheduler)`'s fallback (three markers) and with
+        // `<A> of(...values: A)`'s (three) — the clean signature, declared
+        // between them, is the survivor and both marked twins are markers
+        // naming it, each where it was declared; before, the first-declared
+        // fallback won and the clean signature was the marker. The
+        // `null`/`undefined` pair is the tie control: equally marked, the
+        // first stays.
+        val ofValue = "public external fun of(value: Any? /* xtsc: unmapped null */): Any? /* xtsc: unmapped Observable<null> */\n" +
             "\n" +
-            "/* xtsc: skipped overload of of collapsing to a duplicate signature */\n" +
+            "/* xtsc: skipped overload of of collapsing to a duplicate signature - kept of(value: Any?) */\n" in rendered
+        val ofCollapsed = "public external fun of(scheduler: SchedulerLike): Any? /* xtsc: unmapped Observable<never> */\n" +
             "\n" +
-            "/* xtsc: skipped overload of of collapsing to a duplicate signature */\n" in rendered
+            "/* xtsc: skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T) */\n" +
+            "\n" +
+            "public external fun of(): Any? /* xtsc: unmapped Observable<never> */\n" +
+            "\n" +
+            "public external fun <T> of(): Observable<T>\n" +
+            "\n" +
+            "public external fun <T> of(value: T): Observable<T>\n" +
+            "\n" +
+            "/* xtsc: skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T) */\n" in rendered
+        val noMarkedOf = "of(valuesAndScheduler" !in rendered
         // The cross-file `zip`: the operator's `<T, A> zip(otherInputs)` is
         // the name-only twin of the observable's `<A, R>
-        // zip(sourcesAndResultSelector)` and is a marker.
-        val zipCollapsed = "/* xtsc: skipped overload of zip collapsing to a duplicate signature */" in rendered
+        // zip(sourcesAndResultSelector)` — two markers against three — and
+        // is a marker naming it.
+        val zipCollapsed = "/* xtsc: skipped overload of zip collapsing to a duplicate signature - kept <A, R> zip(sourcesAndResultSelector: Any?) */" in rendered
         val noZipOtherInputs = "public external fun <T, A> zip(otherInputs" !in rendered
         // (3) The narrowed var renders the inherited type with the marker.
         val narrowed = "public open external class ConnectableObservable<T>(source: Observable<T>, subjectFactory: () -> Subject<T>) : Observable<T> {\n" +
@@ -1604,6 +1622,7 @@ export declare const EmptyError: EmptyErrorCtor;
         assert(first)
         assert(ofValue)
         assert(ofCollapsed)
+        assert(noMarkedOf)
         assert(zipCollapsed)
         assert(noZipOtherInputs)
         assert(narrowedVar)
@@ -1619,7 +1638,9 @@ export declare const EmptyError: EmptyErrorCtor;
         val tupleSources = "public external fun <A> zip(sources: Any? /* xtsc: unmapped [any] */): Observable<A>\n" in rendered
         val constructSignature = "public external interface AjaxErrorCtor {\n    /* xtsc: skipped construct signature */\n}\n" in rendered
         val booleanConstructor = "predicate: Any? /* xtsc: unmapped BooleanConstructor */" in rendered
-        val nullPredicate = "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped null */, defaultValue: D?): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" in rendered
+        // (EXT.12) The `null`-predicate `first` is the collapse's loser and
+        // says so — a marker naming its survivor, never a silent drop.
+        val nullPredicate = "/* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Any?, defaultValue: D) */\n" in rendered
         val noNamelessFun = "fun ``(" !in rendered
         assert(tupleSources)
         assert(constructSignature)

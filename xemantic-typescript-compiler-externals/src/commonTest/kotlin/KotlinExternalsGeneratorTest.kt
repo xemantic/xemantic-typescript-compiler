@@ -594,7 +594,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val rendered = result.kotlin
-        val marker = "/* xtsc: skipped overload of choose collapsing to a duplicate signature */" in rendered
+        val marker = "/* xtsc: skipped overload of choose collapsing to a duplicate signature - kept choose(mode: String) */" in rendered
         val funCount = Regex("public fun choose").findAll(rendered).count()
         assert(marker)
         assert(funCount == 1)
@@ -1032,7 +1032,7 @@ class KotlinExternalsGeneratorTest {
         val expected = """
             public external fun choose(mode: String): String
 
-            /* xtsc: skipped overload of choose collapsing to a duplicate signature */
+            /* xtsc: skipped overload of choose collapsing to a duplicate signature - kept choose(mode: String) */
 
             public external fun choose(mode: Boolean): Boolean
         """.trimIndent() + "\n"
@@ -2400,13 +2400,13 @@ class KotlinExternalsGeneratorTest {
 
             public external fun <T, D> first(predicate: Boolean, defaultValue: D): Src<D>
 
-            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+            /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Boolean, defaultValue: D) */
 
-            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+            /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Boolean, defaultValue: D) */
 
             public external fun <T, S> first(pick: (T) -> Boolean, defaultValue: S?): Src<S>
 
-            /* xtsc: skipped overload of first collapsing to a duplicate signature */
+            /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, S> first(pick: (T) -> Boolean, defaultValue: S?) */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
@@ -2441,15 +2441,15 @@ class KotlinExternalsGeneratorTest {
 
             public external fun <T> of(value: T): Box<T>
 
-            /* xtsc: skipped overload of of collapsing to a duplicate signature */
+            /* xtsc: skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T) */
 
             public external fun of(single: Any?): Box<Any?>
 
             public external fun <T, U> pair(a: T, b: U): Unit
 
-            /* xtsc: skipped overload of pair collapsing to a duplicate signature */
+            /* xtsc: skipped overload of pair collapsing to a duplicate signature - kept <T, U> pair(a: T, b: U) */
 
-            /* xtsc: skipped overload of pair collapsing to a duplicate signature */
+            /* xtsc: skipped overload of pair collapsing to a duplicate signature - kept <T, U> pair(a: T, b: U) */
 
             public external fun <A> pair(a: A, b: A): Unit
         """.trimIndent() + "\n"
@@ -2494,7 +2494,7 @@ class KotlinExternalsGeneratorTest {
 
             public external fun <U> wrap(x: Box<Any?>): Unit
 
-            /* xtsc: skipped overload of wrap collapsing to a duplicate signature */
+            /* xtsc: skipped overload of wrap collapsing to a duplicate signature - kept <T> wrap(x: Box<T>) */
 
             public external fun <U> wrap(x: Box<U?>): Unit
 
@@ -2504,13 +2504,13 @@ class KotlinExternalsGeneratorTest {
 
             public external fun <T> make(cb: () -> T): Unit
 
-            /* xtsc: skipped overload of make collapsing to a duplicate signature */
+            /* xtsc: skipped overload of make collapsing to a duplicate signature - kept <T> make(cb: () -> T) */
 
             public external fun <T, U> two(a: Box<T>, b: Box<U>): Unit
 
             public external fun <A, B> two(a: Box<A>, b: Box<A>): Unit
 
-            /* xtsc: skipped overload of two collapsing to a duplicate signature */
+            /* xtsc: skipped overload of two collapsing to a duplicate signature - kept <T, U> two(a: Box<T>, b: Box<U>) */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
@@ -2541,7 +2541,7 @@ class KotlinExternalsGeneratorTest {
                 public fun <U> on(x: T): Unit
                 public fun <V> on(x: V): Unit
                 public fun <U> emit(x: Any?): Unit
-                /* xtsc: skipped overload of emit collapsing to a duplicate signature */
+                /* xtsc: skipped overload of emit collapsing to a duplicate signature - kept <U> emit(x: Any?) */
                 public fun once(x: T): Unit
                 public fun once(x: Any?): Unit
             }
@@ -2749,6 +2749,155 @@ class KotlinExternalsGeneratorTest {
 
             public open external class Leaf<V>(x: Obs<V>) : Mid<V> {
                 public override fun use(v: Obs<V>): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    // --- (EXT.12) the collapse's survivor: fewest markers, ties to the first ---
+
+    @Test
+    fun `the of shape keeps the clean overload over the marked one declared before it`() {
+        // rxjs's `of`: the `[...A, SchedulerLike]` rest overload comes FIRST
+        // and falls to a marked `Any?`, and `<T> of(value: T)` four lines
+        // below is the same Kotlin overload (a free type parameter erases
+        // to `Any?`). Before: first-wins kept the marked one and the clean
+        // signature was the marker.
+        val result = generate(
+            """
+            export interface SchedulerLike { now(): number; }
+            export interface Observable<T> { value: T; }
+            export declare function of<A extends readonly unknown[]>(...valuesAndScheduler: [...A, SchedulerLike]): Observable<A[number]>;
+            export declare function of<T>(value: T): Observable<T>;
+            """
+        )
+        val expected = """
+            public external interface SchedulerLike {
+                public fun now(): Double
+            }
+
+            public external interface Observable<T> {
+                public var value: T
+            }
+
+            /* xtsc: skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T) */
+
+            public external fun <T> of(value: T): Observable<T>
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `the least-marked overload wins and a parameter marker a return marker and a constraint marker each count`() {
+        // Three ingredients of the rank, one per name: `pick` differs in a
+        // PARAMETER marker, `wrap` in the RETURN marker, `gen` in the
+        // declaration's own marker list (a constraint not carried) — in
+        // each the clean twin is declared SECOND and is kept. `tie` is the
+        // control: two equally marked twins keep the first, the standing
+        // policy, so every earlier collapse pin renders as it did.
+        val result = generate(
+            """
+            export declare function pick(x: string | number): string;
+            export declare function pick(x: any): string;
+            export declare function wrap(x: any): string | number;
+            export declare function wrap(x: any): string;
+            export declare function gen<A extends string>(x: A): void;
+            export declare function gen<T>(x: T): void;
+            export declare function tie(x: string | number): void;
+            export declare function tie(x: boolean | string): void;
+            """
+        )
+        val expected = """
+            /* xtsc: skipped overload of pick collapsing to a duplicate signature - kept pick(x: Any?) */
+
+            public external fun pick(x: Any?): String
+
+            /* xtsc: skipped overload of wrap collapsing to a duplicate signature - kept wrap(x: Any?) */
+
+            public external fun wrap(x: Any?): String
+
+            /* xtsc: skipped overload of gen collapsing to a duplicate signature - kept <T> gen(x: T) */
+
+            public external fun <T> gen(x: T): Unit
+
+            public external fun tie(x: Any? /* xtsc: unmapped string | number */): Unit
+
+            /* xtsc: skipped overload of tie collapsing to a duplicate signature - kept tie(x: Any?) */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a three-member class keeps its least-marked middle member at its own position across an interleaved twin`() {
+        // The class is `pick(x: Any?)` three times over, split by a
+        // two-parameter `pick` that is a different overload: collected as a
+        // WHOLE before deciding (a running seen-set would have kept the
+        // first), the middle member wins, and every slot stays where it was
+        // declared — marker, the interleaved twin, the survivor, marker.
+        val result = generate(
+            """
+            export declare function pick(x: string | number): string | number;
+            export declare function pick(x: string, y: string): string;
+            export declare function pick(x: any): string;
+            export declare function pick(x: boolean | string): string;
+            """
+        )
+        val expected = """
+            /* xtsc: skipped overload of pick collapsing to a duplicate signature - kept pick(x: Any?) */
+
+            public external fun pick(x: String, y: String): String
+
+            public external fun pick(x: Any?): String
+
+            /* xtsc: skipped overload of pick collapsing to a duplicate signature - kept pick(x: Any?) */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a method and a static member collapse by the same rank as a top-level function`() {
+        // The one helper decides all three sites: an instance method, a
+        // companion (static) member and an interface method each keep the
+        // clean second twin over the marked first.
+        val result = generate(
+            """
+            export declare class Bus {
+                send(x: string | number): void;
+                send(x: any): void;
+                static open(mode: string | number): Bus;
+                static open(mode: any): Bus;
+            }
+            export interface Port {
+                read(x: string | number): string;
+                read(x: any): string;
+            }
+            """
+        )
+        val expected = """
+            public open external class Bus {
+                /* xtsc: skipped overload of send collapsing to a duplicate signature - kept send(x: Any?) */
+                public fun send(x: Any?): Unit
+                public companion object {
+                    /* xtsc: skipped overload of open collapsing to a duplicate signature - kept open(mode: Any?) */
+                    public fun open(mode: Any?): Bus
+                }
+            }
+
+            public external interface Port {
+                /* xtsc: skipped overload of read collapsing to a duplicate signature - kept read(x: Any?) */
+                public fun read(x: Any?): String
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin

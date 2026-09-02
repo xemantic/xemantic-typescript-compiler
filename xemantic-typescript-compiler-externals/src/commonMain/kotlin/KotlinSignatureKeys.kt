@@ -96,6 +96,13 @@ package com.xemantic.typescript.compiler.externals
  * `open` by [overrideSignature]; the two agree on every signature without
  * own type parameters, and deliberately not otherwise.
  *
+ * ## The collapse's survivor
+ *
+ * (EXT.12) The key says WHICH declarations are one Kotlin overload; which
+ * of them is rendered is a second, separate decision — the one with the
+ * fewest markers, ties to the first declared ([overloadWinners],
+ * [markerCount]) — and the dropped ones name it ([overloadCollapseDescription]).
+ *
  * ## The type text
  *
  * The keys are computed from the RENDERED Kotlin type text because that is
@@ -375,7 +382,7 @@ private fun textualSignature(
  * nullability, `vararg` marked, markers stripped (two literal types both
  * falling to `Any?` conflict however different their markers read).
  * Two signatures with equal keys are one Kotlin overload; the collector
- * keeps the first and marks the rest.
+ * keeps the one [overloadWinners] picks and marks the rest.
  */
 internal fun overloadSignature(
     name: String,
@@ -404,6 +411,107 @@ internal fun overloadSignature(
         }
         append(')')
     }
+}
+
+/**
+ * (EXT.12) The number of loud records a signature would render — the
+ * `xtsc:` marker comments inside its parameter types and its return type,
+ * plus its own marker list (constraints and defaults not carried, a dropped
+ * `this`). The RANK of a member within an overload equivalence class: the
+ * one with the fewest markers is the one whose Kotlin spelling lost the
+ * least of the TypeScript, so it is the one a consumer should be handed.
+ */
+internal fun markerCount(signature: FunctionSignature): Int =
+    signature.parameters.sumOf { countMarkers(it.type) } +
+        countMarkers(signature.returnType) +
+        signature.markers.size
+
+private fun countMarkers(text: String): Int {
+    var count = 0
+    var index = text.indexOf(MARKER_START)
+    while (index >= 0) {
+        count++
+        index = text.indexOf(MARKER_START, index + MARKER_START.length)
+    }
+    return count
+}
+
+/**
+ * (EXT.12) For every candidate of a list — a class's members, the program's
+ * top-level declarations — the index of the member of its overload
+ * equivalence class that is KEPT, or the candidate's own index where it is
+ * kept itself or is not a function at all (a `null` slot). Written once for
+ * both sites ([markerCount] is the rank, [overloadSignature] the class).
+ *
+ * The policy, which (EXT.11c) recorded and did not take: two overloads
+ * whose [overloadSignature]s are equal are one Kotlin overload, and the
+ * survivor is the one with the FEWEST markers — a tie keeps the FIRST in
+ * declaration order, which is what the policy was before, so every
+ * equally-marked class renders exactly as it did. First-wins alone kept
+ * rxjs's marked `<A> of(...valuesAndScheduler: Any?)` and dropped the
+ * clean `<T> of(value: T): Observable<T>` declared four lines below it,
+ * because the marked one came first: a marker describes what was LOST, and
+ * the member losing least is the one to keep.
+ *
+ * A class is collected over the WHOLE list before any decision — an
+ * equivalence class spans consecutive AND non-consecutive declarations
+ * (rxjs's `zip` overloads interleave with a differently-keyed twin, and a
+ * class spans files at the module surface), so a running "seen" set, which
+ * decides at the first repeat, cannot express a later winner.
+ *
+ * Position is decided by the caller and is the same at both sites: every
+ * member keeps its DECLARED slot — the kept one renders where it was
+ * declared, each dropped one is a marker where IT was declared. Not "the
+ * kept member moves into the class's first slot": a member of an
+ * interleaved class would then move past members of OTHER classes, and the
+ * rendered order would stop being the source order — with every slot kept,
+ * rendered slot `i` is declaration `i` whatever the policy picks, the
+ * marker for a dropped declaration stands where a reader of the `.d.ts`
+ * expects it, and nothing downstream reads position (`override`/`open` are
+ * keyed). The accessor-pair precedent (emit at the first accessor) is a
+ * different case: a pair IS one member and has no second slot to keep.
+ */
+internal fun overloadWinners(candidates: List<FunctionSignature?>): IntArray {
+    val winners = IntArray(candidates.size) { it }
+    val classes = LinkedHashMap<String, MutableList<Int>>()
+    candidates.forEachIndexed { index, candidate ->
+        if (candidate == null) return@forEachIndexed
+        val key = overloadSignature(candidate.name, candidate.typeParameters, candidate.parameters)
+        classes.getOrPut(key) { mutableListOf() }.add(index)
+    }
+    for (members in classes.values) {
+        var winner = members.first()
+        var fewest = markerCount(candidates[winner]!!)
+        for (index in members) {
+            val count = markerCount(candidates[index]!!)
+            // Strictly fewer: a tie keeps the earlier declaration.
+            if (count < fewest) {
+                winner = index
+                fewest = count
+            }
+        }
+        for (index in members) winners[index] = winner
+    }
+    return winners
+}
+
+/**
+ * (EXT.12) The marker text of a dropped overload, naming the signature it
+ * collapsed INTO — its own type parameters, name and parameter list as
+ * Kotlin sees them, markers stripped (a comment-close inside the marker
+ * would end it early) and the return type omitted (the class is decided
+ * on the parameters).
+ */
+internal fun overloadCollapseDescription(kept: FunctionSignature): String {
+    val typeParameters =
+        if (kept.typeParameters.isEmpty()) ""
+        else kept.typeParameters.joinToString(", ", prefix = "<", postfix = "> ") { kotlinIdentifier(it) }
+    val parameters = kept.parameters.joinToString(", ") { parameter ->
+        (if (parameter.vararg) "vararg " else "") +
+            "${kotlinIdentifier(parameter.name)}: ${typeTextWithoutMarker(parameter.type)}"
+    }
+    return "overload of ${kept.name} collapsing to a duplicate signature - kept " +
+        commentSafe("$typeParameters${kotlinIdentifier(kept.name)}($parameters)")
 }
 
 /**

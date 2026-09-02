@@ -94,13 +94,13 @@ internal class ExternalTypeAlias(
  * return type, built from nothing but the language.
  */
 internal class ExternalTopLevelFunction(
-    val name: String,
-    val typeParameters: List<String>,
+    override val name: String,
+    override val typeParameters: List<String>,
     /** Loud records — a constraint or default not carried — above the fun. */
-    val markers: List<String>,
-    val parameters: List<ExternalParameter>,
-    val returnType: String,
-) : ExternalDeclaration
+    override val markers: List<String>,
+    override val parameters: List<ExternalParameter>,
+    override val returnType: String,
+) : ExternalDeclaration, FunctionSignature
 
 /**
  * (EXT.4) An exported class — `public external class`, the one declared
@@ -165,14 +165,31 @@ internal class ExternalProperty(
 ) : ExternalMember
 
 internal class ExternalFunction(
-    val name: String,
+    override val name: String,
     /** (EXT.5) A generic METHOD's own type-parameter names, syntactic. */
-    val typeParameters: List<String>,
+    override val typeParameters: List<String>,
     /** (EXT.5) Loud per-member records — constraints/defaults not carried. */
-    val markers: List<String>,
-    val parameters: List<ExternalParameter>,
-    val returnType: String,
-) : ExternalMember
+    override val markers: List<String>,
+    override val parameters: List<ExternalParameter>,
+    override val returnType: String,
+) : ExternalMember, FunctionSignature
+
+/**
+ * (EXT.12) The one view the overload collapse reads a function through —
+ * a top-level function and a method (instance or static) are the same
+ * shape to Kotlin's overload rule and to the rank that picks a class's
+ * survivor ([overloadWinners]), so both model classes expose it and the
+ * collapse is written ONCE.
+ */
+internal sealed interface FunctionSignature {
+    val name: String
+    /** The function's OWN type-parameter names. */
+    val typeParameters: List<String>
+    /** Loud records rendered above the declaration — constraints, defaults, a dropped `this`. */
+    val markers: List<String>
+    val parameters: List<ExternalParameter>
+    val returnType: String
+}
 
 internal class ExternalParameter(
     val name: String,

@@ -339,9 +339,11 @@ private class ExternalsCollector(
      * (EXT.7) The collected declarations after the whole-program passes
      * that can only run once every file has been walked: the top-level
      * function OVERLOAD collapse (the (EXT.5) rule, applied to the module
-     * surface — overloads of one name are consecutive in walk order, and a
-     * second one mapping to the same Kotlin signature becomes a marker; the
-     * signature is the measured [overloadSignature], (EXT.11c)), and the
+     * surface — the declarations mapping to one Kotlin signature are one
+     * class, wherever in the walk they sit, and all but its survivor become
+     * markers naming it; the signature is the measured [overloadSignature],
+     * (EXT.11c), the survivor [overloadWinners]' least-marked pick,
+     * (EXT.12)), and the
      * cross-file NAME rules: every file's declarations share one Kotlin
      * package, so a second interface/class/enum/alias spelling a name an
      * earlier one already took is a loud skip rather than a redeclaration
@@ -375,7 +377,11 @@ private class ExternalsCollector(
      * an alias to a function type or to an interface conflicts with nothing.
      */
     fun finish(): List<ExternalDeclaration> {
-        val seenSignatures = HashSet<String>()
+        // (EXT.12) The whole surface's functions, so an equivalence class
+        // that spans files (rxjs's two `zip`s) or interleaves with another
+        // is collected before its survivor is picked.
+        val functions = declarations.map { it as? ExternalTopLevelFunction }
+        val winners = overloadWinners(functions)
         val seenTypeNames = HashSet<String>()
         val seenValueNames = HashSet<String>()
         val typeDeclarations = HashMap<String, ExternalDeclaration>()
@@ -390,7 +396,7 @@ private class ExternalsCollector(
             typeDeclarations.putIfAbsent(name, declaration)
         }
         val inheritance = Inheritance(declarations)
-        return declarations.map { declaration ->
+        return declarations.mapIndexed { index, declaration ->
             when (declaration) {
                 is ExternalTopLevelFunction -> {
                     val signature = overloadSignature(
@@ -399,10 +405,9 @@ private class ExternalsCollector(
                         declaration.parameters,
                     )
                     val collidingType = typeDeclarations[declaration.name]
+                    val winner = winners[index]
                     when {
-                        !seenSignatures.add(signature) -> SkippedDeclaration(
-                            "overload of ${declaration.name} collapsing to a duplicate signature"
-                        )
+                        winner != index -> SkippedDeclaration(overloadCollapseDescription(functions[winner]!!))
                         collidingType != null && signature in constructorSignatures(collidingType, inheritance) ->
                             SkippedDeclaration(
                                 "function ${declaration.name} shares its signature with the constructor of " +
@@ -1102,21 +1107,22 @@ private class ExternalsCollector(
      * (EXT.5) Collapses overloads that MAP to one Kotlin signature: TypeScript
      * distinguishes them (a literal-typed parameter, say) where the mapping's
      * fallback does not, and Kotlin refuses conflicting overloads — so the
-     * later duplicates become loud markers instead of a compile error.
+     * duplicates become loud markers instead of a compile error. The marker
+     * comment is NOT part of the signature Kotlin sees — two different
+     * literal types both falling to a marked `Any?` conflict however
+     * different their markers read — so the key ([overloadSignature]) is the
+     * type text with the marker stripped. (EXT.12) Which duplicate survives
+     * is [overloadWinners]' decision — the least-marked one, ties to the
+     * first — at each member's own position; the same helper decides the
+     * module surface in [finish].
      */
     private fun dedupeOverloads(members: MutableList<ExternalMember>) {
-        val seenSignatures = HashSet<String>()
+        val functions = members.map { it as? ExternalFunction }
+        val winners = overloadWinners(functions)
         for (index in members.indices) {
-            val member = members[index] as? ExternalFunction ?: continue
-            // The marker comment is NOT part of the signature Kotlin sees —
-            // two different literal types both falling to `Any? /* xtsc: … */`
-            // conflict however different their markers read — so the key is
-            // the type text with the marker stripped.
-            val signature = overloadSignature(member.name, member.typeParameters, member.parameters)
-            if (!seenSignatures.add(signature)) {
-                members[index] =
-                    SkippedMember("overload of ${member.name} collapsing to a duplicate signature")
-            }
+            val winner = winners[index]
+            if (winner == index) continue
+            members[index] = SkippedMember(overloadCollapseDescription(functions[winner]!!))
         }
     }
 
