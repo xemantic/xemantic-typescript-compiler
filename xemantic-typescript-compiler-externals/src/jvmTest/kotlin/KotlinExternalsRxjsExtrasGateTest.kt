@@ -1769,10 +1769,10 @@ export { zipWith } from './internal/operators/zipWith';
             "\n" +
             "public external fun <T> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
             "\n" +
-            "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
+            "public external fun <T, D> first(predicate: Any? /* xtsc: unmapped BooleanConstructor */ = definedExternally, defaultValue: D = definedExternally): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +
             "\n" +
             "/* xtsc: constraint on S: any not carried */\n" +
-            "public external fun <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S?): OperatorFunction<T, S>\n" +
+            "public external fun <T, S> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: S? = definedExternally): OperatorFunction<T, S>\n" +
             "\n" +
             "/* xtsc: constraint on S: any not carried */\n" +
             "public external fun <T, S, D> first(predicate: (T, Double, Observable<T>) -> Boolean, defaultValue: D): Any? /* xtsc: unmapped OperatorFunction<any, any> */\n" +

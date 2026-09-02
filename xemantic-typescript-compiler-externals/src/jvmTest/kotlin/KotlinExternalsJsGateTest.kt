@@ -818,13 +818,90 @@ class KotlinExternalsJsGateTest {
     }
 
     @Test
+    fun `measured - a nested declaration cannot inherit a default for one member from two direct supertypes`() {
+        // (EXT.23) The measurements behind [Inheritance.droppedDefaults] —
+        // found by the `@types/node` probe (`Stream.Readable : Stream,
+        // ReadableStream`, 4 errors), reduced here: the refusal is a
+        // property of the DERIVED declaration being NESTED and of two
+        // DIRECT supertypes each DECLARING the default.
+        val stdlib = JsStdlib.locate() ?: return
+        val multipleDefaults = "declares a default value for"
+        val r = "public external interface R { public fun <T> pipe(d: T, o: String? = definedExternally): T }\n"
+        val rNoDefault = "public external interface R { public fun <T> pipe(d: T, o: String?): T }\n"
+        val s = "public open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T }\n"
+        val sNoDefault = "public open external class S { public fun <T> pipe(d: T, o: String?): T }\n"
+        // -- refused: the derived declaration is nested, wherever, with or without an explicit override
+        val nestedInBase = refusedWith(stdlib, r + "public open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R }", multipleDefaults)
+        val nestedInBaseOpenOverride = refusedWith(
+            stdlib,
+            r + "public open external class S { public open fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R { override fun <T> pipe(d: T, o: String?): T } }",
+            multipleDefaults,
+        )
+        val nestedSiblingBase = refusedWith(stdlib, r + "public external object NS { public open class S { public fun <T> pipe(d: T, o: String? = definedExternally): T }\n public open class D : S, R }", multipleDefaults)
+        val nestedTopLevelBase = refusedWith(stdlib, r + s + "public external object NS { public open class D : S, R }", multipleDefaults)
+        val nestedTwoDeep = refusedWith(stdlib, r + "public open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public object Inner { public open class D : S, R } }", multipleDefaults)
+        val nestedInterface = refusedWith(stdlib, r + "public external object NS { public interface R2 { public fun <T> pipe(d: T, o: String? = definedExternally): T }\n public interface D : R, R2 }", multipleDefaults)
+        val nestedTwoInterfacesOverride = refusedWith(
+            stdlib,
+            "public external object NS { public interface R { public fun pipe(d: String, o: String? = definedExternally): Unit }\n public interface R2 { public fun pipe(d: String, o: String? = definedExternally): Unit }\n public open class D : R, R2 { override fun pipe(d: String, o: String?): Unit } }",
+            multipleDefaults,
+        )
+        // -- accepted: a top-level derived declaration, whatever its bases' nesting
+        val topLevel = accepts(stdlib, r + s + "public open external class D : S, R")
+        val topLevelOpenOverride = accepts(stdlib, r + "public open external class S { public open fun <T> pipe(d: T, o: String? = definedExternally): T }\npublic open external class D : S, R { override fun <T> pipe(d: T, o: String?): T }")
+        val topLevelOverNestedBase = accepts(stdlib, r + "public external object NS { public open class S { public fun <T> pipe(d: T, o: String? = definedExternally): T } }\npublic open external class D : NS.S, R")
+        val topLevelInterface = accepts(stdlib, r + "public external interface R2 { public fun <T> pipe(d: T, o: String? = definedExternally): T }\npublic external interface D : R, R2")
+        // -- accepted: an INDIRECT second declarer, or one overriding without a default
+        val indirectInterface = accepts(stdlib, r + "public external interface R2 : R\npublic open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R2 }")
+        val indirectClass = accepts(stdlib, r + s + "public open external class M : S\npublic external object NS { public open class D : M, R }")
+        val intermediateOverride = accepts(stdlib, r + "public external interface R2 : R { override fun <T> pipe(d: T, o: String?): T }\npublic open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R2 }")
+        // -- accepted: one declarer's default dropped (either), the derived class still callable with the omission
+        val interfaceDropped = accepts(stdlib, rNoDefault + "public open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R }")
+        val classDropped = accepts(stdlib, r + "public open external class S { public fun <T> pipe(d: T, o: String?): T\n public open class D : S, R }")
+        val interfaceDroppedOverride = accepts(
+            stdlib,
+            "public external object NS { public interface R { public fun pipe(d: String, o: String? = definedExternally): Unit }\n public interface R2 { public fun pipe(d: String, o: String?): Unit }\n public open class D : R, R2 { override fun pipe(d: String, o: String?): Unit } }",
+        )
+        val consumer = jsCompileCheck(
+            "@JsModule(\"m\") " + rNoDefault + "@JsModule(\"m\") public open external class S { public fun <T> pipe(d: T, o: String? = definedExternally): T\n public open class D : S, R }\n" +
+                "public fun consume(d: S.D, s: S, r: R) { d.pipe(\"x\"); s.pipe(\"x\"); r.pipe(\"x\", null) }\n",
+            stdlib,
+        )
+        val consumerAccepted = consumer.errors.isEmpty()
+        if (!consumerAccepted) println("  consumer refused: " + consumer.errors.joinToString(" | "))
+        assert(nestedInBase)
+        assert(nestedInBaseOpenOverride)
+        assert(nestedSiblingBase)
+        assert(nestedTopLevelBase)
+        assert(nestedTwoDeep)
+        assert(nestedInterface)
+        assert(nestedTwoInterfacesOverride)
+        assert(topLevel)
+        assert(topLevelOpenOverride)
+        assert(topLevelOverNestedBase)
+        assert(topLevelInterface)
+        assert(indirectInterface)
+        assert(indirectClass)
+        assert(intermediateOverride)
+        assert(interfaceDropped)
+        assert(classDropped)
+        assert(interfaceDroppedOverride)
+        assert(consumerAccepted)
+        // sNoDefault documents the class-side drop the rule does NOT choose (the class base is the first declarer)
+        assert(sNoDefault.isNotEmpty())
+    }
+
+    @Test
     fun `a class extending a nested base with a constructor parameter compiles as Kotlin JS - the types-node stream shape`() {
         // (EXT.22) The real output of the `crypto.d.ts` / `zlib.d.ts` shape
         // over `stream.d.ts` — classes extending the nested `Transform`
         // (`Stream.Transform` on the real `@types/node`, whose `opts?` was
         // `No value passed for parameter 'opts'` 23 times there) — through
-        // the Kotlin/JS compiler; every nested subclass of the chain goes
-        // secondary, `Derived` over the top-level `Hash` stays primary.
+        // the Kotlin/JS compiler. (EXT.23) refined the rule: `opts?` is now
+        // DEFAULTED on the base, so the chain's subclasses stay primary;
+        // the secondary form is kept for a nested base with a REQUIRED
+        // parameter (`Strict(name)` / `Cipher`), `Derived` over the
+        // top-level `Hash` stays primary.
         val result = wired(
             "node", "/index.d.ts",
             "/index.d.ts" to """
@@ -845,6 +922,7 @@ class KotlinExternalsJsGateTest {
                         class Duplex extends Stream { constructor(opts?: StreamOptions); }
                         class Transform extends Duplex { constructor(opts?: TransformOptions); }
                         class PassThrough extends Transform {}
+                        class Strict extends Stream { constructor(name: string, opts?: StreamOptions); }
                     }
                     export = internal;
                 }
@@ -862,19 +940,162 @@ class KotlinExternalsJsGateTest {
                         flush(): void;
                     }
                     class Sign extends stream.Writable { private constructor(); }
+                    class Cipher extends stream.Strict { constructor(key?: string); }
                     class Derived extends Hash { constructor(); }
                     function createHash(algorithm: string): Hash;
                 }
             """.trimIndent(),
         )
         val check = gate("types-node stream shape", result) ?: return
-        val hashSecondary = "public open external class Hash : internal.Transform {\n    public constructor()\n" in result.kotlin
-        val gzipSecondary = "public open external class Gzip : internal.Transform, Zlib {\n    public constructor(options: String?)\n" in result.kotlin
+        val transformDefaulted = "    public open class Transform(opts: TransformOptions? = definedExternally) : Duplex\n" in result.kotlin
+        val hashPrimary = "public open external class Hash() : internal.Transform {\n" in result.kotlin
+        val gzipPrimary = "public open external class Gzip(options: String? = definedExternally) : internal.Transform, Zlib {\n" in result.kotlin
+        val cipherSecondary = "public open external class Cipher : internal.Strict {\n    public constructor(key: String? = definedExternally)\n" in result.kotlin
         val derivedPrimary = "public open external class Derived() : Hash\n" in result.kotlin
-        assert(hashSecondary)
-        assert(gzipSecondary)
+        assert(transformDefaulted)
+        assert(hashPrimary)
+        assert(gzipPrimary)
+        assert(cipherSecondary)
         assert(derivedPrimary)
         assert(check.errors.isEmpty())
+    }
+
+    @Test
+    fun `measured - a defaulted optional parameter in every declaration position and what it does to overrides and overloads`() {
+        // (EXT.23) The measurements behind the optional-parameter rule —
+        // every sentence of [parameterText]'s KDoc is a row here.
+        val stdlib = JsStdlib.locate() ?: return
+        val noDefaultOnOverride = "An overriding function is not allowed to specify default values for its parameters"
+        val conflicting = "Conflicting overloads"
+        // -- (a) `= definedExternally` in every declaration position
+        val topLevel = accepts(stdlib, "public external fun f(x: String? = definedExternally): Unit")
+        val classMember = accepts(stdlib, "public open external class C { public fun f(x: String? = definedExternally): Unit }")
+        val abstractClassMember = accepts(stdlib, "public abstract external class C { public fun f(x: String? = definedExternally): Unit }")
+        val interfaceMember = accepts(stdlib, "public external interface I { public fun f(x: String? = definedExternally): Unit }")
+        val objectMember = accepts(stdlib, "public external object O { public fun f(x: String? = definedExternally): Unit }")
+        val nestedClassMember = accepts(stdlib, "public external object O { public open class C { public fun f(x: String? = definedExternally): Unit } }")
+        val companionMember = accepts(stdlib, "public open external class C { public companion object { public fun f(x: String? = definedExternally): Unit } }")
+        val primaryConstructor = accepts(stdlib, "public open external class C(x: String? = definedExternally)")
+        val secondaryConstructor = accepts(
+            stdlib,
+            "public external object NS { public open class Inner(x: String) }\npublic open external class D : NS.Inner { public constructor(x: String? = definedExternally) }",
+        )
+        val varargDefault = accepts(stdlib, "public external fun f(vararg xs: String = definedExternally): Unit")
+        val operatorSet = refusedWith(
+            stdlib,
+            "public external interface I { public operator fun set(key: String, value: String? = definedExternally): Unit }",
+            "last parameter must not have a default value or be a vararg",
+        )
+        val genericParameter = accepts(stdlib, "public external fun <T> f(x: T? = definedExternally): Unit")
+        val nonNullGenericParameter = accepts(stdlib, "public external fun <T> f(x: T = definedExternally): Unit")
+        val nonNullParameter = accepts(stdlib, "public external fun f(x: String = definedExternally): Unit")
+        val functionTypedParameter = accepts(stdlib, "public external fun f(x: ((String) -> Unit)? = definedExternally): Unit")
+        // -- (e) the fallback type, marker and all
+        val anyFallback = accepts(stdlib, "public external fun f(x: Any? = definedExternally): Unit")
+        val anyFallbackMarked = accepts(stdlib, "public external fun f(x: Any? /* xtsc: unmapped string | number */ = definedExternally): Unit")
+        // -- (g) an optional before a required one, and before a vararg
+        val optionalThenRequired = accepts(stdlib, "public external fun f(a: String? = definedExternally, b: String): Unit")
+        val optionalThenVararg = accepts(stdlib, "public external fun f(a: String, b: String? = definedExternally, vararg rest: String): Unit")
+        // -- (EXT.22) refined: a nested base whose parameters are all DEFAULTED needs no secondary constructor
+        val defaultedNested = "public external object NS { public open class Inner(x: String? = definedExternally) }\n"
+        val nestedDefaultedOwnParameter = accepts(stdlib, defaultedNested + "public open external class D(y: Double) : NS.Inner")
+        val nestedDefaultedOwnDefaulted = accepts(stdlib, defaultedNested + "public open external class D(x: String? = definedExternally) : NS.Inner")
+        val nestedDefaultedInherited = accepts(stdlib, defaultedNested + "public open external class D : NS.Inner")
+        val nestedDefaultedChain = accepts(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String? = definedExternally)\n    public open class Inner2(x: String? = definedExternally) : Inner\n}\n" +
+                "public open external class D(o: String? = definedExternally) : NS.Inner2\npublic open external class E() : D",
+        )
+        val nestedDefaultedTwoParameters = accepts(
+            stdlib,
+            "public external object NS { public open class Inner(x: String? = definedExternally, y: Double? = definedExternally) }\npublic open external class D() : NS.Inner",
+        )
+        val nestedMixedStillSecondary = refusedWith(
+            stdlib,
+            "public external object NS { public open class Inner(x: String, y: Double? = definedExternally) }\npublic open external class D() : NS.Inner",
+            "No value passed for parameter",
+        )
+        // -- (b) an override may not restate the default and inherits it
+        val classBase = "public open external class B { public open fun f(x: String? = definedExternally): Unit }\n"
+        val overrideRestating = refusedWith(stdlib, classBase + "public open external class D : B { override fun f(x: String? = definedExternally): Unit }", noDefaultOnOverride)
+        val overridePlain = accepts(stdlib, classBase + "public open external class D : B { override fun f(x: String?): Unit }")
+        val interfaceBase = "public external interface I { public fun f(x: String? = definedExternally): Unit }\n"
+        val interfaceOverrideRestating = refusedWith(stdlib, interfaceBase + "public open external class C : I { override fun f(x: String? = definedExternally): Unit }", noDefaultOnOverride)
+        val interfaceOverridePlain = accepts(stdlib, interfaceBase + "public open external class C : I { override fun f(x: String?): Unit }")
+        val subInterfaceOverridePlain = accepts(stdlib, interfaceBase + "public external interface J : I { override fun f(x: String?): Unit }")
+        val liftedShape = accepts(
+            stdlib,
+            "public external interface E { public fun <K> on(event: K, listener: Any? = definedExternally): Unit }\n" +
+                "public open external class C : E { override fun <K> on(event: K, listener: Any?): Unit }",
+        )
+        val chainedOverride = accepts(
+            stdlib,
+            interfaceBase + "public open external class C : I { override fun f(x: String?): Unit }\npublic open external class D : C { override fun f(x: String?): Unit }",
+        )
+        // a consumer omits the argument through the override — the default is inherited
+        val consumer = jsCompileCheck(
+            """
+            @JsModule("m") public external interface I { public fun f(x: String? = definedExternally): Unit }
+            @JsModule("m") public open external class C : I { override fun f(x: String?): Unit }
+            @JsModule("m") public open external class B { public open fun g(x: String? = definedExternally): Unit }
+            @JsModule("m") public open external class D : B { override fun g(x: String?): Unit }
+            @JsModule("m") public external fun h(a: String, b: String? = definedExternally, vararg rest: String): Unit
+            @JsModule("m") public external fun k(a: String? = definedExternally, b: String): Unit
+            public fun consume(c: C, d: D, i: I) { c.f(); c.f("x"); d.g(); d.g(null); i.f(); h("a"); h("a", "b", "c", "d"); k(b = "x") }
+            """.trimIndent() + "\n",
+            stdlib,
+        )
+        val consumerAccepted = consumer.errors.isEmpty()
+        if (!consumerAccepted) println("  consumer refused: " + consumer.errors.joinToString(" | "))
+        // -- (c) a default does not change the conflict relation, and `f()` beside `f(x = …)` is not a conflict
+        val defaultVsRequired = refusedWith(stdlib, "public external fun f(x: String?): Unit\npublic external fun f(x: String? = definedExternally): Unit", conflicting)
+        val defaultVsRequiredMember = refusedWith(stdlib, "public open external class C { public fun f(x: String?): Unit\n public fun f(x: String? = definedExternally): Unit }", conflicting)
+        val defaultVsNonNull = accepts(stdlib, "public external fun f(x: String): Unit\npublic external fun f(x: String? = definedExternally): Unit")
+        val defaultVsEmpty = accepts(stdlib, "public external fun f(): Unit\npublic external fun f(x: String? = definedExternally): Unit")
+        val emptyCall = jsCompileCheck(
+            "@JsModule(\"m\") public external fun f(): Unit\n@JsModule(\"m\") public external fun f(x: String? = definedExternally): Unit\npublic fun consume() { f(); f(\"x\") }\n",
+            stdlib,
+        )
+        val emptyCallAccepted = emptyCall.errors.isEmpty()
+        if (!emptyCallAccepted) println("  empty call refused: " + emptyCall.errors.joinToString(" | "))
+        assert(topLevel)
+        assert(classMember)
+        assert(abstractClassMember)
+        assert(interfaceMember)
+        assert(objectMember)
+        assert(nestedClassMember)
+        assert(companionMember)
+        assert(primaryConstructor)
+        assert(secondaryConstructor)
+        assert(varargDefault)
+        assert(operatorSet)
+        assert(genericParameter)
+        assert(nonNullGenericParameter)
+        assert(nonNullParameter)
+        assert(functionTypedParameter)
+        assert(anyFallback)
+        assert(anyFallbackMarked)
+        assert(optionalThenRequired)
+        assert(optionalThenVararg)
+        assert(nestedDefaultedOwnParameter)
+        assert(nestedDefaultedOwnDefaulted)
+        assert(nestedDefaultedInherited)
+        assert(nestedDefaultedChain)
+        assert(nestedDefaultedTwoParameters)
+        assert(nestedMixedStillSecondary)
+        assert(overrideRestating)
+        assert(overridePlain)
+        assert(interfaceOverrideRestating)
+        assert(interfaceOverridePlain)
+        assert(subInterfaceOverridePlain)
+        assert(liftedShape)
+        assert(chainedOverride)
+        assert(consumerAccepted)
+        assert(defaultVsRequired)
+        assert(defaultVsRequiredMember)
+        assert(defaultVsNonNull)
+        assert(defaultVsEmpty)
+        assert(emptyCallAccepted)
     }
 
 }

@@ -229,4 +229,44 @@ class KotlinOverloadEquivalenceTest {
         assert(failing.isEmpty())
     }
 
+    @Test
+    fun `measured - a defaulted parameter leaves the conflict relation alone and the gate variant spells its default as null`() {
+        // (EXT.23) The metadata half of the optional-parameter measurement:
+        // the compile-gate variant renders `x: T? = null` (`definedExternally`
+        // is `kotlin.js`-only), and a default is not part of the signature.
+        val rows = listOf(
+            conflict("default vs required", "fun f(x: String?): Unit = null!!", "fun f(x: String? = null): Unit = null!!"),
+            distinct("default vs non-null", "fun f(x: String): Unit = null!!", "fun f(x: String? = null): Unit = null!!"),
+            distinct("default vs no parameter", "fun f(): Unit = null!!", "fun f(x: String? = null): Unit = null!!"),
+            conflict("default tp vs Any?", "fun <T> f(x: T? = null): Unit = null!!", "fun <U> f(x: Any?): Unit = null!!"),
+            distinct("default on an interface member", "interface I { fun f(x: String? = null): Unit }", ""),
+            distinct("default on an abstract member", "abstract class A { abstract fun f(x: String? = null): Unit }", ""),
+            distinct("default on an open member", "abstract class A { open fun f(x: String? = null): Unit = null!! }", ""),
+            distinct("default on a primary constructor", "abstract class A(x: String? = null)", ""),
+            distinct("default on a companion member", "abstract class A { companion object { fun f(x: String? = null): Unit = null!! } }", ""),
+            distinct("default on an object member", "object O { fun f(x: String? = null): Unit = null!! }", ""),
+            conflict("default on an operator set - refused", "interface I { operator fun set(key: String, value: String? = null): Unit }", ""),
+            distinct("default before an operator set's value", "interface I { operator fun set(key: String? = null, value: String): Unit }", ""),
+            distinct("default on Any? with a marker", "fun f(x: Any? /* xtsc: unmapped string | number */ = null): Unit = null!!", ""),
+            distinct("default before a required parameter", "fun f(a: String? = null, b: String): Unit = null!!", ""),
+            distinct("default before a vararg", "fun f(a: String, b: String? = null, vararg rest: String): Unit = null!!", ""),
+            conflict("override restating the default", "abstract class B { open fun f(x: String? = null): Unit = null!! }", "abstract class D : B() { override fun f(x: String? = null): Unit = null!! }"),
+            distinct("override without the default", "abstract class B { open fun f(x: String? = null): Unit = null!! }", "abstract class D : B() { override fun f(x: String?): Unit = null!! }"),
+            conflict("interface override restating the default", "interface I { fun f(x: String? = null): Unit }", "abstract class C : I { override fun f(x: String? = null): Unit = null!! }"),
+            distinct("interface override without the default", "interface I { fun f(x: String? = null): Unit }", "abstract class C : I { override fun f(x: String?): Unit = null!! }"),
+            distinct("the inherited default is callable", "interface I { fun f(x: String? = null): Unit }\nabstract class C : I { override fun f(x: String?): Unit = null!! }", "fun consume(c: C) { c.f(); c.f(\"x\") }"),
+            distinct("no parameter beside a default is callable", "fun f(): Unit = null!!\nfun f(x: String? = null): Unit = null!!", "fun consume() { f(); f(\"x\") }"),
+            conflict("definedExternally is unresolved outside kotlin.js", "fun f(x: String? = definedExternally): Unit = null!!", ""),
+            conflict("null on a non-null type parameter - refused", "fun <D> f(x: D = null): Unit = null!!", ""),
+            conflict("null on a non-null type - refused", "fun f(x: String = null): Unit = null!!", ""),
+            distinct("null!! on a non-null type parameter", "fun <D> f(x: D = null!!): Unit = null!!", ""),
+            distinct("null!! on a non-null type", "fun f(x: String = null!!): Unit = null!!", ""),
+            distinct("null!! on an interface member", "interface I { fun <D> f(x: D = null!!): Unit }", ""),
+            distinct("null!! on an abstract member and a constructor", "abstract class A(x: String = null!!) { abstract fun f(x: String = null!!): Unit }", ""),
+        )
+        val failing = mismatches(rows)
+        println("MEASURED metadata mismatches: $failing")
+        assert(failing.isEmpty())
+    }
+
 }

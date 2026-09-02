@@ -383,10 +383,10 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
         // intersection falls back, a plain optional interface parameter maps
         // by name), so both survive the collapse.
         val bigIntOverload = "public external fun parse(toml: String, options: Any? /* xtsc: unmapped ParseOptions & " in rendered
-        val plainOverload = "public external fun parse(toml: String, options: ParseOptions?): Any? /* xtsc: unmapped TomlTableWithoutBigInt */\n" in rendered
+        val plainOverload = "public external fun parse(toml: String, options: ParseOptions? = definedExternally): Any? /* xtsc: unmapped TomlTableWithoutBigInt */\n" in rendered
         // (EXT.11b) `obj: any` is `Any?` with no marker; the destructured
         // options parameter keeps its marker.
-        val destructured = "public external fun stringify(obj: Any?, p1: Any? /* xtsc: unmapped { maxDepth?: number | undefined; numbersAsFloat?: boolean | undefined; } */): String\n" in rendered
+        val destructured = "public external fun stringify(obj: Any?, p1: Any? /* xtsc: unmapped { maxDepth?: number | undefined; numbersAsFloat?: boolean | undefined; } */ = definedExternally): String\n" in rendered
         val options = "public external interface ParseOptions {\n    public var maxDepth: Double?\n" in rendered
         // (EXT.16) Wired to the package: `declare const _default` carries
         // no `export` and IS the package's default, so it joins the surface

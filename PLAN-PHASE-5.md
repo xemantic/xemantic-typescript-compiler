@@ -89,6 +89,33 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.23) LANDED — a TypeScript-optional parameter renders `x: T? = definedExternally` (real) /
+`x: T? = null` (gate), everywhere a declaration's parameter is rendered, through ONE
+`ExternalParameter.optional` flag and one `parameterText(parameter, OptionalDefault)`
+(`DEFINED_EXTERNALLY` / `NULL` / `INHERITED`).** Three measurement tables (90 rows: 62 Kotlin/JS
+in the JS gate, 28 metadata in `KotlinOverloadEquivalenceTest`) decided the exceptions: an
+OVERRIDE carries no default (`An overriding function is not allowed to specify default values`;
+the base's is inherited, and where the base parameter is required a loud marker records the
+TypeScript-only optionality); a `vararg` never; `operator fun set` REFUSES a default in both
+compilers (unreachable — an index value is never optional); function TYPES stay refused (arity);
+a default is in NEITHER the overload nor the override key (`f()` beside `f(x = …)` is distinct
+and unambiguous at the call site, measured). Two sub-rules the measurement forced: a collapse
+SURVIVOR carries a dropped twin's optionality (rxjs `first()`/`last()` stay callable), and the
+gate default on a non-null survivor type is `= null!!`. (EXT.22) refined on the way: a nested
+base whose parameters are ALL optional is now defaulted, so its subclasses keep the primary
+constructor (`Stream.Transform(opts?)`'s chain) — only a required non-vararg base parameter
+forces the secondary form. **NEW rule found by `@types/node` (4 errors): a NESTED class/interface
+with two DIRECT supertypes each declaring a default for one member is `More than one function
+overridden by 'pipe' declares a default value`** — 38 variant rows showed the refusal is a
+property of the DERIVED declaration being nested and only DIRECT declarers count (the same shape
+at top level, an indirect second declarer, or an intermediate override without a default is
+accepted); `Inheritance.droppedDefaults` drops all but the first direct declarer's default
+(class base first) with a marker naming the keeper. Six generator pins + three measurement
+tests; 19 existing pins moved by exactly the default addition (stash-ablation 19 RED). Censuses:
+rxjs 123 defaults / 1 override-loss marker, `@types/node` 688 / 1 dropped (`ReadableStream.pipe`,
+keeper `Stream`), `typescript.d.ts` 236 — all three at 0 metadata and 0 Kotlin/JS errors.
+Externals 233 → 242/0; suite 17,117 → 17,126 / 0 / 3.
+
 **(EXT.22) LANDED — and its queued mechanism was REFUTED by measurement before any code moved.**
 70 Kotlin/JS rows in three batches: an external class may NEVER spell a superclass call
 (`Delegated constructor call in external class is prohibited` for `Base(definedExternally)`,
@@ -1812,7 +1839,7 @@ Owner decisions 2026-09-02:
   refuted by (EXT.18)'s measurement (it can). Receipt: `@types/node` real output 23 → 0
   Kotlin/JS errors, the JS gate's library fixtures green.
 
-- [ ] **(EXT.23) A TypeScript-OPTIONAL PARAMETER'S HONEST KOTLIN/JS RENDERING IS `x: T? =
+- [x] **(EXT.23) DONE 2026-09-02 ((P18.9) note; `= definedExternally` real / `= null` gate, three measurement tables (90 rows), the nested two-direct-declarer default conflict found and handled; rxjs 123 / `@types/node` 688 / `typescript.d.ts` 236 defaulted parameters, all at 0 errors in both compilers; externals 242/0, suite 17,126/0/3) — A TypeScript-OPTIONAL PARAMETER'S HONEST KOTLIN/JS RENDERING IS `x: T? =
   definedExternally`, NOT `x: T?` (measured by (EXT.22): a defaulted parameter is what makes a
   nested base callable with `()` and lets a consumer omit what TS lets it omit).** Today every
   optional parameter renders nullable-only, so a Kotlin caller must pass `null` where a TS

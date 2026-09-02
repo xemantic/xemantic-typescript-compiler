@@ -1465,7 +1465,7 @@ class KotlinExternalsGeneratorTest {
 
             public external interface Task {
                 public var cb: Cb
-                public fun run(cb: Cb?): Unit
+                public fun run(cb: Cb? = definedExternally): Unit
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin
@@ -2154,7 +2154,7 @@ class KotlinExternalsGeneratorTest {
             public external interface Host {
                 public fun getVersion(): String
                 public var getRoots: (() -> Double)?
-                public fun readFile(path: String, encoding: String?): String?
+                public fun readFile(path: String, encoding: String? = definedExternally): String?
             }
 
             public abstract external class Base : Host {
@@ -2293,7 +2293,7 @@ class KotlinExternalsGeneratorTest {
                 public var q: Box?
                 public var f: ((String) -> Unit)?
                 public var m: ((String) -> String?)?
-                public fun g(x: Box?): Unit
+                public fun g(x: Box? = definedExternally): Unit
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin
@@ -2593,13 +2593,13 @@ class KotlinExternalsGeneratorTest {
                 public var v: T
             }
 
-            public external fun <T, D> first(predicate: Boolean, defaultValue: D): Src<D>
+            public external fun <T, D> first(predicate: Boolean, defaultValue: D = definedExternally): Src<D>
 
             /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Boolean, defaultValue: D) */
 
             /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, D> first(predicate: Boolean, defaultValue: D) */
 
-            public external fun <T, S> first(pick: (T) -> Boolean, defaultValue: S?): Src<S>
+            public external fun <T, S> first(pick: (T) -> Boolean, defaultValue: S? = definedExternally): Src<S>
 
             /* xtsc: skipped overload of first collapsing to a duplicate signature - kept <T, S> first(pick: (T) -> Boolean, defaultValue: S?) */
         """.trimIndent() + "\n"
@@ -4291,7 +4291,7 @@ class KotlinExternalsGeneratorTest {
             """
         )
         val expected = """
-            public open external class Config(name: String, tags: Array<String>, raw: Any? /* xtsc: unmapped string | number */, level: Double?) {
+            public open external class Config(name: String, tags: Array<String>, raw: Any? /* xtsc: unmapped string | number */, level: Double? = definedExternally) {
                 public val name: String
                 public val tags: Array<String>
                 public var raw: Any? /* xtsc: unmapped string | number */
@@ -4791,7 +4791,7 @@ class KotlinExternalsGeneratorTest {
                     public var hwm: Double?
                 }
 
-                public open class Readable(opts: ReadableOptions?) : EventEmitter<Any?> {
+                public open class Readable(opts: ReadableOptions? = definedExternally) : EventEmitter<Any?> {
                     /* xtsc: on(String, () -> Unit) implements the inherited <K> on(String, () -> Unit) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
                     public override fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped any */
                     /* xtsc: skipped overload of on collapsing to a duplicate signature - kept on(event: String, listener: () -> Unit) */
@@ -4803,8 +4803,7 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: module "fs" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public open external class ReadStream : Stream.Readable {
-                public constructor(opts: Stream.ReadableOptions?)
+            public open external class ReadStream(opts: Stream.ReadableOptions? = definedExternally) : Stream.Readable {
                 /* xtsc: <K> on(K, Any?) implements the inherited on(Any?, Any?) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
                 public override fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
                 /* xtsc: skipped overload on(Any?, Any?) collapsing to the inherited on(Any?, Any?) already rendered */
@@ -4867,7 +4866,7 @@ class KotlinExternalsGeneratorTest {
         val expected = """
             /* xtsc: module "events" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public open external class EventEmitter(options: Any? /* xtsc: unmapped Hidden */) {
+            public open external class EventEmitter(options: Any? /* xtsc: unmapped Hidden */ = definedExternally) {
                 /* xtsc: merged with the interface EventEmitter and the namespace EventEmitter of this scope - TypeScript declaration merging */
                 public fun emit(name: String): Boolean
                 public fun fromInterface(): Unit
@@ -4881,7 +4880,7 @@ class KotlinExternalsGeneratorTest {
                     public var signal: Double?
                 }
 
-                public open class Resource(options: Any? /* xtsc: unmapped Hidden */) : EventEmitter {
+                public open class Resource(options: Any? /* xtsc: unmapped Hidden */ = definedExternally) : EventEmitter {
                     public val x: Double
                 }
             }
@@ -4900,7 +4899,7 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public open external class Stream(options: Any? /* xtsc: unmapped Hidden */) : EventEmitter {
+            public open external class Stream(options: Any? /* xtsc: unmapped Hidden */ = definedExternally) : EventEmitter {
                 public fun pipe(): Unit
             }
 
@@ -5064,7 +5063,7 @@ class KotlinExternalsGeneratorTest {
         val expected = """
             /* xtsc: module "assert" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public external fun assert(value: Any?, message: String?): Unit
+            public external fun assert(value: Any?, message: String? = definedExternally): Unit
 
             public external object assert {
                 public fun ok(value: Any?): Unit
@@ -5278,6 +5277,359 @@ class KotlinExternalsGeneratorTest {
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
+    }
+
+    // ---- (EXT.23) optional parameters default ---------------------------------
+
+    @Test
+    fun `an optional parameter defaults to definedExternally in every declaration position and to null in the gate variant`() {
+        // (EXT.23) `x?: T` is `x: T? = definedExternally`: the type was
+        // already nullable, the DEFAULT is what lets a Kotlin caller omit
+        // what a TypeScript caller omits. Measured in every position
+        // (`KotlinExternalsJsGateTest`'s `measured - a defaulted optional
+        // parameter …`); the gate variant spells `= null`, because
+        // `definedExternally` is `kotlin.js`-only — a renderer flag, never
+        // text surgery.
+        val result = generate(
+            """
+            export declare function f(a: string, b?: number, ...rest: string[]): void;
+            export declare function g(u?: string | number): void;
+            export interface I {
+                m(x?: string): void;
+                cb?: (x: string) => void;
+            }
+            export declare class C {
+                constructor(x?: string);
+                m(x?: string): void;
+                static s(x?: boolean): void;
+            }
+            export declare namespace ns {
+                function h(x?: string): void;
+            }
+            """
+        )
+        val expected = """
+            public external fun f(a: String, b: Double? = definedExternally, vararg rest: String): Unit
+
+            public external fun g(u: Any? /* xtsc: unmapped string | number */ = definedExternally): Unit
+
+            public external interface I {
+                public fun m(x: String? = definedExternally): Unit
+                public var cb: ((String) -> Unit)?
+            }
+
+            public open external class C(x: String? = definedExternally) {
+                public fun m(x: String? = definedExternally): Unit
+                public companion object {
+                    public fun s(x: Boolean? = definedExternally): Unit
+                }
+            }
+
+            /* xtsc: namespace ns - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external fun h(x: String? = definedExternally): Unit
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public fun f(a: String, b: Double? = null, vararg rest: String): Unit = null!!
+
+            public fun g(u: Any? /* xtsc: unmapped string | number */ = null): Unit = null!!
+
+            public interface I {
+                public fun m(x: String? = null): Unit
+                public var cb: ((String) -> Unit)?
+            }
+
+            public abstract class C(x: String? = null) {
+                public fun m(x: String? = null): Unit = null!!
+                public companion object {
+                    public fun s(x: Boolean? = null): Unit = null!!
+                }
+            }
+
+            /* xtsc: namespace ns - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public fun h(x: String? = null): Unit = null!!
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gateVariant = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an override carries no default - it inherits the base's and records a TypeScript-only optionality`() {
+        // (EXT.23) Measured: `An overriding function is not allowed to
+        // specify default values for its parameters`, and the base's default
+        // is inherited (`c.f()` compiles through the override). Where the
+        // BASE parameter is required (`x: string | undefined`), the derived
+        // member's optionality is a fact only TypeScript has: rendered
+        // without a default, loudly.
+        val result = generate(
+            """
+            export interface I {
+                f(x?: string): void;
+                g(x: string | undefined): void;
+            }
+            export declare class C implements I {
+                f(x?: string): void;
+                g(x?: string): void;
+            }
+            export interface J extends I {
+                f(x?: string): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface I {
+                public fun f(x: String? = definedExternally): Unit
+                public fun g(x: String?): Unit
+            }
+
+            public open external class C : I {
+                public override fun f(x: String?): Unit
+                /* xtsc: optional in TypeScript, required here - an override cannot carry a default and the inherited g(String?) declares none for x */
+                public override fun g(x: String?): Unit
+            }
+
+            public external interface J : I {
+                public override fun f(x: String?): Unit
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public interface I {
+                public fun f(x: String? = null): Unit
+                public fun g(x: String?): Unit
+            }
+
+            public abstract class C : I {
+                public override fun f(x: String?): Unit = null!!
+                /* xtsc: optional in TypeScript, required here - an override cannot carry a default and the inherited g(String?) declares none for x */
+                public override fun g(x: String?): Unit = null!!
+            }
+
+            public interface J : I {
+                public override fun f(x: String?): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gateVariant = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an inherited constructor keeps its optional parameters and only a required nested base parameter forces the secondary form`() {
+        // (EXT.23) refining (EXT.22): a base's optional parameter is
+        // DEFAULTED, which is exactly the case the Kotlin/JS measurement
+        // accepts in the primary form (`nestedDefaulted…` rows), so
+        // `Stream.Transform(opts?)`-shaped bases keep every subclass
+        // primary; a REQUIRED one still moves the subclass's constructor to
+        // the secondary form, its own optional parameter defaulted there.
+        val result = generateDts(
+            """
+            declare module "m" {
+                namespace NS {
+                    class Opt { constructor(x?: string); }
+                    class Req { constructor(x: string, y?: number); }
+                }
+                export = NS;
+            }
+            declare module "n" {
+                import * as m from "m";
+                class A extends m.Opt {}
+                class B extends m.Opt { constructor(n: number); }
+                class D extends m.Req {}
+                class E extends m.Req { constructor(y?: number); }
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "m" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object NS {
+                public open class Opt(x: String? = definedExternally)
+
+                public open class Req(x: String, y: Double? = definedExternally)
+            }
+
+            /* xtsc: skipped export = NS - module wiring is a later rung */
+
+            /* xtsc: module "n" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class A(x: String? = definedExternally) : NS.Opt
+
+            public open external class B(n: Double) : NS.Opt
+
+            public open external class D : NS.Req {
+                public constructor(x: String, y: Double? = definedExternally)
+            }
+
+            public open external class E : NS.Req {
+                public constructor(y: Double? = definedExternally)
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a collapsed overload's optionality is carried onto the survivor`() {
+        // (EXT.23) `first()` is legal TypeScript through rxjs's `first<T,
+        // D>(predicate?: null, defaultValue?: D)`, which collapses into the
+        // typed twin of the same key; the survivor keeps its own types and
+        // takes the dropped twin's optionality, so the call stays legal in
+        // Kotlin ([collapsedParameters]) — at the top level and on a member.
+        val result = generate(
+            """
+            export declare function pick<T, U>(x: T, y: U): void;
+            export declare function pick<T, U>(x?: T, y?: U): void;
+            export declare class K {
+                m(x: string | number): void;
+                m(x?: string | number): void;
+            }
+            """
+        )
+        val expected = """
+            public external fun <T, U> pick(x: T = definedExternally, y: U = definedExternally): Unit
+
+            /* xtsc: skipped overload of pick collapsing to a duplicate signature - kept <T, U> pick(x: T, y: U) */
+
+            public open external class K {
+                public fun m(x: Any? /* xtsc: unmapped string | number */ = definedExternally): Unit
+                /* xtsc: skipped overload of m collapsing to a duplicate signature - kept m(x: Any?) */
+            }
+        """.trimIndent() + "\n"
+        // The gate variant's default for a NON-NULL survivor type is the
+        // `Nothing` idiom — `= null` is refused there (measured on rxjs's
+        // `first`/`last`), `= null!!` is the default of any type.
+        val expectedGate = """
+            public fun <T, U> pick(x: T = null!!, y: U = null!!): Unit = null!!
+
+            /* xtsc: skipped overload of pick collapsing to a duplicate signature - kept <T, U> pick(x: T, y: U) */
+
+            public abstract class K {
+                public fun m(x: Any? /* xtsc: unmapped string | number */ = null): Unit = null!!
+                /* xtsc: skipped overload of m collapsing to a duplicate signature - kept m(x: Any?) */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gateVariant = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a nested class inheriting a defaulted member from two direct supertypes drops the interface's default loudly`() {
+        // (EXT.23) The `@types/node` `Stream.Readable : Stream,
+        // ReadableStream` shape: measured, Kotlin refuses a NESTED class
+        // (or interface) inheriting a default for one member from two
+        // direct declarers, and accepts a top-level one — so `R.pipe`'s
+        // default is dropped (the class base `S` is the first declarer and
+        // keeps it), for everyone, with the reason; `T` at the top level
+        // changes nothing ([Inheritance.droppedDefaults]).
+        val result = generateDts(
+            """
+            declare namespace NodeJS {
+                interface R { pipe(d: string, o?: string): void; }
+            }
+            declare module "m" {
+                class S { pipe(d: string, o?: string): void; }
+                namespace S {
+                    class D extends S implements NodeJS.R {}
+                    class E extends S implements NodeJS.R { pipe(d: string, o?: string): void; }
+                }
+                export = S;
+            }
+            declare module "n" {
+                import S = require("m");
+                class T extends S implements NodeJS.R {}
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace NodeJS - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface R {
+                /* xtsc: optional o of pipe rendered without a default - Kotlin refuses the nested S.D a default for one member from two supertypes; S's is kept */
+                public fun pipe(d: String, o: String?): Unit
+            }
+
+            /* xtsc: module "m" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class S {
+                /* xtsc: merged with the namespace S of this scope - TypeScript declaration merging */
+                public open fun pipe(d: String, o: String? = definedExternally): Unit
+
+                public open class D : S, R
+
+                public open class E : S, R {
+                    public override fun pipe(d: String, o: String?): Unit
+                }
+            }
+
+            /* xtsc: skipped export = S - module wiring is a later rung */
+
+            /* xtsc: module "n" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class T : S, R
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `overloads differing only by optionality are distinct Kotlin declarations and a parameter property defaults too`() {
+        // (EXT.23) Measured: `f()` beside `f(x: String? = definedExternally)`
+        // is neither a declaration conflict nor a call ambiguity, and
+        // `f(x: String)` beside it is distinct by nullability — a default
+        // is not part of either key. A parameter property's constructor
+        // parameter defaults; the member it declares stays a nullable var.
+        val result = generate(
+            """
+            export declare function f(): void;
+            export declare function f(x?: string): void;
+            export declare function g(x: string): void;
+            export declare function g(x?: string): void;
+            export class P {
+                constructor(public x?: number, readonly y?: string) {}
+            }
+            export interface Q {
+                cb: (x?: string) => void;
+            }
+            """
+        )
+        val expected = """
+            public external fun f(): Unit
+
+            public external fun f(x: String? = definedExternally): Unit
+
+            public external fun g(x: String): Unit
+
+            public external fun g(x: String? = definedExternally): Unit
+
+            public open external class P(x: Double? = definedExternally, y: String? = definedExternally) {
+                public var x: Double?
+                public val y: String?
+            }
+
+            public external interface Q {
+                public var cb: Any? /* xtsc: unmapped (x?: string | undefined) => void */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
     }
 
 }

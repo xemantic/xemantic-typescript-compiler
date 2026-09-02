@@ -884,8 +884,25 @@ private class ExternalsCollector(
         // (EXT.12) The whole scope's functions, so an equivalence class
         // that spans files (rxjs's two `zip`s) or interleaves with another
         // is collected before its survivor is picked.
-        val functions = entries.map { ((it as? Collected)?.declaration as? ExternalTopLevelFunction) }
-        val winners = overloadWinners(functions)
+        val collected = entries.map { ((it as? Collected)?.declaration as? ExternalTopLevelFunction) }
+        val winners = overloadWinners(collected)
+        // (EXT.23) Each survivor with the optionality of the twins it absorbed.
+        val functions = collected.mapIndexed { index, function ->
+            if (function == null || winners[index] != index) function
+            else {
+                val twins = winners.indices.filter { it != index && winners[it] == index }.map { collected[it]!! }
+                if (twins.isEmpty()) function
+                else ExternalTopLevelFunction(
+                    name = function.name,
+                    typeParameters = function.typeParameters,
+                    markers = function.markers,
+                    parameters = collapsedParameters(function, twins),
+                    returnType = function.returnType,
+                    binding = function.binding,
+                    rename = function.rename,
+                )
+            }
+        }
         // (EXT.20) The merged declarations, each under its lead's index.
         val groups = scopeGroups(scope)
         val merged = HashMap<Int, ExternalDeclaration>()
@@ -1210,6 +1227,8 @@ private class ExternalsCollector(
                     )
                     val collidingType = typeDeclarations[declaration.name]
                     val winner = winners[index]
+                    // (EXT.23) The survivor as [reduce] unified it — the twins' optionality carried.
+                    val survivor = functions[index] ?: declaration
                     when {
                         winner != index -> SkippedDeclaration(overloadCollapseDescription(functions[winner]!!))
                         collidingType != null &&
@@ -1222,7 +1241,7 @@ private class ExternalsCollector(
                                     name = renamed,
                                     typeParameters = declaration.typeParameters,
                                     markers = declaration.markers,
-                                    parameters = declaration.parameters,
+                                    parameters = survivor.parameters,
                                     returnType = declaration.returnType,
                                     rename = Rename(
                                         declaration.name,
@@ -1239,7 +1258,7 @@ private class ExternalsCollector(
                                 )
                             }
                         }
-                        else -> declaration
+                        else -> survivor
                     }
                 }
                 is ExternalInterface ->
@@ -1475,7 +1494,7 @@ private class ExternalsCollector(
                                 if (arguments.size == target.typeParameters.size) target.typeParameters.zip(arguments).toMap()
                                 else emptyMap()
                             val parameters = inheritance.effectiveConstructor(target).orEmpty().map {
-                                ExternalParameter(it.name, substituteTypeParameters(it.type, substitution), it.vararg)
+                                ExternalParameter(it.name, substituteTypeParameters(it.type, substitution), it.vararg, it.optional)
                             }
                             setOf(overloadSignature(type.name, type.typeParameters, parameters))
                         }
@@ -2632,6 +2651,8 @@ private class ExternalsCollector(
                 lens = lens,
                 scope = scope,
             ),
+            // (EXT.23) The optionality itself, for the default the renderer adds.
+            optional = parameter.questionToken,
         )
     }
 
@@ -2792,8 +2813,22 @@ private class ExternalsCollector(
         val winners = overloadWinners(functions)
         for (index in members.indices) {
             val winner = winners[index]
-            if (winner == index) continue
-            members[index] = SkippedMember(overloadCollapseDescription(functions[winner]!!))
+            val function = functions[index] ?: continue
+            if (winner != index) {
+                members[index] = SkippedMember(overloadCollapseDescription(functions[winner]!!))
+                continue
+            }
+            // (EXT.23) The survivor carries the optionality of the twins it absorbed.
+            val twins = winners.indices.filter { it != index && winners[it] == index }.map { functions[it]!! }
+            if (twins.isEmpty()) continue
+            members[index] = ExternalFunction(
+                name = function.name,
+                typeParameters = function.typeParameters,
+                markers = function.markers,
+                parameters = collapsedParameters(function, twins),
+                returnType = function.returnType,
+                operator = function.operator,
+            )
         }
     }
 

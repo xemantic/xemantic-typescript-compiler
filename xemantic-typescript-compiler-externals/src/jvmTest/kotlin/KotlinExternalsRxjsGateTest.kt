@@ -1416,10 +1416,10 @@ export { zipWith } from './internal/operators/zipWith';
         val observerError = "public external interface Observer<T> {\n    public var next: (T) -> Unit\n    public var error: (Any?) -> Unit\n    public var complete: () -> Unit\n}\n" in rendered
         val source = "    public var source: Observable<Any?>?\n    public var operator: Operator<Any?, T>?\n" in rendered
         val kind = "    public val kind: String\n    public val value: T?\n    public val error: Any?\n" in rendered
-        val subscribe = "    public fun subscribe(next: ((T) -> Unit)?, error: ((Any?) -> Unit)?, complete: (() -> Unit)?): Subscription\n" in rendered
+        val subscribe = "    public fun subscribe(next: ((T) -> Unit)? = definedExternally, error: ((Any?) -> Unit)? = definedExternally, complete: (() -> Unit)? = definedExternally): Subscription\n" in rendered
         val restPipe = "op9: OperatorFunction<H, I>, vararg operations: OperatorFunction<Any?, Any?>): Observable<Any?>\n" in rendered
-        val subscription = "public open external class Subscription(initialTeardown: (() -> Unit)?) : SubscriptionLike {\n" in rendered
-        val anonymous = "public open external class AnonymousSubject<T>(destination: Observer<T>?, source: Observable<T>?) : Subject<T> {\n" in rendered
+        val subscription = "public open external class Subscription(initialTeardown: (() -> Unit)? = definedExternally) : SubscriptionLike {\n" in rendered
+        val anonymous = "public open external class AnonymousSubject<T>(destination: Observer<T>? = definedExternally, source: Observable<T>? = definedExternally) : Subject<T> {\n" in rendered
         // (EXT.16) Wired to the package: every declaration the entry
         // re-exports binds under its own name (rxjs renames nothing, so no
         // `@JsName` at all), the SEVEN value-bearing declarations the entry
@@ -1469,7 +1469,7 @@ export { zipWith } from './internal/operators/zipWith';
         val teardown = "/* xtsc: skipped type alias TeardownLogic with unmappable body Subscription | Unsubscribable | (() => void) | void */" in rendered
         // ...`typeof Action` is marked by what was WRITTEN, not by the
         // instance type the lens answers for a class value (CHK.73)...
-        val scheduler = "public open external class Scheduler(schedulerActionCtor: Any? /* xtsc: unmapped typeof Action */, now: (() -> Double)?) : SchedulerLike {\n" in rendered
+        val scheduler = "public open external class Scheduler(schedulerActionCtor: Any? /* xtsc: unmapped typeof Action */, now: (() -> Double)? = definedExternally) : SchedulerLike {\n" in rendered
         val bareAction = "schedulerActionCtor: Action" !in rendered
         // ...the symbol-keyed member and the interface-extends-class heritage
         // are the markers they always were.
@@ -1481,8 +1481,8 @@ export { zipWith } from './internal/operators/zipWith';
         // union of two DISTINCT texts (`Subscriber<any> | Observer<any>`),
         // an OPTIONAL parameter inside a function type (arity), and a
         // `Promise<T>` (no classpath in the gate, not a built-in).
-        val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Subscriber<any> | Observer<any> */) : Subscription, Observer<T> {\n" in rendered
-        val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */, error: Any? /* xtsc: unmapped (e?: any | undefined) => void */, complete: (() -> Unit)?): Subscriber<T>\n" in rendered
+        val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Subscriber<any> | Observer<any> */ = definedExternally) : Subscription, Observer<T> {\n" in rendered
+        val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */ = definedExternally, error: Any? /* xtsc: unmapped (e?: any | undefined) => void */ = definedExternally, complete: (() -> Unit)? = definedExternally): Subscriber<T>\n" in rendered
         val promise = "    public fun toPromise(): Any? /* xtsc: unmapped Promise<any> */\n" in rendered
         assert(distinctUnion)
         assert(optionalInFunctionType)

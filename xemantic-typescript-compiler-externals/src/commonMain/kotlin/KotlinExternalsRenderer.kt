@@ -408,12 +408,88 @@ internal class ExternalParameter(
      * distinct TypeScript ones.
      */
     val vararg: Boolean = false,
+    /**
+     * (EXT.23) Whether TypeScript declares the parameter OPTIONAL (`x?: T`).
+     * The type is already nullable ([kotlinTypeText]); what optionality
+     * adds is the DEFAULT — rendered by [parameterText] as
+     * `= definedExternally` in the real variant and `= null` in the gate
+     * variant, so a Kotlin caller may omit what a TypeScript caller may
+     * omit. Not part of [overloadSignature] or [overrideSignature]:
+     * measured (Kotlin/JS 2.4.10 and the metadata compiler,
+     * `KotlinExternalsJsGateTest`'s `measured - a defaulted optional
+     * parameter …` and `KotlinOverloadEquivalenceTest`), a default changes
+     * neither relation — `f(x: String?)` beside `f(x: String? =
+     * definedExternally)` is `Conflicting overloads` exactly as without the
+     * default, `f()` beside it is a distinct declaration AND an unambiguous
+     * `f()` call, and `override fun f(x: String?)` overrides `f(x: String?
+     * = definedExternally)`. A `vararg` is never optional (TypeScript
+     * refuses `...xs?`).
+     */
+    val optional: Boolean = false,
 )
 
-/** (EXT.11b) The one rendering of a parameter: `[vararg ]name: type`. */
-internal fun parameterText(parameter: ExternalParameter): String =
+/**
+ * (EXT.23) What an OPTIONAL parameter's default renders as — a property
+ * of the VARIANT and of the position, decided by the renderer, never by
+ * text surgery:
+ *
+ *  - [DEFINED_EXTERNALLY] in the real variant: `x: T? = definedExternally`,
+ *    accepted (measured, Kotlin/JS 2.4.10) on a top-level function, a
+ *    class/abstract-class/interface/object/nested-class/companion member,
+ *    a primary and a secondary constructor, a generic or function-typed
+ *    parameter, the `Any?` fallback marker and all, before a required
+ *    parameter and before a `vararg`;
+ *  - [NULL] in the compile-gate variant: `definedExternally` is
+ *    `kotlin.js`-only and unresolved there (measured), and the metadata
+ *    compiler accepts `x: T? = null` in every one of those positions. A
+ *    NON-NULL type — a collapse survivor carrying a dropped twin's
+ *    optionality ([collapsedParameters]), `defaultValue: D`, the rxjs
+ *    `first`/`last` shape — refuses `null` (`Null cannot be a value of a
+ *    non-null type`, measured on the real output) and takes the gate's own
+ *    `Nothing` idiom, `= null!!`, legal as the default of any type;
+ *  - [INHERITED] on an OVERRIDE: `An overriding function is not allowed to
+ *    specify default values for its parameters` (both compilers), and the
+ *    base's default is inherited — `c.f()` compiles through `override fun
+ *    f(x: String?)` over `f(x: String? = definedExternally)`.
+ *
+ * The one MEMBER that renders without its default outside an override is
+ * one a nested declaration could not inherit beside another
+ * ([Inheritance.droppedDefaults]). The one position that refuses a default is an `operator fun set`'s
+ * last parameter (`'operator' modifier is not applicable to function: last
+ * parameter must not have a default value or be a vararg`, both
+ * compilers) — unreachable, because an index signature's value is never
+ * optional. Inside a function TYPE a default is inexpressible and the
+ * arity rule stays ([functionTypeText]).
+ */
+internal enum class OptionalDefault(val text: String?) {
+    INHERITED(null),
+    DEFINED_EXTERNALLY("definedExternally"),
+    NULL("null"),
+}
+
+/** (EXT.23) The variant's default for an optional parameter that is not an override's. */
+internal fun optionalDefault(external: Boolean): OptionalDefault =
+    if (external) OptionalDefault.DEFINED_EXTERNALLY else OptionalDefault.NULL
+
+/**
+ * (EXT.11b) The one rendering of a parameter: `[vararg ]name: type[ =
+ * default]` — the default for an [ExternalParameter.optional] one under
+ * [default], never for a `vararg`.
+ */
+internal fun parameterText(parameter: ExternalParameter, default: OptionalDefault): String =
     (if (parameter.vararg) "vararg " else "") +
-        "${kotlinIdentifier(parameter.name)}: ${parameter.type}"
+        "${kotlinIdentifier(parameter.name)}: ${parameter.type}" +
+        (if (parameter.optional && !parameter.vararg && default.text != null) " = ${defaultText(parameter, default)}" else "")
+
+/** The default's spelling for [parameter]: the gate's `null` becomes `null!!` on a non-null type text. */
+private fun defaultText(parameter: ExternalParameter, default: OptionalDefault): String =
+    if (default == OptionalDefault.NULL && !isNullableTypeText(parameter.type)) "null!!" else default.text!!
+
+/** Whether a rendered type text (marker stripped) is nullable at its top level — parsed, with the last character as the fallback. */
+private fun isNullableTypeText(type: String): Boolean {
+    val text = typeTextWithoutMarker(type).trim()
+    return parseKotlinTypeText(text)?.nullable ?: text.endsWith("?")
+}
 
 /** A member (EXT.1) refuses — rendered as a marker, never dropped. */
 internal class SkippedMember(val description: String) : ExternalMember
@@ -727,7 +803,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         fromPath: List<String>,
         toPath: List<String>,
         skip: Set<String>,
-    ) = ExternalParameter(parameter.name, adapted(parameter.type, substitution, fromPath, toPath, skip), parameter.vararg)
+    ) = ExternalParameter(parameter.name, adapted(parameter.type, substitution, fromPath, toPath, skip), parameter.vararg, parameter.optional)
 
     /** The type-parameter names of a declaration as a set — what [respell] must not touch. */
     private fun ownNamesOf(declaration: ExternalDeclaration): Set<String> = typeParametersOf(declaration).toSet()
@@ -970,6 +1046,74 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
             return basesOf(d, emptyMap()).any { qualifiedNameOf(it.declaration) == target || extends(it.declaration) }
         }
         return extends(ownDeclaration)
+    }
+
+    /** (EXT.23) A member whose optional parameters render WITHOUT a default: the nested declaration that forced it and the declaration whose default is kept. */
+    class DroppedDefault(val nested: String, val keptBy: String)
+
+    /**
+     * (EXT.23) `<qualified declaration>|<member key>` of every function
+     * member whose optional parameters render WITHOUT their default — the
+     * one exception to the optional-parameter rule, forced by a measured
+     * Kotlin/JS rule (`KotlinExternalsJsGateTest`'s `measured - a nested
+     * declaration …`, both compilers agree on `@types/node`): a NESTED
+     * class or interface — nested in its base, in a sibling object, in any
+     * object, whatever its base's own nesting — is refused with `More than
+     * one function overridden by 'pipe' declares a default value` when TWO
+     * of its DIRECT supertypes each DECLARE a default for one member
+     * (`Stream.Readable : Stream, ReadableStream`, both `pipe(destination,
+     * options?)`; 4 errors on `@types/node`), with or without an explicit
+     * override; a top-level declaration of the same shape is accepted, and
+     * so is a nested one whose second declarer is INDIRECT (reached through
+     * a supertype declaring nothing, or overriding without a default).
+     * Dropping the default on all but one direct declarer resolves it, so
+     * the rule keeps the FIRST direct declarer's — the class base before
+     * the interfaces ([basesOf]'s order) — and drops the others', for
+     * everyone: a default is a property of the declaring member, not of the
+     * subtype that could not inherit two. Declarations are visited in
+     * declaration order and a declarer already dropped no longer counts,
+     * so the map is deterministic and a chain of such subtypes converges.
+     * The rendering says why ([appendMember]'s marker).
+     */
+    val droppedDefaults: Map<String, DroppedDefault> by lazy { computeDroppedDefaults() }
+
+    private fun computeDroppedDefaults(): Map<String, DroppedDefault> {
+        val dropped = LinkedHashMap<String, DroppedDefault>()
+        for (declaration in byQualified.values) {
+            if (pathOf(declaration).isEmpty()) continue
+            val nested = qualifiedNameOf(declaration) ?: continue
+            val toPath = pathOf(declaration)
+            // member key as seen from the nested declaration -> (direct declarer, its own member key), first declarer first
+            val declarers = LinkedHashMap<String, MutableList<Pair<String, String>>>()
+            for (base in basesOf(declaration, emptyMap())) {
+                val baseName = qualifiedNameOf(base.declaration) ?: continue
+                val fromPath = pathOf(base.declaration)
+                val skip = ownNamesOf(base.declaration)
+                val baseInherited = inherited(base.declaration)
+                for (member in ownMembers(base.declaration)) {
+                    if (member !is ExternalFunction || member.parameters.none { it.optional && !it.vararg }) continue
+                    val ownKey = keyOf(member) ?: continue
+                    // An override declares no default (it inherits one), and neither does a member already dropped.
+                    if (ownKey in baseInherited || liftedOverride(member, baseInherited) != null) continue
+                    if ("$baseName|$ownKey" in dropped) continue
+                    val seenKey = keyOf(substituted(member, base.substitution, fromPath, toPath, skip)) ?: continue
+                    val list = declarers.getOrPut(seenKey) { mutableListOf() }
+                    if (list.none { it.first == baseName }) list.add(baseName to ownKey)
+                }
+            }
+            for (list in declarers.values) {
+                if (list.size < 2) continue
+                for ((name, key) in list.drop(1)) dropped["$name|$key"] = DroppedDefault(nested, list.first().first)
+            }
+        }
+        return dropped
+    }
+
+    /** (EXT.23) The dropped-default record of [member] declared by [owner] (a qualified name), if any. */
+    fun droppedDefault(owner: String?, member: ExternalMember): DroppedDefault? {
+        if (owner == null) return null
+        val key = keyOf(member) ?: return null
+        return droppedDefaults["$owner|$key"]
     }
 
     private val inheritedCache = HashMap<String, Map<String, ExternalMember>>()
@@ -1215,12 +1359,21 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
      * JavaScript class's own does. The gate variant keeps the primary
      * constructor and its `null!!` call ([gateSuperCall]): a plain Kotlin
      * class must call its base.
+     *
+     * (EXT.23) A TypeScript-OPTIONAL base parameter is rendered DEFAULTED
+     * (`opts: TransformOptions? = definedExternally`), which is exactly the
+     * defaulted case the measurement accepts in the primary form — with
+     * parameters of the derived class's own, defaulted or not, and in a
+     * chain (the `nestedDefaulted…` rows) — so it does not count: only a
+     * REQUIRED, non-`vararg` base parameter moves the derived constructor
+     * to the secondary form. The `@types/node` streams (`constructor(opts?:
+     * TransformOptions)`) stay primary.
      */
     fun secondaryConstructor(declaration: ExternalClass): Boolean {
         val superClass = declaration.superClass ?: return false
         val base = classNamed(superClass, declaration.path) ?: return false
         if (base.path.isEmpty()) return false
-        return effectiveConstructor(base).orEmpty().any { !it.vararg }
+        return effectiveConstructor(base).orEmpty().any { !it.vararg && !it.optional }
     }
 
 }
@@ -1673,15 +1826,18 @@ private fun StringBuilder.appendDeclaration(
                 val lifted = inheritance.liftedOverride(m, inherited)
                 if (appendCollapsedOverride(m, lifted, inherited, renderedKeys, inheritance, member)) continue
                 if (lifted != null) {
-                    appendLiftedOverride(m as ExternalFunction, lifted, indent = member, needsBody = false)
+                    appendLiftedOverride(m as ExternalFunction, lifted, indent = member, needsBody = false, external = external)
                     continue
                 }
-                appendMember(m, indent = member, inherited = inherited[inheritance.keyOf(m)], inheritance = inheritance, path = declaration.path)
+                appendMember(
+                    m, indent = member, inherited = inherited[inheritance.keyOf(m)], inheritance = inheritance,
+                    path = declaration.path, external = external, owner = qualifiedName(declaration.path, declaration.name),
+                )
             }
             // (EXT.20) A merged namespace: its values and functions as the
             // interface's companion (bodies in the gate variant — a
             // companion is a concrete object), its interfaces nested.
-            appendCompanion(declaration.staticMembers, member, needsBody = !external)
+            appendCompanion(declaration.staticMembers, member, needsBody = !external, external = external)
             appendNested(declaration.nested, member, external, inheritance)
             appendLine("$indent}")
         }
@@ -1705,7 +1861,7 @@ private fun StringBuilder.appendDeclaration(
             for (marker in declaration.markers) appendLine("$indent/* xtsc: $marker */")
             appendBinding(declaration.binding, indent, external)
             val typeParams = typeParameterText(declaration.typeParameters, postfix = "> ")
-            val parameters = declaration.parameters.joinToString(", ", transform = ::parameterText)
+            val parameters = declaration.parameters.joinToString(", ") { parameterText(it, optionalDefault(external)) }
             val keyword = if (externalKeyword) "external fun" else "fun"
             val body = if (external) "" else " = null!!"
             appendLine(
@@ -1737,7 +1893,7 @@ private fun StringBuilder.appendDeclaration(
             val secondaryConstructor = external && inheritance.secondaryConstructor(declaration)
             val constructorText =
                 if (secondaryConstructor) ""
-                else effectiveConstructor?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
+                else effectiveConstructor?.joinToString(", ", prefix = "(", postfix = ")") { parameterText(it, optionalDefault(external)) } ?: ""
             // (EXT.8) Supertypes: the generated base class first (with the
             // gate variant's `null!!` constructor call — an external class
             // omits the call, a plain Kotlin class may not: measured, it is
@@ -1769,7 +1925,7 @@ private fun StringBuilder.appendDeclaration(
                     appendLine("$member/* xtsc: $marker */")
                 }
                 if (secondaryConstructor) {
-                    val parameters = effectiveConstructor.orEmpty().joinToString(", ", transform = ::parameterText)
+                    val parameters = effectiveConstructor.orEmpty().joinToString(", ") { parameterText(it, optionalDefault(external)) }
                     appendLine("${member}public constructor($parameters)")
                 }
                 val inherited = inheritance.inherited(declaration)
@@ -1781,7 +1937,7 @@ private fun StringBuilder.appendDeclaration(
                     if (appendCollapsedOverride(m, lifted, inherited, renderedKeys, inheritance, member)) continue
                     if (lifted != null) {
                         appendLiftedOverride(
-                            m as ExternalFunction, lifted, indent = member, needsBody = !external,
+                            m as ExternalFunction, lifted, indent = member, needsBody = !external, external = external,
                             open = key != null && key in opened,
                         )
                         continue
@@ -1794,6 +1950,8 @@ private fun StringBuilder.appendDeclaration(
                         open = key != null && key in opened,
                         inheritance = inheritance,
                         path = declaration.path,
+                        external = external,
+                        owner = qualifiedName(declaration.path, declaration.name),
                     )
                 }
                 // (EXT.17) The interface members no class in the chain
@@ -1804,9 +1962,9 @@ private fun StringBuilder.appendDeclaration(
                         if (owed.nameDeclared) "implemented by the class's own $name under another signature in TypeScript"
                         else "not declared by the class in TypeScript"
                     appendLine("$member/* xtsc: ${memberKindOf(owed.member)} $name inherited from ${owed.from} - $reason */")
-                    appendMember(owed.member, needsBody = !external, indent = member, inherited = owed.member)
+                    appendMember(owed.member, needsBody = !external, indent = member, inherited = owed.member, external = external)
                 }
-                appendCompanion(declaration.staticMembers, member, needsBody = !external)
+                appendCompanion(declaration.staticMembers, member, needsBody = !external, external = external)
                 // (EXT.20) A merged namespace's types, nested after the
                 // class's own surface.
                 appendNested(declaration.nested, member, external, inheritance)
@@ -1838,7 +1996,7 @@ private fun StringBuilder.appendDeclaration(
                     }
                     // (EXT.20) A merged namespace's values and functions, after the entries.
                     for (m in declaration.staticMembers) {
-                        appendMember(m, needsBody = !external, indent = "$member    ")
+                        appendMember(m, needsBody = !external, indent = "$member    ", external = external)
                     }
                     appendLine("$member}")
                 }
@@ -1854,10 +2012,10 @@ private fun StringBuilder.appendDeclaration(
  * members and a merged namespace's values and functions, an interface's or
  * an enum's merged values — nothing when there are none.
  */
-private fun StringBuilder.appendCompanion(members: List<ExternalMember>, indent: String, needsBody: Boolean) {
+private fun StringBuilder.appendCompanion(members: List<ExternalMember>, indent: String, needsBody: Boolean, external: Boolean) {
     if (members.isEmpty()) return
     appendLine("${indent}public companion object {")
-    for (m in members) appendMember(m, needsBody = needsBody, indent = "$indent    ")
+    for (m in members) appendMember(m, needsBody = needsBody, indent = "$indent    ", external = external)
     appendLine("$indent}")
 }
 
@@ -1938,6 +2096,7 @@ private fun StringBuilder.appendLiftedOverride(
     inherited: ExternalFunction,
     indent: String,
     needsBody: Boolean,
+    external: Boolean,
     open: Boolean = false,
 ) {
     val ownText = signatureText(own)
@@ -1946,7 +2105,7 @@ private fun StringBuilder.appendLiftedOverride(
         "$indent/* xtsc: $ownText implements the inherited $inheritedText - rendered in the inherited shape, " +
             "a generic and a non-generic function of one parameter list are one Kotlin signature */"
     )
-    appendMember(inherited, needsBody = needsBody, indent = indent, inherited = inherited, open = open)
+    appendMember(inherited, needsBody = needsBody, indent = indent, inherited = inherited, open = open, external = external)
 }
 
 /** `<K> name(A, B)` — a function's shape for a marker, markers stripped. */
@@ -1987,12 +2146,25 @@ private fun StringBuilder.appendMember(
     /** (EXT.13) The rule deciding whether a redeclaration renders the inherited type; null = never. */
     inheritance: Inheritance? = null,
     path: List<String> = emptyList(),
+    /** (EXT.23) The variant — it decides an optional parameter's default ([optionalDefault]). */
+    external: Boolean,
+    /** (EXT.23) The qualified name of the declaration whose OWN member this is — for [Inheritance.droppedDefault]; null where it cannot apply. */
+    owner: String? = null,
 ) {
     val body = if (needsBody) " = null!!" else ""
+    val overrides = inherited != null || (member is ExternalFunction && overridesAnyMember(member))
     val modifiers = buildString {
-        if (inherited != null || (member is ExternalFunction && overridesAnyMember(member))) append("override ")
+        if (overrides) append("override ")
         if (open) append("open ")
     }
+    // (EXT.23) An override may not restate a default (measured, both
+    // compilers) — it inherits the base's, which is the same default when
+    // the base's parameter is optional too. Where the base's is NOT, the
+    // TypeScript optionality is a fact only the override carries, and a
+    // Kotlin caller of the derived member must pass the argument: recorded
+    // loudly, never silently dropped.
+    val droppedDefault = if (overrides) null else inheritance?.droppedDefault(owner, member)
+    val default = if (overrides || droppedDefault != null) OptionalDefault.INHERITED else optionalDefault(external)
     when (member) {
         is ExternalProperty -> {
             // Kotlin refuses `override val` over a `var`; TypeScript allows a
@@ -2031,13 +2203,31 @@ private fun StringBuilder.appendMember(
         }
         is ExternalFunction -> {
             for (marker in member.markers) appendLine("${indent}/* xtsc: $marker */")
+            if (droppedDefault != null) {
+                val names = member.parameters.filter { it.optional && !it.vararg }.joinToString(", ") { it.name }
+                appendLine(
+                    "${indent}/* xtsc: optional $names of ${member.name} rendered without a default - Kotlin refuses the nested " +
+                        "${droppedDefault.nested} a default for one member from two supertypes; ${droppedDefault.keptBy}'s is kept */"
+                )
+            }
+            if (overrides && inherited is ExternalFunction && inherited !== member) {
+                val undefaulted = member.parameters.filterIndexed { index, own ->
+                    own.optional && !own.vararg && inherited.parameters.getOrNull(index)?.optional != true
+                }
+                if (undefaulted.isNotEmpty()) {
+                    appendLine(
+                        "${indent}/* xtsc: optional in TypeScript, required here - an override cannot carry a default and the inherited " +
+                            "${signatureText(inherited)} declares none for ${undefaulted.joinToString(", ") { it.name }} */"
+                    )
+                }
+            }
             val typeParams =
                 if (member.typeParameters.isEmpty()) ""
                 else member.typeParameters
                     .joinToString(", ", prefix = "<", postfix = "> ") {
                         kotlinIdentifier(it)
                     }
-            val parameters = member.parameters.joinToString(", ", transform = ::parameterText)
+            val parameters = member.parameters.joinToString(", ") { parameterText(it, default) }
             // (EXT.15) `operator` sits last among the modifiers, next to `fun`.
             val operator = if (member.operator) "operator " else ""
             appendLine(

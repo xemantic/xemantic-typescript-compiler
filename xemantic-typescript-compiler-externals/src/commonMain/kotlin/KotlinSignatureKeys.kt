@@ -85,6 +85,13 @@ package com.xemantic.typescript.compiler.externals
  *     which the key canonicalises by numbering pinned parameters in order
  *     of first occurrence.
  *
+ * (EXT.23) A DEFAULT is part of neither key: measured, `f(x: String?)`
+ * beside `f(x: String? = …)` conflicts exactly as without the default,
+ * and `override fun f(x: String?)` overrides `f(x: String? = …)` — so
+ * [ExternalParameter.optional] is read by the renderer alone, and by
+ * [collapsedParameters], which carries a dropped twin's optionality onto
+ * the survivor of a collapse.
+ *
  * The OVERRIDE relation is a different, stricter one, and using the
  * conflict key for it would render `override` where Kotlin reports
  * `overrides nothing`: an override matches own type parameters
@@ -518,6 +525,27 @@ internal fun overloadWinners(candidates: List<FunctionSignature?>): IntArray {
     }
     return winners
 }
+
+/**
+ * (EXT.23) The survivor's parameters with a position OPTIONAL wherever the
+ * survivor or any collapsed [twins] declares it so: the twins are one
+ * Kotlin signature (same arity, same `vararg`-ness per position — the
+ * key's own conditions), so a call TypeScript accepts through the dropped
+ * twin with an argument omitted (`first()` through rxjs's `first<T,
+ * D>(predicate?: null, defaultValue?: D)`, collapsed into the typed
+ * `first(predicate: BooleanConstructor, defaultValue: D)`) is a call the
+ * survivor must accept too, or the collapse would silently take it away.
+ * TypeScript's own rule (an optional parameter is followed only by
+ * optional ones) makes the union trailing-consistent. The TYPE stays the
+ * survivor's, so a non-null one may read `x: T = definedExternally` —
+ * accepted (measured, (EXT.22)'s `nestedDefaulted` row is that shape).
+ */
+internal fun collapsedParameters(survivor: FunctionSignature, twins: List<FunctionSignature>): List<ExternalParameter> =
+    survivor.parameters.mapIndexed { index, parameter ->
+        val optional = parameter.optional || twins.any { it.parameters.getOrNull(index)?.optional == true }
+        if (optional == parameter.optional) parameter
+        else ExternalParameter(parameter.name, parameter.type, parameter.vararg, optional = true)
+    }
 
 /**
  * (EXT.12) The marker text of a dropped overload, naming the signature it
