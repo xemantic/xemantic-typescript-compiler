@@ -89,6 +89,34 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.20) LANDED — an `export =` target never vanishes, and TypeScript declaration MERGING is
+rendered.** tsgo 7.0.2 measured on the reduced `events.d.ts` shape: every import form binds the
+class, the merged interface's members, the namespace's `export`-modified types/functions/values
+and its self re-export; un-modified members not merged with the target are TS2694/TS2305 under
+every form — so the surface is exactly the target plus what merges with it. Kotlin measured
+(pinned in the JS gate and `KotlinOverloadEquivalenceTest`): an `external class` nests
+interfaces/classes/objects and holds a companion; an `external interface` nests interfaces AND
+ACCEPTS A COMPANION (the queue's "cannot hold a companion" was wrong) but refuses a nested
+class/object; `fun assert` beside `object assert` compiles. Rules: `Surface.scan`'s
+`exportEqualsTargets` exports the identifiers a scope's `export =` names whatever their
+modifiers; one `mergeGroupFirst` table (same qualified name, same file, at most one
+class/interface/enum/namespace; class⊥enum, interface⊥enum, alias never) read by BOTH the
+reference side (`ownsName`) and the render side (`finish`): class+interface → members and
+`extends` bases joined (a redeclared property or differing TP lists a loud skip),
+class+namespace → values/functions in the companion and types nested, interface+namespace →
+companion + nested interfaces (a class/object inside a loud skip), enum+namespace → companion
+after the entries, function+namespace → both render (legal, measured); a merged interface's
+second class base is dropped when equal to the superclass and a loud skip otherwise. **`@types/
+node`: metadata errors 0 → 0; 7 `export =` targets declared, 7 rendered, 0 vanished (a new
+census line); heritage skips 113 → 106 (`EventEmitter`, `Stream`, `Module`, `Stats` are classes
+now; `ChildProcess`/`Socket`/`Worker`/`Agent` extend `EventEmitter<Any?>`, zlib classes
+implement `Zlib`); `declared again in the same scope` 14 → 0 (all 14 were merges).** rxjs and
+`typescript.d.ts` md5-identical. 4 pins rewritten, 7 new, one JS-gate compile of the merged
+shape, 3 measurement pins; stash-ablation exactly 11 red; externals 207 → 219/0; suite 17,091 →
+17,103 / 0 / 3. The 66-modules-in-one-scope flattening (57 `declared again by another file`,
+112 names declared by more than one module) is a per-module-generation DESIGN, queued as
+(EXT.21) with its census.
+
 **(EXT.19) LANDED — and the queue item's mechanism was WRONG, which the fixture said before any
 code moved.** `shortestSpelling` already implemented innermost-first resolution correctly (the
 nearer-scope shadow fixtures rendered right on the unmodified binary, and there is no nested
@@ -1703,7 +1731,7 @@ Owner decisions 2026-09-02:
   rendered. Receipt: the `@types/node` probe (`build/chk73/node_modules/@types/node`, 66 files;
   metadata errors 86 → 35 or fewer, heritage skips 137 → ≤ 133) plus the five ladder gates.
 
-- [ ] **(EXT.20) `declare module "m" { class X {} … export = X }` — THE UN-`export`-MODIFIED
+- [x] **(EXT.20) DONE 2026-09-02 ((P18.9) note; `export =` targets never vanish, declaration MERGING implemented per tsgo's measured surface, `@types/node` 0 metadata errors and 17 merges rendered, externals 219/0, suite 17,103/0/3; the flattening residue is (EXT.21)) — `declare module "m" { class X {} … export = X }` — THE UN-`export`-MODIFIED
   CLASS/INTERFACE INSIDE AN `export =` MODULE BODY VANISHES SILENTLY (found by (EXT.19) on
   `@types/node`: events.d.ts's `class EventEmitter`, stream.d.ts's `class Stream` — the 13
   remaining `extends EventEmitter` skips).** The surface rule treats an un-modified member of a
@@ -1716,6 +1744,34 @@ Owner decisions 2026-09-02:
   FLATTENING residue: 66 modules in one scope lose `Socket` (dgram vs net), `Module` (vm vs
   module), `stream/web`'s `ReadableStream` to first-wins — one generation per `declare
   module` block, or a per-block Kotlin object/package, is the wiring-side answer.
+
+- [ ] **(EXT.21) ONE GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
+  RESIDUE, CENSUSED BY (EXT.20) AND LEFT AS A DESIGN.** Today every string-named block flattens
+  into ONE Kotlin scope, so a name two modules declare is first-wins: on `@types/node` 20.19.43
+  that is **112 names declared by more than one module** (`Socket` dgram/net, `Module`
+  module/vm, `Server` http/https/net/tls, `Worker` cluster/worker_threads, `ReadStream`/
+  `WriteStream` fs/tty, `constants` in 10 modules, the whole `dns` vs `dns/promises` and `fs`
+  vs `fs/promises` surfaces), of which 57 surface as `declared again by another file` skips
+  and the rest fall to the overload collapse or the value rule. The census (this round's
+  scratch): 66 files, **107 top-level blocks, 105 distinct specifiers, 55 blocks declaring
+  nothing** (the `node:x` re-export/`export = alias` twins) and **50 declaring modules**; only
+  2 files hold more than one declaring block. A per-block Kotlin `object` named from the
+  specifier is the WRONG wiring (a module is a file-level `@file:JsModule`, and `node:net` is
+  a spelling, not a scope); the honest shape is one generation PER MODULE: extend
+  `ModuleWiring` so `generateKotlinExternals(files, ModuleWiring("node:net", entry))`
+  selects the block(s) whose specifier — or whose `export = <require alias>` / `export *
+  from` chain — matches the wiring's module name, renders THAT block's declarations at the
+  top level under `@file:JsModule("node:net")`, and treats every other block as the imported
+  modules' declarations, reachable only BY NAME through the block's own `import * as X` /
+  `import X = require` bindings (the (EXT.19) `moduleMember` walk already resolves those
+  spellings; the rendered spelling then has to name the OTHER generation's Kotlin package, so
+  a per-module generation needs a `package` line per module — the first `package` this
+  generator emits, an owner-facing choice). Then the probe and the gates run once per
+  declaring module (50 runs), the 57 cross-file skips vanish by construction, and the
+  wired census reads honestly per module. Receipt: `Socket` renders in BOTH `dgram` and
+  `net`, `Module` in both `module` and `vm`, `stream/web`'s `ReadableStream` beside the
+  global one; each per-module output metadata-compiles at 0 errors; rxjs and
+  `typescript.d.ts` byte-identical (single-module generations are the degenerate case).
 
 - [ ] **(CHK.79) `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
   IMPORT (`import * as net from "node:net"` / `import net = require("net")`) INSIDE AN AMBIENT

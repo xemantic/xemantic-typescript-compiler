@@ -126,6 +126,13 @@ class ExternalsLibraryProbe {
             appendLine("== checker diagnostics by code (${result.diagnostics.size}, $errorCount errors) ==")
             appendCounts(diagnosticsByCode.mapKeys { "TS${it.key}" })
             appendLine()
+            appendLine("== export = targets ((EXT.20)) ==")
+            val targets = exportEqualsTargets(files)
+            val rendered = targets.filter { (_, name) -> declaresTopLevel(result.kotlin, name) }
+            val vanished = targets.filter { (_, name) -> !declaresTopLevel(result.kotlin, name) }
+            appendLine("declared in their block: ${targets.size}, rendered: ${rendered.size}, vanished: ${vanished.size}")
+            for ((file, name) in vanished) appendLine("        $file: export = $name")
+            appendLine()
             appendLine("== module wiring ==")
             appendLine("header: ${result.kotlin.lineSequence().firstOrNull { it.startsWith("@file:") } ?: "-"}")
             appendLine("@JsName annotations: $jsNames")
@@ -140,6 +147,29 @@ class ExternalsLibraryProbe {
             appendLine("compile successful: ${check.successful}")
             appendLine("checker diagnostics: ${result.diagnostics.size} ($errorCount errors)")
         }
+    }
+
+    /**
+     * (EXT.20) Every `export = X` of a top-level `declare module` block whose
+     * `X` the SAME block declares (a class, interface, namespace, function,
+     * value or enum — not an `import X = require(…)` alias, which re-routes
+     * another module and declares nothing), as (file, name) pairs.
+     */
+    private fun exportEqualsTargets(files: List<SourceFileEntry>): List<Pair<String, String>> =
+        files.flatMap { file ->
+            val declared = declaredNameRegex.findAll(file.content).mapTo(HashSet()) { it.groupValues[1] }
+            exportEqualsRegex.findAll(file.content)
+                .map { it.groupValues[1] }
+                .filter { it in declared }
+                .distinct()
+                .map { file.fileName to it }
+                .toList()
+        }
+
+    /** Whether the generated Kotlin declares [name] at the top level — a class, interface, object, function, value or alias. */
+    private fun declaresTopLevel(kotlin: String, name: String): Boolean {
+        val regex = Regex("""^public (?:(?:open|abstract|sealed|external) )*(?:interface|class|typealias|fun|val|var|object) (?:<[^>]*> )?`?${Regex.escape(name)}`?\b""", RegexOption.MULTILINE)
+        return regex.containsMatchIn(kotlin)
     }
 
     private fun StringBuilder.appendCounts(counts: Map<String, Int>) {
@@ -163,6 +193,12 @@ class ExternalsLibraryProbe {
 
     private companion object {
         val markerRegex = Regex("""/\* xtsc: (.*?) \*/""")
+        // (EXT.20) A block-level `export = X;` (four-space indent: the body of a top-level module block).
+        val exportEqualsRegex = Regex("""^    export = ([A-Za-z_$][A-Za-z0-9_$]*);""", RegexOption.MULTILINE)
+        val declaredNameRegex = Regex(
+            """^    (?:abstract )?(?:class|interface|namespace|function|const|var|let|enum|type) ([A-Za-z_$][A-Za-z0-9_$]*)""",
+            RegexOption.MULTILINE,
+        )
         val unmappedRegex = Regex("""unmapped (.*)""")
         val internalPathRegex = Regex(""".* is not exported by the package entry - an internal path a consumer cannot bind""")
         // (EXT.13) Declarations at any depth (a nested object's members are
@@ -170,6 +206,19 @@ class ExternalsLibraryProbe {
         val declarationRegex =
             Regex(""" *public ((?:(?:open|abstract|sealed|external) )*(?:interface|class|typealias|fun|val|var|object))\b.*""")
         val categories: List<Pair<Regex, String>> = listOf(
+            // (EXT.20) Declaration merging, before the generic heritage rows.
+            Regex("""merged with .* of this scope - TypeScript declaration merging""") to
+                "merged with <DECLARATIONS> of this scope - TypeScript declaration merging",
+            Regex("""skipped heritage clause extends \S+ of the merged interface \S+ - the class extends .*""") to
+                "skipped heritage clause extends <BASE> of the merged interface <NAME> - a Kotlin class extends one class",
+            Regex("""skipped heritage clause (?:extends|implements) \S+ - \S+ is the merged class \S+ - .*""") to
+                "skipped heritage clause <BASE> - <BASE> is the merged class - an interface cannot extend a class",
+            Regex("""skipped property \S+ declared again by the merged interface \S+""") to
+                "skipped property <NAME> declared again by the merged interface <NAME>",
+            Regex("""skipped interface \S+ merged with the class declares other type parameters .*""") to
+                "skipped interface <NAME> merged with the class declares other type parameters",
+            Regex("""skipped (?:class|namespace) \S+ of the merged namespace \S+ - an external interface cannot nest a class or object""") to
+                "skipped <KIND> <NAME> of the merged namespace <NAME> - an external interface cannot nest a class or object",
             // (EXT.13) Before the generic `unmapped`, which would absorb it.
             Regex("""unmapped .* - shadowed inside .*""") to "unmapped <REF> - shadowed inside <PATH>",
             Regex("""unmapped .*""") to "unmapped <TYPE>",

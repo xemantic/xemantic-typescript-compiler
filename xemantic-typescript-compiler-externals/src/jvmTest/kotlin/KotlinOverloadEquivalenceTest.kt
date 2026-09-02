@@ -214,4 +214,19 @@ class KotlinOverloadEquivalenceTest {
         assert(failing.isEmpty())
     }
 
+    @Test
+    fun `measured - a function beside an object of one name and nested declarations in a class and an interface`() {
+        val rows = listOf(
+            distinct("function vs object", "fun assert(value: Any?): Unit = null!!", "object assert { fun ok(value: Any?): Unit = null!! }"),
+            distinct("object vs function", "object assert { fun ok(value: Any?): Unit = null!! }", "fun assert(value: Any?): Unit = null!!"),
+            distinct("function overloads vs object", "fun test(name: String): Unit = null!!\nfun test(name: String, n: Int): Unit = null!!", "object test { val skip: Int = null!! }"),
+            distinct("class nesting", "abstract class EE { fun emit(name: String): Boolean = null!!\n interface Abortable { var signal: Double? }\n abstract class Inner { fun f(): Int = null!! }\n object Opts { val v: Int = null!! }\n companion object { fun once(e: EE): Any? = null!!\n var d: Double = null!! } }", "fun useIt(a: EE.Abortable, i: EE.Inner): EE.Opts = null!!"),
+            distinct("interface nesting", "interface I { var x: Int\n interface Nested { var n: Int }\n object O { val v: Int = null!! }\n companion object { fun f(): Int = null!! } }", "fun useIt(a: I.Nested): I.O = null!!"),
+            distinct("sealed interface nesting", "sealed interface K { interface Nested { var n: Int }\n companion object { val A: K = null!!\n fun f(): Int = null!! } }", "fun useIt(a: K.Nested): K = null!!"),
+        )
+        val failing = mismatches(rows)
+        println("MEASURED metadata mismatches: $failing")
+        assert(failing.isEmpty())
+    }
+
 }

@@ -97,6 +97,32 @@ internal class ExternalInterface(
      * the declaring scope, so the scope is part of its meaning.
      */
     val path: List<String> = emptyList(),
+    /**
+     * (EXT.20) The VALUES and FUNCTIONS of a same-named namespace the
+     * interface MERGES with (`interface path { … } namespace path { … }`
+     * shapes), rendered as the interface's `companion object` — measured:
+     * Kotlin/JS 2.4.10 accepts a companion on an `external interface`, and
+     * the companion of an external interface binds the JavaScript object of
+     * the interface's name, which is exactly what a merged namespace is.
+     */
+    val staticMembers: List<ExternalMember> = emptyList(),
+    /**
+     * (EXT.20) The TYPES of a merged namespace, rendered inside the
+     * interface body: an INTERFACE only — measured, `Interface cannot
+     * contain nested classes and objects` is what Kotlin/JS says of an
+     * external interface nesting a class or an object, so those arrive here
+     * as loud skips ([mergedDeclaration]).
+     */
+    val nested: List<ExternalDeclaration> = emptyList(),
+    /**
+     * (EXT.20) The `extends` bases that are generated CLASSES, collected only
+     * for an interface that MERGES with a class of its name (`interface Gzip
+     * extends stream.Transform, Zlib {}` beside `class Gzip extends
+     * stream.Transform`): the merged class drops one equal to its own
+     * superclass and marks any other loudly — a Kotlin class extends one
+     * class. An interface merging with nothing keeps the (EXT.8) marker.
+     */
+    val classBases: List<String> = emptyList(),
 ) : ExternalDeclaration
 
 /**
@@ -165,6 +191,20 @@ internal class ExternalClass(
     val path: List<String> = emptyList(),
     /** (EXT.16) The module wiring, rendered above the declaration; null when unwired. */
     val binding: JsBinding? = null,
+    /**
+     * (EXT.20) The TYPES of a same-named namespace the class MERGES with
+     * (`class EventEmitter { … } namespace EventEmitter { export interface
+     * Abortable … }`), rendered NESTED in the class body — an interface, a
+     * class, an object (a nested namespace), each exactly as at the module
+     * surface, one indent in and without the `external` modifier (measured:
+     * Kotlin/JS 2.4.10 accepts all three inside an `external class` and
+     * refuses `Non-top-level 'external' declaration`); the namespace's
+     * values and functions are [staticMembers], the companion's. The
+     * nested declarations keep the namespace's PATH (`[EventEmitter]`), so
+     * every spelling that resolved through the namespace object —
+     * `EventEmitter.Abortable` — resolves through the class unchanged.
+     */
+    val nested: List<ExternalDeclaration> = emptyList(),
 ) : ExternalDeclaration
 
 /**
@@ -181,6 +221,10 @@ internal class ExternalEnum(
     val markers: List<String>,
     /** (EXT.16) The module wiring, rendered above the declaration; null when unwired. */
     val binding: JsBinding? = null,
+    /** (EXT.20) A merged namespace's values and functions, rendered in the companion after the entries. */
+    val staticMembers: List<ExternalMember> = emptyList(),
+    /** (EXT.20) A merged namespace's interfaces, nested in the sealed interface (a class or object is a loud skip, as for [ExternalInterface.nested]). */
+    val nested: List<ExternalDeclaration> = emptyList(),
 ) : ExternalDeclaration
 
 /**
@@ -255,9 +299,11 @@ internal fun withBinding(declaration: ExternalDeclaration, binding: JsBinding): 
     is ExternalClass -> ExternalClass(
         declaration.name, declaration.typeParameters, declaration.headerMarkers, declaration.isAbstract,
         declaration.superClass, declaration.interfaces, declaration.constructorParameters, declaration.members,
-        declaration.staticMembers, declaration.path, binding,
+        declaration.staticMembers, declaration.path, binding, declaration.nested,
     )
-    is ExternalEnum -> ExternalEnum(declaration.name, declaration.entries, declaration.markers, binding)
+    is ExternalEnum -> ExternalEnum(
+        declaration.name, declaration.entries, declaration.markers, binding, declaration.staticMembers, declaration.nested,
+    )
     is ExternalTopLevelValue -> ExternalTopLevelValue(declaration.name, declaration.type, declaration.readOnly, binding)
     is ExternalObject -> ExternalObject(declaration.name, declaration.path, declaration.declarations, binding)
     is ExternalInterface, is ExternalTypeAlias, is SkippedDeclaration, is ExternalMarker -> declaration
@@ -431,11 +477,25 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
     private val declared = HashSet<String>()
 
     init {
+        // (EXT.20) A merged namespace's types are NESTED in the class,
+        // interface or enum that absorbed it, at the namespace's own path:
+        // walked exactly as an object's declarations are, and the enum's
+        // qualified name joins the spelling set as the class's does.
         fun collect(list: List<ExternalDeclaration>) {
             for (declaration in list) {
                 when (declaration) {
-                    is ExternalInterface -> byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
-                    is ExternalClass -> byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
+                    is ExternalInterface -> {
+                        byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
+                        collect(declaration.nested)
+                    }
+                    is ExternalClass -> {
+                        byQualified.putIfAbsent(qualifiedName(declaration.path, declaration.name), declaration)
+                        collect(declaration.nested)
+                    }
+                    is ExternalEnum -> if (declaration.nested.isNotEmpty()) {
+                        declared.add(qualifiedName(pathOfNested(declaration.nested), declaration.name))
+                        collect(declaration.nested)
+                    }
                     is ExternalObject -> {
                         declared.add(qualifiedName(declaration.path, declaration.name))
                         collect(declaration.declarations)
@@ -447,6 +507,23 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         collect(declarations)
         declared.addAll(byQualified.keys)
     }
+
+    /**
+     * (EXT.20) The ENCLOSING path of an enum holding nested declarations —
+     * an [ExternalEnum] carries no path of its own, but every nested
+     * declaration carries the merged namespace's, which is the enum's path
+     * plus its name; the first nested type/object answers, an empty path
+     * (the root) otherwise.
+     */
+    private fun pathOfNested(nested: List<ExternalDeclaration>): List<String> =
+        nested.firstNotNullOfOrNull { declaration ->
+            when (declaration) {
+                is ExternalInterface -> declaration.path
+                is ExternalClass -> declaration.path
+                is ExternalObject -> declaration.path
+                else -> null
+            }
+        }?.dropLast(1) ?: emptyList()
 
     /** The generated declaration a supertype text names from inside [fromPath], if any. */
     fun declarationNamed(supertype: String, fromPath: List<String>): ExternalDeclaration? {
@@ -1516,6 +1593,11 @@ private fun StringBuilder.appendDeclaration(
                 }
                 appendMember(m, indent = member, inherited = inherited[inheritance.keyOf(m)], inheritance = inheritance, path = declaration.path)
             }
+            // (EXT.20) A merged namespace: its values and functions as the
+            // interface's companion (bodies in the gate variant — a
+            // companion is a concrete object), its interfaces nested.
+            appendCompanion(declaration.staticMembers, member, needsBody = !external)
+            appendNested(declaration.nested, member, external, inheritance)
             appendLine("$indent}")
         }
         is ExternalTypeAlias -> {
@@ -1584,6 +1666,7 @@ private fun StringBuilder.appendDeclaration(
             val hasBody = declaration.headerMarkers.isNotEmpty() ||
                 declaration.members.isNotEmpty() ||
                 declaration.staticMembers.isNotEmpty() ||
+                declaration.nested.isNotEmpty() ||
                 inheritance.owedMembers(declaration).isNotEmpty()
             if (!hasBody) {
                 appendLine(header)
@@ -1626,13 +1709,10 @@ private fun StringBuilder.appendDeclaration(
                     appendLine("$member/* xtsc: ${memberKindOf(owed.member)} $name inherited from ${owed.from} - $reason */")
                     appendMember(owed.member, needsBody = !external, indent = member, inherited = owed.member)
                 }
-                if (declaration.staticMembers.isNotEmpty()) {
-                    appendLine("${member}public companion object {")
-                    for (m in declaration.staticMembers) {
-                        appendMember(m, needsBody = !external, indent = "$member    ")
-                    }
-                    appendLine("$member}")
-                }
+                appendCompanion(declaration.staticMembers, member, needsBody = !external)
+                // (EXT.20) A merged namespace's types, nested after the
+                // class's own surface.
+                appendNested(declaration.nested, member, external, inheritance)
                 appendLine("$indent}")
             }
         }
@@ -1641,14 +1721,16 @@ private fun StringBuilder.appendDeclaration(
             val keyword =
                 if (externalKeyword) "sealed external interface" else "sealed interface"
             val header = "${indent}public $keyword ${kotlinIdentifier(declaration.name)}"
-            if (declaration.entries.isEmpty() && declaration.markers.isEmpty()) {
+            if (declaration.entries.isEmpty() && declaration.markers.isEmpty() &&
+                declaration.staticMembers.isEmpty() && declaration.nested.isEmpty()
+            ) {
                 appendLine(header)
             } else {
                 appendLine("$header {")
                 for (marker in declaration.markers) {
                     appendLine("$member/* xtsc: $marker */")
                 }
-                if (declaration.entries.isNotEmpty()) {
+                if (declaration.entries.isNotEmpty() || declaration.staticMembers.isNotEmpty()) {
                     appendLine("${member}public companion object {")
                     val body = if (external) "" else " = null!!"
                     for (entry in declaration.entries) {
@@ -1657,11 +1739,47 @@ private fun StringBuilder.appendDeclaration(
                                 "${kotlinIdentifier(declaration.name)}$body"
                         )
                     }
+                    // (EXT.20) A merged namespace's values and functions, after the entries.
+                    for (m in declaration.staticMembers) {
+                        appendMember(m, needsBody = !external, indent = "$member    ")
+                    }
                     appendLine("$member}")
                 }
+                appendNested(declaration.nested, member, external, inheritance)
                 appendLine("$indent}")
             }
         }
+    }
+}
+
+/**
+ * (EXT.20) A `companion object` holding [members] — a class's `static`
+ * members and a merged namespace's values and functions, an interface's or
+ * an enum's merged values — nothing when there are none.
+ */
+private fun StringBuilder.appendCompanion(members: List<ExternalMember>, indent: String, needsBody: Boolean) {
+    if (members.isEmpty()) return
+    appendLine("${indent}public companion object {")
+    for (m in members) appendMember(m, needsBody = needsBody, indent = "$indent    ")
+    appendLine("$indent}")
+}
+
+/**
+ * (EXT.20) A merged namespace's types NESTED in the declaration that
+ * absorbed it, each preceded by a blank line and rendered through the same
+ * fold one indent in — as an object's declarations are, and with the
+ * `external` keyword off for the same reason (a nested declaration of an
+ * external one is implicitly external, and the modifier is refused there).
+ */
+private fun StringBuilder.appendNested(
+    nested: List<ExternalDeclaration>,
+    indent: String,
+    external: Boolean,
+    inheritance: Inheritance,
+) {
+    for (declaration in nested) {
+        appendLine()
+        appendDeclaration(declaration, indent, external, externalKeyword = false, inheritance)
     }
 }
 

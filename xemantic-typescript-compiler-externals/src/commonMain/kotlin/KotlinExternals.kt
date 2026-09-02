@@ -377,6 +377,25 @@ private class AmbientModule {
  * X = ts.X` is a local. Ambient-ness is the `declare` modifier, the
  * enclosing container's, or the whole file's (`.d.ts`).
  *
+ * (EXT.20) An `export = X` makes `X` — and everything of that name it
+ * MERGES with: the class, the interface and the namespace `EventEmitter` of
+ * `events.d.ts`, the class and the two namespace blocks `Stream` of
+ * `stream.d.ts` — the module's whole surface, whether or not any of those
+ * declarations carries `export`, in a `declare module "m"` body and at a
+ * file's top level alike. Measured against tsgo 7.0.2 on the `events.d.ts`
+ * shape: `import EE = require("events")`, `import { … } from "events"`,
+ * `import * as ee from "events"` and the default import all bind the class,
+ * the merged interface's members and the namespace's `export`-modified
+ * members (types, functions, values, classes), and every OTHER un-modified
+ * member of the block — a module-level `interface Hidden`, a namespace
+ * member without `export` — is TS2694/TS2305 under every form. So the
+ * target's name is exported by [exportEqualsTargets] and nothing else
+ * changes: the other un-modified members stay silent, the policy every
+ * private thing has, while the target itself can never vanish. An
+ * `export =` naming an import alias (`import events = require("events");
+ * export = events`) or an expression names no declaration of the block and
+ * exports nothing here (the wiring marker records it).
+ *
  * (EXT.16) Under a module wiring a top-level declaration WITHOUT the
  * modifier joins the surface too when the entry REACHES it — `declare
  * const _default: …; export default _default;` (smol-toml's entry),
@@ -428,9 +447,16 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
                 fileName = sourceFile.fileName,
                 moduleSpecifier = null,
                 imports = namespaceImportsOf(sourceFile.statements, HashMap(), null),
+                exportEqualsTargets = exportEqualsTargetsOf(sourceFile.statements),
             )
         }
     }
+
+    /** (EXT.20) The identifiers the `export =` statements among [statements] name. */
+    private fun exportEqualsTargetsOf(statements: List<Statement>): Set<String> =
+        statements.mapNotNullTo(HashSet()) { statement ->
+            (statement as? ExportAssignment)?.takeIf { it.isExportEquals }?.expression?.let { it as? Identifier }?.text
+        }
 
     /**
      * (EXT.19) The namespace imports [statements] declare — `import * as X
@@ -473,10 +499,13 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
         fileName: String,
         moduleSpecifier: String?,
         imports: Map<String, String>,
+        /** (EXT.20) The names the scope's own `export =` statements name — exported whatever their modifiers. */
+        exportEqualsTargets: Set<String>,
     ) {
         fun exported(modifiers: Set<ModifierFlag>, name: String?): Boolean =
             ModifierFlag.Export in modifiers ||
                 (!topLevel && exportContext) ||
+                (name != null && name in exportEqualsTargets) ||
                 (topLevel && plan != null && name != null && plan.reachesLocal(fileName, name))
         val site = Site(path, inModule, moduleSpecifier, imports)
         for (statement in statements) {
@@ -606,6 +635,9 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
                 fileName = fileName,
                 moduleSpecifier = bodySpecifier,
                 imports = bodyImports,
+                // (EXT.20) Only a string-named block can hold an `export =`
+                // (TS1194 in a namespace body); its targets are its surface.
+                exportEqualsTargets = if (name is StringLiteralNode) exportEqualsTargetsOf(block.statements) else emptySet(),
             )
         }
     }
@@ -645,7 +677,13 @@ private class ExternalsCollector(
      * same-scope collision wording) and (EXT.16) the declaration NODE, what
      * the plan decides a root declaration's [Reach] from.
      */
-    private class Collected(val declaration: ExternalDeclaration, val fileName: String?, val node: Node?) : Entry
+    private class Collected(
+        val declaration: ExternalDeclaration,
+        val fileName: String?,
+        val node: Node?,
+        /** (EXT.20) The declaration's scan position ([Declared.ordinal]) — the merge rule's key; -1 for a statement or marker. */
+        val ordinal: Int,
+    ) : Entry
 
     private sealed interface Entry
 
@@ -671,9 +709,26 @@ private class ExternalsCollector(
         }
     }
 
-    private fun add(path: List<String>, node: Node?, declaration: ExternalDeclaration) {
+    private fun add(path: List<String>, node: Node?, declaration: ExternalDeclaration, ordinal: Int = -1) {
         val fileName = node?.let(::fileNameOf)
-        scope(path, fileName).entries.add(Collected(declaration, fileName, node))
+        scope(path, fileName).entries.add(Collected(declaration, fileName, node, ordinal))
+    }
+
+    /**
+     * (EXT.20) The scan position of a namespace scope — the FIRST entry
+     * declaring the namespace at [path] or a namespace below it (a dotted
+     * `A.B` declares `A` too; a namespace declared in two blocks is one
+     * scope, and the first block is the one [mergeGroupFirst] recorded).
+     */
+    private fun namespaceOrdinal(path: List<String>): Int =
+        surface.namespaces
+            .filter { it.skip == null && it.bodyPath.size >= path.size && it.bodyPath.subList(0, path.size) == path }
+            .minOfOrNull { it.ordinal } ?: -1
+
+    /** (EXT.20) The scan position of a scope entry; -1 where it has none. */
+    private fun ordinalOf(entry: Entry): Int = when (entry) {
+        is Collected -> entry.ordinal
+        is ScopeBuilder -> namespaceOrdinal(entry.path)
     }
 
     /** The file a node was parsed from, by [NodeBase.parent] up to the [SourceFile]. */
@@ -736,20 +791,69 @@ private class ExternalsCollector(
      * measured alike, a nullable alias body too), an alias to a generated
      * class beside a function spelling that class's constructor conflicts,
      * an alias to a function type or to an interface conflicts with nothing.
+     *
+     * (EXT.20) DECLARATION MERGING — the one exception to "declared again
+     * in the same scope": the declarations of one name ONE FILE declares
+     * that TypeScript merges into one symbol and Kotlin can hold as one
+     * declaration are rendered as that declaration ([mergedDeclaration]),
+     * the lead at the FIRST declaration's position, the others absorbed
+     * into it and the class/interface/enum header saying so loudly. Which
+     * declarations group is decided ONCE, from the scan, by
+     * [mergeGroupFirst] — the same table [ownsName] reads, so a reference
+     * to any declaration of the group spells the merged one. A group
+     * member that was REFUSED (a callable interface with an unmappable
+     * signature) stays a marker at its own position and is not merged.
+     * Across files nothing merges (a module file is its own scope); a
+     * second interface block of one name is still the loud skip.
      */
     fun finish(): List<ExternalDeclaration> {
         val inheritance = Inheritance(freeze(root))
         return reduce(root, inheritance)
     }
 
+    /**
+     * (EXT.20) The MERGE GROUPS of one scope: entry index → the indices of
+     * the entries rendered as one declaration, the lead (the first) among
+     * them. A group needs at least two of: a class, an interface, an enum
+     * ([Collected] entries whose declaration is that kind — a refused one
+     * is a marker and stays out) and a namespace scope, all sharing one
+     * [mergeGroupFirst] answer.
+     */
+    private fun scopeGroups(scope: ScopeBuilder): Map<Int, List<Int>> {
+        val byFirst = HashMap<Int, MutableList<Int>>()
+        scope.entries.forEachIndexed { index, entry ->
+            val mergeable = when (entry) {
+                is ScopeBuilder -> true
+                is Collected -> entry.declaration is ExternalClass ||
+                    entry.declaration is ExternalInterface ||
+                    entry.declaration is ExternalEnum
+            }
+            if (!mergeable) return@forEachIndexed
+            val first = mergeGroupFirst[ordinalOf(entry)] ?: return@forEachIndexed
+            byFirst.getOrPut(first) { mutableListOf() }.add(index)
+        }
+        val groups = HashMap<Int, List<Int>>()
+        for (indices in byFirst.values) {
+            if (indices.size < 2) continue
+            for (index in indices) groups[index] = indices
+        }
+        return groups
+    }
+
     /** The scope tree as collected, nested objects included, before any per-scope rule. */
-    private fun freeze(scope: ScopeBuilder): List<ExternalDeclaration> =
-        scope.entries.map { entry ->
-            when (entry) {
-                is Collected -> entry.declaration
-                is ScopeBuilder -> ExternalObject(entry.name!!, entry.path.dropLast(1), freeze(entry))
+    private fun freeze(scope: ScopeBuilder): List<ExternalDeclaration> {
+        val groups = scopeGroups(scope)
+        return scope.entries.mapIndexedNotNull { index, entry ->
+            val group = groups[index]
+            when {
+                group != null && group.first() != index -> null
+                group != null -> mergedDeclaration(group.map { scope.entries[it] }) { freeze(it) }
+                entry is Collected -> entry.declaration
+                entry is ScopeBuilder -> ExternalObject(entry.name!!, entry.path.dropLast(1), freeze(entry))
+                else -> null
             }
         }
+    }
 
     private fun reduce(scope: ScopeBuilder, inheritance: Inheritance): List<ExternalDeclaration> {
         val entries = scope.entries
@@ -758,21 +862,224 @@ private class ExternalsCollector(
         // is collected before its survivor is picked.
         val functions = entries.map { ((it as? Collected)?.declaration as? ExternalTopLevelFunction) }
         val winners = overloadWinners(functions)
+        // (EXT.20) The merged declarations, each under its lead's index.
+        val groups = scopeGroups(scope)
+        val merged = HashMap<Int, ExternalDeclaration>()
+        for ((index, group) in groups) {
+            if (group.first() == index) merged[index] = mergedDeclaration(group.map { entries[it] }) { reduce(it, inheritance) }
+        }
         /** Type names taken in this scope, each with the file that took it. */
         val seenTypeNames = HashMap<String, String?>()
         val seenValueNames = HashMap<String, String?>()
         val typeDeclarations = HashMap<String, ExternalDeclaration>()
-        for (entry in entries) {
-            val (name, declaration) = when (entry) {
-                is ScopeBuilder -> entry.name to ExternalObject(entry.name!!, entry.path.dropLast(1), emptyList())
-                is Collected -> typeNameOf(entry.declaration) to entry.declaration
+        entries.forEachIndexed { index, entry ->
+            if (index in groups && index !in merged) return@forEachIndexed
+            val (name, declaration) = when {
+                index in merged -> typeNameOf(merged.getValue(index)) to merged.getValue(index)
+                entry is ScopeBuilder -> entry.name to ExternalObject(entry.name!!, entry.path.dropLast(1), emptyList())
+                entry is Collected -> typeNameOf(entry.declaration) to entry.declaration
+                else -> null to entry
             }
-            if (name != null) typeDeclarations.putIfAbsent(name, declaration)
+            if (name != null && declaration is ExternalDeclaration) typeDeclarations.putIfAbsent(name, declaration)
         }
-        return entries.mapIndexed { index, entry ->
-            val reduced = reduceEntry(entry, index, scope, inheritance, functions, winners, seenTypeNames, seenValueNames, typeDeclarations)
-            if (plan == null || scope.path.isNotEmpty()) reduced else wired(entry, reduced, plan)
+        return entries.mapIndexedNotNull { index, entry ->
+            val group = groups[index]
+            val reduced = when {
+                group != null && group.first() != index -> return@mapIndexedNotNull null
+                group != null -> reduceMerged(merged.getValue(index), group.map { entries[it] }, inheritance, seenTypeNames)
+                else -> reduceEntry(entry, index, scope, inheritance, functions, winners, seenTypeNames, seenValueNames, typeDeclarations)
+            }
+            if (plan == null || scope.path.isNotEmpty()) reduced
+            else wired(group?.let { g -> bindingEntry(g.map { entries[it] }, reduced) } ?: entry, reduced, plan)
         }
+    }
+
+    /**
+     * (EXT.20) A merged declaration under the scope's first-wins rule: it
+     * takes the type name as its lead would (a name an EARLIER, non-merging
+     * declaration already took — a second interface block ahead of the
+     * group — still wins), and its supertypes are pruned as any class's or
+     * interface's are.
+     */
+    private fun reduceMerged(
+        merged: ExternalDeclaration,
+        members: List<Entry>,
+        inheritance: Inheritance,
+        seenTypeNames: MutableMap<String, String?>,
+    ): ExternalDeclaration {
+        val name = typeNameOf(merged) ?: return merged
+        if (seenTypeNames.containsKey(name)) {
+            return SkippedDeclaration(
+                "$name declared again in the same scope - TypeScript merges the declarations, " +
+                    "one Kotlin scope cannot hold both"
+            )
+        }
+        seenTypeNames[name] = members.firstNotNullOfOrNull { (it as? Collected)?.fileName }
+        return when (merged) {
+            is ExternalClass -> prunedHeritage(merged, inheritance)
+            is ExternalInterface -> prunedHeritage(merged, inheritance)
+            else -> merged
+        }
+    }
+
+    /** (EXT.20) The group entry whose NODE the wiring reads for the merged declaration — the class's, the interface's, the enum's. */
+    private fun bindingEntry(members: List<Entry>, merged: ExternalDeclaration): Entry =
+        members.firstOrNull { entry ->
+            val declaration = (entry as? Collected)?.declaration
+            when (merged) {
+                is ExternalClass -> declaration is ExternalClass
+                is ExternalInterface -> declaration is ExternalInterface
+                is ExternalEnum -> declaration is ExternalEnum
+                else -> false
+            }
+        } ?: members.first()
+
+    /**
+     * (EXT.20) ONE Kotlin declaration for the TypeScript declarations of
+     * one name in one file that merge — measured against the Kotlin/JS
+     * compiler (`KotlinExternalsJsGateTest`, the metadata compiler in
+     * `KotlinOverloadEquivalenceTest`):
+     *
+     *  - a CLASS with an INTERFACE: the class, the interface's members
+     *    joined to the instance side (TypeScript's merged instance type)
+     *    and its `extends` bases as the class's `implements` list; a
+     *    property the class already declares is a loud skip (TypeScript
+     *    requires identical types there), a method joins the overload
+     *    collapse. TypeScript requires identical type-parameter lists
+     *    (TS2428), so a differing one is a loud skip of the interface's
+     *    members, never a wrong substitution;
+     *  - a CLASS with a NAMESPACE: the namespace's VALUES and FUNCTIONS in
+     *    the class's `companion object` beside the `static` members (the
+     *    overload collapse over both), its TYPES — interfaces, classes,
+     *    enums, nested namespace objects, the loud skips of its aliases —
+     *    NESTED in the class body, at the namespace's own path;
+     *  - an INTERFACE with a NAMESPACE: the interface with the namespace's
+     *    values and functions in its companion (accepted on an `external
+     *    interface`) and its INTERFACES nested; a class or an object is
+     *    refused there (`Interface cannot contain nested classes and
+     *    objects`) and is a loud skip inside the interface;
+     *  - an ENUM with a NAMESPACE: the sealed interface, the namespace's
+     *    values and functions after the entries in its companion, its
+     *    interfaces nested, a class or object the same loud skip.
+     *
+     * A FUNCTION beside a namespace is NOT a merge here: `fun assert(…)`
+     * beside `object assert { … }` compiles (measured, both compilers), so
+     * both render as they are. The header of the merged declaration
+     * records what was merged.
+     */
+    private fun mergedDeclaration(
+        members: List<Entry>,
+        declarationsOf: (ScopeBuilder) -> List<ExternalDeclaration>,
+    ): ExternalDeclaration {
+        val klass = members.firstNotNullOfOrNull { (it as? Collected)?.declaration as? ExternalClass }
+        val iface = members.firstNotNullOfOrNull { (it as? Collected)?.declaration as? ExternalInterface }
+        val enum = members.firstNotNullOfOrNull { (it as? Collected)?.declaration as? ExternalEnum }
+        val namespace = members.firstNotNullOfOrNull { it as? ScopeBuilder }
+        val name = klass?.name ?: iface?.name ?: enum?.name ?: namespace!!.name!!
+        val statics = mutableListOf<ExternalMember>()
+        val nested = mutableListOf<ExternalDeclaration>()
+        for (declaration in namespace?.let(declarationsOf).orEmpty()) {
+            when (declaration) {
+                is ExternalTopLevelFunction -> statics += ExternalFunction(
+                    declaration.name, declaration.typeParameters, declaration.markers, declaration.parameters, declaration.returnType,
+                )
+                is ExternalTopLevelValue -> statics += ExternalProperty(declaration.name, declaration.type, declaration.readOnly)
+                else -> nested += declaration
+            }
+        }
+        val mergedWith = buildList {
+            if (klass != null && iface != null) add("the interface $name")
+            if (namespace != null) add("the namespace $name")
+        }
+        val marker = "merged with ${mergedWith.joinToString(" and ")} of this scope - TypeScript declaration merging"
+        if (klass != null) {
+            val instanceMembers = klass.members.toMutableList()
+            val interfaces = klass.interfaces.toMutableList()
+            if (iface != null) {
+                if (iface.typeParameters != klass.typeParameters) {
+                    instanceMembers += SkippedMember(
+                        "interface $name merged with the class declares other type parameters " +
+                            "<${iface.typeParameters.joinToString(", ")}> - its members not merged"
+                    )
+                } else {
+                    interfaces += iface.supertypes
+                    // The interface's CLASS bases: the class's own superclass
+                    // is the same fact and is dropped; any other is a loud
+                    // skip — a Kotlin class extends one class, and adopting
+                    // it would hand the merged class a constructor and a
+                    // prototype the runtime class does not have.
+                    for (base in iface.classBases) {
+                        if (base == klass.superClass) continue
+                        instanceMembers += SkippedMember(
+                            "heritage clause extends $base of the merged interface $name - " +
+                                "the class extends ${klass.superClass ?: "nothing"}, a Kotlin class extends one class"
+                        )
+                    }
+                    val declared = instanceMembers.filterIsInstance<ExternalProperty>().mapTo(HashSet()) { it.name }
+                    for (member in iface.members) {
+                        instanceMembers +=
+                            if (member is ExternalProperty && member.name in declared) {
+                                SkippedMember("property ${member.name} declared again by the merged interface $name")
+                            } else {
+                                member
+                            }
+                    }
+                }
+            }
+            val staticMembers = (klass.staticMembers + statics).toMutableList()
+            dedupeOverloads(instanceMembers)
+            dedupeOverloads(staticMembers)
+            return ExternalClass(
+                name = name,
+                typeParameters = klass.typeParameters,
+                headerMarkers = klass.headerMarkers + marker,
+                isAbstract = klass.isAbstract,
+                superClass = klass.superClass,
+                interfaces = interfaces,
+                constructorParameters = klass.constructorParameters,
+                members = instanceMembers,
+                staticMembers = staticMembers,
+                path = klass.path,
+                binding = klass.binding,
+                nested = nested,
+            )
+        }
+        // An interface (a sealed one for an enum) nests interfaces only.
+        val nestable = nested.map { declaration ->
+            when (declaration) {
+                is ExternalClass -> SkippedDeclaration(
+                    "class ${declaration.name} of the merged namespace $name - an external interface cannot nest a class or object"
+                )
+                is ExternalObject -> SkippedDeclaration(
+                    "namespace ${declaration.name} of the merged namespace $name - an external interface cannot nest a class or object"
+                )
+                else -> declaration
+            }
+        }
+        if (iface != null) {
+            val staticMembers = statics.toMutableList()
+            dedupeOverloads(staticMembers)
+            return ExternalInterface(
+                name = name,
+                typeParameters = iface.typeParameters,
+                headerMarkers = iface.headerMarkers + marker,
+                supertypes = iface.supertypes,
+                members = iface.members,
+                path = iface.path,
+                staticMembers = staticMembers,
+                nested = nestable,
+            )
+        }
+        val staticMembers = statics.toMutableList()
+        dedupeOverloads(staticMembers)
+        return ExternalEnum(
+            name = name,
+            entries = enum!!.entries,
+            markers = enum.markers + marker,
+            binding = enum.binding,
+            staticMembers = staticMembers,
+            nested = nestable,
+        )
     }
 
     /** One entry of [reduce]'s fold — the per-scope rules its KDoc lists, applied to [entry]. */
@@ -920,6 +1227,9 @@ private class ExternalsCollector(
             supertypes = pruned.interfaces,
             members = declaration.members + pruned.markers,
             path = declaration.path,
+            staticMembers = declaration.staticMembers,
+            nested = declaration.nested,
+            classBases = declaration.classBases,
         )
     }
 
@@ -937,6 +1247,8 @@ private class ExternalsCollector(
             members = declaration.members + pruned.markers,
             staticMembers = declaration.staticMembers,
             path = declaration.path,
+            binding = declaration.binding,
+            nested = declaration.nested,
         )
     }
 
@@ -1058,12 +1370,22 @@ private class ExternalsCollector(
             surface.enums.filterNot { ModifierFlag.Const in it.node.modifiers }
                 .map { Nameable(it.node, it.site, it.node.name.text, it.ordinal) }
 
+    /** (EXT.20) What KIND of declaration a name candidate is — the merge rule's input. */
+    private enum class NameKind { CLASS, INTERFACE, ENUM, NAMESPACE, ALIAS }
+
     /**
      * (EXT.19) One candidate for a qualified NAME in its Kotlin scope — a
      * generated type, a namespace object, or a root alias — with the scan
-     * position [ExternalsCollector.finish]'s first-wins rule orders by.
+     * position [ExternalsCollector.finish]'s first-wins rule orders by,
+     * (EXT.20) its kind and the file declaring it.
      */
-    private class NameCandidate(val ordinal: Int, val nameable: Nameable?, val alias: TypeAliasDeclaration?)
+    private class NameCandidate(
+        val ordinal: Int,
+        val nameable: Nameable?,
+        val alias: TypeAliasDeclaration?,
+        val kind: NameKind,
+        val fileName: String?,
+    )
 
     /** (EXT.19) Every name candidate by qualified name, scan order. */
     private val nameCandidates: Map<String, List<NameCandidate>> = HashMap<String, MutableList<NameCandidate>>().apply {
@@ -1071,21 +1393,85 @@ private class ExternalsCollector(
             getOrPut(qualified) { mutableListOf() }.add(candidate)
         }
         for (nameable in nameableDeclarations) {
-            add(qualifiedName(nameable.path, nameable.name), NameCandidate(nameable.ordinal, nameable, null))
+            val kind = when (nameable.node) {
+                is ClassDeclaration -> NameKind.CLASS
+                is EnumDeclaration -> NameKind.ENUM
+                else -> NameKind.INTERFACE
+            }
+            add(
+                qualifiedName(nameable.path, nameable.name),
+                NameCandidate(nameable.ordinal, nameable, null, kind, fileNameOf(nameable.node)),
+            )
         }
         for (entry in surface.namespaces) {
             if (entry.skip != null) continue
             for (depth in 1..entry.bodyPath.size) {
                 add(
                     qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]),
-                    NameCandidate(entry.ordinal, null, null),
+                    NameCandidate(entry.ordinal, null, null, NameKind.NAMESPACE, fileNameOf(entry.node)),
                 )
             }
         }
         for (alias in surface.aliases) {
-            if (alias.path.isEmpty()) add(alias.node.name.text, NameCandidate(alias.ordinal, null, alias.node))
+            if (alias.path.isEmpty()) {
+                add(alias.node.name.text, NameCandidate(alias.ordinal, null, alias.node, NameKind.ALIAS, fileNameOf(alias.node)))
+            }
         }
         for (candidates in values) candidates.sortBy { it.ordinal }
+    }
+
+    /**
+     * (EXT.20) Scan ordinal → the FIRST ordinal of its MERGE GROUP, for
+     * every declaration that merges with another; absent for one that
+     * merges with nothing. Decided once, from the scan, by TypeScript's
+     * declaration-merging rule restricted to what Kotlin can render as one
+     * declaration ([mergedDeclaration]): among the candidates of one
+     * qualified name, in scan order, the first opens the group and a later
+     * one joins it when it sits in the SAME FILE and the group has no
+     * declaration of its kind yet — at most one class, one interface, one
+     * enum and one namespace, a class and an enum never together, an
+     * interface and an enum never together (Duplicate identifier in
+     * TypeScript), and an alias never (TypeScript merges no alias). A
+     * candidate that does not join is what it was: the later declaration
+     * of a taken name. Read by [ownsName] and by [scopeGroups], so the
+     * reference side and the rendering side cannot disagree about which
+     * declarations are one.
+     */
+    private val mergeGroupFirst: Map<Int, Int> = HashMap<Int, Int>().apply {
+        for (candidates in nameCandidates.values) {
+            val first = candidates.first()
+            if (first.kind == NameKind.ALIAS) continue
+            val kinds = HashSet<NameKind>()
+            kinds += first.kind
+            val members = mutableListOf(first.ordinal)
+            for (candidate in candidates.drop(1)) {
+                if (candidate.fileName != first.fileName || candidate.kind in kinds) continue
+                val joins = when (candidate.kind) {
+                    NameKind.CLASS -> NameKind.ENUM !in kinds
+                    NameKind.INTERFACE -> NameKind.ENUM !in kinds
+                    NameKind.ENUM -> NameKind.CLASS !in kinds && NameKind.INTERFACE !in kinds
+                    NameKind.NAMESPACE -> true
+                    NameKind.ALIAS -> false
+                }
+                if (!joins) continue
+                kinds += candidate.kind
+                members += candidate.ordinal
+            }
+            if (members.size < 2) continue
+            for (ordinal in members) put(ordinal, first.ordinal)
+        }
+    }
+
+    /** (EXT.20) The merge group an ordinal belongs to, named by its first ordinal — itself when it merges with nothing. */
+    private fun mergeGroupFirstOf(ordinal: Int): Int = mergeGroupFirst[ordinal] ?: ordinal
+
+    /** (EXT.20) Another nameable of [nameable]'s merge group satisfying [accept] — the class beside the interface — or null. */
+    private fun mergedSibling(nameable: Nameable, accept: (Nameable) -> Boolean): Nameable? {
+        val group = mergeGroupFirst[nameable.ordinal] ?: return null
+        return nameableDeclarations.firstOrNull {
+            it !== nameable && it.path == nameable.path && it.name == nameable.name &&
+                mergeGroupFirst[it.ordinal] == group && accept(it)
+        }
     }
 
     private val nameOwnerCache = HashMap<String, Int?>()
@@ -1133,8 +1519,12 @@ private class ExternalsCollector(
      * `@types/node`: `readable: ReadableStream<R>` against a non-generic
      * `ReadableStream`, `class SourceTextModule : Module` against an object).
      */
-    private fun ownsName(nameable: Nameable, lens: CheckedLens): Boolean =
-        nameOwnerOrdinal(qualifiedName(nameable.path, nameable.name), lens) == nameable.ordinal
+    private fun ownsName(nameable: Nameable, lens: CheckedLens): Boolean {
+        // (EXT.20) The declarations of one merge group are ONE Kotlin
+        // declaration, so each of them owns the name the group's lead does.
+        val owner = nameOwnerOrdinal(qualifiedName(nameable.path, nameable.name), lens) ?: return false
+        return mergeGroupFirstOf(owner) == mergeGroupFirstOf(nameable.ordinal)
+    }
 
     private val interfaceRenderable = HashMap<Int, Boolean>()
     private val interfaceRenderableInProgress = HashSet<Int>()
@@ -2274,33 +2664,33 @@ private class ExternalsCollector(
             is InterfaceDeclaration -> {
                 val declared = surface.interfaces.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectInterface(node, lens, declared.site))
+                add(declared.path, node, collectInterface(node, lens, declared.site), declared.ordinal)
             }
             is ClassDeclaration -> {
                 val declared = surface.classes.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectClass(node, lens, declared.site))
+                add(declared.path, node, collectClass(node, lens, declared.site), declared.ordinal)
             }
             is EnumDeclaration -> {
                 val declared = surface.enums.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectEnum(node))
+                add(declared.path, node, collectEnum(node), declared.ordinal)
             }
             is TypeAliasDeclaration -> {
                 val declared = surface.aliases.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectTypeAlias(node, lens, declared.site))
+                add(declared.path, node, collectTypeAlias(node, lens, declared.site), declared.ordinal)
             }
             is FunctionDeclaration -> {
                 val declared = surface.functions.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
                 collectFunction(node, lens, declared.site)
-                    ?.let { add(declared.path, node, it) }
+                    ?.let { add(declared.path, node, it, declared.ordinal) }
             }
             is VariableDeclaration -> {
                 val exported = surface.values.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(exported.path, node, collectValue(exported, lens))
+                add(exported.path, node, collectValue(exported, lens), exported.ordinal)
             }
             is ExportAssignment, is ExportDeclaration -> {
                 if (surface.exportWiring.none { it === node }) return
@@ -2586,7 +2976,7 @@ private class ExternalsCollector(
             if (isExtends) base is ClassDeclaration else base is InterfaceDeclaration
         }
         headerMarkers += heritage.markers
-        if (heritage.extends.size > 1) {
+        if (heritage.extendsClasses.size > 1) {
             // Unreachable from well-formed TypeScript (one `extends` per
             // class); kept loud rather than picking one.
             members.add(SkippedMember("class with more than one extends base"))
@@ -2662,7 +3052,7 @@ private class ExternalsCollector(
             typeParameters = typeParameters,
             headerMarkers = headerMarkers,
             isAbstract = ModifierFlag.Abstract in node.modifiers,
-            superClass = heritage.extends.singleOrNull(),
+            superClass = heritage.extendsClasses.singleOrNull(),
             interfaces = heritage.implements,
             constructorParameters = constructorParameters,
             members = members,
@@ -2943,9 +3333,13 @@ private class ExternalsCollector(
         val members = mutableListOf<ExternalMember>()
         // An interface may `extends` a generated interface; a generated CLASS
         // as an interface's base has no Kotlin shape (an interface cannot
-        // extend a class) and stays a marker.
+        // extend a class) and stays a marker — (EXT.20) unless the interface
+        // MERGES with a class of its name, whose merged declaration takes
+        // the class bases ([mergedDeclaration]).
+        val mergesWithClass = nameableDeclarations.firstOrNull { it.node === node }
+            ?.let { mergedSibling(it) { sibling -> sibling.node is ClassDeclaration } } != null
         val heritage = collectHeritage(node.heritageClauses, lens, scope, members) { base, _ ->
-            base is InterfaceDeclaration
+            base is InterfaceDeclaration || (mergesWithClass && base is ClassDeclaration)
         }
         headerMarkers += heritage.markers
         for (member in node.members) {
@@ -2972,13 +3366,18 @@ private class ExternalsCollector(
             }
         }
         dedupeOverloads(members)
-        return ExternalInterface(node.name.text, typeParameters, headerMarkers, heritage.extends, members, path)
+        return ExternalInterface(
+            node.name.text, typeParameters, headerMarkers, heritage.extends, members, path,
+            classBases = heritage.extendsClasses,
+        )
     }
 
     /** (EXT.8) The bases a declaration's heritage clauses resolve to. */
     private class Heritage(
-        /** `extends` bases that are GENERATED classes/interfaces, as Kotlin type text. */
+        /** `extends` bases that are GENERATED interfaces, as Kotlin type text. */
         val extends: List<String>,
+        /** (EXT.20) `extends` bases that are GENERATED classes (by the merged kind), as Kotlin type text. */
+        val extendsClasses: List<String>,
         /** `implements` bases that are GENERATED interfaces, as Kotlin type text. */
         val implements: List<String>,
         /** (EXT.19) Loud header records — a defaulted type argument supplied as `Any?`. */
@@ -3029,6 +3428,7 @@ private class ExternalsCollector(
         kindOk: (base: Node, isExtends: Boolean) -> Boolean,
     ): Heritage {
         val extends = mutableListOf<String>()
+        val extendsClasses = mutableListOf<String>()
         val implements = mutableListOf<String>()
         val markers = mutableListOf<String>()
         for (clause in clauses.orEmpty()) {
@@ -3037,13 +3437,14 @@ private class ExternalsCollector(
             for (base in clause.types) {
                 val baseName = expressionNameText(base.expression)
                 var reason: String? = null
+                var renderedIsClass = false
                 val rendered = baseName?.let { written ->
                     // Resolved as the checker resolves the clause itself (the
                     // lexical `resolveName` offers no import): an imported
                     // base is its import ALIAS, and the identity test needs
                     // the declaration it names. (EXT.14) The written-name
                     // fallback on a lens miss, where it applies.
-                    val nameable = lens.heritageBaseSymbol(base.expression)
+                    val resolved = lens.heritageBaseSymbol(base.expression)
                         ?.let { lens.aliasTarget(it) ?: it }
                         ?.declarations?.firstNotNullOfOrNull { declared ->
                             nameableDeclarations.firstOrNull { it.node === declared }
@@ -3052,7 +3453,21 @@ private class ExternalsCollector(
                             if (writtenApplies(segments, scope)) writtenTarget(segments, scope) as? Nameable else null
                         }
                         ?: return@let null
-                    if (!kindOk(nameable.node, isExtends)) return@let null
+                    // (EXT.20) A MERGED name denotes ONE Kotlin declaration,
+                    // a class when any declaration of the group is a class:
+                    // the kind test reads the group's representative, not
+                    // whichever declaration the resolver answered (an
+                    // `interface EventEmitter` before the `class`), so an
+                    // interface's `extends EventEmitter` refuses as the
+                    // class base it is — with the reason.
+                    val nameable = mergedSibling(resolved) { it.node is ClassDeclaration } ?: resolved
+                    if (!kindOk(nameable.node, isExtends)) {
+                        if (nameable.node is ClassDeclaration && nameable.ordinal in mergeGroupFirst) {
+                            reason = "${nameable.name} is the merged class ${nameable.name} - " +
+                                if (isExtends) "an interface cannot extend a class" else "a class cannot be implemented"
+                        }
+                        return@let null
+                    }
                     // (EXT.11a) A callable interface renders as a function
                     // TYPE alias, which nothing can extend or implement.
                     if (isCallableInterface(nameable.node)) return@let null
@@ -3064,6 +3479,7 @@ private class ExternalsCollector(
                         reason = "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
                         return@let null
                     }
+                    renderedIsClass = nameable.node is ClassDeclaration
                     val filled = filledTypeArguments(nameable, base.typeArguments.orEmpty(), lens, scope)
                         ?: return@let null
                     markers += filled.markers
@@ -3078,12 +3494,13 @@ private class ExternalsCollector(
                                     (reason?.let { " - $it" } ?: "")
                             )
                         )
+                    isExtends && renderedIsClass -> extendsClasses.add(rendered)
                     isExtends -> extends.add(rendered)
                     else -> implements.add(rendered)
                 }
             }
         }
-        return Heritage(extends, implements, markers)
+        return Heritage(extends, extendsClasses, implements, markers)
     }
 
     /**

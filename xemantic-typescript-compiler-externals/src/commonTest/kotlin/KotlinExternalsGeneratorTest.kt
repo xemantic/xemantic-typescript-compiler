@@ -1117,14 +1117,21 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `export equals is a loud marker`() {
+    fun `export equals renders its target whatever its modifiers and keeps the wiring marker`() {
+        // (EXT.20) The target of an `export =` is the module's whole surface,
+        // `export`-modified or not — it can never vanish; the statement itself
+        // is still the wiring marker.
         val result = generate(
             """
             declare const lib: { v: number };
             export = lib;
             """
         )
-        val expected = "/* xtsc: skipped export = lib - module wiring is a later rung */\n"
+        val expected = """
+            public external val lib: Any? /* xtsc: unmapped { v: number; } */
+
+            /* xtsc: skipped export = lib - module wiring is a later rung */
+        """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
     }
@@ -3690,7 +3697,11 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `a declaration merged in one scope is a loud skip naming the merge and a namespace merged onto an enum too`() {
+    fun `a second interface block of one name is a loud skip naming the merge and a namespace merged onto an enum lands in its companion`() {
+        // (EXT.20) Two interface blocks stay the loud skip (Kotlin cannot
+        // hold both and the generator merges no two interfaces); an enum
+        // and its namespace are ONE sealed interface, the namespace's
+        // function in the companion after the entries.
         val result = generateDts(
             """
             declare namespace ts {
@@ -3712,12 +3723,12 @@ class KotlinExternalsGeneratorTest {
             /* xtsc: skipped Node declared again in the same scope - TypeScript merges the declarations, one Kotlin scope cannot hold both */
 
             public sealed external interface Kind {
+                /* xtsc: merged with the namespace Kind of this scope - TypeScript declaration merging */
                 public companion object {
                     public val A: Kind
+                    public fun parse(s: String): Kind
                 }
             }
-
-            /* xtsc: skipped namespace Kind declared again in the same scope - one Kotlin scope cannot hold both */
 
             /* xtsc: skipped export = ts - module wiring is a later rung */
         """.trimIndent() + "\n"
@@ -4435,9 +4446,10 @@ class KotlinExternalsGeneratorTest {
     fun `a reference to a declaration that lost its name to an earlier one in its scope refuses with a marker naming the scope`() {
         // Two files export a `Stream`; the first keeps the name, so a
         // reference to the second's generic `Stream<R>` must not spell
-        // `Stream<Double>` against a non-generic declaration. A namespace
-        // object takes the name of the class it merges with, and a class
-        // extending that class cannot extend the object.
+        // `Stream<Double>` against a non-generic declaration. (EXT.20) A
+        // namespace and the class of its name in ONE file are one merged
+        // class (the namespace's interface nested), which the class
+        // extending it extends.
         val result = generateKotlinExternals(
             listOf(
                 SourceFileEntry(
@@ -4467,16 +4479,16 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public external object Module {
+            public open external class Module {
+                /* xtsc: merged with the namespace Module of this scope - TypeScript declaration merging */
+                public var m: Double
+
                 public interface Inner {
                     public var i: Double
                 }
             }
 
-            /* xtsc: skipped Module declared again in the same scope - TypeScript merges the declarations, one Kotlin scope cannot hold both */
-
-            public open external class SourceTextModule {
-                /* xtsc: skipped heritage clause extends Module - the name Module is taken by an earlier declaration in the top level */
+            public open external class SourceTextModule : Module {
                 public var s: String
             }
 
@@ -4674,9 +4686,11 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public external object Stream {
-                public open class Readable {
-                    /* xtsc: skipped heritage clause extends Stream */
+            public open external class Stream {
+                /* xtsc: merged with the namespace Stream of this scope - TypeScript declaration merging */
+                public fun pipe(): Unit
+
+                public open class Readable : Stream {
                     public fun read(): String
                 }
 
@@ -4796,6 +4810,359 @@ class KotlinExternalsGeneratorTest {
 
             public external interface Events {
                 public var close: () -> Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    // --- (EXT.20) the export = target and declaration merging ------------------
+
+    @Test
+    fun `an export equals class merged with its interface and namespace inside a module block is the module's surface`() {
+        // The `events.d.ts` shape, measured against tsgo 7.0.2: every import
+        // form binds the class, the merged interface's members and the
+        // namespace's `export`-modified members; the un-modified `Hidden`
+        // and the namespace's un-modified member are TS2694/TS2305. So the
+        // class renders merged — `fromInterface` an instance member, the
+        // namespace's function and value in the companion beside the
+        // `static`, its interface and class nested — `Hidden` stays silent
+        // (the constructor names it through the marker), and a class in
+        // ANOTHER module block extends the merged class through its import.
+        val result = generateDts(
+            """
+            declare module "events" {
+                interface Hidden { h: number; }
+                interface EventEmitter { fromInterface(): void; }
+                class EventEmitter {
+                    constructor(options?: Hidden);
+                    emit(name: string): boolean;
+                    static defaultMaxListeners: number;
+                }
+                import internal = require("node:events");
+                namespace EventEmitter {
+                    export { internal as EventEmitter };
+                    export interface Abortable { signal?: number | undefined; }
+                    interface NotExported { n: number; }
+                    export function once(e: EventEmitter, name: string): string;
+                    export const captureRejections: boolean;
+                    export class Resource extends EventEmitter { readonly x: number; }
+                }
+                export interface Uses { e: EventEmitter; a: EventEmitter.Abortable; r: EventEmitter.Resource; }
+                export = EventEmitter;
+            }
+            declare module "node:events" {
+                import events = require("events");
+                export = events;
+            }
+            declare module "stream" {
+                import { EventEmitter } from "events";
+                class Stream extends EventEmitter { pipe(): void; }
+                export = Stream;
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "events" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class EventEmitter(options: Any? /* xtsc: unmapped Hidden */) {
+                /* xtsc: merged with the interface EventEmitter and the namespace EventEmitter of this scope - TypeScript declaration merging */
+                public fun emit(name: String): Boolean
+                public fun fromInterface(): Unit
+                public companion object {
+                    public var defaultMaxListeners: Double
+                    public fun once(e: EventEmitter, name: String): String
+                    public val captureRejections: Boolean
+                }
+
+                public interface Abortable {
+                    public var signal: Double?
+                }
+
+                public open class Resource(options: Any? /* xtsc: unmapped Hidden */) : EventEmitter {
+                    public val x: Double
+                }
+            }
+
+            public external interface Uses {
+                public var e: EventEmitter
+                public var a: EventEmitter.Abortable
+                public var r: EventEmitter.Resource
+            }
+
+            /* xtsc: skipped export = EventEmitter - module wiring is a later rung */
+
+            /* xtsc: module "node:events" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            /* xtsc: skipped export = events - module wiring is a later rung */
+
+            /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class Stream(options: Any? /* xtsc: unmapped Hidden */) : EventEmitter {
+                public fun pipe(): Unit
+            }
+
+            /* xtsc: skipped export = Stream - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `an interface merged with its namespace holds the values in a companion and nests its interfaces while a class or object is a loud skip`() {
+        // Measured on Kotlin/JS 2.4.10 (`KotlinExternalsJsGateTest`): an
+        // external interface accepts a companion and a nested interface,
+        // and refuses a nested class or object.
+        val result = generateDts(
+            """
+            declare module "path" {
+                interface PlatformPath { sep: string; join(...paths: string[]): string; }
+                namespace PlatformPath {
+                    export interface Parsed { root: string; }
+                    export const posix: number;
+                    export function fmt(p: Parsed): string;
+                    export class Inner { x: number; }
+                    export namespace deeper { export interface D { d: number; } }
+                }
+                export = PlatformPath;
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "path" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface PlatformPath {
+                /* xtsc: merged with the namespace PlatformPath of this scope - TypeScript declaration merging */
+                public var sep: String
+                public fun join(vararg paths: String): String
+                public companion object {
+                    public val posix: Double
+                    public fun fmt(p: Parsed): String
+                }
+
+                public interface Parsed {
+                    public var root: String
+                }
+
+                /* xtsc: skipped class Inner of the merged namespace PlatformPath - an external interface cannot nest a class or object */
+
+                /* xtsc: skipped namespace deeper of the merged namespace PlatformPath - an external interface cannot nest a class or object */
+            }
+
+            /* xtsc: skipped export = PlatformPath - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val gateExpected = """
+            /* xtsc: module "path" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public interface PlatformPath {
+                /* xtsc: merged with the namespace PlatformPath of this scope - TypeScript declaration merging */
+                public var sep: String
+                public fun join(vararg paths: String): String
+                public companion object {
+                    public val posix: Double = null!!
+                    public fun fmt(p: Parsed): String = null!!
+                }
+
+                public interface Parsed {
+                    public var root: String
+                }
+
+                /* xtsc: skipped class Inner of the merged namespace PlatformPath - an external interface cannot nest a class or object */
+
+                /* xtsc: skipped namespace deeper of the merged namespace PlatformPath - an external interface cannot nest a class or object */
+            }
+
+            /* xtsc: skipped export = PlatformPath - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gate = result.compileCheckSource
+        assert(rendered == expected)
+        assert(gate == gateExpected)
+    }
+
+    @Test
+    fun `a class merged with its interface joins the members and the extends bases and skips a redeclared property and a differing type-parameter list`() {
+        val result = generate(
+            """
+            export interface Base { z: number; }
+            export declare class Pair { a: number; f(x: string): void; }
+            export interface Pair extends Base { a: number; b: string; f(x: number): void; }
+            export declare class Box<T> { v: T; get(): T; }
+            export interface Box<U> { v: U; }
+            """
+        )
+        val expected = """
+            public external interface Base {
+                public var z: Double
+            }
+
+            public open external class Pair : Base {
+                /* xtsc: merged with the interface Pair of this scope - TypeScript declaration merging */
+                public var a: Double
+                public fun f(x: String): Unit
+                /* xtsc: skipped property a declared again by the merged interface Pair */
+                public var b: String
+                public fun f(x: Double): Unit
+                /* xtsc: property z inherited from Base - not declared by the class in TypeScript */
+                public override var z: Double
+            }
+
+            public open external class Box<T> {
+                /* xtsc: merged with the interface Box of this scope - TypeScript declaration merging */
+                public var v: T
+                public fun get(): T
+                /* xtsc: skipped interface Box merged with the class declares other type parameters <U> - its members not merged */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `negative control - a class and a namespace of one name in different files do not merge`() {
+        // A module file is its own scope: TypeScript merges nothing across
+        // them, so the second file's nested namespace (a root one would
+        // flatten) is the loud skip it was.
+        val result = generateKotlinExternals(
+            listOf(
+                SourceFileEntry("/a.d.ts", "export declare class Model { m: number; }"),
+                SourceFileEntry("/b.d.ts", "export declare namespace ts { namespace Model { interface Inner { i: number; } } }"),
+            )
+        )
+        val expected = """
+            public open external class Model {
+                public var m: Double
+            }
+
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            /* xtsc: skipped namespace Model declared again in the same scope - one Kotlin scope cannot hold both */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a function beside the namespace of its name renders both - an export equals function is the module surface`() {
+        // The `assert.d.ts` shape. Measured: `fun assert` beside `object
+        // assert` compiles in Kotlin/JS and in the metadata compiler, so
+        // nothing merges and nothing is skipped.
+        val result = generateDts(
+            """
+            declare module "assert" {
+                function assert(value: unknown, message?: string): void;
+                namespace assert {
+                    export function ok(value: unknown): void;
+                    export interface Options { strict: boolean; }
+                }
+                export = assert;
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "assert" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external fun assert(value: Any?, message: String?): Unit
+
+            public external object assert {
+                public fun ok(value: Any?): Unit
+
+                public interface Options {
+                    public var strict: Boolean
+                }
+            }
+
+            /* xtsc: skipped export = assert - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `negative control - an un-modified member of an export equals module block that is not the target stays silent`() {
+        // tsgo: `import EE = require("m"); let h: EE.Hidden` is TS2694 —
+        // nothing a consumer can name, so nothing is generated, the policy
+        // every private declaration has; only the TARGET is the surface.
+        val result = generateDts(
+            """
+            declare module "m" {
+                interface Hidden { h: number; }
+                class Target { t: number; }
+                export = Target;
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "m" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class Target {
+                public var t: Double
+            }
+
+            /* xtsc: skipped export = Target - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a merged interface's class bases - one equal to the class's superclass is dropped and any other is a loud skip and an interface extending a merged class refuses with the reason`() {
+        // `zlib.d.ts`: `class Gzip extends stream.Transform` beside
+        // `interface Gzip extends stream.Transform, Zlib {}`; `stream.d.ts`:
+        // `class Duplex extends Stream` beside `interface Duplex extends
+        // Readable, Writable {}`; `child_process.d.ts`: `interface Control
+        // extends EventEmitter` where `EventEmitter` is a merged class.
+        val result = generate(
+            """
+            export declare class Transform { t(): void; }
+            export interface Zlib { z(): void; }
+            export declare class Gzip extends Transform { constructor(level: number); }
+            export interface Gzip extends Transform, Zlib {}
+            export declare class Stream { s(): void; }
+            export declare class Readable extends Stream { r(): void; }
+            export declare class Writable extends Stream { w(): void; }
+            export declare class Duplex extends Stream { d(): void; }
+            export interface Duplex extends Readable, Writable {}
+            export interface Control extends Gzip { c(): void; }
+            """
+        )
+        val expected = """
+            public open external class Transform {
+                public fun t(): Unit
+            }
+
+            public external interface Zlib {
+                public fun z(): Unit
+            }
+
+            public open external class Gzip(level: Double) : Transform, Zlib {
+                /* xtsc: merged with the interface Gzip of this scope - TypeScript declaration merging */
+                /* xtsc: method z inherited from Zlib - not declared by the class in TypeScript */
+                public override fun z(): Unit
+            }
+
+            public open external class Stream {
+                public fun s(): Unit
+            }
+
+            public open external class Readable : Stream {
+                public fun r(): Unit
+            }
+
+            public open external class Writable : Stream {
+                public fun w(): Unit
+            }
+
+            public open external class Duplex : Stream {
+                /* xtsc: merged with the interface Duplex of this scope - TypeScript declaration merging */
+                public fun d(): Unit
+                /* xtsc: skipped heritage clause extends Readable of the merged interface Duplex - the class extends Stream, a Kotlin class extends one class */
+                /* xtsc: skipped heritage clause extends Writable of the merged interface Duplex - the class extends Stream, a Kotlin class extends one class */
+            }
+
+            public external interface Control {
+                /* xtsc: skipped heritage clause extends Gzip - Gzip is the merged class Gzip - an interface cannot extend a class */
+                public fun c(): Unit
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin

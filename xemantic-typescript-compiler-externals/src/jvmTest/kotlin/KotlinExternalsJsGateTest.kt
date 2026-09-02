@@ -431,4 +431,161 @@ class KotlinExternalsJsGateTest {
         assert(check.errors.isEmpty())
     }
 
+    // ---- (EXT.20) declaration merging: what a Kotlin/JS external may NEST ----
+
+    /** Whether Kotlin/JS ACCEPTS [source] under a module header; a refusal is printed. */
+    private fun accepts(stdlib: java.nio.file.Path, source: String): Boolean {
+        val check = jsCompileCheck("@file:JsModule(\"m\")\n\n" + source.trimIndent() + "\n", stdlib)
+        if (check.errors.isNotEmpty()) println("  refused: ${check.errors.joinToString(" | ")}")
+        return check.errors.isEmpty()
+    }
+
+    /**
+     * (EXT.20) The measurements behind `mergedDeclaration`'s shapes — every
+     * sentence of its KDoc is a row here. The day a Kotlin release moves a
+     * row, the pin reddens and the rule may be revisited, not before.
+     */
+    @Test
+    fun `measured - an external class nests an interface a class and an object and holds a companion`() {
+        val stdlib = JsStdlib.locate() ?: return
+        val classNests = accepts(
+            stdlib,
+            """
+            public open external class EE {
+                public fun emit(name: String): Boolean
+                public interface Abortable { public var signal: Double? }
+                public open class Inner { public fun f(): Int }
+                public object Opts { public val v: Int }
+                public companion object {
+                    public fun once(e: EE, name: String): Any?
+                    public var defaultMaxListeners: Double
+                }
+            }
+            public open external class Sub : EE
+            public external fun useIt(a: EE.Abortable, i: EE.Inner, o: Any?): EE.Opts
+            """,
+        )
+        val nestedExternalModifier = accepts(
+            stdlib,
+            """
+            public open external class EE {
+                public external interface Abortable { public var signal: Double? }
+            }
+            """,
+        )
+        assert(classNests)
+        assert(!nestedExternalModifier)
+    }
+
+    @Test
+    fun `measured - an external interface nests an interface and holds a companion but nests no class or object`() {
+        val stdlib = JsStdlib.locate() ?: return
+        val interfaceNestsInterface = accepts(
+            stdlib,
+            """
+            public external interface I {
+                public var x: Int
+                public interface Nested { public var n: Int }
+                public companion object { public fun f(): Int; public var v: Double }
+            }
+            public external fun useIt(a: I.Nested): Unit
+            """,
+        )
+        val interfaceNestsClass = accepts(
+            stdlib,
+            """
+            public external interface I { public open class InnerC { public fun f(): Int } }
+            """,
+        )
+        val interfaceNestsObject = accepts(
+            stdlib,
+            """
+            public external interface I { public object O { public val v: Int } }
+            """,
+        )
+        val sealedNests = accepts(
+            stdlib,
+            """
+            public sealed external interface K {
+                public interface Nested { public var n: Int }
+                public companion object {
+                    public val A: K
+                    public fun f(): Int
+                    public var v: Double
+                }
+            }
+            """,
+        )
+        assert(interfaceNestsInterface)
+        assert(!interfaceNestsClass)
+        assert(!interfaceNestsObject)
+        assert(sealedNests)
+    }
+
+    @Test
+    fun `measured - a function beside an object or a class of one name compiles`() {
+        val stdlib = JsStdlib.locate() ?: return
+        val funBesideObject = accepts(
+            stdlib,
+            """
+            public external fun assert(value: Any?): Unit
+            public external object assert { public fun ok(value: Any?): Unit }
+            """,
+        )
+        val funBesideClassCompanion = accepts(
+            stdlib,
+            """
+            public external fun test(name: String): Unit
+            public open external class test { public companion object { public fun skip(): Unit } }
+            """,
+        )
+        assert(funBesideObject)
+        assert(funBesideClassCompanion)
+    }
+
+    @Test
+    fun `the merged export equals class of an events-shaped module compiles as Kotlin JS`() {
+        // (EXT.20) The real output of the `events.d.ts` shape — the class
+        // merged with its interface and namespace, companion and nested
+        // declarations, a subclass in another module block — through the
+        // Kotlin/JS compiler.
+        val result = generateKotlinExternals(
+            "/events.d.ts",
+            """
+            declare module "events" {
+                interface Hidden { h: number; }
+                interface EventEmitter { fromInterface(): void; }
+                class EventEmitter {
+                    constructor(options?: Hidden);
+                    emit(name: string): boolean;
+                    static defaultMaxListeners: number;
+                }
+                import internal = require("node:events");
+                namespace EventEmitter {
+                    export { internal as EventEmitter };
+                    export interface Abortable { signal?: number | undefined; }
+                    export function once(e: EventEmitter, name: string): string;
+                    export const captureRejections: boolean;
+                    export class Resource extends EventEmitter { readonly x: number; }
+                }
+                export interface Uses { e: EventEmitter; a: EventEmitter.Abortable; r: EventEmitter.Resource; }
+                export = EventEmitter;
+            }
+            declare module "node:events" {
+                import events = require("events");
+                export = events;
+            }
+            declare module "stream" {
+                import { EventEmitter } from "events";
+                class Stream extends EventEmitter { pipe(): void; }
+                export = Stream;
+            }
+            """.trimIndent(),
+        )
+        val check = gate("merged events shape", result) ?: return
+        val mergedClassRendered = "public open external class EventEmitter(" in result.kotlin
+        assert(mergedClassRendered)
+        assert(check.errors.isEmpty())
+    }
+
 }
