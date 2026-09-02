@@ -72,7 +72,7 @@ class KotlinExternalsTypescriptGateTest {
      * and its parent are both tried, and the skip line names the absolute
      * paths it looked at.
      */
-    private fun typescriptDts(): Path? {
+    internal fun typescriptDts(): Path? {
         val explicit = System.getenv("XTSC_TYPESCRIPT_DTS")
         val candidates =
             if (explicit != null) listOf(Path.of(explicit))

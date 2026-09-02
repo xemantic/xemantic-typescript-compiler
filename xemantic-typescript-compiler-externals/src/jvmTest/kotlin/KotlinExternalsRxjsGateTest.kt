@@ -1367,7 +1367,7 @@ export { zipWith } from './internal/operators/zipWith';
     )
 
     /** (EXT.16) Wired to the package: `rxjs`, entry `/rxjs/index.d.ts`. */
-    private fun generateRxjsCore(): KotlinExternals =
+    internal fun generateRxjsCore(): KotlinExternals =
         generateKotlinExternals(rxjsCore, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))
 
     @Test
@@ -1403,7 +1403,8 @@ export { zipWith } from './internal/operators/zipWith';
         val asyncSubject = "public open external class AsyncSubject<T>() : Subject<T> {\n" in rendered
         // The `this`-typed callback is a Kotlin RECEIVER, never a positional
         // parameter — the one overload whose `state` is not optional maps.
-        val schedule = "    public fun <T> schedule(work: SchedulerAction<T>.(T) -> Unit, delay: Double, state: T): Subscription\n" in rendered
+        // (EXT.17) The `this` parameter is a marker, not a receiver: Kotlin/JS refuses receivers in externals.
+        val schedule = "    public fun <T> schedule(work: (T) -> Unit /* xtsc: this parameter SchedulerAction<T> not carried */, delay: Double, state: T): Subscription\n" in rendered
         val positional = "(SchedulerAction<T>, T) -> Unit" !in rendered
         val value = "public external val EMPTY_SUBSCRIPTION: Subscription\n" in rendered
         // (EXT.11b) The cheap mapping wins, read off the probe: an array of

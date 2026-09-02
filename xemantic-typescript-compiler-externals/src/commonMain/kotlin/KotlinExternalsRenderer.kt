@@ -531,6 +531,87 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         is SkippedMember -> null
     }
 
+    /** (EXT.17) An inherited interface member a non-abstract class still owes ([owedMembers]). */
+    class OwedMember(
+        /** The member as the class inherits it, in the class's vocabulary. */
+        val member: ExternalMember,
+        /** The qualified name of the interface declaring it. */
+        val from: String,
+        /** Whether some class in the chain declares the NAME under another key — an implementation TypeScript accepts. */
+        val nameDeclared: Boolean,
+    )
+
+    private val owedCache = HashMap<String, List<OwedMember>>()
+
+    /**
+     * (EXT.17) Every INTERFACE member a non-abstract class inherits —
+     * transitively, through its interfaces and through its superclasses'
+     * interfaces — whose KEY no class in its chain declares: what Kotlin's
+     * `Class 'X' is not abstract and does not implement abstract members`
+     * names, measured by the Kotlin/JS gate in three costumes TypeScript
+     * reads as one member and Kotlin as two. On rxjs: `Subscriber<T>.next(value)`,
+     * a METHOD implementing `Observer<T>.next: (value: T) => void`, a
+     * function-typed PROPERTY (and `Scheduler.now: () => number` implementing
+     * `TimestampProvider.now(): number`, the other direction); `Scheduler`'s
+     * one `schedule(work, delay?, state?)` implementing three interface
+     * OVERLOADS (TypeScript checks the implementation against each; Kotlin
+     * has three abstract functions). On `typescript.d.ts`: `server.Project`
+     * is abstract and declares `getDefaultLibFileName()` where
+     * `LanguageServiceHost` writes `getDefaultLibFileName(options)` (fewer
+     * parameters is an implementation in TypeScript, another key in
+     * Kotlin), and never declares the OPTIONAL host members at all — so the
+     * first non-abstract subclass owes them.
+     *
+     * The renderer answers by rendering each owed member as an `override`
+     * of the INHERITED shape, loudly: a call site compiles to the same
+     * JavaScript whichever shape it resolves through (`s.next(v)`), a Kotlin
+     * class may declare a property and a function of one name, and an
+     * optional member's inherited type is already nullable. An ABSTRACT
+     * class owes nothing (Kotlin's rule too); what it does not declare is
+     * owed by its first non-abstract subclass, and what a non-abstract
+     * superclass rendered as owed counts as declared below it.
+     */
+    fun owedMembers(declaration: ExternalClass): List<OwedMember> {
+        if (declaration.isAbstract) return emptyList()
+        val qualified = qualifiedName(declaration.path, declaration.name)
+        owedCache[qualified]?.let { return it }
+        owedCache[qualified] = emptyList()
+        val declaredKeys = HashSet<String>()
+        val declaredNames = HashSet<String>()
+        val owed = LinkedHashMap<String, OwedMember>()
+        val visited = HashSet<String>()
+        fun walk(d: ExternalDeclaration, outer: Map<String, String>) {
+            val name = qualifiedNameOf(d) ?: return
+            if (!visited.add(name)) return
+            when (d) {
+                is ExternalClass -> {
+                    for (m in ownMembers(d)) {
+                        val seen = substituted(m, outer)
+                        keyOf(seen)?.let(declaredKeys::add)
+                        declaredNames += memberNameOf(seen)
+                    }
+                    if (d !== declaration) {
+                        for (o in owedMembers(d)) keyOf(substituted(o.member, outer))?.let(declaredKeys::add)
+                    }
+                }
+                is ExternalInterface -> {
+                    for (m in renderedOwnMembers(d)) {
+                        val seen = substituted(m, outer)
+                        val key = keyOf(seen) ?: continue
+                        owed.putIfAbsent(key, OwedMember(seen, name, nameDeclared = false))
+                    }
+                }
+                else -> return
+            }
+            for (base in basesOf(d, outer)) walk(base.declaration, base.substitution)
+        }
+        walk(declaration, emptyMap())
+        val result = owed.filterKeys { it !in declaredKeys }.values
+            .map { OwedMember(it.member, it.from, nameDeclared = memberNameOf(it.member) in declaredNames) }
+        owedCache[qualified] = result
+        return result
+    }
+
     /** One inherited member: the base declaring it, its raw form there, and its form read through the chain. */
     private class InheritedMember(val base: ExternalDeclaration, val raw: ExternalMember, val seen: ExternalMember)
 
@@ -1312,7 +1393,8 @@ private fun StringBuilder.appendDeclaration(
                 "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
             val hasBody = declaration.headerMarkers.isNotEmpty() ||
                 declaration.members.isNotEmpty() ||
-                declaration.staticMembers.isNotEmpty()
+                declaration.staticMembers.isNotEmpty() ||
+                inheritance.owedMembers(declaration).isNotEmpty()
             if (!hasBody) {
                 appendLine(header)
             } else {
@@ -1333,6 +1415,16 @@ private fun StringBuilder.appendDeclaration(
                         inheritance = inheritance,
                         path = declaration.path,
                     )
+                }
+                // (EXT.17) The interface members no class in the chain
+                // declares by key — as overrides of the inherited shape.
+                for (owed in inheritance.owedMembers(declaration)) {
+                    val name = memberNameOf(owed.member)
+                    val reason =
+                        if (owed.nameDeclared) "implemented by the class's own $name under another signature in TypeScript"
+                        else "not declared by the class in TypeScript"
+                    appendLine("$member/* xtsc: ${memberKindOf(owed.member)} $name inherited from ${owed.from} - $reason */")
+                    appendMember(owed.member, needsBody = !external, indent = member, inherited = owed.member)
                 }
                 if (declaration.staticMembers.isNotEmpty()) {
                     appendLine("${member}public companion object {")
@@ -1371,6 +1463,18 @@ private fun StringBuilder.appendDeclaration(
             }
         }
     }
+}
+
+private fun memberKindOf(member: ExternalMember): String = when (member) {
+    is ExternalProperty -> if (member.readOnly) "readonly property" else "property"
+    is ExternalFunction -> "method"
+    is SkippedMember -> "member"
+}
+
+private fun memberNameOf(member: ExternalMember): String = when (member) {
+    is ExternalProperty -> member.name
+    is ExternalFunction -> member.name
+    is SkippedMember -> "member"
 }
 
 /**

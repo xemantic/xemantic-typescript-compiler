@@ -77,7 +77,7 @@ export default function mitt<Events extends Record<EventType, unknown>>(all?: Ev
      * (EXT.16) The generation WIRED to the package: `mitt`'s `types` entry is
      * its one file, and its default export binds as `@JsName("default")`.
      */
-    private fun generateMitt(): KotlinExternals = generateKotlinExternals(
+    internal fun generateMitt(): KotlinExternals = generateKotlinExternals(
         listOf(SourceFileEntry("/mitt/index.d.ts", mittIndexDts)),
         module = ModuleWiring("mitt", "/mitt/index.d.ts"),
     )

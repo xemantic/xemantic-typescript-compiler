@@ -934,6 +934,28 @@ private class ExternalsCollector(
     private val aliasesInProgress = mutableListOf<TypeAliasDeclaration>()
 
     /**
+     * (EXT.17) The `this` parameters [functionTypeText] set aside while a type
+     * text was being built — drained into ONE top-level marker by the producer
+     * of the finished text ([annotationText]; the alias declarations put it
+     * among their markers), and cleared by the same producers before they
+     * start, so a marker is attributed to the text it was found in and to no
+     * other. Top-level, because a marker INSIDE a type text (`Array<(T) ->
+     * Unit /* … */>`) is what [typeTextWithoutMarker] cannot strip.
+     */
+    private val droppedReceivers = mutableListOf<String>()
+
+    private fun drainedReceiverMarkers(): List<String> {
+        if (droppedReceivers.isEmpty()) return emptyList()
+        val markers = droppedReceivers.toList()
+        droppedReceivers.clear()
+        return markers
+    }
+
+    /** [text] with the drained receiver markers appended as one top-level marker. */
+    private fun withReceiverMarkers(text: String, markers: List<String>): String =
+        if (markers.isEmpty()) text else "$text /* xtsc: ${markers.joinToString("; ")} */"
+
+    /**
      * (EXT.13) A USE of a nested alias renders what the alias DENOTES — the
      * Dukat rule, kept by syntax where the RESOLVED body has no Kotlin
      * spelling (a function type, a generic instantiation the mapper cannot
@@ -1274,7 +1296,13 @@ private class ExternalsCollector(
         lens: CheckedLens,
         scope: TypeScope,
     ): String {
+        droppedReceivers.clear()
         val mapped = annotationTextOrNull(annotation, returnPosition, lens, scope)
+        // (EXT.17) The receivers set aside while [mapped] was built, as one
+        // marker after the whole text — after the nullable wrap, so the
+        // marker is never inside a parenthesis. An unmapped text carries the
+        // whole written type in its own marker already.
+        val receivers = drainedReceiverMarkers()
         return when {
             // (EXT.11a) A `typeof X` query is marked by what was WRITTEN, not
             // by what it resolved to: this checker types a class value as its
@@ -1290,9 +1318,9 @@ private class ExternalsCollector(
                 val text = annotation?.let { referenceMarkerText(it, type, lens, scope) }
                 "Any? /* xtsc: unmapped ${text ?: commentSafe(lens.render(type))} */"
             }
-            !optional -> mapped
+            !optional -> withReceiverMarkers(mapped, receivers)
             // (EXT.11b) One nullable-wrapping rule for every producer.
-            else -> nullableTypeText(mapped)
+            else -> withReceiverMarkers(nullableTypeText(mapped), receivers)
         }
     }
 
@@ -1520,16 +1548,27 @@ private class ExternalsCollector(
      * enclosing scope, null where any piece refuses (the (EXT.3) rules: an
      * optional or rest parameter, an unannotated one, an unmappable type).
      *
-     * A `this` parameter is a Kotlin RECEIVER, never a positional parameter:
-     * `(this: SchedulerAction<T>, state: T) => void` is
-     * `SchedulerAction<T>.(T) -> Unit`. Rendered positionally — the pre-(EXT.11a)
-     * behaviour — it compiled, and a Kotlin lambda written against it would
-     * have received the action where JavaScript passes the state: the SILENT
-     * direction, which is why this is a rule and not a marker. The receiver
-     * is the FIRST parameter named `this` (TypeScript allows no other
-     * position; one found elsewhere refuses the whole type), goes through the
-     * same mapping, and a function-typed receiver is parenthesised so
-     * `(() -> Unit).(T) -> Unit` parses.
+     * A `this` parameter is NOT a positional parameter, and (EXT.17) it is
+     * not a Kotlin RECEIVER either: `(this: SchedulerAction<T>, state: T) =>
+     * void` is `(T) -> Unit` with a loud marker. Rendered positionally — the
+     * pre-(EXT.11a) behaviour — it compiled, and a Kotlin lambda written
+     * against it would have received the action where JavaScript passes the
+     * state: the SILENT direction. (EXT.11a) rendered it as the receiver
+     * `SchedulerAction<T>.(T) -> Unit`, which the Kotlin/JS compiler REFUSES
+     * in every external declaration (`Function types with receivers are
+     * prohibited in external declarations`, measured 2.4.10, through a
+     * typealias too, lifted only by `-Xextension-functions-in-externals`) —
+     * and which was the silent direction in a second costume: a Kotlin/JS
+     * lambda with a receiver is a JavaScript function taking the receiver as
+     * its FIRST ARGUMENT, so JavaScript's `work.call(action, state)` would
+     * have bound the state to the receiver and `undefined` to the state.
+     * Receiver-less, the lambda is called exactly as JavaScript calls it; what
+     * a consumer loses is access to `this`, which no Kotlin lambda has, and
+     * the marker says so. The receiver is the FIRST parameter named `this`
+     * (TypeScript allows no other position; one found elsewhere refuses the
+     * whole type) and goes through the same mapping — an unmappable one still
+     * refuses the whole type. The marker is set aside in [droppedReceivers]
+     * for the producer of the finished text to attach at the top level.
      */
     private fun functionTypeText(
         declaredParameters: List<Parameter>,
@@ -1541,31 +1580,39 @@ private class ExternalsCollector(
         val receiver = declared.firstOrNull()?.takeIf(::isThisParameter)
         val ordinary = if (receiver == null) declared else declared.drop(1)
         if (ordinary.any(::isThisParameter)) return null
-        val receiverText = receiver?.let { parameter ->
+        // A refusal below takes the markers this call set aside with it: a
+        // refused type carries no marker, and the pieces of a refused
+        // composite must not be attributed to its neighbour.
+        val mark = droppedReceivers.size
+        fun refuse(): String? {
+            droppedReceivers.subList(mark, droppedReceivers.size).clear()
+            return null
+        }
+        receiver?.let { parameter ->
             val text = annotationTextOrNull(
-                parameter.type ?: return null,
+                parameter.type ?: return refuse(),
                 returnPosition = false,
                 lens = lens,
                 scope = scope,
-            ) ?: return null
-            if (" -> " in text) "($text)." else "$text."
-        } ?: ""
+            ) ?: return refuse()
+            droppedReceivers += "this parameter $text not carried"
+        }
         val parameters = ordinary.map { parameter ->
-            if (parameter.questionToken || parameter.dotDotDotToken) return null
+            if (parameter.questionToken || parameter.dotDotDotToken) return refuse()
             annotationTextOrNull(
-                parameter.type ?: return null,
+                parameter.type ?: return refuse(),
                 returnPosition = false,
                 lens = lens,
                 scope = scope,
-            ) ?: return null
+            ) ?: return refuse()
         }
         val returnType = annotationTextOrNull(
-            returnAnnotation ?: return null,
+            returnAnnotation ?: return refuse(),
             returnPosition = true,
             lens = lens,
             scope = scope,
-        ) ?: return null
-        return "$receiverText(${parameters.joinToString(", ")}) -> $returnType"
+        ) ?: return refuse()
+        return "(${parameters.joinToString(", ")}) -> $returnType"
     }
 
     /** (EXT.11a) The `this` parameter of a signature — its name is the keyword, parsed as an [Identifier]. */
@@ -2309,18 +2356,22 @@ private class ExternalsCollector(
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         if (typeParameters.isNotEmpty()) {
             val markers = typeParameterMarkers(node.typeParameters, lens)
+            droppedReceivers.clear()
             val body = annotationTextOrNull(
                 node.type,
                 returnPosition = false,
                 lens = lens,
                 scope = scopeOf(typeParameters.toSet(), path, inAmbientModule),
             ) ?: return SkippedDeclaration("generic type alias $name with unmappable body")
+            // (EXT.17) A `this` parameter in the body is a marker on the alias.
+            markers += drainedReceiverMarkers()
             return ExternalTypeAlias(name, typeParameters, markers, body)
         }
         // (EXT.10) The body through the annotation path — the resolved type
         // where it maps (unchanged: `string` → `String`), and a FUNCTION type
         // syntactically where the resolved one has no Kotlin spelling, so
         // `type Cb = () => void` is a `typealias` its uses can name.
+        droppedReceivers.clear()
         val mapped = annotationTextOrNull(
             node.type,
             returnPosition = false,
@@ -2330,7 +2381,7 @@ private class ExternalsCollector(
             "type alias $name with unmappable body " +
                 commentSafe(lens.render(lens.typeOfTypeNode(node.type)))
         )
-        return ExternalTypeAlias(name, emptyList(), emptyList(), mapped)
+        return ExternalTypeAlias(name, emptyList(), drainedReceiverMarkers(), mapped)
     }
 
     /**
@@ -2449,12 +2500,15 @@ private class ExternalsCollector(
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
+        droppedReceivers.clear()
         val body = functionTypeText(
             signature.parameters,
             signature.type,
             lens,
             scopeOf(typeParameters.toSet(), emptyList(), inAmbientModuleOf(node)),
         ) ?: return SkippedDeclaration("callable interface $name with unmappable signature")
+        // (EXT.17) A `this` parameter of the call signature is a marker on the alias.
+        markers += drainedReceiverMarkers()
         return ExternalTypeAlias(name, typeParameters, markers, body)
     }
 

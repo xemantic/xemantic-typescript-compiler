@@ -341,7 +341,7 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
     )
 
     /** (EXT.16) Wired to the package: `smol-toml`'s `types` entry is `dist/index.d.ts`. */
-    private fun generateSmolToml(): KotlinExternals =
+    internal fun generateSmolToml(): KotlinExternals =
         generateKotlinExternals(smolTomlDist, module = ModuleWiring("smol-toml", "/smol-toml/dist/index.d.ts"))
 
     @Test

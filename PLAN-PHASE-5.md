@@ -89,6 +89,38 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.17) LANDED as a LOCAL gate — the REAL externals output is compiled as Kotlin/JS for the
+first time, and it found two silent defects.** Feasibility measured: `K2JSCompiler` is in the
+`kotlin-compiler-embeddable` jar already on the externals test classpath, but NO Kotlin/JS stdlib
+klib exists anywhere on this box (the Gradle cache holds JVM jars and linuxX64 klibs; `~/.konan`'s
+stdlib is `builtins_platform=NATIVE`); `kotlin-stdlib-js-2.4.10.klib` (3.4 MB, sha1 verified) was
+fetched into the scratchpad for the experiment only. `JsCompileCheck` (the JS twin of
+`MetadataCompileCheck`: `-libraries <klib> -Xir-produce-klib-dir`, module kind `commonjs`) and
+`KotlinExternalsJsGateTest` (19 tests: hello world, a positive control, compiler-fact pins, ten
+fixture families, and the REAL output of mitt, smol-toml, rxjs core, rxjs extras and
+`typescript.d.ts` — 9,960 lines) locate the klib by `XTSC_KOTLIN_STDLIB_JS` or the Gradle cache
+and print a loud `SKIPPED:` line otherwise. **Finding 1, a silent defect of (EXT.11a)'s own rule:
+Kotlin/JS PROHIBITS a function type with a receiver in an external declaration** (`Function types
+with receivers are prohibited in external declarations`, directly and through an alias, lifted
+only by `-Xextension-functions-in-externals`) — and the receiver form was ALSO semantically wrong:
+a Kotlin/JS receiver lambda is a JS function taking the receiver as its FIRST ARGUMENT, so
+`work.call(action, state)` would have bound `state` to the receiver. Now `(T) -> Unit /* xtsc: this
+parameter Action<T> not carried */` — receiver-less, the dropped receiver ONE top-level marker after
+the nullable wrap, never inside a parenthesis; a compiler-fact pin reddens the day Kotlin accepts
+receivers flag-free. **Finding 2: `Class 'Subscriber' is not abstract and does not implement
+abstract members`** — one member in TypeScript is two in Kotlin whenever a class implements an
+interface's function-typed PROPERTY with a METHOD (`Observer.next` / `Subscriber.next(value)`),
+or one method where the interface declares three overloads (`Scheduler.schedule`), or an abstract
+base never declared the interface's OPTIONAL members (`server.InferredProject`); one renderer
+rule, `Inheritance.owedMembers`: a non-abstract class renders every interface member no class in
+its chain declares BY KEY as a loud `override` of the inherited shape. **Finding 3, not a
+generator defect:** `K2JSCompiler`'s default module kind is UMD and Kotlin/JS refuses calling a
+`@JsModule`-only declaration from a UMD compilation — a consumer constraint, pinned (`commonjs` and
+`es` accept). Residual: parameter-name warnings across overload/implementation (printed, not
+gated). Six pins moved/added; externals 201/0 with the klib, 19 loud skips without; suite 17,051
+→ 17,073 / 0 / 3. **The CI half is a build-file change and stays BLOCKED-PENDING-USER** with the
+exact three-line proposal in the queue item.
+
 **(EXT.16) LANDED — module wiring, the umbrella's last rung; the ladder item is CHECKED OFF.**
 `generateKotlinExternals(files, options, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))`
 (null keeps today's global-script output byte-for-byte). The PUBLIC SURFACE is a syntactic
@@ -1540,7 +1572,17 @@ Owner decisions 2026-09-02:
   what Kotlin/JS needs and pin. Gate: the smol-toml/rxjs gates re-pinned with the annotations,
   the 250-file probe's re-export markers → 0.
 
-- [ ] **(EXT.17) BLOCKED-PENDING-USER — A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
+- [x] **(EXT.17) DONE 2026-09-02 as a LOCAL gate ((P18.9) note; `JsCompileCheck` drives
+  `K2JSCompiler` from the embeddable jar already on the test classpath, the JS stdlib klib located
+  by `XTSC_KOTLIN_STDLIB_JS` or the Gradle cache, 19 gate tests skipping LOUDLY without it; it
+  found and closed two silent generator defects; externals 201/0 with the klib, suite 17,073/0/3).
+  **BLOCKED-PENDING-USER — the CI half:** the klib is on no classpath and in no cache on a fresh
+  box, so making the gate run in CI is a build-file change — the minimal one, for the owner:
+  in `xemantic-typescript-compiler-externals/build.gradle.kts` a resolvable configuration
+  `val kotlinStdlibJs by configurations.creating { isTransitive = false }` +
+  `dependencies { kotlinStdlibJs("org.jetbrains.kotlin:kotlin-stdlib-js:${libs.versions.kotlin.get()}") }`
+  and on the `jvmTest` task `environment("XTSC_KOTLIN_STDLIB_JS", kotlinStdlibJs.singleFile)`
+  (an ENVIRONMENT variable — Gradle does not forward `-D` to the test JVM). A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
   OUTPUT.** The metadata gate compiles the annotation-free, `external`-free variant only, so
   `@file:JsModule` + `external var`, `@JsName` on a `sealed external interface`, nested
   `external object`s and the JS-side rules of every annotation are UNVERIFIED by any compiler

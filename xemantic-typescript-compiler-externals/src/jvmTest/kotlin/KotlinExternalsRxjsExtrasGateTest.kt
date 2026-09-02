@@ -1713,7 +1713,7 @@ export { zipWith } from './internal/operators/zipWith';
     )
 
     /** (EXT.16) Wired to the package: `rxjs`, entry `/rxjs/index.d.ts`. */
-    private fun generateRxjsExtras(): KotlinExternals =
+    internal fun generateRxjsExtras(): KotlinExternals =
         generateKotlinExternals(rxjsExtras, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))
 
     @Test

@@ -1986,11 +1986,16 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `a this parameter in a function type renders as a Kotlin receiver`() {
-        // Before: `handler: (Box<T>, T) -> Unit`, positionally — it compiled,
-        // and a Kotlin lambda written against it would have received the
-        // action where JavaScript passes the state. The nullable wrapping
-        // still parenthesises, and a function-typed receiver is parenthesised.
+    fun `a this parameter in a function type is dropped with a loud top-level marker`() {
+        // Before (EXT.11a): `handler: (Box<T>, T) -> Unit`, positionally — it
+        // compiled, and a Kotlin lambda written against it would have
+        // received the action where JavaScript passes the state. (EXT.11a)
+        // rendered the receiver `Box<T>.(T) -> Unit`; (EXT.17) measured that
+        // the Kotlin/JS compiler refuses it in every external declaration
+        // and that a receiver lambda is called with the receiver as its
+        // FIRST ARGUMENT — the same silent direction. Receiver-less, with the
+        // marker after the WHOLE type (after the nullable wrap, never inside
+        // a parenthesis), and the marker names the receiver's Kotlin type.
         val result = generate(
             """
             export interface Box<T> { value: T; }
@@ -2008,11 +2013,156 @@ class KotlinExternalsGeneratorTest {
             }
 
             public external interface Work<T> {
-                public var handler: Box<T>.(T) -> Unit
-                public var maybe: (Box<T>.(T) -> Unit)?
-                public fun schedule(work: Box<T>.(T) -> Unit, delay: Double): Unit
-                public var nested: (() -> Unit).(String) -> Unit
+                public var handler: (T) -> Unit /* xtsc: this parameter Box<T> not carried */
+                public var maybe: ((T) -> Unit)? /* xtsc: this parameter Box<T> not carried */
+                public fun schedule(work: (T) -> Unit /* xtsc: this parameter Box<T> not carried */, delay: Double): Unit
+                public var nested: (String) -> Unit /* xtsc: this parameter () -> Unit not carried */
             }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a this parameter in an alias body or a callable interface is a marker on the alias`() {
+        // (EXT.17) The receiver of an alias body cannot trail the body (a
+        // use of the alias would carry it), so it is one of the alias's own
+        // markers, above the declaration — for both alias producers.
+        val result = generate(
+            """
+            export interface Box { value: number; }
+            export type Work = (this: Box, state: number) => void;
+            export interface Callable { (this: Box, x: string): boolean; }
+            export declare function run(w: Work, c: Callable): void;
+            """
+        )
+        val expected = """
+            public external interface Box {
+                public var value: Double
+            }
+
+            /* xtsc: this parameter Box not carried */
+            public typealias Work = (Double) -> Unit
+
+            /* xtsc: this parameter Box not carried */
+            public typealias Callable = (String) -> Boolean
+
+            public external fun run(w: Work, c: Callable): Unit
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a non-abstract class renders every interface member no class in its chain declares by key as a loud override`() {
+        // (EXT.17) Measured by the Kotlin/JS gate on rxjs: `Observer<T>.next`
+        // is a function-typed PROPERTY and `Subscriber<T>.next(value)` a
+        // METHOD; TypeScript reads them as one member, Kotlin as two, and the
+        // class then owed the property (`Class 'Subscriber' is not abstract
+        // and does not implement abstract members`). The owed member renders
+        // as an override of the INHERITED shape after the class's own
+        // members, loudly (a Kotlin class may declare a property and a
+        // function of one name); both directions; the next class down the
+        // chain sees the owed member as declared and owes nothing.
+        val result = generate(
+            """
+            export interface Observer<T> {
+                next: (value: T) => void;
+                error?: (err: any) => void;
+            }
+            export interface Clock { now(): number; }
+            export declare class Subscriber<T> implements Observer<T>, Clock {
+                next(value: T): void;
+                next(value: T, again: boolean): void;
+                error(err: any): void;
+                now: () => number;
+            }
+            export declare class Safe<T> extends Subscriber<T> {
+                next(value: T): void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Observer<T> {
+                public var next: (T) -> Unit
+                public var error: ((Any?) -> Unit)?
+            }
+
+            public external interface Clock {
+                public fun now(): Double
+            }
+
+            public open external class Subscriber<T> : Observer<T>, Clock {
+                public open fun next(value: T): Unit
+                public fun next(value: T, again: Boolean): Unit
+                public fun error(err: Any?): Unit
+                public var now: () -> Double
+                /* xtsc: property next inherited from Observer - implemented by the class's own next under another signature in TypeScript */
+                public override var next: (T) -> Unit
+                /* xtsc: property error inherited from Observer - implemented by the class's own error under another signature in TypeScript */
+                public override var error: ((Any?) -> Unit)?
+                /* xtsc: method now inherited from Clock - implemented by the class's own now under another signature in TypeScript */
+                public override fun now(): Double
+            }
+
+            public open external class Safe<T> : Subscriber<T> {
+                public override fun next(value: T): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an abstract class owes nothing and its first concrete subclass owes what it never declared`() {
+        // (EXT.17) Measured on `typescript.d.ts`: `server.Project` is abstract
+        // and never declares `LanguageServiceHost`'s OPTIONAL members, so
+        // `server.InferredProject` owed them (`var getTypeRootsVersion: (() ->
+        // Double)?` …). The optional member's inherited type is already
+        // nullable, so the override is true to the JavaScript; the abstract
+        // class renders no override (Kotlin's rule too), and a concrete
+        // subclass of a CONCRETE class owes nothing its base rendered.
+        val result = generate(
+            """
+            export interface Host {
+                getVersion(): string;
+                getRoots?: () => number;
+                readFile(path: string, encoding?: string): string | undefined;
+            }
+            export declare abstract class Base implements Host {
+                getVersion(): string;
+                readFile(path: string): string | undefined;
+            }
+            export declare class Inferred extends Base {}
+            export declare class Configured extends Inferred {}
+            """
+        )
+        val expected = """
+            public external interface Host {
+                public fun getVersion(): String
+                public var getRoots: (() -> Double)?
+                public fun readFile(path: String, encoding: String?): String?
+            }
+
+            public abstract external class Base : Host {
+                public override fun getVersion(): String
+                public fun readFile(path: String): String?
+            }
+
+            public open external class Inferred : Base {
+                /* xtsc: property getRoots inherited from Host - not declared by the class in TypeScript */
+                public override var getRoots: (() -> Double)?
+                /* xtsc: method readFile inherited from Host - implemented by the class's own readFile under another signature in TypeScript */
+                public override fun readFile(path: String, encoding: String?): String?
+            }
+
+            public open external class Configured : Inferred
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
@@ -3662,6 +3812,8 @@ class KotlinExternalsGeneratorTest {
                 public override fun getScriptVersion(f: String): String
                 public fun readFile(f: String): String
                 /* xtsc: skipped heritage clause implements ModuleResolutionHost - its useCaseSensitiveFileNames clashes with the one inherited from LanguageServiceHost */
+                /* xtsc: property useCaseSensitiveFileNames inherited from LanguageServiceHost - implemented by the class's own useCaseSensitiveFileNames under another signature in TypeScript */
+                public override var useCaseSensitiveFileNames: (() -> Boolean)?
             }
 
             public external interface Both : LanguageServiceHost {
