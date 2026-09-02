@@ -148,6 +148,20 @@ interface CheckedLens {
     fun heritageBaseSymbol(base: Expression): Symbol?
 
     /**
+     * (EXT.10) What a written TYPE REFERENCE's name denotes — the symbol behind
+     * the `Handler` of `Handler<string>` — resolved as the walk resolves a free
+     * name (the lexical chain, then the file's own tables) with an import alias
+     * FOLLOWED, so an imported alias answers the declaration in the other file.
+     * Null for a qualified name (`NS.T`, refused rather than guessed) and where
+     * nothing resolves. [typeOfTypeNode] cannot answer this: an alias reference
+     * resolves to its BODY type, whose symbol is the body's, not the alias's —
+     * and a generic instantiation of an alias has no name at all once resolved.
+     * Defaulted so a test double implementing this interface keeps compiling;
+     * the checker's own lens overrides it.
+     */
+    fun typeReferenceSymbol(node: TypeReference): Symbol? = null
+
+    /**
      * Is [source] assignable to [target]?
      *
      * The backend needs this for a reason unrelated to diagnostics: TypeScript

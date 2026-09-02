@@ -69,6 +69,23 @@ capture measurement pins re-run green). After: symbols +258 ms, and the whole st
 3,654/3,685, +5.7 / +7.1 %, 0.95 µs** (232,106). (INV.1b) is half-answered: the companions
 are pure RESOLUTION (+6 % on top of the type), the reconstruction is paid once per node.
 
+**(EXT.10) LANDED in the same session — the externals ladder's alias-reference rung.** A
+reference to an exported alias this generation EMITS renders by name wherever the resolved
+body has no Kotlin spelling: a generic instantiation (`h: Handler<string>` →
+`Handler<String>`, arguments rendered from their own annotations, arity exact — a use
+relying on a defaulted alias parameter falls back) and a function-typed non-generic alias
+(`type Cb = (done: boolean) => void` is now EMITTED — the non-generic alias body goes through
+the annotation path, resolved-first, syntactic for a function type — and its uses spell
+`Cb`). Identity evidence, never spelling: a new `CheckedLens.typeReferenceSymbol` (the
+definition channel's free-name resolution, import alias followed; a qualified name refused),
+matched against the exported alias declarations, and the alias must itself be renderable
+(memoised by running its own collection at the reference — the reference may be walked
+first). The Dukat pin is untouched: a mapped body still renders resolved (`Species` →
+`String`). Seven pins: members/signatures/top-level, the function-typed alias, the Dukat
+control, a skipped alias, an omitted defaulted argument, a lib alias (`Record<string,
+number>`), and a cross-file import beside a same-named non-exported local. Externals
+80/0, both library gates green. Suite 16,860 → 16,867 / 0 / 3.
+
 **What did NOT happen.** `Project` does not hand out an oracle — queued as (INV.2b) with the
 invalidation question stated; EXT/LSP were not migrated (served today). The
 `leaf_owner_profile.py --inclusive-of` filter printed the same table for every method name
@@ -817,8 +834,16 @@ Owner decisions 2026-09-02:
   property, getter-only `val`, setter-only `var`, emitted at the first
   accessor's position; static accessors in the companion; interface
   accessors too; private/`#` accessors omitted).
-  Still to emit: namespaces/modules, index signatures, generic-ALIAS
-  references (`Handler<T>` uses still fall back), parameter properties;
+  DONE 2026-09-02 ((EXT.10), (P18.8) note): references to a GENERATED ALIAS
+  render by NAME wherever the resolved body has no Kotlin spelling — a
+  generic instantiation (`Handler<string>` → `Handler<String>`, arguments from
+  their annotations, exact arity) and a function-typed non-generic alias
+  (`type Cb = () => void` is now emitted and its uses spell `Cb`) — against
+  the checker's identity evidence through the new lens member
+  `typeReferenceSymbol` (import alias followed); the Dukat pin holds (a
+  mapped body still renders resolved, `Species` → `String`); a skipped
+  alias, a lib alias and a same-named non-exported alias keep the fallback.
+  Still to emit: namespaces/modules, index signatures, parameter properties;
   module wiring; next ladder rung: RxJS (`class Subject<T> extends
   Observable<T>` is (EXT.8)'s shape; `export declare const EMPTY:
   Observable<never>` is (EXT.9)'s). Unions and other inexpressible shapes: ONE

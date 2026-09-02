@@ -408,6 +408,39 @@ private class ExternalsCollector(
         TypeScope(typeParamNames, ::generatedNameOf)
 
     /**
+     * (EXT.10) The exported alias a written type reference NAMES, by the
+     * checker's identity evidence — the reference's symbol carries one of this
+     * program's exported alias declarations — or null. Positive evidence, as
+     * for [generatedNameOf]: a lib alias (`Record<K, V>`) and a non-exported
+     * neighbour sharing the spelling both answer null and keep the fallback.
+     */
+    private fun exportedAliasOf(annotation: TypeReference, lens: CheckedLens): TypeAliasDeclaration? {
+        val symbol = lens.typeReferenceSymbol(annotation) ?: return null
+        for (declaration in symbol.declarations) {
+            val alias = exportedAliases.firstOrNull { it === declaration } ?: continue
+            return alias
+        }
+        return null
+    }
+
+    /**
+     * (EXT.10) Whether [alias] is EMITTED as a `typealias` by this generation —
+     * decided by running its own collection ([collectTypeAlias]), which is a
+     * function of the declaration and the lens and so can be asked at any
+     * callback, and memoised by the alias's position in [exportedAliases]: the
+     * reference may be walked before the declaration is. A name may be rendered
+     * only against an alias the generated module declares; a skipped alias
+     * (unmappable body) keeps every use on the fallback.
+     */
+    private val aliasRenderable = HashMap<Int, Boolean>()
+
+    private fun aliasRenderable(alias: TypeAliasDeclaration, lens: CheckedLens): Boolean {
+        val index = exportedAliases.indexOfFirst { it === alias }
+        if (index < 0) return false
+        return aliasRenderable.getOrPut(index) { collectTypeAlias(alias, lens) is ExternalTypeAlias }
+    }
+
+    /**
      * (EXT.2) The one place a member ANNOTATION becomes Kotlin type text.
      *
      * A bare reference to the enclosing declaration's own type parameter is
@@ -463,6 +496,41 @@ private class ExternalsCollector(
             ?.text
             ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
         if (ownParam != null) return kotlinIdentifier(ownParam)
+        // (EXT.10) A reference to an exported ALIAS this generation emits renders
+        // by NAME wherever the resolved body would not map: a generic
+        // instantiation (`Handler<string>` resolves to an anonymous function type
+        // the type mapper cannot express, and the instantiation has no name once
+        // resolved) and a non-generic alias with a function-typed body. The
+        // Dukat pin — a use renders what the checker KNOWS — is kept: a
+        // non-generic alias whose resolved body maps still renders that body
+        // (`Species` → `String`), and the name is the second chance, never the
+        // first. Arity must match exactly: a use relying on a defaulted alias
+        // parameter has no Kotlin spelling and falls back.
+        if (annotation is TypeReference) {
+            val alias = exportedAliasOf(annotation, lens)
+            if (alias != null && aliasRenderable(alias, lens)) {
+                val aliasParameters = alias.typeParameters.orEmpty()
+                val arguments = annotation.typeArguments.orEmpty()
+                if (aliasParameters.isEmpty()) {
+                    kotlinTypeTextOrNull(
+                        lens.typeOfTypeNode(annotation),
+                        returnPosition = returnPosition,
+                        scope = scope,
+                    )?.let { return it }
+                    if (arguments.isEmpty()) return kotlinIdentifier(alias.name.text)
+                } else if (arguments.size == aliasParameters.size) {
+                    val mappedArguments = arguments.map { argument ->
+                        annotationTextOrNull(
+                            argument,
+                            returnPosition = false,
+                            lens = lens,
+                            scope = scope,
+                        ) ?: return null
+                    }
+                    return "${kotlinIdentifier(alias.name.text)}<${mappedArguments.joinToString(", ")}>"
+                }
+            }
+        }
         val referenceArguments = (annotation as? TypeReference)?.typeArguments
         if (referenceArguments != null) {
             // (EXT.6) A generic reference names its TARGET by the CHECKER's
@@ -981,14 +1049,18 @@ private class ExternalsCollector(
             ) ?: return SkippedDeclaration("generic type alias $name with unmappable body")
             return ExternalTypeAlias(name, typeParameters, markers, body)
         }
-        val body = lens.typeOfTypeNode(node.type)
-        val mapped = kotlinTypeTextOrNull(
-            body,
+        // (EXT.10) The body through the annotation path — the resolved type
+        // where it maps (unchanged: `string` → `String`), and a FUNCTION type
+        // syntactically where the resolved one has no Kotlin spelling, so
+        // `type Cb = () => void` is a `typealias` its uses can name.
+        val mapped = annotationTextOrNull(
+            node.type,
             returnPosition = false,
+            lens = lens,
             scope = scopeOf(emptySet()),
         ) ?: return SkippedDeclaration(
             "type alias $name with unmappable body " +
-                commentSafe(lens.render(body))
+                commentSafe(lens.render(lens.typeOfTypeNode(node.type)))
         )
         return ExternalTypeAlias(name, emptyList(), emptyList(), mapped)
     }

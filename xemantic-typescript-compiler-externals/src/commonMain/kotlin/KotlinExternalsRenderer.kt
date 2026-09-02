@@ -61,7 +61,10 @@ internal class ExternalInterface(
  * (EXT.2) An exported, non-generic type alias whose body mapped — rendered as
  * `public typealias`. USES of the alias still render the RESOLVED type (the
  * (EXT.1) `Species` -> `String` pin): the alias declaration is emitted for the
- * consumer's vocabulary, the resolution is what the checker knows.
+ * consumer's vocabulary, the resolution is what the checker knows. (EXT.10)
+ * adds the second chance, not a first: where the resolved body has no Kotlin
+ * spelling — a generic instantiation, a function-typed body — a use names the
+ * emitted alias instead of falling back.
  */
 internal class ExternalTypeAlias(
     val name: String,

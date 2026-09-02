@@ -5717,6 +5717,14 @@ class Checker(
             override fun heritageBaseSymbol(base: Expression): Symbol? =
                 resolveHeritageBaseSymbol(base)
 
+            // (EXT.10) the free-name resolution the definition channel uses
+            // ((API.3b): scope chain, then the per-file tables), alias followed.
+            override fun typeReferenceSymbol(node: TypeReference): Symbol? {
+                val id = node.typeName as? Identifier ?: return null
+                val resolved = spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
+                return typeCaptureFollowImportAlias(resolved)
+            }
+
             override fun isAssignableTo(source: Type, target: Type): Boolean =
                 isTypeAssignableTo(source, target)
 

@@ -1385,4 +1385,152 @@ class KotlinExternalsGeneratorTest {
         assert(rendered == expected)
     }
 
+    // --- (EXT.10) references to a generated alias render by name -------------
+
+    @Test
+    fun `a generic alias instantiation renders by name in members and signatures`() {
+        val result = generate(
+            """
+            export type Handler<T> = (event: T) => void;
+            export interface Emitter {
+                h: Handler<string>;
+                on(type: string, handler: Handler<number>): void;
+                last(): Handler<boolean>;
+            }
+            export declare function wrap(h: Handler<boolean>): Handler<string>;
+            """
+        )
+        val expected = """
+            public typealias Handler<T> = (T) -> Unit
+
+            public external interface Emitter {
+                public var h: Handler<String>
+                public fun on(type: String, handler: Handler<Double>): Unit
+                public fun last(): Handler<Boolean>
+            }
+
+            public external fun wrap(h: Handler<Boolean>): Handler<String>
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a function-typed alias is emitted and its uses name it`() {
+        val result = generate(
+            """
+            export type Cb = (done: boolean) => void;
+            export interface Task {
+                cb: Cb;
+                run(cb?: Cb): void;
+            }
+            """
+        )
+        val expected = """
+            public typealias Cb = (Boolean) -> Unit
+
+            public external interface Task {
+                public var cb: Cb
+                public fun run(cb: Cb?): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `the Dukat pin survives - a use of a mapped non-generic alias still renders the resolved type`() {
+        val result = generate(
+            """
+            export type Species = string;
+            export interface Creature { kind: Species; }
+            """
+        )
+        val rendered = result.kotlin
+        val byResolved = "public var kind: String" in rendered
+        val byName = "public var kind: Species" in rendered
+        assert(byResolved)
+        assert(!byName)
+    }
+
+    @Test
+    fun `negative control - a use of a skipped alias keeps the fallback`() {
+        val result = generate(
+            """
+            export type Pair<T> = { first: T };
+            export interface Holder { p: Pair<string>; }
+            """
+        )
+        val rendered = result.kotlin
+        val skipped = "/* xtsc: skipped generic type alias Pair with unmappable body */" in rendered
+        val byName = "Pair<String>" in rendered
+        val fallback = "public var p: Any? /* xtsc: unmapped" in rendered
+        assert(skipped)
+        assert(!byName)
+        assert(fallback)
+    }
+
+    @Test
+    fun `negative control - a use omitting a defaulted alias argument keeps the fallback`() {
+        val result = generate(
+            """
+            export type Handler<T = unknown> = (event: T) => void;
+            export interface Emitter { h: Handler; }
+            """
+        )
+        val rendered = result.kotlin
+        val byName = "public var h: Handler" in rendered
+        val fallback = "public var h: Any? /* xtsc: unmapped" in rendered
+        assert(!byName)
+        assert(fallback)
+    }
+
+    @Test
+    fun `negative control - a lib generic alias is not named`() {
+        val result = generate(
+            """
+            export interface Bag { entries: Record<string, number>; }
+            """
+        )
+        val rendered = result.kotlin
+        val fallback = "public var entries: Any? /* xtsc: unmapped" in rendered
+        val byName = "Record<String, Double>" in rendered
+        assert(fallback)
+        assert(!byName)
+    }
+
+    @Test
+    fun `an imported generic alias renders by name across files and a same-named local one does not`() {
+        val result = generateFiles(
+            "/pkg/a.d.ts" to """
+                export type Handler<T> = (event: T) => void;
+            """,
+            "/pkg/b.d.ts" to """
+                import type { Handler } from './a.js';
+                export interface Emitter { h: Handler<string>; }
+            """,
+            "/pkg/c.d.ts" to """
+                type Handler<T> = (event: T) => void;
+                export interface Local { h: Handler<string>; }
+            """,
+        )
+        val expected = """
+            public typealias Handler<T> = (T) -> Unit
+
+            public external interface Emitter {
+                public var h: Handler<String>
+            }
+
+            public external interface Local {
+                public var h: Any? /* xtsc: unmapped (event: string) => void */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
 }
