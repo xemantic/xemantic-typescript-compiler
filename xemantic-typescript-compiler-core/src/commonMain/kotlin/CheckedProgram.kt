@@ -152,8 +152,10 @@ interface CheckedLens {
      * the `Handler` of `Handler<string>` — resolved as the walk resolves a free
      * name (the lexical chain, then the file's own tables) with an import alias
      * FOLLOWED, so an imported alias answers the declaration in the other file.
-     * Null for a qualified name (`NS.T`, refused rather than guessed) and where
-     * nothing resolves. [typeOfTypeNode] cannot answer this: an alias reference
+     * A qualified name (`NS.T`, `ts.server.Gen<number>`) resolves through the
+     * checker's qualified-name resolver to the member symbol ((CHK.77); before
+     * it a qualified name was refused rather than guessed). Null where nothing
+     * resolves. [typeOfTypeNode] cannot answer this: an alias reference
      * resolves to its BODY type, whose symbol is the body's, not the alias's —
      * and a generic instantiation of an alias has no name at all once resolved.
      * Defaulted so a test double implementing this interface keeps compiling;

@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,073 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,085 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -80,7 +80,13 @@ output compiled as Kotlin/JS for the first time (a local gate driving `K2JSCompi
 fetched stdlib klib; the CI wiring is a build-file change, BLOCKED-PENDING-USER): Kotlin/JS
 prohibits receiver function types in externals AND the receiver form was semantically wrong —
 now receiver-less with a marker; a class implementing an interface's function-typed property with
-a method (or fewer overloads) owes loud `override`s; externals 201/0 with the klib.
+a method (or fewer overloads) owes loud `override`s; externals 201/0 with the klib. **(CHK.77), 17,073 → 17,085 / 0 / 3:** the four
+namespace-resolution residues closed at the resolver (a fileless `declare module` body, a
+type-only namespace as a dotted heritage head + ambient inheritance, a qualified
+`typeReferenceSymbol`, cross-file namespace MERGING through the `globals` root) — each matching
+tsgo row for row, 12 pins, 8-profile grid unchanged, cost_gate exit 0; `@types/node` now resolves
+what was `any` and exposes an externals spelling rule ((EXT.19)) and two augmentation
+divergences ((CHK.78)).
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

@@ -89,6 +89,39 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.77) LANDED — the four namespace-resolution residues, each reproduced against tsgo and
+closed at the resolver.** (1) A string-named `declare module "m"` body is consulted by
+`lookupInEnclosingNamespaces` ONLY when the specifier resolves to NO program file
+(`ambientModuleBlockIsFileless`: plain resolver → `.js`-aware relative → the (CHK.30) crawl
+fallback, memoized per file+specifier), reading the merged `globals["m"]` carrier; a file-backed
+AUGMENTATION stays skipped — the consumer path was already right (the lazy
+`pushInferenceNamespaceFor` path), the residue was lens-only, and the negative control is
+byte-identical (an ablation consulting every string block blindly reddened exactly the two
+control pins). (2) A dotted heritage base's HEAD is asked with the qualified-left meaning
+(`resolveHeritageBaseHead`; a namespace of interfaces is a `NamespaceModule` that neither
+`Type` nor `Value` matched — 3 false TS2339 on `extends JsTyping.TypingResolutionHost`), and the
+implicit-export rule follows tsc's inherited `NodeFlags.Ambient` (`isInAmbientContext`: an
+ancestor `declare` or a `.d.ts`), so `extends ts.server.A` across files resolves. (3) The lens's
+`typeReferenceSymbol` answers a QUALIFIED name through `resolveQualifiedName` (contract updated in
+`CheckedProgram.kt`; the externals call sites test declaration identity and needed nothing).
+(4) CROSS-FILE MERGING: `mergedNamespaceLevels` descends from the merged `globals` root along
+the segment path for a SCRIPT program file whose outermost namespace the `globals` entry carries
+(identity scan; module files under INV.3(d) and lib files keep the per-file answer, which is what
+leaves the 8 tsc profiles untouched by construction) — `declare namespace ts { interface A }` in
+one file and `interface B extends A { x: A }` in another went from 3 false TS2339 + 7 silent `any`
+to tsgo's 11 rows exactly. 12 pins (`NamespaceResolutionResidueTest`); `*Namespace*`/`*Module*`/
+`*Augment*` 921/0; cost_gate exit 0 (`mapped.hits` +1.22 % as (CHK.76) recorded, the rest under
+0.5 %); huge_methods 0 over; the 8-profile grid `added=0 removed=0`; externals 201/0 WITH the JS
+gate running; suite 17,073 → 17,085 / 0 / 3. **The `@types/node` receipt (66 files, 20.19.43):**
+bare `unmapped any` 1,013 → 964 and `extends EventEmitter` now resolves — but distinct unmapped
+shapes 458 → 540 (names that were `any` now resolve to declarations the generator has no mapping
+for) and the metadata compile 35 → 86 errors: `+45 'X' overrides nothing`, because `implements
+NodeJS.ReadableStream` resolves for the first time and the spelled supertype `ReadableStream`
+inside `object Stream` resolves to a DIFFERENT generated declaration than the file-level one —
+a generator SPELLING rule for a nested scope shadowing an outer name, queued as (EXT.19); two
+pre-existing augmentation divergences on the negative control and the in-walk lens answer are
+(CHK.78).
+
 **(EXT.17) LANDED as a LOCAL gate — the REAL externals output is compiled as Kotlin/JS for the
 first time, and it found two silent defects.** Feasibility measured: `K2JSCompiler` is in the
 `kotlin-compiler-embeddable` jar already on the externals test classpath, but NO Kotlin/JS stdlib
@@ -1601,7 +1634,7 @@ Owner decisions 2026-09-02:
   `@JsName("<original>")` instead of the loud skip; decide the renaming scheme (a suffix the
   consumer can predict), keep the skip without wiring, pin both.
 
-- [ ] **(CHK.77) THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
+- [x] **(CHK.77) DONE 2026-09-02 ((P18.9) note; all four residues match tsgo row for row, 12 pins, 8-profile grid unchanged, cost_gate exit 0, suite 17,085/0/3; the `@types/node` receipt exposed an externals rendering interaction queued as (EXT.19) and two pre-existing augmentation divergences queued as (CHK.78)) — THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
   with probe evidence in the (P18.9) note — the generator keeps a written-name fallback for
   exactly these until the checker answers.** (1) A `declare module "m"` BODY: `lookupInEnclosingNamespaces`
   skips string-named modules by design (the augmentation hazard, INV.3(c)(iv)), so a bare `Widget`
@@ -1621,6 +1654,32 @@ Owner decisions 2026-09-02:
   `@types/node`-style packages are made of this. Pins per shape against tsgo; the externals
   fallback pins (`KotlinExternalsGeneratorTest`'s (EXT.14) four) are the receipt that the arm
   can then be narrowed further.
+
+- [ ] **(EXT.19) `@types/node` AFTER (CHK.77): +45 `'X' overrides nothing` METADATA ERRORS —
+  A SPELLED SUPERTYPE RESOLVES TO THE WRONG GENERATED DECLARATION.** `declare module "stream"
+  { namespace internal { class Readable extends Stream implements NodeJS.ReadableStream } }`:
+  the `implements NodeJS.ReadableStream` clause now RESOLVES (residue 2's head rule), the
+  inherited-member rung renders `override` members, but the Kotlin supertype text
+  `ReadableStream` spelled inside `object Stream` resolves (Kotlin's innermost-first rule) to a
+  DIFFERENT generated `ReadableStream` than the file-level one carrying those members.
+  `shortestSpelling` must spell the qualified path whenever a nearer scope declares the same
+  simple name (the shadowing case (EXT.13) refused loudly for the ROOT; here it is a nested
+  scope shadowing an outer one — render `NodeJS.ReadableStream`-style paths from the root, or
+  refuse loudly). Also the four new heritage skips (`net.Socket`, `tls.TlsOptions`…): the lens
+  now resolves a base through an `import * as net` alias inside an ambient block to a nameable
+  declaration and the generator's kind/spelling step refuses where the written-name fallback
+  rendered. Receipt: the `@types/node` probe (`build/chk73/node_modules/@types/node`, 66 files;
+  metadata errors 86 → 35 or fewer, heritage skips 137 → ≤ 133) plus the five ladder gates.
+
+- [ ] **(CHK.78) TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
+  CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"
+  { interface SourceFile { extra: number } }`: (a) a FALSE TS2882 on the side-effect
+  `import "./types.js"` (tsgo silent); (b) a bare `node: Node` written INSIDE the augmentation
+  block types `any` where tsgo types it by the file's `Node` (`number` probe); (c) the lens's
+  `typeReferenceSymbol` asks the WALK-scoped chain first, which in-walk answers the
+  augmentation block's own PARTIAL interface rather than the merged one. Reproduce each
+  against tsgo, fix at the resolver/import walker, pin; `r1n` under
+  `scratchpad/chk77/` is the fixture.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

@@ -251,6 +251,9 @@ class Checker(
      */
     private val mergedSymbols = IntKeyMap<Symbol>(256)
 
+    /** (CHK.77) [ambientModuleBlockIsFileless]'s memo, keyed `"<file>\u0000<specifier>"`. */
+    private val ambientModuleFilelessCache = HashMap<String, Boolean>()
+
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
@@ -338,28 +341,162 @@ class Checker(
     private fun lookupInEnclosingNamespaces(node: Node, name: String, meaning: SymbolFlags): Symbol? {
         var cur: Node? = (node as NodeBase).parent
         var hops = 0
+        var levels: ArrayList<ModuleDeclaration>? = null
+        var owner: SourceFile? = null
         while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) return null
+            if (cur is SourceFile) { owner = cur; break }
             if (cur is ModuleDeclaration) {
-                var segments = 0
-                var nameExpr: Expression = cur.name
-                while (nameExpr is PropertyAccessExpression) {
-                    segments++
-                    nameExpr = nameExpr.expression
-                }
-                if (nameExpr is Identifier && nameExpr.text != "global") {
-                    var sym = nodeSymbolOf(cur)
-                    var seg = 0
-                    while (sym != null && seg++ <= segments && sym.flags.hasAny(SymbolFlags.Module)) {
-                        val hit = sym.exports?.get(name)
-                        if (hit != null && (hit.flags.hasAny(meaning) || hit.flags.hasAny(SymbolFlags.Alias))) return hit
-                        sym = sym.parent
-                    }
-                }
+                (levels ?: ArrayList<ModuleDeclaration>(4).also { levels = it }).add(cur)
             }
             cur = (cur as NodeBase).parent
         }
+        val enclosing = levels ?: return null
+        val merged = mergedNamespaceLevels(enclosing, owner)
+        for ((i, decl) in enclosing.withIndex()) {
+            fun accept(hit: Symbol?): Symbol? =
+                if (hit != null && (hit.flags.hasAny(meaning) || hit.flags.hasAny(SymbolFlags.Alias))) hit else null
+            // (CHK.77) the MERGED view of this level, where one exists: its exports are
+            // a superset of the per-file symbol's (the merge folds every declaring
+            // file's table into it), so the per-file walk below is not needed.
+            val mergedLevel = merged?.get(i)
+            if (mergedLevel != null) {
+                var k = mergedLevel.size - 1
+                while (k >= 0) {
+                    accept(mergedLevel[k].exports?.get(name))?.let { return it }
+                    k--
+                }
+                continue
+            }
+            var segments = 0
+            var nameExpr: Expression = decl.name
+            while (nameExpr is PropertyAccessExpression) {
+                segments++
+                nameExpr = nameExpr.expression
+            }
+            val consult = when (nameExpr) {
+                is Identifier -> nameExpr.text != "global"
+                // (CHK.77) a genuine ambient module's own block (no merged view, e.g. a
+                // nested `module "a"` whose outer block resolves to no root): the file's
+                // own carrier symbol. An AUGMENTATION block stays skipped (INV.3(c)(iv)).
+                is StringLiteralNode -> owner != null && ambientModuleBlockIsFileless(nameExpr.text, owner.fileName)
+                else -> false
+            }
+            if (!consult) continue
+            var sym = nodeSymbolOf(decl)
+            var seg = 0
+            while (sym != null && seg++ <= segments && sym.flags.hasAny(SymbolFlags.Module)) {
+                accept(sym.exports?.get(name))?.let { return it }
+                sym = sym.parent
+            }
+        }
         return null
+    }
+
+    /**
+     * (CHK.77) The MERGED symbols of the namespace levels [enclosing] (innermost
+     * first, as [lookupInEnclosingNamespaces] collects them), or null where the
+     * per-file symbols are the whole story.
+     *
+     * Same-named namespaces across SCRIPT files — `declare namespace ts { … }` in
+     * a.d.ts and again in b.d.ts, `@types/node`'s whole shape — are ONE symbol to
+     * tsc; here `init:mergeFileLocalsIntoGlobals` folds every script file's locals
+     * into `globals`, and [mergeSingleSymbol] ADOPTS the first file's symbol and
+     * appends the others' declarations and exports into it (recursively, so a
+     * nested `server` is merged too). So `globals[root]` IS the merged instance and
+     * every other file's `nodeToSymbol` entry is an UN-merged twin whose exports
+     * hold that file's members only — which is why a bare `A` in b.d.ts's `ts`
+     * block typed `any` and its heritage was skipped. The merged view is reached by
+     * descending from the root along the segment path (`ts` → `server` → …); a
+     * dotted `namespace A.B.C` contributes three segments.
+     *
+     * Roots: an identifier-named outermost level in a SCRIPT program file whose
+     * `globals` entry carries this declaration (a MODULE file's namespace never
+     * merges — INV.3(d) — and keeps the per-file answer; a lib file is not in
+     * [fileResults] and keeps it too); or a string-named `declare module "m"`
+     * block whose specifier resolves to NO program file — a genuine ambient module,
+     * whose definition and every augmentation carrier merge into `globals["m"]`
+     * ([moduleLocalContributesGlobally]) — where a FILE-backed block is an
+     * augmentation whose partial interface is a separate symbol here (INV.3(c)(iv),
+     * +43 rows on three profiles when consulted blindly in (CHK.76)) and yields no
+     * root at all. Where the descent breaks (a level the merge did not reach) the
+     * remaining levels answer null and the caller falls back per level.
+     */
+    private fun mergedNamespaceLevels(enclosing: List<ModuleDeclaration>, owner: SourceFile?): Array<List<Symbol>?>? {
+        if (owner == null || fileResults[owner.fileName] == null) return null
+        val outermost = enclosing[enclosing.size - 1]
+        var rootExpr: Expression = outermost.name
+        while (rootExpr is PropertyAccessExpression) rootExpr = rootExpr.expression
+        val root: Symbol = when (rootExpr) {
+            is Identifier -> {
+                if (rootExpr.text == "global" || owner.fileName in moduleFiles) return null
+                globals[rootExpr.text] ?: return null
+            }
+            is StringLiteralNode -> {
+                if (!ambientModuleBlockIsFileless(rootExpr.text, owner.fileName)) return null
+                globals[rootExpr.text] ?: return null
+            }
+            else -> return null
+        }
+        if (!root.flags.hasAny(SymbolFlags.Module)) return null
+        var carries = false
+        for (d in root.declarations) if (d === outermost) { carries = true; break }
+        if (!carries) return null
+        val result = arrayOfNulls<List<Symbol>>(enclosing.size)
+        var sym: Symbol? = null
+        var i = enclosing.size - 1
+        while (i >= 0) {
+            val decl = enclosing[i]
+            val segments = ArrayList<String>(2)
+            var nameExpr: Expression = decl.name
+            while (nameExpr is PropertyAccessExpression) {
+                segments.add(0, nameExpr.name.text)
+                nameExpr = nameExpr.expression
+            }
+            when (nameExpr) {
+                is Identifier -> segments.add(0, nameExpr.text)
+                is StringLiteralNode -> segments.add(0, nameExpr.text)
+                else -> return result
+            }
+            val level = ArrayList<Symbol>(segments.size)
+            for ((k, seg) in segments.withIndex()) {
+                val next: Symbol? = if (sym == null) {
+                    if (k == 0) root else null
+                } else sym.exports?.get(seg)
+                if (next == null || !next.flags.hasAny(SymbolFlags.Module)) return result
+                level.add(next)
+                sym = next
+            }
+            result[i] = level
+            i--
+        }
+        return result
+    }
+
+    /**
+     * (CHK.77) Does the `declare module "[spec]"` block written in [ownerFileName]
+     * declare a GENUINE ambient module — one whose specifier resolves to no program
+     * file — rather than augment a file the program has? Mirrors
+     * [collectModuleAugmentations]' target resolution (the plain resolver, the
+     * ESM-`.js`-aware relative one, the crawl's package answer — (CHK.30)) and its
+     * B387 rule: a BARE specifier that merely shares a basename with a plain `.ts`
+     * source names a standalone ambient module. Memoized per (file, specifier): the
+     * answer is a property of the program, and the resolvers cache by specifier
+     * alone where the relative one depends on the asking file.
+     */
+    private fun ambientModuleBlockIsFileless(spec: String, ownerFileName: String): Boolean {
+        val key = ownerFileName + "\u0000" + spec
+        ambientModuleFilelessCache[key]?.let { return it }
+        val target = resolveModuleSpecifier(spec)
+            ?: resolveModuleSpecifierRelativeJsAware(spec, ownerFileName)
+            ?: resolveImportTargetFallback(spec, ownerFileName)
+        val fileless = if (target == null) true else {
+            val specifierIsRelative = spec.startsWith("./") || spec.startsWith("../")
+            val targetIsPlainSource = (target.endsWith(".ts") || target.endsWith(".tsx")) &&
+                !target.endsWith(".d.ts") && "node_modules" !in target
+            !specifierIsRelative && targetIsPlainSource
+        }
+        ambientModuleFilelessCache[key] = fileless
+        return fileless
     }
 
     // -----------------------------------------------------------------------
@@ -5787,12 +5924,18 @@ class Checker(
             // (EXT.10) the free-name resolution the definition channel uses
             // ((API.3b): scope chain, then the per-file tables), alias followed.
             override fun typeReferenceSymbol(node: TypeReference): Symbol? {
-                val id = node.typeName as? Identifier ?: return null
-                // (CHK.76) the walk-scoped chain answers only while the walk is inside the
-                // body; the position-derived consult answers at rest as well.
-                val resolved = spineScopeLookup(id.text)
-                    ?: lookupInEnclosingNamespaces(id, id.text, SymbolFlags.Type)
-                    ?: lookupPerFileForNode(id, id.text) ?: return null
+                val resolved = when (val typeName = node.typeName) {
+                    // (CHK.76) the walk-scoped chain answers only while the walk is inside the
+                    // body; the position-derived consult answers at rest as well.
+                    is Identifier -> spineScopeLookup(typeName.text)
+                        ?: lookupInEnclosingNamespaces(typeName, typeName.text, SymbolFlags.Type)
+                        ?: lookupPerFileForNode(typeName, typeName.text)
+                    // (CHK.77) a QUALIFIED name (`ts.Cb`, `server.Gen<number>`) through the
+                    // checker's own qualified-name resolver — the alias symbol, so the
+                    // (EXT.10) alias-name rule reaches it.
+                    is QualifiedName -> resolveQualifiedName(typeName)
+                    else -> null
+                } ?: return null
                 return typeCaptureFollowImportAlias(resolved)
             }
 
@@ -114435,6 +114578,38 @@ interface DataView {
      * multi-segment `A.B.C`, recursively resolves the parent then walks exports.
      * Returns null when not exported (caller should also emit TS2694).
      */
+    /**
+     * (CHK.77) The HEAD of a dotted heritage base — the `JsTyping` of `extends
+     * JsTyping.TypingResolutionHost`, the `ts` of `ts.server.A` — asked for the
+     * meaning tsc's `resolveEntityName` gives the left of a qualified name
+     * ([QUALIFIED_LEFT_MEANING]: a namespace or an enum, an alias answered for
+     * every meaning). The Identifier arm of [resolveHeritageBaseSymbol] asks
+     * `Type | Value`, which a namespace holding only interfaces — a
+     * `NamespaceModule`, neither a type nor a value — never satisfies, so
+     * `typescript.d.ts:2679`'s `InstallTypingHost` lost its supertype.
+     */
+    private fun resolveHeritageBaseHead(expr: Expression): Symbol? = when (expr) {
+        is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, QUALIFIED_LEFT_MEANING)
+            ?: lookupPerFileForNode(expr, expr.text)
+        is PropertyAccessExpression -> resolveHeritageBaseSymbol(expr)
+        else -> null
+    }
+
+    /**
+     * (CHK.77) tsc's inherited `NodeFlags.Ambient`: [node] sits under a `declare`d
+     * declaration, or in a declaration file. Bounded parent walk.
+     */
+    private fun isInAmbientContext(node: Node): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return isDtsFile(cur.fileName)
+            if (cur is ModuleDeclaration && ModifierFlag.Declare in cur.modifiers) return true
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
     private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? {
         return when (expr) {
             // (CHK.49) INV.3(d)(ii), node-keyed — the same treatment the three
@@ -114452,17 +114627,22 @@ interface DataView {
             is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, SymbolFlags.Type or SymbolFlags.Value)
                 ?: lookupPerFileForNode(expr, expr.text)
             is PropertyAccessExpression -> {
-                val parent = resolveHeritageBaseSymbol(expr.expression) ?: return null
+                val parent = resolveHeritageBaseHead(expr.expression) ?: return null
                 val resolvedParent = resolveAlias(parent)
                 val propName = (expr.name).text
                 val memberSym = resolvedParent.exports?.get(propName) ?: return null
                 // Implicit-export rules:
                 //  - Sub-namespaces (Module flag) are always accessible (parent.Sub usage).
                 //  - `declare namespace` members are implicitly exported (any decl carries Declare).
+                //  - (CHK.77) …and so are the members of a namespace NESTED in an ambient
+                //    one, or declared in a `.d.ts`: tsc's `setExportContextFlag` reads the
+                //    inherited `NodeFlags.Ambient`, not a `declare` keyword on the block
+                //    itself — `extends ts.server.A` inside `declare namespace ts` was
+                //    skipped here while the annotation `a: ts.server.A` beside it resolved.
                 // Otherwise require explicit `export` modifier on the member declaration.
                 if (memberSym.flags.hasAny(SymbolFlags.Module)) return memberSym
                 val parentIsAmbient = resolvedParent.declarations.any {
-                    it is ModuleDeclaration && ModifierFlag.Declare in it.modifiers
+                    it is ModuleDeclaration && (ModifierFlag.Declare in it.modifiers || isInAmbientContext(it))
                 }
                 if (parentIsAmbient) return memberSym
                 val memberIsExported = memberSym.flags.hasAny(SymbolFlags.ExportValue) ||
@@ -114531,7 +114711,13 @@ interface DataView {
             // PropertyAccessExpression arm below keeps its legacy last-segment
             // fallback (the QualifiedName convention from
             // getTypeFromTypeReference).
-            is Identifier -> lookupTypeSymbolInInferenceNamespace(baseExpr.text)
+            // (CHK.77) the position-derived consult FIRST, as (CHK.76) ordered it for a
+            // type reference: the stack below is pushed from the interface SYMBOL's
+            // parent chain, i.e. the PER-FILE namespace, which for `interface B extends
+            // A` written in the SECOND file declaring `declare namespace ts` holds
+            // that file's members only — `A` lives in the merged instance.
+            is Identifier -> lookupInEnclosingNamespaces(baseExpr, baseExpr.text, SymbolFlags.Type)
+                ?: lookupTypeSymbolInInferenceNamespace(baseExpr.text)
                 ?: lookupPerFileForNode(baseExpr, baseExpr.text)
             // A namespace-qualified base `NS.Base` (`RefactorContext extends
             // textChanges.TextChangesContext`, where `NS` is a namespace-IMPORT alias to

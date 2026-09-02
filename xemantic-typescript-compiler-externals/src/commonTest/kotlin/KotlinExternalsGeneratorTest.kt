@@ -4068,10 +4068,11 @@ class KotlinExternalsGeneratorTest {
 
     @Test
     fun `a qualified reference to an alias whose resolved body has no Kotlin spelling resolves through the fallback`() {
-        // `typeReferenceSymbol` refuses a qualified name by contract, so the
-        // (EXT.10) name rule and the nested-alias inlining cannot be reached
-        // through the lens for `ts.Cb` / `server.Gen<number>`; the fallback
-        // reaches both. The inlined body's `Node` is resolved at the BODY's
+        // `typeReferenceSymbol` refused a qualified name by contract until
+        // (CHK.77) routed it through the checker's qualified-name resolver, so
+        // the (EXT.10) name rule and the nested-alias inlining reach `ts.Cb` /
+        // `server.Gen<number>` through the lens now; the written-name fallback
+        // answered the same before it. The inlined body's `Node` is resolved at the BODY's
         // position (`server.Node`) and spelled from the use's scope: bare
         // inside `server`, `server.Node` from the root. `server.NP` maps
         // through the lens (its resolved body is `string`).
