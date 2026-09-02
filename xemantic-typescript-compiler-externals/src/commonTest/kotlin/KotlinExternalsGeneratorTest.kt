@@ -1771,15 +1771,21 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `the arity guard - a value typed by an un-instantiated generic class falls back`() {
+    fun `a generic class value is refused on both paths - the initializer rule first-hand and the arity guard second-hand`() {
         // `export const ctor = Box` is typed by the checker as `Box`'s INSTANCE
-        // type (CHK.73), a bare generic `Type.Interface` — the one shape that
-        // reaches the renderer's bare-name leg with type parameters declared.
-        // Before: `public external val ctor: Box` — one type argument expected.
+        // type (CHK.73), a bare generic `Type.Interface`. (CHK.73b) refuses it
+        // by what the initializer NAMES, before the checker is asked — before
+        // that: `public external val ctor: Any? /* xtsc: unmapped Box<T> */`,
+        // the arity guard, and before (EXT.11a) `val ctor: Box`, a compile
+        // error. The SECOND-hand value `again = ctor` names no class, so it
+        // still reaches the renderer's bare-name leg with type parameters
+        // declared: the arity guard is the negative control that both paths
+        // agree on refusing.
         val result = generate(
             """
             export declare class Box<T> { value: T; }
             export const ctor = Box;
+            export const again = ctor;
             """
         )
         val expected = """
@@ -1787,10 +1793,158 @@ class KotlinExternalsGeneratorTest {
                 public var value: T
             }
 
-            public external val ctor: Any? /* xtsc: unmapped Box<T> */
+            /* xtsc: skipped value ctor initialized by the class Box - a constructor value has no externals shape yet */
+
+            public external val again: Any? /* xtsc: unmapped Box<T> */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
+    }
+
+    // --- (CHK.73b) a class value is not its instance ---------------------------
+
+    @Test
+    fun `a value initialized by a class is a loud skip and a new expression keeps the instance type`() {
+        // Before: `public external val plain: Plain` — the instance type,
+        // which compiles and is WRONG (a consumer reads `plain.x` where the
+        // runtime value is the constructor). `new Plain()` IS an instance.
+        val result = generate(
+            """
+            export declare class Plain { x: number; }
+            export const plain = Plain;
+            export const p = new Plain();
+            """
+        )
+        val expected = """
+            public open external class Plain {
+                public var x: Double
+            }
+
+            /* xtsc: skipped value plain initialized by the class Plain - a constructor value has no externals shape yet */
+
+            public external val p: Plain
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an imported class value is refused through the import alias across files`() {
+        // Before: `public external val p: Plain`. The lexical `resolveName`
+        // answers the import SPECIFIER here and `aliasTarget` on it is null
+        // (measured), so the rule resolves the initializer as a heritage
+        // base does — the class in the other file. The instance-typed `q`
+        // still renders by name across the file boundary.
+        val result = generateFiles(
+            "/pkg/a.ts" to """
+                export declare class Plain { x: number; }
+            """,
+            "/pkg/b.ts" to """
+                import { Plain } from './a.js';
+                export const p = Plain;
+                export const q = new Plain();
+            """,
+        )
+        val expected = """
+            public open external class Plain {
+                public var x: Double
+            }
+
+            /* xtsc: skipped value p initialized by the class Plain - a constructor value has no externals shape yet */
+
+            public external val q: Plain
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an enum object and a namespace object are refused - a namespace member and a merged class decide by kind`() {
+        // Before: `public external val K: Kind` (the entries' sealed
+        // interface — a consumer would read `K` as an ENTRY), `public
+        // external val N: Any?` (marker-less, the shape reserved for a
+        // written `any`), `public external val I: Any? /* xtsc: unmapped
+        // Inner */` (a misleading marker for a nested class's constructor)
+        // and `public external val C: Any?` for a class expression. A
+        // namespace MEMBER `NS.x` resolves to a value and keeps the
+        // checker's answer; a class merged with a namespace is the class.
+        val result = generate(
+            """
+            export enum Kind { A, B }
+            export const K = Kind;
+            export declare namespace NS { const x: number; class Inner { y: number; } }
+            export const N = NS;
+            export const I = NS.Inner;
+            export const v = NS.x;
+            export const C = class { y: number; };
+            export declare class M { y: number; }
+            export declare namespace M { const z: number; }
+            export const m = M;
+            """
+        )
+        val expected = """
+            public sealed external interface Kind {
+                public companion object {
+                    public val A: Kind
+                    public val B: Kind
+                }
+            }
+
+            /* xtsc: skipped value K initialized by the enum Kind - an enum object value has no externals shape yet */
+
+            /* xtsc: skipped value N initialized by the namespace NS - a namespace object value has no externals shape yet */
+
+            /* xtsc: skipped value I initialized by the class NS.Inner - a constructor value has no externals shape yet */
+
+            public external val v: Double
+
+            /* xtsc: skipped value C initialized by a class expression - a constructor value has no externals shape yet */
+
+            public open external class M {
+                public var y: Double
+            }
+
+            /* xtsc: skipped value m initialized by the class M - a constructor value has no externals shape yet */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `negative control - a lib constructor value keeps its marker and a typeof annotation stays the typeof marker`() {
+        // `lib.*.d.ts` spells `Error` as `interface Error` plus `declare var
+        // Error: ErrorConstructor` — no class declaration — so the checker
+        // types `E` CORRECTLY as the constructor interface and the (EXT.11b)
+        // marker carries it; the (CHK.73b) rule does not fire and must not.
+        // An ANNOTATED value renders its annotation whatever its initializer
+        // names: `typeof Plain` is the (EXT.11a) marker on both.
+        val result = generate(
+            """
+            export declare class Plain { x: number; }
+            export const E = Error;
+            export declare const ctor: typeof Plain;
+            export const both: typeof Plain = Plain;
+            """
+        )
+        val expected = """
+            public open external class Plain {
+                public var x: Double
+            }
+
+            public external val E: Any? /* xtsc: unmapped ErrorConstructor */
+
+            public external val ctor: Any? /* xtsc: unmapped typeof Plain */
+
+            public external val both: Any? /* xtsc: unmapped typeof Plain */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
     }
 
     @Test

@@ -89,6 +89,24 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.73b) LANDED — a class-valued export is refused loudly, generator-side.** `export const
+plain = Plain` rendered `val plain: Plain` (the INSTANCE type — the checker has no static-side
+type for a class value, (CHK.73)) and compiled. `collectValue`'s un-annotated branch now asks
+`constructorValueRefusal` before the checker: a `class` expression refuses syntactically; an
+`Identifier` or dotted initializer resolves through `lens.heritageBaseSymbol` (+ `aliasTarget`)
+and refuses when the symbol declares a CLASS (checked first, so a class merged with a namespace
+is the class), an ENUM (`val K: Kind` — a consumer would read `K` as an entry) or a MODULE
+(`val N: Any?` with NO marker, the shape otherwise reserved for a written `any`); `new Plain()`
+and `NS.x` keep the checker's answer. **`resolveName` was measured and rejected as the resolver**:
+it sees a same-file class, but for an IMPORTED class it answers the import specifier's
+lexical-chain symbol, on which `aliasTarget` answers null (no `Alias` flag), and it cannot answer
+`NS.Inner` — `heritageBaseSymbol` answered the declaration in every measured shape. **`export
+const E = Error` is NOT the class shape**: the lib spells `interface Error` + `declare var Error:
+ErrorConstructor`, so the checker types it correctly and the (EXT.11b) marker already carries
+it — pinned as the control it is. A `.d.ts` cannot carry a non-literal `const` initializer
+(TS1254), so the cross-file pin uses `.ts`. Five pins (4 RED by ablation, one control);
+externals 118 → 122/0; suite 16,920 → 16,924 / 0 / 3.
+
 **(EXT.11c) LANDED — the whole `rxjs@7.8.2` surface (250 files) COMPILES: 37 → 0 Kotlin errors,
 and the Kotlin overload-equivalence rule is now a MEASURED table, not a guess.** ~100 Kotlin pairs
 were fed to the metadata compiler (`KotlinOverloadEquivalenceTest`, 5 tests, pins the table
@@ -1221,7 +1239,7 @@ Owner decisions 2026-09-02:
   sibling shape (`from as f`, `f as from`, `import { from }`, default import named `from`,
   `type from`, `from` not first) plus a negative control; huge_methods on the parser.
 
-- [ ] **(CHK.73b) A CLASS VALUE IS TYPED AS ITS INSTANCE TYPE, AND THE EXTERNALS GENERATOR
+- [x] **(CHK.73b) DONE 2026-09-02 ((P18.9) note; generator-side refusal through `heritageBaseSymbol`, class/enum/namespace objects; the checker-side static type stays (CHK.73); externals 122/0, suite 16,924/0/3) — A CLASS VALUE IS TYPED AS ITS INSTANCE TYPE, AND THE EXTERNALS GENERATOR
   RENDERS `export const plain = Plain` AS `val plain: Plain` — WRONG AND COMPILING (found by
   (EXT.11a)).** The generic case is refused by the arity guard; the non-generic one is
   silent. Either the checker grows a static-side type for a class value ((CHK.73)'s blocker)

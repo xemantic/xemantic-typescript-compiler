@@ -30,6 +30,7 @@ import com.xemantic.typescript.compiler.CheckedLens
 import com.xemantic.typescript.compiler.CheckedNodeSink
 import com.xemantic.typescript.compiler.Checker
 import com.xemantic.typescript.compiler.ClassDeclaration
+import com.xemantic.typescript.compiler.ClassExpression
 import com.xemantic.typescript.compiler.ClassStaticBlockDeclaration
 import com.xemantic.typescript.compiler.CompilerOptions
 import com.xemantic.typescript.compiler.Constructor
@@ -51,6 +52,7 @@ import com.xemantic.typescript.compiler.KeywordTypeNode
 import com.xemantic.typescript.compiler.LiteralType
 import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
+import com.xemantic.typescript.compiler.ModuleDeclaration
 import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NumericLiteralNode
@@ -58,6 +60,7 @@ import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.ParenthesizedType
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.PrefixUnaryExpression
+import com.xemantic.typescript.compiler.PropertyAccessExpression
 import com.xemantic.typescript.compiler.PropertyDeclaration
 import com.xemantic.typescript.compiler.QualifiedName
 import com.xemantic.typescript.compiler.SemicolonClassElement
@@ -1189,6 +1192,13 @@ private class ExternalsCollector(
      * checker knows what that widened to). A destructuring declaration
      * (`export const { a, b } = …`) binds names no single `val` can carry and
      * is a loud skip.
+     *
+     * (CHK.73b) An UN-ANNOTATED value whose initializer names a class, an
+     * enum or a namespace is refused BEFORE the checker is asked
+     * ([constructorValueRefusal]): the checker's answer there is a plausible,
+     * mappable, WRONG type. An annotated value renders its annotation as
+     * before — a `typeof Plain` annotation is the (EXT.11a) marker, and an
+     * instance-typed annotation is what the author wrote.
      */
     private fun collectValue(exported: ExportedValue, lens: CheckedLens): ExternalDeclaration {
         val node = exported.node
@@ -1199,6 +1209,7 @@ private class ExternalsCollector(
             if (node.type != null) {
                 annotationText(node.type, optional = false, returnPosition = false, lens = lens, scope = scope)
             } else {
+                constructorValueRefusal(name, node.initializer, lens)?.let { return it }
                 // A `const`'s literal type (`export const RETRIES = 3` is typed
                 // `3`, the (WIDEN.1) const rule) widens to its base primitive
                 // here: the declaration is what a consumer BINDS, and `val
@@ -1207,6 +1218,92 @@ private class ExternalsCollector(
                 kotlinTypeText(widenLiteral(lens.typeOf(node.name)), optional = false, returnPosition = false, lens = lens, scope = scope)
             }
         return ExternalTopLevelValue(name, type, exported.readOnly)
+    }
+
+    /**
+     * (CHK.73b) The loud skip for an un-annotated value whose INITIALIZER is a
+     * class, an enum object or a namespace object — or null when the
+     * initializer is anything else and the checker's answer may be used.
+     *
+     * This checker types a class VALUE as its INSTANCE type (CHK.73: there is
+     * no static-side type for a class value here), so `export const plain =
+     * Plain` was typed `Plain` and rendered `val plain: Plain` — which
+     * compiles and is wrong: a consumer would read `plain.x` where the
+     * runtime value is the constructor. Only the GENERIC case was refused,
+     * by (EXT.11a)'s arity guard, and only because a bare `Box<T>` has no
+     * Kotlin spelling. The same silence covered an enum object (`export
+     * const K = Kind` rendered `val K: Kind`, the entries' sealed interface,
+     * so a consumer would read `K` as an ENTRY) and a namespace object
+     * (`val N: Any?` with NO marker, the one shape this generator otherwise
+     * reserves for a written `any`). So the value's shape is decided from
+     * what the initializer NAMES, before the checker is asked what it is
+     * typed:
+     *
+     *  - an [Identifier] or a dotted [PropertyAccessExpression] (`Plain`,
+     *    `NS.Inner`, an imported `Plain`) is resolved by
+     *    [CheckedLens.heritageBaseSymbol] with the import alias followed —
+     *    measured at the value's own callback: `lens.resolveName` DOES see a
+     *    same-file top-level class, but for an IMPORTED class it answers the
+     *    import specifier's lexical-chain symbol, on which
+     *    [CheckedLens.aliasTarget] answers null (it carries no `Alias` flag),
+     *    and a dotted name it cannot answer at all; the heritage resolver
+     *    answered the declaration in every measured shape, so it is the one
+     *    resolver for all three spellings. A symbol declaring a
+     *    [ClassDeclaration] refuses as a CLASS (a class merged with a
+     *    namespace counts as the class), one declaring an [EnumDeclaration]
+     *    as an ENUM, one declaring a [ModuleDeclaration] as a NAMESPACE —
+     *    any file, the lib included; the description spells the written
+     *    initializer;
+     *  - a [ClassExpression] (`export const C = class { … }`) is a
+     *    constructor value with no name to spell — refused as such (it
+     *    rendered `val C: Any?`, marker-less);
+     *  - everything else keeps the checker's answer: a `new` expression IS
+     *    an instance, a namespace MEMBER (`NS.x`) or another value resolves
+     *    to a [VariableDeclaration], a function value already falls to the
+     *    `unmapped () => void` marker, and a lib "class" is not a class
+     *    declaration at all — `lib.*.d.ts` spells `Error` as `interface
+     *    Error` plus `declare var Error: ErrorConstructor`, so the checker
+     *    types `export const E = Error` CORRECTLY as `ErrorConstructor` and
+     *    the existing marker carries it.
+     */
+    private fun constructorValueRefusal(
+        name: String,
+        initializer: Expression?,
+        lens: CheckedLens,
+    ): SkippedDeclaration? {
+        if (initializer == null) return null
+        if (initializer is ClassExpression) {
+            return SkippedDeclaration(
+                "value $name initialized by a class expression - a constructor value has no externals shape yet"
+            )
+        }
+        val written = expressionNameText(initializer) ?: return null
+        val symbol = lens.heritageBaseSymbol(initializer)
+            ?.let { lens.aliasTarget(it) ?: it }
+            ?: return null
+        val declarations = symbol.declarations
+        val (kind, shape) = when {
+            declarations.any { it is ClassDeclaration } -> "class" to "a constructor value"
+            declarations.any { it is EnumDeclaration } -> "enum" to "an enum object value"
+            declarations.any { it is ModuleDeclaration } -> "namespace" to "a namespace object value"
+            else -> return null
+        }
+        return SkippedDeclaration(
+            "value $name initialized by the $kind ${commentSafe(written)} - $shape has no externals shape yet"
+        )
+    }
+
+    /**
+     * (CHK.73b) The written spelling of an entity-name-shaped EXPRESSION — an
+     * [Identifier] or a dotted chain of them (`NS.Inner`) — or null for any
+     * other expression, which [constructorValueRefusal] then leaves to the
+     * checker. The expression twin of [entityNameText].
+     */
+    private fun expressionNameText(expression: Expression): String? = when (expression) {
+        is Identifier -> expression.text
+        is PropertyAccessExpression ->
+            expressionNameText(expression.expression)?.let { "$it.${expression.name.text}" }
+        else -> null
     }
 
     /**

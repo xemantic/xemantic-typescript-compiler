@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES COMPILE, 16,867 → 16,920 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES COMPILE, 16,867 → 16,924 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -42,7 +42,10 @@ renaming; the override relation is a DIFFERENT key — positional identity, exac
 so `KotlinSignatureKeys.kt` ships two), value-vs-type name collisions a loud skip, a narrowed
 `var` override rendered as the inherited type with a marker, inheritance read through the
 supertype's type arguments (a renamed TP silently lost every `override` before); a 21-file
-extras gate; externals 118/0.
+extras gate; externals 118/0. **(CHK.73b), 16,920 → 16,924 / 0 / 3:** a class-, enum- or
+namespace-valued export (`export const plain = Plain`, rendered as the INSTANCE type before) is
+a loud skip through `heritageBaseSymbol` (`resolveName` cannot follow an import alias — measured);
+externals 122/0.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained
