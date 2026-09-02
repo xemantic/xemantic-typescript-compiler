@@ -89,6 +89,31 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.18) LANDED — a collision Kotlin refuses and TypeScript allows renames through `@JsName`
+under wiring.** The scheme, measured against Kotlin/JS 2.4.10 in the JS gate: the suffix names
+the KIND that had to move — a value colliding with a type or a namespace object is `<Name>Value`,
+a function whose signature is a same-named class's constructor is `<Name>Fn`; the type/object
+keeps its name (it is what every other declaration spells); all six shapes compile
+(`@JsName("AjaxError") val AjaxErrorValue: AjaxErrorCtor` beside the interface,
+`@JsName("Foo") fun FooFn(x: String)` beside `class Foo(x: String)` AND its `fun Foo(x: Double)`
+overload, `@JsName("path") val pathValue` beside `object path`, a nested object member). A rename
+happens only under a `ModuleWiring` (without one the (EXT.11c) skips stay byte-identical — a
+rename without the JS binding would silently move the consumer's binding) and only when the
+suffixed name is free among everything the scope declares (a taken suffix is a loud skip saying
+so); reach is asked under the TypeScript name, the binding is the first exported name, so
+`export { AjaxError as AjaxErr }` composes to `@JsName("AjaxErr")`; value + type is kept OUT of
+(EXT.20)'s merge table (a `const` does not merge with an interface). Nine pins + the measurement
+pin, seven single-mistake ablation arms each red only on the pins naming it. **Censuses (the probe
+now also compiles the REAL output as Kotlin/JS): rxjs 250 wired — value-vs-type skips 9 → 0,
+`@JsName` 9, 0 metadata and 0 Kotlin/JS errors; `@types/node` wired — 40 value/type + 8
+value/object skips → 0 (46 `@JsName`, 2 taken-suffix skips that are the cross-block flattening),
+0 metadata errors; `typescript.d.ts` unwired md5-identical.** Externals 219 → 229/0; suite
+17,103 → 17,113 / 0 / 3. **Found by the new Kotlin/JS arm, queued as (EXT.22):** 23 pre-existing
+Kotlin/JS errors on `@types/node`'s real output — `class Hash() : Stream.Transform` needs the
+superclass call's arity even in an external class (`No value passed for parameter 'opts'`) — never
+JS-compiled by any gate before; and (EXT.16)'s marker "a nested object member cannot carry
+`@JsName`" is refuted by the measurement.
+
 **(EXT.20) LANDED — an `export =` target never vanishes, and TypeScript declaration MERGING is
 rendered.** tsgo 7.0.2 measured on the reduced `events.d.ts` shape: every import form binds the
 class, the merged interface's members, the namespace's `export`-modified types/functions/values
@@ -1687,7 +1712,7 @@ Owner decisions 2026-09-02:
   is not blocked) compiling each gate's real `kotlin` output. A build-file change is an
   owner decision; the in-test compiler route is not.
 
-- [ ] **(EXT.18) RENAME THROUGH `@JsName` WHERE KOTLIN REFUSES A COLLISION TS ALLOWS.** With
+- [x] **(EXT.18) DONE 2026-09-02 ((P18.9) note; `<Name>Value`/`<Name>Fn` under wiring, measured against Kotlin/JS; rxjs 9 → 0 skips, `@types/node` 48 → 0; externals 229/0, suite 17,113/0/3; (EXT.22) queued from the probe's new Kotlin/JS arm) — RENAME THROUGH `@JsName` WHERE KOTLIN REFUSES A COLLISION TS ALLOWS.** With
   wiring in hand, a VALUE sharing a generated TYPE's name (`const AjaxError: AjaxErrorCtor`
   beside `interface AjaxError`, 6 in rxjs extras / 11 in typescript.d.ts) and a function
   equal to a class's constructor can render under a Kotlin-legal name with
@@ -1744,6 +1769,19 @@ Owner decisions 2026-09-02:
   FLATTENING residue: 66 modules in one scope lose `Socket` (dgram vs net), `Module` (vm vs
   module), `stream/web`'s `ReadableStream` to first-wins — one generation per `declare
   module` block, or a per-block Kotlin object/package, is the wiring-side answer.
+
+- [ ] **(EXT.22) AN EXTERNAL SUBCLASS WITH ITS OWN PRIMARY CONSTRUCTOR NEEDS THE SUPERCLASS
+  CALL — 23 PRE-EXISTING KOTLIN/JS ERRORS ON `@types/node` (`No value passed for parameter
+  'opts'` on `class Hash() : Stream.Transform`), found by (EXT.18)'s probe extension that
+  compiles the REAL output as Kotlin/JS; never JS-compiled by any gate before.** Rule: a
+  generated class with its own constructor whose generated superclass declares one renders
+  the superclass call in the REAL variant too — with what arguments? An external class's
+  super call is never executed by Kotlin/JS (it is the JS class's own), but the compiler
+  demands the arity: pass `definedExternally` per parameter (measure with `jsCompileCheck`
+  that `class Hash() : Transform(definedExternally)` compiles; the gate variant keeps
+  `null!!`). Also re-word (EXT.16)'s marker `a nested object member cannot carry @JsName` —
+  refuted by (EXT.18)'s measurement (it can). Receipt: `@types/node` real output 23 → 0
+  Kotlin/JS errors, the JS gate's library fixtures green.
 
 - [ ] **(EXT.21) ONE GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
   RESIDUE, CENSUSED BY (EXT.20) AND LEFT AS A DESIGN.** Today every string-named block flattens

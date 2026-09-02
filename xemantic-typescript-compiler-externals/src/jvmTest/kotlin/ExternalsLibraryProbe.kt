@@ -53,7 +53,11 @@ import kotlin.test.Test
  *   path or as its root-stripped name (`rxjs:/index.d.ts`); with it the
  *   generation is WIRED (`@file:JsModule`, `@JsName`, the surface graph) and
  *   the census reports the internal paths — the declarations the entry does
- *   not export, i.e. what a consumer cannot bind — with examples.
+ *   not export, i.e. what a consumer cannot bind — with examples;
+ * - (EXT.18) when the Kotlin/JS stdlib klib is located ([JsStdlib]) the REAL
+ *   output is compiled as Kotlin/JS too — the `@JsName`/`@file:JsModule`
+ *   wiring the metadata compile cannot see — into `js-compile-errors.txt`
+ *   and the census's `js compile` rows; absent, the rows say so.
  *
  * The census groups each `/* xtsc: … */` marker by its MECHANISM (the concrete
  * declaration name and rendered type replaced by a placeholder), so two runs
@@ -81,6 +85,7 @@ class ExternalsLibraryProbe {
         }
         val result = generateKotlinExternals(files, module = wiring)
         val check = compileCheck(result.compileCheckSource)
+        val jsCheck = JsStdlib.locate()?.let { jsCompileCheck(result.kotlin, it) }
 
         out.resolve("generated.kt").writeText(result.kotlin)
         out.resolve("compile-check.kt").writeText(result.compileCheckSource)
@@ -90,10 +95,13 @@ class ExternalsLibraryProbe {
                 "${d.fileName ?: "-"}:${d.line ?: 0}:${d.character ?: 0} ${d.category} TS${d.code} ${d.message}\n"
             }
         )
-        out.resolve("census.txt").writeText(census(result, check, files))
+        out.resolve("js-compile-errors.txt").writeText(
+            jsCheck?.errors?.joinToString("") { "$it\n" } ?: "SKIPPED: no Kotlin/JS stdlib klib\n"
+        )
+        out.resolve("census.txt").writeText(census(result, check, jsCheck, files))
     }
 
-    private fun census(result: KotlinExternals, check: CompileCheck, files: List<SourceFileEntry>): String {
+    private fun census(result: KotlinExternals, check: CompileCheck, jsCheck: JsCompileCheck?, files: List<SourceFileEntry>): String {
         val markerTexts = markerRegex.findAll(result.kotlin).map { it.groupValues[1] }.toList()
         val byCategory = markerTexts.groupingBy(::categorize).eachCount()
         val unmapped = markerTexts
@@ -145,6 +153,8 @@ class ExternalsLibraryProbe {
             appendLine("markers: ${markerTexts.size}")
             appendLine("compile errors: ${check.errors.size}")
             appendLine("compile successful: ${check.successful}")
+            appendLine("js compile errors: ${jsCheck?.errors?.size?.toString() ?: "SKIPPED (no Kotlin/JS stdlib klib)"}")
+            appendLine("js compile successful: ${jsCheck?.successful?.toString() ?: "SKIPPED"}")
             appendLine("checker diagnostics: ${result.diagnostics.size} ($errorCount errors)")
         }
     }
@@ -259,6 +269,19 @@ class ExternalsLibraryProbe {
                 "skipped constructor this parameter <TYPE> not carried",
             Regex("""skipped this parameter .* not carried - optional method \S+""") to
                 "skipped this parameter <TYPE> not carried - optional method <NAME>",
+            // (EXT.18) The renames, and the skips a taken suffix keeps.
+            Regex("""value \S+ renamed \S+ - Kotlin cannot hold a value and a type of one name(?:; bound by @JsName)?""") to
+                "value <NAME> renamed <NAME>Value - a value and a type of one name",
+            Regex("""value \S+ renamed \S+ - Kotlin cannot hold a value and an object of one name(?:; bound by @JsName)?""") to
+                "value <NAME> renamed <NAME>Value - a value and an object of one name",
+            Regex("""function \S+ renamed \S+ - its signature is the constructor of \S+(?:; bound by @JsName)?""") to
+                "function <NAME> renamed <NAME>Fn - its signature is the constructor of <NAME>",
+            Regex("""skipped value \S+ shares its name with the (?:type|namespace object) \S+ and \S+ is taken too - .*""") to
+                "skipped value <NAME> shares its name with the type <NAME> and <NAME>Value is taken too",
+            Regex("""skipped function \S+ shares its signature with the constructor of \S+ and \S+ is taken too - .*""") to
+                "skipped function <NAME> shares its signature with the constructor of <NAME> and <NAME>Fn is taken too",
+            Regex("""skipped (?:value|function) \S+ of the merged namespace \S+ - .*, and a companion member carries no @JsName""") to
+                "skipped <KIND> <NAME> of the merged namespace <NAME> - a companion member carries no @JsName",
             // (EXT.11c)
             Regex("""skipped value \S+ shares its name with the type \S+ - module wiring is a later rung""") to
                 "skipped value <NAME> shares its name with the type <NAME> - module wiring",

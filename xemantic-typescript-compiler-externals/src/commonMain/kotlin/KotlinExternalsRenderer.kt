@@ -51,15 +51,41 @@ internal sealed interface ExternalDeclaration
  * `@JsName` it renders (null: bound under its own Kotlin name) and the loud
  * records the wiring decision leaves — not exported by the entry, exported
  * under several names, exported only qualified, the `export =` module object.
- * Rendered by [renderKotlinExternals] at the top level of the real variant
- * only: the gate variant renders neither `external` nor any JS annotation
- * (the metadata compile resolves no `kotlin.js` annotation), and a nested
- * object's members inherit the object's binding. Absent (null) in the
- * global-script mode, where nothing is wired.
+ * Rendered by [renderKotlinExternals] in the real variant only: the gate
+ * variant renders neither `external` nor any JS annotation (the metadata
+ * compile resolves no `kotlin.js` annotation). A nested object's members
+ * inherit the object's binding and carry none — (EXT.18) except a RENAMED
+ * member ([Rename]), whose `@JsName` spells the JavaScript name the Kotlin
+ * name no longer does; measured, Kotlin/JS 2.4.10 accepts `@JsName` on a
+ * member of an `external object`. Absent (null) in the global-script mode,
+ * where nothing is wired.
  */
 internal class JsBinding(
     val jsName: String?,
     val markers: List<String>,
+)
+
+/**
+ * (EXT.18) The record of a declaration rendered under a Kotlin name OTHER
+ * than its TypeScript one — a value sharing a generated type's or object's
+ * name (`AjaxError` → `AjaxErrorValue`), a function whose signature is a
+ * same-named class's constructor (`Box` → `BoxFn`) — carried on the
+ * declaration so the wiring binds the ORIGINAL name (`@JsName`) and the
+ * rename marker says what happened. The scheme, and why: the suffix names
+ * the KIND that had to move (`Value`, `Fn`), so a consumer reading the
+ * TypeScript can predict the Kotlin spelling; a trailing underscore or a
+ * `Ctor`-style suffix says nothing about which of the two declarations
+ * moved. The type keeps its name in every case — types are what the other
+ * declarations spell. A rename happens only under a [ModuleWiring]
+ * (without the `@JsName` binding it would silently change what the
+ * consumer binds) and only where the suffixed name is free in its scope;
+ * a taken suffix keeps the loud skip, saying so.
+ */
+internal class Rename(
+    /** The TypeScript name — what the JavaScript binding spells. */
+    val from: String,
+    /** Why Kotlin cannot hold the declaration under [from]. */
+    val reason: String,
 )
 
 /**
@@ -163,6 +189,8 @@ internal class ExternalTopLevelFunction(
     override val returnType: String,
     /** (EXT.16) The module wiring, rendered above the declaration; null when unwired. */
     val binding: JsBinding? = null,
+    /** (EXT.18) The TypeScript name and the reason, when [name] is a Kotlin-legal rename of it. */
+    val rename: Rename? = null,
 ) : ExternalDeclaration, FunctionSignature
 
 /**
@@ -239,6 +267,8 @@ internal class ExternalTopLevelValue(
     val readOnly: Boolean,
     /** (EXT.16) The module wiring, rendered above the declaration; null when unwired. */
     val binding: JsBinding? = null,
+    /** (EXT.18) The TypeScript name and the reason, when [name] is a Kotlin-legal rename of it. */
+    val rename: Rename? = null,
 ) : ExternalDeclaration
 
 /** A declaration (EXT.1) refuses — rendered as a marker, never dropped. */
@@ -294,7 +324,7 @@ internal class ExternalMarker(val text: String) : ExternalDeclaration
 internal fun withBinding(declaration: ExternalDeclaration, binding: JsBinding): ExternalDeclaration = when (declaration) {
     is ExternalTopLevelFunction -> ExternalTopLevelFunction(
         declaration.name, declaration.typeParameters, declaration.markers, declaration.parameters,
-        declaration.returnType, binding,
+        declaration.returnType, binding, declaration.rename,
     )
     is ExternalClass -> ExternalClass(
         declaration.name, declaration.typeParameters, declaration.headerMarkers, declaration.isAbstract,
@@ -304,7 +334,9 @@ internal fun withBinding(declaration: ExternalDeclaration, binding: JsBinding): 
     is ExternalEnum -> ExternalEnum(
         declaration.name, declaration.entries, declaration.markers, binding, declaration.staticMembers, declaration.nested,
     )
-    is ExternalTopLevelValue -> ExternalTopLevelValue(declaration.name, declaration.type, declaration.readOnly, binding)
+    is ExternalTopLevelValue -> ExternalTopLevelValue(
+        declaration.name, declaration.type, declaration.readOnly, binding, declaration.rename,
+    )
     is ExternalObject -> ExternalObject(declaration.name, declaration.path, declaration.declarations, binding)
     is ExternalInterface, is ExternalTypeAlias, is SkippedDeclaration, is ExternalMarker -> declaration
 }
@@ -1517,11 +1549,12 @@ private fun jsStringLiteral(text: String): String =
 
 /**
  * (EXT.16) The wiring lines above a value-bearing declaration — its loud
- * markers, then the `@JsName` — at the top level of the real variant only
- * ([externalKeyword] is exactly that depth and variant).
+ * markers, then the `@JsName` — in the real variant only ([external]); at
+ * any depth since (EXT.18), a nested member carrying a binding being a
+ * renamed one.
  */
-private fun StringBuilder.appendBinding(binding: JsBinding?, indent: String, externalKeyword: Boolean) {
-    if (binding == null || !externalKeyword) return
+private fun StringBuilder.appendBinding(binding: JsBinding?, indent: String, external: Boolean) {
+    if (binding == null || !external) return
     for (marker in binding.markers) appendLine("$indent/* xtsc: $marker */")
     binding.jsName?.let { appendLine("$indent@JsName(\"${jsStringLiteral(it)}\")") }
 }
@@ -1558,7 +1591,7 @@ private fun StringBuilder.appendDeclaration(
         is ExternalMarker ->
             appendLine("$indent/* xtsc: ${declaration.text} */")
         is ExternalObject -> {
-            appendBinding(declaration.binding, indent, externalKeyword)
+            appendBinding(declaration.binding, indent, external)
             val keyword = if (externalKeyword) "external object" else "object"
             val header = "${indent}public $keyword ${kotlinIdentifier(declaration.name)}"
             if (declaration.declarations.isEmpty()) {
@@ -1608,7 +1641,7 @@ private fun StringBuilder.appendDeclaration(
             )
         }
         is ExternalTopLevelValue -> {
-            appendBinding(declaration.binding, indent, externalKeyword)
+            appendBinding(declaration.binding, indent, external)
             val keyword = if (declaration.readOnly) "val" else "var"
             val externalModifier = if (externalKeyword) "external " else ""
             val body = if (external) "" else " = null!!"
@@ -1618,7 +1651,7 @@ private fun StringBuilder.appendDeclaration(
         }
         is ExternalTopLevelFunction -> {
             for (marker in declaration.markers) appendLine("$indent/* xtsc: $marker */")
-            appendBinding(declaration.binding, indent, externalKeyword)
+            appendBinding(declaration.binding, indent, external)
             val typeParams = typeParameterText(declaration.typeParameters, postfix = "> ")
             val parameters = declaration.parameters.joinToString(", ", transform = ::parameterText)
             val keyword = if (externalKeyword) "external fun" else "fun"
@@ -1660,7 +1693,7 @@ private fun StringBuilder.appendDeclaration(
             val supertypes =
                 if (supertypeTexts.isEmpty()) ""
                 else supertypeTexts.joinToString(", ", prefix = " : ")
-            appendBinding(declaration.binding, indent, externalKeyword)
+            appendBinding(declaration.binding, indent, external)
             val header = "${indent}public $abstractModifier${externalModifier}class " +
                 "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
             val hasBody = declaration.headerMarkers.isNotEmpty() ||
@@ -1717,7 +1750,7 @@ private fun StringBuilder.appendDeclaration(
             }
         }
         is ExternalEnum -> {
-            appendBinding(declaration.binding, indent, externalKeyword)
+            appendBinding(declaration.binding, indent, external)
             val keyword =
                 if (externalKeyword) "sealed external interface" else "sealed interface"
             val header = "${indent}public $keyword ${kotlinIdentifier(declaration.name)}"

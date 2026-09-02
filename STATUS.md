@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,103 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,113 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -95,7 +95,10 @@ externals 207/0; (CHK.79) queued. **(EXT.20), 17,091 → 17,103 / 0 / 3:** an `e
 target never vanishes and declaration merging renders per tsgo's measured surface (class +
 interface + namespace → one class with companion and nested types; `@types/node`'s
 `EventEmitter`/`Stream`/`Module`/`Stats` are classes now, 0 metadata errors, 0 vanished
-targets); externals 219/0; the one-generation-per-module design is (EXT.21).
+targets); externals 219/0; the one-generation-per-module design is (EXT.21). **(EXT.18), 17,103 → 17,113 / 0 / 3:**
+collisions Kotlin refuses rename under wiring (`AjaxErrorValue`/`FooFn` bound by `@JsName`,
+measured against Kotlin/JS): rxjs 9 → 0 skips, `@types/node` 48 → 0; the probe now JS-compiles
+the real output and found 23 pre-existing superclass-call errors ((EXT.22)); externals 229/0.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

@@ -1733,15 +1733,31 @@ export { zipWith } from './internal/operators/zipWith';
     fun `the three mechanisms are visible - the value skip, the collapsed overloads, the narrowed var`() {
         val result = generateRxjsExtras()
         val rendered = result.kotlin
-        // (2) The companion value is a loud skip and the TYPE survives, in
-        // every file that carries the idiom.
+        // (2) (EXT.18) The companion value RENAMES under the wiring — `<Name>Value`
+        // bound to `<Name>` by `@JsName` — and the TYPE survives under its
+        // name, in every file that carries the idiom; the two ajax errors
+        // live under the `rxjs/ajax` entry, so their internal-path marker
+        // follows the rename marker. No value keeps the colliding name.
         val ajaxError = "public external interface AjaxError {\n" in rendered
-        val ajaxErrorValue = "/* xtsc: skipped value AjaxError shares its name with the type AjaxError - module wiring is a later rung */\n" in rendered
-        val ajaxTimeoutValue = "/* xtsc: skipped value AjaxTimeoutError shares its name with the type AjaxTimeoutError - module wiring is a later rung */\n" in rendered
-        val timeoutValue = "/* xtsc: skipped value TimeoutError shares its name with the type TimeoutError - module wiring is a later rung */\n" in rendered
-        val rangeValue = "/* xtsc: skipped value ArgumentOutOfRangeError shares its name with the type ArgumentOutOfRangeError - module wiring is a later rung */\n" in rendered
-        val emptyValue = "/* xtsc: skipped value EmptyError shares its name with the type EmptyError - module wiring is a later rung */\n" in rendered
-        val noValueAjaxError = "public external val AjaxError" !in rendered
+        val ajaxErrorValue = "/* xtsc: value AjaxError renamed AjaxErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */\n" +
+            "/* xtsc: value AjaxError is not exported by the package entry - an internal path a consumer cannot bind */\n" +
+            "@JsName(\"AjaxError\")\n" +
+            "public external val AjaxErrorValue: AjaxErrorCtor\n" in rendered
+        val ajaxTimeoutValue = "/* xtsc: value AjaxTimeoutError renamed AjaxTimeoutErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */\n" +
+            "/* xtsc: value AjaxTimeoutError is not exported by the package entry - an internal path a consumer cannot bind */\n" +
+            "@JsName(\"AjaxTimeoutError\")\n" +
+            "public external val AjaxTimeoutErrorValue: AjaxTimeoutErrorCtor\n" in rendered
+        val timeoutValue = "/* xtsc: value TimeoutError renamed TimeoutErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */\n" +
+            "@JsName(\"TimeoutError\")\n" +
+            "public external val TimeoutErrorValue: TimeoutErrorCtor\n" in rendered
+        val rangeValue = "/* xtsc: value ArgumentOutOfRangeError renamed ArgumentOutOfRangeErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */\n" +
+            "@JsName(\"ArgumentOutOfRangeError\")\n" +
+            "public external val ArgumentOutOfRangeErrorValue: ArgumentOutOfRangeErrorCtor\n" in rendered
+        val emptyValue = "/* xtsc: value EmptyError renamed EmptyErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */\n" +
+            "@JsName(\"EmptyError\")\n" +
+            "public external val EmptyErrorValue: EmptyErrorCtor\n" in rendered
+        val noValueAjaxError = "public external val AjaxError:" !in rendered
+        val noValueSkips = "shares its name with the type" !in rendered
         // (1) `first`'s six overloads are four Kotlin signatures. (EXT.12):
         // the `null`-predicate first overload (three markers: a default not
         // carried, the `null` parameter, the return) is one overload with the
@@ -1804,18 +1820,20 @@ export { zipWith } from './internal/operators/zipWith';
         // is exported by the `rxjs/operators` entry, not by `rxjs`, so both
         // its surviving overloads are internal paths here while the `zip`
         // OBSERVABLE (`observable/zip`) binds under its own name; the ajax
-        // errors live under the `rxjs/ajax` entry the same way. Eight
-        // internal paths in all, no `@JsName` (rxjs renames nothing).
+        // errors live under the `rxjs/ajax` entry the same way. Ten
+        // internal paths in all — the eight of (EXT.16) plus the two
+        // renamed ajax values — and (EXT.18) exactly the five renames'
+        // `@JsName`s: rxjs re-exports nothing under another name.
         val header = rendered.startsWith("@file:JsModule(\"rxjs\")\n\n")
         val operatorZipInternal = "/* xtsc: function zip is not exported by the package entry - an internal path a consumer cannot bind */\npublic external fun <T, A, R> zip(otherInputsAndProject: Any? /* xtsc: unmapped [any] */, project: Any? /* xtsc: unmapped (...values: Cons<T, A>) => any */): OperatorFunction<T, R>\n" in rendered
         val observableZipBound = "/* xtsc: constraint on A: readonly unknown[] not carried */\npublic external fun <A> zip(sources: Any? /* xtsc: unmapped [any] */): Observable<A>\n" in rendered
-        val internalPaths = Regex("not exported by the package entry").findAll(rendered).count() == 8
-        val noJsName = "@JsName" !in rendered
+        val internalPaths = Regex("not exported by the package entry").findAll(rendered).count() == 10
+        val fiveJsNames = Regex("^@JsName\\(", RegexOption.MULTILINE).findAll(rendered).count() == 5
         assert(header)
         assert(operatorZipInternal)
         assert(observableZipBound)
         assert(internalPaths)
-        assert(noJsName)
+        assert(fiveJsNames)
         assert(ajaxError)
         assert(ajaxErrorValue)
         assert(ajaxTimeoutValue)
@@ -1823,6 +1841,7 @@ export { zipWith } from './internal/operators/zipWith';
         assert(rangeValue)
         assert(emptyValue)
         assert(noValueAjaxError)
+        assert(noValueSkips)
         assert(first)
         assert(ofValue)
         assert(ofCollapsed)

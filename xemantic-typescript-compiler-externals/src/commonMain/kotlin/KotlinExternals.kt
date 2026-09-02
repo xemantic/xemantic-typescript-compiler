@@ -805,6 +805,30 @@ private class ExternalsCollector(
      * signature) stays a marker at its own position and is not merged.
      * Across files nothing merges (a module file is its own scope); a
      * second interface block of one name is still the loud skip.
+     *
+     * (EXT.18) THE RENAME — under a [ModuleWiring], the two (EXT.11c)
+     * collisions render instead of skipping: a VALUE sharing a type's or a
+     * namespace object's name is `<Name>Value`, a FUNCTION whose signature
+     * is a same-named class's constructor is `<Name>Fn`, each bound to its
+     * JavaScript name by `@JsName` ([Rename] states the scheme). Measured
+     * against Kotlin/JS 2.4.10 (`KotlinExternalsJsGateTest`): `@JsName
+     * ("AjaxError") external val AjaxErrorValue` beside `external interface
+     * AjaxError` compiles, and so do the alias, enum, class-constructor
+     * (`@JsName("Foo") fun FooFn` beside `class Foo` and its other
+     * overloads) and object (`@JsName("path") val pathValue` beside `object
+     * path`) forms, at the top level and inside an `external object`; the
+     * gate variant carries the new name and no annotation. A value and a
+     * type of one name are NOT a TypeScript merge (a `const` merges with
+     * nothing — the two live in different meaning spaces), so the pair
+     * never enters [mergeGroupFirst]; the value is renamed and the type is
+     * untouched. The suffixed name must be FREE in the scope — every name
+     * the scope declares, of any kind, is checked — or the loud skip stays,
+     * naming the taken suffix. Without a wiring the skips stay as they were:
+     * a rename with no `@JsName` would silently change what the consumer
+     * binds. A root declaration's binding is what its [Reach] says (a
+     * re-export under another name is that name; the `export =` target is
+     * the module object, no `@JsName`); a nested object's member binds its
+     * own TypeScript name.
      */
     fun finish(): List<ExternalDeclaration> {
         val inheritance = Inheritance(freeze(root))
@@ -872,6 +896,9 @@ private class ExternalsCollector(
         val seenTypeNames = HashMap<String, String?>()
         val seenValueNames = HashMap<String, String?>()
         val typeDeclarations = HashMap<String, ExternalDeclaration>()
+        // (EXT.18) Every name the scope declares, of any kind — what a
+        // renamed declaration's suffixed name must not collide with.
+        val takenNames = HashSet<String>()
         entries.forEachIndexed { index, entry ->
             if (index in groups && index !in merged) return@forEachIndexed
             val (name, declaration) = when {
@@ -881,17 +908,75 @@ private class ExternalsCollector(
                 else -> null to entry
             }
             if (name != null && declaration is ExternalDeclaration) typeDeclarations.putIfAbsent(name, declaration)
+            name?.let(takenNames::add)
+            when (declaration) {
+                is ExternalTopLevelValue -> takenNames += declaration.name
+                is ExternalTopLevelFunction -> takenNames += declaration.name
+                else -> {}
+            }
         }
         return entries.mapIndexedNotNull { index, entry ->
             val group = groups[index]
             val reduced = when {
                 group != null && group.first() != index -> return@mapIndexedNotNull null
                 group != null -> reduceMerged(merged.getValue(index), group.map { entries[it] }, inheritance, seenTypeNames)
-                else -> reduceEntry(entry, index, scope, inheritance, functions, winners, seenTypeNames, seenValueNames, typeDeclarations)
+                else -> reduceEntry(
+                    entry, index, scope, inheritance, functions, winners, seenTypeNames, seenValueNames,
+                    typeDeclarations, takenNames,
+                )
             }
-            if (plan == null || scope.path.isNotEmpty()) reduced
-            else wired(group?.let { g -> bindingEntry(g.map { entries[it] }, reduced) } ?: entry, reduced, plan)
+            when {
+                plan == null -> reduced
+                scope.path.isEmpty() -> wired(group?.let { g -> bindingEntry(g.map { entries[it] }, reduced) } ?: entry, reduced, plan)
+                else -> nestedBinding(reduced)
+            }
         }
+    }
+
+    /**
+     * (EXT.18) The binding of a NESTED object's member: nothing, as (EXT.16)
+     * decided — the object's binding is the member's — except for a renamed
+     * one, which spells its TypeScript name through `@JsName` and says why.
+     */
+    private fun nestedBinding(reduced: ExternalDeclaration): ExternalDeclaration {
+        val rename = renameOf(reduced) ?: return reduced
+        val kind = if (reduced is ExternalTopLevelFunction) "function" else "value"
+        return withBinding(reduced, JsBinding(rename.from, listOf(renameMarker(kind, rename, kotlinNameOf(reduced), bound = true))))
+    }
+
+    /** (EXT.18) The rename a reduced declaration carries, or null. */
+    private fun renameOf(declaration: ExternalDeclaration): Rename? = when (declaration) {
+        is ExternalTopLevelValue -> declaration.rename
+        is ExternalTopLevelFunction -> declaration.rename
+        else -> null
+    }
+
+    private fun kotlinNameOf(declaration: ExternalDeclaration): String = when (declaration) {
+        is ExternalTopLevelValue -> declaration.name
+        is ExternalTopLevelFunction -> declaration.name
+        else -> ""
+    }
+
+    /** (EXT.18) The loud record above a renamed declaration; [bound] says whether a `@JsName` follows it. */
+    private fun renameMarker(kind: String, rename: Rename, name: String, bound: Boolean): String =
+        "$kind ${rename.from} renamed $name - ${rename.reason}" + if (bound) "; bound by @JsName" else ""
+
+    /**
+     * (EXT.18) The Kotlin-legal name a colliding declaration renders under
+     * — [original] with [suffix] — when a wiring is present and the name is
+     * free in the scope; null keeps the loud skip. [seen] is the value names
+     * taken so far (a second value of one name), [taken] every name the
+     * scope declares.
+     */
+    private fun renamedName(
+        original: String,
+        suffix: String,
+        taken: Set<String>,
+        seen: Map<String, String?>,
+    ): String? {
+        if (plan == null) return null
+        val candidate = original + suffix
+        return candidate.takeIf { it !in taken && !seen.containsKey(it) }
     }
 
     /**
@@ -979,11 +1064,21 @@ private class ExternalsCollector(
         val statics = mutableListOf<ExternalMember>()
         val nested = mutableListOf<ExternalDeclaration>()
         for (declaration in namespace?.let(declarationsOf).orEmpty()) {
-            when (declaration) {
-                is ExternalTopLevelFunction -> statics += ExternalFunction(
+            // (EXT.18) A member the namespace scope RENAMED binds its
+            // TypeScript name through `@JsName`, which a companion member
+            // does not carry here — the collision it was renamed for is
+            // between the namespace's own declarations; loud, never a
+            // silently rebound companion member.
+            val rename = renameOf(declaration)
+            when {
+                rename != null -> statics += SkippedMember(
+                    "${if (declaration is ExternalTopLevelFunction) "function" else "value"} ${rename.from} of the merged " +
+                        "namespace $name - ${rename.reason}, and a companion member carries no @JsName"
+                )
+                declaration is ExternalTopLevelFunction -> statics += ExternalFunction(
                     declaration.name, declaration.typeParameters, declaration.markers, declaration.parameters, declaration.returnType,
                 )
-                is ExternalTopLevelValue -> statics += ExternalProperty(declaration.name, declaration.type, declaration.readOnly)
+                declaration is ExternalTopLevelValue -> statics += ExternalProperty(declaration.name, declaration.type, declaration.readOnly)
                 else -> nested += declaration
             }
         }
@@ -1093,6 +1188,8 @@ private class ExternalsCollector(
         seenTypeNames: MutableMap<String, String?>,
         seenValueNames: MutableMap<String, String?>,
         typeDeclarations: Map<String, ExternalDeclaration>,
+        /** (EXT.18) Every name the scope declares — a rename's suffixed name must be free. */
+        takenNames: Set<String>,
     ): ExternalDeclaration =
         when (entry) {
             is ScopeBuilder -> {
@@ -1116,11 +1213,32 @@ private class ExternalsCollector(
                     when {
                         winner != index -> SkippedDeclaration(overloadCollapseDescription(functions[winner]!!))
                         collidingType != null &&
-                            signature in constructorSignatures(collidingType, inheritance, scope.path) ->
-                            SkippedDeclaration(
-                                "function ${declaration.name} shares its signature with the constructor of " +
-                                    "${declaration.name} - module wiring is a later rung"
-                            )
+                            signature in constructorSignatures(collidingType, inheritance, scope.path) -> {
+                            // (EXT.18) `<Name>Fn`, bound to `<Name>` — the
+                            // class keeps the name its constructor spells.
+                            val renamed = renamedName(declaration.name, "Fn", takenNames, emptyMap())
+                            when {
+                                renamed != null -> ExternalTopLevelFunction(
+                                    name = renamed,
+                                    typeParameters = declaration.typeParameters,
+                                    markers = declaration.markers,
+                                    parameters = declaration.parameters,
+                                    returnType = declaration.returnType,
+                                    rename = Rename(
+                                        declaration.name,
+                                        "its signature is the constructor of ${declaration.name}",
+                                    ),
+                                )
+                                plan == null -> SkippedDeclaration(
+                                    "function ${declaration.name} shares its signature with the constructor of " +
+                                        "${declaration.name} - module wiring is a later rung"
+                                )
+                                else -> SkippedDeclaration(
+                                    "function ${declaration.name} shares its signature with the constructor of " +
+                                        "${declaration.name} and ${declaration.name}Fn is taken too - no Kotlin name to rename it to"
+                                )
+                            }
+                        }
                         else -> declaration
                     }
                 }
@@ -1136,14 +1254,35 @@ private class ExternalsCollector(
                 is ExternalTypeAlias -> typeNameOnce(entry, declaration.name, seenTypeNames)
                 is ExternalTopLevelValue -> when (val colliding = typeDeclarations[declaration.name]) {
                     null -> typeNameOnce(entry, declaration.name, seenValueNames)
-                    is ExternalObject -> SkippedDeclaration(
-                        "value ${declaration.name} shares its name with the namespace object " +
-                            "${declaration.name} - module wiring is a later rung"
-                    )
-                    else -> SkippedDeclaration(
-                        "value ${declaration.name} shares its name with the type ${declaration.name}" +
-                            " - module wiring is a later rung"
-                    )
+                    else -> {
+                        // (EXT.18) `<Name>Value`, bound to `<Name>` — the type
+                        // or object keeps the name every other declaration spells.
+                        val kind = if (colliding is ExternalObject) "namespace object" else "type"
+                        val renamed = renamedName(declaration.name, "Value", takenNames, seenValueNames)
+                        when {
+                            renamed != null -> {
+                                seenValueNames[renamed] = entry.fileName
+                                ExternalTopLevelValue(
+                                    name = renamed,
+                                    type = declaration.type,
+                                    readOnly = declaration.readOnly,
+                                    rename = Rename(
+                                        declaration.name,
+                                        "Kotlin cannot hold a value and " +
+                                            (if (colliding is ExternalObject) "an object" else "a type") + " of one name",
+                                    ),
+                                )
+                            }
+                            plan == null -> SkippedDeclaration(
+                                "value ${declaration.name} shares its name with the $kind ${declaration.name}" +
+                                    " - module wiring is a later rung"
+                            )
+                            else -> SkippedDeclaration(
+                                "value ${declaration.name} shares its name with the $kind ${declaration.name}" +
+                                    " and ${declaration.name}Value is taken too - no Kotlin name to rename it to"
+                            )
+                        }
+                    }
                 }
                 is SkippedDeclaration, is ExternalMarker, is ExternalObject -> declaration
             }
@@ -1171,6 +1310,14 @@ private class ExternalsCollector(
      *
      * A skipped or collapsed declaration, a type and a marker carry no
      * binding; a nested object's members inherit the object's.
+     *
+     * (EXT.18) A RENAMED declaration's reach is asked under its TypeScript
+     * name, and its binding is what that reach says with the Kotlin name
+     * out of the picture: the first exported name (its own, or another
+     * under a re-export), the TypeScript name where the reach is qualified,
+     * via a header or unreachable (the honest JavaScript spelling, whatever
+     * the file a consumer ends up binding it in), and nothing for the
+     * `export =` module object. The rename marker comes first.
      */
     private fun wired(entry: Entry, reduced: ExternalDeclaration, plan: ExportPlan): ExternalDeclaration {
         val (node, name, kind) = when (reduced) {
@@ -1186,27 +1333,34 @@ private class ExternalsCollector(
             else -> return reduced
         }
         if (node == null) return reduced
+        val rename = renameOf(reduced)
+        val tsName = rename?.from ?: name
         val markers = mutableListOf<String>()
         var jsName: String? = null
-        when (val reach = plan.reachOf(node, name)) {
+        when (val reach = plan.reachOf(node, tsName)) {
             is Reach.Names -> {
                 val first = reach.names.first()
-                if (first != name || kotlinIdentifier(name) != name) jsName = first
+                if (rename != null || first != tsName || kotlinIdentifier(tsName) != tsName) jsName = first
                 if (reach.names.size > 1) {
-                    markers += "$kind $name is also exported as ${reach.names.drop(1).joinToString(", ")} - " +
+                    markers += "$kind $tsName is also exported as ${reach.names.drop(1).joinToString(", ")} - " +
                         "one @JsName per declaration, bound as $first"
                 }
             }
-            is Reach.Qualified ->
-                markers += "$kind $name is exported only as ${reach.paths.joinToString(", ")} - " +
+            is Reach.Qualified -> {
+                if (rename != null) jsName = tsName
+                markers += "$kind $tsName is exported only as ${reach.paths.joinToString(", ")} - " +
                     "a nested export needs @file:JsQualifier in a file of its own"
+            }
             is Reach.ModuleObject ->
-                markers += "export = $name - $name is the module object itself: bind it as " +
+                markers += "export = $tsName - $tsName is the module object itself: bind it as " +
                     "@JsModule(\"${plan.moduleName}\") external $kind $name in a file of its own, no @JsName"
-            is Reach.ViaHeader -> {}
-            is Reach.Unreachable ->
-                markers += "$kind $name is not exported by the package entry - an internal path a consumer cannot bind"
+            is Reach.ViaHeader -> if (rename != null) jsName = tsName
+            is Reach.Unreachable -> {
+                if (rename != null) jsName = tsName
+                markers += "$kind $tsName is not exported by the package entry - an internal path a consumer cannot bind"
+            }
         }
+        if (rename != null) markers.add(0, renameMarker(kind, rename, name, bound = jsName != null))
         if (jsName == null && markers.isEmpty()) return reduced
         return withBinding(reduced, JsBinding(jsName, markers))
     }

@@ -627,6 +627,389 @@ class KotlinExternalsWiringTest {
         assert(wiredRendered == wiredExpected)
     }
 
+    // ---- (EXT.18) renaming through @JsName ----------------------------------
+
+    @Test
+    fun `a value sharing a type's name renames to Value and binds its JavaScript name whatever the order`() {
+        // (EXT.11c) skipped these loudly; under a wiring the value keeps
+        // its binding through `@JsName` and the type keeps its name — an
+        // interface, an alias and an enum alike, and the value declared
+        // BEFORE its type too. A second file the entry never reaches
+        // renames all the same: the internal-path marker follows and the
+        // `@JsName` spells the honest JavaScript name.
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                export interface AjaxError { status: number; }
+                export interface AjaxErrorCtor { new (status: number): AjaxError; }
+                export declare const AjaxError: AjaxErrorCtor;
+                export declare const Later: number;
+                export interface Later { id: string; }
+                export type Name = string;
+                export declare const Name: number;
+                export declare enum K { A }
+                export declare let K: number;
+            """,
+            "/pkg/internal.d.ts" to """
+                export interface Hidden { h: number; }
+                export declare const Hidden: number;
+            """,
+        )
+        val expected = """
+            @file:JsModule("pkg")
+
+            public external interface AjaxError {
+                public var status: Double
+            }
+
+            public external interface AjaxErrorCtor {
+                /* xtsc: skipped construct signature */
+            }
+
+            /* xtsc: value AjaxError renamed AjaxErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("AjaxError")
+            public external val AjaxErrorValue: AjaxErrorCtor
+
+            /* xtsc: value Later renamed LaterValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("Later")
+            public external val LaterValue: Double
+
+            public external interface Later {
+                public var id: String
+            }
+
+            public typealias Name = String
+
+            /* xtsc: value Name renamed NameValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("Name")
+            public external val NameValue: Double
+
+            public sealed external interface K {
+                public companion object {
+                    public val A: K
+                }
+            }
+
+            /* xtsc: value K renamed KValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("K")
+            public external var KValue: Double
+
+            public external interface Hidden {
+                public var h: Double
+            }
+
+            /* xtsc: value Hidden renamed HiddenValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            /* xtsc: value Hidden is not exported by the package entry - an internal path a consumer cannot bind */
+            @JsName("Hidden")
+            public external val HiddenValue: Double
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `the gate variant carries the renamed name and no annotation`() {
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                export interface AjaxError { status: number; }
+                export declare const AjaxError: number;
+            """,
+        )
+        val expected = """
+            public interface AjaxError {
+                public var status: Double
+            }
+
+            public val AjaxErrorValue: Double = null!!
+        """.trimIndent() + "\n"
+        val gate = result.compileCheckSource
+        assert(gate == expected)
+    }
+
+    @Test
+    fun `a function spelling a class's constructor renames to Fn while its other overloads keep the name`() {
+        // The class keeps the name its constructor spells; only the
+        // signature that IS the constructor moves, so `Box(1.0)` still
+        // resolves to the function and `Box("s")` to the constructor, as
+        // the JavaScript `Box("s")` and `new Box("s")` are two calls too.
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                export declare class Box { constructor(v: string); }
+                export declare class Empty { }
+                export type Name = string;
+                export declare function Box(v: string): number;
+                export declare function Box(v: number): number;
+                export declare function Empty(): number;
+                export declare function Name(): string;
+                export declare function Name(x: string): string;
+            """,
+        )
+        val expected = """
+            @file:JsModule("pkg")
+
+            public open external class Box(v: String)
+
+            public open external class Empty
+
+            public typealias Name = String
+
+            /* xtsc: function Box renamed BoxFn - its signature is the constructor of Box; bound by @JsName */
+            @JsName("Box")
+            public external fun BoxFn(v: String): Double
+
+            public external fun Box(v: Double): Double
+
+            /* xtsc: function Empty renamed EmptyFn - its signature is the constructor of Empty; bound by @JsName */
+            @JsName("Empty")
+            public external fun EmptyFn(): Double
+
+            /* xtsc: function Name renamed NameFn - its signature is the constructor of Name; bound by @JsName */
+            @JsName("Name")
+            public external fun NameFn(): String
+
+            public external fun Name(x: String): String
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a value sharing a namespace object's name renames to Value - the path shape`() {
+        // `@types/node`'s `path.d.ts`: a namespace and a value of one name in
+        // a module block, both the module's `export =`. The object keeps the
+        // name every type in it is spelled through; the value binds `path`.
+        val result = generateWired(
+            ModuleWiring("path", "/pkg/index.d.ts"),
+            "/pkg/index.d.ts" to """
+                declare module "path" {
+                    namespace path { interface P { sep: string; } }
+                    const path: path.P;
+                    export = path;
+                }
+            """,
+        )
+        val expected = """
+            @file:JsModule("path")
+
+            /* xtsc: module "path" - the package's own module; members rendered at top level */
+
+            public external object path {
+                public interface P {
+                    public var sep: String
+                }
+            }
+
+            /* xtsc: value path renamed pathValue - Kotlin cannot hold a value and an object of one name; bound by @JsName */
+            @JsName("path")
+            public external val pathValue: path.P
+
+            /* xtsc: skipped export = path inside module "path" - outside the package entry's surface */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a renamed value that is the export equals module object carries no JsName`() {
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                declare namespace outer { namespace path { interface P { sep: string; } } }
+                declare const path: outer.path.P;
+                export = path;
+            """,
+        )
+        // The object `path` sits in the flattened `outer`; the value `path`
+        // is the module object — bound as the whole module in a file of its
+        // own, where a `@JsName` would be wrong — so the rename marker says
+        // nothing of a binding and the module-object marker follows.
+        val expected = """
+            @file:JsModule("pkg")
+
+            /* xtsc: namespace outer - not exported by the package entry; members rendered at top level */
+
+            public external object path {
+                public interface P {
+                    public var sep: String
+                }
+            }
+
+            /* xtsc: value path renamed pathValue - Kotlin cannot hold a value and an object of one name */
+            /* xtsc: export = path - path is the module object itself: bind it as @JsModule("pkg") external value pathValue in a file of its own, no @JsName */
+            public external val pathValue: path.P
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a renamed value re-exported under another name binds that name - the rename changes only the Kotlin identifier`() {
+        val result = generateWired(
+            pkg,
+            "/pkg/errors.d.ts" to """
+                export interface Ctor { x: number; }
+                export interface AjaxError { status: number; }
+                export declare const AjaxError: Ctor;
+            """,
+            "/pkg/index.d.ts" to """
+                export { AjaxError as AjaxErr } from './errors';
+            """,
+        )
+        val expected = """
+            @file:JsModule("pkg")
+
+            public external interface Ctor {
+                public var x: Double
+            }
+
+            public external interface AjaxError {
+                public var status: Double
+            }
+
+            /* xtsc: value AjaxError renamed AjaxErrorValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("AjaxErr")
+            public external val AjaxErrorValue: Ctor
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a taken suffix keeps the loud skip naming it`() {
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                export interface AjaxError { status: number; }
+                export declare const AjaxError: number;
+                export declare const AjaxErrorValue: string;
+                export declare class Foo { constructor(x: string); }
+                export declare function Foo(x: string): number;
+                export interface FooFn { f: number; }
+            """,
+        )
+        val expected = """
+            @file:JsModule("pkg")
+
+            public external interface AjaxError {
+                public var status: Double
+            }
+
+            /* xtsc: skipped value AjaxError shares its name with the type AjaxError and AjaxErrorValue is taken too - no Kotlin name to rename it to */
+
+            public external val AjaxErrorValue: String
+
+            public open external class Foo(x: String)
+
+            /* xtsc: skipped function Foo shares its signature with the constructor of Foo and FooFn is taken too - no Kotlin name to rename it to */
+
+            public external interface FooFn {
+                public var f: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a renamed member of a nested namespace object carries its JsName`() {
+        // Measured: Kotlin/JS accepts `@JsName` on an `external object`
+        // member (`KotlinExternalsJsGateTest`). A function beside the
+        // interface is legal and stays.
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                declare module "pkg" {
+                    namespace ns { interface X { s: string; } const X: number; function X(): void; }
+                }
+            """,
+        )
+        val expected = """
+            @file:JsModule("pkg")
+
+            /* xtsc: module "pkg" - the package's own module; members rendered at top level */
+
+            public external object ns {
+                public interface X {
+                    public var s: String
+                }
+
+                /* xtsc: value X renamed XValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+                @JsName("X")
+                public val XValue: Double
+
+                public fun X(): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a value and a type of one name are not a merge - the type merges with its namespace and the value renames`() {
+        val result = generateWired(
+            pkg,
+            "/pkg/index.d.ts" to """
+                declare module "pkg" {
+                    interface A { a: number; }
+                    namespace A { export const z: number; }
+                    const A: number;
+                    class C { }
+                    namespace C { export interface I { i: number; } export const I: number; }
+                }
+            """,
+        )
+        // `A`'s interface and namespace are one declaration; the `const A`
+        // is neither and renames. Inside `C`'s merged namespace the `const
+        // I` collides with the nested `interface I` and would land in the
+        // companion, which carries no `@JsName` here: a loud skip.
+        val expected = """
+            @file:JsModule("pkg")
+
+            /* xtsc: module "pkg" - the package's own module; members rendered at top level */
+
+            public external interface A {
+                /* xtsc: merged with the namespace A of this scope - TypeScript declaration merging */
+                public var a: Double
+                public companion object {
+                    public val z: Double
+                }
+            }
+
+            /* xtsc: value A renamed AValue - Kotlin cannot hold a value and a type of one name; bound by @JsName */
+            @JsName("A")
+            public external val AValue: Double
+
+            public open external class C {
+                /* xtsc: merged with the namespace C of this scope - TypeScript declaration merging */
+                public companion object {
+                    /* xtsc: skipped value I of the merged namespace C - Kotlin cannot hold a value and a type of one name, and a companion member carries no @JsName */
+                }
+
+                public interface I {
+                    public var i: Double
+                }
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
     @Test
     fun `an entry that is not among the files is a caller error`() {
         val failure = runCatching {

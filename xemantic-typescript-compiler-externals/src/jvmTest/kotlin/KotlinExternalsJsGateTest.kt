@@ -543,6 +543,85 @@ class KotlinExternalsJsGateTest {
         assert(funBesideClassCompanion)
     }
 
+    /**
+     * (EXT.18) The measurements behind the RENAME rule — a value or a
+     * function Kotlin cannot hold under its JavaScript name beside a type of
+     * that name renders under a Kotlin-legal name and binds the original
+     * through `@JsName`.
+     */
+    @Test
+    fun `measured - a renamed value or function bound by JsName beside the type of its JavaScript name compiles`() {
+        val stdlib = JsStdlib.locate() ?: return
+        val valueBesideInterfaceRefused = accepts(
+            stdlib,
+            """
+            public external interface AjaxError { public var status: Double }
+            public external interface AjaxErrorCtor { public var x: Double }
+            public external val AjaxError: AjaxErrorCtor
+            """,
+        )
+        val renamedValueBesideInterface = accepts(
+            stdlib,
+            """
+            public external interface AjaxError { public var status: Double }
+            public external interface AjaxErrorCtor { public var x: Double }
+            @JsName("AjaxError")
+            public external val AjaxErrorValue: AjaxErrorCtor
+            public external fun useIt(e: AjaxError): AjaxErrorCtor
+            """,
+        )
+        val renamedValueBesideAlias = accepts(
+            stdlib,
+            """
+            public typealias Name = String
+            @JsName("Name")
+            public external val NameValue: Double
+            """,
+        )
+        val renamedValueBesideEnum = accepts(
+            stdlib,
+            """
+            public sealed external interface K { public companion object { public val A: K } }
+            @JsName("K")
+            public external var KValue: Double
+            """,
+        )
+        val renamedFunctionBesideClass = accepts(
+            stdlib,
+            """
+            public open external class Foo(x: String)
+            public external fun Foo(x: Double): Double
+            @JsName("Foo")
+            public external fun FooFn(x: String): Double
+            """,
+        )
+        val renamedValueBesideObject = accepts(
+            stdlib,
+            """
+            public external object path { public interface P { public var sep: String } }
+            @JsName("path")
+            public external val pathValue: path.P
+            """,
+        )
+        val renamedNestedMember = accepts(
+            stdlib,
+            """
+            public external object ns {
+                public interface X { public var s: String }
+                @JsName("X")
+                public val XValue: Double
+            }
+            """,
+        )
+        assert(!valueBesideInterfaceRefused)
+        assert(renamedValueBesideInterface)
+        assert(renamedValueBesideAlias)
+        assert(renamedValueBesideEnum)
+        assert(renamedFunctionBesideClass)
+        assert(renamedValueBesideObject)
+        assert(renamedNestedMember)
+    }
+
     @Test
     fun `the merged export equals class of an events-shaped module compiles as Kotlin JS`() {
         // (EXT.20) The real output of the `events.d.ts` shape — the class
