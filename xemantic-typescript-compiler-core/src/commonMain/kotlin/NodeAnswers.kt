@@ -64,7 +64,16 @@ object NodeAnswers {
     const val SYMBOLS: Int = 1
     const val CALLS: Int = 2
     const val CONTEXTUAL: Int = 4
-    const val ALL: Int = SYMBOLS or CALLS or CONTEXTUAL
+
+    /**
+     * (INV.1b) The TYPE channel itself. With this bit CLEAR the store records
+     * `anyType` at every expression WITHOUT resolving it — the arm that prices
+     * the per-node ambient RECONSTRUCTION alone, so `types − reconstruction`
+     * is the resolution. A store recorded that way answers nothing true and
+     * [Checker.typeOracle] refuses it like every other partial mask.
+     */
+    const val TYPES: Int = 8
+    const val ALL: Int = TYPES or SYMBOLS or CALLS or CONTEXTUAL
 
     /**
      * Counters, for the CLI report line. Added to ONCE per checker after its

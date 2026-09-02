@@ -519,11 +519,15 @@ class TypeOracleTest {
         val file = Parser(main, mainName).parse()
         val checker = Checker(
             options, listOf(Binder(options).bind(file)), isMultiFileSource = true,
-            recordNodeAnswers = true, nodeAnswerChannels = 0,
+            recordNodeAnswers = true, nodeAnswerChannels = NodeAnswers.TYPES,
         )
         val store = checker.nodeAnswers[mainName]
         assert(store != null)
         assert(store.recorded > 20)
+        // …and the types are REAL under the TYPES bit: the body local reads `number`.
+        val bodyLocal: Identifier = nodeAt(store.sourceFile, offsetOf(main, "collide", 2))
+        val recordedType = store.typeAt(bodyLocal)
+        assert(recordedType === numberType)
         assert(store.symbolsRecorded == 0)
         assert(store.callsRecorded == 0)
         assert(store.contextualRecorded == 0)
@@ -534,6 +538,24 @@ class TypeOracleTest {
             refused = true
         }
         assert(refused)
+        // (INV.1b) the reconstruction-only arm records a placeholder at every expression
+        val placeholder = Checker(
+            options, listOf(Binder(options).bind(Parser(main, mainName).parse())), isMultiFileSource = true,
+            recordNodeAnswers = true, nodeAnswerChannels = 0,
+        )
+        val placeholderStore = placeholder.nodeAnswers[mainName]
+        assert(placeholderStore != null)
+        assert(placeholderStore.recorded == store.recorded)
+        assert(placeholder.nodeAnswerComputations == placeholderStore.recorded)
+        val stack = ArrayList<Node>()
+        stack.add(placeholderStore.sourceFile)
+        var notPlaceholder = 0
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is Expression && placeholderStore.typeAt(node) !== anyType) notPlaceholder++
+            forEachChild(node) { child -> stack.add(child) }
+        }
+        assert(notPlaceholder == 0)
         // and the shipped default is every channel
         assert(NodeAnswers.channels == NodeAnswers.ALL)
         val full = Checker(

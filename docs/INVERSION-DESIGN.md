@@ -537,11 +537,22 @@ likewise), which took the whole store from +60 % to +21 %. Off the store the hel
 old computation verbatim, so the capture and definition paths are unchanged (their
 measurement pins were re-run).
 
-**What this says about (INV.1b).** The companions' price is RESOLUTION, not
-reconstruction: the ambient reconstruction is paid once per node whatever is recorded, and
-three more channels on top of it cost +6 % of the compiler profile once the re-typing was
-removed. Stage 1's own 1.34 µs per expression is still unsplit; (INV.1b) stays open for
-that half only, and the channel seam is its instrument.
+**(INV.1b), ANSWERED the same day with the seam's fourth bit.** `NodeAnswers.TYPES` clear
+records `anyType` at every expression without resolving — the RECONSTRUCTION-only arm
+(`BenchMain … nodeAnswers:reconstruction`), and `types − reconstruction` is the resolution.
+Compiler profile, rotated: **reconstruction 5,290 / 5,266 ms against a plain check at
+5,270 — the reconstruction is FREE** (the eight-field save/restore, `withCtaFrameLocals`
+and the store write together are below the band); **types 6,158 / 6,121 — the whole 1.45 µs
+per expression is `typeCaptureReportedType`, i.e. `getTypeOfExpression` itself.** Round
+737's "most expressions are typed already" does not hold for this population: there is no
+per-node memo, so every expression the store asks about is TYPED AGAIN, which is also the
+mechanism behind the object-literal finding above. many-small-2400-dom, single draws inside
+that shape's ±40 % band ((INC.52)): types 3,738, reconstruction 3,541, off 3,326 — an
+indicative ~0.9 µs each, not a measurement. **What the answer decides for Stage 3-4:** a
+NodeLinks-style `resolvedType` memo would make the type channel's recording nearly free, by
+serving the second typing of every expression the walk already typed once — but round
+716's law stands until that memo is priced on the compiler's OWN re-typings, not on the
+store's; the store's population merely shows the factor is real at 1 : 1.
 
 **Receipts, flag OFF** (the § 10 contract's control): full suite 16,860 / 0 / 3 (+22 pins);
 `cost_gate.py` exit 0, all 20 counters +0.00 %; `huge_methods.py --fail-over 0` clean; no

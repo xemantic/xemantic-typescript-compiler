@@ -25,6 +25,9 @@ Design record: `docs/INVERSION-DESIGN.md` § 9b. **(EXT.10)**: references to a g
 alias render by NAME where the resolved body has no Kotlin spelling (`Handler<string>` →
 `Handler<String>`; function-typed aliases now emitted and named) under identity evidence
 through the new lens member `typeReferenceSymbol`; Dukat pin kept; 7 pins, externals 80/0.
+**(INV.1b)** answered: a reconstruction-only arm (`nodeAnswers:reconstruction`) reads the
+plain check (5,290 / 5,266 vs 5,270 ms) while types-only reads 6,158 / 6,121 — the whole
+1.45 µs per expression is `getTypeOfExpression` re-typing what the walk already typed.
 
 **(P18.7) — TWO OWNER DECISIONS LAND: THE POM LICENCE AND STAGE 1 OF THE INVERSION, 16,828 → 16,838 / 0 / 3 (2026-09-02).**
 (LIC.2) the root POM's `licenses` block now declares `AGPL-3.0-only WITH

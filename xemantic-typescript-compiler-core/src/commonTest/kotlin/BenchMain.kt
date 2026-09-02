@@ -991,18 +991,23 @@ fun main(args: Array<String>) {
     val nodeAnswers: Boolean = when (nodeAnswersArg) {
         null, "", "off", "false" -> false
         "nodeanswers", "on", "true" -> true
-        "nodeanswers:types", "nodeanswers:symbols", "nodeanswers:calls", "nodeanswers:contextual" -> true
+        "nodeanswers:types", "nodeanswers:symbols", "nodeanswers:calls", "nodeanswers:contextual",
+        "nodeanswers:reconstruction" -> true
         else -> error(
-            "usage: 8th argument must be `nodeAnswers`, `nodeAnswers:<types|symbols|calls|contextual>`, " +
+            "usage: 8th argument must be `nodeAnswers`, " +
+                "`nodeAnswers:<types|symbols|calls|contextual|reconstruction>`, " +
                 "`off`, or omitted — not '$nodeAnswersArg'",
         )
     }
     NodeAnswers.enabled = nodeAnswers
+    // Every single-channel arm keeps the TYPE (it is the store's whole point);
+    // `reconstruction` is the one arm that drops it, recording a placeholder.
     NodeAnswers.channels = when (nodeAnswersArg) {
-        "nodeanswers:types" -> 0
-        "nodeanswers:symbols" -> NodeAnswers.SYMBOLS
-        "nodeanswers:calls" -> NodeAnswers.CALLS
-        "nodeanswers:contextual" -> NodeAnswers.CONTEXTUAL
+        "nodeanswers:types" -> NodeAnswers.TYPES
+        "nodeanswers:symbols" -> NodeAnswers.TYPES or NodeAnswers.SYMBOLS
+        "nodeanswers:calls" -> NodeAnswers.TYPES or NodeAnswers.CALLS
+        "nodeanswers:contextual" -> NodeAnswers.TYPES or NodeAnswers.CONTEXTUAL
+        "nodeanswers:reconstruction" -> 0
         else -> NodeAnswers.ALL
     }
     println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers,"shareBind":$shareBind,"nodeAnswers":$nodeAnswers}""")

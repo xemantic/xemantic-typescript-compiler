@@ -6079,7 +6079,10 @@ class Checker(
         val saved = currentCheckFileName
         currentCheckFileName = spineFileName
         try {
-            store.record(node, typeCaptureReportedType(node))
+            // (INV.1b) the reconstruction-only arm records a placeholder and resolves nothing.
+            val recorded =
+                if (nodeAnswerChannels and NodeAnswers.TYPES != 0) typeCaptureReportedType(node) else anyType
+            store.record(node, recorded)
             // (INV.2) The three companion channels, from the SAME visit under the
             // SAME ambient, behind the type's own first-wins gate above — so a node
             // holds all four or none. Each is the capture's own rule generalised:

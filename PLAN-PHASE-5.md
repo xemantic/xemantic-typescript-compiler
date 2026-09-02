@@ -86,6 +86,16 @@ control, a skipped alias, an omitted defaulted argument, a lib alias (`Record<st
 number>`), and a cross-file import beside a same-named non-exported local. Externals
 80/0, both library gates green. Suite 16,860 → 16,867 / 0 / 3.
 
+**(INV.1b) ANSWERED, one bit later.** `NodeAnswers.TYPES` clear records `anyType` without
+resolving — the reconstruction-only arm. Compiler profile, rotated: reconstruction
+**5,290 / 5,266 ms = the plain check (5,270)**, types **6,158 / 6,121** — the reconstruction
+(eight-field save/restore + `withCtaFrameLocals` + the store write) is FREE and the whole
+1.45 µs per expression is `getTypeOfExpression` typing again what the walk had typed: there
+is no per-node memo, so the store's population is a 1 : 1 re-typing, which is also the
+mechanism behind the key-leg finding. many-small single draws (types 3,738 / reconstruction
+3,541 / off 3,326) are inside that shape's ±40 % band and indicative only. Pinned in
+`TypeOracleTest` (placeholder at every expression; real types under the TYPES bit).
+
 **What did NOT happen.** `Project` does not hand out an oracle — queued as (INV.2b) with the
 invalidation question stated; EXT/LSP were not migrated (served today). The
 `leaf_owner_profile.py --inclusive-of` filter printed the same table for every method name
@@ -989,7 +999,13 @@ Owner decisions 2026-09-02:
   interned mappers, forbidden hot-path shapes, the shrinkage metric) is
   `docs/INVERSION-DESIGN.md` § 10.
 
-- [ ] **(INV.1b) PRICE THE PER-EXPRESSION RECORDING COST OF THE (INV.1) STORE — IS THE
+- [x] **(INV.1b) DONE 2026-09-02 — THE 1.34 µs IS THE RESOLUTION, AND THE RECONSTRUCTION IS FREE.**
+  `NodeAnswers.TYPES` clear records a placeholder without resolving (`BenchMain …
+  nodeAnswers:reconstruction`); compiler profile rotated: reconstruction 5,290 / 5,266 ms =
+  the plain check (5,270), types 6,158 / 6,121 — every microsecond is
+  `getTypeOfExpression` re-typing an expression the walk typed once already (no per-node
+  memo). Pinned: the placeholder arm records `anyType` at every expression and computes
+  nothing else; the TYPES arm records real types. Record: design § 9b. ORIGINAL ITEM: PRICE THE PER-EXPRESSION RECORDING COST OF THE (INV.1) STORE — IS THE
   1.3-1.5 µs THE RESOLUTION OR THE AMBIENT RECONSTRUCTION?** Measured 2026-09-02 (design
   § 9a): flag ON is +14.9 % warm on the compiler profile and +10.3 % on many-small-2400-dom,
   1.34 / 1.49 µs per recorded expression, i.e. per-NODE. Two candidates, both already priced
