@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 16,995 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,017 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -58,7 +58,12 @@ bodies (worked around syntactically, queued (CHK.76)); externals 145/0. **(CHK.7
 tsc's `checkAmbientInitializer` at both emitters (a `readonly` property or unannotated const
 with a literal/enum initializer is legal; a non-literal one is TS1254 even on a property) —
 73-row matrix byte-identical to tsgo, 48 pins, cost_gate +0.00%, `typescript.d.ts` now 0
-diagnostics.
+diagnostics. **(CHK.76), 16,995 → 17,017 / 0 / 3:** names inside a `declare namespace` body now
+resolve as tsc resolves them at every non-walk resolver (a nested namespace was invisible to the
+ambient stack, so a sibling class typed `any` and a shadowed `Node` resolved to the root's);
+`lookupInEnclosingNamespaces` at seven sites, 22 pins (8 red by ablation), 8-profile grid
+unchanged, cost_gate within tolerance; two corpus regressions found by the suite and closed (a
+namespace class value on the static-access emitter, a pin walker double-emitting).
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

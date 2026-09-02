@@ -89,6 +89,45 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.76) LANDED — a namespace body's names resolve as tsc resolves them, at every resolver.**
+Not B83.5: the binder binds every namespace-body member into the namespace symbol's `exports`
+and INV.2(c) aliases them, so the WALK-scoped `spineScopeLookup` was right all along; every
+non-walk resolver consulted the enclosing namespace only through the ambient
+`inferenceNamespaceStack`, whose three frame families resolve a namespace's NAME via
+`currentFileLocals ?: globals` — where a NESTED namespace never is — so the stack held only the
+outermost namespace: `lookupTypeSymbolInInferenceNamespace` answered the ROOT's `Node`, and
+`resolveTypeNameToSymbol`/`resolveQualifiedName`/`resolveHeritageBaseSymbol`/`getTypeOfIdentifier`
+fell to `lookupPerFileForNode` (`any`). One position-derived helper, `lookupInEnclosingNamespaces`
+(tsc's `resolveName` `ModuleDeclaration` arm: walk `parent`, read each Identifier-named
+`ModuleDeclaration`'s `exports` innermost-first, dotted segments via `symbol.parent`), consulted
+before the per-file/global consult at seven sites including the lens's `typeReferenceSymbol`;
+it answers null outside namespace bodies, so nothing else moves. Reproduced on small `.d.ts` and
+`.ts` fixtures against tsgo 7.0.2 with write probes (a `.d.ts` initializer is VACUOUS for our
+compiler — no TS2322 on an ambient initializer — so `.d.ts` shapes were read through a consumer
+file): a bare sibling class → `any` (silent where tsgo reports TS2322), a shadowed `Node` → the
+root's (a FALSE TS2353 on the nested literal and silence on the wrong one), `M.D` → `any`,
+`heritageBaseSymbol` null, `LE.Q` → `any`; all now match tsgo in code and position (form-only
+residue: we print `LE.Q` where tsgo prints `N.LE`). **Built and REVERTED**: consulting
+string-named `declare module "<spec>"` bodies added 43 rows on services/server/harness (a module
+AUGMENTATION's partial interface is a separate symbol here, INV.3(c)(iv)); Identifier-named only.
+**The full suite then reddened THREE baselines, two mechanisms, both fixed:** a class VALUE inside
+a namespace now resolved at `getTypeOfIdentifier` to its INSTANCE type (CHK.73), so
+`tryEmitStaticAccessTs2576`'s `identSymbol == null` branch reported `C.y` as a missing instance
+member (`statics.ts` 2 → 13 rows, `genericRecursiveImplicitConstructorErrors3` +1) — the
+namespace class now joins the `identSymbol` chain exactly as a file-level class does (`C.y`
+silent, `C.nope` → `typeof C`, tsgo's answers); and `qualify.ts` DOUBLE-emitted five rows because
+`K1.I3` now resolved in `checkSpine` AND the corpus-unique `checkQualify` pin walker re-added its
+verbatim rows (its TS2740 says `25 more` where the engine's says `28 more`, the embedded-lib
+difference) — the pin, the SECOND pass, now REPLACES the row at its `(file, code, start)`. 18 + 4
+pins (8 RED by ablation against HEAD, controls green; `--passTiming`'s `emissions by pass` table
+was the instrument, as CLAUDE.md prescribes); `*Namespace*`/`*Module*` 832/0; cost_gate exit 0
+(`mapped.hits` +1.22 %, `globals.lookups` −0.49 %, `typeOfExpr.calls` −0.22 % — a resolver that
+now ANSWERS inside namespace bodies, within tolerance, not rebaselined); huge_methods 0 over; the
+8-profile grid `added=0 removed=0` on all eight; externals 145/0 with `typescript.d.ts` still
+compiling — its census moved 1,659 → 1,750 markers because every `resolved to any` marker is
+GONE and the newly-resolved bodies land as honest `unmapped` shapes; retiring the generator's
+syntactic arm where the lens now answers is (EXT.14). Suite 16,995 → 17,017 / 0 / 3.
+
 **(CHK.75) LANDED — the ambient-initializer rule is tsc's, at both emitters.** Read from
 `grammarchecks.go:1942` (`checkAmbientInitializer`): for a `readonly` property or a const-like
 variable (`const`/`using`/`await using`) WITHOUT a type annotation the initializer must be a
@@ -1368,7 +1407,7 @@ Owner decisions 2026-09-02:
   pin all literal kinds plus the negative control (a non-literal initializer still reports,
   a non-readonly literal still reports), corpus + cost_gate.
 
-- [ ] **(CHK.76) NAME RESOLUTION INSIDE A `declare namespace` BODY IS WRONG IN BOTH
+- [x] **(CHK.76) DONE 2026-09-02 ((P18.9) note; `lookupInEnclosingNamespaces` consulted at seven resolver sites, 8 pins red by ablation, 8-profile grid unchanged, cost_gate within tolerance, suite 17,017/0/3; the generator's syntactic arm is now redundant where the lens answers — retiring it is (EXT.14)) — NAME RESOLUTION INSIDE A `declare namespace` BODY IS WRONG IN BOTH
   DIRECTIONS, MEASURED BY (EXT.13) ON `typescript.d.ts` (2026-09-02): inside a nested namespace
   a bare `Project` resolves to `any` (a sibling declared in the same namespace), a bare `Node`
   resolves to the ROOT's `Node` where the namespace declares its own, `server.protocol.Request`
@@ -1381,6 +1420,17 @@ Owner decisions 2026-09-02:
   reproduce each with a `.d.ts` fixture against tsgo, fix at the resolver, then retire the
   generator's third syntactic arm where the lens answers. Instrument: the `typescript.d.ts`
   probe's heritage-skip count (7 after the workaround; hundreds through the lens alone).
+
+- [ ] **(EXT.14) RETIRE THE GENERATOR'S THIRD SYNTACTIC ARM WHERE THE LENS NOW ANSWERS
+  ((CHK.76) landed).** `writtenTarget` resolves qualified names and names written inside a
+  namespace body over the generator's own per-file tree; with (CHK.76) the checker resolves
+  them too. Measure first (the `typescript.d.ts` probe: heritage skips 9, unmapped 847, the
+  compile at 0 errors) with the arm consulted AFTER the lens, then with it removed; keep it
+  only for what the lens still cannot answer (a `declare module "m"` body — deliberately
+  skipped by the resolver — and whatever the probe shows), and say which in the KDoc. The
+  ladder's four gates are the receipt. Also the residue (CHK.76) recorded: a `.d.ts` namespace
+  body reports no TS2304 for an undeclared name (tsgo does) — the unresolved-names family's
+  declaration-file gate, separate item if it survives a reproduction.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

@@ -295,6 +295,73 @@ class Checker(
         return null
     }
 
+    /**
+     * (CHK.76) tsc's `resolveName` `ModuleDeclaration` arm: [name] looked up in the
+     * `exports` of every NAMESPACE enclosing [node], innermost first — the `M` of
+     * `namespace N { namespace M { <node> } }`, then `N` — each read from the owning
+     * file's binder table ([nodeSymbolOf]; for a dotted `namespace A.B.C` the binder
+     * records the innermost segment and its `parent` chain recovers `B` and `A`).
+     * The binder binds EVERY member of a namespace body into the namespace symbol's
+     * `exports` (exported or not), so that one table is what tsc's `locals` +
+     * `exports` pair would answer.
+     *
+     * A parent-chain walk, deliberately NOT an ambient stack: the checker's three
+     * frame families resolved a nested namespace's NAME through the file's locals
+     * and `globals` (where a nested namespace never is) and so pushed only the
+     * OUTERMOST one, which is how a bare `Node` inside `ts.server.protocol` read
+     * as the root's `Node` and a bare `Project` beside its own declaration as
+     * `any` — and a post-hoc reader (the [CheckedLens], the TypeOracle) has no
+     * stack at all. tsc walks `location.parent` for exactly this.
+     *
+     * Only an IDENTIFIER-named declaration is a scope here. A `declare module
+     * "<spec>"` body is skipped on purpose: when the specifier names a program
+     * file the block is an AUGMENTATION whose partial `interface Node` is a
+     * SEPARATE symbol in this checker (the merge is modelled by
+     * [lookupPerFileForNode]'s INV.3(c)(iv) rule, which resolves the bare name in
+     * the AUGMENTED module's own scope) — consulting the block's own exports
+     * answered the partial interface and cost 43 rows on the services profile
+     * (`'../compiler/types.js.SourceFile' is not assignable to 'SourceFile'`).
+     * `declare global` is skipped for the same reason (its members merge into
+     * `globals`, (CHK.50)). A genuine ambient module's bare names keep resolving
+     * exactly as before this consult existed.
+     *
+     * [meaning] is the tsc meaning mask a hit must satisfy — [SymbolFlags.Type]
+     * for a type reference, [SymbolFlags.Value] for an expression identifier,
+     * [QUALIFIED_LEFT_MEANING] for the left of a dotted name; an ALIAS declared in
+     * the body (`import X = …`) is answered for every meaning, as tsc answers it
+     * and lets the caller resolve it. Null where no enclosing namespace declares
+     * the name — callers keep their per-file / global consult below, so a name
+     * declared in NO namespace resolves exactly as before, and a name declared in
+     * an enclosing one now SHADOWS the outer declaration (the B83.5 family's
+     * second failure mode, which is a wrong answer and not a miss).
+     */
+    private fun lookupInEnclosingNamespaces(node: Node, name: String, meaning: SymbolFlags): Symbol? {
+        var cur: Node? = (node as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return null
+            if (cur is ModuleDeclaration) {
+                var segments = 0
+                var nameExpr: Expression = cur.name
+                while (nameExpr is PropertyAccessExpression) {
+                    segments++
+                    nameExpr = nameExpr.expression
+                }
+                if (nameExpr is Identifier && nameExpr.text != "global") {
+                    var sym = nodeSymbolOf(cur)
+                    var seg = 0
+                    while (sym != null && seg++ <= segments && sym.flags.hasAny(SymbolFlags.Module)) {
+                        val hit = sym.exports?.get(name)
+                        if (hit != null && (hit.flags.hasAny(meaning) || hit.flags.hasAny(SymbolFlags.Alias))) return hit
+                        sym = sym.parent
+                    }
+                }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
     // -----------------------------------------------------------------------
     // Per-checker mutable state — grouped for parallel-checking readiness.
     // When N Checker instances run concurrently (Phase 4 item 9c), each
@@ -5721,7 +5788,11 @@ class Checker(
             // ((API.3b): scope chain, then the per-file tables), alias followed.
             override fun typeReferenceSymbol(node: TypeReference): Symbol? {
                 val id = node.typeName as? Identifier ?: return null
-                val resolved = spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return null
+                // (CHK.76) the walk-scoped chain answers only while the walk is inside the
+                // body; the position-derived consult answers at rest as well.
+                val resolved = spineScopeLookup(id.text)
+                    ?: lookupInEnclosingNamespaces(id, id.text, SymbolFlags.Type)
+                    ?: lookupPerFileForNode(id, id.text) ?: return null
                 return typeCaptureFollowImportAlias(resolved)
             }
 
@@ -9723,6 +9794,13 @@ class Checker(
     /** M5 (round 481): memo for [findSymbolInAllNamespaceScopes] (Tier 2 — see its
      *  KDoc). Declared before `init` per the init-order gotcha. */
     private val namespaceScopeSymbolCache = HashMap<String, Symbol?>()
+
+    /**
+     * (CHK.76) tsc's `SymbolFlags.Namespace` meaning for the LEFT of a dotted name
+     * (`M` of `M.D`, `LE` of `LE.Q`): a namespace or an enum — plus an alias, which
+     * [lookupInEnclosingNamespaces] answers for every meaning anyway.
+     */
+    private val QUALIFIED_LEFT_MEANING: SymbolFlags = SymbolFlags.Module or SymbolFlags.Enum
 
     /** M3.4 (round 409): memo for [resolveExportedSymbolThroughStars] (keyed
      *  "<barrelFile> <name>" → target Symbol, a stored null means "not found /
@@ -17751,7 +17829,10 @@ class Checker(
             // INV.3(d): node-keyed root (was the merged `globals`) — the retired
             // merge no longer holds module-file namespaces; an own/imported root
             // resolves per-file to the same declaring-file instance.
-            is Identifier -> lookupPerFileForNode(l, l.text)
+            // (CHK.76) `M.D` written inside `namespace N { namespace M {…} }`: the
+            // root is a member of an enclosing namespace before it is a file-level name.
+            is Identifier -> lookupInEnclosingNamespaces(l, l.text, QUALIFIED_LEFT_MEANING)
+                ?: lookupPerFileForNode(l, l.text)
             is QualifiedName -> resolveQualifiedName(l)
             else -> null
         }
@@ -17777,7 +17858,9 @@ class Checker(
     private fun resolveQualifiedValueSymbol(expr: PropertyAccessExpression): Symbol? {
         val left = when (val l = expr.expression) {
             // INV.3(d): node-keyed fallback (was the merged `globals`).
-            is Identifier -> currentFileLocals?.get(l.text) ?: lookupPerFileForNode(l, l.text)
+            is Identifier -> currentFileLocals?.get(l.text)
+                ?: lookupInEnclosingNamespaces(l, l.text, QUALIFIED_LEFT_MEANING)
+                ?: lookupPerFileForNode(l, l.text)
             is PropertyAccessExpression -> resolveQualifiedValueSymbol(l)
             else -> null
         } ?: return null
@@ -112711,7 +112794,8 @@ interface DataView {
      */
     private fun typeRefQualifiedLeftIsEnum(qn: QualifiedName): Boolean {
         val left = qn.left as? Identifier ?: return false
-        val sym = lookupPerFileForNode(left, left.text) ?: return false
+        val sym = lookupInEnclosingNamespaces(left, left.text, QUALIFIED_LEFT_MEANING)
+            ?: lookupPerFileForNode(left, left.text) ?: return false
         return resolveAlias(sym).flags.hasAny(SymbolFlags.Enum)
     }
 
@@ -112755,8 +112839,14 @@ interface DataView {
         // names declared inside an enclosing `namespace M { interface I {} }`
         // context — required for lazy variable type-resolution where the var's
         // annotation references a namespace-local interface.
-        val symbol = (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
-            ?: resolveTypeNameToSymbol(node.typeName)
+        // (CHK.76) the position-derived consult FIRST: the ambient stack knew only the
+        // outermost namespace (the frame families resolved a nested one's name through
+        // file locals / `globals`), so inside `N.M` a bare `Node` read as `N.Node`.
+        val symbol = (node.typeName as? Identifier)?.let {
+            lookupInEnclosingNamespaces(it, it.text, SymbolFlags.Type)
+                ?: lookupTypeSymbolInInferenceNamespace(it.text)
+        }
+            ?: resolveTypeNameToSymbol(node.typeName, enclosingNamespacesDone = true)
             // Round 444 last-segment fallback for a QUALIFIED name whose
             // resolution failed (`NS.Base` through an unresolvable namespace
             // alias). QualifiedName-ONLY since INV.3(c)(iv): for an Identifier
@@ -114356,7 +114446,11 @@ interface DataView {
             // shape spelled `Zromise` did NOT, on the parent binary. Both work
             // through the per-file probe, which degrades to `globals` for every
             // name with no per-file meaning.
-            is Identifier -> lookupPerFileForNode(expr, expr.text)
+            // (CHK.76) `interface X extends Node` inside `declare namespace ts`: the
+            // base is the namespace's own `Node`, never the lib's — 509 of
+            // `typescript.d.ts`'s clauses answered null (or the DOM's) here.
+            is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, SymbolFlags.Type or SymbolFlags.Value)
+                ?: lookupPerFileForNode(expr, expr.text)
             is PropertyAccessExpression -> {
                 val parent = resolveHeritageBaseSymbol(expr.expression) ?: return null
                 val resolvedParent = resolveAlias(parent)
@@ -117861,6 +117955,15 @@ interface DataView {
                 // namespace's `exports` table. Required for patterns like:
                 //   namespace M { var x: T = ...; export var y = x; }
                 // where `x` is bound in `M.exports` (not in file locals/globals).
+                // (CHK.76) the position-derived twin of the stack consult below — it
+                // sees every enclosing namespace where the stack saw the outermost,
+                // and it answers with no stack installed at all (a `declare
+                // namespace` body's `LE.Q`, read by the ambient-initializer walk and
+                // by the lens, typed `any`). Same acceptance rule as the stack's.
+                lookupInEnclosingNamespaces(id, id.text, SymbolFlags.Value)?.let { sym ->
+                    val type = getTypeOfSymbol(sym)
+                    if (type !== anyType && type !== errorType) return type
+                }
                 lookupInInferenceNamespace(id.text)?.let { return it }
                 // Then look up symbol in globals. INV.3(c)(iii) phase 3 (round
                 // 507b): node-keyed — a name with no per-file meaning types as
@@ -149383,10 +149486,22 @@ interface DataView {
         // the inner binding's own. Measured — without it, a `catch (error)` whose
         // member is reached through an `in` guard went SILENT on knip for a reason
         // that has nothing to do with shadowing.
+        // (CHK.76) a CLASS declared in an ENCLOSING namespace (`namespace M { export
+        // class C { static y } … C.y }`) takes the same identSymbol route a
+        // file-level class takes: the type gates answer a missing member as
+        // `typeof C` and a STATIC member falls through to the instance table, where
+        // statics live too. Before the position-derived consult the receiver typed
+        // `any` and bailed; with it, the `else` branch below read the INSTANCE type
+        // and reported TS2576 at every `C.y` (statics.ts, 2 -> 13 rows). Gated to a
+        // pure class (a class merged with a namespace keeps the pre-consult bail).
+        val nsClassSymbol: Symbol? = if (enclosingNsShadow == null && perFileIdentSymbol == null && nsEnumShadow == null) {
+            lookupInEnclosingNamespaces(objectExpr, identName, SymbolFlags.Class)
+                ?.takeIf { !it.flags.hasAny(SymbolFlags.Module) }
+        } else null
         val lexicalShadow = enclosingNsShadow == null && perFileIdentSymbol != null &&
             cmamLexicalValueShadow(objectExpr, identName)
         val identSymbol = if (lexicalShadow) null
-        else enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
+        else enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow ?: nsClassSymbol
 
         CpaSections.atR(CpaSections.R_OT_IDENT)
         val otT0 = CpaSections.t()
@@ -149543,7 +149658,13 @@ interface DataView {
                 cmamDestructuredReceiverType(objectExpr)
                     ?: cmamUnannotatedLocalReceiverType(objectExpr, propName, shadowed = true)
                     ?: return null
-            } else getTypeOfIdentifier(objectExpr)
+            } else {
+                // (CHK.76) the residue [nsClassSymbol] refuses (a namespace-merged
+                // class in an enclosing namespace): keep the pre-consult bail rather
+                // than read the class VALUE as its instance type here.
+                if (!lexicalShadow && lookupInEnclosingNamespaces(objectExpr, identName, SymbolFlags.Class) != null) return null
+                getTypeOfIdentifier(objectExpr)
+            }
             if (rawType === anyType || rawType === errorType || rawType === unknownType) {
                 // (NARROW.2)(c) round 852 — the function-local twin of the bail above
                 // (a catch parameter, an un-annotated local). See
@@ -169477,7 +169598,7 @@ interface DataView {
      * — for an Identifier that fallback was byte-redundant pre-flip and would
      * silently re-leak post-flip.
      */
-    private fun resolveTypeNameToSymbol(node: Node): Symbol? {
+    private fun resolveTypeNameToSymbol(node: Node, enclosingNamespacesDone: Boolean = false): Symbol? {
         return when (node) {
             is Identifier -> {
                 // (REL.1)(c) step 4: a function-body-scoped `enum` is invisible to the
@@ -169485,6 +169606,12 @@ interface DataView {
                 // resolves there to the WRONG (outer) symbol — so the position-aware
                 // lexical consult must come FIRST, not as a miss-fallback.
                 lexicalTypeSymbolForNode(node, node.text)?.let { return it }
+                // (CHK.76) a name declared in an enclosing namespace body — innermost
+                // first, BEFORE the per-file consult, which would otherwise hand a
+                // nested namespace's `Node` to the root's (or a lib's) `Node`.
+                if (!enclosingNamespacesDone) {
+                    lookupInEnclosingNamespaces(node, node.text, SymbolFlags.Type)?.let { return it }
+                }
                 val sym = lookupPerFileForNode(node, node.text)
                 // INV.3(d): the import-shadowed-by-value-local TYPE/VALUE split —
                 // `import { SourceMapSource }` (a type) + a same-named local
@@ -178273,6 +178400,13 @@ interface DataView {
             }
             fun emit(id: Identifier, code: Int, msg: String, chain: List<String> = emptyList(), related: List<Diagnostic> = emptyList()) {
                 val (l, c) = getLineAndCharacterOfPosition(source, id.pos)
+                // (CHK.76) the engine resolves `K1.I3` inside the nested namespace now
+                // and emits the same code at the same position from `checkSpine`, which
+                // runs FIRST; this pass runs second, so the dedupe lives here (a dedupe
+                // in the first pass cannot see the second). The pin's row REPLACES the
+                // engine's: its text is the baseline's verbatim (the engine's TS2740
+                // counts the real lib's `Array` members, "28 more" against "25 more").
+                diagnostics.removeAll { it.fileName == fileName && it.code == code && it.start == id.pos }
                 diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
                     fileName = fileName, line = l, character = c, start = id.pos, length = id.text.length,
                     messageChain = chain, relatedInformation = related))
