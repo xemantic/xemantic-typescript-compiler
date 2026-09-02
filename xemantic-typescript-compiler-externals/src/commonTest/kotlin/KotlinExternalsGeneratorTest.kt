@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -3715,6 +3716,242 @@ class KotlinExternalsGeneratorTest {
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         assert(rendered == expected)
+    }
+
+    // ---- (EXT.14) the lens is the resolver inside a namespace body --------
+    //
+    // (CHK.76) made the checker's name resolution position-derived, and the
+    // (EXT.13) namespace ladder — a syntactic resolver consulted BEFORE the
+    // lens for a qualified name or any name inside a namespace body — is
+    // retired as the resolver: every (EXT.13) pin above now resolves through
+    // the lens alone (measured: `typescript.d.ts` byte-identical). What
+    // survives is a written-name FALLBACK consulted after every lens leg,
+    // for the two shapes the lens still cannot answer; the pins below are
+    // those shapes, each read from the generator's own output, and the
+    // decision pin — a shape the per-file ladder could not answer at all.
+
+    @Test
+    fun `a qualified cross-file reference into a merged namespace resolves through the lens where the per-file ladder could not`() {
+        // `ts.server.A` written in b.d.ts names a.d.ts's declaration — the
+        // annotation is the LENS's answer (`resolveQualifiedName` reaches
+        // the merged root through the per-file consult); the heritage base
+        // is the FALLBACK's, program-wide (the lens's heritage resolver
+        // still stops at a nested ambient namespace's implicit export — the
+        // checker's half of (EXT.14)'s residue). The (EXT.13) ladder was
+        // per-file and answered null for both.
+        val result = generateKotlinExternals(
+            files = listOf(
+                SourceFileEntry(
+                    "/p/a.d.ts",
+                    """
+                    declare namespace ts {
+                        namespace server {
+                            interface A { a: number; }
+                        }
+                        interface R { r: number; }
+                    }
+                    """.trimIndent(),
+                ),
+                SourceFileEntry(
+                    "/p/b.d.ts",
+                    """
+                    declare namespace other {
+                        interface Use { a: ts.server.A; r: ts.R; }
+                        interface Der extends ts.server.A { }
+                    }
+                    """.trimIndent(),
+                ),
+            ),
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object server {
+                public interface A {
+                    public var a: Double
+                }
+            }
+
+            public external interface R {
+                public var r: Double
+            }
+
+            /* xtsc: namespace other - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Use {
+                public var a: server.A
+                public var r: R
+            }
+
+            public external interface Der : server.A {
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `inside a declare module body a bare name resolves through the written-name fallback`() {
+        // The checker's position-derived resolver skips a string-named module
+        // on purpose (its block may be an augmentation), so the lens types
+        // `Widget` beside its own declaration as `any` and answers no heritage
+        // base there — the residue (EXT.14) keeps the fallback for. `Cb`
+        // resolves through the lens's walk-scoped chain even here.
+        val result = generateDts(
+            """
+            declare module "widgets" {
+                export interface Widget { id: number; }
+                export interface Panel { w: Widget; ws: Widget[]; cb: Cb; }
+                export type Cb = () => void;
+                export class Base { x: number; }
+                export class Derived extends Base implements Widget { id: number; }
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: module "widgets" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Widget {
+                public var id: Double
+            }
+
+            public external interface Panel {
+                public var w: Widget
+                public var ws: Array<Widget>
+                public var cb: Cb
+            }
+
+            public typealias Cb = () -> Unit
+
+            public open external class Base {
+                public var x: Double
+            }
+
+            public open external class Derived : Base, Widget {
+                public override var id: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a qualified heritage base whose head is a type-only namespace in an enclosing scope resolves through the fallback`() {
+        // `typescript.d.ts:2679` — `interface InstallTypingHost extends
+        // JsTyping.TypingResolutionHost` inside `ts.server.typingsInstaller`:
+        // the one hunk the lens alone lost. `JsTyping` declares only
+        // interfaces (a type-only namespace), and the lens's heritage resolver
+        // asks `Type | Value` of a dotted base's head. The annotation beside
+        // it is the lens's own answer.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                namespace JsTyping {
+                    interface Host { r(): string; }
+                }
+                namespace server {
+                    namespace typingsInstaller {
+                        interface InstallTypingHost extends JsTyping.Host { q: number; }
+                        interface Other { h: JsTyping.Host; }
+                    }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object JsTyping {
+                public interface Host {
+                    public fun r(): String
+                }
+            }
+
+            public external object server {
+                public object typingsInstaller {
+                    public interface InstallTypingHost : JsTyping.Host {
+                        public var q: Double
+                    }
+
+                    public interface Other {
+                        public var h: JsTyping.Host
+                    }
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a qualified reference to an alias whose resolved body has no Kotlin spelling resolves through the fallback`() {
+        // `typeReferenceSymbol` refuses a qualified name by contract, so the
+        // (EXT.10) name rule and the nested-alias inlining cannot be reached
+        // through the lens for `ts.Cb` / `server.Gen<number>`; the fallback
+        // reaches both. The inlined body's `Node` is resolved at the BODY's
+        // position (`server.Node`) and spelled from the use's scope: bare
+        // inside `server`, `server.Node` from the root. `server.NP` maps
+        // through the lens (its resolved body is `string`).
+        val result = generateDts(
+            """
+            declare namespace ts {
+                type Cb = () => void;
+                interface Node { k: number; }
+                namespace server {
+                    type Gen<T> = (e: T, n: Node) => void;
+                    type NP = string;
+                    interface Node { nested: string; }
+                    interface Holder { cb: ts.Cb; g: Gen<string>; }
+                }
+                interface Root { g: server.Gen<number>; np: server.NP; }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public typealias Cb = () -> Unit
+
+            public external interface Node {
+                public var k: Double
+            }
+
+            public external object server {
+                /* xtsc: skipped type alias Gen inside namespace server - Kotlin aliases are top-level only */
+
+                /* xtsc: skipped type alias NP inside namespace server - Kotlin aliases are top-level only */
+
+                public interface Node {
+                    public var nested: String
+                }
+
+                public interface Holder {
+                    public var cb: Cb
+                    public var g: (String, Node) -> Unit
+                }
+            }
+
+            public external interface Root {
+                public var g: (Double, server.Node) -> Unit
+                public var np: String
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
     }
 
 }

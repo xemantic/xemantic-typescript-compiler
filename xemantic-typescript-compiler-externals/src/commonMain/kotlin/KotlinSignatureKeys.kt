@@ -121,7 +121,7 @@ internal sealed interface KotlinTypeText {
     val nullable: Boolean
 }
 
-/** A named type with its type arguments: `Observable<T>`, `String?`, a bare `T`. */
+/** A named type with its type arguments: `Observable<T>`, `String?`, a bare `T`, a dotted `server.Node` ((EXT.14)). */
 internal data class NamedTypeText(
     val name: String,
     val arguments: List<KotlinTypeText>,
@@ -192,8 +192,26 @@ private class TypeTextParser(private val text: String) {
         return items
     }
 
+    /**
+     * (EXT.14) A name, DOTTED where the generator spells a nested type from
+     * outside its object (`server.Node`, `server.protocol.Request` — each
+     * segment backticked on its own by [shortestSpelling]). A `.` followed
+     * by `(` is the receiver syntax of a function type and is left to
+     * [type]. Before this a dotted name did not parse at all, so every key
+     * over one fell to the textual form and a nested alias whose body spells
+     * a qualified type could not be substituted at its use.
+     */
     private fun identifier(): String {
         skipSpaces()
+        val name = StringBuilder(segment())
+        while (peek() == '.' && text.getOrNull(index + 1)?.let { it.isLetter() || it == '_' || it == '`' } == true) {
+            index++
+            name.append('.').append(segment())
+        }
+        return name.toString()
+    }
+
+    private fun segment(): String {
         if (consumeIf('`')) {
             val end = text.indexOf('`', index)
             check(end > index)

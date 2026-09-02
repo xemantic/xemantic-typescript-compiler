@@ -233,18 +233,16 @@ public fun generateKotlinExternals(
 private class Declared<N : Node>(
     val node: N,
     val path: List<String>,
-    val fileName: String,
-    /** Inside a namespace body (a flattened root's included) — the ladder's condition. */
-    val inNamespace: Boolean,
+    /** (EXT.14) Inside a `declare module "m"` body (at any depth) — the retained fallback's condition. */
+    val inAmbientModule: Boolean,
 )
 
-/** (EXT.9) One exported value declaration, its list's `const`-ness (→ `val`), its path and file. */
+/** (EXT.9) One exported value declaration, its list's `const`-ness (→ `val`) and its path. */
 private class ExportedValue(
     val node: VariableDeclaration,
     val readOnly: Boolean,
     val path: List<String>,
-    val fileName: String,
-    val inNamespace: Boolean,
+    val inAmbientModule: Boolean,
 )
 
 /**
@@ -281,9 +279,8 @@ private class NamespaceEntry(
     val bodyPath: List<String>,
     /** The loud skip of a namespace that is not generated at all, or null. */
     val skip: String?,
-    /** The identifier a flattened root is written as (`ts`), or null — what a qualified `ts.X` drops. */
+    /** The identifier a flattened root is written as (`ts`), or null. */
     val rootName: String?,
-    val fileName: String,
 )
 
 /**
@@ -347,7 +344,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                 topLevel = true,
                 exportContext = false,
                 ambient = sourceFile.fileName.endsWith(".d.ts"),
-                fileName = sourceFile.fileName,
+                inModule = false,
             )
         }
     }
@@ -358,32 +355,32 @@ private class Surface(sourceFiles: List<SourceFile>) {
         topLevel: Boolean,
         exportContext: Boolean,
         ambient: Boolean,
-        fileName: String,
+        inModule: Boolean,
     ) {
         fun exported(modifiers: Set<ModifierFlag>): Boolean =
             ModifierFlag.Export in modifiers || (!topLevel && exportContext)
         for (statement in statements) {
             when (statement) {
                 is InterfaceDeclaration ->
-                    if (exported(statement.modifiers)) interfaces += Declared(statement, path, fileName, !topLevel)
+                    if (exported(statement.modifiers)) interfaces += Declared(statement, path, inModule)
                 is ClassDeclaration ->
-                    if (exported(statement.modifiers)) classes += Declared(statement, path, fileName, !topLevel)
+                    if (exported(statement.modifiers)) classes += Declared(statement, path, inModule)
                 is EnumDeclaration ->
-                    if (exported(statement.modifiers)) enums += Declared(statement, path, fileName, !topLevel)
+                    if (exported(statement.modifiers)) enums += Declared(statement, path, inModule)
                 is TypeAliasDeclaration ->
-                    if (exported(statement.modifiers)) aliases += Declared(statement, path, fileName, !topLevel)
+                    if (exported(statement.modifiers)) aliases += Declared(statement, path, inModule)
                 is FunctionDeclaration ->
-                    if (exported(statement.modifiers)) functions += Declared(statement, path, fileName, !topLevel)
+                    if (exported(statement.modifiers)) functions += Declared(statement, path, inModule)
                 is VariableStatement ->
                     if (exported(statement.modifiers)) {
                         val readOnly = statement.declarationList.flags == SyntaxKind.ConstKeyword
                         for (declaration in statement.declarationList.declarations) {
-                            values += ExportedValue(declaration, readOnly, path, fileName, !topLevel)
+                            values += ExportedValue(declaration, readOnly, path, inModule)
                         }
                     }
                 is ImportEqualsDeclaration ->
                     if (ModifierFlag.Export in statement.modifiers) {
-                        importAliases += Declared(statement, path, fileName, !topLevel)
+                        importAliases += Declared(statement, path, inModule)
                     }
                 is ExportAssignment ->
                     if (path.isEmpty()) exportWiring += statement
@@ -392,7 +389,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                         (statement.moduleSpecifier != null ||
                             (statement.exportClause as? NamedExports)?.elements?.isNotEmpty() ?: true)
                     ) exportWiring += statement
-                is ModuleDeclaration -> scanNamespace(statement, path, topLevel, ambient, fileName)
+                is ModuleDeclaration -> scanNamespace(statement, path, topLevel, ambient, inModule)
                 else -> {}
             }
         }
@@ -403,7 +400,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
         path: List<String>,
         topLevel: Boolean,
         ambient: Boolean,
-        fileName: String,
+        inModule: Boolean,
     ) {
         val ambientHere = ambient || ModifierFlag.Declare in node.modifiers
         val block = node.body as? ModuleBlock
@@ -443,7 +440,6 @@ private class Surface(sourceFiles: List<SourceFile>) {
             bodyPath = bodyPath,
             skip = skip,
             rootName = rootName,
-            fileName = fileName,
         )
         if (skip == null && block != null) {
             val exportContext = block.statements.none { it is ExportDeclaration || it is ExportAssignment }
@@ -453,7 +449,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                 topLevel = false,
                 exportContext = exportContext,
                 ambient = ambientHere,
-                fileName = fileName,
+                inModule = inModule || name is StringLiteralNode,
             )
         }
     }
@@ -779,17 +775,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
     /** (EXT.11c) The Kotlin built-ins an alias body maps to that expose a default constructor. */
     private val kotlinClassesWithDefaultConstructor = setOf("String", "Double", "Boolean")
 
-    /** (EXT.13) What a written name resolves to on the surface's own tree — a type, or a nested alias. */
-    private sealed interface SurfaceType
-
     /** (EXT.13) One generated type the naming set may spell: its declaration node, path and name. */
-    private class Nameable(val node: Node, val path: List<String>, val name: String) : SurfaceType
-
-    /** (EXT.13) A type alias inside a nested namespace — never emitted, INLINED at each use. */
-    private class NestedAlias(val node: TypeAliasDeclaration, val path: List<String>, val fileName: String) : SurfaceType
-
-    /** (EXT.13) A root-scope alias — emitted when its body maps; a use names it by the (EXT.10) rule. */
-    private class RootAlias(val node: TypeAliasDeclaration) : SurfaceType
+    private class Nameable(val node: Node, val path: List<String>, val name: String)
 
     /**
      * (EXT.4) The NAMING set — the declarations a resolved type may be
@@ -799,6 +786,22 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
      * excluded: its declaration is refused (no runtime object), so a name
      * pointing at it would reference a type the generated module does not
      * declare. (EXT.13) Each carries its namespace path, the spelling's input.
+     *
+     * (EXT.14) The namespace LADDER of (EXT.13) — a third syntactic arm that
+     * resolved a qualified name, or ANY name written inside a namespace
+     * body, over the surface's own per-file tree BEFORE the checker was
+     * asked, because the lens was measured wrong there — is retired as the
+     * resolver: (CHK.76) made every non-walk resolver position-derived
+     * (`lookupInEnclosingNamespaces`, tsc's `resolveName` `ModuleDeclaration`
+     * arm). Measured on `typescript.d.ts` (11,448 lines): with the lens
+     * consulted FIRST and the ladder only on a miss, the output is byte for
+     * byte HEAD's (9,791 lines, 1,750 markers, 847 unmapped, 9 heritage
+     * skips, 0 compile errors); with the ladder REMOVED it differs by ONE
+     * hunk — `interface InstallTypingHost extends JsTyping.TypingResolutionHost`
+     * (line 2679) loses its supertype — and every hermetic namespace pin
+     * still holds. What survives is [writtenTarget], a program-wide
+     * fallback consulted only after every lens leg answered null, and only
+     * for the shapes the lens still cannot answer.
      */
     private val nameableDeclarations: List<Nameable> =
         surface.interfaces.map { Nameable(it.node, it.path, it.node.name.text) } +
@@ -806,150 +809,26 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             surface.enums.filterNot { ModifierFlag.Const in it.node.modifiers }
                 .map { Nameable(it.node, it.path, it.node.name.text) }
 
-    /**
-     * (EXT.13) THE NAMESPACE LADDER — the surface's own tree, per FILE, that
-     * a WRITTEN name is resolved against by TypeScript's lexical rule
-     * ([writtenTarget]): the innermost namespace scope first and outward to
-     * the file's top level, then down through a qualified name's segments.
-     *
-     * Why syntax, measured (the third syntactic arm of this collector, for
-     * the reason the first two exist): inside a NESTED namespace the checker
-     * resolves a bare `Project` declared beside it to `any`, a bare `Node`
-     * to the ROOT's `Node` where the namespace declares its own, and a
-     * qualified `server.protocol.Request` to a type failing the identity
-     * test — wrong in both the silent and the loud direction; and inside
-     * the ROOT namespace a bare HERITAGE base fails the checker's heritage
-     * resolver (509 of `typescript.d.ts`'s `extends Node`-shaped clauses
-     * were markers). So the ladder is consulted for a QUALIFIED name
-     * anywhere and for any name written INSIDE a namespace body — a
-     * flattened root's included — and for nothing else: at a file's top
-     * level a bare name keeps the checker, which sees imports the ladder
-     * cannot. What the ladder resolves is a
-     * declaration of the SAME file (namespace merging across files is not
-     * modelled; such a name falls to the checker), by the tree the pre-scan
-     * already trusts for WHICH declarations exist and WHERE.
-     *
-     * [surfaceTypes]: file → qualified name → the nameable type, or a nested
-     * alias (inlined at its use, [nestedAliasUse]); [surfaceNamespaces]:
-     * file → the qualified names of the nested objects; [flattenedRoots]:
-     * file → the identifiers of the flattened root namespaces, which a
-     * qualified `ts.X` drops before descending (the root has no object).
-     */
-    private val surfaceTypes: Map<String, Map<String, SurfaceType>> = run {
-        val byFile = HashMap<String, HashMap<String, SurfaceType>>()
-        fun put(fileName: String, qualified: String, type: SurfaceType) {
-            byFile.getOrPut(fileName) { HashMap() }.putIfAbsent(qualified, type)
-        }
-        for (d in surface.interfaces) put(d.fileName, qualifiedName(d.path, d.node.name.text), Nameable(d.node, d.path, d.node.name.text))
-        for (d in surface.classes) {
-            val name = d.node.name?.text ?: continue
-            put(d.fileName, qualifiedName(d.path, name), Nameable(d.node, d.path, name))
-        }
-        for (d in surface.enums) {
-            if (ModifierFlag.Const in d.node.modifiers) continue
-            put(d.fileName, qualifiedName(d.path, d.node.name.text), Nameable(d.node, d.path, d.node.name.text))
-        }
-        for (d in surface.aliases) {
-            val type = if (d.path.isEmpty()) RootAlias(d.node) else NestedAlias(d.node, d.path, d.fileName)
-            put(d.fileName, qualifiedName(d.path, d.node.name.text), type)
-        }
-        byFile
-    }
-
-    private val surfaceNamespaces: Map<String, Set<String>> = run {
-        val byFile = HashMap<String, HashSet<String>>()
-        for (entry in surface.namespaces) {
-            if (entry.skip != null) continue
-            for (depth in 1..entry.bodyPath.size) {
-                byFile.getOrPut(entry.fileName) { HashSet() }
-                    .add(qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]))
-            }
-        }
-        byFile
-    }
-
-    private val flattenedRoots: Map<String, Set<String>> = run {
-        val byFile = HashMap<String, HashSet<String>>()
-        for (entry in surface.namespaces) {
-            val root = entry.rootName ?: continue
-            byFile.getOrPut(entry.fileName) { HashSet() }.add(root)
-        }
-        byFile
-    }
-
-    /**
-     * (EXT.13) Whether the ladder is the resolver for a written name at
-     * [scope]: a qualified name anywhere, any name inside a nested namespace.
-     */
-    private fun ladderApplies(segments: List<String>, scope: TypeScope): Boolean =
-        segments.size > 1 || scope.inNamespace
-
-    /**
-     * (EXT.13) The surface declaration a written name denotes, by the ladder
-     * ([surfaceTypes]) — or null where the surface declares nothing by that
-     * route, which hands the name to the checker. A flattened root's own
-     * identifier at the head of a qualified name (`ts.server.X` from
-     * anywhere in its file) is dropped, because the root's members ARE the
-     * top level; a segment found as a namespace descends, a segment found
-     * as a type ends the walk, and a chain that breaks (a type followed by
-     * more segments, a missing member) answers null as Kotlin would.
-     */
-    private fun writtenTarget(segments: List<String>, scope: TypeScope): SurfaceType? {
-        val fileName = scope.fileName ?: return null
-        val types = surfaceTypes[fileName].orEmpty()
-        val namespaces = surfaceNamespaces[fileName].orEmpty()
-        var rest = segments
-        val path = scope.resolvePath
-        // A qualified `ts.X` names the ROOT's member: the walk starts at the
-        // root scope, never at the use's (a `ts.Node` inside `a` must not
-        // find `a.Node`).
-        var start = path.size
-        if (rest.size > 1 && rest[0] in flattenedRoots[fileName].orEmpty()) {
-            rest = rest.drop(1)
-            start = 0
-        }
-        for (k in start downTo 0) {
-            val prefix = path.take(k)
-            val head = qualifiedName(prefix, rest[0])
-            val isType = head in types
-            val isNamespace = head in namespaces
-            if (!isType && !isNamespace) continue
-            if (rest.size == 1) return types[head]
-            if (!isNamespace) return null
-            var current = prefix + rest[0]
-            for (index in 1 until rest.size) {
-                val qualified = qualifiedName(current, rest[index])
-                if (index == rest.lastIndex) return types[qualified]
-                if (qualified !in namespaces) return null
-                current = current + rest[index]
-            }
-        }
-        return null
-    }
-
-    /** The declared type-parameter count of a nameable's declaration. */
-    private fun typeParameterCountOf(node: Node): Int = when (node) {
-        is InterfaceDeclaration -> node.typeParameters.orEmpty().size
-        is ClassDeclaration -> node.typeParameters.orEmpty().size
-        else -> 0
-    }
-
     /** The nested aliases whose bodies are being inlined — a self-referential alias refuses. */
     private val aliasesInProgress = mutableListOf<TypeAliasDeclaration>()
 
     /**
      * (EXT.13) A USE of a nested alias renders what the alias DENOTES — the
-     * Dukat rule, kept by syntax because the checker answers `any` for a
-     * nested alias name: the alias's body through [annotationTextOrNull]
-     * with the body's names resolved from the ALIAS's own scope and spelled
-     * from the USE's ([TypeScope.resolvePath] vs [TypeScope.path]), the
-     * alias's own type parameters answered as bare names and then
-     * substituted by the use's arguments ([substituteTypeParameters]).
-     * Exact arity; a body that does not map, or does not parse for the
-     * substitution, or names the alias itself, refuses to the marker.
+     * Dukat rule, kept by syntax where the RESOLVED body has no Kotlin
+     * spelling (a function type, a generic instantiation the mapper cannot
+     * express — the (EXT.10) shape one scope down, and a nested alias has no
+     * emitted name to fall back on): the alias's body through
+     * [annotationTextOrNull], its names resolved by the lens AT THE BODY's
+     * own position ((CHK.76): resolution is position-derived, so a name in
+     * the body means what it means where the alias was written) and spelled
+     * from the USE's scope ([TypeScope.path]), the alias's own type parameters
+     * answered as bare names and then substituted by the use's arguments
+     * ([substituteTypeParameters]). Exact arity; a body that does not map, or
+     * does not parse for the substitution, or names the alias itself, refuses
+     * to the marker.
      */
     private fun nestedAliasUse(
-        alias: NestedAlias,
+        alias: Declared<TypeAliasDeclaration>,
         arguments: List<TypeNode>,
         lens: CheckedLens,
         scope: TypeScope,
@@ -963,9 +842,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 ownTypeParams = typeParameters.toSet(),
                 generatedNameOf = scope.generatedNameOf,
                 path = scope.path,
-                resolvePath = alias.path,
-                fileName = alias.fileName,
-                inNamespace = true,
+                inAmbientModule = scope.inAmbientModule,
             )
             val body = annotationTextOrNull(alias.node.type, returnPosition = false, lens = lens, scope = bodyScope)
                 ?: return null
@@ -978,6 +855,21 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         } finally {
             aliasesInProgress.removeAt(aliasesInProgress.lastIndex)
         }
+    }
+
+    /**
+     * (EXT.14) The NESTED alias a written type reference names, by the
+     * lens's identity evidence ([CheckedLens.typeReferenceSymbol], as
+     * [exportedAliasOf] for a root one) — or null: a root alias, a lib
+     * alias, a non-exported neighbour and a qualified name all answer null
+     * and keep the later legs.
+     */
+    private fun nestedAliasOf(annotation: TypeReference, lens: CheckedLens): Declared<TypeAliasDeclaration>? {
+        val symbol = lens.typeReferenceSymbol(annotation) ?: return null
+        for (declaration in symbol.declarations) {
+            surface.aliases.firstOrNull { it.path.isNotEmpty() && it.node === declaration }?.let { return it }
+        }
+        return null
     }
 
     /**
@@ -994,6 +886,129 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 add(qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]))
             }
         }
+    }
+
+    /** (EXT.14) An alias the written-name fallback resolved to: root (emitted) or nested (inlined). */
+    private class WrittenAlias(val alias: Declared<TypeAliasDeclaration>)
+
+    /** (EXT.14) The identifiers of the flattened root namespaces — what a qualified `ts.X` drops. */
+    private val flattenedRootNames: Set<String> = surface.namespaces.mapNotNullTo(HashSet()) { it.rootName }
+
+    /**
+     * (EXT.14) Every qualified name a WRITTEN name may resolve through
+     * ([resolveSpelling] over the surface — TypeScript's innermost-first
+     * rule is Kotlin's): the generated types and nested objects
+     * ([declaredQualified]) plus the aliases, root and nested, which have a
+     * TypeScript name whether or not they have a Kotlin one.
+     */
+    private val writtenNames: Set<String> = HashSet<String>(declaredQualified).apply {
+        for (alias in surface.aliases) add(qualifiedName(alias.path, alias.node.name.text))
+    }
+
+    /** (EXT.14) Qualified name → what the fallback answers for it, first declared wins (as [ExternalsCollector.finish]). */
+    private val writtenTargets: Map<String, Any> = HashMap<String, Any>().apply {
+        for (nameable in nameableDeclarations) putIfAbsent(qualifiedName(nameable.path, nameable.name), nameable)
+        for (alias in surface.aliases) putIfAbsent(qualifiedName(alias.path, alias.node.name.text), WrittenAlias(alias))
+    }
+
+    /**
+     * (EXT.14) Whether the written-name fallback is consulted at all for a
+     * name at [scope] — the two shapes the lens cannot answer, measured:
+     *
+     *  - ANY name written inside a `declare module "m"` body: (CHK.76)'s
+     *    resolver skips a string-named module on purpose (its block may be
+     *    an AUGMENTATION), so the lens types a bare `Widget` declared beside
+     *    its use as `any` and answers null for a bare heritage base there
+     *    (probe 1 of this round's scratch; the (EXT.13) pins for a module
+     *    body). The checker's half: consult the block's own exports where
+     *    the specifier resolves to NO program file, i.e. a genuine ambient
+     *    module;
+     *  - a QUALIFIED name anywhere: [CheckedLens.typeReferenceSymbol]
+     *    refuses one by contract, so a qualified reference to an ALIAS whose
+     *    resolved body has no Kotlin spelling — `ts.Cb` for `type Cb = () =>
+     *    void` written from a nested scope, `server.Gen<number>` from the
+     *    root — would keep its marker; and `heritageBaseSymbol`'s Identifier
+     *    arm asks `Type | Value` of a dotted base's HEAD where the head is a
+     *    NAMESPACE (`JsTyping.TypingResolutionHost` inside
+     *    `ts.server.typingsInstaller`, `typescript.d.ts:2679` — the one hunk
+     *    the removed arm cost; `JsTyping` declares only interfaces, so it is a
+     *    type-only `NamespaceModule` that neither meaning matches), and its
+     *    implicit-export rule reads only the OUTERMOST `declare`d namespace
+     *    (`extends ts.server.A` across files, probe 8). The checker's half:
+     *    `typeReferenceSymbol` through `resolveQualifiedName`, and the
+     *    heritage resolver's head meaning and export rule.
+     *
+     * A BARE name inside a `declare namespace` body is the lens's alone —
+     * that is what (CHK.76) closed, and what the (EXT.13) pins and the
+     * `typescript.d.ts` census now measure through it.
+     */
+    private fun writtenApplies(segments: List<String>, scope: TypeScope): Boolean =
+        segments.size > 1 || scope.inAmbientModule
+
+    /**
+     * (EXT.14) The surface declaration a written name denotes, by
+     * TypeScript's lexical rule over the generation's own qualified names:
+     * a flattened root's identifier at the head of a qualified name is
+     * dropped (the root's members ARE the top level, so the walk restarts
+     * at the root scope — a `ts.Node` inside `a` must not find `a.Node`),
+     * then [resolveSpelling] from [fromPath]. Program-wide, not per file:
+     * TypeScript merges a namespace declared in several files, so a
+     * qualified `ts.server.A` written in another file names the same
+     * declaration — the (EXT.13) ladder was per-file and answered null
+     * there. A [Nameable], a [WrittenAlias], or null.
+     */
+    private fun writtenTarget(segments: List<String>, fromPath: List<String>): Any? {
+        var rest = segments
+        var from = fromPath
+        if (rest.size > 1 && rest[0] in flattenedRootNames) {
+            rest = rest.drop(1)
+            from = emptyList()
+        }
+        val full = resolveSpelling(rest, from, writtenNames) ?: return null
+        return writtenTargets[qualifiedName(full.dropLast(1), full.last())]
+    }
+
+    /**
+     * (EXT.14) The written-name fallback for an ANNOTATION — the last leg
+     * of [annotationTextOrNull]: a generated type renders by its shortest
+     * spelling from the use's scope with its arguments from their own
+     * annotations (the (EXT.6) rule), exact arity; a shadowed one refuses
+     * to the marker; a root alias is the (EXT.10) rule's subject; a nested
+     * alias inlines its body. Null where the fallback does not apply or the
+     * surface holds nothing.
+     */
+    private fun writtenFallback(
+        annotation: TypeNode?,
+        returnPosition: Boolean,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): String? {
+        if (annotation !is TypeReference) return null
+        val segments = entityNameText(annotation.typeName).split('.')
+        if (!writtenApplies(segments, scope)) return null
+        return when (val target = writtenTarget(segments, scope.path)) {
+            is Nameable -> {
+                val spelling = spellingOf(target, scope.path) ?: return null
+                val arguments = annotation.typeArguments.orEmpty()
+                if (arguments.size != typeParameterCountOf(target.node)) return null
+                val mapped = arguments.map { argument ->
+                    annotationTextOrNull(argument, returnPosition = false, lens = lens, scope = scope)
+                        ?: return null
+                }
+                if (mapped.isEmpty()) spelling else "$spelling<${mapped.joinToString(", ")}>"
+            }
+            is WrittenAlias ->
+                if (target.alias.path.isEmpty()) rootAliasUse(target.alias.node, annotation, returnPosition, lens, scope)
+                else nestedAliasUse(target.alias, annotation.typeArguments.orEmpty(), lens, scope)
+            else -> null
+        }
+    }
+
+    /** The declared type-parameter count of a nameable's declaration. */
+    private fun typeParameterCountOf(node: Node): Int = when (node) {
+        is InterfaceDeclaration -> node.typeParameters.orEmpty().size
+        is ClassDeclaration -> node.typeParameters.orEmpty().size
+        else -> 0
     }
 
     /**
@@ -1036,13 +1051,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
     private fun spellingOf(nameable: Nameable, fromPath: List<String>): String? =
         shortestSpelling(fromPath, nameable.path, nameable.name, declaredQualified)
 
-    private fun scopeOf(
-        typeParamNames: Set<String>,
-        path: List<String>,
-        fileName: String?,
-        inNamespace: Boolean = path.isNotEmpty(),
-    ): TypeScope =
-        TypeScope(typeParamNames, { generatedNameOf(it, path) }, path, path, fileName, inNamespace)
+    private fun scopeOf(typeParamNames: Set<String>, path: List<String>, inAmbientModule: Boolean): TypeScope =
+        TypeScope(typeParamNames, { generatedNameOf(it, path) }, path, inAmbientModule)
 
     /** (EXT.13) The ROOT-scope aliases — the only ones emitted; a nested alias has no Kotlin shape. */
     private val rootAliases: List<TypeAliasDeclaration> =
@@ -1121,7 +1131,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         if (index < 0) return false
         return aliasRenderable.getOrPut(index) {
             val declared = surface.aliases.first { it.node === alias }
-            collectTypeAlias(alias, lens, emptyList(), declared.fileName, declared.inNamespace) is ExternalTypeAlias
+            collectTypeAlias(alias, lens, emptyList(), declared.inAmbientModule) is ExternalTypeAlias
         }
     }
 
@@ -1247,37 +1257,6 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             }
             else -> {}
         }
-        // (EXT.13) The namespace ladder: a qualified name, or any name written
-        // inside a nested namespace, is resolved on the surface's own tree
-        // ([writtenTarget]) BEFORE the checker is asked — the checker's answer
-        // there is measured wrong in both directions. A generated type
-        // renders by its shortest spelling from the use's scope with its
-        // arguments from their own annotations (the (EXT.6) rule), exact
-        // arity; a shadowed one refuses to the marker; a nested alias
-        // inlines its body. A name the tree does not hold falls through.
-        if (annotation is TypeReference) {
-            val segments = entityNameSegments(annotation.typeName)
-            if (segments != null && ladderApplies(segments, scope)) {
-                when (val target = writtenTarget(segments, scope)) {
-                    is Nameable -> {
-                        val spelling = spellingOf(target, scope.path) ?: return null
-                        val arguments = annotation.typeArguments.orEmpty()
-                        if (arguments.size != typeParameterCountOf(target.node)) return null
-                        val mapped = arguments.map { argument ->
-                            annotationTextOrNull(argument, returnPosition = false, lens = lens, scope = scope)
-                                ?: return null
-                        }
-                        return if (mapped.isEmpty()) spelling else "$spelling<${mapped.joinToString(", ")}>"
-                    }
-                    is NestedAlias -> return nestedAliasUse(target, annotation.typeArguments.orEmpty(), lens, scope)
-                    // A root alias reached by the ladder (qualified `ts.Path`,
-                    // or bare inside the namespace) is the (EXT.10) rule's
-                    // subject; where it answers nothing the legs below try.
-                    is RootAlias -> rootAliasUse(target.node, annotation, returnPosition, lens, scope)?.let { return it }
-                    null -> {}
-                }
-            }
-        }
         // (EXT.10) A reference to an exported ALIAS this generation emits renders
         // by NAME wherever the resolved body would not map: a generic
         // instantiation (`Handler<string>` resolves to an anonymous function type
@@ -1291,6 +1270,19 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         if (annotation is TypeReference) {
             val alias = exportedAliasOf(annotation, lens)
             if (alias != null) rootAliasUse(alias, annotation, returnPosition, lens, scope)?.let { return it }
+            // (EXT.13, reached through the lens since (EXT.14)) A NESTED alias
+            // — never emitted — renders its RESOLVED body where that maps
+            // (the checker knows what the alias denotes) and its body
+            // INLINED syntactically where it does not; a degraded `any`
+            // resolution is not a body.
+            val nested = nestedAliasOf(annotation, lens)
+            if (nested != null) {
+                val resolved = lens.typeOfTypeNode(annotation)
+                if (!isAnyIntrinsic(resolved)) {
+                    kotlinTypeTextOrNull(resolved, returnPosition = returnPosition, scope = scope)?.let { return it }
+                }
+                return nestedAliasUse(nested, annotation.typeArguments.orEmpty(), lens, scope)
+            }
         }
         val referenceArguments = (annotation as? TypeReference)?.typeArguments
         if (referenceArguments != null) {
@@ -1312,7 +1304,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                         scope = scope,
                     ) ?: return null
                 }
-                return "${kotlinIdentifier(targetName)}<${arguments.joinToString(", ")}>"
+                // (EXT.14) `targetName` is a rendered spelling — not wrapped again.
+                return "$targetName<${arguments.joinToString(", ")}>"
             }
         }
         // (EXT.11b) `Array<T>` / `ReadonlyArray<T>` written as a reference —
@@ -1346,12 +1339,13 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         // rule. The written keyword is the only evidence that `any` was
         // meant; every other annotation reaching this leg keeps its marker,
         // spelled by what was written ([annotationText]).
-        if (isAnyIntrinsic(resolved)) return null
+        // (EXT.14) The written-name fallback, after every lens leg.
+        if (isAnyIntrinsic(resolved)) return writtenFallback(annotation, returnPosition, lens, scope)
         return kotlinTypeTextOrNull(
             resolved,
             returnPosition = returnPosition,
             scope = scope,
-        )
+        ) ?: writtenFallback(annotation, returnPosition, lens, scope)
     }
 
     /** (EXT.11b) Any intrinsic carrying the `any` flag — `any`, `error`, `unresolved`. */
@@ -1373,8 +1367,9 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
      * current scope — a root `Node` read from inside a namespace declaring
      * its own `Node`; Kotlin resolves the bare name innermost-first and the
      * generated file has no package to qualify by — names the shadowing
-     * scope. Null for every other annotation, which keeps the checker's own
-     * rendering.
+     * scope, decided on the RESOLVED type's identity ([generatedDeclarationOf],
+     * (EXT.14)). Null for every other annotation, which keeps the checker's
+     * own rendering.
      */
     private fun referenceMarkerText(
         annotation: TypeNode,
@@ -1383,11 +1378,9 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         scope: TypeScope,
     ): String? {
         if (annotation !is TypeReference) return null
-        val segments = entityNameSegments(annotation.typeName)
-        val ladderTarget =
-            if (segments != null && ladderApplies(segments, scope)) writtenTarget(segments, scope) else null
+        val target = generatedDeclarationOf(resolved)
         val reason = when {
-            ladderTarget is Nameable && spellingOf(ladderTarget, scope.path) == null ->
+            target != null && spellingOf(target, scope.path) == null ->
                 "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
             isAnyIntrinsic(resolved) -> "resolved to any"
             (annotation.typeName as? Identifier)?.text in libArrayNames &&
@@ -1605,20 +1598,6 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         else -> "an expression"
     }
 
-    /** (EXT.13) The segments of an entity name — `A` or `A.B.C` — or null for anything else. */
-    private fun entityNameSegments(name: Node): List<String>? = when (name) {
-        is Identifier -> listOf(name.text)
-        is QualifiedName -> entityNameSegments(name.left)?.plus(name.right.text)
-        else -> null
-    }
-
-    /** (EXT.13) The segments of an entity-name-shaped EXPRESSION (`A`, `A.B`), the twin of [expressionNameText]. */
-    private fun expressionNameSegments(expression: Expression): List<String>? = when (expression) {
-        is Identifier -> listOf(expression.text)
-        is PropertyAccessExpression -> expressionNameSegments(expression.expression)?.plus(expression.name.text)
-        else -> null
-    }
-
     /**
      * (EXT.3) An exported top-level function. (EXT.7) Overloads render as
      * Kotlin overloads — the (EXT.5) method rule brought to the module surface
@@ -1634,8 +1613,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         node: FunctionDeclaration,
         lens: CheckedLens,
         path: List<String>,
-        fileName: String,
-        inNamespace: Boolean,
+        inAmbientModule: Boolean,
     ): ExternalDeclaration? {
         val name = node.name?.text
             ?: return SkippedDeclaration("top-level function without a name")
@@ -1644,7 +1622,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         }
         if (node.body != null && overloadGroup.size > 1) return null
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, fileName, inNamespace)
+        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
         val declared = declaredParameters(node.parameters, lens, scope)
@@ -1754,12 +1732,12 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             is InterfaceDeclaration -> {
                 val declared = surface.interfaces.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectInterface(node, lens, declared.path, declared.fileName, declared.inNamespace))
+                add(declared.path, node, collectInterface(node, lens, declared.path, declared.inAmbientModule))
             }
             is ClassDeclaration -> {
                 val declared = surface.classes.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectClass(node, lens, declared.path, declared.fileName, declared.inNamespace))
+                add(declared.path, node, collectClass(node, lens, declared.path, declared.inAmbientModule))
             }
             is EnumDeclaration -> {
                 val declared = surface.enums.firstOrNull { it.node === node } ?: return
@@ -1769,12 +1747,12 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             is TypeAliasDeclaration -> {
                 val declared = surface.aliases.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectTypeAlias(node, lens, declared.path, declared.fileName, declared.inNamespace))
+                add(declared.path, node, collectTypeAlias(node, lens, declared.path, declared.inAmbientModule))
             }
             is FunctionDeclaration -> {
                 val declared = surface.functions.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                collectFunction(node, lens, declared.path, declared.fileName, declared.inNamespace)
+                collectFunction(node, lens, declared.path, declared.inAmbientModule)
                     ?.let { add(declared.path, node, it) }
             }
             is VariableDeclaration -> {
@@ -1859,7 +1837,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         val node = exported.node
         val name = (node.name as? Identifier)?.text
             ?: return SkippedDeclaration("destructuring export - no single name to declare")
-        val scope = scopeOf(emptySet(), exported.path, exported.fileName, exported.inNamespace)
+        val scope = scopeOf(emptySet(), exported.path, exported.inAmbientModule)
         val type =
             if (node.type != null) {
                 annotationText(node.type, optional = false, returnPosition = false, lens = lens, scope = scope)
@@ -2047,13 +2025,12 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         node: ClassDeclaration,
         lens: CheckedLens,
         path: List<String>,
-        fileName: String,
-        inNamespace: Boolean,
+        inAmbientModule: Boolean,
     ): ExternalDeclaration {
         val name = node.name?.text
             ?: return SkippedDeclaration("class without a name")
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, fileName, inNamespace)
+        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
@@ -2117,7 +2094,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             if (memberName != null && isPrivateName(memberName)) continue
             val isStatic = ModifierFlag.Static in modifiers
             val target = if (isStatic) staticMembers else members
-            val memberScope = if (isStatic) scopeOf(emptySet(), path, fileName, inNamespace) else scope
+            val memberScope = if (isStatic) scopeOf(emptySet(), path, inAmbientModule) else scope
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, target, memberScope)
                 is MethodDeclaration -> collectMethod(member, lens, target, memberScope)
@@ -2192,8 +2169,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         node: TypeAliasDeclaration,
         lens: CheckedLens,
         path: List<String>,
-        fileName: String?,
-        inNamespace: Boolean,
+        inAmbientModule: Boolean,
     ): ExternalDeclaration {
         val name = node.name.text
         // (EXT.13) A Kotlin `typealias` is top-level only: inside a nested
@@ -2212,7 +2188,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 node.type,
                 returnPosition = false,
                 lens = lens,
-                scope = scopeOf(typeParameters.toSet(), path, fileName, inNamespace),
+                scope = scopeOf(typeParameters.toSet(), path, inAmbientModule),
             ) ?: return SkippedDeclaration("generic type alias $name with unmappable body")
             return ExternalTypeAlias(name, typeParameters, markers, body)
         }
@@ -2224,7 +2200,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             node.type,
             returnPosition = false,
             lens = lens,
-            scope = scopeOf(emptySet(), path, fileName, inNamespace),
+            scope = scopeOf(emptySet(), path, inAmbientModule),
         ) ?: return SkippedDeclaration(
             "type alias $name with unmappable body " +
                 commentSafe(lens.render(lens.typeOfTypeNode(node.type)))
@@ -2326,9 +2302,9 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
     private fun isCallableInterface(declaration: Node): Boolean =
         callableInterfaces.any { it === declaration }
 
-    /** Whether a surface interface sits inside a namespace body (the scan's answer). */
-    private fun inNamespaceOf(node: InterfaceDeclaration): Boolean =
-        surface.interfaces.firstOrNull { it.node === node }?.inNamespace ?: false
+    /** (EXT.14) Whether a surface interface sits inside a `declare module "m"` body (the scan's answer). */
+    private fun inAmbientModuleOf(node: InterfaceDeclaration): Boolean =
+        surface.interfaces.firstOrNull { it.node === node }?.inAmbientModule ?: false
 
     /**
      * (EXT.11a) A callable interface as `public typealias Name<TPs> =
@@ -2352,7 +2328,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             signature.parameters,
             signature.type,
             lens,
-            scopeOf(typeParameters.toSet(), emptyList(), fileNameOf(node), inNamespaceOf(node)),
+            scopeOf(typeParameters.toSet(), emptyList(), inAmbientModuleOf(node)),
         ) ?: return SkippedDeclaration("callable interface $name with unmappable signature")
         return ExternalTypeAlias(name, typeParameters, markers, body)
     }
@@ -2378,7 +2354,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         if (symbol.declarations.none { it === expectedBase }) return null
         val name = node.name.text
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), emptyList(), fileNameOf(node), inNamespaceOf(node))
+        val scope = scopeOf(typeParameters.toSet(), emptyList(), inAmbientModuleOf(node))
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
         val arguments = base.typeArguments.orEmpty().map { argument ->
@@ -2397,8 +2373,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         node: InterfaceDeclaration,
         lens: CheckedLens,
         path: List<String>,
-        fileName: String,
-        inNamespace: Boolean,
+        inAmbientModule: Boolean,
     ): ExternalDeclaration {
         // (EXT.11a) A callable interface is a function type; a link of a
         // callable chain is an alias to one — unless the lens refutes the
@@ -2414,7 +2389,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         // Kotlin externals cannot carry — a constraint, a default — becomes a
         // loud header marker, never a silent widening.
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, fileName, inNamespace)
+        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
@@ -2477,7 +2452,10 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
      * rendered supertype is the target's shortest spelling from the deriving
      * declaration's own scope ([spellingOf]) — never the written text, which
      * spells the TypeScript route (`ts.server.Project` names a root that has
-     * no Kotlin name). A target shadowed from that scope is a marker.
+     * no Kotlin name). A target shadowed from that scope is a marker. A bare
+     * base inside a namespace body is that namespace's own declaration
+     * before the root's or a lib's ((CHK.76); 509 `extends Node`-shaped
+     * clauses of `typescript.d.ts` answered null or the DOM's before it).
      */
     private fun collectHeritage(
         clauses: List<HeritageClause>?,
@@ -2493,25 +2471,21 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             val keyword = clause.token.name.removeSuffix("Keyword").lowercase()
             for (base in clause.types) {
                 val baseName = expressionNameText(base.expression)
-                val rendered = baseName?.let { _ ->
-                    // (EXT.13) The namespace ladder first, where it applies
-                    // (a qualified base, a base written inside a nested
-                    // namespace); otherwise resolved as the checker resolves
-                    // the clause itself (the lexical `resolveName` offers no
-                    // import): an imported base is its import ALIAS, and the
-                    // identity test needs the declaration it names.
-                    val segments = expressionNameSegments(base.expression)
-                    val ladderNameable =
-                        if (segments != null && ladderApplies(segments, scope)) writtenTarget(segments, scope) as? Nameable
-                        else null
-                    val nameable = ladderNameable ?: run {
-                        val symbol = lens.heritageBaseSymbol(base.expression)
-                            ?.let { lens.aliasTarget(it) ?: it }
-                            ?: return@let null
-                        symbol.declarations.firstNotNullOfOrNull { declared ->
+                val rendered = baseName?.let { written ->
+                    // Resolved as the checker resolves the clause itself (the
+                    // lexical `resolveName` offers no import): an imported
+                    // base is its import ALIAS, and the identity test needs
+                    // the declaration it names. (EXT.14) The written-name
+                    // fallback on a lens miss, where it applies.
+                    val nameable = lens.heritageBaseSymbol(base.expression)
+                        ?.let { lens.aliasTarget(it) ?: it }
+                        ?.declarations?.firstNotNullOfOrNull { declared ->
                             nameableDeclarations.firstOrNull { it.node === declared }
-                        } ?: return@let null
-                    }
+                        }
+                        ?: written.split('.').let { segments ->
+                            if (writtenApplies(segments, scope)) writtenTarget(segments, scope.path) as? Nameable else null
+                        }
+                        ?: return@let null
                     if (!kindOk(nameable.node, isExtends)) return@let null
                     // (EXT.11a) A callable interface renders as a function
                     // TYPE alias, which nothing can extend or implement.
@@ -2619,14 +2593,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         val methodTypeParameters = member.typeParameters.orEmpty().map { it.name.text }
         val methodScope =
             if (methodTypeParameters.isEmpty()) scope
-            else TypeScope(
-                scope.ownTypeParams + methodTypeParameters,
-                scope.generatedNameOf,
-                scope.path,
-                scope.resolvePath,
-                scope.fileName,
-                scope.inNamespace,
-            )
+            else TypeScope(scope.ownTypeParams + methodTypeParameters, scope.generatedNameOf, scope.path, scope.inAmbientModule)
         // (EXT.11a) A method's `this` parameter is dropped with a marker, as
         // a function's is — for a method the receiver is the declaring
         // object anyway, and the constraint is a TypeScript-only fact.

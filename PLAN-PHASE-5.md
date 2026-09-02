@@ -89,6 +89,29 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.14) LANDED — the generator's per-file syntactic ladder is RETIRED; a program-wide
+written-name fallback survives for exactly the two shapes the lens cannot answer.** Measured on
+`typescript.d.ts` in three arms: HEAD (9,791 lines, 1,750 markers, 9 heritage skips), arm A (lens
+first, ladder on miss — 12 compile errors on the first cut, a generator defect the ladder had
+MASKED: `generatedNameOf` answers a spelling `shortestSpelling` already rendered per segment and
+three consumers wrapped it in `kotlinIdentifier` again, `` `protocol.Location` ``; fixed, then
+byte-identical), arm B (ladder removed — ONE hunk, `interface InstallTypingHost extends
+JsTyping.TypingResolutionHost` losing its supertype). Shipped: arm B plus `writtenFallback`
+(~90 lines for 130 + three tables), consulted only after every lens leg answered null and only
+where `segments.size > 1 || scope.inAmbientModule` — a bare name inside a `declare namespace`
+body is the lens's alone now, by (CHK.76). Output byte-identical to HEAD; all five gates green on
+their real inputs; nested-alias inlining now reaches through `typeReferenceSymbol` (resolved body
+first, syntactic inline second — the (EXT.10) rule one scope down); the fallback resolves
+PROGRAM-wide (deliberate: `extends ts.server.A` across files now renders where the ladder
+skipped). Four pins added, none moved; a pre-existing gap fixed on the way — `parseKotlinTypeText`
+had no dotted-name production, so every overload/override key over a `server.Node`-typed
+parameter silently fell to the textual key (`KotlinOverloadEquivalenceTest` has no dotted row yet).
+Externals 145 → 149/0; suite 17,017 → 17,021 / 0 / 3. **Residue for the checker, measured, queued
+as (CHK.77):** `declare module "m"` bodies (skipped by design; a genuine ambient module should be
+consulted), a qualified heritage base whose head is a type-only namespace (the one hunk), the
+qualified-name refusal in `typeReferenceSymbol`, and cross-file namespace MERGING (the consult
+reads the per-file symbol, not the merged instance — `@types/node`'s whole shape).
+
 **(CHK.76) LANDED — a namespace body's names resolve as tsc resolves them, at every resolver.**
 Not B83.5: the binder binds every namespace-body member into the namespace symbol's `exports`
 and INV.2(c) aliases them, so the WALK-scoped `spineScopeLookup` was right all along; every
@@ -1421,7 +1444,7 @@ Owner decisions 2026-09-02:
   generator's third syntactic arm where the lens answers. Instrument: the `typescript.d.ts`
   probe's heritage-skip count (7 after the workaround; hundreds through the lens alone).
 
-- [ ] **(EXT.14) RETIRE THE GENERATOR'S THIRD SYNTACTIC ARM WHERE THE LENS NOW ANSWERS
+- [x] **(EXT.14) DONE 2026-09-02 ((P18.9) note; the per-file ladder removed, a program-wide written-name fallback kept for the two shapes the lens cannot answer, `typescript.d.ts` byte-identical, externals 149/0, suite 17,021/0/3; four checker residues queued as (CHK.77)) — RETIRE THE GENERATOR'S THIRD SYNTACTIC ARM WHERE THE LENS NOW ANSWERS
   ((CHK.76) landed).** `writtenTarget` resolves qualified names and names written inside a
   namespace body over the generator's own per-file tree; with (CHK.76) the checker resolves
   them too. Measure first (the `typescript.d.ts` probe: heritage skips 9, unmapped 847, the
@@ -1431,6 +1454,27 @@ Owner decisions 2026-09-02:
   ladder's four gates are the receipt. Also the residue (CHK.76) recorded: a `.d.ts` namespace
   body reports no TS2304 for an undeclared name (tsgo does) — the unresolved-names family's
   declaration-file gate, separate item if it survives a reproduction.
+
+- [ ] **(CHK.77) THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
+  with probe evidence in the (P18.9) note — the generator keeps a written-name fallback for
+  exactly these until the checker answers.** (1) A `declare module "m"` BODY: `lookupInEnclosingNamespaces`
+  skips string-named modules by design (the augmentation hazard, INV.3(c)(iv)), so a bare `Widget`
+  beside its own declaration types `any` and `heritageBaseSymbol` answers null — consult the
+  block's exports only when the specifier resolves to NO program file (a genuine ambient module,
+  not an augmentation). (2) A QUALIFIED heritage base whose head is a TYPE-ONLY namespace
+  (`extends JsTyping.TypingResolutionHost`, `typescript.d.ts:2679`): `resolveHeritageBaseSymbol`'s
+  Identifier arm asks `Type|Value` of the head where a namespace of interfaces is a
+  `NamespaceModule` — use the qualified-left meaning for a head; the same resolver's
+  implicit-export rule reads only the OUTERMOST `declare`d namespace, so `extends ts.server.A`
+  across files is skipped while the annotation beside it resolves. (3) `typeReferenceSymbol`
+  refuses a qualified name by contract (`Checker.kt` ~5789) — route it through
+  `resolveQualifiedName` so `ts.Cb`/`server.Gen<number>` reach the alias-name rule. (4) CROSS-FILE
+  NAMESPACE MERGING is invisible to `lookupInEnclosingNamespaces` (it reads `nodeSymbolOf(cur)`,
+  the per-file symbol, not the merged instance): `declare namespace ts { interface A }` in one
+  file and `interface B extends A { x: A }` in another's `ts` block → `any` + a heritage skip —
+  `@types/node`-style packages are made of this. Pins per shape against tsgo; the externals
+  fallback pins (`KotlinExternalsGeneratorTest`'s (EXT.14) four) are the receipt that the arm
+  can then be narrowed further.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

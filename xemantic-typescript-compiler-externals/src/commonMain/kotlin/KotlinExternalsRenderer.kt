@@ -940,29 +940,25 @@ internal fun isLibArraySymbol(symbol: Symbol?): Boolean =
  */
 internal class TypeScope(
     val ownTypeParams: Set<String>,
+    /** The RENDERED Kotlin spelling of a generated type (segments backticked already), or null. */
     val generatedNameOf: (Type) -> String?,
     /**
      * (EXT.13) The namespace path of the CURRENT scope — what a generated
      * name is spelled relative to ([shortestSpelling]); [generatedNameOf]
      * already closes over it, the field is for the marker that must name
-     * the scope a shadowed reference could not be spelled from.
+     * the scope a shadowed reference could not be spelled from. (EXT.14)
+     * Names are RESOLVED by the lens at the position they were written —
+     * a nested alias's body inlined at a use site means what it meant in
+     * the alias's own scope — and spelled from here.
      */
     val path: List<String> = emptyList(),
     /**
-     * (EXT.13) The namespace path a WRITTEN name is resolved from — the
-     * declaration's own scope, and, for a nested alias's body inlined at a
-     * use site, the ALIAS's scope while [path] stays the use's: names are
-     * looked up where they were written and spelled where they are used.
+     * (EXT.14) Whether the current declaration sits inside a `declare
+     * module "m"` body (at any depth) — the one scope where a BARE written
+     * name still needs the collector's written-name fallback, because the
+     * checker's position-derived resolver skips a string-named module.
      */
-    val resolvePath: List<String> = path,
-    /** (EXT.13) The file the current declaration is in; the namespace ladder is file-local. */
-    val fileName: String? = null,
-    /**
-     * (EXT.13) Whether the current declaration sits inside a namespace BODY —
-     * a flattened root's included, whose path is empty — where the checker's
-     * name resolution is measured unreliable and the ladder is the resolver.
-     */
-    val inNamespace: Boolean = false,
+    val inAmbientModule: Boolean = false,
 ) {
     internal companion object {
         val EMPTY: TypeScope = TypeScope(emptySet(), { null })
@@ -1002,6 +998,10 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
         return if (members.size < type.types.size) nullableTypeText(text) else text
     }
     // A reference to an interface THIS generation emits — a bare use...
+    // (EXT.14) The name is a RENDERED spelling ([shortestSpelling] backticks
+    // each segment), never wrapped again: `kotlinIdentifier` on a dotted
+    // `protocol.Location` backticks the dot — 12 compile errors on
+    // `typescript.d.ts` the moment the lens answered a qualified reference.
     scope.generatedNameOf(type)?.let { name ->
         // (EXT.11a) The ARITY guard: a generated target that DECLARES type
         // parameters is rendered only as an instantiation. The bare
@@ -1016,18 +1016,18 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
         // constructor over; a target without parameters keeps its bare name.
         if (type !is Type.Reference) {
             if (type is Type.Interface && !type.typeParameters.isNullOrEmpty()) return null
-            return kotlinIdentifier(name)
+            return name
         }
         // ...or a generic instantiation, rendered only when EVERY argument
         // maps: one unmappable argument falls the whole reference back, so a
         // half-translated `Box<...>` never appears.
         val args = type.resolvedTypeArguments
-            ?: return if (type.target.typeParameters.isNullOrEmpty()) kotlinIdentifier(name) else null
+            ?: return if (type.target.typeParameters.isNullOrEmpty()) name else null
         val mappedArgs = args.map { argument ->
             mappedText(argument, returnPosition = false, scope) ?: return null
         }
-        return if (mappedArgs.isEmpty()) kotlinIdentifier(name)
-        else "${kotlinIdentifier(name)}<${mappedArgs.joinToString(", ")}>"
+        return if (mappedArgs.isEmpty()) name
+        else "$name<${mappedArgs.joinToString(", ")}>"
     }
     // (EXT.11b) The lib array, after the generated-name leg so that an
     // exported `Array`-named interface of the program is consulted first —
